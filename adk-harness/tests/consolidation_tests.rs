@@ -114,7 +114,8 @@ impl World {
         fact.valid_from = Utc::now() - chrono::Duration::days(age_days);
         fact.confidence = confidence;
         let stored = self.store.put(fact).await.unwrap();
-        self.store.put_embedding(&stored.id, vector).await.unwrap();
+        let embedding = adk_harness::FactEmbedding::new("test/seeded", vector);
+        self.store.put_embedding(&stored.id, embedding).await.unwrap();
         stored
     }
 
@@ -785,10 +786,17 @@ async fn a_store_without_records_refuses_before_any_change() {
         ) -> adk_core::Result<()> {
             self.0.set_status(id, status, by).await
         }
-        async fn put_embedding(&self, id: &str, vector: Vec<f32>) -> adk_core::Result<()> {
-            self.0.put_embedding(id, vector).await
+        async fn put_embedding(
+            &self,
+            id: &str,
+            embedding: adk_harness::FactEmbedding,
+        ) -> adk_core::Result<()> {
+            self.0.put_embedding(id, embedding).await
         }
-        async fn embeddings(&self, scope: &FactScope) -> adk_core::Result<Vec<(String, Vec<f32>)>> {
+        async fn embeddings(
+            &self,
+            scope: &FactScope,
+        ) -> adk_core::Result<Vec<(String, adk_harness::FactEmbedding)>> {
             self.0.embeddings(scope).await
         }
     }

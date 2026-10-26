@@ -72,7 +72,8 @@ impl World {
         .with_confidence(0.8);
         fact.valid_from = adk_core::Clock::now(&self.clock);
         let stored = self.store.put(fact).await.unwrap();
-        self.store.put_embedding(&stored.id, vector).await.unwrap();
+        let embedding = adk_harness::FactEmbedding::new("test/seeded", vector);
+        self.store.put_embedding(&stored.id, embedding).await.unwrap();
         stored
     }
 

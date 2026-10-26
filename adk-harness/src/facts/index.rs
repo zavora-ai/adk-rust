@@ -7,7 +7,7 @@ use adk_core::{Content, Part, Result};
 use adk_memory::{EmbeddingProvider, MemoryEntry, MemoryService, SearchRequest};
 use async_trait::async_trait;
 
-use super::store::FactStore;
+use super::store::{FactEmbedding, FactStore};
 use super::types::{FACT_AUTHOR_PREFIX, FactFilter, FactScope, MemoryFact};
 
 /// Finds candidate facts for a query (spec 3.1 §7.15.2).
@@ -79,6 +79,14 @@ pub(crate) fn cosine(a: &[f32], b: &[f32]) -> Option<f32> {
     Some((dot / (na.sqrt() * nb.sqrt())) as f32)
 }
 
+/// The id a fact's vector is stored under (spec 3.1 §7.32, I73): the embedder's
+/// [`EmbeddingProvider::model_id`], or `unnamed/<dimensions>` for an embedder without one.
+pub(crate) fn embedder_id(embedder: &dyn EmbeddingProvider) -> String {
+    embedder
+        .model_id()
+        .map_or_else(|| format!("unnamed/{}", embedder.dimensions()), ToString::to_string)
+}
+
 fn best_first(mut scored: Vec<(String, f32)>, limit: usize) -> Vec<(String, f32)> {
     scored.retain(|(_, score)| *score > 0.0);
     scored.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
@@ -94,8 +102,10 @@ fn best_first(mut scored: Vec<(String, f32)>, limit: usize) -> Vec<(String, f32)
 /// | set ([`with_embedder`](Self::with_embedder)) | cosine similarity of the query's embedding and each fact's, stored with the fact through [`FactStore::put_embedding`] |
 /// | none | lexical: the share of query words a fact contains, as `InMemoryMemoryService` scores |
 ///
-/// A fact without a usable embedding — written before an embedder was set, or by another
-/// embedder — is embedded when a search first needs it. When the embedder fails, the
+/// Each vector is stored with its embedder's id (spec 3.1 §7.32, I73). A fact without a
+/// vector from this index's embedder — written before an embedder was set, or by another
+/// embedder, even one whose vectors share the length — is embedded when a search first
+/// needs it, so two models' vectors are never compared. When the embedder fails, the
 /// search falls back to lexical scores.
 ///
 /// # Example
@@ -151,6 +161,7 @@ impl LocalFactIndex {
         query: &str,
         limit: usize,
     ) -> Result<Vec<(String, f32)>> {
+        let id = embedder_id(embedder);
         let query_vector = embedder
             .embed(&[query.to_string()])
             .await?
@@ -163,7 +174,14 @@ impl LocalFactIndex {
             .into_iter()
             .flatten()
         {
-            vectors.extend(self.store.embeddings(&scope).await?);
+            vectors.extend(
+                self.store
+                    .embeddings(&scope)
+                    .await?
+                    .into_iter()
+                    .filter(|(_, embedding)| embedding.is_from(&id))
+                    .map(|(fact, embedding)| (fact, embedding.vector)),
+            );
         }
         let missing: Vec<&MemoryFact> = facts
             .iter()
@@ -175,7 +193,8 @@ impl LocalFactIndex {
             let texts: Vec<String> = missing.iter().map(|fact| fact.text.clone()).collect();
             let embedded = embedder.embed(&texts).await?;
             for (fact, vector) in missing.into_iter().zip(embedded) {
-                if let Err(error) = self.store.put_embedding(&fact.id, vector.clone()).await {
+                let embedding = FactEmbedding::new(id.clone(), vector.clone());
+                if let Err(error) = self.store.put_embedding(&fact.id, embedding).await {
                     tracing::debug!(error = %error, "could not store a fact embedding");
                 }
                 vectors.insert(fact.id.clone(), vector);
@@ -206,7 +225,8 @@ impl FactIndex for LocalFactIndex {
             .into_iter()
             .next()
             .ok_or_else(|| adk_core::AdkError::memory("the embedder returned no vector"))?;
-        self.store.put_embedding(&fact.id, vector).await
+        let embedding = FactEmbedding::new(embedder_id(embedder.as_ref()), vector);
+        self.store.put_embedding(&fact.id, embedding).await
     }
 
     async fn remove(&self, _fact: &MemoryFact) -> Result<()> {

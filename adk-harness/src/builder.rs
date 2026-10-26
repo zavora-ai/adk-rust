@@ -690,15 +690,17 @@ impl HarnessAgentBuilder {
             );
         }
         match &added.uses.web {
+            // Provider search runs outside the deny layer, so an agent kept from
+            // `web_search` declares none (spec 3.1 §7.32).
             adk_kernel::agents::WebAccess::None => {
                 self.web = None;
                 self.search_provider = None;
-                self.provider_web_tools = Some(crate::web::ProviderWebTools::default());
+                self.provider_web_tools = Some(crate::web::ProviderWebTools::off());
             }
             adk_kernel::agents::WebAccess::Listed { hosts } => {
                 let web = self.web.take().unwrap_or_default();
                 self.web = Some(crate::web::WebConfig { allowed_domains: hosts.clone(), ..web });
-                self.provider_web_tools = Some(crate::web::ProviderWebTools::default());
+                self.provider_web_tools = Some(crate::web::ProviderWebTools::off());
             }
             adk_kernel::agents::WebAccess::Any => {}
         }
@@ -2183,13 +2185,13 @@ impl HarnessAgentBuilder {
             } else {
                 crate::web::ProviderWebTools::off()
             });
+            // The search filter, never the fetch allowlist (spec 3.1 §7.32, I73).
+            let filter = self.web.as_ref().and_then(|web| web.search_domains.clone());
             let toolset = if tools.any() {
-                let allowlist =
-                    self.web.as_ref().map(|web| web.allowed_domains.clone()).unwrap_or_default();
                 Some(crate::web::provider::ProviderWebToolset::new(
                     tools,
                     model.as_ref(),
-                    allowlist,
+                    filter.clone(),
                     self.search_provider.is_some(),
                     mode_store.clone(),
                     self.mode,
@@ -2198,9 +2200,10 @@ impl HarnessAgentBuilder {
                 None
             };
             let path = match (&self.search_provider, &self.web) {
-                (Some(provider), Some(_)) => {
-                    crate::web::WebSearchPath::Governed { provider: provider.name().to_string() }
-                }
+                (Some(provider), Some(_)) => crate::web::WebSearchPath::Governed {
+                    provider: provider.name().to_string(),
+                    filter,
+                },
                 _ => match toolset.as_ref().and_then(|toolset| toolset.search_path()) {
                     Some(path) => path,
                     None if self.web.is_none() => {
@@ -2344,8 +2347,8 @@ impl HarnessAgentBuilder {
                 working_notes: memory_resolver.is_some(),
                 long_term_facts: toolset.facts().is_some(),
                 embedder: toolset.facts().map(|_| {
-                    if self.long_term.embedder.is_some() {
-                        "embeddings".to_string()
+                    if let Some(embedder) = &self.long_term.embedder {
+                        format!("embedded by {}", crate::facts::embedder_id(embedder.as_ref()))
                     } else if self.long_term.index.is_some() {
                         "a custom index".to_string()
                     } else {

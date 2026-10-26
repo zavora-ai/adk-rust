@@ -3,9 +3,10 @@
 //!
 //! These run inside the model, outside the governed path. The toolset declares them only
 //! to a run that starts in Ask or Auto, for the provider the harness model's client serves
-//! only, carries the allowlist where the provider supports one, says so in the request,
-//! records what the provider searched after each response, and ends the turn when the mode
-//! tightens while one is live.
+//! only, carries the search filter (`WebConfig::search_domains`, never the fetch allowlist;
+//! spec 3.1 §7.32, I73) where the provider takes one, says so in the request, records what
+//! the provider searched after each response, and ends the turn when the mode tightens
+//! while one is live.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -18,7 +19,7 @@ use adk_core::{
 };
 use serde_json::{Value, json};
 
-use super::{ProviderWebTools, WebSearchPath, hex_sha256, redact_secrets, url_host};
+use super::{ProviderWebTools, SearchDomains, WebSearchPath, hex_sha256, redact_secrets, url_host};
 use crate::audit::HarnessAudit;
 use crate::mode::{HarnessMode, ModeStore};
 
@@ -34,10 +35,8 @@ const BANNER_LEAD: &str = "Provider-native web tools are live for this turn";
 struct Entry {
     provider: &'static str,
     tool: Arc<dyn Tool>,
-    /// The allowlist forwarded to the provider, when it takes one and one is configured.
-    allowlist: Option<Vec<String>>,
-    /// Whether the provider takes an allowlist on this tool.
-    allowlist_supported: bool,
+    /// Whether the configured search filter was forwarded to the provider.
+    filter_applied: bool,
     /// Whether the tool searches (`url_context` reads the URLs the prompt names).
     search: bool,
 }
@@ -45,9 +44,9 @@ struct Entry {
 /// The provider-executed web tools the operator enabled, declared per run (spec 3.1 §7.20).
 pub(crate) struct ProviderWebToolset {
     entries: Vec<Entry>,
-    /// Whether the operator configured an allowlist, so the banner says when a provider
-    /// cannot take it.
-    allowlist_configured: bool,
+    /// The configured search filter (spec 3.1 §7.32), so the banner names it, and says
+    /// when a provider cannot take it.
+    filter: Option<SearchDomains>,
     /// Why the model provider's search was requested but not attached.
     unavailable: Option<String>,
     mode_store: Arc<dyn ModeStore>,
@@ -61,25 +60,34 @@ pub(crate) struct ProviderWebToolset {
     refused: OnceLock<String>,
 }
 
-/// The built-in that declares `search` to the provider, with `domains` forwarded where the
-/// provider takes an allowlist.
-fn search_entry(search: NativeWebSearch, domains: Option<&Vec<String>>) -> Option<Entry> {
-    let allowlist = domains.filter(|_| search.allowed_domains).cloned();
+/// The built-in that declares `search` to the provider, with `filter` forwarded where the
+/// provider takes it (spec 3.1 §7.32): Anthropic takes an allowed or a blocked list,
+/// OpenAI an allowed list, Gemini and DeepSeek none.
+fn search_entry(search: NativeWebSearch, filter: Option<&SearchDomains>) -> Option<Entry> {
+    let takes = |filter: &SearchDomains| {
+        search.allowed_domains
+            && match filter {
+                SearchDomains::Allowed(_) => true,
+                SearchDomains::Blocked(_) => search.tool == NativeWebSearchTool::AnthropicWebSearch,
+            }
+    };
+    let forwarded = filter.filter(|filter| takes(filter));
     let tool: Arc<dyn Tool> = match search.tool {
         NativeWebSearchTool::GoogleSearch => Arc::new(adk_tool::builtin::GoogleSearchTool::new()),
         NativeWebSearchTool::AnthropicWebSearch => {
-            let mut tool = adk_tool::builtin::WebSearchTool::new();
-            if let Some(domains) = &allowlist {
-                tool = tool.with_allowed_domains(domains.clone());
-            }
-            Arc::new(tool)
+            let tool = adk_tool::builtin::WebSearchTool::new();
+            Arc::new(match forwarded {
+                Some(SearchDomains::Allowed(domains)) => tool.with_allowed_domains(domains.clone()),
+                Some(SearchDomains::Blocked(domains)) => tool.with_blocked_domains(domains.clone()),
+                None => tool,
+            })
         }
         NativeWebSearchTool::OpenAiWebSearch => {
-            let mut tool = adk_tool::builtin::OpenAIWebSearchTool::new();
-            if let Some(domains) = &allowlist {
-                tool = tool.with_allowed_domains(domains.clone());
-            }
-            Arc::new(tool)
+            let tool = adk_tool::builtin::OpenAIWebSearchTool::new();
+            Arc::new(match forwarded {
+                Some(SearchDomains::Allowed(domains)) => tool.with_allowed_domains(domains.clone()),
+                _ => tool,
+            })
         }
         NativeWebSearchTool::DeepSeekWebSearch => {
             Arc::new(adk_tool::builtin::DeepSeekWebSearchTool::new())
@@ -90,8 +98,7 @@ fn search_entry(search: NativeWebSearch, domains: Option<&Vec<String>>) -> Optio
     Some(Entry {
         provider: search.provider,
         tool,
-        allowlist,
-        allowlist_supported: search.allowed_domains,
+        filter_applied: forwarded.is_some(),
         search: true,
     })
 }
@@ -104,17 +111,27 @@ impl ProviderWebToolset {
     pub(crate) fn new(
         tools: ProviderWebTools,
         model: &dyn Llm,
-        allowlist: Vec<String>,
+        filter: Option<SearchDomains>,
         search_provider_configured: bool,
         mode_store: Arc<dyn ModeStore>,
         default_mode: HarnessMode,
     ) -> Result<Self> {
         let native = model.native_web_search();
-        let allowlist_configured = !allowlist.is_empty();
-        let domains = allowlist_configured.then_some(allowlist);
+        // A filter that lets no domain through declares no search at all.
+        let no_domain = filter.as_ref().is_some_and(SearchDomains::permits_none);
+        let tools = if no_domain {
+            ProviderWebTools {
+                gemini_url_context: tools.gemini_url_context,
+                ..ProviderWebTools::off()
+            }
+        } else {
+            tools
+        };
+        let domains = filter.as_ref();
         let mut entries: Vec<Entry> = Vec::new();
         let mut skipped = Vec::new();
-        let mut unavailable = None;
+        let mut unavailable = no_domain
+            .then(|| "search_domains allows no domain, so no search is declared".to_string());
         let mut attach =
             |entry: Option<Entry>, label: &'static str, skipped: &mut Vec<_>| match entry {
                 Some(entry) if !entries.iter().any(|e| e.tool.name() == entry.tool.name()) => {
@@ -126,7 +143,7 @@ impl ProviderWebToolset {
         if tools.native_search && !search_provider_configured {
             match native {
                 Some(search) => {
-                    attach(search_entry(search, domains.as_ref()), "native search", &mut skipped)
+                    attach(search_entry(search, domains), "native search", &mut skipped)
                 }
                 None => {
                     unavailable = Some(format!(
@@ -140,25 +157,24 @@ impl ProviderWebToolset {
         let matching = |tool: NativeWebSearchTool| native.filter(|search| search.tool == tool);
         if tools.anthropic_web_search {
             let entry = matching(NativeWebSearchTool::AnthropicWebSearch)
-                .and_then(|search| search_entry(search, domains.as_ref()));
+                .and_then(|search| search_entry(search, domains));
             attach(entry, "anthropic web_search", &mut skipped);
         }
         if tools.openai_web_search {
             let entry = matching(NativeWebSearchTool::OpenAiWebSearch)
-                .and_then(|search| search_entry(search, domains.as_ref()));
+                .and_then(|search| search_entry(search, domains));
             attach(entry, "openai web_search", &mut skipped);
         }
         if tools.gemini_google_search {
             let entry = matching(NativeWebSearchTool::GoogleSearch)
-                .and_then(|search| search_entry(search, domains.as_ref()));
+                .and_then(|search| search_entry(search, domains));
             attach(entry, "gemini google_search", &mut skipped);
         }
         if tools.gemini_url_context {
             let entry = matching(NativeWebSearchTool::GoogleSearch).map(|search| Entry {
                 provider: search.provider,
                 tool: Arc::new(adk_tool::builtin::UrlContextTool::new()),
-                allowlist: None,
-                allowlist_supported: false,
+                filter_applied: false,
                 search: false,
             });
             attach(entry, "gemini url_context", &mut skipped);
@@ -173,7 +189,7 @@ impl ProviderWebToolset {
         }
         Ok(Self {
             entries,
-            allowlist_configured,
+            filter,
             unavailable,
             mode_store,
             default_mode,
@@ -195,8 +211,8 @@ impl ProviderWebToolset {
             return Some(WebSearchPath::Provider {
                 provider: entry.provider.to_string(),
                 tool: entry.tool.name().to_string(),
-                allowlist: entry.allowlist.clone(),
-                allowlist_supported: entry.allowlist_supported,
+                filter: self.filter.clone(),
+                filter_applied: entry.filter_applied,
             });
         }
         self.unavailable.clone().map(|reason| WebSearchPath::None { reason })
@@ -210,27 +226,21 @@ impl ProviderWebToolset {
         }
     }
 
-    /// The request banner naming which path is governed (spec 3.1 §7.20).
+    /// The request banner naming which path is governed and the search filter, never the
+    /// fetch allowlist (spec 3.1 §7.20, §7.32).
     pub(crate) fn banner(&self) -> String {
         let live: Vec<String> = self
             .entries
             .iter()
-            .map(|entry| match &entry.allowlist {
-                Some(domains) => {
-                    format!(
-                        "{} {} (allowlist: {})",
-                        entry.provider,
-                        entry.tool.name(),
-                        domains.join(", ")
-                    )
+            .map(|entry| {
+                let (provider, tool) = (entry.provider, entry.tool.name());
+                match &self.filter {
+                    Some(filter) if entry.filter_applied => format!("{provider} {tool} ({filter})"),
+                    Some(_) if entry.search => format!(
+                        "{provider} {tool} (every domain: {provider} takes no search filter)"
+                    ),
+                    _ => format!("{provider} {tool} (every domain)"),
                 }
-                None if self.allowlist_configured && !entry.allowlist_supported => format!(
-                    "{} {} (every domain: {} takes no allowlist)",
-                    entry.provider,
-                    entry.tool.name(),
-                    entry.provider
-                ),
-                None => format!("{} {} (every domain)", entry.provider, entry.tool.name()),
             })
             .collect();
         format!(
@@ -282,7 +292,7 @@ impl ProviderWebToolset {
                     json!({
                         "provider": entry.provider,
                         "tool": entry.tool.name(),
-                        "allowlist": entry.allowlist,
+                        "searchDomains": self.filter.as_ref().filter(|_| entry.filter_applied),
                         "mode": mode,
                     }),
                 )

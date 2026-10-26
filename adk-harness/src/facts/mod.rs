@@ -38,13 +38,14 @@ pub use consolidate::{
 };
 #[cfg(any(feature = "memory-embeddings", feature = "memory-embeddings-local"))]
 pub use embed::RagEmbedder;
+pub(crate) use index::embedder_id;
 pub use index::{FactIndex, LocalFactIndex, MemoryServiceIndex};
 #[cfg(feature = "kernel")]
 pub use kernel_tick::{HarnessConsolidator, HarnessObservations, SessionStateFilter};
 pub use redact::redact_fact_text;
 #[cfg(feature = "sqlite")]
 pub use store::SqliteFactStore;
-pub use store::{FactStore, FileFactStore, InMemoryFactStore};
+pub use store::{FactEmbedding, FactStore, FileFactStore, InMemoryFactStore};
 pub use types::{
     FACT_AUTHOR_PREFIX, FACT_TEXT_MAX_CHARS, FactFilter, FactKind, FactProjects, FactScope,
     FactSource, FactStatus, LongTermMemoryConfig, MemoryFact, Provenance, fact_digest,

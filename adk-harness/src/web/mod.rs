@@ -4,7 +4,8 @@
 //! policy decides them by the URL's host against [`WebConfig::allowed_domains`], and
 //! everything they return reaches the model only inside a delimited untrusted block,
 //! size-capped, with injection matches labelled and secret patterns redacted
-//! (spec 3.1 §9.2 I46–I49).
+//! (spec 3.1 §9.2 I46–I49). The fetch allowlist is never a search filter: what a search
+//! covers is [`WebConfig::search_domains`] (spec 3.1 §7.32, I73).
 //!
 //! The configuration types compile in every build; the tools, the fetch client, the
 //! HTML-to-text pass and the screening need feature `web`.
@@ -49,14 +50,23 @@ pub use screen::{
 #[cfg(feature = "web")]
 pub use search::{DeepSeekSearch, SearxngSearch};
 
-/// Configuration of the web tools (spec 3.1 §7.20).
+/// Configuration of the web tools (spec 3.1 §7.20, §7.32).
+///
+/// | Setting | Meaning |
+/// |---|---|
+/// | `allowed_domains` | hosts `web_fetch` and the browser pack's navigation reach without approval; never forwarded to a search |
+/// | `search_domains` | the search filter: forwarded to the provider's search where it takes one, applied to the governed `web_search`'s results; `None` searches every domain |
 ///
 /// # Example
 ///
 /// ```rust
-/// use adk_harness::web::WebConfig;
+/// use adk_harness::web::{SearchDomains, WebConfig};
 ///
-/// let config = WebConfig { allowed_domains: vec!["docs.rs".into()], ..WebConfig::default() };
+/// let config = WebConfig {
+///     allowed_domains: vec!["docs.rs".into()],
+///     search_domains: Some(SearchDomains::Allowed(vec!["docs.rs".into(), "rust-lang.org".into()])),
+///     ..WebConfig::default()
+/// };
 /// assert_eq!(config.max_bytes, 1024 * 1024);
 /// assert_eq!(config.max_url_len, 2048);
 /// assert_eq!(config.max_query_len, 512);
@@ -67,9 +77,15 @@ pub use search::{DeepSeekSearch, SearxngSearch};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WebConfig {
-    /// Hosts fetched without approval: exact hosts or `*.example.com`, the `DomainIn`
-    /// grammar.
+    /// Hosts `web_fetch` and the browser pack reach without approval: exact hosts or
+    /// `*.example.com`, the `DomainIn` grammar. Never forwarded to a search (I73).
     pub allowed_domains: Vec<String>,
+    /// The search filter (spec 3.1 §7.32): forwarded where the provider's search takes one
+    /// (Anthropic both lists, OpenAI an allowed list), applied to the governed
+    /// `web_search`'s results, and named in the banner where the provider takes none
+    /// (Gemini, DeepSeek). `None` searches every domain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_domains: Option<SearchDomains>,
     /// Bytes read on the wire per fetch; 64 KiB of text are delivered, the rest cut with
     /// a marker.
     pub max_bytes: usize,
@@ -92,6 +108,7 @@ impl Default for WebConfig {
     fn default() -> Self {
         Self {
             allowed_domains: Vec::new(),
+            search_domains: None,
             max_bytes: 1024 * 1024,
             max_url_len: 2048,
             max_query_len: 512,
@@ -102,6 +119,140 @@ impl Default for WebConfig {
                 "adk-harness/{} (+https://github.com/zavora-ai/adk-rust)",
                 env!("CARGO_PKG_VERSION")
             ),
+        }
+    }
+}
+
+/// What a web search may return, by domain (spec 3.1 §7.32): a filter separate from the
+/// fetch allowlist.
+///
+/// Each entry is a domain such as `docs.rs`; it covers the domain and its subdomains, as
+/// Anthropic's and OpenAI's search filters read it, and a leading `*.` is dropped. A
+/// workspace file may only [`narrow`](Self::narrow) the filter the operator or user set.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_harness::web::SearchDomains;
+///
+/// let only = SearchDomains::Allowed(vec!["rust-lang.org".into()]);
+/// assert!(only.permits("doc.rust-lang.org"));
+/// assert!(!only.permits("evil-rust-lang.org"));
+/// assert_eq!(only.to_string(), "only rust-lang.org");
+///
+/// let blocked = SearchDomains::Blocked(vec!["pinterest.com".into()]);
+/// assert!(!blocked.permits("www.pinterest.com"));
+/// assert_eq!(blocked.to_string(), "every domain except pinterest.com");
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SearchDomains {
+    /// Only these domains and their subdomains.
+    Allowed(Vec<String>),
+    /// Every domain but these and their subdomains.
+    Blocked(Vec<String>),
+}
+
+/// `domain` lowercased, without a leading `*.` or a trailing dot.
+fn search_domain(domain: &str) -> String {
+    let domain = domain.trim().to_ascii_lowercase();
+    let domain = domain.strip_prefix("*.").unwrap_or(&domain);
+    domain.strip_suffix('.').unwrap_or(domain).to_string()
+}
+
+/// Whether `host` is `domain` or one of its subdomains.
+fn covered(host: &str, domain: &str) -> bool {
+    let (host, domain) = (search_domain(host), search_domain(domain));
+    !domain.is_empty()
+        && (host == domain || host.strip_suffix(&domain).is_some_and(|sub| sub.ends_with('.')))
+}
+
+impl SearchDomains {
+    /// The domains the filter lists.
+    pub fn domains(&self) -> &[String] {
+        match self {
+            Self::Allowed(domains) | Self::Blocked(domains) => domains,
+        }
+    }
+
+    /// Whether a result from `host` passes the filter.
+    pub fn permits(&self, host: &str) -> bool {
+        match self {
+            Self::Allowed(domains) => domains.iter().any(|domain| covered(host, domain)),
+            Self::Blocked(domains) => !domains.iter().any(|domain| covered(host, domain)),
+        }
+    }
+
+    /// Whether the filter lets no domain through: an empty allowed list.
+    pub fn permits_none(&self) -> bool {
+        matches!(self, Self::Allowed(domains) if domains.is_empty())
+    }
+
+    /// The filter `ceiling` (the operator's or user's, `None` for every domain) narrowed by
+    /// `workspace`, a workspace file's filter, which may only narrow it (spec 3.1 §7.32,
+    /// I3).
+    ///
+    /// | Ceiling | Workspace | Result |
+    /// |---|---|---|
+    /// | none | any | the workspace's |
+    /// | allowed `a` | allowed `b` | allowed: the entries of each the other covers |
+    /// | allowed `a` | blocked `b` | allowed: `a` without the entries that overlap `b` |
+    /// | blocked `a` | allowed `b` | allowed: `b` without the entries that overlap `a` |
+    /// | blocked `a` | blocked `b` | blocked: both |
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::web::SearchDomains;
+    ///
+    /// let user = SearchDomains::Allowed(vec!["rust-lang.org".into(), "docs.rs".into()]);
+    /// let workspace = SearchDomains::Allowed(vec!["doc.rust-lang.org".into(), "evil.example".into()]);
+    /// assert_eq!(
+    ///     SearchDomains::narrow(Some(&user), &workspace),
+    ///     SearchDomains::Allowed(vec!["doc.rust-lang.org".into()])
+    /// );
+    /// ```
+    pub fn narrow(ceiling: Option<&Self>, workspace: &Self) -> Self {
+        let overlaps = |a: &str, b: &str| covered(a, b) || covered(b, a);
+        let unique = |domains: Vec<String>| {
+            let mut out: Vec<String> = Vec::new();
+            for domain in domains {
+                if !out.contains(&domain) {
+                    out.push(domain);
+                }
+            }
+            out
+        };
+        match (ceiling, workspace) {
+            (None, workspace) => workspace.clone(),
+            (Some(Self::Allowed(a)), Self::Allowed(b)) => {
+                let within = |x: &String, of: &[String]| of.iter().any(|y| covered(x, y));
+                let both =
+                    b.iter().filter(|x| within(x, a)).chain(a.iter().filter(|x| within(x, b)));
+                Self::Allowed(unique(both.cloned().collect()))
+            }
+            (Some(Self::Allowed(allowed)), Self::Blocked(blocked))
+            | (Some(Self::Blocked(blocked)), Self::Allowed(allowed)) => Self::Allowed(unique(
+                allowed
+                    .iter()
+                    .filter(|x| !blocked.iter().any(|y| overlaps(x, y)))
+                    .cloned()
+                    .collect(),
+            )),
+            (Some(Self::Blocked(a)), Self::Blocked(b)) => {
+                Self::Blocked(unique(a.iter().chain(b).cloned().collect()))
+            }
+        }
+    }
+}
+
+impl fmt::Display for SearchDomains {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Allowed(domains) if domains.is_empty() => f.write_str("no domain"),
+            Self::Allowed(domains) => write!(f, "only {}", domains.join(", ")),
+            Self::Blocked(domains) if domains.is_empty() => f.write_str("every domain"),
+            Self::Blocked(domains) => write!(f, "every domain except {}", domains.join(", ")),
         }
     }
 }
@@ -200,13 +351,13 @@ pub struct ProviderWebTools {
     /// The search built-in of the provider the harness model's client serves, whichever
     /// it is; replaced by a configured search provider.
     pub native_search: bool,
-    /// Anthropic `web_search`, with the allowlist forwarded.
+    /// Anthropic `web_search`, with the search filter forwarded.
     pub anthropic_web_search: bool,
-    /// OpenAI `web_search`, with the allowlist forwarded.
+    /// OpenAI `web_search`, with an allowed search filter forwarded.
     pub openai_web_search: bool,
-    /// Gemini `google_search`; it has no allowlist, so every domain.
+    /// Gemini `google_search`; it takes no search filter, so every domain.
     pub gemini_google_search: bool,
-    /// Gemini `url_context`; it has no allowlist, so every domain.
+    /// Gemini `url_context`; it reads the URLs the prompt names.
     pub gemini_url_context: bool,
 }
 
@@ -253,15 +404,26 @@ impl ProviderWebTools {
 /// ```rust
 /// use adk_harness::web::WebSearchPath;
 ///
+/// use adk_harness::web::SearchDomains;
+///
+/// let path = WebSearchPath::Provider {
+///     provider: "anthropic".into(),
+///     tool: "web_search".into(),
+///     filter: Some(SearchDomains::Allowed(vec!["docs.rs".into()])),
+///     filter_applied: true,
+/// };
+/// assert_eq!(path.to_string(), "anthropic web_search, run by the provider: only docs.rs");
+///
 /// let path = WebSearchPath::Provider {
 ///     provider: "gemini".into(),
 ///     tool: "google_search".into(),
-///     allowlist: None,
-///     allowlist_supported: false,
+///     filter: Some(SearchDomains::Allowed(vec!["docs.rs".into()])),
+///     filter_applied: false,
 /// };
 /// assert_eq!(
 ///     path.to_string(),
-///     "gemini google_search, run by the provider: every domain (gemini takes no allowlist)"
+///     "gemini google_search, run by the provider: every domain (gemini takes no search \
+///      filter; search_domains is not applied)"
 /// );
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -274,15 +436,18 @@ pub enum WebSearchPath {
         provider: String,
         /// The built-in tool declared.
         tool: String,
-        /// The allowlist forwarded to the provider.
-        allowlist: Option<Vec<String>>,
-        /// Whether the provider takes an allowlist at all.
-        allowlist_supported: bool,
+        /// The configured search filter ([`WebConfig::search_domains`]); never the fetch
+        /// allowlist.
+        filter: Option<SearchDomains>,
+        /// Whether the provider takes the filter, so it was forwarded.
+        filter_applied: bool,
     },
     /// The governed `web_search` over the operator's search provider.
     Governed {
         /// The search provider's name.
         provider: String,
+        /// The search filter applied to its results.
+        filter: Option<SearchDomains>,
     },
     /// No `web_search`, and why.
     None {
@@ -294,22 +459,23 @@ pub enum WebSearchPath {
 impl fmt::Display for WebSearchPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Provider { provider, tool, allowlist: Some(domains), .. } => write!(
-                f,
-                "{provider} {tool}, run by the provider: allowlist {}",
-                domains.join(", ")
-            ),
-            Self::Provider { provider, tool, allowlist: None, allowlist_supported: false } => {
-                write!(
-                    f,
-                    "{provider} {tool}, run by the provider: every domain ({provider} takes no \
-                     allowlist)"
-                )
+            Self::Provider { provider, tool, filter: Some(filter), filter_applied: true } => {
+                write!(f, "{provider} {tool}, run by the provider: {filter}")
             }
-            Self::Provider { provider, tool, allowlist: None, allowlist_supported: true } => {
+            Self::Provider { provider, tool, filter: Some(_), filter_applied: false } => write!(
+                f,
+                "{provider} {tool}, run by the provider: every domain ({provider} takes no search \
+                 filter; search_domains is not applied)"
+            ),
+            Self::Provider { provider, tool, filter: None, .. } => {
                 write!(f, "{provider} {tool}, run by the provider: every domain")
             }
-            Self::Governed { provider } => write!(f, "web_search through {provider} (governed)"),
+            Self::Governed { provider, filter: Some(filter) } => {
+                write!(f, "web_search through {provider} (governed): {filter}")
+            }
+            Self::Governed { provider, filter: None } => {
+                write!(f, "web_search through {provider} (governed): every domain")
+            }
             Self::None { reason } => write!(f, "off ({reason})"),
         }
     }
@@ -417,10 +583,92 @@ mod tests {
     }
 
     #[test]
+    fn search_domains_cover_subdomains_and_never_lookalikes() {
+        let only = SearchDomains::Allowed(vec!["*.Rust-Lang.org".into(), "docs.rs".into()]);
+        assert!(only.permits("rust-lang.org") && only.permits("doc.rust-lang.org"));
+        assert!(only.permits("docs.rs") && !only.permits("evil-docs.rs"));
+        assert!(!only.permits("example.com"));
+        let blocked = SearchDomains::Blocked(vec!["pinterest.com".into()]);
+        assert!(!blocked.permits("pinterest.com") && blocked.permits("example.com"));
+        assert!(SearchDomains::Allowed(vec![]).permits_none());
+        assert!(!SearchDomains::Blocked(vec![]).permits_none());
+    }
+
+    #[test]
+    fn a_workspace_filter_only_narrows_the_ceiling() {
+        let allowed =
+            |d: &[&str]| SearchDomains::Allowed(d.iter().map(|d| d.to_string()).collect());
+        let blocked =
+            |d: &[&str]| SearchDomains::Blocked(d.iter().map(|d| d.to_string()).collect());
+        // No ceiling: the workspace's filter.
+        assert_eq!(SearchDomains::narrow(None, &blocked(&["a.io"])), blocked(&["a.io"]));
+        // Allowed and allowed: what both cover.
+        assert_eq!(
+            SearchDomains::narrow(Some(&allowed(&["docs.rs"])), &allowed(&["evil.example"])),
+            allowed(&[])
+        );
+        assert_eq!(
+            SearchDomains::narrow(
+                Some(&allowed(&["doc.rust-lang.org"])),
+                &allowed(&["rust-lang.org"])
+            ),
+            allowed(&["doc.rust-lang.org"])
+        );
+        // Allowed and blocked: the allowed list without what the blocked list touches.
+        assert_eq!(
+            SearchDomains::narrow(
+                Some(&allowed(&["docs.rs", "rust-lang.org"])),
+                &blocked(&["blog.rust-lang.org"])
+            ),
+            allowed(&["docs.rs"])
+        );
+        assert_eq!(
+            SearchDomains::narrow(
+                Some(&blocked(&["pinterest.com"])),
+                &allowed(&["docs.rs", "pinterest.com"])
+            ),
+            allowed(&["docs.rs"])
+        );
+        // Blocked and blocked: both lists.
+        assert_eq!(
+            SearchDomains::narrow(Some(&blocked(&["a.io"])), &blocked(&["b.io", "a.io"])),
+            blocked(&["a.io", "b.io"])
+        );
+    }
+
+    #[test]
+    fn the_search_path_names_the_filter_never_the_fetch_allowlist() {
+        let path = |filter, filter_applied| WebSearchPath::Provider {
+            provider: "anthropic".into(),
+            tool: "web_search".into(),
+            filter,
+            filter_applied,
+        };
+        assert_eq!(
+            path(None, true).to_string(),
+            "anthropic web_search, run by the provider: every domain"
+        );
+        assert_eq!(
+            path(Some(SearchDomains::Blocked(vec!["pinterest.com".into()])), true).to_string(),
+            "anthropic web_search, run by the provider: every domain except pinterest.com"
+        );
+        let governed = WebSearchPath::Governed {
+            provider: "searxng".into(),
+            filter: Some(SearchDomains::Allowed(vec!["docs.rs".into()])),
+        };
+        assert_eq!(governed.to_string(), "web_search through searxng (governed): only docs.rs");
+    }
+
+    #[test]
     fn config_round_trips_through_serde() {
-        let config = WebConfig { allowed_domains: vec!["docs.rs".into()], ..WebConfig::default() };
+        let config = WebConfig {
+            allowed_domains: vec!["docs.rs".into()],
+            search_domains: Some(SearchDomains::Blocked(vec!["pinterest.com".into()])),
+            ..WebConfig::default()
+        };
         let json = serde_json::to_value(&config).unwrap();
         assert_eq!(json["allowedDomains"][0], "docs.rs");
+        assert_eq!(json["searchDomains"]["blocked"][0], "pinterest.com");
         assert_eq!(json["timeout"], 20);
         let back: WebConfig = serde_json::from_value(json).unwrap();
         assert_eq!(back, config);
