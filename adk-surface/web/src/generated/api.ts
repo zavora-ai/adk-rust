@@ -76,6 +76,12 @@ export interface AgentDetail {
   changedOn?: string | null;
   /** Its definition. */
   draft: AgentDraft;
+  /**
+   * What the home lets it do beyond its definition, "On this home it can also:", from the
+   * uses the host granted every agent it runs; empty for an agent that does not run, and
+   * absent when empty (spec 3.3 §5.7, S-I12, S-I13).
+   */
+  granted?: GrantedUse[];
   /** Its kernel target, for commands. Never shown. */
   id: string;
   /** How much it asks first, with its words. */
@@ -351,6 +357,24 @@ export interface CallView {
   tool: string;
   /** `text` is cut short: the call must be expanded before it can be approved. */
   truncated: boolean;
+}
+
+/**
+ * A line under a decision's details that a feature adds through a
+ * `CardHint`: where the call comes from, with an optional link into the
+ * home, such as "From the invoice-run workflow · Open in Runs" (spec 3.3 §7.1). Never on a
+ * chat card (S-I5).
+ */
+export interface CardDetail {
+  /**
+   * Where the link goes: a path in the home, such as `/ui/runs/r-1`. A renderer follows only
+   * a path on its own server.
+   */
+  href?: string | null;
+  /** The words of the link after the line: "Open in Runs". */
+  linkText?: string | null;
+  /** The line, in plain words: "From the invoice-run workflow". */
+  text: string;
 }
 
 /** One line of an agent's definition on a card: "Area · Home". */
@@ -664,6 +688,12 @@ export interface DecisionCard {
   call: CallView;
   /** The answer, once decided. */
   decided?: Decided | null;
+  /**
+   * A line under the details from a feature's `CardHint`, such as
+   * "From the invoice-run workflow · Open in Runs" (spec 3.3 §7.1). Never on a chat card
+   * (S-I5).
+   */
+  detail?: CardDetail | null;
   /** What will happen, in plain words. */
   heading: string;
   /** The inbox entry: what a command answers. Never shown. */
@@ -776,6 +806,22 @@ export type FeedFrame = {
 
 /** Where an agent's files are: none, read, or read and change (spec 3.3 §5.7). */
 export type FileUse = "none" | "read" | "readWrite";
+
+/**
+ * Something the home lets every agent on it do beyond its definition, because the host
+ * gives each agent it runs the tools for it (spec 3.3 §5.7, S-I12, S-I13): shown under
+ * "Here is what Finance can do" as "On this home it can also:". Hosts register each with
+ * `SurfaceEngineBuilder::grant`.
+ */
+export interface GrantedUse {
+  /** The feature that grants it, such as `genui`: one line per id. Never shown. */
+  id: string;
+  /**
+   * What it can do, in plain words: "Ask to change things on your screens — always asks
+   * you first".
+   */
+  text: string;
+}
 
 /** One of the three switches of "What it can see" (spec 3.3 §5.6). */
 export type InputSource = "mic" | "camera" | "screen";
@@ -964,7 +1010,7 @@ export interface RemovedThread {
 }
 
 /** Whether a call can be taken back (spec 3.3 §7.1). */
-export type Reversibility = "cantBeUnsent" | "cantBeUndone" | "canBeRemoved";
+export type Reversibility = "cantBeUnsent" | "cantBeUndone" | "canBeRemoved" | "canBeChangedBack";
 
 /** How much harm a call can do, as approvers see it (spec 3.3 §7.1). */
 export type Risk = "low" | "medium" | "high";

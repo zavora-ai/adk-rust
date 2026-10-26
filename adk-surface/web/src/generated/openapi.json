@@ -195,6 +195,13 @@
             "$ref": "#/components/schemas/AgentDraft",
             "description": "Its definition."
           },
+          "granted": {
+            "description": "What the home lets it do beyond its definition, \"On this home it can also:\", from the\nuses the host granted every agent it runs; empty for an agent that does not run, and\nabsent when empty (spec 3.3 §5.7, S-I12, S-I13).",
+            "items": {
+              "$ref": "#/components/schemas/GrantedUse"
+            },
+            "type": "array"
+          },
           "id": {
             "description": "Its kernel target, for commands. Never shown.",
             "type": "string"
@@ -1010,6 +1017,33 @@
           "args",
           "text",
           "truncated"
+        ],
+        "type": "object"
+      },
+      "CardDetail": {
+        "description": "A line under a decision's details that a feature adds through a\n`CardHint`: where the call comes from, with an optional link into the\nhome, such as \"From the invoice-run workflow · Open in Runs\" (spec 3.3 §7.1). Never on a\nchat card (S-I5).",
+        "properties": {
+          "href": {
+            "description": "Where the link goes: a path in the home, such as `/ui/runs/r-1`. A renderer follows only\na path on its own server.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "linkText": {
+            "description": "The words of the link after the line: \"Open in Runs\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "The line, in plain words: \"From the invoice-run workflow\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
         ],
         "type": "object"
       },
@@ -2023,6 +2057,17 @@
             ],
             "description": "The answer, once decided."
           },
+          "detail": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CardDetail"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A line under the details from a feature's `CardHint`, such as\n\"From the invoice-run workflow · Open in Runs\" (spec 3.3 §7.1). Never on a chat card\n(S-I5)."
+          },
           "heading": {
             "description": "What will happen, in plain words.",
             "type": "string"
@@ -2343,6 +2388,24 @@
             "type": "string"
           }
         ]
+      },
+      "GrantedUse": {
+        "description": "Something the home lets every agent on it do beyond its definition, because the host\ngives each agent it runs the tools for it (spec 3.3 §5.7, S-I12, S-I13): shown under\n\"Here is what Finance can do\" as \"On this home it can also:\". Hosts register each with\n`SurfaceEngineBuilder::grant`.",
+        "properties": {
+          "id": {
+            "description": "The feature that grants it, such as `genui`: one line per id. Never shown.",
+            "type": "string"
+          },
+          "text": {
+            "description": "What it can do, in plain words: \"Ask to change things on your screens — always asks\nyou first\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "type": "object"
       },
       "InputSource": {
         "description": "One of the three switches of \"What it can see\" (spec 3.3 §5.6).",
@@ -2849,6 +2912,11 @@
           {
             "const": "canBeRemoved",
             "description": "\"You can remove it later\": an agent a person adds (spec 3.3 §5.7).",
+            "type": "string"
+          },
+          {
+            "const": "canBeChangedBack",
+            "description": "\"You can change it back\": a change a person can make again the other way, such as a\ntime moved on their screens, which a feature's `CardHint` says\n(spec 3.3 §7.1).",
             "type": "string"
           }
         ]
