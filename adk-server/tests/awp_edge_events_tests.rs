@@ -679,3 +679,11 @@ async fn the_beacon_counts_without_identifiers() {
     assert_eq!(read("events:signup").await, Some(1.0));
     assert_eq!(read("visitors").await, Some(1.0), "one consenting visitor, counted once");
 }
+
+// --- the event log and beacon store contract -----------------------------------------------
+
+mod memory_log {
+    adk_server::edge_log_conformance_tests! {
+        harness = adk_server::awp::conformance::MemoryEdgeLog::default(),
+    }
+}

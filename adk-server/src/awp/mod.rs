@@ -61,6 +61,7 @@
 pub mod a2a;
 pub mod beacon;
 pub mod chat;
+pub mod conformance;
 pub mod consent;
 pub mod control;
 pub mod events;
@@ -109,7 +110,9 @@ pub use a2a::AgentCardInfo;
 pub use beacon::{BeaconCounts, BeaconStore, InMemoryBeaconStore};
 pub use consent::{ConsentConfig, ConsentPolicy, LeadsData, SubjectData};
 pub use control::{EdgeMode, StatusError};
-pub use events::{EdgeEvents, EventLog, EventsConfig, InMemoryEventLog, RetainedEvent};
+pub use events::{
+    EdgeEvents, EventLog, EventsConfig, InMemoryEventLog, PendingDelivery, RetainedEvent,
+};
 pub use executor::{GovernedExecutor, KeySources};
 pub use limits::EdgeLimits;
 pub use policy::{CapabilityPolicy, PublicPartitionPolicy};
@@ -159,6 +162,12 @@ pub struct EdgeStores {
     pub subscriptions: Arc<dyn SubscriptionStore>,
     /// Leads captured at the edge.
     pub leads: Arc<dyn LeadStore>,
+    /// Events retained for replay, catalogue pages, consent references and pending
+    /// deliveries; the builder's [`event_log`](AwpEdgeBuilder::event_log), else in memory.
+    pub event_log: Option<Arc<dyn EventLog>>,
+    /// The beacon's daily counts; the builder's
+    /// [`beacon_store`](AwpEdgeBuilder::beacon_store), else in memory.
+    pub beacon: Option<Arc<dyn BeaconStore>>,
 }
 
 impl EdgeStores {
@@ -177,6 +186,8 @@ impl EdgeStores {
             consent,
             subscriptions: Arc::new(memory.subscriptions),
             leads: Arc::new(memory.leads),
+            event_log: None,
+            beacon: None,
         }
     }
 
@@ -191,6 +202,21 @@ impl EdgeStores {
     #[must_use]
     pub fn with_leads(mut self, leads: Arc<dyn LeadStore>) -> Self {
         self.leads = leads;
+        self
+    }
+
+    /// Retains events, catalogue pages, consent references and pending deliveries in `log`,
+    /// so they survive a restart (spec 3.5 §7.5).
+    #[must_use]
+    pub fn with_event_log(mut self, log: Arc<dyn EventLog>) -> Self {
+        self.event_log = Some(log);
+        self
+    }
+
+    /// Keeps the beacon's daily counts in `beacon` (spec 3.5 §7.12).
+    #[must_use]
+    pub fn with_beacon(mut self, beacon: Arc<dyn BeaconStore>) -> Self {
+        self.beacon = Some(beacon);
         self
     }
 
@@ -408,7 +434,7 @@ impl AwpEdgeBuilder {
         self
     }
 
-    /// Sets where events are retained for replay; in memory by default.
+    /// Sets where events are retained for replay; the stores' event log, else in memory.
     #[must_use]
     pub fn event_log(mut self, log: Arc<dyn EventLog>) -> Self {
         self.event_log = Some(log);
@@ -430,7 +456,7 @@ impl AwpEdgeBuilder {
         self
     }
 
-    /// Sets where the beacon counts; in memory by default.
+    /// Sets where the beacon counts; the stores' beacon store, else in memory.
     #[must_use]
     pub fn beacon_store(mut self, store: Arc<dyn BeaconStore>) -> Self {
         self.beacon = Some(store);
@@ -464,12 +490,14 @@ impl AwpEdgeBuilder {
         }
         let events = EdgeEvents::new(
             Arc::clone(&stores.subscriptions),
-            self.event_log.unwrap_or_else(|| Arc::new(InMemoryEventLog::new())),
+            self.event_log
+                .or_else(|| stores.event_log.clone())
+                .unwrap_or_else(|| Arc::new(InMemoryEventLog::new())),
             self.events,
             self.public_url.as_str(),
         );
         control.attach_events(events.clone());
-        let references = events::ConsentReferences::default();
+        let references = events.references();
         let principal = match self.principal {
             Some(principal) => principal,
             None => AgentPrincipal::new(
@@ -594,7 +622,10 @@ impl AwpEdgeBuilder {
                 .unwrap_or_else(|| Arc::new(LeadsData::new(Arc::clone(&stores.leads)))),
             audit: audit.clone(),
         };
-        let beacon_store = self.beacon.unwrap_or_else(|| Arc::new(InMemoryBeaconStore::new()));
+        let beacon_store = self
+            .beacon
+            .or_else(|| stores.beacon.clone())
+            .unwrap_or_else(|| Arc::new(InMemoryBeaconStore::new()));
         let beacon = beacon::BeaconState {
             store: Arc::clone(&beacon_store),
             consent: Arc::clone(&stores.consent),
@@ -748,6 +779,24 @@ impl AwpEdge {
     /// The beacon's daily counts, for the KPI tracker's `beacon` source (spec 3.5 §7.12).
     pub fn beacon(&self) -> BeaconCounts {
         BeaconCounts::new(Arc::clone(&self.inner.beacon))
+    }
+
+    /// Resumes, every `interval` until the edge is dropped, the event deliveries a stopped
+    /// process left in a durable [`EventLog`], so retries survive a restart (spec 3.5 §7.5);
+    /// see [`EdgeEvents::resume_deliveries`]. With a log that keeps no deliveries it finds
+    /// nothing.
+    pub fn spawn_delivery_resumer(&self, interval: Duration) -> tokio::task::JoinHandle<()> {
+        let weak: Weak<EdgeInner> = Arc::downgrade(&self.inner);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            loop {
+                ticker.tick().await;
+                let Some(inner) = weak.upgrade() else { break };
+                if let Err(error) = inner.events.resume_deliveries().await {
+                    tracing::warn!(error = %error, "awp delivery resumer failed");
+                }
+            }
+        })
     }
 
     /// A handle that switches the edge to read-only and back, for the back office's incident

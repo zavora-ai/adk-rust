@@ -285,8 +285,10 @@ impl ConsentState {
     /// rejected, and `consent.revoked` reaches the requesters whose calls referenced them.
     pub(crate) async fn revoked(&self, subject: &str, records: &[ConsentRecord]) {
         let ids: BTreeSet<Uuid> = records.iter().map(|record| record.receipt.id).collect();
-        let mut audiences: BTreeMap<Uuid, BTreeSet<awp_types::RequesterId>> =
-            ids.iter().map(|id| (*id, self.references.of(*id))).collect();
+        let mut audiences: BTreeMap<Uuid, BTreeSet<awp_types::RequesterId>> = BTreeMap::new();
+        for id in &ids {
+            audiences.insert(*id, self.references.of(*id).await);
+        }
         match self.held_calls.pending().await {
             Ok(pending) => {
                 for held in pending {

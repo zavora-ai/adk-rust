@@ -480,7 +480,7 @@ impl GovernedExecutor {
         if let Some(requester) = &invocation.requester
             && !invocation.consent.is_empty()
         {
-            inner.references.note(&invocation.consent, requester);
+            inner.references.note(&invocation.consent, requester).await;
         }
         // At least 128 bits of entropy (AWP 2.0 §7.6).
         let call_id = format!("call_{}", Uuid::new_v4().simple());
