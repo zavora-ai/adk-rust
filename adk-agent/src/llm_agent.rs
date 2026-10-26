@@ -276,7 +276,7 @@ fn build_final_llm_event(
 }
 
 /// The event that ends a run on a call held for confirmation.
-fn confirmation_event(
+pub(crate) fn confirmation_event(
     invocation_id: &str,
     agent_name: &str,
     request: ToolConfirmationRequest,
@@ -2866,7 +2866,10 @@ impl ToolExecutor<'_> {
             // for. A request naming another tool belongs to a delegate the tool runs, whose
             // own governed path binds it.
             if let Some(held) = resumes.filter(|held| held.tool_name == name) {
-                call = call.resuming(held);
+                // A call a person asked for runs only on their decision, whatever the policy
+                // allows by now (spec 3.3 §7.4 rule 5).
+                let requested = adk_core::RequestedCall::is_requested_id(&function_call_id);
+                call = call.resuming(held).requested(requested);
             }
             match authorize_tool_call(&gate, call).await {
                 Ok(ToolAuthorization::Execute { args, confirmation }) => {
@@ -3542,6 +3545,9 @@ impl Agent for LlmAgent {
     )]
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<adk_core::EventStream> {
         adk_telemetry::info!("Starting agent execution");
+        // A call a person asked for is taken by the agent the run starts with (spec 3.3 §7.4
+        // rule 5), never by a workflow or team member.
+        let starts_run = ctx.agent_name() == self.name;
         // Under a workflow or team parent, the agent still acts as itself.
         let ctx = crate::acting_agent_context::ActingAgentContext::scope(ctx, &self.name);
         let ctx = Self::apply_input_guardrails(ctx, self.input_guardrails.clone()).await?;
@@ -3792,6 +3798,28 @@ impl Agent for LlmAgent {
                     for request in held_again {
                         yield Ok(confirmation_event(&invocation_id, &agent_name, request));
                     }
+                    // A call a person asked for in this run waits for them too.
+                    if starts_run
+                        && let Some(requested) = ctx.run_config().requested_call.as_ref()
+                        && !crate::requested_call::taken(ctx.as_ref(), requested)
+                    {
+                        let taken = crate::requested_call::take(
+                            &ctx,
+                            &agent_name,
+                            &tool_map,
+                            tool_guardrails.as_ref(),
+                            requested,
+                        )
+                        .await;
+                        match taken {
+                            Ok(events) => {
+                                for event in events {
+                                    yield Ok(event);
+                                }
+                            }
+                            Err(error) => yield Err(error),
+                        }
+                    }
                     return;
                 }
 
@@ -3805,6 +3833,32 @@ impl Agent for LlmAgent {
                 tool_map = refreshed_tools.map;
                 tool_declarations = refreshed_tools.declarations;
                 valid_transfer_targets = refreshed_tools.transfer_targets;
+            }
+
+            // ===== A CALL A PERSON ASKED FOR =====
+            // Held for the person's decision as this agent, or refused, before any model
+            // call; the run ends either way (spec 3.3 §7.4 rule 5).
+            if starts_run
+                && let Some(requested) = ctx.run_config().requested_call.as_ref()
+                && !crate::requested_call::taken(ctx.as_ref(), requested)
+            {
+                let taken = crate::requested_call::take(
+                    &ctx,
+                    &agent_name,
+                    &tool_map,
+                    tool_guardrails.as_ref(),
+                    requested,
+                )
+                .await;
+                match taken {
+                    Ok(events) => {
+                        for event in events {
+                            yield Ok(event);
+                        }
+                    }
+                    Err(error) => yield Err(error),
+                }
+                return;
             }
 
             // Multi-turn loop with max iterations
