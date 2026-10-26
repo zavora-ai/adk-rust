@@ -51,6 +51,16 @@ pub struct Workspace {
     exclude: Vec<glob::Pattern>,
 }
 
+/// The most bytes of a `bash` command's output its output file keeps unless
+/// [`Workspace::max_output_bytes`] says otherwise: 64 MiB (spec 3.1 §10 D10).
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_devtools::DEFAULT_MAX_OUTPUT_BYTES, 64 * 1024 * 1024);
+/// ```
+pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+
 /// Environment variables `bash` receives by default.
 ///
 /// The parent environment of an agent process routinely holds provider API keys, and a
@@ -112,7 +122,7 @@ impl Workspace {
             writable: true,
             allow_bash: false,
             bash_timeout: Duration::from_secs(120),
-            max_output_bytes: 1_048_576,
+            max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
             read_ledger: Arc::new(InMemoryReadLedger::new()),
             unscoped_reads: Arc::default(),
             inherit_env: false,
@@ -152,7 +162,20 @@ impl Workspace {
         self
     }
 
-    /// Set the maximum number of bytes captured from a stream before truncation.
+    /// Set the most bytes of a `bash` command's output an
+    /// [`OutputStore`](crate::OutputStore) file keeps: the disk bound (default
+    /// [`DEFAULT_MAX_OUTPUT_BYTES`], 64 MiB; spec 3.1 §10 D10). The result itself carries at
+    /// most [`INLINE_OUTPUT_CHARS`](crate::INLINE_OUTPUT_CHARS) characters whatever this
+    /// is, and memory holds only the start and end of each stream.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_devtools::Workspace;
+    ///
+    /// let ws = Workspace::new(".").allow_bash(true).max_output_bytes(8 * 1024 * 1024);
+    /// assert_eq!(ws.max_output(), 8 * 1024 * 1024);
+    /// ```
     pub fn max_output_bytes(mut self, bytes: usize) -> Self {
         self.max_output_bytes = bytes;
         self
@@ -343,7 +366,7 @@ impl Workspace {
         self.bash_timeout
     }
 
-    /// The output-capture cap.
+    /// The most bytes of a command's output its output file keeps.
     pub fn max_output(&self) -> usize {
         self.max_output_bytes
     }

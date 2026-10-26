@@ -156,7 +156,8 @@ pub(crate) fn safety_covers(config: &SnapshotConfig, plan_rewind: bool) -> (Stri
             config.keep_turns
         ),
         format!(
-            "pushes, payments, sent messages or webhooks; .gitignore'd files, build \
+            "pushes, payments, sent messages, webhooks or running background shells; \
+             .gitignore'd files, build \
              directories ({}), excluded paths and files over {} MiB; a snapshot that reaches \
              {} files is partial and /rewind lists what it did not cover",
             config.skip_dirs.join(", "),

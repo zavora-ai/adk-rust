@@ -13,6 +13,59 @@ use tokio::sync::{Mutex, RwLock};
 use super::consolidate::ConsolidationRecord;
 use super::types::{FactFilter, FactScope, FactSource, FactStatus, MemoryFact};
 
+/// A fact's vector and the id of the embedder that produced it (spec 3.1 §7.32, I73).
+///
+/// Recall compares vectors of one embedder only: a vector whose `embedder` differs from
+/// the index's is embedded again, even when the two models share a length. Vectors
+/// stored before the id existed read back with an empty `embedder`.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_harness::FactEmbedding;
+///
+/// let embedding = FactEmbedding::new("onnx/BAAI/bge-small-en-v1.5", vec![0.6, 0.8]);
+/// assert!(embedding.is_from("onnx/BAAI/bge-small-en-v1.5"));
+/// assert!(!embedding.is_from("gemini/gemini-embedding-2"));
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FactEmbedding {
+    /// The embedder's id: its [`adk_memory::EmbeddingProvider::model_id`], or
+    /// `unnamed/<dimensions>` for an embedder without one.
+    pub embedder: String,
+    /// The vector.
+    pub vector: Vec<f32>,
+}
+
+impl FactEmbedding {
+    /// `vector`, produced by the embedder `embedder`.
+    pub fn new(embedder: impl Into<String>, vector: Vec<f32>) -> Self {
+        Self { embedder: embedder.into(), vector }
+    }
+
+    /// Whether the embedder `embedder` produced this vector, and it is usable.
+    pub fn is_from(&self, embedder: &str) -> bool {
+        !self.vector.is_empty() && self.embedder == embedder
+    }
+}
+
+/// A stored vector: tagged, or a bare vector written before embedder ids existed.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum StoredEmbedding {
+    Tagged(FactEmbedding),
+    Untagged(Vec<f32>),
+}
+
+impl From<StoredEmbedding> for FactEmbedding {
+    fn from(stored: StoredEmbedding) -> Self {
+        match stored {
+            StoredEmbedding::Tagged(embedding) => embedding,
+            StoredEmbedding::Untagged(vector) => Self::new("", vector),
+        }
+    }
+}
+
 /// The system of record of long-term facts (spec 3.1 §7.15.2).
 ///
 /// The store keeps every fact with its provenance and history; a [`FactIndex`] only finds
@@ -24,7 +77,7 @@ use super::types::{FactFilter, FactScope, FactSource, FactStatus, MemoryFact};
 /// |---|---|
 /// | `put` | stores a fact; a live fact with the same (scope, digest) is kept instead, its `uses` bumped, and returned |
 /// | `set_status` | changes a live fact's status; `Superseded` and `Forgotten` set `valid_to`; promoting `Assumed` to `Known` records the source `UserConfirmed`; a fact that is no longer live keeps its status |
-/// | `embeddings` | the vectors of the live facts of exactly `scope` |
+/// | `put_embedding`, `embeddings` | one vector per fact, tagged with the id of the embedder that produced it; `embeddings` returns those of the live facts of exactly `scope` (spec 3.1 §7.32, I73) |
 /// | `record_recall` | sets `last_recalled` and bumps `uses` of recalled facts |
 /// | `distilled_sessions`, `mark_distilled` | the cursor of the sessions distillation read, which only moves forward (spec 3.2 §10 HK2) |
 /// | `put_consolidation`, `consolidations` | the records of consolidation ticks, newest first (spec 3.2 §7.5) |
@@ -57,10 +110,10 @@ pub trait FactStore: Send + Sync {
     async fn list(&self, filter: FactFilter) -> Result<Vec<MemoryFact>>;
     /// Changes the status of the live fact `id`; `by` is the person or service doing it.
     async fn set_status(&self, id: &str, status: FactStatus, by: &SubjectRef) -> Result<()>;
-    /// Stores the embedding of fact `id`.
-    async fn put_embedding(&self, id: &str, vector: Vec<f32>) -> Result<()>;
-    /// The embeddings of the live facts of exactly `scope`.
-    async fn embeddings(&self, scope: &FactScope) -> Result<Vec<(String, Vec<f32>)>>;
+    /// Stores the embedding of fact `id`, replacing an earlier one.
+    async fn put_embedding(&self, id: &str, embedding: FactEmbedding) -> Result<()>;
+    /// The embeddings of the live facts of exactly `scope`, each with its embedder's id.
+    async fn embeddings(&self, scope: &FactScope) -> Result<Vec<(String, FactEmbedding)>>;
     /// Records that `ids` were recalled at `at`: `last_recalled` is set and `uses` bumped.
     /// The default does nothing.
     async fn record_recall(&self, ids: &[String], at: DateTime<Utc>) -> Result<()> {
@@ -220,7 +273,7 @@ struct Facts {
     #[serde(default)]
     facts: HashMap<String, MemoryFact>,
     #[serde(default)]
-    embeddings: HashMap<String, Vec<f32>>,
+    embeddings: HashMap<String, StoredEmbedding>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     cursors: HashMap<String, DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -250,16 +303,16 @@ impl Facts {
         apply_status(fact, status)
     }
 
-    fn put_embedding(&mut self, id: &str, vector: Vec<f32>) -> Result<()> {
+    fn put_embedding(&mut self, id: &str, embedding: FactEmbedding) -> Result<()> {
         if !self.facts.contains_key(id) {
             return Err(not_found(id));
         }
-        self.embeddings.insert(id.to_string(), vector);
+        self.embeddings.insert(id.to_string(), StoredEmbedding::Tagged(embedding));
         Ok(())
     }
 
-    fn embeddings(&self, scope: &FactScope) -> Vec<(String, Vec<f32>)> {
-        let mut out: Vec<(String, Vec<f32>)> = self
+    fn embeddings(&self, scope: &FactScope) -> Vec<(String, FactEmbedding)> {
+        let mut out: Vec<(String, FactEmbedding)> = self
             .embeddings
             .iter()
             .filter(|(id, _)| {
@@ -267,7 +320,7 @@ impl Facts {
                     .get(*id)
                     .is_some_and(|fact| fact.status.is_live() && fact.scope == *scope)
             })
-            .map(|(id, vector)| (id.clone(), vector.clone()))
+            .map(|(id, stored)| (id.clone(), stored.clone().into()))
             .collect();
         out.sort_by(|a, b| a.0.cmp(&b.0));
         out
@@ -358,11 +411,11 @@ impl FactStore for InMemoryFactStore {
         self.facts.write().await.set_status(id, status)
     }
 
-    async fn put_embedding(&self, id: &str, vector: Vec<f32>) -> Result<()> {
-        self.facts.write().await.put_embedding(id, vector)
+    async fn put_embedding(&self, id: &str, embedding: FactEmbedding) -> Result<()> {
+        self.facts.write().await.put_embedding(id, embedding)
     }
 
-    async fn embeddings(&self, scope: &FactScope) -> Result<Vec<(String, Vec<f32>)>> {
+    async fn embeddings(&self, scope: &FactScope) -> Result<Vec<(String, FactEmbedding)>> {
         Ok(self.facts.read().await.embeddings(scope))
     }
 
@@ -530,14 +583,14 @@ impl FactStore for FileFactStore {
         Self::save(&path, &facts).await
     }
 
-    async fn put_embedding(&self, id: &str, vector: Vec<f32>) -> Result<()> {
+    async fn put_embedding(&self, id: &str, embedding: FactEmbedding) -> Result<()> {
         let _guard = self.lock.lock().await;
         let (path, mut facts) = self.find(id).await?.ok_or_else(|| not_found(id))?;
-        facts.put_embedding(id, vector)?;
+        facts.put_embedding(id, embedding)?;
         Self::save(&path, &facts).await
     }
 
-    async fn embeddings(&self, scope: &FactScope) -> Result<Vec<(String, Vec<f32>)>> {
+    async fn embeddings(&self, scope: &FactScope) -> Result<Vec<(String, FactEmbedding)>> {
         Ok(Self::load(&self.path(&scope.app, &scope.user)).await?.embeddings(scope))
     }
 
@@ -702,7 +755,7 @@ impl SqliteFactStore {
             "CREATE INDEX IF NOT EXISTS adk_harness_facts_scope \
                 ON adk_harness_facts (app_name, user_id, project, digest)",
             "CREATE TABLE IF NOT EXISTS adk_harness_fact_embeddings (\
-                id TEXT PRIMARY KEY, vector TEXT NOT NULL)",
+                id TEXT PRIMARY KEY, vector TEXT NOT NULL, embedder TEXT NOT NULL DEFAULT '')",
             "CREATE TABLE IF NOT EXISTS adk_harness_fact_cursors (\
                 app_name TEXT NOT NULL, user_id TEXT NOT NULL, session_id TEXT NOT NULL, \
                 upto TEXT NOT NULL, PRIMARY KEY (app_name, user_id, session_id))",
@@ -711,6 +764,24 @@ impl SqliteFactStore {
                 at TEXT NOT NULL, record TEXT NOT NULL)",
         ] {
             sqlx::query(statement).execute(&self.pool).await.map_err(crate::fsutil::db_error)?;
+        }
+        // Tables created before embedder ids (spec 3.1 §7.32) gain the column; their
+        // vectors read back untagged and are embedded again when recall needs them.
+        let (tagged,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM pragma_table_info('adk_harness_fact_embeddings') \
+             WHERE name = 'embedder'",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+        if tagged == 0 {
+            sqlx::query(
+                "ALTER TABLE adk_harness_fact_embeddings \
+                 ADD COLUMN embedder TEXT NOT NULL DEFAULT ''",
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(crate::fsutil::db_error)?;
         }
         Ok(())
     }
@@ -830,27 +901,29 @@ impl FactStore for SqliteFactStore {
         tx.commit().await.map_err(crate::fsutil::db_error)
     }
 
-    async fn put_embedding(&self, id: &str, vector: Vec<f32>) -> Result<()> {
+    async fn put_embedding(&self, id: &str, embedding: FactEmbedding) -> Result<()> {
         if self.get(id).await?.is_none() {
             return Err(not_found(id));
         }
-        let vector = serde_json::to_string(&vector)
+        let vector = serde_json::to_string(&embedding.vector)
             .map_err(|error| crate::fsutil::serialize_error("embedding", &error))?;
         sqlx::query(
-            "INSERT INTO adk_harness_fact_embeddings (id, vector) VALUES (?, ?) \
-             ON CONFLICT (id) DO UPDATE SET vector = excluded.vector",
+            "INSERT INTO adk_harness_fact_embeddings (id, vector, embedder) VALUES (?, ?, ?) \
+             ON CONFLICT (id) DO UPDATE SET vector = excluded.vector, \
+             embedder = excluded.embedder",
         )
         .bind(id)
         .bind(vector)
+        .bind(&embedding.embedder)
         .execute(&self.pool)
         .await
         .map_err(crate::fsutil::db_error)?;
         Ok(())
     }
 
-    async fn embeddings(&self, scope: &FactScope) -> Result<Vec<(String, Vec<f32>)>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT e.id, e.vector FROM adk_harness_fact_embeddings e \
+    async fn embeddings(&self, scope: &FactScope) -> Result<Vec<(String, FactEmbedding)>> {
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT e.id, e.vector, e.embedder FROM adk_harness_fact_embeddings e \
              JOIN adk_harness_facts f ON f.id = e.id \
              WHERE f.app_name = ? AND f.user_id = ? AND f.project IS ? AND f.live = 1 \
              ORDER BY e.id",
@@ -863,8 +936,10 @@ impl FactStore for SqliteFactStore {
         .map_err(crate::fsutil::db_error)?;
         Ok(rows
             .into_iter()
-            .filter_map(|(id, vector)| {
-                serde_json::from_str::<Vec<f32>>(&vector).ok().map(|vector| (id, vector))
+            .filter_map(|(id, vector, embedder)| {
+                serde_json::from_str::<Vec<f32>>(&vector)
+                    .ok()
+                    .map(|vector| (id, FactEmbedding::new(embedder, vector)))
             })
             .collect())
     }

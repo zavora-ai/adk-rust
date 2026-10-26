@@ -46,10 +46,12 @@ mod prompter;
 mod rewind;
 mod rules;
 mod serve;
+mod shells;
 pub mod ultracode;
 
 pub use args::{
-    HarnessArgs, MemberArg, MemberKindArg, PROJECT_CONFIG_FILE, ResolvedHarnessArgs, SearchArg,
+    EmbedderArg, HarnessArgs, MemberArg, MemberKindArg, PROJECT_CONFIG_FILE, ResolvedHarnessArgs,
+    SearchArg, ShellLimits,
 };
 pub use catch_up::distill_unsaved_sessions;
 pub use commands::slash_command_entries;

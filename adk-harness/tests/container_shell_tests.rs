@@ -664,19 +664,19 @@ async fn a_timed_out_command_stops_the_container() {
 }
 
 #[tokio::test]
+/// A container command's output is cut as a host command's is once it finishes: its head
+/// and tail inline, the whole of it kept for `shell_output` (spec 3.1 §7.33 fix 8).
 async fn output_is_capped_after_the_command_finishes() {
     let dir = tempfile::tempdir().unwrap();
-    let client = FakeContainers::new(dir.path(), Behaviour::Output(5000));
+    let client = FakeContainers::new(dir.path(), Behaviour::Output(100_000));
     let model = Arc::new(adk_model::ScriptedLlm::new(
         "scripted",
-        vec![call(json!({ "command": "yes | head -c 5000" })), done()],
+        vec![call(json!({ "command": "yes x | tr -d '\\n' | head -c 100000" })), done()],
     ));
     let agent = Arc::new(
         HarnessAgent::builder("harness")
             .model(model)
-            .workspace(
-                adk_devtools::Workspace::new(dir.path()).allow_bash(true).max_output_bytes(1000),
-            )
+            .workspace(adk_devtools::Workspace::new(dir.path()).allow_bash(true))
             .project_instructions(common::no_user_file())
             .without_compaction()
             .shell(ShellIsolation::Container(container(client)))
@@ -699,8 +699,11 @@ async fn output_is_capped_after_the_command_finishes() {
     let events = common::collect(harness.send(&user, &session, "go").await.unwrap()).await;
     let response = response_of(&events, "bash");
     let stdout = response["stdout"].as_str().unwrap();
-    assert!(stdout.len() < 1100, "{} bytes reached the model", stdout.len());
-    assert!(stdout.ends_with("…[truncated]"), "{stdout:?}");
+    let id = response["output_id"].as_str().expect("the whole output is kept");
+    let marker = format!(
+        "\n…[70000 bytes left out; shell_output {{\"shell_id\": \"{id}\"}} reads the whole output]\n"
+    );
+    assert_eq!(stdout, format!("{}{marker}{}", "x".repeat(10_000), "x".repeat(20_000)));
     assert_eq!(response["truncated"], true);
     assert_eq!(response["exit_code"], 0);
     let end: Vec<_> =

@@ -67,8 +67,11 @@ pub use error::DevToolError;
 pub use launcher::{CommandLauncher, HostLauncher};
 pub use read_ledger::{InMemoryReadLedger, ReadLedger, ReadScope, sha256_hex};
 pub use tools::{
-    ApplyPatchTool, BashTool, DEFAULT_MAX_INLINE_BYTES, EditFileTool, GlobTool, GrepTool,
-    ReadFileTool, WriteFileTool, sniff_inline_mime,
+    ApplyPatchTool, BashTool, BoundedOutput, DEFAULT_MAX_INLINE_BYTES, EditFileTool, GlobTool,
+    GrepTool, INLINE_OUTPUT_CHARS, OutputFile, OutputStore, ReadFileTool, RunningCommand,
+    WriteFileTool, bound_output, sniff_inline_mime,
 };
 pub use toolset::DevToolset;
-pub use workspace::{DEFAULT_ENV_ALLOWLIST, DEFAULT_EXCLUDE_GLOBS, Workspace};
+pub use workspace::{
+    DEFAULT_ENV_ALLOWLIST, DEFAULT_EXCLUDE_GLOBS, DEFAULT_MAX_OUTPUT_BYTES, Workspace,
+};

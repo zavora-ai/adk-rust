@@ -960,15 +960,32 @@ mod tick {
             self.distill_unreached(app, user, sessions, now, &TickWrites::new(None), parent).await
         }
 
-        /// The live facts of exactly `scope` and their vectors; `Assumed` facts without a
-        /// vector the embedder's length are embedded first, when there is an embedder.
+        /// The live facts of exactly `scope` and the vectors of one embedder (spec 3.1
+        /// §7.32, I73): the consolidation embedder's, its `Assumed` facts without one
+        /// embedded first; without an embedder, the embedder most stored vectors carry.
         async fn scope_facts(&self, scope: &FactScope) -> Result<ScopeFacts> {
             let live = self
                 .store
                 .list(FactFilter { live_only: true, ..FactFilter::exactly(scope) })
                 .await?;
-            let mut vectors: std::collections::HashMap<String, Vec<f32>> =
-                self.store.embeddings(scope).await?.into_iter().collect();
+            let stored = self.store.embeddings(scope).await?;
+            let id = match &self.embedder {
+                Some(embedder) => crate::facts::embedder_id(embedder.as_ref()),
+                None => {
+                    let mut counts: std::collections::BTreeMap<&str, usize> =
+                        std::collections::BTreeMap::new();
+                    for (_, embedding) in &stored {
+                        *counts.entry(embedding.embedder.as_str()).or_default() += 1;
+                    }
+                    let most = counts.iter().max_by_key(|(_, count)| **count);
+                    most.map(|(id, _)| (*id).to_string()).unwrap_or_default()
+                }
+            };
+            let mut vectors: std::collections::HashMap<String, Vec<f32>> = stored
+                .into_iter()
+                .filter(|(_, embedding)| embedding.is_from(&id))
+                .map(|(fact, embedding)| (fact, embedding.vector))
+                .collect();
             if let Some(embedder) = &self.embedder {
                 let dimensions = embedder.dimensions();
                 let missing: Vec<&MemoryFact> = live
@@ -985,8 +1002,10 @@ mod tick {
                     match embedder.embed(&texts).await {
                         Ok(embedded) => {
                             for (fact, vector) in missing.into_iter().zip(embedded) {
+                                let embedding =
+                                    crate::facts::FactEmbedding::new(id.clone(), vector.clone());
                                 if let Err(error) =
-                                    self.store.put_embedding(&fact.id, vector.clone()).await
+                                    self.store.put_embedding(&fact.id, embedding).await
                                 {
                                     tracing::debug!(error = %error, "could not store a fact embedding");
                                 }

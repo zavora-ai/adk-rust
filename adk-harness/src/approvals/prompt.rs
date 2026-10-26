@@ -316,6 +316,8 @@ impl RenderedCall {
         let title = if shell {
             if request.args.get("unsandboxed").and_then(Value::as_bool) == Some(true) {
                 format!("{tool}: unsandboxed retry on the host (full user permissions, network)")
+            } else if request.args.get("run_in_background").and_then(Value::as_bool) == Some(true) {
+                format!("{tool} on {isolation}, in the background")
             } else {
                 format!("{tool} on {isolation}")
             }

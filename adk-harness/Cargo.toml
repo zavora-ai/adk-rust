@@ -47,7 +47,7 @@ observe = ["dep:adk-telemetry", "dep:adk-eval"]
 # RBAC wrappers, credential broker and signed audit (spec 3.1 §7.14).
 auth = ["dep:adk-auth", "adk-auth/signed-audit"]
 # Working notes and long-term facts (spec 3.1 §7.15); adk-memory for `MemoryServiceIndex`.
-memory = ["dep:adk-memory", "adk-memory/embedding-trait", "dep:adk-guardrail", "dep:regex"]
+memory = ["dep:adk-memory", "adk-memory/embedding-trait", "dep:adk-guardrail"]
 # `RagEmbedder`: adk-rag's OpenAI and Gemini embedders for long-term facts (spec 3.1 §7.15.2).
 memory-embeddings = ["memory", "dep:adk-rag", "adk-rag/openai", "adk-rag/gemini"]
 # `RagEmbedder::onnx`: adk-rag's `OnnxEmbeddingProvider`, a sentence-transformer run in
@@ -86,7 +86,7 @@ voice = ["dep:adk-realtime", "adk-realtime/integration"]
 # With `kernel`, also the kernel's managed form: one kernel per tenant (spec 3.2 §7.13).
 managed = ["runner", "dep:adk-managed", "adk-kernel?/managed"]
 # Governed web access: web_fetch, web_search, screening (spec 3.1 §7.20).
-web = ["dep:reqwest", "dep:adk-guardrail", "dep:regex", "dep:adk-tool"]
+web = ["dep:reqwest", "dep:adk-guardrail", "dep:adk-tool"]
 # MCP interaction: elicitation, sampling and resource bridges (spec 3.1 §7.21).
 mcp = ["dep:adk-tool", "adk-tool/mcp", "adk-tool/mcp-sampling"]
 # Test fixtures only: lets a loopback HTTP server stand in for the web (never on in adk-cli).
@@ -150,7 +150,8 @@ chrono.workspace = true
 dirs = "7"
 fred = { version = "10", optional = true, features = ["i-scripts"] }
 futures.workspace = true
-regex = { workspace = true, optional = true }
+# `shell_output`'s `pattern` (spec 3.1 §7.29) and the long-term memory screens.
+regex.workspace = true
 reqwest = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true

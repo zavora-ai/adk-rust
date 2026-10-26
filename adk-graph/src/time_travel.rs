@@ -11,6 +11,8 @@
 //! - List all checkpointed steps for a thread
 //! - Resume execution from any historical step
 //! - Fork a thread at a specific step into a new independent thread
+//! - Fork from a checkpoint with edited state, recording the fork's lineage
+//!   ([`fork_thread`], [`TimeTravelHandle::fork`]; spec 3.3 §12)
 //! - Replay execution between two steps, collecting intermediate states
 //!
 //! # Example
@@ -42,15 +44,19 @@
 //! let states = handle.state_history(0, Some(3)).await?;
 //! ```
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde::Serialize;
+use serde_json::Value;
+use thiserror::Error;
 
 use crate::checkpoint::Checkpointer;
 use crate::error::{GraphError, Result};
 use crate::graph::CompiledGraph;
 use crate::node::ExecutionConfig;
-use crate::state::State;
+use crate::record::{LINEAGE_METADATA_KEY, Lineage};
+use crate::state::{Checkpoint, State, StateSchema};
 
 /// Information about a single execution step in the graph history.
 ///
@@ -240,6 +246,8 @@ impl<'g> TimeTravelHandle<'g> {
     ///
     /// Loads the checkpoint at `step` and saves it under `new_thread_id`,
     /// creating a new execution branch. The original thread remains unchanged.
+    /// The fork keeps the arrivals of joins still waiting and records its
+    /// [`Lineage`]; see [`fork_thread`] for what else it carries.
     ///
     /// # Arguments
     ///
@@ -278,13 +286,8 @@ impl<'g> TimeTravelHandle<'g> {
         // Clone the checkpoint under the new thread_id, after its newest.
         let version =
             self.checkpointer.load(new_thread_id).await?.map_or(1, |newest| newest.version + 1);
-        let forked = crate::state::Checkpoint::new(
-            new_thread_id,
-            checkpoint.state,
-            checkpoint.step,
-            checkpoint.pending_nodes,
-        )
-        .with_version(version);
+        let forked =
+            forked_checkpoint(&checkpoint, new_thread_id, version, &BTreeMap::new(), true)?;
 
         // Save the forked checkpoint
         self.checkpointer.save(&forked).await?;
@@ -352,6 +355,326 @@ impl<'g> TimeTravelHandle<'g> {
 
         Ok(results)
     }
+}
+
+impl TimeTravelHandle<'_> {
+    /// Forks this thread at the checkpoint `spec.from`, with edits checked against the
+    /// graph's declared channels (spec 3.3 §12).
+    ///
+    /// See [`fork_thread`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ForkError::OtherThread`] when the checkpoint belongs to another thread,
+    /// and every error [`fork_thread`] returns.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::checkpoint::{Checkpointer, MemoryCheckpointer};
+    /// use adk_graph::edge::{END, START};
+    /// use adk_graph::graph::StateGraph;
+    /// use adk_graph::node::{ExecutionConfig, NodeOutput};
+    /// use adk_graph::state::State;
+    /// use adk_graph::time_travel::ForkSpec;
+    /// use serde_json::json;
+    /// use std::sync::Arc;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let checkpointer = Arc::new(MemoryCheckpointer::new());
+    /// let graph = StateGraph::with_channels(&["note", "done"])
+    ///     .add_node_fn("draft", |_ctx| async { Ok(NodeOutput::new().with_update("note", json!("v1"))) })
+    ///     .add_node_fn("send", |_ctx| async { Ok(NodeOutput::new().with_update("done", json!(true))) })
+    ///     .add_edge(START, "draft")
+    ///     .add_edge("draft", "send")
+    ///     .add_edge("send", END)
+    ///     .compile()?
+    ///     .with_checkpointer_arc(checkpointer.clone());
+    /// graph.invoke(State::new(), ExecutionConfig::new("t1")).await?;
+    ///
+    /// let after_draft = checkpointer.list("t1").await?[0].checkpoint_id.clone();
+    /// let fork = graph
+    ///     .time_travel("t1")?
+    ///     .fork(ForkSpec::new(&after_draft, "t1-fork").set("note", json!("v2")))
+    ///     .await?;
+    /// assert_eq!(fork.state["note"], json!("v2"));
+    /// assert_eq!(fork.lineage()?.map(|l| l.edited), Some(vec!["note".to_string()]));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn fork(&self, spec: ForkSpec) -> std::result::Result<Checkpoint, ForkError> {
+        let source = self
+            .checkpointer
+            .load_by_id(&spec.from)
+            .await?
+            .ok_or_else(|| ForkError::UnknownCheckpoint { id: spec.from.clone() })?;
+        if source.thread_id != self.thread_id {
+            return Err(ForkError::OtherThread {
+                id: spec.from,
+                thread: source.thread_id,
+                expected: self.thread_id.clone(),
+            });
+        }
+        fork_thread(self.checkpointer.as_ref(), spec, Some(self.graph.schema())).await
+    }
+}
+
+/// What to fork, where to, and which state to overwrite (spec 3.3 §12).
+///
+/// # Example
+///
+/// ```
+/// use adk_graph::time_travel::ForkSpec;
+/// use serde_json::json;
+///
+/// let spec = ForkSpec::new("c1", "t1-fork").set("note", json!("re-run for audit"));
+/// assert_eq!(spec.set["note"], json!("re-run for audit"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ForkSpec {
+    /// The id of the checkpoint to fork from: the completed checkpoint of a step.
+    pub from: String,
+    /// The thread the fork is written to; it must have no checkpoints yet.
+    pub new_thread_id: String,
+    /// Channels to overwrite in the fork, whole: no reducer is applied.
+    pub set: BTreeMap<String, Value>,
+}
+
+impl ForkSpec {
+    /// A fork of checkpoint `from` into `new_thread_id`, with no edits.
+    pub fn new(from: impl Into<String>, new_thread_id: impl Into<String>) -> Self {
+        Self { from: from.into(), new_thread_id: new_thread_id.into(), set: BTreeMap::new() }
+    }
+
+    /// Overwrites channel `key` with `value` in the fork.
+    #[must_use]
+    pub fn set(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.set.insert(key.into(), value);
+        self
+    }
+}
+
+/// Why a fork was refused (spec 3.3 §12).
+///
+/// Every message starts with the stable [`code`](Self::code).
+///
+/// # Example
+///
+/// ```
+/// use adk_graph::time_travel::ForkError;
+///
+/// let error = ForkError::NothingToRun { id: "c3".to_string() };
+/// assert_eq!(error.code(), "fork.nothing_to_run");
+/// assert!(error.to_string().starts_with("fork.nothing_to_run:"));
+/// ```
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ForkError {
+    /// No checkpoint has the id.
+    #[error("fork.unknown_checkpoint: no checkpoint '{id}'")]
+    UnknownCheckpoint {
+        /// The id asked for.
+        id: String,
+    },
+    /// The checkpoint belongs to another thread than the handle's.
+    #[error("fork.other_thread: checkpoint '{id}' belongs to thread '{thread}', not '{expected}'")]
+    OtherThread {
+        /// The id asked for.
+        id: String,
+        /// The thread the checkpoint belongs to.
+        thread: String,
+        /// The handle's thread.
+        expected: String,
+    },
+    /// The checkpoint is a pause: a node of its step waits.
+    #[error(
+        "fork.paused: checkpoint '{id}' is a pause, where a node waits mid-step; fork from the          completed checkpoint of its step"
+    )]
+    Paused {
+        /// The id asked for.
+        id: String,
+    },
+    /// The checkpoint ends its run, so nothing would run in the fork.
+    #[error(
+        "fork.nothing_to_run: nothing runs after the last step: checkpoint '{id}' has no pending nodes"
+    )]
+    NothingToRun {
+        /// The id asked for.
+        id: String,
+    },
+    /// An edit names a channel the graph does not declare.
+    #[error("fork.undeclared_channel: '{key}' is not a channel of this graph")]
+    UndeclaredChannel {
+        /// The edited key.
+        key: String,
+    },
+    /// An unchecked edit names a key the checkpoint's state does not hold.
+    #[error(
+        "fork.unknown_key: '{key}' is not a key of this checkpoint; without the graph's channels          only existing keys can be edited"
+    )]
+    UnknownKey {
+        /// The edited key.
+        key: String,
+    },
+    /// The target thread already has checkpoints.
+    #[error(
+        "fork.thread_exists: thread '{thread}' already has checkpoints; fork into a new thread"
+    )]
+    ThreadExists {
+        /// The target thread.
+        thread: String,
+    },
+    /// The checkpointer failed.
+    #[error(transparent)]
+    Checkpointer(#[from] GraphError),
+}
+
+impl ForkError {
+    /// The stable code this refusal's message starts with; `fork.checkpointer` for a
+    /// checkpointer failure.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::UnknownCheckpoint { .. } => "fork.unknown_checkpoint",
+            Self::OtherThread { .. } => "fork.other_thread",
+            Self::Paused { .. } => "fork.paused",
+            Self::NothingToRun { .. } => "fork.nothing_to_run",
+            Self::UndeclaredChannel { .. } => "fork.undeclared_channel",
+            Self::UnknownKey { .. } => "fork.unknown_key",
+            Self::ThreadExists { .. } => "fork.thread_exists",
+            Self::Checkpointer(_) => "fork.checkpointer",
+        }
+    }
+}
+
+impl From<ForkError> for GraphError {
+    fn from(error: ForkError) -> Self {
+        match error {
+            ForkError::Checkpointer(error) => error,
+            refusal => GraphError::CheckpointError(refusal.to_string()),
+        }
+    }
+}
+
+/// Forks the checkpoint `spec.from` into the new thread `spec.new_thread_id`, with the
+/// channels in `spec.set` overwritten (spec 3.3 §12).
+///
+/// | Carried | Dropped |
+/// |---------|---------|
+/// | State (with the edits), step, pending nodes, the arrivals of joins still waiting, each governed node's completed runs | The retry budget, the answered gate, pending writes, finished children, the paused marker and its waiting requests, the run and its step records |
+///
+/// A pause asks again in the fork, and the fork opens its own run when it first runs. The
+/// fork records its [`Lineage`]: `root` is the source's root, else the source's thread.
+/// Edits overwrite whole channels and never go through reducers. With `schema`, each
+/// edited key must be a declared channel and the lineage records `checked: true`;
+/// without one, only keys the source state holds are accepted and it records
+/// `checked: false`. The source thread is never written.
+///
+/// # Errors
+///
+/// Returns a [`ForkError`] for an unknown id, a pause, a checkpoint with no pending nodes,
+/// an edit that names an undeclared channel or an unknown key, a target thread that
+/// already has checkpoints, or a checkpointer failure.
+///
+/// # Example
+///
+/// ```
+/// use adk_graph::checkpoint::{Checkpointer, MemoryCheckpointer};
+/// use adk_graph::state::{Checkpoint, State};
+/// use adk_graph::time_travel::{ForkSpec, fork_thread};
+/// use serde_json::json;
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let checkpointer = MemoryCheckpointer::new();
+/// let state = State::from([("note".to_string(), json!("v1"))]);
+/// let source = Checkpoint::new("t1", state, 1, vec!["send".to_string()]);
+/// checkpointer.save(&source).await?;
+///
+/// let fork = fork_thread(
+///     &checkpointer,
+///     ForkSpec::new(&source.checkpoint_id, "t2").set("note", json!("v2")),
+///     None,
+/// )
+/// .await?;
+/// let lineage = fork.lineage()?.expect("a fork records its lineage");
+/// assert_eq!((lineage.root.as_str(), lineage.checked), ("t1", false));
+/// # Ok(())
+/// # }
+/// ```
+pub async fn fork_thread(
+    checkpointer: &dyn Checkpointer,
+    spec: ForkSpec,
+    schema: Option<&StateSchema>,
+) -> std::result::Result<Checkpoint, ForkError> {
+    let source = checkpointer
+        .load_by_id(&spec.from)
+        .await?
+        .ok_or_else(|| ForkError::UnknownCheckpoint { id: spec.from.clone() })?;
+    if source.is_paused() {
+        return Err(ForkError::Paused { id: spec.from });
+    }
+    if source.pending_nodes.is_empty() {
+        return Err(ForkError::NothingToRun { id: spec.from });
+    }
+    let schema = schema.filter(|schema| !schema.channels.is_empty());
+    for key in spec.set.keys() {
+        match schema {
+            Some(schema) if !schema.channels.contains_key(key) => {
+                return Err(ForkError::UndeclaredChannel { key: key.clone() });
+            }
+            None if !source.state.contains_key(key) => {
+                return Err(ForkError::UnknownKey { key: key.clone() });
+            }
+            _ => {}
+        }
+    }
+    if spec.new_thread_id == source.thread_id
+        || checkpointer.load(&spec.new_thread_id).await?.is_some()
+    {
+        return Err(ForkError::ThreadExists { thread: spec.new_thread_id });
+    }
+    let fork = forked_checkpoint(&source, &spec.new_thread_id, 1, &spec.set, schema.is_some())?;
+    checkpointer.save(&fork).await?;
+    tracing::info!(
+        thread_id = %source.thread_id,
+        fork.thread_id = %spec.new_thread_id,
+        fork.edited = spec.set.len(),
+        "forked a graph thread"
+    );
+    Ok(fork)
+}
+
+/// The first checkpoint of a fork of `source` into `thread`.
+fn forked_checkpoint(
+    source: &Checkpoint,
+    thread: &str,
+    version: u64,
+    set: &BTreeMap<String, Value>,
+    checked: bool,
+) -> Result<Checkpoint> {
+    let mut state = source.state.clone();
+    for (key, value) in set {
+        state.insert(key.clone(), value.clone());
+    }
+    let mut fork = Checkpoint::new(thread, state, source.step, source.pending_nodes.clone())
+        .with_version(version);
+    for key in [crate::deferred::FAN_IN_METADATA_KEY, crate::executor::OCCURRENCES_METADATA_KEY] {
+        if let Some(value) = source.metadata.get(key) {
+            fork.metadata.insert(key.to_string(), value.clone());
+        }
+    }
+    let root = source.lineage()?.map_or_else(|| source.thread_id.clone(), |lineage| lineage.root);
+    let lineage = Lineage {
+        root,
+        parent: source.thread_id.clone(),
+        parent_checkpoint: source.checkpoint_id.clone(),
+        parent_step: source.step,
+        edited: set.keys().cloned().collect(),
+        checked,
+    };
+    fork.metadata.insert(LINEAGE_METADATA_KEY.to_string(), serde_json::to_value(lineage)?);
+    Ok(fork)
 }
 
 impl CompiledGraph {

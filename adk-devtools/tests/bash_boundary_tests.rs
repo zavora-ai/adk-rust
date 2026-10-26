@@ -12,7 +12,7 @@
 #![cfg(unix)]
 
 use adk_core::{ReadonlyContext, Tool, ToolContext};
-use adk_devtools::{BashTool, DevToolset, Workspace};
+use adk_devtools::{BashTool, DevToolset, OutputFile, OutputStore, Workspace};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
@@ -178,47 +178,166 @@ async fn a_command_that_finishes_is_unaffected() {
     assert!(result["stdout"].as_str().unwrap_or_default().contains("hello"));
 }
 
-// ── Output is capped while it is read ─────────────────────────────────
+// ── Output is bounded inline and kept whole in a file (spec 3.1 §7.33 fix 8) ──
 //
-// Output was collected in full and cut afterwards with `String::truncate`, which panics
-// when the cap falls inside a multi-byte character, and which bounded only the report,
-// not the memory spent collecting it.
+// A result carried up to 1 MiB of stdout and 1 MiB of stderr, from the start only. It now
+// carries at most 30,000 characters — the first 10,000 and the last 20,000 — and an output
+// store keeps the whole output, which the result names.
 
-const TRUNCATION_MARKER: &str = "\n…[truncated]";
+/// An output store over a directory, numbering its files.
+struct DirStore {
+    dir: std::path::PathBuf,
+    next: std::sync::atomic::AtomicUsize,
+}
+
+impl DirStore {
+    fn new(dir: &std::path::Path) -> Arc<Self> {
+        Arc::new(Self { dir: dir.to_path_buf(), next: std::sync::atomic::AtomicUsize::new(1) })
+    }
+
+    fn files(&self) -> usize {
+        std::fs::read_dir(&self.dir).unwrap().count()
+    }
+}
+
+impl OutputStore for DirStore {
+    fn create(&self, _ctx: &dyn ToolContext, _command: &str) -> std::io::Result<OutputFile> {
+        let id = self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst).to_string();
+        let path = self.dir.join(format!("{id}.log"));
+        let file = std::fs::File::options().write(true).create_new(true).open(&path)?;
+        Ok(OutputFile { id, path, file })
+    }
+}
+
+/// Runs `command` through a `bash` tool with `store`.
+async fn run_stored(
+    workspace: Workspace,
+    store: Arc<DirStore>,
+    command: &str,
+) -> adk_core::Result<Value> {
+    let bash = BashTool::new(workspace).with_output_store(store);
+    bash.execute(Arc::new(TestCtx), json!({ "command": command })).await
+}
+
+/// Five MiB of numbered 16-byte lines.
+const FIVE_MIB: &str = "awk 'BEGIN { for (i = 0; i < 327680; i++) printf \"%015d\\n\", i }'";
+
+fn five_mib() -> String {
+    (0..327_680).map(|i| format!("{i:015}\n")).collect()
+}
 
 #[tokio::test]
-async fn a_cap_inside_a_multi_byte_character_does_not_panic() {
-    let dir = tempfile::tempdir().unwrap();
-    // `€` is three bytes, so a 4-byte cap falls inside the second one.
-    let workspace = Workspace::new(dir.path()).allow_bash(true).max_output_bytes(4);
+async fn a_five_mebibyte_output_returns_its_head_and_tail_and_keeps_the_rest() {
+    let (dir, workspace) = temp_workspace();
+    let logs = tempfile::tempdir().unwrap();
+    let store = DirStore::new(logs.path());
 
-    let result = run_bash(workspace, "printf '€€€'", None).await.expect("must run");
+    let result = run_stored(workspace, store, FIVE_MIB).await.expect("must run");
+    let expected = five_mib();
+    assert_eq!(expected.len(), 5 * 1024 * 1024);
 
-    assert_eq!(result["stdout"], json!(format!("€{TRUNCATION_MARKER}")));
+    let marker = format!(
+        "\n…[{} bytes left out; shell_output {{\"shell_id\": \"1\"}} reads the whole output]\n",
+        expected.len() - 30_000
+    );
+    let stdout = result["stdout"].as_str().unwrap();
+    assert_eq!(
+        stdout,
+        format!("{}{marker}{}", &expected[..10_000], &expected[expected.len() - 20_000..])
+    );
     assert_eq!(result["truncated"], json!(true));
+    assert_eq!(result["output_id"], json!("1"));
+    assert_eq!(result["exit_code"], json!(0));
+    let kept = std::fs::read_to_string(logs.path().join("1.log")).unwrap();
+    assert!(kept == expected, "the file holds the whole output ({} bytes)", kept.len());
+    drop(dir);
+}
+
+#[tokio::test]
+async fn output_that_fits_inline_is_whole_and_leaves_no_file() {
+    let (_dir, workspace) = temp_workspace();
+    let logs = tempfile::tempdir().unwrap();
+    let store = DirStore::new(logs.path());
+
+    // 23,893 characters on stdout and one line on stderr: within 30,000 together.
+    let result =
+        run_stored(workspace, store.clone(), "seq 1 5000; echo oops >&2").await.expect("must run");
+
+    let expected: String = (1..=5000).map(|i| format!("{i}\n")).collect();
+    assert_eq!(
+        result,
+        json!({
+            "command": "seq 1 5000; echo oops >&2",
+            "exit_code": 0,
+            "stdout": expected,
+            "stderr": "oops\n",
+            "truncated": false,
+        })
+    );
+    assert_eq!(store.files(), 0, "an output that fits inline is not kept");
+}
+
+#[tokio::test]
+async fn without_a_store_a_cut_names_only_the_bytes_left_out() {
+    let (_dir, workspace) = temp_workspace();
+    let result = run_bash(workspace, "seq 1 100000", None).await.expect("must run");
+    let stdout = result["stdout"].as_str().unwrap();
+    let full: String = (1..=100_000).map(|i| format!("{i}\n")).collect();
+
+    assert_eq!(
+        stdout,
+        format!(
+            "{}\n…[{} bytes left out]\n{}",
+            &full[..10_000],
+            full.len() - 30_000,
+            &full[full.len() - 20_000..]
+        )
+    );
+    assert_eq!(result["truncated"], json!(true));
+    assert!(result.get("output_id").is_none(), "{result}");
+}
+
+#[tokio::test]
+async fn multi_byte_output_is_cut_on_character_boundaries() {
+    let (_dir, workspace) = temp_workspace();
+    // Each line is 61 bytes, so the cuts land wherever the characters do.
+    let command = "yes '€€€€€€€€€€€€€€€€€€€€' | head -n 30000";
+
+    let result = run_bash(workspace, command, None).await.expect("must run");
+    let stdout = result["stdout"].as_str().expect("stdout must be a string");
+    let (head, rest) = stdout.split_once("\n…[").expect("the output must be marked");
+    let tail = rest.split_once("]\n").expect("the marker ends").1;
+
+    assert_eq!(result["truncated"], json!(true));
+    assert_eq!((head.chars().count(), tail.chars().count()), (10_000, 20_000));
+    for part in [head, tail] {
+        assert!(
+            part.chars().all(|c| c == '€' || c == '\n'),
+            "the cut produced a replacement or partial character"
+        );
+    }
+    // Excess output is drained rather than left in the pipe, so the command completes.
     assert_eq!(result["exit_code"], json!(0));
 }
 
 #[tokio::test]
-async fn more_than_a_mebibyte_of_multi_byte_output_is_capped() {
-    let (_dir, workspace) = temp_workspace();
-    let cap = workspace.max_output();
-    // Each line is 61 bytes, so the 1 MiB cap lands inside a character.
-    let command = "yes '€€€€€€€€€€€€€€€€€€€€' | head -c 1500000";
+async fn the_output_file_holds_at_most_the_workspace_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = Workspace::new(dir.path()).allow_bash(true).max_output_bytes(1_000);
+    let logs = tempfile::tempdir().unwrap();
+    let store = DirStore::new(logs.path());
 
-    let result = run_bash(workspace, command, None).await.expect("must run");
-    let stdout = result["stdout"].as_str().expect("stdout must be a string");
-    let kept = stdout.strip_suffix(TRUNCATION_MARKER).expect("the output must be marked truncated");
+    let result = run_stored(workspace, store, "seq 1 100000").await.expect("must run");
 
-    assert_eq!(result["truncated"], json!(true));
-    assert!(kept.len() <= cap, "kept {} bytes over a {cap}-byte cap", kept.len());
-    assert!(kept.len() > cap - 4, "the cap discarded more than a partial character");
+    let stdout = result["stdout"].as_str().unwrap();
     assert!(
-        kept.chars().all(|c| c == '€' || c == '\n'),
-        "the cut produced a replacement or partial character"
+        stdout.contains(
+            "shell_output {\"shell_id\": \"1\"} reads the first 1000 bytes of the output]"
+        ),
+        "{stdout}"
     );
-    // Excess output is drained rather than left in the pipe, so the command completes.
-    assert_eq!(result["exit_code"], json!(0));
+    assert_eq!(std::fs::metadata(logs.path().join("1.log")).unwrap().len(), 1_000);
+    assert!(stdout.ends_with("99999\n100000\n"), "the tail is kept in memory, not on disk");
 }
 
 // ── A cancelled call takes the command with it ────────────────────────

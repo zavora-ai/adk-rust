@@ -91,7 +91,7 @@ impl ApplyPatchTool {
             },
         };
         expected.check(Some(current)).map_err(|error| DevToolError::Stale {
-            path: self.workspace.display(resolved),
+            path: self.workspace.record_path(resolved),
             detail: error.get_ref().map(ToString::to_string).unwrap_or_else(|| error.to_string()),
         })
     }
@@ -118,7 +118,7 @@ impl ApplyPatchTool {
             let key = self.workspace.record_path(resolved);
             match expects.get(&key) {
                 Some(Precondition::Sha256(_)) => Err(DevToolError::Stale {
-                    path: self.workspace.display(resolved),
+                    path: self.workspace.record_path(resolved),
                     detail: "the call expected a file there, and there is none".to_string(),
                 }),
                 _ => Ok(()),
@@ -164,12 +164,12 @@ impl ApplyPatchTool {
                     if self.workspace.is_excluded(&resolved) || self.workspace.is_excluded(&target)
                     {
                         return Err(
-                            DevToolError::Excluded(self.workspace.display(&resolved)).into()
+                            DevToolError::Excluded(self.workspace.record_path(&resolved)).into()
                         );
                     }
                     let current = self.workspace.read_contained(&target).await?;
                     self.check_existing(ctx, expects, &resolved, current.as_bytes()).await?;
-                    let display = self.workspace.display(&resolved);
+                    let display = self.workspace.record_path(&resolved);
                     let updated = if hunks.is_empty() {
                         current.clone()
                     } else {
@@ -288,7 +288,7 @@ impl ApplyPatchTool {
                 None => self.workspace.remove_contained(&target, now).await,
             };
             if let Err(error) = restored {
-                let path = self.workspace.display(&target);
+                let path = self.workspace.record_path(&target);
                 tracing::warn!(file.path = %path, error = %error, "apply_patch could not restore a file");
                 failed.push(path);
             }
@@ -390,15 +390,16 @@ impl Tool for ApplyPatchTool {
                 }
                 None => self.workspace.forget_read(ctx.as_ref(), &file.path).await,
             }
+            // A patch names paths with `/`, so its report does too, on every platform.
             let mut entry = json!({
-                "path": self.workspace.display(&file.path),
+                "path": self.workspace.record_path(&file.path),
                 "op": file.op,
                 "beforeSha256": before,
                 "afterSha256": after,
             });
             if let Some((from, _)) = &file.from {
                 self.workspace.forget_read(ctx.as_ref(), from).await;
-                entry["from"] = json!(self.workspace.display(from));
+                entry["from"] = json!(self.workspace.record_path(from));
             }
             files.push(entry);
         }

@@ -69,6 +69,10 @@ pub struct HarnessManifest {
     /// it declares edit tools (spec 3.1 §7.26, §13 Q12).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multi_file_edit: Option<String>,
+    /// How background shells behave under this build's isolation, when `bash` runs them
+    /// (spec 3.1 §7.29).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_shells: Option<String>,
     /// What `harness_help` can read.
     pub help_topics: Vec<String>,
 }
@@ -369,7 +373,8 @@ pub struct MemoryEntry {
     pub working_notes: bool,
     /// `memory_search` and `memory_remember` over long-term facts.
     pub long_term_facts: bool,
-    /// What embeds facts for recall: `lexical` without an embedder.
+    /// What finds facts for recall: `embedded by <embedder id>` (spec 3.1 §7.32),
+    /// `a custom index`, or `lexical` without an embedder.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedder: Option<String>,
 }
@@ -580,6 +585,11 @@ impl HarnessManifest {
                 .iter()
                 .any(|(tool, _)| tool == crate::edits::APPLY_PATCH)
                 .then(|| crate::edits::preferred_multi_file_edit(inputs.model).to_string()),
+            background_shells: inputs
+                .rows
+                .iter()
+                .any(|(tool, _)| tool == crate::shell::SHELL_KILL)
+                .then(|| background_note(inputs.shell)),
             help_topics,
         }
     }
@@ -606,7 +616,9 @@ impl HarnessManifest {
                 self.help_topics.join(", ")
             ),
         ));
-        let reserve = 160;
+        // Room for the line naming every section, should all of them be cut.
+        let reserve = "Cut for length: . harness_help <topic> returns them.\n".len()
+            + sections.iter().map(|(name, _)| name.len() + ", ".len()).sum::<usize>();
         let mut out = header;
         let mut cut = Vec::new();
         for (name, text) in sections {
@@ -717,11 +729,31 @@ impl HarnessManifest {
             })
             .collect();
         let _ = writeln!(out, "Packs: {}", packs.join(", "));
+        // The search filter, never the fetch allowlist (spec 3.1 §7.32).
         let web = match &self.web {
-            WebSearchPath::Provider { provider, .. } => format!("{provider}'s built-in search"),
-            WebSearchPath::Governed { provider } => {
-                format!("the governed web_search over {provider}")
+            WebSearchPath::Provider {
+                provider,
+                filter: Some(filter),
+                filter_applied: true,
+                ..
+            } => {
+                format!("{provider}'s built-in search, {filter}")
             }
+            WebSearchPath::Provider {
+                provider, filter: Some(_), filter_applied: false, ..
+            } => {
+                format!(
+                    "{provider}'s built-in search, every domain ({provider} takes no search \
+                     filter, so search_domains is not applied)"
+                )
+            }
+            WebSearchPath::Provider { provider, filter: None, .. } => {
+                format!("{provider}'s built-in search, every domain")
+            }
+            WebSearchPath::Governed { provider, filter } => format!(
+                "the governed web_search over {provider}, {}",
+                filter.as_ref().map_or_else(|| "every domain".to_string(), ToString::to_string)
+            ),
             WebSearchPath::None { reason } => format!("none ({reason})"),
         };
         let _ = writeln!(out, "Web search: {web}");
@@ -750,7 +782,15 @@ impl HarnessManifest {
                  file changed since you read it is refused as stale: read it again."
             );
         }
+        out.push_str(&self.render_background());
         out
+    }
+
+    fn render_background(&self) -> String {
+        self.background_shells
+            .as_ref()
+            .map(|note| format!("Background shells: {note}\n"))
+            .unwrap_or_default()
     }
 
     fn render_safety(&self) -> String {
@@ -815,6 +855,19 @@ impl HarnessManifest {
             text.push_str("\n[truncated]\n</harness-help>");
         }
         Some(text)
+    }
+}
+
+/// What background shells suit under `shell` (spec 3.1 §7.29 "Isolation"); short, since the
+/// block is capped.
+fn background_note(shell: Option<&crate::shell::IsolationStatus>) -> String {
+    match shell {
+        Some(crate::shell::IsolationStatus::OsSandbox { .. }) => {
+            "builds, tests, watchers; a server \
+             started in the sandbox is unreachable from later commands"
+                .to_string()
+        }
+        _ => "servers and watchers run on the host".to_string(),
     }
 }
 
@@ -945,6 +998,56 @@ mod tests {
             "classes are never cut"
         );
         assert!(block.ends_with("</harness>"));
+    }
+
+    #[test]
+    fn the_block_names_the_search_filter_and_the_embedder_never_the_fetch_allowlist() {
+        let allowlist = vec!["internal.example".to_string()];
+        let generate = |web: WebSearchPath| {
+            HarnessManifest::generate(ManifestInputs {
+                surface: SurfaceManifest::library(),
+                default_mode: HarnessMode::Ask,
+                rows: vec![("web_fetch".into(), TableRow::WebAllowlisted)],
+                switches: PolicySwitches::default(),
+                web_allowlist: &allowlist,
+                shell: None,
+                unsandboxed_retry: false,
+                members: Vec::new(),
+                active_packs: &[],
+                web,
+                memory: MemoryEntry {
+                    working_notes: false,
+                    long_term_facts: true,
+                    embedder: Some("embedded by onnx/BAAI/bge-small-en-v1.5".into()),
+                },
+                ledger_durable: true,
+                plan_rewind: false,
+                snapshots: None,
+                model: "scripted",
+            })
+            .render()
+        };
+        let provider = |provider: &str, filter, filter_applied| WebSearchPath::Provider {
+            provider: provider.into(),
+            tool: "web_search".into(),
+            filter,
+            filter_applied,
+        };
+        let block = generate(provider("anthropic", None, true));
+        assert!(
+            block.contains("Web search: anthropic's built-in search, every domain\n"),
+            "{block}"
+        );
+        assert!(
+            block.contains("long-term facts (embedded by onnx/BAAI/bge-small-en-v1.5)"),
+            "{block}"
+        );
+        let only = Some(crate::web::SearchDomains::Allowed(vec!["docs.rs".into()]));
+        let block = generate(provider("anthropic", only.clone(), true));
+        assert!(block.contains("Web search: anthropic's built-in search, only docs.rs"), "{block}");
+        let block = generate(provider("gemini", only, false));
+        assert!(block.contains("gemini takes no search filter"), "{block}");
+        assert!(!block.contains("Web search: gemini's built-in search, only"), "{block}");
     }
 
     #[test]

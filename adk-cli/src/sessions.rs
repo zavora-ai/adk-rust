@@ -112,6 +112,9 @@ pub struct HarnessDb {
     pub modes: Arc<adk_harness::SqliteModeStore>,
     pub rules: Arc<adk_harness::SqliteStandingRuleStore>,
     pub ledger: Arc<adk_harness::SqliteShellLedger>,
+    /// Background shells' processes, so the next start reaps what a crash left running
+    /// (spec 3.1 §7.29).
+    pub shell_pids: Arc<adk_harness::SqliteShellPidRegistry>,
     /// Held calls and decisions; `EncryptedApprovalStore` under a store key.
     pub approvals: Arc<dyn adk_core::ApprovalStore>,
     pub runs: Arc<adk_session::SqliteRunStore>,
@@ -239,6 +242,8 @@ pub async fn open_harness_db_in(
     rules.migrate().await?;
     let ledger = adk_harness::SqliteShellLedger::new(pool.clone());
     ledger.migrate().await?;
+    let shell_pids = adk_harness::SqliteShellPidRegistry::new(pool.clone());
+    shell_pids.migrate().await?;
     let approvals = adk_session::SqliteApprovalStore::from_pool(pool.clone());
     approvals.migrate().await?;
     let runs = adk_session::SqliteRunStore::from_pool(pool.clone());
@@ -264,6 +269,7 @@ pub async fn open_harness_db_in(
             modes: Arc::new(modes),
             rules: Arc::new(rules),
             ledger: Arc::new(ledger),
+            shell_pids: Arc::new(shell_pids),
             approvals: Arc::new(approvals),
             runs: Arc::new(runs),
             facts: Arc::new(facts),
@@ -311,6 +317,7 @@ pub async fn open_harness_db_in(
         modes: Arc::new(modes.with_keyring(keyring.clone())),
         rules: Arc::new(rules.with_keyring(keyring.clone())),
         ledger: Arc::new(ledger.with_keyring(keyring.clone())),
+        shell_pids: Arc::new(shell_pids),
         approvals: Arc::new(approvals),
         runs: Arc::new(runs),
         facts: Arc::new(facts.with_keyring(keyring.clone())),
@@ -343,6 +350,8 @@ pub async fn open_harness_db_in(dir: &Path) -> Result<HarnessDb> {
     rules.migrate().await?;
     let ledger = adk_harness::SqliteShellLedger::new(pool.clone());
     ledger.migrate().await?;
+    let shell_pids = adk_harness::SqliteShellPidRegistry::new(pool.clone());
+    shell_pids.migrate().await?;
     let approvals = adk_session::SqliteApprovalStore::from_pool(pool.clone());
     approvals.migrate().await?;
     let runs = adk_session::SqliteRunStore::from_pool(pool.clone());
@@ -366,6 +375,7 @@ pub async fn open_harness_db_in(dir: &Path) -> Result<HarnessDb> {
         modes: Arc::new(modes),
         rules: Arc::new(rules),
         ledger: Arc::new(ledger),
+        shell_pids: Arc::new(shell_pids),
         approvals: Arc::new(approvals),
         runs: Arc::new(runs),
         facts: Arc::new(facts),
