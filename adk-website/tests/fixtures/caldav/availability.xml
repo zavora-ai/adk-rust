@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:response>
+    <D:href>/calendars/juniper/open-slots/tasting-20261103.ics</D:href>
+    <D:propstat>
+      <D:prop>
+        <D:getetag>"fffff-tasting"</D:getetag>
+        <C:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Example Corp.//CalDAV Client//EN
+BEGIN:VEVENT
+UID:tasting-20261103@juniper.example
+DTSTAMP:20261020T081500Z
+DTSTART:20261103T070000Z
+DTEND:20261103T073000Z
+SUMMARY:Bread tasting
+X-ADK-PRICE:5000
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Tasting soon
+TRIGGER:-PT15M
+DURATION:PT5M
+REPEAT:1
+END:VALARM
+END:VEVENT
+END:VCALENDAR
+</C:calendar-data>
+      </D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/calendars/juniper/open-slots/consult.ics</D:href>
+    <D:propstat>
+      <D:prop>
+        <D:getetag>"fffff-consult"</D:getetag>
+        <C:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Example Corp.//CalDAV Client//EN
+BEGIN:VEVENT
+DTSTAMP:20261020T081500Z
+DTSTART:20261104T090000Z
+DURATION:PT1H
+RECURRENCE-ID:20261104T090000Z
+SUMMARY:Wedding cake consultation
+UID:consult@juniper.example
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20261020T081500Z
+DTSTART:20261111T090000Z
+DURATION:PT1H
+RECURRENCE-ID:20261111T090000Z
+SUMMARY:Wedding cake consultation
+UID:consult@juniper.example
+END:VEVENT
+END:VCALENDAR
+</C:calendar-data>
+      </D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/calendars/juniper/open-slots/closed-20261105.ics</D:href>
+    <D:propstat>
+      <D:prop>
+        <D:getetag>"fffff-closed"</D:getetag>
+        <C:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Example Corp.//CalDAV Client//EN
+BEGIN:VEVENT
+UID:closed-20261105@juniper.example
+DTSTAMP:20261020T081500Z
+DTSTART:20261105T070000Z
+DTEND:20261105T080000Z
+SUMMARY:Bread tasting
+STATUS:CANCELLED
+END:VEVENT
+END:VCALENDAR
+</C:calendar-data>
+      </D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+</D:multistatus>

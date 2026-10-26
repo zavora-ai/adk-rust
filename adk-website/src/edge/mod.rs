@@ -16,9 +16,12 @@
 //!
 //! Payments go through the owner's [`handlers::PaymentDesk`]: [`ap2::Ap2Desk`] for AP2
 //! mandates, [`token::TokenDesk`] for token rails, [`token::PaymentRails`] for both.
+//! Bookings go through a [`handlers::Calendar`]: [`caldav::CalDavCalendar`] over the owner's
+//! CalDAV calendar, or [`handlers::InMemoryCalendar`] from `calendar.json`.
 
 pub mod adapters;
 pub mod ap2;
+pub mod caldav;
 pub mod handlers;
 pub mod token;
 
