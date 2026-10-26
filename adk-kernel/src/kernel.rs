@@ -9,7 +9,7 @@
 //! | Workers | One `DurableWorker` per [`QueueClass`], each with [`KernelConfig::worker_config`]: `on_governance_refusal: Park` (§10 S3), the class's poll interval, the S1 `WorkerHooks` turned into [`KernelEvent`]s, and the targets registered with [`KernelBuilder::agent`] (the harness runner as `adk-rust` and `harness.goal`) |
 //! | Scheduler | `DurableScheduler::new(schedules, runs).with_governance(..).with_clock(..)`, ticking every [`KernelConfig::scheduler_tick`] on [`KernelConfig::clock`] |
 //! | Wake sources | [`KernelBuilder::wake_source`], [`KernelBuilder::trigger`] and [`KernelBuilder::queue_ingress`], routed by the [`WakeRouter`] (§7.4) |
-//! | Approvals | `StoreApprovalService::with_run_store`, so a decision wakes the parked run; `spawn_approval_ticker` for expiries |
+//! | Approvals | `StoreApprovalService::with_run_store`, so a decision wakes the parked run; the service's `tick` on the kernel's clock for expiries |
 //! | Kill switch | [`KernelConfig::governance`]: `GovernanceControl::mirrored` with a 250 ms poll on multi-replica ([`KernelConfig::mirrored_governance`], K-I8) |
 //! | Control plane | [`ControlPlane`] over [`KernelConfig::control`] (§7.11) |
 //! | `/proc` (feature `proc`) | `KernelBuilder::ledger`: a sink on the bus writes every event's ledger row; the hosted runtime's `ProgressSource` gets the ledger at start; with `proc-baselines` the maintenance tick enqueues the daily `kernel.proc` pass, and [`KernelBuilder::observation_audience`] puts a partition's observations to a person as agenda questions (§7.10) |
@@ -618,10 +618,27 @@ impl Kernel {
             tasks.push(spawn_queue_ingress(ingress.clone(), Arc::clone(&sup), stop.clone()));
         }
         if let Some(approvals) = &self.inner.approvals {
-            tasks.push(adk_server::approvals::spawn_approval_ticker(
-                Arc::clone(approvals),
-                config.scheduler_tick,
-            ));
+            // Inbox requests expire by the kernel's clock, as its agenda items and wakes do:
+            // an item's request carries the item's expiry.
+            let approvals = Arc::clone(approvals);
+            let clock = Arc::clone(&config.clock);
+            let every = config.scheduler_tick;
+            tasks.push(tokio::spawn(async move {
+                let mut timer = tokio::time::interval(every);
+                timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    timer.tick().await;
+                    match approvals.tick(clock.now()).await {
+                        Ok(report) if report.expired.is_empty() && report.escalated.is_empty() => {}
+                        Ok(report) => tracing::info!(
+                            approvals.expired = report.expired.len(),
+                            approvals.escalated = report.escalated.len(),
+                            "approval tick"
+                        ),
+                        Err(error) => tracing::warn!(error = %error, "approval tick failed"),
+                    }
+                }
+            }));
         }
         tasks.push(spawn_mirror(Arc::clone(&sup), stop.clone()));
         tasks.push(spawn_file_watch(

@@ -150,9 +150,12 @@ async fn k10_two_weeks_of_late_finishes_yield_one_observation_after_the_warm_up_
     ));
     let recorder = Arc::new(InMemoryAuditRecorder::new());
     let published = Arc::new(Observed::default());
+    // The inbox reads the kernel's clock: an observation's request expires with its agenda
+    // item, two weeks after the simulated day, not by the wall clock.
     let approvals: Arc<dyn ApprovalService> = Arc::new(
         StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
-            .with_run_store(Arc::clone(&runs)),
+            .with_run_store(Arc::clone(&runs))
+            .with_clock(Arc::new(clock.clone())),
     );
     let alice = Arc::new(Alice::default());
     let kernel = kernel(&clock, &runs, &ledger, |builder| {
