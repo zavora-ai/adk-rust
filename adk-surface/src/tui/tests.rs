@@ -48,7 +48,7 @@ fn agent(name: &str) -> AgentRef {
     }
 }
 
-fn card(id: &str, tool: &str, args: Value) -> DecisionCard {
+pub(super) fn card(id: &str, tool: &str, args: Value) -> DecisionCard {
     let truncated = args.to_string().len() > crate::CALL_TEXT_LIMIT;
     DecisionCard {
         id: id.into(),

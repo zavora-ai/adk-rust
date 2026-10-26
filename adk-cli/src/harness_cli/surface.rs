@@ -721,9 +721,10 @@ fn terminal_voice(
     }
     #[cfg(feature = "voice-desktop")]
     {
-        let (microphone, speaker) =
+        let (microphone, speaker, flush) =
             crate::voice_cli::desktop_channels(first.input_rate, first.output_rate)?;
-        Ok(adk_surface::tui::TerminalVoice::new(hub.build(), first.id, microphone, speaker))
+        Ok(adk_surface::tui::TerminalVoice::new(hub.build(), first.id, microphone, speaker)
+            .with_flush(flush))
     }
     #[cfg(not(feature = "voice-desktop"))]
     {
