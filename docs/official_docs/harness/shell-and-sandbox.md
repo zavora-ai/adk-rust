@@ -224,7 +224,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `Harness::close` | Every session's container is stopped |
 
 A command runs through `SandboxSession::exec_command` with the workspace's timeout ceiling,
-and its output is capped at the workspace's `max_output_bytes` after it finishes. Commands in
+and its output is cut as [Output](#output) describes once it finishes. Commands in
 one session's container run one at a time; when one exits, every process it left in the
 container is killed. The container drops every capability, sets `no-new-privileges` and
 limits processes to 512.
@@ -322,12 +322,115 @@ A process that starts its own session (`setsid`) leaves the process group and su
 group kill on the host and under Seatbelt; bubblewrap's PID namespace still ends it. On a
 Windows host no process the command starts can leave its Job Object.
 
+## Output
+
+A `bash` result carries at most 30,000 characters of output (spec 3.1 §7.33 fix 8); the
+whole output of a longer one is kept for `shell_output`.
+
+| Rule | Behaviour |
+|---|---|
+| Inline | At most `adk_devtools::INLINE_OUTPUT_CHARS` (30,000) characters, stdout and stderr together; a stream within half of it keeps all of it and the other stream takes the rest |
+| Cut | A longer stream keeps the first third and the last two thirds of its share — the first 10,000 and the last 20,000 characters when one stream has it all — around a marker naming the bytes left out and the `shell_output` call that reads them |
+| Kept | The whole output goes to a file outside the workspace, `adk-harness-output-<uid>/<session>/shells/<id>.log` in the system's temporary directory (`ShellOutputs`), private to the user; the result names it as `output_id` |
+| Disk bound | The file holds at most `Workspace::max_output_bytes`, 64 MiB by default (`adk_devtools::DEFAULT_MAX_OUTPUT_BYTES`); memory holds only the start and end of each stream |
+| No cut | An output that fits inline leaves no file |
+| Container shell | The same cut and file, applied once the command finishes |
+
+```json
+{
+  "command": "cargo test",
+  "exit_code": 101,
+  "stdout": "running 812 tests\n…[5212880 bytes left out; shell_output {\"shell_id\": \"1\"} reads the whole output]\ntest result: FAILED. 811 passed; 1 failed\n",
+  "stderr": "",
+  "truncated": true,
+  "output_id": "1"
+}
+```
+
+`shell_output { shell_id, tail_lines?, offset?, limit?, pattern? }` (class `Read`) reads at
+most 30,000 characters of a kept output: its end by default, `limit` bytes from `offset`, the
+last `tail_lines` lines, or the lines matching the regular expression `pattern`, numbered. It
+reads only the calling session's files and never follows a link in their place.
+
+## Background shells
+
+`bash` with `run_in_background: true` starts the command and returns at once (spec 3.1
+§7.29). A dev server, a watcher or a long build keeps running while the agent works.
+
+| Tool | Arguments | Class | Result |
+|---|---|---|---|
+| `bash` | `command`, `run_in_background`, `description?` (a few words shown to the person) | The class of the same command in the foreground | `{ shell_id, status: "running", command, note }`; the note tells the model it is told when the shell exits and must not poll |
+| `shell_output` | `shell_id`, `tail_lines?`, `offset?`, `limit?`, `pattern?` | `Read` | `{ shell_id, status, exit_code?, killed_by?, duration_ms, command, total_bytes, output, … }` |
+| `shell_kill` | `shell_id` | `Read`: allowed in every mode, since it only removes an effect | `{ shell_id, status, killed, duration_ms, exit_code? }` |
+
+| Rule | Behaviour |
+|---|---|
+| Decision | Exactly the foreground decision: the same class, the same `ShellPrefix` rules and the same isolation digest; a prompt's title ends with `, in the background` |
+| Declaration | `run_in_background` and `description` join the declaration, so a standing rule granted before them is stale once (`harness.rule.stale`) |
+| Spawn | The same launcher, environment and empty standard input as a foreground call; the output goes to the shell's file from its first byte |
+| Duplicates | A command identical to one still running in the session returns that shell, with `already_running: true` |
+| Foreground timeout | A call that reaches its timeout moves to the background under the same decision instead of being killed; the result carries `moved_to_background: true`, `timeout_secs` and the `shell_id`. A session already running its most shells kills it as before |
+| Completion | A shell that ends is named in the reminder of every request until `shell_output` reads it or `shell_kill` removes it: `shell 3 ("cargo watch") exited 101 after 4m12s; last line: "error[E0308]: mismatched types"; shell_output 3`. The line is data: quoted, cut and with control characters escaped; the policy never reads it |
+| Sessions | A session lists, reads and stops only its own shells |
+| Shell ledger | A background command is recorded when it ends, with its exit code, so a failed sandboxed one can be retried unsandboxed |
+| Action ledger | The call's result is the started shell, so a re-issued call is answered from its record and never starts a second server |
+| People | Output streams to the console through `emit_progress` as a foreground call's does; `/shells` lists each shell with its id, state, age and command, and `/shells kill N` stops one |
+
+`BackgroundShellConfig` sets the limits:
+
+| Limit | `unattended()` (the default) | `attended()` (the adk-rust REPL) |
+|---|---|---|
+| Running shells per session (`max_running`) | 8 | 8 |
+| Output that kills a shell (`max_output_bytes`) | 64 MiB | 64 MiB |
+| Lifetime (`with_lifetime`, at most 2 h) | 30 minutes | none |
+
+```rust,no_run
+use std::sync::Arc;
+use std::time::Duration;
+
+use adk_harness::{BackgroundShellConfig, HarnessAgent, HarnessMode};
+use adk_model::gemini::GeminiModel;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?);
+    let harness = HarnessAgent::builder("harness")
+        .model(model)
+        .workspace(adk_devtools::Workspace::new(".").allow_bash(true))
+        .mode(HarnessMode::Ask)
+        .background_shells(
+            BackgroundShellConfig::unattended().with_lifetime(Duration::from_secs(2 * 60 * 60)),
+        )
+        .build()?;
+    assert!(harness.runtime().toolset().tool_names().iter().any(|name| name == "shell_kill"));
+    Ok(())
+}
+```
+
+| Shell ends | How |
+|---|---|
+| It exits | Its exit code and last line are recorded; the process group is killed as a foreground call's is |
+| A freeze | The shell's watcher polls the run's kill switch every 250 ms and kills it |
+| Its output or lifetime limit | The watcher kills it and records why (`killed_by`: `output_limit`, `lifetime`) |
+| `shell_kill`, `/shells kill N` | Killed and removed from the reminder |
+| Session end | `Harness::end_session_shells` kills the session's shells |
+| `Harness::close`, the process exiting | Every shell is killed; the adk-rust REPL closes the harness when it exits |
+| A crash | Each shell's pid and start time, and the harness process's, are kept in a `ShellPidRegistry` (`harness.db` in adk-rust); the next start kills the process group of every shell whose harness process is gone, unless its pid now names a process started later |
+
+| Isolation | What background shells suit |
+|---|---|
+| Host | Servers, watchers and long builds, with the same approval as the command in the foreground |
+| OS sandbox | Builds, tests and watchers. bubblewrap unshares the network per call, so a server started there is unreachable from later commands, and Seatbelt binds no port without network: a server needs the host, through an approved unsandboxed retry |
+| OS sandbox with `auto_allow_sandboxed` | None: a sandboxed command in the background is refused with `harness.shell.background_gated`, since no host file tool may run beside an unapproved sandboxed command (I26), and a timed-out one is killed |
+| Container shell | None yet: it declares no `run_in_background`, and a timed-out command is killed |
+
 ## Audit records
 
 | Action | Fields (`ext`) |
 |---|---|
-| `harness.bash.begin` (write-ahead, `args_digest`, `payload_ref` = digest of the command) | `functionCallId`, `enforcer`, `profileDigest`, `network`, `reads`, `workspaceAccess`, `envKeys`, `retryOf`, `goalCheck` |
-| `harness.bash.end` (`outcome`, `payload_ref` = digest of the result) | `functionCallId`, `enforcer`, `exitCode`, `durationMs`, `timedOut`, `killedByFreeze`, `truncated`, `denialSuspected`, `retryOf` |
+| `harness.bash.begin` (write-ahead, `args_digest`, `payload_ref` = digest of the command) | `functionCallId`, `enforcer`, `profileDigest`, `network`, `reads`, `workspaceAccess`, `envKeys`, `retryOf`, `goalCheck`, `background` |
+| `harness.bash.end` (`outcome`, `payload_ref` = digest of the result) | `functionCallId`, `enforcer`, `exitCode`, `durationMs`, `timedOut`, `killedByFreeze`, `truncated`, `denialSuspected`, `retryOf`, `shellId` (a call that started a background shell) |
+| `harness.shell.started` | `functionCallId`, `shellId`, `pid` |
+| `harness.shell.ended` | `functionCallId`, `shellId`, `exitCode`, `durationMs`, `killedBy` (`requested`, `freeze`, `output_limit`, `lifetime`, `session_end`, `close`), `truncated` |
 | `harness.bash.retry_unsandboxed` | `functionCallId`, `retryOf`, `failedEnforcer`, `failureDigest`, `decision`, `source` (`policy` when requested, `tool` when consumed) |
 | `harness.sandbox.unavailable` | `functionCallId`, `requested`, `error` |
 
@@ -336,6 +439,7 @@ Windows host no process the command starts can leave its Job Object.
 | Risk | Status |
 |---|---|
 | A process that calls `setsid` outlives the call on the host and under Seatbelt | Documented; bubblewrap ends it with the PID namespace |
+| A background shell's group is killed after a crash only at the next start, and only where the OS reports process start times (macOS, Linux) | Documented; on Windows the Job Object ends the shell with the harness process |
 | A protected name that does not exist below the root (a new nested `AGENTS.md`, `.envrc` or `.git`) can be created by a sandboxed command | Root-level names gate `auto_allow_sandboxed`; nested files are listed, never inlined, by the instruction loader |
 | On a case-sensitive file system a differently cased protected name (`agents.md`) is a different file | File tools match protected names case-folded; the sandbox protects names that exist |
 | Network access is all or nothing | `network: false` is required for unapproved sandboxed commands |

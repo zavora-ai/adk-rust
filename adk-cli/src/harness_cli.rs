@@ -354,11 +354,11 @@ impl Setup {
     fn shells(&self, attended: bool) -> Arc<adk_harness::ShellSupervisor> {
         self.shells
             .get_or_init(|| {
-                let config = if attended {
+                let config = self.resolved.shells.apply(if attended {
                     adk_harness::BackgroundShellConfig::attended()
                 } else {
                     adk_harness::BackgroundShellConfig::unattended()
-                };
+                });
                 let shells = adk_harness::ShellSupervisor::new(
                     Arc::new(adk_harness::ShellOutputs::default()),
                     config,

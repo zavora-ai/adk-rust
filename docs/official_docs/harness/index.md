@@ -65,7 +65,7 @@ turn runs it once (see [Modes and approvals](modes-and-approvals.md)).
 |---|---|---|
 | Modes | `read_only`, `plan`, `ask` (default), `auto` per session, in a harness-owned store; the model leaves plan mode only through an approved `exit_plan_mode` | [Modes and approvals](modes-and-approvals.md) |
 | Approvals | A prompter at the terminal, or held calls decided later from any process; "always allow" becomes a standing rule bound to you and to the tool's declaration | [Modes and approvals](modes-and-approvals.md) |
-| Shell | `bash` on the host behind approval, or in the OS sandbox (Seatbelt, bubblewrap) | [Shell and sandbox](shell-and-sandbox.md) |
+| Shell | `bash` on the host behind approval, or in the OS sandbox (Seatbelt, bubblewrap); background shells read with `shell_output` and stopped with `shell_kill` | [Shell and sandbox](shell-and-sandbox.md) |
 | Instructions and skills | `AGENTS.md` after a workspace trust decision; skills loaded on demand | [Configuration](configuration.md) |
 | Team | Local, ACP and A2A members under the parent's mode, budget and policy | [Team](team.md) |
 | Plans and goals | An approved plan runs as a checkpointed graph; goals iterate until a command passes, as durable runs | [Plans and goals](plan-and-goals.md) |
@@ -85,7 +85,7 @@ turn runs it once (see [Modes and approvals](modes-and-approvals.md)).
 | [Configuration](configuration.md) | Builder options and defaults, `.adk/harness.toml`, features, the `harness` template |
 | [The harness in your terminal](cli.md) | `adk-rust`, `code`, `goal`, `ultracode`, slash commands, `harness.db` |
 | [Serving the harness](serving.md) | `adk-rust serve`, request identity, the approval inbox, background runs |
-| [Shell and sandbox](shell-and-sandbox.md) | Host and sandboxed `bash`, isolation status, unsandboxed retries |
+| [Shell and sandbox](shell-and-sandbox.md) | Host and sandboxed `bash`, isolation status, unsandboxed retries, output and background shells |
 | [Team](team.md) | Members, isolation, budgets, discovery, review rounds |
 | [Plans and goals](plan-and-goals.md) | The plan graph, gates and rewind; loop-until goals, durable and ambient |
 | [Durability](durability.md) | The durability invariants and the tests that prove them |

@@ -110,6 +110,10 @@ max_rounds = 2
 [plan]                       # the user config only (spec 3.1 §7.11)
 checkpointer = "postgres://plans@db/harness"
 
+[shells]                     # spec 3.1 §7.29; a project file may only lower these
+max_running = 8              # background shells per session
+lifetime_minutes = 30        # goal, served and kernel runs; at most 120; the REPL has none
+
 [[hooks]]                    # spec 3.1 §7.22; see Hooks
 event = "post_edit"
 command = "cargo fmt"
@@ -123,7 +127,9 @@ a project file may set `search = "off"`, and any other `search` or a `searxng_ur
 ignored with a note, since it would choose where the agent's queries go. `[plan] checkpointer` is read from the
 user config only: a checkpointer location is not a permission, but a workspace file naming one would send
 plan state to a server the repository chose, so the flag wins, then the user config, then
-the store the sessions are in. `[[hooks]]` tables are hooks on
+the store the sessions are in. `[shells]` sets the background shell limits
+([Background shells](shell-and-sandbox.md#background-shells)); a project file may lower
+them, never raise them. `[[hooks]]` tables are hooks on
 tool events ([Hooks](hooks.md#in-the-cli)): the user config's run before the workspace's,
 and the workspace's run only once the workspace is trusted.
 
@@ -232,6 +238,7 @@ asks again.
 | `/memory` | Working notes and long-term facts with their status, kind, source and session; `/memory forget ID` and `/memory accept ID` act on one fact (a unique prefix of the id is enough) |
 | `/effort [low\|medium\|high]` | Shows the session's reasoning effort and the policy; with a level, sets every mode and role to it from the next model call (spec 3.1 §7.23) |
 | `/hooks` | The hooks on tool events — each with its source, isolation, timeout and whether it runs — and the bounds of one turn (spec 3.1 §7.22); a workspace hook runs only under the workspace's trust |
+| `/shells [kill N]` | The session's background shells, each with its id, state, age and command; `kill N` stops one (spec 3.1 §7.29, see [Background shells](shell-and-sandbox.md#background-shells)) |
 | `/help`, `exit` | Lists the commands; leaves the REPL |
 
 A slash line that names no command goes to the agent as typed, after one dim line on the

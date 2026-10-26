@@ -22,7 +22,7 @@ harness: with `allow_host_shell_in_auto`, the host shell line reads `allow` in `
 ```text
 <harness version="3.0.0" surface="adk-rust 3.0.0">
 Classes (read-only | plan | ask | auto):
-  read, todos and members (glob grep harness_help read_file update_todo write_todos): allow | allow | allow | allow
+  read, todos and members (glob grep harness_help read_file shell_kill shell_output update_todo write_todos): allow | allow | allow | allow
   plan exit (exit_plan_mode): deny | ask every time | deny | deny
   edit (apply_patch edit_file write_file): deny | deny | ask | allow
   edit, protected path (AGENTS.md, CLAUDE.md, MEMORY.md, .envrc, lefthook.yml and anything under .git, .adk, .skills or .claude): deny | deny | ask every time | ask every time
@@ -36,6 +36,7 @@ Packs: browser (off: --pack browser), payments (not compiled), ...
 Web search: none (...)
 Memory: off
 Edits: edit_file takes several replacements in one file as edits; apply_patch changes several files, all or none; prefer edit_file across files. An edit of a file changed since you read it is refused as stale: read it again.
+Background shells: bash run_in_background returns a shell_id; a reminder names each that ends, shell_output reads it, shell_kill stops it. Servers and watchers run on the host
 Safety (promise only what these cover):
   action ledger: covers ...; does not cover ...
   rewind: covers the plan graph's position only; does not cover files: no file is restored; ...
