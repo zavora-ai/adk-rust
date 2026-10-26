@@ -339,8 +339,9 @@ uncached prompt tokens per turn.
 id or .gguf path>` (feature `mistralrs`, a heavy build; GPU through `adk-mistralrs`'s `cuda`
 or `metal`) run the model on this machine (spec 3.1 §8.1, H10). With a local provider,
 long-term memory recalls with a local ONNX embedder (`BAAI/bge-small-en-v1.5`, fetched
-once into the Hugging Face hub cache, feature `memory-local`), so with `--sandbox` and
-`--store-key` nothing leaves the machine but the local model endpoint.
+once into the Hugging Face hub cache, feature `memory-local`), never another provider's,
+so with `--sandbox` and `--store-key` nothing leaves the machine but the local model
+endpoint.
 
 ```bash
 adk-rust --provider ollama --model qwen3.5 --sandbox --store-key keychain:adk-rust
@@ -379,10 +380,27 @@ what they added:
 | `assumed` | The agent inferred it, or read it in a command's output or a file; a hint until you confirm it |
 | `superseded`, `forgotten` | History: replaced by a newer fact, or forgotten; never recalled |
 
-Recall finds related facts with an embedder when one is available — the model's provider
-when it embeds (Gemini, OpenAI), else Gemini or OpenAI when its key is set — and by shared
-words otherwise, with nothing leaving the machine for it. The banner shows
-`Memory : long-term facts on`.
+Recall finds related facts with an embedder. Every user message is part of a recall query,
+so the embedder is a data boundary: facts and queries go to the chat model's own provider or
+stay on this machine, unless you choose another provider (spec 3.1 §7.32, §13 Q9).
+
+| Chat provider | Embedder |
+|---|---|
+| Ollama, mistral.rs | The local ONNX model (`BAAI/bge-small-en-v1.5`) |
+| Gemini, OpenAI | That provider's: `gemini-embedding-2`, `text-embedding-3-small` |
+| Anthropic, DeepSeek, Groq | The local ONNX model, whatever other keys are in the environment |
+| The local model unavailable | None: facts are found by shared words, never by another provider |
+| `--embedder local\|gemini\|openai\|lexical`, or `[memory] embedder` in the user config | As chosen; a second provider sees your facts only this way |
+
+`.adk/harness.toml` may set `[memory] embedder` to `local` or `lexical` only, and only to
+keep facts closer than your own choice: a workspace never sends them to a provider. Every
+session's banner names the embedder, and each stored vector carries its embedder's id, so
+recall embeds a fact again rather than compare two models' vectors:
+
+```text
+  Embedder  : a local ONNX model (BAAI/bge-small-en-v1.5); nothing leaves this machine
+  Memory    : long-term facts on (/memory)
+```
 
 ```bash
 adk-rust memory list                     # this project's facts and your preferences, known first
