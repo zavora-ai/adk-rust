@@ -803,3 +803,85 @@ async fn a_store_without_records_refuses_before_any_change() {
     assert_eq!(error.code, "harness.memory.consolidation_unsupported");
     assert_eq!(world.get(&older).await, older);
 }
+
+/// Spec 3.3 §12 phase 3, "Correct me, then check", on SQLite, where `adk-rust up` keeps facts
+/// (`harness.db`): an overnight tidy-up merges two notes and Undo restores both; a confirmed
+/// guess is known; a forgotten note is gone from the next turn while the others are still
+/// recalled. The kernel's memory routes make these same calls (`adk-cli`'s
+/// `HarnessMemoryBook`).
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn correct_me_then_check_on_sqlite() {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    let store = adk_harness::SqliteFactStore::new(pool);
+    store.migrate().await.unwrap();
+    let world = World::with_store(Arc::new(store));
+    let a = world
+        .seed("build with make release", FactStatus::Assumed, 2, Some(0.6), at_cosine(1.0))
+        .await;
+    let b = world
+        .seed("the release build runs make", FactStatus::Assumed, 1, Some(0.8), at_cosine(0.85))
+        .await;
+    let guess = world
+        .seed(
+            "tests run with cargo nextest",
+            FactStatus::Assumed,
+            1,
+            Some(0.7),
+            vec![0.0, 0.0, 1.0],
+        )
+        .await;
+    world.fillers(9).await;
+    let distiller = Arc::new(ScriptedLlm::new(
+        "distiller",
+        vec![merge("Release builds run make release", &[&a.id, &b.id], &[&a.id, &b.id])],
+    ));
+    let model = Arc::new(ScriptedLlm::new("m", vec![ScriptedResponse::text("ok")]));
+    let harness = world.harness(&model, &distiller);
+
+    // The tidy-up merges the two notes into one.
+    let record = harness.consolidate_memory(&alice(), ConsolidationRequest::new()).await.unwrap();
+    assert_eq!(record.merged.len(), 1);
+    for note in [&a, &b] {
+        assert!(!world.get(note).await.status.is_live(), "{} was merged", note.text);
+    }
+
+    // Undo restores both, and forgets the merged note with its history kept.
+    harness.undo_consolidation(&alice(), &record.tick_id).await.unwrap();
+    assert_eq!(
+        (world.get(&a).await.status, world.get(&b).await.status),
+        (FactStatus::Assumed, FactStatus::Assumed)
+    );
+    let merged = world.store.get(&record.merged[0]).await.unwrap().unwrap();
+    assert_eq!(merged.status, FactStatus::Forgotten);
+
+    // That's right: the guess is known, as the person confirmed it.
+    let confirmed = harness.accept_fact(&alice(), &guess.id).await.unwrap();
+    assert_eq!(
+        (confirmed.status, confirmed.provenance.source),
+        (FactStatus::Known, FactSource::UserConfirmed)
+    );
+
+    // Forget it: gone from the next turn, while the note it was merged with, which the same
+    // words recall, still is.
+    harness.forget_fact(&alice(), &a.id).await.unwrap();
+    send(&harness, "s1", "the release build").await;
+    let request = model.requests().pop().expect("the next turn calls the model");
+    let texts: Vec<&str> = request
+        .contents
+        .iter()
+        .flat_map(|content| content.parts.iter())
+        .filter_map(adk_core::Part::text)
+        .collect();
+    let block = texts
+        .iter()
+        .find(|text| text.starts_with("<memory-facts>"))
+        .unwrap_or_else(|| panic!("the next turn recalls what is kept: {texts:?}"))
+        .to_string();
+    assert!(!block.contains(&a.id), "a forgotten note is not recalled: {block}");
+    assert!(block.contains(&b.id), "{block}");
+}

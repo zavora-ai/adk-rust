@@ -8,8 +8,10 @@ import type { PlaywrightTestConfig } from "@playwright/test";
 // example of adk-surface on its own port (spec 3.3 §5). Each run starts every example in a new,
 // empty workspace, so a rerun never finds the files of the last one. Per project, with its
 // prefix (`HOME`, `TRAY`, `MEMORY`, …): `<PREFIX>_E2E_PORT` moves the port; `<PREFIX>_E2E_BIN`
-// starts an example already built instead of `cargo run`; `<PREFIX>_E2E_URL` points the project
-// at a server already running, with `<PREFIX>_E2E_WORKSPACE` naming that server's workspace.
+// starts an example already built instead of `cargo run` (a project served by a command reads
+// its own variables: `MEMORY_E2E_BIN` names the `adk-rust` that `memory-kernel.sh` runs);
+// `<PREFIX>_E2E_URL` points the project at a server already running, with
+// `<PREFIX>_E2E_WORKSPACE` naming that server's workspace.
 interface Surface {
   /** The project's name: `npx playwright test --project <name>`. */
   name: string;
@@ -33,6 +35,8 @@ interface Surface {
   args?: string;
   /** What the project's browser runs with. */
   use?: PlaywrightTestConfig["use"];
+  /** Stopped with SIGTERM, so its command cleans up, rather than killed outright. */
+  stopsCleanly?: boolean;
 }
 
 const surfaces: Surface[] = [
@@ -61,6 +65,7 @@ const surfaces: Surface[] = [
     command: "bash adk-surface/web/e2e/memory-kernel.sh",
     // 8792 is taken by the tray and the voice view.
     port: 8796,
+    stopsCleanly: true,
     testMatch: ["memory.spec.ts"],
     ready: "/ui/",
   },
@@ -178,9 +183,10 @@ const servers = surfaces.map((surface) => {
   const workspace = env(surface, "WORKSPACE") ?? mkdtempSync(join(tmpdir(), `adk-${surface.name}-e2e-`));
   process.env[`${surface.prefix}_E2E_WORKSPACE`] = workspace;
   const port = Number(env(surface, "PORT") ?? surface.port);
+  // A command reads `<PREFIX>_E2E_BIN` itself, as the binary it runs.
   const command =
-    env(surface, "BIN") ??
     surface.command ??
+    env(surface, "BIN") ??
     `cargo run -p adk-surface --features ${surface.features ?? "web"} --example ${surface.example} --`;
   return {
     surface,
@@ -210,6 +216,7 @@ const webServer: PlaywrightTestConfig["webServer"] = servers
     reuseExistingServer: false,
     timeout: 20 * 60_000,
     stdout: "pipe" as const,
+    ...(server.surface.stopsCleanly ? { gracefulShutdown: { signal: "SIGTERM" as const, timeout: 15_000 } } : {}),
   }));
 
 export default defineConfig({
