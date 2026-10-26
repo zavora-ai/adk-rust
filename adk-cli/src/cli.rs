@@ -323,8 +323,9 @@ pub enum Commands {
     /// Interactive REPL with the plain chat agent (no workspace tools)
     Chat(ChatArgs),
 
-    /// Serve the harness in plan mode with the approval inbox, on 127.0.0.1 unless --host
-    /// says otherwise
+    /// Serve the harness in plan mode with the approval inbox
+    ///
+    /// Listens on 127.0.0.1 unless --host says otherwise.
     Serve {
         /// Server port
         #[arg(long, default_value_t = 8080)]
@@ -467,9 +468,10 @@ pub enum Commands {
         receipt: Option<std::path::PathBuf>,
     },
 
-    /// Run the harness as the agent kernel, in the foreground or as a service: a worker per
-    /// queue, wake sources, the process table, and a control plane on a local socket (a
-    /// named pipe on Windows) and HTTP.
+    /// Run the harness as the agent kernel, in the foreground or as a service
+    ///
+    /// The kernel runs a worker per queue, wake sources, the process table, and a control
+    /// plane on a local socket (a named pipe on Windows) and HTTP.
     ///
     /// Example: `adk-rust up --mode ask`, then `adk-rust ps` or `adk-rust attach` from
     /// another terminal; `adk-rust up --mode ask --install` keeps it running as a service
@@ -477,9 +479,10 @@ pub enum Commands {
     #[cfg(feature = "harness")]
     Up(Box<UpArgs>),
 
-    /// Open the REPL on the running kernel: each turn runs as a process the kernel owns,
-    /// held calls are answered here or from any other surface, and closing the terminal
-    /// changes nothing.
+    /// Open the REPL on the running kernel
+    ///
+    /// Each turn runs as a process the kernel owns, held calls are answered here or from any
+    /// other surface, and closing the terminal changes nothing.
     #[cfg(feature = "harness")]
     Attach {
         /// Continue this session (default: a new one)
@@ -582,8 +585,10 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
-    /// Move a queued or sleeping process to another queue: interactive, background or
-    /// maintenance. The moved process gets a new pid.
+    /// Move a queued or sleeping process to another queue
+    ///
+    /// The queues are interactive, background and maintenance. The moved process gets a new
+    /// pid.
     #[cfg(feature = "harness")]
     Nice {
         /// Process id, or a unique prefix of it
@@ -606,8 +611,7 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
-    /// Create a sleeping process that runs a task when a file changes, a cron schedule
-    /// fires, or a webhook delivers
+    /// Create a sleeping process woken by a file change, a cron schedule or a webhook
     ///
     /// Example: `adk-rust wake --file Cargo.lock -- "audit the new dependencies"`.
     #[cfg(feature = "harness")]
@@ -641,8 +645,9 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
-    /// Phones, terminals and chat accounts that may reach your agents: pair one with a code,
-    /// list them, remove one (spec 3.3 §10 K1, K2)
+    /// Phones, terminals and chat accounts that may reach your agents
+    ///
+    /// Pair one with a code, list them, or remove one (spec 3.3 §10 K1, K2).
     ///
     /// Example: `adk-rust pair --name "Ana's phone"`, then enter the code on the phone;
     /// `adk-rust pair accept ABCD-EFGH-2345` pairs the chat account that was sent that code.
@@ -656,8 +661,10 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
-    /// The kernel's self-observation: its content-free activity ledger, each partition's
-    /// baselines, and the observations it offered as questions (spec 3.2 §7.10)
+    /// The kernel's self-observation: activity ledger, baselines and observations
+    ///
+    /// The content-free activity ledger, each partition's baselines, and the observations
+    /// the kernel offered as questions (spec 3.2 §7.10).
     ///
     /// Example: `adk-rust proc`, `adk-rust proc ledger --export ledger.jsonl`, then
     /// `cargo adk eval --ledger ledger.jsonl`.
@@ -690,9 +697,10 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
-    /// Your own agents on the running kernel: list, show, new, edit, pause, resume, remove
-    /// (spec 3.3 §5.7). Put --home, --server or --token before the verb; every change shows
-    /// what it does and asks before it applies
+    /// Your own agents on the running kernel
+    ///
+    /// List, show, new, edit, pause, resume and remove (spec 3.3 §5.7). Put --home, --server
+    /// or --token before the verb; every change shows what it does and asks before it applies.
     #[cfg(feature = "harness")]
     Agents {
         /// Print JSON, for scripts
@@ -802,8 +810,10 @@ pub enum Commands {
         command: AuditCommands,
     },
 
-    /// An AWP 2.0 site's releases, content and migration: build, publish, roll back, draft,
-    /// schedule, correct, withdraw, revert, migrate and freeze (spec 3.5 §8.1)
+    /// An AWP 2.0 site's releases, content and migration
+    ///
+    /// Build, publish, roll back, draft, schedule, correct, withdraw, revert, migrate and
+    /// freeze (spec 3.5 §8.1).
     #[cfg(feature = "website")]
     Site {
         #[command(subcommand)]
@@ -812,16 +822,20 @@ pub enum Commands {
         target: crate::site_cli::SiteTarget,
     },
 
-    /// AWP 2.0: verify a domain, run the conformance kit, manage the root and delegated keys,
-    /// migrate a 1.x business.toml (spec 3.5 §8.1)
+    /// AWP 2.0 domains, conformance and keys
+    ///
+    /// Verify a domain, run the conformance kit, manage the root and delegated keys, and
+    /// migrate a 1.x business.toml (spec 3.5 §8.1).
     #[cfg(feature = "website")]
     Awp {
         #[command(subcommand)]
         command: crate::awp_cli::AwpCommands,
     },
 
-    /// An AWP 2.0 website: spin one up, its status, the weekly review, the charter, and the
-    /// jobs' autonomy levels (spec 3.5 §8.1)
+    /// An AWP 2.0 website: spin one up and run it
+    ///
+    /// Its status, the weekly review, the charter, and the jobs' autonomy levels
+    /// (spec 3.5 §8.1).
     #[cfg(feature = "website")]
     Website {
         #[command(subcommand)]
