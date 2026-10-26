@@ -195,7 +195,7 @@ another's reads (A-I22).
 | `HostLogs` | `host_logs` | `requests`, `bytes`, `status:2xx` … `status:5xx`, `not_found`, `pageviews`, `pageviews:{path}`, `crawlers`, `agents`, `agents:{name}`, `machine_views`, `agents.machine_views` |
 | `CommerceKpi` over `MeteredActionLedger` | `commerce` | `actions`, `actions:{capability}`, `actions:{capability}:{completed\|failed\|not_run}`, and `leads`, `sales` from the site's `CommerceOutcomes` |
 | `SpendLedgerKpi` over `MeteredSpendLedger` | `spend` | `spend`, `spend.vendor:{vendor}`, `spend.agent:{agent}`, in USD |
-| `AgentSearchKpi` over `EdgeMeter` | `agents` | `calls`, `calls:{capability}`, `held`, `agent_calls`, `agent_calls:{binding}`, `agent_calls:{capability}` |
+| `AgentSearchKpi` over `EdgeMeter` | `agents` | `calls`, `calls:{capability}`, `held`, `agent_calls`, `agent_calls:{binding}`, `agent_calls:{capability}`, `agent_discovery`, `agent_discovery:{surface}` |
 | `AeoKpi` over `AeoTracker` | `aeo` | `aeo.queries`, `aeo.citations`, `pages.answer_citations`, `aeo.citations:{provider}`, `aeo.top3`, `aeo.citation_rate` |
 
 | Part | How it counts |
@@ -203,7 +203,7 @@ another's reads (A-I22).
 | `HostLogs::ingest` | Parses the Common, Combined and W3C extended (`#Fields:`) formats and adds each request to its day; it keeps no address, query string or referrer. User agents are claims: `agents:{name}` counts self-declared AI crawlers such as `gptbot` and `claudebot` |
 | `MeteredActionLedger` | Wraps the edge's action ledger (`AwpEdge::builder(..).action_ledger(..)`) and counts each completed `non_idempotent` call by capability and outcome; the exactly-once guarantee is the inner ledger's (A-I7) |
 | `MeteredSpendLedger` | Wraps the runtime's spend ledger and counts committed spend by vendor and agent; caps are the inner ledger's |
-| `EdgeMeter` | Wraps the edge's audit recorder (`.audit(AuditTrail::new(meter))`) and counts `awp.capability.called` and `awp.capability.held` records; an agent call is one from a requester above `public`, which takes a verified credential (A-I6) |
+| `EdgeMeter` | Wraps the edge's audit recorder (`.audit(AuditTrail::new(meter))`) and counts `awp.capability.called` and `awp.capability.held` records, and the edge's `awp.request.verified` records of card and manifest fetches by surface; an agent call or discovery is one from a requester above `public`, which takes a verified credential (A-I6) |
 | `AeoTracker::run` | Asks each `web_search` provider (`adk_harness::web::SearchProvider`) each question and records whether a result's host is the site's domain, and at which rank; it reads only, at Observe |
 
 Counts are daily totals in a `BeaconStore`; a source answers `None` for a window that covers no

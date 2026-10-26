@@ -148,9 +148,16 @@ directory is unreachable, is served as `public`. A capability above the caller's
 `404 capability_not_found`, exactly as one that does not exist.
 
 Limits key on the verified requester id, else a digest of the presented credential, else the
-peer address. A request over its per-minute limit, or a call over its daily limit, answers
+peer address. The peer address reaches the edge only when the listener provides it: serve the
+router with `into_make_service_with_connect_info::<SocketAddr>()`, or every anonymous visitor
+shares one limit. A request over its per-minute limit, or a call over its daily limit, answers
 `429 rate_limit_exceeded` with `Retry-After`; every response carries `RateLimit-Policy` and
 `RateLimit`.
+
+A verified caller's fetch of the Agent Card, the capability manifest or the MCP Server Card is
+an `awp.request.verified` audit record with `awp.surface` (`agent_card`, `manifest`,
+`mcp_server_card`), `awp.tier` and `awp.requester`, so verified agent discovery is counted.
+Anonymous fetches are not recorded.
 
 ## One governed path
 
@@ -173,7 +180,11 @@ HTTP, A2A and MCP calls, and the public agent's capability calls, enter `Governe
 |---------|-----------------|-----------|-------|
 | HTTP | `Idempotency-Key` | `202` with `Location: /awp/v2/calls/{id}` | The error envelope |
 | A2A | The `messageId`, or the metadata key `https://agenticwebprotocol.com/ns/2.0/idempotencyKey` | The task stays `TASK_STATE_WORKING` with the held-call document | The task ends `TASK_STATE_REJECTED` or `TASK_STATE_FAILED` with the envelope |
-| MCP | `params._meta["agenticwebprotocol.com/idempotency-key"]`, else the JSON-RPC id within its session | `structuredContent` is the held-call document | `isError: true`, the envelope in the text block |
+| MCP | `params._meta["agenticwebprotocol.com/idempotency-key"]`, else the JSON-RPC id within its session; a stateless endpoint has no session, so only the `_meta` key | `structuredContent` is the held-call document | `isError: true`, the envelope in the text block |
+
+A retried A2A message returns its first task. An anonymous caller's message ids are scoped to
+its own limit key, so two visitors whose clients pick the same `messageId` each get their own
+task.
 
 A held call waits in the owner's approval store for as long as the owner takes, or until its
 `hold_expiry`. Once the owner decides through the `ApprovalService`, `GET /awp/v2/calls/{id}`,
@@ -195,6 +206,15 @@ audited.
 | `search_site` | Searches the release through a `SiteSearch`; `StaticSiteIndex` is an in-memory index |
 | `reply_in_thread` | Sends text to the conversation's own thread, inside `ReplyPolicy`'s template and rate; the thread comes from the conversation, never from the model, and replies carry no attachments |
 | `emit_signal` | Files one typed `awp_types::Signal` through a `SignalEmitter`; a signal naming a requester names the verified caller |
+
+The back office hears of a hostile conversation whatever the model does. When the policy
+refused one of the agent's tool calls in a turn, or the `ConversationScreen` flagged the
+message, and the agent filed no signal for the turn, the edge files one through the same
+`SignalEmitter`: `abuse_observed` with kind `injection_attempt` naming the verified caller, else
+`inbound_message` with category `other` for the conversation's thread. The signal carries no
+text from the message. `InjectionScreen`, the default, flags instructions that override the
+agent's own, claims of system or administrator authority, role markers at the start of a line
+and chat-template tokens; `AwpEdgeBuilder::conversation_screen` replaces it.
 
 ## Modes and the incident handle
 
@@ -241,7 +261,9 @@ jitter; six consecutive failures suspend the subscription, and `PATCH` with
 `{"state": "active"}` reactivates it. Events are retained 72 hours; `POST /awp/v2/events/replay`
 redelivers them under their original ids. `EdgeEvents::announce_catalog` publishes the
 `catalog.changed` of an `adk-site` announcement and serves its further pages; give the
-pipeline's `changes_url` the edge's `/awp/v2/events/changes` base.
+pipeline's `changes_url` the edge's `/awp/v2/events/changes` base. `EdgeEvents::retained`
+reads the retained events of a window with their audiences, for the site's own back office and
+views; the edge serves no route for it.
 
 ## Consent
 
@@ -256,8 +278,8 @@ A revocation takes effect at once: pending held calls that rely on the receipt e
 with `consent_required`, later calls cannot use it, and `consent.revoked` reaches the
 requesters that referenced it. `GET /awp/v2/consent/export` returns the receipts and what the
 `SubjectData` holds; `POST /awp/v2/consent/erase` revokes, erases the subject's data through
-`SubjectData` and erases the receipts. The default `LeadsData` exports the leads that reference
-the subject's receipts and erases none, since a `LeadStore` cannot delete.
+`SubjectData` and erases the receipts. The default `LeadsData` exports and, on erasure,
+deletes the leads that reference the subject's receipts through `LeadStore::delete`.
 
 ## The beacon
 
