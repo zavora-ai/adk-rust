@@ -156,8 +156,8 @@ pub struct PendingDelivery {
 /// [`append`](Self::append), [`between`](Self::between) and
 /// [`purge_before`](Self::purge_before) are required. The provided methods keep nothing: the
 /// edge then holds catalogue pages and consent references in the process, and retries last
-/// as long as it does. A durable log overrides them; [`edge_log_conformance_tests!`]
-/// (crate::edge_log_conformance_tests) checks every method.
+/// as long as it does. A durable log overrides them;
+/// [`edge_log_conformance_tests!`](crate::edge_log_conformance_tests) checks every method.
 #[async_trait]
 pub trait EventLog: Send + Sync {
     /// Retains `event`.
