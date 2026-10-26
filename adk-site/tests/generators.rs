@@ -117,6 +117,9 @@ async fn assembles_from_recorded_output(generator: ExternalGenerator, name: &str
 /// Builds the fixture site with a real generator twice, gates it, compares the builds, and
 /// records the output when `ADK_SITE_GEN_RECORD=1`.
 async fn real_build(generator: ExternalGenerator, name: &str) {
+    // On Windows the generator runs under the restricted token, which leaves the network open.
+    #[cfg(windows)]
+    let generator = generator.with_restricted_token();
     let project = project().await;
     let mut outputs = Vec::new();
     for _ in 0..2 {
@@ -321,6 +324,33 @@ exit 12
         }
         assert!(!read_only.exists(), "nothing was written into the read-only program directory");
         assert!(!escape.exists(), "nothing reached the host's temporary directory");
+    }
+
+    /// On Windows a generator runs only under the restricted token, and only when the build
+    /// accepts what the token leaves open (spec 3.2 §10 W5): `cmd.exe` stands in for one, and
+    /// the run completes in the sandbox without writing a page.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn on_windows_a_generator_runs_under_the_restricted_token_when_asked() {
+        let tools = tempfile::tempdir().unwrap();
+        let system = std::env::var_os("SystemRoot")
+            .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+        let program = tools.path().join("zola.exe");
+        std::fs::copy(system.join("System32").join("cmd.exe"), &program).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let refused = ExternalGenerator::zola(&program)
+            .build(&project().await, out.path())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("with_restricted_token"), "{refused}");
+        let ran = ExternalGenerator::zola(&program)
+            .with_restricted_token()
+            .build(&project().await, out.path())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(ran.contains("wrote no page"), "the sandboxed run completed: {ran}");
     }
 
     #[tokio::test]

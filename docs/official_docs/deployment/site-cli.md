@@ -93,8 +93,8 @@ it publishes only through its approvals, each role by a different person (A-I23)
 
 | Command | Does |
 |---|---|
-| `site build [--preview] [--json]` | Builds into `data/work/build` and runs the launch gate's full tier; exits 1 when it fails |
-| `site publish [ITEM…] [--yes]` | Releases the working copy, or publishes the named drafts; scheduled items whose time has come publish first. The first release passes the full tier, later ones the fast tier on the changed items |
+| `site build [--preview] [--json] [--legacy URL]` | Builds into `data/work/build` and runs the launch gate's full tier; exits 1 when it fails. After `site migrate`, the tier includes migration parity over the inventory and design choice the migration recorded (`data/migration/inventory.json`, `report.json`); `--legacy` compares the looks with the legacy site served at `URL` in headless Chrome |
+| `site publish [ITEM…] [--yes]` | Releases the working copy, or publishes the named drafts; scheduled items whose time has come publish first. The first release passes the full tier — migration parity included after a migration — later ones the fast tier on the changed items |
 | `site rollback SEQ [--replay all\|none] [--yes]` | Serves release `SEQ`'s files again as a new release, puts the working copy back, lists the changes since and replays each one you choose |
 | `site log [--json]` | Every release: time, snapshot or delta, files, source and manifest digest; the checkpoint |
 | `site content new KIND --title T [--slug S] [--language L]` | A draft item in `content/` |

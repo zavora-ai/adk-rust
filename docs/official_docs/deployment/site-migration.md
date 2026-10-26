@@ -188,7 +188,10 @@ The owner chooses the design during migration, and `ParityConfig::design` carrie
 
 `MigrationParity::with_design` sets it; `record_design_choice` writes it to the migration
 audit as `site.migration.decided` with `design_choice_fields`. `adk-rust site migrate
---design keep|new-theme` records it in the migration report.
+--design keep|new-theme` records it in the migration report, and the inventory beside it in
+`data/migration/inventory.json`; `adk-rust site build` and the first `site publish` then run
+the parity check over both, with the quarantined subjects exempt. `site build --legacy URL`
+compares the looks with a legacy view; without one they are reported as not measured.
 
 > **Note:** a migration onto a new theme changes how pages look. Measured with Chrome on the
 > recorded WordPress fixture, the built-in theme differs from the legacy theme by up to 0.17,

@@ -7,7 +7,7 @@
 //! | Step | What happens |
 //! |------|--------------|
 //! | [`export`](ExternalGenerator::export) | The built-in renderer builds the site with templates that write each page's template context — `site`, `page` and `t`, the data the built-in templates read — instead of HTML. Every other file of that build is kept: the Markdown and structured twins, `llms.txt`, `robots.txt`, `security.txt`, sitemaps, feeds, the charter, media, redirects and the stylesheet. The contexts become a project in the generator's own layout |
-//! | [`run`](ExternalGenerator::run) | The generator runs under `adk-sandbox`'s OS enforcer (Seatbelt on macOS, bubblewrap on Linux) with no network, reading only its program, its toolchain and the project, and writing only the project and its output. Without an enforcer the build fails |
+//! | [`run`](ExternalGenerator::run) | The generator runs under `adk-sandbox`'s OS enforcer (Seatbelt on macOS, bubblewrap on Linux) with no network, reading only its program, its toolchain and the project, and writing only the project and its output. Without an enforcer the build fails. On Windows it runs under the restricted token (spec 3.2 §10 W5) when [`with_restricted_token`](ExternalGenerator::with_restricted_token) accepts what that token leaves open |
 //! | [`assemble`](ExternalGenerator::assemble) | Each page's HTML comes from the generator; static assets the generator adds (stylesheets, scripts, images, fonts) are kept where they do not collide; every other file is the built-in build's. A page the generator did not write fails the build |
 //!
 //! | Generator | Project layout | Page template | Writes each page to |
@@ -36,6 +36,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -287,6 +288,7 @@ pub struct ExternalGenerator {
     project: Option<PathBuf>,
     work_dir: Option<PathBuf>,
     timeout: Duration,
+    restricted_token: bool,
 }
 
 impl ExternalGenerator {
@@ -298,6 +300,7 @@ impl ExternalGenerator {
             project: None,
             work_dir: None,
             timeout: Duration::from_secs(300),
+            restricted_token: false,
         }
     }
 
@@ -346,6 +349,26 @@ impl ExternalGenerator {
     #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Runs the generator on Windows under `adk-sandbox`'s restricted token (spec 3.2 §10 W5),
+    /// in a Job Object that ends every process it starts. The token confines the generator's
+    /// writes to its run directory, but it leaves the network open and lets the generator
+    /// read what the user may read, so a Windows build runs only with this set, as it fails
+    /// on any system without an OS sandbox. It changes nothing elsewhere.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_site::generator::external::ExternalGenerator;
+    ///
+    /// let zola = ExternalGenerator::zola(r"C:\tools\zola.exe").with_restricted_token();
+    /// # let _ = zola;
+    /// ```
+    #[must_use]
+    pub fn with_restricted_token(mut self) -> Self {
+        self.restricted_token = true;
         self
     }
 
@@ -494,7 +517,7 @@ impl ExternalGenerator {
     /// The sandbox policy of a run: read the program's installation and the toolchain, write
     /// the run directory, no network.
     fn policy(&self, run: &Path, output: &Path) -> Result<adk_sandbox::SandboxPolicy> {
-        let program = std::fs::canonicalize(&self.program).map_err(|e| {
+        let program = canonical(&self.program).map_err(|e| {
             generator_error(self.kind, format!("cannot find {}: {e}", self.program.display()))
         })?;
         let program_dir = program.parent().unwrap_or(Path::new("/"));
@@ -509,7 +532,17 @@ impl ExternalGenerator {
         for dir in [&home, &tmp] {
             std::fs::create_dir_all(dir).map_err(|e| SiteError::io(dir, e))?;
         }
+        #[cfg(not(windows))]
         let path_env = format!("{}:/usr/local/bin:/usr/bin:/bin", program_dir.display());
+        #[cfg(windows)]
+        let path_env = {
+            let system = std::env::var_os("SystemRoot")
+                .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+            std::env::join_paths([program_dir.to_path_buf(), system.join("System32"), system])
+                .map_err(|e| generator_error(self.kind, e.to_string()))?
+                .to_string_lossy()
+                .into_owned()
+        };
         let mut builder = adk_sandbox::SandboxPolicyBuilder::new()
             .allow_read(install)
             .allow_read_write(run)
@@ -522,7 +555,7 @@ impl ExternalGenerator {
             .env("HUGO_CACHEDIR", tmp.join("hugo").display().to_string())
             .env("NO_COLOR", "1");
         if let Some(toolchain) = &self.toolchain {
-            let toolchain = std::fs::canonicalize(toolchain).map_err(|e| {
+            let toolchain = canonical(toolchain).map_err(|e| {
                 generator_error(self.kind, format!("cannot find {}: {e}", toolchain.display()))
             })?;
             builder = builder.allow_read(toolchain);
@@ -530,9 +563,23 @@ impl ExternalGenerator {
         if self.kind.spawns() {
             builder = builder.allow_process_spawn();
         }
+        // Windows programs find their profile and temporary files through these.
+        #[cfg(windows)]
+        {
+            for (name, dir) in [
+                ("USERPROFILE", &home),
+                ("APPDATA", &home),
+                ("LOCALAPPDATA", &home),
+                ("TEMP", &tmp),
+                ("TMP", &tmp),
+            ] {
+                builder = builder.env(name, dir.display().to_string());
+            }
+        }
         Ok(builder.build())
     }
 
+    #[cfg(not(windows))]
     async fn sandboxed(
         &self,
         args: &[OsString],
@@ -574,6 +621,73 @@ impl ExternalGenerator {
                 generator_error(self.kind, format!("did not finish within {:?}", self.timeout))
             })?
             .map_err(|e| generator_error(self.kind, e.to_string()))
+    }
+
+    /// Runs the generator under the restricted token in a Job Object (spec 3.2 §10 W5): its
+    /// writes confined to the run directory, every process it starts ended with the job.
+    #[cfg(windows)]
+    async fn sandboxed(
+        &self,
+        args: &[OsString],
+        cwd: &Path,
+        run: &Path,
+        output: &Path,
+    ) -> Result<std::process::Output> {
+        use std::io::Read as _;
+        use std::os::windows::process::ExitStatusExt as _;
+
+        use adk_sandbox::sandbox::windows::WindowsEnforcer;
+
+        if !self.restricted_token {
+            return Err(generator_error(
+                self.kind,
+                "on Windows an external generator runs under adk-sandbox's restricted token, \
+                 which confines its writes but leaves the network open; accept that with \
+                 `ExternalGenerator::with_restricted_token`, or build on Linux or macOS",
+            ));
+        }
+        let enforcer = WindowsEnforcer::new();
+        enforcer.probe_confined().map_err(|e| {
+            generator_error(
+                self.kind,
+                format!("no OS sandbox is available ({e}); external generators run only sandboxed"),
+            )
+        })?;
+        let policy = self.policy(run, output)?;
+        let program = canonical(&self.program).map_err(|e| SiteError::io(&self.program, e))?;
+        let mut child =
+            enforcer.spawn_contained(&policy, program.as_os_str(), args, cwd).map_err(|e| {
+                generator_error(self.kind, format!("cannot sandbox the generator: {e}"))
+            })?;
+        drop(child.stdin.take());
+        let read = |pipe: Option<std::fs::File>| {
+            tokio::task::spawn_blocking(move || {
+                let mut bytes = Vec::new();
+                if let Some(mut pipe) = pipe {
+                    let _ = pipe.read_to_end(&mut bytes);
+                }
+                bytes
+            })
+        };
+        let (stdout, stderr) = (read(child.stdout.take()), read(child.stderr.take()));
+        let code = match tokio::time::timeout(self.timeout, child.process.wait()).await {
+            Ok(code) => code.map_err(|e| generator_error(self.kind, e.to_string()))?,
+            Err(_) => {
+                child.job.terminate();
+                return Err(generator_error(
+                    self.kind,
+                    format!("did not finish within {:?}", self.timeout),
+                ));
+            }
+        };
+        let joined = |task: tokio::task::JoinHandle<Vec<u8>>| async move {
+            task.await.map_err(|e| generator_error(self.kind, e.to_string()))
+        };
+        Ok(std::process::Output {
+            status: std::process::ExitStatus::from_raw(code as u32),
+            stdout: joined(stdout).await?,
+            stderr: joined(stderr).await?,
+        })
     }
 
     /// The version a generator binary prints for `args`.
@@ -627,8 +741,7 @@ impl ExternalGenerator {
     pub async fn run(&self, export: &Export, output: &Path) -> Result<GeneratorRef> {
         // Canonical paths: under Seatbelt a generator that walks a path through a symbolic
         // link (macOS `/var` → `/private/var`) finds nothing.
-        let canonical =
-            |path: &Path| std::fs::canonicalize(path).map_err(|e| SiteError::io(path, e));
+        let canonical = |path: &Path| canonical(path).map_err(|e| SiteError::io(path, e));
         let project = canonical(&export.project)?;
         let run = project.parent().unwrap_or(&project).to_path_buf();
         let output = match (output.parent(), output.file_name()) {
@@ -770,8 +883,25 @@ impl SiteGenerator for ExternalGenerator {
     }
 }
 
+/// `path` made absolute with every link resolved; on Windows without the `\\?\` prefix,
+/// which generators and the restricted token's grants do not read.
+fn canonical(path: &Path) -> std::io::Result<PathBuf> {
+    let path = std::fs::canonicalize(path)?;
+    #[cfg(windows)]
+    {
+        let text = path.to_string_lossy();
+        if let Some(plain) = text.strip_prefix(r"\\?\")
+            && plain.as_bytes().get(1) == Some(&b':')
+        {
+            return Ok(PathBuf::from(plain));
+        }
+    }
+    Ok(path)
+}
+
 /// System directories a generator reads under bubblewrap, which starts from an empty root:
 /// without them the dynamic loader, libc and a script's interpreter are missing.
+#[cfg(not(windows))]
 const SYSTEM_READ: &[&str] = &["/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/etc"];
 
 /// Bubblewrap with `/dev`, `/proc` and the symlinked system directories recreated as links.
@@ -779,11 +909,13 @@ const SYSTEM_READ: &[&str] = &["/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib6
 /// On a merged-`/usr` system `/bin`, `/lib` and `/lib64` are symlinks into `/usr`; binding one
 /// mounts its target, so the link path — the dynamic loader's path among them — would be
 /// missing inside.
+#[cfg(not(windows))]
 struct SystemRoot {
     inner: Box<dyn adk_sandbox::SandboxEnforcer>,
     links: Vec<(OsString, PathBuf)>,
 }
 
+#[cfg(not(windows))]
 impl SystemRoot {
     /// Wraps `inner`, adding [`SYSTEM_READ`] to `policy` read-only: a real directory as
     /// itself, a symlinked one as its target plus the link.
@@ -811,6 +943,7 @@ impl SystemRoot {
     }
 }
 
+#[cfg(not(windows))]
 impl adk_sandbox::SandboxEnforcer for SystemRoot {
     fn name(&self) -> &str {
         self.inner.name()

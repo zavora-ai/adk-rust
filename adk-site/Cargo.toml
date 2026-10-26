@@ -100,8 +100,9 @@ reqwest = { workspace = true, optional = true }
 similar = { version = "3", optional = true }
 tempfile = { version = "3", optional = true }
 x509-parser = { version = "0.18", optional = true }
-# External generators (features `gen-*`): Seatbelt on macOS, bubblewrap on Linux.
-adk-sandbox = { workspace = true, optional = true, features = ["sandbox-macos", "sandbox-linux"] }
+# External generators (features `gen-*`): Seatbelt on macOS, bubblewrap on Linux, the
+# restricted token on Windows.
+adk-sandbox = { workspace = true, optional = true, features = ["sandbox-macos", "sandbox-linux", "sandbox-windows"] }
 # Host adapters (features `host-*`).
 futures = { workspace = true, optional = true }
 hmac = { version = "0.12", optional = true }
