@@ -198,6 +198,32 @@
   margin: 0;
 }
 
+/* "On this home it can also:" — what the host grants every agent it runs (spec 3.3 §5.7). */
+.agent-granted {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.agent-granted-heading {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.agent-granted ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  list-style: disc;
+  font-size: 14px;
+  color: var(--text);
+}
+
 .agent-foot {
   display: flex;
   flex-wrap: wrap;

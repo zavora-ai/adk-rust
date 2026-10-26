@@ -820,6 +820,17 @@ pre {
   font-size: 13.5px;
 }
 
+/* A feature's line under the details (spec 3.3 §7.1): secondary text, a link in the accent. */
+.decision-detail {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.decision-detail a {
+  color: var(--accent);
+}
+
 .edit {
   display: grid;
   gap: 8px;

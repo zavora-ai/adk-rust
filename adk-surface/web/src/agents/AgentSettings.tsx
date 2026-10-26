@@ -304,7 +304,13 @@ export function AgentSettings({
           <div className="agent-side">
             {changed ? (
               <>
-                <WhatItCanDo name={draft.displayName} preview={preview} problem={previewProblem} pending={pending} />
+                <WhatItCanDo
+                  name={draft.displayName}
+                  preview={preview}
+                  problem={previewProblem}
+                  pending={pending}
+                  granted={detail.granted ?? []}
+                />
                 {preview && <WasNow preview={preview} />}
                 <div className="agent-foot">
                   <button

@@ -19,6 +19,7 @@ export type {
   ColorChoice,
   EndedWork,
   FileUse,
+  GrantedUse,
   ModelView,
   ShellUse,
   UsesDraft,

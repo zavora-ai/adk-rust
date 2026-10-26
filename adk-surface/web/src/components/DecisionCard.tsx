@@ -179,6 +179,21 @@ export function DecisionCard({
       {card.alsoShown && <span>{visible(card.alsoShown)}</span>}
     </p>
   );
+  // A feature's line under the details: where the call comes from, with a link into the home
+  // only to a path on this server (spec 3.3 §7.1).
+  const href = card.detail?.href;
+  const link = card.detail?.linkText && href?.startsWith("/") && !href.startsWith("//") ? href : undefined;
+  const detail = card.detail ? (
+    <p className="decision-detail">
+      {visible(card.detail.text)}
+      {link && card.detail.linkText && (
+        <>
+          {" · "}
+          <a href={link}>{visible(card.detail.linkText)}</a>
+        </>
+      )}
+    </p>
+  ) : null;
 
   // Decided here or anywhere else, the card keeps its place in the thread as one line; opened,
   // it shows the call and the details again, and nothing on it answers (spec 3.3 §5.1, §7.4).
@@ -198,6 +213,7 @@ export function DecisionCard({
           {call}
           {timeline}
           {details}
+          {detail}
         </DecidedLine>
       </article>
     );
@@ -258,6 +274,7 @@ export function DecisionCard({
         </p>
       )}
       {details}
+      {detail}
     </article>
   );
 }

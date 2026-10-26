@@ -10,7 +10,7 @@ import { Voice } from "../screens/Voice";
 import { TrayPanel } from "../tray/TrayPanel";
 import { Website } from "../website/Website";
 import { agentsFixture } from "./agents";
-import { FixtureClient, fixtureSeams, takeOverCard } from "./fixture";
+import { FixtureClient, fixtureSeams, releaseCard, takeOverCard } from "./fixture";
 import { phoneFixture } from "./phone";
 import { TrayFixture } from "./tray";
 import { VoiceFixtureClient, fixtureDevices } from "./voice";
@@ -24,6 +24,10 @@ const section = (params.get("section") ?? "threads") as Section;
 const client = new FixtureClient();
 // `?takeOver` adds Household's take over (spec 3.3 §8.2) to the example.
 if (params.has("takeOver")) client.hold(takeOverCard());
+// `?detail` gives Code's release a feature's line under its details (spec 3.3 §7.1).
+if (params.has("detail")) {
+  client.hold({ ...releaseCard(), detail: { text: "From the invoice-run workflow", linkText: "Open in Runs", href: "/ui/runs" } });
+}
 // The phone's screen (spec 3.3 §5.4): `&phone=decide` its high-risk decision, `&phone=pair`
 // its pairing, `&phone=long` a command cut short, `&phone=takeOver` a take over,
 // `&phone=unreachable` a read that fails, else Decisions.

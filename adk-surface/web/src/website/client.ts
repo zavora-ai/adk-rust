@@ -24,6 +24,7 @@ import type {
   WebsiteHome,
 } from "../generated/website";
 import { ApiError } from "../client";
+import { probe } from "../features";
 import { readStored, writeStored } from "../stored";
 
 /** Where the home keeps the server's token; the setup code's token is kept there too. */
@@ -84,13 +85,9 @@ export class HttpWebsiteClient implements WebsiteClient {
     return this.request<T>(path, { method: "POST", body: JSON.stringify(body) });
   }
 
-  async home() {
-    try {
-      return await this.request<WebsiteHome>("");
-    } catch (error) {
-      if (error instanceof ApiError && (error.status === 404 || error.status === 405)) return undefined;
-      throw error;
-    }
+  home() {
+    // A server built without the website answers 404, 405 or 501: no tab (spec 3.5 §8.2).
+    return probe(() => this.request<WebsiteHome>(""));
   }
 
   setup() {

@@ -25,6 +25,7 @@ import type {
   AgentPreview,
   AgentPreviewRequest,
   ColorChoice,
+  GrantedUse,
 } from "../agents/types";
 
 const PALETTE: ColorChoice[] = [
@@ -230,7 +231,11 @@ export class FixtureAgents implements AgentsSeam {
   /** Work that removing an agent ends, by agent. */
   readonly running: Record<string, { work: number; decisions: number; routines: number }> = {};
 
-  constructor(withFinance = true) {
+  /** `granted`: what the home grants every agent it runs, as `SurfaceEngineBuilder::grant` adds it. */
+  constructor(
+    withFinance = true,
+    private readonly granted: GrantedUse[] = [],
+  ) {
     if (withFinance) this.put("finance", financeDraft(), "Suggested by ADK-Rust, added by you on 25 Oct");
   }
 
@@ -246,6 +251,7 @@ export class FixtureAgents implements AgentsSeam {
       mode: { mode: draft.mode, ...MODE_WORDS[draft.mode] },
       cantStart: null,
       changedAt: new Date().toISOString(),
+      ...(this.granted.length > 0 ? { granted: this.granted } : {}),
     };
     this.details.set(id, detail);
     return detail;
@@ -400,9 +406,19 @@ export function agentsFixture(params: URLSearchParams, client: FixtureClient): R
   const path = { new: "/ui/agents/new", settings: "/ui/agents/finance" }[view as "new" | "settings"];
   if (path) window.history.replaceState(null, "", `${path}${window.location.search}`);
   const suggestion = path ? suggestionCard() : suggestionCard(travelDraft(), fixtureAgents.chief);
+  // `&granted`: the home grants every agent drawing forms and changes on the screens (spec 3.3 §5.7).
+  const granted = params.has("granted") ? fixtureGrants() : [];
   return createElement(App, {
-    client: withAgents(client, new FixtureAgents(), suggestion),
+    client: withAgents(client, new FixtureAgents(true, granted), suggestion),
     seams: fixtureSeams(),
     initialSection: path ? "agents" : "threads",
   });
+}
+
+/** What a home with `genui` and `verb-ui` grants every agent it runs (spec 3.3 §5.7). */
+export function fixtureGrants(): GrantedUse[] {
+  return [
+    { id: "genui", text: "Show forms and tables in your threads — sending asks you first" },
+    { id: "verb-ui", text: "Ask to change things on your screens — always asks you first" },
+  ];
 }

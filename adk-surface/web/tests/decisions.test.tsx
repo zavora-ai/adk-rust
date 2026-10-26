@@ -31,6 +31,26 @@ function sendThrough(client: FixtureClient) {
 }
 
 describe("a decision card", () => {
+  it("adds a feature's line under the details, linking only into the home (spec 3.3 §7.1)", () => {
+    const card: Card = {
+      ...releaseCard(),
+      detail: { text: "From the invoice-run workflow", linkText: "Open in Runs", href: "/ui/runs/r-1" },
+    };
+    const { rerender } = render(<DecisionCard card={card} send={vi.fn()} />);
+    const line = screen.getByText(/From the invoice-run workflow/);
+    expect(line.textContent).toBe("From the invoice-run workflow · Open in Runs");
+    expect(within(line).getByRole("link", { name: "Open in Runs" }).getAttribute("href")).toBe("/ui/runs/r-1");
+
+    for (const href of ["https://example.com/runs", "//example.com/runs", "javascript:alert(1)"]) {
+      rerender(<DecisionCard card={{ ...card, id: href, detail: { ...card.detail!, href } }} send={vi.fn()} />);
+      expect(screen.getByText(/From the invoice-run workflow/).textContent).toBe("From the invoice-run workflow");
+      expect(screen.queryByRole("link", { name: "Open in Runs" })).toBeNull();
+    }
+
+    rerender(<DecisionCard card={{ ...releaseCard(), id: "plain" }} send={vi.fn()} />);
+    expect(screen.queryByText(/From the invoice-run workflow/)).toBeNull();
+  });
+
   it("draws the anatomy of §7.1 on its own background, without the entry's id or version", () => {
     const card = invoiceCard();
     const { container } = render(<DecisionCard card={card} send={vi.fn()} />);

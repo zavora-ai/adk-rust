@@ -12,7 +12,7 @@ import { NewAgent } from "../src/agents/NewAgent";
 import { RosterFoot } from "../src/agents/RosterFoot";
 import { App } from "../src/App";
 import { FixtureClient, fixtureSeams } from "../src/fixture/fixture";
-import { FixtureAgents, financeDraft, suggestionCard, withAgents } from "../src/fixture/agents";
+import { FixtureAgents, financeDraft, fixtureGrants, suggestionCard, withAgents } from "../src/fixture/agents";
 import { FixturePhoneClient } from "../src/fixture/phone";
 import { Decide } from "../src/phone/Decide";
 import { httpAgents } from "../src/agents/client";
@@ -150,6 +150,28 @@ describe("an agent's settings", () => {
     await userEvent.click(save);
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(seam.details.get("finance")!.draft).toMatchObject({ displayName: "Bills", mode: "suggest" });
+  });
+
+  it("lists what the home grants every agent it runs under what it can do", async () => {
+    const seam = new FixtureAgents(true, fixtureGrants());
+    render(<AgentSettings seam={seam} id="finance" />);
+    const name = (await screen.findByLabelText("Name")) as HTMLInputElement;
+    await userEvent.type(name, "s");
+    const preview = await screen.findByRole("complementary", { name: "Here is what Finances can do" });
+    const granted = await within(preview).findByRole("list", { name: "On this home it can also:" });
+    expect(within(granted).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Show forms and tables in your threads — sending asks you first",
+      "Ask to change things on your screens — always asks you first",
+    ]);
+  });
+
+  it("shows no granted block where the home grants nothing", async () => {
+    render(<AgentSettings seam={new FixtureAgents()} id="finance" />);
+    const name = (await screen.findByLabelText("Name")) as HTMLInputElement;
+    await userEvent.type(name, "s");
+    const preview = await screen.findByRole("complementary", { name: "Here is what Finances can do" });
+    await within(preview).findByText("Medium risk");
+    expect(within(preview).queryByText("On this home it can also:")).toBeNull();
   });
 
   it("shows who changed it first instead of overwriting", async () => {
