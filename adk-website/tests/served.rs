@@ -253,6 +253,8 @@ async fn a_served_site_restarts_and_keeps_its_state() {
     .job;
     let level = served.sites[0].ladder.level(charter.site_id, &job).await.unwrap();
     assert!(level.is_some());
+    let view = json!({ "kind": "pageview", "path": "/" });
+    assert_eq!(http(served.edge_addr, "POST", "/awp/v2/beacon", Some(&view)).await.0, 204);
     served.shutdown().await.unwrap();
 
     let served = start(dir.path(), |_| {}).await;
@@ -265,6 +267,24 @@ async fn a_served_site_restarts_and_keeps_its_state() {
     let (status, page) = http(served.edge_addr, "GET", "/", None).await;
     assert_eq!(status, 200);
     assert!(page.contains("Juniper Bakery"), "the release is still served");
+    // The beacon's counts and the meters' counts survive in `data/edge.db`.
+    let midnight = chrono::Utc::now().date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let tomorrow = midnight + chrono::Duration::days(1);
+    let views = served.sites[0].edge.edge.beacon().read("pageviews:/", midnight, tomorrow).await;
+    assert_eq!(views.unwrap(), Some(1.0), "the page view survives");
+    let pool =
+        sqlx::SqlitePool::connect(&ProjectPaths::new(dir.path()).database("edge")).await.unwrap();
+    let counts = adk_server::awp::stores::SqliteEdgeStores::new(pool)
+        .with_site(format!("{}#measurement", served.sites[0].site.name));
+    let calls = adk_server::awp::BeaconStore::total(
+        &counts,
+        "calls:submit_inquiry",
+        midnight.date_naive(),
+        tomorrow.date_naive(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(calls, 1, "the enquiry's call count survives");
     let next = launch(&served, &charter, Vec::new()).await;
     assert!(
         matches!(&next, PipelineOutcome::Published(p) if p.announcement.release.seq == 2),

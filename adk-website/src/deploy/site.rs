@@ -5,10 +5,10 @@
 //! | Part | Built from |
 //! |---|---|
 //! | Runtime | The content repository, `ExperimentGenerator` around the built-in generator, the SQLite site log signed with `data/keys/release.jwk`, the `DirectoryHost`, the history, the charter store, the kind's launch gate with [`ReleaseDelegation`] |
-//! | Edge | The kind's capabilities with the packs' handlers; SQLite edge stores; the kernel's approvals and signals; the consent policy; `MeteredActionLedger` and `EdgeMeter`; inbox threads, the calendar and payment links when configured; `card.jwk` and `receipt.jwk` |
+//! | Edge | The kind's capabilities with the packs' handlers; SQLite edge stores, event log and beacon counts in `data/edge.db`, with the deliveries a restart left resumed; the kernel's approvals and signals; the consent policy; `MeteredActionLedger` and `EdgeMeter`; inbox threads, the calendar and payment links when configured; `card.jwk` and `receipt.jwk` |
 //! | Updates | `UpdateEngine` over the runtime's pipeline, the edge's live store and the stream lane signed with the receipt key, its held items and deliveries in `data/updates/held.json`; the feeds in `feeds.json`; [`UpdateDriver`] with its journal and cards |
 //! | Experiments | `ExperimentRunner` with `BeaconKpi`, the job pauses, the ladder, the alarms and `RepublishOnStop`; its daily trigger |
-//! | Measurement | `KpiTracker` with the beacon, commerce, spend and agent-search sources (and AEO with search providers) |
+//! | Measurement | `KpiTracker` with the beacon, commerce, spend and agent-search sources (and AEO with search providers), their counts in `data/edge.db` |
 //! | Review | `ReviewComposer` with the alarms, the experiments and the updates |
 
 use std::collections::BTreeMap;
@@ -25,9 +25,7 @@ use adk_kernel::channels::ChannelSink;
 use adk_kernel::charter::{AutonomyLadder, CharterStore, JobPauses, KpiStore, KpiTracker};
 use adk_kernel::wake::Trigger;
 use adk_server::awp::stores::SqliteEdgeStores;
-use adk_server::awp::{
-    BeaconStore, ConsentPolicy, EdgeKeys, EdgeTiers, InMemoryBeaconStore, WebBotAuthTrustAssigner,
-};
+use adk_server::awp::{BeaconStore, ConsentPolicy, EdgeKeys, EdgeTiers, WebBotAuthTrustAssigner};
 use adk_site::content::{FileContentHistory, FsContentStore, SiteProject};
 use adk_site::generator::BuiltinGenerator;
 use adk_site::host::DirectoryHost;
@@ -287,11 +285,13 @@ impl RunningSite {
             crate::jobs::register(&ladder, &current.charter).await?;
         }
 
-        // Counts the edge's meters write and the measurement sources read.
-        let counts: Arc<dyn BeaconStore> = Arc::new(InMemoryBeaconStore::new());
         let pool = sqlx::SqlitePool::connect(&paths.database("edge")).await.map_err(config)?;
         let edge_stores = SqliteEdgeStores::new(pool).with_site(site.name.clone());
         edge_stores.migrate().await.map_err(config)?;
+        // Counts the edge's meters write and the measurement sources read, kept beside the
+        // edge's own beacon counts in a namespace of their own, so both survive a restart.
+        let counts: Arc<dyn BeaconStore> =
+            Arc::new(edge_stores.clone().with_site(format!("{}#measurement", site.name)));
         let terms = std::fs::read(paths.root().join("public-terms.json")).unwrap_or_default();
         let policy = ConsentPolicy { digest: adk_site::release::file_digest(&terms), ttl: None };
         let subject_key = secret(&paths.data().join("keys/subject.key"))?.to_vec();
@@ -485,6 +485,8 @@ impl RunningSite {
             }
         }));
         let _resolver = self.edge.edge.spawn_resolver(Duration::from_secs(5));
+        // Deliveries a stopped process left in `data/edge.db` resume once their lease passes.
+        let _deliveries = self.edge.edge.spawn_delivery_resumer(Duration::from_secs(30));
     }
 
     /// The owner's channel for the weekly review, when one is configured.
