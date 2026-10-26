@@ -13,10 +13,14 @@
 //! | [`stream_router`] | The stream lane's feed a live page polls |
 //! | [`site_router`] | The edge's routes with the release the host serves behind them |
 //! | [`consent_config`] | The consent scopes the kind's capabilities ask for |
+//!
+//! Payments go through the owner's [`handlers::PaymentDesk`]: [`ap2::Ap2Desk`] for AP2
+//! mandates, [`token::TokenDesk`] for token rails, [`token::PaymentRails`] for both.
 
 pub mod adapters;
 pub mod ap2;
 pub mod handlers;
+pub mod token;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

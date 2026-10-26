@@ -19,6 +19,7 @@ use adk_payments::protocol::ap2::{
 use adk_site::pipeline::{Change, EntryPoint, PipelineOutcome};
 use adk_website::edge::ap2::{Ap2Desk, SandboxProcessor, SiteCartVerifier, in_memory_journal};
 use adk_website::edge::handlers::{InMemoryCalendar, PaymentDesk, Slot};
+use adk_website::edge::token::{PaymentRails, TokenDesk};
 use adk_website::kinds::CharterInputs;
 use adk_website::onboarding::build::SitePlan;
 use adk_website::packs::ApprovalThresholds;
@@ -496,4 +497,161 @@ async fn two_payments_racing_on_one_order_pay_it_once() {
     assert_eq!(desk.0.load(std::sync::atomic::Ordering::SeqCst), 1, "the desk took one payment");
     let order = edge.edge.orders.get(placed["id"].as_str().unwrap()).await.unwrap();
     assert_eq!(order.status, "paid");
+}
+
+/// The owner's processor for a token rail: redeems tokens through the sandbox, declining any
+/// that starts with `tok_declined`, and remembers what it was handed.
+struct TokenProcessor {
+    sandbox: SandboxProcessor,
+    transactions: Arc<dyn adk_payments::kernel::TransactionStore>,
+    seen: std::sync::Mutex<Vec<(String, String, i64, Value)>>,
+}
+
+#[async_trait::async_trait]
+impl adk_payments::kernel::PaymentExecutionService for TokenProcessor {
+    async fn execute_payment(
+        &self,
+        command: adk_payments::kernel::ExecutePaymentCommand,
+    ) -> Result<adk_payments::kernel::PaymentExecutionResult> {
+        let token = command
+            .selected_payment_method
+            .as_ref()
+            .and_then(|method| method.reference.clone())
+            .unwrap_or_default();
+        let envelope = serde_json::to_value(&command.extensions).unwrap();
+        self.seen.lock().unwrap().push((
+            command.context.transaction_id.as_str().to_string(),
+            token.clone(),
+            command.amount.amount_minor,
+            envelope,
+        ));
+        if token.starts_with("tok_declined") {
+            let lookup = adk_payments::kernel::TransactionLookup {
+                transaction_id: command.context.transaction_id.clone(),
+                session_identity: command.context.session_identity.clone(),
+            };
+            let transaction = self.transactions.get(lookup).await?.expect("an open transaction");
+            return Ok(adk_payments::kernel::PaymentExecutionResult {
+                outcome: adk_payments::kernel::PaymentExecutionOutcome::Failed,
+                transaction,
+                order: None,
+                intervention: None,
+                generated_evidence_refs: Vec::new(),
+            });
+        }
+        self.sandbox.execute_payment(command).await
+    }
+
+    async fn sync_payment_outcome(
+        &self,
+        command: adk_payments::kernel::SyncPaymentOutcomeCommand,
+    ) -> Result<adk_payments::domain::TransactionRecord> {
+        self.sandbox.sync_payment_outcome(command).await
+    }
+}
+
+/// An order is paid once with the single-use token the buyer's payment provider issued, on a
+/// token rail beside the AP2 desk; the token reaches the owner's processor and nothing else,
+/// and a call on another rail, without a token, or with a declined token pays nothing
+/// (spec 3.5 §7.5 "Commerce", S9).
+#[tokio::test]
+async fn an_order_is_paid_once_with_the_buyers_token_beside_ap2() {
+    let identity = AdkIdentity::new(
+        AppName::try_from("adk-website").unwrap(),
+        UserId::try_from("juniper-example").unwrap(),
+        SessionId::try_from("tokens").unwrap(),
+    );
+    let (transactions, _) = in_memory_journal(&identity).await.unwrap();
+    let processor = Arc::new(TokenProcessor {
+        sandbox: SandboxProcessor::new(transactions.clone()),
+        transactions: transactions.clone(),
+        seen: std::sync::Mutex::new(Vec::new()),
+    });
+    let key = site_keys(DOMAIN).edge.clone();
+    let tokens = TokenDesk::builder(MERCHANT, key.clone())
+        .rail("card")
+        .processor(processor.clone())
+        .journal(transactions.clone(), identity.clone())
+        .build()
+        .unwrap();
+    let (ap2, _) = ap2_desk().await;
+    let rails = PaymentRails::new()
+        .rail("ap2", ap2 as Arc<dyn PaymentDesk>)
+        .rail("card", Arc::new(tokens) as Arc<dyn PaymentDesk>);
+    let (_site, edge) =
+        shop(Shop { payments: Some(Arc::new(rails) as Arc<dyn PaymentDesk>), ..Shop::default() })
+            .await;
+    let payment = edge.consent("payment_data").await;
+    let placed = order(&edge, &payment, "rye-loaf", 3, "o-1").await;
+    let order_id = placed["id"].as_str().unwrap().to_string();
+    assert_eq!(placed["payment"]["rail"], "ap2", "the AP2 desk still signs the cart: {placed}");
+
+    let pay = |key: &str, order: &str, rail: &str, token: Option<&str>| {
+        let mut body = json!({ "orderId": order, "rail": rail });
+        if let Some(token) = token {
+            body["credential"] = json!(token);
+        }
+        edge.signed(edge.call("pay_order", key, Some(&payment), &body))
+    };
+    let (_, _, bare) = edge.send(pay("p-0", &order_id, "card", None)).await;
+    assert_eq!(bare["error"]["code"], "payment_policy_rejected", "{bare}");
+    assert!(bare["error"]["message"].as_str().unwrap().contains("credential"), "{bare}");
+    let (_, _, other) = edge.send(pay("p-00", &order_id, "mpesa", Some("tok_1"))).await;
+    assert!(other["error"]["message"].as_str().unwrap().contains("ap2, card"), "{other}");
+    assert!(processor.seen.lock().unwrap().is_empty(), "nothing reached the processor");
+
+    // Paid three times with one key: one payment, one receipt (A-I7).
+    let mut answers = Vec::new();
+    for _ in 0..3 {
+        let (status, _, paid) = edge.send(pay("p-1", &order_id, "card", Some("tok_1"))).await;
+        assert_eq!(status, StatusCode::OK, "{paid}");
+        answers.push(paid);
+    }
+    assert!(answers.iter().all(|a| a == &answers[0]), "retries are answered from the record");
+    let paid = &answers[0];
+    assert_eq!((paid["status"].as_str(), paid["rail"].as_str()), (Some("paid"), Some("card")));
+    let receipt = &paid["receipt"];
+    assert_eq!((receipt["amount"].as_u64(), receipt["rail"].as_str()), (Some(1_350), Some("card")));
+    assert!(verify_value(receipt, &key.public_key()).is_ok(), "signed by the receipt key");
+    assert!(!paid.to_string().contains("tok_1"), "the answer carries no token: {paid}");
+    {
+        let seen = processor.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "one payment at the processor");
+        let (transaction, token, amount, envelope) = &seen[0];
+        assert_eq!(
+            (transaction.as_str(), token.as_str(), *amount),
+            (order_id.as_str(), "tok_1", 1_350)
+        );
+        assert!(envelope.to_string().contains("\"p-1\""), "the idempotency key: {envelope}");
+    }
+    let record = transactions
+        .get(adk_payments::kernel::TransactionLookup {
+            transaction_id: adk_payments::domain::TransactionId::from(order_id.as_str()),
+            session_identity: Some(identity.clone()),
+        })
+        .await
+        .unwrap()
+        .expect("the journal keeps the order's transaction");
+    assert!(!serde_json::to_string(&record).unwrap().contains("tok_1"), "no token in the journal");
+    assert_eq!(edge.edge.orders.get(&order_id).await.unwrap().status, "paid");
+    let (_, _, again) = edge.send(pay("p-1-again", &order_id, "card", Some("tok_2"))).await;
+    assert_eq!(again["error"]["code"], "payment_policy_rejected", "paid once: {again}");
+
+    // A declined token pays nothing and leaves the order to be paid.
+    let second = order(&edge, &payment, "rye-loaf", 1, "o-2").await;
+    let second_id = second["id"].as_str().unwrap().to_string();
+    let (_, _, declined) = edge.send(pay("p-2a", &second_id, "card", Some("tok_declined_1"))).await;
+    assert!(declined["error"]["message"].as_str().unwrap().contains("declined"), "{declined}");
+    assert_eq!(edge.edge.orders.get(&second_id).await.unwrap().status, "awaiting_payment");
+    let (status, _, paid) = edge.send(pay("p-2b", &second_id, "card", Some("tok_3"))).await;
+    assert_eq!((status, &paid["status"]), (StatusCode::OK, &json!("paid")), "{paid}");
+}
+
+#[tokio::test]
+async fn the_token_desk_needs_a_rail_a_processor_and_a_journal() {
+    let key: Arc<dyn DocumentSigner> = site_keys(DOMAIN).edge.clone();
+    let error = TokenDesk::builder(MERCHANT, key.clone()).build().unwrap_err();
+    assert!(error.message.contains("rail"), "{error}");
+    let error = TokenDesk::builder(MERCHANT, key).rail("card").build().unwrap_err();
+    assert!(error.message.contains("payment processor"), "{error}");
 }
