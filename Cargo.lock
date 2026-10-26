@@ -1527,6 +1527,7 @@ name = "adk-website"
 version = "3.0.0"
 dependencies = [
  "adk-agent",
+ "adk-artifact",
  "adk-auth",
  "adk-awp",
  "adk-core",
@@ -1538,6 +1539,7 @@ dependencies = [
  "adk-kernel",
  "adk-model",
  "adk-payments",
+ "adk-runner",
  "adk-server",
  "adk-session",
  "adk-site",

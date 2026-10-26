@@ -11,6 +11,7 @@
 //! | [`DeferredAnnouncer`] | `adk-site`'s `Announcer` | the edge's announcer once it exists: the runtime is built before the edge that reads it |
 //! | [`EdgeLiveStore`] | `adk-site`'s `LiveStore` | the live lane's values, read by the edge's read-only capabilities |
 //! | [`ReceiptEntrySigner`] | `adk-site`'s `stream::EntrySigner` | the edge's delegated `receipt` key |
+//! | [`ReceiptKey`] | `adk-payments`' `ReceiptSigner` and `ReceiptVerifier` | the edge's delegated `receipt` key, for commerce receipts (§7.5) |
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
@@ -282,5 +283,63 @@ impl adk_site::stream::EntrySigner for ReceiptEntrySigner {
 
     async fn sign(&self, message: &[u8]) -> adk_site::Result<Vec<u8>> {
         self.signer.sign(message).await.map_err(|e| adk_site::SiteError::Pipeline(e.to_string()))
+    }
+}
+
+/// Signs and checks commerce receipts with the edge's delegated `receipt` key (spec 3.5
+/// §7.5 "Commerce"): a detached JWS over the receipt's JCS form, which any agent verifies
+/// against the site's published keys.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+///
+/// use adk_awp::signing::jws::Ed25519DocumentSigner;
+/// use adk_payments::wallet::{ReceiptDetails, issue_receipt, verify_receipt};
+/// use adk_website::edge::adapters::ReceiptKey;
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() {
+/// let key = ReceiptKey::new(Arc::new(Ed25519DocumentSigner::from_seed("receipt-2026-10", [7; 32]).unwrap()));
+/// let details = ReceiptDetails::new("pay_order", "order-1", 1_350, "KES").with_rail("ap2");
+/// let receipt = issue_receipt(&key, details, chrono::Utc::now()).await.unwrap();
+/// assert!(verify_receipt(&key, &receipt).await.is_ok());
+/// # }
+/// ```
+pub struct ReceiptKey {
+    signer: Arc<dyn DocumentSigner>,
+}
+
+impl ReceiptKey {
+    /// Receipts signed by `signer`, the edge's `receipt` key.
+    pub fn new(signer: Arc<dyn DocumentSigner>) -> Self {
+        Self { signer }
+    }
+}
+
+fn receipt_error(code: &'static str, error: impl std::fmt::Display) -> AdkError {
+    AdkError::new(
+        adk_core::ErrorComponent::Tool,
+        adk_core::ErrorCategory::Unauthorized,
+        code,
+        format!("the receipt's signature: {error}"),
+    )
+}
+
+#[async_trait]
+impl adk_payments::wallet::ReceiptSigner for ReceiptKey {
+    async fn sign(&self, document: &Value) -> Result<awp_types::Proof> {
+        adk_awp::signing::jws::sign(document, self.signer.as_ref())
+            .await
+            .map_err(|error| receipt_error("website.receipt.unsigned", error))
+    }
+}
+
+#[async_trait]
+impl adk_payments::wallet::ReceiptVerifier for ReceiptKey {
+    async fn verify(&self, document: &Value, proof: &awp_types::Proof) -> Result<()> {
+        adk_awp::signing::jws::verify(document, proof, &self.signer.public_key())
+            .map_err(|error| receipt_error("website.receipt.invalid", error))
     }
 }

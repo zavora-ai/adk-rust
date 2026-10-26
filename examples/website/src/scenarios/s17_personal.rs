@@ -214,6 +214,7 @@ pub async fn run(_mode: Mode) -> Result<Checks> {
         configure: Arc::new(|_, builder| {
             builder.project_instructions(no_user_file()).without_compaction()
         }),
+        wallet: None,
     };
     let built = site.team.build(&kit).await?;
     checks.check(

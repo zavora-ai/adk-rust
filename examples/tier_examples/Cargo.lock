@@ -609,6 +609,7 @@ dependencies = [
  "async-trait",
  "awp-types",
  "chrono",
+ "futures",
  "hex",
  "regex",
  "serde",
@@ -943,6 +944,7 @@ name = "adk-website"
 version = "3.0.0"
 dependencies = [
  "adk-agent",
+ "adk-artifact",
  "adk-auth",
  "adk-awp",
  "adk-core",

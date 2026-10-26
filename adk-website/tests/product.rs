@@ -187,6 +187,30 @@ async fn the_wallet_answers_the_kpi_tracker_for_its_own_site_only() {
     );
 }
 
+/// The owner's wallet: hosting billed by the host, within a monthly cap.
+fn finance_wallet() -> Wallet {
+    let policy = WalletPolicy::new("KES").with_mandate(
+        adk_payments::wallet::SpendCategory::Hosting,
+        adk_payments::wallet::Mandate::new(
+            50_000,
+            20_000,
+            adk_payments::wallet::RailRef::provider_billing("hostco"),
+        )
+        .with_payee(adk_payments::wallet::PayeeRule::Id("hostco".into())),
+    );
+    Wallet::builder(
+        "juniper-example",
+        policy,
+        Arc::new(InMemoryWalletProvider::stored_value("treasury", "KES", 100_000)),
+    )
+    .rail(Arc::new(adk_payments::wallet::ProviderBillingRail::new(Arc::new(
+        adk_payments::wallet::InMemoryBillingAccount::new("hostco", "KES"),
+    ))))
+    .owner(SubjectRef::human(OWNER))
+    .build()
+    .unwrap()
+}
+
 #[tokio::test]
 async fn a_business_runs_all_eight_agents_and_public_agents_carry_the_kinds_instruction() {
     let site = Site::new(SiteKind::Business, "Juniper Bakery", "juniper.example", &["en"]).await;
@@ -215,9 +239,18 @@ async fn a_business_runs_all_eight_agents_and_public_agents_carry_the_kinds_inst
         }
     };
     let kit = TeamKit {
+        // Finance, then Growth, each asks for the wallet's status once.
         model: Arc::new(adk_model::ScriptedLlm::new(
             "scripted",
-            Vec::<adk_model::ScriptedResponse>::new(),
+            [true, false]
+                .into_iter()
+                .flat_map(|_| {
+                    [
+                        call("wallet_status", serde_json::json!({})),
+                        adk_model::ScriptedResponse::text("Noted."),
+                    ]
+                })
+                .collect::<Vec<_>>(),
         )),
         root: root.path().to_path_buf(),
         back_office: site.back_office_kit(&charter),
@@ -226,9 +259,32 @@ async fn a_business_runs_all_eight_agents_and_public_agents_carry_the_kinds_inst
         configure: Arc::new(|_, builder| {
             builder.project_instructions(no_user_file()).without_compaction()
         }),
+        wallet: Some(finance_wallet()),
     };
     let built = site.team.build(&kit).await.unwrap();
     assert_eq!(built.roles(), AgentRole::ALL);
+    // The Finance agent alone reads and pays from the owner's wallet (spec 3.5 §7.14,
+    // §7.19): asked for the wallet, it answers from `wallet_status`; Growth holds no such tool.
+    for (role, holds) in [(AgentRole::Finance, true), (AgentRole::Growth, false)] {
+        let agent = built.agent(role).unwrap().clone();
+        let runner = agent
+            .configure_runner(
+                adk_runner::Runner::builder()
+                    .app_name(site.site.name.clone())
+                    .agent(agent.clone())
+                    .session_service(site.sessions.clone()),
+            )
+            .build()
+            .unwrap();
+        let harness = adk_harness::Harness::with_runner(agent, runner).unwrap();
+        let owner = user(OWNER);
+        let session = harness.open_session(&owner, None).await.unwrap();
+        let events =
+            collect(harness.send(&owner, &session, "How does the wallet stand?").await.unwrap())
+                .await;
+        let status = response(&events, "wallet_status", 0);
+        assert_eq!(status.get("currency").is_some(), holds, "{role}: {status}");
+    }
     let root = built.compile().expect("the Steward's delegate edges compile over harness agents");
     assert_eq!(adk_core::Agent::name(&root), built.back_office.name);
     let spec = &built.back_office;

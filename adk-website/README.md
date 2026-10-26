@@ -123,10 +123,16 @@ consent receipts, holds — before a handler sees a call.
 | Handler | Capabilities |
 |---------|--------------|
 | `FormHandler` | `submit_inquiry`, `subscribe_newsletter`, `request_prospectus`, `licensing_enquiry`, `volunteer`, `register`, `submit_service_form`: a lead, a contact, one `lead_captured` signal |
-| `QuoteHandler`, `OrderHandler` | `get_quote`, `place_order`, `order_status`, `request_return`: the quote keeps the signed release's price into the order (A-I25) |
-| `PaymentHandler` | `pay_order`, `donate`, `subscribe`, `buy_ticket`: through the owner's `PaymentDesk`, refused without one |
+| `QuoteHandler`, `OrderHandler` | `get_quote`, `place_order`, `order_status`, `request_return`: the quote keeps the signed release's price into the order (A-I25); an order is its buyer's |
+| `PaymentHandler` | `pay_order`, `donate`, `subscribe`, `buy_ticket`: through the owner's `PaymentDesk`, refused without one; `pay_order` takes the buyer's AP2 mandate or a rail credential, and pays an order once |
 | `BookingHandler` | `check_availability`, `book`, `book_appointment` |
 | `SearchHandler`, `ListingHandler`, `StatusHandler` | `search_site`, the listings of published items, `lookup_status` |
+
+`edge::ap2::Ap2Desk` takes payments under AP2 with the site as the merchant, over
+`adk-payments`' `Ap2Adapter` and the owner's payment processor. `packs::ApprovalThresholds`
+(`approvals.json` in a served site) holds orders, bookings and payments above the owner's
+amounts for a decision. `TeamKit::wallet` gives the Finance agent `wallet_pay` and
+`wallet_status` over the owner's wallet.
 
 `SiteEdge::status` is the incident path's `StatusSink`: drift puts the edge in read-only mode,
 so every non-read capability answers `503 read_only` with the signed status while pages and
@@ -151,6 +157,7 @@ CLI and the running site share one log, host and journal:
 | `site.toml`, `content/`, `theme/`, `public-terms.json`, `capabilities.json` | The content repository |
 | `well-known/`, `static/` | Released under `/.well-known/` (the owner's signed contract and `keys.json`) and at their own paths |
 | `feeds.json`, `calendar.json`, `payments.json` | Feeds with their bounds, bookable slots, payment links; each optional |
+| `approvals.json` | The owner's amount thresholds, such as `{"place_order": 20000}`; optional |
 | `data/site-log.db`, `data/host/`, `data/history/` | The site log, the `DirectoryHost`, every saved version |
 | `data/keys/` | `release.jwk`, `card.jwk` (and `receipt.jwk`) as private JWKs, made on first start, owner-only; never the root |
 | `data/kernel.db`, `data/edge.db` | The kernel's stores (charters, KPIs, ladder, signals, agenda, approvals, devices, runs) and the edge's |

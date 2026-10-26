@@ -39,7 +39,10 @@ adk-eval = { workspace = true, features = ["experiments"] }
 # The website runtime: preset, toolsets, partitions, ladder, onboarding machinery (WP I).
 adk-harness = { workspace = true, features = ["website"] }
 adk-kernel = { workspace = true, features = ["charter", "channels"] }
-adk-payments = { workspace = true, features = ["wallet"] }
+# The wallet, and the AP2 merchant side the site takes payments with (spec 3.5 §7.5, §7.14).
+adk-payments = { workspace = true, features = ["wallet", "ap2"] }
+# The AP2 desk's in-memory evidence journal, for tests and sandboxes.
+adk-artifact.workspace = true
 # `WorkflowExecutor` for the site's deterministic jobs (spec 3.5 §7.20); the agent edge and
 # its SQLite stores (spec 3.5 §7.9), whose beacon counts experiments and KPIs read (§7.12).
 adk-server = { workspace = true, features = ["background", "awp", "awp-sqlite"] }
@@ -80,6 +83,8 @@ uuid.workspace = true
 # manifest. `anthropic` for the live onboarding interview.
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic"] }
 adk-skill = { path = "../adk-skill" }
+# A runner over a team member built by `SiteTeam::build`.
+adk-runner = { path = "../adk-runner", default-features = false }
 # `SimpleToolContext` for calling the Guardian's edge tool directly.
 adk-tool = { path = "../adk-tool" }
 dotenvy = "0.15"

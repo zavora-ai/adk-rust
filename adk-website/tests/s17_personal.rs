@@ -171,6 +171,7 @@ async fn s17_a_writers_blog_becomes_a_personal_site_with_four_agents_inside_its_
         configure: Arc::new(|_, builder| {
             builder.project_instructions(no_user_file()).without_compaction()
         }),
+        wallet: None,
     };
     let built = site.team.build(&kit).await.unwrap();
     assert_eq!(

@@ -39,7 +39,7 @@ use adk_site::signer::{Ed25519ReleaseSigner, ReleaseSigner};
 use adk_website::edge::adapters::DeferredAnnouncer;
 use adk_website::kinds::{CharterInputs, KindTemplate, template};
 use adk_website::onboarding::build::SitePlan;
-use adk_website::team::{AgentRole, SiteTeam};
+use adk_website::team::{AgentRole, BuiltTeam, SiteTeam, TeamKit};
 use adk_website::themes::{ThemeId, theme};
 use anyhow::{Context, Result, anyhow};
 use awp_types::{Channel, Charter, ContentItem, LanguageTag, Role, SiteKind};
@@ -579,6 +579,72 @@ impl Site {
         self.harness(mode, name, script, |b| {
             configure(b.website_back_office(&kit).standing_rules(rules))
         })
+    }
+
+    /// The agent `role` of the site's team as the product builds it — `SiteTeam::build` over
+    /// a `TeamKit` with the owner's `wallet` — on the live model in a live run, else on
+    /// `script`, with `configure` applied to `role`'s builder last; with the built team.
+    ///
+    /// # Errors
+    ///
+    /// When the team does not build or the runner refuses its configuration.
+    pub async fn team_member(
+        &mut self,
+        mode: &Mode,
+        charter: &Charter,
+        role: AgentRole,
+        script: Vec<ScriptedResponse>,
+        wallet: Option<adk_payments::wallet::Wallet>,
+        configure: impl Fn(HarnessAgentBuilder) -> HarnessAgentBuilder + Send + Sync + 'static,
+    ) -> Result<(Harness, Arc<ScriptedLlm>, BuiltTeam)> {
+        let dir = tempfile::tempdir()?;
+        let scripted = Arc::new(ScriptedLlm::new("scripted", script));
+        let model: Arc<dyn Llm> = mode.live_model().unwrap_or_else(|| scripted.clone());
+        let public = {
+            let (partitions, table, search) =
+                (self.partitions.clone(), self.table.clone(), self.search.clone());
+            let sink = self.partitions.signal_sink(self.signals.clone(), self.agenda.clone());
+            move || PublicKit {
+                partitions: partitions.clone(),
+                table: table.clone(),
+                search: search.clone(),
+                signals: sink.clone(),
+                reply: None,
+                capabilities: Vec::new(),
+            }
+        };
+        let kit = TeamKit {
+            model,
+            root: dir.path().to_path_buf(),
+            back_office: self.back_office_kit(charter),
+            public: Arc::new(public),
+            standing_rules: self.rules.clone(),
+            configure: Arc::new(move |member, builder| {
+                let builder = builder
+                    .project_instructions(no_user_file())
+                    .without_compaction()
+                    .max_iterations(16);
+                if member == role { configure(builder) } else { builder }
+            }),
+            wallet,
+        };
+        let team = self.team.build(&kit).await.map_err(|e| anyhow!("{e}"))?;
+        let agent = team.agent(role).cloned().ok_or_else(|| anyhow!("the kind runs no {role}"))?;
+        let mut runner = agent.configure_runner(
+            adk_runner::Runner::builder()
+                .app_name(self.site.name.clone())
+                .agent(agent.clone())
+                .session_service(self.sessions.clone()),
+        );
+        // As `HarnessAgent::into_harness` does: the agent acts as its partition's principal.
+        if let Some(partition) = agent.partition() {
+            runner =
+                runner.identity_source(partition.identity_source(&self.site.name, role.as_str()));
+        }
+        let harness = Harness::with_runner(agent, runner.build().map_err(|e| anyhow!("{e}"))?)
+            .map_err(|e| anyhow!("{e}"))?;
+        self.dirs.push(dir);
+        Ok((harness, scripted, team))
     }
 
     /// A harness agent `name`: on the live model in a live run, else on `script`.

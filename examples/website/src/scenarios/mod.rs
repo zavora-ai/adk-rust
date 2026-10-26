@@ -74,9 +74,7 @@ pub fn all() -> Vec<Scenario> {
             "the lead's score crosses the charter threshold",
             "the owner gets one handoff card with the conversation summary on their chosen channel"
         ]),
-        scenario!("S9", "Agent-to-agent business", agent: false, s09_agent_business, known: [
-            "the large one answers 202 and completes after the owner approves"
-        ]),
+        scenario!("S9", "Agent-to-agent business", agent: false, s09_agent_business),
         scenario!("S10", "A week on duty", agent: true, s10_week, known: [
             "upgrade and renewal proposals"
         ]),

@@ -6,6 +6,7 @@
 //! | `site.toml`, `content/`, `theme/`, `public-terms.json`, `capabilities.json` | The content repository |
 //! | `well-known/`, `static/` | Files released under `/.well-known/` (the root-signed contract and `keys.json`) and at their own paths |
 //! | `feeds.json`, `calendar.json`, `payments.json` | The owner's feeds with their bounds, bookable slots, and payment links |
+//! | `approvals.json` | The owner's amount thresholds: orders, bookings and payments above them wait for the owner (spec 3.5 §7.4) |
 //! | `data/site-log.db`, `data/host/`, `data/history/`, `data/work/` | The site log, the `DirectoryHost`, every saved version, builds |
 //! | `data/keys/` | Delegated keys as private JWK files: `release.jwk` signs the log, `edge.jwk` the card and receipts, `web-bot-auth.jwk` crawls; `subject.key` keys consent sessions |
 //! | `data/kernel.db`, `data/edge.db` | The kernel's durable stores and the edge's |
@@ -338,4 +339,19 @@ pub struct PaymentLink {
 /// A file that is not a list of payment links.
 pub fn payment_links(paths: &ProjectPaths) -> Result<Option<Vec<PaymentLink>>> {
     read_json(&paths.root().join("payments.json"))
+}
+
+/// The owner's amount thresholds in `approvals.json`, such as
+/// `{"place_order": 20000, "book": 15000}` in minor units of the site's currency: calls above
+/// them answer `202` and wait for the owner (spec 3.5 §7.4, S9). None without the file.
+///
+/// # Errors
+///
+/// A file that is not a map of capability names to amounts, or a threshold on a capability
+/// whose calls carry no amount.
+pub fn approval_thresholds(paths: &ProjectPaths) -> Result<crate::packs::ApprovalThresholds> {
+    let thresholds: crate::packs::ApprovalThresholds =
+        read_json(&paths.root().join("approvals.json"))?.unwrap_or_default();
+    thresholds.validate()?;
+    Ok(thresholds)
 }

@@ -17,7 +17,9 @@
 //! `website_back_office`); a back-office agent's mode and run budget come from the charter's
 //! authority through the ladder. The back office is one `TeamSpec` with the Steward as its
 //! coordinator. The public agents are woken by their own channels and reach the back office
-//! only through typed signals, so no delegation edge crosses into the public partition.
+//! only through typed signals, so no delegation edge crosses into the public partition. The
+//! Finance agent holds the owner's wallet when the kit carries one ([`TeamKit::wallet`],
+//! §7.14): `wallet_pay` and `wallet_status`, and no other agent holds them.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -319,6 +321,10 @@ pub struct TeamKit {
     pub standing_rules: Arc<dyn StandingRuleStore>,
     /// A last change to each agent's builder, such as its prompter or instruction files.
     pub configure: Arc<dyn Fn(AgentRole, HarnessAgentBuilder) -> HarnessAgentBuilder + Send + Sync>,
+    /// The owner's wallet, which the Finance agent pays from through `wallet_pay` and reads
+    /// through `wallet_status` (spec 3.5 §7.14, A-I16); the Finance agent holds no wallet
+    /// tool without one.
+    pub wallet: Option<adk_payments::wallet::Wallet>,
 }
 
 /// A built team: every agent the kind runs, and the back office as one team with the Steward
@@ -521,6 +527,11 @@ impl SiteTeam {
                         .mode(ladder.mode_for_agent(role.as_str(), &levels));
                     if let Some(budget) = ladder.budget_for_agent(role.as_str(), &levels) {
                         builder = builder.budget(budget);
+                    }
+                    if let (AgentRole::Finance, Some(wallet)) = (role, &kit.wallet) {
+                        for tool in crate::wallet::finance_tools(wallet.clone()) {
+                            builder = builder.tool(tool);
+                        }
                     }
                     builder
                 }

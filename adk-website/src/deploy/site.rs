@@ -5,7 +5,7 @@
 //! | Part | Built from |
 //! |---|---|
 //! | Runtime | The content repository, `ExperimentGenerator` around the built-in generator, the SQLite site log signed with `data/keys/release.jwk`, the `DirectoryHost`, the history, the charter store, the kind's launch gate with [`ReleaseDelegation`] |
-//! | Edge | The kind's capabilities with the packs' handlers; SQLite edge stores, event log and beacon counts in `data/edge.db`, with the deliveries a restart left resumed; the kernel's approvals and signals; the consent policy; `MeteredActionLedger` and `EdgeMeter`; inbox threads, the calendar and payment links when configured; `card.jwk` and `receipt.jwk` |
+//! | Edge | The kind's capabilities with the packs' handlers under the owner's `approvals.json` thresholds; SQLite edge stores, event log and beacon counts in `data/edge.db`, with the deliveries a restart left resumed; the kernel's approvals and signals; the consent policy; `MeteredActionLedger` and `EdgeMeter`; inbox threads, the calendar and a payment desk (`SiteOptions::payments`, such as an AP2 desk, else the `payments.json` links) when configured; `card.jwk` and `receipt.jwk` |
 //! | Updates | `UpdateEngine` over the runtime's pipeline, the edge's live store and the stream lane signed with the receipt key, its held items and deliveries in `data/updates/held.json`; the feeds in `feeds.json`; [`UpdateDriver`] with its journal and cards |
 //! | Experiments | `ExperimentRunner` with `BeaconKpi`, the job pauses, the ladder, the alarms and `RepublishOnStop`; its daily trigger |
 //! | Measurement | `KpiTracker` with the beacon, commerce, spend and agent-search sources (and AEO with search providers), their counts in `data/edge.db` |
@@ -329,6 +329,7 @@ impl RunningSite {
             contacts: Arc::new(InMemoryContactBook::default()),
             calendar,
             payments,
+            thresholds: project::approval_thresholds(&paths)?,
             approvals: Some(stores.approvals.clone()),
             tiers: Some(tiers),
             consent: Some(consent_config(&template, policy, subject_key)),

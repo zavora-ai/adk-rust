@@ -86,6 +86,11 @@ Each job binds the tools it acts with, so the owner's promotion grants their sta
 | `handoff` | `lead_handoff`: `alarms::handoff_tool` sends the owner one P2 card |
 | `experiments` | `experiment_start`, `experiment_report`: `experiments::experiment_tools` over the runner |
 
+With `TeamKit::wallet`, the Finance agent pays from the owner's wallet: `wallet::finance_tools`
+gives it `wallet_pay` and `wallet_status` with the payment scope, and no other agent holds
+them; the wallet's mandates and the governed path decide each payment (spec 3.5 §7.14,
+A-I16).
+
 `jobs::processes` turns the jobs into kernel triggers: `site.probe` every five minutes and
 `site.digest` on Mondays run without a model through `workflows::SiteWorkflows`; the other
 site processes run their job's agent with its playbook.
@@ -126,6 +131,11 @@ office's agenda through the kernel's `SignalSink`, each text field screened (A-I
 | `SiteSubjectData` | Consent export and erasure to the leads and the contact book |
 | `EdgeAnnouncer`, `DeferredAnnouncer` | Each release to `site.release.published` and `catalog.changed` on the edge's events |
 | `ReceiptEntrySigner` | Stream entries to the edge's delegated `receipt` key |
+| `ReceiptKey` | Commerce receipts to the edge's delegated `receipt` key, for `adk-payments`' receipt hook |
+
+`SiteEdgeParts::payments` takes the owner's payment desk, such as `edge::ap2::Ap2Desk`, and
+`SiteEdgeParts::thresholds` the owner's amount thresholds, which hold large orders, bookings
+and payments for the owner ([Writing capability packs](capability-packs.md#amount-thresholds)).
 
 `edge::concierge` builds the Concierge over the edge's own public tools with `adk-harness`'
 `website_public_served`; it is offered those tools and nothing of the harness's own.
@@ -184,7 +194,7 @@ many sites from one harness:
 | Updates | `UpdateEngine` over the runtime's pipeline, the edge's live store and a stream lane signed by the receipt key; feeds from `feeds.json`; `UpdateDriver` ticks it when due and journals to `data/updates/`; held deliveries and items become approval requests (decision cards) and survive a restart in `data/updates/held.json`; `GET /awp/v2/stream` serves `stream_since` |
 | Experiments | `ExperimentGenerator` around the built-in generator; `ExperimentRunner` with `BeaconKpi`, the job pauses, the ladder, the alarms and `RepublishOnStop`; its trigger fires through the kernel's watermarked cron source for the expression |
 | Measurement | `MeteredActionLedger` and `EdgeMeter` on the edge, `MeteredSpendLedger` for agents' spend, and the tracker's sources |
-| Channels | Inbox threads with `SiteOptions::repliers`; the calendar and payment links from `calendar.json` and `payments.json`, or `SiteOptions`; refused without them |
+| Channels | Inbox threads with `SiteOptions::repliers`; the calendar and payment links from `calendar.json` and `payments.json`, or `SiteOptions` (an `Ap2Desk` as `SiteOptions::payments`); refused without them; the owner's amount thresholds from `approvals.json` |
 | Public agent | With `SiteOptions::model`, `edge::concierge` mounts the Concierge through `AwpEdge::public_agent`: the website preset in the public partition over the edge's own tools — the declared capabilities (a declared `search_site` among them), `reply_in_thread` and the edge's `emit_signal` — so the edge's public policy admits every call |
 
 | Store | Survives a restart |

@@ -60,6 +60,8 @@ pub struct EdgeOptions {
     pub beacon: Option<Arc<dyn adk_server::awp::BeaconStore>>,
     /// The public agent the edge hosts on A2A and chat, such as `edge::concierge`.
     pub public_agent: Option<PublicAgentFactory>,
+    /// The owner's amount thresholds: orders, bookings and payments above them wait.
+    pub thresholds: adk_website::packs::ApprovalThresholds,
 }
 
 /// A site's edge and what a scenario drives it with.
@@ -196,6 +198,7 @@ pub async fn edge_with(site: &Site, domain: &str, options: EdgeOptions) -> Resul
         contacts: contacts.clone(),
         calendar: options.calendar,
         payments: options.payments,
+        thresholds: options.thresholds,
         approvals: Some(approvals.clone()),
         tiers: Some(tiers),
         consent: Some(consent_config(&site.template, policy, vec![9u8; 32])),
