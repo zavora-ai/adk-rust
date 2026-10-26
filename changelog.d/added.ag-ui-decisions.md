@@ -5,8 +5,8 @@
   agent and version, and the arguments only for a caller authenticated as the session's
   owner. The next run's `resume` entries are decided through `ApprovalService::decide`
   before the run starts — allow once, edit with `editedArgs`, or deny with a reason — and
-  reported as `CUSTOM` `adk.decision` events; an answer the service refuses ends the stream
-  with `RUN_ERROR` carrying its code, such as `approval.already_resolved`, and is never
-  retried. `RuntimeController::with_approval_service` wires the same for a router built by
-  hand. The shapes follow the AG-UI 1.1 draft interrupt lifecycle (spec 3.3 §10 S2). See
-  `docs/official_docs/tools/ui-tools.md`.
+  reported as `CUSTOM` `adk.decision` events; a resume the service would refuse ends the
+  stream with `RUN_ERROR` carrying its code, such as `approval.version_conflict`, decides
+  nothing and is never retried. `RuntimeController::with_approval_service` wires the same
+  for a router built by hand. The shapes follow the AG-UI 1.1 draft interrupt lifecycle
+  (spec 3.3 §10 S2). See `docs/official_docs/tools/ui-tools.md`.

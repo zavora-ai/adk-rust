@@ -1,5 +1,6 @@
 use super::ag_ui_decisions::{
-    AgUiDecisions, HeldCall, ResumeOutcome, commit_resume, decision_event, plan_resume,
+    AgUiCaller, AgUiDecisions, HeldCall, RESUME_IN_PROGRESS, ResumeOutcome, ResumesInProgress,
+    commit_resume, decision_event, plan_resume,
 };
 use crate::ServerConfig;
 use crate::auth_bridge::{RequestContextError, RequestContextExtractor};
@@ -39,11 +40,12 @@ const UI_TRANSPORT_HEADER: &str = "x-adk-ui-transport";
 pub struct RuntimeController {
     config: ServerConfig,
     approval_service: Option<Arc<dyn adk_core::ApprovalService>>,
+    resumes: ResumesInProgress,
 }
 
 impl RuntimeController {
     pub fn new(config: ServerConfig) -> Self {
-        Self { config, approval_service: None }
+        Self { config, approval_service: None, resumes: ResumesInProgress::default() }
     }
 
     /// Routes the calls that protocol-native AG-UI runs hold for approval to `service`,
@@ -1488,10 +1490,24 @@ where
             });
             // A run that stopped on held calls is not a success (spec 3.3 §10 S2).
             if !ag_ui_stream.held.is_empty() {
-                finished["outcome"] = json!({
-                    "type": "interrupt",
-                    "interrupts": decisions.interrupts(&ag_ui_stream.held).await,
-                });
+                match decisions.interrupts(&ag_ui_stream.held).await {
+                    Ok(interrupts) => {
+                        finished["outcome"] = json!({ "type": "interrupt", "interrupts": interrupts });
+                    }
+                    // An interrupt without its inbox entry would say the call cannot be
+                    // decided here, so the failure is reported instead.
+                    Err(error) => {
+                        yield Ok(Event::default().data(json!({
+                            "type": "RUN_ERROR",
+                            "threadId": selected_thread_id,
+                            "runId": run_id,
+                            "message": "This run is waiting for a decision that could not be \
+                                        loaded; answer it in your decisions inbox",
+                            "code": error.code,
+                        }).to_string()));
+                        return;
+                    }
+                }
             }
             yield Ok(Event::default().data(finished.to_string()));
         }
@@ -1528,18 +1544,22 @@ fn ag_ui_decisions(
     profile: UiProfile,
     transport: UiTransportMode,
     scope: adk_core::ApprovalScope,
-    authenticated: bool,
+    caller: Option<&RequestContext>,
 ) -> AgUiDecisions {
     if profile != UiProfile::AgUi || transport != UiTransportMode::ProtocolNative {
         return AgUiDecisions::default();
     }
     AgUiDecisions {
         service: controller.approval_service.clone(),
-        scope: Some(scope),
         // The caller the extractor authenticated is the session's owner: the session was
         // looked up under its user ID.
-        show_arguments: authenticated,
+        caller: caller.map(|caller| AgUiCaller {
+            approver: adk_core::principal::SubjectRef::human(scope.user_id.clone()),
+            groups: caller.scopes.clone(),
+        }),
+        scope: Some(scope),
         updates: Vec::new(),
+        audit: controller.config.governance.audit(),
     }
 }
 
@@ -1593,7 +1613,7 @@ pub(crate) async fn run_sse_for_request(
             ui_profile,
             transport,
             adk_core::ApprovalScope::new(&app_name, &effective_user_id, &session_id),
-            request_context.is_some(),
+            request_context.as_ref(),
         );
 
         // Validate session exists
@@ -1738,7 +1758,7 @@ pub(crate) async fn run_sse_compat_for_request(
         ui_profile,
         transport,
         adk_core::ApprovalScope::new(&app_name, &effective_user_id, &session_id),
-        request_context.is_some(),
+        request_context.as_ref(),
     );
 
     // Answers to the previous run's interrupts are checked now and recorded only once the run
@@ -1747,6 +1767,7 @@ pub(crate) async fn run_sse_compat_for_request(
     let resume = ag_ui_input.as_ref().and_then(|input| input.resume.as_ref());
     let resuming = resume.is_some_and(|resume| !resume.entries().is_empty());
     let mut resume_plan = None;
+    let mut resume_in_progress = None;
     if let Some(resume) = resume.filter(|_| resuming) {
         let Some(service) = decisions.service.clone() else {
             return Err((
@@ -1765,23 +1786,45 @@ pub(crate) async fn run_sse_compat_for_request(
             ));
         };
         let scope = adk_core::ApprovalScope::new(&app_name, &effective_user_id, &session_id);
+        let refused = |updates, code, message| {
+            let input = ag_ui_input.as_ref();
+            let thread_id = input
+                .and_then(|input| input.thread_id.clone())
+                .unwrap_or_else(|| session_id.clone());
+            let run_id = input
+                .and_then(|input| input.run_id.clone())
+                .unwrap_or_else(|| format!("run-{}", Uuid::new_v4()));
+            let stream = refused_resume_stream(thread_id, run_id, updates, code, message);
+            Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+        };
+        // One resume of a session at a time, until its run ends: a second one would start a
+        // second run resuming the same held calls (spec 3.3 S-I2).
+        let Some(in_progress) = controller.resumes.begin(&scope) else {
+            return refused(
+                Vec::new(),
+                RESUME_IN_PROGRESS,
+                "An earlier answer on this thread is still being applied; try again when its \
+                 run finishes"
+                    .to_string(),
+            );
+        };
+        resume_in_progress = Some(in_progress);
         // The session's owner decides: the extractor authenticated the user it runs for.
         let approver = adk_core::principal::SubjectRef::human(effective_user_id.clone());
-        match plan_resume(service.as_ref(), &scope, &approver, &caller.scopes, resume.entries())
-            .await
-            .map_err(|reason| (StatusCode::BAD_REQUEST, reason))?
+        match plan_resume(
+            service.as_ref(),
+            &scope,
+            &approver,
+            &caller.scopes,
+            resume.entries(),
+            decisions.audit.as_ref(),
+        )
+        .await
+        .map_err(|reason| (StatusCode::BAD_REQUEST, reason))?
         {
             ResumeOutcome::Run(plan) => resume_plan = Some((service, plan)),
             ResumeOutcome::Refused { updates, code, message } => {
-                let input = ag_ui_input.as_ref();
-                let thread_id = input
-                    .and_then(|input| input.thread_id.clone())
-                    .unwrap_or_else(|| session_id.clone());
-                let run_id = input
-                    .and_then(|input| input.run_id.clone())
-                    .unwrap_or_else(|| format!("run-{}", Uuid::new_v4()));
-                let stream = refused_resume_stream(thread_id, run_id, updates, code, message);
-                return Ok(Sse::new(stream).keep_alive(KeepAlive::default()));
+                return refused(updates, code, message);
             }
         }
     }
@@ -1904,7 +1947,7 @@ pub(crate) async fn run_sse_compat_for_request(
     let event_stream =
         runner.run(typed_user_id, typed_session_id, content).await.map_err(adk_err_to_runtime)?;
     if let Some((service, plan)) = resume_plan {
-        decisions.updates = commit_resume(service.as_ref(), plan).await;
+        decisions.updates = commit_resume(service.as_ref(), plan, decisions.audit.as_ref()).await;
     }
 
     // Convert to SSE stream
@@ -1916,6 +1959,12 @@ pub(crate) async fn run_sse_compat_for_request(
         ag_ui_input,
         decisions,
     );
+    // The resume stays in progress until its run's stream ends or is dropped.
+    let sse_stream: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =
+        Box::pin(sse_stream.map(move |event| {
+            let _resume = &resume_in_progress;
+            event
+        }));
 
     Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
 }
