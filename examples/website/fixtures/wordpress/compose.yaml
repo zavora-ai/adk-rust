@@ -27,7 +27,7 @@ services:
     networks: [fixture]
 
   wordpress:
-    image: wordpress:6.8-php8.4-apache
+    image: wordpress:php8.4-apache
     depends_on:
       db:
         condition: service_healthy

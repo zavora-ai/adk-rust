@@ -84,3 +84,9 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 [[profile.default.overrides]]
 filter = "binary(harness_ultracode_live)"
 slow-timeout = { period = "120s", terminate-after = 10 }
+
+# S19's full day (spec 3.5 §11): 50,000 products fed for 24 simulated hours, run only by the nightly
+# `site-soak` job; an optimised build takes a few hours.
+[[profile.default.overrides]]
+filter = "binary(s19_constant_updates) and test(s19_full_day)"
+slow-timeout = { period = "600s", terminate-after = 30 }
