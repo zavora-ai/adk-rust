@@ -549,6 +549,24 @@ async fn a_fork_of_the_parent_answers_a_governed_node_inside_a_subgraph_from_its
     assert_eq!(forked["charge"], original["charge"]);
 }
 
+#[cfg(feature = "time-travel")]
+#[tokio::test]
+async fn a_waiting_call_another_fork_ran_is_answered_and_its_decision_withdrawn() {
+    let rig = Rig::new();
+    rig.approved("t1", ToolApproval::approve()).await.unwrap();
+    rig.fork("t1", "t2", Some(invoice(5000))).await;
+    rig.fork("t1", "t3", Some(invoice(5000))).await;
+    // Both forks wait for the same changed call; t3 is answered first.
+    assert!(rig.invoke("t2").await.is_err());
+    rig.approved("t3", ToolApproval::approve()).await.unwrap();
+    assert_eq!(rig.provider.hits(), 2);
+
+    let t2 = rig.invoke("t2").await.unwrap();
+    assert_eq!(rig.provider.hits(), 2, "t2 is answered from t3's record");
+    assert_eq!(t2["charge"]["amountCents"], json!(5000));
+    assert!(rig.pending("t2").await.is_empty(), "t2's waiting decision is withdrawn");
+}
+
 // ── Through a GraphAgent ─────────────────────────────────────────────
 
 struct Turn {

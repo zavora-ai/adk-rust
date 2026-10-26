@@ -23,6 +23,11 @@
 //! occurrence counts, so a fork whose call is unchanged is answered from the original's
 //! record, and a fork whose call changed waits for a person.
 //!
+//! A node resuming its own pause before a decision exists pauses again without asking
+//! anyone again; a call that changed while it waited, or that a record answers, has its
+//! waiting decision withdrawn. A governed node inside a subgraph keys its record by the
+//! parent's lineage.
+//!
 //! The effect log thread `{lineage root}:effects` holds each executed call's writes. Only
 //! this bracket writes it; forks never do, and checkpoint retention never prunes it, so
 //! sibling forks find effects another fork ran.
@@ -549,11 +554,28 @@ pub(crate) async fn dispatch(dispatch: GovernedDispatch, ctx: &NodeContext) -> G
     // answered from its record and creates no decision.
     let ledger = run_config.action_ledger.clone();
     let key = match &ledger {
-        Some(ledger) => match lookup(ledger.as_ref(), &node, &base_key).await {
-            Lookup::Free(key) => key,
-            Lookup::Done(key) => return replay(&dispatch, key).await,
-            Lookup::Failed(run) => return *run,
-        },
+        Some(ledger) => {
+            let answered = match lookup(ledger.as_ref(), &node, &base_key).await {
+                Lookup::Free(key) => Ok(key),
+                Lookup::Done(key) => Err(replay(&dispatch, key).await),
+                Lookup::Failed(run) => Err(*run),
+            };
+            match answered {
+                Ok(key) => key,
+                Err(run) => {
+                    // The record answers the call, so a decision it waited for is moot. A
+                    // ledger that could not be read answers nothing.
+                    let unread = matches!(
+                        &run.output,
+                        Err(error) if GovernedError::code_of(error) == Some("graph.unavailable")
+                    );
+                    if let Some(held) = dispatch.held.as_ref().filter(|_| !unread) {
+                        withdraw(&gate, held, &node).await;
+                    }
+                    return run;
+                }
+            }
+        }
         None => base_key,
     };
 
@@ -589,12 +611,8 @@ pub(crate) async fn dispatch(dispatch: GovernedDispatch, ctx: &NodeContext) -> G
                     );
                 }
             }
-        } else if let Err(error) = adk_core::withdraw_held_call(&gate, &held).await {
-            tracing::warn!(
-                node = %node,
-                error = %error,
-                "the hold for a governed call whose arguments changed could not be withdrawn"
-            );
+        } else {
+            withdraw(&gate, &held, &node).await;
         }
     }
 
@@ -884,6 +902,13 @@ async fn replay(dispatch: &GovernedDispatch, key: String) -> GovernedRun {
         status: NodeStatus::Recorded,
         effect_key: Some(key),
         held: None,
+    }
+}
+
+/// Withdraws the decision a governed node waited for when it will not wait any more.
+async fn withdraw(gate: &ToolGate<'_>, held: &ToolConfirmationRequest, node: &str) {
+    if let Err(error) = adk_core::withdraw_held_call(gate, held).await {
+        tracing::warn!(node = %node, error = %error, "a governed node's waiting decision could not be withdrawn");
     }
 }
 

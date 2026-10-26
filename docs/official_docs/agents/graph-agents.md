@@ -1413,6 +1413,12 @@ approval store and an action ledger. Each dispatch of the node goes through one 
 - **Failures.** Each is a `GraphError::NodeExecutionFailed` whose message starts with
   its code; `GovernedError::code_of` reads it back. The step is checkpointed with the
   node `refused`, `failed` or `notRun`.
+- **Waiting.** A run that resumes the node before its call is decided pauses again with
+  the same request, without asking anyone again. When the call's arguments changed
+  while it waited, or another fork's record answers it, its waiting decision is
+  withdrawn.
+- **Subgraphs.** A governed node inside a `SubgraphNode` keys its record by the parent's
+  lineage, so a fork of the parent finds the calls its source made.
 - **Not a child.** A governed node runs only through its bracket: a node body cannot
   invoke it with `NodeContext::run_node`, and a node cache never answers it.
 

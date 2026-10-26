@@ -1152,6 +1152,7 @@ and runs at most once per call in its thread's lineage. See
 | Credentials | An HTTP action node shows each credential — authorization and cookie headers, and headers, query parameters and form fields with secret-looking names — as a `sha256:` digest. An approved call is sent with the current credential, and a digest that no longer matches it refuses the call unsent |
 | Outcome unknown | A call that timed out or was cut off after it began stays begun, and every later run in the lineage fails closed with `graph.outcome_unknown` |
 | Kill switch again | A freeze that lands between the decision and the call completes the begun record as not run |
+| Waiting | A run that resumes the node's own pause before a decision exists pauses again without calling `authorize_tool_call`, as `LlmAgent` resumes a held call only once `confirmation_decision_available`; a changed call, or one a record answers, has its waiting decision withdrawn with `withdraw_held_call` |
 
 ## Combining Mechanisms
 
