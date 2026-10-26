@@ -13,7 +13,7 @@ export interface AgentCardView {
   agent: AgentRef;
   /** What it would start with: "Nothing yet". */
   allowedWithoutAsking: string;
-  /** "It can do less than ADK-Rust: no shell, no web". */
+  /** "It can do no more than ADK-Rust, and has no shell or web." */
   compared?: string | null;
   /** "What it does", in one line. */
   description: string;
@@ -50,6 +50,17 @@ export interface AgentChoices {
 /** An agent's colour: one of the eight avatar colours, never a free value (spec 3.3 §5.7). */
 export type AgentColor = "orange" | "green" | "blue" | "violet" | "slate" | "amber" | "teal" | "pink";
 
+/**
+ * `POST /surface/agents/confirm/options` body: the change the person is about to confirm —
+ * `addAgent` or `changeAgent` with the digest its preview showed — bound on the server to
+ * exactly this command (spec 3.3 §7.2: the web home adds an agent at high risk after
+ * confirming it is you).
+ */
+export interface AgentConfirmOptionsRequest {
+  /** The change. */
+  command: Command;
+}
+
 /** One agent a person added (spec 3.3 §5.7): what **Settings** shows. */
 export interface AgentDetail {
   /** The agent as threads and decisions name it. */
@@ -58,6 +69,11 @@ export interface AgentDetail {
   cantStart?: string | null;
   /** When it was last changed. */
   changedAt: string;
+  /**
+   * The surface it was last changed on — `web`, `terminal`, `phone` — when the kernel
+   * knows it; a change refused as out of date names it.
+   */
+  changedOn?: string | null;
   /** Its definition. */
   draft: AgentDraft;
   /** Its kernel target, for commands. Never shown. */
@@ -215,6 +231,11 @@ export interface AgentsResponse {
    * (spec 3.3 §5.5). Absent when the source has no single primary agent.
    */
   primary?: AgentRef | null;
+  /**
+   * The agents the person removed, whose threads stay readable through "Removed agents"
+   * at the roster's foot (spec 3.3 §5.7). Absent when none.
+   */
+  removed?: RemovedAgent[];
 }
 
 /** The answers a surface may give one decision (spec 3.3 §7.2). */
@@ -528,7 +549,7 @@ export type CommandOutcome = {
 } | {
   /** The agent now. */
   agent: AgentDetail;
-  /** "Finance was changed elsewhere at 10:01". */
+  /** "Finance was changed in the terminal at 10:01". */
   text: string;
   type: "agentOutOfDate";
 } | {
@@ -917,6 +938,29 @@ export interface QuietView {
   start: string;
   /** "Quiet from 22:00", or "Quiet until 07:00" while it holds. */
   text: string;
+}
+
+/**
+ * An agent the person removed, whose threads stay readable (spec 3.3 §5.7, §13 decision 18;
+ * owner, at the wave 3 gate: "Removed agents" at the roster's foot).
+ */
+export interface RemovedAgent {
+  /** The agent as its threads name it. */
+  agent: AgentRef;
+  /** "Removed on 25 Oct". */
+  removedText: string;
+  /** Its threads, newest first. */
+  threads: RemovedThread[];
+}
+
+/** One thread of a removed agent, read only. */
+export interface RemovedThread {
+  /** When it last changed. */
+  at: string;
+  /** The session to open. */
+  sessionId: string;
+  /** "25 Oct 10:02". */
+  when: string;
 }
 
 /** Whether a call can be taken back (spec 3.3 §7.1). */

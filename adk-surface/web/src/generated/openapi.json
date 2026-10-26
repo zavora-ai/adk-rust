@@ -20,7 +20,7 @@
             "type": "string"
           },
           "compared": {
-            "description": "\"It can do less than ADK-Rust: no shell, no web\".",
+            "description": "\"It can do no more than ADK-Rust, and has no shell or web.\"",
             "type": [
               "string",
               "null"
@@ -152,6 +152,19 @@
           }
         ]
       },
+      "AgentConfirmOptionsRequest": {
+        "description": "`POST /surface/agents/confirm/options` body: the change the person is about to confirm —\n`addAgent` or `changeAgent` with the digest its preview showed — bound on the server to\nexactly this command (spec 3.3 §7.2: the web home adds an agent at high risk after\nconfirming it is you).",
+        "properties": {
+          "command": {
+            "$ref": "#/components/schemas/Command",
+            "description": "The change."
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "type": "object"
+      },
       "AgentDetail": {
         "description": "One agent a person added (spec 3.3 §5.7): what **Settings** shows.",
         "properties": {
@@ -170,6 +183,13 @@
             "description": "When it was last changed.",
             "format": "date-time",
             "type": "string"
+          },
+          "changedOn": {
+            "description": "The surface it was last changed on — `web`, `terminal`, `phone` — when the kernel\nknows it; a change refused as out of date names it.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "draft": {
             "$ref": "#/components/schemas/AgentDraft",
@@ -667,6 +687,13 @@
               }
             ],
             "description": "The agent a message goes to when the person names none: the tray's \"Ask Finance\"\n(spec 3.3 §5.5). Absent when the source has no single primary agent."
+          },
+          "removed": {
+            "description": "The agents the person removed, whose threads stay readable through \"Removed agents\"\nat the roster's foot (spec 3.3 §5.7). Absent when none.",
+            "items": {
+              "$ref": "#/components/schemas/RemovedAgent"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -1702,7 +1729,7 @@
                 "description": "The agent now."
               },
               "text": {
-                "description": "\"Finance was changed elsewhere at 10:01\".",
+                "description": "\"Finance was changed in the terminal at 10:01\".",
                 "type": "string"
               },
               "type": {
@@ -2753,6 +2780,56 @@
           "start",
           "end",
           "text"
+        ],
+        "type": "object"
+      },
+      "RemovedAgent": {
+        "description": "An agent the person removed, whose threads stay readable (spec 3.3 §5.7, §13 decision 18;\nowner, at the wave 3 gate: \"Removed agents\" at the roster's foot).",
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/AgentRef",
+            "description": "The agent as its threads name it."
+          },
+          "removedText": {
+            "description": "\"Removed on 25 Oct\".",
+            "type": "string"
+          },
+          "threads": {
+            "description": "Its threads, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/RemovedThread"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "agent",
+          "removedText",
+          "threads"
+        ],
+        "type": "object"
+      },
+      "RemovedThread": {
+        "description": "One thread of a removed agent, read only.",
+        "properties": {
+          "at": {
+            "description": "When it last changed.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "sessionId": {
+            "description": "The session to open.",
+            "type": "string"
+          },
+          "when": {
+            "description": "\"25 Oct 10:02\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "at",
+          "when"
         ],
         "type": "object"
       },
@@ -3874,6 +3951,142 @@
           }
         },
         "summary": "What the caller may choose for an agent: the models whose key the kernel has, the packs, the areas and the colours"
+      }
+    },
+    "/api/surface/agents/confirm": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandOutcome"
+                }
+              }
+            },
+            "description": "agentAdded, agentChanged or agentOutOfDate"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "The passkey's assertion for the bound agent change, which is then made with presence; feature mobile (spec 3.3 §7.2)"
+      }
+    },
+    "/api/surface/agents/confirm/options": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentConfirmOptionsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmOptions"
+                }
+              }
+            },
+            "description": "The options for navigator.credentials.get"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Starts Confirm it's you for one change that adds an agent or lets one do more at high risk, bound to exactly that command; feature mobile (spec 3.3 §7.2)"
       }
     },
     "/api/surface/agents/preview": {

@@ -122,3 +122,4 @@ export const NOTHING_YET = "Nothing yet";
 export const NO_AGENTS_OF_YOUR_OWN = "No agents of your own yet. Add one, or ask ADK-Rust to suggest one.";
 export const WHAT_SHOULD_IT_DO = "What should it do?";
 export const SUGGEST_A_NEW_AGENT_FOR = "Suggest a new agent for this: ";
+export const REMOVED_AGENTS = "Removed agents";
