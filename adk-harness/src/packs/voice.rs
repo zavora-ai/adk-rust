@@ -36,8 +36,8 @@ use std::time::{Duration, Instant};
 
 use adk_core::audit_log::AuditActor;
 use adk_core::{
-    AdkError, ApprovalScope, ApprovalStore, RequestContext, Result, RunConfig, ToolApproval,
-    ToolConfirmationRequest,
+    AdkError, ApprovalScope, ApprovalStore, Content, GovernanceControl, ReadonlyContext,
+    RequestContext, Result, RunConfig, Tool, ToolApproval, ToolConfirmationRequest,
 };
 #[cfg(feature = "kernel")]
 use adk_core::{
@@ -168,7 +168,7 @@ pub fn parse_spoken_decision(transcript: &str) -> Option<SpokenDecision> {
 /// let config = VoiceConfig::new("adk-rust").with_voice("Kore");
 /// assert_eq!(config.app_name, "adk-rust");
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct VoiceConfig {
     /// The app name sessions, modes, rules and spend are kept under.
     pub app_name: String,
@@ -185,6 +185,27 @@ pub struct VoiceConfig {
     /// Gemini Live context window compression, so a session that sends camera or screen
     /// frames is not ended after about two minutes (spec 3.3 §5.6).
     pub context_window_compression: bool,
+    /// The kill switches every call checks, beside the harness's: the one **Stop all**
+    /// freezes, so a stop reaches the realtime session's calls (spec 3.3 S-I10).
+    pub governance: Vec<GovernanceControl>,
+    /// Tools the realtime session offers beside the harness toolset:
+    /// [`HarnessAgent::voice_tools`], so a spoken request reaches every tool a typed one does
+    /// (spec 3.3 §5.6).
+    pub tools: Vec<Arc<dyn Tool>>,
+}
+
+impl std::fmt::Debug for VoiceConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VoiceConfig")
+            .field("app_name", &self.app_name)
+            .field("voice", &self.voice)
+            .field("instruction", &self.instruction.is_some())
+            .field("tool_timeout", &self.tool_timeout)
+            .field("context_window_compression", &self.context_window_compression)
+            .field("governance", &self.governance.len())
+            .field("tools", &self.tools.iter().map(|tool| tool.name()).collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
 }
 
 impl VoiceConfig {
@@ -198,6 +219,8 @@ impl VoiceConfig {
             tool_timeout: Duration::from_secs(300),
             request_context: None,
             context_window_compression: false,
+            governance: Vec::new(),
+            tools: Vec::new(),
         }
     }
 
@@ -232,7 +255,8 @@ impl VoiceConfig {
     /// Turns on Gemini Live context window compression with the server's defaults
     /// (`RealtimeConfig::with_context_window_compression`): without it, a session that sends
     /// camera or screen frames ends after about two minutes (spec 3.3 §5.6). Set it for a
-    /// Gemini Live model whenever video may be sent.
+    /// Gemini Live model whenever video may be sent, and never for the OpenAI Realtime API,
+    /// whose `session.update` would carry the key.
     ///
     /// # Example
     ///
@@ -246,6 +270,128 @@ impl VoiceConfig {
     pub fn with_context_window_compression(mut self) -> Self {
         self.context_window_compression = true;
         self
+    }
+
+    /// Adds `control` to the kill switches every call of the session checks, as a `Runner`
+    /// adds its own to each run: give it the one **Stop all** freezes, so a stop refuses the
+    /// realtime session's calls and its resumes too (spec 3.3 S-I10).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::GovernanceControl;
+    /// use adk_harness::VoiceConfig;
+    ///
+    /// let stop = GovernanceControl::new();
+    /// let config = VoiceConfig::new("adk-rust").with_governance(stop.clone());
+    /// assert!(config.governance[0].same_as(&stop));
+    /// ```
+    #[must_use]
+    pub fn with_governance(mut self, control: GovernanceControl) -> Self {
+        if !self.governance.iter().any(|existing| existing.same_as(&control)) {
+            self.governance.push(control);
+        }
+        self
+    }
+
+    /// Offers `tools` beside the harness toolset; a tool whose name the harness toolset has
+    /// is left out. Pass [`HarnessAgent::voice_tools`] so the session has every tool the
+    /// harness's model has (spec 3.3 §5.6).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let tools = harness.voice_tools("adk-rust", "ana", "voice-1").await;
+    /// let config = VoiceConfig::new("adk-rust").with_tools(tools);
+    /// ```
+    #[must_use]
+    pub fn with_tools(mut self, tools: impl IntoIterator<Item = Arc<dyn Tool>>) -> Self {
+        self.tools.extend(tools);
+        self
+    }
+}
+
+/// The context a toolset lists its tools in for a realtime session (spec 3.3 §5.6).
+struct ListingContext {
+    app_name: String,
+    user_id: String,
+    session_id: String,
+    agent_name: String,
+    content: Content,
+}
+
+#[async_trait::async_trait]
+impl ReadonlyContext for ListingContext {
+    fn invocation_id(&self) -> &str {
+        &self.session_id
+    }
+
+    fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+
+    fn user_id(&self) -> &str {
+        &self.user_id
+    }
+
+    fn app_name(&self) -> &str {
+        &self.app_name
+    }
+
+    fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    fn branch(&self) -> &str {
+        ""
+    }
+
+    fn user_content(&self) -> &Content {
+        &self.content
+    }
+}
+
+impl HarnessAgent {
+    /// The tools the harness's model is given beside its toolset — those added with
+    /// `.tool()` and `.toolset()`, the skills toolset, partition crossings and MCP servers —
+    /// listed now for `user_id`'s session `session_id`, for a realtime session of the
+    /// harness: pass them to [`VoiceConfig::with_tools`] (spec 3.3 §5.6). Provider-executed
+    /// web tools are left out, since the text model's provider runs them, and so is a
+    /// toolset that cannot list its tools, with a warning.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let tools = harness.voice_tools("adk-rust", "ana", "voice-1").await;
+    /// let surface = VoiceSurface::open(harness, realtime, sessions, "ana", "voice-1",
+    ///     VoiceConfig::new("adk-rust").with_tools(tools))?;
+    /// ```
+    pub async fn voice_tools(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+    ) -> Vec<Arc<dyn Tool>> {
+        let (tools, toolsets) = &self.runtime().agent_tools;
+        let mut found = tools.clone();
+        let ctx: Arc<dyn ReadonlyContext> = Arc::new(ListingContext {
+            app_name: app_name.to_string(),
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
+            agent_name: self.info().name.clone(),
+            content: Content::new("user"),
+        });
+        for toolset in toolsets {
+            match toolset.tools(Arc::clone(&ctx)).await {
+                Ok(listed) => found.extend(listed),
+                Err(error) => tracing::warn!(
+                    toolset = toolset.name(),
+                    error = %error,
+                    "a toolset's tools could not be listed for the voice session"
+                ),
+            }
+        }
+        found
     }
 }
 
@@ -372,8 +518,9 @@ fn digest(text: &str) -> String {
 
 impl VoiceSurface {
     /// Opens the voice surface of `harness` for `user_id`'s session `session_id` over
-    /// `model`, with the harness tools as the runner's tools and `harness.run_config()` as
-    /// its governance (spec 3.1 §7.17).
+    /// `model`, with the harness toolset and `config.tools` as the runner's tools and
+    /// `harness.run_config()`, with `config.governance`'s kill switches, as its governance
+    /// (spec 3.1 §7.17, spec 3.3 §5.6).
     ///
     /// The harness must be marked `Pack::Voice`. Transcripts persist to `sessions`; the
     /// integration's memory write and memory injection are off, as the harness memory policy
@@ -412,6 +559,11 @@ impl VoiceSurface {
         // loop that carries the spoken answer, so calls are held and resumed instead.
         let mut run_config: RunConfig = harness.run_config();
         run_config.tool_confirmation_handler = None;
+        for control in &config.governance {
+            if !run_config.governance.iter().any(|existing| existing.same_as(control)) {
+                run_config.governance.push(control.clone());
+            }
+        }
         if let Some(request_context) = &config.request_context {
             run_config.request_context = Some(request_context.clone());
         }
@@ -455,8 +607,11 @@ impl VoiceSurface {
                 max_memory_injection: 0,
                 max_history_injection: 20,
             });
-        for tool in harness.runtime().toolset().all_tools() {
-            builder = builder.adk_tool(tool);
+        let mut names = std::collections::HashSet::new();
+        for tool in harness.runtime().toolset().all_tools().into_iter().chain(config.tools) {
+            if names.insert(tool.name().to_string()) {
+                builder = builder.adk_tool(tool);
+            }
         }
         if let Some(pricing) = config.pricing {
             builder = builder.realtime_pricing(pricing);
@@ -825,7 +980,34 @@ impl VoiceSurface {
         Ok(())
     }
 
-    async fn record_held(&self, call_id: &str, request: &ToolConfirmationRequest) -> Result<()> {
+    /// Runs every held call of the session that has a decision, as the runner's
+    /// `resume_held_calls` does, and records `harness.voice.resumed` for each: for a caller
+    /// that reads the runner's events itself instead of [`next_event`](Self::next_event), such
+    /// as a voice conversation of the agent surfaces (spec 3.3 §5.6).
+    ///
+    /// # Errors
+    ///
+    /// The resume path's error, such as a frozen kill switch, or the audit trail's.
+    pub async fn resume_held_calls(&self) -> Result<Vec<ResumedToolCall>> {
+        let resumed = self.runner.resume_held_calls().await.map_err(realtime_error)?;
+        for call in &resumed {
+            self.record_resumed(call).await?;
+        }
+        Ok(resumed)
+    }
+
+    /// Records `harness.voice.held` for the call `call_id` the runner held with `request`:
+    /// for a caller that reads the runner's events itself instead of
+    /// [`next_event`](Self::next_event) (spec 3.3 §5.6).
+    ///
+    /// # Errors
+    ///
+    /// The audit trail's error.
+    pub async fn record_held(
+        &self,
+        call_id: &str,
+        request: &ToolConfirmationRequest,
+    ) -> Result<()> {
         let Some(audit) = &self.audit else {
             return Ok(());
         };
@@ -1195,6 +1377,149 @@ mod tests {
                 .as_ref()
                 .and_then(|extra| extra.get("context_window_compression").cloned());
             assert_eq!(sent, compressed.then_some(serde_json::Value::Bool(true)));
+        }
+    }
+
+    /// A tool of the harness's own: added with `.tool()` as `calendar`, and listed by a
+    /// toolset as `time_now`.
+    struct Named(&'static str);
+
+    #[async_trait::async_trait]
+    impl Tool for Named {
+        fn name(&self) -> &str {
+            self.0
+        }
+
+        fn description(&self) -> &str {
+            "A tool of the harness's own."
+        }
+
+        async fn execute(
+            &self,
+            _ctx: Arc<dyn adk_core::ToolContext>,
+            _args: serde_json::Value,
+        ) -> Result<serde_json::Value> {
+            Ok(json!({ "ok": true }))
+        }
+    }
+
+    /// A toolset of the harness's own, added with `.toolset()`.
+    struct Clock;
+
+    #[async_trait::async_trait]
+    impl adk_core::Toolset for Clock {
+        fn name(&self) -> &str {
+            "clock"
+        }
+
+        async fn tools(&self, _ctx: Arc<dyn ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>> {
+            Ok(vec![Arc::new(Named("time_now"))])
+        }
+    }
+
+    fn voiced(dir: &std::path::Path, mode: HarnessMode) -> Arc<HarnessAgent> {
+        Arc::new(
+            HarnessAgent::builder("harness")
+                .model(Arc::new(adk_model::ScriptedLlm::new(
+                    "scripted",
+                    Vec::<adk_model::ScriptedResponse>::new(),
+                )))
+                .workspace(adk_devtools::Workspace::new(dir).allow_bash(true))
+                .mode(mode)
+                .pack(crate::Pack::Voice)
+                .tool(Arc::new(Named("calendar")))
+                .toolset(Arc::new(Clock))
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// The realtime session offers every tool the harness's model has: the harness toolset,
+    /// `.tool()` and `.toolset()` (spec 3.3 §5.6).
+    #[tokio::test]
+    async fn the_session_offers_every_tool_the_model_has() {
+        use adk_realtime::scripted::ScriptedRealtimeModel;
+
+        let dir = tempfile::tempdir().unwrap();
+        let harness = voiced(dir.path(), HarnessMode::Ask);
+        let tools = harness.voice_tools("adk-rust", "ana", "voice-1").await;
+        let names: Vec<&str> = tools.iter().map(|tool| tool.name()).collect();
+        assert_eq!(names, ["calendar", "time_now"]);
+        let model = ScriptedRealtimeModel::new(Vec::new());
+        let surface = VoiceSurface::open(
+            harness,
+            Arc::new(model.clone()),
+            Arc::new(adk_session::InMemorySessionService::new()),
+            "ana",
+            "voice-1",
+            VoiceConfig::new("adk-rust").with_tools(tools),
+        )
+        .unwrap();
+        surface.runner().connect().await.unwrap();
+        let declared: Vec<String> =
+            model.log().configs()[0].tools.iter().flatten().map(|tool| tool.name.clone()).collect();
+        for name in ["bash", "calendar", "time_now"] {
+            assert!(declared.iter().any(|declared| declared == name), "{name}: {declared:?}");
+        }
+    }
+
+    /// A kill switch given to the session refuses its calls once frozen, as a runner's does
+    /// a run's (spec 3.3 S-I10); without it the same call is held, approved by voice and runs.
+    #[tokio::test]
+    async fn a_frozen_kill_switch_refuses_the_sessions_calls() {
+        use adk_realtime::scripted::{self, ScriptedRealtimeModel, ScriptedReply};
+        use adk_session::{CreateRequest, SessionService};
+
+        for frozen in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let harness = voiced(dir.path(), HarnessMode::Ask);
+            let sessions = Arc::new(adk_session::InMemorySessionService::new());
+            sessions
+                .create(CreateRequest {
+                    app_name: "adk-rust".into(),
+                    user_id: "ana".into(),
+                    session_id: Some("voice-1".into()),
+                    state: Default::default(),
+                })
+                .await
+                .unwrap();
+            let model = ScriptedRealtimeModel::new(vec![
+                ScriptedReply::new(scripted::calls(
+                    "call-1",
+                    "bash",
+                    json!({ "command": "printf ran > ran.txt" }),
+                ))
+                .on_text(),
+                ScriptedReply::new(scripted::spoken("Say yes or no.")).on_tool_output(),
+                ScriptedReply::new(vec![scripted::input_transcript("yes")]).on_audio(),
+                ScriptedReply::new(scripted::spoken("Done.")).on_tool_output(),
+            ])
+            .with_idle_timeout(Duration::from_millis(300));
+            let stop = GovernanceControl::new();
+            if frozen {
+                stop.freeze("stop all");
+            }
+            let surface = VoiceSurface::open(
+                harness,
+                Arc::new(model.clone()),
+                sessions,
+                "ana",
+                "voice-1",
+                VoiceConfig::new("adk-rust").with_governance(stop),
+            )
+            .unwrap();
+            surface.connect().await.unwrap();
+            surface.say("run it").await.unwrap();
+            let mut held = false;
+            while let Some(event) = surface.next_event().await {
+                if let Ok(VoiceEvent::Held { .. }) = event {
+                    held = true;
+                    let audio = adk_realtime::audio::AudioChunk::pcm16_16khz(vec![0; 640]);
+                    surface.send_audio(&audio).await.unwrap();
+                }
+            }
+            assert_eq!(held, !frozen, "frozen: {frozen}");
+            assert_eq!(dir.path().join("ran.txt").exists(), !frozen, "frozen: {frozen}");
         }
     }
 

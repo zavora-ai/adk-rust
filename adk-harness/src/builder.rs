@@ -2609,12 +2609,19 @@ impl HarnessAgentBuilder {
             .tool_confirmation_policy(ToolConfirmationPolicy::PerTool(
                 ["exit_plan_mode".to_string()].into_iter().collect(),
             ));
+        // What the model is given besides the harness toolset, which a realtime session of
+        // the harness offers too (spec 3.3 §5.6).
+        let mut agent_tools: Vec<Arc<dyn Tool>> = Vec::new();
+        let mut agent_toolsets: Vec<Arc<dyn Toolset>> = Vec::new();
         #[cfg(feature = "skills")]
         {
             match crate::skills::wire(workspace.root(), &self.skills)? {
                 crate::skills::SkillsWiring::None => {}
                 crate::skills::SkillsWiring::Toolset(_) if public_only.is_some() => {}
-                crate::skills::SkillsWiring::Toolset(skills) => builder = builder.toolset(skills),
+                crate::skills::SkillsWiring::Toolset(skills) => {
+                    agent_toolsets.push(skills.clone());
+                    builder = builder.toolset(skills);
+                }
                 crate::skills::SkillsWiring::Inject(index) => builder = builder.with_skills(index),
             }
         }
@@ -2627,6 +2634,7 @@ impl HarnessAgentBuilder {
             };
             #[cfg(feature = "auth")]
             let tool = self.identity.protect_extra(tool);
+            agent_tools.push(tool.clone());
             builder = builder.tool(tool);
         }
         for extra in self.toolsets {
@@ -2634,6 +2642,7 @@ impl HarnessAgentBuilder {
                 Some(_) => crate::take_over::ScopedToolset::wrap(extra, self.tool_timeout),
                 None => extra,
             };
+            agent_toolsets.push(extra.clone());
             builder = builder.toolset(extra);
         }
         // The coordinator's crossings into other partitions' drivers (spec 3.2 §7.8).
@@ -2646,6 +2655,7 @@ impl HarnessAgentBuilder {
                     }
                     None => crossings.clone(),
                 };
+                agent_toolsets.push(crossings.clone());
                 builder = builder.toolset(crossings);
             }
         }
@@ -2655,6 +2665,7 @@ impl HarnessAgentBuilder {
         }
         #[cfg(feature = "mcp")]
         if let Some(mcp) = mcp.as_ref().filter(|_| public_only.is_none()) {
+            agent_toolsets.push(mcp.manager());
             builder = builder.toolset(mcp.manager());
         }
         if let Some(customize) = self.customize {
@@ -2874,6 +2885,7 @@ impl HarnessAgentBuilder {
                 #[cfg(feature = "payments")]
                 payments: payments.map(|payments| payments.reminder),
                 take_over: self.take_over,
+                agent_tools: (agent_tools, agent_toolsets),
             },
             info,
             manifest,
