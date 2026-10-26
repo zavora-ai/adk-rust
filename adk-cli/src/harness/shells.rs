@@ -3,6 +3,7 @@
 use std::fmt::Write as _;
 
 use adk_core::Result;
+use adk_harness::ShellStatus;
 
 use super::launcher::Shared;
 
@@ -26,8 +27,16 @@ pub(super) async fn run(shared: &Shared, args: &str) -> Result<String> {
             Ok(out)
         }
         (Some("kill"), Some(id)) => {
+            let running = harness
+                .shells(&shared.user, &shared.session)
+                .await
+                .iter()
+                .any(|shell| shell.shell_id == id && shell.status == ShellStatus::Running);
             Ok(match harness.kill_shell(&shared.user, &shared.session, id).await {
-                Some(shell) => format!("stopped: {}", shell.line()),
+                Some(shell) if running => format!("stopped: {}", shell.line()),
+                Some(shell) => {
+                    format!("already ended, removed from the reminder: {}", shell.line())
+                }
                 None => format!("no background shell {id} in this session"),
             })
         }
