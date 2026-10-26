@@ -15,7 +15,7 @@ use std::sync::Arc;
 use adk_auth::signed_audit::merkle::{
     consistency_proof, inclusion_proof, leaf_hash, root, verify_consistency, verify_inclusion,
 };
-use adk_auth::signed_audit::{CheckpointBody, Note};
+use adk_auth::signed_audit::{CheckpointBody, Note, canonicalize};
 use adk_core::audit_log::AuditHash;
 use awp_types::{Delegation, KeyScope, KeySet, LogEntry, PublicKeyJwk, Revocation, SiteContract};
 use base64::Engine as _;
@@ -41,7 +41,9 @@ fn b64(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
-fn sorted(value: Value) -> Value {
+/// `value` with every object's keys in sorted order, whether or not serde_json's
+/// `preserve_order` feature is on in the build.
+pub(crate) fn sorted(value: Value) -> Value {
     match value {
         Value::Object(map) => {
             let mut entries: Vec<(String, Value)> = map.into_iter().collect();
@@ -182,7 +184,8 @@ async fn contract_cases(
     cases.insert("signed-contract/foreign-root.json".to_owned(), case_foreign);
 
     let crit_header =
-        json!({ "alg": "EdDSA", "kid": site.root.kid(), "crit": ["exp"] }).to_string();
+        canonicalize(&json!({ "alg": "EdDSA", "kid": site.root.kid(), "crit": ["exp"] }))
+            .map_err(|error| SigningError::Canonicalize(error.to_string()))?;
     let payload = signing_payload(&contract)?;
     let input = format!("{}.{}", b64(crit_header.as_bytes()), b64(payload.as_bytes()));
     let signature = site.root.sign(input.as_bytes()).await?;
