@@ -990,6 +990,7 @@ mod tests {
                 },
                 ledger_durable: true,
                 plan_rewind: false,
+                snapshots: None,
                 model: "scripted",
             })
             .render()
