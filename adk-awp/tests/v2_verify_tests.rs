@@ -302,3 +302,92 @@ fn sha2_digest(bytes: &[u8]) -> [u8; 32] {
     use sha2::Digest as _;
     sha2::Sha256::digest(bytes).into()
 }
+
+/// Verifies a preview of `site` whose staged manifest has `candidate` as its digest.
+async fn verify_preview(site: &FixtureSite, candidate: &awp_types::Digest) -> VerifyReport {
+    Verifier::new(
+        Arc::new(RouterFetcher::new(site.router())),
+        Arc::new(site.resolver.clone()),
+        Arc::new(InMemoryPinStore::default()),
+    )
+    .with_options(VerifyOptions { now: Some(fixture_time()), ..Default::default() })
+    .verify_preview("example.com", candidate)
+    .await
+}
+
+/// Serves `manifest` at its path, as a preview's host does for a release it stages but does
+/// not log.
+fn serve_manifest(site: &mut FixtureSite, manifest: &awp_types::ReleaseManifest) {
+    site.files.insert(
+        awp_types::v2::contract::release_manifest_path(manifest.seq),
+        Served {
+            content_type: "application/awp+json".to_owned(),
+            body: serde_json::to_vec_pretty(manifest).unwrap(),
+        },
+    );
+}
+
+/// A preview of the next release passes `awp verify` against the digest its staging
+/// recorded, on top of the logged releases; another digest, or a page that differs from the
+/// preview's manifest, fails (spec 3.5 §7.8.1).
+#[tokio::test]
+async fn a_preview_verifies_against_its_staged_digest() {
+    let mut site = fixture().await;
+    let next = site.manifests.pop().unwrap();
+    site.publish_log().await.unwrap();
+    serve_manifest(&mut site, &next);
+    let staged = adk_awp::signing::jws::document_digest(&next).unwrap();
+
+    let report = verify_preview(&site, &staged).await;
+    assert!(report.passed(), "{report:#?}");
+    assert_eq!(report.release_seq, Some(2));
+    assert!(report.sampled.contains(&"/about/index.html".to_owned()));
+
+    let logged = adk_awp::signing::jws::document_digest(&site.manifests[0]).unwrap();
+    assert_eq!(failure(&verify_preview(&site, &logged).await), "release.inclusion");
+
+    // The published procedure does not take an unlogged release as the site's.
+    let published = verify_site(&site).await;
+    assert_ne!(published.release_seq, Some(2), "{published:#?}");
+
+    site.files.get_mut("/about/index.html").unwrap().body = b"<p>defaced</p>".to_vec();
+    assert_eq!(failure(&verify_preview(&site, &staged).await), "page.digest");
+}
+
+/// A preview of a site's first release verifies with no log at all; a preview never stands
+/// in for a published site, so a verification of the same files fails at the checkpoint.
+#[tokio::test]
+async fn a_first_release_preview_verifies_without_a_log() {
+    let mut site = fixture().await;
+    site.files.retain(|path, _| {
+        !path.starts_with("/.well-known/awp/releases/")
+            && !path.starts_with("/.well-known/awp/log/")
+    });
+    let files = site
+        .files
+        .iter()
+        .map(|(path, served)| {
+            (
+                path.clone(),
+                awp_types::FileEntry {
+                    sha256: awp_types::Digest::from_sha256_bytes(sha2_digest(&served.body)),
+                    size: served.body.len() as u64,
+                    content_type: served.content_type.clone(),
+                },
+            )
+        })
+        .collect();
+    let first = awp_types::ReleaseManifest { files, ..site.manifests[0].clone() };
+    serve_manifest(&mut site, &first);
+    let staged = adk_awp::signing::jws::document_digest(&first).unwrap();
+
+    let report = verify_preview(&site, &staged).await;
+    assert!(report.passed(), "{report:#?}");
+    assert_eq!(report.release_seq, Some(1));
+    assert_eq!(failure(&verify_site(&site).await), "checkpoint.signature");
+
+    let linked = awp_types::ReleaseManifest { previous: Some(staged.clone()), ..first };
+    serve_manifest(&mut site, &linked);
+    let digest = adk_awp::signing::jws::document_digest(&linked).unwrap();
+    assert_eq!(failure(&verify_preview(&site, &digest).await), "release.manifest");
+}

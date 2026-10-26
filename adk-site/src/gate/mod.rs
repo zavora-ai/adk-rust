@@ -16,13 +16,16 @@
 //! | Structured data | Fields each kind needs; JSON-LD parses | changed items | every item |
 //!
 //! Further checks plug in as [`GateExtension`]s: migration parity (`migrate` feature),
-//! [`ThirdPartyResources`] for kinds that ship no third-party scripts or trackers, and
-//! [`ReleaseDelegation`] for a served site whose release key the owner's root delegates.
+//! [`ThirdPartyResources`] for kinds that ship no third-party scripts or trackers,
+//! [`ReleaseDelegation`] for a served site whose release key the owner's root delegates, and
+//! `PreviewVerification` (`verify` feature), which runs `awp verify` against the preview.
 
 mod extensions;
 mod html;
 mod links;
 mod reviews;
+#[cfg(feature = "verify")]
+mod verify;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -44,6 +47,8 @@ use crate::scan::scan_file;
 pub use extensions::{ReleaseDelegation, ThirdPartyResources};
 pub use html::{A11yViolation, Severity};
 pub use reviews::{QuotableReview, review_findings};
+#[cfg(feature = "verify")]
+pub use verify::PreviewVerification;
 
 /// A launch-gate check (spec 3.5 §7.8.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -78,6 +83,9 @@ pub enum GateCheck {
     ThirdPartyResources,
     /// Release signing and its delegation by the owner's root ([`ReleaseDelegation`], D-11).
     Signing,
+    /// `awp verify` against the preview (`PreviewVerification`, feature `verify`; spec 3.5
+    /// §7.8.1 "Machine views").
+    AwpVerify,
 }
 
 /// Which tier runs (spec 3.5 §7.8.3).

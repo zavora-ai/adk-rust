@@ -1354,6 +1354,7 @@ dependencies = [
  "hex",
  "hickory-resolver",
  "hmac 0.12.1",
+ "http 1.5.0",
  "image",
  "image-compare",
  "minijinja",

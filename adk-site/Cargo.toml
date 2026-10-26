@@ -53,6 +53,9 @@ gen-zola = ["dep:adk-sandbox", "minijinja/json", "tokio/process"]
 gen-hugo = ["dep:adk-sandbox", "minijinja/json", "tokio/process"]
 gen-astro = ["dep:adk-sandbox", "minijinja/json", "tokio/process"]
 gen-build-awesome = ["dep:adk-sandbox", "minijinja/json", "tokio/process"]
+# Spec 3.5 §7.8.1 "Machine views": the launch gate runs `awp verify` against the preview
+# (`gate::PreviewVerification`).
+verify = ["adk-awp/verify", "dep:http"]
 
 [dependencies]
 adk-core.workspace = true
@@ -103,6 +106,8 @@ adk-sandbox = { workspace = true, optional = true, features = ["sandbox-macos", 
 futures = { workspace = true, optional = true }
 hmac = { version = "0.12", optional = true }
 sha1 = { version = "0.10", optional = true }
+# `awp verify` against the preview (feature `verify`).
+http = { version = "1", optional = true }
 
 [dev-dependencies]
 axum = "0.8"

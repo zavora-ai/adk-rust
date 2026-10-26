@@ -22,6 +22,11 @@
 //!
 //! A pass pins the root and the checkpoint through a [`PinStore`]. After the
 //! procedure the report carries a posture and readiness summary.
+//!
+//! [`Verifier::verify_preview`] runs the same procedure against a preview of the next
+//! release, whose manifest the log does not hold yet: steps 7 and 8 cover the logged
+//! releases, and step 10 binds the preview's manifest by the digest its staging recorded
+//! (spec 3.5 §7.8.1).
 
 pub mod fetch;
 pub mod pins;
@@ -34,7 +39,8 @@ use adk_auth::signed_audit::{CheckpointBody, Note, canonicalize};
 use adk_core::audit_log::AuditHash;
 use awp_types::v2::contract::CONTRACT_PATH;
 use awp_types::{
-    FileEntry, KeyScope, KeySet, LogEntry, Profile, PublicTerms, ReleaseManifest, SiteContract,
+    ContractRelease, Digest, FileEntry, KeyScope, KeySet, LogEntry, Profile, PublicTerms,
+    ReleaseManifest, SiteContract,
 };
 use axum::http::HeaderMap;
 use chrono::{DateTime, Utc};
@@ -194,6 +200,8 @@ struct Run<'a> {
     origin: String,
     now: DateTime<Utc>,
     posture: Posture,
+    /// The manifest digest of the unlogged release a preview serves at the head of the log.
+    preview: Option<Digest>,
 }
 
 impl Verifier {
@@ -212,17 +220,17 @@ impl Verifier {
         self
     }
 
-    /// Verifies `domain` and, on a pass, pins its root and checkpoint.
-    pub async fn verify(&self, domain: &str) -> VerifyReport {
+    fn run(&self, domain: &str, preview: Option<Digest>) -> (Run<'_>, VerifyReport) {
         let domain = domain.trim_end_matches('.').to_ascii_lowercase();
-        let mut run = Run {
+        let run = Run {
             verifier: self,
             origin: format!("https://{domain}"),
             domain: domain.clone(),
             now: self.options.now.unwrap_or_else(Utc::now),
             posture: Posture::default(),
+            preview,
         };
-        let mut report = VerifyReport {
+        let report = VerifyReport {
             domain,
             failure: None,
             release_seq: None,
@@ -230,6 +238,12 @@ impl Verifier {
             recovery: false,
             posture: Posture::default(),
         };
+        (run, report)
+    }
+
+    /// Verifies `domain` and, on a pass, pins its root and checkpoint.
+    pub async fn verify(&self, domain: &str) -> VerifyReport {
+        let (mut run, mut report) = self.run(domain, None);
         match run.steps(&mut report).await {
             Ok(pin) => {
                 if let Some(pin) = pin
@@ -239,6 +253,48 @@ impl Verifier {
                 }
             }
             Err(failure) => report.failure = Some(failure),
+        }
+        report.posture = run.posture;
+        report
+    }
+
+    /// Verifies a preview of `domain`'s next release: the site as it will be served once the
+    /// release it stages is logged (spec 3.5 §7.8.1 "Machine views"; AWP 2.0 §15).
+    ///
+    /// Every step of [`verify`](Self::verify) runs against what the preview serves, with one
+    /// difference: the release at the head of the log is the preview's, which the log does
+    /// not hold yet. Steps 7 and 8 verify the logged releases the preview carries — none
+    /// before a site's first release — step 9 allows the contract to name the preview's
+    /// release, and step 10 checks that the manifest served for the release after the
+    /// checkpoint has the digest `candidate`, the one its staging recorded, in place of its
+    /// inclusion in the log. Steps 11 to 13 then resolve and sample the preview's files. A
+    /// preview pins nothing.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    ///
+    /// use adk_awp::signing::anchor::FixedTxtResolver;
+    /// use adk_awp::verify::Verifier;
+    /// use adk_awp::verify::fetch::HttpFetcher;
+    /// use adk_awp::verify::pins::InMemoryPinStore;
+    ///
+    /// # async fn run(staged: awp_types::Digest) -> Result<(), Box<dyn std::error::Error>> {
+    /// let verifier = Verifier::new(
+    ///     Arc::new(HttpFetcher::new()?),
+    ///     Arc::new(FixedTxtResolver::default()),
+    ///     Arc::new(InMemoryPinStore::default()),
+    /// );
+    /// let report = verifier.verify_preview("example.com", &staged).await;
+    /// println!("{}", report.failure.map_or("pass".to_owned(), |f| f.to_string()));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn verify_preview(&self, domain: &str, candidate: &Digest) -> VerifyReport {
+        let (mut run, mut report) = self.run(domain, Some(candidate.clone()));
+        if let Err(failure) = run.steps(&mut report).await {
+            report.failure = Some(failure);
         }
         report.posture = run.posture;
         report
@@ -430,6 +486,13 @@ impl Run<'_> {
         let checkpoint_url = format!("{}{LOG_PATH}checkpoint", self.origin);
         let fetched =
             self.get(&checkpoint_url).await.map_err(|e| fail("checkpoint.signature", e))?;
+        if fetched.status == 404
+            && let Some(candidate) = self.preview.clone()
+        {
+            // A preview of a site's first release: nothing is logged yet.
+            self.preview_head(report, &release, 0, &[], &candidate).await?;
+            return Ok(None);
+        }
         if fetched.status != 200 {
             return Err(fail(
                 "checkpoint.signature",
@@ -483,6 +546,11 @@ impl Run<'_> {
             }
         }
 
+        if let Some(candidate) = self.preview.clone() {
+            self.preview_head(report, &release, body.size, &leaves, &candidate).await?;
+            return Ok(None);
+        }
+
         // 9. The contract's release is not ahead of the log.
         if release.seq > body.size {
             return Err(fail(
@@ -497,6 +565,23 @@ impl Run<'_> {
         let files = self.resolve(&manifest, &leaves).await?;
         report.release_seq = Some(latest);
 
+        self.files(report, &files).await?;
+
+        Ok(Some(Pin {
+            root_kid: keys.root.kid.clone(),
+            root_thumbprint: thumbprint,
+            tree_size: body.size,
+            root_hash: body.root_hash.to_string(),
+            revoked,
+        }))
+    }
+
+    /// Steps 12 and 13 over a release's full file set.
+    async fn files(
+        &mut self,
+        report: &mut VerifyReport,
+        files: &BTreeMap<String, FileEntry>,
+    ) -> Result<(), VerifyFailure> {
         // 12. No server-executable path.
         if let Some(path) = files.keys().find(|path| is_executable_path(path)) {
             self.posture.server_code.push(format!("executable path {path}"));
@@ -516,14 +601,50 @@ impl Run<'_> {
             report.sampled.push(path.clone());
             self.check_page(path, &files[path]).await?;
         }
+        Ok(())
+    }
 
-        Ok(Some(Pin {
-            root_kid: keys.root.kid.clone(),
-            root_thumbprint: thumbprint,
-            tree_size: body.size,
-            root_hash: body.root_hash.to_string(),
-            revoked,
-        }))
+    /// Steps 9 to 13 of a preview: the release after the `size` logged ones is the
+    /// preview's, its manifest bound by the digest its staging recorded.
+    async fn preview_head(
+        &mut self,
+        report: &mut VerifyReport,
+        release: &ContractRelease,
+        size: u64,
+        leaves: &[AuditHash],
+        candidate: &Digest,
+    ) -> Result<(), VerifyFailure> {
+        let seq = size + 1;
+        // 9. The contract names at most the preview's release.
+        if release.seq > seq {
+            return Err(fail(
+                "contract.release_ahead",
+                format!("release {} exceeds the preview's release {seq}", release.seq),
+            ));
+        }
+        // 10. The preview's manifest is the one its staging recorded.
+        let url = format!("{}/.well-known/awp/releases/{seq}.json", self.origin);
+        let (value, _) = self.get_json(&url, "release.inclusion").await?;
+        let digest = document_digest(&value)
+            .map_err(|error| fail("release.inclusion", error.to_string()))?;
+        if &digest != candidate {
+            return Err(fail(
+                "release.inclusion",
+                format!("release {seq}'s manifest is not the staged preview {candidate}"),
+            ));
+        }
+        let manifest: ReleaseManifest = serde_json::from_value(value)
+            .map_err(|error| fail("release.inclusion", error.to_string()))?;
+        if manifest.seq != seq {
+            return Err(fail("release.inclusion", format!("{url} names release {}", manifest.seq)));
+        }
+        if seq == 1 && manifest.previous.is_some() {
+            return Err(fail("release.manifest", "the first release names a previous one"));
+        }
+        // 11. Its full file set, linked to the logged releases.
+        let files = self.resolve(&manifest, leaves).await?;
+        report.release_seq = Some(seq);
+        self.files(report, &files).await
     }
 
     async fn leaves(&self, size: u64) -> Result<Vec<AuditHash>, VerifyFailure> {
