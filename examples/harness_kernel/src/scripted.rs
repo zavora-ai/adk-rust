@@ -671,6 +671,56 @@ impl adk_core::Llm for PromptModel {
     }
 }
 
+/// Samples the admitted processes every 20 ms into `peak` while `sampling` holds: running,
+/// claimed — the kernel publishes a claim after admission decided it — and not on their way
+/// to park. A run is `Running` from its claim, before admission preempts or defers anything,
+/// so a run whose claim is not yet published is not counted.
+pub(crate) fn admitted_sampler(
+    kernel: &Kernel,
+    sampling: Arc<std::sync::atomic::AtomicBool>,
+    peak: Arc<std::sync::atomic::AtomicUsize>,
+) -> tokio::task::JoinHandle<()> {
+    use std::sync::atomic::Ordering;
+    let claimed = Arc::new(std::sync::Mutex::new(std::collections::HashSet::<String>::new()));
+    let listener = {
+        let (mut events, claimed) = (kernel.events(), claimed.clone());
+        tokio::spawn(async move {
+            while let Some(record) = events.recv().await {
+                if let KernelEvent::Process { pid, to, .. } = record.event {
+                    let mut claimed = claimed.lock().unwrap_or_else(|e| e.into_inner());
+                    if to == RunState::Running {
+                        claimed.insert(pid);
+                    } else {
+                        claimed.remove(&pid);
+                    }
+                }
+            }
+        })
+    };
+    let kernel = kernel.clone();
+    tokio::spawn(async move {
+        while sampling.load(Ordering::SeqCst) {
+            if let Ok(processes) = kernel.processes().ps(ProcessFilter::default()).await {
+                let claimed = claimed.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                let admitted = processes
+                    .iter()
+                    .filter(|process| {
+                        process.run.state == RunState::Running
+                            && process.run.target != adk_kernel::KERNEL_WAKE_TARGET
+                            && claimed.contains(&process.meta.pid)
+                            && process.meta.wake.is_none()
+                            && !process.meta.suspend_requested
+                            && process.meta.suspended_by.is_none()
+                    })
+                    .count();
+                peak.fetch_max(admitted, Ordering::SeqCst);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        listener.abort();
+    })
+}
+
 /// K8 (spec 3.2 §5): three background jobs run at the partition's quota of three; a typed
 /// message starts at once, the youngest job parks at its next checkpoint and is requeued
 /// when the message's run finishes, its read runs once, and the partition never runs more
@@ -718,30 +768,9 @@ async fn k8_a_message_preempts_background_work() -> Result<Checks> {
     let kernel = boot(&stores, &home, &workspace, setup)?;
     kernel.start().await?;
 
-    // Samples the admitted processes: running, and not on their way to park.
     let sampling = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let sampler = {
-        let (kernel, sampling, peak) = (kernel.clone(), sampling.clone(), peak.clone());
-        tokio::spawn(async move {
-            while sampling.load(std::sync::atomic::Ordering::SeqCst) {
-                if let Ok(processes) = kernel.processes().ps(ProcessFilter::default()).await {
-                    let admitted = processes
-                        .iter()
-                        .filter(|process| {
-                            process.run.state == RunState::Running
-                                && process.run.target != adk_kernel::KERNEL_WAKE_TARGET
-                                && process.meta.wake.is_none()
-                                && !process.meta.suspend_requested
-                                && process.meta.suspended_by.is_none()
-                        })
-                        .count();
-                    peak.fetch_max(admitted, std::sync::atomic::Ordering::SeqCst);
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-    };
+    let sampler = admitted_sampler(&kernel, sampling.clone(), peak.clone());
 
     let mut jobs = Vec::new();
     for n in 0..3 {

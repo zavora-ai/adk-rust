@@ -527,17 +527,7 @@ async fn k8(model: Arc<dyn Llm>) -> Result<Checks> {
     // Samples the admitted processes.
     let sampling = Arc::new(AtomicBool::new(true));
     let peak = Arc::new(AtomicUsize::new(0));
-    let sampler = {
-        let (kernel, sampling, peak) = (kernel.clone(), sampling.clone(), peak.clone());
-        tokio::spawn(async move {
-            while sampling.load(Ordering::SeqCst) {
-                if let Ok(admitted) = admitted(&kernel).await {
-                    peak.fetch_max(admitted, Ordering::SeqCst);
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-    };
+    let sampler = scripted::admitted_sampler(&kernel, sampling.clone(), peak.clone());
 
     let mut jobs = Vec::new();
     for n in 0..3 {
