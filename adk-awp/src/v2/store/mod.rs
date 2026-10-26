@@ -339,6 +339,23 @@ pub trait LeadStore: Send + Sync {
     ///
     /// [`StoreError::NotFound`] for an unknown id.
     async fn set_score(&self, id: &LeadRef, score: f64) -> StoreResult<()>;
+
+    /// Deletes lead `id`, so a subject's erasure reaches it (spec 3.5 §7.5; AWP 2.0 §11.3);
+    /// returns whether it existed.
+    ///
+    /// The provided method refuses: a store that keeps leads must be able to erase them, and
+    /// every store in this crate and in `adk-server` overrides it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Backend`] from a store that cannot delete.
+    async fn delete(&self, id: &LeadRef) -> StoreResult<bool> {
+        Err(StoreError::Backend(format!(
+            "this lead store cannot delete lead {}; implement LeadStore::delete so erasure \
+             reaches leads",
+            id.0
+        )))
+    }
 }
 
 // --- Idempotency ---------------------------------------------------------------------------

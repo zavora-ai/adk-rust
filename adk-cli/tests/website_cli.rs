@@ -182,9 +182,47 @@ async fn new_serves_a_site_whose_setup_code_pairs_a_device_and_the_owner_runs_it
     };
     let claimed = claim(code.clone()).await.unwrap();
     assert!(claimed.status().is_success(), "{:?}", claimed.text().await);
+    let token = claimed.json::<Value>().await.unwrap()["token"].as_str().unwrap().to_string();
     let again = claim(code).await.unwrap();
     assert!(!again.status().is_success(), "a setup code pairs one device");
+
+    // The paired device starts onboarding; the home's review view composes the week.
+    let started = client
+        .post(format!("{origin}/api/surface/website/onboarding"))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({ "type": "start", "from": "nothing", "name": "Juniper Bakery" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(started.status().is_success(), "{:?}", started.text().await);
+    let composed = client
+        .post(format!("{origin}/api/surface/website/review"))
+        .json(&serde_json::json!({ "type": "compose" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(composed.status().is_success(), "{:?}", composed.text().await);
+    let page: Value = composed.json().await.unwrap();
+    assert_eq!(page["canCompose"], true, "{page}");
+    assert!(page["current"]["summary"].as_str().is_some_and(|s| s.starts_with("Your week")));
     drop(running);
+
+    // After a restart the paired device is still the one onboarding admits, and onboarding
+    // resumes where the owner left it (spec 3.5 §8.2, A-I20).
+    assert!(site.join("data/desk.json").exists(), "the desk saved its state");
+    let restarted = start(home.path(), &[&site_arg]);
+    let origin = restarted.url("home").trim_end_matches("/ui/website").to_string();
+    let resumed = client
+        .get(format!("{origin}/api/surface/website/onboarding"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    let status = resumed.status();
+    let view = resumed.text().await.unwrap();
+    assert!(status.is_success(), "{view}");
+    assert!(view.contains("Juniper Bakery"), "{view}");
+    drop(restarted);
 
     // Status, charter, review and jobs read the site's stores.
     let (ok, status, err) = run(home.path(), &["website", "status", "--site", &site_arg, "--json"]);
@@ -265,5 +303,29 @@ async fn agency_serves_every_listed_site_from_one_harness() {
     for host in ["bakery.example", "notes.example"] {
         let page = client.get(format!("{edge}/")).header("host", host).send().await.unwrap();
         assert_eq!(page.status().as_u16(), 200, "{host}");
+    }
+    // The owner pairs the agency once; every listed site's commands read the agency's kernel
+    // database, which the served sites run on (A-I22).
+    let code = printed
+        .lines()
+        .find_map(|line| line.strip_prefix("Setup code: "))
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("no setup code in {printed}"))
+        .to_string();
+    let origin = second.url("home").trim_end_matches("/ui/website").to_string();
+    let claimed = client
+        .post(format!("{origin}/api/surface/website/setup/claim"))
+        .json(&serde_json::json!({ "code": code, "device": "Agency laptop" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(claimed.status().is_success(), "{:?}", claimed.text().await);
+    drop(second);
+    for site in ["bakery.example", "notes.example"] {
+        let dir = agency.join(site).display().to_string();
+        let (ok, status, err) = run(home.path(), &["website", "status", "--site", &dir, "--json"]);
+        assert!(ok, "{err}");
+        let status: Value = serde_json::from_str(&status).unwrap();
+        assert_eq!(status["pairedDevices"], 1, "{site} reads the agency's kernel database");
     }
 }

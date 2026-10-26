@@ -148,6 +148,23 @@ pub trait Source: Send + Sync {
         None
     }
 
+    /// Whether the source rates `request`'s call high risk whatever the request says, so every
+    /// surface asks for what a high-risk call needs (spec 3.3 §7.2): a kernel rates so a tool
+    /// its mounted drivers declare `publish_public` or `financial` (spec 3.2 K-I9). `false`, the
+    /// default, leaves the request's own risk.
+    fn rates_high(&self, request: &ApprovalRequest) -> bool {
+        let _ = request;
+        false
+    }
+
+    /// Whether `request`'s call moves money by the source's account (spec 3.3 §7.4 rule 4): a
+    /// kernel answers for the tools its mounted drivers declare `financial` (spec 3.2 K-I9).
+    /// The engine also counts the payment tools; `false`, the default, adds nothing to them.
+    fn moves_money(&self, request: &ApprovalRequest) -> bool {
+        let _ = request;
+        false
+    }
+
     /// Whether a turn of the session is running now.
     async fn busy(&self, user: &str, session: &str) -> Result<bool> {
         let _ = (user, session);

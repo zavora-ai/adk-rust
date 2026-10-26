@@ -370,6 +370,10 @@ impl LeadStore for InMemoryLeadStore {
         lead.score = Some(score);
         Ok(())
     }
+
+    async fn delete(&self, id: &LeadRef) -> StoreResult<bool> {
+        Ok(self.records.write().await.remove(id).is_some())
+    }
 }
 
 #[derive(Debug, Clone)]

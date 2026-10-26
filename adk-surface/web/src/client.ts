@@ -350,8 +350,13 @@ export class HttpClient implements HomeClient {
     };
   }
 
+  /**
+   * Every waiting process, for Coming up. The kernel lists the oldest first and cuts the list at
+   * a limit, so a limit would leave out the routines added last; waiting processes are what is
+   * asleep now, not the kernel's history, so the whole list is read.
+   */
   async processes() {
-    const page = await this.optional<{ processes: KernelProcess[] }>("/kernel/processes?state=waiting&limit=200");
+    const page = await this.optional<{ processes: KernelProcess[] }>("/kernel/processes?state=waiting");
     return page?.processes;
   }
 
@@ -592,12 +597,17 @@ export class HttpClient implements HomeClient {
         const check = await this.configured<KernelRecordCheck>("/kernel/record/check");
         if (!check) return undefined;
         const failures = check.report?.failures ?? [];
-        // Records the log has not signed yet fail the check as `unanchored`; nothing else did.
-        const unsigned =
-          !check.valid && failures.length > 0 && failures.every((failure) => failure.kind === "unanchored")
-            ? check.report?.unsignedTail
-            : undefined;
-        return { intact: check.valid, count: check.entries, checkedAt: check.checkedAt, problem: check.problem, unsigned };
+        // The records after the log's last signed checkpoint are its unsigned tail, which the
+        // check passes once any checkpoint verified and fails as `unanchored` before the first.
+        const tail = check.report?.unsignedTail ?? 0;
+        const unsigned = tail > 0 && failures.every((failure) => failure.kind === "unanchored") ? tail : undefined;
+        return {
+          intact: check.valid && unsigned === undefined,
+          count: check.entries,
+          checkedAt: check.checkedAt,
+          problem: check.problem,
+          unsigned,
+        };
       },
       lines: async (limit: number) =>
         (await this.configured<{ lines: KernelRecordLine[] }>(`/kernel/record?limit=${limit}`))?.lines ?? [],

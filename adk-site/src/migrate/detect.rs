@@ -125,6 +125,19 @@ pub const DEFAULT_SPAM_KEYWORDS: &[&str] = &[
     "weight loss pills",
 ];
 
+/// What [`Detectors::scan_cloaking`] found.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloakingScan {
+    /// Pages served differently to the crawler and to a browser.
+    pub findings: Vec<Finding>,
+    /// Pages fetched twice.
+    pub checked: usize,
+    /// What was not checked, and why.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
 /// The detectors, with their spam filter.
 pub struct Detectors {
     spam: ContentFilter,
@@ -487,6 +500,73 @@ impl Detectors {
                 },
             ],
         }))
+    }
+
+    /// Runs [`check_cloaking`](Self::check_cloaking) on the home page and the top `limit`
+    /// pages of `inventory` (spec 3.5 §7.8 "Sanitiser", S3). The dual fetch reads the live
+    /// site, so it runs only for a proven domain (A-I9): otherwise nothing is fetched and the
+    /// scan says why. A page that cannot be fetched is noted, not fatal.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_site::migrate::detect::Detectors;
+    ///
+    /// # async fn demo(ctx: &adk_site::migrate::SourceContext, inventory: &adk_site::migrate::SiteInventory) {
+    /// let scan = Detectors::new().scan_cloaking(ctx, inventory, 20).await;
+    /// for finding in &scan.findings {
+    ///     println!("{:?}: {}", finding.subject, finding.evidence[0].detail);
+    /// }
+    /// # }
+    /// ```
+    pub async fn scan_cloaking(
+        &self,
+        ctx: &SourceContext,
+        inventory: &SiteInventory,
+        limit: usize,
+    ) -> CloakingScan {
+        let mut scan = CloakingScan::default();
+        let host = inventory
+            .origin
+            .as_deref()
+            .and_then(|origin| Url::parse(origin).ok())
+            .and_then(|url| url.host_str().map(str::to_string))
+            .or_else(|| {
+                inventory
+                    .urls
+                    .first()
+                    .and_then(|u| Url::parse(&u.url).ok())
+                    .and_then(|u| u.host_str().map(str::to_string))
+            });
+        let Some(host) = host else {
+            scan.notes.push("cloaking not checked: the inventory names no site".into());
+            return scan;
+        };
+        if let Err(error) = ctx.require_proven(&host, "a cloaking check") {
+            scan.notes.push(format!("cloaking not checked: {error}"));
+            return scan;
+        }
+        for url in inventory.top_pages(limit) {
+            let Ok(target) = Url::parse(&url.url) else { continue };
+            let subject = match &url.item {
+                Some(key) => Subject::Item(key.clone()),
+                None => Subject::Url(url.path.clone()),
+            };
+            scan.checked += 1;
+            match self.check_cloaking(ctx, &subject, &target).await {
+                Ok(Some(finding)) => scan.findings.push(finding),
+                Ok(None) => {}
+                Err(error) => {
+                    scan.notes.push(format!("{}: cloaking not checked: {error}", url.path))
+                }
+            }
+        }
+        tracing::info!(
+            checked = scan.checked,
+            findings = scan.findings.len(),
+            "migration cloaking check ran"
+        );
+        scan
     }
 
     /// Scans a whole inventory: every page body read, every item body, every upload and

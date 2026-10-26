@@ -30,6 +30,15 @@ const SETTLED_SHOWN = 3;
 /** How long an answered card's line stays on the panel after the answer. */
 const SETTLED_FOR_MS = 5 * 60_000;
 
+/**
+ * The page event that carries why Stop all from the tray icon's menu did not go through: the
+ * shell (adk-desktop-core `TrayProblem`) dispatches it on the panel, whose banner shows it.
+ */
+const TRAY_PROBLEM_EVENT = "adk:tray-problem";
+
+/** What the shell says went wrong. */
+type TrayProblem = { kind: "unreachable" } | { kind: "signIn" } | { kind: "refused"; message: string };
+
 /** An answered card's line, and when it leaves the panel. */
 interface Settled {
   card: DecisionCard;
@@ -40,6 +49,8 @@ interface Settled {
 export interface TrayClient {
   status(): Promise<StatusLine>;
   decisions(): Promise<DecisionCard[]>;
+  /** One decision, waiting or decided: a card that left the open list, to say who answered. */
+  decision(id: string): Promise<DecisionCard>;
   /** The agents and the one a message goes to when the person names none. */
   agentsWithPrimary(): Promise<AgentsResponse>;
   /** The kernel's running processes; `undefined` without a kernel. */
@@ -124,6 +135,23 @@ export function TrayPanel({ client }: { client: TrayClient }) {
     };
   }, [refresh]);
 
+  // Stop all from the icon's menu has no place of its own to say it failed: the shell opens the
+  // panel and hands it the problem (spec 3.3 §5.5, S-I10).
+  useEffect(() => {
+    const show = (event: Event) => {
+      const problem = (event as CustomEvent<TrayProblem | undefined>).detail;
+      setProblem(
+        problem?.kind === "refused" && problem.message
+          ? problem.message
+          : problem?.kind === "signIn"
+            ? trayLabels.startWithToken
+            : trayLabels.cantReach,
+      );
+    };
+    window.addEventListener(TRAY_PROBLEM_EVENT, show);
+    return () => window.removeEventListener(TRAY_PROBLEM_EVENT, show);
+  }, []);
+
   // Light or dark as the home's switch sets it, following it while open (§9).
   useEffect(() => {
     applyTheme(storedTheme());
@@ -161,14 +189,39 @@ export function TrayPanel({ client }: { client: TrayClient }) {
     return () => window.clearTimeout(timer);
   }, [settled]);
 
+  const settledIds = useRef(new Set<string>());
+  useEffect(() => {
+    settledIds.current = new Set(settled.map((line) => line.card.id));
+  }, [settled]);
+
   const shownBefore = useRef<Set<string>>(undefined);
+  const openBefore = useRef<string[]>([]);
+  // Bumped whenever the lines are cleared, so a read started before then adds none.
+  const cleared = useRef(0);
   useEffect(() => {
     const open = decisions.value;
     if (!open) return;
     const before = shownBefore.current;
+    const left = openBefore.current.filter((id) => !open.some((card) => card.id === id));
     shownBefore.current = new Set([...(before ?? []), ...open.map((card) => card.id)]);
-    if (before && open.some((card) => !before.has(card.id))) setSettled([]);
-  }, [decisions.value]);
+    openBefore.current = open.map((card) => card.id);
+    if (before && open.some((card) => !before.has(card.id))) {
+      cleared.current += 1;
+      setSettled([]);
+      return;
+    }
+    // A card that left the open list was answered, on the tray or anywhere else: read it, so
+    // its line says who answered and where (spec 3.3 §5.5, §8.1 "Decided").
+    const generation = cleared.current;
+    for (const id of left.filter((id) => !settledIds.current.has(id))) {
+      client
+        .decision(id)
+        .then((card) => {
+          if (card.status === "decided" && cleared.current === generation) settle(card);
+        })
+        .catch(() => undefined);
+    }
+  }, [client, decisions.value, settle]);
 
   async function stopAll(event: MouseEvent<HTMLButtonElement>) {
     setProblem("");

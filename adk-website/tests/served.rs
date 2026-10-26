@@ -253,6 +253,8 @@ async fn a_served_site_restarts_and_keeps_its_state() {
     .job;
     let level = served.sites[0].ladder.level(charter.site_id, &job).await.unwrap();
     assert!(level.is_some());
+    let view = json!({ "kind": "pageview", "path": "/" });
+    assert_eq!(http(served.edge_addr, "POST", "/awp/v2/beacon", Some(&view)).await.0, 204);
     served.shutdown().await.unwrap();
 
     let served = start(dir.path(), |_| {}).await;
@@ -265,6 +267,24 @@ async fn a_served_site_restarts_and_keeps_its_state() {
     let (status, page) = http(served.edge_addr, "GET", "/", None).await;
     assert_eq!(status, 200);
     assert!(page.contains("Juniper Bakery"), "the release is still served");
+    // The beacon's counts and the meters' counts survive in `data/edge.db`.
+    let midnight = chrono::Utc::now().date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let tomorrow = midnight + chrono::Duration::days(1);
+    let views = served.sites[0].edge.edge.beacon().read("pageviews:/", midnight, tomorrow).await;
+    assert_eq!(views.unwrap(), Some(1.0), "the page view survives");
+    let pool =
+        sqlx::SqlitePool::connect(&ProjectPaths::new(dir.path()).database("edge")).await.unwrap();
+    let counts = adk_server::awp::stores::SqliteEdgeStores::new(pool)
+        .with_site(format!("{}#measurement", served.sites[0].site.name));
+    let calls = adk_server::awp::BeaconStore::total(
+        &counts,
+        "calls:submit_inquiry",
+        midnight.date_naive(),
+        tomorrow.date_naive(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(calls, 1, "the enquiry's call count survives");
     let next = launch(&served, &charter, Vec::new()).await;
     assert!(
         matches!(&next, PipelineOutcome::Published(p) if p.announcement.release.seq == 2),
@@ -390,5 +410,79 @@ async fn the_experiments_look_runs_on_its_trigger() {
     let all = served.stores.runs.list(RunFilter::default()).await.unwrap();
     let run = done.unwrap_or_else(|| panic!("the daily look ran as a kernel run: {all:#?}"));
     assert_eq!(run.input["site"], json!(served.sites[0].site.id));
+    served.shutdown().await.unwrap();
+}
+
+/// Anonymous callers are limited by their own address, not one bucket every visitor shares:
+/// the edge listener hands the peer address to the edge (spec 3.5 §7.3). Two loopback
+/// addresses, IPv4 and IPv6, stand for two visitors.
+#[tokio::test]
+async fn anonymous_callers_are_limited_by_their_own_address() {
+    if std::net::TcpListener::bind("[::]:0").is_err() {
+        eprintln!("no IPv6 on this host; the check needs two loopback addresses");
+        return;
+    }
+    let dir = project(SiteKind::Business).await;
+    let served = start(dir.path(), |options| {
+        options.edge = "[::]:0".parse().unwrap();
+        options.site.limits = Some(Arc::new(|| {
+            adk_server::awp::EdgeLimits::default().tier_default(
+                awp_types::TrustTier::Public,
+                awp_types::RateClass { requests_per_minute: 1, calls_per_day: 10 },
+            )
+        }));
+    })
+    .await;
+    let port = served.edge_addr.port();
+    let v4 = SocketAddr::from(([127, 0, 0, 1], port));
+    let v6 = SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port));
+    assert_eq!(http(v4, "GET", "/awp/v2/manifest", None).await.0, 200);
+    assert_eq!(http(v4, "GET", "/awp/v2/manifest", None).await.0, 429, "one a minute");
+    assert_eq!(http(v6, "GET", "/awp/v2/manifest", None).await.0, 200, "another visitor's own");
+    served.shutdown().await.unwrap();
+}
+
+/// With a model, the served kernel hosts the back office (spec 3.5 §7.19, §7.20, §7.22): a
+/// `content_gap` signal wakes the freshness job's process, which runs the Growth agent in the
+/// back-office partition under its harness, and the run completes.
+#[tokio::test]
+async fn a_signal_wakes_the_back_office_the_kernel_hosts() {
+    use adk_model::{ScriptedLlm, ScriptedResponse};
+    let dir = project(SiteKind::Business).await;
+    owner_signs(dir.path()).await;
+    let model = Arc::new(ScriptedLlm::new(
+        "scripted",
+        (0..4).map(|_| ScriptedResponse::text("Nothing to draft today.")).collect::<Vec<_>>(),
+    ));
+    let served = start(dir.path(), |options| options.site.model = Some(model.clone())).await;
+    commit(&served, dir.path()).await;
+    let site = &served.sites[0];
+    use adk_server::awp::SignalEmitter as _;
+    site.signals()
+        .emit(awp_types::Signal {
+            id: uuid::Uuid::new_v4(),
+            kind: awp_types::SignalKind::ContentGap {
+                topic: awp_types::Bounded::new("delivery", 120).unwrap(),
+                question_count: 3,
+                samples: vec![awp_types::Bounded::truncated("Do you deliver to Naivasha?", 200)],
+            },
+            emitted_by: AgentRole::Concierge.principal(&site.site),
+            emitted_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+    let mut done = None;
+    for _ in 0..120 {
+        let runs = served.stores.runs.list(RunFilter::default()).await.unwrap();
+        done = runs.into_iter().find(|run| run.target == "growth" && run.state.is_terminal());
+        if done.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let all = served.stores.runs.list(RunFilter::default()).await.unwrap();
+    let run = done.unwrap_or_else(|| panic!("the freshness job ran Growth: {all:#?}"));
+    assert_eq!(run.state, RunState::Completed, "{run:#?}");
+    assert_eq!(run.input["job"], "freshness");
     served.shutdown().await.unwrap();
 }

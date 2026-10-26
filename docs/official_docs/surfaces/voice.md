@@ -173,6 +173,26 @@ keys from the environment:
 cargo run -p adk-surface --features web,voice-live --example voice_home -- 8794 /tmp/voice-workspace
 ```
 
+### With `adk-rust serve` and `adk-rust up`
+
+`adk-rust serve` and `adk-rust up` (adk-cli features `voice` and `surface`) serve the voice
+view for a harness marked `--pack voice`, on every realtime model whose key resolves. The
+resolved model's provider is listed first and is the default:
+
+| Model | Key | Audio |
+|---|---|---|
+| Gemini Live (`gemini-3.1-flash-live-preview`), with context window compression | The Gemini model's own key, else `GOOGLE_API_KEY` or `GEMINI_API_KEY` | 16 kHz up, 24 kHz down |
+| OpenAI Realtime | The OpenAI model's own key, else `OPENAI_API_KEY` | 24 kHz up and down |
+
+```sh
+GOOGLE_API_KEY=… adk-rust up --pack voice
+# open http://127.0.0.1:8080/ui/ and press the microphone in the message box
+```
+
+The start lines name the models offered, or say `voice off` when no key resolves. A spoken
+answer decides the call in the server's approval inbox, so its card reads "You said yes by
+voice" on every surface.
+
 ### Routes and socket
 
 | Route | Answer |
@@ -196,12 +216,18 @@ Decision cards never travel on the socket: the view reads them from
 
 ## In the terminal
 
-`TerminalSurface::voice` (features `tui` and `voice`) holds a conversation beside the thread in
-the full-screen terminal, in the same process as the harness. The application records the
-microphone and plays the speaker, as channels of PCM16 mono. One line above the message box
-says "Listening", `Heard "…"`, "Allowing once in 5 seconds — c to cancel", or that a call is
-high risk and is answered there; `c` cancels a spoken answer only while the message box is
-empty, and Esc never decides.
+`TerminalSurface::voice` (features `tui` and `voice`) holds a conversation beside the thread,
+in the same process as the harness. The application records the microphone and plays the
+speaker, as channels of PCM16 mono. In the full-screen terminal one line above the message
+box says "Listening", `Heard "…"`, "Allowing once in 5 seconds — c to cancel", or that a call
+is high risk and is answered there; the inline terminal prints what was heard, each
+countdown, a call voice cannot approve and the end into the scrollback, once each. `c`
+cancels a spoken answer only while the message box is empty, and Esc never decides.
+
+`adk-rust --voice` (adk-cli features `tui`, `voice` and `voice-desktop`) opens the terminal
+this way on a terminal, talking on the first realtime model whose key resolves, through the
+default microphone and speaker. A first turn (`--voice "…"`), `--voice-input` or
+`--voice-output` keep the [harness's console voice](../harness/voice.md#the-cli).
 
 ## Related
 

@@ -15,7 +15,7 @@ use adk_site::content::{
 };
 use adk_site::gate::{FactStatus, FactTable, LaunchGate};
 use adk_site::generator::BuiltinGenerator;
-use adk_site::host::{DirectoryHost, HostTiles, SiteHost};
+use adk_site::host::{DirectoryHost, HostTarget, HostTiles, SiteHost};
 use adk_site::log::{
     CHECKPOINT_PATH, SiteLog, TileProofs, verify_checkpoint, verify_release_inclusion,
 };
@@ -23,7 +23,7 @@ use adk_site::pipeline::{
     Announcement, Announcer, ApprovalDecision, ApprovalGate, ApprovalRequest, Change, EntryPoint,
     PipelineOutcome, PublishingPipeline, Withdrawal,
 };
-use adk_site::release::{file_digest, manifest_path};
+use adk_site::release::{file_digest, manifest_digest, manifest_path};
 use adk_site::signer::{Ed25519ReleaseSigner, ReleaseSigner};
 use adk_site::{Result, SiteError};
 use async_trait::async_trait;
@@ -406,4 +406,84 @@ async fn server_code_and_gate_failures_never_publish() {
         panic!("expected the gate to hold the change")
     };
     assert!(gate.held_items().contains(&ContentId::from("articles/flood/en")));
+}
+
+/// Release 1 from the fixture, then release 2 with a story.
+async fn launched() -> (Site, adk_site::pipeline::Published, adk_site::pipeline::Published) {
+    let site = site().await;
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/site");
+    let mut items = FsContentStore::new(&fixture).list().await.unwrap();
+    items.retain(|item| item.state != ContentState::Draft);
+    let launch = published(site.pipeline.run(change(items, "urn:agent:steward")).await.unwrap());
+    let second = published(
+        site.pipeline
+            .run(change(vec![story("Water rose overnight.")], "urn:person:reporter"))
+            .await
+            .unwrap(),
+    );
+    (site, launch, second)
+}
+
+/// Replaces `path` as an intruder on the host would: a new file renamed over it.
+fn replace(path: &Path, bytes: &[u8]) {
+    let tmp = path.with_extension("forged");
+    std::fs::write(&tmp, bytes).unwrap();
+    std::fs::rename(&tmp, path).unwrap();
+}
+
+/// A rollback trusts the manifest the site log recorded, not the one the host holds: a
+/// manifest forged on the host — one file left out, consistently in the store and the
+/// served copy — rolls nothing back (spec 3.5 §7.7, A-I4, A-I11).
+#[tokio::test]
+async fn a_rollback_reads_only_manifests_the_log_recorded() {
+    let (site, launch, second) = launched().await;
+    let mut forged = launch.staged.manifest.clone();
+    let left_out = forged.files.keys().find(|p| p.ends_with("about/index.html")).cloned().unwrap();
+    forged.files.remove(&left_out);
+    let (_, bytes) = manifest_digest(&forged).unwrap();
+    let served = site.host.serving_dir(HostTarget::Production).unwrap().unwrap();
+    replace(&site.host.root().join("manifests/1.json"), &bytes);
+    replace(&served.join(manifest_path(1)), &bytes);
+
+    let error = site.pipeline.rollback(1).await.unwrap_err();
+    assert!(
+        matches!(error, SiteError::DigestMismatch { ref path, .. } if path == "/.well-known/awp/releases/1.json"),
+        "{error}"
+    );
+    verify_served(&site, second.staged.manifest.seq).await;
+    assert!(site.host.fetch("/articles/flood/").await.unwrap().is_some(), "release 2 still serves");
+}
+
+/// When the host's stored copy of the release is corrupt, the rollback republishes the signed
+/// files from a rebuild of the content history, digest for digest (spec 3.5 A-I11).
+#[tokio::test]
+async fn a_rollback_republishes_when_the_hosts_copy_is_corrupt() {
+    let (site, launch, second) = launched().await;
+    let (path, entry) = launch
+        .staged
+        .files
+        .iter()
+        .find(|(path, entry)| {
+            path.ends_with(".html") && second.staged.files.get(*path) != Some(*entry)
+        })
+        .map(|(path, entry)| (path.clone(), entry.clone()))
+        .expect("release 2 changed a page of release 1");
+    let hex = entry.sha256.hex().to_string();
+    let object = site.host.root().join("objects").join(&hex[..2]).join(&hex[2..]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&object, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    std::fs::write(&object, "<p>corrupt</p>").unwrap();
+    let rejected = site.host.rollback(&launch.staged.manifest).await;
+    assert!(matches!(rejected, Err(SiteError::DigestMismatch { .. })), "{rejected:?}");
+
+    let rollback = site.pipeline.rollback(1).await.unwrap();
+    assert_eq!(rollback.staged.manifest.source, ReleaseSource::Rollback { to_seq: 1 });
+    assert_eq!(rollback.staged.files, launch.staged.files, "the signed files of release 1");
+    verify_served(&site, rollback.staged.manifest.seq).await;
+    let page = site.host.fetch(&path).await.unwrap().unwrap();
+    assert_eq!(file_digest(&page), entry.sha256, "{path} is release 1's again");
+    assert!(site.host.fetch("/articles/flood/").await.unwrap().is_none());
 }

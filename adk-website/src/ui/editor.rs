@@ -386,6 +386,65 @@ pub(crate) struct State {
     drafts: BTreeMap<String, EditorDraft>,
 }
 
+impl WebsiteDesk {
+    pub(crate) async fn save_drafts(&self) -> Vec<super::saved::SavedDraft> {
+        let state = self.inner.editor.lock().await;
+        state
+            .drafts
+            .iter()
+            .map(|(id, draft)| super::saved::SavedDraft {
+                id: id.clone(),
+                items: draft.change.items.clone(),
+                media: super::saved::SavedDraft::encode(&draft.change.media),
+                entry: draft.change.entry.clone(),
+                proposer: draft.change.proposer.clone(),
+                job: draft.change.job.clone(),
+                action_class: draft.change.action_class.clone(),
+                changes: draft.changes.clone(),
+                outcome: draft.outcome.clone(),
+                done: draft.done,
+                scheduled: draft.scheduled,
+            })
+            .collect()
+    }
+
+    pub(crate) async fn restore_drafts(&self, saved: Vec<super::saved::SavedDraft>) -> Result<()> {
+        let mut drafts = BTreeMap::new();
+        for draft in saved {
+            let media = draft.decode()?;
+            drafts.insert(
+                draft.id.clone(),
+                EditorDraft {
+                    change: Change {
+                        items: draft.items,
+                        media,
+                        entry: draft.entry,
+                        proposer: draft.proposer,
+                        job: draft.job,
+                        action_class: draft.action_class,
+                    },
+                    changes: draft.changes,
+                    checks: None,
+                    preview: None,
+                    pending: None,
+                    outcome: draft.outcome,
+                    done: draft.done,
+                    scheduled: draft.scheduled,
+                },
+            );
+        }
+        let mut state = self.inner.editor.lock().await;
+        // Ids the desk hands out next must not collide with the restored ones.
+        for id in drafts.keys() {
+            if let Some(n) = id.rsplit('-').next().and_then(|n| n.parse::<u64>().ok()) {
+                self.bump_next(n + 1);
+            }
+        }
+        state.drafts = drafts;
+        Ok(())
+    }
+}
+
 fn kind_id(kind: ContentKind) -> String {
     serde_json::to_value(kind).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
 }
@@ -887,6 +946,7 @@ impl WebsiteDesk {
             draft.checks = None;
             draft.preview = None;
         }
+        self.persist().await;
         self.draft_view(person, id).await
     }
 
@@ -897,6 +957,18 @@ impl WebsiteDesk {
     /// `Forbidden` without an editing role or for an approval the person may not give;
     /// `InvalidInput` for a bad value; the pipeline's errors.
     pub async fn editor_command(
+        &self,
+        person: &str,
+        command: EditorCommand,
+    ) -> Result<EditorOutcome> {
+        let result = self.editor_command_unsaved(person, command).await;
+        if result.is_ok() {
+            self.persist().await;
+        }
+        result
+    }
+
+    async fn editor_command_unsaved(
         &self,
         person: &str,
         command: EditorCommand,

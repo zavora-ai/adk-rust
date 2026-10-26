@@ -1,6 +1,12 @@
 //! Inventory to content (spec 3.5 §7.8.2 "Content model", S3, S17): every item becomes a
 //! [`ContentItem`] with a sanitised Markdown body that keeps its URL, uploads keep their paths,
 //! and taxonomy, feed and legacy redirects become 301s.
+//!
+//! After a crawl, a link to a page of the site the crawl could not read — one `robots.txt`
+//! disallows, say — becomes its text, since the new site will not have the page. Legacy
+//! runtime paths the new site does not serve — `/wp-includes/…`, theme and plugin files,
+//! `*.php` endpoints, and WordPress's `/wp-login.php` and `/xmlrpc.php` — answer 410 Gone
+//! (A-I4, S3).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
@@ -15,9 +21,89 @@ use url::Url;
 
 use super::error::Result;
 use super::inventory::{ItemStatus, SiteInventory, SourceKind};
-use super::sanitize::{Dropped, Sanitiser};
+use super::sanitize::{DropReason, Dropped, Sanitiser, UrlUse};
 use crate::content::kind_directory;
 use crate::media::{MediaPipeline, MediaPolicy, MediaUpload};
+use crate::redirects::GONE_PAGE;
+
+/// Path prefixes of legacy server runtimes: theme, plugin, core and API files a static site
+/// replaces and answers 410 Gone for (spec 3.5 A-I4, S3).
+pub const LEGACY_RUNTIME_PREFIXES: &[&str] = &[
+    "/wp-admin/",
+    "/wp-includes/",
+    "/wp-content/themes/",
+    "/wp-content/plugins/",
+    "/wp-content/cache/",
+    "/wp-content/mu-plugins/",
+    "/wp-json/",
+    "/cgi-bin/",
+];
+
+/// WordPress endpoints that answer 410 Gone after a WordPress migration, whether or not the
+/// source read them (spec 3.5 A-I4).
+pub const WORDPRESS_ENDPOINTS: &[&str] = &[
+    "/wp-login.php",
+    "/xmlrpc.php",
+    "/wp-admin/",
+    "/wp-cron.php",
+    "/wp-comments-post.php",
+    "/wp-trackback.php",
+    "/wp-signup.php",
+    "/wp-activate.php",
+];
+
+/// Whether `path` belongs to a legacy server runtime: under [`LEGACY_RUNTIME_PREFIXES`] or a
+/// server-side script by its extension.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_site::migrate::convert::legacy_runtime_path;
+///
+/// assert!(legacy_runtime_path("/wp-includes/js/jquery/jquery.min.js"));
+/// assert!(legacy_runtime_path("/wp-login.php"));
+/// assert!(!legacy_runtime_path("/wp-content/uploads/2026/10/panel.jpg"));
+/// assert!(!legacy_runtime_path("/about/"));
+/// ```
+pub fn legacy_runtime_path(path: &str) -> bool {
+    let path = path.split(['?', '#']).next().unwrap_or_default().to_ascii_lowercase();
+    LEGACY_RUNTIME_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
+        || [".php", ".phtml", ".php5", ".asp", ".aspx", ".jsp", ".cgi"]
+            .iter()
+            .any(|extension| path.ends_with(extension))
+}
+
+/// The paths a crawl read: items, media, answered URLs and taxonomy archives.
+fn read_paths(inventory: &SiteInventory) -> BTreeSet<String> {
+    let mut read: BTreeSet<String> = BTreeSet::from(["/".to_string()]);
+    read.extend(inventory.items.iter().map(|item| item.path.clone()));
+    read.extend(inventory.media.iter().map(|media| media.path.clone()));
+    read.extend(
+        inventory
+            .urls
+            .iter()
+            .filter(|url| matches!(url.status, 200..=299 | 301 | 302 | 303 | 307 | 308))
+            .map(|url| url.path.split('?').next().unwrap_or_default().to_string()),
+    );
+    read.extend(
+        inventory
+            .taxonomies
+            .iter()
+            .flat_map(|t| t.terms.iter().filter_map(|term| term.path.clone())),
+    );
+    read
+}
+
+/// Whether `path` names a page in `read`, with or without its trailing slash or
+/// `index.html`.
+fn was_read(read: &BTreeSet<String>, path: &str) -> bool {
+    let path = path.split(['?', '#']).next().unwrap_or_default();
+    let bare = path.strip_suffix("index.html").unwrap_or(path);
+    let slashed = if bare.ends_with('/') { bare.to_string() } else { format!("{bare}/") };
+    [path, bare, slashed.as_str(), slashed.trim_end_matches('/')]
+        .iter()
+        .any(|candidate| !candidate.is_empty() && read.contains(*candidate))
+}
 
 /// How to convert.
 #[derive(Debug, Clone)]
@@ -139,6 +225,9 @@ pub fn to_content(inventory: &SiteInventory, options: &ConvertOptions) -> Result
     let origin = inventory.origin.as_deref().and_then(|o| Url::parse(o).ok());
     let raw_content = inventory.source == SourceKind::Wxr;
     let mut used: BTreeSet<(ContentKind, String, String)> = BTreeSet::new();
+    // Only a crawl knows which of the site's pages it could not read.
+    let read = matches!(inventory.source, SourceKind::Crawl | SourceKind::IsolatedReplay)
+        .then(|| read_paths(inventory));
     let nav: BTreeMap<String, usize> = inventory
         .menus
         .first()
@@ -241,7 +330,36 @@ pub fn to_content(inventory: &SiteInventory, options: &ConvertOptions) -> Result
         }
         let page = origin.as_ref().and_then(|o| o.join(&item.path).ok());
         let body_html = if raw_content { strip_shortcodes(&item.html) } else { item.html.clone() };
-        let sanitised = options.sanitiser.sanitise(&body_html, page.as_ref());
+        let mut unread: Vec<String> = Vec::new();
+        let site_origin = page.as_ref().map(super::http::origin_of);
+        let mut sanitised = options.sanitiser.sanitise_mapped(
+            &body_html,
+            page.as_ref(),
+            &mut |_: UrlUse, url: &Url| {
+                let Some(site_origin) = &site_origin else { return url.to_string() };
+                let path = super::html::site_path(url, site_origin);
+                // A link to a page the crawl could not read would break on the new site.
+                if let Some(read) = &read
+                    && path.starts_with('/')
+                    && !was_read(read, &path)
+                {
+                    unread.push(path);
+                    return String::new();
+                }
+                path
+            },
+        );
+        for target in unread {
+            converted.notes.push(format!(
+                "{}: the link to {target} became text; the crawl could not read that page",
+                item.key
+            ));
+            sanitised.dropped.push(Dropped {
+                element: "a".into(),
+                reason: DropReason::UnreadTarget { target },
+                excerpt: String::new(),
+            });
+        }
         if !sanitised.dropped.is_empty() {
             converted.dropped.insert(item.key.clone(), sanitised.dropped.clone());
         }
@@ -368,6 +486,27 @@ pub fn to_content(inventory: &SiteInventory, options: &ConvertOptions) -> Result
             to: "/feed.xml".into(),
             status: 301,
         });
+    }
+    // Legacy runtime paths the new site does not serve answer 410 Gone; a redirect added
+    // above for the same path wins (A-I4).
+    let wordpress = matches!(
+        inventory.source,
+        SourceKind::WordPressRest | SourceKind::Wxr | SourceKind::IsolatedReplay
+    ) || inventory.urls.iter().any(|url| url.path.contains("/wp-"));
+    let mut gone: BTreeSet<String> = inventory
+        .urls
+        .iter()
+        .map(|url| url.path.split('?').next().unwrap_or_default().to_string())
+        .filter(|path| legacy_runtime_path(path))
+        .collect();
+    if wordpress {
+        gone.extend(WORDPRESS_ENDPOINTS.iter().map(|path| (*path).to_string()));
+    }
+    for path in gone {
+        if converted.documents.contains_key(&path) || path.is_empty() {
+            continue;
+        }
+        converted.redirects.push(Redirect { from: path, to: GONE_PAGE.into(), status: 410 });
     }
     let kept: BTreeSet<&String> = converted.paths.values().collect();
     let mut seen = BTreeSet::new();

@@ -184,6 +184,58 @@ pub struct PublicKit {
     pub capabilities: Vec<(Arc<dyn Tool>, bool)>,
 }
 
+/// The public partition's tools when another runtime serves them, such as the AWP edge's
+/// `PublicTools` (spec 3.5 §7.9, §7.10): the agent is built over these instead of the kit's
+/// own `search_site` and `emit_signal`, which the edge's public policy would refuse.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let concierge = HarnessAgent::builder("concierge")
+///     .model(model)
+///     .workspace(workspace)
+///     .website_public_served(ServedPublicTools {
+///         partitions,
+///         table,
+///         search_site: edge_tools.search_site.clone(),
+///         reply_in_thread: Some(edge_tools.reply_in_thread.clone()),
+///         emit_signal: edge_tools.emit_signal.clone(),
+///         capabilities: edge_tools.capabilities.iter().map(|tool| (tool.clone(), false)).collect(),
+///     })
+///     .build()?;
+/// ```
+pub struct ServedPublicTools {
+    /// The site's partitions.
+    pub partitions: SitePartitions,
+    /// The kernel's partition table, holding both.
+    pub table: Partitions,
+    /// `search_site`; left out when a declared capability has that name.
+    pub search_site: Arc<dyn Tool>,
+    /// `reply_in_thread`, for agents that answer threads.
+    pub reply_in_thread: Option<Arc<dyn Tool>>,
+    /// `emit_signal`.
+    pub emit_signal: Arc<dyn Tool>,
+    /// The declared capabilities, each with whether the manifest holds its calls here; the
+    /// runtime serving them may hold them on its own governed path too.
+    pub capabilities: Vec<(Arc<dyn Tool>, bool)>,
+}
+
+/// Classes the served public tools by their own origin and name as the website preset
+/// classes the kit's: the public partition's manifest policy is the one policy that decides
+/// them (spec 3.5 §7.10 "Mode").
+#[derive(Debug)]
+struct ServedClasses {
+    tools: std::collections::BTreeSet<(String, String)>,
+}
+
+impl crate::policy::OriginClasses for ServedClasses {
+    fn class_of(&self, source: &str, tool: &str) -> Option<crate::policy::ToolKind> {
+        self.tools
+            .contains(&(source.to_string(), tool.to_string()))
+            .then_some(crate::policy::ToolKind::Todo)
+    }
+}
+
 /// What a back-office agent is built with (spec 3.5 §7.10, §7.11).
 pub struct BackOfficeKit {
     /// The site's partitions.
@@ -229,7 +281,8 @@ impl HarnessAgentBuilder {
     /// preset in the public partition — read-only mode, the site's tenant, the public memory
     /// scope — with `search_site`, `emit_signal`, `reply_in_thread` when the kit has one,
     /// the declared capabilities, and [`PublicPolicy`] denying everything else, whatever a
-    /// model asks.
+    /// model asks. The agent is offered those tools and nothing else: no workspace, memory
+    /// or plan tool.
     ///
     /// # Example
     ///
@@ -255,7 +308,56 @@ impl HarnessAgentBuilder {
             policy = policy.with_capability(capability.name(), held);
             builder = builder.tool(Arc::new(PublicCapability { inner: capability }));
         }
-        builder.add_operator_policy(Arc::new(policy))
+        let offered = policy.tools().map(str::to_string).collect();
+        builder.add_operator_policy(Arc::new(policy)).public_only(offered)
+    }
+
+    /// Builds an agent of the site's public partition over tools another runtime serves,
+    /// such as the AWP edge's `PublicTools` (spec 3.5 §7.9, §7.10, A-I2): the partition and
+    /// policy of [`website_public`](Self::website_public), with the served `search_site`
+    /// (unless a declared capability has that name), `reply_in_thread`, `emit_signal` and
+    /// capabilities, each classed by its own origin so the manifest policy decides it. The
+    /// agent is offered those tools and nothing else.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let concierge = HarnessAgent::builder("concierge")
+    ///     .model(model)
+    ///     .workspace(workspace)
+    ///     .website_public_served(served)
+    ///     .build()?;
+    /// ```
+    pub fn website_public_served(self, tools: ServedPublicTools) -> Self {
+        let declared_search =
+            tools.capabilities.iter().any(|(tool, _)| tool.name() == super::catalog::SEARCH_SITE);
+        let mut policy = PublicPolicy::new();
+        let mut chosen: Vec<Arc<dyn Tool>> = Vec::new();
+        for (capability, held) in tools.capabilities {
+            policy = policy.with_capability(capability.name(), held);
+            chosen.push(capability);
+        }
+        if !declared_search {
+            chosen.push(tools.search_site);
+        }
+        chosen.extend(tools.reply_in_thread);
+        chosen.push(tools.emit_signal);
+        let classes = ServedClasses {
+            tools: chosen
+                .iter()
+                .map(|tool| (tool.origin().to_string(), tool.name().to_string()))
+                .collect(),
+        };
+        let mut builder = self
+            .preset(crate::Preset::Website)
+            .partition(tools.partitions.public().clone(), tools.table.clone())
+            .without_todos()
+            .tool_classes(Arc::new(classes));
+        for tool in chosen {
+            builder = builder.tool(tool);
+        }
+        let offered = policy.tools().map(str::to_string).collect();
+        builder.add_operator_policy(Arc::new(policy)).public_only(offered)
     }
 
     /// Builds an agent of the site's back office (spec 3.5 §7.10, §7.11): the website preset

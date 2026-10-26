@@ -372,7 +372,7 @@ advertising — from an owner-funded wallet under the owner's mandates (spec 3.5
 |------|--------------|
 | Policy | `WalletPolicy` gives each `SpendCategory` a `Mandate`: cap per period, limit per payment, payees, rail |
 | Pay | `Wallet::pay` refuses a payee or rail outside the mandate, holds a payment over the limit or the category cap for the owner, and reserves in the spend ledger before the rail pays |
-| Hold | A held payment is paid only on a person's `ApprovalDecision`; through `wallet_pay` it is held as the tool call and resumes once the owner decides |
+| Hold | A held payment is paid only on a person's `ApprovalDecision`; through `wallet_pay` it is held as the tool call and resumes once the owner decides. A decision moves it out of `held` with the store's compare-and-set (`WalletStore::update_if`), so of two racing decisions exactly one proceeds |
 | Anomaly | Spend today reaching the anomaly rule's multiple of the trailing daily average pauses the category and raises a P1 alarm |
 | Reconcile | `Wallet::reconcile_due` checks the last period against the provider's statement and each billing provider's invoice |
 | Report | `WalletKpiSource` reports spend, revenue, profit, cost per lead and cost per sale |

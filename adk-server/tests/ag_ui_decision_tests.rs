@@ -9,8 +9,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use adk_agent::LlmAgentBuilder;
 use adk_core::{
-    ApprovalPolicy, ApprovalService, ApprovalState, ApproverSelector, InMemoryApprovalStore,
-    SingleAgentLoader, StoreApprovalService, Tool, ToolContext,
+    ApprovalAction, ApprovalCall, ApprovalPolicy, ApprovalRisk, ApprovalRoute, ApprovalService,
+    ApprovalState, ApprovalStore, ApproverSelector, InMemoryApprovalStore, SingleAgentLoader,
+    StoreApprovalService, Tool, ToolContext,
 };
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_server::auth_bridge::{RequestContextError, RequestContextExtractor};
@@ -85,6 +86,14 @@ struct Setup {
     escalate_after: Option<std::time::Duration>,
     /// The server's kill switch.
     governance: adk_core::GovernanceControl,
+    /// Who decides; by default alice, who approves her own agent's calls.
+    policy: ApprovalPolicy,
+    /// The risk the router gives every held call.
+    risk: Option<ApprovalRisk>,
+    /// What the router lets approvers do, when it restricts it.
+    allowed: Option<Vec<ApprovalAction>>,
+    /// The approval store; in memory by default.
+    store: Option<Arc<dyn ApprovalStore>>,
 }
 
 impl Default for Setup {
@@ -95,6 +104,10 @@ impl Default for Setup {
             extractor: true,
             escalate_after: None,
             governance: adk_core::GovernanceControl::new(),
+            policy: ApprovalPolicy::new([ApproverSelector::human("alice")]).allow_self_approval(),
+            risk: None,
+            allowed: None,
+            store: None,
         }
     }
 }
@@ -113,12 +126,24 @@ fn fixture_with(script: Vec<ScriptedResponse>, setup: Setup) -> Fixture {
         .require_tool_confirmation("send_invoice")
         .build()
         .unwrap();
-    let mut policy = ApprovalPolicy::new([ApproverSelector::human("alice")]).allow_self_approval();
+    let mut policy = setup.policy;
     if let Some(after) = setup.escalate_after {
         policy = policy.escalate_after(after, [ApproverSelector::human("bo")]);
     }
-    let service = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()));
-    let service = Arc::new(if setup.routed { service.with_router(policy) } else { service });
+    let (risk, allowed) = (setup.risk, setup.allowed);
+    let router = move |_: &ApprovalCall| {
+        let mut route = ApprovalRoute::new(policy.clone());
+        if let Some(risk) = risk {
+            route = route.with_risk(risk);
+        }
+        if let Some(allowed) = &allowed {
+            route = route.with_allowed_actions(allowed.iter().copied());
+        }
+        Some(route)
+    };
+    let store = setup.store.unwrap_or_else(|| Arc::new(InMemoryApprovalStore::new()));
+    let service = StoreApprovalService::new(store);
+    let service = Arc::new(if setup.routed { service.with_router(router) } else { service });
     let sessions = Arc::new(InMemorySessionService::new()) as Arc<dyn SessionService>;
     let mut config = ServerConfig::new(Arc::new(SingleAgentLoader::new(Arc::new(agent))), sessions)
         .with_governance(setup.governance.clone());
@@ -253,8 +278,8 @@ async fn a_held_call_ends_the_run_with_an_interrupt_naming_its_inbox_entry() {
                 },
                 "metadata": {
                     "summary": entry.summary,
-                    // The acting agent the inbox entry records.
-                    "agent": entry.acting.as_ref().unwrap().agent.id.as_str(),
+                    // The acting agent the inbox entry records, by name.
+                    "agent": APP,
                     "tool": "send_invoice",
                     "answerable": true,
                     "risk": "medium",
@@ -683,7 +708,11 @@ async fn a_resume_without_a_request_context_extractor_is_unauthorized() {
     let fx = fixture_with(invoice_script(), Setup { extractor: false, ..Setup::default() });
     let (status, events) = post(&fx.app, None, first_turn()).await;
     assert_eq!(status, StatusCode::OK);
-    let id = interrupts(&events)[0]["id"].as_str().unwrap().to_string();
+    let interrupt = &interrupts(&events)[0];
+    // Wave 2 findings 5, 14 and 19: no resume can decide it here, so none is offered.
+    assert_eq!(interrupt["metadata"]["answerable"], false, "{interrupt}");
+    assert!(interrupt.get("responseSchema").is_none(), "{interrupt}");
+    let id = interrupt["id"].as_str().unwrap().to_string();
     let (status, _) = post(
         &fx.app,
         None,
@@ -695,7 +724,8 @@ async fn a_resume_without_a_request_context_extractor_is_unauthorized() {
     assert_eq!(fx.sent.load(Ordering::SeqCst), 0);
 }
 
-/// Finding 12: the interrupt names the acting agent the inbox entry records.
+/// Finding 12 of #1029, and wave 2 findings 7 and 24: the interrupt names the acting agent the
+/// inbox entry records by its name, never by its identity URN (spec 3.3 §7.1, §8).
 #[tokio::test]
 async fn the_interrupt_names_the_agent_from_the_inbox_entry() {
     let fx = fixture(invoice_script(), true);
@@ -703,5 +733,458 @@ async fn the_interrupt_names_the_agent_from_the_inbox_entry() {
     let interrupt = &interrupts(&events)[0];
     let entry = fx.service.get(interrupt["id"].as_str().unwrap()).await.unwrap().unwrap();
     let acting = entry.acting.expect("the governed path records the acting agent");
-    assert_eq!(interrupt["metadata"]["agent"], acting.agent.id.as_str());
+    assert_eq!(acting.agent.id.as_str(), "urn:adk:agent:finance/finance");
+    assert_eq!(interrupt["metadata"]["agent"], "finance");
+}
+
+// ----- Wave 2 review (spec 3.3 §10 S2) -----
+
+/// Finding 2: a second resume of a thread while the first one's run is still going is
+/// refused, so two runs never resume the same held call; once the first run ends, the same
+/// answer is reported as already decided and nothing runs again.
+#[tokio::test]
+async fn a_second_resume_while_the_first_runs_is_refused() {
+    let fx = fixture(invoice_script(), true);
+    let (_, events) = post(&fx.app, Some("alice"), first_turn()).await;
+    let id = interrupts(&events)[0]["id"].as_str().unwrap().to_string();
+    let allow_once = json!([{ "interruptId": id, "payload": { "approved": true } }]);
+
+    // The first resume's answer is recorded and its run starts once its stream is read.
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/run_sse")
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer alice")
+        .body(Body::from(resume_turn("run-2", allow_once.clone()).to_string()))
+        .unwrap();
+    let first = fx.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(state_of(&fx, &id).await, ApprovalState::Approved);
+
+    // A double click, or a retry, while it runs.
+    let (status, again) =
+        post(&fx.app, Some("alice"), resume_turn("run-3", allow_once.clone())).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(kinds(&again), ["RUN_STARTED", "RUN_ERROR"], "{again:#?}");
+    assert_eq!(of_type(&again, "RUN_ERROR")[0]["code"], "approval.resume_in_progress");
+
+    let bytes = axum::body::to_bytes(first.into_body(), usize::MAX).await.unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("TOOL_CALL_RESULT"));
+    assert_eq!(fx.sent.load(Ordering::SeqCst), 1);
+
+    let (_, after) = post(&fx.app, Some("alice"), resume_turn("run-4", allow_once)).await;
+    assert_eq!(of_type(&after, "RUN_ERROR")[0]["code"], "approval.already_resolved");
+    assert_eq!(fx.sent.load(Ordering::SeqCst), 1, "the call ran exactly once");
+}
+
+/// Finding 3: a high-risk call is offered and accepted only as a denial from AG-UI, which
+/// cannot confirm it is the person (spec 3.3 §7.2).
+#[tokio::test]
+async fn a_high_risk_call_is_only_denied_from_ag_ui() {
+    for risk in [ApprovalRisk::High, ApprovalRisk::Critical] {
+        let fx = fixture_with(invoice_script(), Setup { risk: Some(risk), ..Setup::default() });
+        let (_, events) = post(&fx.app, Some("alice"), first_turn()).await;
+        let interrupt = &interrupts(&events)[0];
+        assert_eq!(
+            interrupt["responseSchema"],
+            json!({
+                "type": "object",
+                "properties": {
+                    "approved": { "type": "boolean", "const": false },
+                    "reason": { "type": "string" },
+                },
+                "required": ["approved"],
+            }),
+            "{risk:?}"
+        );
+        let id = interrupt["id"].as_str().unwrap().to_string();
+        for yes in [json!({ "approved": true }), json!({ "approved": true, "editedArgs": {} })] {
+            let resume = json!([{ "interruptId": id, "payload": yes }]);
+            let (_, refused) = post(&fx.app, Some("alice"), resume_turn("run-2", resume)).await;
+            let error = of_type(&refused, "RUN_ERROR")[0];
+            assert_eq!(error["code"], "surface.answer_not_allowed", "{risk:?}: {refused:#?}");
+            assert_eq!(
+                error["message"],
+                "This call is high risk or spends money; approve it where you can confirm it's you"
+            );
+        }
+        assert_eq!(state_of(&fx, &id).await, ApprovalState::Pending);
+        let deny = json!([{ "interruptId": id, "payload": { "approved": false } }]);
+        let (_, denied) = post(&fx.app, Some("alice"), resume_turn("run-3", deny)).await;
+        assert_eq!(of_type(&denied, "CUSTOM")[0]["value"]["state"], "rejected");
+        assert_eq!(fx.sent.load(Ordering::SeqCst), 0, "{risk:?}");
+    }
+}
+
+/// Findings 9 and 19: an entry the session's owner may not decide — the policy forbids
+/// approving one's own call, or names other approvers — is not offered as answerable.
+#[tokio::test]
+async fn an_entry_the_owner_may_not_decide_is_not_answerable() {
+    for policy in [
+        ApprovalPolicy::new([ApproverSelector::human("alice")]),
+        ApprovalPolicy::new([ApproverSelector::human("bob")]).allow_self_approval(),
+    ] {
+        let fx =
+            fixture_with(invoice_script(), Setup { policy: policy.clone(), ..Setup::default() });
+        let (_, events) = post(&fx.app, Some("alice"), first_turn()).await;
+        let interrupt = &interrupts(&events)[0];
+        assert_eq!(interrupt["metadata"]["answerable"], false, "{policy:?}");
+        assert!(interrupt.get("responseSchema").is_none(), "{policy:?}");
+    }
+}
+
+/// Findings 8, 15 and 16: the schema offers only the answers the entry allows, and an answer
+/// it does not allow is refused in sentence case, in the words the surfaces use.
+#[tokio::test]
+async fn an_interrupt_offers_only_the_answers_its_entry_allows() {
+    let fx = fixture_with(
+        invoice_script(),
+        Setup {
+            allowed: Some(vec![ApprovalAction::Approve, ApprovalAction::Edit]),
+            ..Setup::default()
+        },
+    );
+    let (_, events) = post(&fx.app, Some("alice"), first_turn()).await;
+    let interrupt = &interrupts(&events)[0];
+    assert_eq!(
+        interrupt["responseSchema"],
+        json!({
+            "type": "object",
+            "properties": {
+                "approved": { "type": "boolean", "const": true },
+                "editedArgs": { "type": "object" },
+            },
+            "required": ["approved"],
+        })
+    );
+    let id = interrupt["id"].as_str().unwrap().to_string();
+    let deny = json!([{ "interruptId": id, "payload": { "approved": false } }]);
+    let (_, refused) = post(&fx.app, Some("alice"), resume_turn("run-2", deny)).await;
+    let error = of_type(&refused, "RUN_ERROR")[0];
+    assert_eq!(error["code"], "approval.action_not_allowed");
+    assert_eq!(error["message"], "This decision does not offer Deny");
+    assert_eq!(state_of(&fx, &id).await, ApprovalState::Pending);
+}
+
+/// Finding 10: a yes with replacement arguments other than the ones the entry was approved
+/// with is reported as not recorded, and the call runs as it was approved.
+#[tokio::test]
+async fn a_different_edit_to_a_decided_entry_is_reported_as_not_recorded() {
+    let fx = fixture(invoice_script(), true);
+    let (_, events) = post(&fx.app, Some("alice"), first_turn()).await;
+    let id = interrupts(&events)[0]["id"].as_str().unwrap().to_string();
+    let entry = fx.service.get(&id).await.unwrap().unwrap();
+    fx.service
+        .decide(
+            &id,
+            entry.version,
+            adk_core::ApprovalDecision::approve(adk_core::principal::SubjectRef::human("alice")),
+        )
+        .await
+        .unwrap();
+
+    let edit = json!([{ "interruptId": id, "payload": { "approved": true, "editedArgs": { "invoice": "INV-99" } } }]);
+    let (_, resumed) = post(&fx.app, Some("alice"), resume_turn("run-2", edit)).await;
+    let update = &of_type(&resumed, "CUSTOM")[0]["value"];
+    assert_eq!(update["state"], "approved");
+    assert_eq!(update["code"], "approval.already_resolved", "{update}");
+    assert_eq!(update["message"], "Already decided by alice");
+    assert_eq!(
+        of_type(&resumed, "TOOL_CALL_RESULT")[0]["content"],
+        json!({ "sent": "INV-10" }).to_string(),
+        "the call runs as it was approved"
+    );
+}
+
+/// Findings 12 and 17: without an echoed version, another approver's edit since the interrupt
+/// was shown is a conflict that shows the new arguments, never approved unseen; answering at
+/// the reported version then completes the quorum.
+#[tokio::test]
+async fn without_an_echoed_version_another_approvers_edit_is_a_conflict() {
+    let quorum =
+        ApprovalPolicy::new([ApproverSelector::human("alice"), ApproverSelector::human("bob")])
+            .with_quorum(2)
+            .allow_self_approval();
+    let fx = fixture_with(invoice_script(), Setup { policy: quorum, ..Setup::default() });
+    let (_, events) = post(&fx.app, Some("alice"), first_turn()).await;
+    let interrupt = &interrupts(&events)[0];
+    assert_eq!(interrupt["metadata"]["arguments"], json!({ "invoice": "INV-10" }));
+    let id = interrupt["id"].as_str().unwrap().to_string();
+    let entry = fx.service.get(&id).await.unwrap().unwrap();
+    let edited = json!({ "invoice": "INV-99" });
+    fx.service
+        .decide(
+            &id,
+            entry.version,
+            adk_core::ApprovalDecision::edit(
+                adk_core::principal::SubjectRef::human("bob"),
+                edited.clone(),
+            ),
+        )
+        .await
+        .unwrap();
+
+    let yes = json!([{ "interruptId": id, "payload": { "approved": true } }]);
+    let (_, refused) = post(&fx.app, Some("alice"), resume_turn("run-2", yes)).await;
+    assert_eq!(of_type(&refused, "RUN_ERROR")[0]["code"], "approval.version_conflict");
+    let update = &of_type(&refused, "CUSTOM")[0]["value"];
+    assert_eq!(update["editedArgs"], edited, "the update shows what changed");
+    assert_eq!(state_of(&fx, &id).await, ApprovalState::Pending);
+    assert_eq!(fx.sent.load(Ordering::SeqCst), 0);
+
+    let seen = json!([{ "interruptId": id, "payload": { "approved": true }, "metadata": { "version": update["version"] } }]);
+    let (_, resumed) = post(&fx.app, Some("alice"), resume_turn("run-3", seen)).await;
+    assert_eq!(
+        of_type(&resumed, "TOOL_CALL_RESULT")[0]["content"],
+        json!({ "sent": "INV-99" }).to_string()
+    );
+}
+
+/// Findings 6 and 23: an entry withdrawn or expired before the answer, whose denial waits to
+/// run, is reported with a code while the run starts and the resume's other answers stand.
+#[tokio::test]
+async fn an_expired_or_withdrawn_entry_is_reported_and_the_run_starts() {
+    let fx = fixture(two_invoices_script(), true);
+    let (_, events) = post(&fx.app, Some("alice"), first_turn()).await;
+    let held = interrupts(&events);
+    let (a, b) = (held[0]["id"].as_str().unwrap(), held[1]["id"].as_str().unwrap());
+    fx.service.cancel(a, Some("no longer needed".into())).await.unwrap();
+
+    let both = json!([
+        { "interruptId": a, "payload": { "approved": true } },
+        { "interruptId": b, "payload": { "approved": true } },
+    ]);
+    let (_, resumed) = post(&fx.app, Some("alice"), resume_turn("run-2", both)).await;
+    assert!(of_type(&resumed, "RUN_ERROR").is_empty(), "{resumed:#?}");
+    let updates: Vec<&Value> =
+        of_type(&resumed, "CUSTOM").iter().map(|event| &event["value"]).collect();
+    assert_eq!(updates[0]["state"], "cancelled");
+    assert_eq!(updates[0]["code"], "approval.already_resolved");
+    assert_eq!(updates[0]["message"], "This decision was withdrawn");
+    assert_eq!(updates[1]["state"], "approved");
+    assert_eq!(fx.sent.load(Ordering::SeqCst), 1, "only the call still decided yes runs");
+
+    let expiring = ApprovalPolicy::new([ApproverSelector::human("alice")])
+        .allow_self_approval()
+        .expires_after(std::time::Duration::from_secs(600));
+    let fx = fixture_with(invoice_script(), Setup { policy: expiring, ..Setup::default() });
+    let (_, events) = post(&fx.app, Some("alice"), first_turn()).await;
+    let id = interrupts(&events)[0]["id"].as_str().unwrap().to_string();
+    fx.service.tick(chrono::Utc::now() + chrono::Duration::minutes(11)).await.unwrap();
+    assert_eq!(state_of(&fx, &id).await, ApprovalState::Expired);
+    let late = json!([{ "interruptId": id, "payload": { "approved": true } }]);
+    let (_, resumed) = post(&fx.app, Some("alice"), resume_turn("run-2", late)).await;
+    assert!(of_type(&resumed, "RUN_ERROR").is_empty(), "{resumed:#?}");
+    let update = &of_type(&resumed, "CUSTOM")[0]["value"];
+    assert_eq!(
+        (&update["state"], &update["code"], &update["message"]),
+        (&json!("expired"), &json!("approval.already_resolved"), &json!("This decision expired"))
+    );
+    assert_eq!(of_type(&resumed, "TOOL_CALL_RESULT").len(), 1, "the call is answered as denied");
+    assert_eq!(fx.sent.load(Ordering::SeqCst), 0);
+}
+
+/// Findings 13 and 18: every AG-UI answer is on the server's audit trail with the surface and
+/// how it was given, so "What your agents did" can say where the yes came from (spec 3.3 §11).
+#[tokio::test]
+async fn an_ag_ui_answer_is_on_record_with_its_surface() {
+    let recorder = Arc::new(adk_core::audit_log::InMemoryAuditRecorder::new());
+    let governance = adk_core::GovernanceControl::new();
+    governance.attach_audit(adk_core::audit_log::AuditTrail::new(recorder.clone()));
+    let fx = fixture_with(invoice_script(), Setup { governance, ..Setup::default() });
+    let (_, events) = post(&fx.app, Some("alice"), first_turn()).await;
+    let id = interrupts(&events)[0]["id"].as_str().unwrap().to_string();
+    let allow_once = json!([{ "interruptId": id, "payload": { "approved": true } }]);
+    post(&fx.app, Some("alice"), resume_turn("run-2", allow_once)).await;
+
+    let answers: Vec<_> =
+        recorder.records().into_iter().filter(|record| record.action == "surface.decide").collect();
+    assert_eq!(answers.len(), 1, "{answers:#?}");
+    let record = &answers[0];
+    assert_eq!(record.decision, Some(adk_core::audit_log::AuditDecision::Approved));
+    assert_eq!(record.actor.on_behalf_of, Some(adk_core::principal::SubjectRef::human("alice")));
+    for (field, value) in [
+        ("surface", json!("ag_ui")),
+        ("origin", json!({ "kind": "app", "channel": "another app" })),
+        ("approvalId", json!(id)),
+        ("answer", json!("allowOnce")),
+        ("outcome", json!("decided")),
+        ("tool", json!("send_invoice")),
+    ] {
+        assert_eq!(record.ext.get(field), Some(&value), "{field}");
+    }
+}
+
+/// An approval store whose reads fail on demand: `pending` once a request was created, and
+/// `has_decision` while `fail_has_decision` is set.
+#[derive(Debug, Default)]
+struct FlakyStore {
+    inner: InMemoryApprovalStore,
+    fail_pending_after_create: std::sync::atomic::AtomicBool,
+    created: std::sync::atomic::AtomicBool,
+    fail_has_decision: std::sync::atomic::AtomicBool,
+}
+
+fn store_down() -> adk_core::AdkError {
+    adk_core::AdkError::new(
+        adk_core::ErrorComponent::Server,
+        adk_core::ErrorCategory::Unavailable,
+        "test.store_down",
+        "the approval store is down",
+    )
+}
+
+#[async_trait]
+impl ApprovalStore for FlakyStore {
+    async fn record_pending(
+        &self,
+        scope: &adk_core::ApprovalScope,
+        request: &adk_core::ToolConfirmationRequest,
+    ) -> adk_core::Result<()> {
+        self.inner.record_pending(scope, request).await
+    }
+    async fn pending(
+        &self,
+        scope: &adk_core::ApprovalScope,
+    ) -> adk_core::Result<Vec<adk_core::PendingApproval>> {
+        if self.fail_pending_after_create.load(Ordering::SeqCst)
+            && self.created.load(Ordering::SeqCst)
+        {
+            return Err(store_down());
+        }
+        self.inner.pending(scope).await
+    }
+    async fn decide(
+        &self,
+        scope: &adk_core::ApprovalScope,
+        fingerprint: &str,
+        approval: adk_core::ToolApproval,
+    ) -> adk_core::Result<()> {
+        self.inner.decide(scope, fingerprint, approval).await
+    }
+    async fn take_decision(
+        &self,
+        scope: &adk_core::ApprovalScope,
+        fingerprint: &str,
+    ) -> adk_core::Result<Option<adk_core::ToolConfirmationDecision>> {
+        self.inner.take_decision(scope, fingerprint).await
+    }
+    async fn has_decision(
+        &self,
+        scope: &adk_core::ApprovalScope,
+        fingerprint: &str,
+    ) -> adk_core::Result<bool> {
+        if self.fail_has_decision.load(Ordering::SeqCst) {
+            return Err(store_down());
+        }
+        self.inner.has_decision(scope, fingerprint).await
+    }
+    async fn record_pending_keyed(
+        &self,
+        scope: &adk_core::ApprovalScope,
+        fingerprint: &str,
+        request: &adk_core::ToolConfirmationRequest,
+    ) -> adk_core::Result<()> {
+        self.inner.record_pending_keyed(scope, fingerprint, request).await
+    }
+    async fn take_approval(
+        &self,
+        scope: &adk_core::ApprovalScope,
+        fingerprint: &str,
+    ) -> adk_core::Result<Option<adk_core::ToolApproval>> {
+        self.inner.take_approval(scope, fingerprint).await
+    }
+    async fn create_request(
+        &self,
+        request: &adk_core::ApprovalRequest,
+    ) -> adk_core::Result<adk_core::ApprovalRequest> {
+        let created = self.inner.create_request(request).await;
+        self.created.store(true, Ordering::SeqCst);
+        created
+    }
+    async fn get_request(&self, id: &str) -> adk_core::Result<Option<adk_core::ApprovalRequest>> {
+        self.inner.get_request(id).await
+    }
+    async fn replace_request(
+        &self,
+        request: &adk_core::ApprovalRequest,
+        expected_version: u64,
+    ) -> adk_core::Result<bool> {
+        self.inner.replace_request(request, expected_version).await
+    }
+    async fn list_requests(
+        &self,
+        query: &adk_core::ApprovalRequestQuery,
+    ) -> adk_core::Result<Vec<adk_core::ApprovalRequest>> {
+        self.inner.list_requests(query).await
+    }
+    async fn put_delegation(
+        &self,
+        delegation: &adk_core::ApprovalDelegation,
+    ) -> adk_core::Result<()> {
+        self.inner.put_delegation(delegation).await
+    }
+    async fn delegations_to(
+        &self,
+        to: &adk_core::principal::SubjectRef,
+    ) -> adk_core::Result<Vec<adk_core::ApprovalDelegation>> {
+        self.inner.delegations_to(to).await
+    }
+    async fn delete_delegation(&self, id: &str) -> adk_core::Result<bool> {
+        self.inner.delete_delegation(id).await
+    }
+}
+
+/// Findings 11 and 20: a failed read of the inbox while the run ends is reported, never
+/// turned into an interrupt that says the call cannot be decided here.
+#[tokio::test]
+async fn a_failed_inbox_read_is_reported_not_turned_into_an_unanswerable_interrupt() {
+    let store = Arc::new(FlakyStore::default());
+    store.fail_pending_after_create.store(true, Ordering::SeqCst);
+    let fx = fixture_with(
+        invoice_script(),
+        Setup { store: Some(store.clone() as Arc<dyn ApprovalStore>), ..Setup::default() },
+    );
+    let (_, events) = post(&fx.app, Some("alice"), first_turn()).await;
+    assert!(of_type(&events, "RUN_FINISHED").is_empty(), "{events:#?}");
+    let error = of_type(&events, "RUN_ERROR")[0];
+    assert_eq!(error["code"], "test.store_down");
+    assert_eq!(
+        error["message"],
+        "This run is waiting for a decision that could not be loaded; answer it in your \
+         decisions inbox"
+    );
+}
+
+/// Findings 11 and 20: a failed read of whether a decision waits to run refuses the resume
+/// as a failure to try again, never as "already decided".
+#[tokio::test]
+async fn a_failed_decision_read_is_reported_not_called_already_decided() {
+    let store = Arc::new(FlakyStore::default());
+    let fx = fixture_with(
+        invoice_script(),
+        Setup { store: Some(store.clone() as Arc<dyn ApprovalStore>), ..Setup::default() },
+    );
+    let (_, events) = post(&fx.app, Some("alice"), first_turn()).await;
+    let id = interrupts(&events)[0]["id"].as_str().unwrap().to_string();
+    let entry = fx.service.get(&id).await.unwrap().unwrap();
+    fx.service
+        .decide(
+            &id,
+            entry.version,
+            adk_core::ApprovalDecision::approve(adk_core::principal::SubjectRef::human("alice")),
+        )
+        .await
+        .unwrap();
+
+    store.fail_has_decision.store(true, Ordering::SeqCst);
+    let allow_once = json!([{ "interruptId": id, "payload": { "approved": true } }]);
+    let (_, refused) = post(&fx.app, Some("alice"), resume_turn("run-2", allow_once.clone())).await;
+    let error = of_type(&refused, "RUN_ERROR")[0];
+    assert_eq!(error["code"], "test.store_down", "{refused:#?}");
+    assert_eq!(error["message"], "The decision could not be recorded; try again");
+
+    store.fail_has_decision.store(false, Ordering::SeqCst);
+    let (_, resumed) = post(&fx.app, Some("alice"), resume_turn("run-3", allow_once)).await;
+    assert_eq!(of_type(&resumed, "TOOL_CALL_RESULT").len(), 1, "{resumed:#?}");
 }

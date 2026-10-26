@@ -15,12 +15,14 @@
 //! |---|---|
 //! | [`project`] | The project layout `adk-rust site` uses, delegated key files, released documents, the owner's feeds, slots and payment links |
 //! | [`kernel`] | The kernel's durable SQLite stores in `data/kernel.db` |
-//! | [`site`] | [`RunningSite`]: one site's runtime, edge, updates, experiments, measurement, review and alarms |
+//! | [`site`] | [`RunningSite`]: one site's runtime, edge, updates, experiments, measurement, review, alarms, leads and upkeep |
+//! | [`back_office`] | The back-office agents the served kernel hosts, led by the Steward as one team |
 //! | [`updates`] | The update engine's driver, journal, decision cards and alarms |
 //! | [`checks`] | The release-delegation gate check, payment links, the log recorder |
 //! | [`serve`](mod@serve) | The kernel and the edge's listener for one site or an agency |
 
 pub mod agency;
+pub mod back_office;
 pub mod checks;
 pub mod kernel;
 pub mod project;
@@ -44,7 +46,7 @@ pub use agency::{Agency, AgencyRouter};
 pub use kernel::KernelStores;
 pub use project::ProjectPaths;
 pub use serve::{AgencyFile, AgencySite, ServeOptions, Served, serve, serve_agency};
-pub use site::{RunningSite, ServedWorkflows, SiteOptions};
+pub use site::{EmailOptions, RunningSite, ServedWorkflows, SiteOptions};
 pub use updates::{UpdateCards, UpdateDriver, UpdateJournal};
 
 /// A deployment shape (spec 3.5 §7.22).

@@ -102,8 +102,10 @@ pub enum Wake {
     At(DateTime<Utc>),
     /// On a cron schedule (`adk-core/src/schedule.rs`), in UTC. A running kernel fires a
     /// sleeper's cron wake itself, on its clock, unless a standing trigger uses the same
-    /// expression (its `CronWakeSource` does); a process spawned asleep on a set holding one
-    /// recurs: after each run that completes or fails, its successor sleeps on the same set.
+    /// expression (its `CronWakeSource` does: the kernel registers a watermarked one per
+    /// expression of its standing triggers, unless a registered source ticks on it); a
+    /// process spawned asleep on a set holding one recurs: after each run that completes or
+    /// fails, its successor sleeps on the same set.
     Cron {
         /// The cron expression.
         expr: String,
@@ -266,6 +268,13 @@ pub trait WakeSource: Send + Sync {
     /// Returns an error when the source cannot start, such as a watch on a missing
     /// directory.
     async fn subscribe(&self) -> Result<BoxStream<'static, WakeEvent>>;
+
+    /// The cron expression the source ticks on, when it is a cron source that names one
+    /// (spec 3.5 §7.11): the kernel adds no source of its own for a standing trigger's
+    /// expression a registered source ticks on. `None` by default.
+    fn cron_expression(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// One wake delivered by a [`WakeSource`] (spec 3.2 §7.4).
@@ -1469,6 +1478,15 @@ impl CatchUp {
 impl WakeSource for CronWakeSource {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    /// The expression of a [`watermarked`](CronWakeSource::watermarked) source; a source made
+    /// with [`new`](CronWakeSource::new) from a `CronTrigger` names none.
+    fn cron_expression(&self) -> Option<&str> {
+        match &self.catch_up.as_ref()?.spec {
+            ScheduleSpec::Cron { expr, .. } => Some(expr),
+            _ => None,
+        }
     }
 
     /// Subscribes to the cron trigger: each tick, catch-up ticks included, becomes an event

@@ -26,6 +26,26 @@ use super::{
     optional, required, unavailable,
 };
 
+impl WebsiteDesk {
+    pub(crate) async fn save_charter(&self) -> super::saved::SavedCharter {
+        let state = self.inner.charter.lock().await;
+        super::saved::SavedCharter {
+            draft: state.draft.clone(),
+            reviewed: state.reviewed.clone(),
+            signatures: state.signatures.clone(),
+            committed: state.committed.clone(),
+        }
+    }
+
+    pub(crate) async fn restore_charter(&self, saved: super::saved::SavedCharter) {
+        let mut state = self.inner.charter.lock().await;
+        state.draft = saved.draft;
+        state.reviewed = saved.reviewed;
+        state.signatures = saved.signatures;
+        state.committed = saved.committed;
+    }
+}
+
 /// The sections of a charter, in the order the cards show them.
 pub const SECTIONS: [&str; 10] = [
     "purpose",
@@ -753,6 +773,18 @@ impl WebsiteDesk {
     /// `InvalidInput` for an unknown section, a bad value, or signing before every section
     /// was read or while the draft is invalid; the charter store's errors.
     pub async fn charter_command(
+        &self,
+        person: &str,
+        command: CharterCommand,
+    ) -> Result<Option<CharterVersion>> {
+        let result = self.charter_command_unsaved(person, command).await;
+        if result.is_ok() {
+            self.persist().await;
+        }
+        result
+    }
+
+    async fn charter_command_unsaved(
         &self,
         person: &str,
         command: CharterCommand,

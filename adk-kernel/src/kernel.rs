@@ -73,10 +73,10 @@ use crate::stores::{
 };
 use crate::supervise::{KernelHooks, Supervision};
 use crate::wake::{
-    FileWakeSource, KernelWakeExecutor, RunFinishedWakeSource, Trigger, Wake, WakeRouter,
-    WakeSource,
+    CronWakeSource, FileWakeSource, KernelWakeExecutor, RunFinishedWakeSource, Trigger, Wake,
+    WakeRouter, WakeSource,
 };
-use crate::watermark::CronWatermarkStore;
+use crate::watermark::{CronWatermarkStore, SourceWatermark};
 
 /// How the kernel runs (spec 3.2 §7.2).
 ///
@@ -926,6 +926,21 @@ impl Kernel {
     /// The wake matcher.
     pub fn wake_router(&self) -> &WakeRouter {
         &self.inner.router
+    }
+
+    /// The address the control plane's HTTP listener is bound to while the kernel runs, so
+    /// a bind on port 0 is discoverable (spec 3.2 §7.11, spec 3.5 §8.2); `None` when the
+    /// control plane serves no HTTP or the kernel is not running.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let control = ControlPlaneConfig::default().without_socket().with_http("127.0.0.1:0".parse()?);
+    /// kernel.start().await?;
+    /// let addr = kernel.control_addr().await.expect("the control plane listens");
+    /// ```
+    pub async fn control_addr(&self) -> Option<std::net::SocketAddr> {
+        self.inner.runtime.lock().await.control.as_ref().and_then(ControlPlane::http_addr)
     }
 
     /// The content-free activity ledger the kernel writes, when it was built with one
@@ -1940,6 +1955,9 @@ impl KernelBuilder {
             bus.add_sink(sink);
         }
         let trigger_names = self.triggers.iter().map(|trigger| trigger.name.clone()).collect();
+        let watermarks: Arc<dyn CronWatermarkStore> =
+            self.watermarks.unwrap_or_else(|| Arc::new(InMemoryCronWatermarkStore::new()));
+        let trigger_crons = trigger_cron_sources(&self.triggers, &self.wake_sources, &watermarks)?;
         #[cfg(feature = "proc")]
         let ledger = self.ledger.map(|ledger| ledger.with_clock(Arc::clone(&config.clock)));
         #[cfg(feature = "proc")]
@@ -2012,9 +2030,7 @@ impl KernelBuilder {
             rule_source: self.rule_source,
             reviewed: std::sync::Mutex::new(None),
             crons: std::sync::Mutex::new(BTreeMap::new()),
-            watermarks: self
-                .watermarks
-                .unwrap_or_else(|| Arc::new(InMemoryCronWatermarkStore::new())),
+            watermarks,
             cron_started: std::sync::Mutex::new(None),
             triggers: trigger_names,
             #[cfg(feature = "proc-baselines")]
@@ -2066,6 +2082,7 @@ impl KernelBuilder {
             .collect();
         let _ = sup.workers.set(workers);
         let mut wake_sources = self.wake_sources;
+        wake_sources.extend(trigger_crons);
         wake_sources.push(run_finished);
         let processes = ProcessTable::supervised(Arc::clone(&sup), self.spend);
         let agenda = Agenda::new(
@@ -2123,6 +2140,40 @@ impl KernelBuilder {
             }),
         })
     }
+}
+
+/// The kernel's own source for each cron expression of `triggers` no source in `sources`
+/// ticks on (spec 3.2 §7.4, spec 3.5 §7.11): one per expression, so every trigger on it
+/// matches each tick once, planned with the widest missed-tick policy of its triggers, its
+/// cursor kept in `watermarks` across restarts.
+fn trigger_cron_sources(
+    triggers: &[Trigger],
+    sources: &[Arc<dyn WakeSource>],
+    watermarks: &Arc<dyn CronWatermarkStore>,
+) -> Result<Vec<Arc<dyn WakeSource>>> {
+    let covered: std::collections::BTreeSet<&str> =
+        sources.iter().filter_map(|source| source.cron_expression()).collect();
+    let mut crons: BTreeMap<&str, adk_core::schedule::MissedFirePolicy> = BTreeMap::new();
+    for trigger in triggers {
+        if let Wake::Cron { expr, missed } = &trigger.wake
+            && !covered.contains(expr.as_str())
+        {
+            let widest = crons
+                .get(expr.as_str())
+                .map_or(*missed, |held| crate::wake::widest_policy(*held, *missed));
+            crons.insert(expr, widest);
+        }
+    }
+    crons
+        .into_iter()
+        .map(|(expr, missed)| {
+            let name =
+                format!("trigger-cron:{}", expr.split_whitespace().collect::<Vec<_>>().join("_"));
+            let watermark = SourceWatermark::new(Arc::clone(watermarks), name.clone());
+            let source = CronWakeSource::watermarked(name, expr, missed, Arc::new(watermark))?;
+            Ok(Arc::new(source) as Arc<dyn WakeSource>)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -2222,6 +2273,82 @@ mod tests {
         kernel.processes().kill(&process.meta.pid, "not needed").await.unwrap();
         eventually("the root to be dropped", || kernel.inner.sup.watched_roots().is_empty()).await;
         kernel.stop().await.unwrap();
+    }
+
+    /// A standing cron trigger fires with no source registered for it: the kernel adds one
+    /// watermarked source per expression, so two triggers on one expression each fire once
+    /// per tick, and a registered source on the expression takes its place (spec 3.5 §7.11).
+    /// The control plane's address is readable once it listens.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_standing_cron_trigger_fires_through_the_kernels_own_source() {
+        let every_second = "* * * * * *";
+        let wake =
+            || Wake::Cron { expr: every_second.into(), missed: adk_core::MissedFirePolicy::Skip };
+        let template = |target: &str| {
+            NewRun::new("background", "adk-rust", "alice", target, json!({ "text": "tick" }))
+        };
+        let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+        let loopback: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let kernel =
+            Kernel::builder()
+                .config(KernelConfig::default().with_control(
+                    ControlPlaneConfig::default().without_socket().with_http(loopback),
+                ))
+                .run_store(Arc::clone(&runs))
+                .trigger(Trigger::new("digest-a", wake(), template("digest-a")))
+                .trigger(Trigger::new("digest-b", wake(), template("digest-b")))
+                .build()
+                .unwrap();
+        let crons: Vec<&str> =
+            kernel.inner.wake_sources.iter().filter_map(|s| s.cron_expression()).collect();
+        assert_eq!(crons, [every_second], "one source for the expression");
+        assert_eq!(kernel.control_addr().await, None, "nothing listens before the start");
+        kernel.start().await.unwrap();
+        let addr = kernel.control_addr().await.expect("the control plane listens");
+        assert_ne!(addr.port(), 0, "the bound port, not the configured 0");
+
+        let started = tokio::time::Instant::now();
+        let fired = loop {
+            let targets: Vec<String> = runs
+                .list(adk_core::RunFilter::default())
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|run| run.target)
+                .collect();
+            if ["digest-a", "digest-b"].iter().all(|t| targets.iter().any(|run| run == t)) {
+                break targets;
+            }
+            assert!(started.elapsed() < Duration::from_secs(5), "no trigger fired: {targets:?}");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        kernel.stop().await.unwrap();
+        let count = |t: &str| fired.iter().filter(|run| *run == t).count();
+        assert!(count("digest-a").abs_diff(count("digest-b")) <= 1, "{fired:?}");
+
+        // A registered source on the expression takes the kernel's place.
+        let watermarks: Arc<dyn CronWatermarkStore> = Arc::new(InMemoryCronWatermarkStore::new());
+        let own = CronWakeSource::watermarked(
+            "mine",
+            every_second,
+            adk_core::MissedFirePolicy::Skip,
+            Arc::new(SourceWatermark::new(watermarks, "mine")),
+        )
+        .unwrap();
+        let kernel = Kernel::builder()
+            .run_store(Arc::new(InMemoryRunStore::new()))
+            .wake_source(Arc::new(own))
+            .trigger(Trigger::new("digest-a", wake(), template("digest-a")))
+            .build()
+            .unwrap();
+        let names: Vec<&str> = kernel
+            .inner
+            .wake_sources
+            .iter()
+            .filter(|s| s.cron_expression().is_some())
+            .map(|s| s.name())
+            .collect();
+        assert_eq!(names, ["mine"]);
     }
 
     /// A sleeper on a cron wake no registered source covers (spec 3.2 §7.4, §8.1 `wake

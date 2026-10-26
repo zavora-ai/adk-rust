@@ -135,8 +135,8 @@ pub trait SubjectData: Send + Sync {
     async fn erase(&self, subject: &str, receipts: &[ConsentRecord]) -> adk_core::Result<usize>;
 }
 
-/// Exports the leads that reference a subject's receipts; erases nothing, as a
-/// [`LeadStore`] has no deletion.
+/// The leads that reference a subject's receipts: exported, and deleted on erasure (spec 3.5
+/// §7.5; AWP 2.0 §11.3).
 pub struct LeadsData {
     leads: Arc<dyn LeadStore>,
 }
@@ -146,25 +146,43 @@ impl LeadsData {
     pub fn new(leads: Arc<dyn LeadStore>) -> Self {
         Self { leads }
     }
-}
 
-#[async_trait]
-impl SubjectData for LeadsData {
-    async fn export(&self, _subject: &str, receipts: &[ConsentRecord]) -> adk_core::Result<Value> {
+    /// The leads that reference one of `receipts`.
+    async fn of(
+        &self,
+        receipts: &[ConsentRecord],
+    ) -> adk_core::Result<Vec<adk_awp::v2::store::Lead>> {
         let ids: BTreeSet<Uuid> = receipts.iter().map(|record| record.receipt.id).collect();
-        let leads = self
+        Ok(self
             .leads
             .since(DateTime::<Utc>::MIN_UTC)
             .await
             .map_err(|error| adk_core::AdkError::session(error.to_string()))?
             .into_iter()
             .filter(|lead| lead.consent.iter().any(|reference| ids.contains(&reference.0)))
-            .collect::<Vec<_>>();
-        Ok(json!({ "leads": leads }))
+            .collect())
+    }
+}
+
+#[async_trait]
+impl SubjectData for LeadsData {
+    async fn export(&self, _subject: &str, receipts: &[ConsentRecord]) -> adk_core::Result<Value> {
+        Ok(json!({ "leads": self.of(receipts).await? }))
     }
 
-    async fn erase(&self, _subject: &str, _receipts: &[ConsentRecord]) -> adk_core::Result<usize> {
-        Ok(0)
+    async fn erase(&self, _subject: &str, receipts: &[ConsentRecord]) -> adk_core::Result<usize> {
+        let mut erased = 0;
+        for lead in self.of(receipts).await? {
+            if self
+                .leads
+                .delete(&lead.id)
+                .await
+                .map_err(|error| adk_core::AdkError::session(error.to_string()))?
+            {
+                erased += 1;
+            }
+        }
+        Ok(erased)
     }
 }
 
@@ -267,8 +285,10 @@ impl ConsentState {
     /// rejected, and `consent.revoked` reaches the requesters whose calls referenced them.
     pub(crate) async fn revoked(&self, subject: &str, records: &[ConsentRecord]) {
         let ids: BTreeSet<Uuid> = records.iter().map(|record| record.receipt.id).collect();
-        let mut audiences: BTreeMap<Uuid, BTreeSet<awp_types::RequesterId>> =
-            ids.iter().map(|id| (*id, self.references.of(*id))).collect();
+        let mut audiences: BTreeMap<Uuid, BTreeSet<awp_types::RequesterId>> = BTreeMap::new();
+        for id in &ids {
+            audiences.insert(*id, self.references.of(*id).await);
+        }
         match self.held_calls.pending().await {
             Ok(pending) => {
                 for held in pending {

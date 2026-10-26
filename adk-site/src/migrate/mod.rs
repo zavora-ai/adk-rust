@@ -12,7 +12,7 @@
 //! | Feature mapping | [`mapping::map_features`]: `CapabilityV2` drafts and owner decisions | §7.8 "Feature mapping", N5 |
 //! | Content | [`convert::to_content`]: inventory items as content items that keep their URLs | §7.8.2, S17 |
 //! | Freeze | [`freeze::Freeze`]: a crawled snapshot published as a release, forms mapped to edge capabilities | §7.8 "Freeze", S4 |
-//! | Parity | [`parity::MigrationParity`], a launch-gate extension: URL coverage, perceptual difference, main-text similarity, metadata | §7.8.1 |
+//! | Parity | [`parity::MigrationParity`], a launch-gate extension: URL coverage, main-text similarity, metadata, and the perceptual difference when the owner keeps the design ([`parity::SiteDesign`]) | §7.8.1 |
 //! | Probes | [`probe::Prober`]: page digests against the release window, status, certificate, DNS, security headers; [`probe::Drift`] for the Guardian | §7.8 "Probes", §7.8.3, S5 |
 //! | Archive | [`archive::LegacyArchive`]: the legacy export as an encrypted artifact; no delete | A-I10 |
 //!

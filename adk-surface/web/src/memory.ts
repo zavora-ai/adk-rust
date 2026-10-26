@@ -32,10 +32,9 @@ export function provenanceOf(origin: RememberedFact["origin"]): Provenance {
   }
 }
 
-/** A kernel fact as the home lists it; what noticed a guess is named as the person reads it. */
+/** A kernel fact as the home lists it; the agent that noticed a guess is named with the roster. */
 export function factOf(fact: RememberedFact): MemoryFact {
-  const noticedBy = fact.noticedBy ? (areaName(fact.noticedBy) ?? capital(fact.noticedBy)) : undefined;
-  return { id: fact.id, text: fact.text, provenance: provenanceOf(fact.origin), noticedBy };
+  return { id: fact.id, text: fact.text, provenance: provenanceOf(fact.origin), noticedBy: fact.noticedBy };
 }
 
 /**

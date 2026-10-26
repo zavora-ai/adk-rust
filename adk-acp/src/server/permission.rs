@@ -30,7 +30,10 @@
 //! are is the implementation's to decide — is offered allow once and deny only, and an
 //! "always" answer to a request that did not offer one is a denial. A call a remembered
 //! rule already covers, one remembered for an earlier call of the same batch included, is
-//! decided by the rule and not asked about.
+//! decided by the rule and not asked about. An "always" answer that differs from an answer
+//! the person gave an earlier call of the same batch is remembered only once that batch's
+//! calls have run, so the new rule never overrides an answer already given; until then the
+//! later calls of the batch are asked about.
 //!
 //! # SDK safety
 //!
@@ -128,6 +131,10 @@ pub trait StandingPermissions: Send + Sync {
 
     /// Remembers `decision` as a standing rule covering what [`offer`](Self::offer)
     /// described for `request`, owned by the person in `scope`.
+    ///
+    /// The server calls it as soon as the person answers, or — when the answer differs from
+    /// one the person gave an earlier call of the same batch — once that batch's calls have
+    /// run, so the rule cannot override that earlier answer.
     ///
     /// # Errors
     ///

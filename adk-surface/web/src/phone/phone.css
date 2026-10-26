@@ -190,6 +190,8 @@
 }
 
 .phone-command {
+  /* Never squeezed by the screen's column: the whole command stays readable as it scrolls. */
+  flex-shrink: 0;
   margin: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -214,6 +216,17 @@
   background: #ee6a5f;
   box-shadow: 16px 0 0 #f5bd4f, 32px 0 0 #61c454;
   margin-right: 34px;
+}
+
+.phone-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+}
+
+.phone-ask p {
+  margin: 0;
 }
 
 .phone-command pre {

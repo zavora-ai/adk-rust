@@ -2901,4 +2901,93 @@ mod tests {
             ["run_command: cargo test -p a", "run_command: cargo test -p b"]
         );
     }
+
+    /// Runs one turn in which the model holds `cargo test -p a` (call-1) and
+    /// `cargo test -p b` (call-2), answering the `n`th permission request as `prefer(n)`
+    /// says; returns the calls asked about, the commands run, and the rules remembered.
+    async fn run_two_call_batch(
+        prefer: Preference,
+    ) -> (Vec<String>, Vec<String>, Vec<(String, serde_json::Value, ToolConfirmationDecision)>)
+    {
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let batch = Content {
+            role: "model".to_string(),
+            parts: ["call-1", "call-2"]
+                .iter()
+                .zip(["cargo test -p a", "cargo test -p b"])
+                .map(|(id, command)| adk_core::Part::FunctionCall {
+                    name: "run_command".to_string(),
+                    args: serde_json::json!({"command": command}),
+                    id: Some((*id).to_string()),
+                    thought_signature: None,
+                })
+                .collect(),
+        };
+        let model =
+            ScriptModel(Mutex::new([batch, Content::new("model").with_text("done")].into()));
+        let inner = adk_agent::LlmAgentBuilder::new("governed")
+            .model(Arc::new(model))
+            .tool(Arc::new(CommandTool { name: "run_command", ran: ran.clone() }))
+            .build()
+            .expect("agent");
+        let rules = Arc::new(RememberedAnswers::default());
+        let config = AcpServerConfigBuilder::new()
+            .agent(Arc::new(GovernedAgent { inner: Arc::new(inner), rules: rules.clone() }))
+            .session_service(Arc::new(adk_session::InMemorySessionService::new()))
+            .agent_name("governed")
+            .user_id("alice")
+            .standing_permissions(rules.clone())
+            .build()
+            .expect("valid config");
+        let asked = drive_prompts_with(config, &["test both packages"], prefer).await;
+        let asked =
+            asked.iter().map(|request| request.tool_call.tool_call_id.to_string()).collect();
+        let ran = ran.lock().expect("ran lock").clone();
+        let remembered = rules.rules.lock().expect("rules lock").clone();
+        (asked, ran, remembered)
+    }
+
+    /// Wave 2 review, finding 1: "Always allow" on a later call of a batch never runs an
+    /// earlier call of the same batch the person denied; the rule is remembered once the
+    /// batch has run.
+    #[tokio::test]
+    async fn always_allow_later_in_a_batch_never_overrides_an_earlier_deny() {
+        fn deny_then_always_allow(index: usize) -> &'static [PermissionOptionKind] {
+            if index == 0 {
+                &[PermissionOptionKind::RejectOnce]
+            } else {
+                &[PermissionOptionKind::AllowAlways]
+            }
+        }
+        let (asked, ran, remembered) = run_two_call_batch(deny_then_always_allow).await;
+        assert_eq!(asked, ["call-1", "call-2"]);
+        assert_eq!(ran, ["run_command: cargo test -p b"], "the denied call-1 does not run");
+        assert_eq!(
+            remembered,
+            [(
+                "run_command".to_string(),
+                serde_json::json!({"command": "cargo test -p b"}),
+                ToolConfirmationDecision::Approve
+            )],
+            "the 'always' answer is still remembered"
+        );
+    }
+
+    /// Wave 2 review, finding 1 (mirror): "Always deny" on a later call of a batch never
+    /// refuses an earlier call of the same batch the person allowed once.
+    #[tokio::test]
+    async fn always_deny_later_in_a_batch_never_overrides_an_earlier_allow_once() {
+        fn allow_once_then_always_deny(index: usize) -> &'static [PermissionOptionKind] {
+            if index == 0 {
+                &[PermissionOptionKind::AllowOnce]
+            } else {
+                &[PermissionOptionKind::RejectAlways]
+            }
+        }
+        let (asked, ran, remembered) = run_two_call_batch(allow_once_then_always_deny).await;
+        assert_eq!(asked, ["call-1", "call-2"]);
+        assert_eq!(ran, ["run_command: cargo test -p a"], "the allowed call-1 runs");
+        assert_eq!(remembered.len(), 1, "the 'always deny' answer is remembered");
+        assert_eq!(remembered[0].2, ToolConfirmationDecision::Deny);
+    }
 }

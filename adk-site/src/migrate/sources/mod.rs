@@ -12,6 +12,7 @@
 mod crawl;
 mod presence;
 mod replay;
+mod schema_types;
 mod wordpress;
 mod wxr;
 
@@ -27,6 +28,7 @@ pub use presence::Presence;
 pub use replay::{
     ContainerDriver, DockerCliDriver, IsolatedReplay, ReplayContainer, ReplayReport, ReplaySpec,
 };
+pub use schema_types::schema_org_ancestry;
 pub use wordpress::WordPressRest;
 pub use wxr::Wxr;
 

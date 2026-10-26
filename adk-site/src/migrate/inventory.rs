@@ -507,3 +507,15 @@ impl ReviewQuote {
         self.author.as_deref().is_some_and(|a| !a.trim().is_empty()) && self.approved_by.is_some()
     }
 }
+
+impl From<&ReviewQuote> for crate::gate::QuotableReview {
+    /// The review as the launch gate polices quotes of it (spec 3.5 S2).
+    fn from(review: &ReviewQuote) -> Self {
+        Self {
+            text: review.text.clone(),
+            author: review.author.clone(),
+            approved_by: review.approved_by.clone(),
+            source: Some(review.source.url.clone()),
+        }
+    }
+}

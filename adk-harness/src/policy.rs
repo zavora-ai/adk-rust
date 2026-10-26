@@ -47,6 +47,8 @@ pub(crate) const HARNESS_TOOL_NAMES: &[&str] = &[
     "edit_file",
     "apply_patch",
     "bash",
+    "shell_output",
+    "shell_kill",
     "write_todos",
     "update_todo",
     "exit_plan_mode",
@@ -315,6 +317,9 @@ impl ToolClassRegistry {
         registry.register("edit_file", ToolKind::Edit);
         registry.register("apply_patch", ToolKind::Edit);
         registry.register("bash", ToolKind::Shell(Isolation::Host));
+        // Reading a shell's output and stopping one only remove effects (spec 3.1 §7.29).
+        registry.register(crate::shell::SHELL_OUTPUT, ToolKind::Read);
+        registry.register(crate::shell::SHELL_KILL, ToolKind::Read);
         registry.register("memory_read", ToolKind::Read);
         registry.register("memory_write", ToolKind::MemoryWrite);
         registry.register("memory_delete", ToolKind::MemoryWrite);

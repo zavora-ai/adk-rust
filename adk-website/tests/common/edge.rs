@@ -45,6 +45,8 @@ pub struct EdgeSite {
     pub router: Router,
     pub stores: MemoryEdgeStores,
     pub buyer: HttpSignatureSigner,
+    /// A second agent of the buyer's directory: another `known` requester.
+    pub other_buyer: HttpSignatureSigner,
     pub approvals: Arc<dyn ApprovalService>,
     pub contacts: Arc<InMemoryContactBook>,
     pub keys: SiteKeys,
@@ -68,11 +70,29 @@ pub async fn edge_with(
     domain: &str,
     public_agent: Option<adk_website::edge::PublicAgentFactory>,
 ) -> EdgeSite {
+    edge_shop(site, domain, Shop { public_agent, ..Shop::default() }).await
+}
+
+/// What a shop's edge is built with beyond the defaults.
+#[derive(Default)]
+pub struct Shop {
+    pub public_agent: Option<adk_website::edge::PublicAgentFactory>,
+    pub payments: Option<Arc<dyn adk_website::edge::handlers::PaymentDesk>>,
+    pub calendar: Option<Arc<dyn adk_website::edge::handlers::Calendar>>,
+    pub thresholds: adk_website::packs::ApprovalThresholds,
+}
+
+/// The edge of `site` with a payment desk, a calendar and the owner's thresholds.
+pub async fn edge_shop(site: &Site, domain: &str, shop: Shop) -> EdgeSite {
     let keys = site_keys(domain);
     let buyer_key = Arc::new(Ed25519SigningKey::generate().unwrap());
+    let other_key = Arc::new(Ed25519SigningKey::generate().unwrap());
     let directories = Arc::new(InMemoryKeyDirectorySource::new());
-    directories.insert(BUYER, KeyDirectory::from_keys([buyer_key.as_ref()]), None).await;
+    directories
+        .insert(BUYER, KeyDirectory::from_keys([buyer_key.as_ref(), other_key.as_ref()]), None)
+        .await;
     let buyer = HttpSignatureSigner::builder(buyer_key, BUYER).build().unwrap();
+    let other_buyer = HttpSignatureSigner::builder(other_key, BUYER).build().unwrap();
     let tiers = EdgeTiers::builder()
         .verifier(WebBotAuthTrustAssigner::new(HttpSignatureVerifier::builder(directories).build()))
         .build();
@@ -96,8 +116,9 @@ pub async fn edge_with(
         )),
         search: Arc::new(ReleaseSearch::new(site.search.clone())),
         contacts: contacts.clone(),
-        calendar: None,
-        payments: None,
+        calendar: shop.calendar,
+        payments: shop.payments,
+        thresholds: shop.thresholds,
         approvals: Some(approvals.clone()),
         tiers: Some(tiers),
         consent: Some(consent_config(&site.template, policy, vec![9u8; 32])),
@@ -107,13 +128,24 @@ pub async fn edge_with(
         audit: None,
         beacon: None,
         limits: None,
-        public_agent,
+        public_agent: shop.public_agent,
     })
     .unwrap();
     let router = site_router(&edge.edge, site.host.clone(), &site.base.config.name);
     let announced = Arc::new(Recorded { target: edge.announcer(), seen: Mutex::default() });
     site.announcer.set(announced.clone());
-    EdgeSite { edge, router, stores, buyer, approvals, contacts, keys, origin, announced }
+    EdgeSite {
+        edge,
+        router,
+        stores,
+        buyer,
+        other_buyer,
+        approvals,
+        contacts,
+        keys,
+        origin,
+        announced,
+    }
 }
 
 /// The edge's announcer, recording each release and whether the edge took it.
@@ -162,6 +194,12 @@ impl EdgeSite {
     /// `request` signed by the buyer agent: the `known` tier.
     pub fn signed(&self, mut request: Request<Body>) -> Request<Body> {
         self.buyer.sign_request(&mut request).unwrap();
+        request
+    }
+
+    /// `request` signed by another agent of the buyer's directory: `known`, another requester.
+    pub fn signed_by_other(&self, mut request: Request<Body>) -> Request<Body> {
+        self.other_buyer.sign_request(&mut request).unwrap();
         request
     }
 

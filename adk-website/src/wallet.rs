@@ -5,16 +5,39 @@
 //! | [`WalletKpi`] | `adk-payments`' `WalletKpiSource` as the kernel's `KpiSource`: spend, revenue, profit, cost per lead and per sale for the KPI tracker and the weekly review |
 //! | [`SiteOutcomes`] | `CommerceOutcomes` over the site's records: leads from the back office's `lead_captured` signals, revenue and sales from a commerce ledger |
 //! | Alarms | `WalletAlarmHook` is [`AlarmRouter`](crate::alarms::AlarmRouter): an anomaly is P1, a reconciliation mismatch P2 |
+//! | [`finance_tools`] | The Finance agent's `wallet_pay` and `wallet_status`, which [`TeamKit::wallet`](crate::team::TeamKit::wallet) gives it |
 
 use std::sync::Arc;
 
-use adk_core::Result;
+use adk_auth::{ScopeGuard, StaticScopeResolver};
+use adk_core::{Result, Tool};
 use adk_kernel::PartitionId;
 use adk_kernel::charter::{KpiSource, SignalFilter, SignalStore};
-use adk_payments::wallet::{CommerceOutcomes, WalletKpiSource};
+use adk_payments::auth::PAYMENT_EXECUTE_SCOPE;
+use adk_payments::wallet::{CommerceOutcomes, Wallet, WalletKpiSource, WalletToolset};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
+
+/// The Finance agent's wallet tools (spec 3.5 §7.14, §7.19): `wallet_pay` and
+/// `wallet_status` over the owner's `wallet`.
+///
+/// The tools hold the payment scope (`payments:payment:execute`) because the owner gave
+/// the Finance agent this wallet: the mandates' caps, limits, payees and rails, the
+/// anomaly rule and the governed path's holds decide each payment, and no tool raises a cap,
+/// adds a payee or adds a payment method (A-I16).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let tools = finance_tools(wallet);
+/// let names: Vec<&str> = tools.iter().map(|tool| tool.name()).collect();
+/// assert_eq!(names, ["wallet_pay", "wallet_status"]);
+/// ```
+pub fn finance_tools(wallet: Wallet) -> Vec<Arc<dyn Tool>> {
+    let guard = ScopeGuard::new(StaticScopeResolver::new(vec![PAYMENT_EXECUTE_SCOPE.to_string()]));
+    WalletToolset::new(wallet).with_scope_guard(guard).tools()
+}
 
 /// The wallet as a kernel KPI source (spec 3.5 §7.11, §7.14): a forward to
 /// `WalletKpiSource::read`, which answers only for its own site (A-I22).

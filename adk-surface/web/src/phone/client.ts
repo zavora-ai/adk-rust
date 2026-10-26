@@ -18,7 +18,7 @@ import { ApiError } from "../client";
 import { parseSse } from "../sse";
 import type { TokenStore } from "./idb";
 import { confirmAnswer, registerPasskey } from "./passkey";
-import { subscribe as browserSubscribe } from "./push";
+import { subscribe as browserSubscribe, unsubscribe as browserUnsubscribe } from "./push";
 
 /** One frame of a session's feed the decide screen watches. */
 export type PhoneFrame = { type: "decisions"; cards: DecisionCard[] } | { type: "other" };
@@ -33,18 +33,24 @@ export interface PhoneClient {
   /** The open decisions, and those decided since `decidedSince`. */
   decisions(decidedSince?: string): Promise<DecisionCard[]>;
   decision(id: string): Promise<DecisionCard>;
-  /** Answers through the device's own route; never for an answer that needs presence. */
-  answer(card: DecisionCard, answer: Answer, expanded: boolean): Promise<CommandOutcome>;
+  /**
+   * Answers through the device's own route, with the changed arguments of an Edit; never for
+   * an answer that needs presence.
+   */
+  answer(card: DecisionCard, answer: Answer, expanded: boolean, editedArgs?: unknown): Promise<CommandOutcome>;
+  /** "Take over", then "Done": the secret the person typed, for the call that asked (§8.2). */
+  takeOver(card: DecisionCard, secret: string): Promise<CommandOutcome>;
   /** "Confirm it's you and approve": options, the passkey, then the bound answer. */
   confirm(card: DecisionCard, answer: Answer, expanded: boolean, editedArgs?: unknown): Promise<CommandOutcome>;
   stop(): Promise<CommandOutcome>;
   info(): Promise<PhoneInfo>;
   /** Claims a pairing code and keeps the device token. */
   claim(code: string): Promise<void>;
-  /** Asks for notifications and subscribes to wake-ups. */
+  /** Asks for notifications and subscribes to wake-ups; `false` when the browser or the phone's settings refuse them. */
   allowNotifications(): Promise<boolean>;
   /** Sets up this phone's passkey. */
   addPasskey(): Promise<void>;
+  /** Ends this phone's wake-ups and forgets its token; removing the phone stays in the home. */
   signOut(): Promise<void>;
   /** The session's feed, for the decide screen, until `signal` aborts. */
   watch(session: string, signal: AbortSignal): AsyncIterable<PhoneFrame>;
@@ -118,11 +124,20 @@ export class HttpPhoneClient implements PhoneClient {
     return this.request<DecisionCard>(`/surface/decisions/${encodeURIComponent(id)}?surface=phone`);
   }
 
-  answer(card: DecisionCard, answer: Answer, expanded: boolean) {
+  answer(card: DecisionCard, answer: Answer, expanded: boolean, editedArgs?: unknown) {
     return this.post<CommandOutcome>(`/surface/decisions/${encodeURIComponent(card.id)}/answer`, {
       version: card.version,
       answer,
       expanded,
+      ...(editedArgs === undefined ? {} : { editedArgs }),
+    });
+  }
+
+  takeOver(card: DecisionCard, secret: string) {
+    return this.post<CommandOutcome>(`/surface/decisions/${encodeURIComponent(card.id)}/take-over`, {
+      surface: "phone",
+      version: card.version,
+      secret,
     });
   }
 
@@ -165,6 +180,9 @@ export class HttpPhoneClient implements PhoneClient {
   }
 
   async signOut() {
+    // Best effort: a phone whose pairing already ended has nothing left to unsubscribe.
+    await this.request("/surface/phone/push", { method: "DELETE" }).catch(() => undefined);
+    await browserUnsubscribe().catch(() => undefined);
     await this.tokens.clear();
     this.token = undefined;
   }

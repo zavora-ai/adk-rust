@@ -245,10 +245,11 @@ impl TerminalSurface {
         }
     }
 
-    /// Talks with the agents by voice in the full-screen UI (spec 3.3 §5.6; feature `voice`):
-    /// the conversation's own session is the thread shown, its state is a line above the
-    /// message box, and `c` cancels a spoken "allow once" while it counts down. In process
-    /// only: the conversation runs on the hub's harness.
+    /// Talks with the agents by voice (spec 3.3 §5.6; feature `voice`): the conversation's own
+    /// session is the thread shown, its state is a line above the message box — in the inline
+    /// UI, what it heard and each countdown are printed into the scrollback — and `c` cancels a
+    /// spoken "allow once" while it counts down. In process only: the conversation runs on the
+    /// hub's harness. JSON output and piped input have no voice conversation.
     #[cfg(feature = "voice")]
     #[must_use]
     pub fn voice(self, voice: TerminalVoice) -> Self {

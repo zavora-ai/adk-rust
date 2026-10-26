@@ -237,3 +237,79 @@ async fn every_kernel_event_reads_the_status_again() {
     assert_eq!(next, Some(Badge::Count(1)));
     running.abort();
 }
+
+#[tokio::test]
+async fn a_status_read_the_kernel_fails_is_not_the_kernel_being_away() {
+    for answer in [
+        Answer::Json(500, json!({ "error": { "message": "store failed" } })),
+        Answer::Json(200, json!("not a status")),
+    ] {
+        let answer = Arc::new(Mutex::new(Some(answer)));
+        let (target, _) = stub(Arc::new(move |request: &Seen| match request.path.as_str() {
+            "/api/kernel/health" => Answer::Json(200, json!({})),
+            _ => answer.lock().unwrap().take().unwrap_or(Answer::Json(500, json!({}))),
+        }))
+        .await;
+        assert_eq!(StatusWatcher::new(target).unwrap().read().await, Reach::Unread);
+    }
+}
+
+#[tokio::test]
+async fn one_failed_status_read_keeps_the_last_status() {
+    // 2 waiting, then a 500, then 1 waiting.
+    let answers = Arc::new(Mutex::new(vec![Some(2_u32), None]));
+    let (frames_tx, frames_rx) = mpsc::unbounded_channel();
+    let frames_rx = Arc::new(Mutex::new(Some(frames_rx)));
+    let next = Arc::clone(&answers);
+    let (target, seen) = stub(Arc::new(move |request: &Seen| match request.path.as_str() {
+        "/api/kernel/health" => Answer::Json(200, json!({})),
+        "/api/kernel/events" => match frames_rx.lock().unwrap().take() {
+            Some(frames) => Answer::Events(frames),
+            None => Answer::Json(503, json!({})),
+        },
+        _ => {
+            let mut answers = next.lock().unwrap();
+            let answer = if answers.len() > 1 { answers.remove(0) } else { answers[0] };
+            match answer {
+                Some(decisions) => Answer::Json(200, status(decisions)),
+                None => Answer::Json(500, json!({ "error": { "message": "store failed" } })),
+            }
+        }
+    }))
+    .await;
+    let watcher = StatusWatcher::new(target).unwrap().every(Duration::from_secs(60));
+    let (seen_tx, mut seen_rx) = mpsc::unbounded_channel();
+    let running = tokio::spawn(async move {
+        watcher.run(move |reach| seen_tx.send(reach.clone()).unwrap()).await
+    });
+    let first = tokio::time::timeout(Duration::from_secs(5), seen_rx.recv()).await.unwrap();
+    assert_eq!(first.map(|reach| reach.badge()), Some(Badge::Count(2)));
+
+    // Events until the 500 has been read: it calls nothing.
+    let reads = |seen: &Arc<Mutex<Vec<Seen>>>| {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|request| request.path.starts_with("/api/surface/status"))
+            .count()
+    };
+    for _ in 0..50 {
+        if reads(&seen) >= 2 {
+            break;
+        }
+        frames_tx.send(()).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(reads(&seen) >= 2, "the failed read never happened");
+    *answers.lock().unwrap() = vec![Some(1)];
+    let mut after = None;
+    for _ in 0..50 {
+        frames_tx.send(()).unwrap();
+        if let Ok(reach) = tokio::time::timeout(Duration::from_millis(100), seen_rx.recv()).await {
+            after = reach;
+            break;
+        }
+    }
+    assert_eq!(after.map(|reach| reach.badge()), Some(Badge::Count(1)));
+    running.abort();
+}

@@ -127,7 +127,7 @@ curl -s -X POST http://127.0.0.1:8080/api/kernel/away/seen \
 |---|---|---|
 | `youSaidThis` | You said this | `Known`, from the person's own words |
 | `youConfirmedThis` | You confirmed this | `Known`, confirmed or corrected by a person |
-| `guess` | A guess | `Assumed`; `noticedBy` names the area that noticed it |
+| `guess` | A guess | `Assumed`; `noticedBy` names the agent that noticed it: the agent whose session it was learned in, as the session's first run stamped it |
 
 | Route | Home's action | Effect |
 |---|---|---|
@@ -144,9 +144,10 @@ through the harness, which updates recall, its index and its own audit records.
 
 `GET /kernel/record?limit=` lists the latest actions on the kernel's signed audit log, newest
 first, as structured fields (`action`, `kernelAction` for the kernel's own records such as
-`approvals.decide` or `settings.mode`, `subject`, `agent`, `tool`, `decision`, `outcome`,
-`how`, `channel` — a paired device's name for its answers — and `target`) a surface words as "You let Finance send one email, from
-Telegram". `GET /kernel/record/check` verifies the whole log against its signed checkpoints:
+`approvals.decide` or `settings.mode`, `subject`, `agent` — for an answer, the agent whose call
+it decided — `tool`, `decision` — for a standing rule's record, `allowed` or `denied` — `outcome`,
+`how`, `channel` — a paired device's name for its answers — `surface` and `target`) a surface
+words as "You let Finance use send_email, from Telegram". `GET /kernel/record/check` verifies the whole log against its signed checkpoints:
 
 | Field | Meaning |
 |---|---|

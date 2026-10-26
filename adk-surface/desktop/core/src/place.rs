@@ -1,4 +1,7 @@
-//! Where the panel opens (spec 3.3 §5.5): at the tray icon, inside the screen's work area.
+//! Where the panel opens (spec 3.3 §5.5): at the tray icon, inside the screen's work area;
+//! and whether a click on the icon opens it or closes it.
+
+use std::time::{Duration, Instant};
 
 /// A point in physical pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,9 +87,87 @@ fn clamp(value: i64, low: i32, high: i64) -> i32 {
     i32::try_from(placed).unwrap_or(if placed < 0 { i32::MIN } else { i32::MAX })
 }
 
+/// What a click on the tray icon does to the panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Toggle {
+    /// Open it at the icon.
+    Show,
+    /// Close it.
+    Hide,
+    /// Nothing: this click already closed it.
+    Nothing,
+}
+
+/// Opens and closes the panel from the tray icon (spec 3.3 §5.5: "a click on the tray icon").
+///
+/// The panel hides when it loses the focus. Pressing the tray icon takes the focus first, as on
+/// Windows, where the taskbar takes it on mouse-down, so the panel is already hidden when the
+/// click (mouse-up) arrives. A click within [`PanelToggle::WITHIN`] of a hide on focus loss is
+/// the click that closed the panel, not a click to open it again.
+///
+/// # Example
+///
+/// ```
+/// use std::time::{Duration, Instant};
+/// use adk_desktop_core::{PanelToggle, Toggle};
+///
+/// let mut toggle = PanelToggle::default();
+/// let pressed = Instant::now();
+/// assert_eq!(toggle.click(pressed, false), Toggle::Show);
+/// // The next press blurs the open panel, which hides; its release must not open it again.
+/// toggle.blurred(pressed + Duration::from_secs(3));
+/// assert_eq!(toggle.click(pressed + Duration::from_millis(3_120), false), Toggle::Nothing);
+/// ```
+#[derive(Debug, Default)]
+pub struct PanelToggle {
+    hidden_on_blur: Option<Instant>,
+}
+
+impl PanelToggle {
+    /// How soon after a hide on focus loss a click still counts as the one that hid it.
+    pub const WITHIN: Duration = Duration::from_millis(400);
+
+    /// The panel, shown, lost the focus at `at` and hid.
+    pub fn blurred(&mut self, at: Instant) {
+        self.hidden_on_blur = Some(at);
+    }
+
+    /// A click on the icon at `at`, with the panel `visible` or not.
+    pub fn click(&mut self, at: Instant, visible: bool) -> Toggle {
+        let hid_it = self
+            .hidden_on_blur
+            .take()
+            .is_some_and(|hidden| at.saturating_duration_since(hidden) <= Self::WITHIN);
+        match (visible, hid_it) {
+            (true, _) => Toggle::Hide,
+            (false, true) => Toggle::Nothing,
+            (false, false) => Toggle::Show,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_click_that_blurred_the_panel_closes_it_and_the_next_one_opens_it() {
+        let mut toggle = PanelToggle::default();
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        // Without a blur first (macOS, or the menu's Show decisions) a click toggles.
+        assert_eq!(toggle.click(at(0), false), Toggle::Show);
+        assert_eq!(toggle.click(at(1_000), true), Toggle::Hide);
+        assert_eq!(toggle.click(at(2_000), false), Toggle::Show);
+        // Windows: mouse-down blurs and hides the panel, then mouse-up clicks.
+        toggle.blurred(at(5_000));
+        assert_eq!(toggle.click(at(5_150), false), Toggle::Nothing);
+        // The blur is spent: the next click opens it.
+        assert_eq!(toggle.click(at(5_400), false), Toggle::Show);
+        // Clicking elsewhere hid it a while ago: a click on the icon opens it.
+        toggle.blurred(at(9_000));
+        assert_eq!(toggle.click(at(9_000) + PanelToggle::WITHIN * 2, false), Toggle::Show);
+    }
 
     const PANEL: Size = Size { width: 420, height: 700 };
 

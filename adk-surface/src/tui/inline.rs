@@ -61,6 +61,9 @@ pub(crate) struct Printer<W: Write> {
     printed_output: Option<u64>,
     /// The Agents view as last printed (spec 3.3 §5.7): printed again when it changes.
     printed_agents: Option<super::agents::AgentsPane>,
+    /// The voice line as last printed (spec 3.3 §5.6).
+    #[cfg(feature = "voice")]
+    printed_voice: super::voice::VoiceLine,
 }
 
 impl<W: Write> Printer<W> {
@@ -83,6 +86,8 @@ impl<W: Write> Printer<W> {
             focused: None,
             printed_output: None,
             printed_agents: None,
+            #[cfg(feature = "voice")]
+            printed_voice: super::voice::VoiceLine::default(),
         }
     }
 
@@ -190,6 +195,14 @@ impl<W: Write> Printer<W> {
             }
         }
         self.printed_queued.clone_from(&app.queued);
+        // The voice conversation's news, each once (spec 3.3 §5.6).
+        #[cfg(feature = "voice")]
+        if let Some(voice) = &app.voice {
+            for news in voice.news(&self.printed_voice, now) {
+                lines.push(Line::styled(news, self.renderer.theme.accent()));
+            }
+            self.printed_voice.clone_from(voice);
+        }
         if app.view != self.view {
             self.view = app.view;
             match app.view {
@@ -400,6 +413,17 @@ async fn inline(surface: TerminalSurface) -> io::Result<i32> {
     let session = surface.initial_session().await;
     let (mut app, pump, tx, mut rx) = start(&surface, session.clone());
     app.inline = true;
+    let mut commands = Commands::default();
+    let mut shown = vec![session];
+    // A voice conversation shows its own session (spec 3.3 §5.6).
+    #[cfg(feature = "voice")]
+    let voice = super::voice::open(&surface.voice, &surface.engine, &surface.caller, &tx).await?;
+    #[cfg(feature = "voice")]
+    if let Some((session, _)) = &voice {
+        for effect in app.switch_session(session.clone()) {
+            surface.apply(effect, &mut app, &pump, &mut commands, &tx, &mut shown).await;
+        }
+    }
 
     term::enter_inline(&mut io::stdout())?;
     let guard = Guard;
@@ -407,8 +431,6 @@ async fn inline(surface: TerminalSurface) -> io::Result<i32> {
     let mut events = EventStream::new();
     let mut tick = tokio::time::interval(TICK);
     let mut code = EXIT_DONE;
-    let mut commands = Commands::default();
-    let mut shown = vec![session];
     loop {
         let now = Instant::now();
         while let Ok(update) = rx.try_recv() {
@@ -448,6 +470,10 @@ async fn inline(surface: TerminalSurface) -> io::Result<i32> {
         if quit {
             break;
         }
+    }
+    #[cfg(feature = "voice")]
+    if let Some((_, running)) = voice {
+        running.end().await;
     }
     drop(pump);
     let mut out = printer.into_inner();

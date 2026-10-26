@@ -237,7 +237,7 @@ pub async fn run(mode: Mode) -> Result<Checks> {
     bindings
         .put_binding(ChannelBinding::new("whatsapp", OWNER_PHONE, "wa-1", OWNER, Utc::now()))
         .await?;
-    let router = AuthoringRouter::new(bindings);
+    let router = AuthoringRouter::new(bindings.clone());
     let message = "New loaf for launch at 9 today: Seeded rye, 520 KES. Three photos attached.";
     let route = router
         .route(&ChannelInbound::text("whatsapp", OWNER_PHONE, "wa-1", "m-1", message))
@@ -271,8 +271,9 @@ pub async fn run(mode: Mode) -> Result<Checks> {
                 "{}\n\nThe owner wrote on WhatsApp: \"{message}\". Draft the product with \
                  content_draft (kind product, slug seeded-rye, language en, fields title, summary, \
                  sku seeded-rye, price 520, currency KES, goal sales, a one-line body, schedule \
-                 publishAt {launch_at}, job onboarding). Then attach each photo with media_intake, \
-                 then publish the draft with site_publish.",
+                 publishAt {launch_at}, job onboarding). The message's three photos reach the \
+                 draft through the channel; when the owner says they are attached, publish the \
+                 draft with site_publish.",
                 AgentRole::Steward.prompt()
             ))
             .mode(HarnessMode::Ask)
@@ -302,31 +303,35 @@ pub async fn run(mode: Mode) -> Result<Checks> {
     if draft.is_empty() {
         println!("      the draft did not come back: {:?}", responses(&first));
     }
-    let mut live_attached = 0;
-    if mode.is_live() {
-        // A model never receives a message's photos: the channel adapter attaches them to the
-        // draft through the back office's media intake, as here.
-        checks.gap(
-            "a WhatsApp message's photos have no path into a draft but the Steward's \
-             `media_intake`, which takes the bytes as base64 arguments the model never received; \
-             the live run attaches them as a channel adapter would",
-        );
-        let intake = adk_harness::website::back_office_tools(&shop.runtime)
-            .into_iter()
-            .find(|t| t.name() == "media_intake")
-            .ok_or_else(|| anyhow!("the media intake tool"))?;
-        for n in 0..3u8 {
-            let args = json!({ "draft": draft, "name": format!("seeded-rye-{n}.png"), "dataBase64": photo(n), "alt": format!("Seeded rye loaf, photo {}", n + 1) });
-            let attached = intake
-                .execute(Arc::new(adk_tool::SimpleToolContext::new("whatsapp")), args)
-                .await?;
-            if attached.get("error").is_none() {
-                live_attached += 1;
-            }
+    // The WhatsApp adapter hands the message's photos to the product's owner channel, which
+    // runs them through the back office's media intake into the Steward's draft (A-I24), and
+    // asks the owner on the thread to confirm their descriptions.
+    let channel = adk_website::channel::OwnerChannel::new(
+        shop.runtime.clone(),
+        AuthoringRouter::new(bindings.clone()),
+    )?;
+    let inbound = ChannelInbound::text("whatsapp", OWNER_PHONE, "wa-1", "m-1", message);
+    let photos: Vec<adk_website::channel::ChannelPhoto> = (0..3u8)
+        .map(|n| adk_website::channel::ChannelPhoto {
+            name: format!("seeded-rye-{n}.png"),
+            bytes: base64::engine::general_purpose::STANDARD
+                .decode(photo(n))
+                .unwrap_or_default()
+                .into(),
+            caption: (n == 0).then(|| "Seeded rye loaf on the counter".to_string()),
+        })
+        .collect();
+    let attached =
+        channel.attach(&inbound, &draft, &ContentId(PRODUCT.into()), "Seeded rye", photos).await;
+    let attached = match attached {
+        Ok(attached) => attached,
+        Err(error) => {
+            println!("      the photos were not attached: {error}");
+            adk_website::channel::Attached { photos: Vec::new(), reply: String::new() }
         }
-    }
-    for n in 0..3u8 {
-        model.push(call("media_intake", json!({ "draft": draft, "name": format!("seeded-rye-{n}.png"), "dataBase64": photo(n), "alt": format!("Seeded rye loaf, photo {}", n + 1) })));
+    };
+    if mode.is_live() {
+        println!("      the channel replies: {}", attached.reply);
     }
     model.push(call("site_publish", json!({ "draft": draft })));
     model.push(ScriptedResponse::text("Scheduled for 09:00."));
@@ -336,21 +341,43 @@ pub async fn run(mode: Mode) -> Result<Checks> {
         trace(&first);
         trace(&second);
     }
-    let attached = if mode.is_live() {
-        live_attached
-    } else {
-        responses(&second)
-            .iter()
-            .filter(|(n, r)| n == "media_intake" && r.get("error").is_none())
-            .count()
-    };
     let before = shop.host.fetch("/products/seeded-rye/").await?.is_none();
     checks.check(
         "the product with three photos waits for 09:00",
-        attached == 3 && before,
+        attached.photos.len() == 3 && before,
         format!(
-            "{attached} photos attached; not served at 07:30; the publish {:?}",
+            "{} photos attached from the WhatsApp message; not served at 07:30; the publish {:?}",
+            attached.photos.len(),
             response(&second, "site_publish", 0)
+        ),
+    );
+
+    // The owner answers on WhatsApp: the second photo's description changes, the rest are
+    // confirmed; the confirmations reach the scheduled item in the content store.
+    let change = ChannelInbound::text(
+        "whatsapp",
+        OWNER_PHONE,
+        "wa-1",
+        "m-2",
+        "2: Seeded rye, sliced on a board",
+    );
+    let changed = channel.reply(&change).await?;
+    let yes = ChannelInbound::text("whatsapp", OWNER_PHONE, "wa-1", "m-3", "Yes");
+    let confirmed = channel.reply(&yes).await?;
+    channel.settle().await?;
+    let stored = shop.store.get(&ContentId(PRODUCT.into())).await?;
+    let alt_ok = stored.as_ref().is_some_and(|item| {
+        item.media.len() == 3
+            && item.media.iter().all(|m| m.alt_confirmed)
+            && item.media.iter().any(|m| m.alt.as_deref() == Some("Seeded rye, sliced on a board"))
+    });
+    checks.check(
+        "the owner confirms the photos' alt text from WhatsApp",
+        changed.is_some() && confirmed.is_some() && alt_ok,
+        format!(
+            "{} confirmed on the thread; {} still waiting",
+            stored.as_ref().map_or(0, |item| item.media.iter().filter(|m| m.alt_confirmed).count()),
+            channel.waiting("wa-1").await.len()
         ),
     );
 
@@ -359,19 +386,6 @@ pub async fn run(mode: Mode) -> Result<Checks> {
     clock.set(
         Utc.with_ymd_and_hms(2026, 10, 27, 9, 0, 0).single().ok_or_else(|| anyhow!("a date"))?,
     );
-    // The owner confirms the three photos' alt text, as the web editor's ConfirmAlt does: the
-    // WhatsApp path has no way to, and the launch gate holds unconfirmed alt text.
-    checks.gap(
-        "photos sent through the Steward keep drafted alt text: nothing on the WhatsApp path \
-         confirms it (only the web editor's ConfirmAlt does, on its own drafts), so the 09:00 \
-         launch is held by the accessibility check until the scenario confirms it in the store",
-    );
-    if let Some(mut item) = shop.store.get(&ContentId(PRODUCT.into())).await? {
-        for media in &mut item.media {
-            media.alt_confirmed = true;
-        }
-        shop.store.put(&item).await?;
-    }
     let due = shop.runtime.pipeline().run_due(None).await?;
     let published = due.iter().find_map(|o| match o {
         PipelineOutcome::Published(p) => Some(p),
@@ -402,13 +416,18 @@ pub async fn run(mode: Mode) -> Result<Checks> {
             && verify_served(&shop.host, SHOP, &shop.release_key).await.ok() == Some(seq),
         format!("release {seq}: {uploaded:?}"),
     );
-    if feed.is_none() {
-        checks.gap(
-            "the built-in renderer writes no product feed: `feed.xml` carries posts and articles \
-             only, so a shop's release has no feed of its products",
-        );
-    }
-    checks.check("the release carries the product feed", feed.is_some(), format!("{feed:?}"));
+    let listed =
+        match &feed {
+            Some(path) => shop.host.fetch(path).await?.is_some_and(|bytes| {
+                String::from_utf8_lossy(&bytes).contains("/products/seeded-rye/")
+            }),
+            None => false,
+        };
+    checks.check(
+        "the release carries the product feed",
+        feed.as_deref() == Some("/products/feed.xml") && listed,
+        format!("{feed:?}, listing the new product: {listed}"),
+    );
     let untouched = [
         "/about/index.html",
         "/index.html",

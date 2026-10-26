@@ -9,6 +9,12 @@
 //! | `adk_awp_held_calls` | One per held call: state and hold time beside the JSON record |
 //! | `adk_awp_leads` | One per lead: capture time and score beside the JSON lead |
 //! | `adk_awp_idempotency` | One per key: input digest, start time and the recorded outcome |
+//! | `adk_awp_events` | One per retained event: its time and audience beside the JSON event |
+//! | `adk_awp_catalog_pages` | One per further page of a release's `catalog.changed` |
+//! | `adk_awp_consent_refs` | One per consent receipt and requester that referenced it |
+//! | `adk_awp_deliveries` | One per pending delivery: failures so far and when it is due |
+//! | `adk_awp_beacon` | One per day and metric: the beacon's count |
+//! | `adk_awp_beacon_visitors` | One per day and consenting visitor |
 //!
 //! Every row carries its site, the namespace that keeps one site's records apart. Both
 //! backends record their steps in `_adk_awp_edge_migrations` with adk-session's migration
@@ -22,10 +28,14 @@ use adk_awp::v2::store::{
 };
 use async_trait::async_trait;
 use awp_types::{
-    ConsentReceipt, ConsentScope, EventType, HeldCallState, LeadRef, RequesterId, SiteStatus,
+    CatalogChangesPage, ConsentReceipt, ConsentScope, EventType, HeldCallState, LeadRef,
+    RequesterId, SiteStatus,
 };
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Datelike as _, NaiveDate, TimeZone, Utc};
 use uuid::Uuid;
+
+use crate::awp::beacon::BeaconStore;
+use crate::awp::events::{EventLog, PendingDelivery, RetainedEvent};
 
 use super::{
     CAS_ATTEMPTS, DEFAULT_SITE, apply_delivery, apply_transition, apply_update, backend, decode,
@@ -55,8 +65,29 @@ CREATE TABLE IF NOT EXISTS adk_awp_idempotency (site TEXT NOT NULL, key TEXT NOT
 digest TEXT NOT NULL, began_us BIGINT NOT NULL, outcome TEXT, PRIMARY KEY (site, key));\
 CREATE INDEX IF NOT EXISTS adk_awp_idempotency_began ON adk_awp_idempotency (site, began_us);";
 
+/// The event log and the beacon (spec 3.5 §7.5, §7.12).
+const SCHEMA_EVENTS: &str = "\
+CREATE TABLE IF NOT EXISTS adk_awp_events (site TEXT NOT NULL, id TEXT NOT NULL, \
+at_us BIGINT NOT NULL, event TEXT NOT NULL, audience TEXT, PRIMARY KEY (site, id));\
+CREATE INDEX IF NOT EXISTS adk_awp_events_at ON adk_awp_events (site, at_us);\
+CREATE TABLE IF NOT EXISTS adk_awp_catalog_pages (site TEXT NOT NULL, seq BIGINT NOT NULL, \
+page BIGINT NOT NULL, at_us BIGINT NOT NULL, body TEXT NOT NULL, PRIMARY KEY (site, seq, page));\
+CREATE TABLE IF NOT EXISTS adk_awp_consent_refs (site TEXT NOT NULL, receipt TEXT NOT NULL, \
+requester TEXT NOT NULL, PRIMARY KEY (site, receipt, requester));\
+CREATE TABLE IF NOT EXISTS adk_awp_deliveries (site TEXT NOT NULL, subscription TEXT NOT NULL, \
+event_id TEXT NOT NULL, failures BIGINT NOT NULL, due_us BIGINT NOT NULL, \
+PRIMARY KEY (site, subscription, event_id));\
+CREATE INDEX IF NOT EXISTS adk_awp_deliveries_due ON adk_awp_deliveries (site, due_us);\
+CREATE TABLE IF NOT EXISTS adk_awp_beacon (site TEXT NOT NULL, day BIGINT NOT NULL, \
+metric TEXT NOT NULL, hits BIGINT NOT NULL, PRIMARY KEY (site, day, metric));\
+CREATE TABLE IF NOT EXISTS adk_awp_beacon_visitors (site TEXT NOT NULL, day BIGINT NOT NULL, \
+visitor TEXT NOT NULL, PRIMARY KEY (site, day, visitor));";
+
 /// The steps both backends run; the schema is portable.
-const MIGRATIONS: &[(i64, &str, &str)] = &[(1, "create the AWP edge store tables", SCHEMA)];
+const MIGRATIONS: &[(i64, &str, &str)] = &[
+    (1, "create the AWP edge store tables", SCHEMA),
+    (2, "create the AWP edge event log and beacon tables", SCHEMA_EVENTS),
+];
 
 const SUB_INSERT: &str = "INSERT INTO adk_awp_subscriptions (site, id, owner, state, version, record) \
 VALUES ($1, $2, $3, $4, 1, $5) ON CONFLICT (site, id) DO NOTHING";
@@ -101,6 +132,7 @@ const LEAD_GET: &str = "SELECT lead, score FROM adk_awp_leads WHERE site = $1 AN
 const LEAD_SINCE: &str = "SELECT lead, score FROM adk_awp_leads WHERE site = $1 \
 AND captured_us >= $2 ORDER BY captured_us, id";
 const LEAD_SCORE: &str = "UPDATE adk_awp_leads SET score = $1 WHERE site = $2 AND id = $3";
+const LEAD_DELETE: &str = "DELETE FROM adk_awp_leads WHERE site = $1 AND id = $2";
 
 const IDEM_BEGIN: &str = "INSERT INTO adk_awp_idempotency (site, key, digest, began_us, outcome) \
 VALUES ($1, $2, $3, $4, NULL) ON CONFLICT (site, key) DO NOTHING";
@@ -109,6 +141,53 @@ const IDEM_GET: &str =
 const IDEM_COMPLETE: &str = "UPDATE adk_awp_idempotency SET outcome = $1 \
 WHERE site = $2 AND key = $3 AND outcome IS NULL";
 const IDEM_PURGE: &str = "DELETE FROM adk_awp_idempotency WHERE site = $1 AND began_us < $2";
+
+const EVENT_INSERT: &str = "INSERT INTO adk_awp_events (site, id, at_us, event, audience) \
+VALUES ($1, $2, $3, $4, $5) ON CONFLICT (site, id) DO NOTHING";
+const EVENT_BETWEEN: &str = "SELECT event, audience FROM adk_awp_events WHERE site = $1 \
+AND at_us >= $2 AND at_us < $3 ORDER BY at_us, id";
+const EVENT_GET: &str = "SELECT event, audience FROM adk_awp_events WHERE site = $1 AND id = $2";
+const EVENT_PURGE: &str = "DELETE FROM adk_awp_events WHERE site = $1 AND at_us < $2";
+const PAGE_PUT: &str = "INSERT INTO adk_awp_catalog_pages (site, seq, page, at_us, body) \
+VALUES ($1, $2, $3, $4, $5) ON CONFLICT (site, seq, page) \
+DO UPDATE SET at_us = excluded.at_us, body = excluded.body";
+const PAGE_DROP: &str = "DELETE FROM adk_awp_catalog_pages WHERE site = $1 AND seq = $2";
+const PAGE_GET: &str =
+    "SELECT body FROM adk_awp_catalog_pages WHERE site = $1 AND seq = $2 AND page = $3";
+const PAGE_PURGE: &str = "DELETE FROM adk_awp_catalog_pages WHERE site = $1 AND at_us < $2";
+const REF_INSERT: &str = "INSERT INTO adk_awp_consent_refs (site, receipt, requester) \
+VALUES ($1, $2, $3) ON CONFLICT (site, receipt, requester) DO NOTHING";
+const REF_LIST: &str = "SELECT requester FROM adk_awp_consent_refs WHERE site = $1 \
+AND receipt = $2 ORDER BY requester";
+const DELIVERY_SAVE: &str = "INSERT INTO adk_awp_deliveries (site, subscription, event_id, \
+failures, due_us) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (site, subscription, event_id) \
+DO UPDATE SET failures = excluded.failures, due_us = excluded.due_us";
+const DELIVERY_CLAIM: &str = "UPDATE adk_awp_deliveries SET due_us = $1 WHERE site = $2 \
+AND due_us <= $3 RETURNING subscription, event_id, failures";
+const DELIVERY_FINISH: &str = "DELETE FROM adk_awp_deliveries WHERE site = $1 \
+AND subscription = $2 AND event_id = $3";
+const BEACON_ADD: &str = "INSERT INTO adk_awp_beacon (site, day, metric, hits) \
+VALUES ($1, $2, $3, $4) ON CONFLICT (site, day, metric) \
+DO UPDATE SET hits = adk_awp_beacon.hits + excluded.hits";
+const BEACON_TOTAL: &str = "SELECT CAST(COALESCE(SUM(hits), 0) AS BIGINT) FROM adk_awp_beacon \
+WHERE site = $1 AND metric = $2 AND day >= $3 AND day < $4";
+const VISITOR_ADD: &str = "INSERT INTO adk_awp_beacon_visitors (site, day, visitor) \
+VALUES ($1, $2, $3) ON CONFLICT (site, day, visitor) DO NOTHING";
+const VISITOR_TOTAL: &str = "SELECT COUNT(*) FROM adk_awp_beacon_visitors WHERE site = $1 \
+AND day >= $2 AND day < $3";
+
+/// A day as stored: days from the common era.
+fn day_number(day: NaiveDate) -> i64 {
+    i64::from(day.num_days_from_ce())
+}
+
+/// A retained event read back from its JSON event and audience.
+fn retained_event(name: &str, event: &str, audience: Option<&str>) -> StoreResult<RetainedEvent> {
+    Ok(RetainedEvent {
+        event: decode(name, event)?,
+        audience: audience.map(|audience| decode(name, audience)).transpose()?,
+    })
+}
 
 fn micros(at: DateTime<Utc>) -> i64 {
     at.timestamp_micros()
@@ -520,6 +599,252 @@ macro_rules! sql_edge_stores {
                 }
                 Ok(())
             }
+
+            async fn delete(&self, id: &LeadRef) -> StoreResult<bool> {
+                let done = sqlx::query(LEAD_DELETE)
+                    .bind(&self.site)
+                    .bind(&id.0)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "delete a lead", &e))?;
+                Ok(done.rows_affected() > 0)
+            }
+        }
+
+        #[async_trait]
+        impl EventLog for $store {
+            async fn append(&self, event: RetainedEvent) -> StoreResult<()> {
+                let audience =
+                    event.audience.as_ref().map(|audience| encode($name, audience)).transpose()?;
+                sqlx::query(EVENT_INSERT)
+                    .bind(&self.site)
+                    .bind(&event.event.id)
+                    .bind(micros(event.event.timestamp))
+                    .bind(encode($name, &event.event)?)
+                    .bind(audience)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "retain an event", &e))?;
+                Ok(())
+            }
+
+            async fn between(
+                &self,
+                since: DateTime<Utc>,
+                until: Option<DateTime<Utc>>,
+            ) -> StoreResult<Vec<RetainedEvent>> {
+                let rows: Vec<(String, Option<String>)> = sqlx::query_as(EVENT_BETWEEN)
+                    .bind(&self.site)
+                    .bind(micros(since))
+                    .bind(until.map_or(i64::MAX, micros))
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "read events", &e))?;
+                rows.iter()
+                    .map(|(event, audience)| retained_event($name, event, audience.as_deref()))
+                    .collect()
+            }
+
+            async fn purge_before(&self, cutoff: DateTime<Utc>) -> StoreResult<usize> {
+                sqlx::query(PAGE_PURGE)
+                    .bind(&self.site)
+                    .bind(micros(cutoff))
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "purge catalogue pages", &e))?;
+                let done = sqlx::query(EVENT_PURGE)
+                    .bind(&self.site)
+                    .bind(micros(cutoff))
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "purge events", &e))?;
+                Ok(usize::try_from(done.rows_affected()).unwrap_or(usize::MAX))
+            }
+
+            async fn event(&self, id: &str) -> StoreResult<Option<RetainedEvent>> {
+                let row: Option<(String, Option<String>)> = sqlx::query_as(EVENT_GET)
+                    .bind(&self.site)
+                    .bind(id)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "read an event", &e))?;
+                row.map(|(event, audience)| retained_event($name, &event, audience.as_deref()))
+                    .transpose()
+            }
+
+            async fn put_catalog_pages(
+                &self,
+                seq: u64,
+                at: DateTime<Utc>,
+                pages: &[CatalogChangesPage],
+            ) -> StoreResult<bool> {
+                let seq = i64::try_from(seq).unwrap_or(i64::MAX);
+                let mut tx =
+                    self.pool.begin().await.map_err(|e| backend($name, "store pages", &e))?;
+                sqlx::query(PAGE_DROP)
+                    .bind(&self.site)
+                    .bind(seq)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| backend($name, "replace catalogue pages", &e))?;
+                for (index, page) in pages.iter().enumerate() {
+                    sqlx::query(PAGE_PUT)
+                        .bind(&self.site)
+                        .bind(seq)
+                        .bind(i64::try_from(index + 2).unwrap_or(i64::MAX))
+                        .bind(micros(at))
+                        .bind(encode($name, page)?)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| backend($name, "store a catalogue page", &e))?;
+                }
+                tx.commit().await.map_err(|e| backend($name, "store pages", &e))?;
+                Ok(true)
+            }
+
+            async fn catalog_page(
+                &self,
+                seq: u64,
+                page: usize,
+            ) -> StoreResult<Option<CatalogChangesPage>> {
+                let row: Option<(String,)> = sqlx::query_as(PAGE_GET)
+                    .bind(&self.site)
+                    .bind(i64::try_from(seq).unwrap_or(i64::MAX))
+                    .bind(i64::try_from(page).unwrap_or(i64::MAX))
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "read a catalogue page", &e))?;
+                row.map(|(body,)| decode($name, &body)).transpose()
+            }
+
+            async fn note_consent_reference(
+                &self,
+                receipt: Uuid,
+                requester: &RequesterId,
+            ) -> StoreResult<bool> {
+                sqlx::query(REF_INSERT)
+                    .bind(&self.site)
+                    .bind(receipt.to_string())
+                    .bind(requester.as_str())
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "note a consent reference", &e))?;
+                Ok(true)
+            }
+
+            async fn consent_references(
+                &self,
+                receipt: Uuid,
+            ) -> StoreResult<std::collections::BTreeSet<RequesterId>> {
+                let rows: Vec<(String,)> = sqlx::query_as(REF_LIST)
+                    .bind(&self.site)
+                    .bind(receipt.to_string())
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "read consent references", &e))?;
+                Ok(rows.into_iter().map(|(requester,)| RequesterId::new(requester)).collect())
+            }
+
+            async fn save_delivery(&self, delivery: &PendingDelivery) -> StoreResult<()> {
+                sqlx::query(DELIVERY_SAVE)
+                    .bind(&self.site)
+                    .bind(&delivery.subscription)
+                    .bind(&delivery.event_id)
+                    .bind(i64::from(delivery.failures))
+                    .bind(micros(delivery.due))
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "keep a delivery", &e))?;
+                Ok(())
+            }
+
+            async fn claim_deliveries(
+                &self,
+                now: DateTime<Utc>,
+                lease: chrono::Duration,
+            ) -> StoreResult<Vec<PendingDelivery>> {
+                let due = now + lease;
+                let mut rows: Vec<(String, String, i64)> = sqlx::query_as(DELIVERY_CLAIM)
+                    .bind(micros(due))
+                    .bind(&self.site)
+                    .bind(micros(now))
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "claim deliveries", &e))?;
+                rows.sort();
+                Ok(rows
+                    .into_iter()
+                    .map(|(subscription, event_id, failures)| PendingDelivery {
+                        subscription,
+                        event_id,
+                        failures: u32::try_from(failures).unwrap_or(u32::MAX),
+                        due,
+                    })
+                    .collect())
+            }
+
+            async fn finish_delivery(&self, subscription: &str, event_id: &str) -> StoreResult<()> {
+                sqlx::query(DELIVERY_FINISH)
+                    .bind(&self.site)
+                    .bind(subscription)
+                    .bind(event_id)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "finish a delivery", &e))?;
+                Ok(())
+            }
+        }
+
+        #[async_trait]
+        impl BeaconStore for $store {
+            async fn add(&self, day: NaiveDate, metric: &str, count: u64) -> StoreResult<()> {
+                sqlx::query(BEACON_ADD)
+                    .bind(&self.site)
+                    .bind(day_number(day))
+                    .bind(metric)
+                    .bind(i64::try_from(count).unwrap_or(i64::MAX))
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "count a beacon", &e))?;
+                Ok(())
+            }
+
+            async fn add_visitor(&self, day: NaiveDate, visitor: &str) -> StoreResult<()> {
+                sqlx::query(VISITOR_ADD)
+                    .bind(&self.site)
+                    .bind(day_number(day))
+                    .bind(visitor)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "count a visitor", &e))?;
+                Ok(())
+            }
+
+            async fn total(
+                &self,
+                metric: &str,
+                from: NaiveDate,
+                to: NaiveDate,
+            ) -> StoreResult<u64> {
+                let (total,): (i64,) = if metric == "visitors" {
+                    sqlx::query_as(VISITOR_TOTAL)
+                        .bind(&self.site)
+                        .bind(day_number(from))
+                        .bind(day_number(to))
+                        .fetch_one(&self.pool)
+                        .await
+                } else {
+                    sqlx::query_as(BEACON_TOTAL)
+                        .bind(&self.site)
+                        .bind(metric)
+                        .bind(day_number(from))
+                        .bind(day_number(to))
+                        .fetch_one(&self.pool)
+                        .await
+                }
+                .map_err(|e| backend($name, "read beacon counts", &e))?;
+                Ok(u64::try_from(total).unwrap_or(0))
+            }
         }
 
         #[async_trait]
@@ -596,7 +921,8 @@ macro_rules! sql_edge_stores {
     };
 }
 
-/// The six edge stores in SQLite (spec 3.5 §7.9, feature `awp-sqlite`).
+/// The six edge stores, the event log and the beacon store in SQLite (spec 3.5 §7.9, feature
+/// `awp-sqlite`).
 ///
 /// One site's records sit under its `site` namespace, so a database such as `harness.db`
 /// holds several sites and other stores. Call [`migrate`](Self::migrate) once before use.
@@ -654,19 +980,23 @@ impl SqliteEdgeStores {
         .map_err(|error| backend("sqlite", "migrate", &error.message))
     }
 
-    /// The six stores as the edge takes them.
+    /// The stores as the edge takes them: the six edge stores, the event log and the beacon
+    /// store.
     pub fn edge_stores(&self) -> crate::awp::EdgeStores {
         let this = std::sync::Arc::new(self.clone());
         crate::awp::EdgeStores::new(this.clone(), this.clone(), this.clone(), this.clone())
             .with_subscriptions(this.clone())
-            .with_leads(this)
+            .with_leads(this.clone())
+            .with_event_log(this.clone())
+            .with_beacon(this)
     }
 }
 
 #[cfg(feature = "awp-sqlite")]
 sql_edge_stores!(SqliteEdgeStores, "sqlite");
 
-/// The six edge stores in PostgreSQL, shared by every edge replica (spec 3.5 §7.9, feature
+/// The six edge stores, the event log and the beacon store in PostgreSQL, shared by every
+/// edge replica (spec 3.5 §7.9, feature
 /// `awp-postgres`).
 ///
 /// [`migrate`](Self::migrate) runs under an advisory lock, so replicas starting together
@@ -726,12 +1056,15 @@ impl PostgresEdgeStores {
         migrate_locked(self.pool.clone()).await
     }
 
-    /// The six stores as the edge takes them.
+    /// The stores as the edge takes them: the six edge stores, the event log and the beacon
+    /// store.
     pub fn edge_stores(&self) -> crate::awp::EdgeStores {
         let this = std::sync::Arc::new(self.clone());
         crate::awp::EdgeStores::new(this.clone(), this.clone(), this.clone(), this.clone())
             .with_subscriptions(this.clone())
-            .with_leads(this)
+            .with_leads(this.clone())
+            .with_event_log(this.clone())
+            .with_beacon(this)
     }
 }
 
@@ -818,10 +1151,28 @@ mod tests {
             LEAD_GET,
             LEAD_SINCE,
             LEAD_SCORE,
+            LEAD_DELETE,
             IDEM_BEGIN,
             IDEM_GET,
             IDEM_COMPLETE,
             IDEM_PURGE,
+            EVENT_INSERT,
+            EVENT_BETWEEN,
+            EVENT_GET,
+            EVENT_PURGE,
+            PAGE_PUT,
+            PAGE_DROP,
+            PAGE_GET,
+            PAGE_PURGE,
+            REF_INSERT,
+            REF_LIST,
+            DELIVERY_SAVE,
+            DELIVERY_CLAIM,
+            DELIVERY_FINISH,
+            BEACON_ADD,
+            BEACON_TOTAL,
+            VISITOR_ADD,
+            VISITOR_TOTAL,
         ] {
             let seen = parameters(statement);
             assert_eq!(seen, (1..=seen.len()).collect::<Vec<_>>(), "{statement}");

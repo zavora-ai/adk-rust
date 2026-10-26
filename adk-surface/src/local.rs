@@ -226,6 +226,20 @@ impl LocalSource {
         Ok(processes)
     }
 
+    /// The classes the kernel's mounted drivers declare `tool` of; a name two drivers share
+    /// has both (spec 3.2 K-I9).
+    fn driver_classes(&self, tool: &str) -> Vec<adk_kernel::drivers::EffectClass> {
+        let Some(drivers) = self.kernel.as_ref().and_then(|(kernel, _)| kernel.drivers()) else {
+            return Vec::new();
+        };
+        drivers
+            .mounted()
+            .iter()
+            .filter_map(|id| drivers.record(id))
+            .map(|record| record.manifest.class_of(tool))
+            .collect()
+    }
+
     async fn ensure_session(&self, user: &str, session: &str) -> Result<()> {
         if self.transcript(user, session).await?.is_some() {
             return Ok(());
@@ -673,6 +687,21 @@ impl Source for LocalSource {
             (None, Some(harness)) => Some(harness.agent().info().name.clone()),
             (None, None) => None,
         }
+    }
+
+    /// A tool the kernel's mounted drivers declare `publish_public` or `financial`, the
+    /// classes nothing may allow without a person (spec 3.2 K-I9), as the kernel's own decide
+    /// route and chat rate it.
+    fn rates_high(&self, request: &ApprovalRequest) -> bool {
+        self.driver_classes(&request.tool_name)
+            .into_iter()
+            .any(adk_kernel::drivers::EffectClass::is_never_auto_allowed)
+    }
+
+    /// A tool the kernel's mounted drivers declare `financial` (spec 3.2 K-I9).
+    fn moves_money(&self, request: &ApprovalRequest) -> bool {
+        self.driver_classes(&request.tool_name)
+            .contains(&adk_kernel::drivers::EffectClass::Financial)
     }
 
     async fn busy(&self, user: &str, session: &str) -> Result<bool> {

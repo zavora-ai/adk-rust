@@ -12,6 +12,12 @@
 //! | `…:held` | Hash | Each held call as JSON, by id |
 //! | `…:leads` | Hash | Each lead as JSON, by id |
 //! | `…:idem` | Hash | Each idempotency entry (digest, start, outcome) as JSON, by key |
+//! | `…:events`, `…:event` | Sorted set, Hash | Retained event ids by time in microseconds; each event and its audience as JSON, by id |
+//! | `…:pages` | Hash | Each further `catalog.changed` page with its time, by `{seq}:{page}` |
+//! | `…:consent-refs:<receipt>` | Set | The requesters that referenced one consent receipt |
+//! | `…:deliveries`, `…:delivery` | Sorted set, Hash | Pending deliveries by due time; their failures so far |
+//! | `…:beacon:<day>`, `…:beacon-days` | Hash, Sorted set | One day's counts by metric; the days that have counts |
+//! | `…:visitors:<day>`, `…:visitor-days` | Set, Sorted set | One day's consenting visitors; the days that have them |
 //! | `adk:awp:layout` | String | The layout version `migrate` recorded |
 //!
 //! Creates are `HSETNX`; every change is a compare-and-set Lua script that writes only when
@@ -25,10 +31,10 @@ use adk_awp::v2::store::{
 };
 use async_trait::async_trait;
 use awp_types::{
-    ConsentReceipt, ConsentScope, EventType, HeldCallState, LeadRef, RequesterId, SiteStatus,
-    SubscriptionState,
+    CatalogChangesPage, ConsentReceipt, ConsentScope, EventType, HeldCallState, LeadRef,
+    RequesterId, SiteStatus, SubscriptionState,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike as _, NaiveDate, Utc};
 use fred::prelude::{
     Builder, Client, ClientLike as _, Config, HashesInterface as _, KeysInterface as _,
     LuaInterface as _, SetsInterface as _,
@@ -39,6 +45,8 @@ use super::{
     CAS_ATTEMPTS, DEFAULT_SITE, IdempotencyEntry, apply_delivery, apply_transition, apply_update,
     backend, decode, encode,
 };
+use crate::awp::beacon::BeaconStore;
+use crate::awp::events::{EventLog, PendingDelivery, RetainedEvent};
 
 const NAME: &str = "redis";
 /// The layout version this release writes.
@@ -63,6 +71,100 @@ redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
 return false
 ";
 
+/// KEYS: event times, events. ARGV: id, time, entry.
+const APPEND_SCRIPT: &str = r"
+if redis.call('HSETNX', KEYS[2], ARGV[1], ARGV[3]) == 1 then
+  redis.call('ZADD', KEYS[1], ARGV[2], ARGV[1])
+end
+return 1
+";
+
+/// KEYS: a sorted set and a hash. ARGV: min and max score. The hash's values for the members
+/// in the score range, in score then member order.
+const RANGE_VALUES_SCRIPT: &str = r"
+local ids = redis.call('ZRANGEBYSCORE', KEYS[1], ARGV[1], ARGV[2])
+local out = {}
+for _, id in ipairs(ids) do
+  local value = redis.call('HGET', KEYS[2], id)
+  if value then table.insert(out, value) end
+end
+return out
+";
+
+/// KEYS: a sorted set. ARGV: min and max score. The members in the range.
+const RANGE_SCRIPT: &str = r"
+return redis.call('ZRANGEBYSCORE', KEYS[1], ARGV[1], ARGV[2])
+";
+
+/// KEYS: event times, events, pages. ARGV: the exclusive cutoff (`(<micros>`), the cutoff.
+/// Drops older events and pages; returns how many events.
+const PURGE_SCRIPT: &str = r"
+local ids = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+for i = 1, #ids, 500 do
+  local chunk = {unpack(ids, i, math.min(i + 499, #ids))}
+  redis.call('ZREM', KEYS[1], unpack(chunk))
+  redis.call('HDEL', KEYS[2], unpack(chunk))
+end
+local pages = redis.call('HGETALL', KEYS[3])
+for i = 1, #pages, 2 do
+  if tonumber(cjson.decode(pages[i + 1]).atUs) < tonumber(ARGV[2]) then
+    redis.call('HDEL', KEYS[3], pages[i])
+  end
+end
+return #ids
+";
+
+/// KEYS: pages. ARGV: the release, then field and entry pairs. Replaces the release's pages.
+const PAGES_SCRIPT: &str = r"
+local prefix = ARGV[1] .. ':'
+for _, field in ipairs(redis.call('HKEYS', KEYS[1])) do
+  if string.sub(field, 1, #prefix) == prefix then redis.call('HDEL', KEYS[1], field) end
+end
+for i = 2, #ARGV, 2 do redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1]) end
+return 1
+";
+
+/// KEYS: due times, failures. ARGV: member, due, failures.
+const SAVE_DELIVERY_SCRIPT: &str = r"
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[1])
+redis.call('HSET', KEYS[2], ARGV[1], ARGV[3])
+return 1
+";
+
+/// KEYS: due times, failures. ARGV: now, the new due time. Leases every due delivery and
+/// returns member and failures pairs.
+const CLAIM_SCRIPT: &str = r"
+local due = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+local out = {}
+for _, member in ipairs(due) do
+  redis.call('ZADD', KEYS[1], ARGV[2], member)
+  table.insert(out, member)
+  table.insert(out, redis.call('HGET', KEYS[2], member) or '0')
+end
+return out
+";
+
+/// KEYS: due times, failures. ARGV: member.
+const FINISH_DELIVERY_SCRIPT: &str = r"
+redis.call('ZREM', KEYS[1], ARGV[1])
+redis.call('HDEL', KEYS[2], ARGV[1])
+return 1
+";
+
+/// KEYS: the day's counts, the days. ARGV: metric, count, day.
+const BEACON_ADD_SCRIPT: &str = r"
+redis.call('HINCRBY', KEYS[1], ARGV[1], ARGV[2])
+redis.call('ZADD', KEYS[2], ARGV[3], ARGV[3])
+return 1
+";
+
+/// KEYS: the day's visitors, the days. ARGV: visitor, day.
+const VISITOR_ADD_SCRIPT: &str = r"
+redis.call('SADD', KEYS[1], ARGV[1])
+redis.call('ZADD', KEYS[2], ARGV[2], ARGV[2])
+return 1
+";
+
 /// KEYS: layout. ARGV: this release's layout.
 const MIGRATE_SCRIPT: &str = r"
 local stored = tonumber(redis.call('GET', KEYS[1]) or '0')
@@ -72,7 +174,8 @@ if stored < mine then redis.call('SET', KEYS[1], ARGV[1]) end
 return mine
 ";
 
-/// The six edge stores in Redis, shared by every edge replica (spec 3.5 §7.9, feature
+/// The six edge stores, the event log and the beacon store in Redis, shared by every edge
+/// replica (spec 3.5 §7.9, feature
 /// `awp-redis`). See the module documentation for its keys.
 ///
 /// # Example
@@ -142,12 +245,15 @@ impl RedisEdgeStores {
         Ok(())
     }
 
-    /// The six stores as the edge takes them.
+    /// The stores as the edge takes them: the six edge stores, the event log and the beacon
+    /// store.
     pub fn edge_stores(&self) -> crate::awp::EdgeStores {
         let this = std::sync::Arc::new(self.clone());
         crate::awp::EdgeStores::new(this.clone(), this.clone(), this.clone(), this.clone())
             .with_subscriptions(this.clone())
-            .with_leads(this)
+            .with_leads(this.clone())
+            .with_event_log(this.clone())
+            .with_beacon(this)
     }
 
     fn key(&self, suffix: &str) -> String {
@@ -216,6 +322,57 @@ impl RedisEdgeStores {
     async fn all<T: serde::de::DeserializeOwned>(&self, hash: &str) -> StoreResult<Vec<T>> {
         self.values(hash).await?.iter().map(|value| decode(NAME, value)).collect()
     }
+
+    async fn script<R: fred::types::FromValue>(
+        &self,
+        script: &str,
+        keys: &[&str],
+        args: Vec<String>,
+        action: &str,
+    ) -> StoreResult<R> {
+        let keys: Vec<String> = keys.iter().map(|suffix| self.key(suffix)).collect();
+        self.client.eval(script, keys, args).await.map_err(failed(action))
+    }
+
+    /// The days in `[from, to)` that `days` lists.
+    async fn days(&self, days: &str, from: NaiveDate, to: NaiveDate) -> StoreResult<Vec<i64>> {
+        let found: Vec<String> = self
+            .script(
+                RANGE_SCRIPT,
+                &[days],
+                vec![day_number(from).to_string(), format!("({}", day_number(to))],
+                "list counted days",
+            )
+            .await?;
+        Ok(found.iter().filter_map(|day| day.parse().ok()).collect())
+    }
+}
+
+/// A day as stored: days from the common era.
+fn day_number(day: NaiveDate) -> i64 {
+    i64::from(day.num_days_from_ce())
+}
+
+/// A retained event as stored.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredEvent {
+    event: awp_types::EventEnvelope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    audience: Option<std::collections::BTreeSet<RequesterId>>,
+}
+
+/// A catalogue page as stored, with when it was.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredPage {
+    at_us: i64,
+    page: CatalogChangesPage,
+}
+
+/// The member a pending delivery is kept under.
+fn delivery_member(subscription: &str, event_id: &str) -> String {
+    format!("{subscription}\u{1f}{event_id}")
 }
 
 #[async_trait]
@@ -473,6 +630,12 @@ impl LeadStore for RedisEdgeStores {
         .await
         .map(|_| ())
     }
+
+    async fn delete(&self, id: &LeadRef) -> StoreResult<bool> {
+        let removed: i64 =
+            self.client.hdel(self.key("leads"), &id.0).await.map_err(failed("delete a lead"))?;
+        Ok(removed > 0)
+    }
 }
 
 #[async_trait]
@@ -539,5 +702,219 @@ impl IdempotencyStore for RedisEdgeStores {
             .await
             .map_err(failed("purge idempotency records"))?;
         Ok(usize::try_from(removed).unwrap_or(0))
+    }
+}
+
+#[async_trait]
+impl EventLog for RedisEdgeStores {
+    async fn append(&self, event: RetainedEvent) -> StoreResult<()> {
+        let id = event.event.id.clone();
+        let at = event.event.timestamp.timestamp_micros().to_string();
+        let entry = encode(NAME, &StoredEvent { event: event.event, audience: event.audience })?;
+        let _: i64 = self
+            .script(APPEND_SCRIPT, &["events", "event"], vec![id, at, entry], "retain an event")
+            .await?;
+        Ok(())
+    }
+
+    async fn between(
+        &self,
+        since: DateTime<Utc>,
+        until: Option<DateTime<Utc>>,
+    ) -> StoreResult<Vec<RetainedEvent>> {
+        let max = until
+            .map_or_else(|| "+inf".to_owned(), |until| format!("({}", until.timestamp_micros()));
+        let entries: Vec<String> = self
+            .script(
+                RANGE_VALUES_SCRIPT,
+                &["events", "event"],
+                vec![since.timestamp_micros().to_string(), max],
+                "read events",
+            )
+            .await?;
+        entries
+            .iter()
+            .map(|entry| {
+                let stored: StoredEvent = decode(NAME, entry)?;
+                Ok(RetainedEvent { event: stored.event, audience: stored.audience })
+            })
+            .collect()
+    }
+
+    async fn purge_before(&self, cutoff: DateTime<Utc>) -> StoreResult<usize> {
+        let cutoff = cutoff.timestamp_micros();
+        let purged: i64 = self
+            .script(
+                PURGE_SCRIPT,
+                &["events", "event", "pages"],
+                vec![format!("({cutoff}"), cutoff.to_string()],
+                "purge events",
+            )
+            .await?;
+        Ok(usize::try_from(purged).unwrap_or(0))
+    }
+
+    async fn event(&self, id: &str) -> StoreResult<Option<RetainedEvent>> {
+        let Some(entry) = self.field("event", id).await? else { return Ok(None) };
+        let stored: StoredEvent = decode(NAME, &entry)?;
+        Ok(Some(RetainedEvent { event: stored.event, audience: stored.audience }))
+    }
+
+    async fn put_catalog_pages(
+        &self,
+        seq: u64,
+        at: DateTime<Utc>,
+        pages: &[CatalogChangesPage],
+    ) -> StoreResult<bool> {
+        let mut args = vec![seq.to_string()];
+        for (index, page) in pages.iter().enumerate() {
+            args.push(format!("{seq}:{}", index + 2));
+            args.push(encode(
+                NAME,
+                &StoredPage { at_us: at.timestamp_micros(), page: page.clone() },
+            )?);
+        }
+        let _: i64 = self.script(PAGES_SCRIPT, &["pages"], args, "store catalogue pages").await?;
+        Ok(true)
+    }
+
+    async fn catalog_page(&self, seq: u64, page: usize) -> StoreResult<Option<CatalogChangesPage>> {
+        let Some(entry) = self.field("pages", &format!("{seq}:{page}")).await? else {
+            return Ok(None);
+        };
+        Ok(Some(decode::<StoredPage>(NAME, &entry)?.page))
+    }
+
+    async fn note_consent_reference(
+        &self,
+        receipt: Uuid,
+        requester: &RequesterId,
+    ) -> StoreResult<bool> {
+        let _: i64 = self
+            .client
+            .sadd(self.key(&format!("consent-refs:{receipt}")), requester.as_str())
+            .await
+            .map_err(failed("note a consent reference"))?;
+        Ok(true)
+    }
+
+    async fn consent_references(
+        &self,
+        receipt: Uuid,
+    ) -> StoreResult<std::collections::BTreeSet<RequesterId>> {
+        let found: Vec<String> = self
+            .client
+            .smembers(self.key(&format!("consent-refs:{receipt}")))
+            .await
+            .map_err(failed("read consent references"))?;
+        Ok(found.into_iter().map(RequesterId::new).collect())
+    }
+
+    async fn save_delivery(&self, delivery: &PendingDelivery) -> StoreResult<()> {
+        let member = delivery_member(&delivery.subscription, &delivery.event_id);
+        let args = vec![
+            member,
+            delivery.due.timestamp_micros().to_string(),
+            delivery.failures.to_string(),
+        ];
+        let _: i64 = self
+            .script(SAVE_DELIVERY_SCRIPT, &["deliveries", "delivery"], args, "keep a delivery")
+            .await?;
+        Ok(())
+    }
+
+    async fn claim_deliveries(
+        &self,
+        now: DateTime<Utc>,
+        lease: chrono::Duration,
+    ) -> StoreResult<Vec<PendingDelivery>> {
+        let due = now + lease;
+        let pairs: Vec<String> = self
+            .script(
+                CLAIM_SCRIPT,
+                &["deliveries", "delivery"],
+                vec![now.timestamp_micros().to_string(), due.timestamp_micros().to_string()],
+                "claim deliveries",
+            )
+            .await?;
+        let mut claimed: Vec<PendingDelivery> = pairs
+            .chunks(2)
+            .filter_map(|pair| {
+                let (subscription, event_id) = pair.first()?.split_once('\u{1f}')?;
+                Some(PendingDelivery {
+                    subscription: subscription.to_owned(),
+                    event_id: event_id.to_owned(),
+                    failures: pair.get(1).and_then(|failures| failures.parse().ok()).unwrap_or(0),
+                    due,
+                })
+            })
+            .collect();
+        claimed.sort_by(|a, b| (&a.subscription, &a.event_id).cmp(&(&b.subscription, &b.event_id)));
+        Ok(claimed)
+    }
+
+    async fn finish_delivery(&self, subscription: &str, event_id: &str) -> StoreResult<()> {
+        let _: i64 = self
+            .script(
+                FINISH_DELIVERY_SCRIPT,
+                &["deliveries", "delivery"],
+                vec![delivery_member(subscription, event_id)],
+                "finish a delivery",
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl BeaconStore for RedisEdgeStores {
+    async fn add(&self, day: NaiveDate, metric: &str, count: u64) -> StoreResult<()> {
+        let day = day_number(day);
+        let _: i64 = self
+            .script(
+                BEACON_ADD_SCRIPT,
+                &[&format!("beacon:{day}"), "beacon-days"],
+                vec![metric.to_owned(), count.to_string(), day.to_string()],
+                "count a beacon",
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn add_visitor(&self, day: NaiveDate, visitor: &str) -> StoreResult<()> {
+        let day = day_number(day);
+        let _: i64 = self
+            .script(
+                VISITOR_ADD_SCRIPT,
+                &[&format!("visitors:{day}"), "visitor-days"],
+                vec![visitor.to_owned(), day.to_string()],
+                "count a visitor",
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn total(&self, metric: &str, from: NaiveDate, to: NaiveDate) -> StoreResult<u64> {
+        let mut total = 0_u64;
+        if metric == "visitors" {
+            for day in self.days("visitor-days", from, to).await? {
+                let seen: i64 = self
+                    .client
+                    .scard(self.key(&format!("visitors:{day}")))
+                    .await
+                    .map_err(failed("read visitors"))?;
+                total += u64::try_from(seen).unwrap_or(0);
+            }
+            return Ok(total);
+        }
+        for day in self.days("beacon-days", from, to).await? {
+            let count: Option<i64> = self
+                .client
+                .hget(self.key(&format!("beacon:{day}")), metric)
+                .await
+                .map_err(failed("read beacon counts"))?;
+            total += count.and_then(|count| u64::try_from(count).ok()).unwrap_or(0);
+        }
+        Ok(total)
     }
 }

@@ -11,7 +11,8 @@ export const DECIDED_CLASS = "decided";
  * A decided card, collapsed to one line (spec 3.3 §5.1, §5.4, §5.5, §7.1): a check, the
  * heading, then the engine's words for who answered and when — "Write file tray-demo.txt ·
  * You said yes from the tray at 15:24". Where the line is too narrow for both, the answer
- * wraps under the heading rather than being cut. It collapses whichever surface answered. A click, Enter or
+ * wraps under the heading and is never cut; a heading longer than two lines stops there, and
+ * the line's title holds all of it. It collapses whichever surface answered. A click, Enter or
  * Space on the line shows `children` — the exact call and the details — and hides them
  * again; that is all it does, so no key and no click on it answers anything (§7.4).
  *
@@ -83,10 +84,12 @@ export function DecidedLine({
             <span id={headingId} className="decided-heading">
               {heading}
             </span>{" "}
-            <span className="decided-dot" aria-hidden="true">
-              ·
-            </span>{" "}
-            <span className="decided-text">{answer}</span>
+            <span className="decided-answer">
+              <span className="decided-dot" aria-hidden="true">
+                ·
+              </span>{" "}
+              <span className="decided-text">{answer}</span>
+            </span>
           </span>
           <svg className="decided-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="m6 9 6 6 6-6" />

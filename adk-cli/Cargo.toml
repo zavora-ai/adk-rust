@@ -173,8 +173,10 @@ secrets-aws = ["dep:adk-auth", "adk-auth/aws-secrets"]
 # `--voice-script` plays a scripted realtime provider
 scripted-model = ["adk-realtime?/scripted"]
 # `adk-rust --voice`: the harness voice surface over Gemini Live or the OpenAI Realtime API
-# (spec 3.1 §7.17, H5); `--voice-input <wav>` and `--voice-output <wav>` need no audio hardware
-voice = ["harness", "adk-harness?/voice", "dep:adk-realtime", "adk-realtime/integration", "adk-realtime/gemini", "adk-realtime/openai", "dep:adk-audio"]
+# (spec 3.1 §7.17, H5); `--voice-input <wav>` and `--voice-output <wav>` need no audio hardware.
+# With `surface`, `serve` and `up` give a harness marked `--pack voice` the home's voice view,
+# and with `tui` (and `voice-desktop`) `--voice` opens the terminal's voice mode (spec 3.3 §5.6)
+voice = ["harness", "adk-harness?/voice", "adk-surface?/voice", "dep:adk-realtime", "adk-realtime/integration", "adk-realtime/gemini", "adk-realtime/openai", "dep:adk-audio"]
 # The web home (spec 3.3 §5.1, §10 S1): `serve` and `up` mount it at `/ui/` with its API under
 # `/api/surface`, over the harness (with `harness`)
 surface = ["dep:adk-surface"]
@@ -206,6 +208,8 @@ libc = { version = "0.2", optional = true }
 [dev-dependencies]
 # The scripted realtime provider the `--voice` end-to-end test writes its script with.
 adk-realtime = { path = "../adk-realtime", features = ["scripted"] }
+# The voice socket `adk-rust up --pack voice` serves (tests/voice_up.rs)
+tokio-tungstenite = "0.29"
 # Paused time for the router timeout test
 tokio = { workspace = true, features = ["full", "test-util"] }
 tower = { version = "0.5", features = ["util"] }

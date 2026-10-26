@@ -15,6 +15,7 @@
 //! | [`consent_config`] | The consent scopes the kind's capabilities ask for |
 
 pub mod adapters;
+pub mod ap2;
 pub mod handlers;
 
 use std::collections::BTreeMap;
@@ -79,8 +80,12 @@ pub struct SiteEdgeParts {
     pub contacts: Arc<dyn ContactBook>,
     /// The bookable slots; none open without one.
     pub calendar: Option<Arc<dyn Calendar>>,
-    /// The owner's payment rail; payments are refused without one.
+    /// The owner's payment rail, such as an [`ap2::Ap2Desk`]; payments are refused without
+    /// one.
     pub payments: Option<Arc<dyn PaymentDesk>>,
+    /// The owner's amount thresholds: orders, bookings and payments above them wait for the
+    /// owner's decision (spec 3.5 §7.4, S9).
+    pub thresholds: crate::packs::ApprovalThresholds,
     /// The kernel's approval service, where held calls wait for the owner.
     pub approvals: Option<Arc<dyn ApprovalService>>,
     /// Trust tiers; every caller is `public` without them.
@@ -115,11 +120,11 @@ pub type PublicAgentFactory = Box<dyn FnOnce(&PublicTools) -> Arc<dyn Agent> + S
 /// `search_site` capability is the site's search; the edge's own one is left out so no two
 /// tools share the name.
 ///
-/// The harness's `website_public` kit is not used: its own `search_site` and `emit_signal`
-/// are not the edge's, so the edge's public policy would refuse them. The edge's tools are
-/// classed as the website preset classes the kit's, so the manifest decides them: the
-/// harness's `PublicPolicy` admits only the public tools, and the edge's governed path holds
-/// the calls its manifest holds.
+/// The agent is built with `adk-harness`' `website_public_served` over the edge's tools, not
+/// with the kit's own `search_site` and `emit_signal`, which the edge's public policy would
+/// refuse: the manifest decides each tool, the harness's `PublicPolicy` admits only the
+/// public tools, the agent is offered nothing else, and the edge's governed path holds the
+/// calls its manifest holds.
 pub fn concierge(
     team: &SiteTeam,
     partitions: &SitePartitions,
@@ -131,46 +136,42 @@ pub fn concierge(
         "" => AgentRole::Concierge.prompt().to_string(),
         kind => format!("{}\n\n{kind}", AgentRole::Concierge.prompt()),
     };
-    let partition = partitions.public().clone();
+    let partitions = partitions.clone();
     let workspace = workspace.into();
     Box::new(move |tools: &PublicTools| {
-        let declared_search = tools.capabilities.iter().any(|tool| tool.name() == "search_site");
-        let mut chosen: Vec<Arc<dyn Tool>> = tools.capabilities.clone();
-        if !declared_search {
-            chosen.push(tools.search_site.clone());
-        }
-        chosen.push(tools.reply_in_thread.clone());
-        chosen.push(tools.emit_signal.clone());
         // The manifest decides (spec 3.5 §7.19 "Manifest policy"): the public policy admits
         // only these tools, and the edge's governed path holds what the manifest holds.
-        let policy = tools
-            .capabilities
-            .iter()
-            .fold(adk_harness::website::PublicPolicy::new(), |policy, tool| {
-                policy.with_capability(tool.name(), false)
-            });
-        let mut builder = adk_harness::HarnessAgent::builder(AgentRole::Concierge.as_str())
+        let served = adk_harness::website::ServedPublicTools {
+            partitions: partitions.clone(),
+            table,
+            search_site: tools.search_site.clone(),
+            reply_in_thread: Some(tools.reply_in_thread.clone()),
+            emit_signal: tools.emit_signal.clone(),
+            capabilities: tools.capabilities.iter().map(|tool| (tool.clone(), false)).collect(),
+        };
+        let builder = adk_harness::HarnessAgent::builder(AgentRole::Concierge.as_str())
             .model(model.clone())
             .workspace(adk_devtools::Workspace::new(&workspace))
-            .preset(adk_harness::Preset::Website)
-            .partition(partition, table)
-            .tool_classes(Arc::new(EdgeToolClasses {
-                origins: chosen.iter().map(|tool| tool.origin().to_string()).collect(),
-            }))
-            .add_operator_policy(Arc::new(policy))
-            .without_todos()
+            .website_public_served(served)
             .instruction(instruction.clone());
-        for tool in &chosen {
-            builder = builder.tool(tool.clone());
-        }
         match builder.build() {
             Ok(agent) => Arc::new(agent) as Arc<dyn Agent>,
             Err(error) => {
                 tracing::error!(error = %error, "the Concierge did not build; a plain agent answers");
+                let declared_search =
+                    tools.capabilities.iter().any(|tool| tool.name() == "search_site");
                 let mut fallback = adk_agent::LlmAgentBuilder::new(AgentRole::Concierge.as_str())
                     .model(model)
                     .instruction(instruction);
-                for tool in chosen {
+                for tool in tools.capabilities.iter().cloned().chain(
+                    [
+                        (!declared_search).then(|| tools.search_site.clone()),
+                        Some(tools.reply_in_thread.clone()),
+                        Some(tools.emit_signal.clone()),
+                    ]
+                    .into_iter()
+                    .flatten(),
+                ) {
                     fallback = fallback.tool(tool);
                 }
                 Arc::new(fallback.build().expect("an LlmAgent with a model builds"))
@@ -192,11 +193,13 @@ pub struct SiteEdge {
 }
 
 impl SiteEdge {
-    /// The kind's capability declarations with the packs' handlers (spec 3.5 §7.16 `packs`).
+    /// The kind's capability declarations with the packs' handlers (spec 3.5 §7.16 `packs`),
+    /// each under the owner's amount threshold (§7.4).
     ///
     /// # Errors
     ///
-    /// A declaration the registry refuses.
+    /// A threshold on a capability whose calls carry no amount, or a declaration the
+    /// registry refuses.
     pub fn registry(
         parts: &SiteEdgeParts,
         quotes: &Arc<QuoteBook>,
@@ -220,12 +223,17 @@ impl SiteEdge {
             .unwrap_or_else(|| Arc::new(InMemoryCalendar::default()) as Arc<dyn Calendar>);
         let booking: Arc<dyn CapabilityHandler> =
             Arc::new(BookingHandler::new(calendar, forms.clone()));
-        let order: Arc<dyn CapabilityHandler> =
-            Arc::new(OrderHandler::new(quotes.clone(), orders.clone()));
+        parts.thresholds.validate()?;
+        let mut order = OrderHandler::new(quotes.clone(), orders.clone());
+        if let Some(desk) = &parts.payments {
+            order = order.with_payments(desk.clone());
+        }
+        let order: Arc<dyn CapabilityHandler> = Arc::new(order);
         let payment: Arc<dyn CapabilityHandler> =
-            Arc::new(PaymentHandler::new(parts.payments.clone()));
+            Arc::new(PaymentHandler::new(parts.payments.clone()).with_orders(orders.clone()));
         let mut registry = CapabilityRegistry::new(domain);
         for declaration in parts.template.capabilities() {
+            let declaration = parts.thresholds.apply(declaration);
             let handler: Arc<dyn CapabilityHandler> = match declaration.name.as_str() {
                 name if FORMS.contains(&name) => forms.clone(),
                 "get_quote" => Arc::new(QuoteHandler::new(
@@ -338,8 +346,8 @@ impl SiteEdge {
     }
 }
 
-/// The consent the kind's capabilities ask for (spec 3.5 §7.5, A-I8): every scope a
-/// declaration names, under the packs' [`POLICY_VERSION`](crate::packs::POLICY_VERSION) with
+/// The consent the kind asks for (spec 3.5 §7.5, A-I8): every scope a declaration names, and
+/// `nurture` when the kind nurtures its leads ([`crate::leads::consent_scopes`]), under the packs' [`POLICY_VERSION`](crate::packs::POLICY_VERSION) with
 /// `policy` as its text, and subject sessions keyed by `subject_key` (at least 32 bytes).
 ///
 /// # Example
@@ -353,18 +361,14 @@ impl SiteEdge {
 /// let policy = ConsentPolicy { digest: Digest::from_sha256_bytes([1; 32]), ttl: None };
 /// let consent = consent_config(&template(SiteKind::Business), policy, vec![7u8; 32]);
 /// assert!(consent.scopes.contains(&ConsentScope::from("contact")));
+/// assert!(consent.scopes.contains(&ConsentScope::from("nurture")), "a business nurtures its leads");
 /// ```
 pub fn consent_config(
     template: &KindTemplate,
     policy: ConsentPolicy,
     subject_key: impl Into<Arc<[u8]>>,
 ) -> ConsentConfig {
-    let mut scopes: Vec<ConsentScope> = Vec::new();
-    for requirement in template.capabilities().into_iter().filter_map(|c| c.consent) {
-        if !scopes.contains(&requirement.scope) {
-            scopes.push(requirement.scope);
-        }
-    }
+    let scopes: Vec<ConsentScope> = crate::leads::consent_scopes(template);
     let policies = BTreeMap::from([(crate::packs::POLICY_VERSION.to_string(), policy)]);
     ConsentConfig::new(scopes, policies, subject_key)
 }
@@ -412,20 +416,6 @@ pub fn site_router(edge: &AwpEdge, host: Arc<dyn SiteHost>, name: &str) -> axum:
     })
 }
 
-/// Classes the edge's public tools as `adk-harness`' `WebsiteClasses` classes the public
-/// kit's: the public partition's manifest policy is the one policy that decides them (spec
-/// 3.5 §7.10 "Mode").
-#[derive(Debug)]
-struct EdgeToolClasses {
-    origins: std::collections::BTreeSet<String>,
-}
-
-impl adk_harness::OriginClasses for EdgeToolClasses {
-    fn class_of(&self, source: &str, _tool: &str) -> Option<adk_harness::ToolKind> {
-        self.origins.contains(source).then_some(adk_harness::ToolKind::Todo)
-    }
-}
-
 /// The site's status on the edge (spec 3.5 §7.5, §7.20, A-I11): an incident or a read-only
 /// state puts the edge in read-only mode with the reason, so every non-read capability
 /// answers `503 read_only` with the signed status; `operational` resumes it.
@@ -460,6 +450,8 @@ impl StatusSink for EdgeStatus {
 }
 
 /// `edge_read_only`: switches the edge to read-only for a reason, or back (spec 3.5 A-I11).
+/// It implements `adk-harness`' catalogue entry, under the back office's origin, so the
+/// catalogue classes it as a reversible incident act an owner may pre-authorise.
 struct EdgeReadOnlyTool {
     control: EdgeStatusControl,
 }
@@ -467,7 +459,11 @@ struct EdgeReadOnlyTool {
 #[async_trait]
 impl Tool for EdgeReadOnlyTool {
     fn name(&self) -> &str {
-        "edge_read_only"
+        adk_harness::website::EDGE_READ_ONLY
+    }
+
+    fn origin(&self) -> &str {
+        adk_harness::website::BACK_OFFICE_ORIGIN
     }
 
     fn description(&self) -> &str {

@@ -56,14 +56,20 @@ revocable (spec 3.3 §10 K2, S-I7). It answers as the phone, by touch, never as 
 
 | On the phone | What happens |
 |---|---|
-| **Allow once**, **Always allow**, **Edit**, **Deny** on a low- or medium-risk call | Answered through `POST /api/surface/decisions/{id}/answer` at the version the card showed (S-I2) |
-| **Confirm it's you and approve** on a high-risk call or one that moves money | Face ID, Touch ID or the phone's screen lock, then the answer (§8.2). The plain answer route refuses it: `403 surface.confirm_presence` |
+| **Allow once**, **Always allow**, **Edit**, **Deny** on a low- or medium-risk call | Answered through `POST /api/surface/decisions/{id}/answer` at the version the card showed (S-I2); **Edit** sends the changed arguments as `editedArgs` |
+| **Confirm it's you and approve** on a high-risk call or one that moves money | Face ID, Touch ID or the phone's screen lock, then the answer (§8.2). The plain answer route refuses it: `403 surface.confirm_presence`. A tool a mounted driver declares `publish_public` or `financial` is high risk whatever its request says, as on the kernel's own decide route and in chat (spec 3.2 K-I9), and `financial` moves money |
 | **Deny** on a high-risk call | Answered at once: denying is always safe |
+| **Take over**, then **Done**, on a call that asks for a secret | The secret goes to that one call through `POST /api/surface/decisions/{id}/take-over`, recorded as taken over on the phone. Only a phone takes over: a remote terminal's or a tray's token gets `403 surface.not_here` |
 | **Stop all** | Every agent stops (`POST /api/surface/stop`, S-I10) |
 | **Resume all**, send a message, change the mode, pair a device | Not on the phone: commands are closed to devices (`403 surface.not_here`) |
 
 Every answer is recorded as `surface.decide` with `surface: "phone"`, `origin: {"kind":"touch"}`,
 the device, and `presence: "confirmed"` when the person confirmed it is them.
+
+A long command is cut short on its card. **Show the full command** draws it whole from its
+arguments, and only then can it be approved (§7.1). The card also shows what the kernel says of
+the decision beside its heading, such as a routine's schedule or what it may spend, and where
+else it is shown.
 
 A device's kind is set by whoever issued its pairing code. Only a device of kind `phone` reaches
 the phone's routes; a remote terminal's token gets `403 surface.not_here` on them.
@@ -83,10 +89,18 @@ the wake-up, which records its latency.
 | Quiet time ends, or the kernel starts | One wake-up per phone whose person has a waiting decision, whatever the number of decisions |
 | The same moment on two replicas | One wake-up: each is claimed in the shared store before it is sent |
 | The push service answers `404` or `410` | The subscription is removed; the phone subscribes again from **Memory** |
+| The push service is busy (`429`, `5xx`) or out of reach on all three tries | Recorded as `dropped`, then sent again after a minute, the wait doubling up to an hour, while the decision waits outside quiet time; the end of quiet time or a restart sends what is left |
 
 Quiet time is the kernel's (`[kernel] quiet_hours` in `harness.toml`, or a change made in the
 home while the kernel runs). A wake-up follows the area of its run's process, and the default
-area otherwise; the wake-up at the start and when quiet time ends follows the default area.
+area otherwise; the wake-up at the start and when quiet time ends follows the default area. A
+wake-up held for quiet time follows a change made meanwhile: quiet time moved later holds it to
+the new end. The wake-up at the end of quiet time covers every decision waiting for the
+person, so a restart does not announce any of them again.
+
+The claims that send each wake-up once are kept beside the device. Those of decisions that no
+longer wait are removed when the kernel starts and every six hours; every attachment of a
+device whose pairing ended goes then too.
 
 A subscription must point at a browser's push service over https: Apple's
 (`*.push.apple.com`), Google's (`fcm.googleapis.com`), Mozilla's (`*.push.services.mozilla.com`)
@@ -101,7 +115,8 @@ outcome: `held`, `sent` or `dropped`. Subscribing and unsubscribing write `surfa
 The VAPID key is a P-256 key kept in the kernel home as `push.key`, readable by its owner only.
 Every subscription remembers the id of the key it was made with, and a server sends only with
 that key, so replicas share one key file. Deleting the file makes a new key; every phone then
-allows notifications again.
+allows notifications again: **Memory** shows **Allow notifications** for a phone subscribed
+with the old key, and tapping it ends the old subscription and makes one with the new key.
 
 ## Confirm it's you
 
@@ -148,16 +163,26 @@ first step answers `403 surface.phone.no_passkey` and says where to set it up.
      Safari's.
    - **Android:** Chrome offers **Install the app**; the code is claimed in the app.
 3. Tap **Pair this phone**, then **Allow notifications**, then **Use your face or fingerprint**.
-   Notifications that cannot be turned on do not stop pairing: **Memory** on the phone offers
-   them again.
+   Notifications that cannot be turned on do not stop pairing: the phone says why — the
+   browser or the phone's settings block them — and **Memory** offers them again.
+
+From the terminal, `adk-rust pair --kind phone` issues a phone's code with its link. A code
+issued without `--kind phone` pairs a remote terminal and carries no link. A pairing link
+opened on a phone that still holds an older token claims the new code.
 
 The home lists the phone as "Your phone · asks for your face or fingerprint" once its passkey
 is set up.
 
 The device token is kept in the app's IndexedDB, so it survives a relaunch; a script running in
 the page can read it, as it can the operator's token in the web home. **Sign out** in **Memory**
-forgets it; **Remove** in the home revokes it, ends its open feeds and removes its push
-subscription and passkey. If the system clears the app's storage, the phone pairs again.
+ends the phone's wake-ups and forgets the token; **Remove** in the home revokes it, ends its open
+feeds and removes its push subscription and passkey. If the system clears the app's storage, the
+phone pairs again. When a read fails, the phone says so rather than that nothing waits; once its
+pairing has ended or it was removed, it offers **Pair this phone again**.
+
+The phone's shell opens for a pairing link, for a browser holding a device token, and for the
+app installed on a device whose main pointer is touch. The home installed on a computer opens
+the home.
 
 ## Mounting the phone
 

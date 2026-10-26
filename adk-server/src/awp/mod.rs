@@ -19,6 +19,10 @@
 //! bindings enter one governed path ([`executor`]) under a policy compiled from the manifest
 //! ([`policy`]). The edge exposes no owner route: the owner's control plane is the kernel's.
 //!
+//! A verified caller's fetch of the Agent Card, the capability manifest or the MCP Server
+//! Card is recorded as `awp.request.verified` with its `awp.surface`, so verified agent
+//! discovery is counted (spec 3.5 §7.12, §9.3).
+//!
 //! # Example
 //!
 //! ```rust,no_run
@@ -57,6 +61,7 @@
 pub mod a2a;
 pub mod beacon;
 pub mod chat;
+pub mod conformance;
 pub mod consent;
 pub mod control;
 pub mod events;
@@ -91,6 +96,7 @@ use adk_session::{InMemorySessionService, SessionService};
 use adk_tool::mcp::server::McpSessions;
 use awp_types::{
     CapabilityEffect, ErrorBody, ErrorCode, ErrorEnvelope, HeldCall, SiteStatus, TrustRules,
+    TrustTier,
 };
 use axum::Router;
 use axum::extract::{FromRequest as _, Request, State};
@@ -104,19 +110,21 @@ pub use a2a::AgentCardInfo;
 pub use beacon::{BeaconCounts, BeaconStore, InMemoryBeaconStore};
 pub use consent::{ConsentConfig, ConsentPolicy, LeadsData, SubjectData};
 pub use control::{EdgeMode, StatusError};
-pub use events::{EdgeEvents, EventLog, EventsConfig, InMemoryEventLog, RetainedEvent};
+pub use events::{
+    EdgeEvents, EventLog, EventsConfig, InMemoryEventLog, PendingDelivery, RetainedEvent,
+};
 pub use executor::{GovernedExecutor, KeySources};
 pub use limits::EdgeLimits;
 pub use policy::{CapabilityPolicy, PublicPartitionPolicy};
 pub use public::{
-    PublicTools, RecordingSignals, RecordingThreadSink, ReplyPolicy, SignalEmitter, SiteHit,
-    SiteSearch, StaticSiteIndex, ThreadSink,
+    ConversationScreen, InjectionScreen, PublicTools, RecordingSignals, RecordingThreadSink,
+    ReplyPolicy, SignalEmitter, SiteHit, SiteSearch, StaticSiteIndex, ThreadSink,
 };
 pub use tiers::{EdgeCaller, EdgeTiers, WebBotAuthTrustAssigner};
 
 use control::EdgeControl;
 use executor::CURRENT_CALLER;
-use public::{LiveThreads, PublicPartition, PublicParts};
+use public::{LiveThreads, PublicPartition, PublicParts, TurnWatch, Watch};
 
 /// The edge's delegated signing keys (spec 3.5 §7.2, D-11; AWP 2.0 §5.3, C3).
 ///
@@ -154,6 +162,12 @@ pub struct EdgeStores {
     pub subscriptions: Arc<dyn SubscriptionStore>,
     /// Leads captured at the edge.
     pub leads: Arc<dyn LeadStore>,
+    /// Events retained for replay, catalogue pages, consent references and pending
+    /// deliveries; the builder's [`event_log`](AwpEdgeBuilder::event_log), else in memory.
+    pub event_log: Option<Arc<dyn EventLog>>,
+    /// The beacon's daily counts; the builder's
+    /// [`beacon_store`](AwpEdgeBuilder::beacon_store), else in memory.
+    pub beacon: Option<Arc<dyn BeaconStore>>,
 }
 
 impl EdgeStores {
@@ -172,6 +186,8 @@ impl EdgeStores {
             consent,
             subscriptions: Arc::new(memory.subscriptions),
             leads: Arc::new(memory.leads),
+            event_log: None,
+            beacon: None,
         }
     }
 
@@ -186,6 +202,21 @@ impl EdgeStores {
     #[must_use]
     pub fn with_leads(mut self, leads: Arc<dyn LeadStore>) -> Self {
         self.leads = leads;
+        self
+    }
+
+    /// Retains events, catalogue pages, consent references and pending deliveries in `log`,
+    /// so they survive a restart (spec 3.5 §7.5).
+    #[must_use]
+    pub fn with_event_log(mut self, log: Arc<dyn EventLog>) -> Self {
+        self.event_log = Some(log);
+        self
+    }
+
+    /// Keeps the beacon's daily counts in `beacon` (spec 3.5 §7.12).
+    #[must_use]
+    pub fn with_beacon(mut self, beacon: Arc<dyn BeaconStore>) -> Self {
+        self.beacon = Some(beacon);
         self
     }
 
@@ -238,6 +269,7 @@ pub struct AwpEdgeBuilder {
     search: Option<Arc<dyn SiteSearch>>,
     threads: Option<Arc<dyn ThreadSink>>,
     signals: Option<Arc<dyn SignalEmitter>>,
+    screen: Option<Arc<dyn ConversationScreen>>,
     reply_policy: ReplyPolicy,
     sessions: Option<Arc<dyn SessionService>>,
     mcp_sessions: McpSessions,
@@ -292,7 +324,8 @@ impl AwpEdgeBuilder {
         self
     }
 
-    /// Records governed decisions and `awp.capability.*` records on `audit`.
+    /// Records governed decisions, `awp.capability.*` records and verified discovery
+    /// (`awp.request.verified`) on `audit`.
     #[must_use]
     pub fn audit(mut self, audit: AuditTrail) -> Self {
         self.audit = Some(audit);
@@ -364,6 +397,15 @@ impl AwpEdgeBuilder {
         self
     }
 
+    /// Sets the screen conversation input passes before the public agent reads it; a flagged
+    /// turn the agent files no signal for gets one from the edge (spec 3.5 §7.10, S7).
+    /// [`InjectionScreen`] by default.
+    #[must_use]
+    pub fn conversation_screen(mut self, screen: Arc<dyn ConversationScreen>) -> Self {
+        self.screen = Some(screen);
+        self
+    }
+
     /// Sets the template and pace of `reply_in_thread`.
     #[must_use]
     pub fn reply_policy(mut self, policy: ReplyPolicy) -> Self {
@@ -392,7 +434,7 @@ impl AwpEdgeBuilder {
         self
     }
 
-    /// Sets where events are retained for replay; in memory by default.
+    /// Sets where events are retained for replay; the stores' event log, else in memory.
     #[must_use]
     pub fn event_log(mut self, log: Arc<dyn EventLog>) -> Self {
         self.event_log = Some(log);
@@ -414,7 +456,7 @@ impl AwpEdgeBuilder {
         self
     }
 
-    /// Sets where the beacon counts; in memory by default.
+    /// Sets where the beacon counts; the stores' beacon store, else in memory.
     #[must_use]
     pub fn beacon_store(mut self, store: Arc<dyn BeaconStore>) -> Self {
         self.beacon = Some(store);
@@ -448,12 +490,14 @@ impl AwpEdgeBuilder {
         }
         let events = EdgeEvents::new(
             Arc::clone(&stores.subscriptions),
-            self.event_log.unwrap_or_else(|| Arc::new(InMemoryEventLog::new())),
+            self.event_log
+                .or_else(|| stores.event_log.clone())
+                .unwrap_or_else(|| Arc::new(InMemoryEventLog::new())),
             self.events,
             self.public_url.as_str(),
         );
         control.attach_events(events.clone());
-        let references = events::ConsentReferences::default();
+        let references = events.references();
         let principal = match self.principal {
             Some(principal) => principal,
             None => AgentPrincipal::new(
@@ -498,6 +542,9 @@ impl AwpEdgeBuilder {
         let public = match self.agent {
             None => None,
             Some(factory) => {
+                let signals: Arc<dyn SignalEmitter> =
+                    self.signals.unwrap_or_else(|| Arc::new(RecordingSignals::new()));
+                let turns = TurnWatch::default();
                 let tools = public::public_tools(
                     &executor,
                     PublicParts {
@@ -505,21 +552,29 @@ impl AwpEdgeBuilder {
                         threads: self
                             .threads
                             .unwrap_or_else(|| Arc::new(RecordingThreadSink::new())),
-                        signals: self.signals.unwrap_or_else(|| Arc::new(RecordingSignals::new())),
+                        signals: Arc::clone(&signals),
                         reply_policy: self.reply_policy,
                         emitted_by: format!("{}#public", principal.id.as_str()),
+                        watch: turns.clone(),
                     },
                     &live,
                 );
                 let agent = factory(&tools);
                 let sessions =
                     self.sessions.unwrap_or_else(|| Arc::new(InMemorySessionService::new()));
+                let watch = Watch {
+                    turns,
+                    screen: self.screen.unwrap_or_else(|| Arc::new(InjectionScreen)),
+                    signals,
+                    edge: principal.id.as_str().to_owned(),
+                };
                 Some(Arc::new(PublicPartition::new(
                     agent,
                     &tools,
                     sessions,
                     "awp-public",
                     audit.as_ref(),
+                    watch,
                 )?))
             }
         };
@@ -567,7 +622,10 @@ impl AwpEdgeBuilder {
                 .unwrap_or_else(|| Arc::new(LeadsData::new(Arc::clone(&stores.leads)))),
             audit: audit.clone(),
         };
-        let beacon_store = self.beacon.unwrap_or_else(|| Arc::new(InMemoryBeaconStore::new()));
+        let beacon_store = self
+            .beacon
+            .or_else(|| stores.beacon.clone())
+            .unwrap_or_else(|| Arc::new(InMemoryBeaconStore::new()));
         let beacon = beacon::BeaconState {
             store: Arc::clone(&beacon_store),
             consent: Arc::clone(&stores.consent),
@@ -662,6 +720,7 @@ impl AwpEdge {
             search: None,
             threads: None,
             signals: None,
+            screen: None,
             reply_policy: ReplyPolicy::default(),
             sessions: None,
             mcp_sessions: McpSessions::default(),
@@ -720,6 +779,24 @@ impl AwpEdge {
     /// The beacon's daily counts, for the KPI tracker's `beacon` source (spec 3.5 §7.12).
     pub fn beacon(&self) -> BeaconCounts {
         BeaconCounts::new(Arc::clone(&self.inner.beacon))
+    }
+
+    /// Resumes, every `interval` until the edge is dropped, the event deliveries a stopped
+    /// process left in a durable [`EventLog`], so retries survive a restart (spec 3.5 §7.5);
+    /// see [`EdgeEvents::resume_deliveries`]. With a log that keeps no deliveries it finds
+    /// nothing.
+    pub fn spawn_delivery_resumer(&self, interval: Duration) -> tokio::task::JoinHandle<()> {
+        let weak: Weak<EdgeInner> = Arc::downgrade(&self.inner);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            loop {
+                ticker.tick().await;
+                let Some(inner) = weak.upgrade() else { break };
+                if let Err(error) = inner.events.resume_deliveries().await {
+                    tracing::warn!(error = %error, "awp delivery resumer failed");
+                }
+            }
+        })
     }
 
     /// A handle that switches the edge to read-only and back, for the back office's incident
@@ -920,10 +997,18 @@ async fn edge_guard(State(guard): State<Arc<Guard>>, request: Request, next: Nex
         http.path = %path,
     );
     parts.extensions.insert(caller.clone());
+    let discovery = (parts.method == Method::GET).then(|| discovery_surface(&path)).flatten();
+    let verified = caller.tier > TrustTier::Public;
     let mut response = CURRENT_CALLER
-        .scope(caller, next.run(Request::from_parts(parts, body)))
+        .scope(caller.clone(), next.run(Request::from_parts(parts, body)))
         .instrument(span)
         .await;
+    if let Some(surface) = discovery
+        && verified
+        && response.status().is_success()
+    {
+        guard.executor.record_discovery(&caller, surface).await;
+    }
     rate_headers(
         &mut response,
         &standing.class,
@@ -932,6 +1017,16 @@ async fn edge_guard(State(guard): State<Arc<Guard>>, request: Request, next: Nex
         standing.reset,
     );
     response
+}
+
+/// The discovery surface a path serves, for `awp.request.verified` (spec 3.5 §7.12).
+fn discovery_surface(path: &str) -> Option<&'static str> {
+    match path {
+        a2a::AGENT_CARD_PATH => Some("agent_card"),
+        "/awp/v2/manifest" => Some("manifest"),
+        "/mcp/server-card" | "/.well-known/mcp/server-card.json" => Some("mcp_server_card"),
+        _ => None,
+    }
 }
 
 fn is_form(headers: &axum::http::HeaderMap) -> bool {

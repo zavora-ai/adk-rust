@@ -215,6 +215,44 @@ async fn presence_lists_every_fact_with_its_source() {
     let unsupported = inventory.fact_table().unsupported_claims(&page).await.unwrap();
     assert_eq!(unsupported.len(), 1);
     assert!(unsupported[0].reason.contains("Assumed"));
+    assert_eq!(fact("@type").value, "LocalBusiness", "the subject's type is a fact");
+}
+
+/// A listing typed with a schema.org subtype — `Bakery` under `FoodEstablishment` under
+/// `LocalBusiness` — yields its facts and its type (spec 3.5 §7.8 `Presence`, S2).
+#[tokio::test]
+async fn presence_reads_schema_org_subtypes_and_records_the_type() {
+    let dir = tempfile::tempdir().unwrap();
+    let site = dir.path().join("site");
+    std::fs::create_dir_all(&site).unwrap();
+    std::fs::write(
+        site.join("bakery.html"),
+        r#"<!doctype html><html><head><title>Juniper Bakery</title>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@graph":[
+ {"@type":"WebSite","name":"Listings"},
+ {"@type":"Organization","name":"Listings Ltd"},
+ {"@type":["LocalBusiness","Bakery"],"name":"Juniper Bakery","telephone":"+254 700 000 001"}]}
+</script></head><body><h1>Juniper Bakery</h1></body></html>"#,
+    )
+    .unwrap();
+    let server = FixtureServer::start_at(dir.path().to_path_buf(), false).await;
+    let ctx = adk_site::migrate::SourceContext {
+        http: Arc::new(
+            adk_site::migrate::http::HttpClient::builder()
+                .egress(adk_site::migrate::http::EgressScope::Only([server.origin.clone()].into()))
+                .min_interval(std::time::Duration::ZERO)
+                .build()
+                .unwrap(),
+        ),
+        ..context(&server)
+    };
+    let listing = Url::parse(&format!("{}/bakery.html", server.origin)).unwrap();
+    let inventory = source_conformance(&Presence::new([listing]), &ctx).await;
+    let fact = |key: &str| inventory.facts.iter().find(|f| f.key == key).unwrap();
+    assert_eq!(fact("@type").value, "Bakery", "the most specific type: {:#?}", inventory.facts);
+    assert_eq!(fact("name").value, "Juniper Bakery", "the bakery, not the listing site");
+    assert_eq!(fact("telephone").source.locator, "json-ld Bakery.telephone");
 }
 
 #[tokio::test]

@@ -504,6 +504,14 @@ impl SurfaceEngineBuilder {
         if !self.quiet_set {
             self.projector.quiet = self.source.quiet_hours();
         }
+        // The source's rating counts beside the request's (spec 3.3 §7.2, spec 3.2 K-I9), so a
+        // call a kernel rates high needs presence or a paired local terminal on every surface.
+        let source = Arc::clone(&self.source);
+        let money = Arc::clone(&self.projector.money);
+        self.projector.money =
+            Arc::new(move |request| money(request) || source.moves_money(request));
+        let source = Arc::clone(&self.source);
+        self.projector.rates_high = Arc::new(move |request| source.rates_high(request));
         self.projector.voice_window_secs =
             u32::try_from(self.voice_window.as_millis().div_ceil(1000)).unwrap_or(u32::MAX);
         SurfaceEngine {
@@ -1958,6 +1966,10 @@ impl SurfaceEngine {
             .ext("outcome", json!(outcome));
         if let Some(decision) = decision {
             draft = draft.decision(decision);
+        }
+        // Whose call it was, so the record can say "You let Finance send one email" (§11).
+        if let Some(acting) = &request.acting {
+            draft = draft.ext("actingAgent", json!(acting.agent.id.to_string()));
         }
         if let Some(code) = code {
             draft = draft.ext("code", json!(code));

@@ -46,7 +46,8 @@ export function TodayLines({ client }: { client: PhoneClient }) {
 
 /**
  * Memory on the phone: this phone's own place in "Where you can say yes from". Pairing, other
- * devices and the operator's rules stay in the home.
+ * devices and the operator's rules stay in the home. Notifications the browser or the phone's
+ * settings refuse are said, with where to turn them on.
  */
 export function ThisPhone({ client, onSignedOut }: { client: PhoneClient; onSignedOut: () => void }) {
   const [info, setInfo] = useState<PhoneInfo>();
@@ -70,7 +71,14 @@ export function ThisPhone({ client, onSignedOut }: { client: PhoneClient; onSign
         </li>
       </ul>
       {info && !info.push && (
-        <button type="button" className="phone-button phone-button-secondary" onClick={act(() => client.allowNotifications())}>
+        <button
+          type="button"
+          className="phone-button phone-button-secondary"
+          onClick={act(async () => {
+            setProblem("");
+            if (!(await client.allowNotifications())) setProblem(phoneLabels.notificationsOff(phoneLabels.notificationsBlocked));
+          })}
+        >
           {phoneLabels.allowNotifications}
         </button>
       )}

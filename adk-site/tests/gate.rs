@@ -274,3 +274,128 @@ async fn the_fast_tier_checks_only_the_change() {
     let full = run(&gate, GateMode::Full, &project, out.path(), &second).await;
     assert_eq!(failed(&full, GateCheck::Links), vec!["broken-link"]);
 }
+
+/// A page quotes a review only with the reviewer's public name and the owner's approval
+/// (spec 3.5 S2): the claims check finds a quote by its words and holds the page.
+#[tokio::test]
+async fn review_quotes_need_attribution_and_approval() {
+    use adk_site::gate::QuotableReview;
+
+    let mut project = project().await;
+    let wanjiru =
+        QuotableReview::new("The panels went up in a day and the crew left nothing behind.")
+            .by("Wanjiru K.");
+    let anonymous = QuotableReview::new("Fair prices, but the quote took a week to arrive.")
+        .approved("decision-2");
+    item(&mut project, "pages/about/en").body = Some(Markdown(
+        "What clients say:\n\n> The panels went up in a day and the crew left nothing behind.\n>\n> — Wanjiru K.\n\n\
+         > Fair prices, but the quote took a week to arrive.\n"
+            .into(),
+    ));
+    let (out, report) = build(&project).await;
+    let gate = facts(FactStatus::Known).with_reviews(vec![wanjiru.clone(), anonymous.clone()]);
+    let verdict = run(&gate, GateMode::Full, &project, out.path(), &report).await;
+    let mut rules = failed(&verdict, GateCheck::Claims);
+    rules.sort();
+    assert_eq!(rules, ["review-quote-anonymous", "review-quote-unapproved"]);
+    assert!(verdict.held_items().contains(&ContentId("pages/about/en".into())));
+
+    // Approved and attributed, the quote is published.
+    item(&mut project, "pages/about/en").body = Some(Markdown(
+        "What clients say:\n\n> The panels went up in a day and the crew left nothing behind.\n>\n> — Wanjiru K.\n"
+            .into(),
+    ));
+    let (out, report) = build(&project).await;
+    let gate =
+        facts(FactStatus::Known).with_reviews(vec![wanjiru.approved("decision-1"), anonymous]);
+    let verdict = run(&gate, GateMode::Full, &project, out.path(), &report).await;
+    assert_eq!(verdict.check(GateCheck::Claims).unwrap().status, CheckStatus::Passed);
+}
+
+/// A page or stylesheet that loads anything from another origin fails the third-party
+/// resource check in both tiers (spec 3.5 §7.16.1, S16).
+#[tokio::test]
+async fn third_party_resources_fail_their_own_check() {
+    use adk_site::gate::ThirdPartyResources;
+
+    let project = project().await;
+    let (out, report) = build(&project).await;
+    let gate = facts(FactStatus::Known)
+        .with_extension(Arc::new(ThirdPartyResources::new("https://example.com")));
+    let clean = run(&gate, GateMode::Full, &project, out.path(), &report).await;
+    assert_eq!(clean.check(GateCheck::ThirdPartyResources).unwrap().status, CheckStatus::Passed);
+
+    let index = out.path().join("index.html");
+    let html = std::fs::read_to_string(&index).unwrap().replace(
+        "</head>",
+        "<link rel=\"icon\" href=\"https://cdn.example/favicon.ico\">\
+         <style>body{background:url(https://pixel.example/p.gif)}</style></head>",
+    );
+    let html = html.replacen(
+        "<main",
+        "<img alt=\"\" src=\"/logo.png\" srcset=\"/logo.png 1x, https://img.example/logo@2x.png 2x\"><main",
+        1,
+    );
+    std::fs::write(&index, html).unwrap();
+    let css = out.path().join("assets/site.css");
+    let mut text = std::fs::read_to_string(&css).unwrap();
+    text.insert_str(0, "@import \"https://fonts.example/inter.css\";\n");
+    std::fs::write(&css, text).unwrap();
+    let verdict = run(&gate, GateMode::Full, &project, out.path(), &report).await;
+    let result = verdict.check(GateCheck::ThirdPartyResources).unwrap();
+    assert_eq!(result.status, CheckStatus::Failed);
+    let loads: Vec<&str> = result.findings.iter().map(|f| f.message.as_str()).collect();
+    for origin in ["cdn.example", "pixel.example", "img.example", "fonts.example"] {
+        assert!(loads.iter().any(|m| m.contains(origin)), "{origin} in {loads:#?}");
+    }
+    assert!(result.findings.iter().all(|f| f.rule == "third-party-resource"));
+}
+
+/// The release key the site log signs with must be delegated by the owner's root; the check
+/// reports as `GateCheck::Signing` (spec 3.5 §7.2, D-11, A-I5).
+#[tokio::test]
+async fn an_undelegated_release_key_fails_the_signing_check() {
+    use adk_awp::signing::jws::{DocumentSigner, Ed25519DocumentSigner, public_key_jwk};
+    use adk_awp::signing::keys::delegate;
+    use adk_site::gate::ReleaseDelegation;
+    use awp_types::{KeyScope, KeySet, RootKey};
+
+    let root = Ed25519DocumentSigner::from_seed("root-1", [1; 32]).unwrap();
+    let release = Ed25519DocumentSigner::from_seed("release-1", [2; 32]).unwrap();
+    let release_key = public_key_jwk(release.public_key_bytes());
+    let check = ReleaseDelegation::new("release-1", release_key.clone(), "data/keys/release.jwk");
+    let gate = LaunchGate::new().with_extension(Arc::new(check));
+
+    let mut project = project().await;
+    let (out, report) = build(&project).await;
+    let verdict = run(&gate, GateMode::Fast, &project, out.path(), &report).await;
+    assert_eq!(failed(&verdict, GateCheck::Signing), ["release-delegation"]);
+
+    let now = Utc::now();
+    let delegation = delegate(
+        &root,
+        "release-1",
+        release_key,
+        vec![KeyScope::Release],
+        now - chrono::Duration::days(1),
+        now + chrono::Duration::days(30),
+    )
+    .await
+    .unwrap();
+    let keys = KeySet {
+        root: RootKey {
+            kid: root.kid().to_string(),
+            public_key: public_key_jwk(root.public_key_bytes()),
+            endorsement: None,
+        },
+        delegations: vec![delegation],
+        retired_roots: Vec::new(),
+        revocations: Vec::new(),
+    };
+    project
+        .documents
+        .insert(".well-known/awp/keys.json".into(), serde_json::to_vec(&keys).unwrap().into());
+    let (out, report) = build(&project).await;
+    let verdict = run(&gate, GateMode::Fast, &project, out.path(), &report).await;
+    assert_eq!(verdict.check(GateCheck::Signing).unwrap().status, CheckStatus::Passed);
+}

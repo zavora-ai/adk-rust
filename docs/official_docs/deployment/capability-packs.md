@@ -16,6 +16,7 @@ a set of declarations with their handlers; `adk-website` ships six, and a site a
 [dependencies]
 adk-awp = { version = "3.0.0", features = ["signing"] }
 adk-core = "3.0.0"
+adk-payments = { version = "3.0.0", features = ["ap2"] }
 adk-server = { version = "3.0.0", features = ["awp"] }
 adk-website = "3.0.0"
 awp-types = "3.0.0"
@@ -197,9 +198,9 @@ and `edge::SiteEdge::build` serves them with the packs' handlers:
 |---------|--------|-------|
 | Forms | The `contact` pack and `register` | A lead, the contact, and a `lead_captured` signal into the back office |
 | Quotes | `get_quote` | Quotes at the published prices, each keeping its price until it expires (A-I25) |
-| Orders | `place_order`, `order_status`, `request_return` | Orders against open quotes |
-| Payments | `pay_order`, `donate`, `subscribe`, `buy_ticket` | Payment through the owner's `PaymentDesk`; refused without one |
-| Bookings | `check_availability`, `book`, `book_appointment` | Slots of the owner's `Calendar`; a taken slot answers `inventory_unavailable` |
+| Orders | `place_order`, `order_status`, `request_return` | Orders against open quotes, each with what the payment desk needs to take its payment; an order is its buyer's, and another requester learns nothing of it |
+| Payments | `pay_order`, `donate`, `subscribe`, `buy_ticket` | Payment through the owner's `PaymentDesk`; refused without one; an order is paid once |
+| Bookings | `check_availability`, `book`, `book_appointment` | Slots of the owner's `Calendar`, each with an optional `price`; a taken slot answers `inventory_unavailable` |
 | Search | `search_site` | The release's index |
 | Listings | `list_products`, `list_notices`, `list_events`, `get_schedule`, `practice_information` | The published items of the matching kind |
 | Status | `lookup_status` | An application's status by its reference |
@@ -208,6 +209,69 @@ and `edge::SiteEdge::build` serves them with the packs' handlers:
 declarations is logged and left unserved. A capability of your own runs on an edge you build
 with `CapabilityRegistry`, as above.
 
+## Amount thresholds
+
+The owner holds large orders, bookings and payments for a decision with
+`adk_website::packs::ApprovalThresholds` (spec 3.5 §7.4, S9): `SiteEdgeParts::thresholds`, or
+`approvals.json` in a served site's project, such as `{"place_order": 20000, "book": 15000}` in
+minor units of the site's currency. A call above its threshold answers `202` with
+`Location: /awp/v2/calls/{id}` and runs once the owner approves.
+
+| Capability | The amount the edge compares |
+|------------|------------------------------|
+| `place_order` | The quote's total |
+| `pay_order` | The order's total |
+| `book`, `book_appointment` | The slot's `price` |
+| `donate` | The `amount` the donor gives |
+
+`ApprovalThresholds::commerce(amount)` holds orders, bookings, appointments and donations above
+`amount`; a threshold on `pay_order` as well would ask the owner a second time for an order they
+approved. A threshold tightens a declaration and never loosens one, and a threshold on a
+capability whose calls carry no amount is refused when the edge is built.
+
+## Payments
+
+`pay_order` takes the order, the rail, and either the buyer's AP2 payment mandate (`mandate`)
+or a single-use payment token from the buyer's provider (`credential`). The owner's
+`PaymentDesk` takes the payment: the payment handler finds the order, refuses one that is not
+awaiting payment, holds it `paying` while the desk works, so a second payment under another
+key is refused, and marks it paid when the desk answers `status: "paid"`; a desk that settles
+later marks it with `OrderBook::set_status`.
+
+| Desk | Takes |
+|------|-------|
+| `deploy::PaymentLinks` | Nothing: answers with the owner's payment instructions from `payments.json` |
+| `edge::ap2::Ap2Desk` | AP2: `place_order` returns the site's cart signed by the edge's `receipt` key as `payment.cartMandate`; `pay_order` with the buyer's mandate for that cart runs through `adk-payments`' merchant-side `Ap2Adapter` — the cart, total and expiry checked, the buyer's authorisation verified, the mandate used once — and the owner's payment processor; the answer carries a receipt signed by the `receipt` key |
+
+```rust
+use std::sync::Arc;
+
+use adk_awp::signing::jws::DocumentSigner;
+use adk_core::identity::AdkIdentity;
+use adk_payments::kernel::PaymentExecutionService;
+use adk_payments::protocol::ap2::UserAuthorizationVerifier;
+use adk_website::edge::ap2::{Ap2Desk, in_memory_journal};
+
+async fn desk(
+    receipt_key: Arc<dyn DocumentSigner>,
+    processor: Arc<dyn PaymentExecutionService>,
+    buyers: Arc<dyn UserAuthorizationVerifier>,
+    identity: AdkIdentity,
+) -> adk_core::Result<Ap2Desk> {
+    let (transactions, evidence) = in_memory_journal(&identity).await?;
+    Ap2Desk::builder("Juniper Bakery", receipt_key)
+        .processor(processor)
+        .buyer_authorization(buyers)
+        .journal(transactions, evidence, identity)
+        .build()
+}
+```
+
+The desk picks no payment processor: give it the owner's `PaymentExecutionService`, and keep
+its journal in the site's session and artifact services in production;
+`edge::ap2::SandboxProcessor` moves no money and is for tests and sandboxes. A served site
+takes the desk as `SiteOptions::payments`.
+
 ## Checking a pack
 
 | Check | How |
@@ -215,7 +279,7 @@ with `CapabilityRegistry`, as above.
 | The declarations are visible to the right tiers | `CapabilityRegistry::manifest_for(tier)`, or `GET /awp/v2/manifest` with and without a credential |
 | The bindings agree | The same call over `POST /awp/v2/capabilities/{name}`, A2A `SendMessage` and MCP `tools/call` returns the same outcome, and a repeated key returns the first one |
 | The deployment conforms | `adk-rust awp conformance http://127.0.0.1:8080 --active` runs the edge's `GET` checks against a deployment on loopback (A-I9) |
-| The scenarios | S6 (identity, not claims) and S9 (agent-to-agent business) in `examples/website`. S9 reports a gap on `main`: no default pack capability carries an amount threshold, so a large order is never held |
+| The scenarios | S6 (identity, not claims) and S9 (agent-to-agent business) in `examples/website`: S9's buyer pays from its own wallet through `adk-payments`' AP2 rail into the shop's AP2 desk, and its large booking waits for the owner |
 
 ```bash
 cargo run --manifest-path examples/website/Cargo.toml -- S6 S9

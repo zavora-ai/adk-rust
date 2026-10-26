@@ -607,6 +607,9 @@ impl AcpSessionHandler {
         // carries an empty user turn so the runner replays persisted history and
         // the agent resumes the held calls before its next model call.
         let mut is_resume = false;
+        // "Always" answers held back until the calls of their batch have run, so the rule
+        // cannot override an answer the person gave earlier in that batch (spec 3.3 §10 A1).
+        let mut deferred: Vec<(ToolConfirmationRequest, ToolConfirmationDecision)> = Vec::new();
 
         // The runner pauses at the first still-undecided confirmation and
         // resumes one decision at a time, so the number of iterations is bounded
@@ -615,6 +618,11 @@ impl AcpSessionHandler {
         // call that already has a decision.
         const MAX_CONFIRMATION_ROUNDS: usize = 64;
 
+        let scope = adk_core::ApprovalScope::new(
+            &self.app_name,
+            &self.user_id,
+            request.session_id.to_string(),
+        );
         for _round in 0..MAX_CONFIRMATION_ROUNDS {
             let run_config = RunConfig::builder()
                 .runtime_toolsets(runtime_toolsets.clone())
@@ -679,6 +687,16 @@ impl AcpSessionHandler {
                 }
             }
 
+            // The resume run dispatched the batch the deferred answers came from, each call
+            // with the answer the person gave it, so the rules may now be remembered.
+            if let Some(standing) = &self.standing_permissions {
+                for (confirmation, decision) in deferred.drain(..) {
+                    if let Err(error) = standing.remember(&scope, &confirmation, decision).await {
+                        warn!(%error, tool.name = %confirmation.tool_name, "could not remember the ACP client's answer; it applied to its call only");
+                    }
+                }
+            }
+
             // No outstanding confirmations means the turn completed.
             if pending.is_empty() {
                 return Ok(StopReason::EndTurn);
@@ -688,11 +706,9 @@ impl AcpSessionHandler {
             // `session/request_permission` to the client, await the outcome, and
             // record the decision (cancellation → deny) against the exact call for
             // the next resume run.
-            let scope = adk_core::ApprovalScope::new(
-                &self.app_name,
-                &self.user_id,
-                request.session_id.to_string(),
-            );
+            // The person's own answers in this batch, which a rule remembered now could
+            // override on the resume run.
+            let mut answered: Vec<ToolConfirmationDecision> = Vec::new();
             for confirmation in &pending {
                 if cancellation_token.is_cancelled() {
                     return Ok(StopReason::Cancelled);
@@ -731,12 +747,20 @@ impl AcpSessionHandler {
                 };
                 if answer.always
                     && let Some(standing) = &self.standing_permissions
-                    && let Err(error) =
-                        standing.remember(&scope, confirmation, answer.decision).await
                 {
-                    // The person decided this call; only remembering the answer failed.
-                    warn!(%error, tool.name = %confirmation.tool_name, "could not remember the ACP client's answer; it applies to this call only");
+                    // The governed path lets a policy allow or deny override a held call's
+                    // own decision, so a rule that could cover an earlier call of this batch
+                    // the person answered the other way waits until that call has run.
+                    if answered.iter().any(|earlier| *earlier != answer.decision) {
+                        deferred.push((confirmation.clone(), answer.decision));
+                    } else if let Err(error) =
+                        standing.remember(&scope, confirmation, answer.decision).await
+                    {
+                        // The person decided this call; only remembering the answer failed.
+                        warn!(%error, tool.name = %confirmation.tool_name, "could not remember the ACP client's answer; it applies to this call only");
+                    }
                 }
+                answered.push(answer.decision);
                 fingerprints.insert(call_id.clone(), confirmation.fingerprint());
                 decisions.insert(call_id, answer.decision);
             }

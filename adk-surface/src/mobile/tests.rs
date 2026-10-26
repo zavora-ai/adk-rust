@@ -59,12 +59,43 @@ struct Options {
     home: Option<&'static str>,
     quiet: bool,
     allowlist: PushAllowlist,
+    /// An in-process kernel with a mounted driver declaring `post_update` `publish_public`,
+    /// `pay_invoice` `financial` and `save_draft` `write_local`.
+    drivers: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { home: Some(HOME), quiet: false, allowlist: PushAllowlist::default() }
+        Self { home: Some(HOME), quiet: false, allowlist: PushAllowlist::default(), drivers: false }
     }
+}
+
+/// A kernel with the `social` driver mounted for the owner (spec 3.2 §7.7).
+async fn kernel_with_drivers() -> adk_kernel::Kernel {
+    use adk_kernel::drivers::{DriverManifest, DriverSupervisor};
+    use adk_kernel::stores::InMemoryDriverStore;
+
+    let drivers = DriverSupervisor::builder(Arc::new(InMemoryDriverStore::new())).build();
+    let manifest = DriverManifest::from_toml(
+        r#"
+        id        = "social"
+        command   = "mcp-social"
+        lifecycle = "lazy"
+
+        [tools]
+        post_update = "publish_public"
+        pay_invoice = "financial"
+        save_draft  = "write_local"
+        "#,
+    )
+    .unwrap();
+    drivers.mount(manifest, OWNER).await.unwrap();
+    adk_kernel::Kernel::builder()
+        .config(adk_kernel::KernelConfig::default().with_app_name(APP))
+        .run_store(Arc::new(adk_core::InMemoryRunStore::new()))
+        .drivers(drivers)
+        .build()
+        .unwrap()
 }
 
 async fn rig(options: Options) -> Rig {
@@ -87,12 +118,14 @@ async fn rig(options: Options) -> Rig {
             )
             .with_notifier(doorbell.clone()),
     );
-    let source = LocalSource::builder(APP)
+    let mut source = LocalSource::builder(APP)
         .sessions(sessions)
         .approvals(Arc::clone(&approvals))
-        .governance(adk_core::GovernanceControl::new())
-        .build()
-        .unwrap();
+        .governance(adk_core::GovernanceControl::new());
+    if options.drivers {
+        source = source.kernel(kernel_with_drivers().await, APP);
+    }
+    let source = source.build().unwrap();
     let audit = InMemoryAuditRecorder::new();
     let trail = AuditTrail::new(Arc::new(audit.clone()));
     let engine = SurfaceEngine::builder(Arc::new(source))
@@ -610,6 +643,53 @@ async fn a_phone_answers_by_touch_and_stops_through_its_own_route() {
     assert_eq!((status, outcome["type"].clone()), (StatusCode::OK, json!("stopped")), "{outcome}");
 }
 
+/// A call a mounted driver declares `publish_public` or `financial` is high risk on the phone
+/// and on a remote terminal whatever its request says, as the kernel's own decide route and
+/// chat rate it (spec 3.3 §7.2, spec 3.2 K-I9): the card asks to confirm it is you, the plain
+/// answer route refuses Allow once, and a terminal device cannot approve it at all. The
+/// driver's everyday call is answered by touch.
+#[tokio::test]
+async fn a_driver_s_public_or_financial_call_needs_confirm_it_s_you() {
+    let rig = rig(Options { drivers: true, ..Options::default() }).await;
+    let phone = app(&rig.phone, device_context(&rig.device, Some("phone")));
+    let terminal = app(&rig.phone, device_context(&rig.device, None));
+    for tool in ["post_update", "pay_invoice"] {
+        let held = hold(&rig, tool, ApprovalRisk::Medium).await;
+        let (status, card) =
+            call(&phone, "GET", &format!("/api/surface/decisions/{}?surface=phone", held.id), None)
+                .await;
+        assert_eq!(status, StatusCode::OK, "{card}");
+        assert_eq!(card["risk"], json!("high"), "{tool}: {card}");
+        let allow_once = card["allowed"]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|option| option["answer"] == json!("allowOnce"))
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(allow_once["needsPresence"], json!(true), "{tool}: {card}");
+        let answer = format!("/api/surface/decisions/{}/answer", held.id);
+        let (status, problem) = call(&phone, "POST", &answer, Some(allow(held.version))).await;
+        assert_eq!(
+            (status, code(&problem)),
+            (StatusCode::FORBIDDEN, "surface.confirm_presence"),
+            "{tool}: {problem}"
+        );
+        let (status, problem) = call(&terminal, "POST", &answer, Some(allow(held.version))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{tool}: {problem}");
+        assert_eq!(state(&rig, &held.id).await, ApprovalState::Pending, "{tool}");
+    }
+    let everyday = hold(&rig, "save_draft", ApprovalRisk::Medium).await;
+    let (status, outcome) = call(
+        &phone,
+        "POST",
+        &format!("/api/surface/decisions/{}/answer", everyday.id),
+        Some(allow(everyday.version)),
+    )
+    .await;
+    assert_eq!((status, outcome["type"].clone()), (StatusCode::OK, json!("answered")), "{outcome}");
+}
+
 /// After a relaunch the phone reads what was answered since, here or elsewhere: the owner's
 /// decided cards only, with how far each answer reaches (spec 3.3 §5.4, S-I8).
 #[tokio::test]
@@ -928,6 +1008,233 @@ async fn wake_ups_wait_through_quiet_time_and_go_out_once() {
     second.abort();
     third.abort();
     server.abort();
+}
+
+/// A quiet time the test moves: quiet until its end while the clock is before it.
+#[derive(Clone, Default)]
+struct MovableQuiet(Arc<std::sync::Mutex<Option<DateTime<Utc>>>>);
+
+impl MovableQuiet {
+    fn ends_at(&self, end: DateTime<Utc>) {
+        *self.0.lock().unwrap() = Some(end);
+    }
+}
+
+#[async_trait::async_trait]
+impl super::quiet::QuietTime for MovableQuiet {
+    async fn until(&self, _run_id: Option<&str>, at: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        self.0.lock().unwrap().filter(|end| *end > at)
+    }
+}
+
+/// The rig's push task parts over `quiet`, for driving one path of it.
+fn ringer(rig: &Rig, quiet: MovableQuiet) -> super::doorbell::Ringer {
+    let inner = &rig.phone.inner;
+    super::doorbell::Ringer {
+        pairing: inner.pairing.clone(),
+        store: inner.store.clone(),
+        sender: inner.sender.clone(),
+        quiet: Arc::new(quiet),
+        approvals: Arc::clone(&rig.approvals),
+        audit: inner.audit.clone(),
+        clock: Arc::clone(&inner.clock),
+        deliveries: Arc::clone(&inner.deliveries),
+        poll: inner.poll,
+    }
+}
+
+/// The keys of the wake-up claims and marks the rig's phone holds.
+async fn wake_rows(rig: &Rig) -> Vec<String> {
+    let holder = super::store::Holder::Device(rig.device.clone());
+    let rows = rig.phone.inner.store.list(&holder, super::store::WAKE).await.unwrap();
+    let mut keys: Vec<String> = rows.into_iter().map(|row| row.key).collect();
+    keys.sort();
+    keys
+}
+
+/// The keys of the wake-up rows once they equal `want`, or after four seconds.
+async fn wake_rows_become(rig: &Rig, want: &[String]) -> Vec<String> {
+    for _ in 0..400 {
+        let keys = wake_rows(rig).await;
+        if keys == want {
+            return keys;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    wake_rows(rig).await
+}
+
+/// A wake-up held for quiet time follows a change the person makes meanwhile (spec 3.3 §5.4):
+/// quiet time moved from 07:00 to 09:00 sends nothing at 07:00 and one wake-up at 09:00,
+/// claimed by the new end, which the sweep at 09:00 shares.
+#[tokio::test]
+async fn a_held_wake_up_follows_quiet_time_changed_meanwhile() {
+    let (fake, base, server) = FakePush::start().await;
+    let rig = rig(Options { allowlist: loopback(), ..Options::default() }).await;
+    subscribe(&rig, &Browser::new(), &base).await;
+    let quiet = MovableQuiet::default();
+    quiet.ends_at(at(25, 7, 0));
+    let ringer = ringer(&rig, quiet.clone());
+    rig.clock.set(at(24, 23, 0));
+    let release = hold(&rig, "cargo_publish", ApprovalRisk::High).await;
+    ringer.submitted(release).await;
+
+    quiet.ends_at(at(25, 9, 0));
+    rig.clock.set(at(25, 7, 0));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(fake.count(), 0, "nothing is sent at the old end");
+    rig.clock.set(at(25, 9, 0));
+    fake.wait_for(1).await;
+    let claim = format!("quiet:{}", at(25, 9, 0).to_rfc3339());
+    assert!(wake_rows(&rig).await.contains(&claim), "{:?}", wake_rows(&rig).await);
+    server.abort();
+}
+
+/// The wake-up at the end of quiet time marks every decision it announced, whichever held
+/// wake-up takes its claim, so a restart wakes no phone again for one of them (spec 3.3 §5.4).
+#[tokio::test]
+async fn the_wake_up_at_the_end_of_quiet_time_marks_every_decision_it_announced() {
+    let (fake, base, server) = FakePush::start().await;
+    let rig = rig(Options { allowlist: loopback(), ..Options::default() }).await;
+    subscribe(&rig, &Browser::new(), &base).await;
+    let quiet = MovableQuiet::default();
+    quiet.ends_at(at(25, 7, 0));
+    let ringer = ringer(&rig, quiet);
+    rig.clock.set(at(24, 23, 0));
+    let invoice = hold(&rig, "send_email", ApprovalRisk::Medium).await;
+    ringer.submitted(invoice).await;
+    rig.clock.set(at(24, 23, 30));
+    let release = hold(&rig, "cargo_publish", ApprovalRisk::High).await;
+    ringer.submitted(release).await;
+
+    rig.clock.set(at(25, 7, 0));
+    fake.wait_for(1).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(fake.count(), 1, "one wake-up at 07:00");
+    // A restart at 09:00 with both still waiting.
+    rig.clock.set(at(25, 9, 0));
+    ringer.sweep(None).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(fake.count(), 1, "a restart wakes no phone twice for one decision");
+    server.abort();
+}
+
+/// What a wake-up claimed goes once nothing needs it (spec 3.3 §5.4): after a restart, the
+/// claim of a decision answered more than ten minutes ago is gone and a waiting one's stays;
+/// once the pairing ends, every attachment of the device goes.
+#[tokio::test]
+async fn spent_wake_up_claims_are_removed() {
+    let (fake, base, server) = FakePush::start().await;
+    let rig = rig(Options { allowlist: loopback(), ..Options::default() }).await;
+    subscribe(&rig, &Browser::new(), &base).await;
+    let first = rig.phone.start_push().unwrap();
+    let invoice = hold(&rig, "send_email", ApprovalRisk::Medium).await;
+    let release = hold(&rig, "cargo_publish", ApprovalRisk::High).await;
+    fake.wait_for(1).await;
+    let both = vec![
+        format!("{}:{}", release.id, release.version),
+        format!("{}:{}", invoice.id, invoice.version),
+    ];
+    let mut sorted = both.clone();
+    sorted.sort();
+    assert_eq!(wake_rows_become(&rig, &sorted).await, sorted, "both decisions marked");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let sent = fake.count();
+    let web = app(&rig.phone, person(&["owner", "operator"]));
+    let deny = json!({ "type": "decide", "decisionId": invoice.id, "version": invoice.version, "answer": "deny", "expanded": true });
+    let (status, _) = call(
+        &web,
+        "POST",
+        "/api/surface/commands",
+        Some(json!({ "surface": "web", "origin": { "kind": "pointer" }, "command": deny })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    first.abort();
+    rig.clock.advance(Duration::from_secs(11 * 60));
+    let second = rig.phone.start_push().unwrap();
+    let kept = vec![both[0].clone()];
+    assert_eq!(wake_rows_become(&rig, &kept).await, kept, "the answered decision's claim went");
+    assert_eq!(fake.count(), sent, "a restart wakes nothing it announced");
+
+    second.abort();
+    rig.clock.advance(Duration::from_secs(91 * 24 * 60 * 60));
+    let third = rig.phone.start_push().unwrap();
+    assert_eq!(wake_rows_become(&rig, &[]).await, Vec::<String>::new(), "an ended device's claims");
+    let holder = super::store::Holder::Device(rig.device.clone());
+    let push = rig.phone.inner.store.list(&holder, super::store::PUSH).await.unwrap();
+    assert!(push.is_empty(), "an ended device's subscription went: {push:?}");
+    third.abort();
+    server.abort();
+}
+
+/// A wake-up the push service could not take, busy on every attempt, is sent again while its
+/// decision waits (spec 3.3 §5.4, §7.3).
+#[tokio::test]
+async fn a_wake_up_the_push_service_could_not_take_is_sent_again() {
+    let (fake, base, server) = FakePush::start().await;
+    *fake.status.lock().unwrap() = Some(503);
+    let rig = rig(Options { allowlist: loopback(), ..Options::default() }).await;
+    subscribe(&rig, &Browser::new(), &base).await;
+    let task = rig.phone.start_push().unwrap();
+    hold(&rig, "send_email", ApprovalRisk::Medium).await;
+    fake.wait_for(3).await;
+    *fake.status.lock().unwrap() = None;
+    for _ in 0..400 {
+        if outcomes(&rig.audit).iter().any(|(_, outcome)| outcome == "sent") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        outcomes(&rig.audit).iter().any(|(_, outcome)| outcome == "sent"),
+        "the wake-up was sent again: {:?}",
+        outcomes(&rig.audit)
+    );
+    assert_eq!(outcomes(&rig.audit)[0].1, "dropped", "the first try is recorded");
+    task.abort();
+    server.abort();
+}
+
+/// After the push key changes, a phone subscribed under the old key is not woken, so it is
+/// told to allow notifications again, and subscribing under the new key turns them back on
+/// (spec 3.3 §5.4 "The push key").
+#[tokio::test]
+async fn a_new_push_key_asks_the_phone_to_allow_notifications_again() {
+    let rig = rig(Options { allowlist: loopback(), ..Options::default() }).await;
+    let browser = Browser::new();
+    subscribe(&rig, &browser, "http://localhost:4999").await;
+    let phone = app(&rig.phone, device_context(&rig.device, Some("phone")));
+    let (_, info) = call(&phone, "GET", "/api/surface/phone", None).await;
+    assert_eq!(info["push"], json!(true), "{info}");
+
+    // The key file was deleted: the server starts with a new key.
+    let renewed = Phone::builder(rig.phone.inner.engine.clone(), rig.pairing.clone())
+        .home_url(HOME)
+        .push_key(PushKey::generate().unwrap())
+        .clock(rig.clock.clone())
+        .approvals(Arc::clone(&rig.approvals))
+        .push_allowlist(loopback())
+        .build()
+        .unwrap();
+    let phone = app(&renewed, device_context(&rig.device, Some("phone")));
+    let (_, info) = call(&phone, "GET", "/api/surface/phone", None).await;
+    assert_eq!(info["push"], json!(false), "{info}");
+    let operator = app(&renewed, person(&["owner", "operator"]));
+    let (_, devices) = call(&operator, "GET", "/api/surface/phone/devices", None).await;
+    assert_eq!(devices["devices"][0]["push"], json!(false), "{devices}");
+
+    let (status, body) = call(
+        &phone,
+        "PUT",
+        "/api/surface/phone/push",
+        Some(browser.subscription("http://localhost:4999/push/2")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (_, info) = call(&phone, "GET", "/api/surface/phone", None).await;
+    assert_eq!(info["push"], json!(true), "{info}");
 }
 
 /// A confirmation's binding verifies only its own tuple: the holder, the decision, the answer

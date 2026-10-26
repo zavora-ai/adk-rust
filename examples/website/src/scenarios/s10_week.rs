@@ -112,15 +112,35 @@ pub async fn run(mode: Mode) -> Result<Checks> {
     );
 
     // Thursday: the Growth agent drafts a page for each recurring gap and a reply to each
-    // review. It works at Propose: drafts wait for the owner.
+    // review. It works at Propose: drafts wait for the owner, and a page it drafts on its own
+    // waits out the site's publish delay of 24 hours as well.
     clock.set(monday + chrono::Duration::days(3));
+    let delay = adk_website::publish_delay::PublishDelay::new(
+        chrono::Duration::hours(24),
+        site.compiler(&charter),
+    )
+    .with_clock(shared.clone());
+    let undelayed = adk_core::ToolPolicy::evaluate(
+        &delay,
+        &{
+            let mut request = adk_core::ToolPolicyRequest::new(
+                "content_draft",
+                json!({ "kind": "page", "slug": "wedding-cakes", "language": "en", "job": "freshness" }),
+            );
+            request.agent_name = "growth".into();
+            request
+        },
+    )
+    .await;
+    let publish_at =
+        (clock.now() + chrono::Duration::hours(25)).format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let (growth, _) = site.back_office(
         &mode,
         "growth",
         &charter,
         vec![
-            call("content_draft", json!({ "kind": "page", "slug": "wedding-cakes", "language": "en", "fields": { "title": "Wedding cakes", "summary": "Ordering, tastings and prices.", "goal": "enquiries" }, "body": "We bake wedding cakes to order. Ask us about tastings.", "job": "freshness" })),
-            call("content_draft", json!({ "kind": "page", "slug": "delivery", "language": "en", "fields": { "title": "Delivery", "summary": "Where and when we deliver.", "goal": "enquiries" }, "body": "Ask us about delivery outside Nakuru.", "job": "freshness" })),
+            call("content_draft", json!({ "kind": "page", "slug": "wedding-cakes", "language": "en", "fields": { "title": "Wedding cakes", "summary": "Ordering, tastings and prices.", "goal": "enquiries" }, "body": "We bake wedding cakes to order. Ask us about tastings.", "job": "freshness", "schedule": { "publishAt": publish_at } })),
+            call("content_draft", json!({ "kind": "page", "slug": "delivery", "language": "en", "fields": { "title": "Delivery", "summary": "Where and when we deliver.", "goal": "enquiries" }, "body": "Ask us about delivery outside Nakuru.", "job": "freshness", "schedule": { "publishAt": publish_at } })),
             call("content_draft", json!({ "kind": "page", "slug": "reply-sold-out", "language": "en", "fields": { "title": "Reply", "summary": "A reply to a review.", "goal": "reputation" }, "body": "Thank you; we now bake a second batch at eleven.", "job": "social" })),
             ScriptedResponse::text("Drafted two pages for the owner and a review reply."),
         ],
@@ -129,13 +149,16 @@ pub async fn run(mode: Mode) -> Result<Checks> {
                 "{}\n\nThis week visitors asked six times about wedding cakes and four times about \
                  delivery to Naivasha and Gilgil, and nobody answered. Draft one page per topic \
                  with content_draft (kind page, slugs wedding-cakes and delivery, language en, \
-                 fields title, summary, goal enquiries, job freshness), claiming nothing the \
-                 owner has not confirmed. content_draft only drafts: it is allowed at your level, and \
-                 nothing goes live until the owner approves. Then draft a reply to the review \"Good bread, but sold \
+                 fields title, summary, goal enquiries, job freshness, schedule publishAt \
+                 {publish_at}: the site's publish delay keeps a page you draft on your own off the \
+                 site for 24 hours), claiming nothing the owner has not confirmed. content_draft \
+                 only drafts: it is allowed at your level, and nothing goes live until the owner \
+                 approves. Then draft a reply to the review \"Good bread, but sold \
                  out by noon.\" with content_draft (slug reply-sold-out, goal reputation, job \
                  social). Do not publish anything.",
                 AgentRole::Growth.prompt()
             ))
+            .add_operator_policy(Arc::new(delay))
         },
     )?;
     let owner = user(OWNER);
@@ -170,10 +193,6 @@ pub async fn run(mode: Mode) -> Result<Checks> {
             drafts.len()
         ),
     );
-    checks.gap(
-        "no `publish_delay`: the charter and the pipeline have none (only AWP 1.0's `business.toml` \
-         names it), so a draft waits for its approval and nothing else",
-    );
     let reply =
         responses(&events).into_iter().filter(|(n, _)| n == "content_draft").nth(2).map(|(_, r)| r);
     checks.check(
@@ -181,15 +200,21 @@ pub async fn run(mode: Mode) -> Result<Checks> {
         reply.as_ref().is_some_and(|r| r["draft"].is_string()),
         format!("{reply:?}"),
     );
-    checks.gap(
-        "no upgrade or renewal proposals: nothing reads a RustSec advisory against the edge's \
-         lockfile, and the probe's certificate expiry reaches no proposal or alarm (the incident \
-         path acts on drift only)",
+    // The Guardian's daily watch: a RustSec advisory against the edge's lockfile and a
+    // certificate 14 days from expiry become two proposals, each one card for the owner.
+    let upkeep = upkeep_proposals(&site, clock.now()).await?;
+    checks.check(
+        "upgrade and renewal proposals",
+        upkeep.0.len() == 2 && upkeep.1 == 2 && upkeep.2 == 0,
+        format!(
+            "{:?}; {} card(s) for the owner, {} filed again on the next day's watch",
+            upkeep.0, upkeep.1, upkeep.2
+        ),
     );
-    checks.check("upgrade and renewal proposals", false, "no machinery on main");
 
-    // The owner approves the wedding-cake page on Friday: a signed release.
-    clock.set(monday + chrono::Duration::days(4));
+    // The owner approves the wedding-cake page on Thursday afternoon: it is scheduled, and
+    // goes live only once the publish delay has passed, on Friday, as a signed release.
+    clock.set(monday + chrono::Duration::days(3) + chrono::Duration::hours(6));
     if let Some(first) = drafts.first() {
         let (approver, model) =
             site.back_office(&Mode::Scripted, "steward", &charter, vec![], |b| {
@@ -207,6 +232,20 @@ pub async fn run(mode: Mode) -> Result<Checks> {
         )
         .await?;
     }
+    let approved_early = site.host.fetch("/wedding-cakes/").await?.is_none();
+    clock.set(monday + chrono::Duration::days(4) + chrono::Duration::hours(2));
+    let due = site.runtime.pipeline().run_due(None).await?;
+    checks.check(
+        "draft pages for recurring gaps wait out publish_delay and an approval",
+        matches!(undelayed, adk_core::PolicyDecision::Deny { .. })
+            && approved_early
+            && site.host.fetch("/wedding-cakes/").await?.is_some(),
+        format!(
+            "a draft without the delay refused; approved Thursday 16:00 and still not served; \
+             served Friday 12:00 after {} scheduled release(s)",
+            due.len()
+        ),
+    );
     let published = verify_served(&site.host, DOMAIN, &site.release_key).await;
     checks.check(
         "every public change a signed release",
@@ -296,4 +335,70 @@ pub async fn run(mode: Mode) -> Result<Checks> {
         format!("the Growth run at Thursday 10:00 UTC; the review at {hour}:00"),
     );
     Ok(checks)
+}
+
+/// The hosting job's watch on a fixture: the edge's lockfile pins `time` 0.1.45, a local
+/// RustSec database holds RUSTSEC-2020-0071 against it, and the certificate expires in 14
+/// days. Returns the proposals, the owner's cards, and the cards a second watch files.
+async fn upkeep_proposals(
+    site: &Site,
+    now: chrono::DateTime<Utc>,
+) -> Result<(Vec<String>, usize, usize)> {
+    use adk_core::{
+        ApprovalPolicy, ApprovalService, ApproverSelector, InMemoryApprovalStore, InboxQuery,
+        StoreApprovalService,
+    };
+    use adk_website::upkeep::{AdvisoryDatabase, StaticCertificate, UpkeepCheck, UpkeepProposal};
+    let dir = tempfile::tempdir()?;
+    let advisory = dir.path().join("advisory-db/crates/time");
+    std::fs::create_dir_all(&advisory)?;
+    std::fs::write(
+        advisory.join("RUSTSEC-2020-0071.md"),
+        "```toml\n[advisory]\nid = \"RUSTSEC-2020-0071\"\npackage = \"time\"\ndate = \"2020-11-18\"\n\
+         url = \"https://github.com/time-rs/time/issues/293\"\n\n[versions]\npatched = [\">= 0.2.23\"]\n\
+         unaffected = [\"= 0.2.0\", \"= 0.2.1\", \"= 0.2.2\"]\n```\n\n# Potential segfault in the time crate\n",
+    )?;
+    let lockfile = dir.path().join("Cargo.lock");
+    std::fs::write(
+        &lockfile,
+        "version = 4\n\n[[package]]\nname = \"time\"\nversion = \"0.1.45\"\n\n\
+         [[package]]\nname = \"serde\"\nversion = \"1.0.228\"\n",
+    )?;
+    let approvals: Arc<dyn ApprovalService> = Arc::new(
+        StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+            .with_router(ApprovalPolicy::new([ApproverSelector::human(OWNER)])),
+    );
+    let certificate = adk_site::migrate::probe::CertificateProbe {
+        not_after: now + chrono::Duration::days(14),
+        days_left: 14,
+        expiring: true,
+    };
+    let check =
+        UpkeepCheck::new(site.site.id, DOMAIN, site.site.name.clone(), OWNER, approvals.clone())
+            .with_advisories(
+                &lockfile,
+                Arc::new(AdvisoryDatabase::new(dir.path().join("advisory-db"))),
+            )
+            .with_certificate(Arc::new(StaticCertificate(Some(certificate))));
+    let report = check.run().await?;
+    let inbox = approvals
+        .inbox(InboxQuery::for_approver(
+            adk_core::principal::SubjectRef::human(OWNER),
+            Vec::<String>::new(),
+        ))
+        .await?;
+    let again = check.run().await?;
+    let proposals = report
+        .proposals
+        .iter()
+        .map(|p| match p {
+            UpkeepProposal::Upgrade { advisory, package, .. } => {
+                format!("upgrade {package} ({advisory})")
+            }
+            UpkeepProposal::RenewCertificate { days_left, .. } => {
+                format!("renew the certificate ({days_left} days)")
+            }
+        })
+        .collect();
+    Ok((proposals, inbox.items.len(), again.filed.len()))
 }

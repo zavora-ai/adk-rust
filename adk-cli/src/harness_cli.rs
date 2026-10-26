@@ -77,6 +77,9 @@ struct Setup {
     plans: Option<(Arc<dyn adk_graph::Checkpointer>, String)>,
     /// `--preset personal`: the first-run answers (spec 3.3 §10 H1, §13 Q7).
     personal: Option<PersonalSetup>,
+    /// The background shells every harness of this process runs, so a harness rebuilt by
+    /// `/sandbox` or `/effort` keeps the session's shells (spec 3.1 §7.29).
+    shells: std::sync::OnceLock<Arc<adk_harness::ShellSupervisor>>,
 }
 
 /// `--preset personal`: the first-run answers and the limits in force (spec 3.3 §10 H1,
@@ -343,7 +346,33 @@ impl Setup {
             db,
             #[cfg(feature = "persist")]
             store_note,
+            shells: std::sync::OnceLock::new(),
         })
+    }
+
+    /// The process's background shells: no lifetime limit when a person at the console
+    /// answers prompts, 30 minutes per shell otherwise (spec 3.1 §7.29 "Limits"); processes
+    /// recorded in `harness.db`, so the next start reaps what a crash left running.
+    fn shells(&self, attended: bool) -> Arc<adk_harness::ShellSupervisor> {
+        self.shells
+            .get_or_init(|| {
+                let config = self.resolved.shells.apply(if attended {
+                    adk_harness::BackgroundShellConfig::attended()
+                } else {
+                    adk_harness::BackgroundShellConfig::unattended()
+                });
+                let shells = adk_harness::ShellSupervisor::new(
+                    Arc::new(adk_harness::ShellOutputs::default()),
+                    config,
+                );
+                #[cfg(feature = "persist")]
+                let shells = match &self.db {
+                    Some(db) => shells.with_pid_registry(db.shell_pids.clone()),
+                    None => shells,
+                };
+                Arc::new(shells)
+            })
+            .clone()
     }
 
     fn sessions(&self) -> Arc<dyn SessionService> {
@@ -394,7 +423,8 @@ impl Setup {
         extras: AgentExtras,
     ) -> Result<HarnessAgent> {
         let workspace = Workspace::new(&self.resolved.workspace).allow_bash(true);
-        let mut builder = HarnessAgent::builder(name);
+        let attended = prompter.is_some() && approval_service.is_none();
+        let mut builder = HarnessAgent::builder(name).shell_supervisor(self.shells(attended));
         // An added agent runs on its own model when it names one (spec 3.3 decision 21).
         let model = extras
             .added
@@ -440,7 +470,11 @@ impl Setup {
                 .shell_ledger(db.ledger.clone())
                 .approval_store(db.approvals.clone())
                 .goal_store(db.goals.clone())
-                .read_records(db.reads.clone());
+                .read_records(db.reads.clone())
+                // A restart, `kill -9` included, keeps what ran and what was spent (spec 3.1
+                // §7.12, §7.13; spec 3.3 §12 phase 1).
+                .action_ledger(db.actions.clone())
+                .spend_ledger(db.spend.clone());
             // Long-term memory in harness.db; off when served (spec 3.1 §7.15.2), on in
             // `adk-rust up`, the user's own kernel (spec 3.2 §8.1).
             if self.resolved.memory && (approval_service.is_none() || extras.memory_with_inbox) {
@@ -457,7 +491,9 @@ impl Setup {
                 .mode_store(shared.modes.clone())
                 .standing_rules(shared.rules.clone())
                 .approval_store(shared.approvals.clone())
-                .read_records(shared.reads.clone());
+                .read_records(shared.reads.clone())
+                .action_ledger(shared.actions.clone())
+                .spend_ledger(shared.spend.clone());
         }
         // Snapshots before each turn (spec 3.1 §7.27, §13 Q11): records in harness.db and
         // objects beside it, in memory with --ephemeral; a harness served from a shared store
@@ -778,6 +814,16 @@ impl Setup {
         }
     }
 
+    /// The personal preset's two limits, which every start shows (spec 3.3 §13 Q7), for the
+    /// commands that print their own banner rather than the launcher's.
+    fn print_limits(&self) {
+        if let Some(personal) = &self.personal {
+            for (label, line) in personal.status_lines() {
+                println!("{label}: {line}");
+            }
+        }
+    }
+
     /// Says once, on the first run with long-term memory, what is stored and where
     /// (spec 3.1 §7.15.2).
     fn memory_notice(&self) {
@@ -1009,6 +1055,7 @@ pub async fn code(
         shell_label(&info),
         setup.plans_note()
     );
+    setup.print_limits();
     let outcome = launcher.run_once(&task).await?;
     println!();
     // The turn is distilled into long-term memory before the process ends (spec 3.1 §7.15.2).
@@ -1084,11 +1131,7 @@ pub async fn voice(
             })
             .await?;
     }
-    #[cfg(feature = "scripted-model")]
-    let script = voice.voice_script.as_deref();
-    #[cfg(not(feature = "scripted-model"))]
-    let script = None;
-    let realtime = crate::voice_cli::realtime_model(&model, script)?;
+    let realtime = crate::voice_cli::realtime_model(&model, setup.args.voice_script())?;
     println!(
         "harness ({}) voice on {} · mode {} · shell {} · realtime {}\n",
         setup.model_id,
@@ -1097,6 +1140,7 @@ pub async fn voice(
         shell_label(&info),
         realtime.id
     );
+    setup.print_limits();
     let surface = adk_harness::VoiceSurface::open(
         Arc::new(agent),
         realtime.model,
@@ -1203,6 +1247,7 @@ pub async fn goal(
 
     println!("goal mode ({}) on {}", setup.model_id, workspace.display());
     println!("plans {}", setup.plans_note());
+    setup.print_limits();
     let outcome = if goal.resume && (resumed.is_some() || setup.args.session.is_some()) {
         let session = resumed.as_deref().or(setup.args.session.as_deref()).unwrap_or_default();
         println!("resuming goal in session {session}");
@@ -1588,6 +1633,7 @@ pub async fn ultracode(
 
     let workspace = setup.resolved.workspace.clone();
     println!("ultracode ({}) on {}", setup.model_id, workspace.display());
+    setup.print_limits();
     println!("task: {task}");
     println!(
         "budget: at most {} model calls (worst case {}) · max rounds {}\n",
@@ -2034,6 +2080,10 @@ pub async fn serve(
     auth_token: Option<String>,
     store: Option<String>,
 ) -> Result<()> {
+    // The realtime models the home's voice view offers a harness marked for voice (spec 3.3
+    // §5.6).
+    #[cfg(all(feature = "voice", feature = "surface"))]
+    let voice = crate::voice_cli::realtime_models(&model, args.voice_script())?;
     let setup =
         Setup::open(model, instruction, args, HarnessMode::Plan, store.as_deref(), None).await?;
     setup.print_notes();
@@ -2123,6 +2173,11 @@ pub async fn serve(
         .with_bind_address(host);
     if let Some(token) = token {
         launcher = launcher.with_auth_token(token);
+    }
+    #[cfg(all(feature = "voice", feature = "surface"))]
+    {
+        let marked = setup.resolved.packs.contains(&adk_harness::Pack::Voice);
+        launcher = crate::voice_cli::offer(launcher, voice, marked);
     }
     if let Some(shared) = &setup.shared {
         println!(

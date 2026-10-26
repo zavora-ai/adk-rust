@@ -14,8 +14,13 @@
 //! | [`Pack::Search`] | `search_site` |
 //! | [`Pack::Components`] | `practice_information`, `lookup_status`, `list_notices`, `list_events`, `get_schedule` |
 //!
-//! The handlers that serve these on the edge arrive with the edge (spec 3.5 §7.9).
+//! The edge serves them through [`crate::edge::handlers`] (spec 3.5 §7.9). An owner's
+//! [`ApprovalThresholds`] hold the orders, bookings and payments above an amount for the
+//! owner's decision (`ApprovalHint::AboveAmount`, spec 3.5 §7.4, S9).
 
+use std::collections::BTreeMap;
+
+use adk_core::{AdkError, Result};
 use awp_types::{
     ApprovalHint, CapabilityEffect, CapabilityV2, ConsentRequirement, ConsentScope, TrustTier,
 };
@@ -270,11 +275,27 @@ pub fn capability(name: &str) -> Option<CapabilityV2> {
         "pay_order" => CapabilityV2 {
             consent: consent(ConsentScope::PaymentData),
             input_schema: Some(object(
-                json!({ "orderId": text(100), "rail": text(50) }),
+                json!({
+                    "orderId": text(100),
+                    "rail": text(50),
+                    "mandate": {
+                        "type": "object",
+                        "required": ["payment_mandate_contents"],
+                        "description": "The buyer's AP2 payment mandate for the cart the order returned, with its user authorization"
+                    },
+                    "credential": {
+                        "type": "string",
+                        "maxLength": 4096,
+                        "description": "A single-use payment token from the buyer's payment provider, for rails that take one"
+                    }
+                }),
                 &["orderId", "rail"],
             )),
-            ..declared("Pay for an order through an accepted rail", NonIdempotent)
-                .with_min_trust(TrustTier::Known)
+            ..declared(
+                "Pay for an order through an accepted rail, with the buyer's AP2 payment mandate or rail credential",
+                NonIdempotent,
+            )
+            .with_min_trust(TrustTier::Known)
         },
         "order_status" => CapabilityV2 {
             input_schema: Some(object(json!({ "orderId": text(100) }), &["orderId"])),
@@ -333,6 +354,106 @@ pub fn capability(name: &str) -> Option<CapabilityV2> {
     Some(capability)
 }
 
+/// The capabilities whose calls carry an amount the edge reads: the quote's total of
+/// `place_order`, the order's total of `pay_order`, the slot's price of `book` and
+/// `book_appointment`, and the `amount` of `donate` (spec 3.5 §7.4).
+pub const AMOUNTED: &[&str] = &["place_order", "pay_order", "book", "book_appointment", "donate"];
+
+/// The capabilities a commerce threshold covers: the calls that commit a buyer to an order,
+/// a booking or a gift. A threshold on `pay_order` as well would hold an order the owner
+/// approved a second time, when it is paid.
+const COMMITTING: &[&str] = &["place_order", "book", "book_appointment", "donate"];
+
+/// The owner's amount thresholds (spec 3.5 §7.4, S9): a call of a named capability whose
+/// amount is above its threshold answers `202 Accepted` and waits for the owner's decision
+/// (`ApprovalHint::AboveAmount`). Amounts are minor units of the site's currency. A served
+/// site reads them from the project's `approvals.json`, such as
+/// `{"place_order": 20000, "book": 15000}`.
+///
+/// A threshold tightens a declaration and never loosens one: a capability every call of
+/// which is held stays held, and of two thresholds the lower holds.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_website::packs::{ApprovalThresholds, capability};
+/// use awp_types::ApprovalHint;
+///
+/// let thresholds = ApprovalThresholds::commerce(20_000).above("pay_order", 50_000);
+/// thresholds.validate().unwrap();
+/// let order = thresholds.apply(capability("place_order").unwrap());
+/// assert_eq!(order.approval, ApprovalHint::AboveAmount(20_000));
+/// let ret = thresholds.apply(capability("request_return").unwrap());
+/// assert_eq!(ret.approval, ApprovalHint::Always);
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ApprovalThresholds(BTreeMap<String, u64>);
+
+impl ApprovalThresholds {
+    /// No thresholds: only the declarations hold calls.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Holds orders, bookings, appointments and donations above `amount` (spec 3.5 S9).
+    pub fn commerce(amount: u64) -> Self {
+        COMMITTING.iter().fold(Self::new(), |thresholds, name| thresholds.above(*name, amount))
+    }
+
+    /// Holds calls of `capability` above `amount`.
+    #[must_use]
+    pub fn above(mut self, capability: impl Into<String>, amount: u64) -> Self {
+        self.0.insert(capability.into(), amount);
+        self
+    }
+
+    /// The threshold of `capability`, when there is one.
+    pub fn get(&self, capability: &str) -> Option<u64> {
+        self.0.get(capability).copied()
+    }
+
+    /// Whether no threshold is set.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Checks that each threshold names a capability whose calls carry an amount
+    /// ([`AMOUNTED`]).
+    ///
+    /// # Errors
+    ///
+    /// A configuration error naming the capability, since a threshold on a call without an
+    /// amount would hold nothing.
+    pub fn validate(&self) -> Result<()> {
+        match self.0.keys().find(|name| !AMOUNTED.contains(&name.as_str())) {
+            Some(name) => Err(AdkError::config(format!(
+                "an approval threshold names `{name}`, whose calls carry no amount; thresholds \
+                 apply to {}",
+                AMOUNTED.join(", ")
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// `declaration` with its threshold applied: `AboveAmount` with the lower of the two
+    /// limits; a declaration that holds every call is kept.
+    pub fn apply(&self, mut declaration: CapabilityV2) -> CapabilityV2 {
+        if let Some(limit) = self.get(&declaration.name) {
+            declaration.approval = match declaration.approval {
+                ApprovalHint::Always => ApprovalHint::Always,
+                ApprovalHint::AboveAmount(declared) => {
+                    ApprovalHint::AboveAmount(declared.min(limit))
+                }
+                ApprovalHint::Never => ApprovalHint::AboveAmount(limit),
+                // A hint this release does not know is kept as declared.
+                other => other,
+            };
+        }
+        declaration
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,5 +504,57 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn thresholds_tighten_and_never_loosen() {
+        let thresholds = ApprovalThresholds::commerce(20_000).above("place_order", 30_000);
+        let order = thresholds.apply(capability("place_order").unwrap());
+        assert_eq!(order.approval, ApprovalHint::AboveAmount(30_000), "the owner's last word");
+        let tighter = ApprovalThresholds::new()
+            .above("book", 10_000)
+            .apply(capability("book").unwrap().with_approval(ApprovalHint::AboveAmount(5_000)));
+        assert_eq!(tighter.approval, ApprovalHint::AboveAmount(5_000), "the lower limit holds");
+        let unpaid = thresholds.apply(capability("pay_order").unwrap());
+        assert_eq!(unpaid.approval, ApprovalHint::Never, "a commerce threshold leaves payment");
+        assert!(ApprovalThresholds::new().above("search_site", 1).validate().is_err());
+        assert!(ApprovalThresholds::commerce(1).above("pay_order", 2).validate().is_ok());
+        let parsed: ApprovalThresholds =
+            serde_json::from_value(json!({ "place_order": 20000, "book": 15000 })).unwrap();
+        assert_eq!(
+            parsed,
+            ApprovalThresholds::new().above("place_order", 20_000).above("book", 15_000)
+        );
+    }
+
+    #[test]
+    fn pay_order_takes_a_mandate_or_a_credential() {
+        use adk_awp::v2::capability::{
+            CapabilityCall, CapabilityError, CapabilityHandler, CapabilityTool,
+        };
+
+        struct Noop;
+        #[async_trait::async_trait]
+        impl CapabilityHandler for Noop {
+            async fn handle(
+                &self,
+                call: CapabilityCall,
+            ) -> std::result::Result<Value, CapabilityError> {
+                Ok(call.input)
+            }
+        }
+        let pay = CapabilityTool::new(
+            "shop.example",
+            capability("pay_order").unwrap(),
+            std::sync::Arc::new(Noop),
+        )
+        .unwrap();
+        let mandate = json!({ "payment_mandate_contents": { "payment_mandate_id": "pm-1" } });
+        let valid = |input: Value| pay.validate_input(&input).is_ok();
+        assert!(valid(json!({ "orderId": "o-1", "rail": "ap2", "mandate": mandate })));
+        assert!(valid(json!({ "orderId": "o-1", "rail": "card", "credential": "tok_1" })));
+        assert!(valid(json!({ "orderId": "o-1", "rail": "mpesa" })));
+        assert!(!valid(json!({ "orderId": "o-1", "rail": "ap2", "card": "4242" })));
+        assert!(!valid(json!({ "orderId": "o-1", "rail": "ap2", "mandate": {} })));
     }
 }

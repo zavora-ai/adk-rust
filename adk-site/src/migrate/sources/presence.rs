@@ -7,33 +7,64 @@ use serde_json::Value;
 use url::Url;
 
 use super::super::error::Result;
-use super::super::html::analyse;
+use super::super::html::{PageAnalysis, analyse};
 use super::super::http::FetchOptions;
 use super::super::inventory::{Fact, FactSource, ReviewQuote, SiteInventory, SourceKind};
 use super::super::{SiteSource, SourceContext};
-use super::json_ld_item;
+use super::schema_types::schema_org_ancestry;
 use crate::gate::FactStatus;
 
-/// schema.org types a profile describes its subject with.
-const SUBJECT_TYPES: &[&str] = &[
-    "LocalBusiness",
-    "Organization",
-    "Corporation",
-    "Store",
-    "Restaurant",
-    "ProfessionalService",
-    "MedicalBusiness",
-    "HomeAndConstructionBusiness",
-    "NGO",
-    "GovernmentOrganization",
-    "EducationalOrganization",
-    "Person",
-];
+/// The JSON-LD item a profile describes its subject with: the most specific schema.org type
+/// under `Organization`, `Person` or `PlaceOfWorship` (`Bakery` and the rest of the
+/// `LocalBusiness` tree included), first in the page on a tie. Returns the type as written
+/// and the item.
+fn subject(page: &PageAnalysis) -> Option<(String, Value)> {
+    fn types(value: &Value) -> Vec<String> {
+        match value.get("@type") {
+            Some(Value::String(t)) => vec![t.clone()],
+            Some(Value::Array(ts)) => {
+                ts.iter().filter_map(Value::as_str).map(String::from).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+    fn walk(value: &Value, out: &mut Vec<(usize, String, Value)>) {
+        match value {
+            Value::Array(items) => items.iter().for_each(|v| walk(v, out)),
+            Value::Object(map) => {
+                let best = types(value)
+                    .into_iter()
+                    .map(|t| (schema_org_ancestry(&t), t))
+                    .filter(|(chain, _)| {
+                        chain
+                            .iter()
+                            .any(|t| matches!(*t, "Organization" | "Person" | "PlaceOfWorship"))
+                    })
+                    .max_by_key(|(chain, _)| chain.len());
+                if let Some((chain, name)) = best {
+                    out.push((chain.len(), name, value.clone()));
+                }
+                if let Some(graph) = map.get("@graph") {
+                    walk(graph, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    for value in &page.json_ld {
+        walk(value, &mut found);
+    }
+    let depth = found.iter().map(|(depth, ..)| *depth).max()?;
+    found.into_iter().find(|(d, ..)| *d == depth).map(|(_, name, value)| (name, value))
+}
 
 /// Reads public profiles of a business or person: listings, review pages and social pages.
 ///
 /// Facts come from schema.org JSON-LD and Open Graph tags; each is `Assumed` and names the page
-/// and property it came from. Reviews keep the reviewer's public name; none is usable on a
+/// and property it came from. The subject is the most specific organisation, business,
+/// person or place of worship on the page — any schema.org subtype, such as `Bakery` — and
+/// its type is recorded as the `@type` fact. Reviews keep the reviewer's public name; none is usable on a
 /// page until the owner approves it ([`ReviewQuote::usable`]).
 ///
 /// # Example
@@ -122,9 +153,10 @@ impl SiteSource for Presence {
                     status: FactStatus::Assumed,
                 });
             };
-            let subject =
-                SUBJECT_TYPES.iter().find_map(|t| json_ld_item(&page, t).map(|v| (*t, v)));
+            let subject = subject(&page);
             if let Some((kind, subject)) = &subject {
+                // The type itself is a fact: kind detection reads it (spec 3.5 §7.16.1).
+                add(&mut inventory, "@type", kind.clone(), format!("json-ld {kind}.@type"));
                 for key in [
                     "name",
                     "description",

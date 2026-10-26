@@ -7,8 +7,9 @@
 //! | `adk_wallet_pauses` | One per paused category of a wallet, the [`CategoryPause`] as JSON |
 //!
 //! Inserting a payment is one `INSERT … ON CONFLICT (wallet, idempotency_key) DO NOTHING`, so
-//! instances racing on one key store one payment; lifting a pause is one
-//! `DELETE … RETURNING`, so one pause is lifted once. Both backends record their steps in
+//! instances racing on one key store one payment; a compare-and-set is one
+//! `UPDATE … WHERE state = $expected`, so one of two decisions on a held payment proceeds;
+//! lifting a pause is one `DELETE … RETURNING`, so one pause is lifted once. Both backends record their steps in
 //! `_adk_wallet_migrations` with adk-session's migration runners; every step is additive.
 //!
 //! Parameters appear in ascending order in every statement and none is repeated, since
@@ -63,6 +64,9 @@ VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (wallet, idempotency_key) DO NOT
 const UPDATE: &str = "\
 UPDATE adk_wallet_payments SET category = $1, state = $2, at_us = $3, record = $4 \
 WHERE wallet = $5 AND id = $6";
+const UPDATE_IF: &str = "\
+UPDATE adk_wallet_payments SET category = $1, state = $2, at_us = $3, record = $4 \
+WHERE wallet = $5 AND id = $6 AND state = $7";
 const GET: &str = "SELECT record FROM adk_wallet_payments WHERE wallet = $1 AND id = $2";
 const BY_KEY: &str =
     "SELECT record FROM adk_wallet_payments WHERE wallet = $1 AND idempotency_key = $2";
@@ -171,6 +175,33 @@ macro_rules! sql_wallet_store {
                     return Err(super::payment_not_found(record));
                 }
                 Ok(())
+            }
+
+            async fn update_if(
+                &self,
+                record: &PaymentRecord,
+                expected: $crate::wallet::PaymentState,
+            ) -> Result<bool> {
+                let columns = Columns::new($backend, record)?;
+                let done = sqlx::query(UPDATE_IF)
+                    .bind(columns.category)
+                    .bind(columns.state)
+                    .bind(columns.at_us)
+                    .bind(columns.record)
+                    .bind(&record.wallet)
+                    .bind(&record.id)
+                    .bind(state_name(expected))
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| unavailable($backend, "update a payment", &e))?;
+                if done.rows_affected() == 1 {
+                    return Ok(true);
+                }
+                // No row changed: the payment moved to another state, or there is none.
+                match self.get(&record.wallet, &record.id).await? {
+                    Some(_) => Ok(false),
+                    None => Err(super::payment_not_found(record)),
+                }
             }
 
             async fn get(&self, wallet: &str, id: &str) -> Result<Option<PaymentRecord>> {
@@ -448,7 +479,7 @@ mod tests {
 
     #[test]
     fn statements_number_parameters_by_first_appearance() {
-        for statement in [INSERT, UPDATE, GET, BY_KEY, PAUSE, RESUME, PAUSES] {
+        for statement in [INSERT, UPDATE, UPDATE_IF, GET, BY_KEY, PAUSE, RESUME, PAUSES] {
             let seen = parameters(statement);
             assert_eq!(seen, (1..=seen.len()).collect::<Vec<_>>(), "{statement}");
         }

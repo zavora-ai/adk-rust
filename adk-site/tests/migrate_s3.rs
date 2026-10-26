@@ -27,7 +27,6 @@ use async_trait::async_trait;
 use awp_types::{ApprovalHint, CapabilityEffect, ContentId, ReleaseSource};
 use chrono::{TimeZone, Utc};
 use support::*;
-use url::Url;
 
 /// Approves as one person and remembers what it was asked.
 #[derive(Default)]
@@ -61,12 +60,15 @@ async fn s3_migrates_and_leaves_the_infection_behind() {
     let inventory = replay.inventory(&ctx).await.unwrap();
     assert!(replay.last_report().unwrap().outbound_connections.is_empty());
 
-    // Every inert marker is found, with evidence.
+    // Every inert marker is found, with evidence; the cloaking check reads the live site
+    // because the domain is proven (A-I9).
     let detectors = Detectors::new();
     let mut findings = detectors.scan_inventory(&inventory).await;
-    let home = Url::parse(&format!("{ORIGIN}/")).unwrap();
-    let cloaking =
-        detectors.check_cloaking(&ctx, &Subject::Url("/".into()), &home).await.unwrap().unwrap();
+    let scan = detectors.scan_cloaking(&ctx, &inventory, 20).await;
+    assert!(scan.checked >= 5 && scan.notes.is_empty(), "{scan:?}");
+    assert_eq!(scan.findings.len(), 1, "only the home page is cloaked: {:#?}", scan.findings);
+    let cloaking = scan.findings[0].clone();
+    assert_eq!(cloaking.subject, Subject::Item("crawl:/".into()));
     assert!(
         cloaking.evidence[0]
             .detail
@@ -74,7 +76,11 @@ async fn s3_migrates_and_leaves_the_infection_behind() {
         "{:?}",
         cloaking.evidence
     );
-    findings.push(cloaking);
+    let polite = context(&live);
+    let unproven = detectors.scan_cloaking(&polite, &inventory, 20).await;
+    assert_eq!((unproven.checked, unproven.findings.len()), (0, 0));
+    assert!(unproven.notes[0].contains("cloaking not checked"), "{:?}", unproven.notes);
+    findings.extend(scan.findings);
     let found = |kind: FindingKind, subject: &Subject| {
         findings
             .iter()
@@ -119,6 +125,34 @@ async fn s3_migrates_and_leaves_the_infection_behind() {
     assert!(!converted.documents.contains_key("/wp-content/uploads/2026/10/cache.php"));
     assert!(!converted.documents.contains_key("/wp-content/uploads/2026/10/photo.jpg"));
     assert!(converted.documents.contains_key("/wp-content/uploads/2026/10/panel.jpg"));
+
+    // A link to a page the crawl could not read (robots-disallowed) becomes its text, and
+    // the legacy runtime's paths answer 410 Gone (A-I4).
+    let unconverted = to_content(&inventory, &options).unwrap();
+    let home = unconverted.items.iter().find(|i| i.slug == "index").unwrap();
+    let body = &home.body.as_ref().unwrap().0;
+    assert!(body.contains("Staff notes") && !body.contains("/private/"), "{body}");
+    assert!(
+        unconverted.dropped["crawl:/"].iter().any(|d| d.reason
+            == adk_site::migrate::sanitize::DropReason::UnreadTarget {
+                target: "/private/".into()
+            }),
+        "{:?}",
+        unconverted.dropped
+    );
+    let gone: Vec<&str> =
+        converted.redirects.iter().filter(|r| r.status == 410).map(|r| r.from.as_str()).collect();
+    for path in [
+        "/wp-includes/js/jquery/jquery.min.js",
+        "/wp-content/uploads/2026/10/cache.php",
+        "/xmlrpc.php",
+    ] {
+        assert!(gone.contains(&path), "{path} answers 410: {gone:?}");
+    }
+    assert!(
+        converted.redirects.iter().any(|r| r.from == "/wp-login.php" && r.status == 301),
+        "a page the crawl read keeps its redirect"
+    );
 
     // Forms and the shop map to capabilities; comments and logins to owner decisions.
     let map = map_features(&inventory);

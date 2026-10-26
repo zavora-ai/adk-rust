@@ -55,6 +55,9 @@ export function DecisionCard({
   const [note, setNote] = useState("");
   // The answer was given on this card: its line takes the focus the answer buttons had.
   const [answeredHere, setAnsweredHere] = useState(false);
+  // Opened at a decision already decided (a deep link): its line takes the focus. One decided
+  // later, elsewhere, never does: the person may be typing (§5.1).
+  const [decidedWhenOpened] = useState(given.status === "decided");
   const heading = useId();
   const root = useRef<HTMLElement>(null);
 
@@ -64,8 +67,9 @@ export function DecisionCard({
     setCard((current) => (given.id !== current.id || given.status === "decided" ? given : current));
   }, [given]);
 
+  // A waiting card takes the focus itself; a decided one gives it to its line (`DecidedLine`).
   useEffect(() => {
-    if (focusOnMount) root.current?.focus();
+    if (focusOnMount && root.current?.dataset.decision === "waiting") root.current.focus();
   }, [focusOnMount]);
 
   const decided = card.status === "decided";
@@ -180,8 +184,15 @@ export function DecisionCard({
   // it shows the call and the details again, and nothing on it answers (spec 3.3 §5.1, §7.4).
   if (decided) {
     return (
-      <article ref={root} className={`${DECIDED_CLASS} decision-line`} aria-labelledby={heading} data-decision="decided">
-        <DecidedLine card={card} headingId={heading} focus={focusOnMount || answeredHere}>
+      // `tabIndex` as the waiting card has it: a focus on the card stays on it.
+      <article
+        ref={root}
+        tabIndex={-1}
+        className={`${DECIDED_CLASS} decision-line`}
+        aria-labelledby={heading}
+        data-decision="decided"
+      >
+        <DecidedLine card={card} headingId={heading} focus={answeredHere || (focusOnMount && decidedWhenOpened)}>
           {who}
           {summary}
           {call}

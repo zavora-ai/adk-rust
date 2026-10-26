@@ -162,6 +162,7 @@ fn session_harness(
         .mode_store(db.modes.clone())
         .standing_rules(db.rules.clone())
         .shell_ledger(db.ledger.clone())
+        .action_ledger(db.actions.clone())
         .approval_store(db.approvals.clone())
         .plan_checkpointer(db.plans.clone())
         .snapshots(adk_harness::SnapshotConfig::default())

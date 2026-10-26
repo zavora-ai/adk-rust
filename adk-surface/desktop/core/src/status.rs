@@ -96,15 +96,6 @@ impl Badge {
         }
     }
 
-    /// The decisions it counts, for the dock and launcher badge; `None` when it counts none.
-    pub fn count(self) -> Option<u32> {
-        match self {
-            Self::Count(count) => Some(u32::from(count)),
-            Self::Many => Some(10),
-            Self::Idle | Self::Stopped | Self::Unreachable | Self::SignIn => None,
-        }
-    }
-
     /// The badge's own words, beside the icon on macOS: "2", "9+", or nothing.
     pub fn text(self) -> &'static str {
         const DIGITS: [&str; 10] = ["", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
@@ -183,10 +174,6 @@ mod tests {
         assert_eq!(Badge::from_status(&status(10, false)), Badge::Many);
         assert_eq!(Badge::from_status(&status(3, true)), Badge::Stopped);
         assert_eq!(Badge::from_status(&status(0, true)), Badge::Stopped);
-        assert_eq!(
-            [Badge::Idle, Badge::Count(2), Badge::Many, Badge::Stopped].map(Badge::count),
-            [None, Some(2), Some(10), None]
-        );
         assert_eq!(
             [Badge::Count(2), Badge::Many, Badge::Unreachable].map(Badge::text),
             ["2", "9+", ""]

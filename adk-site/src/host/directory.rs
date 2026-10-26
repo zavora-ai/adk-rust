@@ -45,6 +45,12 @@ type Index = BTreeMap<String, FileEntry>;
 /// checkpoint, then renames the pointer into place, so a reader sees the previous release
 /// or the next one, never a mixture. A delta stores only what changed.
 ///
+/// Stored files are read-only. On Unix a release directory hard-links them, so a write
+/// through a served file is refused instead of changing every release that shares the
+/// object; elsewhere a release directory holds copies. A file replaced by a rename changes
+/// that directory only, and [`rollback`](SiteHost::rollback) checks every object's digest
+/// before it switches.
+///
 /// By default every release is also materialised as a directory a static file server can
 /// serve, and [`fetch`](SiteHost::fetch) reads that directory, so a file planted in it shows
 /// as drift. [`materialise(false)`](Self::materialise) keeps only the objects — a publish
@@ -146,15 +152,42 @@ fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
     }
 }
 
-/// Hard-links `from` at `to`, copying when the file system refuses a link.
+/// Makes a stored file read-only. A release directory hard-links the objects every release
+/// shares, so a write through one of its files would otherwise change them all.
+fn seal(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path).map_err(io(path))?.permissions().mode();
+        if mode & 0o222 != 0 {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & !0o222))
+                .map_err(io(path))?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+/// Places `from` at `to` in a release directory: a hard link to the sealed, read-only object
+/// on Unix (a copy when the file system refuses a link), a copy elsewhere, where a read-only
+/// file cannot be replaced by a rename.
 fn link(from: &Path, to: &Path) -> Result<()> {
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent).map_err(io(parent))?;
     }
-    if std::fs::hard_link(from, to).is_err() {
-        std::fs::copy(from, to).map_err(io(from))?;
+    #[cfg(unix)]
+    {
+        if std::fs::hard_link(from, to).is_err() {
+            std::fs::copy(from, to).map_err(io(from))?;
+        }
+        seal(to)
     }
-    Ok(())
+    #[cfg(not(unix))]
+    {
+        std::fs::copy(from, to).map_err(io(from))?;
+        Ok(())
+    }
 }
 
 fn nanos() -> u128 {
@@ -208,11 +241,20 @@ impl Store {
     }
 
     /// Stores a file version under its digest, copying it from the build (a clone on file
-    /// systems that support one) and checking its digest; returns whether it was new.
+    /// systems that support one) and checking its digest; returns whether it was new. A stored
+    /// object whose bytes no longer match its digest is replaced, so republishing a release
+    /// repairs it.
     fn store_object(&self, release: &StagedRelease, path: &str, entry: &FileEntry) -> Result<bool> {
         let object = self.object(&entry.sha256);
-        if object.exists() {
-            return Ok(false);
+        if let Some(bytes) = read_optional(&object)? {
+            if file_digest(&bytes) == entry.sha256 {
+                return Ok(false);
+            }
+            tracing::warn!(
+                site.host.object = %entry.sha256,
+                path,
+                "a stored object no longer matches its digest; replacing it"
+            );
         }
         let parent = object.parent().unwrap_or(&self.root);
         std::fs::create_dir_all(parent).map_err(io(parent))?;
@@ -230,6 +272,7 @@ impl Store {
             });
         }
         std::fs::rename(&tmp, &object).map_err(io(&object))?;
+        seal(&object)?;
         Ok(true)
     }
 

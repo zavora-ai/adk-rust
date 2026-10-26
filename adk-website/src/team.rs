@@ -17,7 +17,9 @@
 //! `website_back_office`); a back-office agent's mode and run budget come from the charter's
 //! authority through the ladder. The back office is one `TeamSpec` with the Steward as its
 //! coordinator. The public agents are woken by their own channels and reach the back office
-//! only through typed signals, so no delegation edge crosses into the public partition.
+//! only through typed signals, so no delegation edge crosses into the public partition. The
+//! Finance agent holds the owner's wallet when the kit carries one ([`TeamKit::wallet`],
+//! §7.14): `wallet_pay` and `wallet_status`, and no other agent holds them.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -270,9 +272,16 @@ impl AgentRole {
                 "site_publish",
                 "launch_gate_run",
                 "awp_verify",
+                "social_post",
+                "experiment_start",
+                "experiment_report",
             ],
-            Self::Revenue => &["content_draft", "release_preview"],
-            Self::Guardian => &["site_rollback", "host_fetch", "awp_verify", "launch_gate_run"],
+            Self::Revenue => {
+                &["content_draft", "release_preview", "email_send_sequence_step", "lead_handoff"]
+            }
+            Self::Guardian => {
+                &["site_rollback", "edge_read_only", "host_fetch", "awp_verify", "launch_gate_run"]
+            }
             Self::Finance => &["wallet_pay", "wallet_status"],
         }
     }
@@ -312,10 +321,15 @@ pub struct TeamKit {
     pub standing_rules: Arc<dyn StandingRuleStore>,
     /// A last change to each agent's builder, such as its prompter or instruction files.
     pub configure: Arc<dyn Fn(AgentRole, HarnessAgentBuilder) -> HarnessAgentBuilder + Send + Sync>,
+    /// The owner's wallet, which the Finance agent pays from through `wallet_pay` and reads
+    /// through `wallet_status` (spec 3.5 §7.14, A-I16); the Finance agent holds no wallet
+    /// tool without one.
+    pub wallet: Option<adk_payments::wallet::Wallet>,
 }
 
-/// A built team: every agent the kind runs, and the back office as one validated team with
-/// the Steward as coordinator (spec 3.5 §7.19).
+/// A built team: every agent the kind runs, and the back office as one team with the Steward
+/// as coordinator, which [`compile`](Self::compile) turns into one runner root (spec 3.5
+/// §7.19).
 pub struct BuiltTeam {
     /// The agents, by role.
     pub agents: BTreeMap<AgentRole, Arc<HarnessAgent>>,
@@ -342,6 +356,45 @@ impl BuiltTeam {
         })
     }
 
+    /// The back office as one runner (spec 3.5 §7.19): the compiled team as its root, run
+    /// under the Steward's harness — its policy, approvals and audit trail — so the Steward
+    /// leads, and each member it delegates to runs under its own harness. Each agent acts as
+    /// its partition's principal for `app`, `urn:adk:agent:{app}/{agent}`.
+    ///
+    /// # Errors
+    ///
+    /// When the kind runs no Steward, the team does not compile, or the runner refuses its
+    /// configuration.
+    pub fn team_runner(
+        &self,
+        app: &str,
+        sessions: Arc<dyn adk_session::SessionService>,
+    ) -> Result<adk_runner::Runner> {
+        let steward = self.agent(AgentRole::Steward).ok_or_else(|| {
+            AdkError::config("the kind runs no Steward to lead the back office (spec 3.5 §7.19)")
+        })?;
+        let root: Arc<dyn Agent> = Arc::new(self.compile()?);
+        runner(steward, root, app, sessions)
+    }
+
+    /// One back-office agent as a runner, for the kernel's process of one of its jobs (spec
+    /// 3.5 §7.20).
+    ///
+    /// # Errors
+    ///
+    /// When the kind does not run `role`, or the runner refuses its configuration.
+    pub fn agent_runner(
+        &self,
+        role: AgentRole,
+        app: &str,
+        sessions: Arc<dyn adk_session::SessionService>,
+    ) -> Result<adk_runner::Runner> {
+        let agent = self
+            .agent(role)
+            .ok_or_else(|| AdkError::config(format!("the kind does not run the {role} agent")))?;
+        runner(agent, agent.clone(), app, sessions)
+    }
+
     /// The agent of `role`, when the kind runs it.
     pub fn agent(&self, role: AgentRole) -> Option<&Arc<HarnessAgent>> {
         self.agents.get(&role)
@@ -351,6 +404,26 @@ impl BuiltTeam {
     pub fn roles(&self) -> Vec<AgentRole> {
         self.agents.keys().copied().collect()
     }
+}
+
+/// A runner over `root`, configured by `harness`, its agents acting as the harness's
+/// partition's principals for `app`.
+fn runner(
+    harness: &Arc<HarnessAgent>,
+    root: Arc<dyn Agent>,
+    app: &str,
+    sessions: Arc<dyn adk_session::SessionService>,
+) -> Result<adk_runner::Runner> {
+    let builder = adk_runner::Runner::builder()
+        .app_name(app.to_string())
+        .agent(root)
+        .session_service(sessions);
+    let builder = harness.configure_runner(builder);
+    let builder = match harness.partition() {
+        Some(partition) => builder.identity_source(partition.identity_source(app, harness.name())),
+        None => builder,
+    };
+    builder.build()
 }
 
 /// The team of one site (spec 3.5 §7.19).
@@ -479,7 +552,7 @@ impl SiteTeam {
         self.runs(role).then_some(role)
     }
 
-    /// Builds every agent the kind runs and validates the back office's team (spec 3.5
+    /// Builds every agent the kind runs and compiles the back office's team (spec 3.5
     /// §7.19): each public agent with `website_public`, each back-office agent with
     /// `website_back_office`, the ladder's mode for its jobs and the run budget of its jobs
     /// acting within budget. Each agent's workspace holds its jobs' playbooks.
@@ -487,7 +560,7 @@ impl SiteTeam {
     /// # Errors
     ///
     /// Returns the autonomy store's, the workspace's or the builder's error, or a team
-    /// error when the back office's team does not validate.
+    /// error when the back office's team does not compile over the built agents.
     pub async fn build(&self, kit: &TeamKit) -> Result<BuiltTeam> {
         let ladder = &kit.back_office.ladder;
         let levels = job_levels(ladder, kit.back_office.autonomy.as_ref(), self.site.id).await?;
@@ -514,17 +587,35 @@ impl SiteTeam {
                     if let Some(budget) = ladder.budget_for_agent(role.as_str(), &levels) {
                         builder = builder.budget(budget);
                     }
+                    if let (AgentRole::Finance, Some(wallet)) = (role, &kit.wallet) {
+                        for tool in crate::wallet::finance_tools(wallet.clone()) {
+                            builder = builder.tool(tool);
+                        }
+                    }
+                    if *role == AgentRole::Steward {
+                        // The Steward hands work to the back office over the team's
+                        // delegate edges; each member's own harness decides its calls.
+                        builder = builder.team_delegates(
+                            self.members
+                                .iter()
+                                .filter(|m| {
+                                    m.partition() == WebsitePartition::BackOffice
+                                        && **m != AgentRole::Steward
+                                })
+                                .map(|m| m.as_str()),
+                        );
+                    }
                     builder
                 }
             };
             let agent = (kit.configure)(*role, builder).build()?;
             agents.insert(*role, Arc::new(agent));
         }
-        let back_office = self.spec();
-        back_office.validate().map_err(|error| {
-            AdkError::config(format!("the back office is not a valid team: {error}"))
-        })?;
-        Ok(BuiltTeam { agents, back_office })
+        let built = BuiltTeam { agents, back_office: self.spec() };
+        // The Steward's delegate edges compile: a harness consumes the runtime toolsets a
+        // team gives its coordinator (spec 3.5 §7.19).
+        built.compile()?;
+        Ok(built)
     }
 }
 

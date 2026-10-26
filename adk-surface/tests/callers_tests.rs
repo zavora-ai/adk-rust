@@ -346,3 +346,46 @@ async fn audit_records_carry_the_device_and_the_presence() {
     );
     assert_eq!(fields(&decided[1]), (Some(json!(medium.id)), Some(json!("web")), None, None));
 }
+
+/// An answer's record names the agent whose call it decided, so "What your agents did" can say
+/// "You let Finance send one email" (spec 3.3 §11). Fails on `origin/main`, whose
+/// `surface.decide` records name no agent.
+#[tokio::test]
+async fn an_answers_record_names_the_agent_whose_call_it_decided() {
+    let home = home().await;
+    let call = ToolConfirmationRequest::new("send_email", json!({ "to": "kim" }));
+    let request = ApprovalRequest::new(
+        "apr-finance",
+        ApprovalScope::new(APP, OWNER, "s1"),
+        &call,
+        ApprovalPolicy::new([ApproverSelector::group("owner")]).allow_self_approval(),
+    )
+    .with_acting(adk_core::ActingContext::derived(
+        APP,
+        "finance",
+        OWNER,
+        adk_core::SubjectKind::Human,
+    ));
+    let request = home.service.submit(request).await.unwrap();
+    let web = Caller::human(OWNER, SurfaceKind::Web, Origin::Pointer).with_groups(["owner"]);
+    home.engine
+        .execute(
+            &web,
+            Command::Decide {
+                decision_id: request.id.clone(),
+                version: request.version,
+                answer: Answer::AllowOnce,
+                edited_args: None,
+                reason: None,
+                expanded: true,
+            },
+        )
+        .await
+        .unwrap();
+    let decided = records(&home.audit, SURFACE_AUDIT_DECIDE);
+    assert_eq!(
+        decided[0].ext.get("actingAgent"),
+        Some(&json!(format!("urn:adk:agent:{APP}/finance"))),
+        "{decided:?}"
+    );
+}

@@ -2,5 +2,5 @@
   longer sends a held call's placeholder `TOOL_CALL_RESULT` or the hold's placeholder text
   message; the run ends with an interrupt for the call instead, and the call's result
   arrives against the same `toolCallId` in the run that resumes it. `GET
-  /api/ui/capabilities` lists `tool_call_interrupts` and `interrupt_resume` for `ag_ui`
-  (spec 3.3 §10 S2).
+  /api/ui/capabilities` lists `tool_call_interrupts` for `ag_ui`, and `interrupt_resume` on
+  a server with an approval service and a `RequestContextExtractor` (spec 3.3 §10 S2).

@@ -165,6 +165,26 @@ async fn a_rule_remembered_mid_batch_decides_the_later_calls_it_covers() {
     assert_eq!(standing.standing_decision(&elsewhere, &held[1]).await, None, "alice's call only");
 }
 
+/// Wave 2 review, finding 4: a deny rule remembered for an earlier call of a batch decides the
+/// later calls it covers as denied, so "Allow once" is never asked for a call the rule refuses.
+#[tokio::test]
+async fn a_deny_rule_remembered_mid_batch_denies_the_later_calls_it_covers() {
+    let script = vec![batch(&["cargo test -p a", "cargo test -p b", "cargo publish"])];
+    let f = fixture(script, |b| b.mode(HarnessMode::Ask)).await;
+    let scope = ApprovalScope::new(common::APP, "alice", f.session.as_str());
+    let standing: &dyn StandingPermissions = f.harness.agent().as_ref();
+    let held = confirmation_requests(&f.send("test both packages").await);
+    assert_eq!(held.len(), 3);
+
+    standing.remember(&scope, &held[0], ToolConfirmationDecision::Deny).await.unwrap();
+    assert_eq!(
+        standing.standing_decision(&scope, &held[1]).await,
+        Some(ToolConfirmationDecision::Deny),
+        "the cargo test deny rule covers the other package's tests"
+    );
+    assert_eq!(standing.standing_decision(&scope, &held[2]).await, None, "a publish is asked");
+}
+
 /// Review of #1029, finding 7: a rule answers only the harness's own approval, so a call
 /// another policy layer also holds is still asked about after a rule covers it.
 #[tokio::test]

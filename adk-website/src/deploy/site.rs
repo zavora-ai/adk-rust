@@ -5,11 +5,13 @@
 //! | Part | Built from |
 //! |---|---|
 //! | Runtime | The content repository, `ExperimentGenerator` around the built-in generator, the SQLite site log signed with `data/keys/release.jwk`, the `DirectoryHost`, the history, the charter store, the kind's launch gate with [`ReleaseDelegation`] |
-//! | Edge | The kind's capabilities with the packs' handlers; SQLite edge stores; the kernel's approvals and signals; the consent policy; `MeteredActionLedger` and `EdgeMeter`; inbox threads, the calendar and payment links when configured; `card.jwk` and `receipt.jwk` |
-//! | Updates | `UpdateEngine` over the runtime's pipeline, the edge's live store and the stream lane signed with the receipt key; the feeds in `feeds.json`; [`UpdateDriver`] with its journal and cards |
+//! | Edge | The kind's capabilities with the packs' handlers under the owner's `approvals.json` thresholds; SQLite edge stores, event log and beacon counts in `data/edge.db`, with the deliveries a restart left resumed; the kernel's approvals and signals; the consent policy; `MeteredActionLedger` and `EdgeMeter`; inbox threads, the calendar and a payment desk (`SiteOptions::payments`, such as an AP2 desk, else the `payments.json` links) when configured; `card.jwk` and `receipt.jwk` |
+//! | Updates | `UpdateEngine` over the runtime's pipeline, the edge's live store and the stream lane signed with the receipt key, its held items and deliveries in `data/updates/held.json`; the feeds in `feeds.json`; [`UpdateDriver`] with its journal and cards |
 //! | Experiments | `ExperimentRunner` with `BeaconKpi`, the job pauses, the ladder, the alarms and `RepublishOnStop`; its daily trigger |
-//! | Measurement | `KpiTracker` with the beacon, commerce, spend and agent-search sources (and AEO with search providers) |
+//! | Measurement | `KpiTracker` with the beacon, commerce, spend and agent-search sources (and AEO with search providers), their counts in `data/edge.db` |
 //! | Review | `ReviewComposer` with the alarms, the experiments and the updates |
+//! | Leads | The contact book and nurture counts in `data/edge.db` ([`SqliteLeadRecords`]), scored against the kind's threshold; the email outbox, when configured, reading consent from the edge's receipts |
+//! | Upkeep | [`UpkeepCheck`] over the edge's lockfile and the certificate, when configured |
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -25,16 +27,14 @@ use adk_kernel::channels::ChannelSink;
 use adk_kernel::charter::{AutonomyLadder, CharterStore, JobPauses, KpiStore, KpiTracker};
 use adk_kernel::wake::Trigger;
 use adk_server::awp::stores::SqliteEdgeStores;
-use adk_server::awp::{
-    BeaconStore, ConsentPolicy, EdgeKeys, EdgeTiers, InMemoryBeaconStore, WebBotAuthTrustAssigner,
-};
+use adk_server::awp::{BeaconStore, ConsentPolicy, EdgeKeys, EdgeTiers, WebBotAuthTrustAssigner};
 use adk_site::content::{FileContentHistory, FsContentStore, SiteProject};
 use adk_site::generator::BuiltinGenerator;
 use adk_site::host::DirectoryHost;
 use adk_site::log::SiteLog;
 use adk_site::signer::Ed25519ReleaseSigner;
 use adk_site::stream::StreamLane;
-use adk_site::updates::UpdateEngine;
+use adk_site::updates::{FileHeldStore, UpdateEngine};
 use awp_types::{Cadence, Charter, Reporting, SiteKind};
 use tokio::task::JoinHandle;
 
@@ -46,17 +46,20 @@ use crate::alarms::AlarmRouter;
 use crate::edge::adapters::{
     DeferredAnnouncer, InboxThreads, KernelSignals, ReceiptEntrySigner, ReleaseSearch,
 };
-use crate::edge::handlers::{Calendar, InMemoryCalendar, InMemoryContactBook, PaymentDesk};
+use crate::edge::handlers::{Calendar, InMemoryCalendar, PaymentDesk};
 use crate::edge::{SiteEdge, SiteEdgeParts, consent_config, site_router, stream_router};
 use crate::experiments::{
     ExperimentGenerator, ExperimentRunner, FileExperimentStore, RepublishOnStop,
 };
 use crate::kinds::{KindTemplate, template};
+use crate::leads::{LeadScorer, Leads, SqliteLeadRecords};
 use crate::measurement::{
     AeoKpi, AeoTracker, AgentSearchKpi, BeaconKpi, CommerceKpi, MeteredSpendLedger, SpendLedgerKpi,
 };
+use crate::quotes::{QuotedReviews, ReviewQuotes};
 use crate::review::ReviewComposer;
 use crate::team::AgentRole;
+use crate::upkeep::{AdvisorySource, CertificateSource, UpkeepCheck};
 
 fn config(error: impl std::fmt::Display) -> AdkError {
     AdkError::config(error.to_string())
@@ -91,6 +94,38 @@ pub struct SiteOptions {
     pub model: Option<Arc<dyn adk_core::Llm>>,
     /// The edge's rate limits, made for each site.
     pub limits: Option<Arc<dyn Fn() -> adk_server::awp::EdgeLimits + Send + Sync>>,
+    /// The site's email: nurture sequences and the outbox are off without it (spec 3.5 §5 S8).
+    pub email: Option<EmailOptions>,
+    /// How long a page the site drafts on its own waits before it can go live; 24 hours by
+    /// default (spec 3.5 §5 S10).
+    pub publish_delay: Option<chrono::Duration>,
+    /// The edge's `Cargo.lock` and where its advisories come from, for the hosting job's
+    /// upgrade proposals (spec 3.5 §7.20).
+    pub advisories: Option<(std::path::PathBuf, Arc<dyn AdvisorySource>)>,
+    /// Where the certificate's expiry is read, for renewal proposals (spec 3.5 §7.20).
+    pub certificate: Option<Arc<dyn CertificateSource>>,
+    /// The owner's wallet the Finance agent pays running costs from (spec 3.5 §7.14); no
+    /// wallet tools without it.
+    pub wallet: Option<adk_payments::wallet::Wallet>,
+}
+
+/// The site's email (spec 3.5 §7.13): the driver, the address it sends from, and the
+/// domain-authentication check bulk sends wait for.
+#[derive(Clone)]
+pub struct EmailOptions {
+    /// The driver.
+    pub driver: Arc<dyn adk_drivers::email::EmailDriver>,
+    /// The address the site sends from.
+    pub from: adk_drivers::email::Mailbox,
+    /// The DNS lookup and sender policy SPF, DKIM and DMARC are checked against.
+    pub domain_auth:
+        Option<(Arc<dyn adk_drivers::email::TxtLookup>, adk_drivers::email::SenderPolicy)>,
+}
+
+impl std::fmt::Debug for EmailOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmailOptions").field("from", &self.from).finish_non_exhaustive()
+    }
 }
 
 impl std::fmt::Debug for SiteOptions {
@@ -172,6 +207,18 @@ pub struct RunningSite {
     pub review: Arc<ReviewComposer>,
     /// The spend ledger agents' runs commit to, metered for the `spend` KPI source.
     pub spend: Arc<MeteredSpendLedger>,
+    /// The site's leads: scores, consent for nurture, one handoff each (spec 3.5 §5 S8).
+    pub leads: Arc<Leads>,
+    /// The reviews the site may quote, with the owner's approvals (spec 3.5 S2).
+    pub quotes: Arc<ReviewQuotes>,
+    /// The site's email outbox, when the site has email (spec 3.5 §7.13).
+    pub outbox: Option<Arc<adk_drivers::email::EmailOutbox>>,
+    pub(crate) reporting: Reporting,
+    pub(crate) publish_delay: chrono::Duration,
+    pub(crate) wallet: Option<adk_payments::wallet::Wallet>,
+    /// The edge's signals into the back office, which wake the kernel's processes once the
+    /// kernel serving the site exists.
+    pub(crate) signals: Arc<KernelSignals>,
     /// The router serving the edge, the stream feed and the release.
     pub router: axum::Router,
     triggers: Vec<Trigger>,
@@ -253,6 +300,7 @@ impl RunningSite {
             "data/keys/release.jwk",
         );
         let announcer = Arc::new(DeferredAnnouncer::default());
+        let quotes = Arc::new(ReviewQuotes::open(paths.data().join("reviews.json"))?);
         let charters: Arc<dyn CharterStore> = stores.charters.clone();
         let mut builder = SiteRuntime::builder(
             site.clone(),
@@ -265,7 +313,13 @@ impl RunningSite {
         )
         .history(Arc::new(FileContentHistory::new(paths.history())))
         .charters(charters.clone())
-        .gate(template.gate(&site.origin).with_extension(Arc::new(delegation)))
+        .gate(
+            template
+                .gate(&site.origin)
+                .with_extension(Arc::new(delegation))
+                // Pages quote a found review only as its owner approved (S2).
+                .with_extension(Arc::new(QuotedReviews::new(quotes.clone()))),
+        )
         .announcer(announcer.clone());
         if let Some(previous) = previous {
             builder = builder.previous(previous);
@@ -287,11 +341,40 @@ impl RunningSite {
             crate::jobs::register(&ladder, &current.charter).await?;
         }
 
-        // Counts the edge's meters write and the measurement sources read.
-        let counts: Arc<dyn BeaconStore> = Arc::new(InMemoryBeaconStore::new());
         let pool = sqlx::SqlitePool::connect(&paths.database("edge")).await.map_err(config)?;
+        // The contact book, kept beside the edge's leads so the people behind them are still
+        // reachable after a restart, and erased with them (spec 3.5 §7.5, S8).
+        let records = Arc::new(SqliteLeadRecords::new(pool.clone()));
+        records.migrate().await?;
         let edge_stores = SqliteEdgeStores::new(pool).with_site(site.name.clone());
         edge_stores.migrate().await.map_err(config)?;
+        let served_stores = edge_stores.edge_stores();
+        let leads = Arc::new(Leads::new(
+            served_stores.leads.clone(),
+            records.clone(),
+            served_stores.consent.clone(),
+            LeadScorer::default(),
+        ));
+        let outbox = options.email.as_ref().map(|email| {
+            let disclosure = adk_drivers::Disclosure::new(&project.config.name)
+                .or_else(|_| adk_drivers::Disclosure::new(&domain))
+                .map_err(config)?;
+            let mut builder = adk_drivers::email::EmailOutbox::builder(
+                email.driver.clone(),
+                email.from.clone(),
+                disclosure,
+            )
+            .consent(leads.clone());
+            if let Some((lookup, policy)) = &email.domain_auth {
+                builder = builder.domain_auth(lookup.clone(), policy.clone());
+            }
+            Ok::<_, AdkError>(Arc::new(builder.build()))
+        });
+        let outbox = outbox.transpose()?;
+        // Counts the edge's meters write and the measurement sources read, kept beside the
+        // edge's own beacon counts in a namespace of their own, so both survive a restart.
+        let counts: Arc<dyn BeaconStore> =
+            Arc::new(edge_stores.clone().with_site(format!("{}#measurement", site.name)));
         let terms = std::fs::read(paths.root().join("public-terms.json")).unwrap_or_default();
         let policy = ConsentPolicy { digest: adk_site::release::file_digest(&terms), ttl: None };
         let subject_key = secret(&paths.data().join("keys/subject.key"))?.to_vec();
@@ -318,17 +401,19 @@ impl RunningSite {
             )) as Arc<dyn adk_server::awp::ThreadSink>
         });
         let signals = partitions.signal_sink(stores.signals.clone(), stores.agenda.clone());
+        let edge_signals = Arc::new(KernelSignals::new(signals));
         let edge = SiteEdge::build(SiteEdgeParts {
             template: template.clone(),
             runtime: runtime.clone(),
             keys: EdgeKeys { card: card_signer, receipt: receipt_signer.clone() },
             edge_url: Url::parse(&edge_url).map_err(config)?,
-            stores: edge_stores.edge_stores(),
-            signals: Arc::new(KernelSignals::new(signals)),
+            stores: served_stores,
+            signals: edge_signals.clone(),
             search: Arc::new(ReleaseSearch::new(Arc::new(adk_harness::website::SiteSearch::new()))),
-            contacts: Arc::new(InMemoryContactBook::default()),
+            contacts: records,
             calendar,
             payments,
+            thresholds: project::approval_thresholds(&paths)?,
             approvals: Some(stores.approvals.clone()),
             tiers: Some(tiers),
             consent: Some(consent_config(&template, policy, subject_key)),
@@ -356,6 +441,9 @@ impl RunningSite {
         let lane = Arc::new(StreamLane::new(Arc::new(ReceiptEntrySigner::new(receipt_signer))));
         let updates = Arc::new(
             UpdateEngine::builder(runtime.shared_pipeline(), edge.live.clone())
+                // Held items and deliveries outlive a restart, so the owner's cards still
+                // decide them.
+                .held_store(Arc::new(FileHeldStore::new(paths.journal().join("held.json"))))
                 .streams(lane)
                 .alarms(Arc::new(SiteAlarms::new(alarms.clone(), site.id)))
                 .build()
@@ -445,11 +533,31 @@ impl RunningSite {
             alarms,
             review,
             spend,
+            leads,
+            quotes,
+            outbox,
+            reporting,
+            wallet: options.wallet.clone(),
+            signals: edge_signals,
+            publish_delay: options.publish_delay.unwrap_or_else(|| {
+                chrono::Duration::hours(crate::publish_delay::DEFAULT_PUBLISH_DELAY_HOURS)
+            }),
             router,
             triggers,
             aeo,
             tasks: Vec::new(),
         })
+    }
+
+    /// The edge's signals into the back office (spec 3.5 §7.10): what a public agent or a
+    /// form files, which wakes the back office's processes while the site serves.
+    pub fn signals(&self) -> Arc<KernelSignals> {
+        self.signals.clone()
+    }
+
+    /// The KPI tracker the site measures with, for the owner's site view (spec 3.5 §7.24).
+    pub fn tracker(&self) -> &KpiTracker {
+        &self.tracker
     }
 
     /// The kernel triggers the site's own processes run on: the experiments' daily look.
@@ -482,6 +590,31 @@ impl RunningSite {
             }
         }));
         let _resolver = self.edge.edge.spawn_resolver(Duration::from_secs(5));
+        // Deliveries a stopped process left in `data/edge.db` resume once their lease passes.
+        let _deliveries = self.edge.edge.spawn_delivery_resumer(Duration::from_secs(30));
+    }
+
+    /// The hosting job's upkeep check (spec 3.5 §7.20), when the site has a lockfile with an
+    /// advisory source or a certificate source: proposals go to `owner`'s approval inbox.
+    pub fn upkeep(&self, stores: &KernelStores, options: &SiteOptions) -> Option<Arc<UpkeepCheck>> {
+        if options.advisories.is_none() && options.certificate.is_none() {
+            return None;
+        }
+        let mut check = UpkeepCheck::new(
+            self.site.id,
+            self.domain.clone(),
+            self.site.name.clone(),
+            options.owner.clone(),
+            stores.approvals.clone(),
+        )
+        .with_alarms(self.alarms.clone());
+        if let Some((lockfile, source)) = &options.advisories {
+            check = check.with_advisories(lockfile, source.clone());
+        }
+        if let Some(source) = &options.certificate {
+            check = check.with_certificate(source.clone());
+        }
+        Some(Arc::new(check))
     }
 
     /// The owner's channel for the weekly review, when one is configured.

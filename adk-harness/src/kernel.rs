@@ -32,7 +32,7 @@ use adk_kernel::proc::{Activity, LateLedgerSink, LedgerAuditTap, LedgerSink};
 use adk_kernel::{
     AgendaHandle, AgendaItem, AgendaOrigin, ApprovalWakeSource, GoalProgress, KernelBuilder,
     KernelConfig, PartitionId, PartitionMode, PlanRef, ProcessHandle, ProgressSource,
-    ProposalOutcome, RuleAge, RunUsage, StandingRuleSource, Wake,
+    ProposalOutcome, RuleAge, StandingRuleSource, Wake,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -366,11 +366,12 @@ impl ProgressSource for HarnessProgress {
     }
 
     #[cfg(feature = "observe")]
-    async fn usage(&self, run: &RunRecord) -> adk_kernel::Result<Option<RunUsage>> {
-        Ok(self
-            .trails
-            .session_usage(&run.app_name, &run.user_id, &session_of(run))
-            .map(|(model_calls, tool_calls, cost)| RunUsage::new(model_calls, tool_calls, cost)))
+    async fn usage(&self, run: &RunRecord) -> adk_kernel::Result<Option<adk_kernel::RunUsage>> {
+        Ok(self.trails.session_usage(&run.app_name, &run.user_id, &session_of(run)).map(
+            |(model_calls, tool_calls, cost)| {
+                adk_kernel::RunUsage::new(model_calls, tool_calls, cost)
+            },
+        ))
     }
 
     fn attach(&self, processes: ProcessHandle) {

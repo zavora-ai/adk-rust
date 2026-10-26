@@ -13,6 +13,10 @@
 //! | [`Route`] | The panel, the home, an external page, or nothing |
 //! | [`place_panel`] | Under or above the tray icon, inside the work area |
 //! | [`StatusWatcher`] | Reads the status at start, on every kernel event and every 5 s |
+//! | [`PanelToggle`] | Whether a click on the icon opens the panel or closes it |
+//! | [`TrayProblem`] | Why Stop all from the icon's menu did not go through, for the panel |
+//! | [`CommandLine`] | `--server`, `--token`, `--probe`; never logs a value it does not know |
+//! | [`window_background`] | The windows' background before a page paints, light or dark |
 //!
 //! Experimental: the shell is an unpublished app, outside the library crates (spec 3.3 §6.1,
 //! recorded deviation).
@@ -29,16 +33,20 @@
 //! assert_eq!(Badge::from_status(&status), Badge::Count(2));
 //! ```
 
+mod args;
 mod error;
 mod place;
 mod route;
 mod server;
 mod status;
+mod theme;
 mod watch;
 
+pub use args::CommandLine;
 pub use error::{DesktopError, Result};
-pub use place::{Point, Rect, Size, place_panel};
-pub use route::{HOME_PATH, PANEL_PATH, Route};
-pub use server::{DEFAULT_SERVER, ServerTarget, Token, user_config_file};
+pub use place::{PanelToggle, Point, Rect, Size, Toggle, place_panel};
+pub use route::{HOME_PATH, PANEL_PATH, Route, home_navigation};
+pub use server::{DEFAULT_SERVER, HOME_TOKEN_KEY, ServerTarget, Token, user_config_file};
 pub use status::{Badge, ModeView, QuietView, SpendView, TrayStatus};
-pub use watch::{Reach, StatusWatcher, stop_all};
+pub use theme::{DARK_BACKGROUND, LIGHT_BACKGROUND, window_background};
+pub use watch::{Reach, StatusWatcher, TrayProblem, stop_all};

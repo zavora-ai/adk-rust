@@ -28,10 +28,10 @@ use adk_site::content::SiteConfig;
 use adk_site::gate::LaunchGate;
 use adk_site::translation::TranslationPolicy;
 use awp_types::{
-    ActionClass, ApprovalChain, Breach, Budget, Cadence, CapabilityV2, Charter, ConsentScope,
-    ContactLinks, Direction, Goal, Governance, Guardrail, GuardrailAction, Kpi, LanguageTag,
-    PolicyRef, PriceRule, PublicTerms, QuietHours, RedLine, RedLineKind, Reporting, Role,
-    RoleHolder, SiteKind, SourceRef, SpendCategory, StrategyPillar, Urgency, UrgencyRoute, Voice,
+    ActionClass, ApprovalChain, Breach, Budget, Cadence, CapabilityV2, Charter, ContactLinks,
+    Direction, Goal, Governance, Guardrail, GuardrailAction, Kpi, LanguageTag, PolicyRef,
+    PriceRule, PublicTerms, QuietHours, RedLine, RedLineKind, Reporting, Role, RoleHolder,
+    SiteKind, SourceRef, SpendCategory, StrategyPillar, Urgency, UrgencyRoute, Voice,
 };
 use chrono::NaiveTime;
 use serde::{Deserialize, Serialize};
@@ -308,13 +308,8 @@ impl KindTemplate {
                 digest: None,
             });
         }
-        let mut consent_scopes: Vec<ConsentScope> = self
-            .capabilities()
-            .into_iter()
-            .filter_map(|capability| capability.consent.map(|consent| consent.scope))
-            .collect();
-        consent_scopes.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-        consent_scopes.dedup();
+        // The forms' scopes, and `nurture` where the kind nurtures its leads (S8, A-I8).
+        let consent_scopes = crate::leads::consent_scopes(self);
         let jobs = self.jobs();
         let actions_per_day = if self.has(&KindRule::LowBudget) { 20 } else { 100 };
         Charter {
@@ -345,9 +340,18 @@ impl KindTemplate {
                 quiet_hours: inputs.quiet_hours.clone(),
             },
             public: PublicTerms {
-                usage: self
-                    .has(&KindRule::ContentUsageTerms)
-                    .then(|| "train-ai=n, search=y".to_string()),
+                // Every launched site states its AI preferences in `robots.txt` (spec 3.5
+                // §4.4); the owner reviews them with the charter. A newsroom licenses its
+                // reporting, so it opts out of training; other kinds state only that search
+                // and answer engines may use the site.
+                usage: Some(
+                    if self.has(&KindRule::ContentUsageTerms) {
+                        "train-ai=n, search=y"
+                    } else {
+                        "search=y"
+                    }
+                    .to_string(),
+                ),
                 policies,
                 consent_scopes,
                 contact: ContactLinks {

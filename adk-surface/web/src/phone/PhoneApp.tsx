@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DecisionCard } from "../generated/api";
-import { problemText } from "../client";
+import { ApiError, problemText } from "../client";
 import { usePoll } from "../poll";
 import { applyTheme, storedTheme } from "../theme";
 import type { PhoneClient } from "./client";
@@ -31,7 +31,8 @@ const TABS: Array<{ tab: Tab; label: string }> = [
 /**
  * The phone (spec 3.3 §5.4): the web home installed on a phone, woken by push. Decisions
  * carries the badge on its heading, its tab and the app's icon. What a paired device cannot
- * do is not shown: no composer, no Resume all, no pairing, no operator rows.
+ * do is not shown: no composer, no Resume all, no pairing, no operator rows. A read that
+ * fails is said, never shown as nothing waiting; a pairing that ended offers to pair again.
  */
 export function PhoneApp({ client, initial }: { client: PhoneClient; initial?: PhoneScreen }) {
   const [screen, setScreen] = useState<PhoneScreen>(() => initial ?? phoneScreenOf(window.location));
@@ -79,6 +80,10 @@ export function PhoneApp({ client, initial }: { client: PhoneClient; initial?: P
   }, [cards.value, decided.value, settled]);
   const waiting = status.value?.decisions ?? shown.filter((card) => card.status === "waiting").length;
   useEffect(() => badge(waiting), [waiting]);
+  // The device's token no longer works: the phone was removed or its pairing ended.
+  const failed = cards.error ?? status.error ?? decided.error;
+  const unpaired = failed instanceof ApiError && failed.status === 401;
+  const readProblem = failed === undefined ? undefined : problemText(failed);
 
   const onSettled = useCallback(
     (card: DecisionCard) => {
@@ -143,13 +148,31 @@ export function PhoneApp({ client, initial }: { client: PhoneClient; initial?: P
               </button>
             </div>
             {status.value?.stopped && <p className="phone-note">{phoneLabels.allStopped}</p>}
+            {unpaired && (
+              <div className="phone-note" role="alert">
+                <p>{phoneLabels.pairingEnded}</p>
+                <button
+                  type="button"
+                  className="phone-button phone-button-secondary"
+                  onClick={() => void client.signOut().then(() => go({ screen: "pair" }))}
+                >
+                  {phoneLabels.pairAgain}
+                </button>
+              </div>
+            )}
             {problem && (
               <p className="phone-problem" role="alert">
                 {problem}
               </p>
             )}
           </header>
-          {tab === "decisions" && <Decisions cards={shown} onOpen={(card) => go({ screen: "decide", id: card.id })} />}
+          {tab === "decisions" && (
+            <Decisions
+              cards={shown}
+              problem={readProblem}
+              onOpen={(card) => go({ screen: "decide", id: card.id })}
+            />
+          )}
           {tab === "threads" && <Agents client={client} />}
           {tab === "today" && <TodayLines client={client} />}
           {tab === "memory" && <ThisPhone client={client} onSignedOut={() => go({ screen: "pair" })} />}

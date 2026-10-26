@@ -263,6 +263,9 @@ fn migrate_from_a_wordpress_export() {
     )
     .unwrap();
     assert!(report["items"].as_u64().unwrap() > 0);
+    // The owner's design choice (spec 3.5 §7.8.1): keeping the design by default.
+    assert_eq!(report["design"]["design"], "keep", "{report}");
+    assert!(printed.contains("Design: kept"), "{printed}");
     let config = std::fs::read_to_string(site.path().join("site.toml")).unwrap();
     assert!(config.contains("[[redirects]]"), "{config}");
     assert!(site.path().join("capabilities.json").exists());
@@ -278,13 +281,23 @@ fn migrate_from_a_wordpress_export() {
             .mode();
         assert_eq!(mode & 0o777, 0o600);
     }
-    // A second run keeps what the project holds.
+    // A second run keeps what the project holds; a new theme gates text and metadata only.
     let again = ok(adk_rust(
-        &["site", "migrate", "--wxr", export.to_str().unwrap()],
+        &["site", "migrate", "--wxr", export.to_str().unwrap(), "--design", "new-theme"],
         home.path(),
         site.path(),
     ));
     assert!(again.contains("0 written"), "{again}");
+    assert!(again.contains("Design: a new theme"), "{again}");
+    let report: Value = serde_json::from_slice(
+        &std::fs::read(site.path().join("data/migration/report.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["design"]["design"], "new_theme");
+    assert_eq!(
+        report["design"]["gates"],
+        serde_json::json!(["url-coverage", "text-similarity", "metadata"])
+    );
 }
 
 /// `site feeds` lists the feeds the owner configured with their bounds; feeds make no model

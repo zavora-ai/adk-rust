@@ -19,8 +19,14 @@
 //! suspend the subscription, which receives one final `subscription.suspended`. Events are
 //! retained 72 hours for replay. A release's `catalog.changed` carries at most 1,000 item ids
 //! and a `next` URL for the rest.
+//!
+//! An [`EventLog`] that keeps catalogue pages, the consent-reference index and pending
+//! deliveries — the SQLite, PostgreSQL and Redis edge stores do — makes them survive a
+//! restart: a retry the process was waiting on is resumed by
+//! [`AwpEdge::spawn_delivery_resumer`](super::AwpEdge::spawn_delivery_resumer) once its lease
+//! passes. A log that keeps none leaves them in the process, as before.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -67,11 +73,15 @@ pub struct EventsConfig {
     pub egress: EgressPolicy,
     /// The bound on one delivery attempt.
     pub attempt_timeout: Duration,
+    /// How long a delivery's next attempt stays its process's before a resumer may take it
+    /// from a durable [`EventLog`].
+    pub delivery_lease: Duration,
 }
 
 impl Default for EventsConfig {
     /// The six AWP 2.0 event types; retries after 1 s, 5 s, 30 s, 5 min, 30 min and 2 h;
-    /// 72 hours' retention; public `https` URLs only; ten seconds per attempt.
+    /// 72 hours' retention; public `https` URLs only; ten seconds per attempt; a 70-second
+    /// delivery lease.
     fn default() -> Self {
         Self {
             catalog: EventCatalog(vec![
@@ -86,6 +96,7 @@ impl Default for EventsConfig {
             retention: chrono::Duration::hours(72),
             egress: EgressPolicy::default(),
             attempt_timeout: Duration::from_secs(10),
+            delivery_lease: Duration::from_secs(70),
         }
     }
 }
@@ -124,7 +135,29 @@ pub struct RetainedEvent {
     pub audience: Option<BTreeSet<RequesterId>>,
 }
 
-/// Events retained for replay (spec 3.5 §7.5).
+/// A delivery waiting for its next attempt, kept so a restart resumes it (spec 3.5 §7.5).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingDelivery {
+    /// The subscription it goes to.
+    pub subscription: String,
+    /// The retained event it carries.
+    pub event_id: String,
+    /// The failed attempts so far.
+    pub failures: u32,
+    /// When it is due if nobody holds it: the next attempt's time plus a lease, so a live
+    /// process finishes its own retries and a restart resumes the ones a stopped process left.
+    pub due: DateTime<Utc>,
+}
+
+/// Events retained for replay, and what their delivery needs across a restart (spec 3.5
+/// §7.5, §7.8.3, §7.9).
+///
+/// [`append`](Self::append), [`between`](Self::between) and
+/// [`purge_before`](Self::purge_before) are required. The provided methods keep nothing: the
+/// edge then holds catalogue pages and consent references in the process, and retries last
+/// as long as it does. A durable log overrides them; [`edge_log_conformance_tests!`]
+/// (crate::edge_log_conformance_tests) checks every method.
 #[async_trait]
 pub trait EventLog: Send + Sync {
     /// Retains `event`.
@@ -137,14 +170,93 @@ pub trait EventLog: Send + Sync {
         until: Option<DateTime<Utc>>,
     ) -> StoreResult<Vec<RetainedEvent>>;
 
-    /// Drops the events before `cutoff`; returns how many.
+    /// Drops the events, and the catalogue pages, kept before `cutoff`; returns how many
+    /// events.
     async fn purge_before(&self, cutoff: DateTime<Utc>) -> StoreResult<usize>;
+
+    /// The retained event `id`.
+    ///
+    /// The provided method scans [`between`](Self::between); a durable log looks it up.
+    async fn event(&self, id: &str) -> StoreResult<Option<RetainedEvent>> {
+        Ok(self
+            .between(DateTime::<Utc>::MIN_UTC, None)
+            .await?
+            .into_iter()
+            .find(|retained| retained.event.id == id))
+    }
+
+    /// Keeps the further pages of release `seq`'s `catalog.changed`, page 2 first, stored at
+    /// `at`; returns whether the log keeps them. The provided method keeps none.
+    async fn put_catalog_pages(
+        &self,
+        seq: u64,
+        at: DateTime<Utc>,
+        pages: &[CatalogChangesPage],
+    ) -> StoreResult<bool> {
+        let _ = (seq, at, pages);
+        Ok(false)
+    }
+
+    /// Page `page` (from 2) of release `seq`'s changed items.
+    async fn catalog_page(&self, seq: u64, page: usize) -> StoreResult<Option<CatalogChangesPage>> {
+        let _ = (seq, page);
+        Ok(None)
+    }
+
+    /// Notes that `requester` referenced consent receipt `receipt`, so `consent.revoked`
+    /// reaches it (AWP 2.0 §9.2); returns whether the log keeps the note. The provided
+    /// method keeps none.
+    async fn note_consent_reference(
+        &self,
+        receipt: uuid::Uuid,
+        requester: &RequesterId,
+    ) -> StoreResult<bool> {
+        let _ = (receipt, requester);
+        Ok(false)
+    }
+
+    /// The requesters that referenced consent receipt `receipt`.
+    async fn consent_references(&self, receipt: uuid::Uuid) -> StoreResult<BTreeSet<RequesterId>> {
+        let _ = receipt;
+        Ok(BTreeSet::new())
+    }
+
+    /// Keeps `delivery`, replacing the one for the same subscription and event. The provided
+    /// method keeps none.
+    async fn save_delivery(&self, delivery: &PendingDelivery) -> StoreResult<()> {
+        let _ = delivery;
+        Ok(())
+    }
+
+    /// Takes the deliveries due at `now`, atomically: each is returned to one caller with its
+    /// `due` moved to `now + lease`, so no other caller takes it while this one delivers.
+    async fn claim_deliveries(
+        &self,
+        now: DateTime<Utc>,
+        lease: chrono::Duration,
+    ) -> StoreResult<Vec<PendingDelivery>> {
+        let _ = (now, lease);
+        Ok(Vec::new())
+    }
+
+    /// Forgets the delivery of `event_id` to `subscription`: it succeeded or ended.
+    async fn finish_delivery(&self, subscription: &str, event_id: &str) -> StoreResult<()> {
+        let _ = (subscription, event_id);
+        Ok(())
+    }
 }
 
-/// An in-memory [`EventLog`].
+/// An in-memory [`EventLog`]: what it keeps lasts the process.
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryEventLog {
     events: Arc<Mutex<Vec<RetainedEvent>>>,
+    pages: Arc<Mutex<CatalogPages>>,
+    references: Arc<Mutex<HashMap<uuid::Uuid, BTreeSet<RequesterId>>>>,
+    deliveries: Arc<Mutex<BTreeMap<(String, String), PendingDelivery>>>,
+}
+
+fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl InMemoryEventLog {
@@ -166,22 +278,84 @@ impl EventLog for InMemoryEventLog {
         since: DateTime<Utc>,
         until: Option<DateTime<Utc>>,
     ) -> StoreResult<Vec<RetainedEvent>> {
-        let events = self.events.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        Ok(events
+        let mut found: Vec<RetainedEvent> = locked(&self.events)
             .iter()
             .filter(|retained| {
                 retained.event.timestamp >= since
                     && until.is_none_or(|until| retained.event.timestamp < until)
             })
             .cloned()
-            .collect())
+            .collect();
+        found.sort_by(|a, b| {
+            (a.event.timestamp, &a.event.id).cmp(&(b.event.timestamp, &b.event.id))
+        });
+        Ok(found)
     }
 
     async fn purge_before(&self, cutoff: DateTime<Utc>) -> StoreResult<usize> {
-        let mut events = self.events.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        locked(&self.pages).retain(|_, (at, _)| *at >= cutoff);
+        let mut events = locked(&self.events);
         let before = events.len();
         events.retain(|retained| retained.event.timestamp >= cutoff);
         Ok(before - events.len())
+    }
+
+    async fn event(&self, id: &str) -> StoreResult<Option<RetainedEvent>> {
+        Ok(locked(&self.events).iter().find(|retained| retained.event.id == id).cloned())
+    }
+
+    async fn put_catalog_pages(
+        &self,
+        seq: u64,
+        at: DateTime<Utc>,
+        pages: &[CatalogChangesPage],
+    ) -> StoreResult<bool> {
+        let mut stored = locked(&self.pages);
+        for (index, page) in pages.iter().enumerate() {
+            stored.insert((seq, index + 2), (at, page.clone()));
+        }
+        Ok(true)
+    }
+
+    async fn catalog_page(&self, seq: u64, page: usize) -> StoreResult<Option<CatalogChangesPage>> {
+        Ok(locked(&self.pages).get(&(seq, page)).map(|(_, page)| page.clone()))
+    }
+
+    async fn note_consent_reference(
+        &self,
+        receipt: uuid::Uuid,
+        requester: &RequesterId,
+    ) -> StoreResult<bool> {
+        locked(&self.references).entry(receipt).or_default().insert(requester.clone());
+        Ok(true)
+    }
+
+    async fn consent_references(&self, receipt: uuid::Uuid) -> StoreResult<BTreeSet<RequesterId>> {
+        Ok(locked(&self.references).get(&receipt).cloned().unwrap_or_default())
+    }
+
+    async fn save_delivery(&self, delivery: &PendingDelivery) -> StoreResult<()> {
+        locked(&self.deliveries)
+            .insert((delivery.subscription.clone(), delivery.event_id.clone()), delivery.clone());
+        Ok(())
+    }
+
+    async fn claim_deliveries(
+        &self,
+        now: DateTime<Utc>,
+        lease: chrono::Duration,
+    ) -> StoreResult<Vec<PendingDelivery>> {
+        let mut claimed = Vec::new();
+        for delivery in locked(&self.deliveries).values_mut().filter(|d| d.due <= now) {
+            delivery.due = now + lease;
+            claimed.push(delivery.clone());
+        }
+        Ok(claimed)
+    }
+
+    async fn finish_delivery(&self, subscription: &str, event_id: &str) -> StoreResult<()> {
+        locked(&self.deliveries).remove(&(subscription.to_owned(), event_id.to_owned()));
+        Ok(())
     }
 }
 
@@ -204,27 +378,37 @@ impl reqwest::dns::Resolve for PublicOnly {
     }
 }
 
-/// Who referenced which consent receipt, so `consent.revoked` reaches them (AWP 2.0 §9.2).
-#[derive(Debug, Clone, Default)]
+/// Who referenced which consent receipt, so `consent.revoked` reaches them (AWP 2.0 §9.2):
+/// in the event log when it keeps them, else in the process.
+#[derive(Clone)]
 pub(crate) struct ConsentReferences {
+    log: Arc<dyn EventLog>,
     by_receipt: Arc<Mutex<HashMap<uuid::Uuid, BTreeSet<RequesterId>>>>,
 }
 
 impl ConsentReferences {
-    pub(crate) fn note(&self, receipts: &[uuid::Uuid], requester: &RequesterId) {
-        let mut map = self.by_receipt.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    pub(crate) async fn note(&self, receipts: &[uuid::Uuid], requester: &RequesterId) {
         for receipt in receipts {
-            map.entry(*receipt).or_default().insert(requester.clone());
+            match self.log.note_consent_reference(*receipt, requester).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    locked(&self.by_receipt).entry(*receipt).or_default().insert(requester.clone());
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "awp consent reference kept in the process only");
+                    locked(&self.by_receipt).entry(*receipt).or_default().insert(requester.clone());
+                }
+            }
         }
     }
 
-    pub(crate) fn of(&self, receipt: uuid::Uuid) -> BTreeSet<RequesterId> {
-        self.by_receipt
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&receipt)
-            .cloned()
-            .unwrap_or_default()
+    pub(crate) async fn of(&self, receipt: uuid::Uuid) -> BTreeSet<RequesterId> {
+        let mut found = locked(&self.by_receipt).get(&receipt).cloned().unwrap_or_default();
+        match self.log.consent_references(receipt).await {
+            Ok(kept) => found.extend(kept),
+            Err(error) => tracing::warn!(error = %error, "awp consent references not read"),
+        }
+        found
     }
 }
 
@@ -239,6 +423,7 @@ struct Inner {
     client: reqwest::Client,
     base_url: String,
     pages: Mutex<CatalogPages>,
+    references: Arc<Mutex<HashMap<uuid::Uuid, BTreeSet<RequesterId>>>>,
     last_purge: Mutex<DateTime<Utc>>,
 }
 
@@ -290,14 +475,48 @@ impl EdgeEvents {
                 client,
                 base_url: base_url.trim_end_matches('/').to_owned(),
                 pages: Mutex::new(HashMap::new()),
+                references: Arc::default(),
                 last_purge: Mutex::new(Utc::now()),
             }),
+        }
+    }
+
+    /// The consent-reference index, kept beside the events.
+    pub(crate) fn references(&self) -> ConsentReferences {
+        ConsentReferences {
+            log: Arc::clone(&self.inner.log),
+            by_receipt: Arc::clone(&self.inner.references),
         }
     }
 
     /// The catalogue the edge emits.
     pub fn catalog(&self) -> &EventCatalog {
         &self.inner.config.catalog
+    }
+
+    /// The retained events published at or after `since` and before `until`, oldest first,
+    /// each with its audience (spec 3.5 §7.5): the site's own read of what its edge
+    /// announced, for the back office and the owner's views. Subscribers read events through
+    /// their subscriptions and replay; the edge serves no route for this read.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let day = chrono::Utc::now() - chrono::Duration::days(1);
+    /// for retained in edge.events().retained(day, None).await? {
+    ///     println!("{} {}", retained.event.event_type, retained.event.id);
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`] when the event log cannot be read.
+    pub async fn retained(
+        &self,
+        since: DateTime<Utc>,
+        until: Option<DateTime<Utc>>,
+    ) -> StoreResult<Vec<RetainedEvent>> {
+        self.inner.log.between(since, until).await
     }
 
     /// Publishes `site.release.published`; returns the event id.
@@ -354,9 +573,15 @@ impl EdgeEvents {
         pages: Vec<CatalogChangesPage>,
     ) -> StoreResult<String> {
         let now = Utc::now();
-        {
-            let mut stored =
-                self.inner.pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let kept = match self.inner.log.put_catalog_pages(catalog.release_seq, now, &pages).await {
+            Ok(kept) => kept,
+            Err(error) => {
+                tracing::warn!(error = %error, "awp catalogue pages kept in the process only");
+                false
+            }
+        };
+        if !kept {
+            let mut stored = locked(&self.inner.pages);
             for (index, page) in pages.into_iter().enumerate() {
                 stored.insert((catalog.release_seq, index + 2), (now, page));
             }
@@ -425,7 +650,7 @@ impl EdgeEvents {
         let targets = self.inner.subscriptions.active_for(&event_type).await?;
         for record in targets {
             if admits(&retained, &record.owner) {
-                self.spawn_delivery(record, retained.event.clone());
+                self.spawn_delivery(record, retained.event.clone(), 0);
             }
         }
         tracing::debug!(event.id = %id, event.kind = %event_type, "awp event published");
@@ -489,20 +714,48 @@ impl EdgeEvents {
         }
     }
 
-    fn spawn_delivery(&self, record: SubscriptionRecord, event: EventEnvelope) {
+    fn spawn_delivery(&self, record: SubscriptionRecord, event: EventEnvelope, failures: u32) {
         let events = self.clone();
-        tokio::spawn(async move { events.deliver(record, event).await });
+        tokio::spawn(async move { events.deliver(record, event, failures).await });
     }
 
-    /// Delivers `event` with the retry schedule; suspends the subscription after six
-    /// consecutive failures and makes one final `subscription.suspended` attempt.
-    async fn deliver(&self, record: SubscriptionRecord, event: EventEnvelope) {
+    /// How long a delivery is held by the process attempting it before another may take it.
+    fn lease(&self) -> chrono::Duration {
+        chrono::Duration::from_std(self.inner.config.delivery_lease)
+            .unwrap_or_else(|_| chrono::Duration::seconds(70))
+    }
+
+    /// Keeps the delivery's state in the log, so a restart resumes it.
+    async fn keep(&self, subscription: &str, event: &str, failures: u32, due: DateTime<Utc>) {
+        let delivery = PendingDelivery {
+            subscription: subscription.to_owned(),
+            event_id: event.to_owned(),
+            failures,
+            due,
+        };
+        if let Err(error) = self.inner.log.save_delivery(&delivery).await {
+            tracing::warn!(error = %error, "awp delivery kept in the process only");
+        }
+    }
+
+    async fn finish(&self, subscription: &str, event: &str) {
+        if let Err(error) = self.inner.log.finish_delivery(subscription, event).await {
+            tracing::warn!(error = %error, "awp finished delivery not cleared");
+        }
+    }
+
+    /// Delivers `event` with the retry schedule, after `failures` failed attempts; suspends
+    /// the subscription after six consecutive failures and makes one final
+    /// `subscription.suspended` attempt.
+    async fn deliver(&self, record: SubscriptionRecord, event: EventEnvelope, failures: u32) {
         let id = record.subscription.id.clone();
-        let mut waits = self.inner.config.retry_schedule.clone().into_iter();
+        let mut failures = failures;
         let mut subscription = record.subscription;
+        self.keep(&id, &event.id, failures, Utc::now() + self.lease()).await;
         loop {
             match self.post(&subscription, &event).await {
                 Ok(()) => {
+                    self.finish(&id, &event.id).await;
                     if let Err(error) = self.inner.subscriptions.record_delivery(&id, true).await {
                         tracing::warn!(error = %error, "awp delivery outcome not recorded");
                     }
@@ -533,11 +786,22 @@ impl EdgeEvents {
                         if let Err(reason) = self.post(&after.subscription, &notice).await {
                             tracing::debug!(reason = %reason, "awp final suspension notice not delivered");
                         }
+                        self.finish(&id, &event.id).await;
                         return;
                     }
                     subscription = after.subscription;
-                    let Some(wait) = waits.next() else { return };
-                    tokio::time::sleep(jittered(wait)).await;
+                    let schedule = &self.inner.config.retry_schedule;
+                    let Some(wait) = schedule.get(failures as usize).copied() else {
+                        self.finish(&id, &event.id).await;
+                        return;
+                    };
+                    failures += 1;
+                    let wait = jittered(wait);
+                    let wake = Utc::now()
+                        + chrono::Duration::from_std(wait)
+                            .unwrap_or_else(|_| chrono::Duration::zero());
+                    self.keep(&id, &event.id, failures, wake + self.lease()).await;
+                    tokio::time::sleep(wait).await;
                 }
             }
         }
@@ -576,15 +840,58 @@ impl EdgeEvents {
         let events_handle = self.clone();
         tokio::spawn(async move {
             for retained in events {
-                events_handle.deliver(record.clone(), retained.event).await;
+                events_handle.deliver(record.clone(), retained.event, 0).await;
             }
         });
         Ok(accepted)
     }
 
-    fn page(&self, seq: u64, page: usize) -> Option<CatalogChangesPage> {
-        let pages = self.inner.pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        pages.get(&(seq, page)).map(|(_, page)| page.clone())
+    async fn page(&self, seq: u64, page: usize) -> StoreResult<Option<CatalogChangesPage>> {
+        if let Some((_, found)) = locked(&self.inner.pages).get(&(seq, page)) {
+            return Ok(Some(found.clone()));
+        }
+        self.inner.log.catalog_page(seq, page).await
+    }
+
+    /// Resumes the deliveries a stopped process left: each delivery whose lease passed is
+    /// taken from the log and attempted again where its retries stood, if its subscription
+    /// is still active and its event retained (spec 3.5 §7.5). Returns how many resumed.
+    ///
+    /// [`AwpEdge::spawn_delivery_resumer`](super::AwpEdge::spawn_delivery_resumer) calls it
+    /// on an interval.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`] when the log cannot be read.
+    pub async fn resume_deliveries(&self) -> StoreResult<usize> {
+        let mut resumed = 0;
+        for delivery in self.inner.log.claim_deliveries(Utc::now(), self.lease()).await? {
+            let Some(retained) = self.inner.log.event(&delivery.event_id).await? else {
+                self.finish(&delivery.subscription, &delivery.event_id).await;
+                continue;
+            };
+            let record = self
+                .inner
+                .subscriptions
+                .active_for(&retained.event.event_type)
+                .await?
+                .into_iter()
+                .find(|record| record.subscription.id == delivery.subscription)
+                .filter(|record| admits(&retained, &record.owner));
+            let Some(record) = record else {
+                self.finish(&delivery.subscription, &delivery.event_id).await;
+                continue;
+            };
+            tracing::info!(
+                subscription.id = %delivery.subscription,
+                event.id = %delivery.event_id,
+                failures = delivery.failures,
+                "awp delivery resumed after a restart"
+            );
+            self.spawn_delivery(record, retained.event, delivery.failures);
+            resumed += 1;
+        }
+        Ok(resumed)
     }
 }
 
@@ -828,8 +1135,9 @@ async fn changes(
         Ok(_) => return refuse(ErrorCode::ResourceNotFound, "no such page"),
         Err(error) => return store_failed(&error),
     }
-    match events.page(seq, page) {
-        Some(page) => awp_json(StatusCode::OK, &page),
-        None => refuse(ErrorCode::ResourceNotFound, "no such page"),
+    match events.page(seq, page).await {
+        Ok(Some(page)) => awp_json(StatusCode::OK, &page),
+        Ok(None) => refuse(ErrorCode::ResourceNotFound, "no such page"),
+        Err(error) => store_failed(&error),
     }
 }

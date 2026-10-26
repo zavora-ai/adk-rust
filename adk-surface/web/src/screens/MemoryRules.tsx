@@ -15,7 +15,7 @@ import { phoneLabels } from "../phone/labels";
 import { RECORD_READ, recentLines } from "../record";
 import { dateValue, earliestExtension, endOfDay, ended, ruleSentence, suggestedExtension } from "../rules";
 import type { AgentSpend, Device, MemoryFact, PairingIssued, RecordCheck, RecordLine, Seams, TidyUp } from "../seams";
-import { onThisDevice, typedWindow } from "../away";
+import { agentOf, onThisDevice, typedWindow } from "../away";
 import { areaName, kernelMode, limitValue, modeOf, modeValue, quietValue, windowText } from "../settings";
 
 const provenance = {
@@ -53,7 +53,7 @@ export function MemoryRules({
       </h1>
       <p className="subhead subhead-memory">{labels.memorySubhead}</p>
       <div className="memory-grid">
-        <Remember seams={seams} />
+        <Remember seams={seams} agents={agents} />
         <CanDo client={client} status={status} areas={areas} agents={agents} seams={seams} onChanged={onChanged} />
         <Did client={client} agents={agents} seams={seams} />
       </div>
@@ -61,7 +61,7 @@ export function MemoryRules({
   );
 }
 
-function Remember({ seams }: { seams: Seams }) {
+function Remember({ seams, agents }: { seams: Seams; agents: AgentRow[] }) {
   const [facts, setFacts] = useState<MemoryFact[]>([]);
   // The agents keep long-term memory: the kernel's memory route has a book to read.
   const [kept, setKept] = useState(true);
@@ -133,7 +133,9 @@ function Remember({ seams }: { seams: Seams }) {
               <p className="fact-text">{fact.text}</p>
               <p className="fact-meta">
                 <Pill kind={provenance[fact.provenance].kind}>{provenance[fact.provenance].text}</Pill>
-                {fact.provenance === "aGuess" && fact.noticedBy && <span>{labels.noticedThis(fact.noticedBy)}</span>}
+                {fact.provenance === "aGuess" && fact.noticedBy && (
+                  <span>{labels.noticedThis(agentOf(fact.noticedBy, agents) ?? fact.noticedBy)}</span>
+                )}
               </p>
               {/* Every fact can be fixed or forgotten; only a guess can be confirmed. */}
               {memory && fixing !== fact.id && (
@@ -227,8 +229,11 @@ function CanDo({
   useEffect(() => {
     void load();
   }, [client]);
-  // Spending is read with the areas' settings, so an agent's spend and its area's "spent
-  // today" come from the same moment of the kernel's daily totals.
+  // Spending is read again when an area's "spent today" moves, so an agent's spend and its
+  // area's total come from the same moment of the kernel's daily totals. The read lists every
+  // process the kernel has run, so the areas' poll alone, which brings the same totals in a new
+  // list, never repeats it.
+  const spentKey = areas?.map((entry) => `${entry.partition}:${entry.spentToday}`).join(",") ?? "";
   useEffect(() => {
     let live = true;
     void roster
@@ -238,7 +243,7 @@ function CanDo({
     return () => {
       live = false;
     };
-  }, [roster, areas]);
+  }, [roster, spentKey]);
 
   /** "Extend": moves a rule's end later, then shows what it was and is (spec 3.3 §8.1). */
   async function extend(rule: StandingRule, until: Date): Promise<boolean> {
@@ -292,6 +297,12 @@ function CanDo({
   }
 
   const allowed = (rules ?? []).filter(allows);
+  // What was spent in an area the kernel does not list, such as its own upkeep in `default`
+  // beside configured areas: no area's roster shows it, so it has a list of its own.
+  const listed = new Set(kernelAreas?.map((entry) => entry.partition) ?? []);
+  const outside = kernelAreas
+    ? (spending ?? []).filter((entry) => !listed.has(entry.area)).map((entry) => ({ ...entry, area: "" }))
+    : [];
   const current = area?.mode ? modeOf(area.mode) : status?.mode?.mode;
   // Quiet time on this device's clock: the kernel keeps a window without an offset in the
   // server's time zone (spec 3.3 §5.1).
@@ -456,6 +467,9 @@ function CanDo({
           label={area && areaName(area.partition) ? labels.agentsTodayIn(areaName(area.partition)!) : labels.agentsToday}
         />
       )}
+      {outside.some((entry) => entry.spentToday > 0) && (
+        <AreaRoster agents={areaAgents("", outside, agents, false)} label={labels.outsideAreas} />
+      )}
     </section>
   );
 }
@@ -489,6 +503,7 @@ function RuleRow({
   const textId = useId();
   const field = useId();
   const now = new Date();
+  // Set again each time Extend opens, so it offers thirty days past the rule's end as it is then.
   const [value, setValue] = useState(() => dateValue(suggestedExtension(rule, now)));
   const min = dateValue(earliestExtension(rule, now));
   const until = endOfDay(value);
@@ -539,7 +554,15 @@ function RuleRow({
             {end ? (ended(rule, now) ? labels.endedOn(dayMonth(end)) : labels.until(dayMonth(end))) : labels.noEndDate}
           </span>
           {end && canExtend && (
-            <button type="button" className="link link-accent" aria-describedby={textId} onClick={onExtend}>
+            <button
+              type="button"
+              className="link link-accent"
+              aria-describedby={textId}
+              onClick={() => {
+                setValue(dateValue(suggestedExtension(rule, new Date())));
+                onExtend();
+              }}
+            >
               {labels.extend}
             </button>
           )}

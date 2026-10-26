@@ -1,21 +1,25 @@
 //! Durable edge stores: SQLite, PostgreSQL and Redis implementations of `adk-awp`'s six edge
-//! store traits (spec 3.5 §7.9).
+//! store traits, the edge's [`EventLog`](crate::awp::EventLog) and its
+//! [`BeaconStore`](crate::awp::BeaconStore) (spec 3.5 §7.5, §7.9, §7.12).
 //!
 //! | Backend | Feature | Atomic steps |
 //! |---------|---------|--------------|
-//! | [`SqliteEdgeStores`] | `awp-sqlite` | `INSERT … ON CONFLICT DO NOTHING` for every create and idempotency `begin`; compare-and-set `UPDATE`s for subscriptions, held calls and outcomes |
+//! | [`SqliteEdgeStores`] | `awp-sqlite` | `INSERT … ON CONFLICT DO NOTHING` for every create and idempotency `begin`; compare-and-set `UPDATE`s for subscriptions, held calls and outcomes; `UPDATE … RETURNING` to claim due deliveries; upserts that add to beacon counts |
 //! | `PostgresEdgeStores` | `awp-postgres` | The same statements, shared by every edge replica |
-//! | `RedisEdgeStores` | `awp-redis` | `HSETNX` creates, a compare-and-set Lua script, and `SET … GET` for the status |
+//! | `RedisEdgeStores` | `awp-redis` | `HSETNX` creates, compare-and-set and claim Lua scripts, `HINCRBY` counts, and `SET … GET` for the status |
 //!
 //! Each backend implements [`SubscriptionStore`](adk_awp::v2::store::SubscriptionStore),
 //! [`ConsentReceiptStore`](adk_awp::v2::store::ConsentReceiptStore),
 //! [`StatusStore`](adk_awp::v2::store::StatusStore),
 //! [`HeldCallStore`](adk_awp::v2::store::HeldCallStore),
-//! [`LeadStore`](adk_awp::v2::store::LeadStore) and
-//! [`IdempotencyStore`](adk_awp::v2::store::IdempotencyStore), passes
-//! `adk_awp::edge_store_conformance_tests!`, and keeps one site's records under its `site`
-//! namespace, so several sites share one database (spec 3.5 A-I22). Records are stored as JSON
-//! beside the columns queries select on, so they read back exactly as written.
+//! [`LeadStore`](adk_awp::v2::store::LeadStore),
+//! [`IdempotencyStore`](adk_awp::v2::store::IdempotencyStore),
+//! [`EventLog`](crate::awp::EventLog) and [`BeaconStore`](crate::awp::BeaconStore), passes
+//! `adk_awp::edge_store_conformance_tests!` and
+//! [`edge_log_conformance_tests!`](crate::edge_log_conformance_tests), and keeps one site's
+//! records under its `site` namespace, so several sites share one database (spec 3.5 A-I22).
+//! Records are stored as JSON beside the columns queries select on, so they read back exactly
+//! as written. `edge_stores()` hands the edge all eight.
 
 use adk_awp::v2::store::StoreError;
 

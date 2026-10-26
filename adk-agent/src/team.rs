@@ -1573,6 +1573,9 @@ impl Agent for TeamMemberAgent {
     }
 
     fn configure_run(&self, _agent_name: &str, config: &mut RunConfig) {
+        // The member applies its own run policy first, such as a harness's governed layer;
+        // the team's transfer targets and delegation tools then take precedence over it.
+        self.agent.configure_run(&self.name, config);
         let handoff_targets: Vec<String> = self
             .relationships
             .iter()
@@ -2932,6 +2935,59 @@ mod tests {
             relationship.kind == adk_core::AgentRelationshipKind::Handoff
                 && relationship.from == "supervisor"
         }));
+    }
+
+    /// A member that sets its own run policy, as a governed harness does in `configure_run`.
+    struct PolicyAgent(String);
+
+    #[async_trait]
+    impl Agent for PolicyAgent {
+        fn name(&self) -> &str {
+            &self.0
+        }
+
+        fn description(&self) -> &str {
+            "applies its own run policy"
+        }
+
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+
+        fn configure_run(&self, _agent_name: &str, config: &mut RunConfig) {
+            config.history_max_events = Some(7);
+            config.transfer_targets = vec!["anywhere".to_string()];
+        }
+
+        async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+            Ok(Box::pin(stream! { yield Ok(Event::new("policy")); }))
+        }
+    }
+
+    /// A member's own `configure_run` applies to its runs, and the team's transfer targets
+    /// still take precedence (spec 3.5 §7.19: a harness member runs governed).
+    #[test]
+    fn a_member_applies_its_own_run_policy_under_the_teams() {
+        let team = valid_spec()
+            .compile(vec![
+                Arc::new(PolicyAgent("supervisor".into())) as Arc<dyn Agent>,
+                Arc::new(PolicyAgent("billing".into())),
+                Arc::new(StubAgent("technical".into())),
+            ])
+            .unwrap();
+        let mut coordinator = RunConfig::default();
+        team.configure_run("support_team", &mut coordinator);
+        assert_eq!(coordinator.history_max_events, Some(7));
+        assert_eq!(coordinator.transfer_targets, ["billing", "technical"]);
+
+        let mut billing = RunConfig::default();
+        team.configure_run("billing", &mut billing);
+        assert_eq!(billing.history_max_events, Some(7));
+        assert!(billing.transfer_targets.is_empty(), "billing hands off to no one");
+
+        let mut technical = RunConfig::default();
+        team.configure_run("technical", &mut technical);
+        assert_eq!(technical.history_max_events, None, "a member without a policy adds none");
     }
 
     #[test]

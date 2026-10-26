@@ -3,6 +3,7 @@
  * phone shell adds. The service worker repeats the two wake-up words; a test keeps them equal.
  */
 import * as words from "../generated/words";
+import { labels } from "../labels";
 
 export const phoneLabels = {
   decisions: words.DECISIONS,
@@ -26,6 +27,16 @@ export const phoneLabels = {
   waitingForYou: words.WAITING_FOR_YOU,
   whileYouWereAway: words.WHILE_YOU_WERE_AWAY,
   whatYourAgentsRemember: words.WHAT_YOUR_AGENTS_REMEMBER,
+  takeOver: words.TAKE_OVER,
+  takeOverDone: words.TAKE_OVER_DONE,
+  // The home's words for what a take over asks, so both say the same.
+  asksFor: labels.asksFor,
+  aOneTimeCode: labels.aOneTimeCode,
+  aPassword: labels.aPassword,
+  aSecret: labels.aSecret,
+  forResource: labels.forResource,
+  typeItHere: labels.typeItHere,
+  secretGoesToTheCall: labels.secretGoesToTheCall,
   // The shell's own.
   back: "Decisions",
   theExactCommand: "The exact command",
@@ -47,6 +58,11 @@ export const phoneLabels = {
   done: "Go to Decisions",
   signOut: "Sign out",
   showFullCommand: "Show the full command",
+  wholeCommandShown: "The whole command is shown.",
+  couldNotRead: (why: string) => `Decisions could not be read: ${why}`,
+  pairingEnded: "This phone's pairing ended or it was removed in the home. Pair it again to see decisions here.",
+  pairAgain: "Pair this phone again",
+  notificationsBlocked: "this browser or the phone's settings block them. Turn them on in Settings, then tap Allow notifications in Memory",
   passkeyNotUsed: "Your face or fingerprint was not checked. Tap the answer again to try once more.",
   passkeyNotSetUp: "The passkey was not set up. Try again.",
   // The home's pairing and passkey rows (spec 3.3 §8.3).

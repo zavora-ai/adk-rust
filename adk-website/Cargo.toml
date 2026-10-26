@@ -37,12 +37,19 @@ adk-devtools.workspace = true
 # The sequential analysis of the site's experiments (spec 3.5 §7.12).
 adk-eval = { workspace = true, features = ["experiments"] }
 # The website runtime: preset, toolsets, partitions, ladder, onboarding machinery (WP I).
-adk-harness = { workspace = true, features = ["website"] }
+adk-harness = { workspace = true, features = ["website", "sqlite"] }
 adk-kernel = { workspace = true, features = ["charter", "channels"] }
-adk-payments = { workspace = true, features = ["wallet"] }
+# The wallet, and the AP2 merchant side the site takes payments with (spec 3.5 §7.5, §7.14).
+adk-payments = { workspace = true, features = ["wallet", "ap2"] }
+# The AP2 desk's in-memory evidence journal, for tests and sandboxes.
+adk-artifact.workspace = true
 # `WorkflowExecutor` for the site's deterministic jobs (spec 3.5 §7.20); the agent edge and
 # its SQLite stores (spec 3.5 §7.9), whose beacon counts experiments and KPIs read (§7.12).
 adk-server = { workspace = true, features = ["background", "awp", "awp-sqlite"] }
+# The back office's runners, which the served kernel hosts (spec 3.5 §7.19, §7.22).
+adk-runner.workspace = true
+# The context the owner's channel runs the back office's media intake in (spec 3.5 S18).
+adk-tool.workspace = true
 adk-session = { workspace = true, features = ["sqlite"] }
 # Migration sources, freeze, quarantine and probes for onboarding and the Guardian (§7.8).
 adk-site = { workspace = true, features = ["migrate"] }
@@ -61,6 +68,8 @@ zeroize = "1.8.2"
 scraper = "0.25"
 # JSON Schema of the owner's views, for the surfaces' generated types (spec 3.5 §7.16 `ui`).
 schemars = { version = "1.0", features = ["chrono04"] }
+# Advisory version ranges against the edge's lockfile (spec 3.5 §7.20, S10).
+semver = "1"
 serde.workspace = true
 # The edge's SQLite stores in a served project (spec 3.5 §7.9).
 sqlx = { workspace = true, features = ["sqlite"] }
@@ -80,8 +89,6 @@ uuid.workspace = true
 # manifest. `anthropic` for the live onboarding interview.
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic"] }
 adk-skill = { path = "../adk-skill" }
-# `SimpleToolContext` for calling the Guardian's edge tool directly.
-adk-tool = { path = "../adk-tool" }
 dotenvy = "0.15"
 futures.workspace = true
 proptest = "1.5"

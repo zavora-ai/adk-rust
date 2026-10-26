@@ -152,9 +152,10 @@ fn record(wallet: &str, key: &str, category: SpendCategory, at: DateTime<Utc>) -
     }
 }
 
-/// Checks a [`WalletStore`]: one payment per wallet and key, updates by id, queries by
-/// state, category and window, pauses kept until resumed, and no wallet reading
-/// another's payments or pauses (A-I22).
+/// Checks a [`WalletStore`]: one payment per wallet and key, updates by id, a
+/// compare-and-set that lets exactly one of concurrent decisions on a held payment through
+/// (A-I16), queries by state, category and window, pauses kept until resumed, and no wallet
+/// reading another's payments or pauses (A-I22).
 ///
 /// # Panics
 ///
@@ -204,6 +205,56 @@ pub async fn wallet_store_conformance(store: &dyn WalletStore) {
     let mut ghost = record(&wallet, "key-ghost", SpendCategory::Models, now);
     ghost.id = "never-stored".to_string();
     assert!(store.update(&ghost).await.is_err(), "updating an unknown payment fails");
+    assert!(
+        store.update_if(&ghost, PaymentState::Held).await.is_err(),
+        "a compare-and-set on an unknown payment fails"
+    );
+
+    // Decisions racing on one held payment: approvals moving it to executing, rejections
+    // moving it to rejected. Exactly one moves it; the store keeps that one.
+    let decided = format!("wallet-c-{suffix}");
+    let waiting = record(&decided, "key-decide", SpendCategory::Hosting, now);
+    store.insert(waiting.clone()).await.expect("insert");
+    let decisions: Vec<PaymentRecord> = (0..8)
+        .map(|n| PaymentRecord {
+            state: if n % 2 == 0 { PaymentState::Executing } else { PaymentState::Rejected },
+            description: format!("decision {n}"),
+            ..waiting.clone()
+        })
+        .collect();
+    let outcomes = futures::future::join_all(
+        decisions.iter().map(|decision| store.update_if(decision, PaymentState::Held)),
+    )
+    .await;
+    let moved: Vec<usize> = outcomes
+        .into_iter()
+        .enumerate()
+        .filter_map(|(n, outcome)| outcome.expect("a compare-and-set is answered").then_some(n))
+        .collect();
+    assert_eq!(moved.len(), 1, "of concurrent decisions on one held payment exactly one proceeds");
+    assert_eq!(
+        store.get(&decided, &waiting.id).await.unwrap(),
+        Some(decisions[moved[0]].clone()),
+        "the store keeps the decision that proceeded"
+    );
+    assert!(
+        !store.update_if(&waiting, PaymentState::Held).await.unwrap(),
+        "a payment no longer held is not replaced"
+    );
+    let mut settled_after = decisions[moved[0]].clone();
+    settled_after.state = PaymentState::Settled;
+    assert!(
+        store.update_if(&settled_after, decisions[moved[0]].state).await.unwrap(),
+        "a compare-and-set on the state the payment is in replaces it"
+    );
+    assert!(
+        store
+            .list(&PaymentQuery::new(&decided).state(PaymentState::Held))
+            .await
+            .unwrap()
+            .is_empty(),
+        "a payment moved by a compare-and-set leaves its old state's listing"
+    );
 
     let old = record(&wallet, "key-2", SpendCategory::Advertising, now - Duration::days(40));
     store.insert(old.clone()).await.expect("insert");

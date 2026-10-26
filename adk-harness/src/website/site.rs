@@ -158,8 +158,12 @@ enum ChainVote {
 ///
 /// | The charter | What decides |
 /// |---|---|
-/// | names an approval chain for the action class | the people who hold its roles, each a distinct person and none the proposer, recorded with [`approve`](Self::approve) |
+/// | names an approval chain for the action class | the people who hold its roles, each a distinct person and none the proposer, recorded with [`record_approval`](Self::record_approval) or [`approve`](Self::approve) |
 /// | names none | the governed path: the call ran because the job's level allowed it or the owner approved it, recorded as [`GOVERNED_APPROVER`] |
+///
+/// A vote that cannot count — an agent's, one in a role its voter does not hold in the
+/// charter in force, the proposer's own — is refused and never reaches the chain check, so
+/// it cannot hold up the votes of the people who can approve.
 pub struct SiteApprovals {
     site: Uuid,
     charters: Option<Arc<dyn CharterStore>>,
@@ -177,17 +181,51 @@ impl SiteApprovals {
         Self { site, charters, votes: Mutex::new(BTreeMap::new()) }
     }
 
-    /// Records a person's approval of the preview `digest` in `approval.role`.
+    /// Records a person's approval of the preview `digest` in `approval.role`; a vote that
+    /// cannot count (see [`record_approval`](Self::record_approval)) is dropped with a
+    /// warning.
     pub async fn approve(&self, digest: &Digest, approval: RoleApproval) {
+        if let Err(error) = self.record_approval(digest, approval).await {
+            tracing::warn!(error = %error, website.release.preview = %digest, "an approval that cannot count was not recorded");
+        }
+    }
+
+    /// Records a person's approval of the preview `digest` in `approval.role` (spec 3.5
+    /// A-I23).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let editor = RoleApproval::new(Role::Editor, SubjectRef::human("amina"), Utc::now());
+    /// runtime.approvals().record_approval(&preview.staged.digest, editor).await?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// `Forbidden` for an agent's vote, and for a vote in a role its voter does not hold in
+    /// the charter in force; the charter store's error.
+    pub async fn record_approval(&self, digest: &Digest, approval: RoleApproval) -> Result<()> {
+        let governance = self.governing().await?;
+        if let Some(reason) = vote_refusal(governance.as_ref(), &approval, None) {
+            return Err(AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::Forbidden,
+                "website.approval.refused",
+                format!("the approval cannot count: {reason} (spec 3.5 A-I23)"),
+            ));
+        }
         self.votes
             .lock()
             .await
             .entry(digest.clone())
             .or_default()
             .push(ChainVote::Approve(approval));
+        Ok(())
     }
 
-    /// Records a person's refusal of the preview `digest`.
+    /// Records a person's refusal of the preview `digest`. Only a person holding a role of
+    /// the release's chain can refuse it; anyone else's refusal is ignored when the release
+    /// is decided.
     pub async fn reject(&self, digest: &Digest, by: &SubjectRef, reason: &str) {
         self.votes
             .lock()
@@ -197,13 +235,38 @@ impl SiteApprovals {
             .push(ChainVote::Reject { by: by.id.clone(), reason: reason.to_string() });
     }
 
-    async fn governance(&self, action_class: &str) -> Result<Option<Governance>> {
+    /// The governance of the charter in force, when the runtime knows the charters.
+    async fn governing(&self) -> Result<Option<Governance>> {
         let Some(charters) = &self.charters else { return Ok(None) };
         let current = charters.current(self.site).await.map_err(kernel_error)?;
-        Ok(current.map(|version| version.charter.governance).filter(|governance| {
+        Ok(current.map(|version| version.charter.governance))
+    }
+
+    async fn governance(&self, action_class: &str) -> Result<Option<Governance>> {
+        Ok(self.governing().await?.filter(|governance| {
             governance.approval_chains.iter().any(|chain| chain.action.as_str() == action_class)
         }))
     }
+}
+
+/// Why `approval` cannot count towards a chain under `governance`: an agent's vote, a role
+/// the voter does not hold, or the proposer's own vote (spec 3.5 A-I23). `None` when it can.
+fn vote_refusal(
+    governance: Option<&Governance>,
+    approval: &RoleApproval,
+    proposer: Option<&str>,
+) -> Option<String> {
+    let who = &approval.principal;
+    if super::is_agent(who) {
+        return Some(format!("{} is not a person, and no agent holds a role", who.id));
+    }
+    if governance.is_some_and(|governance| !governance.holds(&who.id, approval.role)) {
+        return Some(format!("{} does not hold the {:?} role", who.id, approval.role));
+    }
+    if proposer == Some(who.id.as_str()) {
+        return Some(format!("{} proposed it, so cannot also approve it", who.id));
+    }
+    None
 }
 
 #[async_trait]
@@ -221,19 +284,39 @@ impl ApprovalGate for SiteApprovals {
         };
         let votes =
             self.votes.lock().await.get(&request.preview_digest).cloned().unwrap_or_default();
-        if let Some(ChainVote::Reject { by, reason }) =
-            votes.iter().find(|vote| matches!(vote, ChainVote::Reject { .. }))
-        {
+        let action = awp_types::ActionClass::from(request.action_class.as_str());
+        let chain_roles: Vec<awp_types::Role> = governance
+            .approval_chains
+            .iter()
+            .find(|chain| chain.action == action)
+            .map(|chain| chain.roles.clone())
+            .unwrap_or_default();
+        // Only a person holding a role of the chain refuses a release.
+        if let Some(ChainVote::Reject { by, reason }) = votes.iter().find(|vote| match vote {
+            ChainVote::Reject { by, .. } => {
+                !adk_kernel::charter::is_agent_principal(by)
+                    && chain_roles.iter().any(|role| governance.holds(by, *role))
+            }
+            ChainVote::Approve(_) => false,
+        }) {
             return Ok(ApprovalDecision::Rejected { by: by.clone(), reason: reason.clone() });
         }
+        // A vote that cannot count is left out, so it never holds up the chain (A-I23).
         let approvals: Vec<RoleApproval> = votes
             .into_iter()
             .filter_map(|vote| match vote {
-                ChainVote::Approve(approval) => Some(approval),
+                ChainVote::Approve(approval) => {
+                    match vote_refusal(Some(&governance), &approval, Some(&request.proposer)) {
+                        None => Some(approval),
+                        Some(reason) => {
+                            tracing::info!(website.release.preview = %request.preview_digest, reason = %reason, "an approval that cannot count is left out");
+                            None
+                        }
+                    }
+                }
                 ChainVote::Reject { .. } => None,
             })
             .collect();
-        let action = awp_types::ActionClass::from(request.action_class.as_str());
         match check_chain(&governance, &action, &approvals, Some(&request.proposer)) {
             Ok(()) => Ok(ApprovalDecision::Approved {
                 approvers: approvals.iter().map(|a| a.principal.id.clone()).collect(),

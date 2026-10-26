@@ -132,7 +132,7 @@ happens only here or on a paired local terminal (§11 S-I10).
 
 | Section | What it shows | Where it reads it |
 |---|---|---|
-| **Threads** | The roster (avatar, name, status word), the selected agent's thread with its decisions inline on their own background, **Decisions** with a filled count badge, **Coming up** (today's times, and the day for what comes later in the week, so a weekday routine seen on a Saturday reads "Mon 09:00"). A thread follows one conversation: the session the agent's row names when it is first shown, or a new one, kept for the tab. A decision of another session, opened from **Decisions** or **Today**, shows in that session's thread with "A decision from another conversation" and **Back to your conversation**, and no message box; the thread still follows its own conversation | `GET /surface/agents`, the session feed, `GET /surface/decisions`, the kernel's processes and agenda |
+| **Threads** | The roster (avatar, name, status word), the selected agent's thread with its decisions inline on their own background, **Decisions** with a filled count badge, **Coming up** (today's times, and the day for what comes later in the week, so a weekday routine seen on a Saturday reads "Mon 09:00"; numbered weekdays are read as the kernel runs them, 1 for Sunday to 7 for Saturday, so `1-5` is Sunday to Thursday and `MON-FRI` is Monday to Friday). A thread follows one conversation: the session the agent's row names when it is first shown, or a new one, kept for the tab. A decision of another session, opened from **Decisions** or **Today**, shows in that session's thread with "A decision from another conversation" and **Back to your conversation**, and no message box; the thread still follows its own conversation | `GET /surface/agents`, the session feed, `GET /surface/decisions`, the kernel's processes and agenda |
 | **Today** | "While you were away": spent, quiet time, how many things wait, one line per event since you last marked it seen with a status pill, its actions and its record, **Mark as seen**, and today's routines with **Add a routine** | `GET /kernel/away`, `GET /kernel/away/lines/{seq}`, `POST /kernel/away/seen`, `GET /kernel/settings`, the kernel's agenda; **Do it** and **Not now** answer a suggestion through `POST /kernel/agenda/{id}/approve` or `reject`. Without a kernel ledger, `GET /surface/briefing` |
 | **Memory & rules** | "Agent Memory and Rules": **What your agents remember**, **What your agents can do** and **What your agents did**, as bordered lists | `GET /kernel/memory` and its corrections; `GET /rules` with **Extend** (`POST /rules/{id}/extend`) and **Stop allowing**; `GET /kernel/settings` and its changes; each agent's spend from `GET /kernel/processes`; `GET /kernel/record` and `GET /kernel/record/check`, or `GET /surface/briefing` without a signed record; **Where you can say yes from** from `GET /kernel/devices` and `GET /kernel/channels`, with **Remove**, **Add a phone or app** (a pairing code from `POST /kernel/pairing`) and **Pair a chat account** (`POST /kernel/channels/pair`) when the kernel pairs devices |
 
@@ -225,7 +225,9 @@ extend.
 Below the settings, each area lists its agents, with their avatar, status word and what each
 spent today, from the same daily totals as the area's "spent today", so they add up to it
 (spec 3.3 §12 phase 4). The kernel's own upkeep — tidying notes, checking what agents do — is
-one line, shown when it spent something.
+one line, shown when it spent something. What was spent in an area the kernel does not list —
+its own upkeep runs in `default`, which a partition table without it leaves out — is listed
+under **Spent outside your areas today**, so nothing the kernel spent goes unshown.
 
 ### What your agents did
 
@@ -234,16 +236,21 @@ its signed record (`GET /kernel/record/check`): with every action signed, "All 1
 and nothing has been changed or deleted." The log signs a checkpoint after 256 actions, or on
 its next action a minute after the last, so the newest actions can wait for their signature:
 the page then says how many are not signed yet, and that the check can't vouch for them until
-they are — as `adk-rust audit verify` reports them `unanchored` — never that anything was
-changed. Any other failure reads "Something on record was changed or deleted.", with the
-check's words under **Details**. **Check again** runs it again.
+they are, never that anything was changed. These are the records `adk-rust audit verify`
+reports as its unsigned tail, after its last verified checkpoint; before the log's first
+checkpoint it also fails them as `unanchored`. Any other failure reads "Something on record was
+changed or deleted.", with the check's words under **Details**. **Check again** runs it again.
 
-The latest actions are sentences from the record's lines (`GET /kernel/record`): an answer
-and where it was given ("You said yes to send_email, from Telegram."), a rule allowed, extended
-or stopped, a stop or resume, an agent's tool call ("ADK-Rust used write_file."), and the
-person's corrections and settings, which the kernel's records name. Housekeeping and messages
-are left out of the list, though the check counts them. A server without a signed record shows
-the latest lines of the activity ledger instead.
+The latest actions are sentences from the record's lines (`GET /kernel/record`): an answer,
+whose call it was and where it was given ("You let Finance use send_email, from Telegram.",
+"You said no to write_file, from the tray."), a rule that allows or refuses a call made,
+extended or stopped, a stop or resume, an agent's tool call ("ADK-Rust used write_file."), and
+the person's corrections and settings, which the kernel's records name. A paired device is
+named by its name, never its id. Each answer is listed once: a chat thread's tap is recorded
+before and after it decides, and an answer that came after the decision was made, which changed
+nothing, is left out. Housekeeping and messages are left out of the list, though the check
+counts them. A server without a signed record shows the latest lines of the activity ledger
+instead.
 
 `adk-rust up --mode ask` on `claude-sonnet-5-5`, after a session that left three facts, a
 rule for `write_file` within `notes/` extended from the home, one write it covered, **Stop
@@ -310,7 +317,8 @@ Every card is drawn from its inbox entry (spec 3.3 §7.1, §11 S-I1) and answers
 | ![Take over: the bank's one-time code](../images/surfaces/web-take-over-light.png) | ![Take over, dark](../images/surfaces/web-take-over-dark.png) |
 
 Every command carries how it was given — keyboard, pointer or touch — and the engine writes it
-to the audit record, so **What your agents did** can say "You let Finance send one email".
+to the audit record with the surface and, for an answer, the agent whose call it was
+(`actingAgent`), so **What your agents did** can say "You let Finance use send_email".
 
 ## Light, dark, keyboard and phone
 

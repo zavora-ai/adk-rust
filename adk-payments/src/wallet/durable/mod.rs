@@ -2,9 +2,9 @@
 //! and paused categories survive process loss and are shared by every instance (spec 3.5
 //! §7.14, A-I16).
 //!
-//! | Backend | Feature | Insert-if-absent and resume |
-//! |---------|---------|-----------------------------|
-//! | [`SqliteWalletStore`] | `sqlite` | One `INSERT … ON CONFLICT DO NOTHING` on the wallet and key; one `DELETE … RETURNING` |
+//! | Backend | Feature | Insert-if-absent, compare-and-set and resume |
+//! |---------|---------|----------------------------------------------|
+//! | [`SqliteWalletStore`] | `sqlite` | One `INSERT … ON CONFLICT DO NOTHING` on the wallet and key; one `UPDATE … WHERE state = $expected`; one `DELETE … RETURNING` |
 //! | [`PostgresWalletStore`] | `postgres` | The same statements, shared by every replica |
 //! | [`RedisWalletStore`] | `redis` | One Lua script each, which Redis runs atomically |
 //!

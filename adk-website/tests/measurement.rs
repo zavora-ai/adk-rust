@@ -300,6 +300,37 @@ async fn verified_callers_are_agent_calls() {
     assert_eq!(read("agent_calls:get_quote").await, Some(3.0));
 }
 
+/// Verified agent discovery — the edge's `awp.request.verified` records of card and manifest
+/// fetches — counts by surface (spec 3.5 §7.12).
+#[tokio::test]
+async fn verified_discovery_is_counted_by_surface() {
+    let site = Uuid::new_v4();
+    let counts = Arc::new(InMemoryBeaconStore::new());
+    let inner = InMemoryAuditRecorder::new();
+    let clock = ManualClock::new(day(24) + chrono::Duration::hours(10));
+    let meter = EdgeMeter::new(Arc::new(inner.clone()), counts.clone()).with_clock(Arc::new(clock));
+    for surface in ["agent_card", "manifest", "manifest", "mcp_server_card"] {
+        let draft =
+            AuditRecordDraft::new(AuditRecordKind::Other("awp".into()), "awp.request.verified")
+                .ext("awp.surface", json!(surface))
+                .ext("awp.tier", json!("known"));
+        meter.record(draft).await.unwrap();
+    }
+    let unnamed =
+        AuditRecordDraft::new(AuditRecordKind::Other("awp".into()), "awp.request.verified");
+    meter.record(unnamed).await.unwrap();
+    assert_eq!(inner.records().len(), 5, "every record reaches the trail");
+    let agents = AgentSearchKpi::new(site, counts);
+    let read = |metric: &'static str| {
+        let agents = agents.clone();
+        async move { agents.read(site, metric, day(24), day(25)).await.unwrap() }
+    };
+    assert_eq!(read("agent_discovery").await, Some(4.0));
+    assert_eq!(read("agent_discovery:manifest").await, Some(2.0));
+    assert_eq!(read("agent_discovery:agent_card").await, Some(1.0));
+    assert_eq!(read("calls").await, Some(0.0), "discovery is not a call");
+}
+
 /// Ledgered outcomes by label, the kill switch's refusal apart (spec 3.5 §7.12).
 #[tokio::test]
 async fn the_action_ledger_meter_labels_outcomes() {

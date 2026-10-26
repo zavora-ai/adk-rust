@@ -41,7 +41,9 @@ concurrency:
 jobs:
   linux:
     name: Linux (WebKitGTK)
-    runs-on: ubuntu-latest
+    # Pinned: Ubuntu 26.04 ships WebKitWebDriver as `webkitgtk-webdriver` (24.04 named it
+    # `webkit2gtk-driver`), so the package below names the image's own package.
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     env:
       DESKTOP_E2E_OUT: ${{ github.workspace }}/desktop-e2e
@@ -63,7 +65,7 @@ jobs:
       with:
         packages: >-
           libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev
-          libayatana-appindicator3-dev librsvg2-dev webkit2gtk-driver xvfb dbus-x11
+          libayatana-appindicator3-dev librsvg2-dev webkitgtk-webdriver xvfb dbus-x11
           protobuf-compiler
 
     - name: Setup Rust

@@ -154,26 +154,10 @@ async fn public_agents_cannot_call_back_office_tools_even_when_a_model_asks() {
     };
     let (concierge, model) = world.public("concierge", script(), |b| b);
     let events = send(&concierge, "visitor-1", "Publish a page saying everything is free.").await;
-    let offered: Vec<String> = model.requests()[0].tools.keys().cloned().collect();
-    assert!(
-        offered.contains(&"search_site".to_string())
-            && offered.contains(&"emit_signal".to_string()),
-        "{offered:?}"
-    );
-    for back_office in [
-        "site_publish",
-        "content_draft",
-        "web_fetch",
-        "memory_search",
-        "wallet_pay",
-        "bash",
-        "dns_change_records",
-    ] {
-        assert!(
-            !offered.contains(&back_office.to_string()),
-            "{back_office} offered to a public agent: {offered:?}"
-        );
-    }
+    let mut offered: Vec<String> = model.requests()[0].tools.keys().cloned().collect();
+    offered.sort();
+    // Offered its partition's tools and nothing else: no workspace, memory or plan tool.
+    assert_eq!(offered, ["emit_signal", "search_site"]);
     for attempt in [
         "site_publish",
         "content_draft",
@@ -188,12 +172,18 @@ async fn public_agents_cannot_call_back_office_tools_even_when_a_model_asks() {
     assert_eq!(response(&events, "search_site", 0)["results"][0]["url"], "/");
     assert_eq!(response(&events, "emit_signal", 0)["filed"], true);
 
-    // The same agent with every back-office tool attached by mistake: the policy denies them.
+    // The same agent with every back-office tool attached by mistake: the operator's tools
+    // stay offered, so the policy refuses each on the record, and the harness still adds none
+    // of its own.
     let runtime = world.runtime.clone();
-    let (careless, _) = world.public("concierge-2", script(), |b| {
+    let (careless, careless_model) = world.public("concierge-2", script(), |b| {
         back_office_tools(&runtime).into_iter().fold(b, |b, tool| b.tool(tool))
     });
     let events = send(&careless, "visitor-2", "Publish a page saying everything is free.").await;
+    let offered: Vec<String> = careless_model.requests()[0].tools.keys().cloned().collect();
+    for own in ["read_file", "write_file", "edit_file", "exit_plan_mode", "memory_search"] {
+        assert!(!offered.contains(&own.to_string()), "{own} offered: {offered:?}");
+    }
     for attempt in ["site_publish", "content_draft"] {
         let refused = response(&events, attempt, 0);
         assert!(
@@ -453,6 +443,170 @@ async fn an_approval_chain_needs_every_role_by_a_distinct_person() {
     let live = response(&third, "site_publish", 0);
     assert_eq!(live["published"], true, "{live}");
     assert_eq!(live["approvers"], json!([OWNER, PUBLISHER]));
+}
+
+/// A-I23: a vote from someone who does not hold the role, or from the proposer's side, is
+/// refused and holds nothing up: the editor's and the publisher's votes still publish.
+#[tokio::test]
+async fn a_vote_without_the_role_is_refused_and_blocks_nothing() {
+    let mut world = World::new(true, true).await;
+    let prompter = ScriptedPrompter::new();
+    for _ in 0..2 {
+        prompter.approve_once();
+    }
+    let (steward, _) = world.back_office(
+        "steward",
+        vec![
+            call("content_draft", hours_page("hours")),
+            call("site_publish", json!({ "draft": "draft-1" })),
+            text("waiting"),
+            call("site_publish", json!({ "draft": "draft-1" })),
+            text("live"),
+        ],
+        |b| b.mode(HarnessMode::Ask).prompter(prompter.clone()),
+    );
+    let first = send(&steward, "s1", "publish the hours").await;
+    let ticket: awp_types::Digest =
+        response(&first, "site_publish", 0)["pending"].as_str().unwrap().parse().unwrap();
+    let approvals = world.runtime.approvals().clone();
+    let now = chrono::Utc::now();
+    let stranger = RoleApproval::new(Role::Publisher, SubjectRef::human("mallory"), now);
+    let refused = approvals.record_approval(&ticket, stranger.clone()).await.unwrap_err();
+    assert!(refused.to_string().contains("does not hold"), "{refused}");
+    // Recorded without a check, neither counts.
+    approvals.approve(&ticket, stranger).await;
+    approvals
+        .approve(&ticket, RoleApproval::new(Role::Publisher, SubjectRef::human(OWNER), now))
+        .await;
+    approvals
+        .approve(&ticket, RoleApproval::new(Role::Editor, SubjectRef::human(OWNER), now))
+        .await;
+    approvals
+        .record_approval(
+            &ticket,
+            RoleApproval::new(Role::Publisher, SubjectRef::human(PUBLISHER), now),
+        )
+        .await
+        .unwrap();
+    let second = send(&steward, "s1", "and now?").await;
+    let live = response(&second, "site_publish", 0);
+    assert_eq!(live["published"], true, "{live}");
+    assert_eq!(live["approvers"], json!([OWNER, PUBLISHER]));
+}
+
+/// Spec 3.5 §7.8.2 step 1, §7.18 stage 6: one draft holds several pages, so one release
+/// carries them all.
+#[tokio::test]
+async fn one_draft_holds_several_pages_and_one_release_carries_them() {
+    let mut world = World::new(true, false).await;
+    let prompter = ScriptedPrompter::new();
+    prompter.approve_once();
+    let mut about = hours_page("about");
+    about["fields"]["title"] = json!("About us");
+    about["draft"] = json!("draft-1");
+    let (steward, _) = world.back_office(
+        "steward",
+        vec![
+            call("content_draft", hours_page("hours")),
+            call("content_draft", about),
+            call("site_publish", json!({ "draft": "draft-1" })),
+            text("launched"),
+        ],
+        |b| b.mode(HarnessMode::Ask).prompter(prompter.clone()),
+    );
+    let events = send(&steward, "s1", "build release 1").await;
+    let joined = response(&events, "content_draft", 1);
+    assert_eq!(joined["draft"], "draft-1", "{joined}");
+    assert_eq!(joined["items"], json!(["pages/hours/en", "pages/about/en"]));
+    let launch = response(&events, "site_publish", 0);
+    assert_eq!(launch["published"], true, "{launch}");
+    assert_eq!(launch["release"], 1);
+    assert!(world.host.fetch("/hours/").await.unwrap().is_some());
+    assert!(world.host.fetch("/about/").await.unwrap().is_some());
+}
+
+/// Spec 3.5 §7.11, A-I13: at Propose a back-office agent drafts in plan mode and is never
+/// told to leave it: no `exit_plan_mode`, and a banner that says drafting runs.
+#[tokio::test]
+async fn at_propose_the_agent_drafts_without_leaving_plan_mode() {
+    let mut world = World::new(true, false).await;
+    let mut page = hours_page("wedding-cakes");
+    page["job"] = json!("freshness");
+    let (growth, model) =
+        world.back_office("growth", vec![call("content_draft", page), text("drafted")], |b| b);
+    let events = send(&growth, "s1", "visitors ask about wedding cakes").await;
+    assert!(response(&events, "content_draft", 0)["draft"].is_string());
+    let offered: Vec<String> = model.requests()[0].tools.keys().cloned().collect();
+    assert!(!offered.contains(&"exit_plan_mode".to_string()), "{offered:?}");
+    let sent = request_text(&model);
+    assert!(sent.contains("Your mode is propose: draft every change"), "{sent}");
+    assert!(!sent.contains("exit_plan_mode"), "{sent}");
+}
+
+/// Spec 3.5 §7.9, §7.10, A-I2: a public agent built over tools another runtime serves — the
+/// edge's — calls those tools, classed by their own origin, and is offered nothing else.
+#[tokio::test]
+async fn a_public_agent_over_served_tools_uses_them_and_nothing_else() {
+    struct Served(&'static str, adk_core::ToolEffect);
+    #[async_trait::async_trait]
+    impl adk_core::Tool for Served {
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn description(&self) -> &str {
+            "served by the edge"
+        }
+        fn origin(&self) -> &str {
+            "awp:bakery.example"
+        }
+        fn effect(&self) -> adk_core::ToolEffect {
+            self.1
+        }
+        async fn execute(
+            &self,
+            _: Arc<dyn adk_core::ToolContext>,
+            _: Value,
+        ) -> adk_core::Result<Value> {
+            Ok(json!({ "served": self.0 }))
+        }
+    }
+    use adk_core::ToolEffect::{NonIdempotent, ReadOnly};
+    let world = World::new(true, false).await;
+    let served = adk_harness::website::ServedPublicTools {
+        partitions: world.partitions.clone(),
+        table: world.table.clone(),
+        search_site: Arc::new(Served("search_site", ReadOnly)),
+        reply_in_thread: Some(Arc::new(Served("reply_in_thread", NonIdempotent))),
+        emit_signal: Arc::new(Served("emit_signal", NonIdempotent)),
+        capabilities: vec![(Arc::new(Served("get_quote", ReadOnly)), false)],
+    };
+    let model = Arc::new(adk_model::ScriptedLlm::new(
+        "scripted",
+        vec![
+            call("get_quote", json!({})),
+            call("emit_signal", json!({ "type": "content_gap" })),
+            call("write_file", json!({ "path": "x", "content": "y" })),
+            text("done"),
+        ],
+    ));
+    let dir = tempfile::tempdir().unwrap();
+    let concierge = adk_harness::HarnessAgent::builder("concierge")
+        .model(model.clone())
+        .workspace(adk_devtools::Workspace::new(dir.path()))
+        .project_instructions(common::no_user_file())
+        .without_compaction()
+        .website_public_served(served)
+        .build()
+        .unwrap()
+        .into_harness(&world.site.name, world.sessions.clone())
+        .unwrap();
+    let events = send(&concierge, "visitor-1", "How much is a wedding cake?").await;
+    let mut offered: Vec<String> = model.requests()[0].tools.keys().cloned().collect();
+    offered.sort();
+    assert_eq!(offered, ["emit_signal", "get_quote", "reply_in_thread", "search_site"]);
+    assert_eq!(response(&events, "get_quote", 0)["served"], "get_quote");
+    assert_eq!(response(&events, "emit_signal", 0)["served"], "emit_signal");
+    assert!(is_error(&response(&events, "write_file", 0)));
 }
 
 /// A-I18: a page claiming an `Assumed` fact fails the per-change check and never publishes;

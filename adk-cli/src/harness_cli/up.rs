@@ -76,6 +76,10 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     let UpArgs { home, bind, auth_token, store, mut harness, .. } = up;
     // The baseline pass's observations are worded by the harness's model (spec 3.2 §7.10).
     let phraser = Arc::new(LlmPhraser::new(model.llm.clone()));
+    // The realtime models the home's voice view offers a harness marked for voice (spec 3.3
+    // §5.6).
+    #[cfg(all(feature = "voice", feature = "surface"))]
+    let voice = crate::voice_cli::realtime_models(&model, harness.voice_script())?;
     // The personal preset's workspace is a folder under the home, so the current directory's
     // `.adk/harness.toml` plays no part (spec 3.3 §10 H1).
     let personal_home =
@@ -91,9 +95,34 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         };
         KernelSettings::resolve(user_config().as_deref(), &workspace)?
     };
-    let home = match home.or_else(|| settings.home.clone()) {
+    // The home every other command reads: `[kernel] home` in the user config, else the
+    // default; `--home` is this kernel's alone.
+    let shared_home = settings.home.clone().or_else(|| default_home().ok());
+    let home = match home.or_else(|| shared_home.clone()) {
         Some(home) => home,
         None => default_home()?,
+    };
+    // The personal preset's answers live in the home, so the REPL, `code` and `serve` show
+    // another `personal.toml` than this kernel keeps unless the user config names it (spec
+    // 3.3 §13 Q7).
+    let same = |a: &PathBuf, b: &PathBuf| {
+        a.canonicalize().unwrap_or_else(|_| a.clone())
+            == b.canonicalize().unwrap_or_else(|_| b.clone())
+    };
+    let home_note = match &shared_home {
+        Some(shared)
+            if harness.preset == Some(adk_harness::Preset::Personal) && !same(&home, shared) =>
+        {
+            Some(format!(
+                "--home {} is this kernel's alone: the REPL, `code` and `serve` read the \
+                 personal preset's answers in {}. Add `home = {:?}` under [kernel] in your user \
+                 config so they read this kernel's",
+                home.display(),
+                shared.display(),
+                home.display().to_string()
+            ))
+        }
+        _ => None,
     };
     // Its own `.adk/harness.toml` may restrict the kernel as a project's does.
     if personal_home {
@@ -129,7 +158,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     let agents_handle = adk_kernel::agents::AgentsHandle::new();
     setup.print_notes();
     setup.memory_notice();
-    for note in &settings.notes {
+    for note in settings.notes.iter().chain(&home_note) {
         println!("note: {note}");
     }
     // The first-run answers become the kernel's quiet hours and every partition's daily
@@ -582,6 +611,11 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     if let Some(phone) = phone {
         println!("  phone {}/ (pairing, wake-ups, confirm it's you)", phone.setup.pairing_base());
         launcher = launcher.with_phone(phone.setup);
+    }
+    #[cfg(all(feature = "voice", feature = "surface"))]
+    {
+        let marked = setup.resolved.packs.contains(&adk_harness::Pack::Voice);
+        launcher = crate::voice_cli::offer(launcher, voice, marked);
     }
     println!(
         "  store {}: sessions, approvals, runs, processes, agenda, schedules, drivers, partitions, the activity ledger, paired devices",

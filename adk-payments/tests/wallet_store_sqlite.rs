@@ -86,6 +86,11 @@ async fn a_key_pays_once_across_two_instances() {
     wallet_stores::a_key_pays_once_across_instances(&File::new(), 12).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_held_payment_is_decided_once_across_two_instances() {
+    wallet_stores::a_held_payment_is_decided_once_across_instances(&File::new()).await;
+}
+
 #[tokio::test]
 async fn migrating_twice_keeps_the_journal() {
     let file = File::new();

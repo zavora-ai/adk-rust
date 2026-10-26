@@ -1,4 +1,5 @@
-//! The Redis edge stores (spec 3.5 §7.9): the edge store conformance suite.
+//! The Redis edge stores (spec 3.5 §7.9): the edge store conformance suite, and the event log
+//! and beacon store conformance suite.
 //!
 //! The tests are `#[ignore]`d because they need a server; CI's postgres job runs them with its
 //! Redis service. Each test keeps its records under a site of its own, and every handle is a
@@ -18,7 +19,9 @@ use adk_awp::v2::store::conformance::EdgeStoreHarness;
 use adk_awp::v2::store::{
     ConsentReceiptStore, HeldCallStore, IdempotencyStore, LeadStore, StatusStore, SubscriptionStore,
 };
+use adk_server::awp::conformance::EdgeLogHarness;
 use adk_server::awp::stores::RedisEdgeStores;
+use adk_server::awp::{BeaconStore, EventLog};
 use async_trait::async_trait;
 
 fn redis_url() -> String {
@@ -66,4 +69,23 @@ impl EdgeStoreHarness for Site {
 adk_awp::edge_store_conformance_tests! {
     #[ignore = "needs Redis: REDIS_URL"]
     harness = Site::new(),
+}
+
+#[async_trait]
+impl EdgeLogHarness for Site {
+    async fn events(&self) -> Arc<dyn EventLog> {
+        Arc::new(self.stores().await)
+    }
+    async fn beacon(&self) -> Arc<dyn BeaconStore> {
+        Arc::new(self.stores().await)
+    }
+}
+
+mod log {
+    use super::*;
+
+    adk_server::edge_log_conformance_tests! {
+        #[ignore = "needs Redis: REDIS_URL"]
+        harness = Site::new(),
+    }
 }

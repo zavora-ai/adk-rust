@@ -187,6 +187,30 @@ async fn the_wallet_answers_the_kpi_tracker_for_its_own_site_only() {
     );
 }
 
+/// The owner's wallet: hosting billed by the host, within a monthly cap.
+fn finance_wallet() -> Wallet {
+    let policy = WalletPolicy::new("KES").with_mandate(
+        adk_payments::wallet::SpendCategory::Hosting,
+        adk_payments::wallet::Mandate::new(
+            50_000,
+            20_000,
+            adk_payments::wallet::RailRef::provider_billing("hostco"),
+        )
+        .with_payee(adk_payments::wallet::PayeeRule::Id("hostco".into())),
+    );
+    Wallet::builder(
+        "juniper-example",
+        policy,
+        Arc::new(InMemoryWalletProvider::stored_value("treasury", "KES", 100_000)),
+    )
+    .rail(Arc::new(adk_payments::wallet::ProviderBillingRail::new(Arc::new(
+        adk_payments::wallet::InMemoryBillingAccount::new("hostco", "KES"),
+    ))))
+    .owner(SubjectRef::human(OWNER))
+    .build()
+    .unwrap()
+}
+
 #[tokio::test]
 async fn a_business_runs_all_eight_agents_and_public_agents_carry_the_kinds_instruction() {
     let site = Site::new(SiteKind::Business, "Juniper Bakery", "juniper.example", &["en"]).await;
@@ -215,9 +239,18 @@ async fn a_business_runs_all_eight_agents_and_public_agents_carry_the_kinds_inst
         }
     };
     let kit = TeamKit {
+        // Finance, then Growth, each asks for the wallet's status once.
         model: Arc::new(adk_model::ScriptedLlm::new(
             "scripted",
-            Vec::<adk_model::ScriptedResponse>::new(),
+            [true, false]
+                .into_iter()
+                .flat_map(|_| {
+                    [
+                        call("wallet_status", serde_json::json!({})),
+                        adk_model::ScriptedResponse::text("Noted."),
+                    ]
+                })
+                .collect::<Vec<_>>(),
         )),
         root: root.path().to_path_buf(),
         back_office: site.back_office_kit(&charter),
@@ -226,9 +259,34 @@ async fn a_business_runs_all_eight_agents_and_public_agents_carry_the_kinds_inst
         configure: Arc::new(|_, builder| {
             builder.project_instructions(no_user_file()).without_compaction()
         }),
+        wallet: Some(finance_wallet()),
     };
     let built = site.team.build(&kit).await.unwrap();
     assert_eq!(built.roles(), AgentRole::ALL);
+    // The Finance agent alone reads and pays from the owner's wallet (spec 3.5 §7.14,
+    // §7.19): asked for the wallet, it answers from `wallet_status`; Growth holds no such tool.
+    for (role, holds) in [(AgentRole::Finance, true), (AgentRole::Growth, false)] {
+        let agent = built.agent(role).unwrap().clone();
+        let runner = agent
+            .configure_runner(
+                adk_runner::Runner::builder()
+                    .app_name(site.site.name.clone())
+                    .agent(agent.clone())
+                    .session_service(site.sessions.clone()),
+            )
+            .build()
+            .unwrap();
+        let harness = adk_harness::Harness::with_runner(agent, runner).unwrap();
+        let owner = user(OWNER);
+        let session = harness.open_session(&owner, None).await.unwrap();
+        let events =
+            collect(harness.send(&owner, &session, "How does the wallet stand?").await.unwrap())
+                .await;
+        let status = response(&events, "wallet_status", 0);
+        assert_eq!(status.get("currency").is_some(), holds, "{role}: {status}");
+    }
+    let root = built.compile().expect("the Steward's delegate edges compile over harness agents");
+    assert_eq!(adk_core::Agent::name(&root), built.back_office.name);
     let spec = &built.back_office;
     let delegates: Vec<&str> = spec.relationships.iter().map(|r| r.to.as_str()).collect();
     assert_eq!(
@@ -246,4 +304,96 @@ async fn a_business_runs_all_eight_agents_and_public_agents_carry_the_kinds_inst
     let ministry = SiteTeam::new(site.site.clone(), &template(SiteKind::Government));
     assert!(ministry.public_instruction().contains("End every reply with"));
     assert!(site.team.public_instruction().is_empty(), "a business adds nothing");
+}
+
+/// The back office runs as one team (spec 3.5 §7.19): the Steward leads, delegates to Growth,
+/// and each member runs under its own harness's policy, not refused as ungoverned.
+#[tokio::test]
+async fn the_back_office_runs_as_one_governed_team_led_by_the_steward() {
+    use adk_model::{ScriptedLlm, ScriptedResponse};
+    use adk_session::{CreateRequest, SessionService};
+
+    let site = Site::new(SiteKind::Business, "Juniper Bakery", "juniper.example", &["en"]).await;
+    let inputs = CharterInputs::new(
+        site.site.id,
+        "Juniper Bakery",
+        OWNER,
+        "Bread.",
+        vec!["en".parse().unwrap()],
+        "KES",
+    );
+    let charter = site.template.draft_charter(&site.team, &inputs);
+    site.commit(&charter, &[(Role::Owner, OWNER)]).await;
+    let root = tempfile::tempdir().unwrap();
+    let model = Arc::new(ScriptedLlm::new(
+        "scripted",
+        vec![
+            ScriptedResponse::function_call(
+                "growth",
+                serde_json::json!({ "request": "Which pages are stale this week?" }),
+            ),
+            ScriptedResponse::text("None are stale; the FAQ was updated on Monday."),
+            ScriptedResponse::text("Growth checked: nothing is stale."),
+        ],
+    ));
+    let public = {
+        let (partitions, table, search) =
+            (site.partitions.clone(), site.table.clone(), site.search.clone());
+        let sink = site.partitions.signal_sink(site.signals.clone(), site.agenda.clone());
+        move || adk_harness::website::PublicKit {
+            partitions: partitions.clone(),
+            table: table.clone(),
+            search: search.clone(),
+            signals: sink.clone(),
+            reply: None,
+            capabilities: Vec::new(),
+        }
+    };
+    let kit = TeamKit {
+        model: model.clone(),
+        root: root.path().to_path_buf(),
+        back_office: site.back_office_kit(&charter),
+        public: Arc::new(public),
+        standing_rules: site.rules.clone(),
+        configure: Arc::new(|_, builder| {
+            builder.project_instructions(no_user_file()).without_compaction()
+        }),
+        wallet: None,
+    };
+    let built = site.team.build(&kit).await.unwrap();
+    let sessions: Arc<dyn SessionService> = Arc::new(adk_session::InMemorySessionService::new());
+    let runner = built.team_runner(&site.site.name, sessions.clone()).unwrap();
+    sessions
+        .create(CreateRequest {
+            app_name: site.site.name.clone(),
+            user_id: OWNER.into(),
+            session_id: Some("weekly".into()),
+            state: Default::default(),
+        })
+        .await
+        .unwrap();
+    let stream = runner
+        .run_str(OWNER, "weekly", adk_core::Content::new("user").with_text("Check freshness."))
+        .await
+        .unwrap();
+    let events = collect(stream).await;
+    let said: Vec<String> = events
+        .iter()
+        .filter_map(|e| e.llm_response.content.as_ref())
+        .flat_map(|c| c.parts.iter())
+        .filter_map(|p| match p {
+            adk_core::Part::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        said.iter().any(|t| t.contains("nothing is stale")),
+        "the Steward answered after Growth: {said:?}"
+    );
+    assert!(
+        said.iter().any(|t| t.contains("FAQ was updated")),
+        "Growth ran governed under the team: {said:?}"
+    );
+    let growth = built.agent_runner(AgentRole::Growth, &site.site.name, sessions).unwrap();
+    assert_eq!(growth.app_name(), site.site.name, "one runner per agent for its jobs' processes");
 }

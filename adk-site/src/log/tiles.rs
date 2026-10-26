@@ -1,5 +1,6 @@
-//! C2SP tlog-tiles layout for the site log (spec 3.5 §7.7, §7.8.3 "the log's tiles are built
-//! for millions of entries").
+//! C2SP tlog-tiles for the site log (spec 3.5 §7.7, §7.8.3 "the log's tiles are built for
+//! millions of entries"): the layout and the writer's primitives are `adk-awp`'s
+//! `signing::log`; this module reads tiles back into proofs.
 //!
 //! A verifier reads the checkpoint, then only the tiles a proof needs: hash tiles hold 256
 //! hashes of one tree level each (`tile/<L>/<N>`, partial tiles `tile/<L>/<N>.p/<W>`), entry
@@ -15,87 +16,15 @@ use bytes::Bytes;
 
 use crate::error::{Result, SiteError};
 
-/// Tree levels per tile.
-pub const TILE_HEIGHT: u32 = 8;
-/// Hashes or entries in a full tile.
-pub const TILE_WIDTH: u64 = 1 << TILE_HEIGHT;
-
-/// Encodes a tile index as C2SP path elements: `1234067` gives `x001/x234/067`.
-///
-/// # Example
-///
-/// ```rust
-/// use adk_site::log::tile_index_path;
-///
-/// assert_eq!(tile_index_path(5), "005");
-/// assert_eq!(tile_index_path(1_234_067), "x001/x234/067");
-/// ```
-pub fn tile_index_path(index: u64) -> String {
-    let mut groups = vec![format!("{:03}", index % 1000)];
-    let mut rest = index / 1000;
-    while rest > 0 {
-        groups.push(format!("x{:03}", rest % 1000));
-        rest /= 1000;
-    }
-    groups.reverse();
-    groups.join("/")
-}
-
-/// The path of hash tile `index` at tile level `level` holding `width` hashes, relative to
-/// the log prefix.
-pub fn hash_tile_path(level: u32, index: u64, width: u64) -> String {
-    let base = format!("tile/{level}/{}", tile_index_path(index));
-    if width == TILE_WIDTH { base } else { format!("{base}.p/{width}") }
-}
-
-/// The path of entry bundle `index` holding `width` entries, relative to the log prefix.
-pub fn entry_bundle_path(index: u64, width: u64) -> String {
-    let base = format!("tile/entries/{}", tile_index_path(index));
-    if width == TILE_WIDTH { base } else { format!("{base}.p/{width}") }
-}
-
-/// The tiles that change when a log grows from `old` to `new` entries, as
-/// `(level, index, width)`; level `None` is the entry bundle.
-pub(crate) fn changed_tiles(old: u64, new: u64) -> Vec<(Option<u32>, u64, u64)> {
-    let mut tiles = Vec::new();
-    if new <= old {
-        return tiles;
-    }
-    let first = old / TILE_WIDTH;
-    let last = (new - 1) / TILE_WIDTH;
-    for index in first..=last {
-        tiles.push((None, index, (new - index * TILE_WIDTH).min(TILE_WIDTH)));
-    }
-    let mut level = 0;
-    loop {
-        let shift = level * TILE_HEIGHT;
-        let (old_count, new_count) = (old >> shift, new >> shift);
-        if new_count == 0 {
-            break;
-        }
-        if new_count > old_count {
-            let first = old_count / TILE_WIDTH;
-            let last = (new_count - 1) / TILE_WIDTH;
-            for index in first..=last {
-                tiles.push((Some(level), index, (new_count - index * TILE_WIDTH).min(TILE_WIDTH)));
-            }
-        }
-        level += 1;
-    }
-    tiles
-}
+// The layout is adk-awp's `signing::log`, the workspace's one C2SP tile writer.
+pub use adk_awp::signing::log::{
+    TILE_HEIGHT, TILE_WIDTH, entry_bundle_path, hash_tile_path, tile_index_path,
+};
+pub(crate) use adk_awp::signing::log::{changed_tiles, hash_tile};
 
 /// Encodes log entries as an entry bundle.
 pub(crate) fn encode_bundle(entries: &[Vec<u8>]) -> Result<Vec<u8>> {
-    let mut out = Vec::new();
-    for entry in entries {
-        let len = u16::try_from(entry.len()).map_err(|_| {
-            SiteError::Log(format!("log entry of {} bytes exceeds 65535", entry.len()))
-        })?;
-        out.extend_from_slice(&len.to_be_bytes());
-        out.extend_from_slice(entry);
-    }
-    Ok(out)
+    adk_awp::signing::log::encode_bundle(entries).map_err(|e| SiteError::Log(e.to_string()))
 }
 
 /// Splits an entry bundle into its entries.
@@ -104,22 +33,7 @@ pub(crate) fn encode_bundle(entries: &[Vec<u8>]) -> Result<Vec<u8>> {
 ///
 /// [`SiteError::Log`] when the bundle is truncated.
 pub fn decode_bundle(bundle: &[u8]) -> Result<Vec<Vec<u8>>> {
-    let mut entries = Vec::new();
-    let mut at = 0;
-    while at < bundle.len() {
-        if at + 2 > bundle.len() {
-            return Err(SiteError::Log("entry bundle is truncated".into()));
-        }
-        let len = usize::from(u16::from_be_bytes([bundle[at], bundle[at + 1]]));
-        at += 2;
-        let end = at + len;
-        if end > bundle.len() {
-            return Err(SiteError::Log("entry bundle is truncated".into()));
-        }
-        entries.push(bundle[at..end].to_vec());
-        at = end;
-    }
-    Ok(entries)
+    adk_awp::signing::log::decode_bundle(bundle).map_err(|e| SiteError::Log(e.to_string()))
 }
 
 /// Where a verifier reads published tiles from: a host, an HTTP client, a directory.
@@ -351,39 +265,5 @@ impl<'a> TileProofs<'a> {
             return Err(SiteError::Log(format!("entry bundle is missing entry {index}")));
         }
         Ok(entries.swap_remove(offset))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn index_paths_follow_c2sp() {
-        assert_eq!(tile_index_path(0), "000");
-        assert_eq!(tile_index_path(999), "999");
-        assert_eq!(tile_index_path(1000), "x001/000");
-        assert_eq!(hash_tile_path(0, 0, 256), "tile/0/000");
-        assert_eq!(hash_tile_path(1, 3, 7), "tile/1/003.p/7");
-        assert_eq!(entry_bundle_path(1_234_067, 1), "tile/entries/x001/x234/067.p/1");
-    }
-
-    #[test]
-    fn changed_tiles_cover_growth() {
-        assert_eq!(changed_tiles(0, 1), vec![(None, 0, 1), (Some(0), 0, 1)]);
-        let tiles = changed_tiles(255, 257);
-        assert!(tiles.contains(&(None, 0, 256)));
-        assert!(tiles.contains(&(None, 1, 1)));
-        assert!(tiles.contains(&(Some(0), 1, 1)));
-        assert!(tiles.contains(&(Some(1), 0, 1)));
-        assert!(changed_tiles(5, 5).is_empty());
-    }
-
-    #[test]
-    fn bundles_round_trip() {
-        let entries = vec![b"one".to_vec(), Vec::new(), vec![7; 300]];
-        assert_eq!(decode_bundle(&encode_bundle(&entries).unwrap()).unwrap(), entries);
-        assert!(decode_bundle(&[0, 5, 1]).is_err());
-        assert!(encode_bundle(&[vec![0; 70_000]]).is_err());
     }
 }

@@ -114,7 +114,8 @@ Quarantined, held out until you decide each one:
 | Bookings | `check_availability` and `book` |
 | Newsletter plugin | `subscribe_newsletter` under consent scope `newsletter` |
 | Logins and member areas | The owner decision `migration.accounts`: remove, link to a named service, or leave out |
-| `/wp-login.php`, `/xmlrpc.php` and other runtime paths | Not served; the Guardian's probes report them as drift if they reappear |
+| `/wp-login.php`, `/xmlrpc.php`, `/wp-includes/…`, theme and plugin files | Not served: they answer 410 Gone (a login page the crawl read keeps a 301 to the home page); the Guardian's probes report them as drift if they reappear |
+| Links to pages the crawl could not read, such as `robots.txt`-disallowed ones | Their text, without the link |
 
 The capabilities serve on the agent edge ([Writing capability packs](capability-packs.md)).
 
@@ -135,13 +136,14 @@ In `adk-website` each finding is a decision card in onboarding, bound to the dig
 evidence; a decision by the change's proposer keeps the item held. The CLI leaves held subjects
 out and lists them in the report.
 
-In `adk-website` onboarding the owner also chooses the design (`DesignChoice`). Keeping the
-design gates the launch on visual parity: every inventoried URL served or redirected, main text
-at 0.95 similarity or more, metadata kept, and a perceptual difference under 0.05 at two widths.
-A new theme gates URL coverage, text and metadata, and the owner approves the new look from the
-preview: in scenario S3 the largest perceptual difference between the recorded WordPress pages
-and the built-in theme's is 0.173.
-`adk-rust site build` runs no parity check, and `site migrate` has no flag for the choice
+The owner also chooses the design: `DesignChoice` in `adk-website` onboarding, `--design
+keep|new-theme` on `adk-rust site migrate`. Keeping the design gates the launch on visual
+parity: every inventoried URL served or redirected, main text at 0.95 similarity or more,
+metadata kept, and a perceptual difference under 0.05 at two widths. A new theme gates URL
+coverage, text and metadata, reports the perceptual difference without gating on it, and the
+owner approves the new look from the preview: in scenario S3 the largest perceptual difference
+between the recorded WordPress pages and the built-in theme's is 0.173. The choice is recorded
+in the migration audit (`site.migration.decided`). `adk-rust site build` runs no parity check
 ([Remaining work](../../design/spec-3.5-agentic-web.md#remaining-work)).
 
 ## 6. Build, sign and publish

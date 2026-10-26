@@ -73,7 +73,7 @@ skip_dirs = ["target", "node_modules", ".venv", "venv", "dist", "build", "__pyca
 | Conflicts | Files changed since the session's latest snapshot that no harness file tool wrote — a command or you changed them. Each is shown and restored only when chosen (`[a]`) |
 | Protected | Protected paths among them (`AGENTS.md`, `.git/**`, `.adk/**`, …): changed only under the rewind's confirmation, which lists them |
 | Not covered | Files the snapshot left out — too large, excluded, or past a partial walk — listed and never touched; a partial snapshot deletes nothing it did not reach |
-| Not undone | Every call after the target that a file restore cannot take back: commands, payments, messages, pushes, with their action-ledger keys |
+| Not undone | Every call after the target that a file restore cannot take back: commands, payments, messages, pushes, with their action-ledger keys; a background shell the call started is named, and one still running says `/shells kill N` stops it ([Background shells](shell-and-sandbox.md#background-shells)) |
 | Transcript | The session forks at the target turn: the events after it are removed and kept with the snapshot taken before the rewind, so `/redo` puts them back |
 | Plan | The plan graph rewinds with the files: to just after the last step completed at the target, or back to its first step |
 

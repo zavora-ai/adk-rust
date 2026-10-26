@@ -22,7 +22,6 @@ use crate::instructions::{
     InMemoryWorkspaceTrustStore, InstructionsConfig, ProjectInstructions, WorkspaceTrustStore,
 };
 use crate::mode::{HarnessMode, InMemoryModeStore, ModeStore};
-#[cfg(any(feature = "auth", feature = "payments"))]
 use crate::policy::ToolKind;
 use crate::policy::{
     HARNESS_TOOL_NAMES, HarnessPolicy, PolicyInner, PolicySwitches, PromptContexts, ShellView,
@@ -34,7 +33,7 @@ use crate::shell::{
     resolve_isolation,
 };
 use crate::tools::{ExitPlanModeTool, HarnessBashTool, TodoList, UpdateTodoTool, WriteTodosTool};
-use crate::toolset::HarnessToolset;
+use crate::toolset::{HarnessToolset, mode_banner, website_banner};
 
 /// A pack: a feature that adds tools or a surface under the same policy
 /// (spec 3.1 §7.16–§7.18).
@@ -120,9 +119,13 @@ pub struct HarnessAgentBuilder {
     mode_store: Option<Arc<dyn ModeStore>>,
     standing_rules: Option<Arc<dyn StandingRuleStore>>,
     shell_ledger: Option<Arc<dyn ShellLedger>>,
+    background_shells: crate::shell::BackgroundShellConfig,
+    shell_pids: Option<Arc<dyn crate::shell::ShellPidRegistry>>,
+    shell_supervisor: Option<Arc<crate::shell::ShellSupervisor>>,
     read_records: Option<Arc<dyn adk_devtools::ReadLedger>>,
     operator_policy: Option<Arc<dyn ToolPolicy>>,
     origin_classes: Vec<Arc<dyn crate::policy::OriginClasses>>,
+    team_delegates: Vec<String>,
     prompter: Option<Arc<dyn ApprovalPrompter>>,
     confirmation_handler: Option<Arc<dyn ToolConfirmationHandler>>,
     approval_store: Option<Arc<dyn ApprovalStore>>,
@@ -153,6 +156,12 @@ pub struct HarnessAgentBuilder {
     isolated_shell_only: bool,
     /// The website preset leaves `bash` out (spec 3.5 §10 X10).
     preset_without_shell: bool,
+    /// The website preset: its mode banner, and no `exit_plan_mode`, since the charter's
+    /// autonomy levels set the mode (spec 3.5 §7.11, A-I13).
+    website_preset: bool,
+    /// The public partition's tools: of the harness's own tools the agent is offered these
+    /// and nothing else (spec 3.5 §7.10, A-I2).
+    public_only: Option<BTreeSet<String>>,
     /// `allow_unsandboxed_retry` was set explicitly, so a container shell keeps it.
     retry_explicit: bool,
     trust_mcp_read_only_hints: bool,
@@ -247,9 +256,13 @@ impl HarnessAgentBuilder {
             mode_store: None,
             standing_rules: None,
             shell_ledger: None,
+            background_shells: crate::shell::BackgroundShellConfig::default(),
+            shell_pids: None,
+            shell_supervisor: None,
             read_records: None,
             operator_policy: None,
             origin_classes: Vec::new(),
+            team_delegates: Vec::new(),
             prompter: None,
             confirmation_handler: None,
             approval_store: None,
@@ -274,6 +287,8 @@ impl HarnessAgentBuilder {
             shell_enabled: true,
             isolated_shell_only: false,
             preset_without_shell: false,
+            website_preset: false,
+            public_only: None,
             retry_explicit: false,
             trust_mcp_read_only_hints: false,
             todos: true,
@@ -547,6 +562,30 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// The limits of background shells (spec 3.1 §7.29); default
+    /// [`BackgroundShellConfig::unattended`](crate::BackgroundShellConfig::unattended),
+    /// and [`attended`](crate::BackgroundShellConfig::attended) for a REPL a person watches.
+    pub fn background_shells(mut self, config: crate::shell::BackgroundShellConfig) -> Self {
+        self.background_shells = config;
+        self
+    }
+
+    /// Where each background shell's process is recorded (default in memory), so the next
+    /// start reaps what a crash left running (spec 3.1 §7.29).
+    pub fn shell_pid_registry(mut self, registry: Arc<dyn crate::shell::ShellPidRegistry>) -> Self {
+        self.shell_pids = Some(registry);
+        self
+    }
+
+    /// Runs background shells on `shells`, which every harness of a process can share, so a
+    /// harness rebuilt for the same session keeps its shells (spec 3.1 §7.29). Its limits
+    /// and pid registry replace [`background_shells`](Self::background_shells) and
+    /// [`shell_pid_registry`](Self::shell_pid_registry).
+    pub fn shell_supervisor(mut self, shells: Arc<crate::shell::ShellSupervisor>) -> Self {
+        self.shell_supervisor = Some(shells);
+        self
+    }
+
     /// Where the file tools' read records are kept (default in memory): the sha256 each
     /// session's agent last read or wrote per file, which `edit_file` takes as its
     /// precondition (spec 3.1 §7.26, §10 D7). A durable store lets a held edit approved
@@ -816,6 +855,25 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// The members an `adk-agent` `TeamSpec` lets this harness delegate to as its
+    /// coordinator (spec 3.5 §7.19): their delegation tools, which the team adds to each run,
+    /// are classed `Delegate`, as a member of the harness's own team is, so the mode table
+    /// lets the coordinator hand work over and each member's own harness decides its calls.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let steward = HarnessAgent::builder("steward")
+    ///     .website_back_office(&kit)
+    ///     .team_delegates(["growth", "revenue", "guardian", "finance"])
+    ///     .build()?;
+    /// ```
+    #[must_use]
+    pub fn team_delegates(mut self, members: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.team_delegates.extend(members.into_iter().map(Into::into));
+        self
+    }
+
     /// Asks a person through `prompter` on interactive surfaces.
     pub fn prompter(mut self, prompter: Arc<dyn ApprovalPrompter>) -> Self {
         self.prompter = Some(prompter);
@@ -1048,6 +1106,22 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// The website preset's mode banner and no `exit_plan_mode`, for as long as the preset
+    /// holds (spec 3.5 §7.11, A-I13).
+    #[cfg(feature = "website")]
+    pub(crate) fn website_preset(mut self) -> Self {
+        self.website_preset = true;
+        self
+    }
+
+    /// Offers the agent no tool of the harness's own beyond `tools`: no workspace, memory,
+    /// plan or web tool, and no harness toolset (spec 3.5 A-I2).
+    #[cfg(feature = "website")]
+    pub(crate) fn public_only(mut self, tools: BTreeSet<String>) -> Self {
+        self.public_only = Some(tools);
+        self
+    }
+
     /// Undoes what a preset set that another preset leaves alone (spec 3.3 §10 H1).
     pub(crate) fn clear_preset(mut self) -> Self {
         if self.description.as_deref() == Some(crate::personal::PERSONAL_DESCRIPTION) {
@@ -1058,6 +1132,7 @@ impl HarnessAgentBuilder {
             self.description = None;
         }
         self.preset_without_shell = false;
+        self.website_preset = false;
         self.isolated_shell_only(false)
     }
 
@@ -1573,6 +1648,7 @@ impl HarnessAgentBuilder {
     pub fn build(mut self) -> Result<HarnessAgent> {
         // The website preset runs without a shell, whatever the workspace allows (X10).
         self.shell_enabled &= !self.preset_without_shell;
+        let public_only = self.public_only.take();
         let model = self.model.ok_or_else(|| AdkError::config("HarnessAgent requires a model"))?;
         let mut workspace =
             self.workspace.ok_or_else(|| AdkError::config("HarnessAgent requires a workspace"))?;
@@ -1737,6 +1813,9 @@ impl HarnessAgentBuilder {
         for classes in &self.origin_classes {
             registry = registry.with_origin_classes(classes.clone());
         }
+        for member in &self.team_delegates {
+            registry.register(member.clone(), ToolKind::Delegate);
+        }
         // The payments pack (spec 3.1 §7.16): every payment tool name is class Payment,
         // declared or not, so a lookalike attached as an extra never classes as External.
         #[cfg(feature = "payments")]
@@ -1825,6 +1904,11 @@ impl HarnessAgentBuilder {
             None => rules,
         };
         let ledger = self.shell_ledger.unwrap_or_else(|| Arc::new(InMemoryShellLedger::new()));
+        let shells = crate::shell::supervisor(
+            self.shell_supervisor.take(),
+            self.background_shells.clone(),
+            self.shell_pids.take(),
+        );
         let approval_store = self
             .approval_store
             .or_else(|| self.approval_service.as_ref().and_then(|service| service.approval_store()))
@@ -1875,7 +1959,8 @@ impl HarnessAgentBuilder {
                     ledger.clone(),
                 )
                 .allow_unsandboxed_retry(allow_unsandboxed_retry)
-                .with_file_gate(file_gate.clone());
+                .with_file_gate(file_gate.clone())
+                .with_outputs(shells.outputs().clone());
                 let pool = bash.pool();
                 tools.push(Arc::new(bash));
                 Some(pool)
@@ -1899,7 +1984,8 @@ impl HarnessAgentBuilder {
             )
             .with_mode_store(mode_store.clone(), self.mode)
             .allow_unsandboxed_retry(allow_unsandboxed_retry)
-            .with_file_gate(file_gate.clone());
+            .with_file_gate(file_gate.clone())
+            .with_shells(shells.clone());
             #[cfg(feature = "sandbox")]
             let bash = match shell.launcher.clone() {
                 Some(launcher) => bash.with_sandbox(launcher),
@@ -1910,6 +1996,10 @@ impl HarnessAgentBuilder {
             #[cfg(not(feature = "auth"))]
             let bash: Arc<dyn Tool> = Arc::new(bash);
             tools.push(bash);
+            tools.push(Arc::new(crate::shell::ShellKillTool::new(shells.clone())));
+        }
+        if tools.iter().any(|tool| tool.name() == "bash") {
+            tools.push(Arc::new(crate::shell::ShellOutputTool::new(shells.clone())));
         }
         if self.todos {
             match &self.last_todos {
@@ -1943,7 +2033,10 @@ impl HarnessAgentBuilder {
             Some(graphs) => plan_exit.with_plan_graph(graphs.clone()),
             None => plan_exit,
         };
-        tools.push(Arc::new(plan_exit));
+        // A website agent's mode is its jobs' autonomy, which only the owner raises (A-I13).
+        if !self.website_preset {
+            tools.push(Arc::new(plan_exit));
+        }
         // Follow-ups go on the agenda of the kernel hosting the harness (spec 3.2 §7.5).
         #[cfg(feature = "kernel")]
         tools.push(Arc::new(crate::kernel::ProposeFollowupTool::new(
@@ -2086,6 +2179,11 @@ impl HarnessAgentBuilder {
                 })
                 .collect();
         }
+        // A public-partition agent is offered its partition's tools and nothing else, so no
+        // workspace, memory or plan tool reaches a model that reads untrusted text (A-I2).
+        if let Some(allowed) = &public_only {
+            tools.retain(|tool| allowed.contains(tool.name()));
+        }
         let tool_names: Vec<String> = tools.iter().map(|tool| tool.name().to_string()).collect();
         #[cfg(feature = "auth")]
         let (tools, identity_gate) = {
@@ -2158,9 +2256,11 @@ impl HarnessAgentBuilder {
         }
         #[cfg_attr(not(feature = "memory"), allow(unused_mut))]
         let mut toolset = HarnessToolset::new(tools, mode_store.clone(), self.mode)
+            .with_banner(if self.website_preset { website_banner } else { mode_banner })
             .with_observers(&observers)
             .with_effort(self.effort)
-            .with_rules_digest(rules.clone());
+            .with_rules_digest(rules.clone())
+            .with_shells(shells);
         // Under a kernel, each run's tool calls write their ledger rows (spec 3.2 §7.10).
         #[cfg(all(feature = "kernel", feature = "observe"))]
         run_trails.attach_ledger(self.kernel_ledger.clone(), &toolset.all_tools());
@@ -2513,10 +2613,13 @@ impl HarnessAgentBuilder {
         {
             match crate::skills::wire(workspace.root(), &self.skills)? {
                 crate::skills::SkillsWiring::None => {}
+                crate::skills::SkillsWiring::Toolset(_) if public_only.is_some() => {}
                 crate::skills::SkillsWiring::Toolset(skills) => builder = builder.toolset(skills),
                 crate::skills::SkillsWiring::Inject(index) => builder = builder.with_skills(index),
             }
         }
+        // The operator's own tools and toolsets stay, so the public partition's policy refuses
+        // one attached by mistake on the record; the harness adds no toolset of its own there.
         for tool in self.tools {
             let tool = match &self.take_over {
                 Some(_) => crate::take_over::ScopedTool::wrap(tool, self.tool_timeout),
@@ -2535,7 +2638,7 @@ impl HarnessAgentBuilder {
         }
         // The coordinator's crossings into other partitions' drivers (spec 3.2 §7.8).
         #[cfg(feature = "kernel")]
-        if let Some(wired) = &partition {
+        if let Some(wired) = partition.as_ref().filter(|_| public_only.is_none()) {
             for crossings in &wired.toolsets {
                 let crossings = match &self.take_over {
                     Some(_) => {
@@ -2547,11 +2650,11 @@ impl HarnessAgentBuilder {
             }
         }
         #[cfg(feature = "web")]
-        if let Some(provider_web) = &provider_web {
+        if let Some(provider_web) = provider_web.as_ref().filter(|_| public_only.is_none()) {
             builder = builder.toolset(provider_web.clone());
         }
         #[cfg(feature = "mcp")]
-        if let Some(mcp) = &mcp {
+        if let Some(mcp) = mcp.as_ref().filter(|_| public_only.is_none()) {
             builder = builder.toolset(mcp.manager());
         }
         if let Some(customize) = self.customize {
