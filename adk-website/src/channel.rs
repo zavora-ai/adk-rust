@@ -6,6 +6,8 @@
 //! the message's photos. [`OwnerChannel::attach`] runs them through the back office's media
 //! intake into the Steward's draft — only for a device the owner paired (A-I24) — and returns
 //! the message the thread gets back, which lists each photo's drafted alt text.
+//! When the Steward scheduled the draft before the photos arrived, they join the scheduled item
+//! in the content store instead, which is not live yet.
 //! [`OwnerChannel::reply`] reads the person's answer: `yes` confirms them all; `2: text`
 //! replaces the second one's and confirms it. A confirmation applies to the item once it is
 //! in the content store — scheduled or published — so a reply sent before the draft is
@@ -136,8 +138,15 @@ impl OwnerChannel {
                 "dataBase64": base64::engine::general_purpose::STANDARD.encode(&photo.bytes),
                 "alt": alt,
             });
-            let out = self.intake.execute(ctx.clone(), args).await?;
-            let path = out["media"]["path"].as_str().unwrap_or_default().to_string();
+            let path = match self.intake.execute(ctx.clone(), args).await {
+                Ok(out) => out["media"]["path"].as_str().unwrap_or_default().to_string(),
+                // The Steward may have scheduled the draft before the photos arrived: they
+                // join the scheduled item, which is not live yet.
+                Err(error) => match self.attach_to_scheduled(item, &photo, &alt).await? {
+                    Some(path) => path,
+                    None => return Err(error),
+                },
+            };
             attached.push(PendingAlt { item: item.clone(), path, alt, confirmed: false });
         }
         self.pending
@@ -156,6 +165,48 @@ impl OwnerChannel {
         }
         reply.push_str("\nReply yes to confirm them, or a number and new text to change one.");
         Ok(Attached { photos: attached, reply })
+    }
+
+    /// Adds `photo` to `item` in the content store when the item waits there unpublished —
+    /// scheduled, or a draft — through the media rules (spec 3.5 §7.8.2 "Media"); `None` for
+    /// an item that is live or not there, whose change is a new release.
+    async fn attach_to_scheduled(
+        &self,
+        item: &ContentId,
+        photo: &ChannelPhoto,
+        alt: &str,
+    ) -> Result<Option<String>> {
+        let site = |e: adk_site::SiteError| AdkError::config(e.to_string());
+        let store = self.runtime.store();
+        let Some(mut stored) = store.get(item).await.map_err(site)? else { return Ok(None) };
+        if !matches!(
+            stored.state,
+            awp_types::ContentState::Scheduled | awp_types::ContentState::Draft
+        ) {
+            return Ok(None);
+        }
+        let processed = adk_site::media::MediaPipeline::default()
+            .process(&adk_site::media::MediaUpload {
+                name: &photo.name,
+                bytes: &photo.bytes,
+                alt: Some(alt.to_string()),
+                generated: false,
+            })
+            .map_err(site)?;
+        let dir =
+            format!("content/{}/{}", adk_site::content::kind_directory(stored.kind), stored.slug);
+        let media = processed.media_ref(&dir);
+        store.write_media(&media.path, processed.bytes.clone()).await.map_err(site)?;
+        for variant in &processed.variants {
+            store
+                .write_media(&format!("{dir}/{}", variant.name), variant.bytes.clone())
+                .await
+                .map_err(site)?;
+        }
+        stored.media.retain(|held| held.path != media.path);
+        stored.media.push(media.clone());
+        store.put(&stored).await.map_err(site)?;
+        Ok(Some(media.path))
     }
 
     /// Reads the person's reply on a thread with photos waiting (spec 3.5 §5 S18): `yes`

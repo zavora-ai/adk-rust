@@ -137,7 +137,8 @@ approved it.
 to: it runs them through the back office's media intake into the Steward's draft, drafts each
 alt text from its caption, and asks the owner on the thread to confirm. `yes` confirms them
 all; `2: text` rewrites the second; the confirmation reaches the item once it is scheduled or
-published. A message from an account no one paired adds nothing (A-I24).
+published. Photos that arrive after the Steward scheduled the draft join the scheduled item,
+which is not live yet. A message from an account no one paired adds nothing (A-I24).
 
 ## Incidents, alarms and the weekly review
 
@@ -241,7 +242,7 @@ many sites from one harness:
 | Measurement | `MeteredActionLedger` and `EdgeMeter` on the edge, `MeteredSpendLedger` for agents' spend, and the tracker's sources |
 | Channels | Inbox threads with `SiteOptions::repliers`; the calendar and payment links from `calendar.json` and `payments.json`, or `SiteOptions` (an `Ap2Desk` as `SiteOptions::payments`); refused without them; the owner's amount thresholds from `approvals.json` |
 | Public agent | With `SiteOptions::model`, `edge::concierge` mounts the Concierge through `AwpEdge::public_agent`: the website preset in the public partition over the edge's own tools — the declared capabilities (a declared `search_site` among them), `reply_in_thread` and the edge's `emit_signal` — so the edge's public policy admits every call |
-| Back office | With `SiteOptions::model`, the kernel hosts the back office (`deploy::back_office`): the Steward's target runs the team, every agent its jobs' processes on their signals and schedules, under the owner's standing rules in `data/kernel.db` — what `adk-rust website jobs promote` grants takes effect while the site serves — with held calls in the owner's approval inbox; the edge's signals wake them. Revenue gets the nurture sends (`SiteOptions::email`) and the handoff, Growth the experiment tools, Guardian `edge_read_only`, Finance the wallet (`SiteOptions::wallet`); agent sessions are kept in `data/kernel/sessions.db` |
+| Back office | With `SiteOptions::model`, the kernel hosts the back office (`deploy::back_office`): the Steward's target runs the team, every agent its jobs' processes on their signals and schedules, under the owner's standing rules in `data/kernel.db` — what `adk-rust website jobs promote` grants takes effect while the site serves — with held calls in the owner's approval inbox; the edge's signals wake them, and the kernel defers each proactive run inside the charter's quiet hours (an agency's kernel holds none). Revenue gets the nurture sends (`SiteOptions::email`) and the handoff, Growth the experiment tools, Guardian `edge_read_only`, Finance the wallet (`SiteOptions::wallet`); agent sessions are kept in `data/kernel/sessions.db` |
 | Upkeep | With `SiteOptions::advisories` or `SiteOptions::certificate`, the daily `site.watch` runs `UpkeepCheck` |
 
 | Store | Survives a restart |

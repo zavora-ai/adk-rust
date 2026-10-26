@@ -103,6 +103,11 @@ impl std::fmt::Debug for Served {
 }
 
 impl Served {
+    /// The kernel serving the sites.
+    pub fn kernel(&self) -> &Kernel {
+        &self.kernel
+    }
+
     /// Stops the edge, the sites' background work and the kernel with its control plane.
     ///
     /// # Errors
@@ -154,8 +159,17 @@ async fn start(
         }
         None => None,
     };
+    let mut kernel_config =
+        KernelConfig::default().with_app_name(name).with_home(home.clone()).with_control(control);
+    // The site's proactive runs wait out the owner's quiet hours (spec 3.5 §7.21, §5 S10); an
+    // agency's sites may keep different hours, and the kernel holds one set.
+    if let [site] = sites.as_slice()
+        && let Some(quiet) = crate::alarms::quiet_hours(&site.reporting)
+    {
+        kernel_config = kernel_config.with_quiet_hours(quiet);
+    }
     let mut builder = Kernel::builder()
-        .config(KernelConfig::default().with_app_name(name).with_home(home).with_control(control))
+        .config(kernel_config)
         .run_store(stores.runs.clone())
         .approval_service(stores.approvals.clone())
         .partitions(stores.partitions.clone())

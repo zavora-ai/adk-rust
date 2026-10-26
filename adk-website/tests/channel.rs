@@ -124,3 +124,56 @@ async fn photos_from_the_paired_phone_reach_the_draft_and_the_thread_confirms_th
     assert_eq!(confirmed.media[1].alt.as_deref(), Some("A sliced seeded rye loaf"));
     assert!(channel.waiting("wa-1").await.is_empty());
 }
+
+/// The Steward scheduled the draft before the photos arrived (spec 3.5 S18): they join the
+/// scheduled item in the content store, which is not live yet; a live item is left alone.
+#[tokio::test]
+async fn photos_that_arrive_after_scheduling_join_the_scheduled_item() {
+    let site = Site::new(SiteKind::Ecommerce, "Juniper Bakery", "juniper.example", &["en"]).await;
+    let bindings = Arc::new(InMemoryChannelBindingStore::new());
+    bindings
+        .put_binding(ChannelBinding::new(
+            "whatsapp",
+            "+254700000001",
+            "wa-1",
+            OWNER,
+            chrono::Utc::now(),
+        ))
+        .await
+        .unwrap();
+    let channel = OwnerChannel::new(site.runtime.clone(), AuthoringRouter::new(bindings)).unwrap();
+    let item = ContentId("products/seeded-rye/en".into());
+    let mut scheduled = awp_types::ContentItem {
+        id: item.clone(),
+        kind: awp_types::ContentKind::Product,
+        slug: "seeded-rye".into(),
+        language: "en".parse().unwrap(),
+        fields: Default::default(),
+        volatile: Vec::new(),
+        body: None,
+        media: Vec::new(),
+        sources: Vec::new(),
+        schedule: None,
+        state: awp_types::ContentState::Scheduled,
+    };
+    site.store.put(&scheduled).await.unwrap();
+    let message = ChannelInbound::text("whatsapp", "+254700000001", "wa-1", "m-1", "photos");
+    let attached = channel
+        .attach(&message, "draft-gone", &item, "Seeded rye", (0..2).map(photo).collect())
+        .await
+        .unwrap();
+    assert_eq!(attached.photos.len(), 2);
+    let stored = site.store.get(&item).await.unwrap().unwrap();
+    assert_eq!(stored.media.len(), 2);
+    for media in &stored.media {
+        assert!(site.store.read_media(&media.path).await.unwrap().is_some(), "{}", media.path);
+    }
+
+    scheduled.id = ContentId("products/rye-loaf/en".into());
+    scheduled.slug = "rye-loaf".into();
+    scheduled.state = awp_types::ContentState::Published;
+    site.store.put(&scheduled).await.unwrap();
+    let live =
+        channel.attach(&message, "draft-gone", &scheduled.id, "Rye loaf", vec![photo(0)]).await;
+    assert!(live.is_err(), "a live item changes through a release, not the channel");
+}

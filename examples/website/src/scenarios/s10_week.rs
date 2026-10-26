@@ -324,9 +324,10 @@ pub async fn run(mode: Mode) -> Result<Checks> {
     );
     let hour = clock.now().hour();
     checks.gap(
-        "no record of proactive runs to hold against budget and quiet hours outside the kernel's \
-         process runner: the scenario's runs happen at 10:00 UTC, outside the template's quiet \
-         hours, by construction",
+        "the scenario runs its agents directly, not as kernel processes: a served site's kernel \
+         defers each proactive run inside the charter's quiet hours and bounds it by its jobs' \
+         run budget (`deploy::serve`); here the runs happen at 10:00 UTC, outside them, by \
+         construction",
     );
     checks.check(
         "every proactive run inside budget and outside quiet hours",

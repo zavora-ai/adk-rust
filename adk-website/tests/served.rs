@@ -54,6 +54,14 @@ fn charter(dir: &Path) -> Charter {
     serde_json::from_slice(&std::fs::read(dir.join("charter.draft.json")).unwrap()).unwrap()
 }
 
+/// The served kernel holds proactive runs to the charter's quiet hours: a test that waits for
+/// one drops them, so the run is admitted whatever the time of day.
+fn without_quiet_hours(dir: &Path) {
+    let mut draft = charter(dir);
+    draft.reporting.quiet_hours = None;
+    std::fs::write(dir.join("charter.draft.json"), serde_json::to_vec(&draft).unwrap()).unwrap();
+}
+
 /// The owner at a terminal: makes the root, delegates the release key and the card and
 /// receipt key the site uses, and writes the signed contract and key set into `well-known/`.
 async fn owner_signs(dir: &Path) {
@@ -392,6 +400,7 @@ async fn a_feed_batch_publishes_into_the_journal_and_a_held_one_becomes_a_card()
 async fn the_experiments_look_runs_on_its_trigger() {
     let dir = project(SiteKind::Business).await;
     owner_signs(dir.path()).await;
+    without_quiet_hours(dir.path());
     let served = start(dir.path(), |options| {
         options.site.experiments_cron = Some("* * * * * *".into());
     })
@@ -450,6 +459,7 @@ async fn a_signal_wakes_the_back_office_the_kernel_hosts() {
     use adk_model::{ScriptedLlm, ScriptedResponse};
     let dir = project(SiteKind::Business).await;
     owner_signs(dir.path()).await;
+    without_quiet_hours(dir.path());
     let model = Arc::new(ScriptedLlm::new(
         "scripted",
         (0..4).map(|_| ScriptedResponse::text("Nothing to draft today.")).collect::<Vec<_>>(),
@@ -484,5 +494,19 @@ async fn a_signal_wakes_the_back_office_the_kernel_hosts() {
     let run = done.unwrap_or_else(|| panic!("the freshness job ran Growth: {all:#?}"));
     assert_eq!(run.state, RunState::Completed, "{run:#?}");
     assert_eq!(run.input["job"], "freshness");
+    served.shutdown().await.unwrap();
+}
+
+/// The served kernel holds a site's proactive runs to its charter's quiet hours (spec 3.5
+/// §7.21, §5 S10).
+#[tokio::test]
+async fn the_served_kernel_keeps_the_charters_quiet_hours() {
+    let dir = project(SiteKind::Business).await;
+    let served = start(dir.path(), |_| {}).await;
+    let quiet = served.kernel().config().quiet_hours.expect("the charter's quiet hours");
+    assert_eq!(
+        (quiet.start.to_string(), quiet.end.to_string()),
+        ("21:00:00".to_string(), "07:00:00".to_string())
+    );
     served.shutdown().await.unwrap();
 }
