@@ -800,7 +800,7 @@ impl Setup {
             return None;
         }
         let recall = match &self.embedder {
-            Some((_, name)) => format!("Facts are embedded with {name} so related ones are found."),
+            Some((_, name)) => format!("Related facts are found with {name}."),
             None => "Facts are found by shared words; nothing leaves this machine for it.".into(),
         };
         let notice = format!(
