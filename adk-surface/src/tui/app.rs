@@ -60,6 +60,8 @@ pub(crate) struct Failure {
 pub(crate) enum Update {
     Status(StatusLine),
     Agents(Vec<AgentRow>),
+    /// The agents the person removed, whose threads stay readable (spec 3.3 §5.7).
+    Removed(Vec<crate::agents::RemovedAgent>),
     /// A frame of the session shown since the `generation`-th switch: a frame read for a
     /// session shown before is never kept, even when the person came back to it.
     Frame {
@@ -320,6 +322,9 @@ pub(crate) struct App {
     pub generation: u64,
     pub status: Option<StatusLine>,
     pub agents: Vec<AgentRow>,
+    /// The agents the person removed, with their threads: "Removed agents" at the roster's
+    /// foot, read only (spec 3.3 §5.7).
+    pub removed: Vec<crate::agents::RemovedAgent>,
     pub entries: Vec<FeedEntry>,
     pub cards: Vec<OpenCard>,
     pub briefing: Option<Briefing>,
@@ -413,6 +418,7 @@ impl App {
             generation: 0,
             status: None,
             agents: Vec::new(),
+            removed: Vec::new(),
             entries: Vec::new(),
             cards: Vec::new(),
             briefing: None,
@@ -640,6 +646,13 @@ impl App {
             .or_else(|| self.agents.iter().find(|row| Some(row.agent.name.as_str()) == fresh))
     }
 
+    /// The removed agent whose thread `session` is: nothing more is sent there.
+    pub(crate) fn removed_agent_of(&self, session: &str) -> Option<&crate::agents::RemovedAgent> {
+        self.removed
+            .iter()
+            .find(|agent| agent.threads.iter().any(|thread| thread.session_id == session))
+    }
+
     /// The agent whose new thread is shown, before its first message.
     fn fresh_agent(&self) -> Option<&str> {
         match &self.fresh {
@@ -740,6 +753,7 @@ impl App {
         match update {
             Update::Status(status) => self.status = Some(status),
             Update::Agents(agents) => self.agents = agents,
+            Update::Removed(removed) => self.removed = removed,
             Update::Briefing(briefing) => self.briefing = Some(briefing),
             Update::Queued { session, lines } if session == self.session => self.queued = lines,
             Update::Queued { .. } => {}
@@ -1269,7 +1283,12 @@ impl App {
         {
             return effects;
         }
-        if key.kind == KeyEventKind::Press && matches!(c, 'y' | 'a' | 'e' | 'n' | '?') {
+        // `c` is **Change it first** on a suggested agent's card (spec 3.3 §8.2).
+        let changes_first =
+            c == 'c' && self.cards.first().is_some_and(|open| open.card.adds_agent.is_some());
+        if key.kind == KeyEventKind::Press
+            && (matches!(c, 'y' | 'a' | 'e' | 'n' | '?') || changes_first)
+        {
             if self.keys_answer(now) {
                 if self.burst_guard {
                     self.held = Some((c, key, now));
@@ -1371,6 +1390,20 @@ impl App {
         };
         if c == '?' {
             open.details = !open.details;
+            return Vec::new();
+        }
+        // **Change it first**: the form filled in with the suggestion; saving it adds the
+        // agent by hand and ends the suggestion (spec 3.3 §5.7).
+        if c == 'c' {
+            let Some(suggested) = open.card.adds_agent.clone() else {
+                return Vec::new();
+            };
+            self.agents_pane.pane = super::agents::Pane::Form(super::agents::Form::suggested(
+                &suggested.draft,
+                &suggested.id,
+            ));
+            self.agents_pane.note = None;
+            self.set_view(View::Agents, now);
             return Vec::new();
         }
         let answer = match c {
@@ -1513,6 +1546,14 @@ impl App {
                 if let Some(command) = text.strip_prefix('/') {
                     return self.slash(command, now);
                 }
+                // A removed agent's thread is read only (spec 3.3 §5.7): the message stays.
+                if let Some(agent) = self.removed_agent_of(&self.session) {
+                    let note =
+                        words::was_removed(&super::safe::safe_line(&agent.agent.display_name));
+                    self.composer.set(text.to_string());
+                    self.notice(note, Tone::Problem);
+                    return Vec::new();
+                }
                 self.scroll = 0;
                 // The next message clears what the terminal said before it.
                 self.notices_from = self.notice_count;
@@ -1644,6 +1685,21 @@ impl App {
                 super::agents::Ask::Start { agent } => {
                     self.set_view(View::Thread, now);
                     effects.extend(self.open_thread_with(agent));
+                }
+                super::agents::Ask::OpenRemoved { agent } => {
+                    let latest = self
+                        .removed
+                        .iter()
+                        .find(|removed| removed.agent.name == agent)
+                        .and_then(|removed| removed.threads.first())
+                        .map(|thread| thread.session_id.clone());
+                    match latest {
+                        Some(session) => {
+                            self.set_view(View::Thread, now);
+                            effects.extend(self.switch_session(session));
+                        }
+                        None => self.notice("It left no thread.", Tone::Info),
+                    }
                 }
                 super::agents::Ask::Close => self.set_view(View::Thread, now),
             }

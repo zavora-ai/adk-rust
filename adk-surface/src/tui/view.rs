@@ -222,7 +222,29 @@ impl Renderer {
         let inner = width.saturating_sub(2);
         let mut lines = vec![Line::default()];
         lines.push(Line::from(vec![Span::raw(" "), Span::styled("Agents", t.heading())]));
+        // The person's agents sit under their area when the kernel has more than one (spec
+        // 3.3 §5.7 "The roster"); the engine lists them in that order.
+        let mut areas: Vec<&str> = app
+            .agents
+            .iter()
+            .filter(|row| row.added)
+            .filter_map(|row| row.area.as_deref())
+            .collect();
+        areas.dedup();
+        let grouped = areas.len() > 1;
+        let mut area_shown: Option<&str> = None;
         for row in &app.agents {
+            if grouped
+                && row.added
+                && let Some(area) = row.area.as_deref()
+                && area_shown != Some(area)
+            {
+                area_shown = Some(area);
+                lines.push(Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled(fit(&safe_line(area), inner.saturating_sub(1)), t.label()),
+                ]));
+            }
             let (glyph, style) = self.status_style(row.status);
             let selected = row.session_id.as_deref() == Some(app.session.as_str());
             let name = safe_line(&row.agent.display_name);
@@ -244,6 +266,20 @@ impl Renderer {
                 line = line.style(Style::new().bg(t.color(t.palette().decision_strong)));
             }
             lines.push(line);
+        }
+        // "Removed agents" at the roster's foot: Ctrl-G lists them, and their threads stay
+        // readable (spec 3.3 §5.7).
+        if !app.removed.is_empty() {
+            let count = app.removed.len().to_string();
+            let room = inner.saturating_sub(count.width() + 2);
+            let label = fit(words::REMOVED_AGENTS, room);
+            let gap = inner.saturating_sub(1 + label.width() + count.width());
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(label, t.label()),
+                Span::raw(" ".repeat(gap)),
+                Span::styled(count, t.label()),
+            ]));
         }
         lines.push(Line::default());
         lines.push(Line::from(vec![Span::raw(" "), Span::styled("Coming up", t.heading())]));
@@ -621,8 +657,13 @@ impl Renderer {
             )],
             body,
         );
+        // A suggested agent is named, never by the kernel's tool name (§8).
+        let tool_name = match &card.adds_agent {
+            Some(suggested) => suggested.agent.display_name.clone(),
+            None => card.call.tool.clone(),
+        };
         let tool: Row = (
-            vec![Span::styled(safe_line(&card.call.tool), t.text().add_modifier(Modifier::BOLD))],
+            vec![Span::styled(safe_line(&tool_name), t.text().add_modifier(Modifier::BOLD))],
             body,
         );
 
@@ -656,6 +697,44 @@ impl Renderer {
             for line in wrap_spans(vec![Span::styled(details, t.secondary())], inner, 0) {
                 call.push((line.spans, body));
             }
+        } else if let Some(suggested) = &card.adds_agent {
+            // A suggested agent: its definition in full, what it can do, the comparison with
+            // the agent that suggested it, and what it starts with (spec 3.3 §5.7, S-I13).
+            let line = |label: &str, value: &str, style: Style| -> Vec<Row> {
+                wrap_spans(
+                    vec![
+                        Span::styled(format!("  {label}  "), t.label()),
+                        Span::styled(safe_line(value), style),
+                    ],
+                    inner,
+                    4,
+                )
+                .into_iter()
+                .map(|line| (line.spans, body))
+                .collect()
+            };
+            if !suggested.description.is_empty() {
+                call.extend(line("What it does", &suggested.description, t.text()));
+            }
+            for item in &suggested.lines {
+                let style =
+                    if item.mono { t.text().add_modifier(Modifier::BOLD) } else { t.text() };
+                call.extend(line(&item.label, &item.value, style));
+            }
+            for text in safe_lines(&suggested.instructions) {
+                call.extend(line("›", &text, t.secondary()));
+            }
+            for ability in &suggested.abilities {
+                call.extend(line("·", ability, t.text()));
+            }
+            if let Some(compared) = &suggested.compared {
+                call.extend(line("", compared, t.secondary()));
+            }
+            call.extend(line(
+                "Allowed without asking",
+                &suggested.allowed_without_asking,
+                t.text(),
+            ));
         } else {
             let arg_rows = self.compact_args(&card.call.args, inner - 2);
             let shown = if too_long { arg_rows.len().min(COMPACT_ROWS) } else { arg_rows.len() };
@@ -697,6 +776,10 @@ impl Renderer {
         for option in &card.allowed.options {
             keys.push(Span::styled(format!(" {} ", key_of(option.answer)), cap));
             keys.push(Span::styled(format!(" {}   ", option.label), words_style));
+        }
+        if card.adds_agent.is_some() {
+            keys.push(Span::styled(" c ", cap));
+            keys.push(Span::styled(format!(" {}   ", words::CHANGE_IT_FIRST), words_style));
         }
         keys.push(Span::styled(" ? ", cap));
         keys.push(Span::styled(format!(" {DETAILS}"), words_style));
@@ -1129,6 +1212,12 @@ impl Renderer {
                 return Some(pending);
             }
             return Some("Press 1–4 twice to change the mode · Esc to go back".to_string());
+        }
+        // A removed agent's thread is read only (spec 3.3 §5.7).
+        if app.view == View::Thread
+            && let Some(agent) = app.removed_agent_of(&app.session)
+        {
+            return Some(words::was_removed(&safe_line(&agent.agent.display_name)));
         }
         let box_shown = app.view == View::Thread && !app.cards.is_empty() && !app.typing;
         let text = if box_shown && app.box_hidden {

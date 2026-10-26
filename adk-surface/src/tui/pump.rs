@@ -272,6 +272,12 @@ async fn read_state(
         if let Ok(agents) = engine.agents(&caller).await {
             sent &= tx.send(Update::Agents(agents)).is_ok();
         }
+        // "Removed agents" changes only when one is removed: read now and then.
+        if round.is_multiple_of(BRIEFING_EVERY)
+            && let Ok(removed) = engine.removed_agents(&caller).await
+        {
+            sent &= tx.send(Update::Removed(removed)).is_ok();
+        }
         let lines = engine.queued(&caller, &shown);
         sent &= tx.send(Update::Queued { session: shown, lines }).is_ok();
         if (briefing_due || round.is_multiple_of(BRIEFING_EVERY))

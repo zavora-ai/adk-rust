@@ -41,6 +41,8 @@ pub(crate) struct Listed {
     pub area: String,
     pub mode: String,
     pub cant_start: Option<String>,
+    /// Paused by hand: `p` resumes it, whether or not it can start.
+    pub paused: bool,
     /// The agent's definition, for its settings.
     pub definition: Value,
     pub version: u64,
@@ -93,6 +95,11 @@ fn fields() -> Vec<Field> {
 pub(crate) struct Form {
     /// The agent the form changes; `None` for a new one.
     pub editing: Option<String>,
+    /// The version the settings were read at: a change made since is refused, never
+    /// overwritten (spec 3.3 §5.7).
+    pub version: Option<u64>,
+    /// The suggestion **Change it first** replaces, by its agent id.
+    pub replaces: Option<String>,
     pub fields: Vec<Field>,
     pub focus: usize,
     /// The preview of what the form holds now, once Enter asked for it.
@@ -144,6 +151,8 @@ pub(crate) enum Ask {
     Open { session: String },
     /// Open a new thread with `agent`, which has none yet.
     Start { agent: String },
+    /// Open the latest thread of the removed agent `agent`, read only.
+    OpenRemoved { agent: String },
     /// Back to the thread.
     Close,
 }
@@ -152,6 +161,10 @@ pub(crate) enum Ask {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentsPane {
     pub listed: Vec<Listed>,
+    /// The agents the person removed: "Removed agents" at the list's foot, whose threads stay
+    /// readable (spec 3.3 §5.7).
+    pub removed: Vec<Listed>,
+    /// The selected row: one of `listed`, then one of `removed`.
     pub selected: usize,
     pub pane: Pane,
     /// A line under the list: what the last change did, or why it was refused.
@@ -166,6 +179,7 @@ impl Default for AgentsPane {
     fn default() -> Self {
         Self {
             listed: Vec::new(),
+            removed: Vec::new(),
             selected: 0,
             pane: Pane::List,
             note: None,
@@ -185,13 +199,28 @@ pub(crate) fn quote(value: &str) -> String {
 
 impl Form {
     fn new(editing: Option<String>) -> Self {
-        Self { editing, fields: fields(), focus: 0, preview: None }
+        Self { editing, version: None, replaces: None, fields: fields(), focus: 0, preview: None }
     }
 
-    /// The form of `listed`'s settings, filled in from its definition.
+    /// The form of `listed`'s settings, filled in from its definition at its version.
     fn of(listed: &Listed) -> Self {
-        let mut form = Self::new(Some(listed.id.clone()));
-        let definition = &listed.definition;
+        let mut form = Self::filled(Some(listed.id.clone()), &listed.definition);
+        form.version = Some(listed.version);
+        form
+    }
+
+    /// **Change it first**: **Set it up yourself** filled in with the suggestion `draft`,
+    /// which saving it replaces (spec 3.3 §5.7).
+    pub(crate) fn suggested(draft: &crate::agents::AgentDraft, replaces: &str) -> Self {
+        let definition = serde_json::to_value(draft.clone().into_definition()).unwrap_or_default();
+        let mut form = Self::filled(None, &definition);
+        form.replaces = Some(replaces.to_string());
+        form
+    }
+
+    /// A form filled in from `definition`, the kernel's wire form of a definition.
+    fn filled(editing: Option<String>, definition: &Value) -> Self {
+        let mut form = Self::new(editing);
         let text =
             |key: &str| definition.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
         let uses = definition.get("uses").cloned().unwrap_or(Value::Null);
@@ -276,6 +305,12 @@ impl Form {
             Some(id) => vec!["edit".to_string(), quote(id)],
             None => vec!["new".to_string()],
         };
+        if let Some(version) = self.version {
+            words.push(format!("--version {version}"));
+        }
+        if let Some(replaces) = &self.replaces {
+            words.push(format!("--replaces {}", quote(replaces)));
+        }
         for field in &self.fields {
             let value = field.value.trim();
             match field.flag {
@@ -346,14 +381,21 @@ fn preview_of(answer: &Value, args: &str) -> Option<Preview> {
                 vec![agent_words::removing_ends(&safe_line(name), &work)],
             )
         }
-        None => (
-            agent_words::here_is_what_can_do(&safe_line(name)),
-            preview
+        None => {
+            let mut lines: Vec<String> = preview
                 .get("abilities")
                 .and_then(Value::as_array)
                 .map(|items| items.iter().filter_map(Value::as_str).map(safe_line).collect())
-                .unwrap_or_default(),
-        ),
+                .unwrap_or_default();
+            // A change shows each field as "Was … Now …" before it is saved (spec 3.3 §5.7).
+            let text = answer.get("text").and_then(Value::as_str).unwrap_or_default();
+            lines.extend(
+                text.lines()
+                    .filter(|line| line.contains(": Was ") && line.contains(" · Now "))
+                    .map(|line| safe_line(line.trim())),
+            );
+            (agent_words::here_is_what_can_do(&safe_line(name)), lines)
+        }
     };
     Some(Preview {
         heading,
@@ -369,11 +411,14 @@ fn listed_of(view: &Value) -> Option<Listed> {
     let agent = view.get("agent")?;
     let text = |key: &str| agent.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
     let cant_start = view.get("cantStart").and_then(Value::as_str).map(str::to_string);
-    let state = match (cant_start.is_some(), text("state").as_str()) {
-        (true, _) => agent_words::CANT_START,
-        (_, "proposed") => "Suggested",
-        (_, "paused") => agent_words::PAUSED,
-        (_, "removing") => "Removing",
+    let paused = text("state") == "paused";
+    // Paused by hand says what the person did; Can't start shows its reason below.
+    let state = match (paused, cant_start.is_some(), text("state").as_str()) {
+        (true, _, _) => agent_words::PAUSED,
+        (_, true, _) => agent_words::CANT_START,
+        (_, _, "proposed") => "Suggested",
+        (_, _, "removing") => "Removing",
+        (_, _, "removed") => "Removed",
         _ => agent_words::READY,
     };
     let mode = match text("mode").as_str() {
@@ -389,6 +434,7 @@ fn listed_of(view: &Value) -> Option<Listed> {
         area: safe_line(&text("area")),
         mode: mode.to_string(),
         cant_start: cant_start.map(|reason| safe_line(&reason)),
+        paused,
         definition: agent.clone(),
         version: agent.get("version").and_then(Value::as_u64).unwrap_or(0),
     })
@@ -412,8 +458,19 @@ impl AgentsPane {
         self.waiting.as_ref().is_some_and(|(waiting, _)| *waiting == serial)
     }
 
+    /// The agent selected among the person's own; `None` on a removed one.
     fn selected(&self) -> Option<&Listed> {
         self.listed.get(self.selected)
+    }
+
+    /// The removed agent selected, if one is.
+    fn selected_removed(&self) -> Option<&Listed> {
+        self.selected.checked_sub(self.listed.len()).and_then(|at| self.removed.get(at))
+    }
+
+    /// The rows the list shows: the person's agents, then the removed ones.
+    fn rows(&self) -> usize {
+        self.listed.len() + self.removed.len()
     }
 
     /// The answer to the request in flight.
@@ -437,12 +494,14 @@ impl AgentsPane {
         self.no_kernel = None;
         match purpose {
             Purpose::List => {
-                self.listed = answer
+                let all: Vec<Listed> = answer
                     .get("agents")
                     .and_then(Value::as_array)
                     .map(|views| views.iter().filter_map(listed_of).collect())
                     .unwrap_or_default();
-                self.selected = self.selected.min(self.listed.len().saturating_sub(1));
+                (self.removed, self.listed) =
+                    all.into_iter().partition(|listed| listed.state == "Removed");
+                self.selected = self.selected.min(self.rows().saturating_sub(1));
             }
             Purpose::Preview { args } => {
                 let Some(preview) = preview_of(&answer, &args) else {
@@ -471,7 +530,10 @@ impl AgentsPane {
                 };
                 let view = serde_json::json!({ "agent": agent });
                 match (kind, listed_of(&view)) {
-                    ("removed", _) => self.listed.retain(|listed| listed.id != id),
+                    ("removed", listed) => {
+                        self.listed.retain(|listed| listed.id != id);
+                        self.removed.extend(listed);
+                    }
                     (_, Some(listed)) => {
                         match self.listed.iter_mut().find(|known| known.id == id) {
                             Some(known) => *known = listed,
@@ -483,7 +545,7 @@ impl AgentsPane {
                     }
                     _ => {}
                 }
-                self.selected = self.selected.min(self.listed.len().saturating_sub(1));
+                self.selected = self.selected.min(self.rows().saturating_sub(1));
                 self.note = Some((note, false));
                 self.pane = Pane::List;
             }
@@ -544,7 +606,20 @@ impl AgentsPane {
     }
 
     fn list_key(&mut self, key: KeyEvent, roster: &[AgentRow]) -> Option<Vec<Ask>> {
-        let count = self.listed.len();
+        let count = self.rows();
+        // A removed agent's threads are read only: Enter opens the latest, nothing changes it.
+        if let Some((id, name)) =
+            self.selected_removed().map(|removed| (removed.id.clone(), removed.name.clone()))
+        {
+            match key.code {
+                KeyCode::Enter => return Some(vec![Ask::OpenRemoved { agent: id }]),
+                KeyCode::Char('e' | 'p' | 'x') => {
+                    self.note = Some((crate::words::was_removed(&name), true));
+                    return Some(Vec::new());
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Up => {
                 self.selected = self.selected.saturating_sub(1);
@@ -578,7 +653,7 @@ impl AgentsPane {
             }
             KeyCode::Char('p') => {
                 let listed = self.selected()?;
-                let verb = if listed.state == agent_words::PAUSED { "resume" } else { "pause" };
+                let verb = if listed.paused { "resume" } else { "pause" };
                 let args = format!("{verb} {}", quote(&listed.id));
                 Some(vec![Ask::Run {
                     args: format!("{args} --json"),
@@ -696,6 +771,7 @@ pub(crate) fn lines(pane: &AgentsPane, theme: &Theme, width: usize) -> Vec<Line<
                     t.label(),
                 )));
             }
+            let removed_from = pane.listed.len();
             for (index, listed) in pane.listed.iter().enumerate() {
                 let selected = index == pane.selected;
                 let marker = if selected { "› " } else { "  " };
@@ -709,6 +785,22 @@ pub(crate) fn lines(pane: &AgentsPane, theme: &Theme, width: usize) -> Vec<Line<
                 ]));
                 if let Some(reason) = &listed.cant_start {
                     lines.push(Line::from(Span::styled(format!("    {reason}"), t.label())));
+                }
+            }
+            // "Removed agents" at the foot: their threads stay readable (spec 3.3 §5.7).
+            if !pane.removed.is_empty() {
+                lines.push(Line::default());
+                lines.push(Line::from(Span::styled(
+                    crate::words::REMOVED_AGENTS.to_string(),
+                    t.label().add_modifier(Modifier::BOLD),
+                )));
+                for (index, removed) in pane.removed.iter().enumerate() {
+                    let selected = removed_from + index == pane.selected;
+                    lines.push(Line::from(vec![
+                        Span::styled(if selected { "› " } else { "  " }.to_string(), t.accent()),
+                        Span::styled(format!("{:<24}", removed.name), t.label()),
+                        Span::styled("enter reads its threads".to_string(), t.label()),
+                    ]));
                 }
             }
             lines.push(Line::default());
@@ -979,7 +1071,57 @@ mod tests {
         assert_eq!(value("files"), "read");
         assert_eq!(value("folder"), "Invoices");
         assert_eq!(value("asks"), "ask-first");
-        assert!(form.args().starts_with("edit finance --name"));
+        // Wave 3 finding 14: made against the version read, so a change since is refused.
+        assert!(form.args().starts_with("edit finance --version 2 --name"), "{}", form.args());
+    }
+
+    /// Wave 3 finding 40: an agent paused by hand that also cannot start shows Paused, and `p`
+    /// resumes it.
+    #[test]
+    fn a_paused_agent_that_cannot_start_is_resumed_with_p() {
+        let mut pane = AgentsPane::default();
+        pane.sent(1, Purpose::List);
+        let mut list = listed();
+        list["agents"][0]["agent"]["state"] = json!("paused");
+        list["agents"][0]["cantStart"] = json!("No key for OpenAI");
+        pane.done(Ok(list.to_string()));
+        assert_eq!(pane.listed[0].state, "Paused");
+        let asks = pane.key(key(KeyCode::Char('p')), &[]).unwrap();
+        assert!(
+            matches!(&asks[0], Ask::Run { args, .. } if args == "resume finance --json"),
+            "{asks:?}"
+        );
+    }
+
+    /// Wave 3 findings 10, 11 and 39: removed agents are listed under "Removed agents"; Enter
+    /// opens a thread read only and nothing changes them.
+    #[test]
+    fn removed_agents_sit_at_the_foot_and_open_read_only() {
+        let mut pane = AgentsPane::default();
+        pane.sent(1, Purpose::List);
+        let mut list = listed();
+        let mut gone = list["agents"][0].clone();
+        gone["agent"]["id"] = json!("bills");
+        gone["agent"]["displayName"] = json!("Bills");
+        gone["agent"]["state"] = json!("removed");
+        list["agents"].as_array_mut().unwrap().push(gone);
+        pane.done(Ok(list.to_string()));
+        assert_eq!((pane.listed.len(), pane.removed.len()), (1, 1));
+        pane.key(key(KeyCode::Down), &[]).unwrap();
+        let asks = pane.key(key(KeyCode::Enter), &[]).unwrap();
+        assert_eq!(asks, [Ask::OpenRemoved { agent: "bills".into() }]);
+        assert_eq!(pane.key(key(KeyCode::Char('x')), &[]).unwrap(), Vec::new());
+        assert!(pane.note.as_ref().unwrap().0.contains("Bills was removed"));
+    }
+
+    /// Wave 3 finding 42: **Change it first** fills the form with the suggestion and adds it in
+    /// its place.
+    #[test]
+    fn change_it_first_fills_the_form_and_replaces_the_suggestion() {
+        let draft = crate::agents::AgentDraft::new("Finance", "default");
+        let form = Form::suggested(&draft, "finance");
+        let args = form.args();
+        assert!(args.starts_with("new --replaces finance --name Finance"), "{args}");
     }
 
     #[test]

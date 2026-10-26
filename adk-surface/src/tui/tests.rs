@@ -2424,3 +2424,148 @@ fn a_kernel_asked_decision_shows_its_summary() {
     let printed = String::from_utf8(printer.into_inner()).unwrap();
     assert!(printed.contains("Finance suggests this."), "{printed}");
 }
+
+// ---------------------------------------------------------------------------
+// Wave 3 review, agents you create: each test fails on its base before its fix.
+// ---------------------------------------------------------------------------
+
+/// A suggested agent's card, as the kernel draws it.
+fn suggestion() -> DecisionCard {
+    let mut card = card(
+        "agent-finance-0123456789ab",
+        "kernel:agent.create",
+        json!({ "definition": { "displayName": "Finance" } }),
+    );
+    card.adds_agent = Some(crate::agents::AgentCardView {
+        id: "finance".into(),
+        agent: agent("Finance"),
+        description: "Reads invoices".into(),
+        lines: vec![crate::agents::CardLine {
+            label: "Files".into(),
+            value: "Reads files in Invoices".into(),
+            mono: false,
+        }],
+        instructions: "Read the invoices.".into(),
+        instructions_truncated: false,
+        abilities: vec!["Read your files in Invoices".into()],
+        compared: Some("It can do no more than ADK-Rust, and has no shell or web.".into()),
+        allowed_without_asking: "Nothing yet".into(),
+        draft: crate::agents::AgentDraft::new("Finance", "default"),
+    });
+    card
+}
+
+/// Wave 3 finding 42: a suggested agent's card shows the agent — what it does, what it can
+/// do, the comparison and "Nothing yet" — never the kernel's tool, and `c` is **Change it
+/// first**: the form filled in with the suggestion, which saving it replaces.
+#[test]
+fn a_suggested_agent_s_card_shows_the_agent_and_c_changes_it_first() {
+    let shown = Instant::now();
+    let mut app = app_with(vec![suggestion()], shown);
+    let all = screen_text(&app, Appearance::Light, 150, 40).join("\n");
+    for expected in [
+        "What it does Reads invoices",
+        "Files Reads files in Invoices",
+        "› Read the invoices.",
+        "· Read your files in Invoices",
+        "It can do no more than ADK-Rust, and has no shell or web.",
+        "Allowed without asking Nothing yet",
+        " c  Change it first",
+    ] {
+        assert!(all.contains(expected), "{expected:?} missing:\n{all}");
+    }
+    assert!(!all.contains("kernel:agent.create"), "{all}");
+
+    let effects = app.key(key(KeyCode::Char('c')), shown + ARM_DELAY * 4);
+    assert!(!decides(&effects), "{effects:?}");
+    assert_eq!(app.view, View::Agents);
+    let super::agents::Pane::Form(form) = &app.agents_pane.pane else {
+        panic!("no form: {:?}", app.agents_pane.pane);
+    };
+    assert_eq!((form.editing.as_deref(), form.replaces.as_deref()), (None, Some("finance")));
+    let name = form.fields.iter().find(|field| field.flag == "name").map(|field| &field.value);
+    assert_eq!(name.map(String::as_str), Some("Finance"));
+
+    // On any other card `c` is not a key of the box.
+    let mut app = app_with(vec![invoice()], shown);
+    app.key(key(KeyCode::Char('c')), shown + ARM_DELAY * 4);
+    assert_eq!(app.view, View::Thread);
+}
+
+/// An added agent's roster row in `area`.
+fn added_row(name: &str, area: &str) -> AgentRow {
+    AgentRow {
+        agent: agent(name),
+        status: AgentStatus::Ready,
+        status_text: "Ready".into(),
+        wake_at: None,
+        session_id: None,
+        area: Some(area.into()),
+        mode: None,
+        added: true,
+        can_change: true,
+    }
+}
+
+/// Wave 3 finding 43: with more than one area, the person's agents sit under their area in
+/// the roster, in the order the engine lists them.
+#[test]
+fn added_agents_sit_under_their_area_in_the_roster() {
+    let now = Instant::now();
+    let mut app = App::new("adk-rust", SESSION.into());
+    let mut primary = added_row("ADK-Rust", "Home");
+    (primary.added, primary.area, primary.session_id) = (false, None, Some(SESSION.into()));
+    app.update(
+        Update::Agents(vec![
+            primary,
+            added_row("Bills", "Home"),
+            added_row("Archive", "Work"),
+            added_row("Builder", "Work"),
+        ]),
+        now,
+    );
+    let rows = screen_text(&app, Appearance::Light, 150, 40);
+    let at = |needle: &str| row_of(&rows, needle).unwrap_or_else(|| panic!("{needle}: {rows:#?}"));
+    assert!(at("ADK-Rust") < at(" Home"));
+    assert!(at(" Home") < at("Bills") && at("Bills") < at(" Work"));
+    assert!(at(" Work") < at("Archive") && at("Archive") < at("Builder"));
+
+    // One area: no heading.
+    let mut app = App::new("adk-rust", SESSION.into());
+    app.update(Update::Agents(vec![added_row("Bills", "Home")]), now);
+    let rows = screen_text(&app, Appearance::Light, 150, 40);
+    assert!(row_of(&rows, " Home ").is_none(), "{rows:#?}");
+}
+
+/// Wave 3 findings 10, 11 and 39: "Removed agents" sits at the roster's foot; a removed
+/// agent's thread opens read only, and a message typed there is kept, not sent.
+#[test]
+fn a_removed_agent_s_thread_is_read_only() {
+    let now = Instant::now();
+    let mut app = App::new("adk-rust", SESSION.into());
+    app.update(Update::Agents(vec![added_row("Finance", "Home")]), now);
+    app.update(
+        Update::Removed(vec![crate::agents::RemovedAgent {
+            agent: agent("Bills"),
+            removed_text: "Removed on 25 Oct".into(),
+            threads: vec![crate::agents::RemovedThread {
+                session_id: "bills-1".into(),
+                at: Utc::now(),
+                when: "25 Oct 10:02".into(),
+            }],
+        }]),
+        now,
+    );
+    let all = screen_text(&app, Appearance::Light, 150, 40).join("\n");
+    assert!(all.contains("Removed agents"), "{all}");
+
+    assert_eq!(app.switch_session("bills-1".into()), vec![Effect::Session("bills-1".into())]);
+    type_text(&mut app, "one more invoice", now);
+    let effects = app.key(key(KeyCode::Enter), now);
+    assert!(
+        !effects.iter().any(|effect| matches!(effect, Effect::Execute(_))),
+        "nothing is sent: {effects:?}"
+    );
+    assert_eq!(app.composer.text, "one more invoice");
+    assert!(notices(&app).contains("Bills was removed"), "{}", notices(&app));
+}

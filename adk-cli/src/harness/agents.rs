@@ -16,8 +16,11 @@
 //! | `remove AGENT` | Removes an agent, naming what ends |
 //!
 //! Fields: `--name`, `--does`, `--instructions`, `--area`, `--asks`, `--model`, `--files`,
-//! `--folder`, `--shell`, `--web`, `--pack`, `--driver`, `--limit`, `--colour`. `--json`
-//! answers in JSON, for the terminal's Agents view and `adk-rust agents --output json`.
+//! `--folder`, `--shell`, `--web`, `--pack`, `--driver`, `--limit`, `--colour`. `--version N`
+//! makes an edit or removal against the version the person saw, so a change made since is
+//! refused rather than overwritten; `--replaces ID` adds the agent in place of a waiting
+//! suggestion (**Change it first**). `--json` answers in JSON, with the preview's words in
+//! `text`, for the terminal's Agents view and `adk-rust agents --output json`.
 
 use std::fmt::Write as _;
 
@@ -121,6 +124,8 @@ struct Line {
     confirm: Option<String>,
     /// The version an edit or removal was made against: the one the person saw.
     version: Option<u64>,
+    /// The suggestion a new agent replaces: **Change it first** (spec 3.3 §5.7).
+    replaces: Option<String>,
     json: bool,
 }
 
@@ -167,6 +172,8 @@ fn parse(args: &str) -> Result<Line> {
         };
         if flag == "confirm" {
             line.confirm = Some(value);
+        } else if flag == "replaces" {
+            line.replaces = Some(value);
         } else if flag == "version" {
             line.version = Some(value.parse().map_err(|_| {
                 invalid(format!("--version is the agent's version as shown, not `{value}`"))
@@ -630,7 +637,7 @@ pub(crate) async fn run(
                 definition.color = AvatarColor::for_name(&definition.display_name);
             }
             let name = definition.display_name.clone();
-            let action = AgentAction::Create { definition, replaces: None };
+            let action = AgentAction::Create { definition, replaces: line.replaces.clone() };
             confirm_or_preview(
                 &agents,
                 &caller,

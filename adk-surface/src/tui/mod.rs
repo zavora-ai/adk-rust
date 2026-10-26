@@ -505,6 +505,9 @@ impl TerminalSurface {
         if let Ok(agents) = engine.agents(caller).await {
             app.update(app::Update::Agents(agents), now);
         }
+        if let Ok(removed) = engine.removed_agents(caller).await {
+            app.update(app::Update::Removed(removed), now);
+        }
         if let Ok(briefing) = engine.briefing(caller, pump::start_of_today()).await {
             app.update(app::Update::Briefing(briefing), now);
         }

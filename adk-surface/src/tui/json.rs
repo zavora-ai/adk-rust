@@ -1,7 +1,7 @@
 //! JSON lines for CI (spec 3.3 §5.2): the engine's events of one session, one per line, then
 //! how the turn ended, as a line and as the exit code.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
@@ -220,10 +220,28 @@ fn frame_line(out: &mut impl Write, frame: &FeedFrame) -> io::Result<()> {
     line(out, &serde_json::to_value(frame).map_err(io::Error::other)?)
 }
 
+/// Each agent's version, by id: a change to any field of its definition moves it.
+pub(crate) type Versions = BTreeMap<String, u64>;
+
+/// The versions of `caller`'s agents now; none when they cannot be read.
+async fn versions(engine: &SurfaceEngine, caller: &Caller) -> Versions {
+    engine
+        .agent_details(caller)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|detail| (detail.id, detail.version))
+        .collect()
+}
+
 /// The `agent` lines between two rosters (spec 3.3 §5.2, §5.7: "one line per agent change"):
-/// for each agent a person added, `added`, `changed` (its name, colour, area or mode),
-/// `paused`, `resumed` or `removed`, with its roster row as the terminal shows it.
-pub(crate) fn agent_changes(was: &[AgentRow], now: &[AgentRow]) -> Vec<Value> {
+/// for each agent a person added, `added`, `changed` (any field of its definition: its
+/// version moved), `paused`, `resumed` or `removed`, with its roster row as the terminal
+/// shows it.
+pub(crate) fn agent_changes(
+    (was, was_versions): (&[AgentRow], &Versions),
+    (now, now_versions): (&[AgentRow], &Versions),
+) -> Vec<Value> {
     let added = |rows: &[AgentRow]| -> Vec<AgentRow> {
         rows.iter().filter(|row| row.added).cloned().collect()
     };
@@ -238,7 +256,8 @@ pub(crate) fn agent_changes(was: &[AgentRow], now: &[AgentRow]) -> Vec<Value> {
             Some(before)
                 if before.agent != row.agent
                     || before.area != row.area
-                    || before.mode != row.mode =>
+                    || before.mode != row.mode
+                    || was_versions.get(&row.agent.name) != now_versions.get(&row.agent.name) =>
             {
                 Some("changed")
             }
@@ -369,6 +388,7 @@ pub(crate) async fn run<W: Write + Send>(
     }
     // The roster as the run began; each later change of an added agent is one `agent` line.
     let mut roster = engine.agents(caller).await.unwrap_or_default();
+    let mut known = versions(engine, caller).await;
     let mut last = baseline;
     let mut cards: Option<Vec<(String, u64)>> = None;
     let mut feed = engine.feed(caller.clone(), session.clone(), Some(last));
@@ -403,10 +423,12 @@ pub(crate) async fn run<W: Write + Send>(
             },
             _ = tick.tick() => {
                 if let Ok(now) = engine.agents(caller).await {
-                    for change in agent_changes(&roster, &now) {
+                    let now_known = versions(engine, caller).await;
+                    for change in agent_changes((&roster, &known), (&now, &now_known)) {
                         line(&mut out, &change)?;
                     }
                     roster = now;
+                    known = now_known;
                 }
                 if let Some(end) = settler.check(engine, caller, &session).await {
                     // What the feed has not shown yet, so the lines are complete.
@@ -435,7 +457,7 @@ pub(crate) async fn run<W: Write + Send>(
 
 #[cfg(test)]
 mod tests {
-    use super::agent_changes;
+    use super::{Versions, agent_changes};
     use crate::model::{AgentRef, AgentRow, AgentStatus, Avatar};
 
     fn row(name: &str, display: &str, status: AgentStatus, added: bool) -> AgentRow {
@@ -457,6 +479,13 @@ mod tests {
     }
 
     fn changes(was: &[AgentRow], now: &[AgentRow]) -> Vec<(String, String)> {
+        versioned((was, &Versions::new()), (now, &Versions::new()))
+    }
+
+    fn versioned(
+        was: (&[AgentRow], &Versions),
+        now: (&[AgentRow], &Versions),
+    ) -> Vec<(String, String)> {
         agent_changes(was, now)
             .into_iter()
             .map(|line| {
@@ -490,5 +519,16 @@ mod tests {
         let working = [idle.clone(), row("finance", "Finance", AgentStatus::Working, true)];
         assert!(changes(&added, &working).is_empty(), "work is not a change of the agent");
         assert_eq!(changes(&added, &[idle]), [("removed".into(), "finance".into())]);
+    }
+
+    /// Wave 3 finding 41: a change to a field the roster row does not show — instructions,
+    /// what it can use — is one line too, found by its version.
+    #[test]
+    fn a_change_the_row_does_not_show_is_one_line() {
+        let rows = [row("finance", "Finance", AgentStatus::Ready, true)];
+        let v1 = Versions::from([("finance".to_string(), 1)]);
+        let v2 = Versions::from([("finance".to_string(), 2)]);
+        assert!(versioned((&rows, &v1), (&rows, &v1)).is_empty());
+        assert_eq!(versioned((&rows, &v1), (&rows, &v2)), [("changed".into(), "finance".into())]);
     }
 }
