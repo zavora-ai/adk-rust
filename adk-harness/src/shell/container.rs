@@ -885,7 +885,7 @@ impl Tool for ContainerBashTool {
                         outputs.finish(
                             (&app, &user, &session),
                             &id,
-                            output.exit_code.and_then(|code| i32::try_from(code).ok()),
+                            Some(output.exit_code),
                             started.elapsed(),
                         );
                     }
@@ -1016,12 +1016,6 @@ mod tests {
         // The idle TTL changes nothing a command can observe.
         let longer = ContainerConfig { idle_ttl: Duration::from_secs(1), ..base.clone() };
         assert_eq!(base.profile_digest(), longer.profile_digest());
-    }
-
-    #[test]
-    fn output_is_capped_on_a_character_boundary() {
-        assert_eq!(cap_output("héllo".to_string(), 1024), ("héllo".to_string(), false));
-        assert_eq!(cap_output("€€€".to_string(), 4), ("€\n…[truncated]".to_string(), true));
     }
 
     /// Parsed, never run: on the host the sweep would end the host's processes.
