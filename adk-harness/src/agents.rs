@@ -705,13 +705,13 @@ impl RuleSuggestion {
     /// ```rust
     /// use adk_core::principal::{SubjectKind, SubjectRef};
     /// use adk_core::{ToolConfirmationRequest, ToolOrigin};
-    /// use adk_harness::{RuleOwner, RuleSuggestion, StandingDecision};
+    /// use adk_harness::{RuleOwner, StandingDecision, StandingRule};
     /// use serde_json::json;
     ///
-    /// let origin = ToolOrigin::new("static", &json!({ "name": "read_file" }), None);
-    /// let request = ToolConfirmationRequest::new("read_file", json!({ "path": "a.md" }))
+    /// let origin = ToolOrigin::new("static", &json!({ "name": "write_file" }), None);
+    /// let request = ToolConfirmationRequest::new("write_file", json!({ "path": "notes/a.md" }))
     ///     .with_origin(origin);
-    /// let suggestion = RuleSuggestion::for_request(&request).unwrap();
+    /// let suggestion = StandingRule::suggestions(&request).remove(0);
     /// let owner = RuleOwner {
     ///     app_name: "adk-rust".into(),
     ///     user_id: "ana".into(),
