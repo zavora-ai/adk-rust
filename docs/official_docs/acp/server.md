@@ -263,7 +263,11 @@ Before each permission request the server also asks
 already decides the call. A model turn can hold several calls; when the person
 answers "Always allow" for the first, a later call of the same turn that the new
 rule covers is decided by the rule and not asked about, so the person is never
-shown a question whose answer the rule would override. `HarnessAgent` answers it
+shown a question whose answer the rule would override. An "always" answer that
+differs from an answer the person gave an earlier call of the same turn — "Deny"
+for `cargo test -p a`, then "Always allow" for `cargo test -p b` — is remembered
+once that turn's calls have run, so `cargo test -p a` stays denied; until then
+the turn's later calls are asked about. `HarnessAgent` answers it
 by re-checking the call as its terminal prompt does: a rule answers only the
 harness's own approval, so a call another policy layer also holds, or one the
 harness holds without a waiver, is still asked about.
