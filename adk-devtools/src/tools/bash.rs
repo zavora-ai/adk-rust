@@ -184,6 +184,8 @@ impl BashTool {
             })
             .collect();
         let kill = Arc::new(Notify::new());
+        #[cfg(windows)]
+        let job = group.job.clone();
         let done = tokio::spawn(supervise(child, group, kill_group_on_exit, pumps, kill.clone()));
         Ok(RunningCommand {
             command: command.to_string(),
@@ -193,6 +195,8 @@ impl BashTool {
             done,
             exit: None,
             started: Instant::now(),
+            #[cfg(windows)]
+            job,
         })
     }
 
@@ -225,7 +229,10 @@ impl BashTool {
                     |file: std::fs::File| -> Pipe { Box::new(tokio::fs::File::from_std(file)) };
                 return Ok((
                     Running::Contained(process),
-                    ProcessGroupGuard { job: Some(job), keep_on_exit: !kill_group_on_exit },
+                    ProcessGroupGuard {
+                        job: Some(Arc::new(job)),
+                        keep_on_exit: !kill_group_on_exit,
+                    },
                     stdout.map(pipe),
                     stderr.map(pipe),
                 ));
@@ -305,6 +312,9 @@ pub struct RunningCommand {
     /// The exit code once [`wait`](Self::wait) has seen it.
     exit: Option<Option<i32>>,
     started: Instant,
+    /// The command's Job Object, shared with its supervising task.
+    #[cfg(windows)]
+    job: Option<Arc<JobObject>>,
 }
 
 impl std::fmt::Debug for RunningCommand {
@@ -417,6 +427,14 @@ impl Drop for RunningCommand {
     fn drop(&mut self) {
         if self.exit.is_none() {
             self.kill.notify_one();
+            // The supervising task may not run again before the caller blocks or the
+            // runtime stops, so a dropped call ends its job here, waiting as the guard does.
+            #[cfg(windows)]
+            if !self.done.is_finished()
+                && let Some(job) = &self.job
+            {
+                note_termination(job.terminate_and_wait(JobObject::TERMINATION_WAIT));
+            }
         }
     }
 }
@@ -520,12 +538,12 @@ impl BashTool {
         // On failure the suspended child is dropped, and `kill_on_drop` ends it.
         #[cfg(windows)]
         let group = ProcessGroupGuard {
-            job: Some(contain(&child).map_err(|error| {
+            job: Some(Arc::new(contain(&child).map_err(|error| {
                 DevToolError::Other(format!(
                     "the command could not be placed in a Job Object, which stops the \
                      processes it starts, so it was not run: {error}"
                 ))
-            })?),
+            })?)),
             keep_on_exit: !kill_group_on_exit,
         };
         #[cfg(not(any(unix, windows)))]
@@ -595,7 +613,7 @@ struct ProcessGroupGuard {
     #[cfg(unix)]
     pid: Option<u32>,
     #[cfg(windows)]
-    job: Option<JobObject>,
+    job: Option<Arc<JobObject>>,
     /// Whether the job's processes keep running once the call ends normally.
     #[cfg(windows)]
     keep_on_exit: bool,
@@ -630,8 +648,8 @@ impl ProcessGroupGuard {
         {
             self.pid = None;
         }
-        // The job's last handle closes here, which kills what is left in it unless the
-        // workspace keeps background processes.
+        // The guard's handle closes here; the job's last one kills what is left in it
+        // unless the workspace keeps background processes.
         #[cfg(windows)]
         if let Some(job) = self.job.take()
             && self.keep_on_exit
