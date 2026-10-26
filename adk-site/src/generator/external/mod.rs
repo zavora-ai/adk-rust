@@ -546,7 +546,12 @@ impl ExternalGenerator {
                 format!("no OS sandbox is available ({e}); external generators run only sandboxed, with no network"),
             )
         })?;
-        let policy = self.policy(run, output)?;
+        let mut policy = self.policy(run, output)?;
+        let enforcer: Box<dyn adk_sandbox::SandboxEnforcer> = if enforcer.name() == "bubblewrap" {
+            Box::new(SystemRoot::grant(enforcer, &mut policy))
+        } else {
+            enforcer
+        };
         let mut command = adk_sandbox::sandbox::sandboxed_command(
             enforcer.as_ref(),
             self.program.as_os_str(),
@@ -762,6 +767,87 @@ impl SiteGenerator for ExternalGenerator {
         let mut report = self.assemble(&export, &generated, out)?;
         report.generator = generator;
         Ok(report)
+    }
+}
+
+/// System directories a generator reads under bubblewrap, which starts from an empty root:
+/// without them the dynamic loader, libc and a script's interpreter are missing.
+const SYSTEM_READ: &[&str] = &["/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/etc"];
+
+/// Bubblewrap with `/dev`, `/proc` and the symlinked system directories recreated as links.
+///
+/// On a merged-`/usr` system `/bin`, `/lib` and `/lib64` are symlinks into `/usr`; binding one
+/// mounts its target, so the link path — the dynamic loader's path among them — would be
+/// missing inside.
+struct SystemRoot {
+    inner: Box<dyn adk_sandbox::SandboxEnforcer>,
+    links: Vec<(OsString, PathBuf)>,
+}
+
+impl SystemRoot {
+    /// Wraps `inner`, adding [`SYSTEM_READ`] to `policy` read-only: a real directory as
+    /// itself, a symlinked one as its target plus the link.
+    fn grant(
+        inner: Box<dyn adk_sandbox::SandboxEnforcer>,
+        policy: &mut adk_sandbox::SandboxPolicy,
+    ) -> Self {
+        let mut read = |path: &Path| {
+            policy.allowed_paths.push(adk_sandbox::AllowedPath {
+                path: path.to_path_buf(),
+                mode: adk_sandbox::AccessMode::ReadOnly,
+            });
+        };
+        let mut links = Vec::new();
+        for dir in SYSTEM_READ.iter().map(Path::new) {
+            let Ok(metadata) = std::fs::symlink_metadata(dir) else { continue };
+            if !metadata.file_type().is_symlink() {
+                read(dir);
+            } else if let (Ok(text), Ok(target)) = (std::fs::read_link(dir), dir.canonicalize()) {
+                read(&target);
+                links.push((text.into_os_string(), dir.to_path_buf()));
+            }
+        }
+        Self { inner, links }
+    }
+}
+
+impl adk_sandbox::SandboxEnforcer for SystemRoot {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn probe(&self) -> std::result::Result<(), adk_sandbox::SandboxError> {
+        self.inner.probe()
+    }
+
+    fn wrap_command(
+        &self,
+        program: &std::ffi::OsStr,
+        args: &[OsString],
+        policy: &adk_sandbox::SandboxPolicy,
+    ) -> std::result::Result<adk_sandbox::WrappedCommand, adk_sandbox::SandboxError> {
+        let mut wrapped = self.inner.wrap_command(program, args, policy)?;
+        let separator =
+            wrapped.args.iter().position(|arg| arg == "--").unwrap_or(wrapped.args.len());
+        let mut extra: Vec<OsString> =
+            ["--dev", "/dev", "--proc", "/proc"].into_iter().map(OsString::from).collect();
+        for (text, link) in &self.links {
+            extra.extend([
+                OsString::from("--symlink"),
+                text.clone(),
+                link.clone().into_os_string(),
+            ]);
+        }
+        wrapped.args.splice(separator..separator, extra);
+        Ok(wrapped)
+    }
+
+    fn configure_command(
+        &self,
+        cmd: &mut tokio::process::Command,
+        policy: &adk_sandbox::SandboxPolicy,
+    ) -> std::result::Result<(), adk_sandbox::SandboxError> {
+        self.inner.configure_command(cmd, policy)
     }
 }
 

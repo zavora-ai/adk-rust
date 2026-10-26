@@ -16,7 +16,7 @@ pub(crate) enum Edited {
 pub(crate) async fn edit_json(console: &ConsoleIo, args: &Value) -> Edited {
     let current = serde_json::to_string_pretty(args).unwrap_or_else(|_| args.to_string());
     let text = match console.can_open_editor().then(external_editor).flatten() {
-        Some(editor) => match run_editor(editor, current).await {
+        Some(editor) => match run_editor(editor, current, "json").await {
             Ok(text) => text,
             Err(error) => return Edited::Unchanged(format!("editor failed: {error}")),
         },
@@ -35,6 +35,31 @@ pub(crate) async fn edit_json(console: &ConsoleIo, args: &Value) -> Edited {
     }
 }
 
+/// Lets the person edit the document `current`: in `$VISUAL`/`$EDITOR` on a real terminal,
+/// otherwise as one typed line. `Ok(None)` when nothing changed or the editor failed (the
+/// failure is printed); `Err(())` when the person pressed Ctrl-C.
+pub(crate) async fn edit_text(
+    console: &ConsoleIo,
+    current: &str,
+    extension: &str,
+) -> Result<Option<String>, ()> {
+    let text = match console.can_open_editor().then(external_editor).flatten() {
+        Some(editor) => match run_editor(editor, current.to_string(), extension).await {
+            Ok(text) => text,
+            Err(error) => {
+                console.print(&format!("  editor failed: {error}\n"));
+                return Ok(None);
+            }
+        },
+        None => match console.read_line("  calls (JSON array) > ").await {
+            ConsoleInput::Line(text) => text,
+            ConsoleInput::Interrupted => return Err(()),
+            ConsoleInput::Eof => return Ok(None),
+        },
+    };
+    Ok((!text.trim().is_empty() && text != current).then_some(text))
+}
+
 /// The editor named by `$VISUAL` or `$EDITOR`.
 fn external_editor() -> Option<String> {
     ["VISUAL", "EDITOR"]
@@ -43,11 +68,12 @@ fn external_editor() -> Option<String> {
         .find(|editor| !editor.trim().is_empty())
 }
 
-/// Opens `current` in `editor` and returns the saved text.
-async fn run_editor(editor: String, current: String) -> std::io::Result<String> {
+/// Opens `current` in `editor` as a `.{extension}` file and returns the saved text.
+async fn run_editor(editor: String, current: String, extension: &str) -> std::io::Result<String> {
+    let extension = extension.to_string();
     tokio::task::spawn_blocking(move || {
         let path = std::env::temp_dir().join(format!(
-            "adk-tool-args-{}-{}.json",
+            "adk-tool-args-{}-{}.{extension}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

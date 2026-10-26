@@ -1,5 +1,6 @@
 //! The individual developer tools.
 
+pub mod apply_patch;
 pub mod bash;
 pub mod edit;
 pub mod glob;
@@ -7,6 +8,7 @@ pub mod grep;
 pub mod read;
 pub mod write;
 
+pub use apply_patch::ApplyPatchTool;
 pub use bash::BashTool;
 pub use edit::EditFileTool;
 pub use glob::GlobTool;

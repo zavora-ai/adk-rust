@@ -21,8 +21,8 @@ use adk_website::kinds::CharterInputs;
 use adk_website::onboarding::build::SitePlan;
 use adk_website::team::AgentRole;
 use awp_types::{
-    Channel, Charter, ContentId, ContentItem, ContentKind, ContentState, LeadRef, Markdown, Role,
-    SignalKind, SiteKind, SiteState,
+    Bounded, Channel, Charter, ContentId, ContentItem, ContentKind, ContentState, LeadRef,
+    Markdown, Role, SignalKind, SiteKind, SiteState,
 };
 use axum::http::{StatusCode, header};
 use common::edge::edge;
@@ -268,4 +268,56 @@ async fn every_release_is_announced_on_the_edges_events() {
     let edge = edge(&site, "juniper.example").await;
     launch(&site, "Juniper Bakery", "KES", vec![product("rye-loaf", "Rye loaf", 450)]).await;
     assert_eq!(*edge.announced.seen.lock().unwrap(), [(1, true)], "site.release.published");
+}
+
+/// The Concierge on the edge (spec 3.5 §7.10, A-I2, A-I3): built over the edge's own tools,
+/// it searches with the declared `search_site` capability and files a typed signal through
+/// the edge's `emit_signal`, which lands on the back office's agenda.
+#[tokio::test]
+async fn the_concierge_answers_with_the_edges_tools_and_signals_the_back_office() {
+    let site = Site::new(SiteKind::Business, "Juniper Bakery", "juniper.example", &["en"]).await;
+    let gap = SignalKind::ContentGap {
+        topic: Bounded::new("wedding cakes", 120).unwrap(),
+        question_count: 1,
+        samples: vec![Bounded::truncated("Do you bake wedding cakes?", 200)],
+    };
+    let model = Arc::new(adk_model::ScriptedLlm::new(
+        "scripted",
+        vec![
+            adk_model::ScriptedResponse::function_calls(vec![
+                ("search_site", json!({ "query": "wedding cakes" })),
+                ("emit_signal", json!({ "kind": serde_json::to_value(&gap).unwrap() })),
+            ]),
+            adk_model::ScriptedResponse::text("I have asked the bakery about wedding cakes."),
+        ],
+    ));
+    let workspace = tempfile::tempdir().unwrap();
+    let factory = adk_website::edge::concierge(
+        &site.team,
+        &site.partitions,
+        site.table.clone(),
+        model.clone(),
+        workspace.path(),
+    );
+    let edge = common::edge::edge_with(&site, "juniper.example", Some(factory)).await;
+    let message = json!({
+        "jsonrpc": "2.0", "id": "c-1", "method": "SendMessage",
+        "params": { "message": {
+            "messageId": "c-1", "role": "ROLE_USER",
+            "parts": [{ "text": "Do you bake wedding cakes?" }],
+        } },
+    });
+    let (_, _, reply) = edge.send(edge.post("/awp/v2/a2a", &message)).await;
+    let task = &reply["result"]["task"];
+    assert_eq!(task["status"]["state"], "TASK_STATE_COMPLETED", "{reply}");
+    assert_eq!(
+        task["artifacts"][0]["parts"][0]["text"],
+        "I have asked the bakery about wedding cakes."
+    );
+    let records = site.signals.list(&SignalFilter::default()).await.unwrap();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0].kind, "content_gap");
+    let answered = format!("{:?}", model.last_request().unwrap().contents);
+    assert!(!answered.contains("not a public-partition tool"), "{answered}");
+    assert!(!answered.contains("Tool confirmation required"), "{answered}");
 }

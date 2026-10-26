@@ -173,6 +173,7 @@ expensive axes move to a later tier.
   `pgvector/pgvector:pg17` service, driven by `scripts/test-postgres.sh`),
   `docs` (`cargo doc --workspace --no-deps` plus doctests), standalone examples
   (4 shards), `kernel-scenarios` (the scripted scenarios of `examples/harness_kernel`, on Linux),
+  `website-scenarios` (spec 3.5's scripted scenarios of `examples/website`),
   `templates`, a compile-only macOS build, a Windows workspace build
   with targeted sandbox portability smokes and the kernel's crate-level scenarios
   (`adk-kernel`'s K2–K4, K6, K8 and K9), and `semver` (stable strict against
@@ -275,7 +276,9 @@ adk-anthropic/   Dedicated Anthropic API client: streaming, adaptive thinking, p
 adk-tool/        Tool system: FunctionTool, StatefulTool, SimpleToolContext, MCP integration
                  (rmcp 3.1), McpServerManager (lifecycle, health, auto-restart), MCP Resource
                  API, MCP Elicitation, Google Search, built-in tool wrappers (Gemini/OpenAI/
-                 Anthropic), Slack/BigQuery/Spanner toolsets
+                 Anthropic), Slack/BigQuery/Spanner toolsets. MCP server (`mcp-server`, spec
+                 3.5 §7.9): a set of `adk_core::Tool`s over Streamable HTTP with an SEP-2127
+                 Server Card at `{endpoint}/server-card`, `tools/list` filtered per caller
 adk-runner/      Agent execution runtime with event streaming, RunnerConfigBuilder (typestate),
                  Runner::interrupt() API, Runner::run_str(), per-session cancellation tokens,
                  transfer enforcement, plugin hooks for every agent, run budgets, spend and
@@ -289,6 +292,11 @@ adk-server/      HTTP server (Axum) and A2A v1.0.0 (Agent-to-Agent) protocol, Se
                  endpoints (POST/GET/DELETE /runs, POST /runs/{id}/wake), cron job management
                  (POST/GET/PATCH/DELETE /cron), concurrency policies (skip/allow/queue).
                  Webhook wake-ups (`webhook-ingress`), approval inbox (`approvals`).
+                 The AWP 2.0 agent edge (`awp`, spec 3.5 §7.9): ServerBuilder::awp(AwpEdge),
+                 trust tiers from Web Bot Auth, OAuth, mTLS and API keys, capabilities over
+                 A2A, MCP and HTTP through one governed path, held and exactly-once calls,
+                 the public partition, events, consent, status, the beacon; durable edge
+                 stores (`awp-sqlite`, `awp-postgres`, `awp-redis`).
 adk-session/     Session management: SQLite, PostgreSQL, Redis, MongoDB, Firestore, Neo4j,
                  Vertex AI backends. Encrypted sessions (AES-256-GCM) with key rotation.
                  Identity-scoped rewind. Durable stores on every backend: spend ledger,
@@ -319,7 +327,9 @@ adk-eval/        Evaluation framework: trajectory, semantic, rubric, LLM-judge, 
                  cost/latency tracking, trace analysis (loop/redundancy detection), regression
                  baselines, JUnit XML CI output, human annotation workflows (JSONL), A/B agent
                  comparison (Wilcoxon), auto-generated test cases, multi-turn conversation
-                 metrics. Feature-gated: embedding, ci-helpers, statistics.
+                 metrics. Feature-gated: embedding, ci-helpers, statistics. Web experiments
+                 (`experiments`, spec 3.5 §7.12): ExperimentAnalyzer, sequential tests for
+                 proportions and means with guardrail monitoring, and a Bayesian option.
 adk-telemetry/   OpenTelemetry 0.32 integration for agent observability: logging, OTLP export
                  (`otlp`), bounded in-process span retention, SQLite (`sqlite`) and Google
                  Cloud (`gcp`) export, GenAI semantic conventions
@@ -328,7 +338,10 @@ adk-guardrail/   Input/output guardrails: validation, content filtering, PII red
 adk-auth/        Authentication: API keys, JWT, OAuth2, OIDC, SSO, cloud secret providers
                  (AWS Secrets Manager, Azure Key Vault, GCP Secret Manager), RBAC and scope
                  guards, audit sinks, signed Merkle-tree audit log (`signed-audit`),
-                 credential brokers (SecretCredentialBroker, TokenExchangeBroker)
+                 credential brokers (SecretCredentialBroker, TokenExchangeBroker). Web Bot
+                 Auth (`web-bot-auth`, spec 3.5 §7.3): RFC 9421 HTTP Message Signatures with
+                 Ed25519, HttpSignatureSigner, HttpSignatureVerifier, key directory fetch and
+                 cache.
 adk-plugin/      Plugin system for agent lifecycle hooks — EnhancedPlugin trait with tool/model
                  interception, priority-based pipeline, PluginContext shared state
 adk-retry-reflect/ Retry & Reflect plugin — intercepts tool failures, injects reflection prompts,
@@ -336,7 +349,13 @@ adk-retry-reflect/ Retry & Reflect plugin — intercepts tool failures, injects 
 adk-skill/       Skill discovery, parsing, and convention-based agent capabilities
 adk-cli/         Command-line launcher: the `adk-rust` binary (REPL, web server, coding agent,
                  skills, graph checkpoints, audit verification, deploy commands) and the
-                 embeddable Launcher
+                 embeddable Launcher. `website` (spec 3.5 §8.1): `adk-rust website` (new,
+                 which serves the site with the owner's views on a loopback home; status,
+                 review, charter, jobs), `adk-rust site` (build, publish, rollback, log,
+                 content, schedule, correct, withdraw, revert, batches, feeds, migrate,
+                 freeze) and `adk-rust awp` (verify, conformance, keys rotate and delegate,
+                 migrate-config). `adk-rust up` mounts a WebhookIngress for webhook wakes
+                 (spec 3.5 §10 X11).
 adk-rust-macros/ Procedural macros (#[tool] attribute with read_only, idempotent,
                  concurrency_safe, long_running, lenient_args; #[entrypoint]/#[task] for the
                  adk-graph functional API)
@@ -359,7 +378,10 @@ adk-harness/     Governed harness agent (spec 3.1): HarnessAgent over LlmAgent w
                  notes and long-term facts with provenance (FactStore, FactIndex, recall,
                  distillation), `.adk/harness.toml` (HarnessConfig), and the `coding`
                  preset. Umbrella feature `harness`; `kernel` feature hosts it in adk-kernel
-                 (Harness::kernel, goal stall parking). Beta.
+                 (Harness::kernel, goal stall parking). `website` (spec 3.5 §7.1): the
+                 website preset, the back-office and public toolsets, SitePartitions, the
+                 autonomy ladder compiled to policy, authoring routes, outbound Web Bot Auth
+                 and onboarding machinery. Beta.
 adk-kernel/      Agent kernel (spec 3.2): Kernel supervisor with a DurableWorker per QueueClass
                  (interactive, background, maintenance) and the DurableScheduler, ProcessTable
                  (ps, spawn, kill, nice, suspend, resume, live ProcessView with spend),
@@ -367,12 +389,33 @@ adk-kernel/      Agent kernel (spec 3.2): Kernel supervisor with a DurableWorker
                  file, webhook, queue, approval, run-finished, time), standing Triggers,
                  EventBus, freeze that parks across replicas, control plane on a Unix socket
                  and loopback HTTP with ControlClient. ProcessStore on in-memory, SQLite,
-                 PostgreSQL, Redis. Beta.
+                 PostgreSQL, Redis. `charter` (spec 3.5 §7.10, §7.11): CharterStore, KpiStore
+                 and the KPI tracker, guardrail job pauses, the AutonomyLadder, typed signals
+                 through SignalSink, site process kinds; in-memory, SQLite, PostgreSQL and
+                 Redis backends. Beta.
 adk-surface/     Agent surfaces (spec 3.3): SurfaceEngine over a LocalSource (kernel, harness,
                  runner) or a ControlSource (control plane), a per-session feed numbered by
                  session-store position, decision cards and status in the plain words of §8,
                  commands with subject and Origin on the audit record, the §7.2 rules.
-                 `web`: the API under /api/surface with OpenAPI and generated TypeScript. Beta.
+                 `web`: the API under /api/surface with OpenAPI and generated TypeScript.
+                 `website` (spec 3.5 §8.2, Experimental): a prebuilt website's setup code,
+                 onboarding, charter, site view, weekly review and web editor. Beta.
+adk-site/        Site pipeline of an AWP 2.0 website (spec 3.5 §7.7, §7.8): content as files,
+                 the built-in generator with Markdown and machine-view twins, the launch gate,
+                 signed releases and the site log, DirectoryHost, the publishing pipeline,
+                 media, lanes, streams and the UpdateEngine for constantly updated sites.
+                 `migrate`: sources, detectors, quarantine, sanitiser, freeze, parity, probes,
+                 archive. `host-*`: S3, GCS, Azure, Cloudflare, Netlify, GitHub Pages, rsync.
+                 `gen-*`: Zola, Hugo, Astro, Build Awesome in a sandbox. EXPERIMENTAL.
+adk-drivers/     Service drivers of an AWP website (spec 3.5 §7.13): DNS and registrar, email,
+                 analytics and search console, social and advertising, each a contract, a
+                 kernel driver manifest, a conformance suite and reference adapters
+                 (RFC 2136, RDAP, IMAP and SMTP, Plausible, search console, Mastodon);
+                 DriverCapPolicy. EXPERIMENTAL.
+adk-website/     The AWP website product (spec 3.5 Part C): site kinds, the team of eight
+                 agents, onboarding, themes, capability packs, playbooks, jobs, incidents,
+                 alarms, the weekly review, experiments, measurement sources, the agent edge,
+                 the contract and deployment shapes; the `adk-website` binary. EXPERIMENTAL.
 adk-bench/       Benchmarking framework: framework-level runtime performance with real LLM APIs
                  and cross-framework (Python ADK) comparison
 adk-sandbox/     Sandboxed execution environments — process/WASM backends, OS-level sandbox profiles
@@ -398,9 +441,12 @@ adk-managed/     Managed agent runtime — provider-neutral agent execution engi
                  ScriptedLlm test double, golden fixture tests.
                  Feature-gated: `managed-runtime` on umbrella crate. EXPERIMENTAL.
 adk-deploy/      Deployment utilities
-adk-payments/    Payment integration: ACP commerce, AP2 alpha mandates, multi-actor flows
+adk-payments/    Payment integration: ACP commerce, AP2 alpha mandates, multi-actor flows.
+                 Owner-funded wallet (`wallet`, spec 3.5 §7.14): category mandates, caps
+                 checked before execution, holds, rails, anomaly pauses, reconciliation;
+                 durable WalletStore backends (`sqlite`, `postgres`, `redis`).
 cargo-adk/       Cargo subcommand for project scaffolding, builds, eval runs, benchmarks, and
-                 deployment
+                 deployment; the `website` template (spec 3.5 §7.17)
 adk-mistralrs/   Local LLM inference via mistral.rs 0.8 (Gemma 4, Qwen 3.5, Voxtral, Llama 4,
                  GPT-OSS; mistral.rs 0.8.1 has 46 model loaders). GPU features (`cuda`,
                  `metal`) are opt-in.
@@ -410,10 +456,20 @@ adk-rust/        Umbrella crate re-exporting all of the above with tiered featur
 ### Protocol crates
 
 ```
-awp-types/       Agentic Web Protocol types — TrustLevel, RequesterType, AwpVersion,
-                 BusinessContext, PaymentIntent, CapabilityManifest. Zero adk-* dependencies.
-adk-awp/         AWP implementation (Axum 0.8): discovery, rate limiting, consent (GDPR/KPA),
-                 event subscriptions (HMAC-SHA256 webhooks), health state machine, A2A messages
+awp-types/       Agentic Web Protocol types. AWP 2.0 (spec 3.5 §7.2–§7.10): SiteContract,
+                 KeySet, TrustTier, CapabilityV2 and the manifest, MachineView, HeldCall,
+                 SiteStatus, EventEnvelope, ConsentReceipt, Receipt, ReleaseManifest,
+                 LogEntry, StreamEntry, Charter, Signal; JSON Schemas (`json-schema`). The
+                 AWP 1.x types: TrustLevel, BusinessContext, PaymentIntent. Zero adk-*
+                 dependencies.
+adk-awp/         AWP implementation (Axum 0.8). AWP 2.0: the /awp/v2/ routes, AWP-Version
+                 list negotiation, TierAssigner, CapabilityTool and CapabilityRegistry, edge
+                 store traits with a conformance suite, business.toml migration; `signing`
+                 (JWS over JCS, keys and delegations, the DNS root anchor, signed Agent
+                 Cards, the site log's tiles and checkpoint, StaticBundle); `verify` (the
+                 Verifier, the conformance kit, test vectors). The AWP 1.x routes and
+                 AwpState behind the default `awp-v1` feature, beside the 1.x consent,
+                 event and health services.
 adk-acp/         Agent Client Protocol — connect to external ACP agents (Claude Code, Codex,
                  Kiro CLI) as tools. AcpAgentTool, AcpToolset, AcpServer (expose ADK agents
                  as ACP-compatible), StdioTransport for IDE connections.
@@ -492,13 +548,16 @@ Four tiered presets control which crates are compiled:
 - `minimal` **(default)** — agents, models, gemini, runner, sessions. Fastest possible build for a single Gemini-powered agent.
 - `standard` — minimal + openai, anthropic, anthropic-client, tools, memory, telemetry, skills, graph, auth, server, eval, guardrail, plugin, artifacts, computer-use. Production deployment with server and auth.
 - `enterprise` — standard + realtime, browser, rag, payments, awp. Full-featured production.
-- `full` — enterprise + audio, code, sandbox, code-tools, graph-functional, graph-node-cache, graph-delta, graph-time-travel, harness. Everything that needs no external infrastructure.
+- `full` — enterprise + audio, code, sandbox, code-tools, graph-functional, graph-node-cache, graph-delta, graph-time-travel, harness, website. Everything that needs no external infrastructure.
 
 Domain add-ons are composable with any tier: `features = ["minimal", "audio"]`.
 
 Platform meta-features (composable with any tier):
 - `gemini-agent-platform` — every Gemini Enterprise Agent Platform (Vertex/EAP) integration except realtime transports: `gemini-vertex`, `vertex-session`, `gcp-secrets`, `gcs-artifacts`, `gcp-telemetry`, `agent-engine`, `vertex-memory`, `example-store`, `vertex-sandbox`, `vertex-eval`, `vertex-rag`, `agent-retrieval`, `vertex-agent-registry`, `vertex-skill-registry`, `vertex-remote-engine` (grows as later integrations land). The right default for ReasoningEngine BYOC deployments. Deploy-time tooling is host-side and excluded.
 - `gemini-agent-platform-full` — `gemini-agent-platform` + `vertex-live` (Vertex AI Live API, pulls in the adk-realtime stack)
+
+Website feature (spec 3.5 §7.1, D-14):
+- `website` — `adk_rust::website` (adk-website) and `adk_rust::site` (adk-site), with the AWP edge on the server (`adk-server/awp`), AWP signing and the harness kernel; with `cli`, `adk-rust website`, `adk-rust site` and `adk-rust awp`. In `full`. Hosts, generators and backends stay features of `adk-site` and `adk-kernel` (recorded in `docs/feature-surface.md`)
 
 Harness features (spec 3.1 §8.4):
 - `harness` — `adk_rust::harness` (all of `adk-harness`) and `HarnessAgent`, `HarnessAgentBuilder`, `HarnessMode` in the prelude; with `cli` it also re-exports `HarnessLauncher`, `ConsolePrompter` and `ConsoleIo`. In `full`
@@ -1018,24 +1077,32 @@ Always verify builds during publish — never use `--no-verify`. Verification en
 Crates must be published in dependency order. `cargo xtask publish` (via
 `./publish.sh`) computes the order from the workspace graph, so this list is
 documentation rather than configuration — `scripts/check-publish-order.sh` is the
-gate that keeps it satisfiable. The current 11 tiers over 46 publishable crates:
+gate that keeps it satisfiable. The current 13 tiers over 49 publishable crates:
 
 ```
 Tier 1: adk-anthropic, adk-core, adk-enterprise, adk-rust-macros, adk-telemetry,
         awp-types
-Tier 2: adk-action, adk-awp, adk-browser, adk-gcp, adk-gemini, adk-guardrail,
+Tier 2: adk-action, adk-auth, adk-browser, adk-gcp, adk-gemini, adk-guardrail,
         adk-mistralrs, adk-plugin, adk-sandbox
-Tier 3: adk-artifact, adk-code, adk-deploy, adk-devtools, adk-graph, adk-memory,
-        adk-model, adk-rag, adk-retry-reflect, adk-session, adk-skill
-Tier 4: adk-realtime, adk-runner, adk-tool
+Tier 3: adk-artifact, adk-awp, adk-code, adk-deploy, adk-devtools, adk-graph,
+        adk-memory, adk-model, adk-rag, adk-retry-reflect, adk-session, adk-skill
+Tier 4: adk-payments, adk-realtime, adk-runner, adk-site, adk-tool
 Tier 5: adk-acp, adk-agent, adk-audio, adk-eval
-Tier 6: adk-bench, adk-codeact-monty, adk-managed, adk-server
-Tier 7: adk-auth, adk-kernel, cargo-adk
-Tier 8: adk-computer-use, adk-payments
+Tier 6: adk-bench, adk-codeact-monty, adk-computer-use, adk-managed, adk-server
+Tier 7: adk-kernel, cargo-adk
+Tier 8: adk-drivers
 Tier 9: adk-harness
-Tier 10: adk-cli, adk-surface
-Tier 11: adk-rust (umbrella — always last)
+Tier 10: adk-website
+Tier 11: adk-surface
+Tier 12: adk-cli
+Tier 13: adk-rust (umbrella — always last)
 ```
+
+`adk-auth` no longer depends on `adk-server` (its `auth-bridge` takes `RequestContextExtractor`
+from `adk-core`), and `adk-server`'s `awp` feature depends on `adk-auth`, `adk-awp` and
+`adk-tool`. `adk-site` depends on `adk-auth` (`signed-audit`) and, for its generators,
+`adk-sandbox`; `adk-harness`'s `website` feature on `adk-site`, `adk-drivers` and `adk-awp`;
+`adk-website` on `adk-harness` and `adk-server`; `adk-surface`'s `website` on `adk-website`.
 
 > **Note:** internal **dev**-dependencies are declared path-only (no version) so
 > they do not constrain this order. Adding a versioned internal dev-dependency can

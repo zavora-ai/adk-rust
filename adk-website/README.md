@@ -40,6 +40,7 @@ is for each kind of site.
 | `measurement` | KPI sources that are not drivers: the beacon, host logs, the commerce, action and spend ledgers, agent search at the edge, AEO | §7.12, §7.11 |
 | `workflows` | The probe and the weekly review as kernel runs | §7.20 |
 | `observability` | Spans, metrics and the site view | §7.24 |
+| `ui` | `WebsiteDesk`: the setup code, onboarding, the charter cards, the site view, the weekly review and the web editor as views in plain words, and the decisions people make on them; `adk-surface`'s `website` feature serves them on the web home | §7.8.2, §7.16, §7.18, §7.21, §7.24, §8.2 |
 
 ## Site kinds
 
@@ -140,8 +141,36 @@ read-only capabilities keep working; a person's close resumes it (A-I11).
 | `managed` | Any static host | The managed agent runtime or another agent platform through `adk-deploy` | Owners who want no servers |
 | `agency` | Per-site hosts | One harness for many sites, each isolated (A-I22) | Developers running sites for clients |
 
-The keys are made on first start under `data/keys/`, owner-only. The root signs the contract
-and the delegations and never enters an agent's context (A-I5).
+## A served site
+
+`deploy::serve` runs one site from its project, in the layout `adk-rust site` uses, so the
+CLI and the running site share one log, host and journal:
+
+| Path | Holds |
+|------|-------|
+| `site.toml`, `content/`, `theme/`, `public-terms.json`, `capabilities.json` | The content repository |
+| `well-known/`, `static/` | Released under `/.well-known/` (the owner's signed contract and `keys.json`) and at their own paths |
+| `feeds.json`, `calendar.json`, `payments.json` | Feeds with their bounds, bookable slots, payment links; each optional |
+| `data/site-log.db`, `data/host/`, `data/history/` | The site log, the `DirectoryHost`, every saved version |
+| `data/keys/` | `release.jwk`, `card.jwk` (and `receipt.jwk`) as private JWKs, made on first start, owner-only; never the root |
+| `data/kernel.db`, `data/edge.db` | The kernel's stores (charters, KPIs, ladder, signals, agenda, approvals, devices, runs) and the edge's |
+| `data/updates/` | `batches.jsonl` and `feeds.json`, read by `adk-rust site batches` and `site feeds` |
+
+The owner signs at a terminal: `adk-rust awp keys rotate` makes the root and the key set,
+`adk-rust awp keys delegate --scope release` and `--scope card,receipt` delegate the keys the
+site made. Until the release key is delegated, every build fails the gate's
+`release-delegation` check, which names those commands (D-11, A-I5).
+
+| Part | Runs |
+|------|------|
+| `UpdateEngine` | On the runtime's pipeline, driven when `next_due` says; each held delivery or item is an approval request in the owner's inbox — a decision card on the phone — and the answer releases or discards it (A-I23, A-I27) |
+| `ExperimentRunner` | Its daily look as the kernel run `website.experiments`, on a cron trigger |
+| `KpiTracker` | With the beacon, commerce, spend and agent-search sources; AEO with search providers |
+| `ReviewComposer` | With the alarms, the experiments and the updates; the weekly review when the owner has a channel |
+| Concierge | With a model, `edge::concierge` over the edge's own public tools, through `AwpEdge::public_agent` |
+
+A restart keeps the charter, the jobs' levels, the signals, the approvals and the paired
+device, and continues after the release the host serves; no second setup code is offered.
 
 ## Incidents and alarms
 

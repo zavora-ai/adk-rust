@@ -7,19 +7,20 @@ new one over the same SQLite file.
 
 | Invariant | Mechanism | Test |
 |---|---|---|
-| A completed `bash`, `write_file`, `edit_file` or delegation never runs twice after a crash, retry or resume | The tools are `NonIdempotent`, so the runner's action ledger records each call; before a turn, `Harness::send` and `Harness::resume` answer the calls a stopped process left unanswered from the ledger (`already_succeeded`, `already_failed` or `outcome_unknown`), and nothing executes | `a_completed_bash_never_runs_twice_after_a_crash` |
+| A completed `bash`, `write_file`, `edit_file`, `apply_patch` or delegation never runs twice after a crash, retry or resume | The tools are `NonIdempotent`, so the runner's action ledger records each call; before a turn, `Harness::send` and `Harness::resume` answer the calls a stopped process left unanswered from the ledger (`already_succeeded`, `already_failed` or `outcome_unknown`), and nothing executes | `a_completed_bash_never_runs_twice_after_a_crash` |
 | A held approval survives process loss and is answered from any process | The approval store is durable; another harness over the same store lists it, decides it and resumes the call | `a_held_approval_survives_process_loss_and_is_answered_from_another_harness` |
 | A resumed run is governed by the current mode and rules | The policy reads the mode and rule stores at evaluation time; an approved call resumed after tightening to ReadOnly is refused | `a_resumed_run_is_governed_by_the_current_mode_not_the_one_it_parked_under` |
 | Loosening cancels held calls | `Harness::set_mode` answers every held call "cancelled by mode change" before writing; a held `rm` runs zero times after switching to Auto | `a_held_rm_in_ask_runs_zero_times_after_switching_to_auto` |
 | A plan step survives process loss | The plan graph is checkpointed; after a restart the gate is decided in the new process and only the remaining step runs | `a_plan_step_survives_process_loss` |
+| A held edit approved from a new process runs once | The file tools' read records — the sha256 each agent last read or wrote per file — persist with the session (`read_records`), so the edit finds the read that preceded it; a file changed since is refused as `devtools.stale`, never edited against content nobody reviewed (spec 3.1 §7.33 fix 5) | `a_held_edit_parked_by_a_goal_runs_once_when_approved_from_a_new_process` |
 | Only one process works a run | `DurableWorker` claims runs under fenced leases; two workers over one store complete the run once | `a_durable_goal_survives_killing_the_process` |
 | An approved plan runs after a restart | Plans are checkpointed in the store `plan_checkpoint_store(url)` names; a new process over the same database finds the plan and runs every step | `an_approved_plan_runs_after_a_restart` (`checkpoint_store_tests.rs`) |
 | The `Graph` goal engine continues its thread after a restart | The goal's graph is checkpointed in the same store; the restarted process decides the held call and finishes on the first process's thread | `the_goal_graph_continues_its_thread_after_a_restart` (`checkpoint_store_tests.rs`) |
 
 ## One backend per deployment
 
-Sessions, approvals, the action ledger, modes, goals, durable runs and plan checkpoints can
-share one SQLite file. `plan_checkpoint_store(url)` opens the plan checkpointer from a store
+Sessions, approvals, the action ledger, modes, goals, read records, durable runs and plan
+checkpoints can share one SQLite file. `plan_checkpoint_store(url)` opens the plan checkpointer from a store
 URL, `adk_harness::checkpointer_from_url`, so it can name the same database (spec 3.1 §7.11,
 §13 Q5); without it or `plan_checkpointer(..)`, plans live in memory and do not survive a
 restart:
@@ -28,7 +29,7 @@ restart:
 use std::sync::Arc;
 
 use adk_core::{ActionLedger, ApprovalStore, DurableRunStore, Llm};
-use adk_harness::{Harness, HarnessAgent, SqliteGoalStore, SqliteModeStore};
+use adk_harness::{Harness, HarnessAgent, SqliteGoalStore, SqliteModeStore, SqliteReadRecords};
 use adk_runner::Runner;
 use adk_session::{SessionService, SqliteActionLedger, SqliteApprovalStore, SqliteRunStore, SqliteSessionService};
 
@@ -44,6 +45,8 @@ async fn open(model: Arc<dyn Llm>, url: &str) -> Result<Harness, Box<dyn std::er
     modes.migrate().await?;
     let goals = SqliteGoalStore::new(pool.clone());
     goals.migrate().await?;
+    let reads = SqliteReadRecords::new(pool.clone());
+    reads.migrate().await?;
     let runs = SqliteRunStore::from_pool(pool.clone());
     runs.migrate().await?;
     let checkpointer = adk_graph::SqliteCheckpointer::from_pool(pool).await?;
@@ -54,6 +57,7 @@ async fn open(model: Arc<dyn Llm>, url: &str) -> Result<Harness, Box<dyn std::er
             .workspace(adk_devtools::Workspace::new(".").allow_bash(true))
             .mode_store(Arc::new(modes))
             .goal_store(Arc::new(goals))
+            .read_records(Arc::new(reads))
             .approval_store(Arc::new(approvals) as Arc<dyn ApprovalStore>)
             .plan_checkpointer(Arc::new(checkpointer))
             .build()?,
@@ -67,9 +71,9 @@ async fn open(model: Arc<dyn Llm>, url: &str) -> Result<Harness, Box<dyn std::er
 }
 ```
 
-> **Note:** `adk-devtools` keeps its read-before-edit record in process memory, so an
-> `edit_file` call approved after a restart fails with "must be read with read_file before
-> it can be edited" until the model reads the file again in the new process.
+> **Note:** without `read_records(..)` the read records live in process memory, and an
+> `edit_file` call approved after a restart fails with `devtools.not_read` until the model
+> reads the file again. `adk-rust` keeps them in `harness.db`.
 
 ## Shared backends
 
@@ -79,6 +83,7 @@ Replicas of a served harness share PostgreSQL or Redis instead of a file (spec 3
 |---|---|---|
 | Modes | `PostgresModeStore` | `RedisModeStore` |
 | Standing rules | `PostgresStandingRuleStore` | `RedisStandingRuleStore` |
+| Read records | `PostgresReadRecords` | `RedisReadRecords` |
 | Plan and goal checkpoints | `checkpointer_from_url("postgres://…")` | `checkpointer_from_url("redis://…")` |
 
 Sessions, approvals and durable runs come from `adk-session`'s stores on the same backend,

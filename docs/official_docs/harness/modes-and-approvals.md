@@ -21,7 +21,7 @@ The mode decides each tool class:
 |---|---|---|---|---|
 | Read, todos, delegation to a member | Allow | Allow | Allow | Allow |
 | `exit_plan_mode` | Deny | Approval, non-waivable | Deny | Deny |
-| Edit (`write_file`, `edit_file`) | Deny | Deny | Approval | Allow |
+| Edit (`write_file`, `edit_file`, `apply_patch`) | Deny | Deny | Approval | Allow |
 | Edit of a protected path | Deny | Deny | Approval, non-waivable | Approval, non-waivable |
 | `bash` on the host | Deny | Deny | Approval | Approval (Allow with `allow_host_shell_in_auto`) |
 | `bash` in the OS sandbox | Deny | Allow, read-only workspace | Approval (Allow with `auto_allow_sandboxed`) | Allow when protected paths hold |
@@ -34,7 +34,9 @@ from an MCP server's `readOnlyHint` alone; `trust_mcp_read_only_hints(true)` tru
 hint for external tools. Protected paths are the files that steer the agent or the build:
 `.git`, `.adk`, `.skills`, `.claude`, `AGENTS.md`, `CLAUDE.md`, `MEMORY.md`, `.envrc`,
 `lefthook.yml` and `.cargo/config*` at any depth, matched as written and at the target a
-symlink resolves to. The [`adk-harness` README](https://github.com/zavora-ai/adk-rust/blob/main/adk-harness/README.md#mode-table)
+symlink resolves to. An `apply_patch` call is judged on every path its patch names — a
+move's source and destination included — so one protected path anywhere makes the whole call
+non-waivable, and one path outside the workspace refuses it. The [`adk-harness` README](https://github.com/zavora-ai/adk-rust/blob/main/adk-harness/README.md#mode-table)
 lists the root-level ones.
 
 ### Choosing and changing the mode
@@ -107,6 +109,44 @@ impl ApprovalPrompter for CargoTestOnly {
 ```
 
 Pass it with `.prompter(Arc::new(CargoTestOnly))` on the builder.
+
+### Change sets
+
+Two or more edits of one model turn that need approval are reviewed as one change set and
+decided once (spec 3.1 §7.26). The agent hands the handler the turn's batch before any call
+runs (`ToolConfirmationHandler::batch_started`); at the batch's first held edit the handler
+re-checks every `write_file`, `edit_file` and `apply_patch` call of it against the policy and
+composes them in call order over an in-memory copy of the workspace, read under the file
+tools' own rules, so successive edits of one file compose.
+
+| Part of the card | Content |
+|---|---|
+| Files | A unified diff per file with line numbers, and its sha256 before and after |
+| Digest | `sha256:` over the sorted (path, before, after) triples |
+| Calls that would fail | Shown failing — no match, an escape, a hunk that does not apply — and answered with the reason, without running |
+| Edits a standing rule allows | Not held, so not in the card: counted as "N more edits run under standing rules" |
+| Protected paths (I29) | Not merged in: asked about on their own after the card, as is an edit of a file a call outside the card also changes |
+
+`ApprovalPrompter::prompt_change_set` shows the card and returns one `ChangeSetAnswer`:
+
+| `ChangeSetAnswer` | Effect |
+|---|---|
+| `ApproveAll` | Every call that does not fail runs |
+| `ApproveFiles(paths)` | The calls that change only those files run; the others are denied |
+| `DenyAll { message }` | No call runs; `message` is reported to the model |
+| `Edit(calls)` | Replaces calls' arguments by call ID and shows the change set again; the policy checks the edited calls again |
+
+Each approved call is answered with its own arguments plus `expect_sha256`: the hash its
+file had at that point of the composition — the batch's base for the first call on a file,
+the intermediate hash for the next — so the call writes only against the content the person
+saw, and a file changed in between is refused as `devtools.stale` (I66). The calls still run
+one at a time: a stale call refuses only itself, and `apply_patch` is the all-or-nothing unit.
+The handler answers each call of the card from the one decision, whichever order the calls
+are dispatched in; a call whose arguments differ from the reviewed ones is asked about on its
+own. `harness.changeset.decided` records the digest, the files, the call IDs and the answer.
+A prompter that does not override `prompt_change_set` asks about each call on its own.
+`ChangeSet::compose` is public, so a surface that groups held edits itself — spec 3.3's
+decision card — computes the same change set and the same `expect_sha256` per call.
 
 ### Held calls
 
@@ -203,6 +243,10 @@ No model-callable tool creates one. A rule never applies to a non-waivable call:
 `memory_delete` are decided every time. A suggestion for `bash` never starts with a command
 that runs arbitrary code (`sh`, `bash`, `env`, `sudo` and similar), and the harness re-reads
 the store on every call, so a revoked rule stops applying at once.
+
+A `PathWithin` rule covers an `apply_patch` call only when every path of the patch lies
+within its directory; the suggestion offered for a patch names the directory all its paths
+share (`apply_patch: within src/`).
 
 A suggestion's label states what the rule matches (`edit_file: within src/`); every surface
 shows its scope from `RuleSuggestion::scope`, once. A call a rule allows where the mode would

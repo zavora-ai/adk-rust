@@ -92,7 +92,7 @@ pub trait JobControl: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`KernelError::Unauthorized`] for a decision no person made.
+    /// Returns [`KernelError::Unauthorized`](crate::KernelError::Unauthorized) for a decision no person made.
     async fn resume(&self, site: Uuid, job: &str, decision: &OwnerDecision) -> Result<bool>;
 
     /// Why `job` is paused, or `None` when it is not.

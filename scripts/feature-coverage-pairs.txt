@@ -171,6 +171,9 @@
 2 adk-surface voice doc
 2 adk-surface web,voice
 2 adk-surface tui,voice
+# The website's views (spec 3.5 §8.2): the desk's routes under `/api/surface/website`, the
+# setup code, the API contract with its generated types, and the doctests.
+2 adk-surface website doc
 # `adk-rust` as the terminal surface in a pseudo-terminal: full screen, inline, JSON, a
 # kernel on its socket and a paired one over HTTP (spec 3.3 §5.2, §10 K2).
 2 adk-cli tui,scripted-model

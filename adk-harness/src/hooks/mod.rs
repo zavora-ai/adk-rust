@@ -849,8 +849,15 @@ impl PostToolVerdict {
                 let rendered: Vec<Value> =
                     notes.iter().map(|note| Value::String(note.render())).collect();
                 match result {
+                    // Notes from earlier verdicts on the same call — another file of a
+                    // patch — are kept.
                     Value::Object(mut object) => {
-                        object.insert("hook_notes".to_string(), Value::Array(rendered));
+                        match object.get_mut("hook_notes") {
+                            Some(Value::Array(existing)) => existing.extend(rendered),
+                            _ => {
+                                object.insert("hook_notes".to_string(), Value::Array(rendered));
+                            }
+                        }
                         Value::Object(object)
                     }
                     other => serde_json::json!({ "result": other, "hook_notes": rendered }),

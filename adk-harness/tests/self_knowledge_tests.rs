@@ -1,6 +1,8 @@
 //! The harness describes itself to the model (spec 3.1 §7.25): the `<harness>` block in
 //! the system instruction, the standing-rules digest in the reminder and `harness_help`.
 
+#![cfg(feature = "runner")]
+
 mod common;
 
 use adk_core::{Part, SubjectKind, SubjectRef, ToolOrigin};
@@ -57,7 +59,7 @@ async fn the_system_instruction_carries_the_harness_block_after_the_environment(
     assert!(system.find("</environment>").unwrap() < system.find("<harness version=").unwrap());
     assert!(block.contains("surface=\"adk-rust 3.0.0\""), "{block}");
     assert!(
-        block.contains("  edit (edit_file write_file): deny | deny | ask | allow"),
+        block.contains("  edit (apply_patch edit_file write_file): deny | deny | ask | allow"),
         "the edit class line says what each mode does: {block}"
     );
     assert!(block.contains("ask every time"), "{block}");

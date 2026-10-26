@@ -82,7 +82,7 @@ See [The harness in your terminal](../docs/official_docs/harness/cli.md),
 | `tui` | yes | `adk-rust` with no subcommand as the terminal surface (spec 3.3 §5.2, `adk-surface`'s `tui`): full screen on a capable terminal, `--ui inline`, `--output json` with exit codes, `--theme`, the REPL's slash commands with completion, and `--server` with `--pair` for a kernel on another machine; `--ui repl` keeps the REPL; see [the terminal](../docs/official_docs/surfaces/terminal.md) |
 | `channels` | yes | `adk-rust up` starts the Telegram chat thread when `TELEGRAM_BOT_TOKEN` is set (spec 3.3 §5.3, `adk-surface`'s `channels`), with `harness` and `surface`; see [chat](../docs/official_docs/surfaces/chat.md) |
 | `scripted-model` | no | Hidden `--model-script` and `--approval-fixture` flags for end-to-end tests: a scripted model and a `record_note` tool that needs approval; with `website`, a hidden `--dns-fixture` for domain claims |
-| `website` | no | `adk-rust site …` and `adk-rust awp …` (spec 3.5 §8.1): an AWP 2.0 site's releases, content, migration and freeze on `adk-site`, and verification, conformance, keys and `business.toml` migration on `adk-awp`; see [Sites and AWP from the command line](../docs/official_docs/deployment/site-cli.md) |
+| `website` | no | `adk-rust website …`, `adk-rust site …` and `adk-rust awp …` (spec 3.5 §8.1): the product spun up and run from the terminal on `adk-website`; an AWP 2.0 site's releases, content, migration and freeze on `adk-site`, and verification, conformance, keys and `business.toml` migration on `adk-awp`; see [Sites and AWP from the command line](../docs/official_docs/deployment/site-cli.md) |
 
 `cargo install adk-cli` builds the default features; add `--features all-providers` for every provider.
 
@@ -146,6 +146,7 @@ adk-rust deploy       Deployment commands
 adk-rust registry     Agent Registry registration and search (`vertex-agent-registry`)
 adk-rust site         An AWP 2.0 site: build/publish/rollback/log, content new, schedule/correct/withdraw/revert, batches/feeds, migrate/freeze (`website`)
 adk-rust awp          AWP 2.0: verify a domain, conformance, keys rotate/delegate, migrate-config (`website`)
+adk-rust website      An AWP 2.0 website: new (serve, setup code, onboarding), status, review, charter, jobs promote/demote (`website`)
 ```
 
 `adk-rust up` serves the signed webhooks `[[kernel.webhooks]]` lists in the user config at
@@ -499,8 +500,10 @@ in `adk_cli::console`, re-exported at the crate root.
 
 The `StreamPrinter` type handles rendering of streamed response parts including
 text, thinking blocks, function calls/responses, inline data, and file data, a held call as
-`[approval needed] <tool> <args> — <reason>`, and an applied decision as `[approved] <tool>`
-or `[denied] <tool>`. It prints
+`[approval needed] <tool> <args> — <reason>`, an applied decision as `[approved] <tool>`
+or `[denied] <tool>` unless a prompter printed it when you answered
+(`StreamPrinter::decision_printed`), and a tool's streamed output under a
+`[<tool> <short call id>]` header. It prints
 terminal control characters other than newline and tab as `\u{..}` escapes, so model or
 tool output cannot inject escape sequences into the terminal; stream errors are printed the
 same way. `StreamPrinter::with_writer` renders to any `std::io::Write` instead of stdout.

@@ -39,6 +39,7 @@ templates=(
   "harness:openai"
   "harness:anthropic"
   "harness:gemini:telemetry,mcp"
+  "website:"
 )
 
 for entry in "${templates[@]}"; do
@@ -81,14 +82,15 @@ adk-rust-macros = { path = "$ROOT/adk-rust-macros" }
 adk-graph = { path = "$ROOT/adk-graph" }
 adk-realtime = { path = "$ROOT/adk-realtime" }
 adk-devtools = { path = "$ROOT/adk-devtools" }
+awp-types = { path = "$ROOT/awp-types" }
 PATCH
 
     # Every generated project builds into the shared target directory without debug
     # info, so the dependencies compile once and the build stays within the disk.
     export CARGO_TARGET_DIR="$CHECK_TARGET_DIR" CARGO_PROFILE_DEV_DEBUG=0
     cargo check --manifest-path "$name/Cargo.toml"
-    # The harness template ships a scripted smoke test that needs no API key.
-    if [[ "$template" == "harness" ]]; then
+    # The harness and website templates ship smoke tests that need no API key.
+    if [[ "$template" == "harness" || "$template" == "website" ]]; then
       cargo test --manifest-path "$name/Cargo.toml"
     fi
   )

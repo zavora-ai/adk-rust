@@ -213,6 +213,10 @@ const PAYLOADS: &[(&str, &str)] = &[
         "SELECT count(*), sum(CASE WHEN record LIKE 'adk-enc:v1:%' THEN 1 ELSE 0 END) FROM adk_harness_facts",
     ),
     (
+        "read records",
+        "SELECT count(*), sum(CASE WHEN records LIKE 'adk-enc:v1:%' THEN 1 ELSE 0 END) FROM adk_harness_read_records",
+    ),
+    (
         "plan checkpoints",
         "SELECT count(*), sum(CASE WHEN state LIKE '%adk-enc:v1:%' THEN 1 ELSE 0 END) FROM graph_checkpoints",
     ),
@@ -341,6 +345,9 @@ async fn rotate_key(store_key: Option<String>, key: Option<String>) -> Result<()
     let facts = adk_harness::SqliteFactStore::new(pool.clone()).with_keyring(rotated.clone());
     facts.migrate().await?;
     stores.push(("facts".to_string(), facts.rewrap().await?));
+    let reads = adk_harness::SqliteReadRecords::new(pool.clone()).with_keyring(rotated.clone());
+    reads.migrate().await?;
+    stores.push(("read-records".to_string(), reads.rewrap().await?));
     let plans = adk_harness::SealedCheckpointer::new(
         std::sync::Arc::new(adk_graph::SqliteCheckpointer::from_pool(pool.clone()).await?),
         rotated.clone(),

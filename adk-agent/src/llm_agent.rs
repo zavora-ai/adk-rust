@@ -4707,6 +4707,33 @@ impl Agent for LlmAgent {
                         return;
                     }
 
+                    // ===== THE BATCH, BEFORE DISPATCH =====
+                    // The confirmation handler sees the turn's calls once, so it can review
+                    // several held edits as one change set (spec 3.1 §7.26, §10 A2).
+                    if !fc_parts.is_empty()
+                        && let Some(handler) = ctx.run_config().tool_confirmation_handler.clone()
+                    {
+                        let origins: Vec<Option<adk_core::ToolOrigin>> = fc_parts
+                            .iter()
+                            .map(|call| {
+                                tool_map.get(&call.name).map(|tool| adk_core::ToolOrigin::of(tool.as_ref()))
+                            })
+                            .collect();
+                        let batch: Vec<adk_core::BatchCall<'_>> = fc_parts
+                            .iter()
+                            .zip(&origins)
+                            .map(|(call, origin)| {
+                                let entry = adk_core::BatchCall::new(&call.name, &call.args)
+                                    .with_function_call_id(&call.function_call_id);
+                                match origin {
+                                    Some(origin) => entry.with_origin(origin),
+                                    None => entry,
+                                }
+                            })
+                            .collect();
+                        handler.batch_started(&batch).await;
+                    }
+
                     // Wrap circuit breaker in Mutex for shared access across parallel futures.
                     let cb_mutex = std::sync::Mutex::new(circuit_breaker_state.take());
 

@@ -34,6 +34,7 @@
 mod agents;
 mod args;
 mod catch_up;
+mod changeset;
 mod commands;
 mod goal;
 mod kernel;

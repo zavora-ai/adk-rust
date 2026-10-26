@@ -19,6 +19,19 @@ pub enum DevToolError {
     #[error("file '{0}' must be read with read_file before it can be edited")]
     NotRead(String),
 
+    /// The file changed since this session and agent read it, or since the decision that
+    /// approved the write was shown: the write did not happen (spec 3.1 §7.26, I66).
+    ///
+    /// Maps to an [`AdkError`](adk_core::AdkError) with category `Conflict` and code
+    /// `devtools.stale`, whose message the model sees.
+    #[error("'{path}' changed since it was read: {detail}. Read it again, then make the change")]
+    Stale {
+        /// The file path.
+        path: String,
+        /// What differs.
+        detail: String,
+    },
+
     /// `old_string` was not found in the target file.
     #[error("no occurrence of the target string was found in '{0}'")]
     NoMatch(String),
@@ -72,6 +85,7 @@ impl From<DevToolError> for adk_core::AdkError {
         let (category, code) = match &e {
             DevToolError::Excluded(_) => (Forbidden, "devtools.path_excluded"),
             DevToolError::NotRead(_) => (Conflict, "devtools.not_read"),
+            DevToolError::Stale { .. } => (Conflict, "devtools.stale"),
             DevToolError::NoMatch(_) => (InvalidInput, "devtools.no_match"),
             DevToolError::Ambiguous { .. } => (InvalidInput, "devtools.ambiguous"),
             DevToolError::PathEscape(_) => (Forbidden, "devtools.path_escape"),
@@ -109,6 +123,14 @@ mod tests {
                 DevToolError::NotRead("src/lib.rs".into()),
                 ErrorCategory::Conflict,
                 "devtools.not_read",
+            ),
+            (
+                DevToolError::Stale {
+                    path: "src/lib.rs".into(),
+                    detail: "it no longer exists".into(),
+                },
+                ErrorCategory::Conflict,
+                "devtools.stale",
             ),
             (
                 DevToolError::NoMatch("src/lib.rs".into()),

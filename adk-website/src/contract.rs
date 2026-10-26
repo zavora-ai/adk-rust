@@ -8,6 +8,10 @@
 //! | Root | — | The contract and the delegations; outside every agent (A-I5) |
 //! | Release | `release` | The site log's checkpoints (`adk-site`'s release signer, same seed) |
 //! | Edge | `card`, `receipt` | The A2A Agent Card, the status, consent receipts and stream entries |
+//!
+//! Signing is the owner's step at a terminal, as `adk-rust awp keys rotate` and `delegate`
+//! do it: a served site never holds the root and never signs its own contract or
+//! delegations; it publishes the `well-known/` files the owner wrote (D-11, A-I5).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

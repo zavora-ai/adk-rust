@@ -34,6 +34,8 @@ mod store;
 mod ultra;
 #[cfg(feature = "voice")]
 mod voice_cli;
+#[cfg(feature = "website")]
+mod website_cli;
 
 use adk_agent::LlmAgentBuilder;
 use adk_cli::{Launcher, launcher::ThinkingDisplayMode};
@@ -351,6 +353,8 @@ async fn run() -> Result<()> {
         Some(Commands::Site { command, target }) => site_cli::run(command, target).await,
         #[cfg(feature = "website")]
         Some(Commands::Awp { command }) => awp_cli::run(command).await,
+        #[cfg(feature = "website")]
+        Some(Commands::Website { command }) => website_cli::run(command).await,
     }
 }
 

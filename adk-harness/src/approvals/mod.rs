@@ -1,11 +1,17 @@
 //! Standing approvals: rules, their stores, the matcher, and interactive prompts
 //! (spec 3.1 §7.5).
 
+mod batch;
+mod changeset;
 pub mod matcher;
 mod prompt;
 mod rule;
 mod store;
 
+pub use changeset::{
+    CHANGE_SET_MAX_BYTES, ChangeSet, ChangeSetAnswer, ChangeSetCall, ChangeSetFile,
+    ChangeSetPrompt, RenderedChangeSet,
+};
 pub(crate) use prompt::rule_audit_fields;
 pub use prompt::{
     ApprovalPrompt, ApprovalPrompter, DEFAULT_PROMPTS_PER_TURN, PromptAnswer,

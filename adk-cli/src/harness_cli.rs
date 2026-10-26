@@ -437,7 +437,8 @@ impl Setup {
                 .standing_rules(db.rules.clone())
                 .shell_ledger(db.ledger.clone())
                 .approval_store(db.approvals.clone())
-                .goal_store(db.goals.clone());
+                .goal_store(db.goals.clone())
+                .read_records(db.reads.clone());
             // Long-term memory in harness.db; off when served (spec 3.1 §7.15.2), on in
             // `adk-rust up`, the user's own kernel (spec 3.2 §8.1).
             if self.resolved.memory && (approval_service.is_none() || extras.memory_with_inbox) {
@@ -453,7 +454,8 @@ impl Setup {
             builder = builder
                 .mode_store(shared.modes.clone())
                 .standing_rules(shared.rules.clone())
-                .approval_store(shared.approvals.clone());
+                .approval_store(shared.approvals.clone())
+                .read_records(shared.reads.clone());
         }
         // An area's mode the person changes while the kernel runs governs the harness's
         // sessions from their next step (spec 3.3 §10 K3).

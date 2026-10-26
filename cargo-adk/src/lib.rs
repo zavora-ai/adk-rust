@@ -13,3 +13,4 @@ pub mod pattern;
 pub mod provider;
 pub mod registry;
 pub mod template;
+pub mod website_template;
