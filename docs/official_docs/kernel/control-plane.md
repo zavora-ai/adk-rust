@@ -183,7 +183,8 @@ async fn list(home: &std::path::Path) -> adk_kernel::Result<()> {
 To serve the control plane from your own server, merge `adk_kernel::control::router(kernel)`
 with `ServerBuilder::add_api_routes` and register the kernel with
 `ServerBuilder::with_freeze_delegate`; `ControlPlane::start` serves it on the socket (the pipe
-on Windows) and, with `ControlPlaneConfig::with_http`, on a bind of its own.
+on Windows) and, with `ControlPlaneConfig::with_http`, on a bind of its own. With a bind on
+port 0, `Kernel::control_addr` returns the address the listener took once the kernel runs.
 
 `KernelConfig::default()` serves no control plane, so a kernel embedded in an application
 never takes the socket of the kernel `adk-rust up` runs at the same home. Pass

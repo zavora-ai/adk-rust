@@ -265,6 +265,45 @@ async fn a_i13_incidents_and_charters_only_lower() {
     );
 }
 
+/// Syncing the charter in force again — every start of a site does — keeps the owner's
+/// promotions made after it took effect; a later charter that sets a lower level still
+/// lowers the job (A-I13, §7.11).
+#[tokio::test]
+async fn a_i13_a_resync_keeps_the_owners_later_promotion() {
+    let site = Uuid::new_v4();
+    let clock = Arc::new(ManualClock::new(start()));
+    let charters = Arc::new(InMemoryCharterStore::new());
+    let mut first = charter(site, &["amina"]);
+    first.authority = vec![authority("social", AutonomyLevel::Propose)];
+    let v1 = charters
+        .commit(first.clone(), decision("dec-v1", clock.now(), &[(Role::Owner, "amina")]))
+        .await
+        .unwrap();
+    let ladder = AutonomyLadder::new(Arc::new(InMemoryAutonomyStore::new()))
+        .with_charters(charters.clone())
+        .with_clock(clock.clone() as Arc<dyn Clock>);
+    ladder.sync(&v1.charter).await.unwrap();
+    ahead(&clock, Duration::days(30));
+    let owner = OwnerDecision::new("dec-promote", SubjectRef::human("amina"), clock.now());
+    ladder.promote(site, "social", &owner).await.unwrap();
+
+    ahead(&clock, Duration::days(1));
+    ladder.sync(&v1.charter).await.unwrap();
+    assert_eq!(
+        ladder.level(site, "social").await.unwrap(),
+        Some(AutonomyLevel::ActWithApproval),
+        "the owner promoted the job after charter version 1 took effect"
+    );
+
+    ahead(&clock, Duration::days(1));
+    let v2 = charters
+        .commit(first, decision("dec-v2", clock.now(), &[(Role::Owner, "amina")]))
+        .await
+        .unwrap();
+    let jobs = ladder.sync(&v2.charter).await.unwrap();
+    assert_eq!(jobs[0].level, AutonomyLevel::Propose, "charter version 2 sets it lower");
+}
+
 // ── A-I14 ──────────────────────────────────────────────────────────────────────────────
 
 /// A KPI without a baseline is measured for 14 days with no target, then its baseline is

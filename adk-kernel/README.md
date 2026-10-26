@@ -208,7 +208,9 @@ A `Trigger` spawns a new process for an event no sleeper takes, keyed
 reconciled on start. `CronWakeSource::watermarked` keeps where a cron source left off in a
 `CronWatermarkStore` (in-memory, SQLite, PostgreSQL, Redis, MongoDB, Firestore and
 Neo4j; `cron_watermark_store_conformance_tests!`), so the ticks missed while no kernel watched fire
-once each, as the wake's `MissedFirePolicy` picks them. A sleeper's cron wake keeps its cursor in
+once each, as the wake's `MissedFirePolicy` picks them. A standing trigger on a cron expression
+fires through one such source the kernel registers per expression, unless a registered source
+ticks on it (`WakeSource::cron_expression`). A sleeper's cron wake keeps its cursor in
 the kernel's own store (`KernelBuilder::watermark_store`), so a restarted kernel or another replica
 fires the occurrences missed while no kernel ran, one at a time as each series sleeps again, and
 none from before a series began. A local event reaches `Running` in under 2 s: in-process sources
