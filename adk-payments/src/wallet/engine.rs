@@ -464,6 +464,14 @@ impl WalletBuilder {
     }
 }
 
+/// How a reserved payment leaves the category's in-flight total.
+enum Landing<'a> {
+    /// Paid: the settled units are committed and the settled record is stored.
+    Settled { record: &'a PaymentRecord, units: u64 },
+    /// Not paid: the reservation is released.
+    Released(SpendCategory),
+}
+
 /// A reservation the wallet took for a payment it is about to execute.
 struct Reserved {
     reservation: ReservationId,
@@ -753,9 +761,19 @@ impl Wallet {
         }
         let approved = decision.approved;
         record.decision = Some(decision);
+        let not_held = || {
+            conflict(
+                WALLET_NOT_HELD_CODE,
+                format!("payment {payment_id} is not held; another decision settled it"),
+            )
+        };
         if !approved {
             record.state = PaymentState::Rejected;
-            inner.store.update(&record).await?;
+            // Another wallet instance over the store may decide the payment at the same
+            // time: only the decision that moves it out of `Held` stands.
+            if !inner.store.update_if(&record, PaymentState::Held).await? {
+                return Err(not_held());
+            }
             drop(gate);
             self.audit(
                 "wallet.held",
@@ -780,7 +798,18 @@ impl Wallet {
         };
         let reservation = inner.ledger.reserve(&key, units).await?;
         record.state = PaymentState::Executing;
-        inner.store.update(&record).await?;
+        let moved = match inner.store.update_if(&record, PaymentState::Held).await {
+            Ok(moved) => moved,
+            Err(error) => {
+                let _ = inner.ledger.release(reservation).await;
+                return Err(error);
+            }
+        };
+        if !moved {
+            // Another instance's decision moved it first; this one pays nothing.
+            let _ = inner.ledger.release(reservation).await;
+            return Err(not_held());
+        }
         drop(gate);
         let reserved = Reserved { reservation, units, autonomous: false };
         if let Err(error) = self
@@ -1235,8 +1264,7 @@ impl Wallet {
 
     /// Gives up a reserved payment before any money moved.
     async fn abandon(&self, mut record: PaymentRecord, reserved: Reserved, error: &AdkError) {
-        let _ = self.inner.ledger.release(reserved.reservation.clone()).await;
-        self.leave_flight(record.category, &reserved).await;
+        let _ = self.land(&reserved, Landing::Released(record.category)).await;
         record.state = PaymentState::Failed;
         record.error = Some(error.message.clone());
         if let Err(store_error) = self.inner.store.update(&record).await {
@@ -1244,13 +1272,33 @@ impl Wallet {
         }
     }
 
-    async fn leave_flight(&self, category: SpendCategory, reserved: &Reserved) {
-        if reserved.autonomous {
-            let mut gate = self.inner.gate.lock().await;
-            if let Some(units) = gate.get_mut(&category) {
-                *units = units.saturating_sub(reserved.units);
+    /// Takes a payment out of the category's in-flight total in one step under the gate with
+    /// its outcome in the spend ledger and, once settled, in the journal (spec 3.5 §7.14): a
+    /// payment checking the cap or the anomaly rule meanwhile sees it either in flight or
+    /// recorded, never in both and never in neither, so in-cap payments are not held for
+    /// spend counted twice.
+    async fn land(&self, reserved: &Reserved, landing: Landing<'_>) -> Result<()> {
+        let inner = &self.inner;
+        let mut gate = inner.gate.lock().await;
+        let reservation = reserved.reservation.clone();
+        let (category, stored) = match landing {
+            Landing::Settled { record, units } => {
+                if let Err(error) = inner.ledger.commit(reservation, units).await {
+                    tracing::error!(error = %error, payment.id = %record.id, "settled spend could not be committed");
+                }
+                (record.category, inner.store.update(record).await)
             }
+            Landing::Released(category) => {
+                let _ = inner.ledger.release(reservation).await;
+                (category, Ok(()))
+            }
+        };
+        if reserved.autonomous
+            && let Some(units) = gate.get_mut(&category)
+        {
+            *units = units.saturating_sub(reserved.units);
         }
+        stored
     }
 
     async fn execute(
@@ -1281,17 +1329,13 @@ impl Wallet {
             Ok(settlement) => {
                 let units =
                     inner.policy.to_ledger_units(settlement.amount).unwrap_or(reserved.units);
-                if let Err(error) = inner.ledger.commit(reserved.reservation.clone(), units).await {
-                    tracing::error!(error = %error, payment.id = %record.id, "settled spend could not be committed");
-                }
-                self.leave_flight(record.category, &reserved).await;
                 if settlement.amount != record.amount {
                     tracing::warn!(payment.id = %record.id, requested = record.amount, settled = settlement.amount, "rail settled another amount");
                 }
                 record.state = PaymentState::Settled;
                 record.settlement = Some(settlement);
                 record.settled_at = Some(inner.clock.now());
-                inner.store.update(&record).await?;
+                self.land(&reserved, Landing::Settled { record: &record, units }).await?;
                 tracing::info!(wallet.id = %inner.id, payment.id = %record.id, "payment settled");
                 if let Err(error) = self
                     .audit(
@@ -1331,8 +1375,7 @@ impl Wallet {
             tracing::error!(error = %void_error, payment.id = %record.id, "a failed payment's debit could not be voided");
             record.debit_outstanding = true;
         }
-        let _ = inner.ledger.release(reserved.reservation.clone()).await;
-        self.leave_flight(record.category, &reserved).await;
+        let _ = self.land(&reserved, Landing::Released(record.category)).await;
         record.state = PaymentState::Failed;
         record.error = Some(error.message.clone());
         if let Err(store_error) = inner.store.update(&record).await {

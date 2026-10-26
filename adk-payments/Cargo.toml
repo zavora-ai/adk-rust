@@ -21,7 +21,7 @@ ap2 = ["dep:tokio"]
 ap2-a2a = ["ap2"]
 ap2-mcp = ["ap2"]
 # The owner-funded wallet, its rails, anomaly alarms and reconciliation (spec 3.5 §7.14).
-wallet = ["dep:awp-types", "dep:tokio", "dep:uuid"]
+wallet = ["dep:awp-types", "dep:futures", "dep:tokio", "dep:uuid"]
 # Durable `WalletStore` backends (spec 3.5 §7.14). Each turns on `wallet` and the same backend of
 # adk-session, whose spend ledger caps the categories across instances.
 sqlite = ["wallet", "dep:sqlx", "sqlx/sqlite", "adk-session/sqlite", "serde_json/float_roundtrip"]
@@ -38,6 +38,8 @@ adk-session.workspace = true
 async-trait.workspace = true
 awp-types = { workspace = true, optional = true }
 chrono.workspace = true
+# The wallet store conformance suite races decisions on one payment (spec 3.5 §7.14).
+futures = { workspace = true, optional = true }
 hex.workspace = true
 regex.workspace = true
 serde.workspace = true

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 #[cfg(feature = "ap2-mcp")]
 use adk_payments::domain::TransactionState;
+#[cfg(feature = "ap2-mcp")]
 use adk_payments::domain::{
     Cart, CartLine, CommerceActor, CommerceActorRole, CommerceMode, MerchantRef, Money,
     ProtocolExtensions, TransactionId, TransactionRecord,
@@ -19,6 +20,7 @@ use adk_payments::protocol::ap2::{Ap2A2aArtifact, Ap2A2aMessage, Ap2AgentCardExt
 #[cfg(feature = "ap2-mcp")]
 use adk_payments::protocol::ap2::{Ap2McpReceiptStatus, Ap2ReceiptStatusKind};
 
+#[cfg(feature = "ap2-mcp")]
 use chrono::{TimeZone, Utc};
 use serde_json::Value;
 

@@ -113,6 +113,14 @@ async fn a_key_pays_once_across_two_instances() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs PostgreSQL: DATABASE_URL"]
+async fn a_held_payment_is_decided_once_across_two_instances() {
+    let scratch = Scratch::new();
+    wallet_stores::a_held_payment_is_decided_once_across_instances(&scratch).await;
+    scratch.drop_schema().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs PostgreSQL: DATABASE_URL"]
 async fn instances_migrate_one_database_together() {
     let scratch = Scratch::new();
     let stores: Vec<_> = futures::future::join_all(

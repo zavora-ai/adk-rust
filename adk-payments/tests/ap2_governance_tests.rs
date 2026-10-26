@@ -55,6 +55,7 @@ const MERCHANT_ID: &str = "merchant-ap2";
 const SHOPPER: &str = "shopper-agent";
 
 /// The id a payment tool reports for the shopper: the identity derived from app and agent.
+#[cfg(feature = "ap2-a2a")]
 fn shopper_agent_id() -> String {
     adk_core::AgentPrincipal::derived(APP, SHOPPER).id.to_string()
 }

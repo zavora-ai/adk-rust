@@ -87,6 +87,11 @@ approved payment is paid beyond the mandate as the owner's act: it is recorded i
 category's owner-approved scope, counts toward the category's spend for the period, and
 leaves the cap unchanged. `Wallet::resume_category` lifts an anomaly pause the same way.
 
+A decision moves the payment out of `held` with the store's compare-and-set
+(`WalletStore::update_if`), so when two decisions race on one payment — the owner on the
+phone and on the web, or two instances of the site — exactly one proceeds and the other is
+refused with `wallet.not_held`; the ledger and the rail see the payment once.
+
 Through the `wallet_pay` tool, a held payment is held as the tool call: the run's approval
 sources (the approval store, a fingerprint approval or the confirmation handler) decide
 it, the owner's card shows it, and the next run resumes the call and pays it.
@@ -180,12 +185,15 @@ instance of a site (spec 3.5 §7.14):
 
 | Store | Feature | Built from | Atomic steps |
 |-------|---------|------------|--------------|
-| `SqliteWalletStore` | `sqlite` | A `sqlx::SqlitePool` | `INSERT … ON CONFLICT DO NOTHING` on the wallet and idempotency key; `DELETE … RETURNING` to lift a pause |
+| `SqliteWalletStore` | `sqlite` | A `sqlx::SqlitePool` | `INSERT … ON CONFLICT DO NOTHING` on the wallet and idempotency key; `UPDATE … WHERE state = $expected` for a decision; `DELETE … RETURNING` to lift a pause |
 | `PostgresWalletStore` | `postgres` | A `sqlx::PgPool`, or `connect(url)` | The same statements, shared by every replica |
-| `RedisWalletStore` | `redis` | A `fred` client, or `connect(url)` | One Lua script per insert, update, listing and resume |
+| `RedisWalletStore` | `redis` | A `fred` client, or `connect(url)` | One Lua script per insert, update, compare-and-set, listing and resume |
 
 Each feature turns on `wallet` and the same backend of `adk-session`, whose spend ledger
-the wallet reserves in. Every store passes `wallet::conformance::wallet_store_conformance`.
+the wallet reserves in. Every store passes `wallet::conformance::wallet_store_conformance`,
+which races eight decisions on one held payment and expects exactly one to proceed. A store
+of your own that several instances share overrides `WalletStore::update_if` with one atomic
+step; the provided method reads and then writes, which is atomic only for one instance.
 
 | Backend | Layout | Setup |
 |---------|--------|-------|

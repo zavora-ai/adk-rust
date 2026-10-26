@@ -289,6 +289,48 @@ pub trait WalletStore: Send + Sync {
     /// Returns `wallet.payment_not_found` when there is none, or the store's error.
     async fn update(&self, record: &PaymentRecord) -> Result<()>;
 
+    /// Replaces the stored payment with `record`'s id only while it is in `expected` state,
+    /// as one compare-and-set (spec 3.5 §7.14, A-I16): returns `true` when it replaced the
+    /// payment and `false` when the stored payment has moved to another state.
+    ///
+    /// Wallets decide a held payment through it, so of two decisions racing on one payment,
+    /// from one instance or several sharing the store, exactly one proceeds.
+    ///
+    /// The provided implementation reads the payment and then updates it, which is atomic
+    /// only while one wallet instance uses the store; a store shared by several instances
+    /// overrides it with one atomic step, as the built-in stores do.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_payments::wallet::{InMemoryWalletStore, PaymentState, WalletStore};
+    ///
+    /// # async fn decide(store: &InMemoryWalletStore, mut held: adk_payments::wallet::PaymentRecord) -> adk_core::Result<()> {
+    /// held.state = PaymentState::Executing;
+    /// if !store.update_if(&held, PaymentState::Held).await? {
+    ///     // Another decision got there first.
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `wallet.payment_not_found` when there is none, or the store's error.
+    async fn update_if(&self, record: &PaymentRecord, expected: PaymentState) -> Result<bool> {
+        let stored = self.get(&record.wallet, &record.id).await?.ok_or_else(|| {
+            super::error::not_found(
+                super::error::WALLET_PAYMENT_NOT_FOUND_CODE,
+                format!("wallet {} has no payment {}", record.wallet, record.id),
+            )
+        })?;
+        if stored.state != expected {
+            return Ok(false);
+        }
+        self.update(record).await?;
+        Ok(true)
+    }
+
     /// The payment `id` of `wallet`.
     ///
     /// # Errors
@@ -388,6 +430,22 @@ impl WalletStore for InMemoryWalletStore {
             })?;
         state.payments[index] = record.clone();
         Ok(())
+    }
+
+    async fn update_if(&self, record: &PaymentRecord, expected: PaymentState) -> Result<bool> {
+        let mut state = self.state.write().await;
+        let index =
+            *state.by_id.get(&(record.wallet.clone(), record.id.clone())).ok_or_else(|| {
+                super::error::not_found(
+                    super::error::WALLET_PAYMENT_NOT_FOUND_CODE,
+                    format!("wallet {} has no payment {}", record.wallet, record.id),
+                )
+            })?;
+        if state.payments[index].state != expected {
+            return Ok(false);
+        }
+        state.payments[index] = record.clone();
+        Ok(true)
     }
 
     async fn get(&self, wallet: &str, id: &str) -> Result<Option<PaymentRecord>> {

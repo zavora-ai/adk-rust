@@ -78,6 +78,12 @@ async fn a_key_pays_once_across_two_instances() {
     wallet_stores::a_key_pays_once_across_instances(&Namespace::new(), 16).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs Redis: REDIS_URL"]
+async fn a_held_payment_is_decided_once_across_two_instances() {
+    wallet_stores::a_held_payment_is_decided_once_across_instances(&Namespace::new()).await;
+}
+
 #[tokio::test]
 #[ignore = "needs Redis: REDIS_URL"]
 async fn a_newer_layout_is_refused() {
