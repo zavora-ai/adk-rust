@@ -9,12 +9,18 @@
 //! | `releases/<dir>.index.json` | The digest of every file of a release directory |
 //! | `current`, `preview` | Symbolic links the web server's document root follows |
 //!
-//! A publish sends the release to a staging directory with `rsync --checksum --link-dest`,
-//! so unchanged files become hard links to the serving release and only changed files
+//! A publish sends the release to a staging directory with `rsync --checksum --copy-dest`,
+//! so the server copies unchanged files from the serving release and only changed files
 //! cross the network, links the log forward, renames the directory into place and swaps
 //! `current` with one `rename(2)` ([`Atomicity::Deploy`]). Point the web server's document
 //! root at `<root>/current`. The server needs `rsync`, a POSIX shell, and `sha256sum` or
 //! `shasum`.
+//!
+//! Each release directory holds its own copy of every file, read-only, so a write through one
+//! release's file changes no other release and a rollback finds the files it checks as they
+//! were published; a rollback copies its release's files too. Only the log's tiles and
+//! manifests, which never change once written, are shared between releases, as read-only
+//! hard links, as `DirectoryHost` shares its read-only objects.
 //!
 //! The SSH identity comes from a [`HostCredential`] holding an OpenSSH private key; `ssh`
 //! reads it from a temporary file readable only by this user and removed after each
@@ -57,14 +63,15 @@ const PREPARE: &str =
 const WRITE: &str = r#"set -e; t="$1/$2.tmp.$$"; cat > "$t"; mv -f -- "$t" "$1/$2""#;
 
 /// Links the log and manifests of `$3` (the serving directory, or empty) into the staging
-/// directory `$2` where it lacks them, renames it to `$4`, and points the link `$5` at it
-/// with one rename: `mv -T` (GNU, BusyBox), else `mv -h` (BSD, macOS).
+/// directory `$2` where it lacks them, read-only, renames it to `$4`, and points the link `$5`
+/// at it with one rename: `mv -T` (GNU, BusyBox), else `mv -h` (BSD, macOS).
 const FINISH: &str = r#"set -e
 root="$1"; stage="$2"; cur="$3"; final="$4"; link="$5"
 cd "$root"
 if [ -n "$cur" ]; then
   for d in .well-known/awp/releases .well-known/awp/log; do
     if [ -d "$cur/$d" ]; then
+      find "$cur/$d" -type f -perm -u+w -exec chmod a-w {} +
       mkdir -p "$stage/$d"
       rsync -r --perms --ignore-existing --link-dest="$root/$cur/$d/" "$cur/$d/" "$stage/$d/"
     fi
@@ -76,9 +83,9 @@ rm -f -- "$tmp"
 ln -s -- "$final" "$tmp"
 mv -T -- "$tmp" "$link" 2>/dev/null || mv -h -- "$tmp" "$link""#;
 
-/// Hard-links the files listed on stdin from release directory `$2` into a new directory
-/// `$3`.
-const LINK_FILES: &str = r#"set -e; mkdir -p -- "$1/$3"; rsync -r --perms --files-from=- --link-dest="$1/$2/" "$1/$2/" "$1/$3/""#;
+/// Copies the files listed on stdin from release directory `$2` into a new directory `$3`.
+const COPY_FILES: &str =
+    r#"set -e; mkdir -p -- "$1/$3"; rsync -r --perms --files-from=- "$1/$2/" "$1/$3/""#;
 
 /// Prints `<sha256> <path>` for each path on stdin under directory `$2`, `missing <path>`
 /// for an absent one.
@@ -415,20 +422,20 @@ impl RsyncHost {
         self.checked(WRITE, &[root, &format!("{dir}.index.json")], Some(bytes)).await.map(drop)
     }
 
-    /// Sends the local directory `from` to `<root>/<to>/`, hard-linking files equal to those
-    /// in `<root>/<link_dest>/`.
+    /// Sends the local directory `from` to `<root>/<to>/`, copying on the server the files
+    /// equal to those in `<root>/<copy_dest>/` instead of sending them.
     async fn rsync(
         &self,
         from: &Path,
         root: &str,
         to: &str,
-        link_dest: Option<&str>,
+        copy_dest: Option<&str>,
     ) -> Result<()> {
         let files = self.ssh_files().await?;
         let mut command = tokio::process::Command::new(&self.rsync);
         command.args(["-r", "--perms", "--checksum"]);
-        if let Some(dir) = link_dest {
-            command.arg(format!("--link-dest={root}/{dir}/"));
+        if let Some(dir) = copy_dest {
+            command.arg(format!("--copy-dest={root}/{dir}/"));
         }
         let destination = match &self.target {
             RsyncTarget::Local { .. } => format!("{root}/{to}/"),
@@ -551,7 +558,7 @@ impl RsyncHost {
                 );
             }
             std::fs::write(&local, bytes).map_err(|e| SiteError::io(&local, e))?;
-            served_mode(&local, 0o644)?;
+            served_mode(&local, 0o444)?;
             let digest = file_digest(bytes);
             if current_index.files.get(path) != Some(&digest) {
                 uploaded.push(path.clone());
@@ -661,7 +668,7 @@ impl RsyncHost {
         let current = self.link(&root, "current").await?.ok_or_else(not_found)?;
         let current_index = self.index(&root, &current).await?;
         let dir = format!("releases/rollback-{}-{}", to.seq, nanos());
-        self.checked(LINK_FILES, &[&root, &stored, &dir], Some(list.into_bytes())).await?;
+        self.checked(COPY_FILES, &[&root, &stored, &dir], Some(list.into_bytes())).await?;
         let mut index = DirIndex::default();
         for (path, entry) in &files {
             index.files.insert(path.clone(), entry.sha256.clone());
@@ -688,8 +695,9 @@ impl RsyncHost {
     }
 }
 
-/// Gives a staged file or directory the mode the web server reads it with; `--perms`
-/// carries it to the server whatever this process's umask.
+/// Gives a staged file or directory the mode the web server reads it with — files read-only
+/// for everyone, so a write through a served file is refused — and `--perms` carries it to the
+/// server whatever this process's umask.
 fn served_mode(path: &Path, mode: u32) -> Result<()> {
     #[cfg(unix)]
     {
