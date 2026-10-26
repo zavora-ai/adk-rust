@@ -43,7 +43,7 @@ use crate::scan::scan_file;
 
 pub use extensions::{ReleaseDelegation, ThirdPartyResources};
 pub use html::{A11yViolation, Severity};
-pub use reviews::QuotableReview;
+pub use reviews::{QuotableReview, review_findings};
 
 /// A launch-gate check (spec 3.5 §7.8.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

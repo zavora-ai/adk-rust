@@ -84,8 +84,23 @@ fn quotes(haystack: &str, review: &[String]) -> bool {
     review.windows(window).any(|run| haystack.contains(&format!(" {} ", run.join(" "))))
 }
 
-/// The blocking findings for `item`'s quotes of `reviews`.
-pub(super) fn review_findings(item: &ContentItem, reviews: &[QuotableReview]) -> Vec<Finding> {
+/// The blocking findings for `item`'s quotes of `reviews` (spec 3.5 S2): a quote of an
+/// anonymous review, of one the owner has not approved, or one that does not name its
+/// reviewer. A gate extension that keeps its reviews outside the gate, such as the reviews an
+/// owner approves while the site runs, reports these under `GateCheck::Claims`.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_site::gate::{QuotableReview, review_findings};
+/// # let item: awp_types::ContentItem = serde_json::from_value(serde_json::json!({
+/// #   "id": "pages/reviews/en", "kind": "page", "slug": "reviews", "language": "en",
+/// #   "body": "Customers say: the sourdough is the best in town and still warm at seven.",
+/// #   "state": "published" })).unwrap();
+/// let anonymous = QuotableReview::new("The sourdough is the best in town and still warm at seven.");
+/// assert_eq!(review_findings(&item, &[anonymous])[0].rule, "review-quote-anonymous");
+/// ```
+pub fn review_findings(item: &ContentItem, reviews: &[QuotableReview]) -> Vec<Finding> {
     if reviews.is_empty() {
         return Vec::new();
     }
