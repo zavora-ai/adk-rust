@@ -253,9 +253,115 @@ fn serve_with_the_personal_preset_shows_both_limits() {
     );
     terminal.expect("Quiet time: 22:00–07:00 (kept by adk-rust up)");
     terminal.expect("Spending: daily spending limit $5.00 a day (kept by adk-rust up)");
+    // Wave 2 review finding 4: its banner names no shell.
+    terminal.expect("· shell none");
     wait_listening(port, &terminal);
     terminal.send("\x03");
     terminal.wait();
+}
+
+/// Wave 2 review finding 4: `serve` reads the `personal.toml` of the user config's
+/// `[kernel] home`, and a `[kernel]` error does not stop it: it shows the first-run answers.
+#[test]
+fn serve_reads_the_kernel_home_and_starts_despite_a_kernel_error() {
+    let serve = |home: &Path, repo: &Path, shown: &str| {
+        let port = free_port();
+        let mut terminal = Terminal::spawn_in(
+            &["serve", "--preset", "personal", "--port", &port.to_string(), "--model-script", "[]"],
+            home,
+            repo,
+        );
+        terminal.expect(&format!("Spending: daily spending limit {shown} (kept by adk-rust up)"));
+        wait_listening(port, &terminal);
+        terminal.send("\x03");
+        let (_, text) = terminal.wait();
+        assert!(!text.contains("Daily spending limit —"), "asked again: {text}");
+        text
+    };
+    let home = tempfile::tempdir().unwrap();
+    let repo = repository();
+    let kernel = home.path().join("assistant");
+    answered(&kernel);
+    std::fs::write(
+        kernel.join("personal.toml"),
+        "quiet_time = \"21:00-06:00\"\ndaily_spending_limit_usd = 50.0\n",
+    )
+    .unwrap();
+    for config in config_dirs(home.path()) {
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(
+            config.join("harness.toml"),
+            format!("[kernel]\nhome = {:?}\n", kernel.display().to_string()),
+        )
+        .unwrap();
+    }
+    serve(home.path(), repo.path(), "$50.00 a day");
+
+    let home = tempfile::tempdir().unwrap();
+    for config in config_dirs(home.path()) {
+        answered(&config);
+        std::fs::write(config.join("harness.toml"), "[kernel]\nmax_concurrent_runs = 0\n").unwrap();
+    }
+    let shown = serve(home.path(), repo.path(), "$5.00 a day");
+    assert!(shown.contains("the limits shown are the first-run answers"), "{shown}");
+}
+
+/// Wave 2 review finding 1: `code` shows both limits in force, as every start does.
+#[test]
+fn code_with_the_personal_preset_shows_both_limits() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = repository();
+    for config in config_dirs(home.path()) {
+        answered(&config);
+    }
+    let output = run(
+        &["code", "note this", "--preset", "personal", "--model-script", r#"[{"text": "Noted."}]"#],
+        home.path(),
+        repo.path(),
+    );
+    let shown = text(&output);
+    assert!(output.status.success(), "{shown}");
+    assert!(shown.contains("Quiet time: 22:00–07:00 (kept by adk-rust up)"), "{shown}");
+    assert!(
+        shown.contains("Spending: daily spending limit $5.00 a day (kept by adk-rust up)"),
+        "{shown}"
+    );
+}
+
+/// Wave 2 review finding 2: `up --home` keeps its answers in a home the other commands do
+/// not read unless the user config names it, and says so.
+#[test]
+fn up_with_its_own_home_says_where_the_other_commands_read() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = repository();
+    let kernel = home.path().join("k");
+    answered(&kernel);
+    let port = free_port();
+    let args = up_args(&kernel, port);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let mut terminal = Terminal::spawn_in(&args, home.path(), repo.path());
+    terminal.expect("is this kernel's alone");
+    wait_listening(port, &terminal);
+    terminal.send("\x03");
+    terminal.wait();
+
+    // Named in the user config, it is every command's home: nothing to say.
+    for config in config_dirs(home.path()) {
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(
+            config.join("harness.toml"),
+            format!("[kernel]\nhome = {:?}\n", kernel.display().to_string()),
+        )
+        .unwrap();
+    }
+    let port = free_port();
+    let args = up_args(&kernel, port);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let mut terminal = Terminal::spawn_in(&args, home.path(), repo.path());
+    wait_listening(port, &terminal);
+    terminal.send("\x03");
+    let (_, shown) = terminal.wait();
+    assert!(!shown.contains("is this kernel's alone"), "{shown}");
 }
 
 /// Review of #1045, finding 3: a `[kernel]` error stops only `adk-rust up`, which runs the

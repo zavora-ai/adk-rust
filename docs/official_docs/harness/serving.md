@@ -71,6 +71,8 @@ adk-rust serve --store postgres://harness:…@db/harness --host 0.0.0.0 --port 8
 | Modes | `PostgresModeStore` (`adk_harness_modes`) | `RedisModeStore` |
 | Standing rules | `PostgresStandingRuleStore` (`adk_harness_rules`, `adk_harness_rule_versions`) | `RedisStandingRuleStore` |
 | Plans and goal graphs | `PostgresCheckpointer` | `RedisCheckpointer` |
+| Action ledger | `PostgresActionLedger` | `RedisActionLedger` |
+| Spend ledger | `PostgresSpendLedger` | `RedisSpendLedger` |
 
 The PostgreSQL stores share one connection pool and migrate under advisory locks, so
 replicas can start together. The banner names the store with its password redacted.

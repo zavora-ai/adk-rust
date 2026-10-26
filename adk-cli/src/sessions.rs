@@ -135,6 +135,45 @@ pub struct HarnessDb {
     pub snapshots: Arc<adk_harness::snapshot::SqliteSnapshotStore>,
     /// The directory `harness.db` is in: the config dir, or the kernel home.
     pub dir: std::path::PathBuf,
+    /// The action ledger, so a call with side effects that began before a restart is
+    /// answered from its record rather than run again (spec 3.1 §7.12; spec 3.3 §12 phase 1).
+    pub actions: Arc<dyn adk_core::ActionLedger>,
+    /// The spend ledger model calls reserve against, kept across restarts (spec 3.1 §7.13).
+    pub spend: Arc<dyn adk_core::SpendLedger>,
+}
+
+/// The action ledger of a `harness.db` sealed under a store key: a failed call's error text
+/// is a payload, so it is not kept at rest (spec 3.1 §7.12, I57). A refused call's
+/// `not run` text stays, as the agent reads it back to tell a call that never ran.
+#[cfg(all(feature = "harness", feature = "encrypted"))]
+#[derive(Debug)]
+struct SealedActions(adk_session::SqliteActionLedger);
+
+#[cfg(all(feature = "harness", feature = "encrypted"))]
+#[async_trait::async_trait]
+impl adk_core::ActionLedger for SealedActions {
+    async fn begin(&self, record: &adk_core::ActionRecord) -> adk_core::Result<()> {
+        self.0.begin(record).await
+    }
+
+    async fn complete(&self, key: &str, outcome: adk_core::ActionOutcome) -> adk_core::Result<()> {
+        let outcome = match outcome {
+            adk_core::ActionOutcome::Failed { error }
+                if !adk_core::action_ledger::is_not_run(&error) =>
+            {
+                adk_core::ActionOutcome::Failed {
+                    error: "the tool returned an error; a sealed harness.db keeps no error text"
+                        .to_string(),
+                }
+            }
+            outcome => outcome,
+        };
+        self.0.complete(key, outcome).await
+    }
+
+    async fn get(&self, key: &str) -> adk_core::Result<Option<adk_core::ActionRecord>> {
+        self.0.get(key).await
+    }
 }
 
 #[cfg(feature = "harness")]
@@ -214,6 +253,10 @@ pub async fn open_harness_db_in(
         Arc::new(adk_graph::SqliteCheckpointer::from_pool(pool.clone()).await?);
     let snapshots = adk_harness::snapshot::SqliteSnapshotStore::new(pool.clone());
     snapshots.migrate().await?;
+    let actions = adk_session::SqliteActionLedger::from_pool(pool.clone());
+    actions.migrate().await?;
+    let spend = adk_session::SqliteSpendLedger::from_pool(pool.clone());
+    spend.migrate().await?;
     let Some(keyring) = keyring else {
         return Ok(HarnessDb {
             pool,
@@ -231,6 +274,8 @@ pub async fn open_harness_db_in(
             keyring: None,
             snapshots: Arc::new(snapshots),
             dir: dir.to_path_buf(),
+            actions: Arc::new(actions),
+            spend: Arc::new(spend),
         });
     };
     if marker.key_id().await?.is_none() {
@@ -276,6 +321,8 @@ pub async fn open_harness_db_in(
         keyring: Some(keyring.clone()),
         snapshots: Arc::new(snapshots.with_keyring(keyring.clone())),
         dir: dir.to_path_buf(),
+        actions: Arc::new(SealedActions(actions)),
+        spend: Arc::new(spend),
     })
 }
 
@@ -309,6 +356,10 @@ pub async fn open_harness_db_in(dir: &Path) -> Result<HarnessDb> {
     let plans = adk_graph::SqliteCheckpointer::from_pool(pool.clone()).await?;
     let snapshots = adk_harness::snapshot::SqliteSnapshotStore::new(pool.clone());
     snapshots.migrate().await?;
+    let actions = adk_session::SqliteActionLedger::from_pool(pool.clone());
+    actions.migrate().await?;
+    let spend = adk_session::SqliteSpendLedger::from_pool(pool.clone());
+    spend.migrate().await?;
     Ok(HarnessDb {
         pool,
         sessions,
@@ -324,6 +375,8 @@ pub async fn open_harness_db_in(dir: &Path) -> Result<HarnessDb> {
         plans: Arc::new(plans),
         snapshots: Arc::new(snapshots),
         dir: dir.to_path_buf(),
+        actions: Arc::new(actions),
+        spend: Arc::new(spend),
     })
 }
 
@@ -493,5 +546,55 @@ mod tests {
         write(&reopened, "fourth").await;
         owner_only("reopening");
         assert_eq!(latest(reopened.as_ref(), "ana").await.unwrap().as_deref(), Some("fourth"));
+    }
+
+    /// Wave 2 gate, core item d: the action and spend ledgers are in `harness.db`, so a
+    /// restart keeps them; under a store key a failed call's error text is not kept, and a
+    /// refused call's `not run` text is (spec 3.1 §7.12, §7.13, I57).
+    #[cfg(all(feature = "harness", feature = "encrypted"))]
+    #[tokio::test]
+    async fn the_ledgers_survive_reopening_and_a_sealed_db_keeps_no_error_text() {
+        use adk_core::{
+            ActionOutcome, ActionRecord, AdkError, SpendKey, SpendPeriod, ToolEffect,
+            action_ledger::not_run_text,
+        };
+        let begun = |key: &str| {
+            ActionRecord::new(key, "write_file", &serde_json::json!({}), ToolEffect::NonIdempotent)
+        };
+        let failed = || ActionOutcome::Failed { error: "disk full at /private/diary.txt".into() };
+        let dir = tempfile::tempdir().unwrap();
+        let spend_key = SpendKey::org(APP_NAME);
+        let db = open_harness_db_in(dir.path(), None).await.unwrap();
+        let held = db.spend.reserve(&spend_key, 1_500).await.unwrap();
+        db.spend.commit(held, 1_200).await.unwrap();
+        db.actions.begin(&begun("k1")).await.unwrap();
+        db.actions.complete("k1", failed()).await.unwrap();
+        db.pool.close().await;
+        drop(db);
+
+        let db = open_harness_db_in(dir.path(), None).await.unwrap();
+        assert_eq!(db.spend.spent(&spend_key, SpendPeriod::Day).await.unwrap(), 1_200);
+        assert_eq!(db.actions.get("k1").await.unwrap().unwrap().outcome, Some(failed()));
+
+        let sealed = tempfile::tempdir().unwrap();
+        let keyring = adk_harness::encrypted::StoreKeyring::generate();
+        let db = open_harness_db_in(sealed.path(), Some(&keyring)).await.unwrap();
+        let refused = not_run_text(&AdkError::agent("stopped from the web home"));
+        for (key, outcome) in
+            [("k2", failed()), ("k3", ActionOutcome::Failed { error: refused.clone() })]
+        {
+            db.actions.begin(&begun(key)).await.unwrap();
+            db.actions.complete(key, outcome).await.unwrap();
+        }
+        let stored: String =
+            sqlx::query_scalar("SELECT group_concat(outcome, ' ') FROM adk_action_ledger")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert!(!stored.contains("diary"), "{stored}");
+        assert_eq!(
+            db.actions.get("k3").await.unwrap().unwrap().outcome,
+            Some(ActionOutcome::Failed { error: refused })
+        );
     }
 }

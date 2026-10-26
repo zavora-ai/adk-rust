@@ -438,7 +438,11 @@ impl Setup {
                 .shell_ledger(db.ledger.clone())
                 .approval_store(db.approvals.clone())
                 .goal_store(db.goals.clone())
-                .read_records(db.reads.clone());
+                .read_records(db.reads.clone())
+                // A restart, `kill -9` included, keeps what ran and what was spent (spec 3.1
+                // §7.12, §7.13; spec 3.3 §12 phase 1).
+                .action_ledger(db.actions.clone())
+                .spend_ledger(db.spend.clone());
             // Long-term memory in harness.db; off when served (spec 3.1 §7.15.2), on in
             // `adk-rust up`, the user's own kernel (spec 3.2 §8.1).
             if self.resolved.memory && (approval_service.is_none() || extras.memory_with_inbox) {
@@ -455,7 +459,9 @@ impl Setup {
                 .mode_store(shared.modes.clone())
                 .standing_rules(shared.rules.clone())
                 .approval_store(shared.approvals.clone())
-                .read_records(shared.reads.clone());
+                .read_records(shared.reads.clone())
+                .action_ledger(shared.actions.clone())
+                .spend_ledger(shared.spend.clone());
         }
         // Snapshots before each turn (spec 3.1 §7.27, §13 Q11): records in harness.db and
         // objects beside it, in memory with --ephemeral; a harness served from a shared store
@@ -769,6 +775,16 @@ impl Setup {
         }
     }
 
+    /// The personal preset's two limits, which every start shows (spec 3.3 §13 Q7), for the
+    /// commands that print their own banner rather than the launcher's.
+    fn print_limits(&self) {
+        if let Some(personal) = &self.personal {
+            for (label, line) in personal.status_lines() {
+                println!("{label}: {line}");
+            }
+        }
+    }
+
     /// Says once, on the first run with long-term memory, what is stored and where
     /// (spec 3.1 §7.15.2).
     fn memory_notice(&self) {
@@ -1034,6 +1050,7 @@ pub async fn code(
         shell_label(&info),
         setup.plans_note()
     );
+    setup.print_limits();
     let outcome = launcher.run_once(&task).await?;
     println!();
     // The turn is distilled into long-term memory before the process ends (spec 3.1 §7.15.2).
@@ -1118,6 +1135,7 @@ pub async fn voice(
         shell_label(&info),
         realtime.id
     );
+    setup.print_limits();
     let surface = adk_harness::VoiceSurface::open(
         Arc::new(agent),
         realtime.model,
@@ -1224,6 +1242,7 @@ pub async fn goal(
 
     println!("goal mode ({}) on {}", setup.model_id, workspace.display());
     println!("plans {}", setup.plans_note());
+    setup.print_limits();
     let outcome = if goal.resume && (resumed.is_some() || setup.args.session.is_some()) {
         let session = resumed.as_deref().or(setup.args.session.as_deref()).unwrap_or_default();
         println!("resuming goal in session {session}");
@@ -1609,6 +1628,7 @@ pub async fn ultracode(
 
     let workspace = setup.resolved.workspace.clone();
     println!("ultracode ({}) on {}", setup.model_id, workspace.display());
+    setup.print_limits();
     println!("task: {task}");
     println!(
         "budget: at most {} model calls (worst case {}) · max rounds {}\n",
