@@ -392,3 +392,32 @@ async fn the_experiments_look_runs_on_its_trigger() {
     assert_eq!(run.input["site"], json!(served.sites[0].site.id));
     served.shutdown().await.unwrap();
 }
+
+/// Anonymous callers are limited by their own address, not one bucket every visitor shares:
+/// the edge listener hands the peer address to the edge (spec 3.5 §7.3). Two loopback
+/// addresses, IPv4 and IPv6, stand for two visitors.
+#[tokio::test]
+async fn anonymous_callers_are_limited_by_their_own_address() {
+    if std::net::TcpListener::bind("[::]:0").is_err() {
+        eprintln!("no IPv6 on this host; the check needs two loopback addresses");
+        return;
+    }
+    let dir = project(SiteKind::Business).await;
+    let served = start(dir.path(), |options| {
+        options.edge = "[::]:0".parse().unwrap();
+        options.site.limits = Some(Arc::new(|| {
+            adk_server::awp::EdgeLimits::default().tier_default(
+                awp_types::TrustTier::Public,
+                awp_types::RateClass { requests_per_minute: 1, calls_per_day: 10 },
+            )
+        }));
+    })
+    .await;
+    let port = served.edge_addr.port();
+    let v4 = SocketAddr::from(([127, 0, 0, 1], port));
+    let v6 = SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port));
+    assert_eq!(http(v4, "GET", "/awp/v2/manifest", None).await.0, 200);
+    assert_eq!(http(v4, "GET", "/awp/v2/manifest", None).await.0, 429, "one a minute");
+    assert_eq!(http(v6, "GET", "/awp/v2/manifest", None).await.0, 200, "another visitor's own");
+    served.shutdown().await.unwrap();
+}

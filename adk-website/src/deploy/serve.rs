@@ -177,8 +177,10 @@ async fn start(
     }
     let listener = tokio::net::TcpListener::bind(options.edge).await.map_err(config)?;
     let edge_addr = listener.local_addr().map_err(config)?;
+    // The peer address keys anonymous callers' rate limits and conversations (spec 3.5 §7.3).
+    let service = app.into_make_service_with_connect_info::<SocketAddr>();
     let edge_task = tokio::spawn(async move {
-        if let Err(error) = axum::serve(listener, app).await {
+        if let Err(error) = axum::serve(listener, service).await {
             tracing::error!(error = %error, "the edge stopped");
         }
     });
