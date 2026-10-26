@@ -18,17 +18,19 @@ use adk_awp::signing::jws::{DocumentSigner, Ed25519DocumentSigner, verify};
 use adk_awp::v2::capability::{
     CapabilityCall, CapabilityError, CapabilityHandler, CapabilityRegistry,
 };
+use adk_awp::v2::store::{Lead, LeadStore, MemoryEdgeStores};
 use adk_core::webhook::{WebhookHeaders, WebhookSecret, WebhookVerifier};
 use adk_core::webhook_delivery::EgressPolicy;
 use adk_core::{GovernanceControl, Url};
 use adk_server::awp::{
-    AwpEdge, ConsentConfig, ConsentPolicy, EdgeKeys, EdgeMode, EdgeTiers, EventsConfig,
+    AwpEdge, ConsentConfig, ConsentPolicy, EdgeKeys, EdgeMode, EdgeStores, EdgeTiers, EventsConfig,
     WebBotAuthTrustAssigner,
 };
 use async_trait::async_trait;
 use awp_types::{
-    ApprovalHint, CapabilityEffect, CapabilityV2, ConsentReceipt, ConsentRequirement, ConsentScope,
-    ContentId, Digest, OrderUpdated, RequesterId, TrustTier,
+    ApprovalHint, CapabilityEffect, CapabilityV2, Channel, ConsentReceipt, ConsentReceiptRef,
+    ConsentRequirement, ConsentScope, ContactRef, ContentId, Digest, EventType, LeadRef,
+    OrderUpdated, RequesterId, TrustTier,
 };
 use axum::Router;
 use axum::body::{Body, Bytes};
@@ -116,6 +118,11 @@ struct Site {
 }
 
 async fn site(events: EventsConfig) -> Site {
+    site_over(events, &MemoryEdgeStores::default()).await
+}
+
+/// The site over `stores`, shared with the caller.
+async fn site_over(events: EventsConfig, stores: &MemoryEdgeStores) -> Site {
     let mut registry = CapabilityRegistry::new("example.com");
     let mut callback =
         CapabilityV2::new("request_callback", "Ask for a call back", CapabilityEffect::Idempotent)
@@ -163,6 +170,7 @@ async fn site(events: EventsConfig) -> Site {
         )
         .events(events)
         .consent(consent)
+        .stores(EdgeStores::in_memory(stores))
         .build()
         .unwrap();
     let mut signers = signers.into_iter().map(|(signer, _)| signer);
@@ -506,6 +514,82 @@ async fn consent_receipts_revocation_export_and_erasure() {
     let mut export = request("GET", "/awp/v2/consent/export", None);
     export.headers_mut().insert("awp-subject", token.parse().unwrap());
     assert_eq!(site.send(export).await.2["receipts"], json!([]));
+}
+
+/// Erasure reaches the leads that reference the subject's receipts and leaves the others
+/// (spec 3.5 §7.5; AWP 2.0 §11.3).
+#[tokio::test]
+async fn erasure_deletes_the_subjects_leads() {
+    let stores = MemoryEdgeStores::default();
+    let site = site_over(local_events(), &stores).await;
+    let grant = json!({ "scope": "newsletter", "policyVersion": "2026-10", "jurisdiction": "KE" });
+    let (status, headers, receipt) =
+        site.send(request("POST", "/awp/v2/consent", Some(grant))).await;
+    assert_eq!(status, StatusCode::CREATED, "{receipt}");
+    let token = headers["awp-subject"].to_str().unwrap().to_owned();
+    let receipt: ConsentReceipt = serde_json::from_value(receipt).unwrap();
+    let lead = |id: &str, consent: uuid::Uuid| Lead {
+        id: LeadRef(id.to_owned()),
+        captured_at: Utc::now(),
+        source: Channel::Web,
+        contact_ref: ContactRef(format!("contact-{id}")),
+        consent: vec![ConsentReceiptRef(consent)],
+        answers: BTreeMap::new(),
+        thread_ref: None,
+        score: None,
+    };
+    stores.leads.insert(lead("theirs", receipt.id)).await.unwrap();
+    stores.leads.insert(lead("someone-else", uuid::Uuid::new_v4())).await.unwrap();
+
+    let mut export = request("GET", "/awp/v2/consent/export", None);
+    export.headers_mut().insert("awp-subject", token.parse().unwrap());
+    let (_, _, exported) = site.send(export).await;
+    assert_eq!(exported["data"]["leads"][0]["id"], "theirs");
+
+    let mut erase = request("POST", "/awp/v2/consent/erase", None);
+    erase.headers_mut().insert("awp-subject", token.parse().unwrap());
+    let (status, _, erased) = site.send(erase).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(erased["erased"], json!({ "receipts": 1, "data": 1 }));
+    assert_eq!(stores.leads.get(&LeadRef("theirs".to_owned())).await.unwrap(), None);
+    assert!(stores.leads.get(&LeadRef("someone-else".to_owned())).await.unwrap().is_some());
+}
+
+/// The site reads back what its edge announced, oldest first and within the window asked
+/// for, with each event's audience (spec 3.5 §7.5).
+#[tokio::test]
+async fn the_site_reads_its_retained_events() {
+    let site = site(local_events()).await;
+    let before = Utc::now() - chrono::Duration::seconds(1);
+    let events = site.edge.events();
+    let catalog = events.catalog_changed(3, vec![ContentId("sku-1".to_owned())]).await.unwrap();
+    let order = events
+        .order_updated(
+            &site.buyer_id,
+            OrderUpdated { order_id: "o-1".to_owned(), state: "paid".to_owned(), receipt: None },
+        )
+        .await
+        .unwrap();
+    let retained = events.retained(before, None).await.unwrap();
+    assert_eq!(
+        retained
+            .iter()
+            .map(|r| (r.event.id.as_str(), r.event.event_type.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (catalog.as_str(), EventType::CatalogChanged),
+            (order.as_str(), EventType::OrderUpdated)
+        ]
+    );
+    assert_eq!(retained[0].audience, None);
+    assert_eq!(
+        retained[1].audience,
+        Some(std::collections::BTreeSet::from([site.buyer_id.clone()]))
+    );
+    assert!(
+        events.retained(Utc::now() + chrono::Duration::seconds(5), None).await.unwrap().is_empty()
+    );
+    assert!(events.retained(before, Some(before)).await.unwrap().is_empty());
 }
 
 // --- status --------------------------------------------------------------------------------

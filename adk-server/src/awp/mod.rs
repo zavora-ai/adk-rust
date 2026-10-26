@@ -19,6 +19,10 @@
 //! bindings enter one governed path ([`executor`]) under a policy compiled from the manifest
 //! ([`policy`]). The edge exposes no owner route: the owner's control plane is the kernel's.
 //!
+//! A verified caller's fetch of the Agent Card, the capability manifest or the MCP Server
+//! Card is recorded as `awp.request.verified` with its `awp.surface`, so verified agent
+//! discovery is counted (spec 3.5 §7.12, §9.3).
+//!
 //! # Example
 //!
 //! ```rust,no_run
@@ -91,6 +95,7 @@ use adk_session::{InMemorySessionService, SessionService};
 use adk_tool::mcp::server::McpSessions;
 use awp_types::{
     CapabilityEffect, ErrorBody, ErrorCode, ErrorEnvelope, HeldCall, SiteStatus, TrustRules,
+    TrustTier,
 };
 use axum::Router;
 use axum::extract::{FromRequest as _, Request, State};
@@ -109,14 +114,14 @@ pub use executor::{GovernedExecutor, KeySources};
 pub use limits::EdgeLimits;
 pub use policy::{CapabilityPolicy, PublicPartitionPolicy};
 pub use public::{
-    PublicTools, RecordingSignals, RecordingThreadSink, ReplyPolicy, SignalEmitter, SiteHit,
-    SiteSearch, StaticSiteIndex, ThreadSink,
+    ConversationScreen, InjectionScreen, PublicTools, RecordingSignals, RecordingThreadSink,
+    ReplyPolicy, SignalEmitter, SiteHit, SiteSearch, StaticSiteIndex, ThreadSink,
 };
 pub use tiers::{EdgeCaller, EdgeTiers, WebBotAuthTrustAssigner};
 
 use control::EdgeControl;
 use executor::CURRENT_CALLER;
-use public::{LiveThreads, PublicPartition, PublicParts};
+use public::{LiveThreads, PublicPartition, PublicParts, TurnWatch, Watch};
 
 /// The edge's delegated signing keys (spec 3.5 §7.2, D-11; AWP 2.0 §5.3, C3).
 ///
@@ -238,6 +243,7 @@ pub struct AwpEdgeBuilder {
     search: Option<Arc<dyn SiteSearch>>,
     threads: Option<Arc<dyn ThreadSink>>,
     signals: Option<Arc<dyn SignalEmitter>>,
+    screen: Option<Arc<dyn ConversationScreen>>,
     reply_policy: ReplyPolicy,
     sessions: Option<Arc<dyn SessionService>>,
     mcp_sessions: McpSessions,
@@ -292,7 +298,8 @@ impl AwpEdgeBuilder {
         self
     }
 
-    /// Records governed decisions and `awp.capability.*` records on `audit`.
+    /// Records governed decisions, `awp.capability.*` records and verified discovery
+    /// (`awp.request.verified`) on `audit`.
     #[must_use]
     pub fn audit(mut self, audit: AuditTrail) -> Self {
         self.audit = Some(audit);
@@ -361,6 +368,15 @@ impl AwpEdgeBuilder {
     #[must_use]
     pub fn signals(mut self, signals: Arc<dyn SignalEmitter>) -> Self {
         self.signals = Some(signals);
+        self
+    }
+
+    /// Sets the screen conversation input passes before the public agent reads it; a flagged
+    /// turn the agent files no signal for gets one from the edge (spec 3.5 §7.10, S7).
+    /// [`InjectionScreen`] by default.
+    #[must_use]
+    pub fn conversation_screen(mut self, screen: Arc<dyn ConversationScreen>) -> Self {
+        self.screen = Some(screen);
         self
     }
 
@@ -498,6 +514,9 @@ impl AwpEdgeBuilder {
         let public = match self.agent {
             None => None,
             Some(factory) => {
+                let signals: Arc<dyn SignalEmitter> =
+                    self.signals.unwrap_or_else(|| Arc::new(RecordingSignals::new()));
+                let turns = TurnWatch::default();
                 let tools = public::public_tools(
                     &executor,
                     PublicParts {
@@ -505,21 +524,29 @@ impl AwpEdgeBuilder {
                         threads: self
                             .threads
                             .unwrap_or_else(|| Arc::new(RecordingThreadSink::new())),
-                        signals: self.signals.unwrap_or_else(|| Arc::new(RecordingSignals::new())),
+                        signals: Arc::clone(&signals),
                         reply_policy: self.reply_policy,
                         emitted_by: format!("{}#public", principal.id.as_str()),
+                        watch: turns.clone(),
                     },
                     &live,
                 );
                 let agent = factory(&tools);
                 let sessions =
                     self.sessions.unwrap_or_else(|| Arc::new(InMemorySessionService::new()));
+                let watch = Watch {
+                    turns,
+                    screen: self.screen.unwrap_or_else(|| Arc::new(InjectionScreen)),
+                    signals,
+                    edge: principal.id.as_str().to_owned(),
+                };
                 Some(Arc::new(PublicPartition::new(
                     agent,
                     &tools,
                     sessions,
                     "awp-public",
                     audit.as_ref(),
+                    watch,
                 )?))
             }
         };
@@ -662,6 +689,7 @@ impl AwpEdge {
             search: None,
             threads: None,
             signals: None,
+            screen: None,
             reply_policy: ReplyPolicy::default(),
             sessions: None,
             mcp_sessions: McpSessions::default(),
@@ -920,10 +948,18 @@ async fn edge_guard(State(guard): State<Arc<Guard>>, request: Request, next: Nex
         http.path = %path,
     );
     parts.extensions.insert(caller.clone());
+    let discovery = (parts.method == Method::GET).then(|| discovery_surface(&path)).flatten();
+    let verified = caller.tier > TrustTier::Public;
     let mut response = CURRENT_CALLER
-        .scope(caller, next.run(Request::from_parts(parts, body)))
+        .scope(caller.clone(), next.run(Request::from_parts(parts, body)))
         .instrument(span)
         .await;
+    if let Some(surface) = discovery
+        && verified
+        && response.status().is_success()
+    {
+        guard.executor.record_discovery(&caller, surface).await;
+    }
     rate_headers(
         &mut response,
         &standing.class,
@@ -932,6 +968,16 @@ async fn edge_guard(State(guard): State<Arc<Guard>>, request: Request, next: Nex
         standing.reset,
     );
     response
+}
+
+/// The discovery surface a path serves, for `awp.request.verified` (spec 3.5 §7.12).
+fn discovery_surface(path: &str) -> Option<&'static str> {
+    match path {
+        a2a::AGENT_CARD_PATH => Some("agent_card"),
+        "/awp/v2/manifest" => Some("manifest"),
+        "/mcp/server-card" | "/.well-known/mcp/server-card.json" => Some("mcp_server_card"),
+        _ => None,
+    }
 }
 
 fn is_form(headers: &axum::http::HeaderMap) -> bool {

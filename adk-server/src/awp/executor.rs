@@ -237,6 +237,29 @@ impl GovernedExecutor {
         }
     }
 
+    /// Records `awp.request.verified` for a verified caller's fetch of a discovery surface —
+    /// the Agent Card, the capability manifest or the MCP Server Card — so verified agent
+    /// discovery is counted (spec 3.5 §7.12, §9.3). Public callers are not recorded.
+    pub(crate) async fn record_discovery(&self, caller: &EdgeCaller, surface: &str) {
+        let (Some(trail), Some(requester)) = (&self.inner.audit, &caller.requester) else {
+            return;
+        };
+        if caller.tier == TrustTier::Public {
+            return;
+        }
+        let acting = self.acting(caller.tier, Some(requester), &[]);
+        let request_id = format!("req_{}", Uuid::new_v4().simple());
+        let draft =
+            AuditRecordDraft::new(AuditRecordKind::Other("awp".to_owned()), "awp.request.verified")
+                .actor(AuditActor::new(&acting, request_id))
+                .ext("awp.surface", Value::String(surface.to_owned()))
+                .ext("awp.tier", Value::String(caller.tier.as_str().to_owned()))
+                .ext("awp.requester", Value::String(requester.to_string()));
+        if let Err(error) = trail.record(draft).await {
+            tracing::warn!(error = %error, "awp discovery audit record not written");
+        }
+    }
+
     /// Executes an authorized call, ledgered when it is `non_idempotent` (A-I7).
     async fn execute(
         &self,

@@ -300,6 +300,31 @@ impl EdgeEvents {
         &self.inner.config.catalog
     }
 
+    /// The retained events published at or after `since` and before `until`, oldest first,
+    /// each with its audience (spec 3.5 §7.5): the site's own read of what its edge
+    /// announced, for the back office and the owner's views. Subscribers read events through
+    /// their subscriptions and replay; the edge serves no route for this read.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let day = chrono::Utc::now() - chrono::Duration::days(1);
+    /// for retained in edge.events().retained(day, None).await? {
+    ///     println!("{} {}", retained.event.event_type, retained.event.id);
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`] when the event log cannot be read.
+    pub async fn retained(
+        &self,
+        since: DateTime<Utc>,
+        until: Option<DateTime<Utc>>,
+    ) -> StoreResult<Vec<RetainedEvent>> {
+        self.inner.log.between(since, until).await
+    }
+
     /// Publishes `site.release.published`; returns the event id.
     ///
     /// # Errors
