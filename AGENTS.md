@@ -173,6 +173,7 @@ expensive axes move to a later tier.
   `pgvector/pgvector:pg17` service, driven by `scripts/test-postgres.sh`),
   `docs` (`cargo doc --workspace --no-deps` plus doctests), standalone examples
   (4 shards), `kernel-scenarios` (the scripted scenarios of `examples/harness_kernel`, on Linux),
+  `website-scenarios` (spec 3.5's scripted scenarios of `examples/website`),
   `templates`, a compile-only macOS build, a Windows workspace build
   with targeted sandbox portability smokes and the kernel's crate-level scenarios
   (`adk-kernel`'s K2–K4, K6, K8 and K9), and `semver` (stable strict against

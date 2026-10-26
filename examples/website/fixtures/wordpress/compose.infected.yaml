@@ -1,0 +1,28 @@
+# The `infected` overlay of spec 3.5 §11 (S3): inert markers only — hidden spam links, an
+# obfuscated script that decodes harmless text, a script served only to crawlers from a
+# `.test` domain that never resolves, a `.php` file in uploads whose code does nothing, and a
+# file whose name claims an image. Nothing here exploits anything.
+services:
+  wordpress:
+    volumes:
+      - ./infected/mu-plugins/cloak.php:/var/www/html/wp-content/mu-plugins/cloak.php:ro
+      - ./infected/uploads/2026/10/cache.php:/var/www/html/wp-content/uploads/2026/10/cache.php:ro
+      - ./infected/uploads/2026/10/photo.jpg:/var/www/html/wp-content/uploads/2026/10/photo.jpg:ro
+
+  infect:
+    image: wordpress:cli-php8.4
+    profiles: [seed]
+    depends_on:
+      wordpress:
+        condition: service_healthy
+    user: "33:33"
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: fixture-only
+      WORDPRESS_DB_NAME: wordpress
+    volumes:
+      - wordpress:/var/www/html
+      - ./infected/infect.sh:/infect.sh:ro
+    entrypoint: ["sh", "/infect.sh"]
+    networks: [fixture]

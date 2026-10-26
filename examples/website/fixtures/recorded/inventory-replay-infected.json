@@ -1,0 +1,542 @@
+{
+  "source": "isolated_replay",
+  "origin": "https://solar.test",
+  "siteName": "Example Solar",
+  "description": "Rooftop solar for homes in Nairobi.",
+  "language": "en-US",
+  "takenAt": "2026-10-25T17:31:53.384159Z",
+  "urls": [
+    {
+      "url": "https://solar.test/",
+      "path": "/",
+      "status": 200,
+      "contentType": "text/html",
+      "sha256": "sha256:e72e2f9f5efdae2553023934eb2005eff625051390109863036c54ce3b9e978c",
+      "item": "crawl:/",
+      "page": {
+        "title": "Home – Example Solar",
+        "description": "Rooftop solar for homes in Nairobi.",
+        "canonical": "/",
+        "language": "en-US",
+        "openGraph": {
+          "og:site_name": "Example Solar",
+          "og:title": "Home"
+        },
+        "mainText": "Clean power for homes Example Solar installs rooftop panels and batteries for homes and small businesses in Nairobi. We have installed more than four hundred systems since 2019, each one designed for the roof it sits on. Read why we started , see our 400 W panel , or ask for a quote . Staff notes"
+      },
+      "inboundLinks": 9
+    },
+    {
+      "url": "https://solar.test/about/",
+      "path": "/about/",
+      "status": 200,
+      "contentType": "text/html",
+      "sha256": "sha256:d886dd2e48f68ca0c3a17904d8f2a881d3a6fbd19b5a40a8a138b1243a62cb8b",
+      "item": "crawl:/about/",
+      "page": {
+        "title": "About us – Example Solar",
+        "description": "Who we are and how we work.",
+        "canonical": "/about/",
+        "language": "en-US",
+        "openGraph": {
+          "og:site_name": "Example Solar",
+          "og:title": "About us"
+        },
+        "mainText": "We are a team of eight engineers and installers. Every installation is surveyed, designed and wired by our own staff, and we stay on call for the life of the system. The team in October. How we work A free site survey A written design and quote Installation in two days"
+      },
+      "inboundLinks": 9
+    },
+    {
+      "url": "https://solar.test/contact/",
+      "path": "/contact/",
+      "status": 200,
+      "contentType": "text/html",
+      "sha256": "sha256:50104a356fd282bbb311b2bffa3d4e5787a5500df36e5a92bcc4aafa21ead846",
+      "item": "crawl:/contact/",
+      "page": {
+        "title": "Contact – Example Solar",
+        "description": "Ask for a quote.",
+        "canonical": "/contact/",
+        "language": "en-US",
+        "openGraph": {
+          "og:site_name": "Example Solar",
+          "og:title": "Contact"
+        },
+        "mainText": "Tell us about your roof and we will reply within one working day."
+      },
+      "inboundLinks": 9
+    },
+    {
+      "url": "https://solar.test/old-offers/",
+      "path": "/old-offers/",
+      "status": 301,
+      "redirectTo": "/products/panel-400/",
+      "inboundLinks": 0
+    },
+    {
+      "url": "https://solar.test/2026/10/01/hello-sun/",
+      "path": "/2026/10/01/hello-sun/",
+      "status": 200,
+      "contentType": "text/html",
+      "sha256": "sha256:6c39fad52cc653949451065a02cd6f2012b98a6784296a03663143ea1690d88c",
+      "item": "crawl:/2026/10/01/hello-sun/",
+      "page": {
+        "title": "Hello, sun – Example Solar",
+        "description": "Why we started.",
+        "canonical": "/2026/10/01/hello-sun/",
+        "language": "en-US",
+        "openGraph": {
+          "og:site_name": "Example Solar",
+          "og:title": "Hello, sun"
+        },
+        "mainText": "Our first panel went up in 2019 on a school roof in Kibera. It still produces more than it did on day one, because we clean it every quarter. This blog is where we share what we learn from every installation."
+      },
+      "inboundLinks": 3
+    },
+    {
+      "url": "https://solar.test/2026/10/12/panel-care/",
+      "path": "/2026/10/12/panel-care/",
+      "status": 200,
+      "contentType": "text/html",
+      "sha256": "sha256:31a00fcb1595257bf11b0305293fca532c8ea7573128e9176d6c24880450a04c",
+      "item": "crawl:/2026/10/12/panel-care/",
+      "page": {
+        "title": "Caring for your panels – Example Solar",
+        "description": "Keep your panels producing.",
+        "canonical": "/2026/10/12/panel-care/",
+        "language": "en-US",
+        "openGraph": {
+          "og:site_name": "Example Solar",
+          "og:title": "Caring for your panels"
+        },
+        "mainText": "Dust costs a panel up to a fifth of its output in the dry season. Rinse panels with clean water early in the morning, never with soap, and never climb onto the roof yourself. We include two cleaning visits a year with every installation."
+      },
+      "inboundLinks": 1
+    },
+    {
+      "url": "https://solar.test/products/panel-400/",
+      "path": "/products/panel-400/",
+      "status": 200,
+      "contentType": "text/html",
+      "sha256": "sha256:aae1079262ffc296fea50b8eeb4d0f25d4f585c4a8a80bdeaa36f19215fd6bd5",
+      "item": "crawl:/products/panel-400/",
+      "page": {
+        "title": "Panel 400 W – Example Solar",
+        "description": "A 400 W monocrystalline panel.",
+        "canonical": "/products/panel-400/",
+        "language": "en-US",
+        "openGraph": {
+          "og:site_name": "Example Solar",
+          "og:title": "Panel 400 W"
+        },
+        "mainText": "A 400 W monocrystalline panel with a 25-year output warranty."
+      },
+      "inboundLinks": 9
+    },
+    {
+      "url": "https://solar.test/blog/",
+      "path": "/blog/",
+      "status": 200,
+      "contentType": "text/html",
+      "sha256": "sha256:8a24e3fc92cbb63f5891608db5d011720837bd114e30f3255a14126f03aa546f",
+      "page": {
+        "title": "Blog – Example Solar",
+        "canonical": "/blog/",
+        "language": "en-US",
+        "openGraph": {
+          "og:site_name": "Example Solar",
+          "og:title": "Blog"
+        },
+        "mainText": "Blog Caring for your panels Hello, sun"
+      },
+      "inboundLinks": 9
+    },
+    {
+      "url": "https://solar.test/wp-login.php",
+      "path": "/wp-login.php",
+      "status": 200,
+      "contentType": "text/html",
+      "sha256": "sha256:1882616c4e14aa5db39a380297f4ce9163f37de64ab3d252ebd44444c840d180",
+      "page": {
+        "title": "Log In – Example Solar",
+        "canonical": "/wp-login.php",
+        "language": "en-US",
+        "openGraph": {
+          "og:site_name": "Example Solar",
+          "og:title": "Log In"
+        },
+        "mainText": ""
+      },
+      "inboundLinks": 9
+    },
+    {
+      "url": "https://solar.test/category/news/",
+      "path": "/category/news/",
+      "status": 200,
+      "contentType": "text/html",
+      "sha256": "sha256:a0f4df76aca3bb0e31c3ac42068c1f4fe542467b6941442de33b8bda254210bb",
+      "page": {
+        "title": "News Archives – Example Solar",
+        "canonical": "/category/news/",
+        "language": "en-US",
+        "openGraph": {
+          "og:site_name": "Example Solar",
+          "og:title": "News Archives"
+        },
+        "mainText": "Category: News Hello, sun"
+      },
+      "inboundLinks": 1
+    },
+    {
+      "url": "https://solar.test/wp-content/uploads/2026/10/team.png",
+      "path": "/wp-content/uploads/2026/10/team.png",
+      "status": 200,
+      "contentType": "image/png",
+      "sha256": "sha256:f48ce9c9f99ea50e190a5e3dc2a26f4720998b83fd2b8f0164d91ca3ea1b9fd2",
+      "inboundLinks": 0
+    },
+    {
+      "url": "https://solar.test/wp-content/uploads/2026/10/panel.jpg",
+      "path": "/wp-content/uploads/2026/10/panel.jpg",
+      "status": 200,
+      "contentType": "image/jpeg",
+      "sha256": "sha256:833a66dcd66e6b7068aa03c1dbc3d68b109daec876da879e6772aa195e0681df",
+      "inboundLinks": 0
+    },
+    {
+      "url": "https://solar.test/wp-includes/js/jquery/jquery.min.js?ver=3.7.1",
+      "path": "/wp-includes/js/jquery/jquery.min.js?ver=3.7.1",
+      "status": 200,
+      "contentType": "application/javascript",
+      "sha256": "sha256:4270a5bdd6b6da8457ad85615c0086c6596f783ea39e2ad5dd96c2288bdee1e6",
+      "inboundLinks": 0
+    },
+    {
+      "url": "https://solar.test/wp-content/uploads/2026/10/cache.php",
+      "path": "/wp-content/uploads/2026/10/cache.php",
+      "status": 200,
+      "sha256": "sha256:b8090799be386db7d33a1d67edd511a7518d451c20a9d90caf262ac51b619b49",
+      "inboundLinks": 0
+    },
+    {
+      "url": "https://solar.test/wp-content/uploads/2026/10/photo.jpg",
+      "path": "/wp-content/uploads/2026/10/photo.jpg",
+      "status": 200,
+      "sha256": "sha256:679faa72f213bbeb1583895b499ee3ffbb32158bf09ffd9f294471f00abed10c",
+      "inboundLinks": 0
+    }
+  ],
+  "items": [
+    {
+      "key": "crawl:/",
+      "kind": "page",
+      "slug": "index",
+      "url": "https://solar.test/",
+      "path": "/",
+      "title": "Home",
+      "html": "\n<h2>Clean power for homes</h2>\n<p>Example Solar installs rooftop panels and batteries for homes and small businesses in Nairobi. We have installed more than four hundred systems since 2019, each one designed for the roof it sits on.</p>\n<p>Read <a href=\"https://solar.test/2026/10/01/hello-sun/\">why we started</a>, see our <a href=\"https://solar.test/products/panel-400/\">400 W panel</a>, or <a href=\"https://solar.test/contact/\">ask for a quote</a>.</p>\n<p><a href=\"https://solar.test/private/\">Staff notes</a></p>\n",
+      "excerpt": "Rooftop solar for homes in Nairobi.",
+      "status": "published",
+      "language": "en-US"
+    },
+    {
+      "key": "crawl:/about/",
+      "kind": "page",
+      "slug": "about",
+      "url": "https://solar.test/about/",
+      "path": "/about/",
+      "title": "About us",
+      "html": "\n<p>We are a team of eight engineers and installers. Every installation is surveyed, designed and wired by our own staff, and we stay on call for the life of the system.</p>\n<figure class=\"wp-block-image\"><img alt=\"The installation team on a roof\" src=\"https://solar.test/wp-content/uploads/2026/10/team.png\"><figcaption>The team in October.</figcaption></figure>\n<h2>How we work</h2>\n<ul><li>A free site survey</li><li>A written design and quote</li><li>Installation in two days</li></ul>\n",
+      "excerpt": "Who we are and how we work.",
+      "status": "published",
+      "language": "en-US",
+      "media": [
+        "https://solar.test/wp-content/uploads/2026/10/team.png"
+      ]
+    },
+    {
+      "key": "crawl:/contact/",
+      "kind": "page",
+      "slug": "contact",
+      "url": "https://solar.test/contact/",
+      "path": "/contact/",
+      "title": "Contact",
+      "html": "\n<p>Tell us about your roof and we will reply within one working day.</p>\n<div class=\"wpcf7\"><form action=\"/contact/#wpcf7-f12-p5-o1\" class=\"wpcf7-form init\" method=\"post\">\n<input name=\"_wpcf7\" type=\"hidden\" value=\"12\">\n<p><label>Your name <input name=\"your-name\" required=\"\" type=\"text\"></label></p>\n<p><label>Your email <input name=\"your-email\" required=\"\" type=\"email\"></label></p>\n<p><label>Your message <textarea name=\"your-message\"></textarea></label></p>\n<p><input type=\"submit\" value=\"Send\"></p>\n</form></div>\n",
+      "excerpt": "Ask for a quote.",
+      "status": "published",
+      "language": "en-US"
+    },
+    {
+      "key": "crawl:/2026/10/01/hello-sun/",
+      "kind": "post",
+      "slug": "hello-sun",
+      "url": "https://solar.test/2026/10/01/hello-sun/",
+      "path": "/2026/10/01/hello-sun/",
+      "title": "Hello, sun",
+      "html": "\n<p>Our first panel went up in 2019 on a school roof in Kibera. It still produces more than it did on day one, because we clean it every quarter.</p>\n<p>This blog is where we share what we learn from every installation.</p>\n<div style=\"position:absolute;left:-9999px;top:-9999px\"><a href=\"https://cheap-casino.test/\">best online casino bonus</a> <a href=\"https://pills.test/buy\">cheap viagra online</a></div>\n",
+      "excerpt": "Why we started.",
+      "status": "published",
+      "publishedAt": "2026-10-01T09:00:00Z",
+      "modifiedAt": "2026-10-02T10:00:00Z",
+      "language": "en-US",
+      "categories": [
+        "News"
+      ],
+      "author": "Amina"
+    },
+    {
+      "key": "crawl:/2026/10/12/panel-care/",
+      "kind": "post",
+      "slug": "panel-care",
+      "url": "https://solar.test/2026/10/12/panel-care/",
+      "path": "/2026/10/12/panel-care/",
+      "title": "Caring for your panels",
+      "html": "\n<p>Dust costs a panel up to a fifth of its output in the dry season. Rinse panels with clean water early in the morning, never with soap, and never climb onto the roof yourself.</p>\n<p>We include two cleaning visits a year with every installation.</p>\n",
+      "excerpt": "Keep your panels producing.",
+      "status": "published",
+      "publishedAt": "2026-10-12T08:00:00Z",
+      "language": "en-US",
+      "author": "Otieno"
+    },
+    {
+      "key": "crawl:/products/panel-400/",
+      "kind": "product",
+      "slug": "panel-400",
+      "url": "https://solar.test/products/panel-400/",
+      "path": "/products/panel-400/",
+      "title": "Panel 400 W",
+      "html": "\n<p>A 400 W monocrystalline panel with a 25-year output warranty.</p>\n<img alt=\"The 400 W panel\" src=\"https://solar.test/wp-content/uploads/2026/10/panel.jpg\">\n",
+      "excerpt": "A 400 W monocrystalline panel.",
+      "status": "published",
+      "language": "en-US",
+      "fields": {
+        "currency": "KES",
+        "price": 25000.0,
+        "sku": "P-400"
+      },
+      "media": [
+        "https://solar.test/wp-content/uploads/2026/10/panel.jpg"
+      ]
+    }
+  ],
+  "media": [
+    {
+      "url": "https://solar.test/wp-content/uploads/2026/10/team.png",
+      "path": "/wp-content/uploads/2026/10/team.png",
+      "declaredType": "image/png",
+      "alt": "The installation team on a roof",
+      "sha256": "sha256:f48ce9c9f99ea50e190a5e3dc2a26f4720998b83fd2b8f0164d91ca3ea1b9fd2",
+      "size": 83
+    },
+    {
+      "url": "https://solar.test/wp-content/uploads/2026/10/panel.jpg",
+      "path": "/wp-content/uploads/2026/10/panel.jpg",
+      "declaredType": "image/jpeg",
+      "alt": "The 400 W panel",
+      "sha256": "sha256:833a66dcd66e6b7068aa03c1dbc3d68b109daec876da879e6772aa195e0681df",
+      "size": 777
+    },
+    {
+      "url": "https://solar.test/wp-content/uploads/2026/10/cache.php",
+      "path": "/wp-content/uploads/2026/10/cache.php",
+      "sha256": "sha256:b8090799be386db7d33a1d67edd511a7518d451c20a9d90caf262ac51b619b49",
+      "size": 67
+    },
+    {
+      "url": "https://solar.test/wp-content/uploads/2026/10/photo.jpg",
+      "path": "/wp-content/uploads/2026/10/photo.jpg",
+      "sha256": "sha256:679faa72f213bbeb1583895b499ee3ffbb32158bf09ffd9f294471f00abed10c",
+      "size": 58
+    }
+  ],
+  "taxonomies": [
+    {
+      "name": "category",
+      "terms": [
+        {
+          "slug": "news",
+          "name": "News",
+          "path": "/category/news/"
+        }
+      ]
+    }
+  ],
+  "menus": [
+    {
+      "name": "primary",
+      "entries": [
+        {
+          "title": "Home",
+          "target": "/"
+        },
+        {
+          "title": "About us",
+          "target": "/about/"
+        },
+        {
+          "title": "Panel 400 W",
+          "target": "/products/panel-400/"
+        },
+        {
+          "title": "Contact",
+          "target": "/contact/"
+        },
+        {
+          "title": "Blog",
+          "target": "/blog/"
+        }
+      ]
+    }
+  ],
+  "features": [
+    {
+      "kind": "search",
+      "evidence": [
+        {
+          "url": "https://solar.test/",
+          "detail": "form action=/ method=get"
+        },
+        {
+          "url": "https://solar.test/about/",
+          "detail": "form action=/ method=get"
+        },
+        {
+          "url": "https://solar.test/contact/",
+          "detail": "form action=/ method=get"
+        },
+        {
+          "url": "https://solar.test/2026/10/01/hello-sun/",
+          "detail": "form action=/ method=get"
+        },
+        {
+          "url": "https://solar.test/2026/10/12/panel-care/",
+          "detail": "form action=/ method=get"
+        },
+        {
+          "url": "https://solar.test/products/panel-400/",
+          "detail": "form action=/ method=get"
+        },
+        {
+          "url": "https://solar.test/blog/",
+          "detail": "form action=/ method=get"
+        },
+        {
+          "url": "https://solar.test/wp-login.php",
+          "detail": "form action=/ method=get"
+        },
+        {
+          "url": "https://solar.test/category/news/",
+          "detail": "form action=/ method=get"
+        }
+      ],
+      "fields": [
+        {
+          "name": "s",
+          "inputType": "search",
+          "required": false
+        }
+      ]
+    },
+    {
+      "kind": "contact_form",
+      "evidence": [
+        {
+          "url": "https://solar.test/contact/",
+          "detail": "form action=/contact/ method=post"
+        }
+      ],
+      "fields": [
+        {
+          "name": "your-name",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "name": "your-email",
+          "inputType": "email",
+          "required": true
+        },
+        {
+          "name": "your-message",
+          "inputType": "textarea",
+          "required": false
+        }
+      ]
+    },
+    {
+      "kind": "comments",
+      "evidence": [
+        {
+          "url": "https://solar.test/2026/10/01/hello-sun/",
+          "detail": "form action=/wp-comments-post.php method=post"
+        }
+      ],
+      "fields": [
+        {
+          "name": "comment",
+          "inputType": "textarea",
+          "required": true
+        },
+        {
+          "name": "author",
+          "inputType": "text",
+          "required": false
+        },
+        {
+          "name": "email",
+          "inputType": "email",
+          "required": false
+        }
+      ]
+    },
+    {
+      "kind": "shop",
+      "evidence": [
+        {
+          "url": "https://solar.test/products/panel-400/",
+          "detail": "form action=/products/panel-400/ method=post"
+        },
+        {
+          "url": "https://solar.test/products/panel-400/",
+          "detail": "WooCommerce page or schema.org Product"
+        }
+      ],
+      "fields": [
+        {
+          "name": "quantity",
+          "inputType": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "kind": "login",
+      "evidence": [
+        {
+          "url": "https://solar.test/wp-login.php",
+          "detail": "form action=/wp-login.php method=post"
+        }
+      ],
+      "fields": [
+        {
+          "name": "log",
+          "inputType": "text",
+          "required": false
+        },
+        {
+          "name": "pwd",
+          "inputType": "password",
+          "required": false
+        }
+      ]
+    }
+  ],
+  "facts": [],
+  "reviews": [],
+  "notes": [
+    "https://solar.test/private/: disallowed by robots.txt, not read",
+    "/wp-content/uploads/2026/10/cache.php: in the uploads directory, linked from no page",
+    "/wp-content/uploads/2026/10/photo.jpg: in the uploads directory, linked from no page",
+    "replayed in isolation: 18 requests, all to http://127.0.0.1:64386; network egress blocked: true"
+  ]
+}
