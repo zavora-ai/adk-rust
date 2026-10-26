@@ -28,9 +28,11 @@ use async_trait::async_trait;
 use awp_types::{Charter, ContentItem, Digest, Governance, Role};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use super::drafts::{DraftKind, SiteDraftStore, StoredDraft};
 use crate::facts::{FactScope, FactStatus, FactStore};
 
 /// The approver a release names when the governed path, not an approval chain, allowed it:
@@ -406,6 +408,7 @@ pub struct SiteRuntime {
     pub(crate) charter_drafts: Mutex<BTreeMap<String, Charter>>,
     pub(crate) requests: SiteRequests,
     pub(crate) next: std::sync::atomic::AtomicU64,
+    pub(crate) draft_store: Option<Arc<dyn SiteDraftStore>>,
 }
 
 impl std::fmt::Debug for SiteRuntime {
@@ -436,9 +439,29 @@ pub struct SiteRuntimeBuilder {
     audit: Option<adk_core::audit_log::AuditTrail>,
     clock: Arc<dyn Clock>,
     gate: LaunchGate,
+    draft_store: Option<Arc<dyn SiteDraftStore>>,
 }
 
 impl SiteRuntimeBuilder {
+    /// Keeps the back office's drafts — content drafts, charter drafts, charter signing and
+    /// promotion requests — in `store`, so they survive a restart (spec 3.5 §7.8.2 step 1);
+    /// in memory only by default. After building, [`SiteRuntime::restore_drafts`] reads back
+    /// what the store holds.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let runtime = SiteRuntime::builder(site, base, store, generator, host, log, work)
+    ///     .drafts(Arc::new(InMemorySiteDraftStore::default()))
+    ///     .build();
+    /// runtime.restore_drafts().await?;
+    /// ```
+    #[must_use]
+    pub fn drafts(mut self, store: Arc<dyn SiteDraftStore>) -> Self {
+        self.draft_store = Some(store);
+        self
+    }
+
     /// Records every saved version, which per-item reverts need.
     #[must_use]
     pub fn history(mut self, history: Arc<dyn ContentHistory>) -> Self {
@@ -510,7 +533,8 @@ impl SiteRuntimeBuilder {
         self
     }
 
-    /// Where the `website.*` records go.
+    /// Where the `website.*` records go, with the pipeline's `site.content.*` and
+    /// `site.release.*` records (spec 3.5 §9.3).
     #[must_use]
     pub fn audit(mut self, trail: adk_core::audit_log::AuditTrail) -> Self {
         self.audit = Some(trail);
@@ -565,6 +589,10 @@ impl SiteRuntimeBuilder {
         if let Some(previous) = self.previous {
             pipeline = pipeline.previous(previous);
         }
+        // The pipeline writes the `site.content.*` and `site.release.*` records (spec 3.5 §9.3).
+        if let Some(trail) = &self.audit {
+            pipeline = pipeline.audit(trail.clone());
+        }
         Arc::new(SiteRuntime {
             site: self.site,
             base: self.base,
@@ -587,6 +615,7 @@ impl SiteRuntimeBuilder {
             charter_drafts: Mutex::new(BTreeMap::new()),
             requests: SiteRequests::default(),
             next: std::sync::atomic::AtomicU64::new(1),
+            draft_store: self.draft_store,
         })
     }
 }
@@ -633,6 +662,7 @@ impl SiteRuntime {
             audit: None,
             clock: Arc::new(SystemClock),
             gate: LaunchGate::new(),
+            draft_store: None,
         }
     }
 
@@ -679,6 +709,81 @@ impl SiteRuntime {
     pub(crate) fn next_id(&self, prefix: &str) -> String {
         let n = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         format!("{prefix}-{n}")
+    }
+
+    /// Reads back the drafts the runtime's draft store holds (spec 3.5 §7.8.2 step 1): content
+    /// drafts, charter drafts, and the charter signing and promotion requests that wait. New
+    /// ids continue after the highest one restored. Returns how many were restored; none
+    /// without a draft store.
+    ///
+    /// # Errors
+    ///
+    /// The store's error, or a stored record that does not read back.
+    pub async fn restore_drafts(&self) -> Result<usize> {
+        let Some(store) = &self.draft_store else { return Ok(0) };
+        let site = self.site.id;
+        let mut restored = 0;
+        let mut highest = 0u64;
+        let mut seen = |id: &str| {
+            if let Some(n) = id.rsplit('-').next().and_then(|n| n.parse::<u64>().ok()) {
+                highest = highest.max(n);
+            }
+        };
+        fn read<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> {
+            serde_json::from_value(value).map_err(super::drafts::store_error)
+        }
+        for (id, value) in store.list(site, DraftKind::Content).await? {
+            let draft = read::<StoredDraft>(value)?.into_draft()?;
+            seen(&id);
+            self.drafts.lock().await.insert(id, DraftRecord { draft, preview: None });
+            restored += 1;
+        }
+        for (id, value) in store.list(site, DraftKind::Charter).await? {
+            seen(&id);
+            self.charter_drafts.lock().await.insert(id, read(value)?);
+            restored += 1;
+        }
+        for (id, value) in store.list(site, DraftKind::CharterSign).await? {
+            seen(&id);
+            self.requests.charters.lock().await.insert(id, read(value)?);
+            restored += 1;
+        }
+        for (id, value) in store.list(site, DraftKind::Promotion).await? {
+            seen(&id);
+            self.requests.promotions.lock().await.insert(id, read(value)?);
+            restored += 1;
+        }
+        self.next.fetch_max(highest + 1, std::sync::atomic::Ordering::Relaxed);
+        if restored > 0 {
+            tracing::info!(website.site = %self.site.name, website.drafts.restored = restored, "drafts restored");
+        }
+        Ok(restored)
+    }
+
+    /// Keeps `value` as `id` of `kind` in the draft store, when the runtime has one.
+    pub(crate) async fn keep(
+        &self,
+        kind: DraftKind,
+        id: &str,
+        value: &impl Serialize,
+    ) -> Result<()> {
+        let Some(store) = &self.draft_store else { return Ok(()) };
+        let value = serde_json::to_value(value).map_err(super::drafts::store_error)?;
+        store.put(self.site.id, kind, id, &value).await
+    }
+
+    /// Keeps the content draft `id`.
+    pub(crate) async fn keep_draft(&self, id: &str, draft: &Draft) -> Result<()> {
+        self.keep(DraftKind::Content, id, &StoredDraft::of(draft)).await
+    }
+
+    /// Forgets the content draft `id`: it was published or refused. A failure is logged; the
+    /// release stands.
+    pub(crate) async fn forget_draft(&self, id: &str) {
+        let Some(store) = &self.draft_store else { return };
+        if let Err(error) = store.remove(self.site.id, DraftKind::Content, id).await {
+            tracing::warn!(website.draft = id, error = %error, "a finished draft stays in the draft store");
+        }
     }
 
     /// Runs the launch gate's full tier over the working copy as it would publish now
@@ -788,6 +893,7 @@ impl SiteRuntime {
         if check_chain(&governing, &adk_kernel::charter::CHARTER_ACTION, &request.signatures, None)
             .is_err()
         {
+            self.keep(DraftKind::CharterSign, id, &*request).await?;
             return Ok(None);
         }
         let mut decision = CommitDecision::new(decision_id, self.clock.now());
@@ -799,6 +905,7 @@ impl SiteRuntime {
                 .await
                 .map_err(kernel_error)?;
         request.committed = Some(version.version());
+        self.keep(DraftKind::CharterSign, id, &*request).await?;
         Ok(Some(version))
     }
 }

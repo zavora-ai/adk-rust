@@ -27,6 +27,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::catalog::{self, BACK_OFFICE_ORIGIN, ToolSpec};
+use super::drafts::DraftKind;
 use super::site::{
     CharterSignRequest, DraftRecord, PromotionRequest, SiteRuntime, kernel_error, site_error,
 };
@@ -619,6 +620,7 @@ impl Tool for BackOfficeTool {
                         .push((format!("{dir}/{}", variant.name), variant.bytes.clone()));
                 }
                 record.preview = None;
+                site.keep_draft(&args.draft, &record.draft).await?;
                 Ok(json!({
                     "draft": args.draft,
                     "media": media,
@@ -637,6 +639,7 @@ impl Tool for BackOfficeTool {
                     Err(error) => error.violations.iter().map(|v| format!("{v:?}")).collect(),
                 };
                 let id = site.next_id("charter");
+                site.keep(DraftKind::Charter, &id, &charter).await?;
                 site.charter_drafts.lock().await.insert(id.clone(), charter);
                 Ok(json!({ "draft": id, "valid": violations.is_empty(), "violations": violations }))
             }
@@ -692,6 +695,7 @@ impl Tool for BackOfficeTool {
                         item.schedule = Some(schedule.clone());
                     }
                     record.preview = None;
+                    site.keep_draft(&args.draft, &record.draft).await?;
                 }
                 publish(site, &args.draft).await
             }
@@ -817,6 +821,7 @@ impl Tool for BackOfficeTool {
                     committed: None,
                 };
                 let id = request.id.clone();
+                site.keep(DraftKind::CharterSign, &id, &request).await?;
                 site.requests.charters.lock().await.insert(id.clone(), request);
                 Ok(json!({
                     "request": id,
@@ -835,6 +840,7 @@ impl Tool for BackOfficeTool {
                     requested_at: site.clock.now(),
                 };
                 let id = request.id.clone();
+                site.keep(DraftKind::Promotion, &id, &request).await?;
                 site.requests.promotions.lock().await.insert(id.clone(), request);
                 Ok(json!({
                     "request": id,
@@ -891,6 +897,7 @@ async fn draft(
     let ids: Vec<String> = candidate.change.items.iter().map(|item| item.id.0.clone()).collect();
     let gate = site.pipeline.check(&candidate).await.map_err(site_error)?;
     let id = joined.unwrap_or_else(|| site.next_id("draft"));
+    site.keep_draft(&id, &candidate).await?;
     drafts.insert(id.clone(), DraftRecord { draft: candidate, preview: None });
     Ok(json!({
         "draft": id,
@@ -922,6 +929,7 @@ async fn publish(site: &Arc<SiteRuntime>, id: &str) -> Result<Value> {
                 site.pipeline.complete(&record.draft, decision).await.map_err(site_error)?;
             let _ = tokio::fs::remove_dir_all(&preview.staged.root).await;
             drafts.remove(id);
+            site.forget_draft(id).await;
             let mut out = outcome_json(&outcome);
             out["approvers"] = json!(approvers);
             Ok(out)
@@ -933,6 +941,7 @@ async fn publish(site: &Arc<SiteRuntime>, id: &str) -> Result<Value> {
         })),
         ApprovalDecision::Rejected { by, reason } => {
             drafts.remove(id);
+            site.forget_draft(id).await;
             Ok(json!({ "published": false, "rejected": { "by": by, "reason": reason } }))
         }
     }

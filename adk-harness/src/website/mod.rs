@@ -6,6 +6,7 @@
 //! | [`Preset::Website`](crate::Preset::Website), [`WEBSITE_SYSTEM_PROMPT`] | The preset: prompt scaffold, plan mode, no shell, website tool classes | §7.1, §10 X10 |
 //! | [`CATALOG`], [`ToolSpec`], [`WebsiteClasses`] | Every website tool's partition, effect, effect class, reversibility and holds | §7.10, §7.11, §7.13 |
 //! | [`SiteRuntime`], [`SiteApprovals`], [`FactClaimCheck`] | `adk-site`'s pipeline, gate and host for the tools; approval chains of distinct people; claims checked against `Known` facts | §7.8, §7.8.2, A-I18, A-I23 |
+//! | [`SiteDraftStore`], [`InMemorySiteDraftStore`], `SqliteSiteDraftStore` (feature `sqlite`) | The runtime's drafts and requests, durable across a restart | §7.8.2, §7.6, §7.11 |
 //! | [`back_office_tools`] | Content draft, edit, schedule, correct, withdraw, revert; translations; media; preview; publish; rollback; host reads; launch gate; `awp verify`; charter draft; charter-commit and promotion requests | §7.8.2, §7.10, §7.13 |
 //! | [`SearchSiteTool`], [`EmitSignalTool`], [`PublicPolicy`], [`screen_bounded`] | The public partition: search over the release's Markdown twins, typed screened signals, `adk-drivers`' `reply_in_thread`, and nothing else | §7.10, A-I2, A-I3 |
 //! | [`WebsitePolicy`] | Decision cards and the launch, held in every mode | A-I13, A-I21 |
@@ -33,6 +34,7 @@ use adk_core::principal::{SubjectKind, SubjectRef};
 mod authoring;
 mod back_office;
 mod catalog;
+mod drafts;
 mod ladder;
 mod onboarding;
 mod partitions;
@@ -53,6 +55,11 @@ pub use catalog::{
     LEAD_HANDOFF, MEDIA_INTAKE, PUBLIC_ORIGIN, RELEASE_PREVIEW, REPLY_IN_THREAD, SEARCH_SITE,
     SITE_DISCOVER, SITE_PUBLISH, SITE_ROLLBACK, TRANSLATION_DRAFT, ToolSpec, WALLET_PAY,
     WebsiteClasses, WebsitePartition, spec,
+};
+#[cfg(feature = "sqlite")]
+pub use drafts::SqliteSiteDraftStore;
+pub use drafts::{
+    DraftKind, InMemorySiteDraftStore, SiteDraftStore, conformance as draft_conformance,
 };
 pub use ladder::{
     JobBinding, LadderCompiler, LevelDecision, Promotion, apply_demotion, job_levels,
