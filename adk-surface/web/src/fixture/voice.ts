@@ -42,6 +42,7 @@ export class VoiceFixtureClient implements VoiceClient {
   async voiceModels(): Promise<VoiceModels> {
     return {
       agent: "Chief of staff",
+      agentName: "finance",
       models: [
         { id: "gemini", name: "Gemini Live", inputRate: 16_000, outputRate: 24_000 },
         { id: "openai", name: "OpenAI Realtime", inputRate: 24_000, outputRate: 24_000 },

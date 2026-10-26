@@ -11,6 +11,7 @@ import type {
 } from "../generated/api";
 import { problemText } from "../client";
 import { decisionPath } from "../route";
+import { visible } from "../safe";
 import type { VoiceDevices } from "../voice/devices";
 import { browserDevices } from "../voice/devices";
 import { allowingIn, heard, voiceCantApprove, voiceLabels, wantsTo } from "../voice/labels";
@@ -35,9 +36,11 @@ const READ_EVERY_MS = 1000;
 
 /**
  * The voice view (spec 3.3 §5.6): hands-free turns with the agent, the decision a spoken
- * answer would apply to, a spoken "allow once" counting down with Cancel, the decisions voice
- * cannot approve with "Decide on screen", and what the model can see while its switches are on.
- * Everything a model, a tool or a person said is rendered as text (S-I9).
+ * answer would apply to with its exact call in full (§7.1), a spoken "allow once" counting
+ * down with Cancel, the decisions voice cannot approve with "Decide on screen", and what the
+ * model can see while its switches are on. Everything a model, a tool or a person said is
+ * rendered as text (S-I9). End gives back the conversation's session, which then opens in
+ * Threads.
  */
 export function Voice({
   client,
@@ -46,7 +49,7 @@ export function Voice({
 }: {
   client: VoiceClient;
   devices?: VoiceDevices;
-  onEnd: () => void;
+  onEnd: (sessionId?: string) => void;
 }) {
   const devices = useMemo(() => given ?? browserDevices(), [given]);
   const [models, setModels] = useState<VoiceModels>();
@@ -134,7 +137,7 @@ export function Voice({
 
   function end() {
     session.current?.end();
-    onEnd();
+    onEnd(conversation.current);
   }
 
   return (
@@ -190,6 +193,7 @@ export function Voice({
                 </span>
               </div>
               <h2 className="voice-pending-heading">{pending?.heading}</h2>
+              {pending && <Call card={pending} />}
               <div className="voice-pending-bottom">
                 <span className="voice-pending-meta">
                   {pending ? `${pending.agent.displayName} · ${pending.riskText}` : ""}
@@ -204,7 +208,7 @@ export function Voice({
           {!stopped &&
             onScreen.map((high) => (
               <p className="voice-screen" key={high.id}>
-                {voiceCantApprove(high.heading, high.money)}{" "}
+                {cantApprove(high)}{" "}
                 <a href={decisionPath(high.id)}>{voiceLabels.decideOnScreen}</a>
               </p>
             ))}
@@ -249,25 +253,55 @@ export function Voice({
   );
 }
 
+/** Whether voice may allow `card` once: an everyday call shown in full. */
+function voiceAllows(card: DecisionCard): boolean {
+  return card.allowed.options.some((option) => option.answer === "allowOnce" && !option.needsExpanded);
+}
+
+/** Why voice cannot allow `card` once: high risk, money, or a call shown cut short. */
+function cantApprove(card: DecisionCard): string {
+  return card.money || card.risk === "high"
+    ? voiceCantApprove(card.heading, card.money)
+    : wantsTo(card.agent.displayName, card.heading);
+}
+
 /**
- * What a spoken answer would apply to now, and the words that answer it. A call voice cannot
- * approve says so, and where to decide it.
+ * What a spoken answer would apply to now, the words that answer it, and the exact call in
+ * full (§7.1). A call voice cannot approve says so, and where to decide it.
  */
 function Prompt({ card }: { card: DecisionCard }) {
-  if (card.allowed.options.some((option) => option.answer === "allowOnce")) {
+  if (voiceAllows(card)) {
     return (
-      <p className="voice-prompt">
-        {`${wantsTo(card.agent.displayName, card.heading)} ${voiceLabels.sayAllowOnceOrDeny}`}
-      </p>
+      <>
+        <p className="voice-prompt">
+          {`${wantsTo(card.agent.displayName, card.heading)} ${voiceLabels.sayAllowOnceOrDeny}`}
+        </p>
+        <Call card={card} />
+      </>
     );
   }
   const [before, after] = voiceLabels.sayDenyOrDecideOnScreen.split(DECIDE);
   return (
-    <p className="voice-prompt">
-      {`${voiceCantApprove(card.heading, card.money)} ${before}`}
-      <a href={decisionPath(card.id)}>{DECIDE}</a>
-      {after}
-    </p>
+    <>
+      <p className="voice-prompt">
+        {`${cantApprove(card)} ${before}`}
+        <a href={decisionPath(card.id)}>{DECIDE}</a>
+        {after}
+      </p>
+      <Call card={card} />
+    </>
+  );
+}
+
+/** The exact call, in full, and whether it can be taken back (§7.1). */
+function Call({ card }: { card: DecisionCard }) {
+  return (
+    <div className="voice-call-block">
+      <code className="voice-call" aria-label={voiceLabels.exactCall}>
+        {visible(card.call.text)}
+      </code>
+      <p className="voice-call-details">{card.reversibilityText}</p>
+    </div>
   );
 }
 

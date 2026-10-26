@@ -104,6 +104,27 @@
   line-height: 1.5;
 }
 
+.voice-call-block {
+  margin: 0 0 22px;
+}
+
+.voice-call {
+  display: block;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--code-bg);
+  font-size: 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.voice-call-details {
+  margin: 8px 0 0;
+  color: var(--label);
+  font-size: 14px;
+}
+
 .voice-said {
   margin: 0 0 24px;
   font-size: 18px;

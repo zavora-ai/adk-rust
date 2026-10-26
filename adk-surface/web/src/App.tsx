@@ -220,7 +220,17 @@ export function App({
     [voice, voiceModels.value, navigate],
   );
   if (section === "voice" && voice) {
-    return <Voice client={voice} onEnd={() => navigate("threads")} />;
+    // The conversation ended opens in Threads under the agent, in place of its own thread.
+    const ended = (sessionId?: string) => {
+      const agent = voiceModels.value?.agentName;
+      if (sessionId && agent) {
+        setSelected(agent);
+        setFocusDecision(undefined);
+        setVisiting({ agent, session: sessionId });
+      }
+      navigate("threads");
+    };
+    return <Voice client={voice} onEnd={ended} />;
   }
 
   const home = (
