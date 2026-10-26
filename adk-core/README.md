@@ -429,7 +429,7 @@ let ledger = InMemorySpendLedger::new(
 
 ## Audit Records
 
-`AuditRecorder` (module `audit_log`) receives a record for every governed tool decision, approval decision, kill-switch change, and `outcome_unknown` answer; `InMemoryAuditRecorder` keeps them in memory. Each record names the acting agent and the subject it acts for and carries an argument digest, never the arguments. Under `AuditFailureMode::Block` (the default) an action whose record cannot be written does not happen. `AuditLogStore` and `InMemoryAuditLogStore` hold append-only logs with a compare-and-swap on the log size; `adk-auth`'s `signed_audit::AuditLog` signs them.
+`AuditRecorder` (module `audit_log`) receives a record for every governed tool decision, approval decision, kill-switch change, and `outcome_unknown` answer; `InMemoryAuditRecorder` keeps them in memory and `FileAuditRecorder` appends them to a JSON Lines file that survives a restart. Each record names the acting agent and the subject it acts for and carries an argument digest, never the arguments. Under `AuditFailureMode::Block` (the default) an action whose record cannot be written does not happen. `AuditLogStore` and `InMemoryAuditLogStore` hold append-only logs with a compare-and-swap on the log size; `adk-auth`'s `signed_audit::AuditLog` signs them.
 
 ## Durable Runtime Contracts
 

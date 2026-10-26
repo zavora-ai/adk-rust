@@ -1059,9 +1059,318 @@ impl AuditRecorder for InMemoryAuditRecorder {
     }
 }
 
+/// An [`AuditRecorder`] that appends each record to a file as one line of JSON, so the
+/// records survive a restart (spec 3.5 §7.9, §9.3).
+///
+/// Each line is an [`AuditRecord`] whose `seq` counts the file's records from 0 and whose
+/// `ts` is the time it was appended. Several processes may append to one file: each append
+/// takes an exclusive lock on it and counts the records another process added since its
+/// last append, so `seq` has no gap and no repeat. A line a crash left unfinished is cut
+/// before the next append, and [`read`](Self::read) leaves it out. Every append is flushed
+/// to disk before [`record`](AuditRecorder::record) returns.
+///
+/// The records are not hash-chained or signed; `adk_auth::signed_audit::AuditLog` over a
+/// durable [`AuditLogStore`] keeps a tamper-evident log. The digest is `sha256:` and the hex
+/// SHA-256 of the value's canonical JSON.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::audit_log::{AuditRecordDraft, AuditRecordKind, AuditRecorder, FileAuditRecorder};
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> adk_core::Result<()> {
+/// let dir = std::env::temp_dir().join(format!("adk-audit-{}", uuid::Uuid::new_v4()));
+/// let path = dir.join("audit.jsonl");
+/// let recorder = FileAuditRecorder::open(&path)?;
+/// recorder.record(AuditRecordDraft::new(AuditRecordKind::Other("site".into()), "site.release.built")).await?;
+///
+/// let records = FileAuditRecorder::read(&path)?;
+/// assert_eq!((records[0].seq, records[0].action.as_str()), (0, "site.release.built"));
+/// # std::fs::remove_dir_all(dir).ok();
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone)]
+pub struct FileAuditRecorder {
+    path: std::path::PathBuf,
+    log_id: String,
+    state: Arc<std::sync::Mutex<FileAuditState>>,
+}
+
+/// What the recorder knows of its file: the length it last saw and the records before it.
+#[derive(Debug, Default)]
+struct FileAuditState {
+    len: u64,
+    records: u64,
+}
+
+impl fmt::Debug for FileAuditRecorder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FileAuditRecorder")
+            .field("path", &self.path)
+            .field("log_id", &self.log_id)
+            .finish_non_exhaustive()
+    }
+}
+
+fn file_audit_error(path: &std::path::Path, action: &str, error: impl fmt::Display) -> AdkError {
+    AdkError::new(
+        ErrorComponent::Auth,
+        ErrorCategory::Unavailable,
+        "audit.file_failed",
+        format!(
+            "could not {action} the audit file {}: {error}. Check that the directory exists \
+             and is writable, and that the disk has space",
+            path.display()
+        ),
+    )
+}
+
+/// The number of complete lines in `bytes` and the length up to the last one.
+fn complete_lines(bytes: &[u8]) -> (u64, u64) {
+    let lines = bytes.iter().filter(|byte| **byte == b'\n').count() as u64;
+    let end = bytes.iter().rposition(|byte| *byte == b'\n').map_or(0, |at| at as u64 + 1);
+    (lines, end)
+}
+
+impl FileAuditRecorder {
+    /// Appends to the file at `path`, creating it and its directory when missing; the log
+    /// id is `file:` and the path.
+    ///
+    /// # Errors
+    ///
+    /// `audit.file_failed` when the directory cannot be created or the file opened.
+    pub fn open(path: impl Into<std::path::PathBuf>) -> Result<Self> {
+        let path = path.into();
+        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| file_audit_error(&path, "create the directory of", error))?;
+        }
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|error| file_audit_error(&path, "open", error))?;
+        Ok(Self {
+            log_id: format!("file:{}", path.display()),
+            path,
+            state: Arc::new(std::sync::Mutex::new(FileAuditState::default())),
+        })
+    }
+
+    /// Names the log the records belong to, such as the site's domain.
+    #[must_use]
+    pub fn with_log_id(mut self, log_id: impl Into<String>) -> Self {
+        self.log_id = log_id.into();
+        self
+    }
+
+    /// The file.
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// The records in the file at `path`, in order; none when it does not exist.
+    ///
+    /// # Errors
+    ///
+    /// `audit.file_failed` when the file cannot be read or a complete line is not a record.
+    pub fn read(path: impl AsRef<std::path::Path>) -> Result<Vec<AuditRecord>> {
+        let path = path.as_ref();
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(file_audit_error(path, "read", error)),
+        };
+        let (_, end) = complete_lines(&bytes);
+        bytes[..end as usize]
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .enumerate()
+            .map(|(index, line)| {
+                serde_json::from_slice(line).map_err(|error| {
+                    file_audit_error(path, &format!("read record {index} of"), error)
+                })
+            })
+            .collect()
+    }
+
+    /// The records this recorder's file holds, in order.
+    ///
+    /// # Errors
+    ///
+    /// As [`read`](Self::read).
+    pub async fn records(&self) -> Result<Vec<AuditRecord>> {
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || Self::read(path))
+            .await
+            .map_err(|error| file_audit_error(&self.path, "read", error))?
+    }
+
+    /// Appends `draft` as the next record under the file's lock.
+    fn append(&self, draft: AuditRecordDraft) -> Result<()> {
+        use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+
+        let path = &self.path;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .append(true)
+            .open(path)
+            .map_err(|error| file_audit_error(path, "open", error))?;
+        file.lock().map_err(|error| file_audit_error(path, "lock", error))?;
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let len = file.metadata().map_err(|error| file_audit_error(path, "inspect", error))?.len();
+        if len != state.len {
+            // Another process appended, or the file is new to this recorder: count the
+            // records from where this recorder last stopped, or from the start.
+            let from = if len > state.len { state.len } else { 0 };
+            if from == 0 {
+                state.records = 0;
+            }
+            let mut tail = Vec::new();
+            file.seek(SeekFrom::Start(from))
+                .and_then(|_| file.read_to_end(&mut tail))
+                .map_err(|error| file_audit_error(path, "read", error))?;
+            let (lines, end) = complete_lines(&tail);
+            state.records += lines;
+            state.len = from + end;
+            if state.len < len {
+                // A line a crash left unfinished never completed; cut it.
+                file.set_len(state.len).map_err(|error| file_audit_error(path, "repair", error))?;
+            }
+        }
+        let record = AuditRecord {
+            v: AUDIT_RECORD_VERSION,
+            log_id: self.log_id.clone(),
+            seq: state.records,
+            ts: Utc::now(),
+            prev_hash: None,
+            actor: draft.actor,
+            kind: draft.kind,
+            action: draft.action,
+            args_digest: draft.args_digest,
+            decision: draft.decision,
+            outcome: draft.outcome,
+            policy_ref: draft.policy_ref,
+            payload_ref: draft.payload_ref,
+            ext: draft.ext,
+        };
+        let mut line = serde_json::to_vec(&record)
+            .map_err(|error| file_audit_error(path, "encode a record for", error))?;
+        line.push(b'\n');
+        file.write_all(&line)
+            .and_then(|()| file.sync_data())
+            .map_err(|error| file_audit_error(path, "append to", error))?;
+        state.len += line.len() as u64;
+        state.records += 1;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl AuditRecorder for FileAuditRecorder {
+    fn digest(&self, value: &serde_json::Value) -> String {
+        use sha2::{Digest as _, Sha256};
+        use std::fmt::Write as _;
+
+        let mut canonical = String::new();
+        crate::context::write_canonical(value, &mut canonical);
+        let mut digest = String::with_capacity(7 + 64);
+        digest.push_str("sha256:");
+        for byte in Sha256::digest(canonical.as_bytes()) {
+            let _ = write!(digest, "{byte:02x}");
+        }
+        digest
+    }
+
+    async fn record(&self, draft: AuditRecordDraft) -> Result<()> {
+        let recorder = self.clone();
+        tokio::task::spawn_blocking(move || recorder.append(draft))
+            .await
+            .map_err(|error| file_audit_error(&self.path, "append to", error))?
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn draft(action: &str) -> AuditRecordDraft {
+        AuditRecordDraft::new(AuditRecordKind::Other("site".into()), action)
+            .ext("releaseSeq", serde_json::json!(7))
+    }
+
+    #[tokio::test]
+    async fn a_file_recorder_keeps_its_records_across_a_reopen() {
+        let dir = std::env::temp_dir().join(format!("adk-audit-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("nested").join("audit.jsonl");
+        let recorder = FileAuditRecorder::open(&path).unwrap().with_log_id("example.com");
+        recorder.record(draft("site.release.built")).await.unwrap();
+        recorder.record(draft("site.release.signed")).await.unwrap();
+        drop(recorder);
+
+        // A second process opens the same file, and the first appends again after it.
+        let first = FileAuditRecorder::open(&path).unwrap().with_log_id("example.com");
+        let second = FileAuditRecorder::open(&path).unwrap().with_log_id("example.com");
+        first.record(draft("awp.keys.rotated")).await.unwrap();
+        second.record(draft("awp.keys.delegated")).await.unwrap();
+        first.record(draft("site.content.published")).await.unwrap();
+
+        let records = first.records().await.unwrap();
+        let read: Vec<(u64, &str)> = records.iter().map(|r| (r.seq, r.action.as_str())).collect();
+        assert_eq!(
+            read,
+            vec![
+                (0, "site.release.built"),
+                (1, "site.release.signed"),
+                (2, "awp.keys.rotated"),
+                (3, "awp.keys.delegated"),
+                (4, "site.content.published"),
+            ]
+        );
+        assert!(records.iter().all(|r| r.log_id == "example.com" && r.v == AUDIT_RECORD_VERSION));
+        assert_eq!(records[0].ext["releaseSeq"], 7);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn an_unfinished_line_is_cut_and_never_read() {
+        use std::io::Write as _;
+
+        let dir = std::env::temp_dir().join(format!("adk-audit-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("audit.jsonl");
+        let recorder = FileAuditRecorder::open(&path).unwrap();
+        recorder.record(draft("site.content.approved")).await.unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"{\"v\":1,\"logId\":\"torn")
+            .unwrap();
+        assert_eq!(FileAuditRecorder::read(&path).unwrap().len(), 1, "the torn line is left out");
+
+        let reopened = FileAuditRecorder::open(&path).unwrap();
+        reopened.record(draft("site.content.withdrawn")).await.unwrap();
+        let records = FileAuditRecorder::read(&path).unwrap();
+        assert_eq!(
+            records.iter().map(|r| (r.seq, r.action.as_str())).collect::<Vec<_>>(),
+            vec![(0, "site.content.approved"), (1, "site.content.withdrawn")]
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn the_file_digest_is_sha256_of_the_canonical_json() {
+        let dir = std::env::temp_dir().join(format!("adk-audit-{}", uuid::Uuid::new_v4()));
+        let recorder = FileAuditRecorder::open(dir.join("audit.jsonl")).unwrap();
+        let a = recorder.digest(&serde_json::json!({ "b": 1, "a": [1, 2] }));
+        let b = recorder.digest(&serde_json::json!({ "a": [1, 2], "b": 1 }));
+        assert_eq!(a, b);
+        assert!(a.starts_with("sha256:") && a.len() == 7 + 64, "{a}");
+        std::fs::remove_dir_all(dir).ok();
+    }
 
     #[test]
     fn hash_rejects_bad_text() {
