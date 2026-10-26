@@ -66,6 +66,7 @@ pub use walk::{
     WalkedFile, walk,
 };
 
+#[cfg(feature = "runner")]
 pub(crate) use plan::{harness_writes, transcript_cut, turns_of};
 
 use std::sync::Arc;
@@ -182,6 +183,7 @@ pub(crate) async fn before_turn(
 }
 
 /// Takes the snapshot before plan step `step` (spec 3.1 §7.27).
+#[cfg(feature = "graph")]
 pub(crate) async fn before_step(
     snapshots: &Snapshots,
     ctx: &dyn adk_core::InvocationContext,

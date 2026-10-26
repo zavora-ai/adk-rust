@@ -2,18 +2,30 @@
 //! snapshot and the current tree, with conflicts, protected paths, files not covered,
 //! effects not undone, the transcript fork and the plan.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
-use std::path::{Component, Path};
 
-use adk_core::{Event, Part};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+use super::store::{FileEntry, SnapshotKind};
+use super::walk::{NotCovered, SkipReason};
+
+// The rewind half of the plan — the file diff, the transcript cut and the writes the
+// transcript records — runs only with `runner`, which has the sessions it reads.
+#[cfg(feature = "runner")]
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+#[cfg(feature = "runner")]
+use std::path::{Component, Path};
+
+#[cfg(feature = "runner")]
+use adk_core::{Event, Part};
+#[cfg(feature = "runner")]
 use serde_json::Value;
 
+#[cfg(feature = "runner")]
 use super::runtime::TreeScan;
-use super::store::{FileEntry, SnapshotKind, SnapshotRecord};
-use super::walk::{NotCovered, SkipReason};
+#[cfg(feature = "runner")]
+use super::store::SnapshotRecord;
 
 /// Most paths a rendered plan or report lists per section.
 const RENDER_PATHS: usize = 12;
@@ -487,6 +499,7 @@ fn adk_core_escape(text: &str) -> String {
 /// The rewind of the files: the target's entries against the current tree. A path the
 /// target did not cover — left out by size or exclusion, or past a partial walk — is never
 /// deleted.
+#[cfg(feature = "runner")]
 pub(crate) fn diff(
     target: &[FileEntry],
     target_partial: bool,
@@ -528,6 +541,7 @@ pub(crate) fn diff(
     entries
 }
 
+#[cfg(feature = "runner")]
 fn entry(
     path: &str,
     change: ChangeKind,
@@ -546,6 +560,7 @@ fn entry(
 }
 
 /// The paths that differ between two file lists.
+#[cfg(feature = "runner")]
 pub(crate) fn changed_paths(before: &[FileEntry], after: &[FileEntry]) -> BTreeSet<String> {
     let mut by_path: BTreeMap<&str, (Option<&FileEntry>, Option<&FileEntry>)> = BTreeMap::new();
     for file in before {
@@ -566,6 +581,7 @@ pub(crate) fn changed_paths(before: &[FileEntry], after: &[FileEntry]) -> BTreeS
 
 /// The user turns of a session's events: a user message that starts a run, numbered from 1,
 /// with the index of its first event and the start of its text.
+#[cfg(feature = "runner")]
 pub(crate) fn turns_of(events: &[Event]) -> Vec<(u32, String, usize, String)> {
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     let mut turns = Vec::new();
@@ -598,6 +614,7 @@ pub(crate) fn turns_of(events: &[Event]) -> Vec<(u32, String, usize, String)> {
 /// Where the transcript forks for `record`: the index of the first event a rewind to it
 /// removes, or `None` when it removes none. A turn snapshot forks before the turn's user
 /// message; a step or `Destructive` snapshot before the next user message that followed it.
+#[cfg(feature = "runner")]
 pub(crate) fn transcript_cut(events: &[Event], record: &SnapshotRecord) -> Option<usize> {
     match record.kind {
         SnapshotKind::Turn => events
@@ -611,6 +628,7 @@ pub(crate) fn transcript_cut(events: &[Event], record: &SnapshotRecord) -> Optio
 }
 
 /// The index of the first event at or after `record` (a user message when `user_only`).
+#[cfg(feature = "runner")]
 fn after(events: &[Event], record: &SnapshotRecord, user_only: bool) -> Option<usize> {
     events.iter().position(|event| {
         event.timestamp >= record.created_at && (!user_only || event.author == "user")
@@ -619,6 +637,7 @@ fn after(events: &[Event], record: &SnapshotRecord, user_only: bool) -> Option<u
 
 /// The index of the first event after `record` was taken: where "since this snapshot"
 /// starts in the transcript.
+#[cfg(feature = "runner")]
 pub(crate) fn position_after(events: &[Event], record: &SnapshotRecord) -> usize {
     let found = match record.kind {
         SnapshotKind::Turn => {
@@ -630,6 +649,7 @@ pub(crate) fn position_after(events: &[Event], record: &SnapshotRecord) -> usize
 }
 
 /// A tool call in the transcript and whether it ran without an error.
+#[cfg(feature = "runner")]
 #[derive(Clone, Debug)]
 pub(crate) struct RanCall {
     pub(crate) name: String,
@@ -640,6 +660,7 @@ pub(crate) struct RanCall {
 }
 
 /// The tool calls in `events` that have a response, with whether it was a success.
+#[cfg(feature = "runner")]
 pub(crate) fn calls_in(events: &[Event]) -> Vec<RanCall> {
     let mut calls: Vec<RanCall> = Vec::new();
     let mut answered: HashMap<String, bool> = HashMap::new();
@@ -679,11 +700,13 @@ pub(crate) fn calls_in(events: &[Event]) -> Vec<RanCall> {
 }
 
 /// The harness file tools whose effect is the workspace files a snapshot restores.
+#[cfg(feature = "runner")]
 pub(crate) const FILE_TOOLS: &[&str] = &["write_file", "edit_file", "apply_patch"];
 
 /// The paths the harness's file tools wrote in `events`: a file a command or the person
 /// changed is a conflict, one a file tool wrote is not (spec 3.1 §7.27). The transcript is
 /// the write record here; the digest records of §7.26 tighten it to the content written.
+#[cfg(feature = "runner")]
 pub(crate) fn harness_writes(events: &[Event], root: &Path) -> BTreeSet<String> {
     let mut paths = BTreeSet::new();
     for call in calls_in(events) {
@@ -716,6 +739,7 @@ pub(crate) fn harness_writes(events: &[Event], root: &Path) -> BTreeSet<String> 
 }
 
 /// A tool's path argument as a workspace-relative path with `/` separators.
+#[cfg(feature = "runner")]
 fn normalize(path: &str, root: &Path) -> Option<String> {
     let path = Path::new(path);
     let relative = if path.is_absolute() { path.strip_prefix(root).ok()? } else { path };
@@ -733,7 +757,8 @@ fn normalize(path: &str, root: &Path) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
-#[cfg(test)]
+// The tests exercise the rewind half, which needs `runner`.
+#[cfg(all(test, feature = "runner"))]
 mod tests {
     use super::*;
     use adk_core::{Content, FunctionResponseData};
