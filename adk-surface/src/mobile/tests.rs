@@ -1379,3 +1379,127 @@ fn a_recorded_chrome_passkey_registers_and_confirms() {
     let ceremony = recorded::<PasskeyRegistration>(&ceremony, "rs", &registration["challenge"]);
     assert!(elsewhere.finish_registration(&registration["credential"], &ceremony).is_err());
 }
+
+/// Wave 3 finding 15: the web home adds an agent at high risk after "Confirm it's you" (spec
+/// 3.3 §7.2): the plain command is refused for want of presence, the change bound to the
+/// passkey is made with it, and a phone may not use the route (decision 16).
+#[tokio::test]
+async fn the_web_home_adds_a_high_risk_agent_after_confirming_it_s_you() {
+    struct NoBuild;
+
+    #[async_trait::async_trait]
+    impl adk_kernel::agents::AgentFactory for NoBuild {
+        fn assess(
+            &self,
+            _record: &adk_kernel::agents::AgentRecord,
+        ) -> adk_kernel::agents::AgentAssessment {
+            adk_kernel::agents::AgentAssessment::new(ApprovalRisk::Low)
+        }
+        async fn ceiling(
+            &self,
+            _agent: &adk_core::AgentId,
+            _session: &str,
+        ) -> adk_kernel::Result<Option<adk_kernel::agents::AgentCeiling>> {
+            Ok(None)
+        }
+        async fn choices(&self) -> adk_kernel::Result<adk_kernel::agents::AgentChoices> {
+            Ok(adk_kernel::agents::AgentChoices::default())
+        }
+        async fn build(
+            &self,
+            _record: &adk_kernel::agents::AgentRecord,
+        ) -> adk_kernel::Result<adk_kernel::agents::HostedAgent> {
+            Err(adk_kernel::KernelError::Config { reason: "not built in this test".into() })
+        }
+        async fn retired(
+            &self,
+            _record: &adk_kernel::agents::AgentRecord,
+        ) -> adk_kernel::Result<u64> {
+            Ok(0)
+        }
+    }
+
+    let kernel = adk_kernel::Kernel::builder()
+        .config(
+            adk_kernel::KernelConfig::default()
+                .with_app_name(APP)
+                .with_control(adk_kernel::control::ControlPlaneConfig::default().without_socket()),
+        )
+        .run_store(Arc::new(adk_core::InMemoryRunStore::new()))
+        .agent_factory(Arc::new(NoBuild))
+        .build()
+        .unwrap();
+    let source = LocalSource::builder(APP)
+        .sessions(Arc::new(InMemorySessionService::new()))
+        .kernel(kernel.clone(), APP)
+        .build()
+        .unwrap();
+    let engine = SurfaceEngine::builder(Arc::new(source)).places([Place::phone()]).build();
+    let clock = Arc::new(ManualClock::new(at(24, 18, 0)));
+    let pairing = Pairing::new(Arc::new(InMemoryDeviceStore::new())).with_clock(clock.clone());
+    let device = pair(&pairing).await;
+    let phone = Phone::builder(engine, pairing)
+        .push_key(PushKey::generate().unwrap())
+        .clock(clock)
+        .home_url(HOME)
+        .build()
+        .unwrap();
+    let web = app(&phone, person(&["owner", "operator"]));
+    let mut touch_id = authenticator();
+    assert_eq!(register(&web, &mut touch_id).await.0, StatusCode::NO_CONTENT);
+
+    let draft =
+        crate::agents::AgentDraft::new("Ops", "default").with_mode(crate::model::Mode::GoAhead);
+    let (status, preview) = call(
+        &web,
+        "POST",
+        "/api/surface/agents/preview",
+        Some(json!({ "action": "create", "draft": draft })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["needsPresence"], true, "{preview}");
+    let command = json!({ "type": "addAgent", "draft": draft, "digest": preview["digest"] });
+    let (status, refused) = call(
+        &web,
+        "POST",
+        "/api/surface/commands",
+        Some(json!({ "surface": "web", "origin": { "kind": "pointer" }, "command": command })),
+    )
+    .await;
+    assert_eq!((status, code(&refused)), (StatusCode::FORBIDDEN, "kernel.agent.refused"));
+
+    let (status, options) = call(
+        &web,
+        "POST",
+        "/api/surface/agents/confirm/options",
+        Some(json!({ "command": command })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{options}");
+    let credential = touch_id.assert(&options["publicKey"]);
+    let (status, outcome) = call(
+        &web,
+        "POST",
+        "/api/surface/agents/confirm",
+        Some(json!({ "challengeId": options["challengeId"], "credential": credential })),
+    )
+    .await;
+    assert_eq!(
+        (status, outcome["type"].clone()),
+        (StatusCode::OK, json!("agentAdded")),
+        "{outcome}"
+    );
+    let added = kernel.agents().get("ops").await.unwrap().unwrap().agent;
+    assert_eq!(added.mode, adk_kernel::PartitionMode::Auto);
+
+    let phone_app = app(&phone, device_context(&device, Some("phone")));
+    let (status, problem) = call(
+        &phone_app,
+        "POST",
+        "/api/surface/agents/confirm/options",
+        Some(json!({ "command": command })),
+    )
+    .await;
+    assert_eq!((status, code(&problem)), (StatusCode::FORBIDDEN, "surface.not_here"), "{problem}");
+}

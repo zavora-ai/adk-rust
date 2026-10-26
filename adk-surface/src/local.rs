@@ -69,6 +69,7 @@ pub struct LocalSource {
     runner: Option<Arc<Runner>>,
     governance: Option<GovernanceControl>,
     daily_limit: Option<u64>,
+    agents: Option<adk_kernel::agents::AgentsHandle>,
 }
 
 impl fmt::Debug for LocalSource {
@@ -94,6 +95,7 @@ pub struct LocalSourceBuilder {
     runner: Option<Arc<Runner>>,
     governance: Option<GovernanceControl>,
     daily_limit: Option<u64>,
+    agents: Option<adk_kernel::agents::AgentsHandle>,
 }
 
 impl fmt::Debug for LocalSourceBuilder {
@@ -153,6 +155,30 @@ impl LocalSourceBuilder {
         self
     }
 
+    /// The agent table of a kernel this source does not run turns on — a kernel built after
+    /// the source, such as the one `adk-rust up` serves the terminal's commands for — so
+    /// "Always allow" on an added agent's card makes a rule for that agent alone (spec 3.3
+    /// S-I19). A [`kernel`](Self::kernel) brings its own.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_kernel::agents::AgentsHandle;
+    /// use adk_session::InMemorySessionService;
+    ///
+    /// let source = adk_surface::LocalSource::builder("adk-rust")
+    ///     .sessions(std::sync::Arc::new(InMemorySessionService::new()))
+    ///     .agents(AgentsHandle::new())
+    ///     .build()
+    ///     .unwrap();
+    /// # let _ = source;
+    /// ```
+    #[must_use]
+    pub fn agents(mut self, agents: adk_kernel::agents::AgentsHandle) -> Self {
+        self.agents = Some(agents);
+        self
+    }
+
     /// The source.
     ///
     /// # Errors
@@ -187,6 +213,7 @@ impl LocalSourceBuilder {
             runner: self.runner,
             governance,
             daily_limit: self.daily_limit,
+            agents: self.agents,
         })
     }
 }
@@ -195,6 +222,14 @@ impl LocalSource {
     /// A builder for the sessions of `app_name`.
     pub fn builder(app_name: impl Into<String>) -> LocalSourceBuilder {
         LocalSourceBuilder { app: app_name.into(), ..LocalSourceBuilder::default() }
+    }
+
+    /// The kernel's agent table: the kernel's own, else the handle's while its kernel lives.
+    fn agent_table(&self) -> Option<adk_kernel::agents::Agents> {
+        match &self.kernel {
+            Some((kernel, _)) => Some(kernel.agents().clone()),
+            None => self.agents.as_ref().and_then(adk_kernel::agents::AgentsHandle::get),
+        }
     }
 
     fn approvals(&self) -> Result<&Arc<dyn ApprovalService>> {
@@ -347,17 +382,17 @@ impl LocalSource {
             .rule_for_held_call(&held.request, suggestion, StandingDecision::Allow, &owner)
             .ok()?;
         // "Always allow" on an added agent's card makes a rule for that agent alone (spec 3.3
-        // S-I19).
-        if let (Some((kernel, _)), Some(acting)) = (&self.kernel, &request.acting)
-            && kernel
-                .agents()
-                .get(&crate::project::agent_name(request))
-                .await
-                .ok()
-                .flatten()
-                .is_some()
-        {
-            rule.agent = Some(acting.agent.id.as_str().to_string());
+        // S-I19). When the agent table cannot be read, no rule is made: one for every agent
+        // would let the others do what the person allowed this one.
+        if let (Some(table), Some(acting)) = (self.agent_table(), &request.acting) {
+            match table.get(&crate::project::agent_name(request)).await {
+                Ok(Some(_)) => rule.agent = Some(acting.agent.id.as_str().to_string()),
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(approval.id = %request.id, error = %error, "could not tell whose rule \"Always allow\" makes; none is offered");
+                    return None;
+                }
+            }
         }
         Some((label, rule, held.request))
     }
@@ -574,6 +609,14 @@ impl Source for LocalSource {
     }
 
     async fn resolved_by(&self, caller: &Caller, request: &ApprovalRequest) -> Result<()> {
+        // A suggested agent is added as the surface that approved it, so its record names
+        // where (spec 3.3 §11).
+        if request.tool_name == adk_kernel::agents::AGENT_CREATE_TOOL_NAME {
+            if let Some(table) = self.agent_table() {
+                table.answered(&request.id, &crate::agents::agent_caller(caller)).await;
+            }
+            return Ok(());
+        }
         self.resume_decided(request, Some(caller)).await
     }
 
@@ -623,20 +666,22 @@ impl Source for LocalSource {
                     },
                 );
             }
-            // A removed agent leaves the roster; its past runs stay in its threads.
-            let mut gone = Vec::new();
-            for name in latest.keys() {
-                let state = kernel.agents().get(name).await?.map(|view| view.agent.state);
-                if matches!(
-                    state,
-                    Some(
+            // A removed agent leaves the roster; its past runs stay in its threads. One
+            // listing carries every agent's state (spec 3.3 §5.7).
+            let gone: Vec<String> = kernel
+                .agents()
+                .list()
+                .await?
+                .into_iter()
+                .filter(|view| {
+                    matches!(
+                        view.agent.state,
                         adk_kernel::agents::AgentRecordState::Removing
                             | adk_kernel::agents::AgentRecordState::Removed
                     )
-                ) {
-                    gone.push(name.clone());
-                }
-            }
+                })
+                .map(|view| view.agent.id)
+                .collect();
             latest.retain(|name, _| !gone.contains(name));
             return Ok(latest.into_values().collect());
         }
@@ -976,7 +1021,11 @@ impl Source for LocalSource {
             self.harness.as_ref().ok_or_else(|| SurfaceError::unsupported("copying a rule"))?;
         let (kernel, _) =
             self.kernel.as_ref().ok_or_else(|| SurfaceError::unsupported("copying a rule"))?;
-        if kernel.agents().get(agent).await?.is_none() {
+        // Only an agent the person added and still has: never a suggestion, whose id may be
+        // given again, nor a removed one.
+        let added =
+            kernel.agents().get(agent).await?.is_some_and(|view| view.agent.state.is_hosted());
+        if !added {
             return Err(SurfaceError::not_found(format!("agent '{agent}'")));
         }
         let store = harness.agent().runtime().standing_rules().clone();
@@ -989,8 +1038,28 @@ impl Source for LocalSource {
         let pinned = adk_core::AgentPrincipal::derived(&self.app, agent).id.as_str().to_string();
         let copy = adk_harness::copy_rule_to(&original, &pinned, caller.subject.clone())?;
         let label = copy.label.clone();
-        store.grant(copy).await?;
+        // Through the harness, which records `harness.rule.created` before the rule is
+        // stored (spec 3.1 I39, spec 3.3 §11).
+        let surface = serde_json::to_value(caller.surface)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| "surface".to_string());
+        harness.agent().grant_rule(copy, &surface, None).await?;
         Ok(label)
+    }
+
+    async fn agent_threads(&self, user: &str, agent: &str) -> Result<Vec<(String, DateTime<Utc>)>> {
+        let mut threads: BTreeMap<String, DateTime<Utc>> = BTreeMap::new();
+        for process in self.processes(user).await? {
+            if process.run.target != agent {
+                continue;
+            }
+            if let Some(session) = process.run.session_id.clone() {
+                let at = threads.entry(session).or_insert(process.run.updated_at);
+                *at = (*at).max(process.run.updated_at);
+            }
+        }
+        Ok(threads.into_iter().collect())
     }
 
     async fn agent_of_session(&self, user: &str, session: &str) -> Result<Option<String>> {

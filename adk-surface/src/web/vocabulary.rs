@@ -137,6 +137,7 @@ const WORDS: &[(&str, &str)] = listed![
     NO_AGENTS_OF_YOUR_OWN,
     WHAT_SHOULD_IT_DO,
     SUGGEST_A_NEW_AGENT_FOR,
+    REMOVED_AGENTS,
 ];
 
 /// The words of [`words`](crate::words) as a TypeScript module, one exported constant each

@@ -339,6 +339,13 @@ pub trait Source: Send + Sync {
         Err(SurfaceError::unsupported("copying a rule"))
     }
 
+    /// The threads of `user`'s agent `agent`: each session it ran and when it last changed;
+    /// none by default. A removed agent's threads are read through it (spec 3.3 §5.7).
+    async fn agent_threads(&self, user: &str, agent: &str) -> Result<Vec<(String, DateTime<Utc>)>> {
+        let _ = (user, agent);
+        Ok(Vec::new())
+    }
+
     /// The agent whose thread `session` is: its stamp, else the target of its latest run.
     async fn agent_of_session(&self, user: &str, session: &str) -> Result<Option<String>> {
         let _ = (user, session);

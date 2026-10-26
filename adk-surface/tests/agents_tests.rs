@@ -60,7 +60,12 @@ impl AgentFactory for Factory {
         _: &adk_core::AgentId,
         _: &str,
     ) -> adk_kernel::Result<Option<AgentCeiling>> {
-        Ok(None)
+        Ok(Some(AgentCeiling::new(
+            adk_kernel::PartitionMode::Ask,
+            adk_kernel::agents::AgentUses::default()
+                .with_files(adk_kernel::agents::FileAccess::ReadWrite)
+                .with_web(adk_kernel::agents::WebAccess::Any),
+        )))
     }
 
     async fn choices(&self) -> adk_kernel::Result<AgentChoices> {
@@ -107,17 +112,70 @@ impl AgentFactory for Factory {
     }
 }
 
+/// The kernel's agent store, which a test can make fail as a backend that times out does.
+#[derive(Default)]
+struct Store {
+    inner: InMemoryAgentStore,
+    failing: std::sync::atomic::AtomicBool,
+}
+
+impl Store {
+    fn check(&self) -> adk_kernel::Result<()> {
+        if self.failing.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(adk_kernel::KernelError::Store {
+                backend: "test",
+                reason: "timed out".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl adk_kernel::agents::AgentStore for Store {
+    async fn put_if_version(&self, record: AgentRecord, expected: u64) -> adk_kernel::Result<bool> {
+        self.check()?;
+        self.inner.put_if_version(record, expected).await
+    }
+
+    async fn get(&self, id: &str) -> adk_kernel::Result<Option<AgentRecord>> {
+        self.check()?;
+        self.inner.get(id).await
+    }
+
+    async fn list(&self) -> adk_kernel::Result<Vec<AgentRecord>> {
+        self.check()?;
+        self.inner.list().await
+    }
+
+    async fn delete(&self, id: &str) -> adk_kernel::Result<bool> {
+        self.check()?;
+        self.inner.delete(id).await
+    }
+}
+
 struct World {
     _dir: tempfile::TempDir,
     kernel: adk_kernel::Kernel,
+    /// The kernel's agent table through a handle, as `adk-rust up` gives the terminal's
+    /// commands.
+    handle: adk_kernel::agents::AgentsHandle,
+    store: Arc<Store>,
     runs: Arc<dyn DurableRunStore>,
     service: Arc<dyn ApprovalService>,
     engine: SurfaceEngine,
+    harness: Arc<Harness>,
+    audit: Arc<adk_core::audit_log::InMemoryAuditRecorder>,
 }
 
 /// A kernel hosting a primary harness, with an agent store and a factory of added agents, and
 /// the engine over it, as `adk-rust up` builds them.
 async fn world() -> World {
+    world_with(scripted()).await
+}
+
+/// [`world`] with the primary agent on `model`.
+async fn world_with(model: Arc<dyn Llm>) -> World {
     let dir = tempfile::tempdir().unwrap();
     let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
     let service: Arc<dyn ApprovalService> = Arc::new(
@@ -131,9 +189,11 @@ async fn world() -> World {
                 .allow_self_approval(),
             ),
     );
+    let audit = Arc::new(adk_core::audit_log::InMemoryAuditRecorder::new());
     let agent = Arc::new(
         HarnessAgent::builder(APP)
-            .model(scripted())
+            .audit_log(audit.clone())
+            .model(model)
             .workspace(adk_devtools::Workspace::new(dir.path()))
             .project_instructions(InstructionsConfig {
                 user_file: None,
@@ -165,6 +225,8 @@ async fn world() -> World {
         sessions: Arc::clone(&sessions),
         control: harness.runner().governance().clone(),
     };
+    let store = Arc::new(Store::default());
+    let handle = adk_kernel::agents::AgentsHandle::new();
     let kernel = harness
         .kernel()
         .config(
@@ -180,7 +242,8 @@ async fn world() -> World {
                 .with_control(ControlPlaneConfig::default().without_socket()),
         )
         .process_store(Arc::new(InMemoryProcessStore::new()) as Arc<dyn ProcessStore>)
-        .agent_store(Arc::new(InMemoryAgentStore::new()))
+        .agent_store(Arc::clone(&store) as Arc<dyn adk_kernel::agents::AgentStore>)
+        .agents_handle(handle.clone())
         .agent_factory(Arc::new(factory))
         .build()
         .unwrap();
@@ -188,7 +251,7 @@ async fn world() -> World {
     let source = LocalSource::builder(APP)
         .sessions(Arc::clone(&sessions))
         .approvals(Arc::clone(&service))
-        .harness(harness)
+        .harness(Arc::clone(&harness))
         .kernel(kernel.clone(), APP)
         .build()
         .unwrap();
@@ -196,7 +259,7 @@ async fn world() -> World {
         .agent_name(APP, "ADK-Rust")
         .poll_interval(Duration::from_millis(20))
         .build();
-    World { _dir: dir, kernel, runs, service, engine }
+    World { _dir: dir, kernel, handle, store, runs, service, engine, harness, audit }
 }
 
 fn finance() -> AgentDraft {
@@ -371,7 +434,8 @@ async fn a_change_against_an_older_version_is_out_of_date() {
         .unwrap();
     let CommandOutcome::AgentOutOfDate { agent, text } = stale else { panic!("{stale:?}") };
     assert_eq!(agent.version, seen.version + 1);
-    assert!(text.starts_with("Bills was changed"), "{text}");
+    // Wave 3 finding 37: it names where the change was made.
+    assert!(text.starts_with("Bills was changed in the home app at"), "{text}");
     world.kernel.stop().await.unwrap();
 }
 
@@ -535,7 +599,180 @@ async fn removing_an_agent_names_what_ends() {
     assert!(matches!(removed, CommandOutcome::AgentRemoved { .. }));
     let rows = world.engine.agents(&web()).await.unwrap();
     assert!(!rows.iter().any(|row| row.agent.name == "finance"), "{rows:?}");
+    // Wave 3 findings 10, 11 and 39: its threads stay readable under "Removed agents".
+    let removed = world.engine.removed_agents(&web()).await.unwrap();
+    assert_eq!(removed.len(), 1, "{removed:?}");
+    assert_eq!(removed[0].agent.display_name, "Finance");
+    assert!(removed[0].removed_text.starts_with("Removed on "), "{removed:?}");
+    let threads: Vec<&str> =
+        removed[0].threads.iter().map(|thread| thread.session_id.as_str()).collect();
+    assert_eq!(threads, ["t-finance"]);
     world.kernel.stop().await.unwrap();
+}
+
+/// Wave 3 findings 12 and 13: copying one of the person's rules to an agent goes through the
+/// harness, which records `harness.rule.created` before the rule is stored; a suggestion,
+/// never added, gets no rule.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn copying_a_rule_to_an_agent_is_recorded() {
+    let world = world().await;
+    add(&world, &web(), finance()).await.unwrap();
+    let rule = adk_harness::StandingRule {
+        id: "rule-read".into(),
+        scope: adk_harness::RuleScope::User {
+            app_name: APP.into(),
+            user_id: OWNER.into(),
+            subject_kind: adk_core::SubjectKind::Human,
+        },
+        tool: "read_file".into(),
+        origin: adk_harness::OriginPin::exact(&adk_core::ToolOrigin::new(
+            "static",
+            &json!({ "name": "read_file" }),
+            None,
+        )),
+        agent: None,
+        predicates: vec![],
+        decision: adk_harness::StandingDecision::Allow,
+        created_by: adk_core::SubjectRef::human(OWNER),
+        created_at: chrono::Utc::now(),
+        expires_at: None,
+        label: "Reading files".into(),
+        source_fingerprint: None,
+    };
+    world.harness.agent().runtime().standing_rules().grant(rule).await.unwrap();
+    let copied = world
+        .engine
+        .execute(
+            &web(),
+            Command::CopyRuleToAgent { agent: "finance".into(), rule_id: "rule-read".into() },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(copied, CommandOutcome::RuleCopied { .. }), "{copied:?}");
+    let created: Vec<_> = world
+        .audit
+        .records()
+        .into_iter()
+        .filter(|record| record.action == "harness.rule.created")
+        .collect();
+    assert_eq!(created.len(), 1, "{created:?}");
+    assert_eq!(created[0].ext["surface"], "web");
+    world.kernel.stop().await.unwrap();
+}
+
+/// Wave 3 findings 3 and 38: "Always allow" on an added agent's card makes a rule for that
+/// agent alone, also from a source that reaches the kernel's agent table only through a
+/// handle — the one `adk-rust up` serves an attached terminal's commands with; when the table
+/// cannot be read, no rule is offered or made, rather than one for every agent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn always_allow_on_an_added_agents_card_pins_the_rule_to_it() {
+    let model: Arc<dyn Llm> = Arc::new(ScriptedLlm::new(
+        "scripted",
+        vec![
+            ScriptedResponse::function_call(
+                "write_file",
+                json!({ "path": "Invoices/a.txt", "content": "INV-1" }),
+            ),
+            ScriptedResponse::text("Written."),
+        ],
+    ));
+    let world = world_with(model).await;
+    add(&world, &web(), finance()).await.unwrap();
+    world
+        .engine
+        .execute(&web(), Command::Send { session_id: "s-hold".into(), text: "write it".into() })
+        .await
+        .unwrap();
+    let approvals = Arc::clone(world.harness.agent().runtime().approval_store());
+    let scope = ApprovalScope::new(APP, OWNER, "s-hold");
+    let held = eventually("the held write", Duration::from_secs(20), || async {
+        approvals.pending(&scope).await.unwrap().into_iter().next()
+    })
+    .await;
+    // The same call, as Finance makes it.
+    let mut call = held.request.clone();
+    call.acting = Some(Box::new(adk_core::ActingContext::derived(
+        APP,
+        "finance",
+        OWNER,
+        adk_core::SubjectKind::Human,
+    )));
+    approvals.record_pending(&scope, &call).await.unwrap();
+    let request = ApprovalRequest::new(
+        "apr-finance",
+        scope.clone(),
+        &call,
+        ApprovalPolicy::new([ApproverSelector::human(OWNER)]),
+    )
+    .with_acting(adk_core::ActingContext::derived(
+        APP,
+        "finance",
+        OWNER,
+        adk_core::SubjectKind::Human,
+    ));
+
+    // No kernel of its own: the table's handle, as `adk-rust up` builds it.
+    let source = LocalSource::builder(APP)
+        .sessions(Arc::new(InMemorySessionService::new()))
+        .harness(Arc::clone(&world.harness))
+        .agents(world.handle.clone())
+        .build()
+        .unwrap();
+    use adk_surface::Source as _;
+    assert!(source.always_allow_offer(&request).await.is_some());
+    source.prepare_always_allow(&terminal(), &request).await.unwrap().commit().await.unwrap();
+    let rules = world.harness.agent().runtime().standing_rules().list(APP, OWNER).await.unwrap();
+    assert_eq!(
+        rules.iter().map(|rule| rule.agent.as_deref()).collect::<Vec<_>>(),
+        [Some("urn:adk:agent:adk-rust/finance")],
+        "{rules:?}"
+    );
+
+    // The agent table cannot be read: nothing is offered, and nothing is made.
+    world.store.failing.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(source.always_allow_offer(&request).await.is_none());
+    assert!(source.prepare_always_allow(&terminal(), &request).await.is_err());
+    world.store.failing.store(false, std::sync::atomic::Ordering::SeqCst);
+    world.kernel.stop().await.unwrap();
+}
+
+/// Wave 3 finding 35: a suggestion approved in the web home is added as the web home, so its
+/// record names where the person said yes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_suggestion_approved_in_the_home_is_added_as_the_home() {
+    let world = world().await;
+    let primary = adk_core::AgentPrincipal::derived(APP, APP).id;
+    let proposal = world
+        .kernel
+        .agents()
+        .propose(
+            finance().into_definition(),
+            &adk_kernel::agents::AgentProposer::new(primary, OWNER, "s-suggest"),
+        )
+        .await
+        .unwrap();
+    let card = world.engine.decision(&web(), &proposal.request_id).await.unwrap();
+    // No tick may find the answer first: the answer is applied as the surface gave it.
+    world.kernel.stop().await.unwrap();
+    let answered = world
+        .engine
+        .execute(
+            &web(),
+            Command::Decide {
+                decision_id: card.id.clone(),
+                version: card.version,
+                answer: Answer::AllowOnce,
+                edited_args: None,
+                reason: None,
+                expanded: true,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(answered, CommandOutcome::Answered { .. }), "{answered:?}");
+    let added = world.kernel.agents().get("finance").await.unwrap().unwrap().agent;
+    assert_eq!(added.state, adk_kernel::agents::AgentRecordState::Active);
+    assert_eq!(added.changed_on.as_deref(), Some("web"));
 }
 
 fn suggestion(instructions: &str) -> ApprovalRequest {

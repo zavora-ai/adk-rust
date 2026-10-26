@@ -100,6 +100,11 @@ pub(crate) trait PasskeyVerifier: Send + Sync + fmt::Debug {
     ) -> Result<Verified, String>;
 }
 
+/// The decision id a confirmation of an agent change is bound under: the change itself is the
+/// binding's edited arguments, so the passkey confirms exactly that command (spec 3.3 §7.2).
+/// No decision has it, so the decision routes never accept such a binding.
+pub(crate) const AGENT_CHANGE: &str = "agent-change";
+
 /// What a confirmation is bound to.
 #[derive(Clone)]
 pub(crate) struct Binding {

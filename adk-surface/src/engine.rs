@@ -24,7 +24,7 @@ use crate::model::{
     AgentRef, AgentRow, Briefing, Decided, DecisionCard, FeedEntry, Mode, ModeView, Reversibility,
     StatusLine,
 };
-use crate::origin::{Caller, Origin};
+use crate::origin::{Caller, Origin, SurfaceKind};
 use crate::project::{self, Place, Projector};
 use crate::rules::{self, Answer, Row};
 use crate::source::Source;
@@ -318,7 +318,7 @@ pub enum CommandOutcome {
     AgentOutOfDate {
         /// The agent now.
         agent: crate::agents::AgentDetail,
-        /// "Finance was changed elsewhere at 10:01".
+        /// "Finance was changed in the terminal at 10:01".
         text: String,
     },
     /// A rule was copied to the agent (spec 3.3 S-I19).
@@ -1013,6 +1013,46 @@ impl SurfaceEngine {
         let can_change =
             !matches!(caller.origin, Origin::Agent { .. }) && rules::may_change_agents(caller);
         Ok(crate::agents::roster(rows, &definitions, can_change))
+    }
+
+    /// The agents `caller` removed, each with its threads, which stay readable (spec 3.3
+    /// §5.7, §13 decision 18): what "Removed agents" at the roster's foot lists.
+    ///
+    /// # Errors
+    ///
+    /// Returns the source's error.
+    pub async fn removed_agents(
+        &self,
+        caller: &Caller,
+    ) -> Result<Vec<crate::agents::RemovedAgent>> {
+        let source = &self.inner.source;
+        let mut removed = Vec::new();
+        for detail in source.agent_definitions(caller.user_id()).await? {
+            if detail.state != crate::agents::AgentLife::Removed {
+                continue;
+            }
+            let threads = source.agent_threads(caller.user_id(), &detail.id).await?;
+            removed.push(crate::agents::RemovedAgent::of(
+                &detail,
+                threads,
+                self.inner.projector.offset,
+            ));
+        }
+        removed.sort_by(|a, b| {
+            a.agent.display_name.to_lowercase().cmp(&b.agent.display_name.to_lowercase())
+        });
+        Ok(removed)
+    }
+
+    /// Every agent `caller` added, removed ones included, with its version: what the
+    /// terminal's `--output json` compares, so a change to any field is one line (spec 3.3
+    /// §5.7).
+    ///
+    /// # Errors
+    ///
+    /// Returns the source's error.
+    pub async fn agent_details(&self, caller: &Caller) -> Result<Vec<crate::agents::AgentDetail>> {
+        self.inner.source.agent_definitions(caller.user_id()).await
     }
 
     /// The agent a message goes to when the person names none (spec 3.3 §5.5): the tray's
@@ -1937,9 +1977,18 @@ impl SurfaceEngine {
             // Someone changed it since: shown again with what it is now, never overwritten.
             (Err(error), Some(agent)) if crate::agents::local::out_of_date(&error) => {
                 let detail = self.agent(caller, &agent).await?;
+                // Where it was changed: "in the terminal", "in the home app", "on your phone".
+                let place = detail
+                    .changed_on
+                    .as_deref()
+                    .and_then(|surface| serde_json::from_value::<SurfaceKind>(json!(surface)).ok())
+                    .map_or_else(
+                        || "elsewhere".to_string(),
+                        |surface| crate::origin::Via { surface, origin: Origin::Keyboard }.phrase(),
+                    );
                 let text = crate::agents::words::changed_in(
                     &detail.draft.display_name,
-                    "elsewhere",
+                    &place,
                     &self.inner.projector.hh_mm(detail.changed_at),
                 );
                 Ok(CommandOutcome::AgentOutOfDate { agent: detail, text })

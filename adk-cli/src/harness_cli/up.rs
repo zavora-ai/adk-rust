@@ -452,9 +452,14 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             .effort(setup.args.effort)
             .hooks_disabled(!setup.resolved.hooks);
     let host = commands::HarnessCommandHost::new(commands);
+    // The agent table, bound once the kernel is built, so "Always allow" on an added agent's
+    // card pins the rule to that agent (spec 3.3 S-I19).
     #[cfg(feature = "surface")]
     let host = host.with_rules(
-        adk_surface::LocalSource::builder(APP_NAME).harness(primary.harness.clone()).build()?,
+        adk_surface::LocalSource::builder(APP_NAME)
+            .harness(primary.harness.clone())
+            .agents(agents_handle.clone())
+            .build()?,
     );
     control = control.with_commands(Arc::new(host));
     // The run store reads the system clock too, so leases, `not_before` and wake times agree.

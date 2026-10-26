@@ -855,6 +855,44 @@ pub fn was_not_added(name: &str, reason: &str) -> String {
     format!("{name} wasn't added: {reason}")
 }
 
+/// The comparison line on a suggested agent's card: "It can do no more than ADK-Rust, and
+/// has no shell or web." `none` lists what it has none of: `files`, `shell`, `web`.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::words;
+///
+/// assert_eq!(words::no_more_than("ADK-Rust", &[]), "It can do no more than ADK-Rust.");
+/// assert_eq!(
+///     words::no_more_than("ADK-Rust", &["files", "shell", "web"]),
+///     "It can do no more than ADK-Rust, and has no files, shell or web."
+/// );
+/// ```
+pub fn no_more_than(suggester: &str, none: &[&str]) -> String {
+    match none {
+        [] => format!("It can do no more than {suggester}."),
+        [one] => format!("It can do no more than {suggester}, and has no {one}."),
+        [rest @ .., last] => {
+            format!("It can do no more than {suggester}, and has no {} or {last}.", rest.join(", "))
+        }
+    }
+}
+
+/// The roster's entry for the person's removed agents, whose threads stay readable.
+pub const REMOVED_AGENTS: &str = "Removed agents";
+
+/// When an agent was removed: "Removed on 25 Oct".
+pub fn removed_on(day: &str) -> String {
+    format!("Removed on {day}")
+}
+
+/// What a removed agent's thread says where the message box was: "Finance was removed. Its
+/// threads stay; nothing more runs."
+pub fn was_removed(name: &str) -> String {
+    format!("{name} was removed. Its threads stay; nothing more runs.")
+}
+
 /// A change refused because someone changed the agent first: "Finance was changed in the
 /// terminal at 10:01".
 pub fn changed_in(name: &str, place: &str, hh_mm: &str) -> String {

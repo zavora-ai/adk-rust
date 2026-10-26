@@ -10,7 +10,7 @@ use axum::routing::{delete, get, post, put};
 use axum::{Extension, Json, Router};
 use serde_json::{Value, json};
 
-use super::passkey::REGISTRATION_WINDOW;
+use super::passkey::{AGENT_CHANGE, REGISTRATION_WINDOW};
 use super::push::Subscription;
 use super::store::{Attachment, Holder, PASSKEY, PUSH, PUSH_KEY};
 use super::{Home, MobileError, Phone, SURFACE_AUDIT_PHONE_PASSKEY, SURFACE_AUDIT_PHONE_PUSH, qr};
@@ -18,9 +18,9 @@ use crate::engine::{Command, CommandOutcome};
 use crate::error::SurfaceError;
 use crate::origin::{Caller, SurfaceKind};
 use crate::web::phone::{
-    ComputerPasskey, ConfirmOptionsRequest, ConfirmRequest, DeliveriesResponse,
-    PasskeyRegistration, PhoneDevice, PhoneDevicesResponse, PhoneInfo, PushReceivedRequest,
-    PushSubscriptionRequest, QrRequest,
+    AgentConfirmOptionsRequest, ComputerPasskey, ConfirmOptionsRequest, ConfirmRequest,
+    DeliveriesResponse, PasskeyRegistration, PhoneDevice, PhoneDevicesResponse, PhoneInfo,
+    PushReceivedRequest, PushSubscriptionRequest, QrRequest,
 };
 use crate::web::{
     Context, Unauthenticated, caller, device_kind, device_of, failed, paths, problem,
@@ -55,6 +55,8 @@ pub fn router(phone: Phone) -> Router {
         .route(paths::PHONE_DEVICES, get(devices))
         .route(paths::CONFIRM_OPTIONS, post(confirm_options))
         .route(paths::CONFIRM, post(confirm))
+        .route(paths::AGENT_CONFIRM_OPTIONS, post(agent_confirm_options))
+        .route(paths::AGENT_CONFIRM, post(agent_confirm))
         .with_state(phone)
 }
 
@@ -458,6 +460,73 @@ async fn confirm(
         edited_args: binding.edited_args,
         reason: None,
         expanded: binding.expanded,
+    };
+    let caller = who.caller().clone().with_presence_confirmed();
+    match phone.inner.engine.execute(&caller, command).await {
+        Ok(outcome) => Json::<CommandOutcome>(outcome).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+/// The agent changes "Confirm it's you" confirms in the home: adding an agent and changing one
+/// (spec 3.3 §7.2). Pausing, resuming and removing never need it.
+fn confirmable(command: &Command) -> bool {
+    matches!(command, Command::AddAgent { .. } | Command::ChangeAgent { .. })
+}
+
+/// The home only: a phone answers suggestions, and setting an agent up or changing one opens
+/// the home (spec 3.3 decision 16).
+fn in_the_home(who: &Who) -> Result<(), Refused> {
+    match who {
+        Who::Phone { .. } => Err(Box::new(failed(SurfaceError::NotHere(
+            "agents are set up and changed in the home on your computer".into(),
+        )))),
+        Who::Person { .. } => Ok(()),
+    }
+}
+
+async fn agent_confirm_options(
+    State(phone): State<Phone>,
+    context: Context,
+    Json(request): Json<AgentConfirmOptionsRequest>,
+) -> Response {
+    let who = or_respond!(who(context));
+    or_respond!(home(&phone));
+    or_respond!(in_the_home(&who));
+    if !confirmable(&request.command) {
+        return failed(SurfaceError::Invalid(
+            "only adding an agent or changing one is confirmed".into(),
+        ));
+    }
+    let bound = ConfirmOptionsRequest {
+        version: 0,
+        answer: crate::rules::Answer::Edit,
+        edited_args: Some(or_fail!(serde_json::to_value(&request.command).map_err(|error| {
+            SurfaceError::Invalid(format!("the change cannot be read: {error}"))
+        }))),
+        expanded: true,
+    };
+    let now = phone.inner.clock.now();
+    let options = or_fail!(
+        phone.inner.passkeys.confirm_options(who.holder(), AGENT_CHANGE, bound, now).await
+    );
+    Json(options).into_response()
+}
+
+async fn agent_confirm(
+    State(phone): State<Phone>,
+    context: Context,
+    Json(request): Json<ConfirmRequest>,
+) -> Response {
+    let who = or_respond!(who(context));
+    or_respond!(home(&phone));
+    or_respond!(in_the_home(&who));
+    let now = phone.inner.clock.now();
+    let binding =
+        or_fail!(phone.inner.passkeys.confirm(&who.holder(), AGENT_CHANGE, &request, now).await);
+    let command: Command = match binding.edited_args.map(serde_json::from_value) {
+        Some(Ok(command)) if confirmable(&command) => command,
+        _ => return failed(SurfaceError::Invalid("no agent change was bound".into())),
     };
     let caller = who.caller().clone().with_presence_confirmed();
     match phone.inner.engine.execute(&caller, command).await {

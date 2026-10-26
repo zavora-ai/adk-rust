@@ -16,9 +16,9 @@ use schemars::generate::{Contract, SchemaGenerator, SchemaSettings};
 use serde_json::{Map, Value, json};
 
 use super::phone::{
-    AnswerRequest, ConfirmOptions, ConfirmOptionsRequest, ConfirmRequest, DeliveriesResponse,
-    PasskeyOptions, PasskeyRegistration, PhoneDevicesResponse, PhoneInfo, PushReceivedRequest,
-    PushSubscriptionRequest, QrRequest, StopRequest,
+    AgentConfirmOptionsRequest, AnswerRequest, ConfirmOptions, ConfirmOptionsRequest,
+    ConfirmRequest, DeliveriesResponse, PasskeyOptions, PasskeyRegistration, PhoneDevicesResponse,
+    PhoneInfo, PushReceivedRequest, PushSubscriptionRequest, QrRequest, StopRequest,
 };
 use super::{
     AgentsResponse, CommandRequest, DecisionsResponse, QueuedResponse, SurfaceQuery,
@@ -156,6 +156,7 @@ pub fn openapi() -> Value {
     let stop_body = schema_ref::<StopRequest>(&mut input);
     let confirm_options_body = schema_ref::<ConfirmOptionsRequest>(&mut input);
     let confirm_body = schema_ref::<ConfirmRequest>(&mut input);
+    let agent_confirm_options_body = schema_ref::<AgentConfirmOptionsRequest>(&mut input);
     let push_body = schema_ref::<PushSubscriptionRequest>(&mut input);
     let received_body = schema_ref::<PushReceivedRequest>(&mut input);
     let registration_body = schema_ref::<PasskeyRegistration>(&mut input);
@@ -339,7 +340,7 @@ pub fn openapi() -> Value {
             "Starts Confirm it's you for one answer, bound to the decision, its version and the edited arguments; feature mobile (spec 3.3 §8.2)",
             json!([path_param("id")]),
             Some(confirm_options_body),
-            ("200", answer("The options for navigator.credentials.get", confirm_options)),
+            ("200", answer("The options for navigator.credentials.get", confirm_options.clone())),
         ),
     );
     routes.insert(
@@ -348,8 +349,28 @@ pub fn openapi() -> Value {
             "post",
             "The passkey's assertion for the bound answer, which is then decided with presence; feature mobile (spec 3.3 §8.2)",
             json!([path_param("id")]),
-            Some(confirm_body),
+            Some(confirm_body.clone()),
             outcome_of("answered, alreadyDecided or changed"),
+        ),
+    );
+    routes.insert(
+        with(paths::AGENT_CONFIRM_OPTIONS),
+        write(
+            "post",
+            "Starts Confirm it's you for one change that adds an agent or lets one do more at high risk, bound to exactly that command; feature mobile (spec 3.3 §7.2)",
+            json!([]),
+            Some(agent_confirm_options_body),
+            ("200", answer("The options for navigator.credentials.get", confirm_options.clone())),
+        ),
+    );
+    routes.insert(
+        with(paths::AGENT_CONFIRM),
+        write(
+            "post",
+            "The passkey's assertion for the bound agent change, which is then made with presence; feature mobile (spec 3.3 §7.2)",
+            json!([]),
+            Some(confirm_body.clone()),
+            outcome_of("agentAdded, agentChanged or agentOutOfDate"),
         ),
     );
     routes.insert(

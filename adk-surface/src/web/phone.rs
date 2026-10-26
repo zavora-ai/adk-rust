@@ -191,6 +191,29 @@ pub struct ConfirmOptionsRequest {
     pub expanded: bool,
 }
 
+/// `POST /surface/agents/confirm/options` body: the change the person is about to confirm —
+/// `addAgent` or `changeAgent` with the digest its preview showed — bound on the server to
+/// exactly this command (spec 3.3 §7.2: the web home adds an agent at high risk after
+/// confirming it is you).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::web::AgentConfirmOptionsRequest;
+///
+/// let request: AgentConfirmOptionsRequest = serde_json::from_value(serde_json::json!({
+///     "command": { "type": "pauseAgent", "agent": "finance" },
+/// }))
+/// .unwrap();
+/// assert!(matches!(request.command, adk_surface::Command::PauseAgent { .. }));
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentConfirmOptionsRequest {
+    /// The change.
+    pub command: crate::engine::Command,
+}
+
 /// `POST /surface/decisions/{id}/confirm/options` answer: the options for
 /// `navigator.credentials.get`, single use, for two minutes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

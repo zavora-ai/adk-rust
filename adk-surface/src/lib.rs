@@ -82,7 +82,7 @@ pub mod words;
 pub use agents::{
     AgentCardView, AgentChoices, AgentColor, AgentDetail, AgentDraft, AgentLife, AgentPreview,
     AgentPreviewRequest, AreaChoice, CardLine, ColorChoice, EndedWork, FileUse, ModelView,
-    ShellUse, UsesDraft, WebUse,
+    RemovedAgent, RemovedThread, ShellUse, UsesDraft, WebUse,
 };
 pub use answers::{
     AnswerLog, AnswerRecord, AuditAnswerLog, InMemoryAnswerLog, RECORD_LINES, RecordAnswerLog,

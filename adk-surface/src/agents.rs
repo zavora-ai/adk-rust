@@ -418,6 +418,35 @@ pub struct AgentDetail {
     pub cant_start: Option<String>,
     /// When it was last changed.
     pub changed_at: DateTime<Utc>,
+    /// The surface it was last changed on — `web`, `terminal`, `phone` — when the kernel
+    /// knows it; a change refused as out of date names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_on: Option<String>,
+}
+
+/// An agent the person removed, whose threads stay readable (spec 3.3 §5.7, §13 decision 18;
+/// owner, at the wave 3 gate: "Removed agents" at the roster's foot).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovedAgent {
+    /// The agent as its threads name it.
+    pub agent: AgentRef,
+    /// "Removed on 25 Oct".
+    pub removed_text: String,
+    /// Its threads, newest first.
+    pub threads: Vec<RemovedThread>,
+}
+
+/// One thread of a removed agent, read only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovedThread {
+    /// The session to open.
+    pub session_id: String,
+    /// When it last changed.
+    pub at: DateTime<Utc>,
+    /// "25 Oct 10:02".
+    pub when: String,
 }
 
 /// What removing an agent ends, counted (spec 3.3 §5.7 "Pausing and removing").
@@ -695,7 +724,7 @@ pub struct AgentCardView {
     pub instructions_truncated: bool,
     /// What it can do, in plain words.
     pub abilities: Vec<String>,
-    /// "It can do less than ADK-Rust: no shell, no web".
+    /// "It can do no more than ADK-Rust, and has no shell or web."
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compared: Option<String>,
     /// What it would start with: "Nothing yet".
@@ -768,6 +797,32 @@ impl AgentDetail {
             mode: mode_view(record.mode),
             cant_start,
             changed_at: record.updated_at,
+            changed_on: record.changed_on.clone(),
+        }
+    }
+}
+
+impl RemovedAgent {
+    /// The removed agent `detail` with its threads: each session and when it last changed,
+    /// newest first.
+    pub(crate) fn of(
+        detail: &AgentDetail,
+        threads: Vec<(String, DateTime<Utc>)>,
+        offset: FixedOffset,
+    ) -> Self {
+        let mut threads: Vec<RemovedThread> = threads
+            .into_iter()
+            .map(|(session_id, at)| RemovedThread {
+                session_id,
+                at,
+                when: at.with_timezone(&offset).format("%-d %b %H:%M").to_string(),
+            })
+            .collect();
+        threads.sort_by_key(|thread| std::cmp::Reverse(thread.at));
+        Self {
+            agent: detail.agent.clone(),
+            removed_text: words::removed_on(&day(detail.changed_at, offset)),
+            threads,
         }
     }
 }
@@ -813,17 +868,17 @@ fn uses_lines(uses: &AgentUses) -> Vec<CardLine> {
     lines
 }
 
-/// What an agent lacks that its suggester may have, in plain words.
+/// What an agent has none of, in plain words.
 fn lacks(uses: &AgentUses) -> Vec<&'static str> {
     let mut lacks = Vec::new();
     if uses.files == FileAccess::None {
-        lacks.push("no files");
+        lacks.push("files");
     }
     if uses.shell == ShellAccess::None {
-        lacks.push("no shell");
+        lacks.push("shell");
     }
     if uses.web == WebAccess::None {
-        lacks.push("no web");
+        lacks.push("web");
     }
     lacks
 }
@@ -879,12 +934,10 @@ impl AgentCardView {
         } else {
             definition.instructions.clone()
         };
-        let lacking = lacks(&definition.uses);
-        let compared = Some(if lacking.is_empty() {
-            format!("It can do no more than {suggester}.")
-        } else {
-            format!("It can do less than {suggester}: {}.", lacking.join(", "))
-        });
+        // The kernel let the suggestion through only within its suggester's limits, so it
+        // can do no more; what it has none of is said as the card knows it, not as a
+        // difference from the suggester, whose limits the card does not hold.
+        let compared = Some(words::no_more_than(suggester, &lacks(&definition.uses)));
         // The kernel names a suggestion's request `agent-<id>-<digest[..12]>`.
         let id = request
             .id
@@ -1106,10 +1159,12 @@ pub(crate) fn roster(
         if !matches!(detail.state, AgentLife::Active | AgentLife::Paused) {
             continue;
         }
-        let status = if detail.cant_start.is_some() {
-            Some((AgentStatus::CantStart, words::CANT_START))
-        } else if detail.state == AgentLife::Paused {
+        // Paused by hand says what the person did: an agent that also cannot start shows
+        // Paused, so Resume is what is offered (wave 3 finding 40).
+        let status = if detail.state == AgentLife::Paused {
             Some((AgentStatus::Paused, words::PAUSED))
+        } else if detail.cant_start.is_some() {
+            Some((AgentStatus::CantStart, words::CANT_START))
         } else {
             None
         };
@@ -1143,10 +1198,14 @@ pub(crate) fn roster(
             }
         }
     }
-    // Added agents follow the primary, by name.
+    // Added agents follow the primary, under their area, by name (spec 3.3 §5.7 "The
+    // roster"); without areas every one is in Home.
     added.sort_by(|a, b| {
-        (!a.added, a.agent.display_name.to_lowercase())
-            .cmp(&(!b.added, b.agent.display_name.to_lowercase()))
+        (!a.added, &a.area, a.agent.display_name.to_lowercase()).cmp(&(
+            !b.added,
+            &b.area,
+            b.agent.display_name.to_lowercase(),
+        ))
     });
     primary.extend(added.into_iter().filter(|row| row.added));
     primary
@@ -1304,6 +1363,48 @@ mod tests {
         assert_eq!(rows[2].session_id.as_deref(), Some("s-zeta"));
     }
 
+    /// Wave 3 findings 40 and 43: an agent paused by hand shows Paused even when it cannot
+    /// start; added agents are listed under their area, then by name.
+    #[test]
+    fn paused_wins_over_cant_start_and_agents_sit_under_their_area() {
+        let detail = |id: &str, name: &str, area: &str, state: AgentRecordState| {
+            let record = AgentRecord::new(
+                id,
+                AgentDefinition::new(name, area),
+                state,
+                AgentOrigin::ByHand,
+                SubjectRef::human("ana"),
+                chrono::Utc::now(),
+            );
+            AgentDetail::of(
+                &record,
+                Some("No key for OpenAI".into()),
+                "ana",
+                "ADK-Rust",
+                FixedOffset::east_opt(0).unwrap(),
+            )
+        };
+        let definitions = [
+            detail("builder", "Builder", "work", AgentRecordState::Active),
+            detail("bills", "Bills", "home", AgentRecordState::Paused),
+            detail("archive", "Archive", "work", AgentRecordState::Active),
+        ];
+        let rows = roster(Vec::new(), &definitions, true);
+        let shown: Vec<(&str, Option<&str>, AgentStatus)> = rows
+            .iter()
+            .map(|row| (row.agent.display_name.as_str(), row.area.as_deref(), row.status))
+            .collect();
+        use crate::model::AgentStatus;
+        assert_eq!(
+            shown,
+            [
+                ("Bills", Some("Home"), AgentStatus::Paused),
+                ("Archive", Some("Work"), AgentStatus::CantStart),
+                ("Builder", Some("Work"), AgentStatus::CantStart),
+            ]
+        );
+    }
+
     #[test]
     fn colours_follow_the_palette() {
         for (index, color) in AvatarColor::ALL.iter().enumerate() {
@@ -1380,9 +1481,11 @@ mod tests {
         assert_eq!(line("How much it asks first"), "Asks first");
         assert_eq!(line("Files"), "Reads files in Invoices");
         assert_eq!(line("Shell"), "No shell");
+        // Wave 3 finding 36: the card never claims a difference from the suggester it cannot
+        // check; the kernel kept the suggestion within the suggester's limits.
         assert_eq!(
             card.compared.as_deref(),
-            Some("It can do less than ADK-Rust: no shell, no web.")
+            Some("It can do no more than ADK-Rust, and has no shell or web.")
         );
         assert_eq!(card.allowed_without_asking, NOTHING_YET);
         assert!(!card.instructions_truncated);

@@ -506,21 +506,40 @@ impl Source for ControlSource {
                 },
             );
         }
-        // A removed agent leaves the roster; the kernel's own targets are never in its table.
-        let mut gone = Vec::new();
-        for name in latest.keys() {
-            if let Ok(view) = self.client.agent(name).await
-                && matches!(
+        // A removed agent leaves the roster. One listing carries every agent's state, removed
+        // ones included, so no agent is looked up on its own (spec 3.3 §5.7); a kernel that
+        // keeps no agents lists none.
+        let gone: Vec<String> = self
+            .client
+            .agents()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|view| {
+                matches!(
                     view.agent.state,
                     adk_kernel::agents::AgentRecordState::Removing
                         | adk_kernel::agents::AgentRecordState::Removed
                 )
-            {
-                gone.push(name.clone());
-            }
-        }
+            })
+            .map(|view| view.agent.id)
+            .collect();
         latest.retain(|name, _| !gone.contains(name));
         Ok(latest.into_values().collect())
+    }
+
+    async fn agent_threads(&self, user: &str, agent: &str) -> Result<Vec<(String, DateTime<Utc>)>> {
+        let mut threads: BTreeMap<String, DateTime<Utc>> = BTreeMap::new();
+        for process in self.processes(user).await? {
+            if process.run.target != agent {
+                continue;
+            }
+            if let Some(session) = process.run.session_id.clone() {
+                let at = threads.entry(session).or_insert(process.run.updated_at);
+                *at = (*at).max(process.run.updated_at);
+            }
+        }
+        Ok(threads.into_iter().collect())
     }
 
     // The terminal changes agents through `/agent` on the kernel; this source reads them for
@@ -555,7 +574,14 @@ impl Source for ControlSource {
     }
 
     async fn agent(&self, user: &str, id: &str) -> Result<Option<crate::agents::AgentDetail>> {
-        Ok(self.agent_definitions(user).await?.into_iter().find(|detail| detail.id == id))
+        // A removed agent has no settings; its threads are read through "Removed agents".
+        Ok(self.agent_definitions(user).await?.into_iter().find(|detail| {
+            detail.id == id
+                && !matches!(
+                    detail.state,
+                    crate::agents::AgentLife::Removed | crate::agents::AgentLife::Refused
+                )
+        }))
     }
 
     async fn busy(&self, user: &str, session: &str) -> Result<bool> {

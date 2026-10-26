@@ -70,10 +70,10 @@ pub use devices::{device_scope_for, devices_router, router_with_devices};
 pub use home::{HOME_PATH, home};
 pub use openapi::{openapi, typescript};
 pub use phone::{
-    AnswerRequest, ComputerPasskey, ConfirmOptions, ConfirmOptionsRequest, ConfirmRequest,
-    DeliveriesResponse, Delivery, PasskeyOptions, PasskeyRegistration, PhoneDevice,
-    PhoneDevicesResponse, PhoneInfo, PushKeys, PushReceivedRequest, PushSubscriptionRequest,
-    QrRequest, StopRequest,
+    AgentConfirmOptionsRequest, AnswerRequest, ComputerPasskey, ConfirmOptions,
+    ConfirmOptionsRequest, ConfirmRequest, DeliveriesResponse, Delivery, PasskeyOptions,
+    PasskeyRegistration, PhoneDevice, PhoneDevicesResponse, PhoneInfo, PushKeys,
+    PushReceivedRequest, PushSubscriptionRequest, QrRequest, StopRequest,
 };
 pub use take_over::{TakeOverRequest, take_over_router};
 pub use vocabulary::words_typescript;
@@ -123,6 +123,11 @@ pub mod paths {
     pub const CONFIRM_OPTIONS: &str = "/surface/decisions/{id}/confirm/options";
     /// `POST`: the passkey's assertion for the bound answer (spec 3.3 §8.2).
     pub const CONFIRM: &str = "/surface/decisions/{id}/confirm";
+    /// `POST`: starts "Confirm it's you" for one change that adds an agent or lets one do more
+    /// at high risk (spec 3.3 §7.2).
+    pub const AGENT_CONFIRM_OPTIONS: &str = "/surface/agents/confirm/options";
+    /// `POST`: the passkey's assertion for the bound agent change, then made with presence.
+    pub const AGENT_CONFIRM: &str = "/surface/agents/confirm";
     /// `GET`: what the phone needs to subscribe and to confirm it is you (spec 3.3 §5.4).
     pub const PHONE: &str = "/surface/phone";
     /// `PUT`, `DELETE`: the phone's push subscription.
@@ -230,6 +235,10 @@ pub struct AgentsResponse {
     /// caller may add one here (spec 3.3 §5.7). Absent when false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub can_add: bool,
+    /// The agents the person removed, whose threads stay readable through "Removed agents"
+    /// at the roster's foot (spec 3.3 §5.7). Absent when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<crate::agents::RemovedAgent>,
 }
 
 /// `POST /surface/commands` body: the command, the surface it was given on and how.
@@ -495,6 +504,7 @@ async fn agents(
             agents,
             primary: engine.primary_agent(),
             can_add: engine.can_add_agents(&caller),
+            removed: engine.removed_agents(&caller).await.unwrap_or_default(),
         })
         .into_response(),
         Err(error) => failed(error),
