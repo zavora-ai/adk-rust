@@ -45,7 +45,7 @@ design label.
 | 1 | `Preset::Website`, site toolsets, onboarding machinery ([§7.1](#71-layout-and-features), [§7.18](#718-onboarding-and-self-building), X10) | Done | #1127 (`adk-harness` `website`) |
 | 1 | `adk-website`: kinds, team, onboarding, themes, packs, playbooks, jobs, incidents, alarms, review ([§7.16](#716-adk-website)–[§7.21](#721-reviews-reports-and-escalation)) | Done | #1141; the back office compiles as one `TeamSpec` led by the Steward and runs governed (#1165, #1173) |
 | 1 | The agent edge of the site, the contract, deployment shapes, agency ([§7.9](#79-agent-edge-mcp-server-and-stores), [§7.22](#722-deployment-shapes)) | Done | #1145; an agency's sites under `adk-rust website` read the agency's kernel database (#1173) |
-| 1 | The running site ([§7.17](#717-spinning-it-up), D-11) | Done | #1150: `deploy::serve` over durable kernel and edge stores, the update engine, experiments, measurement, channels, the Concierge; the edge's durable event log and beacon (#1171); the AP2 desk and amount thresholds (#1172); with a model, the back office hosted on the kernel under the owner's standing rules, woken by the edge's signals and held to the charter's quiet hours, the durable contact book, the upkeep watch (#1173) |
+| 1 | The running site ([§7.17](#717-spinning-it-up), D-11) | Done | #1150: `deploy::serve` over durable kernel and edge stores, the update engine, experiments, measurement, channels, the Concierge; the edge's durable event log and beacon (#1171); the AP2 desk and amount thresholds (#1172); with a model, the back office hosted on the kernel under the owner's standing rules, woken by the edge's signals, the durable contact book, the upkeep watch (#1173); held to the charter's quiet hours (#1175) |
 | 1 | Web editor, onboarding views, charter cards, site view, weekly review ([§8.2](#82-server-kernel-surfaces-and-templates)) | Done | #1156 (`adk-surface` `website`), mounted by `adk-rust website new` (#1159); the desk keeps its state across restarts and the home composes the weekly review (#1173) |
 | 1 | `adk-rust site …`, `adk-rust awp …` ([§8.1](#81-adk-cli)) | Done | #1144 (`adk-cli` `website`) |
 | 1 | `adk-rust website …` ([§8.1](#81-adk-cli)) | Done | #1159: `website new [dir] [--agency]` scaffolds, serves the kernel, the edge and the owner's views on a loopback home, and prints the setup code; `status`, `review`, `charter`, `jobs promote\|demote`. The `adk-website` binary keeps `new`, `kinds`, `plan`, `start`, `agency` and `deploy` (#1141, #1145) |
@@ -71,11 +71,11 @@ design label.
 | 4 | Commerce and receipts ([§7.5](#75-events-status-consent-and-commerce)) | Partial | Quotes keep their price (#1145); `edge::ap2::Ap2Desk` takes AP2 mandates with signed receipts, and the owner's amount thresholds hold large orders, bookings and payments (#1172); `PaymentLinks` stays for owners without a processor. No calendar driver: `calendar.json` slots, quotes and orders are kept in memory |
 | 4 | Social and advertising drivers ([§7.13](#713-drivers)) | Done | #1118 |
 | — | Observability ([§7.24](#724-observability)) | Partial | Spans and metrics in `adk-website`'s `observability` (#1141); the `awp.request` and `awp.capability.call` spans from the edge (#1132). `adk-site` logs `site.release.*` events and opens no `site.release` span; `kernel.signal` is an audit record, not a span |
-| — | Scenarios and fixtures ([§5](#5-headline-capabilities-and-demonstration-scenarios), [§11](#11-testing-and-live-verification)) | Done | #1158: S1–S19 in `examples/website`, the recorded WordPress site, the presence fixture, the `website-scenarios` PR job and the nightly `website-wordpress` and `website-soak` jobs; every scenario passes scripted with no known gap, and the live set passes on `claude-sonnet-5-5` (#1165–#1173 and the final pass) |
+| — | Scenarios and fixtures ([§5](#5-headline-capabilities-and-demonstration-scenarios), [§11](#11-testing-and-live-verification)) | Done | #1158: S1–S19 in `examples/website`, the recorded WordPress site, the presence fixture, the `website-scenarios` PR job and the nightly `website-wordpress` and `website-soak` jobs; every scenario passes scripted with no known gap, and the live set passes on `claude-sonnet-5-5` (#1165–#1173, #1175) |
 
 ### Scenarios
 
-Scripted runs on `main` @ `7a498b3b9` with the final pass's fixes (2026-10-26); live runs on
+Scripted runs on `main` @ `7a498b3b9` with #1175's fixes (2026-10-26); live runs on
 `claude-sonnet-5-5` in the same pass. No scenario has a `known` gap left: every check passes.
 
 | # | Scripted | Live | Pull requests |
@@ -89,7 +89,7 @@ Scripted runs on `main` @ `7a498b3b9` with the final pass's fixes (2026-10-26); 
 | S7 | PASS 8/8 | PASS 7/7 | #1132, #1150, #1158, #1165, #1169 |
 | S8 | PASS 7/7 | PASS 7/7 | #1118, #1139, #1158, #1173 |
 | S9 | PASS 6/6 | No agent turn | #1132, #1139, #1145, #1158, #1172 |
-| S10 | PASS 9/9 | PASS 9/9 | #1141, #1158, #1165, #1173 |
+| S10 | PASS 9/9 | PASS 9/9 | #1141, #1158, #1165, #1173, #1175 |
 | S11 | PASS 5/5 | No agent turn | #1112, #1146 |
 | S12 | PASS 11/11 | PASS 11/11 | #1111, #1122, #1158, #1172 |
 | S13 | PASS 7/7 | No agent turn | #1121, #1144, #1158, #1168 |
@@ -97,7 +97,7 @@ Scripted runs on `main` @ `7a498b3b9` with the final pass's fixes (2026-10-26); 
 | S15 | PASS 8/8 | No agent turn | #1145, #1158 |
 | S16 | PASS 8/8 | No agent turn | #1141, #1158 |
 | S17 | PASS 7/7 | No agent turn | #1125, #1141, #1158 |
-| S18 | PASS 10/10 | PASS 10/10: the model scheduled the draft before the photos arrived, and they joined the scheduled item | #1108, #1127, #1134, #1158, #1168, #1173 |
+| S18 | PASS 10/10 | PASS 10/10: the model scheduled the draft before the photos arrived, and they joined the scheduled item | #1108, #1127, #1134, #1158, #1168, #1173, #1175 |
 | S19 | PASS 11/11, scaled: 600 products over four hours | No agent turn | #1133, #1140, #1158 |
 
 S10 reports one note, not a failed check: the scenario runs its agents directly, so the
@@ -217,7 +217,7 @@ leaves open.
 | [§5](#5-headline-capabilities-and-demonstration-scenarios) S10 | `publish_delay` | A product setting (`SiteOptions::publish_delay`, 24 hours, AWP 1.0's default) that `publish_delay::PublishDelay` enforces on the drafts of `freshness`, `seo` and `aeo` by requiring `schedule.publishAt` | The charter and the pipeline have none | #1173 |
 | [§7.20](#720-jobs) | The hosting job is the Guardian's | Its daily watch runs `upkeep::UpkeepCheck` without a model (`jobs::WATCH_WORKFLOW`): advisories against the edge's lockfile and the certificate's expiry become one decision card each | A proposal needs no model; the upgrade or renewal stays the owner's | #1173 |
 | [§5](#5-headline-capabilities-and-demonstration-scenarios) S18, [§7.8.2](#782-publishing) | Photos on the WhatsApp path | A chat adapter hands a message's photos to `channel::OwnerChannel`, which attaches them to the Steward's draft — or to the item it scheduled — and takes the alt-text confirmation from the thread | The kernel's `ChannelInbound` carries no attachments, and no WhatsApp adapter is on `ChannelSink` (X12) | #1173 |
-| [§7.21](#721-reviews-reports-and-escalation) | Quiet hours | A served site's kernel defers proactive runs inside its charter's quiet hours; an agency's kernel holds none, since its sites' hours may differ | The kernel holds one set of quiet hours | Final pass |
+| [§7.21](#721-reviews-reports-and-escalation) | Quiet hours | A served site's kernel defers proactive runs inside its charter's quiet hours; an agency's kernel holds none, since its sites' hours may differ | The kernel holds one set of quiet hours | #1175 |
 | A-I11 | Rollback to a signed release | When the host cannot roll back, the pipeline republishes the release's signed files from any copy with the signed digest (the host's current files, the last build, a rebuild of the content history) and fails rather than publish anything else; manifests are trusted only when the site log recorded their digest | A host's stored copy can be corrupted | #1168 |
 
 ## Remaining work
