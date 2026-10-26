@@ -16,7 +16,7 @@ use adk_core::{
     Llm, LlmRequest, LlmResponseStream, NativeWebSearch, Part, RunBudget, SpendKey, SpendLedger, SpendPeriod,
     UsageMetadata, vendor_for_model,
 };
-use adk_harness::web::{INJECTION_LABEL, ProviderWebTools, SECRET_REDACTION, WebConfig, WebSearchPath, fixture};
+use adk_harness::web::{INJECTION_LABEL, ProviderWebTools, SECRET_REDACTION, SearchDomains, WebConfig, WebSearchPath, fixture};
 use adk_harness::{HarnessMode, McpInteractionConfig, McpServerSet, PromptAnswer, RulePredicate};
 use adk_model::ScriptedResponse;
 use adk_tool::mcp::McpServerConfig;
@@ -451,19 +451,23 @@ async fn live_web_allowlist(model: Arc<dyn Llm>) -> Result<Checks> {
     Ok(checks)
 }
 
-/// H12 live, provider search (spec 3.1 §7.20, I49): with only `web` configured, the harness
-/// declares the search built-in of the provider the model's client serves, with the allowlist
-/// where the provider takes one; a search question runs it inside the model, and
-/// `harness.web.searched` lists what it searched afterwards. A client that serves no search
-/// gets none, and the harness says why.
+/// H12 live, provider search (spec 3.1 §7.20, §7.32, I49, I73): with only `web` configured, the
+/// harness declares the search built-in of the provider the model's client serves, with the
+/// search filter where the provider takes one and never the fetch allowlist; a search question
+/// runs it inside the model, and `harness.web.searched` lists what it searched afterwards. A
+/// client that serves no search gets none, and the harness says why.
 async fn live_provider_search(model: Arc<dyn Llm>) -> Result<Checks> {
     let mut checks = Checks::default();
     let native = model.native_web_search();
     let recording = Arc::new(Recording { inner: model.clone(), requests: Mutex::new(Vec::new()) });
-    let allowlist = vec!["rust-lang.org".to_string(), "blog.rust-lang.org".to_string()];
+    let filter = SearchDomains::Allowed(vec!["rust-lang.org".to_string(), "blog.rust-lang.org".to_string()]);
     let env = Env::new(Subject::Harness, recording.clone(), |b| {
         b.mode(HarnessMode::Ask)
-            .web(WebConfig { allowed_domains: allowlist.clone(), ..WebConfig::default() })
+            .web(WebConfig {
+                allowed_domains: vec!["docs.rs".to_string()],
+                search_domains: Some(filter.clone()),
+                ..WebConfig::default()
+            })
             .without_default_members()
             .max_iterations(4)
     })
@@ -491,10 +495,11 @@ async fn live_provider_search(model: Arc<dyn Llm>) -> Result<Checks> {
         return Ok(checks);
     };
     checks.check(format!("{}'s search is declared by default", native.provider), declared.len() == 1);
+    let declaration = requests.first().and_then(|request| declared.first().and_then(|tool| request.tools.get(tool).cloned())).unwrap_or_default();
+    println!("      declaration: {declaration}");
+    checks.check("the fetch allowlist is never forwarded to the search", !declaration.to_string().contains("docs.rs"));
     if native.allowed_domains {
-        let declaration = requests.first().and_then(|request| request.tools.get(&declared[0]).cloned()).unwrap_or_default();
-        println!("      declaration: {declaration}");
-        checks.check("the allowlist is forwarded in the request", declaration.to_string().contains("blog.rust-lang.org"));
+        checks.check("the search filter is forwarded in the request", declaration.to_string().contains("blog.rust-lang.org"));
     }
     let answer: String = events
         .iter()
