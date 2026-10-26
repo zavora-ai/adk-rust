@@ -101,6 +101,7 @@ const LEAD_GET: &str = "SELECT lead, score FROM adk_awp_leads WHERE site = $1 AN
 const LEAD_SINCE: &str = "SELECT lead, score FROM adk_awp_leads WHERE site = $1 \
 AND captured_us >= $2 ORDER BY captured_us, id";
 const LEAD_SCORE: &str = "UPDATE adk_awp_leads SET score = $1 WHERE site = $2 AND id = $3";
+const LEAD_DELETE: &str = "DELETE FROM adk_awp_leads WHERE site = $1 AND id = $2";
 
 const IDEM_BEGIN: &str = "INSERT INTO adk_awp_idempotency (site, key, digest, began_us, outcome) \
 VALUES ($1, $2, $3, $4, NULL) ON CONFLICT (site, key) DO NOTHING";
@@ -520,6 +521,16 @@ macro_rules! sql_edge_stores {
                 }
                 Ok(())
             }
+
+            async fn delete(&self, id: &LeadRef) -> StoreResult<bool> {
+                let done = sqlx::query(LEAD_DELETE)
+                    .bind(&self.site)
+                    .bind(&id.0)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "delete a lead", &e))?;
+                Ok(done.rows_affected() > 0)
+            }
         }
 
         #[async_trait]
@@ -818,6 +829,7 @@ mod tests {
             LEAD_GET,
             LEAD_SINCE,
             LEAD_SCORE,
+            LEAD_DELETE,
             IDEM_BEGIN,
             IDEM_GET,
             IDEM_COMPLETE,

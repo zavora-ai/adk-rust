@@ -473,6 +473,12 @@ impl LeadStore for RedisEdgeStores {
         .await
         .map(|_| ())
     }
+
+    async fn delete(&self, id: &LeadRef) -> StoreResult<bool> {
+        let removed: i64 =
+            self.client.hdel(self.key("leads"), &id.0).await.map_err(failed("delete a lead"))?;
+        Ok(removed > 0)
+    }
 }
 
 #[async_trait]

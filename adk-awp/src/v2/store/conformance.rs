@@ -433,6 +433,35 @@ pub async fn leads_round_trip<H: EdgeStoreHarness + ?Sized>(harness: &H) {
     ));
 }
 
+/// A deleted lead is gone through every handle and from listings; deleting it again, or an
+/// unknown lead, reports that nothing existed (spec 3.5 §7.5, erasure).
+pub async fn leads_delete<H: EdgeStoreHarness + ?Sized>(harness: &H) {
+    let lead = Lead {
+        id: LeadRef(fresh("lead")),
+        captured_at: at(10),
+        source: Channel::Web,
+        contact_ref: ContactRef(fresh("contact")),
+        consent: vec![ConsentReceiptRef(Uuid::now_v7())],
+        answers: BTreeMap::new(),
+        thread_ref: None,
+        score: Some(0.5),
+    };
+    let kept = Lead { id: LeadRef(fresh("lead")), ..lead.clone() };
+    harness.leads().await.insert(lead.clone()).await.unwrap();
+    harness.leads().await.insert(kept.clone()).await.unwrap();
+    assert!(harness.leads().await.delete(&lead.id).await.unwrap());
+    let store = harness.leads().await;
+    assert_eq!(store.get(&lead.id).await.unwrap(), None);
+    assert_eq!(store.get(&kept.id).await.unwrap(), Some(kept.clone()));
+    let listed = store.since(at(0)).await.unwrap();
+    assert!(!listed.iter().any(|found| found.id == lead.id));
+    assert!(listed.iter().any(|found| found.id == kept.id));
+    assert!(!store.delete(&lead.id).await.unwrap());
+    assert!(!store.delete(&LeadRef(fresh("lead"))).await.unwrap());
+    store.insert(lead.clone()).await.unwrap();
+    assert_eq!(harness.leads().await.get(&lead.id).await.unwrap(), Some(lead));
+}
+
 /// A key begins once; a repeat with the same input is in flight, then answered with the
 /// recorded outcome; a different input conflicts; outcomes are write-once (spec 3.5 A-I7).
 pub async fn idempotency_records_and_replays<H: EdgeStoreHarness + ?Sized>(harness: &H) {
@@ -519,6 +548,7 @@ macro_rules! edge_store_conformance_tests {
             held_call_lifecycle,
             held_call_refuses_invalid_transitions,
             leads_round_trip,
+            leads_delete,
             idempotency_records_and_replays,
             idempotency_concurrent_begin_has_one_winner,
             idempotency_purge,
