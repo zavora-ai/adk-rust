@@ -186,6 +186,30 @@ async fn root_and_release_keys_make_a_site_anyone_can_verify() {
         "{report:#}"
     );
 
+    // Each root operation is in the site's audit trail (spec 3.5 §9.3).
+    let trail =
+        adk_core::audit_log::FileAuditRecorder::read(site.join("data/audit.jsonl")).unwrap();
+    let field = |record: &adk_core::audit_log::AuditRecord, key: &str| {
+        record.ext.get(key).cloned().unwrap_or_default()
+    };
+    let keys: Vec<(&str, serde_json::Value, serde_json::Value)> = trail
+        .iter()
+        .filter(|record| record.action.starts_with("awp.keys."))
+        .map(|record| (record.action.as_str(), field(record, "principal"), field(record, "root")))
+        .collect();
+    assert_eq!(keys.len(), 3, "{trail:#?}");
+    assert_eq!(
+        (keys[0].0, keys[0].1.as_str()),
+        ("awp.keys.rotated", Some("awp-root:site-root-2026"))
+    );
+    assert_eq!(keys[0].2, "site-root-2026");
+    assert_eq!(keys[1].0, "awp.keys.delegated");
+    assert_eq!((keys[2].0, keys[2].2.as_str()), ("awp.keys.rotated", Some("site-root-2027")));
+    assert_eq!(keys[2].1, "awp-root:site-root-2026", "the old root endorsed the new one");
+    let delegated = trail.iter().find(|record| record.action == "awp.keys.delegated").unwrap();
+    assert_eq!(delegated.ext["scopes"], serde_json::json!(["release"]));
+    assert!(trail.iter().any(|record| record.action == "site.release.signed"));
+
     // A page replaced on the host fails at its digest.
     let current = std::fs::canonicalize(site.join("data/host/current")).unwrap();
     let page = current.join("about/index.html");

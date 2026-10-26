@@ -668,11 +668,14 @@ async fn publish_working_copy(site: &Site, yes: bool) -> Result<()> {
     };
     let staged =
         builder.release(&out, previous.as_ref(), options(source(decision)), &site.log).await?;
+    site.record_release(&staged, &proposer(), None).await;
     let published = if !staged.manifest.is_snapshot() && site.host.limits().delta_upload {
         site.host.publish_delta(&StagedDelta::new(staged.clone())?, HostTarget::Production).await?
     } else {
         site.host.publish(&staged, HostTarget::Production).await?
     };
+    site.record_release(&staged, &proposer(), Some((published.uploaded.len(), changed.len())))
+        .await;
     for item in &changed {
         let meta = HistoryMeta {
             at: Some(Utc::now()),

@@ -5,6 +5,8 @@
 //! ask the person to confirm. An agent's shell has no terminal, so no agent runs them. Each
 //! writes the key set to `<site>/well-known/awp/keys.json` and signs the contract again with
 //! the root into `<site>/well-known/awp.json`; `site build` and `site publish` release both.
+//! Each then appends `awp.keys.rotated` or `awp.keys.delegated` to the site's audit trail,
+//! `<site>/data/audit.jsonl`, which a served site writes too (spec 3.5 §9.3).
 
 use std::io::{BufRead as _, IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
@@ -153,6 +155,45 @@ fn confirm(question: &str) -> Result<()> {
     Ok(())
 }
 
+/// A root key was made or rotated (spec 3.5 §9.3).
+pub(crate) const KEYS_ROTATED: &str = "awp.keys.rotated";
+/// A key was delegated by the root.
+pub(crate) const KEYS_DELEGATED: &str = "awp.keys.delegated";
+
+/// Appends `action`, done under the root key `root`, to the site's audit trail. The keys are
+/// already written, so a record that cannot be written is reported, not undone.
+async fn record(
+    paths: &SitePaths,
+    domain: &str,
+    action: &str,
+    root: &str,
+    fields: serde_json::Value,
+) {
+    use adk_core::audit_log::{
+        AuditActor, AuditRecordDraft, AuditRecordKind, AuditRecorder, FileAuditRecorder,
+    };
+    let path = paths.data().join("audit.jsonl");
+    let written = async {
+        let recorder = FileAuditRecorder::open(&path)?.with_log_id(domain);
+        let mut draft = AuditRecordDraft::new(AuditRecordKind::Other("awp".into()), action)
+            .actor(AuditActor::subject(adk_core::principal::SubjectRef::human(format!(
+                "awp-root:{root}"
+            ))))
+            .args_digest(recorder.digest(&fields))
+            .ext("site", serde_json::json!(domain))
+            .ext("principal", serde_json::json!(format!("awp-root:{root}")));
+        if let serde_json::Value::Object(fields) = fields {
+            for (key, value) in fields {
+                draft = draft.ext(key, value);
+            }
+        }
+        recorder.record(draft).await
+    };
+    if let Err(error) = written.await {
+        eprintln!("warning: {action} was not added to {}: {error}", path.display());
+    }
+}
+
 fn month_kid(prefix: &str) -> String {
     format!("{prefix}-{}", Utc::now().format("%Y-%m"))
 }
@@ -263,6 +304,21 @@ async fn rotate(args: RotateArgs) -> Result<()> {
     // The new root's file first: if it cannot be written, nothing else changes.
     new.write_new(&args.new_root_key)?;
     write_documents(&paths, &config, &keys, &new_signer).await?;
+    let previous = keys.retired_roots.last().map(|root| root.kid.clone());
+    record(
+        &paths,
+        &domain,
+        KEYS_ROTATED,
+        old.as_ref().map_or(new.kid(), |old| old.kid()),
+        serde_json::json!({
+            "root": new.kid(),
+            "previousRoot": old.as_ref().and(previous),
+            "first": old.is_none() && !args.recover,
+            "recovered": args.recover,
+            "delegations": keys.delegations.len(),
+        }),
+    )
+    .await;
     println!("New root `{}` written to {}.", new.kid(), args.new_root_key.display());
     println!("Signed {} and the contract with it.", paths.keys_json().display());
     println!(
@@ -364,6 +420,20 @@ async fn delegate_key(args: DelegateArgs) -> Result<()> {
         key.write_new(out)?;
     }
     write_documents(&paths, &config, &keys, &root_signer).await?;
+    record(
+        &paths,
+        &config.domain,
+        KEYS_DELEGATED,
+        root.kid(),
+        serde_json::json!({
+            "kid": key.kid(),
+            "scopes": names,
+            "notBefore": not_before,
+            "notAfter": not_after,
+            "newKey": written.is_some(),
+        }),
+    )
+    .await;
     match &written {
         Some(out) => println!("New key `{}` written to {}.", key.kid(), out.display()),
         None => println!("Delegated `{}`.", key.kid()),

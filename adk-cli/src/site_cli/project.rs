@@ -286,6 +286,8 @@ pub(crate) struct Site {
     pub(crate) previous: Option<PreviousRelease>,
     /// The release key's id, and whether it was generated now.
     pub(crate) release_key: (String, bool),
+    /// The project's audit trail, `data/audit.jsonl` (spec 3.5 §9.3).
+    pub(crate) trail: adk_core::audit_log::AuditTrail,
 }
 
 impl Site {
@@ -317,6 +319,14 @@ impl Site {
         )
         .history(history.clone())
         .approvals(approvals);
+        // The project's audit trail, which a served site and `awp keys` write too (spec 3.5
+        // §9.3): drafted, approved and published content, built, signed and published releases.
+        let recorder =
+            adk_core::audit_log::FileAuditRecorder::open(paths.data().join("audit.jsonl"))
+                .map_err(|error| anyhow::anyhow!("{error}"))?
+                .with_log_id(&config.domain);
+        let trail = adk_core::audit_log::AuditTrail::new(Arc::new(recorder));
+        builder = builder.audit(trail.clone());
         if let Some(previous) = &previous {
             builder = builder.previous(previous.clone());
         }
@@ -330,7 +340,36 @@ impl Site {
             pipeline: Arc::new(builder.build()),
             previous,
             release_key: (key.kid().to_string(), generated),
+            trail,
         })
+    }
+
+    /// Records a release made outside the pipeline — `site.release.built` and
+    /// `site.release.signed`, then `site.release.published` once `uploaded` files are on the
+    /// host — as the pipeline records its own (spec 3.5 §9.3).
+    pub(crate) async fn record_release(
+        &self,
+        staged: &adk_site::release::StagedRelease,
+        principal: &str,
+        uploaded: Option<(usize, usize)>,
+    ) {
+        use adk_site::pipeline::audit::{
+            ReleaseContext, record_release_logged, record_release_published,
+        };
+        let context = ReleaseContext {
+            site: &self.config.domain,
+            charter_version: self.config.charter_version,
+            principal,
+        };
+        match uploaded {
+            None => {
+                let key = self.log.verifier_key().await;
+                record_release_logged(Some(&self.trail), context, staged, &key).await;
+            }
+            Some((files, items)) => {
+                record_release_published(Some(&self.trail), context, staged, files, items).await;
+            }
+        }
     }
 
     /// Notes for the person about the release key and the AWP documents.
