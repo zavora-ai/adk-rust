@@ -67,6 +67,7 @@ A card is drawn from the decision's inbox entry, never from agent output (S-I1):
 | How it got here | `timeline` | Asked at 18:00 — Waited through quiet time — Waiting for you |
 | Actions | `allowed.options` | Allow once · Always allow for this person · Edit · Deny |
 | Details | `riskText`, `reversibilityText`, `alsoShown` | Medium risk · Can't be unsent · Also on your phone and in Telegram |
+| A feature's line | `detail`, from a card hint; never on a chat card | From the invoice-run workflow · Open in Runs |
 
 The answers depend on the surface and on how the input was given: a spoken answer in the web
 home follows the voice row. The high-risk column is about approving: the tray and voice keep
@@ -97,6 +98,55 @@ A call that spends money follows the high-risk column and is never allowed "alwa
 shown truncated cannot be approved until the surface expanded it. A chat card leaves the
 machine through someone else's servers, so it carries the agent, the risk and the tool's name
 as its heading, never the call's arguments (S-I5).
+
+### Card hints
+
+A feature that publishes its own tools — a workflow's governed nodes, a form an agent drew, a
+change on the person's screens — knows things about their decisions the call does not say. It
+tells its own requests apart by `ApprovalRequest::origin`, never by the tool's name, and gives
+the engine a `CardHint` for each through `SurfaceEngineBuilder::card_hints`. The engine reads
+the hints, in the order they were added, wherever it draws a card: Decisions, a session's
+decisions, the feed, and the cards of the phone, voice, chat and the tray.
+
+| Field | What it changes | When several hints set it |
+|---|---|---|
+| `heading` | The heading | The first hint that sets it |
+| `chat_heading` | The heading of a chat card | The first hint that sets it |
+| `money` | `Some(true)`: the high-risk column, never **Always allow** | Any hint that marks it |
+| `reversibility` | "Can't be undone", "You can change it back", … | The first hint that sets it |
+| `offer_always` | `Some(false)`: no **Always allow** on any surface | Any hint that removes it |
+| `first_step` | A step of "How it got here" before "Asked at 10:02" | The first hint that sets it |
+| `detail` | A line under the details, with an optional link to a path in the home | The first hint that sets it |
+
+A hint may only make a card stricter or add words: it never adds an answer, never lowers the
+risk and never changes it, since the risk is the inbox entry's and chat, voice and the
+kernel's own routes read the same entry. `money: Some(false)` and `offer_always: Some(true)`
+change nothing. The engine's own `heading`, `money` and `reversibility` stay the fallback for a
+field no hint sets. A hint reads only the inbox entry and the feature's own kernel-side data,
+never text an agent wrote.
+
+```rust,ignore
+use std::sync::Arc;
+use adk_core::ApprovalRequest;
+use adk_surface::{CardHint, CardHints, Reversibility, SurfaceEngine};
+
+struct Verbs;
+
+#[async_trait::async_trait]
+impl CardHints for Verbs {
+    async fn hint(&self, request: &ApprovalRequest) -> Option<CardHint> {
+        let mine = request.origin.as_ref()?.source == "verbs:adk-rust";
+        mine.then(|| {
+            CardHint::new()
+                .with_chat_heading("Snooze something in Coming up")
+                .with_reversibility(Reversibility::CanBeChangedBack)
+                .without_always_allow()
+        })
+    }
+}
+
+let engine = SurfaceEngine::builder(source).card_hints(Arc::new(Verbs)).build();
+```
 
 ## Commands
 

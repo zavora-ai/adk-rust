@@ -62,6 +62,7 @@ pub mod channels;
 mod control;
 mod engine;
 pub mod error;
+mod hints;
 mod inbox;
 mod local;
 #[cfg(feature = "mobile")]
@@ -79,6 +80,7 @@ pub mod voice;
 pub mod web;
 pub mod words;
 
+pub use agents::GrantedUse;
 pub use agents::{
     AgentCardView, AgentChoices, AgentColor, AgentDetail, AgentDraft, AgentLife, AgentPreview,
     AgentPreviewRequest, AreaChoice, CardLine, ColorChoice, EndedWork, FileUse, ModelView,
@@ -95,7 +97,9 @@ pub use engine::{
     SurfaceEngineBuilder,
 };
 pub use error::{Result, SurfaceError};
+pub use hints::{CardHint, CardHints};
 pub use local::{LocalSource, LocalSourceBuilder};
+pub use model::CardDetail;
 pub use model::{
     AgentRef, AgentRow, AgentStatus, Avatar, Briefing, BriefingLine, CallView, CardStatus, Decided,
     DecidedAnswer, DecisionCard, FeedEntry, Mode, ModeView, Pill, QuietView, Reversibility,

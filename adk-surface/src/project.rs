@@ -17,6 +17,7 @@ use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use serde_json::Value;
 
 use crate::answers::AnswerRecord;
+use crate::hints::CardHint;
 use crate::model::{
     AgentRef, AgentRow, AgentStatus, Avatar, BriefingLine, CallView, CardStatus, Decided,
     DecidedAnswer, DecisionCard, FeedEntry, Mode, ModeView, Pill, QuietView, Reversibility,
@@ -149,11 +150,14 @@ impl Projector {
         )
     }
 
-    /// The facts the §7.2 rules read.
+    /// The facts the §7.2 rules read. A feature's `hint` may only make them stricter: mark
+    /// money or take **Always allow** away, never add an answer or change the risk
+    /// (spec 3.3 §7.1, §7.2).
     pub(crate) fn facts(
         &self,
         request: &ApprovalRequest,
         always_label: Option<String>,
+        hint: &CardHint,
     ) -> DecisionFacts {
         // A suggested agent is added or not, never always or edited (spec 3.3 §7.2); long
         // instructions are expanded before it is added, as a long call is (S-I13).
@@ -168,7 +172,7 @@ impl Projector {
             );
             return DecisionFacts {
                 risk: request.risk.into(),
-                money: adk_harness::assess_agent(&assessed).money,
+                money: adk_harness::assess_agent(&assessed).money || hint.marks_money(),
                 truncated: agent.instructions_truncated,
                 allows: request
                     .allowed_actions
@@ -195,7 +199,7 @@ impl Projector {
         };
         DecisionFacts {
             risk: risk.into(),
-            money: (self.money)(request),
+            money: (self.money)(request) || hint.marks_money(),
             truncated: call_view(request).truncated,
             allows: request
                 .allowed_actions
@@ -207,7 +211,7 @@ impl Projector {
                     ApprovalAction::Approve | ApprovalAction::Respond => !take_over,
                 })
                 .collect(),
-            always_label: always_label.filter(|_| !take_over),
+            always_label: always_label.filter(|_| !take_over && !hint.removes_always()),
             adds_agent: false,
         }
     }
@@ -268,7 +272,8 @@ impl Projector {
         Some(Decided { by, by_you, via, at, at_text, answer: answer_kind, text, scope_text: None })
     }
 
-    /// The card of `request` as `caller` sees it (spec 3.3 §7.1).
+    /// The card of `request` as `caller` sees it (spec 3.3 §7.1), with a feature's `hint`
+    /// ahead of the engine's own headings and reversibility.
     pub(crate) fn card(
         &self,
         request: &ApprovalRequest,
@@ -276,11 +281,13 @@ impl Projector {
         always_label: Option<String>,
         answer: Option<&AnswerRecord>,
         now: DateTime<Utc>,
+        hint: &CardHint,
     ) -> DecisionCard {
-        let facts = self.facts(request, always_label);
+        let facts = self.facts(request, always_label, hint);
+        let chat = rules::row(caller) == rules::Row::Chat;
         // A chat card leaves the machine through someone else's servers: it carries the
         // agent, the risk and a short summary, never the call's arguments (S-I5).
-        let (heading, summary, call) = if rules::row(caller) == rules::Row::Chat {
+        let (heading, summary, call) = if chat {
             let full = call_view(request);
             let call = CallView {
                 tool: full.tool.clone(),
@@ -288,9 +295,11 @@ impl Projector {
                 text: full.tool,
                 truncated: full.truncated,
             };
-            (chat_heading(request), None, call)
+            let heading = hint.chat_heading.clone().unwrap_or_else(|| chat_heading(request));
+            (heading, None, call)
         } else {
-            ((self.heading)(request), self.kernel_summary(request, now), call_view(request))
+            let heading = hint.heading.clone().unwrap_or_else(|| (self.heading)(request));
+            (heading, self.kernel_summary(request, now), call_view(request))
         };
         let decided = self.decided(request, caller, answer);
         let mut allowed = rules::allowed_answers(caller, &facts);
@@ -316,7 +325,8 @@ impl Projector {
             allowed.note = None;
         }
         let since = self.hh_mm(request.created_at);
-        let mut timeline = vec![words::asked_at(&since)];
+        let mut timeline: Vec<String> = hint.first_step.iter().cloned().collect();
+        timeline.push(words::asked_at(&since));
         let until = decided.as_ref().map_or(now, |decided| decided.at);
         if self.waited_through_quiet(request.created_at, until) {
             timeline.push(words::WAITED_THROUGH_QUIET_TIME.to_string());
@@ -334,7 +344,7 @@ impl Projector {
         let adds_agent = self.adds_agent(request);
         let reversibility = match adds_agent {
             Some(_) => Reversibility::CanBeRemoved,
-            None => (self.reversibility)(request),
+            None => hint.reversibility.unwrap_or_else(|| (self.reversibility)(request)),
         };
         let also: Vec<String> = self
             .places
@@ -367,12 +377,15 @@ impl Projector {
                 Reversibility::CantBeUnsent => words::CANT_BE_UNSENT,
                 Reversibility::CantBeUndone => words::CANT_BE_UNDONE,
                 Reversibility::CanBeRemoved => crate::agents::words::YOU_CAN_REMOVE_IT_LATER,
+                Reversibility::CanBeChangedBack => words::YOU_CAN_CHANGE_IT_BACK,
             }
             .to_string(),
             money: facts.money,
             also_shown: words::also_shown(&also),
             decided,
             adds_agent,
+            // Like the summary, never on a chat card (S-I5).
+            detail: hint.detail.clone().filter(|_| !chat),
         }
     }
 
@@ -1294,7 +1307,7 @@ mod tests {
         ];
         let me = Caller::human("ana", SurfaceKind::Web, crate::origin::Origin::Pointer);
         for (item, heading, summary) in cases {
-            let card = projector.card(&agenda(&item), &me, None, None, now);
+            let card = projector.card(&agenda(&item), &me, None, None, now, &CardHint::new());
             assert_eq!((card.heading.as_str(), card.summary.as_deref()), (heading, Some(summary)));
             for text in [card.heading.as_str(), summary] {
                 assert!(!text.contains("kernel") && !text.contains('{'), "{text}");

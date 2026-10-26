@@ -118,7 +118,7 @@ the web home and, with `c`, in the terminal. An answer given on a surface is app
 |---|---|
 | Roster | **New agent** at the foot, then **Removed agents**; **Settings** on each row on hover and focus |
 | New agent (`/ui/agents/new`) | **Describe it**, which starts a thread with ADK-Rust, and **Set it up yourself**: the form beside **Here is what Finance can do**, kept current, then **Add Finance** |
-| Settings (`/ui/agents/<id>`) | How it was added; the definition with "Was … Now …" before **Save changes**; its own rules and **Copy one of your rules**; its routines; **Pause** and **Remove**, which names what ends first |
+| Settings (`/ui/agents/<id>`) | How it was added; the definition with "Was … Now …" before **Save changes**; under **Here is what Finance can do**, "On this home it can also:" with what the home grants every agent it runs; its own rules and **Copy one of your rules**; its routines; **Pause** and **Remove**, which names what ends first |
 | Memory & rules | "What your agents can do" lists every agent with its area, how much it asks first, and **Settings** |
 
 | Light | Dark |
@@ -130,6 +130,13 @@ the web home and, with `c`, in the terminal. An answer given on a surface is app
 
 The screenshots are the web home over its fixture (`npm run dev`, then
 `/ui/fixture.html?screen=agents&agents=new`, `=settings` or `=home`).
+
+A host that gives every agent it runs a capability beyond its definition — drawing forms in
+its threads, asking to change things on the person's screens — grants it with
+`SurfaceEngineBuilder::grant(GrantedUse::new(id, text))`. An agent that runs, added or paused,
+lists each grant in its detail (`AgentDetail::granted`), which the web home and the terminal's
+settings show under "On this home it can also:"; a removed or suggested agent lists none, and
+the block is absent when the host grants nothing (spec 3.3 §5.7, S-I12, S-I13).
 
 ## In the terminal
 

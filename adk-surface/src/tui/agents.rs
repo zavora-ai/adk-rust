@@ -173,6 +173,9 @@ pub(crate) struct AgentsPane {
     pub waiting: Option<(u64, Purpose)>,
     /// The terminal has no kernel: what `/agent` answered.
     pub no_kernel: Option<String>,
+    /// What the home lets every agent on it do, from the engine's grants: an agent's settings
+    /// list it under "On this home it can also:" (spec 3.3 §5.7).
+    pub granted: Vec<String>,
 }
 
 impl Default for AgentsPane {
@@ -185,6 +188,7 @@ impl Default for AgentsPane {
             note: None,
             waiting: None,
             no_kernel: None,
+            granted: Vec::new(),
         }
     }
 }
@@ -867,7 +871,9 @@ pub(crate) fn lines(pane: &AgentsPane, theme: &Theme, width: usize) -> Vec<Line<
             lines.push(Line::default());
             match &form.preview {
                 Some(preview) => {
-                    push_preview(&mut lines, preview, t, width);
+                    // An agent that runs has what the home grants it; one not yet added, not yet.
+                    let granted = if form.editing.is_some() { &pane.granted[..] } else { &[] };
+                    push_preview(&mut lines, preview, granted, t, width);
                     let confirm = match &form.editing {
                         Some(_) => agent_words::SAVE_CHANGES.to_string(),
                         None => agent_words::add_named(&safe_line(&form.name())),
@@ -883,7 +889,7 @@ pub(crate) fn lines(pane: &AgentsPane, theme: &Theme, width: usize) -> Vec<Line<
             }
         }
         Pane::Confirm(preview) => {
-            push_preview(&mut lines, preview, t, width);
+            push_preview(&mut lines, preview, &[], t, width);
             let action =
                 if preview.heading.starts_with("Remove") { agent_words::REMOVE } else { "Confirm" };
             lines.push(keys(&[("enter", action), ("esc", agent_words::KEEP)]));
@@ -900,7 +906,13 @@ pub(crate) fn lines(pane: &AgentsPane, theme: &Theme, width: usize) -> Vec<Line<
     lines
 }
 
-fn push_preview(lines: &mut Vec<Line<'static>>, preview: &Preview, t: &Theme, width: usize) {
+fn push_preview(
+    lines: &mut Vec<Line<'static>>,
+    preview: &Preview,
+    granted: &[String],
+    t: &Theme,
+    width: usize,
+) {
     lines.push(Line::from(Span::styled(
         preview.heading.clone(),
         t.text().add_modifier(Modifier::BOLD),
@@ -908,6 +920,27 @@ fn push_preview(lines: &mut Vec<Line<'static>>, preview: &Preview, t: &Theme, wi
     for line in &preview.lines {
         for part in wrap_words(line, width.saturating_sub(4)) {
             lines.push(Line::from(vec![Span::raw("  "), Span::styled(part, t.text())]));
+        }
+    }
+    // What the home grants every agent on it; absent when it grants nothing (spec 3.3 §5.7).
+    if !granted.is_empty() {
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                crate::words::ON_THIS_HOME_IT_CAN_ALSO.to_string(),
+                t.text().add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        for text in granted {
+            for (index, part) in
+                wrap_words(&safe_line(text), width.saturating_sub(8)).into_iter().enumerate()
+            {
+                let bullet = if index == 0 { "  • " } else { "    " };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {bullet}"), t.label()),
+                    Span::styled(part, t.text()),
+                ]));
+            }
         }
     }
     lines.push(Line::from(vec![
@@ -1073,6 +1106,68 @@ mod tests {
         assert_eq!(value("asks"), "ask-first");
         // Wave 3 finding 14: made against the version read, so a change since is refused.
         assert!(form.args().starts_with("edit finance --version 2 --name"), "{}", form.args());
+    }
+
+    /// Spec 3.3 §5.7: an agent's settings list what the home grants every agent it runs under
+    /// "On this home it can also:"; a new agent's form, and a home that grants nothing, do not.
+    #[test]
+    fn settings_list_what_the_home_grants() {
+        use super::super::theme::{Appearance, Theme};
+        let preview = json!({
+            "preview": { "abilities": ["It can read files in Invoices."], "risk": "medium", "money": false, "widens": false },
+            "code": "3f9a2c", "name": "Finance"
+        });
+        let text = |pane: &AgentsPane| -> Vec<String> {
+            lines(pane, &Theme::new(Appearance::Light, false), 90)
+                .iter()
+                .map(|line| line.spans.iter().map(|span| span.content.as_ref()).collect())
+                .collect()
+        };
+        let granted = [
+            "Show forms and tables in your threads — sending asks you first".to_string(),
+            "Ask to change things on your screens — always asks you first".to_string(),
+        ];
+        let block = [
+            "  On this home it can also:".to_string(),
+            format!("    • {}", granted[0]),
+            format!("    • {}", granted[1]),
+        ];
+
+        let mut pane = AgentsPane { granted: granted.to_vec(), ..AgentsPane::default() };
+        pane.sent(1, Purpose::List);
+        pane.done(Ok(listed().to_string()));
+        pane.key(key(KeyCode::Char('e')), &[]).unwrap();
+        let asks = pane.key(key(KeyCode::Enter), &[]).unwrap();
+        let Ask::Run { purpose, .. } = &asks[0] else { panic!("{asks:?}") };
+        pane.sent(2, purpose.clone());
+        pane.done(Ok(preview.to_string()));
+        let shown = text(&pane);
+        let at = shown.iter().position(|line| line.contains("It can read files in Invoices."));
+        let at = at.expect("the preview is shown") + 1;
+        assert_eq!(shown[at..at + 3], block);
+
+        let mut none = AgentsPane::default();
+        none.sent(1, Purpose::List);
+        none.done(Ok(listed().to_string()));
+        none.key(key(KeyCode::Char('e')), &[]).unwrap();
+        none.key(key(KeyCode::Enter), &[]).unwrap();
+        none.sent(2, Purpose::Preview { args: String::new() });
+        none.done(Ok(preview.to_string()));
+        assert!(!text(&none).iter().any(|line| line.contains("On this home")));
+
+        let mut new = AgentsPane { granted: granted.to_vec(), ..AgentsPane::default() };
+        new.key(key(KeyCode::Char('n')), &[]).unwrap();
+        new.key(key(KeyCode::Char('s')), &[]).unwrap();
+        for c in "Finance".chars() {
+            new.key(key(KeyCode::Char(c)), &[]).unwrap();
+        }
+        let asks = new.key(key(KeyCode::Enter), &[]).unwrap();
+        let Ask::Run { purpose, .. } = &asks[0] else { panic!("{asks:?}") };
+        new.sent(2, purpose.clone());
+        new.done(Ok(preview.to_string()));
+        let shown = text(&new);
+        assert!(shown.iter().any(|line| line.contains("It can read files in Invoices.")));
+        assert!(!shown.iter().any(|line| line.contains("On this home")));
     }
 
     /// Wave 3 finding 40: an agent paused by hand that also cannot start shows Paused, and `p`

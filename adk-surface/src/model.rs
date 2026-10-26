@@ -196,6 +196,52 @@ pub enum Reversibility {
     CantBeUndone,
     /// "You can remove it later": an agent a person adds (spec 3.3 §5.7).
     CanBeRemoved,
+    /// "You can change it back": a change a person can make again the other way, such as a
+    /// time moved on their screens, which a feature's [`CardHint`](crate::CardHint) says
+    /// (spec 3.3 §7.1).
+    CanBeChangedBack,
+}
+
+/// A line under a decision's details that a feature adds through a
+/// [`CardHint`](crate::CardHint): where the call comes from, with an optional link into the
+/// home, such as "From the invoice-run workflow · Open in Runs" (spec 3.3 §7.1). Never on a
+/// chat card (S-I5).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::CardDetail;
+///
+/// let detail = CardDetail::new("From the invoice-run workflow").with_link("Open in Runs", "/ui/runs/r-1");
+/// assert_eq!(detail.href.as_deref(), Some("/ui/runs/r-1"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CardDetail {
+    /// The line, in plain words: "From the invoice-run workflow".
+    pub text: String,
+    /// The words of the link after the line: "Open in Runs".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_text: Option<String>,
+    /// Where the link goes: a path in the home, such as `/ui/runs/r-1`. A renderer follows only
+    /// a path on its own server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
+}
+
+impl CardDetail {
+    /// The line `text`, with no link.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into(), link_text: None, href: None }
+    }
+
+    /// Adds the link `link_text` to `href`, a path in the home.
+    #[must_use]
+    pub fn with_link(mut self, link_text: impl Into<String>, href: impl Into<String>) -> Self {
+        self.link_text = Some(link_text.into());
+        self.href = Some(href.into());
+        self
+    }
 }
 
 /// One step of how a decision got here (spec 3.3 §7.1).
@@ -317,6 +363,11 @@ pub struct DecisionCard {
     /// The agent a suggestion would add, shown in place of the call (spec 3.3 §5.7, S-I13).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adds_agent: Option<crate::agents::AgentCardView>,
+    /// A line under the details from a feature's [`CardHint`](crate::CardHint), such as
+    /// "From the invoice-run workflow · Open in Runs" (spec 3.3 §7.1). Never on a chat card
+    /// (S-I5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<CardDetail>,
 }
 
 /// Who wrote a message in a thread.

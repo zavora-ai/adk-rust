@@ -11,6 +11,7 @@
 //! | [`EndedWork`] | What removing an agent stops, counted |
 //! | [`AgentChoices`] | The models, packs, areas and colours a person may choose |
 //! | [`AgentCardView`] | The definition list on the decision that adds a suggested agent |
+//! | [`GrantedUse`] | What the home lets every agent on it do, beyond its definition: "On this home it can also:" |
 //! | [`AgentPreviewRequest`] | What `POST /surface/agents/preview` previews |
 //!
 //! Every name and instruction is data: renderers escape it (S-I9). No surface shows an
@@ -422,6 +423,41 @@ pub struct AgentDetail {
     /// knows it; a change refused as out of date names it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed_on: Option<String>,
+    /// What the home lets it do beyond its definition, "On this home it can also:", from the
+    /// uses the host granted every agent it runs; empty for an agent that does not run, and
+    /// absent when empty (spec 3.3 §5.7, S-I12, S-I13).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub granted: Vec<GrantedUse>,
+}
+
+/// Something the home lets every agent on it do beyond its definition, because the host
+/// gives each agent it runs the tools for it (spec 3.3 §5.7, S-I12, S-I13): shown under
+/// "Here is what Finance can do" as "On this home it can also:". Hosts register each with
+/// [`SurfaceEngineBuilder::grant`](crate::SurfaceEngineBuilder::grant).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::GrantedUse;
+///
+/// let draws = GrantedUse::new("genui", "Show forms and tables in your threads — sending asks you first");
+/// assert_eq!(draws.id, "genui");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GrantedUse {
+    /// The feature that grants it, such as `genui`: one line per id. Never shown.
+    pub id: String,
+    /// What it can do, in plain words: "Ask to change things on your screens — always asks
+    /// you first".
+    pub text: String,
+}
+
+impl GrantedUse {
+    /// The use `text`, granted by the feature `id`.
+    pub fn new(id: impl Into<String>, text: impl Into<String>) -> Self {
+        Self { id: id.into(), text: text.into() }
+    }
 }
 
 /// An agent the person removed, whose threads stay readable (spec 3.3 §5.7, §13 decision 18;
@@ -798,6 +834,7 @@ impl AgentDetail {
             cant_start,
             changed_at: record.updated_at,
             changed_on: record.changed_on.clone(),
+            granted: Vec::new(),
         }
     }
 }

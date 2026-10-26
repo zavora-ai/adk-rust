@@ -18,8 +18,10 @@ use serde_json::{Value, json};
 use tokio::sync::{Notify, oneshot};
 use tokio::task::JoinHandle;
 
+use crate::agents::{AgentDetail, AgentLife, GrantedUse};
 use crate::answers::{AnswerLog, AnswerRecord, InMemoryAnswerLog, SURFACE_AUDIT_DECIDE};
 use crate::error::{Result, SurfaceError};
+use crate::hints::{CardHint, CardHints};
 use crate::model::{
     AgentRef, AgentRow, Briefing, Decided, DecisionCard, FeedEntry, Mode, ModeView, Reversibility,
     StatusLine,
@@ -369,6 +371,8 @@ pub struct SurfaceEngineBuilder {
     clock: Arc<dyn Clock>,
     voice_window: Duration,
     stops_need: Option<String>,
+    card_hints: Vec<Arc<dyn CardHints>>,
+    granted: Vec<GrantedUse>,
 }
 
 impl fmt::Debug for SurfaceEngineBuilder {
@@ -455,6 +459,69 @@ impl SurfaceEngineBuilder {
         self
     }
 
+    /// Adds `hints`, a feature's [`CardHints`], after those added before (spec 3.3 §7.1): for
+    /// each field of a card the first hint that sets it wins, and [`heading`](Self::heading),
+    /// [`money`](Self::money) and [`reversibility`](Self::reversibility) stay the fallback. A
+    /// hint may only make a card stricter or add words; it never adds an answer or changes the
+    /// risk (§7.2).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    /// use adk_core::ApprovalRequest;
+    /// use adk_surface::{CardHint, CardHints, LocalSource, SurfaceEngine};
+    ///
+    /// struct Payments;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl CardHints for Payments {
+    ///     async fn hint(&self, request: &ApprovalRequest) -> Option<CardHint> {
+    ///         let mine = request.origin.as_ref()?.source == "mcp:payments";
+    ///         mine.then(|| CardHint::new().spends_money())
+    ///     }
+    /// }
+    ///
+    /// # fn example(source: LocalSource) {
+    /// let engine = SurfaceEngine::builder(Arc::new(source)).card_hints(Arc::new(Payments)).build();
+    /// # let _ = engine;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn card_hints(mut self, hints: Arc<dyn CardHints>) -> Self {
+        self.card_hints.push(hints);
+        self
+    }
+
+    /// Grants every agent the home runs `granted`, shown on its detail under "On this home it
+    /// can also:" (spec 3.3 §5.7, S-I12, S-I13). A host grants a use when it gives each agent
+    /// it runs the tools for it; a second grant with the same id replaces the first.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    /// use adk_surface::{GrantedUse, LocalSource, SurfaceEngine};
+    ///
+    /// # fn example(source: LocalSource) {
+    /// let engine = SurfaceEngine::builder(Arc::new(source))
+    ///     .grant(GrantedUse::new(
+    ///         "genui",
+    ///         "Show forms and tables in your threads — sending asks you first",
+    ///     ))
+    ///     .build();
+    /// assert_eq!(engine.granted().len(), 1);
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn grant(mut self, granted: GrantedUse) -> Self {
+        match self.granted.iter_mut().find(|known| known.id == granted.id) {
+            Some(known) => *known = granted,
+            None => self.granted.push(granted),
+        }
+        self
+    }
+
     /// How often the feed reads the store when the source signals nothing sooner.
     #[must_use]
     pub fn poll_interval(mut self, poll: Duration) -> Self {
@@ -524,6 +591,8 @@ impl SurfaceEngineBuilder {
                 clock: self.clock,
                 voice_window: self.voice_window,
                 stops_need: self.stops_need,
+                card_hints: self.card_hints,
+                granted: self.granted,
                 queues: Mutex::new(HashMap::new()),
                 draining: Mutex::new(HashSet::new()),
                 wake: Notify::new(),
@@ -573,6 +642,10 @@ struct Inner {
     voice_window: Duration,
     /// The group Stop all and Resume all need, when only some callers may give them.
     stops_need: Option<String>,
+    /// Features' card hints, in the order they were added (spec 3.3 §7.1).
+    card_hints: Vec<Arc<dyn CardHints>>,
+    /// What every agent the home runs may also do (spec 3.3 §5.7).
+    granted: Vec<GrantedUse>,
     /// Input queued behind an open decision, per (user, session), oldest first.
     queues: Mutex<HashMap<(String, String), VecDeque<String>>>,
     /// Sessions with a delivery loop running. Changed only under the `queues` lock, so a
@@ -621,6 +694,8 @@ impl SurfaceEngine {
             clock: Arc::new(SystemClock),
             voice_window: Duration::from_secs(u64::from(rules::VOICE_CANCEL_WINDOW_SECS)),
             stops_need: None,
+            card_hints: Vec::new(),
+            granted: Vec::new(),
         }
     }
 
@@ -631,6 +706,48 @@ impl SurfaceEngine {
 
     fn now(&self) -> DateTime<Utc> {
         self.inner.clock.now()
+    }
+
+    /// What every agent the home runs may also do, as the host granted it (spec 3.3 §5.7).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    /// use adk_surface::{LocalSource, SurfaceEngine};
+    ///
+    /// # fn example(source: LocalSource) {
+    /// let engine = SurfaceEngine::builder(Arc::new(source)).build();
+    /// assert!(engine.granted().is_empty());
+    /// # }
+    /// ```
+    pub fn granted(&self) -> &[GrantedUse] {
+        &self.inner.granted
+    }
+
+    /// `detail` with what the home grants every agent it runs: only an agent that runs, added
+    /// or paused, is granted anything (spec 3.3 §5.7).
+    fn with_granted(&self, mut detail: AgentDetail) -> AgentDetail {
+        detail.granted = match detail.state {
+            AgentLife::Active | AgentLife::Paused => self.inner.granted.clone(),
+            AgentLife::Suggested
+            | AgentLife::Removing
+            | AgentLife::Removed
+            | AgentLife::Refused => Vec::new(),
+        };
+        detail
+    }
+
+    /// What the features say about `request`'s card, merged in the order they were added
+    /// (spec 3.3 §7.1).
+    async fn hint(&self, request: &ApprovalRequest) -> CardHint {
+        let mut merged = CardHint::new();
+        for hints in &self.inner.card_hints {
+            if let Some(hint) = hints.hint(request).await {
+                merged = merged.then(hint);
+            }
+        }
+        merged
     }
 
     // -----------------------------------------------------------------------
@@ -718,8 +835,9 @@ impl SurfaceEngine {
                 None
             }),
         };
+        let hint = self.hint(request).await;
         let mut card =
-            self.inner.projector.card(request, caller, always, answer.as_ref(), self.now());
+            self.inner.projector.card(request, caller, always, answer.as_ref(), self.now(), &hint);
         // How far a surface's answer reaches: once, or by the standing rule it made (§5.4).
         if let (Some(decided), Some(record)) = (card.decided.as_mut(), answer.as_ref())
             && decided.via.is_some()
@@ -755,7 +873,9 @@ impl SurfaceEngine {
                 .into_iter()
                 .map(|text| crate::model::TimelineStep { text, current: false })
                 .collect();
-            timeline.extend(card.timeline.into_iter().skip(1));
+            // The suggesting turn's steps take the place of a hint's first step and "Asked at".
+            let asked = usize::from(hint.first_step.is_some()) + 1;
+            timeline.extend(card.timeline.into_iter().skip(asked));
             card.timeline = timeline;
         }
         Ok(card)
@@ -1052,7 +1172,8 @@ impl SurfaceEngine {
     ///
     /// Returns the source's error.
     pub async fn agent_details(&self, caller: &Caller) -> Result<Vec<crate::agents::AgentDetail>> {
-        self.inner.source.agent_definitions(caller.user_id()).await
+        let details = self.inner.source.agent_definitions(caller.user_id()).await?;
+        Ok(details.into_iter().map(|detail| self.with_granted(detail)).collect())
     }
 
     /// The agent a message goes to when the person names none (spec 3.3 §5.5): the tray's
@@ -1256,7 +1377,8 @@ impl SurfaceEngine {
             return self.already_decided(caller, &request, answer).await;
         }
         let always = self.always_label(&request).await;
-        let facts = self.inner.projector.facts(&request, always);
+        let hint = self.hint(&request).await;
+        let facts = self.inner.projector.facts(&request, always, &hint);
         if let Err(violation) = rules::check(caller, &facts, answer, expanded) {
             let error = SurfaceError::Rule(violation);
             self.audit_decide(caller, &request, answer, "refused", Some(&error.code())).await?;
@@ -1398,7 +1520,8 @@ impl SurfaceEngine {
         answer: Answer,
     ) -> Result<CommandOutcome> {
         self.audit_decide(caller, request, answer, "already_decided", None).await?;
-        let mut card = self.inner.projector.card(request, caller, None, None, self.now());
+        let hint = self.hint(request).await;
+        let mut card = self.inner.projector.card(request, caller, None, None, self.now(), &hint);
         // When it was decided is not known either: `at` is when this surface found out, and
         // no time is shown.
         let decided = Decided {
@@ -1856,6 +1979,7 @@ impl SurfaceEngine {
             .source
             .agent(caller.user_id(), id)
             .await?
+            .map(|detail| self.with_granted(detail))
             .ok_or_else(|| SurfaceError::not_found(format!("agent '{id}'")))
     }
 
@@ -1942,15 +2066,15 @@ impl SurfaceEngine {
             Command::AddAgent { draft, digest, replaces } => source
                 .add_agent(caller, *draft, &digest, replaces)
                 .await
-                .map(|agent| CommandOutcome::AgentAdded { agent }),
+                .map(|agent| CommandOutcome::AgentAdded { agent: self.with_granted(agent) }),
             Command::ChangeAgent { agent, version, draft, digest } => source
                 .change_agent(caller, &agent, version, *draft, &digest)
                 .await
-                .map(|agent| CommandOutcome::AgentChanged { agent }),
+                .map(|agent| CommandOutcome::AgentChanged { agent: self.with_granted(agent) }),
             Command::PauseAgent { agent } => source
                 .pause_agent(caller, &agent)
                 .await
-                .map(|agent| CommandOutcome::AgentPaused { agent }),
+                .map(|agent| CommandOutcome::AgentPaused { agent: self.with_granted(agent) }),
             Command::ResumeAgent { agent } => {
                 // Resuming is the person at the home or a paired local terminal (S-I10).
                 if !rules::may_resume_agent(caller) {
@@ -1961,7 +2085,7 @@ impl SurfaceEngine {
                 source
                     .resume_agent(caller, &agent)
                     .await
-                    .map(|agent| CommandOutcome::AgentResumed { agent })
+                    .map(|agent| CommandOutcome::AgentResumed { agent: self.with_granted(agent) })
             }
             Command::RemoveAgent { agent, version, digest } => source
                 .remove_agent(caller, &agent, version, &digest)
@@ -2053,14 +2177,42 @@ impl SurfaceEngine {
         trail.record(draft).await.map_err(SurfaceError::Source)
     }
 
-    async fn audit_command(&self, caller: &Caller, action: &str, fields: Value) -> Result<()> {
-        let Some(trail) = &self.inner.audit else {
-            return Ok(());
-        };
+    /// The record of a command `caller` gave (spec 3.3 §11): Stop all and Resume all as
+    /// governance, a mode change as configuration, every other command through
+    /// [`record`](Self::record).
+    pub(crate) async fn audit_command(
+        &self,
+        caller: &Caller,
+        action: &str,
+        fields: Value,
+    ) -> Result<()> {
         let kind = match action {
             SURFACE_AUDIT_STOP_ALL | SURFACE_AUDIT_RESUME_ALL => AuditRecordKind::Governance,
             SURFACE_AUDIT_SET_MODE => AuditRecordKind::Configuration,
-            _ => AuditRecordKind::Other("surface".to_string()),
+            _ => return self.record(caller, action, fields).await,
+        };
+        self.write_record(caller, kind, action, fields).await
+    }
+
+    /// Writes the record `action` of what `caller` did through a surface, with `fields` as its
+    /// extensions (spec 3.3 §11): stamped with the caller's surface, origin, device and
+    /// presence as every surface record is, of kind `Other("surface")`, which the kernel's
+    /// surface-records route accepts. A feature records what a person did with it here, such
+    /// as `surface.verb`. Without an audit trail nothing is written.
+    pub(crate) async fn record(&self, caller: &Caller, action: &str, fields: Value) -> Result<()> {
+        self.write_record(caller, AuditRecordKind::Other("surface".to_string()), action, fields)
+            .await
+    }
+
+    async fn write_record(
+        &self,
+        caller: &Caller,
+        kind: AuditRecordKind,
+        action: &str,
+        fields: Value,
+    ) -> Result<()> {
+        let Some(trail) = &self.inner.audit else {
+            return Ok(());
         };
         let mut draft = Self::draft(caller, kind, action);
         if let Value::Object(fields) = fields {
@@ -2112,4 +2264,44 @@ fn lower_first(label: &str) -> String {
 /// The session-owner check every read and command makes (spec 3.3 §11 S-I8).
 fn owns(caller: &Caller, request: &ApprovalRequest) -> bool {
     request.scope.user_id == caller.user_id()
+}
+
+#[cfg(test)]
+mod tests {
+    use adk_core::audit_log::InMemoryAuditRecorder;
+    use adk_core::{InMemoryApprovalStore, StoreApprovalService};
+    use adk_session::InMemorySessionService;
+
+    use super::*;
+    use crate::LocalSource;
+
+    /// A feature's record carries who did it, where and how, as every surface record does,
+    /// under the kind the kernel's surface-records route accepts (spec 3.3 §11).
+    #[tokio::test]
+    async fn a_feature_record_is_stamped_like_every_surface_record() {
+        let source = LocalSource::builder("adk-rust")
+            .sessions(Arc::new(InMemorySessionService::new()))
+            .approvals(Arc::new(StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))))
+            .build()
+            .unwrap();
+        let audit = InMemoryAuditRecorder::new();
+        let engine = SurfaceEngine::builder(Arc::new(source))
+            .audit(AuditTrail::new(Arc::new(audit.clone())))
+            .build();
+        let caller = Caller::human("ana", SurfaceKind::Phone, Origin::Touch)
+            .with_device("dev-1")
+            .with_presence_confirmed();
+
+        engine.record(&caller, "surface.verb", json!({ "verb": "snooze" })).await.unwrap();
+
+        let expected =
+            AuditRecordDraft::new(AuditRecordKind::Other("surface".into()), "surface.verb")
+                .actor(AuditActor::subject(caller.subject.clone()))
+                .ext("surface", json!("phone"))
+                .ext("origin", json!({ "kind": "touch" }))
+                .ext("device", json!("dev-1"))
+                .ext("presence", json!("confirmed"))
+                .ext("verb", json!("snooze"));
+        assert_eq!(audit.records(), vec![expected]);
+    }
 }

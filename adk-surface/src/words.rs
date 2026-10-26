@@ -767,6 +767,12 @@ pub const PAUSED: &str = "Paused";
 pub const CANT_START: &str = "Can't start";
 /// The reversibility of adding an agent.
 pub const YOU_CAN_REMOVE_IT_LATER: &str = "You can remove it later";
+/// The reversibility of a change a person can make again the other way, which a feature's
+/// card hint says (spec 3.3 §7.1).
+pub const YOU_CAN_CHANGE_IT_BACK: &str = "You can change it back";
+/// Over what the home lets every agent on it do, under "Here is what Finance can do"
+/// (spec 3.3 §5.7).
+pub const ON_THIS_HOME_IT_CAN_ALSO: &str = "On this home it can also:";
 /// What a new agent may do without asking.
 pub const NOTHING_YET: &str = "Nothing yet";
 /// The roster with no agent of the person's own.

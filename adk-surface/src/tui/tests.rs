@@ -86,6 +86,7 @@ pub(super) fn card(id: &str, tool: &str, args: Value) -> DecisionCard {
         also_shown: Some("Also on your phone and in Telegram".into()),
         decided: None,
         adds_agent: None,
+        detail: None,
     }
 }
 

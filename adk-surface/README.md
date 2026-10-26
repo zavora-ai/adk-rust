@@ -98,6 +98,13 @@ session is free, whichever surface answered (S-I4). "Stop all" works from every 
 only from the web home or a paired local terminal (S-I10). No agent answers a decision (§7.4).
 A chat card carries the agent, the risk and a short summary, never the call's arguments (S-I5).
 
+A feature that publishes its own tools adds to their cards with `CardHints`, registered with
+`SurfaceEngineBuilder::card_hints`: a heading, a chat heading, "You can change it back", a first
+step of "How it got here" and a line under the details. A hint may also mark money or take
+**Always allow** away; it never adds an answer or changes the risk (§7.1, §7.2). What a host
+grants every agent it runs, `SurfaceEngineBuilder::grant`, is listed on each agent's settings
+under "On this home it can also:" (§5.7).
+
 ## The web API
 
 | Route (under `/api`) | Answer |

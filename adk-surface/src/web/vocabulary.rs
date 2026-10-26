@@ -133,6 +133,8 @@ const WORDS: &[(&str, &str)] = listed![
     PAUSED,
     CANT_START,
     YOU_CAN_REMOVE_IT_LATER,
+    YOU_CAN_CHANGE_IT_BACK,
+    ON_THIS_HOME_IT_CAN_ALSO,
     NOTHING_YET,
     NO_AGENTS_OF_YOUR_OWN,
     WHAT_SHOULD_IT_DO,
