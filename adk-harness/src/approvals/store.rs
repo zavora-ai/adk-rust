@@ -34,17 +34,27 @@ pub trait StandingRuleStore: fmt::Debug + Send + Sync {
 
     /// Replaces the stored rule with `rule`'s id in `rule`'s app by `rule` while it is still
     /// stored, and returns whether it was, so a rule revoked meanwhile stays revoked (spec 3.3
-    /// §8.1 "Extend").
+    /// §8.1 "Extend", spec 3.1 §9.2 I4).
     ///
-    /// The default reads the owner's rules, then grants `rule` when its id is among them; a
-    /// revocation between the two is undone. Every store of this crate replaces in one step.
+    /// The replacement must be one step of the store: a read of the rules and a grant after it
+    /// would bring back a rule revoked between the two. Every store of this crate replaces in
+    /// one step. The default changes nothing and answers `harness.rule.replace_unsupported`,
+    /// so a store that does not implement it cannot extend a rule.
+    ///
+    /// # Errors
+    ///
+    /// The default always returns `harness.rule.replace_unsupported`; a store returns its
+    /// own error when the write fails.
     async fn replace(&self, rule: StandingRule) -> Result<bool> {
-        let held = self.list(rule.scope.app_name(), rule.scope.user_id()).await?;
-        if !held.iter().any(|existing| existing.id == rule.id) {
-            return Ok(false);
-        }
-        self.grant(rule).await?;
-        Ok(true)
+        let _ = rule;
+        Err(AdkError::new(
+            ErrorComponent::Agent,
+            ErrorCategory::Unsupported,
+            "harness.rule.replace_unsupported",
+            "this standing rule store cannot change a rule in one step, so a rule cannot be \
+             extended: implement `StandingRuleStore::replace` for it, or stop the rule and \
+             allow it again",
+        ))
     }
 }
 
