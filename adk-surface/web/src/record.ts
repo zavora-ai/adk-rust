@@ -18,8 +18,9 @@ export const RECORD_READ = 200;
 /** How many sentences "What your agents did" lists. */
 export const RECORD_SHOWN = 5;
 
-/** Where an answer was given, from how it was given (§11): ", from Telegram". */
+/** Where an answer was given, from the surface and how it was given (§11): ", from Telegram". */
 function where(line: KernelRecordLine): string {
+  if (line.surface === "tray") return ", from the tray";
   switch (line.how) {
     case "pointer":
       return ", in the home";
@@ -41,25 +42,39 @@ function call(line: KernelRecordLine): string {
   return line.tool ?? "a call";
 }
 
-/** The sentence of an answer to a decision: yes or no to the call, and where. */
-function answer(line: KernelRecordLine): string | undefined {
+/**
+ * The sentence of an answer to a decision: yes or no to the call, whose call it was when the
+ * record names the agent, and where: "You let Finance use send_email, from Telegram."
+ */
+function answer(line: KernelRecordLine, agents: AgentRow[]): string | undefined {
+  const agent = line.agent ? agentOf(line.agent, agents) : undefined;
   switch (line.decision) {
     case "approved":
     case "edited":
-      return `You said yes to ${call(line)}${where(line)}.`;
+      return agent ? `You let ${agent} use ${call(line)}${where(line)}.` : `You said yes to ${call(line)}${where(line)}.`;
     case "rejected":
-      return `You said no to ${call(line)}${where(line)}.`;
+      return agent
+        ? `You didn't let ${agent} use ${call(line)}${where(line)}.`
+        : `You said no to ${call(line)}${where(line)}.`;
     default:
       return undefined;
   }
 }
 
+/**
+ * A kernel record of an answer written before the answer is applied — a chat thread's
+ * `decide`, a paired device's `approvals.decide` — which cannot say whether it decided.
+ */
+function answeredBefore(line: KernelRecordLine): boolean {
+  return line.action.startsWith("kernel.") && (line.kernelAction === "decide" || line.kernelAction === "approvals.decide");
+}
+
 /** What the kernel's own record of a person's action did (`kernelAction`, spec 3.3 §10 K1–K5). */
-function kernelSentence(line: KernelRecordLine): string | undefined {
+function kernelSentence(line: KernelRecordLine, agents: AgentRow[]): string | undefined {
   switch (line.kernelAction) {
     case "approvals.decide":
     case "decide":
-      return answer(line);
+      return answer(line, agents);
     case "memory.confirm":
       return "You confirmed a note your agents keep.";
     case "memory.fix":
@@ -107,23 +122,30 @@ function kernelSentence(line: KernelRecordLine): string | undefined {
 export function recordSentence(line: KernelRecordLine, agents: AgentRow[]): string | undefined {
   switch (line.action) {
     case "surface.decide":
-      return line.outcome === "decided" ? answer(line) : undefined;
+      return line.outcome === "decided" ? answer(line, agents) : undefined;
     case "surface.stop_all":
       return `You stopped all agents${where(line)}.`;
     case "surface.resume_all":
       return `You resumed all agents${where(line)}.`;
     case "surface.set_mode":
       return "You changed how much your agents ask first.";
+    // A rule refuses calls when its record says `denied`, and allows them otherwise.
     case "harness.rule.created":
-      return `You allowed ${call(line)} without asking.`;
+      return line.decision === "denied"
+        ? `You refused ${call(line)} without asking.`
+        : `You allowed ${call(line)} without asking.`;
     case "harness.rule.revoked":
-      return `You stopped allowing ${call(line)} without asking.`;
+      return line.decision === "denied"
+        ? `You stopped refusing ${call(line)} without asking.`
+        : `You stopped allowing ${call(line)} without asking.`;
     case "harness.rule.extended":
-      return `You extended how long ${call(line)} is allowed without asking.`;
+      return line.decision === "denied"
+        ? `You extended how long ${call(line)} is refused without asking.`
+        : `You extended how long ${call(line)} is allowed without asking.`;
     default:
       break;
   }
-  if (line.action.startsWith("kernel.")) return kernelSentence(line);
+  if (line.action.startsWith("kernel.")) return kernelSentence(line, agents);
   // A tool call: its action is the tool, and it names the agent that made it.
   if (line.tool !== undefined && line.action === line.tool && line.agent) {
     const agent = agentOf(line.agent, agents) ?? "Your agents";
@@ -139,15 +161,30 @@ function atText(at: Date, now: Date): string {
   return now.getTime() - at.getTime() < 24 * 3_600_000 ? hhmm(at) : dayMonth(at).replace(/(\d+ \w{3})\w*/, "$1");
 }
 
-/** The latest actions on record as sentences, newest first, at most `shown`. */
+/**
+ * The latest actions on record as sentences, newest first, at most `shown`, each answer once.
+ * A kernel record of an answer written before it was applied is left out when the decision's
+ * own answer that decided it is on record (`surface.decide`: a chat thread's tap writes both),
+ * or when an earlier answer to the same decision is: that one decided, and this one changed
+ * nothing.
+ */
 export function recentLines(
   lines: KernelRecordLine[],
   agents: AgentRow[],
   now: Date = new Date(),
   shown: number = RECORD_SHOWN,
 ): RecordLine[] {
+  const decided = new Set(
+    lines.filter((line) => line.action === "surface.decide" && line.outcome === "decided").flatMap((line) => line.target ?? []),
+  );
+  // Newest first, so the last pre-decision record of a decision seen is its earliest.
+  const earliest = new Map<string, KernelRecordLine>();
+  for (const line of lines) {
+    if (answeredBefore(line) && line.target) earliest.set(line.target, line);
+  }
   const out: RecordLine[] = [];
   for (const line of lines) {
+    if (answeredBefore(line) && line.target && (decided.has(line.target) || earliest.get(line.target) !== line)) continue;
     const text = recordSentence(line, agents);
     if (!text) continue;
     const at = new Date(line.at);
