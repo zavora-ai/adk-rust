@@ -18,6 +18,16 @@
 //!    decision makes it claimable, and the claim resumes the same session so the held call
 //!    executes with its decision.
 //!
+//! # Calls a person asked for
+//!
+//! An agent run's input `{"text": ..., "requestedCall": RequestedCall}` carries a call a
+//! person asked for through something the agent drew (spec 3.3 §7.4 rule 5). On a run an
+//! authenticated caller enqueued, the start of the run sets [`RunConfig::requested_call`],
+//! and the agent holds the call for the person's decision, so the run parks as above; on any
+//! other run the call is ignored. A woken run continues as any parked run does.
+//!
+//! [`RunConfig::requested_call`]: adk_core::RunConfig::requested_call
+//!
 //! # Fencing a stalled worker
 //!
 //! A worker that stalls (a long pause, a partition) can wake after its lease expired and
@@ -191,8 +201,8 @@ use adk_core::{
     ActingConfig, AdkError, AgentId, AgentPrincipal, BeforeModelResult, CallbackContext,
     ClaimedRun, Content, DurableRunStore, ErrorCategory, ErrorComponent, GOVERNANCE_FROZEN_CODE,
     GOVERNANCE_STALE_CODE, GovernanceControl, InvocationHooks, LlmRequest, LlmResponse,
-    PRINCIPAL_NOT_ALLOWED_CODE, Part, RunCheckpointRef, RunFilter, RunOutcome, RunRecord, RunState,
-    SessionId, UserId,
+    PRINCIPAL_NOT_ALLOWED_CODE, Part, RequestedCall, RunCheckpointRef, RunFilter, RunOutcome,
+    RunRecord, RunState, SessionId, UserId,
     run_store::{RUN_NOT_FOUND_CODE, RUN_STALE_EPOCH_CODE},
 };
 use adk_runner::Runner;
@@ -1438,7 +1448,15 @@ impl DurableWorker {
                 return Ok(Ok(Attempt::Done(agent_result(&text, &session_id, None))));
             }
             Ok(Prepared::Continue) => Content::new("user").with_text(""),
-            Ok(Prepared::Start) => input_content(&record.input),
+            Ok(Prepared::Start) => {
+                // The agent takes a call a person asked for once, so a woken run that starts
+                // from the same input never holds it again (spec 3.3 §7.4 rule 5).
+                match requested_call(&record.input, record.authenticated) {
+                    Ok(call) => config.requested_call = call,
+                    Err(error) => return Ok(Err(Failure { error, retryable: false })),
+                }
+                input_content(&record.input)
+            }
             Err(error) => return Ok(Err(error.into())),
         };
 
@@ -2101,7 +2119,8 @@ fn agent_result(text: &str, session_id: &str, invocation_id: Option<&str>) -> Va
 }
 
 /// The user turn an agent run starts from: a string, `{"text": ...}`, or
-/// `{"content": Content}`; any other value is sent as its JSON text.
+/// `{"content": Content}`; any other value is sent as its JSON text, except a
+/// `{"requestedCall": ...}` without text, which starts from an empty turn.
 pub(crate) fn input_content(input: &Value) -> Content {
     match input {
         Value::String(text) => Content::new("user").with_text(text),
@@ -2114,11 +2133,36 @@ pub(crate) fn input_content(input: &Value) -> Content {
             }
             match map.get("text").and_then(Value::as_str) {
                 Some(text) => Content::new("user").with_text(text),
+                None if map.contains_key(REQUESTED_CALL_INPUT_KEY) => {
+                    Content::new("user").with_text("")
+                }
                 None => Content::new("user").with_text(input.to_string()),
             }
         }
         other => Content::new("user").with_text(other.to_string()),
     }
+}
+
+/// The run input key of a call a person asked for through something an agent drew.
+const REQUESTED_CALL_INPUT_KEY: &str = "requestedCall";
+
+/// The call a person asked for that an agent run's `input` carries beside its text
+/// (`{"text": ..., "requestedCall": RequestedCall}`), honoured only on a run an
+/// authenticated caller enqueued (spec 3.3 §7.4 rule 5, wave 4 decision 13).
+fn requested_call(input: &Value, authenticated: bool) -> Result<Option<RequestedCall>, String> {
+    let Some(raw) = input.get(REQUESTED_CALL_INPUT_KEY) else {
+        return Ok(None);
+    };
+    if !authenticated {
+        tracing::warn!("ignored a requested call on a run no authenticated caller enqueued");
+        return Ok(None);
+    }
+    serde_json::from_value(raw.clone()).map(Some).map_err(|error| {
+        format!(
+            "the run's {REQUESTED_CALL_INPUT_KEY} is not a requested call: {error}. Enqueue it \
+             as an adk_core::RequestedCall"
+        )
+    })
 }
 
 /// The workflow state a run's input becomes: an object's fields, or `{"input": value}`.
