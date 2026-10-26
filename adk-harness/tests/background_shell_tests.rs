@@ -393,3 +393,14 @@ async fn a_rewind_lists_a_running_background_shell_as_not_undone() {
     );
     f.harness.close().await;
 }
+
+/// The `<harness>` block says what background shells suit under the build's isolation, and
+/// lists `shell_output` and `shell_kill` in the read class (spec 3.1 §7.25, §7.29).
+#[tokio::test]
+async fn the_block_says_what_background_shells_suit() {
+    let (f, _outputs) = auto(vec![ScriptedResponse::text("ok")]).await;
+    let block = f.harness.agent().manifest().render();
+    assert!(block.contains("Background shells: servers and watchers run on the host\n"), "{block}");
+    let read = block.lines().find(|line| line.contains("read_file")).unwrap();
+    assert!(read.contains("shell_kill shell_output"), "{read}");
+}

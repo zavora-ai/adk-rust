@@ -835,16 +835,16 @@ impl HarnessManifest {
     }
 }
 
-/// What background shells suit under `shell` (spec 3.1 §7.29 "Isolation").
+/// What background shells suit under `shell` (spec 3.1 §7.29 "Isolation"); short, since the
+/// block is capped.
 fn background_note(shell: Option<&crate::shell::IsolationStatus>) -> String {
-    let base = "bash run_in_background returns a shell_id; a reminder names each that ends, \
-                shell_output reads it, shell_kill stops it";
     match shell {
-        Some(crate::shell::IsolationStatus::OsSandbox { .. }) => format!(
-            "{base}. Under the sandbox they suit builds, tests and watchers; a server started \
-             there is unreachable from later commands, so a server needs the host"
-        ),
-        _ => format!("{base}. Servers and watchers run on the host"),
+        Some(crate::shell::IsolationStatus::OsSandbox { .. }) => {
+            "builds, tests, watchers; a server \
+             started in the sandbox is unreachable from later commands"
+                .to_string()
+        }
+        _ => "servers and watchers run on the host".to_string(),
     }
 }
 
