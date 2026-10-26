@@ -300,6 +300,7 @@ impl RunningSite {
             "data/keys/release.jwk",
         );
         let announcer = Arc::new(DeferredAnnouncer::default());
+        let verify_edge = Arc::new(crate::edge::adapters::DeferredFetcher::default());
         let quotes = Arc::new(ReviewQuotes::open(paths.data().join("reviews.json"))?);
         let charters: Arc<dyn CharterStore> = stores.charters.clone();
         let mut builder = SiteRuntime::builder(
@@ -318,7 +319,12 @@ impl RunningSite {
                 .gate(&site.origin)
                 .with_extension(Arc::new(delegation))
                 // Pages quote a found review only as its owner approved (S2).
-                .with_extension(Arc::new(QuotedReviews::new(quotes.clone()))),
+                .with_extension(Arc::new(QuotedReviews::new(quotes.clone())))
+                .with_extension(Arc::new(super::checks::preview_verification(
+                    &project,
+                    host.clone(),
+                    verify_edge.clone(),
+                ))),
         )
         .announcer(announcer.clone());
         if let Some(previous) = previous {
@@ -515,6 +521,7 @@ impl RunningSite {
         let triggers = vec![experiments.trigger(&site.name, &cron)];
         let router = site_router(&edge.edge, host, &project.config.name)
             .merge(stream_router(updates.clone()));
+        verify_edge.set(Arc::new(adk_awp::verify::fetch::RouterFetcher::new(router.clone())));
         Ok(Self {
             tracker: tracker(aeo.is_some()),
             site,

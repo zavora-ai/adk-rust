@@ -218,6 +218,38 @@ async fn nothing_publishes_until_the_owner_delegates_the_release_key() {
     served.shutdown().await.unwrap();
 }
 
+/// The launch gate's full tier runs `awp verify` against the preview: it fails while the
+/// owner has signed no contract, passes for release 1 with nothing logged, and passes for
+/// the next release over the log of the first, the Agent Card read from the served edge
+/// (spec 3.5 §7.8.1 "Machine views").
+#[tokio::test]
+async fn the_launch_gate_verifies_the_preview_as_an_agent_would() {
+    use adk_site::gate::{CheckStatus, GateCheck};
+
+    let dir = project(SiteKind::Business).await;
+    let served = start(dir.path(), |_| {}).await;
+    let gate = served.sites[0].runtime.run_launch_gate().await.unwrap();
+    let check = gate.check(GateCheck::AwpVerify).unwrap();
+    assert_eq!(check.status, CheckStatus::Failed, "{check:#?}");
+    assert_eq!(check.findings[0].rule, "contract.unavailable", "{check:#?}");
+    served.shutdown().await.unwrap();
+
+    owner_signs(dir.path()).await;
+    let served = start(dir.path(), |_| {}).await;
+    let charter = commit(&served, dir.path()).await;
+    let gate = served.sites[0].runtime.run_launch_gate().await.unwrap();
+    let check = gate.check(GateCheck::AwpVerify).unwrap();
+    assert_eq!(check.status, CheckStatus::Passed, "{check:#?}");
+    assert!(check.note.as_deref().unwrap_or_default().contains("release 1"), "{check:#?}");
+
+    assert!(matches!(launch(&served, &charter, Vec::new()).await, PipelineOutcome::Published(_)));
+    let gate = served.sites[0].runtime.run_launch_gate().await.unwrap();
+    let check = gate.check(GateCheck::AwpVerify).unwrap();
+    assert_eq!(check.status, CheckStatus::Passed, "{check:#?}");
+    assert!(check.note.as_deref().unwrap_or_default().contains("release 2"), "{check:#?}");
+    served.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn a_served_site_restarts_and_keeps_its_state() {
     let dir = project(SiteKind::Business).await;

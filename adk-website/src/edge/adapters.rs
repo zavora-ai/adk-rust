@@ -9,6 +9,7 @@
 //! | [`SiteSubjectData`] | the edge's `SubjectData` | the edge's leads and the site's contact book |
 //! | [`EdgeAnnouncer`] | `adk-site`'s `Announcer` | `site.release.published` and `catalog.changed` on the edge's events |
 //! | [`DeferredAnnouncer`] | `adk-site`'s `Announcer` | the edge's announcer once it exists: the runtime is built before the edge that reads it |
+//! | [`DeferredFetcher`] | `adk-awp`'s verifier `Fetcher` | the served site's router once it exists, for the launch gate's `awp verify` against the preview (§7.8.1) |
 //! | [`EdgeLiveStore`] | `adk-site`'s `LiveStore` | the live lane's values, read by the edge's read-only capabilities |
 //! | [`ReceiptEntrySigner`] | `adk-site`'s `stream::EntrySigner` | the edge's delegated `receipt` key |
 //! | [`ReceiptKey`] | `adk-payments`' `ReceiptSigner` and `ReceiptVerifier` | the edge's delegated `receipt` key, for commerce receipts (§7.5) |
@@ -241,6 +242,53 @@ impl Announcer for DeferredAnnouncer {
                 );
                 Ok(())
             }
+        }
+    }
+}
+
+/// The served site's documents for the launch gate's `awp verify` against the preview (spec
+/// 3.5 §7.8.1 "Machine views"): what the release does not hold, such as the Agent Card the
+/// edge serves, is read from the site's router once it exists. The runtime and its gate are
+/// built before the edge, so the router is set afterwards; until then such a document is
+/// unavailable.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+///
+/// use adk_awp::verify::fetch::RouterFetcher;
+/// use adk_website::edge::adapters::DeferredFetcher;
+///
+/// let deferred = Arc::new(DeferredFetcher::default());
+/// assert!(deferred.set(Arc::new(RouterFetcher::new(axum::Router::new()))));
+/// ```
+#[derive(Default)]
+pub struct DeferredFetcher {
+    target: OnceLock<Arc<dyn adk_awp::verify::fetch::Fetcher>>,
+}
+
+impl DeferredFetcher {
+    /// Fetches through `target` from now on; returns `false` when one was already set.
+    pub fn set(&self, target: Arc<dyn adk_awp::verify::fetch::Fetcher>) -> bool {
+        self.target.set(target).is_ok()
+    }
+}
+
+#[async_trait]
+impl adk_awp::verify::fetch::Fetcher for DeferredFetcher {
+    async fn get(
+        &self,
+        url: &str,
+        headers: &axum::http::HeaderMap,
+    ) -> std::result::Result<adk_awp::verify::fetch::Fetched, adk_awp::verify::fetch::FetchError>
+    {
+        match self.target.get() {
+            Some(target) => target.get(url, headers).await,
+            None => Err(adk_awp::verify::fetch::FetchError {
+                url: url.to_string(),
+                reason: "the site's edge is not serving yet".into(),
+            }),
         }
     }
 }

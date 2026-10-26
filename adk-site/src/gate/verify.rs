@@ -37,7 +37,8 @@ use crate::release::{
 /// tiles, manifests, executable paths, sampled pages and public terms — with the preview's
 /// manifest bound by its staged digest instead of a log entry it does not have yet.
 ///
-/// Documents on other origins, such as an Agent Card the edge serves, are fetched through
+/// Documents the release does not hold — on other origins, or served by an edge in front of
+/// the release, such as its Agent Card — are fetched through
 /// [`with_fetcher`](Self::with_fetcher); without one they are unavailable and the check
 /// fails. The DNS anchor is checked against the given resolver: before the domain points at
 /// the site, give it the `_awp-root` record the owner is about to publish.
@@ -93,8 +94,8 @@ impl PreviewVerification {
         }
     }
 
-    /// Fetches documents on other origins, such as the edge's Agent Card, through
-    /// `fetcher`.
+    /// Fetches the documents the release does not hold, such as the edge's Agent Card, through
+    /// `fetcher`: an `adk-awp` `RouterFetcher` over an in-process edge, or an `HttpFetcher`.
     #[must_use]
     pub fn with_fetcher(mut self, fetcher: Arc<dyn Fetcher>) -> Self {
         self.others = Some(fetcher);
@@ -165,22 +166,34 @@ struct PreviewSite {
     others: Option<Arc<dyn Fetcher>>,
 }
 
+/// What the preview answers for a path.
+enum Answer {
+    /// A file, with its media type.
+    File(Vec<u8>, String),
+    /// Nothing, and nothing else may answer: the log's paths are the host's alone.
+    Absent,
+    /// Not the release's: an edge in front of it may serve it.
+    NotHeld,
+}
+
 impl PreviewSite {
-    async fn serve(&self, path: &str) -> std::result::Result<Option<(Vec<u8>, String)>, String> {
+    async fn serve(&self, path: &str) -> std::result::Result<Answer, String> {
         let path = if path.ends_with('/') { format!("{path}index.html") } else { path.to_string() };
         if path.trim_start_matches('/') == manifest_path(self.staged.manifest.seq) {
             let bytes = self.staged.manifest_bytes.to_vec();
-            return Ok(Some((bytes, "application/awp+json".into())));
+            return Ok(Answer::File(bytes, "application/awp+json".into()));
         }
         if let Some(entry) = self.staged.files.get(&path) {
             let bytes = self.staged.read(&path).map_err(|e| e.to_string())?;
-            return Ok(Some((bytes, entry.content_type.clone())));
+            return Ok(Answer::File(bytes, entry.content_type.clone()));
         }
         if is_log_path(&path) {
             let bytes = self.host.fetch(&path).await.map_err(|e| e.to_string())?;
-            return Ok(bytes.map(|bytes| (bytes.to_vec(), content_type(&path).to_string())));
+            return Ok(bytes.map_or(Answer::Absent, |bytes| {
+                Answer::File(bytes.to_vec(), content_type(&path).to_string())
+            }));
         }
-        Ok(None)
+        Ok(Answer::NotHeld)
     }
 }
 
@@ -199,8 +212,18 @@ impl Fetcher for PreviewSite {
             };
         };
         let path = rest.split(['?', '#']).next().unwrap_or(rest);
-        let Some((body, media)) = self.serve(path).await.map_err(failed)? else {
-            return Ok(Fetched { status: 404, headers: HeaderMap::new(), body: Bytes::new() });
+        let not_found = || Fetched { status: 404, headers: HeaderMap::new(), body: Bytes::new() };
+        let (body, media) = match self.serve(path).await.map_err(failed)? {
+            Answer::File(body, media) => (body, media),
+            Answer::Absent => return Ok(not_found()),
+            // What the release does not hold, such as an Agent Card an edge in front of it
+            // serves, comes from the edge.
+            Answer::NotHeld => {
+                return match &self.others {
+                    Some(others) => others.get(url, headers).await,
+                    None => Ok(not_found()),
+                };
+            }
         };
         let mut headers = HeaderMap::new();
         if let Ok(value) = HeaderValue::from_str(&media) {

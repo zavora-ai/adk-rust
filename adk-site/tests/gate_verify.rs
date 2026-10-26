@@ -163,3 +163,38 @@ async fn a_preview_a_verifier_refuses_fails_the_gate_by_name() {
     let check = verdict.check(GateCheck::AwpVerify).unwrap();
     assert_eq!(check.findings[0].rule, "root.unanchored", "{check:#?}");
 }
+
+/// An Agent Card the edge serves, not the release, comes from the edge: without it the card
+/// is unavailable and the check fails at `card.signature`.
+#[tokio::test]
+async fn documents_the_release_does_not_hold_come_from_the_edge() {
+    let site = FixtureSite::build("example.com", Profile::StaticEdge).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut project = signed_project(&site).await;
+    project.documents.remove(".well-known/agent-card.json");
+    let (out, report) = build(&project).await;
+
+    let verdict = run(
+        &gate(&site, Arc::new(DirectoryHost::new(dir.path()))),
+        GateMode::Full,
+        &project,
+        out.path(),
+        &report,
+    )
+    .await;
+    let check = verdict.check(GateCheck::AwpVerify).unwrap();
+    assert_eq!(check.findings[0].rule, "card.signature", "{check:#?}");
+
+    let edge = adk_awp::verify::fetch::RouterFetcher::new(site.router());
+    let check = PreviewVerification::new(
+        "example.com",
+        Arc::new(DirectoryHost::new(dir.path())),
+        Arc::new(site.resolver.clone()),
+    )
+    .with_fetcher(Arc::new(edge))
+    .at(fixture_time());
+    let gate = LaunchGate::new().with_extension(Arc::new(check));
+    let verdict = run(&gate, GateMode::Full, &project, out.path(), &report).await;
+    let check = verdict.check(GateCheck::AwpVerify).unwrap();
+    assert_eq!(check.status, CheckStatus::Passed, "{check:#?}");
+}

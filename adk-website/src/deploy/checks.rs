@@ -5,6 +5,7 @@
 //! | Part | Does |
 //! |---|---|
 //! | [`ReleaseDelegation`] | Fails every build whose `/.well-known/awp/keys.json` does not delegate the release key the site log signs with; the finding names `adk-rust awp keys rotate` and `adk-rust awp keys delegate` |
+//! | [`preview_verification`] | The full tier runs `awp verify` against the preview of the next release (spec 3.5 §7.8.1), over the host's site log, with the edge's documents read from the served router |
 //! | [`PaymentLinks`] | `pay_order`, `donate`, `subscribe` and `buy_ticket` answer with the owner's payment instructions from `payments.json`; the money never passes through the site |
 //! | [`LogRecorder`] | Writes audit records to the logs, for the edge's meter |
 
@@ -22,6 +23,50 @@ use crate::edge::handlers::PaymentDesk;
 /// Refuses to publish until the owner's root has delegated the release key (spec 3.5 §7.2,
 /// D-11, A-I5); it lives in `adk-site`'s gate and reports as `GateCheck::Signing`.
 pub use adk_site::gate::ReleaseDelegation;
+
+/// `awp verify` against the preview, for a served site's launch gate (spec 3.5 §7.8.1
+/// "Machine views"): the full tier stages the build as the release after the ones `host`
+/// logs and verifies it as an agent would once it is live, reporting as
+/// `GateCheck::AwpVerify`. What the release does not hold, such as the Agent Card the edge
+/// serves, is read from `edge`. The DNS root anchor is checked against the `_awp-root`
+/// record the project's key set names — the record the owner publishes when the domain
+/// points at the site; the Guardian's probes and `adk-rust awp verify` read the published
+/// one.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use std::sync::Arc;
+///
+/// use adk_site::gate::LaunchGate;
+/// use adk_website::deploy::checks::preview_verification;
+/// use adk_website::edge::adapters::DeferredFetcher;
+///
+/// # fn demo(project: &adk_site::content::SiteProject, host: Arc<dyn adk_site::host::SiteHost>) {
+/// let edge = Arc::new(DeferredFetcher::default());
+/// let gate = LaunchGate::new().with_extension(Arc::new(preview_verification(project, host, edge)));
+/// # let _ = gate;
+/// # }
+/// ```
+pub fn preview_verification(
+    project: &adk_site::content::SiteProject,
+    host: Arc<dyn adk_site::host::SiteHost>,
+    edge: Arc<crate::edge::adapters::DeferredFetcher>,
+) -> adk_site::gate::PreviewVerification {
+    use adk_awp::signing::anchor::{FixedTxtResolver, root_record, root_record_name};
+
+    let domain = project.config.domain.clone();
+    let keys = project
+        .documents
+        .get(".well-known/awp/keys.json")
+        .and_then(|bytes| serde_json::from_slice::<awp_types::KeySet>(bytes).ok());
+    let resolver = match keys {
+        Some(keys) => FixedTxtResolver::default()
+            .with(&root_record_name(&domain), &root_record(&keys.root.kid, &keys.root.public_key)),
+        None => FixedTxtResolver::default(),
+    };
+    adk_site::gate::PreviewVerification::new(domain, host, Arc::new(resolver)).with_fetcher(edge)
+}
 
 /// Payments through the owner's own payment links (spec 3.5 §7.5 "Commerce", §7.14): the
 /// buyer is told how to pay with the order as the reference; nothing is charged here.

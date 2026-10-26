@@ -51,8 +51,9 @@ adk-runner.workspace = true
 # The context the owner's channel runs the back office's media intake in (spec 3.5 S18).
 adk-tool.workspace = true
 adk-session = { workspace = true, features = ["sqlite"] }
-# Migration sources, freeze, quarantine and probes for onboarding and the Guardian (§7.8).
-adk-site = { workspace = true, features = ["migrate"] }
+# Migration sources, freeze, quarantine and probes for onboarding and the Guardian (§7.8);
+# `awp verify` against the preview in the launch gate (§7.8.1).
+adk-site = { workspace = true, features = ["migrate", "verify"] }
 awp-types.workspace = true
 async-trait.workspace = true
 axum = "0.8"
