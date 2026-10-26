@@ -197,7 +197,7 @@ export function suggestionCard(
       instructions: draft.instructions,
       instructionsTruncated: false,
       abilities: assessed.abilities,
-      compared: draft.uses.web.access === "none" ? `It can do less than ${by}: no shell, no web.` : `It can do less than ${by}: no shell, and only the sites listed.`,
+      compared: draft.uses.web.access === "none" ? `It can do no more than ${by}, and has no shell or web.` : `It can do no more than ${by}, and has no shell.`,
       allowedWithoutAsking: "Nothing yet",
       draft,
     },

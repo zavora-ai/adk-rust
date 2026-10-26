@@ -11,7 +11,7 @@ import { AgentForm, MODES } from "./AgentForm";
 import type { AgentsSeam } from "./client";
 import { agentLabels as l } from "./labels";
 import type { ConfirmPresence } from "./NewAgent";
-import type { AgentChoices, AgentDetail, AgentDraft, AgentPreview } from "./types";
+import type { AgentChoices, AgentCommand, AgentDetail, AgentDraft, AgentPreview } from "./types";
 import { usePreview } from "./usePreview";
 import { WhatItCanDo } from "./WhatItCanDo";
 
@@ -77,6 +77,12 @@ export function WasNow({ preview }: { preview: AgentPreview }) {
       ))}
     </dl>
   );
+}
+
+/** Whether `rule` is pinned to the added agent `id`: its agent is exactly `urn:adk:agent:{app}/{id}` (S-I19). */
+export function pinnedTo(rule: StandingRule, id: string): boolean {
+  const agent = rule.agent ?? "";
+  return agent.startsWith("urn:adk:agent:") && agent.slice(agent.lastIndexOf("/") + 1) === id;
 }
 
 function sameDraft(a: AgentDraft, b: AgentDraft): boolean {
@@ -162,14 +168,19 @@ export function AgentSettings({
     run(async () => {
       if (!detail || !draft || !preview) return;
       const origin = originOf(event);
-      if (preview.needsPresence && !(await confirm?.())) {
+      if (preview.needsPresence && !confirm) {
         setProblem(l.presenceNeeded);
         return;
       }
-      const outcome = await seam.command(
-        { type: "changeAgent", agent: detail.id, version: detail.version, draft, digest: preview.digest },
-        origin,
-      );
+      const command: AgentCommand = {
+        type: "changeAgent",
+        agent: detail.id,
+        version: detail.version,
+        draft,
+        digest: preview.digest,
+      };
+      const outcome =
+        preview.needsPresence && confirm ? await confirm(command) : await seam.command(command, origin);
       if (outcome.type === "agentChanged") {
         setDetail(outcome.agent);
         setDraft(outcome.agent.draft);
@@ -222,7 +233,16 @@ export function AgentSettings({
       const label = rules?.find((rule) => rule.id === chosenRule)?.label ?? "";
       setNote(l.copied(label));
       setChosenRule("");
+      // The copy is the agent's own rule now.
+      void seam
+        .rules?.()
+        .then((all) => setRules((all ?? []).filter(allows)))
+        .catch(() => undefined);
     });
+
+  // The agent's own rules, and the person's — pinned to no agent — that may be copied to it.
+  const own = id ? rules?.filter((rule) => pinnedTo(rule, id)) : undefined;
+  const copyable = rules?.filter((rule) => !rule.agent);
 
   if (!id) {
     // The primary agent: its mode and rules only (decision 17).
@@ -241,7 +261,7 @@ export function AgentSettings({
             <span className="setting-label">{l.howMuchItAsksFirst}</span> <strong>{primary.mode.label}</strong>
           </p>
         )}
-        <RuleList rules={rules} />
+        <RuleList rules={copyable} />
         <p className="agent-hint">{l.primaryNote}</p>
       </section>
     );
@@ -305,9 +325,20 @@ export function AgentSettings({
               <h2 id={ruleId} className="card-label">
                 {l.allowedWithoutAsking}
               </h2>
+              {own !== undefined && own.length > 0 ? (
+                <ul className="bordered" aria-label={l.itsRules}>
+                  {own.map((rule) => (
+                    <li key={rule.id} className="rule">
+                      {visible(rule.label)}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="muted">{l.nothingYet}</p>
+              )}
               <p className="agent-hint">{l.allowedHint}</p>
-              {seam.copyRule && rules !== undefined && (
-                rules.length === 0 ? (
+              {seam.copyRule && copyable !== undefined && (
+                copyable.length === 0 ? (
                   <p className="muted">{l.noRulesToCopy}</p>
                 ) : (
                   <div className="agent-copy-rule">
@@ -318,7 +349,7 @@ export function AgentSettings({
                       onChange={(event) => setChosenRule(event.target.value)}
                     >
                       <option value="">{l.chooseARule}</option>
-                      {rules.map((rule) => (
+                      {copyable.map((rule) => (
                         <option key={rule.id} value={rule.id}>
                           {rule.label}
                         </option>

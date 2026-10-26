@@ -6,14 +6,17 @@ import { originOf } from "../origin";
 import { AgentForm, emptyDraft } from "./AgentForm";
 import type { AgentsSeam } from "./client";
 import { agentLabels as l } from "./labels";
-import type { AgentChoices, AgentDetail, AgentDraft } from "./types";
+import type { AgentChoices, AgentCommand, AgentDetail, AgentDraft, AgentOutcome } from "./types";
 import { usePreview } from "./usePreview";
 import { WhatItCanDo } from "./WhatItCanDo";
 
 export type NewAgentTab = "describe" | "setUp";
 
-/** Confirms the person is present for a high-risk change (spec 3.3 §7.2): a passkey in the home. */
-export type ConfirmPresence = () => Promise<boolean>;
+/**
+ * Makes a high-risk change after the person confirms it is them (spec 3.3 §7.2): the passkey on
+ * this computer, bound by the server to exactly this change.
+ */
+export type ConfirmPresence = (command: AgentCommand) => Promise<AgentOutcome>;
 
 /**
  * The New agent screen (`/ui/agents/new`, spec 3.3 §5.7): **Describe it** asks ADK-Rust to
@@ -79,11 +82,13 @@ export function NewAgent({
     setBusy(true);
     setProblem("");
     try {
-      if (preview.needsPresence && !(await confirm?.())) {
+      const command: AgentCommand = { type: "addAgent", draft, digest: preview.digest, replaces };
+      if (preview.needsPresence && !confirm) {
         setProblem(l.presenceNeeded);
         return;
       }
-      const outcome = await seam.command({ type: "addAgent", draft, digest: preview.digest, replaces }, origin);
+      const outcome =
+        preview.needsPresence && confirm ? await confirm(command) : await seam.command(command, origin);
       if (outcome.type === "agentAdded") onAdded(outcome.agent);
     } catch (error) {
       setProblem(problemText(error));

@@ -50,6 +50,8 @@ import { labels } from "./labels";
 import { memoryOf, undoOutcome } from "./memory";
 import { phoneLabels } from "./phone/labels";
 import { confirmAnswer, platformPasskeys, registerPasskey } from "./phone/passkey";
+import { confirmAgentChange } from "./agents/confirm";
+import type { AgentCommand, AgentOutcome } from "./agents/types";
 import type {
   AgentSpend,
   DevicesSeam,
@@ -153,6 +155,8 @@ export interface HomeClient {
   voiceCommand?(command: Command, origin: Origin): Promise<CommandOutcome>;
   /** The agents a person adds (spec 3.3 §5.7): their reads, previews and changes. */
   agentsSeam?(): AgentsSeam;
+  /** Makes a high-risk agent change after "Confirm it's you" with this computer's passkey. */
+  confirmAgentChange?(command: AgentCommand): Promise<AgentOutcome>;
   /** The roster with the primary agent and whether agents can be added here. */
   agentsWithPrimary?(): Promise<AgentsResponse>;
 }
@@ -251,12 +255,18 @@ export class HttpClient implements HomeClient {
     return this.request<AgentsResponse>(`/surface/agents?surface=${this.surface}`);
   }
 
+  /** "Confirm it's you" for an agent change at high risk (spec 3.3 §7.2). */
+  confirmAgentChange(command: AgentCommand): Promise<AgentOutcome> {
+    return confirmAgentChange(this.post.bind(this), command);
+  }
+
   /** The agents a person adds (spec 3.3 §5.7), over the engine's reads and commands. */
   agentsSeam(): AgentsSeam {
     return httpAgents({
       get: (path) => this.request(path),
       post: (path, body) => this.post(path, body),
       command: (command, origin) => this.command(command as Command, origin),
+      rules: () => this.rules(),
     });
   }
 

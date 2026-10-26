@@ -35,6 +35,8 @@ export interface AgentsTransport {
   get<T>(path: string): Promise<T>;
   post<T>(path: string, body: unknown): Promise<T>;
   command(command: unknown, origin: Origin): Promise<unknown>;
+  /** The person's standing rules; `undefined` without a harness. */
+  rules?(): Promise<StandingRule[] | undefined>;
 }
 
 /** The seam over the engine's HTTP API. */
@@ -47,5 +49,7 @@ export function httpAgents(transport: AgentsTransport): AgentsSeam {
     copyRule: async (agent, rule, origin) => {
       await transport.command({ type: "copyRuleToAgent", agent, ruleId: rule }, origin);
     },
+    // Settings show the agent's own rules and offer the person's to copy (spec 3.3 §5.7).
+    ...(transport.rules ? { rules: transport.rules } : {}),
   };
 }

@@ -12,10 +12,15 @@ import { NewAgent } from "../src/agents/NewAgent";
 import { RosterFoot } from "../src/agents/RosterFoot";
 import { App } from "../src/App";
 import { FixtureClient, fixtureSeams } from "../src/fixture/fixture";
-import { FixtureAgents, suggestionCard, withAgents } from "../src/fixture/agents";
+import { FixtureAgents, financeDraft, suggestionCard, withAgents } from "../src/fixture/agents";
 import { FixturePhoneClient } from "../src/fixture/phone";
 import { Decide } from "../src/phone/Decide";
-import type { AgentRow } from "../src/generated/api";
+import { httpAgents } from "../src/agents/client";
+import { agentRoutines } from "../src/agents/routines";
+import type { AgentCommand } from "../src/agents/types";
+import { Roster } from "../src/components/Roster";
+import type { AgentRow, Origin, RemovedAgent } from "../src/generated/api";
+import type { KernelProcess, StandingRule } from "../src/kernel";
 
 const chief: AgentRow = {
   agent: { name: "adk-rust", displayName: "ADK-Rust", avatar: { monogram: "A", color: "#C03A00" } },
@@ -219,7 +224,7 @@ describe("the decision that adds an agent", () => {
     render(<AgentCard view={card.addsAgent} decisionId={card.id} expanded={false} onExpand={vi.fn()} />);
     expect(screen.getByText("Reads files in Invoices")).toBeTruthy();
     expect(screen.getByText("claude-sonnet-5-5").className).toContain("mono");
-    expect(screen.getByText("It can do less than ADK-Rust: no shell, no web.")).toBeTruthy();
+    expect(screen.getByText("It can do no more than ADK-Rust, and has no shell or web.")).toBeTruthy();
     expect(screen.getByText("Nothing yet")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Change it first" }));
     expect(`${window.location.pathname}${window.location.search}`).toBe(newAgentPath(card.id));
@@ -311,3 +316,109 @@ describe("Memory & rules", () => {
   });
 });
 
+
+// Wave 3 review, agents you create: each test fails on its base before its fix.
+describe("wave 3 review", () => {
+  const keyboard: Origin = { kind: "keyboard" };
+  const row = (name: string, area: string): AgentRow => ({
+    agent: { name: name.toLowerCase(), displayName: name, avatar: { monogram: name.slice(0, 1), color: "#2F7D4F" } },
+    status: "done",
+    statusText: "Ready",
+    added: true,
+    canChange: true,
+    area,
+  });
+  const bills: RemovedAgent = {
+    agent: { name: "bills", displayName: "Bills", avatar: { monogram: "B", color: "#475569" } },
+    removedText: "Removed on 25 Oct",
+    threads: [{ sessionId: "bills-1", at: "2026-10-25T07:02:00Z", when: "25 Oct 10:02" }],
+  };
+
+  // Finding 15.
+  it("adds an agent at high risk after Confirm it's you, never through the plain command", async () => {
+    const seam = new FixtureAgents(false);
+    const server = new FixtureAgents(false);
+    const confirm = vi.fn((command: AgentCommand) => server.command(command, keyboard));
+    const onAdded = vi.fn();
+    const draft = { ...financeDraft(), uses: { ...financeDraft().uses, shell: "host" as const } };
+    render(
+      <NewAgent seam={seam} initial={draft} confirm={confirm} onDescribe={vi.fn()} onAdded={onAdded} onCancel={vi.fn()} />,
+    );
+    const add = (await screen.findByRole("button", { name: "Confirm it's you and add" })) as HTMLButtonElement;
+    await waitFor(() => expect(add.disabled).toBe(false));
+    await userEvent.click(add);
+    await waitFor(() => expect(onAdded).toHaveBeenCalled());
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ type: "addAgent", draft }));
+    expect(seam.taken).toEqual([]);
+  });
+
+  // Finding 16.
+  it("reads the person's rules over HTTP, so settings list them and offer Copy one of your rules", async () => {
+    const rules: StandingRule[] = [
+      { id: "r-read", tool: "read_file", label: "Reading files", decision: { kind: "allow" }, createdAt: "2026-10-20T09:00:00Z" },
+    ];
+    const seam = httpAgents({ get: vi.fn(), post: vi.fn(), command: vi.fn(), rules: async () => rules });
+    expect(await seam.rules?.()).toEqual(rules);
+  });
+
+  it("lists an agent's routines from its scheduled processes, soonest first", () => {
+    const process = (pid: string, target: string, title: string, expr: string): KernelProcess => ({
+      run: { runId: pid, target, state: "scheduled" },
+      meta: { pid, wake: { anyOf: [{ cron: { expr } }] }, labels: { title } },
+    });
+    const now = new Date("2026-10-26T06:00:00Z");
+    const routines = agentRoutines(
+      [
+        process("p1", "finance", "Chase late invoices", "0 17 * * *"),
+        process("p2", "finance", "Morning summary", "0 8 * * *"),
+        process("p3", "adk-rust", "Not Finance's", "0 7 * * *"),
+      ],
+      [],
+      "finance",
+      now,
+    );
+    expect(routines.map((routine) => [routine.id, routine.text])).toEqual([
+      ["p2", "Morning summary"],
+      ["p1", "Chase late invoices"],
+    ]);
+  });
+
+  // Finding 43.
+  it("lists the person's agents under their area when there is more than one", () => {
+    render(
+      <Roster agents={[chief, row("Bills", "Home"), row("Archive", "Work"), row("Builder", "Work")]} onSelect={vi.fn()} />,
+    );
+    const items = screen
+      .getAllByRole("listitem")
+      .map((item) => (item.querySelector(".roster-name") ?? item).textContent?.trim());
+    expect(items).toEqual([
+      "ADK-Rust",
+      "Home",
+      "Bills",
+      "Work",
+      "Archive",
+      "Builder",
+    ]);
+  });
+
+  // Findings 10, 11 and 39.
+  it("ends the roster with Removed agents, whose threads open", async () => {
+    const onRead = vi.fn();
+    render(<Roster agents={[chief]} onSelect={vi.fn()} removed={[bills]} onRead={onRead} />);
+    await userEvent.click(screen.getByRole("button", { name: /Removed agents/ }));
+    expect(screen.getByText("Removed on 25 Oct")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Thread of 25 Oct 10:02" }));
+    expect(onRead).toHaveBeenCalledWith(bills, "bills-1");
+  });
+
+  it("shows a removed agent's thread read only", async () => {
+    const client = withAgents(new FixtureClient());
+    const withPrimary = client.agentsWithPrimary!.bind(client);
+    client.agentsWithPrimary = async () => ({ ...(await withPrimary()), removed: [bills] });
+    render(<App client={client} seams={fixtureSeams()} initialSection="threads" />);
+    await userEvent.click(await screen.findByRole("button", { name: /Removed agents/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Thread of 25 Oct 10:02" }));
+    expect(await screen.findByRole("heading", { name: "Bills" })).toBeTruthy();
+    expect(screen.getByText("Bills was removed. Its threads stay; nothing more runs.")).toBeTruthy();
+  });
+});

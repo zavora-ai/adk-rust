@@ -385,3 +385,60 @@ li:has(> .roster-settings) .roster-text > span {
   margin-left: auto;
 }
 
+
+/* "Removed agents" at the roster's foot (spec 3.3 §5.7): read only, quieter than the roster. */
+.roster-removed {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.roster-removed-toggle {
+  justify-self: start;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.roster-removed-list,
+.roster-removed-threads {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.roster-removed-agent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  opacity: 0.75;
+}
+
+.roster-removed-threads {
+  padding-left: 40px;
+}
+
+.roster-removed-threads .link {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.roster-removed-threads [aria-current="true"] {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* An area's name over its agents, when the kernel has more than one. */
+.roster-area {
+  margin: 10px 0 2px;
+  color: var(--label);
+  font-size: 12px;
+}
+
+/* A removed agent's thread is read only: a line where the message box was. */
+.read-only-note {
+  margin: 0;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  color: var(--text-2);
+}

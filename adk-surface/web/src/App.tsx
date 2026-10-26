@@ -4,6 +4,7 @@ import type { HomeClient } from "./client";
 import { ApiError, problemText } from "./client";
 import type { TakeOverSeam } from "./components/DecisionCard";
 import { AgentsScreen } from "./agents/AgentsScreen";
+import { agentRoutines } from "./agents/routines";
 import { agentsPlaceOf } from "./agents/route";
 import { Header } from "./components/Header";
 import { Developer } from "./developer/Developer";
@@ -292,6 +293,7 @@ export function App({
             focusDecision={focusDecision}
             onOpenDecision={openDecision}
             canAddAgents={roster.value?.canAdd ?? false}
+            removed={roster.value?.removed ?? []}
           />
         )}
         {section === "today" && (
@@ -352,6 +354,8 @@ export function App({
               select(primary);
               navigate("threads");
             }}
+            routinesOf={(agent) => agentRoutines(kernel.value?.processes, kernel.value?.agenda, agent, new Date())}
+            confirm={client.confirmAgentChange?.bind(client)}
             onAddRoutine={() => navigate("today")}
             onChanged={refresh}
             onDone={(note) => {

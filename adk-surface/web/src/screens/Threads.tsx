@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentRow, DecisionCard, Origin, StatusLine } from "../generated/api";
+import type { AgentRow, DecisionCard, Origin, RemovedAgent, StatusLine } from "../generated/api";
+import { agentLabels } from "../agents/labels";
 import type { HomeClient } from "../client";
 import { problemText } from "../client";
 import { Avatar } from "../components/Avatar";
@@ -54,6 +55,7 @@ export function Threads({
   focusDecision,
   onOpenDecision,
   canAddAgents = false,
+  removed = [],
 }: {
   client: HomeClient;
   agents: AgentRow[];
@@ -84,7 +86,11 @@ export function Threads({
   onOpenDecision: (card: DecisionCard) => void;
   /** The roster ends with New agent (spec 3.3 §5.7). */
   canAddAgents?: boolean;
+  /** The agents the person removed: their threads open read only (spec 3.3 §5.7). */
+  removed?: RemovedAgent[];
 }) {
+  // A removed agent's thread, read only, in place of the selected agent's.
+  const [reading, setReading] = useState<{ agent: RemovedAgent; session: string }>();
   const [fresh] = useState(newSession);
   const [queued, setQueued] = useState<{ session: string; items: string[] }>({ session: "", items: [] });
   const [sent, setSent] = useState(0);
@@ -109,7 +115,11 @@ export function Threads({
   // An agent without a thread yet starts one of its own (spec 3.3 §5.7 "Threads").
   const own = pinned ?? current?.sessionId ?? (current?.added ? `${fresh}-${key}` : fresh);
   const away = visiting && visiting.agent === key && visiting.session !== own ? visiting.session : undefined;
-  const session = away ?? own;
+  const session = reading?.session ?? away ?? own;
+  // A decision opened elsewhere shows its own thread, not a removed agent's.
+  useEffect(() => {
+    if (visiting) setReading(undefined);
+  }, [visiting]);
   useEffect(() => {
     if (!pinned) onFollow(key, own);
   }, [pinned, key, own, onFollow]);
@@ -157,11 +167,23 @@ export function Threads({
     }
   }
 
-  const name = current?.agent.displayName;
+  const name = reading ? reading.agent.agent.displayName : current?.agent.displayName;
+  const shownAgent = reading ? reading.agent.agent : current?.agent;
   return (
     <div className="threads">
       <aside className="rail">
-        <Roster agents={agents} selected={current?.agent.name} onSelect={onSelect} canAdd={canAddAgents} />
+        <Roster
+          agents={agents}
+          selected={current?.agent.name}
+          onSelect={(agent) => {
+            setReading(undefined);
+            onSelect(agent);
+          }}
+          canAdd={canAddAgents}
+          removed={removed}
+          reading={reading?.session}
+          onRead={(agent, thread) => setReading({ agent, session: thread })}
+        />
         <a
           className="rail-link"
           href="/ui/developer"
@@ -176,12 +198,16 @@ export function Threads({
       <main className="thread-pane" aria-label={name ?? labels.threads}>
         {/* The thread scrolls above the message box, which never covers it. */}
         <div className="thread-scroll">
-          {current && (
+          {shownAgent && (
             <header className="thread-head">
-              <Avatar agent={current.agent} size="lg" />
+              <Avatar agent={shownAgent} size="lg" />
               <div>
-                <h1 className="thread-name">{current.agent.displayName}</h1>
-                {status?.mode && <p className="thread-sub">{status.mode.status}</p>}
+                <h1 className="thread-name">{shownAgent.displayName}</h1>
+                {reading ? (
+                  <p className="thread-sub">{reading.agent.removedText}</p>
+                ) : (
+                  status?.mode && <p className="thread-sub">{status.mode.status}</p>
+                )}
               </div>
             </header>
           )}
@@ -206,7 +232,11 @@ export function Threads({
             </p>
           )}
         </div>
-        {away ? (
+        {reading ? (
+          <p className="read-only-note" role="status">
+            {agentLabels.wasRemoved(reading.agent.agent.displayName)}
+          </p>
+        ) : away ? (
           <div className="composer-wrap">
             <div className="visiting" role="status">
               <span>{labels.anotherConversation(name ?? labels.yourAgents)}</span>
