@@ -37,6 +37,7 @@ enum Kind {
     Effort,
     Hooks,
     Agent,
+    Shells,
 }
 
 const COMMANDS: &[(Kind, &str, &str)] = &[
@@ -56,6 +57,7 @@ const COMMANDS: &[(Kind, &str, &str)] = &[
     (Kind::Effort, "effort", "Reasoning effort; /effort low|medium|high sets every mode"),
     (Kind::Hooks, "hooks", "Hooks on tool events: source, isolation and whether each runs"),
     (Kind::Agent, "agent", super::agents::DESCRIPTION),
+    (Kind::Shells, "shells", super::shells::DESCRIPTION),
 ];
 
 /// The REPL's built-in commands, which take precedence over a registered one of the same
@@ -118,6 +120,7 @@ impl Kind {
             Self::Rules => first == Some("rm"),
             Self::Memory => matches!(first, Some("forget" | "accept")),
             Self::Web => first == Some("allow"),
+            Self::Shells => first == Some("kill"),
             Self::Todos
             | Self::Approvals
             | Self::Plan
@@ -190,6 +193,8 @@ impl HarnessCommands {
             Kind::Rules => first == Some("rm"),
             Kind::Memory => first == Some("forget"),
             Kind::Sandbox => first == Some("on"),
+            // Stopping a shell only removes an effect (spec 3.1 §7.29).
+            Kind::Shells => first == Some("kill"),
             Kind::Mode => match requested_mode(args) {
                 Some(requested) => {
                     let current =
@@ -336,6 +341,7 @@ async fn execute(kind: Kind, shared: &Shared, args: &str) -> Result<String> {
         Kind::Mcp => mcp(shared, args).await,
         Kind::Effort => effort(shared, args).await,
         Kind::Hooks => Ok(hooks(shared)),
+        Kind::Shells => super::shells::run(shared, args).await,
         Kind::Agent => {
             super::agents::run(
                 shared.agents.as_ref(),

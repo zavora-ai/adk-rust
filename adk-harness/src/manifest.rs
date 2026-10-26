@@ -69,6 +69,10 @@ pub struct HarnessManifest {
     /// it declares edit tools (spec 3.1 §7.26, §13 Q12).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multi_file_edit: Option<String>,
+    /// How background shells behave under this build's isolation, when `bash` runs them
+    /// (spec 3.1 §7.29).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_shells: Option<String>,
     /// What `harness_help` can read.
     pub help_topics: Vec<String>,
 }
@@ -570,6 +574,11 @@ impl HarnessManifest {
                 .iter()
                 .any(|(tool, _)| tool == crate::edits::APPLY_PATCH)
                 .then(|| crate::edits::preferred_multi_file_edit(inputs.model).to_string()),
+            background_shells: inputs
+                .rows
+                .iter()
+                .any(|(tool, _)| tool == crate::shell::SHELL_KILL)
+                .then(|| background_note(inputs.shell)),
             help_topics,
         }
     }
@@ -740,7 +749,15 @@ impl HarnessManifest {
                  file changed since you read it is refused as stale: read it again."
             );
         }
+        out.push_str(&self.render_background());
         out
+    }
+
+    fn render_background(&self) -> String {
+        self.background_shells
+            .as_ref()
+            .map(|note| format!("Background shells: {note}\n"))
+            .unwrap_or_default()
     }
 
     fn render_safety(&self) -> String {
@@ -805,6 +822,19 @@ impl HarnessManifest {
             text.push_str("\n[truncated]\n</harness-help>");
         }
         Some(text)
+    }
+}
+
+/// What background shells suit under `shell` (spec 3.1 §7.29 "Isolation").
+fn background_note(shell: Option<&crate::shell::IsolationStatus>) -> String {
+    let base = "bash run_in_background returns a shell_id; a reminder names each that ends, \
+                shell_output reads it, shell_kill stops it";
+    match shell {
+        Some(crate::shell::IsolationStatus::OsSandbox { .. }) => format!(
+            "{base}. Under the sandbox they suit builds, tests and watchers; a server started \
+             there is unreachable from later commands, so a server needs the host"
+        ),
+        _ => format!("{base}. Servers and watchers run on the host"),
     }
 }
 

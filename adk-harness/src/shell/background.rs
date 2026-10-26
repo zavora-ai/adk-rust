@@ -112,6 +112,20 @@ impl BackgroundShellConfig {
         Self { lifetime: None, ..Self::unattended() }
     }
 
+    /// Runs at most `count` shells per session at once.
+    #[must_use]
+    pub fn with_max_running(mut self, count: usize) -> Self {
+        self.max_running = count;
+        self
+    }
+
+    /// Kills a shell once its output passes `bytes`.
+    #[must_use]
+    pub fn with_max_output_bytes(mut self, bytes: u64) -> Self {
+        self.max_output_bytes = bytes;
+        self
+    }
+
     /// Ends each shell after `lifetime`, at most [`MAX_UNATTENDED_SHELL_LIFETIME`].
     #[must_use]
     pub fn with_lifetime(mut self, lifetime: Duration) -> Self {
@@ -730,18 +744,22 @@ impl ShellSupervisor {
     }
 }
 
-/// The supervisor a harness builds: output under [`ShellOutputs::default`], processes in
-/// `pids` (memory by default), and the orphans a crash left there reaped now when a Tokio
-/// runtime runs the build, else before the first shell starts.
+/// The supervisor a harness builds on: `shared` when given, else one with output under
+/// [`ShellOutputs::default`] and processes in `pids` (memory by default). The orphans a
+/// crash left in its registry are reaped now when a Tokio runtime runs the build, else
+/// before its first shell starts.
 pub(crate) fn supervisor(
+    shared: Option<Arc<ShellSupervisor>>,
     config: BackgroundShellConfig,
     pids: Option<Arc<dyn ShellPidRegistry>>,
 ) -> Arc<ShellSupervisor> {
-    let mut supervisor = ShellSupervisor::new(Arc::new(ShellOutputs::default()), config);
-    if let Some(pids) = pids {
-        supervisor = supervisor.with_pid_registry(pids);
-    }
-    let supervisor = Arc::new(supervisor);
+    let supervisor = shared.unwrap_or_else(|| {
+        let mut supervisor = ShellSupervisor::new(Arc::new(ShellOutputs::default()), config);
+        if let Some(pids) = pids {
+            supervisor = supervisor.with_pid_registry(pids);
+        }
+        Arc::new(supervisor)
+    });
     if let Ok(runtime) = tokio::runtime::Handle::try_current() {
         let reaping = supervisor.clone();
         runtime.spawn(async move {

@@ -76,6 +76,9 @@ struct Setup {
     plans: Option<(Arc<dyn adk_graph::Checkpointer>, String)>,
     /// `--preset personal`: the first-run answers (spec 3.3 §10 H1, §13 Q7).
     personal: Option<PersonalSetup>,
+    /// The background shells every harness of this process runs, so a harness rebuilt by
+    /// `/sandbox` or `/effort` keeps the session's shells (spec 3.1 §7.29).
+    shells: std::sync::OnceLock<Arc<adk_harness::ShellSupervisor>>,
 }
 
 /// `--preset personal`: the first-run answers and the limits in force (spec 3.3 §10 H1,
@@ -341,7 +344,33 @@ impl Setup {
             db,
             #[cfg(feature = "persist")]
             store_note,
+            shells: std::sync::OnceLock::new(),
         })
+    }
+
+    /// The process's background shells: no lifetime limit when a person at the console
+    /// answers prompts, 30 minutes per shell otherwise (spec 3.1 §7.29 "Limits"); processes
+    /// recorded in `harness.db`, so the next start reaps what a crash left running.
+    fn shells(&self, attended: bool) -> Arc<adk_harness::ShellSupervisor> {
+        self.shells
+            .get_or_init(|| {
+                let config = if attended {
+                    adk_harness::BackgroundShellConfig::attended()
+                } else {
+                    adk_harness::BackgroundShellConfig::unattended()
+                };
+                let shells = adk_harness::ShellSupervisor::new(
+                    Arc::new(adk_harness::ShellOutputs::default()),
+                    config,
+                );
+                #[cfg(feature = "persist")]
+                let shells = match &self.db {
+                    Some(db) => shells.with_pid_registry(db.shell_pids.clone()),
+                    None => shells,
+                };
+                Arc::new(shells)
+            })
+            .clone()
     }
 
     fn sessions(&self) -> Arc<dyn SessionService> {
@@ -392,7 +421,8 @@ impl Setup {
         extras: AgentExtras,
     ) -> Result<HarnessAgent> {
         let workspace = Workspace::new(&self.resolved.workspace).allow_bash(true);
-        let mut builder = HarnessAgent::builder(name);
+        let attended = prompter.is_some() && approval_service.is_none();
+        let mut builder = HarnessAgent::builder(name).shell_supervisor(self.shells(attended));
         // An added agent runs on its own model when it names one (spec 3.3 decision 21).
         let model = extras
             .added

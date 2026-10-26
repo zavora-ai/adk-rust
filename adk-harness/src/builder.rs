@@ -122,6 +122,7 @@ pub struct HarnessAgentBuilder {
     shell_ledger: Option<Arc<dyn ShellLedger>>,
     background_shells: crate::shell::BackgroundShellConfig,
     shell_pids: Option<Arc<dyn crate::shell::ShellPidRegistry>>,
+    shell_supervisor: Option<Arc<crate::shell::ShellSupervisor>>,
     read_records: Option<Arc<dyn adk_devtools::ReadLedger>>,
     operator_policy: Option<Arc<dyn ToolPolicy>>,
     origin_classes: Vec<Arc<dyn crate::policy::OriginClasses>>,
@@ -249,6 +250,7 @@ impl HarnessAgentBuilder {
             shell_ledger: None,
             background_shells: crate::shell::BackgroundShellConfig::default(),
             shell_pids: None,
+            shell_supervisor: None,
             read_records: None,
             operator_policy: None,
             origin_classes: Vec::new(),
@@ -560,6 +562,15 @@ impl HarnessAgentBuilder {
     /// start reaps what a crash left running (spec 3.1 §7.29).
     pub fn shell_pid_registry(mut self, registry: Arc<dyn crate::shell::ShellPidRegistry>) -> Self {
         self.shell_pids = Some(registry);
+        self
+    }
+
+    /// Runs background shells on `shells`, which every harness of a process can share, so a
+    /// harness rebuilt for the same session keeps its shells (spec 3.1 §7.29). Its limits
+    /// and pid registry replace [`background_shells`](Self::background_shells) and
+    /// [`shell_pid_registry`](Self::shell_pid_registry).
+    pub fn shell_supervisor(mut self, shells: Arc<crate::shell::ShellSupervisor>) -> Self {
+        self.shell_supervisor = Some(shells);
         self
     }
 
@@ -1806,8 +1817,11 @@ impl HarnessAgentBuilder {
             None => rules,
         };
         let ledger = self.shell_ledger.unwrap_or_else(|| Arc::new(InMemoryShellLedger::new()));
-        let shells =
-            crate::shell::supervisor(self.background_shells.clone(), self.shell_pids.take());
+        let shells = crate::shell::supervisor(
+            self.shell_supervisor.take(),
+            self.background_shells.clone(),
+            self.shell_pids.take(),
+        );
         let approval_store = self
             .approval_store
             .or_else(|| self.approval_service.as_ref().and_then(|service| service.approval_store()))

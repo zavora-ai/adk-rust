@@ -44,6 +44,7 @@ mod phone;
 mod prompter;
 mod rules;
 mod serve;
+mod shells;
 pub mod ultracode;
 
 pub use args::{
