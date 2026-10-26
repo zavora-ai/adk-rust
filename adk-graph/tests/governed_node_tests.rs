@@ -432,6 +432,123 @@ async fn a_governed_node_cannot_be_invoked_as_a_child() {
     assert_eq!((state["out"].clone(), rig.provider.hits()), (json!(true), 0));
 }
 
+/// A confirmation handler that never answers in time, so each call it is asked about
+/// waits in the approval store.
+#[derive(Debug, Default)]
+struct SlowHandler(AtomicUsize);
+
+#[async_trait]
+impl adk_core::ToolConfirmationHandler for SlowHandler {
+    async fn decide(
+        &self,
+        _request: &adk_core::ToolConfirmationRequest,
+    ) -> adk_core::Result<adk_core::ToolConfirmationDecision> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        Ok(adk_core::ToolConfirmationDecision::Deny)
+    }
+}
+
+#[tokio::test]
+async fn a_waiting_call_resumes_on_its_decision_and_never_asks_again() {
+    let rig = Rig::new();
+    let handler = Arc::new(SlowHandler::default());
+    let run_config = RunConfig::builder()
+        .approval_store(rig.store.clone())
+        .action_ledger(rig.ledger.clone())
+        .tool_confirmation_handler(handler.clone())
+        .tool_confirmation_timeout(Duration::from_millis(50))
+        .build();
+    let invoke = || {
+        rig.graph.invoke_with_run_config(
+            State::new(),
+            ExecutionConfig::new("t1"),
+            run_config.clone(),
+        )
+    };
+
+    // The handler did not answer in time, so the call waits in the store.
+    assert!(matches!(invoke().await, Err(GraphError::Interrupted(_))));
+    assert_eq!((handler.0.load(Ordering::SeqCst), rig.pending("t1").await.len()), (1, 1));
+
+    // A turn before anyone decides keeps waiting, without asking anyone again.
+    assert!(matches!(invoke().await, Err(GraphError::Interrupted(_))));
+    assert_eq!((handler.0.load(Ordering::SeqCst), rig.pending("t1").await.len()), (1, 1));
+    assert_eq!(rig.provider.hits(), 0);
+
+    rig.decide("t1", ToolApproval::approve()).await;
+    invoke().await.unwrap();
+    assert_eq!((handler.0.load(Ordering::SeqCst), rig.provider.hits()), (1, 1));
+}
+
+#[tokio::test]
+async fn a_call_changed_while_it_waited_replaces_its_hold() {
+    let rig = Rig::new();
+    assert!(rig.invoke("t1").await.is_err());
+    rig.graph.update_state("t1", [("invoice".to_string(), invoice(5000))]).await.unwrap();
+
+    assert!(matches!(rig.invoke("t1").await, Err(GraphError::Interrupted(_))));
+    let pending = rig.pending("t1").await;
+    assert_eq!(
+        pending.iter().map(|entry| entry.request.args.clone()).collect::<Vec<_>>(),
+        vec![invoice(5000)],
+        "the hold for 4200 is withdrawn; only the changed call waits"
+    );
+    rig.decide("t1", ToolApproval::approve()).await;
+    let state = rig.invoke("t1").await.unwrap();
+    assert_eq!((rig.provider.hits(), &state["charge"]["amountCents"]), (1, &json!(5000)));
+}
+
+#[cfg(feature = "time-travel")]
+#[tokio::test]
+async fn a_fork_of_the_parent_answers_a_governed_node_inside_a_subgraph_from_its_record() {
+    let provider = Arc::new(Provider::default());
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let inner = Arc::new(
+        StateGraph::with_channels(&["invoice", "charge"])
+            .add_node(Pay(Arc::clone(&provider)))
+            .add_edge(START, "pay")
+            .add_edge("pay", END)
+            .compile()
+            .unwrap()
+            .with_checkpointer_arc(checkpointer.clone())
+            .with_governed_node("pay", GovernedNode::new()),
+    );
+    let graph = StateGraph::with_channels(&["invoice", "note", "charge"])
+        .add_node_fn("draft", |_ctx| async {
+            Ok(NodeOutput::new().with_update("invoice", invoice(4200)))
+        })
+        .add_node(adk_graph::subgraph::SubgraphNode::new("billing", inner))
+        .add_edge(START, "draft")
+        .add_edge("draft", "billing")
+        .add_edge("billing", END)
+        .compile()
+        .unwrap()
+        .with_checkpointer_arc(checkpointer.clone());
+    let run_config =
+        RunConfig::builder().action_ledger(Arc::new(InMemoryActionLedger::new())).build();
+
+    let original = graph
+        .invoke_with_run_config(State::new(), ExecutionConfig::new("t1"), run_config.clone())
+        .await
+        .unwrap();
+    assert_eq!(provider.hits(), 1);
+
+    let after_draft = checkpointer.list("t1").await.unwrap()[0].checkpoint_id.clone();
+    graph
+        .time_travel("t1")
+        .unwrap()
+        .fork(adk_graph::time_travel::ForkSpec::new(&after_draft, "t2").set("note", json!("again")))
+        .await
+        .unwrap();
+    let forked = graph
+        .invoke_with_run_config(State::new(), ExecutionConfig::new("t2"), run_config)
+        .await
+        .unwrap();
+    assert_eq!(provider.hits(), 1, "the inner call is not sent again");
+    assert_eq!(forked["charge"], original["charge"]);
+}
+
 // ── Through a GraphAgent ─────────────────────────────────────────────
 
 struct Turn {

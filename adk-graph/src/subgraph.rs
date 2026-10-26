@@ -283,6 +283,10 @@ impl Node for SubgraphNode {
         }
         // Agents inside the subgraph report to the same caller as the parent's.
         config.event_sink = ctx.config.event_sink.clone();
+        // Governed nodes inside key their records by the parent's lineage, so a fork of
+        // the parent finds the calls its source made (spec 3.3 §12).
+        config.lineage_root =
+            ctx.config.lineage_root.as_deref().map(|root| self.child_thread(root, ctx.step));
         // The answer to this node's pause answers the node inside that paused; the
         // inner run hands it only to a node resuming its own pause.
         if let Some(answer) = ctx.resume_value() {

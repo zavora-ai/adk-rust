@@ -68,6 +68,9 @@ pub struct ExecutionConfig {
     /// Set by [`GraphAgent`](crate::agent::GraphAgent), which streams these events
     /// to its caller, so a runner shows and records them while the graph runs.
     pub(crate) event_sink: Option<tokio::sync::mpsc::UnboundedSender<adk_core::Event>>,
+    /// The lineage root a subgraph's run keys its governed nodes' records by, derived from
+    /// the parent's, so a fork of the parent finds the records its source wrote.
+    pub(crate) lineage_root: Option<String>,
 }
 
 impl ExecutionConfig {
@@ -84,6 +87,7 @@ impl ExecutionConfig {
             #[cfg(feature = "functional")]
             cancellation_token: None,
             event_sink: None,
+            lineage_root: None,
         }
     }
 

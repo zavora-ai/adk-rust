@@ -557,6 +557,47 @@ pub(crate) async fn dispatch(dispatch: GovernedDispatch, ctx: &NodeContext) -> G
         None => base_key,
     };
 
+    // A node resuming its own pause waits for that call's decision, as `LlmAgent` does: it
+    // is not asked about again. A call whose arguments changed since is a new call, and
+    // the hold for the old one is withdrawn.
+    let mut resuming = None;
+    if let Some(held) = dispatch.held.clone() {
+        if held.args == call_args {
+            match adk_core::confirmation_decision_available(&gate, &held).await {
+                Ok(false) => {
+                    tracing::debug!(node = %node, "governed node still waits for its decision");
+                    let interrupt =
+                        GraphToolConfirmationPause::pending_interrupt(node, held.clone());
+                    return GovernedRun {
+                        output: Ok(NodeOutput::new().with_interrupt(interrupt)),
+                        status: NodeStatus::Paused,
+                        effect_key: Some(key),
+                        held: Some(held),
+                    };
+                }
+                Ok(true) => resuming = Some(held),
+                Err(error) => {
+                    return GovernedRun::failed(
+                        GovernedError::Unavailable {
+                            node,
+                            detail: format!(
+                                "the approval store could not be read: {}",
+                                error.redacted()
+                            ),
+                        },
+                        Some(key),
+                    );
+                }
+            }
+        } else if let Err(error) = adk_core::withdraw_held_call(&gate, &held).await {
+            tracing::warn!(
+                node = %node,
+                error = %error,
+                "the hold for a governed call whose arguments changed could not be withdrawn"
+            );
+        }
+    }
+
     // 3. The governed path.
     let mut call = GovernedCall::new(
         node.clone(),
@@ -566,7 +607,7 @@ pub(crate) async fn dispatch(dispatch: GovernedDispatch, ctx: &NodeContext) -> G
     .with_effect(dispatch.effect)
     .requiring_confirmation(dispatch.governed.requires_approval);
     call.origin = Some(ToolOrigin::new(format!("graph:{agent_name}"), &dispatch.declaration, None));
-    if let Some(held) = dispatch.held.clone() {
+    if let Some(held) = resuming {
         call = call.resuming(held);
     }
     let args = match adk_core::authorize_tool_call(&gate, call).await {

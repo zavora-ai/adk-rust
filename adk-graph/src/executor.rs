@@ -1190,6 +1190,8 @@ impl<'a> PregelExecutor<'a> {
     /// when the node has an idle timeout.
     fn node_context(&self, node: &str) -> NodeContext {
         let mut ctx = NodeContext::new(self.state.clone(), self.config.clone(), self.step);
+        // A subgraph's governed nodes key their records by this run's lineage.
+        ctx.config.lineage_root = Some(self.lineage_root());
         if let Some(run_config) = self.run_config.clone() {
             ctx.set_run_config(run_config);
         }
@@ -1759,9 +1761,14 @@ impl<'a> PregelExecutor<'a> {
         })
     }
 
-    /// The thread this thread's lineage started at: itself, unless it was forked.
+    /// The thread this thread's lineage started at: itself, unless it was forked or is a
+    /// subgraph's run, which takes its parent's.
     fn lineage_root(&self) -> String {
-        self.lineage.as_ref().map_or_else(|| self.config.thread_id.clone(), |l| l.root.clone())
+        match (&self.lineage, &self.config.lineage_root) {
+            (Some(lineage), _) => lineage.root.clone(),
+            (None, Some(inherited)) => inherited.clone(),
+            (None, None) => self.config.thread_id.clone(),
+        }
     }
 
     /// Counts a completed run of each governed node in `executed`, so the next run of
