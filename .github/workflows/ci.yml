@@ -699,6 +699,13 @@ jobs:
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         cargo test -p adk-harness --test shell_sandbox_windows_tests
 
+    # External site generators run on Windows under the restricted token (spec 3.5 §7.8,
+    # spec 3.2 §10 W5). Only this job compiles that path; the nightly `site-generators` job runs
+    # it with the real generators.
+    - name: Lint the external generators' Windows path
+      timeout-minutes: 20
+      run: cargo clippy -p adk-site --features gen-zola,gen-hugo,gen-astro,gen-build-awesome --all-targets -- -D warnings
+
     # The Job Objects that hold a process tree (spec 3.2 §10 W1): adk-sandbox's own, each
     # stdio server of McpServerManager's, and a kernel driver's, which unmounting ends with
     # every process the driver started. adk-devtools' bash runs in the same jobs below.

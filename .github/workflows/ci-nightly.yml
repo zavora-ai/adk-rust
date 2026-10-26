@@ -13,6 +13,9 @@ name: CI Nightly
 #     PostgreSQL, Redis, MongoDB, Neo4j, and the Firestore emulator.
 #   • integration-tests — the `#[ignore]`d integration tests that hit real
 #     provider APIs, gated on the relevant secrets being configured.
+#   • site-hosts, site-generators — adk-site's host adapters against MinIO, Azurite
+#     and an SSH server, the CalDAV driver against Radicale, and the real site
+#     generators under bubblewrap and the Windows restricted token (spec 3.5 §11).
 #
 # This is an INFORMATIONAL tier: per the spec's required-check policy these jobs
 # are NOT branch-protection-required. A nightly failure is a signal to triage,
@@ -33,7 +36,7 @@ on:
         description: The job to run; `all` runs every job
         type: choice
         default: all
-        options: [all, feature-combinations, supply-chain, durable-stores, integration-tests, harness-eval-live, site-soak, website-wordpress, website-soak]
+        options: [all, feature-combinations, supply-chain, durable-stores, integration-tests, harness-eval-live, site-soak, website-wordpress, website-soak, site-hosts, site-generators]
 
 permissions:
   contents: read
@@ -494,6 +497,200 @@ jobs:
         name: s19-soak
         path: s19-soak.json
         if-no-files-found: ignore
+
+  # ── adk-site: host adapters against real servers (spec 3.5 §7.8 "Hosts", §11) ──
+  # The `#[ignore]`d host conformance suites against MinIO (S3), Azurite (Azure Blob) and an
+  # OpenSSH server with rsync, and adk-website's CalDAV calendar driver against Radicale.
+  # Azurite is a service container. MinIO needs its `server` command and the SSH server a key
+  # this job makes, neither of which a service container can take, so both start with
+  # `docker run`; Radicale runs from PyPI. MinIO's own images are no longer published, so the
+  # community `pgsty/minio` build of the same server is used.
+  site-hosts:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'site-hosts' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+        ports: ["10000:10000"]
+    env:
+      ADK_SITE_S3_ENDPOINT: http://127.0.0.1:9000
+      ADK_SITE_S3_BUCKET: adk-site
+      ADK_SITE_S3_KEYS: '{"accessKeyId":"adk","secretAccessKey":"adk-site-secret"}'
+      # Azurite's published development account; its key is not a secret.
+      ADK_SITE_AZURE_ENDPOINT: http://127.0.0.1:10000/devstoreaccount1
+      ADK_SITE_AZURE_ACCOUNT: devstoreaccount1
+      ADK_SITE_AZURE_KEY: Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==
+      ADK_SITE_RSYNC_DESTINATION: deploy@127.0.0.1
+      ADK_SITE_RSYNC_PORT: "2222"
+      ADK_SITE_RSYNC_ROOT: /config/site
+      ADK_WEBSITE_CALDAV_HOME: http://127.0.0.1:5232/juniper/
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-key: site-hosts
+        neutralize-wild: 'true'
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      with:
+        tool: cargo-nextest
+
+    - name: Start MinIO and make the bucket
+      timeout-minutes: 5
+      run: |
+        docker run -d --name minio -p 127.0.0.1:9000:9000 \
+          -e MINIO_ROOT_USER=adk -e MINIO_ROOT_PASSWORD=adk-site-secret \
+          pgsty/minio:RELEASE.2026-08-04T00-00-00Z server /data
+        for _ in $(seq 60); do curl -sf http://127.0.0.1:9000/minio/health/live && break; sleep 2; done
+        curl -sf -X PUT --user adk:adk-site-secret --aws-sigv4 aws:amz:us-east-1:s3 \
+          http://127.0.0.1:9000/adk-site
+
+    - name: Make the Azurite containers
+      timeout-minutes: 5
+      run: |
+        connection="DefaultEndpointsProtocol=http;AccountName=$ADK_SITE_AZURE_ACCOUNT;AccountKey=$ADK_SITE_AZURE_KEY;BlobEndpoint=$ADK_SITE_AZURE_ENDPOINT;"
+        for container in site site-releases; do
+          az storage container create --name "$container" --connection-string "$connection" --output none
+        done
+
+    - name: Start an SSH server with rsync
+      timeout-minutes: 10
+      run: |
+        key="$RUNNER_TEMP/adk-site-ssh"
+        ssh-keygen -q -t ed25519 -N '' -f "$key"
+        docker run -d --name sshd -p 127.0.0.1:2222:2222 -e USER_NAME=deploy \
+          -e PUBLIC_KEY="$(cat "$key.pub")" -e DOCKER_MODS=linuxserver/mods:openssh-server-rsync \
+          lscr.io/linuxserver/openssh-server:version-10.3_p1-r1
+        for _ in $(seq 120); do
+          known=$(ssh-keyscan -p 2222 127.0.0.1 2>/dev/null || true)
+          if [ -n "$known" ] && ssh -o BatchMode=yes -o StrictHostKeyChecking=no -i "$key" -p 2222 \
+              deploy@127.0.0.1 'command -v rsync && mkdir -p /config/site' >/dev/null 2>&1; then
+            break
+          fi
+          sleep 2
+        done
+        {
+          echo "ADK_SITE_RSYNC_KEY<<EOF"; cat "$key"; echo "EOF"
+          echo "ADK_SITE_RSYNC_KNOWN_HOSTS<<EOF"; ssh-keyscan -p 2222 127.0.0.1 2>/dev/null; echo "EOF"
+        } >> "$GITHUB_ENV"
+
+    - name: Start Radicale
+      timeout-minutes: 5
+      run: |
+        pipx install 'radicale==3.8.3'
+        mkdir -p "$RUNNER_TEMP/radicale"
+        nohup radicale --server-hosts 127.0.0.1:5232 --auth-type none --rights-type none \
+          --storage-filesystem-folder "$RUNNER_TEMP/radicale" > "$RUNNER_TEMP/radicale.log" 2>&1 &
+        for _ in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:5232/ && exit 0; sleep 1; done
+        cat "$RUNNER_TEMP/radicale.log"
+        exit 1
+
+    - name: Run the host suites against MinIO, Azurite and the SSH server
+      run: >-
+        cargo nextest run -p adk-site --features host-s3,host-azure,host-rsync
+        --run-ignored only --no-fail-fast
+        -E 'test(s3_compatible_store) | test(azure_storage) | test(rsync_over_ssh)'
+
+    - name: Run the CalDAV calendar driver against Radicale
+      if: ${{ !cancelled() }}
+      run: >-
+        cargo nextest run -p adk-website --test caldav
+        --run-ignored only -E 'test(live_caldav)'
+
+    - name: Stop the servers
+      if: always()
+      run: |
+        docker rm -f minio sshd || true
+        pkill -f 'radicale --server-hosts' || true
+
+  # ── adk-site: the real generators (spec 3.5 §7.8 "Generator", §11) ──
+  # Zola, Hugo, Astro and Build Awesome build the fixture site twice each, sandboxed with no
+  # network: under bubblewrap on Linux, and under the restricted token on Windows (spec 3.2
+  # §10 W5), which also runs the generators' Windows tests. Nothing is installed during a
+  # build: the tools are fetched here, at pinned versions.
+  site-generators:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'site-generators' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      ZOLA_VERSION: 0.23.6
+      HUGO_VERSION: 0.167.0
+      ASTRO_VERSION: 7.3.8
+      ELEVENTY_VERSION: 3.1.6
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-key: site-generators-${{ matrix.os }}
+        neutralize-wild: ${{ runner.os == 'Linux' && 'true' || 'false' }}
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      with:
+        tool: cargo-nextest
+
+    - name: Setup Node.js
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+      with:
+        node-version: '22'
+
+    - name: Install bubblewrap
+      if: runner.os == 'Linux'
+      timeout-minutes: 10
+      uses: ./.github/actions/apt-install
+      with:
+        packages: bubblewrap
+
+    - name: Allow unprivileged user namespaces
+      if: runner.os == 'Linux'
+      run: |
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        bwrap --version
+
+    - name: Fetch Zola, Hugo, Astro and Build Awesome
+      shell: bash
+      run: |
+        set -euo pipefail
+        tools="$RUNNER_TEMP/tools"
+        mkdir -p "$tools"
+        zola="https://github.com/getzola/zola/releases/download/v$ZOLA_VERSION/zola-v$ZOLA_VERSION"
+        hugo="https://github.com/gohugoio/hugo/releases/download/v$HUGO_VERSION/hugo_extended_$HUGO_VERSION"
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          curl -fsSL -o "$tools/zola.zip" "$zola-x86_64-pc-windows-msvc.zip"
+          curl -fsSL -o "$tools/hugo.zip" "${hugo}_windows-amd64.zip"
+          (cd "$tools" && 7z x -y zola.zip >/dev/null && 7z x -y hugo.zip hugo.exe >/dev/null)
+          suffix=".exe"
+        else
+          curl -fsSL "$zola-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$tools"
+          curl -fsSL "${hugo}_linux-amd64.tar.gz" | tar -xz -C "$tools" hugo
+          suffix=""
+        fi
+        npm install --prefix "$RUNNER_TEMP/astro" --no-audit --no-fund "astro@$ASTRO_VERSION"
+        npm install --prefix "$RUNNER_TEMP/eleventy" --no-audit --no-fund "@11ty/eleventy@$ELEVENTY_VERSION"
+        {
+          echo "ADK_SITE_ZOLA=$tools/zola$suffix"
+          echo "ADK_SITE_HUGO=$tools/hugo$suffix"
+          echo "ADK_SITE_NODE=$(node -p 'process.execPath')"
+          echo "ADK_SITE_ASTRO_MODULES=$RUNNER_TEMP/astro/node_modules"
+          echo "ADK_SITE_ELEVENTY_MODULES=$RUNNER_TEMP/eleventy/node_modules"
+        } >> "$GITHUB_ENV"
+        "$tools/zola$suffix" --version
+        "$tools/hugo$suffix" version
+
+    - name: Build the fixture site with each generator, sandboxed
+      run: >-
+        cargo nextest run -p adk-site --features gen-zola,gen-hugo,gen-astro,gen-build-awesome
+        --test generators --run-ignored all --no-fail-fast
 
   # ── Integration tests: #[ignore]d tests gated on secrets ───────
   # Requirement 2.3 (scheduled integration coverage). The workspace marks tests

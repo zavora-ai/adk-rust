@@ -71,7 +71,7 @@ cd "$root"
 if [ -n "$cur" ]; then
   for d in .well-known/awp/releases .well-known/awp/log; do
     if [ -d "$cur/$d" ]; then
-      find "$cur/$d" -type f -perm -u+w -exec chmod a-w {} +
+      find "$cur/$d" -type f -perm -200 -exec chmod a-w {} +
       mkdir -p "$stage/$d"
       rsync -r --perms --ignore-existing --link-dest="$root/$cur/$d/" "$cur/$d/" "$stage/$d/"
     fi

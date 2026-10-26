@@ -90,3 +90,10 @@ slow-timeout = { period = "120s", terminate-after = 10 }
 [[profile.default.overrides]]
 filter = "binary(s19_constant_updates) and test(s19_full_day)"
 slow-timeout = { period = "600s", terminate-after = 30 }
+
+# adk-site's host suites against real servers (MinIO, Azurite, an SSH server) and its real
+# generators, and the CalDAV driver's live run, run only by the nightly `site-hosts` and
+# `site-generators` jobs: each publishes dozens of releases or builds a site twice.
+[[profile.default.overrides]]
+filter = "test(s3_compatible_store) | test(azure_storage) | test(rsync_over_ssh) | test(builds_the_fixture_site_sandboxed) | test(live_caldav)"
+slow-timeout = { period = "120s", terminate-after = 10 }
