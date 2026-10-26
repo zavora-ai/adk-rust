@@ -257,6 +257,11 @@ many sites from one harness:
 | The desk's work in progress | `data/desk.json`, under `adk-rust website new` |
 | Retained events, catalogue pages, consent references, pending deliveries, beacon counts | The same `SqliteEdgeStores`, as the edge's event log and beacon store; the deliveries a stopped process left resume once their lease passes |
 | Measurement counts (`MeteredActionLedger`, `EdgeMeter`, `MeteredSpendLedger`, host logs, AEO) | `SqliteEdgeStores` in `data/edge.db`, under the namespace `{site}#measurement` |
+| The edge's rate-limit windows | The same `SqliteEdgeStores`, through `EdgeLimits::store` |
+| Quotes, orders and the bookings of `calendar.json`'s slots | `edge::commerce::SqliteCommerceStore` in `data/edge.db`, with `edge::commerce::StoredCalendar`; `SiteEdge::build_with_commerce` takes the store |
+| The back office's drafts, charter drafts, charter signing and promotion requests | `adk_harness::website::SqliteSiteDraftStore` in `data/edge.db`, read back by `SiteRuntime::restore_drafts`; a preview and the votes on it are made again |
+| The owner's open, deferred and waiting alarms | `alarms::SqliteAlarmStore` in `data/edge.db` (`AlarmRouter::with_store`) |
+| The audit trail | `data/audit.jsonl`, through `adk_core::audit_log::FileAuditRecorder`: the pipeline's, the edge's, the update engine's, the alarms', the review's, the experiments', the ladder's, the tracker's and the signals' records |
 
 ## Audit records
 
@@ -268,3 +273,10 @@ many sites from one harness:
 | `website.review.sent` | `ReviewComposer::send` |
 | `site.status.changed`, `site.rollback` | `IncidentPath` |
 | `awp.request.refused` | `deploy::AgencyRouter` |
+| `awp.payment.created`, `awp.payment.settled`, `awp.payment.rejected` | `edge::handlers::PaymentHandler` (`with_audit`; the edge's trail on a served site) |
+| `site.content.drafted`, `approved`, `scheduled`, `published`, `corrected`, `withdrawn`; `site.release.built`, `signed`, `published`, `refused` | `adk-site`'s `PublishingPipeline` (`PublishingPipelineBuilder::audit`; `SiteRuntimeBuilder::audit` passes its trail) |
+| `awp.keys.rotated`, `awp.keys.delegated` | `adk-rust awp keys`, into the project's `data/audit.jsonl` |
+
+Every release runs in a `site.release` span (`observability::spans::SITE_RELEASE`) with its
+sequence, source and items, and every signal the edge files in a `kernel.signal` span
+(`observability::spans::KERNEL_SIGNAL`) with its kind, id and emitter.

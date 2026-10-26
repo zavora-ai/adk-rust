@@ -15,6 +15,7 @@ adk-harness = { version = "3.0.0", features = ["website"] }
 | Preset | `Preset::Website`, `WEBSITE_SYSTEM_PROMPT` | §7.1, §10 X10 |
 | Tool catalogue | `CATALOG`, `ToolSpec`, `WebsiteClasses` | §7.10, §7.11, §7.13 |
 | Site runtime | `SiteRuntime`, `SiteApprovals`, `FactClaimCheck` | §7.8, §7.8.2, A-I18, A-I23 |
+| Durable drafts | `SiteDraftStore`, `InMemorySiteDraftStore`, `SqliteSiteDraftStore` (feature `sqlite`), `DraftKind` | §7.8.2, §7.6, §7.11 |
 | Back office | `back_office_tools`, `WebsitePolicy` | §7.8.2, §7.10, A-I13, A-I21 |
 | Public partition | `SearchSiteTool`, `EmitSignalTool`, `PublicPolicy`, `screen_bounded` | §7.10, A-I2, A-I3 |
 | Partitions | `SitePartitions`, `PublicKit`, `ServedPublicTools`, `BackOfficeKit`, `website_public`, `website_public_served`, `website_back_office` | §7.9, §7.10, §7.19, A-I22 |
@@ -95,6 +96,13 @@ A vote that cannot count — recorded with `approve`, or left over from a charte
 left out when the release is decided, so it never holds up the people who can approve. `charter_commit_request` commits nothing: `SiteRuntime::sign_charter` commits
 the draft once every required signer has signed. Every DNS change is held by `adk-drivers`'
 `DriverCapPolicy`.
+
+`SiteRuntimeBuilder::drafts` keeps the content drafts, charter drafts, and charter signing and
+promotion requests in a `SiteDraftStore`, and `SiteRuntime::restore_drafts` reads them back
+after a restart; new draft ids follow the restored ones. A preview and the votes on it are not
+kept: a preview's digest names the build it staged, so it is made again. With
+`SiteRuntimeBuilder::audit`, the runtime's pipeline writes the `site.content.*` and
+`site.release.*` records beside the runtime's own.
 
 ## The autonomy ladder
 

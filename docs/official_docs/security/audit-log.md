@@ -115,8 +115,12 @@ fn audited_runner(
 }
 ```
 
-`audit_log` takes any `AuditRecorder`; `AuditLog` is one, and `InMemoryAuditRecorder` keeps
-drafts in memory for tests. The runner installs the trail on each run's `RunConfig::audit`
+`audit_log` takes any `AuditRecorder`; `AuditLog` is one, `FileAuditRecorder` appends each
+record to a file as one line of JSON, and `InMemoryAuditRecorder` keeps drafts in memory for
+tests. `FileAuditRecorder` numbers the file's records from 0 without a gap, also when several
+processes append to one file, cuts a line a crash left unfinished, and reads the file back with
+`FileAuditRecorder::read`; its records are durable but neither hash-chained nor signed, which
+`AuditLog` adds. The runner installs the trail on each run's `RunConfig::audit`
 (set it there to audit a single run) and attaches it to the runner's kill switch.
 
 | Event | Where | `kind` | `action` | `decision` / `outcome` | `policyRef` |

@@ -82,6 +82,7 @@ languages = ["en"]
 | `data/keys/` | `release.jwk` signs the log; `web-bot-auth.jwk` signs crawls; `archive.key` seals legacy exports. Each is created owner-only on first use |
 | `data/host/` | The `DirectoryHost` releases publish to, unless `--host-dir DIR` names another |
 | `data/updates/` | The update engine's journal that `site batches` and `site feeds` read |
+| `data/audit.jsonl` | The audit trail: the pipeline's `site.content.*` and `site.release.*` records, `awp keys`' `awp.keys.*`, and a served site's records |
 | `data/claims/`, `data/migration/`, `data/archive/` | Domain claims, migration reports, the encrypted legacy archive |
 
 Every change is the act of the person at the terminal: the command shows the page diff and
@@ -144,7 +145,9 @@ adk-rust site publish --yes
 rotates: the new root is endorsed by the old one, so verifiers that pinned the old root accept
 it. With `--recover` (the old root is lost) the new root is anchored by DNS alone and every
 delegation is made again. Both commands write `well-known/awp/keys.json` and sign
-`well-known/awp.json` again; a key file is never overwritten and is created owner-only.
+`well-known/awp.json` again; a key file is never overwritten and is created owner-only. Each
+appends `awp.keys.rotated` or `awp.keys.delegated` to `data/audit.jsonl`, naming the root key
+that signed it.
 
 ## `adk-rust awp`
 

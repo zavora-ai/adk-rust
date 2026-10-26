@@ -49,7 +49,7 @@ The project:
 | `charter.draft.json` | Charter version 1 drafted from the kind's template, unsigned ([The charter](charter.md)) |
 | `capabilities.json`, `public-terms.json` | The kind's capabilities and the charter's public terms |
 | `content/` | The content repository |
-| `data/` | The site log, the host, the delegated keys, and the kernel's and the edge's stores (`kernel.db`, `edge.db`), so charters, KPIs, approvals, leads and held calls survive a restart |
+| `data/` | The site log, the host, the delegated keys, the kernel's and the edge's stores (`kernel.db`, `edge.db`), so charters, KPIs, approvals, leads, held calls, quotes, orders, bookings, drafts and alarms survive a restart, and the audit trail (`audit.jsonl`) |
 | `public/index.html` | The holding page served until the launch |
 
 The project keeps no root key.

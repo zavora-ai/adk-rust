@@ -13,7 +13,7 @@ agent. It has no owner route: the owner's control plane is the kernel's.
 |------|------|
 | The edge and its routes | `AwpEdge`, `AwpEdgeBuilder`, `ServerBuilder::awp` |
 | Trust tiers | `EdgeTiers`, `WebBotAuthTrustAssigner`, `OAuthClientCredentials`, `MtlsCredentials`, `ApiKeyCredentials`, `EdgeCaller` |
-| Rate limits | `EdgeLimits` |
+| Rate limits | `EdgeLimits`, `RateLimitStore`, `InMemoryRateLimitStore` |
 | The governed path | `GovernedExecutor`, `CapabilityPolicy` |
 | The public partition | `PublicTools`, `PublicPartitionPolicy`, `SiteSearch`, `ThreadSink`, `SignalEmitter` |
 | Modes and status | `EdgeMode`, `EdgeStatusControl` |
@@ -153,6 +153,11 @@ router with `into_make_service_with_connect_info::<SocketAddr>()`, or every anon
 shares one limit. A request over its per-minute limit, or a call over its daily limit, answers
 `429 rate_limit_exceeded` with `Retry-After`; every response carries `RateLimit-Policy` and
 `RateLimit`.
+
+The windows are counted in the process unless `EdgeLimits::store` shares them through a
+`RateLimitStore`: the SQLite, PostgreSQL and Redis edge stores implement it, so edge replicas
+and a restarted edge count a caller against one window. A store that fails is logged and the
+process's own counters answer until it recovers.
 
 A verified caller's fetch of the Agent Card, the capability manifest or the MCP Server Card is
 an `awp.request.verified` audit record with `awp.surface` (`agent_card`, `manifest`,
@@ -300,11 +305,13 @@ edge origin, so list it in the server's allowed origins.
 | PostgreSQL | `awp-postgres` | `adk_server::awp::stores::PostgresEdgeStores` |
 | Redis | `awp-redis` | `adk_server::awp::stores::RedisEdgeStores` |
 
-Each implements the six edge store traits, the edge's `EventLog` and its `BeaconStore`, passes
-`adk_awp::edge_store_conformance_tests!` and `adk_server::edge_log_conformance_tests!`, and
+Each implements the six edge store traits, the edge's `EventLog`, its `BeaconStore` and its
+`RateLimitStore`, passes `adk_awp::edge_store_conformance_tests!`,
+`adk_server::edge_log_conformance_tests!` and `adk_server::rate_limit_conformance_tests!`, and
 keeps one site's records under its `with_site` namespace. Call `migrate` once, then pass
-`edge_stores()` to `AwpEdgeBuilder::stores`: the edge then keeps its retained events,
-catalogue pages, consent references, pending deliveries and beacon counts across a restart.
+`edge_stores()` to `AwpEdgeBuilder::stores` and the store to `EdgeLimits::store`: the edge then
+keeps its retained events, catalogue pages, consent references, pending deliveries, beacon
+counts and rate-limit windows across a restart.
 
 | Kept | Survives a restart because |
 |------|----------------------------|
@@ -312,6 +319,7 @@ catalogue pages, consent references, pending deliveries and beacon counts across
 | Who referenced a consent receipt | `EventLog::note_consent_reference`, so `consent.revoked` still reaches them |
 | A delivery waiting for its retry | `EventLog::save_delivery` keeps it due at its next attempt plus `EventsConfig::delivery_lease` (70 s); `AwpEdge::spawn_delivery_resumer` claims the overdue ones (`claim_deliveries`, one claimer each) and attempts them where their retries stood |
 | Beacon counts | `BeaconStore::add` and `add_visitor` |
+| Rate-limit windows | `RateLimitStore::hit`, one atomic step per request or call; Redis windows expire with their keys |
 
 ```rust
 use std::sync::Arc;
@@ -321,7 +329,7 @@ use adk_awp::signing::jws::Ed25519DocumentSigner;
 use adk_awp::v2::capability::CapabilityRegistry;
 use adk_core::Url;
 use adk_server::awp::stores::SqliteEdgeStores;
-use adk_server::awp::{AwpEdge, EdgeKeys};
+use adk_server::awp::{AwpEdge, EdgeKeys, EdgeLimits};
 
 async fn durable_edge() -> Result<AwpEdge, Box<dyn std::error::Error>> {
     let pool = sqlx::SqlitePool::connect("sqlite://edge.db?mode=rwc").await?;
@@ -337,6 +345,7 @@ async fn durable_edge() -> Result<AwpEdge, Box<dyn std::error::Error>> {
         Url::parse("https://agent.example.com")?,
     )
     .stores(stores.edge_stores())
+    .limits(EdgeLimits::default().store(Arc::new(stores.clone())))
     .build()?;
     let _resolver = edge.spawn_resolver(Duration::from_secs(5));
     let _deliveries = edge.spawn_delivery_resumer(Duration::from_secs(30));
