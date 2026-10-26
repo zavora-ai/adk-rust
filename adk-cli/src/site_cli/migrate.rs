@@ -20,7 +20,9 @@ use adk_site::migrate::detect::Detectors;
 use adk_site::migrate::freeze::{Freeze, FreezeConfig};
 use adk_site::migrate::http::{CrawlSigner, HttpClient};
 use adk_site::migrate::mapping::map_features;
-use adk_site::migrate::parity::{ParityConfig, SiteDesign, design_choice_fields};
+use adk_site::migrate::parity::{
+    ChromeScreenshotter, MigrationParity, ParityConfig, SiteDesign, design_choice_fields,
+};
 use adk_site::migrate::quarantine::QuarantineBook;
 use adk_site::migrate::sources::{
     Crawl, DockerCliDriver, IsolatedReplay, ReplaySpec, WordPressRest, Wxr,
@@ -34,6 +36,51 @@ use url::Url;
 
 use super::project::{Site, SitePaths};
 use super::{confirm, person};
+
+/// The migrated inventory, beside the migration report.
+const INVENTORY: &str = "inventory.json";
+
+/// The launch gate's migration parity for a migrated project (spec 3.5 §7.8.1): the inventory
+/// and the design choice the last `site migrate` recorded, with the subjects it quarantined
+/// exempt; `None` before any migration. With `legacy`, the looks are compared with the legacy
+/// site served there, in headless Chrome when it is installed.
+pub(super) fn parity(paths: &SitePaths, legacy: Option<&Url>) -> Result<Option<MigrationParity>> {
+    let dir = paths.migration();
+    let Ok(bytes) = std::fs::read(dir.join("report.json")) else { return Ok(None) };
+    let report: serde_json::Value = serde_json::from_slice(&bytes).with_context(|| {
+        format!("{} is not a migration report", dir.join("report.json").display())
+    })?;
+    let inventory = match std::fs::read(dir.join(INVENTORY)) {
+        Ok(bytes) => serde_json::from_slice::<SiteInventory>(&bytes).with_context(|| {
+            format!("{} is not a site inventory", dir.join(INVENTORY).display())
+        })?,
+        Err(_) => {
+            eprintln!(
+                "note: migration parity is not checked: {} predates the recorded inventory; \
+                 run `adk-rust site migrate` again to record it",
+                dir.join("report.json").display()
+            );
+            return Ok(None);
+        }
+    };
+    let design: SiteDesign =
+        report["design"]["design"].as_str().unwrap_or(SiteDesign::Keep.as_str()).parse()?;
+    let quarantine: QuarantineBook =
+        serde_json::from_value(report["quarantine"].clone()).unwrap_or_default();
+    let mut parity = MigrationParity::new(Arc::new(inventory))
+        .excluding(quarantine.excluded())
+        .with_design(design);
+    if let Some(legacy) = legacy {
+        parity = parity.with_legacy(legacy.clone());
+        match ChromeScreenshotter::detect() {
+            Some(chrome) => parity = parity.with_screenshotter(Arc::new(chrome)),
+            None => eprintln!(
+                "note: no Chrome or Chromium found; the looks are not compared with {legacy}"
+            ),
+        }
+    }
+    Ok(Some(parity))
+}
 
 /// `adk-rust site migrate`.
 #[derive(clap::Args, Debug, Clone)]
@@ -309,6 +356,8 @@ pub(super) async fn migrate(paths: &SitePaths, args: MigrateArgs) -> Result<()> 
     });
     let report_path = paths.migration().join("report.json");
     std::fs::write(&report_path, serde_json::to_vec_pretty(&report)?)?;
+    // The inventory is what the launch gate's parity check compares the new site with.
+    std::fs::write(paths.migration().join(INVENTORY), serde_json::to_vec(&inventory)?)?;
     if let Some((name, bytes)) = &export {
         let receipt = archive(paths, &config.domain, name, bytes).await?;
         println!(

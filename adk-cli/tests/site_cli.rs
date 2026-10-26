@@ -300,6 +300,41 @@ fn migrate_from_a_wordpress_export() {
     );
 }
 
+/// After `site migrate`, `site build` runs the launch gate's migration parity check over the
+/// recorded inventory and design choice; before it, there is no such check (spec 3.5 §7.8.1).
+#[test]
+fn build_checks_parity_after_a_migration() {
+    let home = tempfile::tempdir().unwrap();
+    let site = tempfile::tempdir().unwrap();
+    let (home, site) = (home.path(), site.path());
+    project(site);
+    let checks = |site: &Path| -> Vec<Value> {
+        let output = adk_rust(&["site", "build", "--json"], home, site);
+        let printed: Value = serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|_| panic!("not JSON:\n{}", text(&output)));
+        printed["gate"]["checks"].as_array().unwrap().clone()
+    };
+    let parity = |checks: &[Value]| {
+        checks.iter().find(|check| check["check"] == "migration_parity").cloned()
+    };
+    assert!(parity(&checks(site)).is_none(), "no parity check before a migration");
+
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../adk-site/tests/fixtures/migrate");
+    let export = fixtures.join("export.xml");
+    ok(adk_rust(&["site", "migrate", "--wxr", export.to_str().unwrap()], home, site));
+    assert!(site.join("data/migration/inventory.json").is_file(), "the inventory is recorded");
+    let after = checks(site);
+    let parity = parity(&after).expect("the parity check runs after a migration");
+    assert!(
+        parity["note"].as_str().unwrap_or_default().contains("design kept"),
+        "the owner's design choice decides the looks: {parity}"
+    );
+    assert!(
+        parity["note"].as_str().unwrap_or_default().contains("visual comparison not measured"),
+        "no legacy view was given: {parity}"
+    );
+}
+
 /// `site feeds` lists the feeds the owner configured with their bounds; feeds make no model
 /// calls.
 #[test]

@@ -70,7 +70,8 @@ pub enum SiteCommands {
     /// Example: `adk-rust site freeze https://example.com --vantage http://10.0.0.5:8080`
     Freeze(migrate::FreezeArgs),
 
-    /// Build the site into data/work/build and run the launch gate on it.
+    /// Build the site into data/work/build and run the launch gate on it; after
+    /// `site migrate`, with the migration parity check.
     Build {
         /// Render drafts, items in review and future schedules, as a preview does
         #[arg(long)]
@@ -78,6 +79,10 @@ pub enum SiteCommands {
         /// Print the gate's report as JSON
         #[arg(long)]
         json: bool,
+        /// After a migration, compare the looks with the legacy site served at this URL (a
+        /// replay or a frozen snapshot), in headless Chrome
+        #[arg(long, value_name = "URL")]
+        legacy: Option<url::Url>,
     },
 
     /// Release the site: a signed release in the site log, published to the host. With item
@@ -274,7 +279,7 @@ pub async fn run(command: SiteCommands, target: SiteTarget) -> Result<()> {
     match command {
         SiteCommands::Migrate(args) => migrate::migrate(&paths, args).await,
         SiteCommands::Freeze(args) => migrate::freeze(&paths, args).await,
-        SiteCommands::Build { preview, json } => build(&paths, preview, json).await,
+        SiteCommands::Build { preview, json, legacy } => build(&paths, preview, json, legacy).await,
         SiteCommands::Publish { items, yes } => publish(&paths, items, yes).await,
         SiteCommands::Rollback { seq, replay, yes } => rollback(&paths, seq, replay, yes).await,
         SiteCommands::Log { json } => log(&paths, json).await,
@@ -481,27 +486,41 @@ async fn project(site: &Site, seq: u64, preview: bool) -> Result<SiteProject> {
     Ok(project)
 }
 
+/// The launch gate over a build, with the migration parity check when the project was
+/// migrated (spec 3.5 §7.8.1); `legacy` is where the legacy site's looks are compared.
 async fn gate(
+    paths: &SitePaths,
     project: &SiteProject,
     out: &std::path::Path,
     report: &adk_site::generator::BuildReport,
     mode: GateMode,
     changed: Option<&BTreeSet<ContentId>>,
+    legacy: Option<&url::Url>,
 ) -> Result<GateReport> {
     let quarantine = Quarantine::default();
-    Ok(LaunchGate::new()
+    let mut gate = LaunchGate::new();
+    if let Some(parity) = migrate::parity(paths, legacy)? {
+        gate = gate.with_extension(Arc::new(parity));
+    }
+    Ok(gate
         .run(mode, &GateInput { project, out, report, changed, quarantine: &quarantine })
         .await?)
 }
 
 /// `adk-rust site build`.
-async fn build(paths: &SitePaths, preview: bool, json: bool) -> Result<()> {
+async fn build(
+    paths: &SitePaths,
+    preview: bool,
+    json: bool,
+    legacy: Option<url::Url>,
+) -> Result<()> {
     let site = open(paths, true).await?;
     let seq = site.log.size().await + 1;
     let project = project(&site, seq, preview).await?;
     let out = paths.work().join("build");
     let report = BuiltinGenerator.build(&project, &out).await?;
-    let verdict = gate(&project, &out, &report, GateMode::Full, None).await?;
+    let verdict =
+        gate(paths, &project, &out, &report, GateMode::Full, None, legacy.as_ref()).await?;
     if json {
         println!(
             "{}",
@@ -618,8 +637,10 @@ async fn publish_working_copy(site: &Site, yes: bool) -> Result<()> {
     let report = BuiltinGenerator.build(&project, &out).await?;
     let ids: BTreeSet<ContentId> = changed.iter().map(|item| item.id.clone()).collect();
     let verdict = match &previous {
-        None => gate(&project, &out, &report, GateMode::Full, None).await?,
-        Some(_) => gate(&project, &out, &report, GateMode::Fast, Some(&ids)).await?,
+        None => gate(&site.paths, &project, &out, &report, GateMode::Full, None, None).await?,
+        Some(_) => {
+            gate(&site.paths, &project, &out, &report, GateMode::Fast, Some(&ids), None).await?
+        }
     };
     if !verdict.passed() {
         print_gate(&verdict);
