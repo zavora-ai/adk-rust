@@ -6,6 +6,7 @@
 //! | `site.toml`, `content/`, `theme/`, `public-terms.json`, `capabilities.json` | The content repository |
 //! | `well-known/`, `static/` | Files released under `/.well-known/` (the root-signed contract and `keys.json`) and at their own paths |
 //! | `feeds.json`, `calendar.json`, `payments.json` | The owner's feeds with their bounds, bookable slots, and payment links |
+//! | `caldav.json` | The owner's CalDAV calendar of open slots, in place of `calendar.json` ([`CalDavConfig`]) |
 //! | `approvals.json` | The owner's amount thresholds: orders, bookings and payments above them wait for the owner (spec 3.5 §7.4) |
 //! | `data/site-log.db`, `data/host/`, `data/history/`, `data/work/` | The site log, the `DirectoryHost`, every saved version, builds |
 //! | `data/keys/` | Delegated keys as private JWK files: `release.jwk` signs the log, `edge.jwk` the card and receipts, `web-bot-auth.jwk` crawls; `subject.key` keys consent sessions |
@@ -345,6 +346,103 @@ pub fn feeds(paths: &ProjectPaths) -> Result<Vec<ConfiguredFeed>> {
 /// A file that is not a list of slots.
 pub fn slots(paths: &ProjectPaths) -> Result<Option<Vec<Slot>>> {
     read_json(&paths.root().join("calendar.json"))
+}
+
+/// The owner's CalDAV calendar in `caldav.json` (spec 3.5 §7.5 "Commerce"): where the open
+/// slots are, where bookings go, and how to sign in. Secrets are references, `env:VAR` or
+/// `file:PATH` (relative to the project), never the secret itself (A-I19).
+///
+/// ```json
+/// {
+///   "slots": "https://dav.example.com/calendars/juniper/open-slots/",
+///   "bookings": "https://dav.example.com/calendars/juniper/personal/",
+///   "username": "juniper",
+///   "password": "env:JUNIPER_CALDAV_PASSWORD",
+///   "price": 1500,
+///   "timeZone": "Africa/Nairobi"
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CalDavConfig {
+    /// The collection of open slots.
+    pub slots: String,
+    /// The collection bookings are written to; the slots' collection when not set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bookings: Option<String>,
+    /// The account, for HTTP Basic with `password`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// The app password, as `env:VAR` or `file:PATH`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    /// An OAuth bearer token in place of a password, as `env:VAR` or `file:PATH`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// The price of a slot with none of its own, in minor units of the site's currency.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price: Option<u64>,
+    /// The IANA zone times without one are read in; UTC when not set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
+}
+
+/// A secret from `env:VAR` or `file:PATH`, a relative path read from the project root.
+fn secret_reference(paths: &ProjectPaths, source: &str) -> Result<adk_core::CredentialSecret> {
+    let text = if let Some(var) = source.strip_prefix("env:") {
+        std::env::var(var).map_err(|_| {
+            AdkError::config(format!("caldav.json: the environment holds no `{var}`"))
+        })?
+    } else if let Some(file) = source.strip_prefix("file:") {
+        let file = paths.root().join(file);
+        std::fs::read_to_string(&file).map_err(|e| io(&file, e))?
+    } else {
+        return Err(AdkError::config(
+            "caldav.json: write each secret as `env:VAR` or `file:PATH`, never in the file itself",
+        ));
+    };
+    Ok(adk_core::CredentialSecret::new(text.trim()))
+}
+
+/// The owner's CalDAV calendar from `caldav.json`; `None` without the file.
+///
+/// # Errors
+///
+/// A file that is not a [`CalDavConfig`], a secret written in it or not found, an unknown
+/// time zone, or an address that is not `https` (`http` on loopback only).
+pub fn caldav(paths: &ProjectPaths) -> Result<Option<crate::edge::caldav::CalDavCalendar>> {
+    use crate::edge::caldav::{CalDavAuth, CalDavCalendar};
+
+    let Some(config) = read_json::<CalDavConfig>(&paths.root().join("caldav.json"))? else {
+        return Ok(None);
+    };
+    let auth = match (&config.username, &config.password, &config.token) {
+        (Some(username), Some(password), None) => CalDavAuth::Basic {
+            username: username.clone(),
+            password: secret_reference(paths, password)?,
+        },
+        (None, None, Some(token)) => CalDavAuth::Bearer(secret_reference(paths, token)?),
+        (None, None, None) => CalDavAuth::None,
+        _ => {
+            return Err(AdkError::config(
+                "caldav.json: sign in with `username` and `password`, or with `token`",
+            ));
+        }
+    };
+    let mut calendar = CalDavCalendar::new(&config.slots, auth)?;
+    if let Some(bookings) = &config.bookings {
+        calendar = calendar.with_bookings(bookings)?;
+    }
+    if let Some(price) = config.price {
+        calendar = calendar.with_price(price);
+    }
+    if let Some(zone) = &config.time_zone {
+        let zone = zone.parse::<chrono_tz::Tz>().map_err(|_| {
+            AdkError::config(format!("caldav.json: `{zone}` is not an IANA time zone"))
+        })?;
+        calendar = calendar.with_time_zone(zone);
+    }
+    Ok(Some(calendar))
 }
 
 /// One way to pay the owner, from `payments.json`: a rail's name, what the buyer is told,

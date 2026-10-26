@@ -391,6 +391,41 @@ async fn the_edge_books_through_the_owners_calendar() {
     assert_eq!(puts, 1, "one booking in the owner's calendar");
 }
 
+/// A served site reads its CalDAV calendar from `caldav.json`, its secrets by reference only
+/// (A-I19).
+#[tokio::test]
+async fn caldav_json_configures_the_served_calendar() {
+    use adk_website::deploy::project::{ProjectPaths, caldav};
+
+    let server = server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let paths = ProjectPaths::new(dir.path());
+    assert!(caldav(&paths).unwrap().is_none(), "no file, no calendar");
+    std::fs::write(dir.path().join("caldav.secret"), format!("{PASSWORD}\n")).unwrap();
+    let config = serde_json::json!({
+        "slots": server.url(SLOTS),
+        "bookings": server.url(PERSONAL),
+        "username": "juniper",
+        "password": "file:caldav.secret",
+        "price": 1500,
+        "timeZone": "Africa/Nairobi",
+    });
+    std::fs::write(dir.path().join("caldav.json"), config.to_string()).unwrap();
+    let calendar = caldav(&paths).unwrap().expect("the configured calendar");
+    let (from, to) = window();
+    assert_eq!(calendar.open(from, to).await.unwrap().len(), 2);
+
+    let mut literal = config.clone();
+    literal["password"] = serde_json::json!(PASSWORD);
+    std::fs::write(dir.path().join("caldav.json"), literal.to_string()).unwrap();
+    let error = caldav(&paths).unwrap_err();
+    assert!(error.message.contains("env:VAR"), "{error}");
+    let mut zone = config.clone();
+    zone["timeZone"] = serde_json::json!("Mars/Olympus");
+    std::fs::write(dir.path().join("caldav.json"), zone.to_string()).unwrap();
+    assert!(caldav(&paths).is_err());
+}
+
 /// A live run against a real CalDAV server: makes a calendar, lists and books its slots,
 /// and removes it. With Radicale:
 ///

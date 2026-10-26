@@ -708,10 +708,10 @@ fn parse_events(text: &str, zone: Tz) -> Vec<CalEvent> {
                 }
             }
             "END" => {
-                if stack.pop().is_some_and(|c| c == "VEVENT") {
-                    if let Some(event) = event(&props, zone) {
-                        events.push(event);
-                    }
+                if stack.pop().is_some_and(|c| c == "VEVENT")
+                    && let Some(event) = event(&props, zone)
+                {
+                    events.push(event);
                 }
             }
             _ if stack.last().is_some_and(|c| c == "VEVENT") => props.push((name, params, value)),

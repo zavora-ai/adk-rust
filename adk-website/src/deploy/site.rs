@@ -80,7 +80,8 @@ pub struct SiteOptions {
     pub reply_template: Option<String>,
     /// A payment desk; otherwise `payments.json`, otherwise payments are refused.
     pub payments: Option<Arc<dyn PaymentDesk>>,
-    /// A calendar; otherwise `calendar.json`, otherwise no slot is open.
+    /// A calendar; otherwise the CalDAV calendar in `caldav.json`, otherwise `calendar.json`,
+    /// otherwise no slot is open.
     pub calendar: Option<Arc<dyn Calendar>>,
     /// `web_search` providers for AEO tracking, with the questions to ask.
     pub search: Vec<Arc<dyn SearchProvider>>,
@@ -390,8 +391,10 @@ impl RunningSite {
                 adk_auth::web_bot_auth::HttpSignatureVerifier::builder(Arc::new(directory)).build(),
             ))
             .build();
+        let caldav = project::caldav(&paths)?.map(|c| Arc::new(c) as Arc<dyn Calendar>);
         let calendar = match &options.calendar {
             Some(calendar) => Some(calendar.clone()),
+            None if caldav.is_some() => caldav,
             None => project::slots(&paths)?
                 .map(|slots| Arc::new(InMemoryCalendar::new(slots)) as Arc<dyn Calendar>),
         };
