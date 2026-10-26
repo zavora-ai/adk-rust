@@ -31,6 +31,7 @@
 //! | `website` | The website's views on the web home (spec 3.5 §8.2): the web editor, onboarding, the charter cards, the site view and the weekly review over `adk-website`'s desk, `web::website::router`; implies `web` | Experimental |
 //! | `verb-ui` | Screen actions people and agents share (spec 3.3 §2 item 7, §6.1): snoozing something in Coming up from the home, the terminal, voice and an agent, always through the governed path, `verbs::VerbRegistry`; with `web`, `web::verbs::router` | Experimental |
 //! | `workflow` | The workflow observer (spec 3.3 §12 developer track): a graph agent's runs, steps and forks, card hints for its governed nodes, `workflow::Workflows`; with `web`, the Runs tab's routes, `web::workflow::router` | Beta |
+//! | `genui` | Agent-drawn UI (spec 3.3 §6.1, §7.4 rule 5): the A2UI v0.9.1 model, the `forms` 1.0 catalog, the validator that keeps approval controls and secrets out of drawings, and the render tools agents draw with, `genui::DrawToolset` | Beta |
 //!
 //! ## Example
 //!
@@ -64,6 +65,8 @@ pub mod channels;
 mod control;
 mod engine;
 pub mod error;
+#[cfg(feature = "genui")]
+pub mod genui;
 mod hints;
 mod inbox;
 mod local;

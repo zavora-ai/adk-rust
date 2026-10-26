@@ -59,6 +59,10 @@ verb-ui = []
 # adk-harness's default `graph` feature already compiles; adk-harness `web` for the secret
 # redaction every shown value passes.
 workflow = ["dep:adk-graph", "adk-graph/time-travel", "adk-harness/web"]
+# Agent-drawn UI (spec 3.3 §6.1, §7.4 rule 5): the A2UI v0.9.1 model, the embedded `forms` 1.0
+# catalog, the validator that keeps approval controls and secrets out of drawings, and the
+# render tools agents draw with (`genui::DrawToolset`).
+genui = ["dep:jsonschema", "dep:sha2"]
 
 [dependencies]
 adk-core.workspace = true
@@ -82,6 +86,8 @@ base64 = { version = "0.22", optional = true }
 chrono.workspace = true
 crossterm = { version = "0.29", optional = true, features = ["event-stream"] }
 futures.workspace = true
+# Drawn surfaces checked against the embedded A2UI catalog (`genui`).
+jsonschema = { workspace = true, optional = true }
 # The approvals inbox in full over the kernel's Unix socket (`ControlSource`).
 http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "http1"] }
