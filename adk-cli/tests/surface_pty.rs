@@ -1598,9 +1598,21 @@ fn inline_runs_the_repls_commands() {
     assert_eq!(wait_exit(terminal).0, Some(0));
 }
 
+/// The kernel's record at `port`, read with the operator's token `kernel_up` starts it with:
+/// each line's action, how it was given and its outcome.
+fn kernel_record(port: u16) -> Vec<(String, Option<String>, Option<String>)> {
+    let client = adk_kernel::control::ControlClient::http(format!("http://127.0.0.1:{port}"))
+        .with_bearer_token("operator-only");
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let lines = runtime.block_on(client.record(Some(200))).expect("the kernel's record");
+    lines.into_iter().map(|line| (line.action, line.how, line.outcome)).collect()
+}
+
 /// On a kernel the terminal runs the REPL's commands there, over the kernel's harness, and
 /// `a` makes the standing rule the harness makes in process: the next call like it runs
-/// without asking (spec 3.3 §5.2, §7.2).
+/// without asking (spec 3.3 §5.2, §7.2). The mode is set there, on a thread with no message
+/// yet too; every answer and stop is on the kernel's record with how it was given; stopped,
+/// a rule can still be revoked (wave 3 review: spec 3.3 §11, S-I10).
 #[test]
 fn the_repls_commands_and_always_allow_run_on_the_kernel() {
     let home = tempfile::tempdir().unwrap();
@@ -1612,7 +1624,8 @@ fn the_repls_commands_and_always_allow_run_on_the_kernel() {
         {"call": {"name": "write_file", "args": {"path": "b.txt", "content": "B"}}},
         {"text": "Wrote b."}
     ]"#;
-    let mut up = kernel_up(home.path(), &kernel, ws.path(), free_port(), script);
+    let port = free_port();
+    let mut up = kernel_up(home.path(), &kernel, ws.path(), port, script);
     let kernel_arg = kernel.display().to_string();
     let mut terminal = Terminal::spawn_sized_env(
         &["--home", &kernel_arg, "--theme", "light"],
@@ -1629,6 +1642,12 @@ fn the_repls_commands_and_always_allow_run_on_the_kernel() {
     command(&mut terminal, "/rules", &["No standing rules."]);
     command(&mut terminal, "/memory", &["Working notes:", "Long-term facts"]);
     command(&mut terminal, "/hooks", &["No hooks."]);
+    // The thread has no message yet; the kernel's `/mode` sets its mode, and the status line
+    // shows the mode the kernel reports.
+    terminal.send("/mode plan\r");
+    expect_screen(&terminal, "Suggest");
+    terminal.send("/mode ask\r");
+    expect_screen(&terminal, "Ask first");
 
     terminal.send("Write a\r");
     let parser = expect_all(&terminal, &["Waiting for you · Write file a.txt", "Always allow"]);
@@ -1644,13 +1663,29 @@ fn the_repls_commands_and_always_allow_run_on_the_kernel() {
     expect_screen(&terminal, "Wrote b.");
     assert_eq!(std::fs::read_to_string(ws.path().join("b.txt")).unwrap(), "B");
 
-    // Stopped, the kernel runs no command that changes something; one that reads still runs.
+    // Stopped, the kernel runs no command that lets the agents do more; one that reads, or
+    // revokes a rule, still runs.
     terminal.send("\x0b");
     expect_screen(&terminal, "stopped");
     command(&mut terminal, "/web allow docs.rs", &["everything is stopped"]);
     command(&mut terminal, "/rules", &["allow write_file"]);
+    command(&mut terminal, "/rules rm 1", &["revoked:"]);
+    command(&mut terminal, "/rules", &["No standing rules."]);
     terminal.send("\x03");
     assert_eq!(terminal.wait().0, Some(0));
+
+    // The answer, the mode changes and the stop are on the kernel's record, given by keyboard.
+    let record = kernel_record(port);
+    let by_key = |action: &str| {
+        record.iter().any(|(at, how, _)| at == action && how.as_deref() == Some("keyboard"))
+    };
+    assert!(
+        record.iter().any(|(action, how, outcome)| action == "surface.decide"
+            && how.as_deref() == Some("keyboard")
+            && outcome.as_deref() == Some("decided")),
+        "{record:?}"
+    );
+    assert!(by_key("surface.set_mode") && by_key("surface.stop_all"), "{record:?}");
     up.send("\x03");
     assert!(up.wait().0.is_some(), "the kernel stopped");
 }

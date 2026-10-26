@@ -73,6 +73,7 @@ mod builder;
 #[cfg(feature = "graph")]
 mod checkpoint;
 mod config;
+mod edits;
 #[cfg(feature = "encrypted")]
 pub mod encrypted;
 #[cfg(feature = "memory")]
@@ -102,6 +103,8 @@ mod plan_graph;
 mod policy;
 mod posture;
 mod prompt;
+#[cfg(any(feature = "sqlite", feature = "postgres", feature = "redis"))]
+mod read_records;
 mod run_context;
 mod shell;
 #[cfg(feature = "skills")]
@@ -146,6 +149,10 @@ pub use approvals::{
     RuleSuggestion, SHELL_PREFIX_SUGGESTION_DENYLIST, StandingDecision, StandingRule,
     StandingRuleStore, SuggestedScope, escape_control,
 };
+pub use approvals::{
+    CHANGE_SET_MAX_BYTES, ChangeSet, ChangeSetAnswer, ChangeSetCall, ChangeSetFile,
+    ChangeSetPrompt, RenderedChangeSet,
+};
 #[cfg(feature = "observe")]
 pub use builder::LoopGuard;
 pub use builder::{HarnessAgentBuilder, Pack};
@@ -154,6 +161,7 @@ pub use checkpoint::SealedCheckpointer;
 #[cfg(feature = "graph")]
 pub use checkpoint::checkpointer_from_url;
 pub use config::{HARNESS_CONFIG_FILE, HarnessConfig};
+pub use edits::PREFERRED_MULTI_FILE_EDIT;
 #[cfg(any(feature = "memory-embeddings", feature = "memory-embeddings-local"))]
 pub use facts::RagEmbedder;
 #[cfg(all(feature = "memory", feature = "sqlite"))]
@@ -261,6 +269,12 @@ pub use policy::{
 pub use posture::{Effort, EffortPolicy};
 pub use preset::Preset;
 pub use prompt::HARNESS_SYSTEM_PROMPT;
+#[cfg(feature = "postgres")]
+pub use read_records::PostgresReadRecords;
+#[cfg(feature = "redis")]
+pub use read_records::RedisReadRecords;
+#[cfg(feature = "sqlite")]
+pub use read_records::SqliteReadRecords;
 #[cfg(feature = "sqlite")]
 pub use shell::SqliteShellLedger;
 pub use shell::{AUTO_ALLOW_UNAVAILABLE_CODE, SANDBOX_PROTECTED_PATHS};

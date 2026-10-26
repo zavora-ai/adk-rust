@@ -24,6 +24,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
+use super::vectors::sorted;
 use crate::signing::SigningError;
 use crate::signing::anchor::{FixedTxtResolver, root_record, root_record_name};
 use crate::signing::bundle::StaticBundle;
@@ -122,7 +123,7 @@ fn twins(path: &str, title: &str, body: &str, release_seq: u64) -> Vec<(String, 
             format!("{base}/index.awp.json"),
             Served::new(
                 "application/awp+json",
-                serde_json::to_vec_pretty(&view).unwrap_or_default(),
+                serde_json::to_vec_pretty(&sorted(view)).unwrap_or_default(),
             ),
         ),
         (
@@ -243,7 +244,10 @@ impl FixtureSite {
         }
         release_one.insert(
             "/.well-known/agent-card.json".to_owned(),
-            Served::new("application/json", serde_json::to_vec_pretty(&card).unwrap_or_default()),
+            Served::new(
+                "application/json",
+                serde_json::to_vec_pretty(&sorted(card.clone())).unwrap_or_default(),
+            ),
         );
         release_one.insert(
             "/.well-known/security.txt".to_owned(),
@@ -380,7 +384,7 @@ impl FixtureSite {
     /// Replaces served file `path` with `value` as JSON.
     pub fn set_json(&mut self, path: &str, value: &Value) {
         if let Some(served) = self.files.get_mut(path) {
-            served.body = serde_json::to_vec_pretty(value).unwrap_or_default();
+            served.body = serde_json::to_vec_pretty(&sorted(value.clone())).unwrap_or_default();
         }
     }
 

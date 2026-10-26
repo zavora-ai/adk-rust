@@ -1746,7 +1746,13 @@ impl SurfaceEngine {
                 &detail.mode.label,
             )));
         }
-        self.transcript(caller, session).await?;
+        // A thread with no message yet takes a mode where the source opens it for the caller,
+        // as a kernel's `/mode` does; elsewhere only the caller's own session does (S-I8).
+        if self.inner.source.transcript(caller.user_id(), session).await?.is_none()
+            && !self.inner.source.opens_sessions()
+        {
+            return Err(SurfaceError::not_found(format!("session '{session}'")));
+        }
         self.audit_command(
             caller,
             SURFACE_AUDIT_SET_MODE,

@@ -4,8 +4,8 @@
 //! | Backend | Feature | Atomic steps |
 //! |---------|---------|--------------|
 //! | [`SqliteEdgeStores`] | `awp-sqlite` | `INSERT … ON CONFLICT DO NOTHING` for every create and idempotency `begin`; compare-and-set `UPDATE`s for subscriptions, held calls and outcomes |
-//! | [`PostgresEdgeStores`] | `awp-postgres` | The same statements, shared by every edge replica |
-//! | [`RedisEdgeStores`] | `awp-redis` | `HSETNX` creates, a compare-and-set Lua script, and `SET … GET` for the status |
+//! | `PostgresEdgeStores` | `awp-postgres` | The same statements, shared by every edge replica |
+//! | `RedisEdgeStores` | `awp-redis` | `HSETNX` creates, a compare-and-set Lua script, and `SET … GET` for the status |
 //!
 //! Each backend implements [`SubscriptionStore`](adk_awp::v2::store::SubscriptionStore),
 //! [`ConsentReceiptStore`](adk_awp::v2::store::ConsentReceiptStore),

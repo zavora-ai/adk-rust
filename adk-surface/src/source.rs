@@ -192,6 +192,14 @@ pub trait Source: Send + Sync {
         Ok(None)
     }
 
+    /// Whether [`set_mode`](Self::set_mode) opens a session the caller names that has no
+    /// events yet, so a new thread takes a mode before its first message (spec 3.3 §5.2). The
+    /// default says no: a session store cannot tell such a session from another person's,
+    /// so the engine sets the mode of the caller's own sessions only (S-I8).
+    fn opens_sessions(&self) -> bool {
+        false
+    }
+
     /// Sets the session's mode.
     async fn set_mode(&self, caller: &Caller, session: &str, mode: HarnessMode) -> Result<()> {
         let _ = (caller, session, mode);

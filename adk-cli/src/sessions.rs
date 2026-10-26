@@ -119,6 +119,9 @@ pub struct HarnessDb {
     pub facts: Arc<adk_harness::SqliteFactStore>,
     /// Goals (spec 3.1 §7.11).
     pub goals: Arc<adk_harness::SqliteGoalStore>,
+    /// The file tools' read records, so a held edit approved in a later process finds the
+    /// read that preceded it (spec 3.1 §7.26, §7.33 fix 5).
+    pub reads: Arc<adk_harness::SqliteReadRecords>,
     /// The id of the key the stores are sealed under, if any.
     pub key_id: Option<String>,
     /// Plan and goal checkpoints, sealed under the store key when one is configured
@@ -205,6 +208,8 @@ pub async fn open_harness_db_in(
     facts.migrate().await?;
     let goals = adk_harness::SqliteGoalStore::new(pool.clone());
     goals.migrate().await?;
+    let reads = adk_harness::SqliteReadRecords::new(pool.clone());
+    reads.migrate().await?;
     let plans: Arc<dyn adk_graph::Checkpointer> =
         Arc::new(adk_graph::SqliteCheckpointer::from_pool(pool.clone()).await?);
     let snapshots = adk_harness::snapshot::SqliteSnapshotStore::new(pool.clone());
@@ -220,6 +225,7 @@ pub async fn open_harness_db_in(
             runs: Arc::new(runs),
             facts: Arc::new(facts),
             goals: Arc::new(goals),
+            reads: Arc::new(reads),
             key_id: None,
             plans,
             keyring: None,
@@ -264,6 +270,7 @@ pub async fn open_harness_db_in(
         runs: Arc::new(runs),
         facts: Arc::new(facts.with_keyring(keyring.clone())),
         goals: Arc::new(goals.with_keyring(keyring.clone())),
+        reads: Arc::new(reads.with_keyring(keyring.clone())),
         key_id: Some(keyring.key_id()),
         plans: Arc::new(adk_harness::SealedCheckpointer::new(plans, keyring.clone())),
         keyring: Some(keyring.clone()),
@@ -297,6 +304,8 @@ pub async fn open_harness_db_in(dir: &Path) -> Result<HarnessDb> {
     facts.migrate().await?;
     let goals = adk_harness::SqliteGoalStore::new(pool.clone());
     goals.migrate().await?;
+    let reads = adk_harness::SqliteReadRecords::new(pool.clone());
+    reads.migrate().await?;
     let plans = adk_graph::SqliteCheckpointer::from_pool(pool.clone()).await?;
     let snapshots = adk_harness::snapshot::SqliteSnapshotStore::new(pool.clone());
     snapshots.migrate().await?;
@@ -310,6 +319,7 @@ pub async fn open_harness_db_in(dir: &Path) -> Result<HarnessDb> {
         runs: Arc::new(runs),
         facts: Arc::new(facts),
         goals: Arc::new(goals),
+        reads: Arc::new(reads),
         key_id: None,
         plans: Arc::new(plans),
         snapshots: Arc::new(snapshots),

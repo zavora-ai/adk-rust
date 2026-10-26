@@ -13,6 +13,52 @@ Both are in `adk-cli`'s `website` feature.
 cargo install adk-cli --features website
 ```
 
+## Spinning up a website
+
+`adk-rust website new [dir]` scaffolds a site project (the files `adk-website new` writes),
+starts its kernel and agent edge on this machine, mounts the website views of the web home
+beside them, prints a one-time setup code and the owner's key steps, and opens onboarding in
+the browser (spec 3.5 §7.17). A directory that already holds a `site.toml` is started as it
+is.
+
+```text
+$ adk-rust website new bakery --kind business --name "Juniper Bakery" --domain bakery.example
+Scaffolded a business site in bakery:
+  site.toml
+  …
+bakery-example (bakery.example) is running:
+  edge    http://127.0.0.1:8080  the site and its agent edge
+  kernel  http://127.0.0.1:7340  the control plane
+  home    http://127.0.0.1:8090/ui/website  onboarding, the charter, the site and the review
+Setup code: ABCD-EFGH-2345  — enter it on the setup screen to pair your device; nothing else can claim the site (A-I20).
+Your keys — run these yourself, in your own terminal, never inside an agent:
+  1. adk-rust awp keys rotate --site bakery --new-root-key ~/keys/bakery.example-root.jwk
+  …
+```
+
+| Flag | Default | Use |
+|---|---|---|
+| `--kind`, `--name`, `--domain`, `--language`, `--theme`, `--currency` | business, the directory's name, `example.com`, `en`, `paper`, `USD` | The scaffold |
+| `--agency` | — | One harness for many sites: the site goes into `<dir>/<domain>`, `<dir>/agency.toml` lists it, and every listed site is served, each isolated (A-I22) |
+| `--edge`, `--kernel`, `--home` | `127.0.0.1:8080`, `127.0.0.1:7340`, `127.0.0.1:8090` | Listeners; the home takes loopback only |
+| `--owner` | your user name | The person the setup code pairs |
+| `--no-open` | — | Do not open the browser |
+
+The project keeps no root key: the root key file stays with the owner, and `awp keys` signs
+with it at a terminal. Until a device is paired the site accepts no onboarding input.
+
+| Command | Shows or does |
+|---|---|
+| `website status [--json]` | The kind, the charter in force or the draft, whether the site is live and its release, paired devices, the jobs |
+| `website review [--week DATE] [--json]` | The weekly review, composed from the site's stores: KPIs against baselines, work, money, experiments, incidents, alarms, promotions offered, demotions and questions |
+| `website charter [--json]` | The charter in force with its signing decision, every earlier version, or the draft waiting for its signers |
+| `website jobs [--json]` | Every job and its autonomy level |
+| `website jobs promote JOB [--yes]` | Raises the job one level by the owner's decision and grants the standing rules the level needs; a person the charter does not name as an owner is refused (A-I13) |
+| `website jobs demote JOB [--reason TEXT] [--yes]` | Lowers the job one level and revokes the standing rules it no longer warrants |
+
+Every command takes `--site DIR` (default `.`) and `--owner NAME` (default: the charter's
+first owner). The standing rules are kept in the site's `data/kernel.db`.
+
 ## The site project
 
 Every `site` command acts on a project directory: the current one, or `--site DIR`.

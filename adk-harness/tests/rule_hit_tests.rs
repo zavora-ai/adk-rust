@@ -1,5 +1,7 @@
 //! A call a standing rule allows is announced, not run silently (spec 3.1 §7.33 fix 3).
 
+#![cfg(feature = "runner")]
+
 mod common;
 
 use adk_harness::{HarnessAgentBuilder, PromptAnswer, RuleHit, RulePredicate};

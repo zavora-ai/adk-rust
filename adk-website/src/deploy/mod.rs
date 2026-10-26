@@ -8,7 +8,7 @@
 //! | [`Shape::Agency`] | Per-site hosts | One harness for many sites, each isolated (A-I22) | Developers running sites for clients |
 //!
 //! [`plan`] writes what a shape needs into the site project and estimates its monthly
-//! running cost before deployment; [`serve`] is what the `adk-website` binary runs: the
+//! running cost before deployment; [`serve`](fn@serve) is what the `adk-website` binary runs: the
 //! kernel's control plane and the agent edge for one site, or many in [`agency`] mode.
 //!
 //! | Module | Contents |

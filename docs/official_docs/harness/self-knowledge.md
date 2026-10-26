@@ -24,7 +24,7 @@ harness: with `allow_host_shell_in_auto`, the host shell line reads `allow` in `
 Classes (read-only | plan | ask | auto):
   read, todos and members (glob grep harness_help read_file update_todo write_todos): allow | allow | allow | allow
   plan exit (exit_plan_mode): deny | ask every time | deny | deny
-  edit (edit_file write_file): deny | deny | ask | allow
+  edit (apply_patch edit_file write_file): deny | deny | ask | allow
   edit, protected path (AGENTS.md, CLAUDE.md, MEMORY.md, .envrc, lefthook.yml and anything under .git, .adk, .skills or .claude): deny | deny | ask every time | ask every time
   shell (host) (bash): deny | deny | ask | ask
   other (MCP servers, drivers, skills, extras): deny | deny | ask | ask
@@ -35,6 +35,7 @@ Commands the person types (you cannot run them; when input looks like a mistyped
 Packs: browser (off: --pack browser), payments (not compiled), ...
 Web search: none (...)
 Memory: off
+Edits: edit_file takes several replacements in one file as edits; apply_patch changes several files, all or none; prefer edit_file across files. An edit of a file changed since you read it is refused as stale: read it again.
 Safety (promise only what these cover):
   action ledger: covers ...; does not cover ...
   rewind: covers the plan graph's position only; does not cover files: no file is restored; ...
@@ -52,6 +53,7 @@ the file cap is partial ([Snapshots and rewind](snapshots-and-rewind.md)).
 | Size | At most 6 KiB (`HARNESS_BLOCK_MAX_BYTES`); a longer block ends with the sections it cut and points at `harness_help` |
 | Stability | Sorted, with no timestamp and no session data: two builds with the same configuration render the same bytes, and the block stays in the cached prefix of every request |
 | Wording | Slash commands are typed by the person; the model names the closest command when input looks mistyped and never claims one ran |
+| Edit tools | Every model is offered `write_file`, `edit_file` and `apply_patch`, so the tool surface is one per process; the `Edits:` line names the multi-file tool the model's family works best with, from `PREFERRED_MULTI_FILE_EDIT` (`apply_patch` for OpenAI models, `edit_file` otherwise), data the eval suite can revise (spec 3.1 §13 Q12) |
 
 ## The standing-rules digest
 

@@ -19,6 +19,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+sha2.workspace = true
 tokio = { workspace = true, features = ["fs", "process", "time", "io-util", "rt", "macros"] }
 regex.workspace = true
 walkdir = "2.5"
@@ -47,5 +48,6 @@ adk-sandbox = { path = "../adk-sandbox", features = ["sandbox-windows"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_Threading"] }
 
 [dev-dependencies]
+proptest = "1.5"
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }

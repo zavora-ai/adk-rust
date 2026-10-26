@@ -33,7 +33,7 @@ on:
         description: The job to run; `all` runs every job
         type: choice
         default: all
-        options: [all, feature-combinations, supply-chain, durable-stores, integration-tests, harness-eval-live, site-soak]
+        options: [all, feature-combinations, supply-chain, durable-stores, integration-tests, harness-eval-live, site-soak, website-wordpress, website-soak]
 
 permissions:
   contents: read
@@ -418,6 +418,82 @@ jobs:
       run: >-
         cargo nextest run -p adk-site --features migrate --cargo-profile ci
         --run-ignored only -E 'test(s19_full_day)' --no-capture
+
+  # ── adk-website: the WordPress fixture (spec 3.5 §11) ─────────
+  # The compose fixture in examples/website/fixtures/wordpress, clean and with its `infected`
+  # overlay, against the recordings the PR tier runs on; and adk-site's Docker replay.
+  website-wordpress:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'website-wordpress' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-key: website-wordpress
+        neutralize-wild: 'true'
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      with:
+        tool: cargo-nextest
+
+    - name: Start and seed the WordPress fixture
+      working-directory: examples/website/fixtures/wordpress
+      run: |
+        docker compose up -d --wait
+        docker compose run --rm seed
+
+    - name: Run against the clean site
+      run: cargo run --locked --manifest-path examples/website/Cargo.toml -- wordpress http://127.0.0.1:8080
+
+    - name: Apply the infected overlay
+      working-directory: examples/website/fixtures/wordpress
+      run: |
+        docker compose -f compose.yaml -f compose.infected.yaml up -d --wait
+        docker compose -f compose.yaml -f compose.infected.yaml run --rm infect
+
+    - name: Run against the infected site
+      run: cargo run --locked --manifest-path examples/website/Cargo.toml -- wordpress http://127.0.0.1:8080 --infected
+
+    - name: Replay a WordPress dump in isolation through Docker
+      run: >-
+        cargo nextest run -p adk-site --features migrate --run-ignored only
+        -E 'test(docker_replay_is_isolated_and_destroyed)'
+
+    - name: Stop the fixture
+      if: always()
+      working-directory: examples/website/fixtures/wordpress
+      run: docker compose -f compose.yaml -f compose.infected.yaml down -v
+
+  # ── adk-website: the S19 soak (spec 3.5 §11 "Soak") ───────────
+  # 50,000 products over 24 simulated hours on the product's runtime, update engine, alarm
+  # routing, Guardian probe and weekly review; the report is the job's artifact.
+  website-soak:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'website-soak' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-key: website-soak
+        neutralize-wild: 'true'
+
+    - name: Run S19 for 24 simulated hours
+      run: cargo run --locked --release --manifest-path examples/website/Cargo.toml -- soak --report s19-soak.json
+
+    - name: Upload the soak report
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: s19-soak
+        path: s19-soak.json
+        if-no-files-found: ignore
 
   # ── Integration tests: #[ignore]d tests gated on secrets ───────
   # Requirement 2.3 (scheduled integration coverage). The workspace marks tests

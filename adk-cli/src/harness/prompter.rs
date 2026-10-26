@@ -1,7 +1,10 @@
 //! Approval prompts for the harness at the console (spec 3.1 §8.1).
 
 use adk_core::Result;
-use adk_harness::{ApprovalPrompt, ApprovalPrompter, PromptAnswer, RuleSuggestion, ToolKind};
+use adk_harness::{
+    ApprovalPrompt, ApprovalPrompter, ChangeSetAnswer, ChangeSetPrompt, PromptAnswer,
+    RuleSuggestion, ToolKind,
+};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -33,6 +36,13 @@ const MENU_ONCE: &str = "  [y] allow once  [n] deny (reason)  [e] edit args  [?]
 /// non-waivable calls such as `exit_plan_mode`, protected-path edits or unsandboxed
 /// retries. A call whose arguments were cut for display can be approved only after `?`
 /// has shown them in full (spec 3.1 §9.2 I21).
+///
+/// Two or more held edits of one model turn are shown as one change set: a unified diff
+/// per file with its before and after sha256 and the change set's digest, then
+/// `[y] approve all  [f] choose files  [n] deny all (reason)  [e] edit  [?] full diff`.
+/// `e` opens the calls' arguments, under the diff as comments, in `$VISUAL`/`$EDITOR` and
+/// shows the change set again. Each approved edit runs bound to the content shown
+/// (spec 3.1 §7.26).
 ///
 /// Without a terminal every call is denied with a message saying how to approve it, so
 /// an unattended run never waits for input. [`approve_all`](Self::approve_all) is the
@@ -88,6 +98,15 @@ impl ConsolePrompter {
     pub fn approve_all(mut self, allow_unsandboxed: bool) -> Self {
         self.approve_all = Some(allow_unsandboxed);
         self
+    }
+
+    pub(super) fn console(&self) -> &ConsoleIo {
+        &self.console
+    }
+
+    /// `Some(allow_unsandboxed)` under `--yes`.
+    pub(super) fn approve_all_flag(&self) -> Option<bool> {
+        self.approve_all
     }
 
     fn show(&self, prompt: &ApprovalPrompt) {
@@ -260,6 +279,11 @@ impl ApprovalPrompter for ConsolePrompter {
             hit.function_call_id.as_deref(),
             &format!("{}\n", terminal_safe(&hit.to_string())),
         );
+    }
+
+    /// The change-set card: one diff, one answer (spec 3.1 §7.26).
+    async fn prompt_change_set(&self, prompt: ChangeSetPrompt) -> Result<Option<ChangeSetAnswer>> {
+        Ok(self.change_set(prompt).await)
     }
 
     async fn prompt(&self, prompt: ApprovalPrompt) -> Result<PromptAnswer> {

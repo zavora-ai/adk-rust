@@ -11,16 +11,22 @@ import type { DevicesSeam } from "../src/seams";
 
 describe("the header", () => {
   it("names the three sections, the status line, a filled Decisions badge and Stop all", async () => {
-    render(<App client={new FixtureClient()} initialSection="threads" />);
-    const nav = screen.getByRole("navigation", { name: "Sections" });
-    for (const name of ["Threads", "Today", "Memory & rules"]) {
-      expect(within(nav).getByRole("link", { name: new RegExp(name) })).toBeTruthy();
+    // The status line reads the local clock; noon is outside the fixture's 22:00–07:00 window.
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 9, 26, 12, 0) });
+    try {
+      render(<App client={new FixtureClient()} initialSection="threads" />);
+      const nav = screen.getByRole("navigation", { name: "Sections" });
+      for (const name of ["Threads", "Today", "Memory & rules"]) {
+        expect(within(nav).getByRole("link", { name: new RegExp(name) })).toBeTruthy();
+      }
+      expect(await screen.findByText("$1.84 of $5.00 today")).toBeTruthy();
+      expect(screen.getByText("Quiet from 22:00")).toBeTruthy();
+      const decisions = await screen.findByRole("heading", { name: /^Decisions/ });
+      await waitFor(() => expect(within(decisions).getByText("2").className).toContain("badge"));
+      expect(screen.getByRole("button", { name: "Stop all" })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
     }
-    expect(await screen.findByText("$1.84 of $5.00 today")).toBeTruthy();
-    expect(screen.getByText("Quiet from 22:00")).toBeTruthy();
-    const decisions = await screen.findByRole("heading", { name: /^Decisions/ });
-    await waitFor(() => expect(within(decisions).getByText("2").className).toContain("badge"));
-    expect(screen.getByRole("button", { name: "Stop all" })).toBeTruthy();
   });
 
   it("stops every agent in one action, and resumes from the home", async () => {

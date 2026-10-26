@@ -55,6 +55,17 @@ impl CommandHost for HarnessCommandHost {
         HarnessCommands::changes(name, args)
     }
 
+    async fn tightens(&self, call: &CommandCall) -> adk_kernel::Result<bool> {
+        self.commands
+            .tightens(&call.name, &call.args, &call.user, &call.session)
+            .await
+            .map_err(kernel_error)
+    }
+
+    async fn session_mode(&self, user: &str, session: &str) -> adk_kernel::Result<Option<String>> {
+        self.commands.session_mode(user, session).await.map(Some).map_err(kernel_error)
+    }
+
     async fn run(&self, call: &CommandCall) -> adk_kernel::Result<String> {
         let reach = Some(call.reach.clone());
         match self.commands.run(&call.name, &call.args, &call.user, &call.session, reach).await {

@@ -130,3 +130,23 @@ async fn a_redis_url_checkpoints_plans_across_processes() {
     let second = adk_harness::checkpointer_from_url(&redis_url()).await.unwrap();
     assert_eq!(second.load(&thread).await.unwrap(), Some(checkpoint));
 }
+
+/// The file tools' read records on Redis (spec 3.1 §7.26, §10 D7): the conformance cases,
+/// and a record written through one replica's store read through another's.
+#[tokio::test]
+#[ignore = "needs REDIS_URL; CI's postgres job runs it"]
+async fn read_records_conform_and_reach_every_replica() {
+    use adk_harness::conformance::read_records;
+    async fn store(namespace: &str) -> adk_harness::RedisReadRecords {
+        adk_harness::RedisReadRecords::connect(&redis_url())
+            .await
+            .expect("connect")
+            .with_namespace(namespace)
+    }
+    read_records::round_trip(&store(&namespace()).await).await;
+    read_records::scopes_are_isolated(&store(&namespace()).await).await;
+    read_records::forget_removes_one_path(&store(&namespace()).await).await;
+    let namespace = namespace();
+    read_records::records_reach_every_instance(&store(&namespace).await, &store(&namespace).await)
+        .await;
+}

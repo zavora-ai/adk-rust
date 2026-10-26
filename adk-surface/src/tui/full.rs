@@ -92,6 +92,7 @@ async fn full_screen(surface: TerminalSurface) -> io::Result<i32> {
         terminal.draw(|frame| box_view = renderer.draw(frame, &app, now))?;
         app.set_box_view(box_view, now);
         app.view_scroll = app.view_scroll.min(renderer.view_max_scroll);
+        app.view_page = renderer.view_page;
         let held = app.held_until();
         let effects = tokio::select! {
             exit = signals.recv() => {

@@ -11,13 +11,14 @@ any `LlmAgent` (the [`CodingAgent`](harness.md) harness wires it for you).
 
 ## The tools
 
-`DevToolset` is a `Toolset` bundling six tools:
+`DevToolset` is a `Toolset` bundling seven tools:
 
 | Tool | Params | Behavior |
 |------|--------|----------|
 | `read_file` | `path`, `offset?`, `limit?` | Return file contents, line-numbered; a PNG, JPEG, GIF, WebP or PDF as inline data (see [Images and PDFs](#images-and-pdfs)) |
-| `write_file` | `path`, `content` | Create/overwrite a file (creates parent dirs) |
-| `edit_file` | `path`, `old_string`, `new_string`, `replace_all?` | Exact-string replacement |
+| `write_file` | `path`, `content`, `expect_sha256?` | Create/overwrite a file (creates parent dirs) |
+| `edit_file` | `path`, `old_string` + `new_string` + `replace_all?` or `edits: [{ old_string, new_string, replace_all? }]`, `expect_sha256?` | Exact-string replacement; several replacements in one file apply together or not at all |
+| `apply_patch` | `patch`, `expect_sha256?` (per path) | A multi-file patch, checked whole and written all or nothing (see [`apply_patch`](#apply_patch)) |
 | `glob` | `pattern`, `path?` | List files matching a glob (e.g. `src/**/*.rs`) |
 | `grep` | `pattern`, `path?`, `glob?`, `case_insensitive?` | Regex content search |
 | `bash` | `command`, `timeout_secs?` | Run a shell command in the workspace root |
@@ -25,12 +26,10 @@ any `LlmAgent` (the [`CodingAgent`](harness.md) harness wires it for you).
 Three safety behaviors worth knowing:
 
 - **`edit_file` requires a prior `read_file`** of that file by the same session
-  and agent, and by default the target string must occur **exactly once**
-  (`replace_all` to override). This guards against blind overwrites. The record of
-  reads is kept per (app, user, session, agent), taken from the tool call's
-  context, so clones of one `Workspace` shared by several sessions or team members
-  keep their reads apart; at most 1,024 records are kept, least recently used
-  first out. Calls whose context names no session share one record.
+  and agent, **and the file must be unchanged since**; by default the target string
+  must occur **exactly once** (`replace_all` to override). This guards against blind
+  overwrites and against overwriting someone else's change (see
+  [Read records and the before-hash](#read-records-and-the-before-hash)).
 - **`grep`** skips common build/VCS dirs (`target`, `.git`, `node_modules`, …)
   and binary/oversized files.
 - **Secret files are excluded.** `grep` and `glob` skip files matching the
@@ -166,6 +165,76 @@ path a symlink resolves to as well, so a link named `settings.txt` pointing at
 `exclude_globs([])` turns exclusion off; `Workspace::is_excluded` answers the same
 question for a path, so a harness can require approval before reading one.
 
+### Read records and the before-hash
+
+Every `read_file` records the sha256 of the file it read, and every `write_file`,
+`edit_file` and `apply_patch` the sha256 of what it wrote, per (app, user, session,
+agent, path), taken from the tool call's context. Clones of one `Workspace` shared by
+several sessions or team members keep their records apart; calls whose context names no
+session share one record.
+
+| Call | Precondition | When the file differs |
+|---|---|---|
+| `edit_file` without `expect_sha256` | The read record: the file is what this agent last read or wrote | `devtools.stale`, nothing written; read it again |
+| `edit_file`, `write_file` with `expect_sha256` | The digest given, or `absent` for a file that must not exist yet | `devtools.stale`, nothing written |
+| `write_file` without `expect_sha256` | None | — |
+| `apply_patch` | Per file: its `expect_sha256` entry, else the read record when there is one | `devtools.stale`, no file written |
+
+The digest is checked on the descriptor the write goes through, so a file that changes
+between the check and the write is not written either. `expect_sha256` is what a
+reviewer's decision binds: an approval carries the hash of the content it showed.
+
+Records live in a `ReadLedger`. `InMemoryReadLedger` is the default (at most 1,024
+sessions and agents, least recently used first out); `Workspace::with_read_ledger`
+names a persistent one, so a held edit approved from a new process still finds the read
+that preceded it. adk-harness keeps them in its store (`SqliteReadRecords`,
+`PostgresReadRecords`, `RedisReadRecords`):
+
+```rust
+use std::sync::Arc;
+
+use adk_devtools::{InMemoryReadLedger, ReadLedger, Workspace};
+
+let ledger: Arc<dyn ReadLedger> = Arc::new(InMemoryReadLedger::new());
+let workspace = Workspace::new("./my-repo").with_read_ledger(ledger);
+```
+
+### `apply_patch`
+
+`apply_patch` takes the `*** Begin Patch` envelope. Each file is a section; a hunk is
+located by its context and removed lines, never by line numbers:
+
+```text
+*** Begin Patch
+*** Add File: docs/notes.md
++# Notes
+*** Update File: src/lib.rs
+@@ fn parse()
+     let input = read();
+-    let value = input.trim();
++    let value = input.trim().to_lowercase();
+     value
+*** Delete File: old.txt
+*** Update File: src/name.rs
+*** Move to: src/renamed.rs
+@@
+-pub fn old() {}
++pub fn new() {}
+*** End Patch
+```
+
+| Aspect | Rule |
+|---|---|
+| Check | The whole patch is parsed and every hunk located before any write. A hunk matches exactly, then ignoring trailing whitespace and line endings — never leading whitespace, never fuzzily. Without an `@@` anchor it must match exactly once after the previous hunk; with one it matches at the first place after the anchor line (the line equal to the anchor, or starting with it), and the first anchor must name one line. `*** End of File` pins a hunk to the end |
+| Failure | A hunk that does not apply fails the call with its file, the hunk and the nearest candidate lines. A path twice in one patch, an `Add File` or `Move to` onto an existing file, an escape, or an `Update File` of an excluded secret file is refused |
+| Apply | Each file goes to a temporary sibling, opened without following a symlink, and is renamed into place, keeping its permissions; on any failure the files already written are restored from their originals, so the call writes every file or none |
+| Line endings | Every line keeps its own ending; added lines take the file's prevailing one |
+| Report | `{ "files": [{ "path", "op", "beforeSha256", "afterSha256" }] }`, `op` one of `add`, `update`, `delete`, `move` (with `from`) |
+| Effect | `NonIdempotent`: a resumed run answers a recorded call from the action ledger |
+
+The parser is public as `adk_devtools::patch` (`parse_patch`, `Patch::paths`,
+`apply_hunks`), so a policy reads the same paths the tool writes.
+
 ### Errors the model sees
 
 Each `DevToolError` maps to an `AdkError` with a code. The ones a model can act on are
@@ -174,6 +243,7 @@ rejections, so `LlmAgent` passes their message to the model (spec 3.1 §7.33 fix
 | Error | Category | Code | The model sees |
 |---|---|---|---|
 | `NotRead` | `Conflict` | `devtools.not_read` | `file 'src/lib.rs' must be read with read_file before it can be edited` |
+| `Stale` | `Conflict` | `devtools.stale` | `'src/lib.rs' changed since it was read: its sha256 is now 3f2a…, and the call expected 9c1e…. Read it again, then make the change` |
 | `NoMatch`, `Ambiguous` | `InvalidInput` | `devtools.no_match`, `devtools.ambiguous` | The string was not found, or how many times it occurs |
 | `PathEscape`, `ReadOnly`, `BashDisabled`, `Excluded` | `Forbidden` | `devtools.path_escape`, `devtools.read_only`, `devtools.bash_disabled`, `devtools.path_excluded` | Why the call is refused |
 | `Io` of a missing file | `NotFound` | `devtools.not_found` | The I/O message |

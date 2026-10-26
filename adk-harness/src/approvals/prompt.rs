@@ -12,6 +12,7 @@ use adk_core::{
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
+use super::changeset::{ChangeSetAnswer, ChangeSetPrompt};
 use super::matcher::glob_matches;
 use super::rule::{OriginPin, RuleOwner, RuleSuggestion, StandingDecision, StandingRule};
 use super::store::StandingRuleStore;
@@ -121,6 +122,19 @@ pub trait ApprovalPrompter: fmt::Debug + Send + Sync {
     /// earlier call of the batch answers a held one. The default shows nothing.
     fn rule_applied(&self, hit: &RuleHit) {
         let _ = hit;
+    }
+
+    /// Shows a change set — two or more held edits of one model turn as one diff — and
+    /// returns the person's one answer (spec 3.1 §7.26). `None`, the default, has the
+    /// handler ask about each call on its own, as a prompter that shows one call at a time
+    /// needs.
+    ///
+    /// # Errors
+    ///
+    /// Returns the prompter's error.
+    async fn prompt_change_set(&self, prompt: ChangeSetPrompt) -> Result<Option<ChangeSetAnswer>> {
+        let _ = prompt;
+        Ok(None)
     }
 
     /// Shows a partition crossing (spec 3.2 §7.8) and returns the person's answer: "allow
@@ -447,11 +461,13 @@ impl Turns {
 ///     .build()?;
 /// ```
 pub struct PromptingConfirmationHandler {
-    prompter: Arc<dyn ApprovalPrompter>,
+    pub(super) prompter: Arc<dyn ApprovalPrompter>,
     standing: Arc<dyn StandingRuleStore>,
     policy: HarnessPolicy,
     serial: Mutex<Turns>,
-    per_turn_cap: usize,
+    pub(super) per_turn_cap: usize,
+    /// The batches of recent model turns, for change sets (spec 3.1 §7.26).
+    pub(super) batches: std::sync::Mutex<super::batch::BatchBook>,
     /// The partition whose crossings are put to the person with their three answers.
     #[cfg(feature = "kernel")]
     partition: Option<crate::partition::PartitionWiring>,
@@ -466,7 +482,7 @@ impl fmt::Debug for PromptingConfirmationHandler {
     }
 }
 
-fn refuse(message: impl Into<String>) -> ToolApproval {
+pub(super) fn refuse(message: impl Into<String>) -> ToolApproval {
     ToolApproval::deny().with_message(message)
 }
 
@@ -484,6 +500,7 @@ impl PromptingConfirmationHandler {
             policy,
             serial: Mutex::new(Turns::default()),
             per_turn_cap: DEFAULT_PROMPTS_PER_TURN,
+            batches: std::sync::Mutex::default(),
             #[cfg(feature = "kernel")]
             partition: None,
         }
@@ -556,6 +573,12 @@ impl PromptingConfirmationHandler {
             *turn =
                 TurnState { invocation_id: context.invocation_id.clone(), ..TurnState::default() };
         }
+        // A call a change set decided is answered from that decision (spec 3.1 §7.26).
+        if let Some(approval) =
+            self.batches.lock().unwrap_or_else(|e| e.into_inner()).decided(request)
+        {
+            return Ok(approval);
+        }
         if turn.deny_all {
             return Ok(refuse("the person denied the remaining calls of this turn"));
         }
@@ -602,6 +625,18 @@ impl PromptingConfirmationHandler {
             PolicyDecision::Allow => {}
             PolicyDecision::Deny { reason } => return Ok(refuse(reason.clone())),
             PolicyDecision::RequireApproval { .. } => {}
+        }
+        // Two or more held edits of the turn are reviewed as one change set (spec 3.1 §7.26).
+        if evaluated.kind == ToolKind::Edit
+            && super::rule::EDIT_TOOLS.contains(&request.tool_name.as_str())
+            && let Some(approval) = self
+                .change_set(&context, request, &policy, &mut turn.prompts, &mut turn.deny_all)
+                .await?
+        {
+            return Ok(approval);
+        }
+        if turn.deny_all {
+            return Ok(refuse("the person denied the remaining calls of this turn"));
         }
         if turn.prompts >= self.per_turn_cap {
             return Ok(refuse(format!(
@@ -849,5 +884,11 @@ impl ToolConfirmationHandler for PromptingConfirmationHandler {
 
     async fn decide_approval(&self, request: &ToolConfirmationRequest) -> Result<ToolApproval> {
         self.approval_for(request).await
+    }
+
+    /// Keeps the turn's batch, so its held edits are reviewed as one change set
+    /// (spec 3.1 §7.26, §10 C6).
+    async fn batch_started(&self, calls: &[adk_core::BatchCall<'_>]) {
+        self.batches.lock().unwrap_or_else(|e| e.into_inner()).started(calls);
     }
 }

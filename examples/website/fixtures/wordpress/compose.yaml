@@ -1,0 +1,79 @@
+# The WordPress fixture of spec 3.5 §11: a current, patched WordPress with seeded content, a
+# contact-form plugin and a small shop, bound to loopback. The nightly tier starts it, seeds
+# it and runs the WordPress-backed scenarios against http://127.0.0.1:8080; the pull-request
+# tier runs against the recordings in ../recorded/ instead.
+#
+#   docker compose -f compose.yaml up -d --wait
+#   docker compose -f compose.yaml run --rm seed
+#   # the infected overlay (S3): inert markers only
+#   docker compose -f compose.yaml -f compose.infected.yaml up -d --wait
+#   docker compose -f compose.yaml -f compose.infected.yaml run --rm infect
+#
+# Images are pinned to patched lines: PHP 8.4 carries the PHP2Shell fixes from 8.4.27 on.
+name: website-fixture
+
+services:
+  db:
+    image: mariadb:11.4
+    environment:
+      MARIADB_DATABASE: wordpress
+      MARIADB_USER: wordpress
+      MARIADB_PASSWORD: fixture-only
+      MARIADB_RANDOM_ROOT_PASSWORD: "1"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      retries: 30
+    networks: [fixture]
+
+  wordpress:
+    image: wordpress:6.8-php8.4-apache
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: fixture-only
+      WORDPRESS_DB_NAME: wordpress
+      # Pages link to the legacy site's public origin, as the recordings do; the crawler maps
+      # https://solar.test onto this loopback port.
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_HOME', 'https://solar.test');
+        define('WP_SITEURL', 'https://solar.test');
+        define('DISALLOW_FILE_EDIT', true);
+        define('AUTOMATIC_UPDATER_DISABLED', true);
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - wordpress:/var/www/html
+      - ./mu-plugins:/var/www/html/wp-content/mu-plugins:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost/wp-login.php"]
+      interval: 5s
+      retries: 60
+    networks: [fixture]
+
+  seed:
+    image: wordpress:cli-php8.4
+    profiles: [seed]
+    depends_on:
+      wordpress:
+        condition: service_healthy
+    user: "33:33"
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: fixture-only
+      WORDPRESS_DB_NAME: wordpress
+    volumes:
+      - wordpress:/var/www/html
+      - ./seed.sh:/seed.sh:ro
+    entrypoint: ["sh", "/seed.sh"]
+    networks: [fixture]
+
+volumes:
+  wordpress:
+
+networks:
+  fixture:

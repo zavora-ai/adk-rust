@@ -1,6 +1,6 @@
 //! The sandboxed workspace that scopes every developer-tool operation.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -10,8 +10,9 @@ use adk_core::ToolContext;
 use tokio::io::AsyncWriteExt;
 
 #[cfg(windows)]
-use crate::beneath::write_beneath;
+use crate::beneath::{remove_beneath, replace_beneath, write_beneath};
 use crate::error::DevToolError;
+use crate::read_ledger::{InMemoryReadLedger, ReadLedger, ReadScope};
 
 /// A workspace roots every file/search/shell operation at a directory and
 /// enforces a small capability policy.
@@ -20,14 +21,16 @@ use crate::error::DevToolError;
 /// and rejected if they escape it. Mutating operations require
 /// [`is_writable`](Self::is_writable); `bash` requires [`bash_allowed`](Self::bash_allowed).
 ///
-/// The workspace also records which files have been read, so that `edit_file`
-/// can require a prior `read_file` (guarding against blind overwrites). The record
-/// is kept per session and agent, taken from the tool call's context, so one
-/// session or agent reading a file does not let another edit it.
+/// The workspace also records the sha256 of every file read and of every file its tools
+/// write, so that `edit_file` can require a prior `read_file` and refuse to edit a file
+/// that changed since (spec 3.1 §7.26, §10 D7). The record is kept per session and agent,
+/// taken from the tool call's context, so one session or agent reading a file does not let
+/// another edit it. Records live in a [`ReadLedger`], in memory unless
+/// [`with_read_ledger`](Self::with_read_ledger) names a persistent one.
 ///
-/// `Workspace` is cheap to clone. Clones share the read record, which stays
+/// `Workspace` is cheap to clone. Clones share the read records, which stay
 /// separated by session and agent; calls whose context names no session share one
-/// record.
+/// record, kept in memory.
 #[derive(Clone)]
 pub struct Workspace {
     root: PathBuf,
@@ -35,7 +38,9 @@ pub struct Workspace {
     allow_bash: bool,
     bash_timeout: Duration,
     max_output_bytes: usize,
-    read_tracker: Arc<Mutex<ReadTracker>>,
+    read_ledger: Arc<dyn ReadLedger>,
+    /// Reads by calls that name no session, by record path.
+    unscoped_reads: Arc<Mutex<HashMap<String, String>>>,
     /// Whether `bash` inherits the parent process environment.
     inherit_env: bool,
     /// Variables passed through when the environment is not inherited.
@@ -73,10 +78,6 @@ pub const DEFAULT_ENV_ALLOWLIST: &[&str] =
 pub const DEFAULT_EXCLUDE_GLOBS: &[&str] =
     &[".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "*.p12", "*.pfx"];
 
-/// How many (session, agent) read records a workspace keeps before evicting the
-/// least recently used one.
-const READ_SCOPE_CAPACITY: usize = 1024;
-
 /// Exclusion patterns match regardless of case, since `.ENV` names `.env` on a
 /// case-insensitive file system, and `*` never crosses a `/`.
 const EXCLUDE_MATCH: glob::MatchOptions = glob::MatchOptions {
@@ -112,7 +113,8 @@ impl Workspace {
             allow_bash: false,
             bash_timeout: Duration::from_secs(120),
             max_output_bytes: 1_048_576,
-            read_tracker: Arc::new(Mutex::new(ReadTracker::default())),
+            read_ledger: Arc::new(InMemoryReadLedger::new()),
+            unscoped_reads: Arc::default(),
             inherit_env: false,
             env_allowlist: DEFAULT_ENV_ALLOWLIST.iter().map(|k| (*k).to_string()).collect(),
             kill_group_on_exit: true,
@@ -213,6 +215,29 @@ impl Workspace {
     /// Set with [`bash_kill_group_on_exit`](Self::bash_kill_group_on_exit); spec 3.1 §10 D3.
     pub fn kills_bash_group_on_exit(&self) -> bool {
         self.kill_group_on_exit
+    }
+
+    /// Keep read records in `ledger` instead of process memory (spec 3.1 §10 D7).
+    ///
+    /// A host that resumes a session in another process — a held edit approved from a new
+    /// process, a crash-resumed run, a kernel process moved between workers — persists the
+    /// records with the session, so the read that preceded an edit is still known. Clones
+    /// made after this call share `ledger`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use adk_devtools::{InMemoryReadLedger, Workspace};
+    ///
+    /// let ws = Workspace::new("./my-repo").with_read_ledger(Arc::new(InMemoryReadLedger::new()));
+    /// assert!(ws.is_writable());
+    /// ```
+    #[must_use]
+    pub fn with_read_ledger(mut self, ledger: Arc<dyn ReadLedger>) -> Self {
+        self.read_ledger = ledger;
+        self
     }
 
     /// Replace the file patterns `grep` and `glob` skip and `read_file` refuses.
@@ -486,24 +511,27 @@ impl Workspace {
 
     /// Writes `contents` to `target`, a canonical target returned by
     /// [`resolve_target`](Self::resolve_target), creating the file and its missing
-    /// parent directories or truncating it.
+    /// parent directories or truncating it, once `precondition` holds.
     ///
     /// On Unix the parent directory is opened by descriptor beneath the root, creating
     /// what is missing, and the file relative to it, following no symlink on any
     /// component: a symlink planted anywhere on the path after the check fails the
-    /// write instead of redirecting it (spec 3.1 §10 D4). A file with more than one
-    /// hard link is replaced, keeping its permissions, rather than truncated:
-    /// truncating writes through every link, including one outside the workspace.
+    /// write instead of redirecting it (spec 3.1 §10 D4). The precondition is checked on
+    /// the descriptor the write goes through, so a file that changed is never written
+    /// (spec 3.1 §7.26, I66). A file with more than one hard link is replaced, keeping
+    /// its permissions, rather than truncated: truncating writes through every link,
+    /// including one outside the workspace.
     ///
     /// On Windows each directory on the path is opened, or created, without following a
     /// link on it and held open until the write ends, and the file is opened without
     /// truncation; the handle is refused when it is a symlink or a junction or when its
-    /// final path is not the checked target, and it is truncated only after those checks
-    /// (spec 3.2 §10 W6).
+    /// final path is not the checked target, the precondition is read through it, and it
+    /// is truncated only after those checks (spec 3.2 §10 W6).
     pub(crate) async fn write_contained(
         &self,
         target: &Path,
         contents: &[u8],
+        precondition: Precondition,
     ) -> Result<(), DevToolError> {
         #[cfg(any(unix, windows))]
         {
@@ -513,12 +541,12 @@ impl Workspace {
             };
             let root = self.root.clone();
             let contents = contents.to_vec();
-            tokio::task::spawn_blocking(move || write_beneath(&root, &relative, &name, &contents))
-                .await
-                .map_err(|error| {
-                    DevToolError::Other(format!("the write did not complete: {error}"))
-                })?
-                .map_err(|error| self.open_error(target, error))
+            tokio::task::spawn_blocking(move || {
+                write_beneath(&root, &relative, &name, &contents, &precondition)
+            })
+            .await
+            .map_err(|error| DevToolError::Other(format!("the write did not complete: {error}")))?
+            .map_err(|error| self.open_error(target, error))
         }
         #[cfg(not(any(unix, windows)))]
         {
@@ -530,6 +558,10 @@ impl Workspace {
             if !tokio::fs::canonicalize(parent).await?.join(name).starts_with(&self.root) {
                 return Err(escape());
             }
+            let current = tokio::fs::read(target).await;
+            precondition
+                .check(current.as_deref().ok())
+                .map_err(|error| self.open_error(target, error))?;
             let mut file = tokio::fs::OpenOptions::new()
                 .write(true)
                 .create(true)
@@ -542,6 +574,71 @@ impl Workspace {
         }
     }
 
+    /// Writes `contents` to a temporary sibling of `target` and renames it into place,
+    /// once `precondition` holds, keeping an existing file's permissions (spec 3.1 §7.26
+    /// `apply_patch`).
+    ///
+    /// The parent directory and the target are opened as for
+    /// [`write_contained`](Self::write_contained), following no symlink; the rename
+    /// replaces the target in one step, so a reader never sees a partial file.
+    pub(crate) async fn replace_contained(
+        &self,
+        target: &Path,
+        contents: &[u8],
+        precondition: Precondition,
+    ) -> Result<(), DevToolError> {
+        #[cfg(any(unix, windows))]
+        {
+            let relative = self.beneath_root(target)?;
+            let Some(name) = relative.file_name().map(std::ffi::OsStr::to_os_string) else {
+                return Err(std::io::Error::from(std::io::ErrorKind::IsADirectory).into());
+            };
+            let root = self.root.clone();
+            let contents = contents.to_vec();
+            tokio::task::spawn_blocking(move || {
+                replace_beneath(&root, &relative, &name, &contents, &precondition)
+            })
+            .await
+            .map_err(|error| DevToolError::Other(format!("the write did not complete: {error}")))?
+            .map_err(|error| self.open_error(target, error))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            self.write_contained(target, contents, precondition).await
+        }
+    }
+
+    /// Removes the file `target` once `precondition` holds, following no symlink on the
+    /// path (spec 3.1 §7.26 `apply_patch`).
+    pub(crate) async fn remove_contained(
+        &self,
+        target: &Path,
+        precondition: Precondition,
+    ) -> Result<(), DevToolError> {
+        #[cfg(any(unix, windows))]
+        {
+            let relative = self.beneath_root(target)?;
+            let Some(name) = relative.file_name().map(std::ffi::OsStr::to_os_string) else {
+                return Err(std::io::Error::from(std::io::ErrorKind::IsADirectory).into());
+            };
+            let root = self.root.clone();
+            tokio::task::spawn_blocking(move || {
+                remove_beneath(&root, &relative, &name, &precondition)
+            })
+            .await
+            .map_err(|error| DevToolError::Other(format!("the removal did not complete: {error}")))?
+            .map_err(|error| self.open_error(target, error))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let current = tokio::fs::read(target).await;
+            precondition
+                .check(current.as_deref().ok())
+                .map_err(|error| self.open_error(target, error))?;
+            Ok(tokio::fs::remove_file(target).await?)
+        }
+    }
+
     /// `target` relative to the root, which every target the check returns lies under.
     #[cfg(any(unix, windows))]
     fn beneath_root(&self, target: &Path) -> Result<PathBuf, DevToolError> {
@@ -551,14 +648,17 @@ impl Workspace {
             .map_err(|_| DevToolError::PathEscape(self.display(target)))
     }
 
-    /// Reports an open that refused a symlink as an escape, and any other failure as I/O.
-    #[cfg(any(unix, windows))]
+    /// Reports a failed precondition as stale, an open that refused a symlink as an
+    /// escape, and any other failure as I/O.
     fn open_error(&self, target: &Path, error: std::io::Error) -> DevToolError {
-        if crate::beneath::is_symlink_refusal(&error) {
-            DevToolError::PathEscape(self.display(target))
-        } else {
-            DevToolError::Io(error)
+        if let Some(stale) = error.get_ref().and_then(|inner| inner.downcast_ref::<StaleFile>()) {
+            return DevToolError::Stale { path: self.display(target), detail: stale.to_string() };
         }
+        #[cfg(any(unix, windows))]
+        if crate::beneath::is_symlink_refusal(&error) {
+            return DevToolError::PathEscape(self.display(target));
+        }
+        DevToolError::Io(error)
     }
 
     /// Render a path relative to the root for display (falls back to the full path).
@@ -566,19 +666,229 @@ impl Workspace {
         path.strip_prefix(&self.root).unwrap_or(path).display().to_string()
     }
 
-    /// Record that the session and agent behind `ctx` have read a file.
-    pub(crate) fn mark_read(&self, ctx: &dyn ToolContext, path: &Path) {
-        if let Ok(mut tracker) = self.read_tracker.lock() {
-            tracker.files(ReadScope::of(ctx)).insert(path.to_path_buf());
+    /// The key a read record names `resolved` by: its path relative to the root with `/`
+    /// separators, so a record written on one platform matches on another.
+    pub fn record_path(&self, resolved: &Path) -> String {
+        let relative = resolved.strip_prefix(&self.root).unwrap_or(resolved);
+        relative
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
+    /// Records that the session and agent behind `ctx` saw `resolved` with content digest
+    /// `sha256`, by reading or writing it. A record that cannot be stored is logged and
+    /// skipped: the read succeeded, and a later edit then asks for another read.
+    pub(crate) async fn record_digest(&self, ctx: &dyn ToolContext, resolved: &Path, sha256: &str) {
+        let path = self.record_path(resolved);
+        let Some(scope) = ReadScope::of(ctx) else {
+            if let Ok(mut reads) = self.unscoped_reads.lock() {
+                reads.insert(path, sha256.to_string());
+            }
+            return;
+        };
+        if let Err(error) = self.read_ledger.record(&scope, &path, sha256).await {
+            tracing::warn!(file.path = %path, error = %error, "read record not stored");
         }
     }
 
-    /// Whether the session and agent behind `ctx` have read a file.
-    pub(crate) fn was_read(&self, ctx: &dyn ToolContext, path: &Path) -> bool {
-        self.read_tracker
-            .lock()
-            .map(|mut tracker| tracker.files(ReadScope::of(ctx)).contains(path))
-            .unwrap_or(false)
+    /// The digest the session and agent behind `ctx` last saw `resolved` with.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DevToolError::Other`] when the ledger cannot be read, so an edit fails
+    /// closed instead of running unchecked.
+    pub(crate) async fn read_digest(
+        &self,
+        ctx: &dyn ToolContext,
+        resolved: &Path,
+    ) -> Result<Option<String>, DevToolError> {
+        let path = self.record_path(resolved);
+        let Some(scope) = ReadScope::of(ctx) else {
+            return Ok(self.unscoped_reads.lock().ok().and_then(|reads| reads.get(&path).cloned()));
+        };
+        self.read_ledger.digest(&scope, &path).await.map_err(|error| {
+            DevToolError::Other(format!(
+                "the read records are unavailable ({}), so '{path}' cannot be checked; try again",
+                error.message
+            ))
+        })
+    }
+
+    /// The key a read record and an `expect_sha256` map name `path` by, after the
+    /// containment check: its path relative to the root with `/` separators.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DevToolError::PathEscape`] for a path outside the root.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let dir = tempfile::tempdir().unwrap();
+    /// let ws = adk_devtools::Workspace::new(dir.path());
+    /// assert_eq!(ws.record_key("./src/../src/lib.rs").unwrap(), "src/lib.rs");
+    /// assert!(ws.record_key("../outside").is_err());
+    /// ```
+    pub fn record_key(&self, path: &str) -> Result<String, DevToolError> {
+        let (resolved, _) = self.resolve_target(path)?;
+        Ok(self.record_path(&resolved))
+    }
+
+    /// Reads `path` for a reviewer under the file tools' rules — containment, no symlink
+    /// followed, excluded secret files refused — returning `None` when it does not exist
+    /// (spec 3.1 §7.26: a change set is composed over what the tools would read).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DevToolError::PathEscape`], [`DevToolError::Excluded`], or the read error.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # async fn example() -> Result<(), adk_devtools::DevToolError> {
+    /// let ws = adk_devtools::Workspace::new("./my-repo");
+    /// let current = ws.read_for_review("src/lib.rs").await?;
+    /// # let _ = current;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn read_for_review(&self, path: &str) -> Result<Option<Vec<u8>>, DevToolError> {
+        let (resolved, target) = self.resolve_target(path)?;
+        if self.is_excluded(&resolved) || self.is_excluded(&target) {
+            return Err(DevToolError::Excluded(self.display(&resolved)));
+        }
+        match self.read_contained_bytes(&target).await {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(DevToolError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Records the current content of `path` as what the session and agent behind `ctx`
+    /// last saw, for a host step that changes a file right after the agent wrote it — a
+    /// formatter hook — so the agent's next edit is not refused as stale (spec 3.1 §7.22,
+    /// §7.26).
+    ///
+    /// # Errors
+    ///
+    /// Returns the containment or read error for `path`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # async fn example(ws: adk_devtools::Workspace, ctx: &dyn adk_core::ToolContext) {
+    /// ws.record_current(ctx, "src/lib.rs").await.unwrap();
+    /// # }
+    /// ```
+    pub async fn record_current(
+        &self,
+        ctx: &dyn ToolContext,
+        path: &str,
+    ) -> Result<(), DevToolError> {
+        let (resolved, target) = self.resolve_target(path)?;
+        let bytes = self.read_contained_bytes(&target).await?;
+        self.record_digest(ctx, &resolved, &crate::read_ledger::sha256_hex(&bytes)).await;
+        Ok(())
+    }
+
+    /// Forgets the record of `resolved` for the session and agent behind `ctx`: the file
+    /// was deleted or moved away.
+    pub(crate) async fn forget_read(&self, ctx: &dyn ToolContext, resolved: &Path) {
+        let path = self.record_path(resolved);
+        let Some(scope) = ReadScope::of(ctx) else {
+            if let Ok(mut reads) = self.unscoped_reads.lock() {
+                reads.remove(&path);
+            }
+            return;
+        };
+        if let Err(error) = self.read_ledger.forget(&scope, &path).await {
+            tracing::warn!(file.path = %path, error = %error, "read record not removed");
+        }
+    }
+}
+
+/// What a write requires of the file it replaces (spec 3.1 §7.26, I66).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Precondition {
+    /// Nothing: the file may be absent or hold anything.
+    Any,
+    /// The file must not exist.
+    Absent,
+    /// The file must exist with this lowercase hex sha256.
+    Sha256(String),
+}
+
+impl Precondition {
+    /// `expect_sha256` as a call states it: a digest, or `absent` for a file that must not
+    /// exist yet.
+    pub(crate) fn from_expect(expect: &str) -> Result<Self, DevToolError> {
+        let expect = expect.trim();
+        if expect.eq_ignore_ascii_case("absent") {
+            return Ok(Self::Absent);
+        }
+        let digest = expect.strip_prefix("sha256:").unwrap_or(expect).to_ascii_lowercase();
+        if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(DevToolError::Other(format!(
+                "expect_sha256 must be a 64-character hex sha256 or \"absent\"; got \"{expect}\""
+            )));
+        }
+        Ok(Self::Sha256(digest))
+    }
+
+    /// Checks the file's current content, `None` when it does not exist.
+    pub(crate) fn check(&self, current: Option<&[u8]>) -> std::io::Result<()> {
+        match (self, current) {
+            (Self::Any, _) | (Self::Absent, None) => Ok(()),
+            (Self::Absent, Some(_)) => Err(StaleFile::Exists.into()),
+            (Self::Sha256(_), None) => Err(StaleFile::Missing.into()),
+            (Self::Sha256(expected), Some(bytes)) => {
+                let found = crate::read_ledger::sha256_hex(bytes);
+                if found == *expected {
+                    Ok(())
+                } else {
+                    Err(StaleFile::Changed { expected: expected.clone(), found }.into())
+                }
+            }
+        }
+    }
+}
+
+/// Why a file failed its [`Precondition`]; carried inside an `io::Error` from the
+/// blocking write to [`Workspace::open_error`].
+#[derive(Debug)]
+pub(crate) enum StaleFile {
+    /// The file is gone.
+    Missing,
+    /// A file exists where none was expected.
+    Exists,
+    /// The content differs.
+    Changed { expected: String, found: String },
+}
+
+impl std::fmt::Display for StaleFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing => f.write_str("it no longer exists"),
+            Self::Exists => f.write_str("a file exists there now, and the call expected none"),
+            Self::Changed { expected, found } => write!(
+                f,
+                "its sha256 is now {}…, and the call expected {}…",
+                &found[..12.min(found.len())],
+                &expected[..12.min(expected.len())]
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StaleFile {}
+
+impl From<StaleFile> for std::io::Error {
+    fn from(stale: StaleFile) -> Self {
+        std::io::Error::other(stale)
     }
 }
 
@@ -600,86 +910,17 @@ fn compile_excludes(globs: impl IntoIterator<Item = String>) -> Vec<glob::Patter
         .collect()
 }
 
-/// The session and agent a read is recorded for.
-///
-/// Session ids are unique only within an app and user, so both are part of the key.
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct ReadScope {
-    app: String,
-    user: String,
-    session: String,
-    agent: String,
-}
-
-impl ReadScope {
-    /// The scope of the call behind `ctx`, or `None` when it names no session.
-    fn of(ctx: &dyn ToolContext) -> Option<Self> {
-        let session = ctx.session_id();
-        if session.is_empty() {
-            return None;
-        }
-        Some(Self {
-            app: ctx.app_name().to_string(),
-            user: ctx.user_id().to_string(),
-            session: session.to_string(),
-            agent: ctx.agent_name().to_string(),
-        })
-    }
-}
-
-/// Files read, per (session, agent) scope, with least-recently-used eviction.
-#[derive(Default)]
-struct ReadTracker {
-    /// Reads by calls that name no session.
-    unscoped: HashSet<PathBuf>,
-    /// Reads per scope, with the tick of the scope's last use.
-    scoped: HashMap<ReadScope, (u64, HashSet<PathBuf>)>,
-    tick: u64,
-}
-
-impl ReadTracker {
-    /// The read set of `scope`, created (evicting the least recently used scope at
-    /// capacity) if absent.
-    fn files(&mut self, scope: Option<ReadScope>) -> &mut HashSet<PathBuf> {
-        let Some(scope) = scope else {
-            return &mut self.unscoped;
-        };
-        self.tick += 1;
-        if !self.scoped.contains_key(&scope)
-            && self.scoped.len() >= READ_SCOPE_CAPACITY
-            && let Some(oldest) = self
-                .scoped
-                .iter()
-                .min_by_key(|(_, (used, _))| *used)
-                .map(|(oldest, _)| oldest.clone())
-        {
-            self.scoped.remove(&oldest);
-        }
-        let entry = self.scoped.entry(scope).or_default();
-        entry.0 = self.tick;
-        &mut entry.1
-    }
-}
-
-/// Writes `contents` to the entry `name` of the directory `relative` beneath `root`
-/// (spec 3.1 §10 D4).
-///
-/// The parent is opened by descriptor, creating missing directories, and the file
-/// relative to it, all without following a symlink. The file is truncated only after
-/// its link count is known, so a hard-linked file is replaced instead.
+/// Opens the root, creating it when missing, and the directory `relative`'s parent beneath
+/// it, creating missing directories when `create` is set, following no symlink.
 #[cfg(unix)]
-fn write_beneath(
+fn open_parent_beneath(
     root: &Path,
     relative: &Path,
-    name: &std::ffi::OsStr,
-    contents: &[u8],
-) -> std::io::Result<()> {
-    use std::io::Write as _;
-    use std::os::unix::fs::MetadataExt as _;
-
+    create: bool,
+) -> std::io::Result<std::os::fd::OwnedFd> {
     let dir = match crate::beneath::open_root(root) {
         // The root is trusted, so a workspace whose root does not exist yet creates it.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(error) if create && error.kind() == std::io::ErrorKind::NotFound => {
             std::fs::create_dir_all(root)?;
             crate::beneath::open_root(root)?
         }
@@ -687,18 +928,92 @@ fn write_beneath(
     };
     let parent_path = relative.parent().unwrap_or(Path::new(""));
     let flags = libc::O_RDONLY | libc::O_DIRECTORY;
-    let parent = match crate::beneath::open_beneath(&dir, parent_path, flags, 0) {
+    match crate::beneath::open_beneath(&dir, parent_path, flags, 0) {
+        Err(error) if create && error.kind() == std::io::ErrorKind::NotFound => {
+            crate::beneath::create_dirs_beneath(&dir, parent_path)
+        }
+        result => result,
+    }
+}
+
+/// Reads the entry `name` of `parent` without following a symlink and checks it against
+/// `precondition`; returns its metadata, or `None` when it does not exist.
+#[cfg(unix)]
+fn check_entry(
+    parent: &std::os::fd::OwnedFd,
+    name: &std::ffi::OsStr,
+    precondition: &Precondition,
+) -> std::io::Result<Option<std::fs::Metadata>> {
+    use std::io::Read as _;
+
+    match crate::beneath::open_entry(parent, name, libc::O_RDONLY, 0) {
+        Ok(mut file) => {
+            let meta = file.metadata()?;
+            if !matches!(precondition, Precondition::Any) {
+                let mut current = Vec::new();
+                file.read_to_end(&mut current)?;
+                precondition.check(Some(&current))?;
+            }
+            Ok(Some(meta))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            crate::beneath::create_dirs_beneath(&dir, parent_path)?
+            precondition.check(None)?;
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Writes `contents` to the entry `name` of the directory `relative` beneath `root`
+/// once `precondition` holds (spec 3.1 §10 D4, §7.26).
+///
+/// The parent is opened by descriptor, creating missing directories, and the file
+/// relative to it, all without following a symlink. The precondition is read through the
+/// descriptor the write goes through. The file is truncated only after its link count is
+/// known, so a hard-linked file is replaced instead.
+#[cfg(unix)]
+fn write_beneath(
+    root: &Path,
+    relative: &Path,
+    name: &std::ffi::OsStr,
+    contents: &[u8],
+    precondition: &Precondition,
+) -> std::io::Result<()> {
+    use std::io::{Read as _, Seek as _, Write as _};
+    use std::os::unix::fs::MetadataExt as _;
+
+    let parent = open_parent_beneath(root, relative, true)?;
+    let opened = match precondition {
+        Precondition::Any => {
+            crate::beneath::open_entry(&parent, name, libc::O_WRONLY | libc::O_CREAT, 0o666)
+        }
+        Precondition::Absent => crate::beneath::open_entry(
+            &parent,
+            name,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+            0o666,
+        ),
+        Precondition::Sha256(_) => crate::beneath::open_entry(&parent, name, libc::O_RDWR, 0),
+    };
+    let mut file = match opened {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(StaleFile::Exists.into());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(StaleFile::Missing.into());
         }
         result => result?,
     };
-    let mut file =
-        crate::beneath::open_entry(&parent, name, libc::O_WRONLY | libc::O_CREAT, 0o666)?;
     let meta = file.metadata()?;
+    if let Precondition::Sha256(_) = precondition {
+        let mut current = Vec::new();
+        file.read_to_end(&mut current)?;
+        precondition.check(Some(&current))?;
+        file.rewind()?;
+    }
     if meta.is_file() && meta.nlink() > 1 {
         drop(file);
-        return replace_entry(&parent, name, meta.permissions(), contents);
+        return replace_entry(&parent, name, Some(meta.permissions()), contents);
     }
     if meta.is_file() {
         file.set_len(0)?;
@@ -707,13 +1022,45 @@ fn write_beneath(
     file.flush()
 }
 
+/// Writes `contents` to a temporary sibling of the entry `name` of the directory
+/// `relative` beneath `root` and renames it over `name`, once `precondition` holds
+/// (spec 3.1 §7.26 `apply_patch`).
+#[cfg(unix)]
+fn replace_beneath(
+    root: &Path,
+    relative: &Path,
+    name: &std::ffi::OsStr,
+    contents: &[u8],
+    precondition: &Precondition,
+) -> std::io::Result<()> {
+    let parent = open_parent_beneath(root, relative, true)?;
+    let existing = check_entry(&parent, name, precondition)?;
+    replace_entry(&parent, name, existing.map(|meta| meta.permissions()), contents)
+}
+
+/// Removes the entry `name` of the directory `relative` beneath `root` once
+/// `precondition` holds, following no symlink (spec 3.1 §7.26 `apply_patch`).
+#[cfg(unix)]
+fn remove_beneath(
+    root: &Path,
+    relative: &Path,
+    name: &std::ffi::OsStr,
+    precondition: &Precondition,
+) -> std::io::Result<()> {
+    let parent = open_parent_beneath(root, relative, false)?;
+    if check_entry(&parent, name, precondition)?.is_none() {
+        return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+    }
+    crate::beneath::remove_entry(&parent, name)
+}
+
 /// Writes `contents` to a new entry beside `name` in `parent` and renames it over
-/// `name`.
+/// `name`, with `permissions` when given and the default mode otherwise.
 #[cfg(unix)]
 fn replace_entry(
     parent: &std::os::fd::OwnedFd,
     name: &std::ffi::OsStr,
-    permissions: std::fs::Permissions,
+    permissions: Option<std::fs::Permissions>,
     contents: &[u8],
 ) -> std::io::Result<()> {
     use std::io::Write as _;
@@ -728,14 +1075,18 @@ fn replace_entry(
         std::process::id()
     ));
     let result = (|| {
+        // A new file gets the mode `write_file` gives one; an existing file keeps its own.
+        let mode = if permissions.is_some() { 0o600 } else { 0o666 };
         let mut file = crate::beneath::open_entry(
             parent,
             &temp,
             libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
-            0o600,
+            mode,
         )?;
         file.write_all(contents)?;
-        file.set_permissions(permissions)?;
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions)?;
+        }
         crate::beneath::rename_entry(parent, &temp, name)
     })();
     if result.is_err() {
@@ -789,7 +1140,7 @@ mod tests {
             let resolved = ws.resolve(name).expect("the path does not exist yet");
             let Some(()) = link(&target, &root.join(name)) else { return };
 
-            let result = ws.write_contained(&resolved, b"payload").await;
+            let result = ws.write_contained(&resolved, b"payload", Precondition::Any).await;
 
             assert!(
                 matches!(result, Err(DevToolError::PathEscape(_))),
@@ -818,7 +1169,7 @@ mod tests {
         let ws = Workspace::new(&root);
 
         let resolved = ws.resolve("linked.txt").unwrap();
-        ws.write_contained(&resolved, b"rewritten").await.unwrap();
+        ws.write_contained(&resolved, b"rewritten", Precondition::Any).await.unwrap();
 
         assert_eq!(std::fs::read_to_string(root.join("linked.txt")).unwrap(), "rewritten");
         assert_eq!(std::fs::read_to_string(&outside).unwrap(), "host");
@@ -932,7 +1283,7 @@ mod tests {
             return;
         };
 
-        let result = ws.write_contained(&target, b"rewritten").await;
+        let result = ws.write_contained(&target, b"rewritten", Precondition::Any).await;
 
         assert!(matches!(result, Err(DevToolError::PathEscape(_))), "{result:?}");
         assert_eq!(std::fs::read_to_string(f.root.join("AGENTS.md")).unwrap(), "instructions");
@@ -964,7 +1315,7 @@ mod tests {
         swap_for_link(&f.root.join("docs"), &f.outside).unwrap();
 
         let read = ws.read_contained(&read_target).await;
-        let write = ws.write_contained(&write_target, b"planted").await;
+        let write = ws.write_contained(&write_target, b"planted", Precondition::Any).await;
 
         assert!(matches!(read, Err(DevToolError::PathEscape(_))), "{read:?}");
         assert!(matches!(write, Err(DevToolError::PathEscape(_))), "{write:?}");
@@ -979,7 +1330,7 @@ mod tests {
         let (_, target) = ws.resolve_target("build/out/report.md").unwrap();
         link(&f.outside, &f.root.join("build")).unwrap();
 
-        let result = ws.write_contained(&target, b"planted").await;
+        let result = ws.write_contained(&target, b"planted", Precondition::Any).await;
 
         assert!(matches!(result, Err(DevToolError::PathEscape(_))), "{result:?}");
         assert!(!f.outside.join("out").exists(), "a directory was created outside the root");
@@ -996,10 +1347,10 @@ mod tests {
         assert_eq!(target, ws.root().join("notes.md"));
 
         assert_eq!(ws.read_contained(&target).await.unwrap(), "notes");
-        ws.write_contained(&target, b"updated").await.unwrap();
+        ws.write_contained(&target, b"updated", Precondition::Any).await.unwrap();
         assert_eq!(std::fs::read_to_string(f.root.join("notes.md")).unwrap(), "updated");
         let (_, created) = ws.resolve_target("new/dir/file.md").unwrap();
-        ws.write_contained(&created, b"made").await.unwrap();
+        ws.write_contained(&created, b"made", Precondition::Any).await.unwrap();
         assert_eq!(std::fs::read_to_string(f.root.join("new/dir/file.md")).unwrap(), "made");
     }
 
@@ -1037,7 +1388,7 @@ mod tests {
         std::fs::rename(&staged, &docs).unwrap();
 
         let read = ws.read_contained(&read_target).await;
-        let write = ws.write_contained(&write_target, b"planted").await;
+        let write = ws.write_contained(&write_target, b"planted", Precondition::Any).await;
 
         assert!(matches!(read, Err(DevToolError::PathEscape(_))), "{read:?}");
         assert!(matches!(write, Err(DevToolError::PathEscape(_))), "{write:?}");
@@ -1086,7 +1437,7 @@ mod tests {
         let (_, target) = ws.resolve_target("packed.txt").unwrap();
 
         assert_eq!(ws.read_contained(&target).await.unwrap(), text);
-        ws.write_contained(&target, b"rewritten").await.unwrap();
+        ws.write_contained(&target, b"rewritten", Precondition::Any).await.unwrap();
 
         assert_eq!(std::fs::read_to_string(&packed).unwrap(), "rewritten");
     }
@@ -1193,7 +1544,7 @@ mod tests {
         let target = ws.root().join("placeholder.txt");
 
         let read = ws.read_contained(&target).await;
-        let write = ws.write_contained(&target, b"rewritten").await;
+        let write = ws.write_contained(&target, b"rewritten", Precondition::Any).await;
 
         // An `Io` error other than the link refusal: the open passed its checks, and the
         // reopen through the unserved tag failed.
@@ -1279,63 +1630,152 @@ mod tests {
         }
     }
 
-    #[test]
-    fn read_tracking() {
+    #[tokio::test]
+    async fn read_tracking() {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path());
         let ctx = ScopeCtx::new("session", "agent");
         let p = ws.resolve("a.txt").unwrap();
-        assert!(!ws.was_read(&ctx, &p));
-        ws.mark_read(&ctx, &p);
-        assert!(ws.was_read(&ctx, &p));
+        assert_eq!(ws.read_digest(&ctx, &p).await.unwrap(), None);
+        ws.record_digest(&ctx, &p, "d1").await;
+        assert_eq!(ws.read_digest(&ctx, &p).await.unwrap().as_deref(), Some("d1"));
+        ws.forget_read(&ctx, &p).await;
+        assert_eq!(ws.read_digest(&ctx, &p).await.unwrap(), None);
     }
 
-    #[test]
-    fn clones_keep_reads_apart_by_session_and_agent() {
+    #[tokio::test]
+    async fn clones_keep_reads_apart_by_session_and_agent() {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path());
         let other = ws.clone();
         let p = ws.resolve("a.txt").unwrap();
 
-        ws.mark_read(&ScopeCtx::new("one", "coder"), &p);
+        ws.record_digest(&ScopeCtx::new("one", "coder"), &p, "d1").await;
 
-        assert!(other.was_read(&ScopeCtx::new("one", "coder"), &p), "clones share a scope");
-        assert!(!other.was_read(&ScopeCtx::new("two", "coder"), &p), "another session read it");
-        assert!(!other.was_read(&ScopeCtx::new("one", "reviewer"), &p), "another agent read it");
+        let seen = |session: &str, agent: &str| {
+            let (other, p, ctx) = (other.clone(), p.clone(), ScopeCtx::new(session, agent));
+            async move { other.read_digest(&ctx, &p).await.unwrap() }
+        };
+        assert_eq!(seen("one", "coder").await.as_deref(), Some("d1"), "clones share a scope");
+        assert_eq!(seen("two", "coder").await, None, "another session read it");
+        assert_eq!(seen("one", "reviewer").await, None, "another agent read it");
     }
 
-    #[test]
-    fn calls_without_a_session_share_one_record() {
+    #[tokio::test]
+    async fn calls_without_a_session_share_one_record() {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path());
         let p = ws.resolve("a.txt").unwrap();
 
-        ws.mark_read(&ScopeCtx::new("", "first"), &p);
+        ws.record_digest(&ScopeCtx::new("", "first"), &p, "d1").await;
 
-        assert!(ws.clone().was_read(&ScopeCtx::new("", "second"), &p));
-        assert!(!ws.was_read(&ScopeCtx::new("session", "first"), &p));
+        let unscoped = ws.clone().read_digest(&ScopeCtx::new("", "second"), &p).await.unwrap();
+        assert_eq!(unscoped.as_deref(), Some("d1"));
+        assert_eq!(ws.read_digest(&ScopeCtx::new("session", "first"), &p).await.unwrap(), None);
     }
 
-    #[test]
-    fn the_least_recently_used_scope_is_evicted_at_capacity() {
+    #[tokio::test]
+    async fn the_least_recently_used_scope_is_evicted_at_capacity() {
+        use crate::read_ledger::READ_SCOPE_CAPACITY;
+
         let dir = tempfile::tempdir().unwrap();
-        let ws = Workspace::new(dir.path());
+        let ledger = Arc::new(InMemoryReadLedger::new());
+        let ws = Workspace::new(dir.path()).with_read_ledger(ledger.clone());
         let p = ws.resolve("a.txt").unwrap();
         for session in 0..READ_SCOPE_CAPACITY {
-            ws.mark_read(&ScopeCtx::new(&format!("s{session}"), "agent"), &p);
+            ws.record_digest(&ScopeCtx::new(&format!("s{session}"), "agent"), &p, "d").await;
         }
         // Touch the oldest scope so the second oldest is the one evicted.
-        assert!(ws.was_read(&ScopeCtx::new("s0", "agent"), &p));
+        assert!(ws.read_digest(&ScopeCtx::new("s0", "agent"), &p).await.unwrap().is_some());
 
-        ws.mark_read(&ScopeCtx::new("newest", "agent"), &p);
+        ws.record_digest(&ScopeCtx::new("newest", "agent"), &p, "d").await;
 
         assert!(
-            ws.was_read(&ScopeCtx::new("s0", "agent"), &p),
+            ws.read_digest(&ScopeCtx::new("s0", "agent"), &p).await.unwrap().is_some(),
             "a recently used scope was evicted"
         );
-        assert!(!ws.was_read(&ScopeCtx::new("s1", "agent"), &p), "the oldest scope was kept");
-        let scopes = ws.read_tracker.lock().unwrap().scoped.len();
-        assert_eq!(scopes, READ_SCOPE_CAPACITY);
+        assert!(
+            ws.read_digest(&ScopeCtx::new("s1", "agent"), &p).await.unwrap().is_none(),
+            "the oldest scope was kept"
+        );
+        assert_eq!(ledger.scopes(), READ_SCOPE_CAPACITY);
+    }
+
+    #[test]
+    fn record_paths_use_forward_slashes_relative_to_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path());
+        let p = ws.resolve("src/nested/a.rs").unwrap();
+        assert_eq!(ws.record_path(&p), "src/nested/a.rs");
+    }
+
+    #[cfg(any(unix, windows))]
+    #[tokio::test]
+    async fn a_write_checks_its_precondition_on_the_file_it_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path());
+        std::fs::write(dir.path().join("a.txt"), "one").unwrap();
+        let (_, target) = ws.resolve_target("a.txt").unwrap();
+        let one = crate::read_ledger::sha256_hex(b"one");
+
+        let stale = ws
+            .write_contained(
+                &target,
+                b"two",
+                Precondition::Sha256(crate::read_ledger::sha256_hex(b"x")),
+            )
+            .await;
+        assert!(matches!(&stale, Err(DevToolError::Stale { .. })), "{stale:?}");
+        assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), "one");
+
+        ws.write_contained(&target, b"two", Precondition::Sha256(one.clone())).await.unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), "two");
+
+        let exists = ws.write_contained(&target, b"three", Precondition::Absent).await;
+        assert!(matches!(&exists, Err(DevToolError::Stale { .. })), "{exists:?}");
+        let (_, fresh) = ws.resolve_target("fresh.txt").unwrap();
+        let missing = ws.write_contained(&fresh, b"x", Precondition::Sha256(one)).await;
+        assert!(matches!(&missing, Err(DevToolError::Stale { .. })), "{missing:?}");
+        assert!(!dir.path().join("fresh.txt").exists(), "a stale write creates nothing");
+        ws.write_contained(&fresh, b"x", Precondition::Absent).await.unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path().join("fresh.txt")).unwrap(), "x");
+    }
+
+    #[cfg(any(unix, windows))]
+    #[tokio::test]
+    async fn replace_and_remove_check_their_precondition() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path());
+        std::fs::write(dir.path().join("a.txt"), "one").unwrap();
+        let (_, target) = ws.resolve_target("a.txt").unwrap();
+        let one = crate::read_ledger::sha256_hex(b"one");
+
+        let stale = ws.replace_contained(&target, b"two", Precondition::Absent).await;
+        assert!(matches!(&stale, Err(DevToolError::Stale { .. })), "{stale:?}");
+        ws.replace_contained(&target, b"two", Precondition::Sha256(one.clone())).await.unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), "two");
+
+        let stale = ws.remove_contained(&target, Precondition::Sha256(one)).await;
+        assert!(matches!(&stale, Err(DevToolError::Stale { .. })), "{stale:?}");
+        let two = crate::read_ledger::sha256_hex(b"two");
+        ws.remove_contained(&target, Precondition::Sha256(two)).await.unwrap();
+        assert!(!dir.path().join("a.txt").exists());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0, "no temporary file is left");
+    }
+
+    #[test]
+    fn expect_sha256_takes_a_digest_or_absent() {
+        let digest = "A".repeat(64);
+        assert_eq!(
+            Precondition::from_expect(&digest).unwrap(),
+            Precondition::Sha256("a".repeat(64))
+        );
+        assert_eq!(
+            Precondition::from_expect(&format!("sha256:{digest}")).unwrap(),
+            Precondition::Sha256("a".repeat(64))
+        );
+        assert_eq!(Precondition::from_expect("absent").unwrap(), Precondition::Absent);
+        assert!(Precondition::from_expect("abc").is_err());
     }
 
     #[test]

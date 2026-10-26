@@ -1,0 +1,4658 @@
+{
+  "components": {
+    "schemas": {
+      "AlarmLine": {
+        "description": "An open alarm (spec 3.5 §7.21).",
+        "properties": {
+          "canAcknowledge": {
+            "description": "Whether it repeats until a person acknowledges it: an urgent alarm.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The alarm.",
+            "type": "string"
+          },
+          "raisedAt": {
+            "description": "When.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "text": {
+            "description": "What happened.",
+            "type": "string"
+          },
+          "urgency": {
+            "$ref": "#/components/schemas/Pill",
+            "description": "Its urgency."
+          }
+        },
+        "required": [
+          "id",
+          "urgency",
+          "text",
+          "raisedAt",
+          "canAcknowledge"
+        ],
+        "type": "object"
+      },
+      "ApprovalView": {
+        "description": "Who has approved a release waiting for its chain, and who still must (A-I23).",
+        "properties": {
+          "canApprove": {
+            "description": "The roles the viewer may approve in now.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "lines": {
+            "description": "The chain's roles, in order, with who approved in each.",
+            "items": {
+              "$ref": "#/components/schemas/SignerLine"
+            },
+            "type": "array"
+          },
+          "proposer": {
+            "description": "Who proposed it; they cannot approve it.",
+            "type": "string"
+          },
+          "text": {
+            "description": "One line.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "lines",
+          "canApprove",
+          "proposer"
+        ],
+        "type": "object"
+      },
+      "BatchLine": {
+        "description": "One recent batch.",
+        "properties": {
+          "batch": {
+            "description": "The batch.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "closedAt": {
+            "description": "When it closed.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "text": {
+            "description": "One line.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batch",
+          "closedAt",
+          "text"
+        ],
+        "type": "object"
+      },
+      "CategoryLine": {
+        "description": "A spend category against its cap.",
+        "properties": {
+          "cap": {
+            "description": "Its cap.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The category.",
+            "type": "string"
+          },
+          "paused": {
+            "description": "Why it is paused, when it is.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "percent": {
+            "description": "Spent as a share of the cap, in percent from 0 to 100.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "spent": {
+            "description": "Spent this month.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "spent",
+          "cap",
+          "percent"
+        ],
+        "type": "object"
+      },
+      "CharterCommand": {
+        "description": "A change to the charter under review.",
+        "oneOf": [
+          {
+            "description": "The section looks right.",
+            "properties": {
+              "section": {
+                "description": "The section.",
+                "type": "string"
+              },
+              "type": {
+                "const": "review",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "section"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Change the section's fields; clears every signature.",
+            "properties": {
+              "section": {
+                "description": "The section.",
+                "type": "string"
+              },
+              "type": {
+                "const": "edit",
+                "type": "string"
+              },
+              "values": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "The new values, by field id.",
+                "type": "object"
+              }
+            },
+            "required": [
+              "type",
+              "section",
+              "values"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Sign in `role` (A-I23).",
+            "properties": {
+              "role": {
+                "description": "The role, such as `owner`.",
+                "type": "string"
+              },
+              "type": {
+                "const": "sign",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "role"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "CharterResponse": {
+        "description": "`GET`, `POST /surface/website/charter`.",
+        "properties": {
+          "charter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CharterReview"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The charter under review, if a draft exists."
+          }
+        },
+        "type": "object"
+      },
+      "CharterReview": {
+        "description": "The charter under review (spec 3.5 §7.18 stage 5).",
+        "properties": {
+          "canSign": {
+            "description": "The roles the viewer may sign in now.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "committed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CommittedView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The committed version, once every signer has signed."
+          },
+          "kind": {
+            "description": "The site kind's template it started from.",
+            "type": "string"
+          },
+          "problems": {
+            "description": "Why it cannot be signed yet.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reviewed": {
+            "description": "Sections read so far.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sections": {
+            "description": "One card per section.",
+            "items": {
+              "$ref": "#/components/schemas/SectionCard"
+            },
+            "type": "array"
+          },
+          "signers": {
+            "description": "The signatures it needs, in the chain's order.",
+            "items": {
+              "$ref": "#/components/schemas/SignerLine"
+            },
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Pill",
+            "description": "Where it stands."
+          },
+          "version": {
+            "description": "The version it becomes.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "kind",
+          "status",
+          "sections",
+          "reviewed",
+          "signers",
+          "canSign",
+          "problems"
+        ],
+        "type": "object"
+      },
+      "CheckView": {
+        "description": "One launch-gate check (spec 3.5 §7.8.1).",
+        "properties": {
+          "findings": {
+            "description": "What to fix.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "The check, in words.",
+            "type": "string"
+          },
+          "note": {
+            "description": "What it could not measure here.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/Pill",
+            "description": "How it ended."
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "findings"
+        ],
+        "type": "object"
+      },
+      "ClaimRequest": {
+        "description": "`POST …/setup/claim` body.",
+        "properties": {
+          "code": {
+            "description": "The setup code from the host's logs.",
+            "type": "string"
+          },
+          "device": {
+            "default": null,
+            "description": "A name for this device, such as \"Amina's laptop\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "type": "object"
+      },
+      "ClaimedView": {
+        "description": "The device the setup code paired; its token is shown once (spec 3.5 A-I20).",
+        "properties": {
+          "device": {
+            "description": "The device's name.",
+            "type": "string"
+          },
+          "expiresAt": {
+            "description": "When the pairing ends.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "token": {
+            "description": "The device's token: the page keeps it and sends it with every request.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "device",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "CommittedView": {
+        "description": "The committed version.",
+        "properties": {
+          "at": {
+            "description": "When it took effect.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "signedBy": {
+            "description": "Who signed it.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "The version.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "at",
+          "signedBy"
+        ],
+        "type": "object"
+      },
+      "ConnectStep": {
+        "description": "The next step of a connection, for the person to take outside the site (A-I19).",
+        "oneOf": [
+          {
+            "description": "Open the service's own page: its sign-in or the broker's grant.",
+            "properties": {
+              "type": {
+                "const": "open",
+                "type": "string"
+              },
+              "url": {
+                "description": "The page.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Send or enter this code where the text says.",
+            "properties": {
+              "code": {
+                "description": "The code.",
+                "type": "string"
+              },
+              "how": {
+                "description": "Where to use it.",
+                "type": "string"
+              },
+              "type": {
+                "const": "code",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "code",
+              "how"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Connected; nothing more to do.",
+            "properties": {
+              "type": {
+                "const": "done",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ConnectionCard": {
+        "description": "One connection (spec 3.5 §7.18 stage 8, A-I19).",
+        "properties": {
+          "account": {
+            "description": "The account it is connected to.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "canConnect": {
+            "description": "Whether it can be connected here.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The connection, as sent back.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What it is for.",
+            "type": "string"
+          },
+          "method": {
+            "description": "How it connects, in words.",
+            "type": "string"
+          },
+          "service": {
+            "description": "The service.",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Pill",
+            "description": "Where it stands."
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "service",
+          "method",
+          "status",
+          "canConnect"
+        ],
+        "type": "object"
+      },
+      "ConnectionsView": {
+        "description": "Stage 8: connections.",
+        "properties": {
+          "cards": {
+            "description": "The connections.",
+            "items": {
+              "$ref": "#/components/schemas/ConnectionCard"
+            },
+            "type": "array"
+          },
+          "notice": {
+            "description": "What the site says before the first connection (A-I19).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "notice",
+          "cards"
+        ],
+        "type": "object"
+      },
+      "DecisionView": {
+        "description": "A decision discovery found for the owner: a quarantined subject or a legacy feature.",
+        "properties": {
+          "chosen": {
+            "description": "The owner's choice.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "default": {
+            "description": "What applies until the owner decides.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "description": "What was found.",
+            "type": "string"
+          },
+          "evidence": {
+            "description": "Where.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "description": "The card.",
+            "type": "string"
+          },
+          "options": {
+            "description": "The choices.",
+            "items": {
+              "$ref": "#/components/schemas/FieldOption"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "What it is about.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "detail",
+          "evidence",
+          "options"
+        ],
+        "type": "object"
+      },
+      "DeployView": {
+        "description": "Stage 8: the deployment and going live (spec 3.5 §7.22, A-I21).",
+        "properties": {
+          "canGoLive": {
+            "description": "Whether the owner can go live now.",
+            "type": "boolean"
+          },
+          "cost": {
+            "description": "The monthly running-cost estimate, by category.",
+            "items": {
+              "$ref": "#/components/schemas/Line"
+            },
+            "type": "array"
+          },
+          "fits": {
+            "description": "Whether the estimate fits the budget.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "live": {
+            "description": "The live release.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shape": {
+            "description": "The deployment shape.",
+            "type": "string"
+          },
+          "waiting": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApprovalView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The launch waiting for its approval chain."
+          }
+        },
+        "required": [
+          "shape",
+          "cost",
+          "canGoLive"
+        ],
+        "type": "object"
+      },
+      "DesignOption": {
+        "description": "A design direction (spec 3.5 §7.18 stage 6).",
+        "properties": {
+          "dark": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Swatch"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its dark colours."
+          },
+          "direction": {
+            "description": "The direction in words.",
+            "type": "string"
+          },
+          "id": {
+            "description": "`keep_current` or a theme's name.",
+            "type": "string"
+          },
+          "light": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Swatch"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its light colours."
+          },
+          "name": {
+            "description": "Its name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "direction"
+        ],
+        "type": "object"
+      },
+      "DesignView": {
+        "description": "Stage 6.",
+        "properties": {
+          "built": {
+            "description": "What building release 1 did.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "chosen": {
+            "description": "The owner's choice.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "held": {
+            "description": "Pages the per-change checks held.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "options": {
+            "description": "The directions, and keeping the current design for an existing site.",
+            "items": {
+              "$ref": "#/components/schemas/DesignOption"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "options",
+          "held"
+        ],
+        "type": "object"
+      },
+      "DiscoveryView": {
+        "description": "Stage 2: what discovery found, each fact with its source (spec 3.5 §7.18).",
+        "properties": {
+          "decisions": {
+            "description": "Quarantined subjects and legacy features.",
+            "items": {
+              "$ref": "#/components/schemas/DecisionView"
+            },
+            "type": "array"
+          },
+          "facts": {
+            "description": "The facts.",
+            "items": {
+              "$ref": "#/components/schemas/FactView"
+            },
+            "type": "array"
+          },
+          "found": {
+            "description": "Counts of what it read.",
+            "items": {
+              "$ref": "#/components/schemas/Line"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/KindView",
+            "description": "The site kind."
+          },
+          "ran": {
+            "description": "Whether discovery ran.",
+            "type": "boolean"
+          },
+          "source": {
+            "description": "What it read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ran",
+          "found",
+          "facts",
+          "kind",
+          "decisions"
+        ],
+        "type": "object"
+      },
+      "DraftLine": {
+        "description": "A draft in progress.",
+        "properties": {
+          "author": {
+            "description": "Who wrote it.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The draft.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "Its kind's name.",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Pill",
+            "description": "Where it stands."
+          },
+          "title": {
+            "description": "Its title.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "kind",
+          "status",
+          "author"
+        ],
+        "type": "object"
+      },
+      "DraftView": {
+        "description": "One draft in the editor.",
+        "properties": {
+          "approval": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApprovalView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The approval chain it waits for."
+          },
+          "author": {
+            "description": "Who wrote it.",
+            "type": "string"
+          },
+          "body": {
+            "description": "The body, in Markdown.",
+            "type": "string"
+          },
+          "changes": {
+            "description": "The live item it changes, if any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checkText": {
+            "description": "One line on the checks.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checks": {
+            "description": "The per-change checks, once saved.",
+            "items": {
+              "$ref": "#/components/schemas/CheckView"
+            },
+            "type": "array"
+          },
+          "fields": {
+            "description": "The kind's fields with their values.",
+            "items": {
+              "$ref": "#/components/schemas/FieldSpec"
+            },
+            "type": "array"
+          },
+          "id": {
+            "description": "The draft.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "The kind, as sent back.",
+            "type": "string"
+          },
+          "kindTitle": {
+            "description": "The kind's name.",
+            "type": "string"
+          },
+          "language": {
+            "description": "The language.",
+            "type": "string"
+          },
+          "media": {
+            "description": "Its media.",
+            "items": {
+              "$ref": "#/components/schemas/MediaView"
+            },
+            "type": "array"
+          },
+          "outcome": {
+            "description": "How publishing ended.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "preview": {
+            "description": "The preview's pages and how they change.",
+            "items": {
+              "$ref": "#/components/schemas/PageView"
+            },
+            "type": "array"
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/ScheduleInput",
+            "description": "The schedule."
+          },
+          "slug": {
+            "description": "The address part.",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Pill",
+            "description": "Where it stands."
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "kindTitle",
+          "slug",
+          "language",
+          "fields",
+          "body",
+          "schedule",
+          "media",
+          "checks",
+          "preview",
+          "status",
+          "author"
+        ],
+        "type": "object"
+      },
+      "EditorCommand": {
+        "description": "An editor action (spec 3.5 §7.8.2). Uploads have their own call, with the file's bytes.",
+        "oneOf": [
+          {
+            "description": "A new draft of `kind`.",
+            "properties": {
+              "kind": {
+                "description": "The kind, such as `product`.",
+                "type": "string"
+              },
+              "language": {
+                "default": null,
+                "description": "Its language; the site's first unless set.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "const": "new",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A draft that changes the item `id`.",
+            "properties": {
+              "id": {
+                "description": "The item.",
+                "type": "string"
+              },
+              "type": {
+                "const": "open",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Saves the draft's form and runs the per-change checks.",
+            "properties": {
+              "body": {
+                "default": null,
+                "description": "The body, in Markdown.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "draft": {
+                "description": "The draft.",
+                "type": "string"
+              },
+              "fields": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "The kind's fields, by id.",
+                "type": "object"
+              },
+              "language": {
+                "description": "The language.",
+                "type": "string"
+              },
+              "schedule": {
+                "$ref": "#/components/schemas/ScheduleInput",
+                "default": {},
+                "description": "The schedule."
+              },
+              "slug": {
+                "description": "The address part.",
+                "type": "string"
+              },
+              "type": {
+                "const": "save",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "draft",
+              "slug",
+              "language",
+              "fields"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Confirms an image's alt text; the accessibility check needs it.",
+            "properties": {
+              "alt": {
+                "description": "The text.",
+                "type": "string"
+              },
+              "draft": {
+                "description": "The draft.",
+                "type": "string"
+              },
+              "path": {
+                "description": "The media file.",
+                "type": "string"
+              },
+              "type": {
+                "const": "confirmAlt",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "draft",
+              "path",
+              "alt"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Builds the preview with its page diffs (spec 3.3 §7.5).",
+            "properties": {
+              "draft": {
+                "description": "The draft.",
+                "type": "string"
+              },
+              "type": {
+                "const": "preview",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "draft"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Publishes, or schedules when the draft has a future time.",
+            "properties": {
+              "draft": {
+                "description": "The draft.",
+                "type": "string"
+              },
+              "type": {
+                "const": "publish",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "draft"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Approves a draft waiting for its chain, in `role` (A-I23).",
+            "properties": {
+              "draft": {
+                "description": "The draft.",
+                "type": "string"
+              },
+              "role": {
+                "description": "The role.",
+                "type": "string"
+              },
+              "type": {
+                "const": "approve",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "draft",
+              "role"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Refuses a draft waiting for its chain.",
+            "properties": {
+              "draft": {
+                "description": "The draft.",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Why.",
+                "type": "string"
+              },
+              "type": {
+                "const": "reject",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "draft",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Corrects a live item: a new release with a visible correction note.",
+            "properties": {
+              "body": {
+                "default": null,
+                "description": "A new body.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fields": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "description": "Fields to change.",
+                "type": "object"
+              },
+              "id": {
+                "description": "The item.",
+                "type": "string"
+              },
+              "note": {
+                "description": "The correction note readers see.",
+                "type": "string"
+              },
+              "type": {
+                "const": "correct",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id",
+              "note"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Withdraws a live item: a notice in its place, or 410 Gone without one.",
+            "properties": {
+              "id": {
+                "description": "The item.",
+                "type": "string"
+              },
+              "notice": {
+                "default": null,
+                "description": "The notice; 410 Gone when absent.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "const": "withdraw",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Throws a draft away.",
+            "properties": {
+              "draft": {
+                "description": "The draft.",
+                "type": "string"
+              },
+              "type": {
+                "const": "discard",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "draft"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "EditorHome": {
+        "description": "The editor's home: the forms, the content and the drafts (spec 3.5 §7.8.2).",
+        "properties": {
+          "canEdit": {
+            "description": "Whether the viewer may write.",
+            "type": "boolean"
+          },
+          "chain": {
+            "description": "Who approves a publication, when the charter names a chain.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "drafts": {
+            "description": "Drafts in progress.",
+            "items": {
+              "$ref": "#/components/schemas/DraftLine"
+            },
+            "type": "array"
+          },
+          "items": {
+            "description": "The site's content, newest kinds first.",
+            "items": {
+              "$ref": "#/components/schemas/ItemLine"
+            },
+            "type": "array"
+          },
+          "kinds": {
+            "description": "One form per content kind.",
+            "items": {
+              "$ref": "#/components/schemas/KindForm"
+            },
+            "type": "array"
+          },
+          "languages": {
+            "description": "The site's languages.",
+            "items": {
+              "$ref": "#/components/schemas/FieldOption"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "kinds",
+          "items",
+          "drafts",
+          "languages",
+          "canEdit"
+        ],
+        "type": "object"
+      },
+      "EditorOutcome": {
+        "description": "What an editor action did.",
+        "properties": {
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DraftView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The draft it acted on."
+          },
+          "home": {
+            "$ref": "#/components/schemas/EditorHome",
+            "description": "The editor after it."
+          },
+          "note": {
+            "description": "One line on what happened.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "home"
+        ],
+        "type": "object"
+      },
+      "FactAnswer": {
+        "description": "The owner's answer on a discovered fact (spec 3.3 §8.2 \"That's right / Fix it / Forget it\").",
+        "oneOf": [
+          {
+            "const": "right",
+            "description": "It is right: it becomes `Known` by the owner's confirmation.",
+            "type": "string"
+          },
+          {
+            "const": "fix",
+            "description": "It is wrong: the owner's text replaces it, `Known`.",
+            "type": "string"
+          },
+          {
+            "const": "forget",
+            "description": "Forget it.",
+            "type": "string"
+          }
+        ]
+      },
+      "FactView": {
+        "description": "A discovered fact (spec 3.5 §7.18 stage 2, A-I18).",
+        "properties": {
+          "id": {
+            "description": "The fact.",
+            "type": "string"
+          },
+          "open": {
+            "description": "Whether the owner may still answer it.",
+            "type": "boolean"
+          },
+          "source": {
+            "description": "Where it was found.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/Pill",
+            "description": "\"A guess\" until the owner confirms it."
+          },
+          "text": {
+            "description": "What it says.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "status",
+          "open"
+        ],
+        "type": "object"
+      },
+      "FieldKind": {
+        "description": "What a form field takes.",
+        "oneOf": [
+          {
+            "const": "text",
+            "description": "One line of text.",
+            "type": "string"
+          },
+          {
+            "const": "longText",
+            "description": "Several lines of text.",
+            "type": "string"
+          },
+          {
+            "const": "markdown",
+            "description": "Markdown, with the editor's formatting buttons and preview (spec 3.5 §13 Q13).",
+            "type": "string"
+          },
+          {
+            "const": "email",
+            "description": "An email address.",
+            "type": "string"
+          },
+          {
+            "const": "tel",
+            "description": "A telephone number.",
+            "type": "string"
+          },
+          {
+            "const": "url",
+            "description": "A web address.",
+            "type": "string"
+          },
+          {
+            "const": "number",
+            "description": "A number.",
+            "type": "string"
+          },
+          {
+            "const": "dateTime",
+            "description": "A date and time.",
+            "type": "string"
+          },
+          {
+            "const": "time",
+            "description": "A time of day, `HH:MM`.",
+            "type": "string"
+          },
+          {
+            "const": "choice",
+            "description": "One of `options`.",
+            "type": "string"
+          }
+        ]
+      },
+      "FieldOption": {
+        "description": "One choice of a `FieldKind::Choice` field.",
+        "properties": {
+          "label": {
+            "description": "What the person reads.",
+            "type": "string"
+          },
+          "value": {
+            "description": "The value sent back.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label"
+        ],
+        "type": "object"
+      },
+      "FieldSpec": {
+        "description": "One field of a form: the interview's, a charter section's or the web editor's.",
+        "properties": {
+          "hint": {
+            "description": "A line under the field.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The field's id, the key of its value.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FieldKind",
+            "description": "What it takes."
+          },
+          "label": {
+            "description": "Its label.",
+            "type": "string"
+          },
+          "options": {
+            "description": "The choices of a `FieldKind::Choice` field.",
+            "items": {
+              "$ref": "#/components/schemas/FieldOption"
+            },
+            "type": "array"
+          },
+          "required": {
+            "description": "Whether it must be filled in.",
+            "type": "boolean"
+          },
+          "value": {
+            "description": "The value it starts with.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "kind",
+          "required"
+        ],
+        "type": "object"
+      },
+      "FormView": {
+        "description": "One interview form (spec 3.5 §7.18 stage 4).",
+        "properties": {
+          "answered": {
+            "description": "Whether it is answered.",
+            "type": "boolean"
+          },
+          "fields": {
+            "description": "Its fields, with the answers given.",
+            "items": {
+              "$ref": "#/components/schemas/FieldSpec"
+            },
+            "type": "array"
+          },
+          "fromDiscovery": {
+            "description": "Whether discovery's confirmed facts answered it already.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The form.",
+            "type": "string"
+          },
+          "question": {
+            "description": "The question.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "question",
+          "fields",
+          "answered",
+          "fromDiscovery"
+        ],
+        "type": "object"
+      },
+      "GateView": {
+        "description": "Stage 7: the launch gate's report, page by page (spec 3.5 §7.8.1, §7.18).",
+        "properties": {
+          "checks": {
+            "description": "The checks.",
+            "items": {
+              "$ref": "#/components/schemas/CheckView"
+            },
+            "type": "array"
+          },
+          "pages": {
+            "description": "The preview's pages.",
+            "items": {
+              "$ref": "#/components/schemas/PageView"
+            },
+            "type": "array"
+          },
+          "passed": {
+            "description": "Whether every check passed.",
+            "type": "boolean"
+          },
+          "text": {
+            "description": "One line.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "passed",
+          "text",
+          "checks",
+          "pages"
+        ],
+        "type": "object"
+      },
+      "HeldDecision": {
+        "description": "The owner's decision on something held.",
+        "oneOf": [
+          {
+            "const": "release",
+            "description": "Publish it.",
+            "type": "string"
+          },
+          {
+            "const": "discard",
+            "description": "Drop it.",
+            "type": "string"
+          }
+        ]
+      },
+      "HeldDeliveryLine": {
+        "description": "A feed delivery held whole (spec 3.5 A-I27).",
+        "properties": {
+          "breaks": {
+            "description": "The bounds it broke.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "delivery": {
+            "description": "The delivery.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "feed": {
+            "description": "The feed.",
+            "type": "string"
+          },
+          "receivedAt": {
+            "description": "When it arrived.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "would": {
+            "description": "What it would change.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "delivery",
+          "feed",
+          "breaks",
+          "would",
+          "receivedAt"
+        ],
+        "type": "object"
+      },
+      "HeldItemLine": {
+        "description": "An item held alone (spec 3.5 §7.8.3).",
+        "properties": {
+          "batch": {
+            "description": "The batch it came in.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "heldAt": {
+            "description": "When it was held.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "The item.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why it waits.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Its title.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "reason",
+          "batch",
+          "heldAt"
+        ],
+        "type": "object"
+      },
+      "HeldPayment": {
+        "description": "A payment held for the owner (spec 3.5 §7.14).",
+        "properties": {
+          "amount": {
+            "description": "How much.",
+            "type": "string"
+          },
+          "description": {
+            "description": "What it is for.",
+            "type": "string"
+          },
+          "why": {
+            "description": "Why it waits.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "amount",
+          "why"
+        ],
+        "type": "object"
+      },
+      "HeldView": {
+        "description": "Held batches (spec 3.5 §7.8.3).",
+        "properties": {
+          "batches": {
+            "description": "The latest batches.",
+            "items": {
+              "$ref": "#/components/schemas/BatchLine"
+            },
+            "type": "array"
+          },
+          "deliveries": {
+            "description": "Deliveries held whole.",
+            "items": {
+              "$ref": "#/components/schemas/HeldDeliveryLine"
+            },
+            "type": "array"
+          },
+          "items": {
+            "description": "Items held alone.",
+            "items": {
+              "$ref": "#/components/schemas/HeldItemLine"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "deliveries",
+          "batches"
+        ],
+        "type": "object"
+      },
+      "InterviewView": {
+        "description": "Stage 4.",
+        "properties": {
+          "done": {
+            "description": "Whether the interview is done.",
+            "type": "boolean"
+          },
+          "forms": {
+            "description": "The forms, in order.",
+            "items": {
+              "$ref": "#/components/schemas/FormView"
+            },
+            "type": "array"
+          },
+          "preview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviewView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The live preview."
+          }
+        },
+        "required": [
+          "forms",
+          "done"
+        ],
+        "type": "object"
+      },
+      "ItemLine": {
+        "description": "One item of the site's content.",
+        "properties": {
+          "id": {
+            "description": "The item.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "Its kind's name.",
+            "type": "string"
+          },
+          "language": {
+            "description": "Its language.",
+            "type": "string"
+          },
+          "live": {
+            "description": "Whether it can be corrected or withdrawn: it is live.",
+            "type": "boolean"
+          },
+          "scheduled": {
+            "description": "When it publishes, for a scheduled item.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "slug": {
+            "description": "Its address part.",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/Pill",
+            "description": "Where it stands."
+          },
+          "title": {
+            "description": "Its title.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "slug",
+          "language",
+          "state",
+          "live"
+        ],
+        "type": "object"
+      },
+      "JobLine": {
+        "description": "One job and its level (spec 3.5 §7.11, §7.20).",
+        "properties": {
+          "agent": {
+            "description": "The agent that does it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "area": {
+            "description": "Its area.",
+            "type": "string"
+          },
+          "canLower": {
+            "description": "Whether the viewer may lower it.",
+            "type": "boolean"
+          },
+          "canPromote": {
+            "description": "Whether the viewer may raise it.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The job.",
+            "type": "string"
+          },
+          "level": {
+            "description": "How much it does alone.",
+            "type": "string"
+          },
+          "next": {
+            "description": "The level a promotion would give it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "offered": {
+            "description": "Whether it has earned the offer of a promotion.",
+            "type": "boolean"
+          },
+          "record": {
+            "description": "Its record towards a promotion.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "since": {
+            "description": "Since when.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "title": {
+            "description": "What it is.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "area",
+          "level",
+          "since",
+          "offered",
+          "canPromote",
+          "canLower"
+        ],
+        "type": "object"
+      },
+      "KindForm": {
+        "description": "A content kind's form (spec 3.5 §7.8.2, Q13): structured fields, then the Markdown body.",
+        "properties": {
+          "description": {
+            "description": "What it is for.",
+            "type": "string"
+          },
+          "fields": {
+            "description": "Its fields, before the body.",
+            "items": {
+              "$ref": "#/components/schemas/FieldSpec"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "description": "The kind, as sent back.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Its name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "title",
+          "description",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "KindView": {
+        "description": "The kind of site: proposed from the evidence, confirmed by the owner (spec 3.5 §7.16.1).",
+        "properties": {
+          "confirmed": {
+            "description": "The confirmed kind.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "options": {
+            "description": "Every kind, the proposal and its alternatives first.",
+            "items": {
+              "$ref": "#/components/schemas/FieldOption"
+            },
+            "type": "array"
+          },
+          "proposed": {
+            "description": "The proposed kind.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reasons": {
+            "description": "Why.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "reasons",
+          "options"
+        ],
+        "type": "object"
+      },
+      "KpiCard": {
+        "description": "One KPI this week (spec 3.5 §7.11, §7.24).",
+        "properties": {
+          "baseline": {
+            "description": "Its baseline.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The KPI.",
+            "type": "string"
+          },
+          "lastWeek": {
+            "description": "The week before.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Its name.",
+            "type": "string"
+          },
+          "phase": {
+            "description": "\"Measuring until 8 Nov\" or \"Tracking\".",
+            "type": "string"
+          },
+          "target": {
+            "description": "Its target, the owner's.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thisWeek": {
+            "description": "This week.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trend": {
+            "$ref": "#/components/schemas/Pill",
+            "description": "The trend, in its direction: up is better."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "trend",
+          "phase"
+        ],
+        "type": "object"
+      },
+      "Line": {
+        "description": "A label and its value, for a card's lines.",
+        "properties": {
+          "label": {
+            "description": "The label.",
+            "type": "string"
+          },
+          "value": {
+            "description": "The value, in words.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ],
+        "type": "object"
+      },
+      "MediaView": {
+        "description": "A media file beside a draft (spec 3.5 §7.8.2 \"Media\").",
+        "properties": {
+          "alt": {
+            "description": "Its alt text.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "altConfirmed": {
+            "description": "Whether a person confirmed the alt text; the accessibility check needs it.",
+            "type": "boolean"
+          },
+          "contentType": {
+            "description": "Its media type.",
+            "type": "string"
+          },
+          "generated": {
+            "description": "Whether it is a generated illustration.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Its file name.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Its path.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "name",
+          "contentType",
+          "altConfirmed",
+          "generated"
+        ],
+        "type": "object"
+      },
+      "MoneyView": {
+        "description": "Cost, revenue and profit and loss (spec 3.5 §7.14).",
+        "properties": {
+          "categories": {
+            "description": "Each category this week.",
+            "items": {
+              "$ref": "#/components/schemas/Line"
+            },
+            "type": "array"
+          },
+          "month": {
+            "description": "Spent this month, against the budget.",
+            "type": "string"
+          },
+          "results": {
+            "description": "Revenue, profit, cost per lead and per sale, where the site sells.",
+            "items": {
+              "$ref": "#/components/schemas/Line"
+            },
+            "type": "array"
+          },
+          "spend": {
+            "description": "Spent this week.",
+            "type": "string"
+          },
+          "within": {
+            "$ref": "#/components/schemas/Pill",
+            "description": "Whether the month is inside the budget."
+          }
+        },
+        "required": [
+          "spend",
+          "month",
+          "within",
+          "categories",
+          "results"
+        ],
+        "type": "object"
+      },
+      "OfferLine": {
+        "description": "A promotion the jobs earned, for the owner to decide (A-I13).",
+        "properties": {
+          "from": {
+            "description": "Its level now.",
+            "type": "string"
+          },
+          "job": {
+            "description": "The job.",
+            "type": "string"
+          },
+          "record": {
+            "description": "The record behind the offer.",
+            "type": "string"
+          },
+          "title": {
+            "description": "What it is.",
+            "type": "string"
+          },
+          "to": {
+            "description": "The level a promotion gives it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job",
+          "title",
+          "from",
+          "to",
+          "record"
+        ],
+        "type": "object"
+      },
+      "OnboardingCommand": {
+        "description": "An input to onboarding (spec 3.5 §7.18), from the paired device only (A-I20).",
+        "oneOf": [
+          {
+            "description": "Stage 1: a URL, profiles or nothing, the site's name, and a phone number for urgent\nalarms.",
+            "properties": {
+              "from": {
+                "$ref": "#/components/schemas/StartFrom",
+                "description": "Where to start."
+              },
+              "name": {
+                "default": null,
+                "description": "The site's name.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "phone": {
+                "default": null,
+                "description": "A phone number for urgent alarms.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "profiles": {
+                "default": [],
+                "description": "The profiles' URLs.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": {
+                "const": "start",
+                "type": "string"
+              },
+              "url": {
+                "default": null,
+                "description": "The existing site's URL.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "from"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Stage 2: confirm, fix or forget a discovered fact.",
+            "properties": {
+              "answer": {
+                "$ref": "#/components/schemas/FactAnswer",
+                "description": "The answer."
+              },
+              "id": {
+                "description": "The fact.",
+                "type": "string"
+              },
+              "text": {
+                "default": null,
+                "description": "The corrected text, for `fix`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "const": "fact",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id",
+              "answer"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Stage 2: confirm the site kind.",
+            "properties": {
+              "kind": {
+                "description": "The kind, such as `business`.",
+                "type": "string"
+              },
+              "type": {
+                "const": "kind",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Stage 3: freeze the legacy site or not.",
+            "properties": {
+              "freeze": {
+                "description": "Whether to freeze it.",
+                "type": "boolean"
+              },
+              "type": {
+                "const": "protect",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "freeze"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Stage 2–3: decide a quarantined subject or a legacy feature.",
+            "properties": {
+              "card": {
+                "description": "The card.",
+                "type": "string"
+              },
+              "choice": {
+                "description": "The choice.",
+                "type": "string"
+              },
+              "type": {
+                "const": "decide",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "card",
+              "choice"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Stage 4: answer one form; the live preview rebuilds.",
+            "properties": {
+              "form": {
+                "description": "The form.",
+                "type": "string"
+              },
+              "type": {
+                "const": "answer",
+                "type": "string"
+              },
+              "values": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "The values, by field id.",
+                "type": "object"
+              }
+            },
+            "required": [
+              "type",
+              "form",
+              "values"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Stage 4 ends: the charter is drafted from the answers.",
+            "properties": {
+              "type": {
+                "const": "finishInterview",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Stage 5: a charter card.",
+            "properties": {
+              "command": {
+                "$ref": "#/components/schemas/CharterCommand",
+                "description": "What to do."
+              },
+              "type": {
+                "const": "charter",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "command"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Stage 6: keep the current design or pick a direction; release 1 is built.",
+            "properties": {
+              "design": {
+                "description": "`keep_current`, or a theme: `paper`, `harbour`, `meadow`.",
+                "type": "string"
+              },
+              "type": {
+                "const": "design",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "design"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Stage 7: run the launch gate.",
+            "properties": {
+              "type": {
+                "const": "runGate",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Stage 8: start a connection.",
+            "properties": {
+              "connection": {
+                "description": "The connection.",
+                "type": "string"
+              },
+              "type": {
+                "const": "connect",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "connection"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Stage 8: connect it later.",
+            "properties": {
+              "connection": {
+                "description": "The connection.",
+                "type": "string"
+              },
+              "type": {
+                "const": "skip",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "connection"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Stage 8: go live (A-I21).",
+            "properties": {
+              "type": {
+                "const": "goLive",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Stage 8: approve the launch in a role, under a publication chain (A-I23).",
+            "properties": {
+              "role": {
+                "description": "The role.",
+                "type": "string"
+              },
+              "type": {
+                "const": "approve",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "role"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "OnboardingOutcome": {
+        "description": "What an onboarding command did.",
+        "properties": {
+          "next": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConnectStep"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The next step of a connection, for the person to take outside the site."
+          },
+          "note": {
+            "description": "One line on what happened.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "$ref": "#/components/schemas/OnboardingView",
+            "description": "Onboarding after it."
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "type": "object"
+      },
+      "OnboardingView": {
+        "description": "Onboarding as the owner sees it (spec 3.5 §7.18).",
+        "properties": {
+          "charter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CharterReview"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Stage 5."
+          },
+          "connections": {
+            "$ref": "#/components/schemas/ConnectionsView",
+            "description": "Stage 8."
+          },
+          "current": {
+            "description": "The stage to do now; `done` once the site runs.",
+            "type": "string"
+          },
+          "deploy": {
+            "$ref": "#/components/schemas/DeployView",
+            "description": "Stage 8."
+          },
+          "design": {
+            "$ref": "#/components/schemas/DesignView",
+            "description": "Stage 6."
+          },
+          "discovery": {
+            "$ref": "#/components/schemas/DiscoveryView",
+            "description": "Stage 2."
+          },
+          "gate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GateView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Stage 7."
+          },
+          "interview": {
+            "$ref": "#/components/schemas/InterviewView",
+            "description": "Stage 4."
+          },
+          "protect": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProtectView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Stage 3, for a site on a legacy runtime."
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Stage 9."
+          },
+          "siteName": {
+            "description": "The site's name.",
+            "type": "string"
+          },
+          "stages": {
+            "description": "The nine stages.",
+            "items": {
+              "$ref": "#/components/schemas/StageLine"
+            },
+            "type": "array"
+          },
+          "start": {
+            "$ref": "#/components/schemas/StartView",
+            "description": "Stage 1."
+          }
+        },
+        "required": [
+          "siteName",
+          "stages",
+          "current",
+          "start",
+          "discovery",
+          "interview",
+          "design",
+          "connections",
+          "deploy"
+        ],
+        "type": "object"
+      },
+      "PageLine": {
+        "description": "A page a release changed (spec 3.3 §7.5).",
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/Pill",
+            "description": "How it changed."
+          },
+          "path": {
+            "description": "The page.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "change"
+        ],
+        "type": "object"
+      },
+      "PageView": {
+        "description": "One page of the preview, with how it changes (spec 3.3 §7.5).",
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/Pill",
+            "description": "How it changes."
+          },
+          "markdown": {
+            "description": "The page as Markdown.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The page's address.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Its title.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "title",
+          "change"
+        ],
+        "type": "object"
+      },
+      "Pill": {
+        "description": "A status word and its tone (spec 3.3 §9).",
+        "properties": {
+          "text": {
+            "description": "The word, in sentence case.",
+            "type": "string"
+          },
+          "tone": {
+            "$ref": "#/components/schemas/Tone",
+            "description": "Its tone."
+          }
+        },
+        "required": [
+          "text",
+          "tone"
+        ],
+        "type": "object"
+      },
+      "PreviewPage": {
+        "description": "A page of the live preview.",
+        "properties": {
+          "summary": {
+            "description": "What it is for.",
+            "type": "string"
+          },
+          "title": {
+            "description": "The page's title.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "PreviewView": {
+        "description": "The live preview, rebuilt after each answer (spec 3.5 §7.18 stage 4).",
+        "properties": {
+          "about": {
+            "description": "The About page as built, in Markdown.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "facts": {
+            "description": "How many confirmed facts it shows.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pages": {
+            "description": "The pages release 1 will have.",
+            "items": {
+              "$ref": "#/components/schemas/PreviewPage"
+            },
+            "type": "array"
+          },
+          "published": {
+            "description": "Whether the preview is on the host.",
+            "type": "boolean"
+          },
+          "rebuiltAt": {
+            "description": "When it was rebuilt.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "siteName": {
+            "description": "The site's name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "siteName",
+          "pages",
+          "facts",
+          "rebuiltAt",
+          "published"
+        ],
+        "type": "object"
+      },
+      "ProtectView": {
+        "description": "Stage 3: the freeze, for a site on a legacy runtime.",
+        "properties": {
+          "freeze": {
+            "description": "The owner's decision.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "What the freeze does.",
+            "type": "string"
+          },
+          "url": {
+            "description": "The legacy site.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "text"
+        ],
+        "type": "object"
+      },
+      "ReleaseLine": {
+        "description": "One signed release (spec 3.5 §7.7).",
+        "properties": {
+          "at": {
+            "description": "When it was built.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "otherFiles": {
+            "description": "How many other files it changed.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pages": {
+            "description": "The pages it changed.",
+            "items": {
+              "$ref": "#/components/schemas/PageLine"
+            },
+            "type": "array"
+          },
+          "seq": {
+            "description": "Its number.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "description": "What made it, in words.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "source",
+          "pages",
+          "otherFiles"
+        ],
+        "type": "object"
+      },
+      "ReviewCommand": {
+        "description": "A review action.",
+        "oneOf": [
+          {
+            "description": "Composes the review of the week starting `week`, last week's when absent.",
+            "properties": {
+              "type": {
+                "const": "compose",
+                "type": "string"
+              },
+              "week": {
+                "default": null,
+                "description": "The Monday.",
+                "format": "date",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Sends the review's summary to the owner's channel.",
+            "properties": {
+              "type": {
+                "const": "send",
+                "type": "string"
+              },
+              "week": {
+                "description": "The Monday of the review.",
+                "format": "date",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "week"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ReviewLine": {
+        "description": "One review in the list.",
+        "properties": {
+          "sent": {
+            "description": "Where and when its summary went.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "description": "Its title.",
+            "type": "string"
+          },
+          "week": {
+            "description": "The Monday its week starts.",
+            "format": "date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "week",
+          "title"
+        ],
+        "type": "object"
+      },
+      "ReviewPage": {
+        "description": "The weekly review page.",
+        "properties": {
+          "canCompose": {
+            "description": "Whether the viewer can compose one now.",
+            "type": "boolean"
+          },
+          "channel": {
+            "description": "The owner's channel the summary goes to.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "current": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The review shown."
+          },
+          "nextDue": {
+            "description": "When the next one is due.",
+            "format": "date",
+            "type": "string"
+          },
+          "reviews": {
+            "description": "Every review, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/ReviewLine"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "reviews",
+          "canCompose",
+          "nextDue"
+        ],
+        "type": "object"
+      },
+      "ReviewView": {
+        "description": "One week's review (spec 3.5 §7.21).",
+        "properties": {
+          "alarms": {
+            "description": "Alarms that waited for the review.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "charterVersion": {
+            "description": "The charter version in force.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "demotions": {
+            "description": "Demotions, with why.",
+            "items": {
+              "$ref": "#/components/schemas/Line"
+            },
+            "type": "array"
+          },
+          "experiments": {
+            "description": "Experiments and their evidence.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "headline": {
+            "description": "The week at a glance.",
+            "items": {
+              "$ref": "#/components/schemas/Line"
+            },
+            "type": "array"
+          },
+          "incidents": {
+            "description": "Incidents.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kpis": {
+            "description": "KPIs against baselines and targets, with trends.",
+            "items": {
+              "$ref": "#/components/schemas/KpiCard"
+            },
+            "type": "array"
+          },
+          "leads": {
+            "description": "Leads captured and handed off.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "markdown": {
+            "description": "The review as a document, in Markdown.",
+            "type": "string"
+          },
+          "money": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MoneyView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Money."
+          },
+          "promotions": {
+            "description": "Promotions the jobs earned.",
+            "items": {
+              "$ref": "#/components/schemas/OfferLine"
+            },
+            "type": "array"
+          },
+          "questions": {
+            "description": "Questions for the owner.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sent": {
+            "description": "Where and when its summary went.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "description": "The line sent to the owner's channel.",
+            "type": "string"
+          },
+          "title": {
+            "description": "\"Week of 19 October\".",
+            "type": "string"
+          },
+          "updates": {
+            "description": "What the constant-update engine did: updates, deliveries, what it held and its cost;\nempty when the site runs no engine (spec 3.5 §7.8.3).",
+            "items": {
+              "$ref": "#/components/schemas/Line"
+            },
+            "type": "array"
+          },
+          "week": {
+            "description": "The Monday its week starts.",
+            "format": "date",
+            "type": "string"
+          },
+          "work": {
+            "description": "What each agent did.",
+            "items": {
+              "$ref": "#/components/schemas/WorkLine"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "week",
+          "title",
+          "headline",
+          "kpis",
+          "work",
+          "experiments",
+          "incidents",
+          "leads",
+          "promotions",
+          "demotions",
+          "alarms",
+          "questions",
+          "updates",
+          "summary",
+          "markdown"
+        ],
+        "type": "object"
+      },
+      "RunView": {
+        "description": "Stage 9: the 30/60/90-day plan (spec 3.5 §7.18).",
+        "properties": {
+          "firstReview": {
+            "description": "When the first weekly review comes.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "phases": {
+            "description": "Days 1–30, 31–60 and 61–90.",
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "promotions": {
+            "description": "The levels the jobs can earn, offered for your decision.",
+            "items": {
+              "$ref": "#/components/schemas/Line"
+            },
+            "type": "array"
+          },
+          "proposeUntil": {
+            "description": "Until when every job suggests.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "firstReview",
+          "proposeUntil",
+          "phases",
+          "promotions"
+        ],
+        "type": "object"
+      },
+      "ScheduleInput": {
+        "description": "A schedule as the form shows it.",
+        "properties": {
+          "embargoUntil": {
+            "description": "Not before.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expiresAt": {
+            "description": "When to withdraw it.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "publishAt": {
+            "description": "When to publish.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revertAt": {
+            "description": "When to go back to the previous version.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SectionCard": {
+        "description": "One section of the charter as a card (spec 3.5 §7.18 stage 5).",
+        "properties": {
+          "fields": {
+            "description": "What can be changed here; empty when nothing can.",
+            "items": {
+              "$ref": "#/components/schemas/FieldSpec"
+            },
+            "type": "array"
+          },
+          "id": {
+            "description": "The section's id.",
+            "type": "string"
+          },
+          "lines": {
+            "description": "What the draft says.",
+            "items": {
+              "$ref": "#/components/schemas/Line"
+            },
+            "type": "array"
+          },
+          "note": {
+            "description": "A rule that applies to it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reviewed": {
+            "description": "Whether the owner has read it.",
+            "type": "boolean"
+          },
+          "summary": {
+            "description": "What it decides, in one line.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Its heading.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "summary",
+          "lines",
+          "reviewed",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "SetupView": {
+        "description": "What the setup screen shows (spec 3.5 §7.17).",
+        "properties": {
+          "holding": {
+            "description": "What visitors see until the site is launched.",
+            "type": "string"
+          },
+          "needed": {
+            "description": "Whether this site asks for a setup code at all.",
+            "type": "boolean"
+          },
+          "paired": {
+            "description": "Whether the owner's device has paired.",
+            "type": "boolean"
+          },
+          "siteName": {
+            "description": "The site's name.",
+            "type": "string"
+          },
+          "whereCode": {
+            "description": "Where the code is.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "siteName",
+          "needed",
+          "paired",
+          "whereCode",
+          "holding"
+        ],
+        "type": "object"
+      },
+      "SignalLine": {
+        "description": "One signal from the public side, typed and screened (spec 3.5 §7.10).",
+        "properties": {
+          "count": {
+            "description": "How many arrived.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lastAt": {
+            "description": "The latest.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "text": {
+            "description": "What it is.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "count",
+          "lastAt"
+        ],
+        "type": "object"
+      },
+      "SignalsView": {
+        "description": "Signals waiting in the back office.",
+        "properties": {
+          "lines": {
+            "description": "The latest open ones.",
+            "items": {
+              "$ref": "#/components/schemas/SignalLine"
+            },
+            "type": "array"
+          },
+          "open": {
+            "description": "How many are open.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "open",
+          "lines"
+        ],
+        "type": "object"
+      },
+      "SignerLine": {
+        "description": "A signature the charter needs (spec 3.5 A-I23).",
+        "properties": {
+          "holders": {
+            "description": "The people who hold it.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "label": {
+            "description": "The role's name.",
+            "type": "string"
+          },
+          "role": {
+            "description": "The role, as sent back to sign.",
+            "type": "string"
+          },
+          "signedAt": {
+            "description": "When.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "signedBy": {
+            "description": "Who signed in it, if anyone.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "label",
+          "holders"
+        ],
+        "type": "object"
+      },
+      "SiteCommand": {
+        "description": "An owner's decision on the site view.",
+        "oneOf": [
+          {
+            "description": "Raise a job one rung (A-I13).",
+            "properties": {
+              "job": {
+                "description": "The job.",
+                "type": "string"
+              },
+              "type": {
+                "const": "promote",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "job"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Lower a job one rung.",
+            "properties": {
+              "job": {
+                "description": "The job.",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Why.",
+                "type": "string"
+              },
+              "type": {
+                "const": "lower",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "job",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Release or discard an item held alone.",
+            "properties": {
+              "decision": {
+                "$ref": "#/components/schemas/HeldDecision",
+                "description": "`release` or `discard`."
+              },
+              "id": {
+                "description": "The item.",
+                "type": "string"
+              },
+              "type": {
+                "const": "item",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id",
+              "decision"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Release or discard a delivery held whole (A-I27).",
+            "properties": {
+              "decision": {
+                "$ref": "#/components/schemas/HeldDecision",
+                "description": "`release` or `discard`."
+              },
+              "delivery": {
+                "description": "The delivery.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": {
+                "const": "delivery",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "delivery",
+              "decision"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Acknowledge an alarm.",
+            "properties": {
+              "alarm": {
+                "description": "The alarm.",
+                "type": "string"
+              },
+              "type": {
+                "const": "acknowledge",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "alarm"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SiteOutcome": {
+        "description": "What a site decision did.",
+        "properties": {
+          "note": {
+            "description": "One line on what happened.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "$ref": "#/components/schemas/SiteViewModel",
+            "description": "The view after it."
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "type": "object"
+      },
+      "SiteViewModel": {
+        "description": "The site as every surface shows it (spec 3.5 §7.24).",
+        "properties": {
+          "alarms": {
+            "description": "Open alarms.",
+            "items": {
+              "$ref": "#/components/schemas/AlarmLine"
+            },
+            "type": "array"
+          },
+          "held": {
+            "$ref": "#/components/schemas/HeldView",
+            "description": "Held batches."
+          },
+          "jobs": {
+            "description": "The jobs and their levels.",
+            "items": {
+              "$ref": "#/components/schemas/JobLine"
+            },
+            "type": "array"
+          },
+          "kpis": {
+            "description": "This week's KPIs.",
+            "items": {
+              "$ref": "#/components/schemas/KpiCard"
+            },
+            "type": "array"
+          },
+          "launched": {
+            "description": "Whether it is live.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The site's name.",
+            "type": "string"
+          },
+          "origin": {
+            "description": "Its public address.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "Whether the viewer decides as an owner.",
+            "type": "boolean"
+          },
+          "releases": {
+            "description": "The latest releases, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/ReleaseLine"
+            },
+            "type": "array"
+          },
+          "signals": {
+            "$ref": "#/components/schemas/SignalsView",
+            "description": "Signals from the public side."
+          },
+          "status": {
+            "$ref": "#/components/schemas/StatusView",
+            "description": "Its status."
+          },
+          "wallet": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WalletView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The wallet, when the site has one."
+          }
+        },
+        "required": [
+          "name",
+          "origin",
+          "launched",
+          "status",
+          "releases",
+          "kpis",
+          "jobs",
+          "signals",
+          "held",
+          "alarms",
+          "owner"
+        ],
+        "type": "object"
+      },
+      "StageLine": {
+        "description": "One stage of onboarding (spec 3.5 §7.18).",
+        "properties": {
+          "id": {
+            "description": "The stage's id.",
+            "type": "string"
+          },
+          "number": {
+            "description": "1 to 9.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/StageState",
+            "description": "Where it stands."
+          },
+          "title": {
+            "description": "Its name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "number",
+          "title",
+          "state"
+        ],
+        "type": "object"
+      },
+      "StageState": {
+        "description": "A stage's place in the list.",
+        "oneOf": [
+          {
+            "const": "done",
+            "description": "Done.",
+            "type": "string"
+          },
+          {
+            "const": "current",
+            "description": "The one to do now.",
+            "type": "string"
+          },
+          {
+            "const": "later",
+            "description": "Still to come.",
+            "type": "string"
+          }
+        ]
+      },
+      "StartFrom": {
+        "description": "Where onboarding starts (spec 3.5 §7.18 \"Starting point\").",
+        "oneOf": [
+          {
+            "const": "site",
+            "description": "An existing site, by its URL.",
+            "type": "string"
+          },
+          {
+            "const": "presence",
+            "description": "Profiles, listings and reviews, and no site.",
+            "type": "string"
+          },
+          {
+            "const": "nothing",
+            "description": "Nothing: the interview and the charter.",
+            "type": "string"
+          }
+        ]
+      },
+      "StartView": {
+        "description": "Stage 1.",
+        "properties": {
+          "from": {
+            "description": "Where it started, in words.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phone": {
+            "description": "Whether urgent alarms have a phone number.",
+            "type": "boolean"
+          },
+          "started": {
+            "description": "Whether onboarding started.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "started",
+          "phone"
+        ],
+        "type": "object"
+      },
+      "StatusView": {
+        "description": "The site's status (spec 3.5 §7.5).",
+        "properties": {
+          "reason": {
+            "description": "Why, in words.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "since": {
+            "description": "Since when.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/Pill",
+            "description": "The state, as a pill."
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "Swatch": {
+        "description": "A theme's colours.",
+        "properties": {
+          "accent": {
+            "description": "Buttons and highlights.",
+            "type": "string"
+          },
+          "background": {
+            "description": "Page background.",
+            "type": "string"
+          },
+          "border": {
+            "description": "Rules and outlines.",
+            "type": "string"
+          },
+          "link": {
+            "description": "Links.",
+            "type": "string"
+          },
+          "text": {
+            "description": "Body text.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "background",
+          "text",
+          "accent",
+          "link",
+          "border"
+        ],
+        "type": "object"
+      },
+      "Tone": {
+        "description": "The tone of a pill: a word always comes with it, so status is never colour alone (spec\n3.3 §9).",
+        "oneOf": [
+          {
+            "const": "good",
+            "description": "Done, passed, up.",
+            "type": "string"
+          },
+          {
+            "const": "waiting",
+            "description": "Waiting for someone.",
+            "type": "string"
+          },
+          {
+            "const": "bad",
+            "description": "Failed, held, down.",
+            "type": "string"
+          },
+          {
+            "const": "info",
+            "description": "Worth knowing.",
+            "type": "string"
+          },
+          {
+            "const": "neutral",
+            "description": "Neither.",
+            "type": "string"
+          }
+        ]
+      },
+      "UploadRequest": {
+        "description": "`POST /surface/website/editor/drafts/{id}/media`.",
+        "properties": {
+          "alt": {
+            "default": null,
+            "description": "Drafted alt text; a person confirms it before the accessibility check passes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataBase64": {
+            "description": "The file, base64-encoded.",
+            "type": "string"
+          },
+          "generated": {
+            "default": false,
+            "description": "Whether the image was generated; it is then labelled as an illustration.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The file's name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "dataBase64"
+        ],
+        "type": "object"
+      },
+      "WalletView": {
+        "description": "The wallet (spec 3.5 §7.14).",
+        "properties": {
+          "balance": {
+            "description": "What is available.",
+            "type": "string"
+          },
+          "budget": {
+            "description": "The month's caps together.",
+            "type": "string"
+          },
+          "categories": {
+            "description": "Each category.",
+            "items": {
+              "$ref": "#/components/schemas/CategoryLine"
+            },
+            "type": "array"
+          },
+          "held": {
+            "description": "Payments held for the owner.",
+            "items": {
+              "$ref": "#/components/schemas/HeldPayment"
+            },
+            "type": "array"
+          },
+          "spent": {
+            "description": "Spent this month.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "balance",
+          "spent",
+          "budget",
+          "categories",
+          "held"
+        ],
+        "type": "object"
+      },
+      "WebsiteHome": {
+        "description": "`GET /surface/website`.",
+        "properties": {
+          "launched": {
+            "description": "Whether the site is live.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The site's name.",
+            "type": "string"
+          },
+          "needsSetup": {
+            "description": "Whether the site asks for a setup code, and its owner has not claimed it.",
+            "type": "boolean"
+          },
+          "origin": {
+            "description": "Its public address.",
+            "type": "string"
+          },
+          "roles": {
+            "description": "The caller's roles in the charter: `owner`, `publisher`, `editor`, `approver`, `auditor`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "origin",
+          "launched",
+          "needsSetup",
+          "roles"
+        ],
+        "type": "object"
+      },
+      "WorkLine": {
+        "description": "What each agent did.",
+        "properties": {
+          "agent": {
+            "description": "The agent.",
+            "type": "string"
+          },
+          "items": {
+            "description": "What it did.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "agent",
+          "items"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "The website's views on the web home (spec 3.5 §8.2): setup, onboarding, the charter, the site view, the weekly review and the web editor. Generated from the Rust types; do not edit.",
+    "title": "adk-surface website",
+    "version": "3.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/surface/website": {
+      "get": {
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebsiteHome"
+                }
+              }
+            },
+            "description": "The site"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "The site and the caller's roles in its charter"
+      }
+    },
+    "/api/surface/website/charter": {
+      "get": {
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CharterResponse"
+                }
+              }
+            },
+            "description": "The charter"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "The charter under review (spec 3.5 §7.18 stage 5)"
+      },
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CharterCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CharterResponse"
+                }
+              }
+            },
+            "description": "The charter after it"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Signs the charter in a role the caller holds (spec 3.5 A-I23); changes go through onboarding"
+      }
+    },
+    "/api/surface/website/editor": {
+      "get": {
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditorHome"
+                }
+              }
+            },
+            "description": "The editor"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "The web editor's home (spec 3.5 §7.8.2)"
+      },
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditorCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditorOutcome"
+                }
+              }
+            },
+            "description": "The editor after it"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "An editor action: draft, save, preview, publish, approve, correct, withdraw (spec 3.5 §7.8.2, A-I23, A-I24)"
+      }
+    },
+    "/api/surface/website/editor/drafts/{id}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftView"
+                }
+              }
+            },
+            "description": "The draft"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "One draft"
+      }
+    },
+    "/api/surface/website/editor/drafts/{id}/media": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftView"
+                }
+              }
+            },
+            "description": "The draft with the file"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "One media file through the media pipeline, into the draft (spec 3.5 §7.8.2 \"Media\")"
+      }
+    },
+    "/api/surface/website/onboarding": {
+      "get": {
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingView"
+                }
+              }
+            },
+            "description": "Onboarding"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Onboarding as the owner sees it (spec 3.5 §7.18). Needs the paired device's token as `Authorization: Bearer` (spec 3.5 A-I20)"
+      },
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardingCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingOutcome"
+                }
+              }
+            },
+            "description": "Onboarding after it"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "An input to onboarding (spec 3.5 §7.18). Needs the paired device's token as `Authorization: Bearer` (spec 3.5 A-I20)"
+      }
+    },
+    "/api/surface/website/openapi.json": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "The OpenAPI document"
+          }
+        },
+        "summary": "This document"
+      }
+    },
+    "/api/surface/website/review": {
+      "get": {
+        "parameters": [
+          {
+            "description": "The Monday of the week to show",
+            "in": "query",
+            "name": "week",
+            "required": false,
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewPage"
+                }
+              }
+            },
+            "description": "The review page"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "The weekly review page (spec 3.5 §7.21)"
+      },
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewPage"
+                }
+              }
+            },
+            "description": "The review page after it"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Composes a week's review, or sends its summary to the owner's channel"
+      }
+    },
+    "/api/surface/website/setup": {
+      "get": {
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupView"
+                }
+              }
+            },
+            "description": "The setup screen"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "The setup screen of a fresh site (spec 3.5 §7.17); a root route, needing no caller"
+      }
+    },
+    "/api/surface/website/setup/claim": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimedView"
+                }
+              }
+            },
+            "description": "The paired device and its token"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Claims the setup code from this device (spec 3.5 A-I20); a root route: the code is the credential. The token is shown once"
+      }
+    },
+    "/api/surface/website/site": {
+      "get": {
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteViewModel"
+                }
+              }
+            },
+            "description": "The site view"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "The site view (spec 3.5 §7.24)"
+      },
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiteCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteOutcome"
+                }
+              }
+            },
+            "description": "The site view after it"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "An owner's decision on the site view: promote or lower a job, release or discard what is held, acknowledge an alarm (spec 3.5 §7.11, §7.8.3)"
+      }
+    }
+  }
+}

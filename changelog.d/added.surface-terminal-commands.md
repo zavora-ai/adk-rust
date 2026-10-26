@@ -13,6 +13,6 @@
   up` builds over its harness, with `ControlClient::{commands, run_command,
   always_allow_offer, prepare_always_allow, grant_always_allow}`. The person only, never a
   paired device; each run recorded with how the caller reached the kernel (`CommandReach`:
-  transport, device, calling process); a command that changes something waits while
-  everything is stopped. A terminal attached to a kernel runs its commands there, and
+  transport, device, calling process); while everything is stopped, a command that lets the
+  agents do more is refused and one that makes them do less runs. A terminal attached to a kernel runs its commands there, and
   `ControlSource` offers "Always allow" where the kernel makes the rule.

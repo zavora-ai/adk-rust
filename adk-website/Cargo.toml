@@ -59,6 +59,8 @@ getrandom = "0.3"
 zeroize = "1.8.2"
 # The third-party script check parses generated HTML, as the launch gate does.
 scraper = "0.25"
+# JSON Schema of the owner's views, for the surfaces' generated types (spec 3.5 §7.16 `ui`).
+schemars = { version = "1.0", features = ["chrono04"] }
 serde.workspace = true
 # The edge's SQLite stores in a served project (spec 3.5 §7.9).
 sqlx = { workspace = true, features = ["sqlite"] }

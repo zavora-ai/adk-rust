@@ -120,6 +120,7 @@ pub struct HarnessAgentBuilder {
     mode_store: Option<Arc<dyn ModeStore>>,
     standing_rules: Option<Arc<dyn StandingRuleStore>>,
     shell_ledger: Option<Arc<dyn ShellLedger>>,
+    read_records: Option<Arc<dyn adk_devtools::ReadLedger>>,
     operator_policy: Option<Arc<dyn ToolPolicy>>,
     origin_classes: Vec<Arc<dyn crate::policy::OriginClasses>>,
     prompter: Option<Arc<dyn ApprovalPrompter>>,
@@ -246,6 +247,7 @@ impl HarnessAgentBuilder {
             mode_store: None,
             standing_rules: None,
             shell_ledger: None,
+            read_records: None,
             operator_policy: None,
             origin_classes: Vec::new(),
             prompter: None,
@@ -542,6 +544,15 @@ impl HarnessAgentBuilder {
     /// Where the shell ledger is kept (default in memory).
     pub fn shell_ledger(mut self, ledger: Arc<dyn ShellLedger>) -> Self {
         self.shell_ledger = Some(ledger);
+        self
+    }
+
+    /// Where the file tools' read records are kept (default in memory): the sha256 each
+    /// session's agent last read or wrote per file, which `edit_file` takes as its
+    /// precondition (spec 3.1 §7.26, §10 D7). A durable store lets a held edit approved
+    /// from another process run (§7.33 fix 5).
+    pub fn read_records(mut self, records: Arc<dyn adk_devtools::ReadLedger>) -> Self {
+        self.read_records = Some(records);
         self
     }
 
@@ -1561,8 +1572,11 @@ impl HarnessAgentBuilder {
         // The website preset runs without a shell, whatever the workspace allows (X10).
         self.shell_enabled &= !self.preset_without_shell;
         let model = self.model.ok_or_else(|| AdkError::config("HarnessAgent requires a model"))?;
-        let workspace =
+        let mut workspace =
             self.workspace.ok_or_else(|| AdkError::config("HarnessAgent requires a workspace"))?;
+        if let Some(records) = self.read_records.take() {
+            workspace = workspace.with_read_ledger(records);
+        }
         let unimplemented = self.unimplemented;
         if let Some(first) = unimplemented.first() {
             return Err(AdkError::config(format!("not yet implemented: {first}")));
@@ -1829,6 +1843,7 @@ impl HarnessAgentBuilder {
         if workspace.is_writable() {
             tools.push(Arc::new(WriteFileTool::new(workspace.clone())));
             tools.push(Arc::new(EditFileTool::new(workspace.clone())));
+            tools.push(Arc::new(adk_devtools::ApplyPatchTool::new(workspace.clone())));
         }
         // While sandboxed commands run unapproved, no host file tool overlaps one (I26).
         let file_gate = shell.auto_allow_sandboxed.then(crate::shell::FileToolGate::default);
@@ -2364,6 +2379,7 @@ impl HarnessAgentBuilder {
                 ledger_durable: self.action_ledger.is_some(),
                 plan_rewind,
                 snapshots: snapshots.as_ref().map(|snapshots| snapshots.config().clone()),
+                model: model.name(),
             })
         };
         let harness_block = manifest.render();

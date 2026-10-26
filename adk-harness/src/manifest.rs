@@ -65,6 +65,10 @@ pub struct HarnessManifest {
     pub safety: Vec<SafetyEntry>,
     /// Languages with a language server (spec 3.1 §7.28); empty until servers exist.
     pub languages: Vec<LanguageEntry>,
+    /// The edit tool recommended for changes across files for this harness's model, when
+    /// it declares edit tools (spec 3.1 §7.26, §13 Q12).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub multi_file_edit: Option<String>,
     /// What `harness_help` can read.
     pub help_topics: Vec<String>,
 }
@@ -424,6 +428,8 @@ pub(crate) struct ManifestInputs<'a> {
     pub(crate) plan_rewind: bool,
     /// The snapshot configuration, when the harness takes snapshots (spec 3.1 §7.27).
     pub(crate) snapshots: Option<crate::snapshot::SnapshotConfig>,
+    /// The harness model's name, for the preferred multi-file edit tool.
+    pub(crate) model: &'a str,
 }
 
 /// Every pack and whether this build compiles it.
@@ -569,6 +575,11 @@ impl HarnessManifest {
             memory: inputs.memory,
             safety,
             languages: Vec::new(),
+            multi_file_edit: inputs
+                .rows
+                .iter()
+                .any(|(tool, _)| tool == crate::edits::APPLY_PATCH)
+                .then(|| crate::edits::preferred_multi_file_edit(inputs.model).to_string()),
             help_topics,
         }
     }
@@ -731,6 +742,14 @@ impl HarnessManifest {
             }
         };
         let _ = writeln!(out, "Memory: {memory}");
+        if let Some(tool) = &self.multi_file_edit {
+            let _ = writeln!(
+                out,
+                "Edits: edit_file takes several replacements in one file as edits; apply_patch \
+                 changes several files, all or none; prefer {tool} across files. An edit of a \
+                 file changed since you read it is refused as stale: read it again."
+            );
+        }
         out
     }
 
@@ -864,6 +883,7 @@ mod tests {
             ledger_durable: true,
             plan_rewind: false,
             snapshots,
+            model: "scripted",
         })
     }
 
@@ -879,6 +899,39 @@ mod tests {
         assert!(on.contains("/rewind restores those files"), "{on}");
         assert!(on.contains("reaches 50000 files is partial"), "{on}");
         assert!(!on.contains("no file is restored"), "{on}");
+    }
+
+    #[test]
+    fn the_block_names_the_preferred_multi_file_edit_tool_for_the_model() {
+        let generate = |model: &str| {
+            HarnessManifest::generate(ManifestInputs {
+                surface: SurfaceManifest::library(),
+                default_mode: HarnessMode::Ask,
+                rows: vec![
+                    ("edit_file".into(), TableRow::Edit),
+                    ("apply_patch".into(), TableRow::Edit),
+                ],
+                switches: PolicySwitches::default(),
+                web_allowlist: &[],
+                shell: None,
+                unsandboxed_retry: false,
+                members: Vec::new(),
+                active_packs: &[],
+                web: WebSearchPath::None { reason: "off".into() },
+                memory: MemoryEntry::default(),
+                ledger_durable: true,
+                plan_rewind: false,
+                snapshots: None,
+                model,
+            })
+        };
+        let openai = generate("gpt-5.6-terra");
+        assert_eq!(openai.multi_file_edit.as_deref(), Some("apply_patch"));
+        assert!(openai.render().contains("prefer apply_patch across files"));
+        let anthropic = generate("claude-sonnet-5-5").render();
+        assert!(anthropic.contains("prefer edit_file across files"), "{anthropic}");
+        assert!(anthropic.contains("edit (apply_patch edit_file): deny | deny | ask | allow"));
+        assert_eq!(manifest(3).multi_file_edit, None, "no apply_patch, no recommendation");
     }
 
     #[test]
