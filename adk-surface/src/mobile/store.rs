@@ -53,4 +53,9 @@ impl Attachments {
     ) -> Result<bool, AdkError> {
         self.0.remove_attachment(holder, kind, key).await.map_err(AdkError::from)
     }
+
+    /// Removes every attachment of `holder`; how many went.
+    pub(crate) async fn remove_all(&self, holder: &Holder) -> Result<usize, AdkError> {
+        self.0.remove_attachments(holder).await.map_err(AdkError::from)
+    }
 }

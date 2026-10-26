@@ -21,10 +21,12 @@ never the model, the session, a log or the audit record (spec 3.3 §8.2, §10 H2
 
 ### On the command line
 
-`--preset personal` is a shared flag, so the REPL, `code`, `serve` and `up` all take it. The
-home is the kernel home: `--home` (under `adk-rust up`), `[kernel] home` in your user config,
-else the config directory's `adk-rust`, so every command reads the same `personal.toml` and
-works in the same folder. The current directory plays no part, its `.adk/harness.toml`
+`--preset personal` is a shared flag, so the REPL, `code`, `goal`, `serve` and `up` all take
+it. The home is the kernel home: `[kernel] home` in your user config, else the config
+directory's `adk-rust`, so every command reads the same `personal.toml` and works in the same
+folder. `adk-rust up --home` gives that one kernel another home, which the other commands do not
+read: `up` then says so in a note, and `home = "<path>"` under `[kernel]` in your user config
+makes it every command's home. The current directory plays no part, its `.adk/harness.toml`
 included. `--dir` still chooses another workspace.
 
 ```bash
@@ -70,16 +72,17 @@ the first-run answers. The workspace's own `.adk/harness.toml` may lower the dai
 limit and never raise it. The banner shows the values in force. Edit `personal.toml`, or delete
 it to be asked again.
 
-Only `adk-rust up` runs work on its own, so only it keeps the two limits. The REPL, `code` and
-`serve` show the same values in force, marked as kept by `adk-rust up`:
+Only `adk-rust up` runs work on its own, so only it keeps the two limits. The REPL, `code`,
+`goal` and `serve` show the same values in force, marked as kept by `adk-rust up`:
 
 ```text
   Quiet time: 22:00–07:00 (kept by adk-rust up)
   Spending  : daily spending limit $5.00 a day (kept by adk-rust up)
 ```
 
-An error in a `[kernel]` table stops only `adk-rust up`. The REPL, `code` and `serve` start
-anyway, show the error as a note, and show the first-run answers in its place.
+An error in a `[kernel]` table stops only `adk-rust up`. The REPL, `code`, `goal` and `serve`
+start anyway, show the error as a note, and show the first-run answers of the config
+directory's `personal.toml` in its place.
 
 > **Note:** a first run without a terminal fails and names the file: write
 > `quiet_time = "22:00-07:00"` and `daily_spending_limit_usd = 5.0` into `<home>/personal.toml`.
@@ -201,7 +204,7 @@ refuses, and `bash` runs without a token. The harness policy denies any tool nam
 | No store keeps it | The inbox entry carries the heading and resource only; the decision records who and where; sessions, the action ledger and the audit log get the scrubbed result |
 | No log line carries it | The harness logs request ids, tools and surfaces; `CredentialSecret`'s `Debug` and `Display` are redacted |
 | Only the session's person answers | The entry's approver is the session's user; anyone else gets `approval.not_an_approver` and the call keeps waiting |
-| One answer | A second answer gets `approval.version_conflict` or `approval.already_resolved`, never a retry |
+| One answer | A second answer gets `approval.version_conflict` or `approval.already_resolved`, never a retry. The waiting call approves its entry itself when it takes the secret, so an entry is `Approved` only when a call took it |
 | Phone and web only | `TakeOverSurface` has `Web` and `Phone`; chat, voice and the tray cannot carry a secret (spec 3.3 §8.2) |
 | Nothing waits forever in flight | On **Deny** the entry is `Rejected`. When the wait ends — at the confirmation timeout or shortly before the tool timeout — on **Stop all**, or when the call is cancelled or dropped, the entry is `Cancelled`. Either way the tool gets `harness.take_over.declined` (or the freeze) and `harness.take_over.ended` records why |
 
@@ -217,7 +220,7 @@ scrubs what the call returns and withholds what it streams once the secret has a
 |---|---|
 | `harness.take_over.unavailable` | Asked outside a call of a harness built with `take_over`, from the harness's shell, or the harness has no approval service |
 | `harness.take_over.declined` | The person denied it, the entry expired or was cancelled, the wait ended, or the call was cancelled |
-| `harness.take_over.not_waiting` | No call in this process waits for the entry |
+| `harness.take_over.not_waiting` | No call in this process waits for the entry, or the call stopped waiting — Stop all, the timeout, a cancel — before it took the secret; the entry then ends `Cancelled`, never `Approved` |
 | `harness.take_over.invalid_secret` | Fewer than 4 or more than 4,096 characters, or control characters |
 
 ### Tests that prove it
@@ -226,10 +229,10 @@ scrubs what the call returns and withholds what it streams once the secret has a
 |---|---|
 | `adk-harness/tests/take_over_tests.rs` `a_one_time_code_reaches_the_tool_and_nothing_else` | On one SQLite file: the bank gets the code once; the model sees the placeholder; no byte of `harness.db` — sessions, inbox, signed audit log — holds the code |
 | `the_secret_never_appears_in_any_persisted_event_or_log_line` | Property, 100 cases: random secrets reach the tool and appear in no event, store record, audit record, model request or log line at any level |
-| `only_the_session_owner_takes_over_and_a_second_answer_conflicts`, `a_declined_take_over_answers_the_call_without_a_secret`, `a_take_over_nobody_answers_times_out_and_leaves_no_entry_open`, `the_tool_timeout_ends_a_take_over_as_declined_and_recorded`, `a_dropped_take_over_is_cancelled_and_recorded`, `stop_all_ends_the_wait` | Who may answer, and every way a take over ends without a secret |
+| `only_the_session_owner_takes_over_and_a_second_answer_conflicts`, `a_declined_take_over_answers_the_call_without_a_secret`, `a_take_over_nobody_answers_times_out_and_leaves_no_entry_open`, `the_tool_timeout_ends_a_take_over_as_declined_and_recorded`, `a_dropped_take_over_is_cancelled_and_recorded`, `stop_all_ends_the_wait`, `a_secret_typed_after_stop_all_reaches_no_call` | Who may answer, and every way a take over ends without a secret: a secret typed after the call stopped waiting reaches no call and is answered `harness.take_over.not_waiting` |
 | `a_numeric_code_is_scrubbed_from_results_and_error_metadata`, `a_code_the_tool_normalizes_is_scrubbed`, `progress_is_withheld_once_a_secret_is_in_the_call`, `take_over_never_feeds_the_shell`, `a_tool_with_the_reserved_name_is_refused` | A code returned as a number, typed with a space or read without its leading zeros, streamed progress, the shell and an impostor tool |
 | `live_take_over_with_claude` (ignored) | On `claude-sonnet-5-5`: the model calls the tool, the phone types the code, and the model reports the receipt with the placeholder |
-| `adk-cli/tests/harness_personal_cli.rs` | `adk-rust up --preset personal` started in a repository asks once, works in the personal workspace with no shell, ignores the repository's `.adk/harness.toml`, never lets the workspace raise the limit, and shows both limits on every start; the REPL and `serve` show the limits in force and no shell, read the `personal.toml` of `[kernel] home`, and start despite a `[kernel]` error |
+| `adk-cli/tests/harness_personal_cli.rs` | `adk-rust up --preset personal` started in a repository asks once, works in the personal workspace with no shell, ignores the repository's `.adk/harness.toml`, never lets the workspace raise the limit, and shows both limits on every start, with a note when `--home` is not every command's home; the REPL, `code` and `serve` show the limits in force; the REPL and `serve` show no shell, read the `personal.toml` of `[kernel] home`, and start despite a `[kernel]` error |
 
 ## Related
 

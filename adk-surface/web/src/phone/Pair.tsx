@@ -18,8 +18,10 @@ type InstallPrompt = Event & { prompt: () => Promise<void> };
 /**
  * Pairing on the phone (spec 3.3 §5.4, WP M step 8): installed first on iOS, where a Home
  * Screen app keeps its storage apart from Safari's; then the code, "Allow notifications" and
- * "Use your face or fingerprint", each started by a tap. Where a passkey cannot be set up,
- * high-risk calls are approved in the home on the computer.
+ * "Use your face or fingerprint", each started by a tap. A pairing link's code is claimed
+ * even on a phone that still holds an older token, which the claim replaces. Notifications
+ * the browser or the phone's settings refuse are said, and pairing goes on. Where a passkey
+ * cannot be set up, high-risk calls are approved in the home on the computer.
  */
 export function Pair({
   client,
@@ -30,7 +32,7 @@ export function Pair({
   code?: string;
   onDone: () => void;
 }) {
-  const [step, setStep] = useState<Step>(client.paired() ? "notify" : "claim");
+  const [step, setStep] = useState<Step>(client.paired() && !given ? "notify" : "claim");
   const [code, setCode] = useState(given ?? "");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState("");
@@ -122,7 +124,11 @@ export function Pair({
               // Declined, unsupported or refused, the phone still pairs and goes on to its
               // passkey; its Memory tab offers notifications again.
               setNotifyProblem("");
-              await client.allowNotifications().catch((error: unknown) => setNotifyProblem(problemText(error)));
+              const on = await client.allowNotifications().catch((error: unknown) => {
+                setNotifyProblem(problemText(error));
+                return undefined;
+              });
+              if (on === false) setNotifyProblem(phoneLabels.notificationsBlocked);
               return "passkey";
             })
           }

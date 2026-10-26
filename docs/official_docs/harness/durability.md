@@ -75,6 +75,12 @@ async fn open(model: Arc<dyn Llm>, url: &str) -> Result<Harness, Box<dyn std::er
 > `edit_file` call approved after a restart fails with `devtools.not_read` until the model
 > reads the file again. `adk-rust` keeps them in `harness.db`.
 
+`adk-rust` — the REPL, `code`, `goal`, `serve` and `adk-rust up` — keeps the action ledger
+(`SqliteActionLedger`) and the spend ledger (`SqliteSpendLedger`) in `harness.db` too, so a
+call with side effects that began before a restart, `kill -9` included, is answered from its
+record rather than run again. With a store key, a failed call's error text is not kept: the
+record says the tool returned an error.
+
 ## Shared backends
 
 Replicas of a served harness share PostgreSQL or Redis instead of a file (spec 3.1 §13 Q2):

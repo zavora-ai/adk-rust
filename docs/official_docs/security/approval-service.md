@@ -58,7 +58,10 @@ PostgreSQL, Redis, MongoDB, Neo4j, or Firestore.
    ten seconds fails the call with `approval.outcome_unsettled`. `Harness::decide` refuses a
    rule it cannot remember before it touches the request, withdraws the request before it
    records the person's decision, and refuses the decision when an approver, an expiry or
-   another decision settled the call first.
+   another decision settled the call first. Of two `Harness::decide` calls for one call at
+   once in one process — two surfaces answering together — the second is refused with
+   `harness.decision.invalid`; the store's decision write is not conditional, so processes
+   that share a store and decide one call at the same moment are not told apart.
 
 ```rust
 use std::sync::Arc;

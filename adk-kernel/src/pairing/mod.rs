@@ -644,8 +644,9 @@ pub struct IssuedCode {
     pub expires_at: DateTime<Utc>,
     /// The scopes the device will get.
     pub scopes: Vec<DeviceScope>,
-    /// Where a phone opens the code, when the kernel knows its home's address:
+    /// Where a phone opens its code, when the kernel knows its home's address:
     /// `<home>/pair#code=ABCD-EFGH-2345`, the code in the fragment so no server log keeps it.
+    /// `None` for a terminal or a tray, which take the code typed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// How long the device that claims the code stays paired, in seconds.
@@ -851,6 +852,8 @@ impl Pairing {
     pub async fn issue(&self, request: IssueCode) -> Result<IssuedCode> {
         let device_ttl = self.check(&request)?;
         let request = request.normalized();
+        // The link opens the phone's pairing page; a terminal or a tray takes the code typed.
+        let phone = request.kind == Some(DeviceKind::Phone);
         let now = self.now();
         self.inner.store.prune_codes(now).await?;
         let code = secret::new_code()?;
@@ -864,7 +867,12 @@ impl Pairing {
         self.inner.store.put_code(stored).await?;
         // A new code starts the count of claims again, after a lockout too.
         self.inner.store.reset_claim_attempts().await?;
-        let url = self.inner.home_url.as_ref().map(|home| format!("{home}/pair#code={code}"));
+        let url = self
+            .inner
+            .home_url
+            .as_ref()
+            .filter(|_| phone)
+            .map(|home| format!("{home}/pair#code={code}"));
         Ok(IssuedCode {
             code,
             expires_at,
@@ -1397,6 +1405,26 @@ mod tests {
         }
         async fn reset_claim_attempts(&self) -> Result<()> {
             self.inner.reset_claim_attempts().await
+        }
+    }
+
+    /// The pairing link opens the phone's pairing page, so only a phone's code carries it: a
+    /// terminal or a tray takes its code typed (spec 3.3 §5.4, §10 K2).
+    #[tokio::test]
+    async fn only_a_phone_s_code_carries_the_pairing_link() {
+        let pairing = pairing().with_home_url("https://home.example/ui/");
+        let phone = pairing
+            .issue(IssueCode::new("ana", ["operator"]).with_kind(DeviceKind::Phone))
+            .await
+            .unwrap();
+        assert_eq!(phone.url, Some(format!("https://home.example/ui/pair#code={}", phone.code)));
+        for kind in [None, Some(DeviceKind::Terminal), Some(DeviceKind::Tray)] {
+            let request = IssueCode::new("ana", ["operator"]);
+            let request = match kind {
+                Some(kind) => request.with_kind(kind),
+                None => request,
+            };
+            assert_eq!(pairing.issue(request).await.unwrap().url, None, "{kind:?}");
         }
     }
 

@@ -25,6 +25,11 @@ pub struct SharedStores {
     /// The file tools' read records, so an edit held on one replica and approved on
     /// another finds its read (spec 3.1 §7.26, §7.33 fix 5).
     pub reads: Arc<dyn adk_devtools::ReadLedger>,
+    /// The action ledger, so a call with side effects is not run again by another replica
+    /// or after a restart (spec 3.1 §7.12).
+    pub actions: Arc<dyn adk_core::ActionLedger>,
+    /// The spend ledger model calls reserve against (spec 3.1 §7.13).
+    pub spend: Arc<dyn adk_core::SpendLedger>,
 }
 
 /// Opens and migrates the standing-rule store at `url`, for `adk-rust rules --store`.
@@ -63,6 +68,10 @@ async fn postgres(url: &str, label: String) -> Result<SharedStores> {
     approvals.migrate().await?;
     let runs = adk_session::PostgresRunStore::from_pool(pool.clone());
     runs.migrate().await?;
+    let actions = adk_session::PostgresActionLedger::from_pool(pool.clone());
+    actions.migrate().await?;
+    let spend = adk_session::PostgresSpendLedger::from_pool(pool.clone());
+    spend.migrate().await?;
     let checkpointer = adk_graph::PostgresCheckpointer::from_pool(pool);
     checkpointer.migrate().await?;
     let governance = adk_session::PostgresGovernanceStateStore::new(url).await?;
@@ -77,6 +86,8 @@ async fn postgres(url: &str, label: String) -> Result<SharedStores> {
         checkpointer: Arc::new(checkpointer),
         governance: Arc::new(governance),
         reads: Arc::new(reads),
+        actions: Arc::new(actions),
+        spend: Arc::new(spend),
     })
 }
 
@@ -104,6 +115,10 @@ async fn redis(url: &str, label: String) -> Result<SharedStores> {
     approvals.migrate().await?;
     let runs = adk_session::RedisRunStore::new(url).await?;
     runs.migrate().await?;
+    let actions = adk_session::RedisActionLedger::new(url).await?;
+    actions.migrate().await?;
+    let spend = adk_session::RedisSpendLedger::new(url).await?;
+    spend.migrate().await?;
     let checkpointer = adk_harness::checkpointer_from_url(url).await?;
     let governance = adk_session::RedisGovernanceStateStore::new(url).await?;
     governance.migrate().await?;
@@ -117,6 +132,8 @@ async fn redis(url: &str, label: String) -> Result<SharedStores> {
         checkpointer,
         governance: Arc::new(governance),
         reads: Arc::new(reads),
+        actions: Arc::new(actions),
+        spend: Arc::new(spend),
     })
 }
 

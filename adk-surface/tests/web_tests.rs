@@ -213,12 +213,11 @@ impl ApprovalPrompter for AllowCalls {
     }
 }
 
-/// "Take over, then Done" on the web home (spec 3.3 §8.2, §10 H2): the card names what to
-/// type, the typed code reaches the one call, the card is decided, and a second answer is
-/// "already decided" (S-I2).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_secret_typed_on_the_web_home_reaches_the_call_that_asked() {
-    let dir = tempfile::tempdir().unwrap();
+/// A harness whose `bank_sign_in` asks the person to type their bank's one-time code, the
+/// engine over it, its take over, and the codes the tool got.
+async fn signing_in(
+    dir: &std::path::Path,
+) -> (Arc<dyn ApprovalService>, SurfaceEngine, TakeOver, Arc<Mutex<Vec<String>>>) {
     let service = service();
     let take_over = TakeOver::new();
     let codes = Arc::new(Mutex::new(Vec::new()));
@@ -232,7 +231,7 @@ async fn a_secret_typed_on_the_web_home_reaches_the_call_that_asked() {
     let agent = Arc::new(
         HarnessAgent::builder("assistant")
             .model(model)
-            .workspace(adk_devtools::Workspace::new(dir.path()))
+            .workspace(adk_devtools::Workspace::new(dir))
             .project_instructions(InstructionsConfig {
                 user_file: None,
                 require_trust: false,
@@ -263,22 +262,34 @@ async fn a_secret_typed_on_the_web_home_reaches_the_call_that_asked() {
         .build()
         .unwrap();
     let engine = SurfaceEngine::builder(Arc::new(source)).build();
-    let app = api(engine.clone(), Some(take_over));
+    (service, engine, take_over, codes)
+}
 
+/// Asks the agent to sign in and returns the take-over card it raises.
+async fn take_over_card(engine: &SurfaceEngine, app: &axum::Router) -> Value {
     engine
         .execute(&web(), Command::Send { session_id: "s1".into(), text: "sign me in".into() })
         .await
         .unwrap();
-    let mut card = None;
     for _ in 0..400 {
-        let (_, page) = call(&app, "GET", "/api/surface/decisions?surface=web", None).await;
+        let (_, page) = call(app, "GET", "/api/surface/decisions?surface=web", None).await;
         if let Some(found) = page["decisions"].as_array().and_then(|cards| cards.first()) {
-            card = Some(found.clone());
-            break;
+            return found.clone();
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    let card = card.expect("the take over is a card");
+    panic!("the take over is a card");
+}
+
+/// "Take over, then Done" on the web home (spec 3.3 §8.2, §10 H2): the card names what to
+/// type, the typed code reaches the one call, the card is decided, and a second answer is
+/// "already decided" (S-I2).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_secret_typed_on_the_web_home_reaches_the_call_that_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_service, engine, take_over, codes) = signing_in(dir.path()).await;
+    let app = api(engine.clone(), Some(take_over));
+    let card = take_over_card(&engine, &app).await;
     assert_eq!(card["call"]["tool"], TAKE_OVER_TOOL, "{card}");
     assert_eq!(card["heading"], "Type the code your bank sent", "{card}");
     // Approving without a secret would end the call with nothing; only Deny is a decide.
@@ -303,6 +314,54 @@ async fn a_secret_typed_on_the_web_home_reaches_the_call_that_asked() {
     let (_, again) = call(&app, "POST", &uri, Some(body)).await;
     assert_eq!(again["type"], "alreadyDecided", "{again}");
     assert_eq!(codes.lock().unwrap().len(), 1, "a second answer delivers nothing");
+}
+
+/// The routes as a paired device of `kind` (a remote terminal without one) calls them.
+fn device_api(engine: SurfaceEngine, take_over: TakeOver, kind: Option<&str>) -> axum::Router {
+    let mut metadata = std::collections::HashMap::from([
+        (adk_kernel::pairing::DEVICE_ID_METADATA.to_string(), "dev_1".to_string()),
+        (adk_kernel::pairing::DEVICE_SCOPES_METADATA.to_string(), "decide,read,stop".to_string()),
+    ]);
+    if let Some(kind) = kind {
+        metadata.insert(adk_kernel::pairing::DEVICE_KIND_METADATA.to_string(), kind.to_string());
+    }
+    let routes = adk_surface::web::router(engine.clone())
+        .merge(adk_surface::web::take_over_router(engine, take_over));
+    axum::Router::new().nest("/api", routes).layer(axum::Extension(Some(RequestContext {
+        user_id: OWNER.into(),
+        scopes: vec!["owner".into()],
+        metadata,
+    })))
+}
+
+/// A paired device takes over as its kind's surface, whatever its body says, and only a phone
+/// may (spec 3.3 §8.2): a remote terminal and a tray are refused, and a phone that sends
+/// `surface: "web"` is recorded as the phone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_device_takes_over_as_its_own_surface_and_only_a_phone_may() {
+    let dir = tempfile::tempdir().unwrap();
+    let (service, engine, take_over, codes) = signing_in(dir.path()).await;
+    let app = api(engine.clone(), Some(take_over.clone()));
+    let card = take_over_card(&engine, &app).await;
+    let id = card["id"].as_str().unwrap().to_string();
+    let uri = format!("/api/surface/decisions/{id}/take-over");
+    let body = json!({ "surface": "web", "version": card["version"], "secret": "731905" });
+    for kind in [None, Some("tray")] {
+        let device = device_api(engine.clone(), take_over.clone(), kind);
+        let (status, problem) = call(&device, "POST", &uri, Some(body.clone())).await;
+        assert_eq!(
+            (status, problem["error"]["code"].clone()),
+            (StatusCode::FORBIDDEN, json!("surface.not_here")),
+            "{kind:?}: {problem}"
+        );
+    }
+    assert!(codes.lock().unwrap().is_empty(), "nothing was delivered");
+
+    let phone = device_api(engine, take_over, Some("phone"));
+    let (status, outcome) = call(&phone, "POST", &uri, Some(body)).await;
+    assert_eq!((status, outcome["type"].clone()), (StatusCode::OK, json!("answered")), "{outcome}");
+    let entry = service.get(&id).await.unwrap().unwrap();
+    assert_eq!(entry.decisions[0].reason.as_deref(), Some("taken over on the phone"));
 }
 
 /// A card that asks for no secret is answered with a decide command, not taken over.

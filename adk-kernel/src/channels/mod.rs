@@ -871,6 +871,10 @@ pub struct ChannelPairingRequest {
     /// no code and gets none, and it waits for nothing.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dismissed: bool,
+    /// Its code could not be sent: the account's next message is sent a new code in its
+    /// place, with no second request on record, while it keeps its place among those waiting.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub undelivered: bool,
 }
 
 impl ChannelPairingRequest {
@@ -892,6 +896,7 @@ impl ChannelPairingRequest {
             requested_at,
             expires_at,
             dismissed: false,
+            undelivered: false,
         }
     }
 

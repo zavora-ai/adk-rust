@@ -199,3 +199,110 @@ async fn an_approver_who_settles_the_call_during_the_decision_keeps_it() {
         "the approver's rejection stands"
     );
 }
+
+/// An approval store whose decision write waits, up to a bound, until a second one arrives,
+/// so two decisions that both found the call pending are written together.
+#[derive(Debug, Default)]
+struct DecisionsTogether {
+    inner: InMemoryApprovalStore,
+    arrived: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl ApprovalStore for DecisionsTogether {
+    async fn record_pending(
+        &self,
+        scope: &ApprovalScope,
+        request: &adk_core::ToolConfirmationRequest,
+    ) -> adk_core::Result<()> {
+        self.inner.record_pending(scope, request).await
+    }
+    async fn record_pending_keyed(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+        request: &adk_core::ToolConfirmationRequest,
+    ) -> adk_core::Result<()> {
+        self.inner.record_pending_keyed(scope, fingerprint, request).await
+    }
+    async fn pending(
+        &self,
+        scope: &ApprovalScope,
+    ) -> adk_core::Result<Vec<adk_core::PendingApproval>> {
+        self.inner.pending(scope).await
+    }
+    async fn decide(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+        approval: adk_core::ToolApproval,
+    ) -> adk_core::Result<()> {
+        self.arrived.fetch_add(1, Ordering::SeqCst);
+        let started = std::time::Instant::now();
+        while self.arrived.load(Ordering::SeqCst) < 2
+            && started.elapsed() < Duration::from_millis(300)
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        self.inner.decide(scope, fingerprint, approval).await
+    }
+    async fn take_decision(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> adk_core::Result<Option<ToolConfirmationDecision>> {
+        self.inner.take_decision(scope, fingerprint).await
+    }
+    async fn take_approval(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> adk_core::Result<Option<adk_core::ToolApproval>> {
+        self.inner.take_approval(scope, fingerprint).await
+    }
+    async fn has_decision(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> adk_core::Result<bool> {
+        self.inner.has_decision(scope, fingerprint).await
+    }
+}
+
+/// Wave 2 gate, core item b: two surfaces answering one call at once through
+/// `Harness::decide` — an approval and a denial — do not both win. One decision is recorded;
+/// the other is refused as a second answer (spec 3.3 §7.3, §11 S-I2).
+#[tokio::test]
+async fn two_decisions_at_once_record_one() {
+    let store = Arc::new(DecisionsTogether::default());
+    let f = fixture(vec![append_line(), ScriptedResponse::text("done")], |b| {
+        b.prompter(Arc::new(Away)).confirmation_timeout(TIMEOUT).approval_store(store.clone())
+    })
+    .await;
+    f.send("append a line").await;
+    let pending = f.harness.pending_approvals(&f.user, &f.session).await.unwrap();
+    let fingerprint = pending[0].fingerprint.clone();
+
+    let (approved, denied) = tokio::join!(
+        f.harness.decide(&f.user, &f.session, &fingerprint, HarnessDecision::Approve),
+        f.harness.decide(
+            &f.user,
+            &f.session,
+            &fingerprint,
+            HarnessDecision::Deny { message: Some("no".into()) }
+        ),
+    );
+    let refused = match (&approved, &denied) {
+        (Ok(()), Err(refused)) | (Err(refused), Ok(())) => refused,
+        _ => panic!("exactly one decision is recorded: {approved:?}, {denied:?}"),
+    };
+    assert_eq!(refused.code, "harness.decision.invalid");
+    let scope = ApprovalScope::new(common::APP, f.user.to_string(), f.session.to_string());
+    let recorded = store.take_approval(&scope, &fingerprint).await.unwrap().map(|a| a.decision);
+    let expected = if approved.is_ok() {
+        ToolConfirmationDecision::Approve
+    } else {
+        ToolConfirmationDecision::Deny
+    };
+    assert_eq!(recorded, Some(expected), "the decision recorded is the one that was answered Ok");
+}

@@ -643,6 +643,36 @@ async fn stop_all_ends_the_wait() {
     assert!(setup.bank.lock().unwrap().is_empty());
 }
 
+/// Wave 2 review finding 3 (spec 3.3 §8.2, §11 S-I10): a secret typed just after Stop all
+/// reaches no call and is not answered as accepted; the entry ends cancelled, not approved.
+#[tokio::test]
+async fn a_secret_typed_after_stop_all_reaches_no_call() {
+    let (setup, _dir) = in_memory(sign_in_script(), Options::default()).await;
+    let run = {
+        let harness = setup.harness.clone();
+        tokio::spawn(async move {
+            let stream =
+                harness.send(&user("alice"), &session_id("s1"), "sign me in").await.unwrap();
+            futures::StreamExt::collect::<Vec<_>>(stream).await
+        })
+    };
+    let entry = waiting_entry(&setup, "alice").await;
+    setup.harness.runner().governance().freeze("stop all");
+    let typed = TakeOverAnswer::new(
+        SubjectRef::human("alice"),
+        TakeOverSurface::Phone,
+        CredentialSecret::new("731905"),
+    );
+    let provided = setup.take_over.provide(&entry.request_id, entry.version, typed).await;
+    let _ = tokio::time::timeout(Duration::from_secs(20), run).await.expect("the run ends");
+    assert_eq!(provided.map(|decided| decided.state).unwrap_err().code, TAKE_OVER_NOT_WAITING_CODE);
+    assert!(setup.bank.lock().unwrap().is_empty(), "the bank got nothing");
+    let (_, items) = stored_entries(&setup.service).await;
+    let item = items.iter().find(|item| item.id == entry.request_id).unwrap();
+    assert_eq!(item.state, ApprovalState::Cancelled);
+    assert!(!actions(&setup.audit).contains(&TAKE_OVER_PROVIDED.to_string()));
+}
+
 #[tokio::test]
 async fn asking_outside_a_harness_call_is_unavailable() {
     let take_over = TakeOver::new();

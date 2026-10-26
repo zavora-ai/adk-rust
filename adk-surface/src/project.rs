@@ -88,6 +88,8 @@ pub(crate) struct Projector {
     pub(crate) names: BTreeMap<String, String>,
     pub(crate) heading: Classify<String>,
     pub(crate) money: Classify<bool>,
+    /// Whether the source rates a call high risk whatever the request says (spec 3.2 K-I9).
+    pub(crate) rates_high: Classify<bool>,
     pub(crate) reversibility: Classify<Reversibility>,
     /// The engine's cancel window for a spoken "allow once", in whole seconds, which a voice
     /// card advertises.
@@ -113,6 +115,7 @@ impl Projector {
             names: BTreeMap::new(),
             heading: Arc::new(heading),
             money: Arc::new(spends_money),
+            rates_high: Arc::new(|_| false),
             reversibility: Arc::new(reversibility),
             voice_window_secs: rules::VOICE_CANCEL_WINDOW_SECS,
         }
@@ -185,8 +188,13 @@ impl Projector {
         // over is answered with the secret the person types, or refused (§8.2, §10 H2).
         let own_args = shows_own_arguments(request);
         let take_over = request.tool_name == TAKE_OVER_TOOL;
+        let risk = if (self.rates_high)(request) {
+            request.risk.max(adk_core::ApprovalRisk::High)
+        } else {
+            request.risk
+        };
         DecisionFacts {
-            risk: request.risk.into(),
+            risk: risk.into(),
             money: (self.money)(request),
             truncated: call_view(request).truncated,
             allows: request
