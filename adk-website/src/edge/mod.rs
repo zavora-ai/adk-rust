@@ -115,11 +115,11 @@ pub type PublicAgentFactory = Box<dyn FnOnce(&PublicTools) -> Arc<dyn Agent> + S
 /// `search_site` capability is the site's search; the edge's own one is left out so no two
 /// tools share the name.
 ///
-/// The harness's `website_public` kit is not used: its own `search_site` and `emit_signal`
-/// are not the edge's, so the edge's public policy would refuse them. The edge's tools are
-/// classed as the website preset classes the kit's, so the manifest decides them: the
-/// harness's `PublicPolicy` admits only the public tools, and the edge's governed path holds
-/// the calls its manifest holds.
+/// The agent is built with `adk-harness`' `website_public_served` over the edge's tools, not
+/// with the kit's own `search_site` and `emit_signal`, which the edge's public policy would
+/// refuse: the manifest decides each tool, the harness's `PublicPolicy` admits only the
+/// public tools, the agent is offered nothing else, and the edge's governed path holds the
+/// calls its manifest holds.
 pub fn concierge(
     team: &SiteTeam,
     partitions: &SitePartitions,
@@ -131,46 +131,42 @@ pub fn concierge(
         "" => AgentRole::Concierge.prompt().to_string(),
         kind => format!("{}\n\n{kind}", AgentRole::Concierge.prompt()),
     };
-    let partition = partitions.public().clone();
+    let partitions = partitions.clone();
     let workspace = workspace.into();
     Box::new(move |tools: &PublicTools| {
-        let declared_search = tools.capabilities.iter().any(|tool| tool.name() == "search_site");
-        let mut chosen: Vec<Arc<dyn Tool>> = tools.capabilities.clone();
-        if !declared_search {
-            chosen.push(tools.search_site.clone());
-        }
-        chosen.push(tools.reply_in_thread.clone());
-        chosen.push(tools.emit_signal.clone());
         // The manifest decides (spec 3.5 §7.19 "Manifest policy"): the public policy admits
         // only these tools, and the edge's governed path holds what the manifest holds.
-        let policy = tools
-            .capabilities
-            .iter()
-            .fold(adk_harness::website::PublicPolicy::new(), |policy, tool| {
-                policy.with_capability(tool.name(), false)
-            });
-        let mut builder = adk_harness::HarnessAgent::builder(AgentRole::Concierge.as_str())
+        let served = adk_harness::website::ServedPublicTools {
+            partitions: partitions.clone(),
+            table,
+            search_site: tools.search_site.clone(),
+            reply_in_thread: Some(tools.reply_in_thread.clone()),
+            emit_signal: tools.emit_signal.clone(),
+            capabilities: tools.capabilities.iter().map(|tool| (tool.clone(), false)).collect(),
+        };
+        let builder = adk_harness::HarnessAgent::builder(AgentRole::Concierge.as_str())
             .model(model.clone())
             .workspace(adk_devtools::Workspace::new(&workspace))
-            .preset(adk_harness::Preset::Website)
-            .partition(partition, table)
-            .tool_classes(Arc::new(EdgeToolClasses {
-                origins: chosen.iter().map(|tool| tool.origin().to_string()).collect(),
-            }))
-            .add_operator_policy(Arc::new(policy))
-            .without_todos()
+            .website_public_served(served)
             .instruction(instruction.clone());
-        for tool in &chosen {
-            builder = builder.tool(tool.clone());
-        }
         match builder.build() {
             Ok(agent) => Arc::new(agent) as Arc<dyn Agent>,
             Err(error) => {
                 tracing::error!(error = %error, "the Concierge did not build; a plain agent answers");
+                let declared_search =
+                    tools.capabilities.iter().any(|tool| tool.name() == "search_site");
                 let mut fallback = adk_agent::LlmAgentBuilder::new(AgentRole::Concierge.as_str())
                     .model(model)
                     .instruction(instruction);
-                for tool in chosen {
+                for tool in tools.capabilities.iter().cloned().chain(
+                    [
+                        (!declared_search).then(|| tools.search_site.clone()),
+                        Some(tools.reply_in_thread.clone()),
+                        Some(tools.emit_signal.clone()),
+                    ]
+                    .into_iter()
+                    .flatten(),
+                ) {
                     fallback = fallback.tool(tool);
                 }
                 Arc::new(fallback.build().expect("an LlmAgent with a model builds"))
@@ -412,20 +408,6 @@ pub fn site_router(edge: &AwpEdge, host: Arc<dyn SiteHost>, name: &str) -> axum:
     })
 }
 
-/// Classes the edge's public tools as `adk-harness`' `WebsiteClasses` classes the public
-/// kit's: the public partition's manifest policy is the one policy that decides them (spec
-/// 3.5 §7.10 "Mode").
-#[derive(Debug)]
-struct EdgeToolClasses {
-    origins: std::collections::BTreeSet<String>,
-}
-
-impl adk_harness::OriginClasses for EdgeToolClasses {
-    fn class_of(&self, source: &str, _tool: &str) -> Option<adk_harness::ToolKind> {
-        self.origins.contains(source).then_some(adk_harness::ToolKind::Todo)
-    }
-}
-
 /// The site's status on the edge (spec 3.5 §7.5, §7.20, A-I11): an incident or a read-only
 /// state puts the edge in read-only mode with the reason, so every non-read capability
 /// answers `503 read_only` with the signed status; `operational` resumes it.
@@ -460,6 +442,8 @@ impl StatusSink for EdgeStatus {
 }
 
 /// `edge_read_only`: switches the edge to read-only for a reason, or back (spec 3.5 A-I11).
+/// It implements `adk-harness`' catalogue entry, under the back office's origin, so the
+/// catalogue classes it as a reversible incident act an owner may pre-authorise.
 struct EdgeReadOnlyTool {
     control: EdgeStatusControl,
 }
@@ -467,7 +451,11 @@ struct EdgeReadOnlyTool {
 #[async_trait]
 impl Tool for EdgeReadOnlyTool {
     fn name(&self) -> &str {
-        "edge_read_only"
+        adk_harness::website::EDGE_READ_ONLY
+    }
+
+    fn origin(&self) -> &str {
+        adk_harness::website::BACK_OFFICE_ORIGIN
     }
 
     fn description(&self) -> &str {

@@ -92,7 +92,8 @@ each KPI's week against the week before, its baseline and its target for the wee
 
 The tracker runs as the kernel's own maintenance process: register `KpiTrackerExecutor`
 with `KernelBuilder::workflows` and `KpiTracker::trigger(app, "0 0 3 * * *")` with
-`KernelBuilder::trigger`, beside a `CronWakeSource` for the expression. Each run executes
+`KernelBuilder::trigger`; the kernel fires the expression through a watermarked
+`CronWakeSource` of its own. Each run executes
 target `kernel.kpi`, makes no model call, and returns the `TrackerReport`.
 
 `JobPauses` implements `JobControl` and `ToolPolicy`: added to the job's harness policy, it
@@ -113,7 +114,7 @@ denies every tool call of a paused job's agents until a person resumes the job w
 
 | Change | Who | Rule |
 |---|---|---|
-| `register`, `sync(charter)` | the site | A job enters at its charter level; a charter that sets a lower level lowers it; a higher level changes nothing |
+| `register`, `sync(charter)` | the site | A job enters at its charter level; a charter that sets a lower level lowers it, unless an owner promoted the job after that charter took effect (its signature's time), so syncing the charter in force again at every start keeps the owner's promotions; a higher level changes nothing |
 | `promote`, `promote_to` | an owner | Takes an `OwnerDecision` by a person who holds the owner role in the charter in force; agents, services and anyone else are refused (A-I13). The change carries the decision, from which the harness creates the standing rule |
 | `lower` | the site | One rung down, at any time |
 | `guardrail_breach` | the tracker | One rung down |

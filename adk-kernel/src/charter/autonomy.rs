@@ -655,13 +655,28 @@ impl AutonomyLadder {
 
     /// Brings the jobs of `charter`'s authority onto the ladder (spec 3.5 §7.11): a job not
     /// registered enters at the charter's level; a registered job above the charter's level
-    /// is lowered to it; a job below it stays where it is, since only an owner's
-    /// [`promote`](Self::promote) raises a level.
+    /// is lowered to it, unless an owner promoted it there after the charter took effect; a
+    /// job below it stays where it is, since only an owner's [`promote`](Self::promote)
+    /// raises a level.
+    ///
+    /// The charter took effect when its owner signed it — the committing decision's time —
+    /// or, for an unsigned charter, when the charter store committed it; a charter with
+    /// neither lowers every job above it.
+    /// Syncing the charter in force again — as every start of a site does — so keeps the
+    /// owner's promotions (A-I13), and a later charter that sets a lower level still lowers.
     ///
     /// # Errors
     ///
     /// Returns a store error.
     pub async fn sync(&self, charter: &Charter) -> Result<Vec<JobAutonomy>> {
+        let effective = match (&charter.signed, &self.charters) {
+            (Some(signature), _) => Some(signature.signed_at),
+            (None, Some(charters)) => charters
+                .get(charter.site_id, charter.version)
+                .await?
+                .map(|version| version.committed_at),
+            (None, None) => None,
+        };
         let mut jobs = Vec::new();
         for authority in &charter.authority {
             let record = self
@@ -673,7 +688,14 @@ impl AutonomyLadder {
                     Some(charter.version),
                 )
                 .await?;
-            let record = if ladder_rank(record.level) > ladder_rank(authority.level) {
+            let promoted = match effective {
+                Some(since) => {
+                    self.promoted_since(charter.site_id, &authority.job, record.level, since)
+                        .await?
+                }
+                None => false,
+            };
+            let record = if ladder_rank(record.level) > ladder_rank(authority.level) && !promoted {
                 let reason = AutonomyReason::Lowered {
                     reason: format!("charter version {} sets it lower", charter.version),
                 };
@@ -692,6 +714,21 @@ impl AutonomyLadder {
             jobs.push(record);
         }
         Ok(jobs)
+    }
+
+    /// Whether an owner promoted `job` to `level` or above at or after `since`.
+    async fn promoted_since(
+        &self,
+        site: Uuid,
+        job: &str,
+        level: AutonomyLevel,
+        since: DateTime<Utc>,
+    ) -> Result<bool> {
+        Ok(self.store.history(site, job).await?.iter().any(|change| {
+            matches!(change.reason, AutonomyReason::Promoted { .. })
+                && change.at >= since
+                && ladder_rank(change.to) >= ladder_rank(level)
+        }))
     }
 
     /// The job's level, or `None` for a job never registered.

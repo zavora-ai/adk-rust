@@ -478,3 +478,108 @@ impl WalletAlarmHook for AlarmRouter {
         Ok(())
     }
 }
+
+/// The most characters of a handoff card's summary.
+const HANDOFF_SUMMARY_MAX: usize = 600;
+
+/// `lead_handoff` over `router` (spec 3.5 §7.20 "Warm handoff with context", §7.21): the
+/// Revenue agent hands a qualified lead to the owner as one P2 card with the conversation's
+/// summary, on the owner's chosen channel outside quiet hours. It implements `adk-harness`'
+/// catalogue entry, so the ladder decides it as the `handoff` job's.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_tool::SimpleToolContext;
+/// use adk_website::alarms::{AlarmRouter, handoff_tool};
+/// use awp_types::{Cadence, Reporting};
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() {
+/// let reporting = Reporting { review: Cadence::Weekly, routes: vec![], quiet_hours: None };
+/// let router = Arc::new(AlarmRouter::new(uuid::Uuid::nil(), &reporting));
+/// let tool = handoff_tool(router.clone());
+/// let ctx = Arc::new(SimpleToolContext::new("revenue"));
+/// let card = tool.execute(ctx, serde_json::json!({ "leadRef": "lead-1", "summary": "A wedding cake for 120 guests on 14 February" })).await.unwrap();
+/// assert_eq!(card["handedOff"], true);
+/// assert_eq!(router.raised_since(chrono::DateTime::UNIX_EPOCH).await[0].kind, "lead_handoff");
+/// # }
+/// ```
+pub fn handoff_tool(router: Arc<AlarmRouter>) -> Arc<dyn adk_core::Tool> {
+    Arc::new(HandoffTool { router })
+}
+
+/// `lead_handoff`: one card to the owner per qualified lead.
+struct HandoffTool {
+    router: Arc<AlarmRouter>,
+}
+
+#[async_trait]
+impl adk_core::Tool for HandoffTool {
+    fn name(&self) -> &str {
+        adk_harness::website::LEAD_HANDOFF
+    }
+
+    fn description(&self) -> &str {
+        "Hands a qualified lead to the owner: one card on their chosen channel with the lead's \
+         reference and a short summary of the conversation in your own words."
+    }
+
+    fn parameters_schema(&self) -> Option<serde_json::Value> {
+        Some(json!({
+            "type": "object",
+            "properties": {
+                "leadRef": { "type": "string" },
+                "summary": { "type": "string", "maxLength": HANDOFF_SUMMARY_MAX },
+                "score": { "type": "number" }
+            },
+            "required": ["leadRef", "summary"],
+            "additionalProperties": false
+        }))
+    }
+
+    fn origin(&self) -> &str {
+        adk_harness::website::BACK_OFFICE_ORIGIN
+    }
+
+    fn effect(&self) -> adk_core::ToolEffect {
+        adk_core::ToolEffect::NonIdempotent
+    }
+
+    async fn execute(
+        &self,
+        _ctx: Arc<dyn adk_core::ToolContext>,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let invalid = |message: &str| {
+            AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::InvalidInput,
+                "website.handoff.invalid",
+                format!("invalid arguments for lead_handoff: {message}"),
+            )
+        };
+        let lead = args["leadRef"].as_str().filter(|r| !r.trim().is_empty());
+        let lead = lead.ok_or_else(|| invalid("a leadRef is required"))?;
+        let summary: String = args["summary"]
+            .as_str()
+            .ok_or_else(|| invalid("a summary is required"))?
+            .chars()
+            .take(HANDOFF_SUMMARY_MAX)
+            .collect();
+        let score =
+            args["score"].as_f64().map(|score| format!(" (score {score:.0})")).unwrap_or_default();
+        let routed = self
+            .router
+            .raise(Alarm::new(
+                self.router.site,
+                Urgency::P2,
+                "lead_handoff",
+                format!("A warm lead is ready for you{score}: {summary} [lead {lead}]"),
+                self.router.clock.now(),
+            ))
+            .await;
+        Ok(json!({ "handedOff": true, "lead": lead, "routed": routed }))
+    }
+}

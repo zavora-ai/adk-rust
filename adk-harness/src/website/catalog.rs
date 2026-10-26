@@ -7,7 +7,9 @@ use adk_kernel::drivers::EffectClass;
 use crate::policy::{OriginClasses, ToolKind};
 
 /// `Tool::origin` of the back-office tools: the harness classes them by this catalogue,
-/// never by their own hints (spec 3.1 I12).
+/// never by their own hints (spec 3.1 I12). A product's implementation of a catalogue entry
+/// — `edge_read_only`, `experiment_start`, `experiment_report`, `lead_handoff` — reports
+/// this origin too, so the catalogue classes it and an owner's standing rule pins it.
 pub const BACK_OFFICE_ORIGIN: &str = "website:back-office";
 /// `Tool::origin` of the public tools and the declared capabilities the public partition
 /// serves (spec 3.5 §7.10).
@@ -58,6 +60,20 @@ pub const INTERVIEW_RECORD: &str = "interview_record";
 /// The wallet's payment tool (`adk-payments`, spec 3.5 §7.14); it publishes itself, the
 /// catalogue only knows its class.
 pub const WALLET_PAY: &str = "wallet_pay";
+/// Switches the agent edge to read-only for a reason, or back: the second incident act an
+/// owner may pre-authorise (spec 3.5 §7.20, A-I11). The product's edge implements it.
+pub const EDGE_READ_ONLY: &str = "edge_read_only";
+/// Starts a web experiment from a plan: one page, one variant, the KPI it should move and
+/// the guardrails that stop it (spec 3.5 §7.12, §7.20 "Experiments"). The product's
+/// experiment runner implements it.
+pub const EXPERIMENT_START: &str = "experiment_start";
+/// Reports the site's experiments: their state, decision and evidence (spec 3.5 §7.12).
+/// The product's experiment runner implements it.
+pub const EXPERIMENT_REPORT: &str = "experiment_report";
+/// Hands a qualified lead to the owner as one card with the conversation's summary on
+/// their chosen channel (spec 3.5 §7.20 "Warm handoff with context", §7.21). The product's
+/// alarm router implements it.
+pub const LEAD_HANDOFF: &str = "lead_handoff";
 
 /// Searches the current release's content (spec 3.5 §7.10).
 pub const SEARCH_SITE: &str = "search_site";
@@ -115,8 +131,8 @@ pub struct ToolSpec {
     pub class: EffectClass,
     /// It only writes drafts and proposals, never the live site: allowed from Propose up.
     pub draft: bool,
-    /// It is one of the acts "Act, reversible only" permits: drafts and a rollback to a
-    /// signed release (A-I11).
+    /// It is one of the acts "Act, reversible only" permits: drafts, a rollback to a signed
+    /// release and switching the edge to read-only (A-I11).
     pub reversible: bool,
     /// What else decides it.
     pub hold: Hold,
@@ -148,7 +164,10 @@ use WebsitePartition::{BackOffice, Public};
 /// | `content_schedule`, `content_correct`, `content_withdraw`, `content_revert` | back office | non-idempotent | `publish_public` | no | no | level |
 /// | `site_publish` | back office | non-idempotent | `publish_public` | no | no | the launch in every mode (A-I21) |
 /// | `site_rollback` | back office | non-idempotent | `publish_public` | no | yes (A-I11) | level |
-/// | `host_fetch`, `launch_gate_run`, `awp_verify` | back office | read-only | `read` | — | — | — |
+/// | `edge_read_only` (the product's edge) | back office | idempotent | `publish_public` | no | yes (A-I11) | level |
+/// | `experiment_start` (the product's runner) | back office | non-idempotent | `publish_public` | no | no | level |
+/// | `lead_handoff` (the product's alarm router) | back office | non-idempotent | `write_local` | no | no | level |
+/// | `host_fetch`, `launch_gate_run`, `awp_verify`, `experiment_report` | back office | read-only | `read` | — | — | — |
 /// | `charter_commit_request`, `job_promotion_request` | back office | non-idempotent | `write_local` | no | no | every mode (a decision card) |
 /// | `wallet_pay` | back office | non-idempotent | `financial` | no | no | level; the wallet holds over a cap |
 /// | `search_site` | public | read-only | `read` | — | — | — |
@@ -175,6 +194,10 @@ pub const CATALOG: &[ToolSpec] = &[
     tool(CHARTER_COMMIT_REQUEST, BackOffice, NonIdempotent, WriteLocal, false, false, Hold::Always),
     tool(JOB_PROMOTION_REQUEST, BackOffice, NonIdempotent, WriteLocal, false, false, Hold::Always),
     tool(WALLET_PAY, BackOffice, NonIdempotent, EffectClass::Financial, false, false, Hold::Ladder),
+    tool(EDGE_READ_ONLY, BackOffice, Idempotent, PublishPublic, false, true, Hold::Ladder),
+    tool(EXPERIMENT_START, BackOffice, NonIdempotent, PublishPublic, false, false, Hold::Ladder),
+    tool(EXPERIMENT_REPORT, BackOffice, ReadOnly, Read, false, false, Hold::Ladder),
+    tool(LEAD_HANDOFF, BackOffice, NonIdempotent, WriteLocal, false, false, Hold::Ladder),
     tool(SEARCH_SITE, Public, ReadOnly, Read, false, false, Hold::Ladder),
     tool(REPLY_IN_THREAD, Public, NonIdempotent, SendExternal, false, false, Hold::Ladder),
     tool(EMIT_SIGNAL, Public, NonIdempotent, WriteLocal, false, false, Hold::Ladder),
@@ -256,12 +279,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn names_are_unique_and_only_drafts_and_rollback_are_reversible() {
+    fn names_are_unique_and_only_drafts_and_the_incident_acts_are_reversible() {
         let names: std::collections::BTreeSet<&str> = CATALOG.iter().map(|s| s.name).collect();
         assert_eq!(names.len(), CATALOG.len());
         for spec in CATALOG {
             if spec.reversible {
-                assert!(spec.draft || spec.name == SITE_ROLLBACK, "{} is reversible", spec.name);
+                assert!(
+                    spec.draft || [SITE_ROLLBACK, EDGE_READ_ONLY].contains(&spec.name),
+                    "{} is reversible",
+                    spec.name
+                );
             }
             if spec.draft {
                 assert_ne!(spec.effect, ToolEffect::NonIdempotent, "{}", spec.name);
@@ -272,17 +299,32 @@ mod tests {
     }
 
     #[test]
-    fn only_publish_public_and_financial_tools_change_the_world() {
+    fn a_tool_that_changes_the_world_is_no_draft_and_no_decision_card() {
         for spec in CATALOG.iter().filter(|s| s.partition == WebsitePartition::BackOffice) {
             let world = matches!(spec.class, EffectClass::PublishPublic | EffectClass::Financial);
-            assert_eq!(
-                world,
-                !spec.draft
-                    && spec.effect == ToolEffect::NonIdempotent
-                    && spec.hold != Hold::Always,
-                "{}",
-                spec.name
-            );
+            if world {
+                assert!(
+                    !spec.draft && spec.effect != ToolEffect::ReadOnly && spec.hold != Hold::Always,
+                    "{}",
+                    spec.name
+                );
+            }
+            if spec.draft || spec.hold == Hold::Always {
+                assert_eq!(spec.class, EffectClass::WriteLocal, "{}", spec.name);
+            }
         }
+    }
+
+    /// A-I11: the incident acts an owner may pre-authorise at "act, reversible only" are the
+    /// rollback and the edge's read-only switch, and nothing else outside drafts.
+    #[test]
+    fn the_incident_acts_are_the_reversible_world_changes() {
+        let acts: Vec<&str> =
+            CATALOG.iter().filter(|s| s.reversible && !s.draft).map(|s| s.name).collect();
+        assert_eq!(acts, [SITE_ROLLBACK, EDGE_READ_ONLY]);
+        assert_eq!(
+            WebsiteClasses.class_of(BACK_OFFICE_ORIGIN, EDGE_READ_ONLY),
+            Some(ToolKind::External { effect: ToolEffect::Idempotent, trusted_origin: true })
+        );
     }
 }

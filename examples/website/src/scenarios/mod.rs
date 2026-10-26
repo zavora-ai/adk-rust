@@ -78,17 +78,12 @@ pub fn all() -> Vec<Scenario> {
             "the large one answers 202 and completes after the owner approves"
         ]),
         scenario!("S10", "A week on duty", agent: true, s10_week, known: [
-            "review replies drafted",
             "upgrade and renewal proposals"
         ]),
         scenario!("S11", "An experiment that respects its guardrails", agent: false, s11_experiment),
         scenario!("S12", "Money inside the box", agent: true, s12_money),
         scenario!("S13", "Anyone can check", agent: false, s13_verify),
-        scenario!("S14", "Earned autonomy", agent: true, s14_autonomy, known: [
-            "at Propose the agent drafts the reply for the owner; nothing publishes",
-            "the owner accepts and a standing rule is created by the owner's decision",
-            "the demotion takes back the standing rules the level no longer warrants"
-        ]),
+        scenario!("S14", "Earned autonomy", agent: true, s14_autonomy),
         scenario!("S15", "Agency mode", agent: false, s15_agency),
         scenario!("S16", "A public body", agent: false, s16_government),
         scenario!("S17", "A personal site", agent: false, s17_personal),

@@ -35,6 +35,16 @@ default). `adk-rust up` opens it on `harness.db`, or in the `--store` backend ev
 The cursor moves past each occurrence after its wake is submitted, and every occurrence keeps its
 key (`cron:kernel:<expression>:<time>`), so a restart or a second replica never fires one twice.
 
+### Cron triggers
+
+A standing trigger on a cron expression (`KernelBuilder::trigger` with `Wake::Cron`) fires
+through a watermarked `CronWakeSource` the kernel registers itself: one per expression, named
+`trigger-cron:<expression>`, planned with the widest `missed` policy of the expression's
+triggers, its cursor in the same `CronWatermarkStore`. Every trigger on the expression matches
+each tick once. A registered source that ticks on the expression — a
+`CronWakeSource::watermarked` one reports it through `WakeSource::cron_expression` — takes the
+kernel's place (spec 3.5 §7.11).
+
 There is no file backend: no durable store is file-backed, and the CLI keeps its state in
 `harness.db`. Vertex AI holds sessions only, so it has no kernel backend.
 

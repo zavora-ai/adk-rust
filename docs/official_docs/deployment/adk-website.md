@@ -72,7 +72,19 @@ The Steward leads the back office (Steward, Growth, Revenue, Guardian, Finance) 
 `TeamSpec`; the public agents (Concierge, Agent desk, Inbox) are woken by their own channels
 and reach the back office only through typed signals. `SiteTeam::build` makes each agent a
 `HarnessAgent` with its partition's kit, the ladder's mode and run budget for its jobs, and
-its jobs' playbooks under `.skills/` in its workspace.
+its jobs' playbooks under `.skills/` in its workspace, and compiles the back office:
+`BuiltTeam::compile` returns it as one runner root over the built agents, the Steward's
+delegate edges included.
+
+Each job binds the tools it acts with, so the owner's promotion grants their standing rules:
+
+| Job | Tools beyond the drafting tools |
+|-----|---------------------------------|
+| `protect` | `site_rollback`, `edge_read_only` (A-I11) |
+| `social` (review replies) | `site_publish`, `social_post` |
+| `nurture` | `adk-drivers`' `email_send_sequence_step` |
+| `handoff` | `lead_handoff`: `alarms::handoff_tool` sends the owner one P2 card |
+| `experiments` | `experiment_start`, `experiment_report`: `experiments::experiment_tools` over the runner |
 
 `jobs::processes` turns the jobs into kernel triggers: `site.probe` every five minutes and
 `site.digest` on Mondays run without a model through `workflows::SiteWorkflows`; the other
@@ -115,6 +127,8 @@ office's agenda through the kernel's `SignalSink`, each text field screened (A-I
 | `EdgeAnnouncer`, `DeferredAnnouncer` | Each release to `site.release.published` and `catalog.changed` on the edge's events |
 | `ReceiptEntrySigner` | Stream entries to the edge's delegated `receipt` key |
 
+`edge::concierge` builds the Concierge over the edge's own public tools with `adk-harness`'
+`website_public_served`; it is offered those tools and nothing of the harness's own.
 `edge::site_router` serves the edge's routes with the release the host serves behind them,
 each file with its release media type. `edge::consent_config` asks for the consent scopes the
 kind's capabilities name.
@@ -122,7 +136,7 @@ kind's capabilities name.
 | Incident step | The edge |
 |---------------|----------|
 | Drift opens an incident | Read-only mode: non-read capabilities answer `503 read_only` with the signed status |
-| The Guardian's `edge_read_only` | Read-only for a reason, or back with `resume: true` |
+| The Guardian's `edge_read_only` | Read-only for a reason, or back with `resume: true`; the catalogue's reversible incident act, pre-authorisable at "act, reversible only" |
 | A person closes the incident | Serving again, status `operational` |
 
 ## The contract
@@ -168,7 +182,7 @@ many sites from one harness:
 | Keys | `data/keys/release.jwk` signs the site log; `card.jwk` (and `receipt.jwk`) sign the Agent Card, the status, consent receipts and stream entries. No root key is kept in the project |
 | Publishing | Refused until `well-known/awp/keys.json` delegates the release key: the gate's `release-delegation` finding names `adk-rust awp keys rotate` and `adk-rust awp keys delegate` |
 | Updates | `UpdateEngine` over the runtime's pipeline, the edge's live store and a stream lane signed by the receipt key; feeds from `feeds.json`; `UpdateDriver` ticks it when due and journals to `data/updates/`; held deliveries and items become approval requests (decision cards); `GET /awp/v2/stream` serves `stream_since` |
-| Experiments | `ExperimentGenerator` around the built-in generator; `ExperimentRunner` with `BeaconKpi`, the job pauses, the ladder, the alarms and `RepublishOnStop`; its trigger fires through a watermarked cron source |
+| Experiments | `ExperimentGenerator` around the built-in generator; `ExperimentRunner` with `BeaconKpi`, the job pauses, the ladder, the alarms and `RepublishOnStop`; its trigger fires through the kernel's watermarked cron source for the expression |
 | Measurement | `MeteredActionLedger` and `EdgeMeter` on the edge, `MeteredSpendLedger` for agents' spend, and the tracker's sources |
 | Channels | Inbox threads with `SiteOptions::repliers`; the calendar and payment links from `calendar.json` and `payments.json`, or `SiteOptions`; refused without them |
 | Public agent | With `SiteOptions::model`, `edge::concierge` mounts the Concierge through `AwpEdge::public_agent`: the website preset in the public partition over the edge's own tools — the declared capabilities (a declared `search_site` among them), `reply_in_thread` and the edge's `emit_signal` — so the edge's public policy admits every call |

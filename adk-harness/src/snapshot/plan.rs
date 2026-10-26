@@ -2,16 +2,23 @@
 //! snapshot and the current tree, with conflicts, protected paths, files not covered,
 //! effects not undone, the transcript fork and the plan.
 
+use std::fmt::Write as _;
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+use super::store::{FileEntry, SnapshotKind};
+use super::walk::{NotCovered, SkipReason};
+
+// The rewind half of the plan — the file diff, the transcript cut and the writes the
+// transcript records — runs only with `runner`, which has the sessions it reads.
 #[cfg(feature = "runner")]
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fmt::Write as _;
 #[cfg(feature = "runner")]
 use std::path::{Component, Path};
 
 #[cfg(feature = "runner")]
 use adk_core::{Event, Part};
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 #[cfg(feature = "runner")]
 use serde_json::Value;
 
@@ -19,8 +26,6 @@ use serde_json::Value;
 use super::runtime::TreeScan;
 #[cfg(feature = "runner")]
 use super::store::SnapshotRecord;
-use super::store::{FileEntry, SnapshotKind};
-use super::walk::{NotCovered, SkipReason};
 
 /// Most paths a rendered plan or report lists per section.
 const RENDER_PATHS: usize = 12;
@@ -763,6 +768,7 @@ fn normalize(path: &str, root: &Path) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
+// The tests exercise the rewind half, which needs `runner`.
 #[cfg(all(test, feature = "runner"))]
 mod tests {
     use super::*;

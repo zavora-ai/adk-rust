@@ -17,8 +17,8 @@ adk-harness = { version = "3.0.0", features = ["website"] }
 | Site runtime | `SiteRuntime`, `SiteApprovals`, `FactClaimCheck` | §7.8, §7.8.2, A-I18, A-I23 |
 | Back office | `back_office_tools`, `WebsitePolicy` | §7.8.2, §7.10, A-I13, A-I21 |
 | Public partition | `SearchSiteTool`, `EmitSignalTool`, `PublicPolicy`, `screen_bounded` | §7.10, A-I2, A-I3 |
-| Partitions | `SitePartitions`, `PublicKit`, `BackOfficeKit`, `website_public`, `website_back_office` | §7.10, §7.19, A-I22 |
-| Autonomy ladder | `LadderCompiler`, `JobBinding`, `level_decision`, `promote_job`, `apply_demotion` | §7.11, A-I13, A-I15 |
+| Partitions | `SitePartitions`, `PublicKit`, `ServedPublicTools`, `BackOfficeKit`, `website_public`, `website_public_served`, `website_back_office` | §7.9, §7.10, §7.19, A-I22 |
+| Autonomy ladder | `LadderCompiler`, `JobBinding`, `level_decision`, `promote_job`, `apply_demotion` | §7.11, A-I11, A-I13, A-I15 |
 | Authoring | `AuthoringRouter`, `inbound_signal` | §7.8.2, A-I24 |
 | Outbound signing | `SiteSigning`, `WebBotAuthSigner`, `HarnessAgentBuilder::web_signer` | §7.3 |
 | Verification | `SiteVerifier`, `ReleaseLogVerifier`, `adk_awp::verify::Verifier` | §7.7, A-I9 |
@@ -30,6 +30,11 @@ adk-harness = { version = "3.0.0", features = ["website"] }
 until the charter's authority compiles to more — no shell and no default members, and classes
 the website tools by their catalogue rather than by their own hints. `website_back_office` and
 `website_public` apply it and attach the toolsets, which need the site's runtime.
+
+A website agent's mode is its jobs' autonomy, which only the owner raises (A-I13), so the
+preset offers no `exit_plan_mode`, and its mode banner says what the level allows: at Propose,
+"draft every change with the drafting tools and raise decision cards; drafts and cards run in
+this mode". A Propose agent drafts without asking to leave plan mode.
 
 ## Two partitions
 
@@ -43,7 +48,13 @@ the website tools by their catalogue rather than by their own hints. `website_ba
 
 A public agent cannot publish, deploy, change DNS, spend, send in bulk, fetch the web or read
 owner memory, whatever a model asks: `PublicPolicy` denies every tool outside its list, even
-one attached by mistake (A-I2). `emit_signal` files a typed signal in the back office's agenda
+one attached by mistake (A-I2). The harness offers a public agent none of its own tools — no
+`read_file`, `write_file`, `edit_file`, memory, plan or web tool — only the partition's.
+
+When another runtime serves the public tools, as the AWP edge serves its `PublicTools`,
+`website_public_served` builds the agent over those instead of the kit's own `search_site`
+and `emit_signal`: `ServedPublicTools` carries them, each is classed by its own origin so the
+manifest policy decides it, and a declared `search_site` capability replaces the served one. `emit_signal` files a typed signal in the back office's agenda
 through the kernel's `SignalSink`; every text field is screened by the injection screen,
 redacted of secrets and personal data, cut to 280 characters and marked untrusted, and a
 field that matches an injection pattern keeps only the screening label (A-I3). A back-office
@@ -58,15 +69,25 @@ partition, which the public partition refuses.
 | `content_schedule`, `content_correct`, `content_withdraw`, `content_revert` | `publish_public` | — | — | — |
 | `site_publish` | `publish_public` | — | — | the launch: the site's first production release (A-I21) |
 | `site_rollback` | `publish_public` | — | yes (A-I11) | — |
-| `host_fetch`, `launch_gate_run`, `awp_verify` | `read` | — | — | — |
+| `edge_read_only` (the product's edge) | `publish_public` | — | yes (A-I11) | — |
+| `experiment_start` (the product's experiment runner) | `publish_public` | — | — | — |
+| `lead_handoff` (the product's alarm router) | `write_local` | — | — | — |
+| `host_fetch`, `launch_gate_run`, `awp_verify`, `experiment_report` | `read` | — | — | — |
 | `charter_commit_request`, `job_promotion_request` | `write_local` | — | — | always: each is a decision card |
 | `wallet_pay` (`adk-payments`) | `financial` | — | — | — the wallet holds a payment over a cap |
 
 Every tool calls `adk-site`'s publishing pipeline, launch gate, host and media pipeline. A
+product implements `edge_read_only`, `experiment_start`, `experiment_report` and
+`lead_handoff` under `BACK_OFFICE_ORIGIN`, so the catalogue classes them and a standing rule
+pins them. `content_draft`, `content_edit` and `translation_draft` take an optional `draft`:
+the item joins that draft, so one release carries several items, such as the pages of
+release 1; `media_intake` takes the `item` an upload belongs to. A
 claim cites the facts it rests on; `FactClaimCheck` lets it publish only when each is `Known`
 in the site's scope (A-I18). A release under a charter approval chain publishes only when
-distinct people hold every role and none proposed it (A-I23); `SiteApprovals::approve` records
-their approvals. `charter_commit_request` commits nothing: `SiteRuntime::sign_charter` commits
+distinct people hold every role and none proposed it (A-I23); `SiteApprovals::record_approval`
+records their approvals and refuses an agent's vote or one in a role its voter does not hold.
+A vote that cannot count — recorded with `approve`, or left over from a charter change — is
+left out when the release is decided, so it never holds up the people who can approve. `charter_commit_request` commits nothing: `SiteRuntime::sign_charter` commits
 the draft once every required signer has signed. Every DNS change is held by `adk-drivers`'
 `DriverCapPolicy`.
 
@@ -77,14 +98,25 @@ the draft once every required signer has signed. Every DNS change is held by `ad
 | Observe | `read_only` | read-only tools only |
 | Propose | `plan` | read-only tools, drafts and decision cards |
 | Act with approval | `ask` | every other call held for the owner |
-| Act, reversible only | `auto` | drafts and a rollback run; every other call held |
+| Act, reversible only | `auto` | drafts, a rollback and the edge's read-only switch run; every other call held |
 | Act within budget | `auto` | drafts and reversible acts run; every other call runs within the job's `DeclarativePolicy` rules and run budget, and is held beyond them |
 
 The ladder policy reads each job's level from the kernel's `AutonomyStore` at every call, so a
 demotion applies to the next call and its reason appears in the refusal. A level above Propose
 runs a call only through a standing rule: `promote_job` raises a job by an owner's decision —
 the kernel refuses an agent, a service or a person without the owner role — and grants the
-rules the new level needs, created by that owner (A-I13). `apply_demotion` revokes the rules a
+rules the new level holds, created by that owner, revoking the old level's rules the new one
+does not hold (A-I13):
+
+| Level | Standing rules |
+|---|---|
+| Observe, Propose | none: drafts and decision cards need no rule |
+| Act with approval | the job's tools that are not read-only, drafts or decision cards; the ladder still holds each call, so the rules record the owner's grant |
+| Act, reversible only | the rollback and the edge's read-only switch (A-I11) |
+| Act within budget | the job's tools that are not read-only, drafts or decision cards |
+
+A tool outside the catalogue, such as a driver's, is pinned to the origin the agent is given:
+`LadderCompiler::with_tool_origins` records it. `apply_demotion` revokes the rules a
 lower level no longer warrants. A charter's `spendCap` bounds the `amount` of a job's
 financial calls, and its `actionsPerDay` caps the tool calls of a run.
 

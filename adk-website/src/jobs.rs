@@ -218,7 +218,7 @@ pub const JOBS: &[JobSpec] = &[
         starts_at: StartsAt::Level(ActReversibleOnly),
         note: "Rollback and read-only are the only incident acts (A-I11)",
         effects: &[PublishPublic],
-        tools: &["site_rollback", "host_fetch", "awp_verify"],
+        tools: &["site_rollback", "edge_read_only", "host_fetch", "awp_verify"],
         needs: JobNeed::Nothing,
         process: Some(SiteProcessKind::Probe),
         playbook: "protect",
@@ -369,7 +369,7 @@ pub const JOBS: &[JobSpec] = &[
         starts_at: StartsAt::Level(Propose),
         note: "Propose, then playbook",
         effects: &[SendExternal, PublishPublic],
-        tools: &[],
+        tools: &["content_draft", "content_edit", "release_preview", "site_publish", "social_post"],
         needs: JobNeed::Nothing,
         process: Some(SiteProcessKind::Reviews),
         playbook: "review-replies",
@@ -408,7 +408,7 @@ pub const JOBS: &[JobSpec] = &[
         starts_at: StartsAt::Level(ActWithinBudget),
         note: "Within playbook",
         effects: &[SendExternal],
-        tools: &[],
+        tools: &["email_send_sequence_step"],
         needs: JobNeed::Nothing,
         process: Some(SiteProcessKind::Outreach),
         playbook: "nurture",
@@ -421,7 +421,7 @@ pub const JOBS: &[JobSpec] = &[
         starts_at: StartsAt::Level(ActWithinBudget),
         note: "Act",
         effects: &[OwnerChannels],
-        tools: &[],
+        tools: &["lead_handoff"],
         needs: JobNeed::Nothing,
         process: None,
         playbook: "handoff",
@@ -447,7 +447,13 @@ pub const JOBS: &[JobSpec] = &[
         starts_at: StartsAt::Level(ActWithinBudget),
         note: "Within budget",
         effects: &[PublishPublic],
-        tools: &["content_draft", "release_preview", "site_publish"],
+        tools: &[
+            "content_draft",
+            "release_preview",
+            "site_publish",
+            "experiment_start",
+            "experiment_report",
+        ],
         needs: JobNeed::Nothing,
         process: None,
         playbook: "experiments",
@@ -724,6 +730,35 @@ mod tests {
         assert_eq!(ids.len(), JOBS.len());
         for job in JOBS {
             assert!(crate::playbooks::playbook(job.playbook).is_some(), "{}", job.id);
+        }
+    }
+
+    /// Every back-office job binds the tools it acts with, and each is one its agent holds
+    /// (spec 3.5 §7.19, §7.20): a job with none could be promoted without any standing rule.
+    #[test]
+    fn every_acting_job_binds_tools_its_agent_holds() {
+        let unbound: Vec<&str> = JOBS
+            .iter()
+            .filter(|job| matches!(job.starts_at, StartsAt::Level(_)) && job.tools.is_empty())
+            .map(|job| job.id)
+            .collect();
+        // Jobs whose work is the kernel's (alarms, the review's questions), drafting prose
+        // with no tool of their own (playbook learning), or a driver the product does not
+        // mount yet (email, advertising, sales).
+        assert_eq!(
+            unbound,
+            ["alarms", "email", "advertising", "sell", "playbook-learning", "owner-questions"]
+        );
+        for job in JOBS.iter().filter(|job| matches!(job.starts_at, StartsAt::Level(_))) {
+            let agent = job
+                .agents
+                .iter()
+                .find(|role| role.partition() == WebsitePartition::BackOffice)
+                .expect("a back-office job has a back-office agent");
+            let held = JobBinding::new(job.id, agent.as_str(), agent.tools().iter().copied());
+            for tool in job.tools {
+                assert!(held.covers(tool), "{} binds {tool}, which {agent} does not hold", job.id);
+            }
         }
     }
 

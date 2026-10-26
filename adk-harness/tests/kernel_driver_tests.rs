@@ -5,7 +5,8 @@
 //!
 //! The driver is this test binary run as a stdio MCP server.
 
-#![cfg(feature = "kernel")]
+// `adk-tool` (for `SimpleToolContext`) comes with `team`, `web` or `mcp`.
+#![cfg(all(feature = "kernel", any(feature = "team", feature = "web", feature = "mcp")))]
 
 mod common;
 

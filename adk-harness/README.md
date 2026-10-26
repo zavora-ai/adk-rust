@@ -217,8 +217,9 @@ its team from it; the product's agents, site kinds and onboarding questions are 
 |---|---|
 | `Preset::Website` | The website prompt, plan mode until the charter compiles to more, no shell, website tools classed by their catalogue |
 | `website_back_office(&BackOfficeKit)` | Content drafts, edits, schedules, corrections, withdrawals and reverts; translations; media; preview, publish and rollback over `adk-site`; host reads; the launch gate; `awp verify`; charter drafts; charter-commit and promotion requests as decision cards. The launch and every DNS change are held for the owner in every mode (A-I21) |
-| `website_public(PublicKit)` | `search_site` over the release's Markdown twins, `emit_signal` with screened bounded fields, `adk-drivers`' `reply_in_thread`, the declared capabilities, and nothing else (A-I2, A-I3) |
-| `LadderCompiler`, `promote_job`, `apply_demotion` | Each job's level compiled to a mode, a policy read at every call, within-budget rules and owner-created standing rules; only an owner's decision raises a level (A-I13) |
+| `website_public(PublicKit)` | `search_site` over the release's Markdown twins, `emit_signal` with screened bounded fields, `adk-drivers`' `reply_in_thread`, the declared capabilities, and nothing else — no workspace, memory or plan tool of the harness's own (A-I2, A-I3) |
+| `website_public_served(ServedPublicTools)` | The same partition over tools another runtime serves, such as the AWP edge's `PublicTools` |
+| `LadderCompiler`, `promote_job`, `apply_demotion` | Each job's level compiled to a mode, a policy read at every call, within-budget rules and owner-created standing rules — from "act with approval" up, and at "act, reversible only" the rollback and the edge's read-only switch (A-I11); only an owner's decision raises a level (A-I13) |
 | `AuthoringRouter` | Paired devices author through the Steward; everyone else reaches the public partition (A-I24) |
 | `SiteSigning`, `ReleaseLogVerifier` | Web Bot Auth on crawls, `awp verify` and opted-in `web_fetch`; the release-log half of `awp verify` before a site publishes its contract |
 | `OnboardingStage`, `InterviewForm` | Plan-graph steps for discovery, interview, charter, build, gate, connections and launch; facts `Known` only from the owner's words (A-I18) |
