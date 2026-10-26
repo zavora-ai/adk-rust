@@ -383,7 +383,10 @@ that has a decision. The decision does not depend on the model issuing the call 
   answer it, or resume held calls with an empty message before sending a new one.
 
 `CodeActAgent` resumes a held call from its checkpoint (`Disposition::AwaitingConfirmation`),
-which already re-dispatches the call through the governed path. Realtime agents answer a held
+which already re-dispatches the call through the governed path. The event that records the
+call's result answers the held call with a function response under its ID, as `LlmAgent`'s
+resumed response does, so the session no longer holds it and compaction may pass it; the
+model is never sent that response. Realtime agents answer a held
 call with the reason inside the live session and have no later run to resume it in.
 
 ### Calls Held Inside an Agent Tool

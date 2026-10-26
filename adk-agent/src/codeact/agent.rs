@@ -285,6 +285,8 @@ fn run_codeact(mut input: LoopInputs) -> impl Stream<Item = adk_core::Result<Eve
             beside = Some((fingerprint, watched));
         }
         let ctx = input.invocation_ctx.clone();
+        let (invocation_id, agent_name) = (input.invocation_id.clone(), input.agent_name.clone());
+        let waiting_call = waiting.as_ref().map(|(cp, _)| cp.call.clone());
         let mut inner = Box::pin(drive_codeact(input, hold, waiting.map(|(_, request)| request)));
         while let Some(mut item) = inner.next().await {
             // The turn that answered the message ends; the waiting call's checkpoint stays,
@@ -311,6 +313,19 @@ fn run_codeact(mut input: LoopInputs) -> impl Stream<Item = adk_core::Result<Eve
                 };
                 if !answered {
                     event.actions.state_delta.remove(PENDING_STATE_KEY);
+                } else if let Some(call) = &waiting_call {
+                    // The waiting call took no decision of its own: it is answered here, or the
+                    // session would hold it for good.
+                    let mut answer = Event::new(&invocation_id);
+                    answer.author = agent_name.clone();
+                    answer.llm_response.content = Some(held_call_answer(
+                        call,
+                        &ResolutionRecord::Value(serde_json::json!({
+                            "status": "decided",
+                            "detail": "an identical call in a later turn took this call's decision",
+                        })),
+                    ));
+                    yield Ok(answer);
                 }
             }
             yield item;
@@ -517,6 +532,10 @@ fn drive_codeact(
                         return;
                     }
                     Some(rec) => {
+                        // A decided call is answered on the event that records its
+                        // resolution, as LlmAgent answers a resumed one (spec 3.3 §7.3).
+                        let answer = (cp.disposition == Disposition::AwaitingConfirmation)
+                            .then(|| held_call_answer(&cp.call, &rec));
                         // A tool that escalated / requested skip-summarization /
                         // a transfer on this resume ends the run now, before the
                         // result is fed back to the script (matches the inline
@@ -525,6 +544,7 @@ fn drive_codeact(
                             let mut event = control_terminal_event(
                                 &invocation_id, &agent_name, &resume_control,
                             );
+                            event.llm_response.content = answer;
                             flush_actions(&mut event, &mut pending_actions);
                             yield Ok(event);
                             return;
@@ -543,6 +563,7 @@ fn drive_codeact(
                             );
                             let mut after_ev =
                                 checkpoint_event(&invocation_id, &agent_name, &after);
+                            after_ev.llm_response.content = answer;
                             flush_actions(&mut after_ev, &mut pending_actions);
                             yield Ok(after_ev);
                         }
@@ -1529,6 +1550,26 @@ fn content_to_tool_value(content: &Content) -> Value {
     }
     let text: String = content.parts.iter().filter_map(|p| p.text()).collect();
     Value::String(text)
+}
+
+/// The response that answers a call held for confirmation once it is decided:
+/// [`held_tool_calls`](adk_core::held_tool_calls) holds a call until a response with its ID,
+/// and compaction never passes a held call (spec 3.3 §7.3). The model is never sent it: a
+/// CodeAct model issues no function calls, and the history leaves out a response that
+/// answers none.
+fn held_call_answer(call: &PendingToolCall, rec: &ResolutionRecord) -> Content {
+    let response = match rec {
+        ResolutionRecord::Value(value) => value.clone(),
+        ResolutionRecord::Raise(message) => serde_json::json!({ "error": message }),
+    };
+    Content {
+        role: "function".to_string(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new(call.tool.clone(), response),
+            id: Some(call.call_id.to_string()),
+            annotations: None,
+        }],
+    }
 }
 
 /// A durability event: persists the checkpoint to session state, no content.
@@ -5741,7 +5782,8 @@ mod tests {
             Planned::Complete(json!({"type": "final_result", "value": "after"})),
         ]]));
         let input = waiting_inputs(FakeLlm::new("noop"), rt, user("go"), never, store.clone());
-        let cp = pending_in(collect(input).await.last().unwrap()).unwrap();
+        let mut session = collect(input).await;
+        let cp = pending_in(session.last().unwrap()).unwrap();
 
         let incoming = user("go ahead and echo it");
         let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![
@@ -5767,6 +5809,75 @@ mod tests {
         assert_eq!(kept(last), Some(Value::Null), "the answered call's checkpoint is cleared");
         let scope = adk_core::ApprovalScope::new("app", "user", "sess-test");
         assert!(store.pending(&scope).await.unwrap().is_empty());
+        // Wave 2 gate, core item a: the session holds the call no longer.
+        session.extend(events);
+        assert!(adk_core::held_tool_calls(&session, "code-agent", "").is_empty());
+    }
+
+    /// Wave 2 gate, core item a (spec 3.3 §7.3): a held call a decision resumes, approved or
+    /// denied, is answered in the session as LlmAgent answers it, so nothing holds it
+    /// afterwards and compaction may pass it.
+    #[tokio::test]
+    async fn a_decided_call_is_answered_and_no_longer_held() {
+        use adk_core::ApprovalStore as _;
+        for (approval, response) in [
+            (adk_core::ToolApproval::approve(), json!({"msg": "x"})),
+            (adk_core::ToolApproval::deny(), Value::Null),
+        ] {
+            let handler = Arc::new(NeverAnswers::default());
+            let store = Arc::new(adk_core::InMemoryApprovalStore::new());
+            let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+                Planned::call("echo", json!({"msg": "x"}), 7),
+                Planned::Complete(json!({"type": "final_result", "value": "after"})),
+            ]]));
+            let input = waiting_inputs(
+                FakeLlm::new("noop"),
+                rt,
+                user("go"),
+                handler.clone(),
+                store.clone(),
+            );
+            let mut session = collect(input).await;
+            let held = session.last().unwrap().clone();
+            let request = held.actions.tool_confirmation.clone().expect("the call waits");
+            assert_eq!(adk_core::held_tool_calls(&session, "code-agent", "").len(), 1);
+
+            let scope = adk_core::ApprovalScope::new("app", "user", "sess-test");
+            store.decide(&scope, &request.fingerprint(), approval).await.unwrap();
+            let rt = Arc::new(ScriptedRuntime::with_suspension(vec![]));
+            let mut input =
+                waiting_inputs(FakeLlm::new("noop"), rt, Content::new("user"), handler, store);
+            input.pending = pending_in(&held);
+            let resumed = collect(input).await;
+            assert_eq!(final_text(resumed.last().unwrap()).as_deref(), Some("after"));
+            let answers: Vec<_> = resumed
+                .iter()
+                .flat_map(|event| event.llm_response.content.iter())
+                .flat_map(|content| content.parts.iter())
+                .filter_map(|part| match part {
+                    Part::FunctionResponse { function_response, id, .. } => Some((
+                        function_response.name.clone(),
+                        id.clone(),
+                        function_response.response.clone(),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(answers.len(), 1, "{answers:?}");
+            assert_eq!((answers[0].0.as_str(), answers[0].1.as_deref()), ("echo", Some("7")));
+            if !response.is_null() {
+                assert_eq!(answers[0].2, response);
+            } else {
+                assert!(answers[0].2.get("error").is_some(), "a denial answers with its error");
+            }
+            session.extend(resumed);
+            assert!(adk_core::held_tool_calls(&session, "code-agent", "").is_empty());
+            assert_eq!(
+                adk_core::held_call_compaction_limit(&session, session.len()),
+                session.len(),
+                "compaction may pass the answered call"
+            );
+        }
     }
 
     /// Wave 2 review finding 9 (spec 3.3 §7.4): a turn beside a waiting call that ends
