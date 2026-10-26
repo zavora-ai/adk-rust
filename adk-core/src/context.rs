@@ -1751,6 +1751,18 @@ pub struct RunConfig {
     /// with only an approval service, whose decisions it cannot read — denies the call
     /// either way.
     pub deny_on_confirmation_timeout: bool,
+    /// A tool call a person asked for through something an agent drew, which this run
+    /// holds for their decision before any model call (spec 3.3 §7.4 rule 5).
+    ///
+    /// The run's root `LlmAgent` takes it once, after resuming held calls: it refuses a tool
+    /// outside its own toolset, a `kernel_*` tool or a tool that draws, checks the arguments
+    /// against the tool's parameters, and authorizes the call as
+    /// [`GovernedCall::requested`](crate::GovernedCall::requested), so an earlier approval or
+    /// the confirmation handler never answers it. The call is held as the agent, or refused,
+    /// and the run ends without a model call. A run that is not authenticated, or whose user
+    /// is not the person who asked, has it refused; an agent that cannot hold a call, such as
+    /// `CodeActAgent`, refuses it.
+    pub requested_call: Option<crate::RequestedCall>,
 }
 
 impl Default for RunConfig {
@@ -1787,6 +1799,7 @@ impl Default for RunConfig {
             audit: None,
             acting: crate::ActingConfig::default(),
             deny_on_confirmation_timeout: false,
+            requested_call: None,
         }
     }
 }
@@ -2034,6 +2047,29 @@ impl RunConfigBuilder {
     /// Sets where held calls and their decisions are kept between runs.
     pub fn approval_store(mut self, store: Arc<dyn crate::ApprovalStore>) -> Self {
         self.config.approval_store = Some(store);
+        self
+    }
+
+    /// Sets the call a person asked for, which the run holds for their decision before any
+    /// model call. See [`RunConfig::requested_call`] (spec 3.3 §7.4 rule 5).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{RequestedCall, RequestedVia, RunConfig, SubjectRef};
+    /// use serde_json::json;
+    ///
+    /// let call = RequestedCall::new(
+    ///     "send_invoice",
+    ///     json!({ "to": "ana@example.com" }),
+    ///     SubjectRef::human("ana"),
+    ///     RequestedVia::form("invoice-10", 1, "send"),
+    /// );
+    /// let config = RunConfig::builder().requested_call(call.clone()).build();
+    /// assert_eq!(config.requested_call, Some(call));
+    /// ```
+    pub fn requested_call(mut self, call: crate::RequestedCall) -> Self {
+        self.config.requested_call = Some(call);
         self
     }
 

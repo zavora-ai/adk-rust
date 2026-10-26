@@ -47,6 +47,13 @@
 //! absorbed rather than left to authorize a later call, as is an outcome already applied or
 //! recorded while the handler was asked.
 //!
+//! A call a person asked for through something an agent drew ([`RequestedCall`],
+//! [`GovernedCall::requested`]) is checked by the kill switch, the policy and the screen,
+//! then always held for a decision: on its first authorization no earlier decision and no
+//! confirmation handler answers it, because the press is the request, never the approval
+//! (spec 3.3 §7.4 rule 5). When it resumes, its decision is consulted even where the policy
+//! would now allow the call without one.
+//!
 //! A held call survives what happens to the session while it waits: compaction never
 //! covers it ([`held_call_compaction_limit`]), a workflow agent that it stopped resumes at
 //! the sub-agent holding it ([`workflow_resume_positions`]), and a call its provider sent
@@ -1299,6 +1306,9 @@ pub struct GovernedCall {
     pub origin: Option<ToolOrigin>,
     /// The held request this call resumes, if it is one. See [`resuming`](Self::resuming).
     pub resumes: Option<ToolConfirmationRequest>,
+    /// Whether a person asked for this call through something an agent drew. See
+    /// [`requested`](Self::requested).
+    pub requested: bool,
 }
 
 impl GovernedCall {
@@ -1316,6 +1326,7 @@ impl GovernedCall {
             requires_confirmation: false,
             origin: None,
             resumes: None,
+            requested: false,
         }
     }
 
@@ -1369,6 +1380,60 @@ impl GovernedCall {
         self
     }
 
+    /// Marks the call as one a person asked for through something an agent drew — a
+    /// form's Send or an app's tool call ([`RequestedCall`], spec 3.3 §7.4 rule 5).
+    ///
+    /// The press is the request, never the approval. On the call's first authorization the
+    /// kill switch, the policy and the screen still refuse it, but nothing else answers it:
+    /// decisions keyed by call ID, [`RunConfig::tool_approvals`], a decision already in the
+    /// [`ApprovalStore`] (which is discarded) and the confirmation handler are all passed
+    /// over, and the call is held for a person, even when the policy allows it. When the
+    /// held call [resumes](Self::resuming), its decision is consulted as for any held call
+    /// that needs confirmation, so a policy that allows the tool by then never runs a call
+    /// the person denied.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{
+    ///     ApprovalScope, DeclarativePolicy, GovernedCall, RunConfig, ToolAuthorization,
+    ///     ToolConfirmationDecision, ToolGate,
+    /// };
+    /// use serde_json::json;
+    /// use std::collections::HashMap;
+    /// use std::sync::Arc;
+    ///
+    /// # futures::executor::block_on(async {
+    /// let call = || GovernedCall::new("send_invoice", "call-1", json!({ "to": "ana" }));
+    /// // The policy allows the tool, and the call already carries an approval.
+    /// let config = RunConfig::builder()
+    ///     .tool_policy(Arc::new(DeclarativePolicy::builder().allow("send_invoice").build()))
+    ///     .tool_confirmation_decisions(HashMap::from([(
+    ///         "call-1".to_string(),
+    ///         ToolConfirmationDecision::Approve,
+    ///     )]))
+    ///     .build();
+    /// let gate = ToolGate::new(&config, "finance", "inv-1", ApprovalScope::new("app", "u", "s"));
+    ///
+    /// // Asked for by the model, it runs.
+    /// assert!(matches!(
+    ///     adk_core::authorize_tool_call(&gate, call()).await?,
+    ///     ToolAuthorization::Execute { .. }
+    /// ));
+    /// // Asked for by a person through a drawn form, it waits for their decision.
+    /// assert!(matches!(
+    ///     adk_core::authorize_tool_call(&gate, call().requested(true)).await?,
+    ///     ToolAuthorization::Pending { .. }
+    /// ));
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// # }).unwrap();
+    /// ```
+    #[must_use]
+    pub fn requested(mut self, requested: bool) -> Self {
+        self.requested = requested;
+        self
+    }
+
     /// Sets the effect the tool declares.
     #[must_use]
     pub fn with_effect(mut self, effect: ToolEffect) -> Self {
@@ -1389,6 +1454,227 @@ impl GovernedCall {
         self
     }
 }
+
+// ---------------------------------------------------------------------------
+// Requested calls
+// ---------------------------------------------------------------------------
+
+/// Prefix of every [`RequestedCall`]'s function call ID.
+///
+/// It extends [`GENERATED_CALL_ID_PREFIX`](crate::GENERATED_CALL_ID_PREFIX), so the ID never
+/// reaches a model provider, and it lets an agent recognise a held requested call when it
+/// resumes it (spec 3.3 §7.4 rule 5).
+pub const REQUESTED_CALL_ID_PREFIX: &str = "adk-call-requested-";
+
+/// Event metadata key ([`Event::provider_metadata`]) on the events an agent writes for a
+/// [`RequestedCall`]: its JSON, `{ "requestedBy": .., "via": .. }`, so surfaces can tell the
+/// call a person asked for from one the model made (spec 3.3 §7.4 rule 5).
+pub const REQUESTED_CALL_METADATA_KEY: &str = "adk.requested";
+
+/// What a person used to ask for a [`RequestedCall`] (spec 3.3 §7.4 rule 5).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::RequestedViaKind;
+///
+/// assert_eq!(serde_json::to_value(RequestedViaKind::Form).unwrap(), "form");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum RequestedViaKind {
+    /// A form an agent drew: its Send button.
+    Form,
+    /// An app an agent showed: a tool call the app made.
+    App,
+}
+
+/// The drawn surface and action a [`RequestedCall`] came from (spec 3.3 §7.4 rule 5).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{RequestedVia, RequestedViaKind};
+///
+/// let via = RequestedVia::form("invoice-10", 1, "send");
+/// assert_eq!(via.kind, RequestedViaKind::Form);
+/// assert_eq!(
+///     serde_json::to_value(&via).unwrap(),
+///     serde_json::json!({ "kind": "form", "surfaceId": "invoice-10", "version": 1, "actionId": "send" })
+/// );
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestedVia {
+    /// A form or an app.
+    pub kind: RequestedViaKind,
+    /// The drawn surface's ID.
+    pub surface_id: String,
+    /// The surface's version the person saw.
+    pub version: u64,
+    /// The declared action the person used.
+    pub action_id: String,
+}
+
+impl RequestedVia {
+    /// The action `action_id` of version `version` of the form `surface_id`.
+    pub fn form(surface_id: impl Into<String>, version: u64, action_id: impl Into<String>) -> Self {
+        Self {
+            kind: RequestedViaKind::Form,
+            surface_id: surface_id.into(),
+            version,
+            action_id: action_id.into(),
+        }
+    }
+}
+
+/// A tool call a person asked for through something an agent drew — a form's Send, or a
+/// tool call from an app the agent showed (spec 3.3 §7.4 rule 5, §13 decision 13).
+///
+/// A run carries one as [`RunConfig::requested_call`]. The run's root `LlmAgent` takes it
+/// before its first model call: it looks the tool up in its own toolset, checks the
+/// arguments against the tool's parameters and authorizes the call as
+/// [`GovernedCall::requested`], so the call is held for the person's decision as the agent
+/// itself, under its own policy, standing rules, acting context and approval store — or
+/// refused — and the run ends without a model call. Only an authenticated run carries one.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{REQUESTED_CALL_ID_PREFIX, RequestedCall, RequestedVia, SubjectRef};
+/// use serde_json::json;
+///
+/// let call = RequestedCall::new(
+///     "send_invoice",
+///     json!({ "to": "ana@example.com", "amount": 4200, "invoice": "INV-10" }),
+///     SubjectRef::human("ana"),
+///     RequestedVia::form("invoice-10", 1, "send"),
+/// );
+/// assert!(call.function_call_id.starts_with(REQUESTED_CALL_ID_PREFIX));
+///
+/// // The run input a durable worker takes it from.
+/// let wire = serde_json::to_value(&call).unwrap();
+/// assert_eq!(wire["toolName"], "send_invoice");
+/// assert_eq!(serde_json::from_value::<RequestedCall>(wire).unwrap(), call);
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestedCall {
+    /// The tool to call: one in the drawing agent's own toolset.
+    pub tool_name: String,
+    /// The call's arguments, resolved by the surface from what the person typed and the
+    /// constants the drawn surface fixed.
+    pub args: Value,
+    /// The call's ID. It starts with [`REQUESTED_CALL_ID_PREFIX`].
+    pub function_call_id: String,
+    /// The person who asked.
+    pub requested_by: SubjectRef,
+    /// The drawn surface and action they used.
+    pub via: RequestedVia,
+}
+
+impl RequestedCall {
+    /// A call to `tool_name` with `args`, asked for by `requested_by` through `via`, under a
+    /// new ID starting with [`REQUESTED_CALL_ID_PREFIX`].
+    pub fn new(
+        tool_name: impl Into<String>,
+        args: Value,
+        requested_by: SubjectRef,
+        via: RequestedVia,
+    ) -> Self {
+        Self {
+            tool_name: tool_name.into(),
+            args,
+            function_call_id: format!(
+                "{REQUESTED_CALL_ID_PREFIX}{}",
+                uuid::Uuid::new_v4().simple()
+            ),
+            requested_by,
+            via,
+        }
+    }
+
+    /// Whether `function_call_id` names a requested call ([`REQUESTED_CALL_ID_PREFIX`]).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::RequestedCall;
+    ///
+    /// assert!(RequestedCall::is_requested_id("adk-call-requested-1f2e"));
+    /// assert!(!RequestedCall::is_requested_id("toolu_01"));
+    /// ```
+    pub fn is_requested_id(function_call_id: &str) -> bool {
+        function_call_id.starts_with(REQUESTED_CALL_ID_PREFIX)
+    }
+
+    /// The [`REQUESTED_CALL_METADATA_KEY`] value of the events written for this call.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{RequestedCall, RequestedVia, SubjectRef};
+    /// use serde_json::json;
+    ///
+    /// let call = RequestedCall::new(
+    ///     "send_invoice",
+    ///     json!({}),
+    ///     SubjectRef::human("ana"),
+    ///     RequestedVia::form("invoice-10", 2, "send"),
+    /// );
+    /// let metadata: serde_json::Value = serde_json::from_str(&call.metadata()).unwrap();
+    /// assert_eq!(metadata["via"]["version"], 2);
+    /// assert_eq!(metadata["requestedBy"]["id"], "ana");
+    /// ```
+    pub fn metadata(&self) -> String {
+        serde_json::json!({ "requestedBy": self.requested_by, "via": self.via }).to_string()
+    }
+
+    /// Why a requested call may not name `tool_name`, or `None` when it may: the kernel's
+    /// own tools and the tools that draw ([`DRAW_TOOL_NAMES`]) are never asked for through
+    /// a drawing (spec 3.3 §7.4 rule 5).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::RequestedCall;
+    ///
+    /// assert!(RequestedCall::refused_tool("send_invoice").is_none());
+    /// assert!(RequestedCall::refused_tool("verb_snooze").is_none());
+    /// assert!(RequestedCall::refused_tool("kernel_spawn").is_some());
+    /// assert!(RequestedCall::refused_tool("render_form").is_some());
+    /// ```
+    pub fn refused_tool(tool_name: &str) -> Option<&'static str> {
+        if tool_name.starts_with(KERNEL_TOOL_PREFIX) {
+            Some("it is one of the kernel's own tools")
+        } else if DRAW_TOOL_NAMES.contains(&tool_name) {
+            Some("it draws on the person's screens")
+        } else {
+            None
+        }
+    }
+}
+
+/// Name prefix of the kernel's own tools, which a [`RequestedCall`] never names.
+const KERNEL_TOOL_PREFIX: &str = "kernel_";
+
+/// The tools that draw on a person's screens (spec 3.3 §7.4 rule 5): a drawn surface never
+/// binds them, and a [`RequestedCall`] never names them.
+///
+/// # Example
+///
+/// ```rust
+/// assert!(adk_core::DRAW_TOOL_NAMES.contains(&"render_form"));
+/// ```
+pub const DRAW_TOOL_NAMES: &[&str] = &[
+    "render_form",
+    "render_card",
+    "render_table",
+    "render_screen",
+    "patch_surface",
+    "delete_surface",
+];
 
 /// The run-wide inputs [`authorize_tool_call`] reads.
 pub struct ToolGate<'a> {
@@ -1580,6 +1866,7 @@ pub async fn authorize_tool_call(
         requires_confirmation,
         origin,
         resumes,
+        requested,
     } = call;
     let audited = AuditedCall {
         gate,
@@ -1665,6 +1952,45 @@ pub async fn authorize_tool_call(
             });
         }
     };
+
+    // The press is the request, never the approval (spec 3.3 §7.4 rule 5): no earlier
+    // decision and no handler answers the first authorization of a call a person asked for.
+    if requested && resumes.is_none() {
+        let request = ToolConfirmationRequest {
+            tool_name: tool_name.clone(),
+            function_call_id: Some(function_call_id.clone()),
+            args: args.clone(),
+            acting: Some(Box::new(gate.acting.clone())),
+            origin: origin.clone(),
+        };
+        // A decision recorded before the person asked would otherwise answer the call when
+        // it resumes.
+        if let Some(store) = &config.approval_store
+            && store.take_approval(&gate.scope, &request.fingerprint()).await?.is_some()
+        {
+            tracing::info!(
+                tool.name = %tool_name,
+                agent.id = %gate.acting.agent.id,
+                "discarded a decision recorded before the person asked for the call"
+            );
+        }
+        let held_by = if approval_reason.is_some() {
+            policy_ref.as_deref()
+        } else {
+            Some(POLICY_REF_REQUESTED)
+        };
+        audited
+            .decision(&args, AuditDecision::ApprovalRequired, held_by, approval_reason.as_deref())
+            .await?;
+        let reason = format!(
+            "Tool '{tool_name}' requires confirmation: {}",
+            approval_reason.as_deref().unwrap_or("a person asked for it")
+        );
+        record_held_call(gate, &request, &reason).await?;
+        return Ok(ToolAuthorization::Pending { request, reason });
+    }
+    // A requested call that resumes runs only on its decision.
+    let requires_confirmation = requires_confirmation || requested;
 
     if !requires_confirmation && approval_reason.is_none() {
         tracing::debug!(
@@ -2122,6 +2448,8 @@ const POLICY_REF_TOOL_POLICY: &str = "tool_policy";
 const POLICY_REF_GUARDRAIL: &str = "guardrail";
 /// `policy_ref` of a call decided by its confirmation.
 const POLICY_REF_CONFIRMATION: &str = "confirmation";
+/// `policy_ref` of a call held because a person asked for it ([`GovernedCall::requested`]).
+const POLICY_REF_REQUESTED: &str = "requested_call";
 
 /// One call on its way through [`authorize_tool_call`], for its policy evaluations and
 /// audit records.
@@ -5129,5 +5457,188 @@ mod tests {
         );
         assert!(!records[1].ext.contains_key("toolSource"), "{:?}", records[1]);
         assert!(!records[1].ext.contains_key("declarationDigest"), "{:?}", records[1]);
+    }
+
+    /// Approves every call and counts how often it was asked.
+    #[derive(Debug, Default)]
+    struct CountingApproves(std::sync::atomic::AtomicUsize);
+
+    #[async_trait]
+    impl ToolConfirmationHandler for CountingApproves {
+        async fn decide(
+            &self,
+            _request: &ToolConfirmationRequest,
+        ) -> Result<ToolConfirmationDecision> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(ToolConfirmationDecision::Approve)
+        }
+    }
+
+    /// The policy of the requested-call tests: Go ahead for `send_invoice`.
+    fn allows_send_invoice() -> Arc<dyn crate::ToolPolicy> {
+        Arc::new(DeclarativePolicy::builder().allow("send_invoice").build())
+    }
+
+    fn invoice_args() -> Value {
+        json!({ "to": "ana@example.com", "amount": 4200, "invoice": "INV-10" })
+    }
+
+    /// Spec 3.3 §7.4 rule 5, wave 4 decision 12: the press is never the approval. A call
+    /// the policy allows, with a call-ID decision, a fingerprint approval, a decision stored
+    /// before the person asked and a handler that approves everything, is still held for
+    /// the person, as the agent, and the stored decision is spent.
+    #[tokio::test]
+    async fn a_requested_call_waits_for_the_person_whatever_answered_before() {
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let handler = Arc::new(CountingApproves::default());
+        let scope = ApprovalScope::new("app", "user", "session");
+        let fingerprint = key("send_invoice", &invoice_args());
+        store.decide(&scope, &fingerprint, ToolApproval::approve()).await.unwrap();
+        let config = RunConfig::builder()
+            .tool_policy(allows_send_invoice())
+            .tool_confirmation_decisions(HashMap::from([(
+                "c1".to_string(),
+                ToolConfirmationDecision::Approve,
+            )]))
+            .tool_approval(fingerprint.clone(), ToolApproval::approve())
+            .tool_confirmation_handler(handler.clone())
+            .approval_store(store.clone())
+            .build();
+        let gate = gate(&config);
+        let call = GovernedCall::new("send_invoice", "c1", invoice_args());
+
+        // Asked for by the model, the same call runs.
+        assert!(matches!(
+            authorize_tool_call(&gate, call.clone()).await.unwrap(),
+            ToolAuthorization::Execute { .. }
+        ));
+
+        let held = ToolConfirmationRequest::new("send_invoice", invoice_args())
+            .with_function_call_id("c1")
+            .with_acting_context(gate.acting_context().clone());
+        store.decide(&scope, &fingerprint, ToolApproval::approve()).await.unwrap();
+        assert_eq!(
+            authorize_tool_call(&gate, call.requested(true)).await.unwrap(),
+            ToolAuthorization::Pending {
+                request: held.clone(),
+                reason: "Tool 'send_invoice' requires confirmation: a person asked for it".into(),
+            }
+        );
+        assert_eq!(handler.0.load(Ordering::SeqCst), 0, "the handler was never asked");
+        assert!(
+            !store.has_decision(&scope, &fingerprint).await.unwrap(),
+            "the decision stored before the person asked is spent"
+        );
+        let pending = store.pending(&scope).await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].request, held, "held as the agent, for the person");
+    }
+
+    /// The kill switch, the policy and the screen still refuse a requested call.
+    #[tokio::test]
+    async fn a_requested_call_is_refused_by_the_policy_the_screen_and_the_kill_switch() {
+        let denies = DeclarativePolicy::builder().deny("send_invoice", "not on this home").build();
+        let config = RunConfig::builder().tool_policy(Arc::new(denies)).build();
+        let call = || GovernedCall::new("send_invoice", "c1", invoice_args()).requested(true);
+        assert_eq!(
+            authorize_tool_call(&gate(&config), call()).await.unwrap(),
+            ToolAuthorization::Refuse {
+                reason: "Tool 'send_invoice' denied by policy: not on this home".into(),
+                confirmation: None,
+            }
+        );
+
+        struct Refuses;
+        #[async_trait]
+        impl ToolCallScreen for Refuses {
+            async fn screen(
+                &self,
+                _tool: &str,
+                _args: &Value,
+            ) -> std::result::Result<Value, String> {
+                Err("the guardrail refused it".into())
+            }
+        }
+        let config = RunConfig::builder().tool_policy(allows_send_invoice()).build();
+        let screen = Refuses;
+        assert_eq!(
+            authorize_tool_call(&gate(&config).with_screen(&screen), call()).await.unwrap(),
+            ToolAuthorization::Refuse {
+                reason: "the guardrail refused it".into(),
+                confirmation: None
+            }
+        );
+
+        let control = GovernanceControl::new();
+        control.freeze("drill");
+        let config = RunConfig::builder().governance(control).build();
+        let error = authorize_tool_call(&gate(&config), call()).await.unwrap_err();
+        assert_eq!(error.code, GOVERNANCE_FROZEN_CODE);
+    }
+
+    /// A requested call resumes on its decision only: a Deny stands even when the policy
+    /// allows the tool, and an Allow once runs it once.
+    #[tokio::test]
+    async fn a_resumed_requested_call_runs_only_on_the_persons_decision() {
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let config = RunConfig::builder()
+            .tool_policy(allows_send_invoice())
+            .approval_store(store.clone())
+            .build();
+        let gate = gate(&config);
+        let scope = ApprovalScope::new("app", "user", "session");
+        let origin = ToolOrigin::new("static", &json!({ "name": "send_invoice" }), None);
+        let call = || {
+            let mut call = GovernedCall::new("send_invoice", "c1", invoice_args()).requested(true);
+            call.origin = Some(origin.clone());
+            call
+        };
+        let ToolAuthorization::Pending { request, .. } =
+            authorize_tool_call(&gate, call()).await.unwrap()
+        else {
+            panic!("a requested call is held");
+        };
+
+        store.decide(&scope, &request.fingerprint(), ToolApproval::deny()).await.unwrap();
+        assert_eq!(
+            authorize_tool_call(&gate, call().resuming(request.clone())).await.unwrap(),
+            ToolAuthorization::Refuse {
+                reason: "Tool 'send_invoice' execution denied by confirmation policy".into(),
+                confirmation: Some(ToolConfirmationDecision::Deny),
+            }
+        );
+
+        store.record_pending(&scope, &request).await.unwrap();
+        store.decide(&scope, &request.fingerprint(), ToolApproval::approve()).await.unwrap();
+        assert_eq!(
+            authorize_tool_call(&gate, call().resuming(request.clone())).await.unwrap(),
+            ToolAuthorization::Execute {
+                args: invoice_args(),
+                confirmation: Some(ToolConfirmationDecision::Approve),
+            }
+        );
+        assert!(
+            matches!(
+                authorize_tool_call(&gate, call().resuming(request)).await.unwrap(),
+                ToolAuthorization::Pending { .. }
+            ),
+            "the decision is spent by the call it ran"
+        );
+    }
+
+    /// A requested call's first hold is recorded as held because a person asked for it.
+    #[tokio::test]
+    async fn a_requested_call_is_recorded_as_held_for_the_person() {
+        let recorder = crate::audit_log::InMemoryAuditRecorder::new();
+        let config = RunConfig::builder()
+            .tool_policy(allows_send_invoice())
+            .audit(AuditTrail::new(Arc::new(recorder.clone())))
+            .build();
+        let call = GovernedCall::new("send_invoice", "c1", invoice_args()).requested(true);
+        authorize_tool_call(&gate(&config), call).await.unwrap();
+        let records = recorder.records();
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0].decision, Some(AuditDecision::ApprovalRequired));
+        assert_eq!(records[0].policy_ref.as_deref(), Some(POLICY_REF_REQUESTED));
     }
 }

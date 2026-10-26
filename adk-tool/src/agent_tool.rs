@@ -247,6 +247,7 @@ fn delegated_run_config(parent: RunConfig) -> RunConfig {
         audit,
         acting,
         deny_on_confirmation_timeout,
+        requested_call: _,
     } = parent;
     RunConfig {
         // The delegate's output is read whole.
@@ -286,6 +287,8 @@ fn delegated_run_config(parent: RunConfig) -> RunConfig {
         audit,
         acting,
         deny_on_confirmation_timeout,
+        // The person asked the caller's agent; a delegate never takes the call.
+        requested_call: None,
     }
 }
 
