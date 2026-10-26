@@ -242,6 +242,8 @@ later marks it with `OrderBook::set_status`.
 |------|-------|
 | `deploy::PaymentLinks` | Nothing: answers with the owner's payment instructions from `payments.json` |
 | `edge::ap2::Ap2Desk` | AP2: `place_order` returns the site's cart signed by the edge's `receipt` key as `payment.cartMandate`; `pay_order` with the buyer's mandate for that cart runs through `adk-payments`' merchant-side `Ap2Adapter` — the cart, total and expiry checked, the buyer's authorisation verified, the mandate used once — and the owner's payment processor; the answer carries a receipt signed by the `receipt` key |
+| `edge::token::TokenDesk` | Token rails, such as `card`: `pay_order` with the single-use token the buyer's payment provider issued (`credential`) hands it to the owner's payment processor with the order's total and the call's idempotency key, and answers with a receipt signed by the `receipt` key. The token reaches the processor only — never the journal, the answer or a log; a call on another rail, without a token, or with a token the processor declines pays nothing |
+| `edge::token::PaymentRails` | Several desks by rail: `pay_order`'s `rail` picks the desk, so an AP2 desk and token rails serve one site; a call naming no rail goes to the first desk |
 
 ```rust
 use std::sync::Arc;
@@ -271,6 +273,77 @@ The desk picks no payment processor: give it the owner's `PaymentExecutionServic
 its journal in the site's session and artifact services in production;
 `edge::ap2::SandboxProcessor` moves no money and is for tests and sandboxes. A served site
 takes the desk as `SiteOptions::payments`.
+
+A token rail beside AP2:
+
+```rust
+use std::sync::Arc;
+
+use adk_awp::signing::jws::DocumentSigner;
+use adk_core::identity::AdkIdentity;
+use adk_payments::kernel::{PaymentExecutionService, TransactionStore};
+use adk_website::edge::ap2::{AP2_RAIL, Ap2Desk};
+use adk_website::edge::handlers::PaymentDesk;
+use adk_website::edge::token::{PaymentRails, TokenDesk};
+
+fn rails(
+    ap2: Ap2Desk,
+    receipt_key: Arc<dyn DocumentSigner>,
+    processor: Arc<dyn PaymentExecutionService>,
+    transactions: Arc<dyn TransactionStore>,
+    identity: AdkIdentity,
+) -> adk_core::Result<PaymentRails> {
+    let cards = TokenDesk::builder("Juniper Bakery", receipt_key)
+        .rail("card")
+        .processor(processor)
+        .journal(transactions, identity)
+        .build()?;
+    Ok(PaymentRails::new()
+        .rail(AP2_RAIL, Arc::new(ap2) as Arc<dyn PaymentDesk>)
+        .rail("card", Arc::new(cards) as Arc<dyn PaymentDesk>))
+}
+```
+
+The processor redeems the token with the provider that issued it: the command's
+`selected_payment_method` is `single_use_token` with the token as its `reference`, and its
+`awp-token` extension carries the rail and the idempotency key.
+
+## Bookings
+
+`check_availability`, `book` and `book_appointment` read and take the slots of the owner's
+`Calendar`; a taken slot answers `inventory_unavailable`.
+
+| Calendar | Slots |
+|----------|-------|
+| `edge::handlers::InMemoryCalendar` | A fixed list: `calendar.json` in a served site, a list of `{id, startsAt, minutes, price}` |
+| `edge::caldav::CalDavCalendar` | The owner's CalDAV calendar (RFC 4791) on Nextcloud, Fastmail, iCloud, Radicale, Baïkal, Google or any CalDAV server: `caldav.json` in a served site, or `SiteOptions::calendar` |
+
+A CalDAV calendar reads two collections. Every event of the **slots** collection is a bookable
+slot, and a recurring event one slot per occurrence, which the server expands. Bookings go to
+the **bookings** collection — the slots' own by default, or the owner's everyday calendar,
+whose busy events then also block the slots they overlap; transparent and cancelled events
+block nothing. Each booking is one event under a name derived from its slot, written with
+`If-None-Match: *`, so a slot is booked once whichever process, site or caller asks first; a
+retry with the same booking key answers as booked. A booking event carries the slot and the
+booking key and no personal data — the contact stays in the site's contact book. A slot's
+`X-ADK-PRICE` property (minor units) prices it for the owner's amount thresholds, else the
+calendar's price.
+
+```json
+{
+  "slots": "https://dav.example.com/calendars/juniper/open-slots/",
+  "bookings": "https://dav.example.com/calendars/juniper/personal/",
+  "username": "juniper",
+  "password": "env:JUNIPER_CALDAV_PASSWORD",
+  "price": 1500,
+  "timeZone": "Africa/Nairobi"
+}
+```
+
+Secrets in `caldav.json` are references — `env:VAR` or `file:PATH` relative to the project —
+never the secret itself; `token` takes an OAuth bearer token in place of `username` and
+`password`. The server must be `https`, or plain `http` on loopback, since the credentials
+travel with every request.
 
 ## Checking a pack
 

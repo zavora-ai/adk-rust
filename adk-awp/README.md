@@ -112,7 +112,7 @@ fn edge() -> axum::Router {
 | `signing::card` | `sign_agent_card`, `verify_agent_card` by a `card` key | §7.4.2 |
 | `signing::log` | Log entries, C2SP tiles and entry bundles, the signed checkpoint | §14.5 |
 | `signing::bundle` | `StaticBundle`: the signed contract, `keys.json` and public terms, deterministic | §4, §13.2 |
-| `verify` | `Verifier`: the fourteen steps of §15.2, each failure by name; pins per domain (`InMemoryPinStore`, `FilePinStore`); posture and readiness; `HttpFetcher` (`GET` only, no redirects, optional `RequestSigner` for Web Bot Auth) and `RouterFetcher` | §15 |
+| `verify` | `Verifier`: the fourteen steps of §15.2, each failure by name; pins per domain (`InMemoryPinStore`, `FilePinStore`); posture and readiness; `verify_preview` for the next release before it is logged, bound by its staged manifest digest; `HttpFetcher` (`GET` only, no redirects, optional `RequestSigner` for Web Bot Auth) and `RouterFetcher` | §15 |
 | `conformance` | `run`: S1–S9 and E1–E13 by profile, passive, with `GET`-only edge checks behind `active_edge_checks`; `rules::check_document`; `fixture::FixtureSite`; `vectors` | §16 |
 
 ```toml

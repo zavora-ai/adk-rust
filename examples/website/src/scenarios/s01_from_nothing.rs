@@ -7,7 +7,8 @@
 //!
 //! Pass condition: charter v1 signed with every KPI carrying a baseline source; every page
 //! maps to a charter goal; zero published claims from `Assumed` facts; launch gate green;
-//! release 1 signed; `awp verify` passes on the local deployment.
+//! release 1 signed; `awp verify` passes on the local deployment, and against the preview of
+//! the next release in the launch gate.
 
 use std::sync::Arc;
 
@@ -24,6 +25,7 @@ use adk_kernel::charter::{CharterStore, RoleApproval};
 use adk_kernel::pairing::{InMemoryDeviceStore, Pairing};
 use adk_model::ScriptedResponse;
 use adk_site::content::ContentStore;
+use adk_site::gate::{CheckStatus, GateCheck, PreviewVerification};
 use adk_website::contract::{ContractInputs, add_to_project, site_documents};
 use adk_website::kinds::CharterInputs;
 use adk_website::onboarding::build::{
@@ -369,6 +371,28 @@ pub async fn run(mode: Mode) -> Result<Checks> {
         ),
     );
     progress.complete(Stage::ConnectAndDeploy, Some(1)).await;
+
+    // From now on the launch gate's full tier runs `awp verify` against the preview of the
+    // next release: the working copy staged over the host's log of release 1, the Agent Card
+    // read from the edge (spec 3.5 §7.8.1 "Machine views").
+    site.gate = site.gate.clone().with_extension(Arc::new(
+        PreviewVerification::new(
+            "juniper.example",
+            site.host.clone(),
+            Arc::new(FixedTxtResolver::default().with(&record, &value)),
+        )
+        .with_fetcher(Arc::new(RouterFetcher::new(site_edge.router.clone()))),
+    ));
+    let preview = site.assemble(Some(ThemeId::Harbour)).run_launch_gate().await?;
+    let verified = preview.check(GateCheck::AwpVerify);
+    checks.check(
+        "awp verify passes against the preview of release 2",
+        verified.is_some_and(|check| {
+            check.status == CheckStatus::Passed
+                && check.note.as_deref().is_some_and(|note| note.contains("release 2"))
+        }),
+        format!("{verified:?}"),
+    );
 
     // Every published page maps to a goal; no claim rests on an Assumed fact (A-I18).
     let assumed: Vec<String> = site

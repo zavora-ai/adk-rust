@@ -238,6 +238,14 @@ async fn verify() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+`Verifier::verify_preview(domain, &staged_digest)` runs the same procedure against a preview
+of the next release, which the log does not hold yet: steps 7 and 8 cover the logged
+releases — none before the first — and step 10 checks that the manifest served after the
+checkpoint has the digest its staging recorded. A preview pins nothing. `adk-site`'s
+`gate::PreviewVerification` (feature `verify`) is the launch-gate check built on it: the full
+tier stages the build over the site log its host serves and reports `GateCheck::AwpVerify`,
+each failure under its step's name ([A served site](adk-website.md#a-served-site)).
+
 `adk-awp` has no network DNS resolver of its own: pass a `DnsTxtResolver`, as
 `adk-rust awp verify` does, or `FixedTxtResolver` with the record you expect. The conformance
 kit, `adk_awp::conformance::run`, checks any AWP 2.0 implementation; `adk-rust awp verify

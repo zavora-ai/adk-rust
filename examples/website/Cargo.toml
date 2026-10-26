@@ -29,7 +29,7 @@ adk-payments = { path = "../../adk-payments", features = ["wallet", "ap2"] }
 adk-runner = { path = "../../adk-runner", default-features = false }
 adk-server = { path = "../../adk-server", features = ["background", "awp", "awp-sqlite"] }
 adk-session = { path = "../../adk-session" }
-adk-site = { path = "../../adk-site", features = ["migrate"] }
+adk-site = { path = "../../adk-site", features = ["migrate", "verify"] }
 adk-tool = { path = "../../adk-tool" }
 adk-website = { path = "../../adk-website" }
 awp-types = { path = "../../awp-types" }

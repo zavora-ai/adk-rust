@@ -132,6 +132,35 @@ async fn verify(host: &dyn SiteHost, domain: &str, key: &NoteVerifier) -> adk_si
 }
 ```
 
+## `awp verify` against the preview (feature `verify`)
+
+The launch gate's `PreviewVerification` extension runs `adk-awp`'s whole verification
+procedure against the release a build would publish: it stages the build after the latest
+release the host's checkpoint names and verifies it as served over that log, the preview's
+manifest bound by its staged digest (spec 3.5 §7.8.1 "Machine views"). It runs in the full
+tier and reports `GateCheck::AwpVerify`, each failure under its AWP 2.0 §15.2 name.
+
+```toml
+[dependencies]
+adk-site = { version = "3.0.0", features = ["verify"] }
+```
+
+```rust
+use std::sync::Arc;
+
+use adk_awp::signing::anchor::FixedTxtResolver;
+use adk_site::gate::{LaunchGate, PreviewVerification};
+use adk_site::host::DirectoryHost;
+
+fn gate(record: &str, value: &str) -> LaunchGate {
+    let host = Arc::new(DirectoryHost::new("/srv/example.com"));
+    let anchor = Arc::new(FixedTxtResolver::default().with(record, value));
+    LaunchGate::new().with_extension(Arc::new(PreviewVerification::new("example.com", host, anchor)))
+}
+```
+
+`with_fetcher` reads what the release does not hold, such as an Agent Card the edge serves.
+
 ## Migrating a site (feature `migrate`)
 
 ```toml

@@ -83,14 +83,29 @@ fn money(currency: &str, minor: u64) -> std::result::Result<Money, CapabilityErr
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// use std::sync::Arc;
+///
+/// use adk_awp::signing::jws::DocumentSigner;
+/// use adk_core::identity::AdkIdentity;
+/// use adk_payments::kernel::PaymentExecutionService;
+/// use adk_website::edge::ap2::in_memory_journal;
+/// use adk_website::edge::token::TokenDesk;
+///
+/// # async fn demo(
+/// #     receipt_key: Arc<dyn DocumentSigner>,
+/// #     owner_processor: Arc<dyn PaymentExecutionService>,
+/// #     identity: AdkIdentity,
+/// # ) -> adk_core::Result<()> {
 /// let (transactions, _) = in_memory_journal(&identity).await?;
 /// let desk = TokenDesk::builder("Juniper Bakery", receipt_key)
 ///     .rail("card")
 ///     .processor(owner_processor)
 ///     .journal(transactions, identity)
 ///     .build()?;
-/// let parts = SiteEdgeParts { payments: Some(Arc::new(desk)), ..parts };
+/// assert!(desk.rails().contains("card"));
+/// # Ok(())
+/// # }
 /// ```
 pub struct TokenDesk {
     merchant: MerchantRef,
@@ -377,11 +392,19 @@ impl PaymentDesk for TokenDesk {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// use std::sync::Arc;
+///
+/// use adk_website::edge::ap2::{AP2_RAIL, Ap2Desk};
+/// use adk_website::edge::handlers::PaymentDesk;
+/// use adk_website::edge::token::{PaymentRails, TokenDesk};
+///
+/// # fn demo(ap2_desk: Ap2Desk, token_desk: TokenDesk) {
 /// let rails = PaymentRails::new()
-///     .rail(AP2_RAIL, Arc::new(ap2_desk))
-///     .rail("card", Arc::new(token_desk));
-/// let parts = SiteEdgeParts { payments: Some(Arc::new(rails)), ..parts };
+///     .rail(AP2_RAIL, Arc::new(ap2_desk) as Arc<dyn PaymentDesk>)
+///     .rail("card", Arc::new(token_desk) as Arc<dyn PaymentDesk>);
+/// # let _ = rails;
+/// # }
 /// ```
 #[derive(Default)]
 pub struct PaymentRails {

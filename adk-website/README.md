@@ -134,7 +134,10 @@ consent receipts, holds — before a handler sees a call.
 | `SearchHandler`, `ListingHandler`, `StatusHandler` | `search_site`, the listings of published items, `lookup_status` |
 
 `edge::ap2::Ap2Desk` takes payments under AP2 with the site as the merchant, over
-`adk-payments`' `Ap2Adapter` and the owner's payment processor. `packs::ApprovalThresholds`
+`adk-payments`' `Ap2Adapter` and the owner's payment processor; `edge::token::TokenDesk` takes
+`pay_order`'s single-use `credential` on token rails such as `card`, and
+`edge::token::PaymentRails` serves both by rail. `edge::caldav::CalDavCalendar` books the
+owner's slots in any CalDAV calendar, each slot once. `packs::ApprovalThresholds`
 (`approvals.json` in a served site) holds orders, bookings and payments above the owner's
 amounts for a decision. `TeamKit::wallet` gives the Finance agent `wallet_pay` and
 `wallet_status` over the owner's wallet.
@@ -162,6 +165,7 @@ CLI and the running site share one log, host and journal:
 | `site.toml`, `content/`, `theme/`, `public-terms.json`, `capabilities.json` | The content repository |
 | `well-known/`, `static/` | Released under `/.well-known/` (the owner's signed contract and `keys.json`) and at their own paths |
 | `feeds.json`, `calendar.json`, `payments.json` | Feeds with their bounds, bookable slots, payment links; each optional |
+| `caldav.json` | The owner's CalDAV calendar of open slots, in place of `calendar.json`; secrets as `env:VAR` or `file:PATH`; optional |
 | `approvals.json` | The owner's amount thresholds, such as `{"place_order": 20000}`; optional |
 | `data/site-log.db`, `data/host/`, `data/history/` | The site log, the `DirectoryHost`, every saved version |
 | `data/keys/` | `release.jwk`, `card.jwk` (and `receipt.jwk`) as private JWKs, made on first start, owner-only; never the root |
