@@ -12,6 +12,7 @@
 //! | [`ExperimentGenerator`] | Wraps the site's generator: each running experiment's variant is its own static file under `/_exp/{id}/`, and its pages load `/_awp/experiments.js` | §7.8, §7.12 |
 //! | [`ExperimentRunner`] | Starts experiments, reads each day's per-arm counts, feeds the cumulative totals to `ExperimentAnalyzer` as a `Look`, keeps its `ExperimentState`, pauses the job on a guardrail breach, writes the review's evidence | §7.12, A-I15, §7.21 |
 //! | [`ExperimentStore`] | Every experiment's record between looks: in memory or as JSON files | §7.12 |
+//! | [`experiment_tools`] | The Growth agent's `experiment_start` and `experiment_report` over the runner | §7.12, §7.20 |
 //!
 //! # How an experiment runs
 //!
@@ -76,6 +77,7 @@ mod build;
 mod publish;
 mod runner;
 mod store;
+mod tools;
 
 pub use build::ExperimentGenerator;
 pub use publish::RepublishOnStop;
@@ -84,6 +86,7 @@ pub use store::{
     ArmCounts, Arms, ExperimentRecord, ExperimentStatus, ExperimentStore, FileExperimentStore,
     GuardedMetric, InMemoryExperimentStore,
 };
+pub use tools::experiment_tools;
 
 /// The job that runs experiments (spec 3.5 §7.20).
 pub const EXPERIMENTS_JOB: &str = "experiments";

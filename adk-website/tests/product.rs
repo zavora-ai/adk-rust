@@ -229,6 +229,8 @@ async fn a_business_runs_all_eight_agents_and_public_agents_carry_the_kinds_inst
     };
     let built = site.team.build(&kit).await.unwrap();
     assert_eq!(built.roles(), AgentRole::ALL);
+    let root = built.compile().expect("the Steward's delegate edges compile over harness agents");
+    assert_eq!(adk_core::Agent::name(&root), built.back_office.name);
     let spec = &built.back_office;
     let delegates: Vec<&str> = spec.relationships.iter().map(|r| r.to.as_str()).collect();
     assert_eq!(

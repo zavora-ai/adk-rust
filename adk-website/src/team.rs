@@ -270,9 +270,16 @@ impl AgentRole {
                 "site_publish",
                 "launch_gate_run",
                 "awp_verify",
+                "social_post",
+                "experiment_start",
+                "experiment_report",
             ],
-            Self::Revenue => &["content_draft", "release_preview"],
-            Self::Guardian => &["site_rollback", "host_fetch", "awp_verify", "launch_gate_run"],
+            Self::Revenue => {
+                &["content_draft", "release_preview", "email_send_sequence_step", "lead_handoff"]
+            }
+            Self::Guardian => {
+                &["site_rollback", "edge_read_only", "host_fetch", "awp_verify", "launch_gate_run"]
+            }
             Self::Finance => &["wallet_pay", "wallet_status"],
         }
     }
@@ -314,8 +321,9 @@ pub struct TeamKit {
     pub configure: Arc<dyn Fn(AgentRole, HarnessAgentBuilder) -> HarnessAgentBuilder + Send + Sync>,
 }
 
-/// A built team: every agent the kind runs, and the back office as one validated team with
-/// the Steward as coordinator (spec 3.5 §7.19).
+/// A built team: every agent the kind runs, and the back office as one team with the Steward
+/// as coordinator, which [`compile`](Self::compile) turns into one runner root (spec 3.5
+/// §7.19).
 pub struct BuiltTeam {
     /// The agents, by role.
     pub agents: BTreeMap<AgentRole, Arc<HarnessAgent>>,
@@ -479,7 +487,7 @@ impl SiteTeam {
         self.runs(role).then_some(role)
     }
 
-    /// Builds every agent the kind runs and validates the back office's team (spec 3.5
+    /// Builds every agent the kind runs and compiles the back office's team (spec 3.5
     /// §7.19): each public agent with `website_public`, each back-office agent with
     /// `website_back_office`, the ladder's mode for its jobs and the run budget of its jobs
     /// acting within budget. Each agent's workspace holds its jobs' playbooks.
@@ -487,7 +495,7 @@ impl SiteTeam {
     /// # Errors
     ///
     /// Returns the autonomy store's, the workspace's or the builder's error, or a team
-    /// error when the back office's team does not validate.
+    /// error when the back office's team does not compile over the built agents.
     pub async fn build(&self, kit: &TeamKit) -> Result<BuiltTeam> {
         let ladder = &kit.back_office.ladder;
         let levels = job_levels(ladder, kit.back_office.autonomy.as_ref(), self.site.id).await?;
@@ -520,11 +528,11 @@ impl SiteTeam {
             let agent = (kit.configure)(*role, builder).build()?;
             agents.insert(*role, Arc::new(agent));
         }
-        let back_office = self.spec();
-        back_office.validate().map_err(|error| {
-            AdkError::config(format!("the back office is not a valid team: {error}"))
-        })?;
-        Ok(BuiltTeam { agents, back_office })
+        let built = BuiltTeam { agents, back_office: self.spec() };
+        // The Steward's delegate edges compile: a harness consumes the runtime toolsets a
+        // team gives its coordinator (spec 3.5 §7.19).
+        built.compile()?;
+        Ok(built)
     }
 }
 

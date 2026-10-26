@@ -109,8 +109,8 @@ pub async fn run(mode: Mode) -> Result<Checks> {
     // outbox no consent source of its own; the visitor's receipt is mirrored into it here.
     checks.gap(
         "the product wires no email outbox: `adk-drivers`' `EmailOutbox` and `email_tools` reach \
-         no agent, the nurture and handoff jobs bind no tools, and no adapter turns the edge's \
-         consent receipts into the outbox's `ConsentCheck`; the scenario wires all three",
+         no agent, and no adapter turns the edge's consent receipts into the outbox's \
+         `ConsentCheck`; the scenario wires both",
     );
     let mail = Arc::new(InMemoryEmail::new());
     let consent = Arc::new(InMemoryConsent::new());
@@ -134,8 +134,8 @@ pub async fn run(mode: Mode) -> Result<Checks> {
     );
     let tools = email_tools(outbox, Side::BackOffice);
     // After the first week the owner raised nurture to its template's level, one rung per
-    // decision (D-7).
-    let compiler = site.compiler(&charter);
+    // decision (D-7); each standing rule pins the outbox's tools the agent is given.
+    let compiler = site.compiler(&charter).with_tool_origins(&tools);
     for n in 0..4 {
         if site.ladder.level(site.site.id, "nurture").await?
             == Some(awp_types::AutonomyLevel::ActWithinBudget)
@@ -197,13 +197,11 @@ pub async fn run(mode: Mode) -> Result<Checks> {
              exists for a sequence, so a careful live agent declines to nurture on a contact consent",
         );
     }
-    if !sends.held().is_empty() {
-        checks.gap(format!(
-            "each nurture email waits for the owner: the nurture job binds no tool, so its \
-             promotion grants no standing rule and the harness holds every external send ({} held)",
-            sends.held().len()
-        ));
-    }
+    checks.check(
+        "the nurture job's standing rules let its sends run without a hold",
+        sends.held().is_empty(),
+        format!("{} send(s) held for the owner", sends.held().len()),
+    );
     let quiet = adk_website::alarms::quiet_hours(&charter.reporting);
     let now = chrono::Utc::now();
     let disclosed = sent.iter().all(|m| {
@@ -237,8 +235,8 @@ pub async fn run(mode: Mode) -> Result<Checks> {
         .filter(|v| !v.is_null());
     checks.gap(
         "no lead score: the edge records `score: None` and nothing in the charter, the kernel or \
-         the product scores a lead or holds a handoff threshold; the handoff job binds no tool to \
-         send the owner a card",
+         the product scores a lead or holds a handoff threshold, so nothing calls the handoff \
+         job's `lead_handoff` to send the owner a card",
     );
     checks.check(
         "the lead's score crosses the charter threshold",

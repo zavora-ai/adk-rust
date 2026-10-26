@@ -18,8 +18,7 @@ use std::time::Duration;
 use adk_core::{AdkError, Result};
 use adk_kernel::control::ControlPlaneConfig;
 use adk_kernel::pairing::{IssuedCode, Pairing};
-use adk_kernel::wake::Wake;
-use adk_kernel::{CronWakeSource, Kernel, KernelConfig, SourceWatermark};
+use adk_kernel::{Kernel, KernelConfig};
 use serde::Deserialize;
 use tokio::task::JoinHandle;
 
@@ -133,15 +132,10 @@ async fn start(
     } else {
         Some(SetupGate::new(pairing.clone(), options.site.owner.clone()).issue().await?)
     };
-    // The kernel binds its control plane itself; a port of 0 is resolved first so the
-    // address it listens on is known.
-    let kernel_addr = if options.kernel.port() == 0 {
-        std::net::TcpListener::bind(options.kernel).and_then(|l| l.local_addr()).map_err(config)?
-    } else {
-        options.kernel
-    };
-    let control =
-        ControlPlaneConfig::default().without_socket().with_http(kernel_addr).with_pairing(pairing);
+    let control = ControlPlaneConfig::default()
+        .without_socket()
+        .with_http(options.kernel)
+        .with_pairing(pairing);
     let mut site_workflows = SiteWorkflows::new();
     let mut triggers = Vec::new();
     let mut builder = Kernel::builder()
@@ -149,7 +143,8 @@ async fn start(
         .run_store(stores.runs.clone())
         .approval_service(stores.approvals.clone())
         .partitions(stores.partitions.clone())
-        .agenda_store(stores.agenda.clone());
+        .agenda_store(stores.agenda.clone())
+        .watermark_store(stores.watermarks.clone());
     for site in &sites {
         triggers.extend(site.triggers().iter().cloned());
         if let Some(target) = site.digest_target(&options.site) {
@@ -163,25 +158,19 @@ async fn start(
             }
         }
     }
-    // A standing trigger's cron expression fires through its own watermarked source.
+    // The kernel fires each standing trigger's cron expression through one watermarked
+    // source of its own, its cursor in the project's store.
     for trigger in triggers {
-        if let Wake::Cron { expr, missed } = &trigger.wake {
-            let watermark = SourceWatermark::new(stores.watermarks.clone(), trigger.name.clone());
-            let source = CronWakeSource::watermarked(
-                trigger.name.clone(),
-                expr,
-                *missed,
-                Arc::new(watermark),
-            )
-            .map_err(config)?;
-            builder = builder.wake_source(Arc::new(source));
-        }
         builder = builder.trigger(trigger);
     }
     let workflows =
         ServedWorkflows::new(site_workflows, sites.iter().map(|site| site.experiments.clone()));
     let kernel = builder.workflows(Arc::new(workflows)).build().map_err(config)?;
     kernel.start().await.map_err(config)?;
+    let kernel_addr = kernel
+        .control_addr()
+        .await
+        .ok_or_else(|| config("the kernel's control plane is not listening"))?;
     let idle = options.site.idle.unwrap_or(Duration::from_secs(60));
     for site in &mut sites {
         site.start(idle);
