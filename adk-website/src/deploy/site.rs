@@ -12,6 +12,8 @@
 //! | Review | `ReviewComposer` with the alarms, the experiments and the updates |
 //! | Leads | The contact book and nurture counts in `data/edge.db` ([`SqliteLeadRecords`]), scored against the kind's threshold; the email outbox, when configured, reading consent from the edge's receipts |
 //! | Upkeep | [`UpkeepCheck`] over the edge's lockfile and the certificate, when configured |
+//! | Durable state | In `data/edge.db`: the back office's drafts and requests (`SqliteSiteDraftStore`), quotes, orders and the bookings of `calendar.json`'s slots ([`SqliteCommerceStore`], [`StoredCalendar`]), the owner's open, deferred and waiting alarms ([`SqliteAlarmStore`]), and the edge's rate-limit windows |
+//! | Audit trail | `data/audit.jsonl` (`adk-core`'s `FileAuditRecorder`): the pipeline's, the edge's, the update engine's, the alarms', the review's, the experiments', the ladder's, the tracker's and the signals' records (spec 3.5 §9.3) |
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -38,15 +40,16 @@ use adk_site::updates::{FileHeldStore, UpdateEngine};
 use awp_types::{Cadence, Charter, Reporting, SiteKind};
 use tokio::task::JoinHandle;
 
-use super::checks::{PaymentLinks, ReleaseDelegation, metered_audit};
+use super::checks::{PaymentLinks, ReleaseDelegation, metered_trail};
 use super::kernel::KernelStores;
 use super::project::{self, KeyFile, ProjectPaths};
 use super::updates::{SiteAlarms, UpdateCards, UpdateDriver, UpdateJournal};
-use crate::alarms::AlarmRouter;
+use crate::alarms::{AlarmRouter, SqliteAlarmStore};
 use crate::edge::adapters::{
     DeferredAnnouncer, InboxThreads, KernelSignals, ReceiptEntrySigner, ReleaseSearch,
 };
-use crate::edge::handlers::{Calendar, InMemoryCalendar, PaymentDesk};
+use crate::edge::commerce::{SqliteCommerceStore, StoredCalendar};
+use crate::edge::handlers::{Calendar, PaymentDesk};
 use crate::edge::{SiteEdge, SiteEdgeParts, consent_config, site_router, stream_router};
 use crate::experiments::{
     ExperimentGenerator, ExperimentRunner, FileExperimentStore, RepublishOnStop,
@@ -280,6 +283,16 @@ impl RunningSite {
                 .map_err(config)?,
         );
 
+        // The site's audit trail survives a restart (spec 3.5 §9.3).
+        let recorder: Arc<dyn adk_core::audit_log::AuditRecorder> = Arc::new(
+            adk_core::audit_log::FileAuditRecorder::open(paths.data().join("audit.jsonl"))?
+                .with_log_id(&domain),
+        );
+        let trail = adk_core::audit_log::AuditTrail::new(recorder.clone());
+        let pool = sqlx::SqlitePool::connect(&paths.database("edge")).await.map_err(config)?;
+        // The back office's drafts and requests, kept beside the edge's stores (§7.8.2).
+        let drafts = adk_harness::website::SqliteSiteDraftStore::new(pool.clone());
+        drafts.migrate().await?;
         let audit = adk_session::SqliteAuditLogStore::new(&paths.database("site-log")).await?;
         audit.migrate().await?;
         let signer = Ed25519ReleaseSigner::from_seed(&domain, release.seed()).map_err(config)?;
@@ -315,6 +328,8 @@ impl RunningSite {
         )
         .history(Arc::new(FileContentHistory::new(paths.history())))
         .charters(charters.clone())
+        .drafts(Arc::new(drafts))
+        .audit(trail.clone())
         .gate(
             template
                 .gate(&site.origin)
@@ -332,28 +347,34 @@ impl RunningSite {
             builder = builder.previous(previous);
         }
         let runtime = builder.build();
+        runtime.restore_drafts().await?;
 
         let partitions = SitePartitions::new(&site);
         let reporting = drafted.as_ref().map_or_else(
             || Reporting { review: Cadence::Weekly, routes: Vec::new(), quiet_hours: None },
             |charter| charter.reporting.clone(),
         );
-        let mut router = AlarmRouter::new(site.id, &reporting);
+        let alarm_store = SqliteAlarmStore::new(pool.clone());
+        alarm_store.migrate().await?;
+        let mut router = AlarmRouter::new(site.id, &reporting)
+            .with_store(Arc::new(alarm_store))
+            .with_audit(trail.clone());
         for (sink, thread) in &options.channels {
             router = router.with_sink(sink.clone(), thread.clone());
         }
         let alarms = Arc::new(router);
-        let ladder = AutonomyLadder::new(stores.autonomy.clone()).with_charters(charters.clone());
+        let ladder = AutonomyLadder::new(stores.autonomy.clone())
+            .with_charters(charters.clone())
+            .with_audit(trail.clone());
         if let Some(current) = charters.current(site.id).await.map_err(config)? {
             crate::jobs::register(&ladder, &current.charter).await?;
         }
 
-        let pool = sqlx::SqlitePool::connect(&paths.database("edge")).await.map_err(config)?;
         // The contact book, kept beside the edge's leads so the people behind them are still
         // reachable after a restart, and erased with them (spec 3.5 §7.5, S8).
         let records = Arc::new(SqliteLeadRecords::new(pool.clone()));
         records.migrate().await?;
-        let edge_stores = SqliteEdgeStores::new(pool).with_site(site.name.clone());
+        let edge_stores = SqliteEdgeStores::new(pool.clone()).with_site(site.name.clone());
         edge_stores.migrate().await.map_err(config)?;
         let served_stores = edge_stores.edge_stores();
         let leads = Arc::new(Leads::new(
@@ -391,12 +412,17 @@ impl RunningSite {
                 adk_auth::web_bot_auth::HttpSignatureVerifier::builder(Arc::new(directory)).build(),
             ))
             .build();
+        // Quotes, orders and bookings outlive a restart (spec 3.5 §7.5, §7.9).
+        let commerce = SqliteCommerceStore::new(pool.clone()).with_site(site.name.clone());
+        commerce.migrate().await?;
+        let commerce: Arc<dyn crate::edge::commerce::CommerceStore> = Arc::new(commerce);
         let caldav = project::caldav(&paths)?.map(|c| Arc::new(c) as Arc<dyn Calendar>);
         let calendar = match &options.calendar {
             Some(calendar) => Some(calendar.clone()),
             None if caldav.is_some() => caldav,
-            None => project::slots(&paths)?
-                .map(|slots| Arc::new(InMemoryCalendar::new(slots)) as Arc<dyn Calendar>),
+            None => project::slots(&paths)?.map(|slots| {
+                Arc::new(StoredCalendar::new(slots, commerce.clone())) as Arc<dyn Calendar>
+            }),
         };
         let payments = match &options.payments {
             Some(desk) => Some(desk.clone()),
@@ -409,42 +435,55 @@ impl RunningSite {
                 options.reply_template.clone().unwrap_or_else(|| "reply".into()),
             )) as Arc<dyn adk_server::awp::ThreadSink>
         });
-        let signals = partitions.signal_sink(stores.signals.clone(), stores.agenda.clone());
+        let signals = partitions
+            .signal_sink(stores.signals.clone(), stores.agenda.clone())
+            .with_audit(trail.clone());
         let edge_signals = Arc::new(KernelSignals::new(signals));
-        let edge = SiteEdge::build(SiteEdgeParts {
-            template: template.clone(),
-            runtime: runtime.clone(),
-            keys: EdgeKeys { card: card_signer, receipt: receipt_signer.clone() },
-            edge_url: Url::parse(&edge_url).map_err(config)?,
-            stores: served_stores,
-            signals: edge_signals.clone(),
-            search: Arc::new(ReleaseSearch::new(Arc::new(adk_harness::website::SiteSearch::new()))),
-            contacts: records,
-            calendar,
-            payments,
-            thresholds: project::approval_thresholds(&paths)?,
-            approvals: Some(stores.approvals.clone()),
-            tiers: Some(tiers),
-            consent: Some(consent_config(&template, policy, subject_key)),
-            threads,
-            quote_validity: chrono::Duration::days(7),
-            action_ledger: Some(Arc::new(crate::measurement::MeteredActionLedger::new(
-                stores.actions.clone(),
-                counts.clone(),
-            ))),
-            audit: Some(metered_audit(counts.clone())),
-            beacon: None,
-            limits: options.limits.as_ref().map(|limits| limits()),
-            public_agent: options.model.clone().map(|model| {
-                crate::edge::concierge(
-                    &crate::team::SiteTeam::new(site.clone(), &template),
-                    &partitions,
-                    stores.partitions.clone(),
-                    model,
-                    paths.data().join("agents/concierge"),
-                )
-            }),
-        })?;
+        // The edge's rate-limit windows are shared through `data/edge.db` (spec 3.5 §7.9).
+        let limits = options
+            .limits
+            .as_ref()
+            .map_or_else(adk_server::awp::EdgeLimits::default, |limits| limits())
+            .store(Arc::new(edge_stores.clone()));
+        let edge = SiteEdge::build_with_commerce(
+            SiteEdgeParts {
+                template: template.clone(),
+                runtime: runtime.clone(),
+                keys: EdgeKeys { card: card_signer, receipt: receipt_signer.clone() },
+                edge_url: Url::parse(&edge_url).map_err(config)?,
+                stores: served_stores,
+                signals: edge_signals.clone(),
+                search: Arc::new(ReleaseSearch::new(Arc::new(
+                    adk_harness::website::SiteSearch::new(),
+                ))),
+                contacts: records,
+                calendar,
+                payments,
+                thresholds: project::approval_thresholds(&paths)?,
+                approvals: Some(stores.approvals.clone()),
+                tiers: Some(tiers),
+                consent: Some(consent_config(&template, policy, subject_key)),
+                threads,
+                quote_validity: chrono::Duration::days(7),
+                action_ledger: Some(Arc::new(crate::measurement::MeteredActionLedger::new(
+                    stores.actions.clone(),
+                    counts.clone(),
+                ))),
+                audit: Some(metered_trail(recorder.clone(), counts.clone())),
+                beacon: None,
+                limits: Some(limits),
+                public_agent: options.model.clone().map(|model| {
+                    crate::edge::concierge(
+                        &crate::team::SiteTeam::new(site.clone(), &template),
+                        &partitions,
+                        stores.partitions.clone(),
+                        model,
+                        paths.data().join("agents/concierge"),
+                    )
+                }),
+            },
+            commerce,
+        )?;
         announcer.set(edge.announcer());
 
         let lane = Arc::new(StreamLane::new(Arc::new(ReceiptEntrySigner::new(receipt_signer))));
@@ -455,6 +494,15 @@ impl RunningSite {
                 .held_store(Arc::new(FileHeldStore::new(paths.journal().join("held.json"))))
                 .streams(lane)
                 .alarms(Arc::new(SiteAlarms::new(alarms.clone(), site.id)))
+                .audit(
+                    recorder.clone(),
+                    adk_core::ActingContext::derived(
+                        &site.name,
+                        "updates",
+                        &options.owner,
+                        adk_core::SubjectKind::Service,
+                    ),
+                )
                 .build()
                 .map_err(config)?,
         );
@@ -483,6 +531,7 @@ impl RunningSite {
                 .with_control(pauses.clone())
                 .with_ladder(ladder.clone())
                 .with_events(alarms.clone())
+                .with_audit(trail.clone())
                 .with_stop_hook(Arc::new(RepublishOnStop::new(
                     runtime.clone(),
                     AgentRole::Growth.principal(&site),
@@ -508,7 +557,8 @@ impl RunningSite {
                 .with_source(Arc::new(AgentSearchKpi::new(site.id, counts.clone())))
                 .with_control(pauses.clone())
                 .with_ladder(ladder.clone())
-                .with_events(alarms.clone());
+                .with_events(alarms.clone())
+                .with_audit(trail.clone());
             if aeo {
                 tracker = tracker.with_source(Arc::new(AeoKpi::new(site.id, counts.clone())));
             }
@@ -516,6 +566,7 @@ impl RunningSite {
         };
         let review = Arc::new(
             ReviewComposer::new(site.id, tracker(aeo.is_some()), ladder.clone(), charters.clone())
+                .with_audit(trail.clone())
                 .with_alarms(alarms.clone())
                 .with_experiments(experiments.clone())
                 .with_updates(updates.clone()),

@@ -29,6 +29,7 @@ use async_trait::async_trait;
 use awp_types::{Bounded, ContentId, PublicKeyJwk, Signal, SignalKind, ThreadRef};
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
+use tracing::Instrument as _;
 use uuid::Uuid;
 
 use super::handlers::ContactBook;
@@ -39,6 +40,8 @@ async fn screened(text: &Bounded) -> Bounded {
 
 /// Files the edge's signals in the back office's agenda through the kernel's `SignalSink`,
 /// every text field screened, redacted, cut and marked untrusted (spec 3.5 §7.10, A-I3).
+/// Each signal is filed in a [`KERNEL_SIGNAL`](crate::observability::spans::KERNEL_SIGNAL)
+/// span carrying its kind, id and emitter (spec 3.5 §7.24).
 pub struct KernelSignals {
     sink: std::sync::RwLock<SignalSink>,
 }
@@ -60,7 +63,19 @@ impl KernelSignals {
 
 #[async_trait]
 impl SignalEmitter for KernelSignals {
-    async fn emit(&self, mut signal: Signal) -> Result<()> {
+    async fn emit(&self, signal: Signal) -> Result<()> {
+        let span = tracing::info_span!(
+            crate::observability::spans::KERNEL_SIGNAL,
+            signal.kind = signal.kind.name(),
+            signal.id = %signal.id,
+            signal.emitted_by = %signal.emitted_by,
+        );
+        self.file(signal).instrument(span).await
+    }
+}
+
+impl KernelSignals {
+    async fn file(&self, mut signal: Signal) -> Result<()> {
         match &mut signal.kind {
             SignalKind::LeadCaptured { answers, .. } => {
                 for value in answers.values_mut() {

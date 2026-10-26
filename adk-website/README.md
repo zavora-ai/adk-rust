@@ -129,9 +129,15 @@ consent receipts, holds — before a handler sees a call.
 |---------|--------------|
 | `FormHandler` | `submit_inquiry`, `subscribe_newsletter`, `request_prospectus`, `licensing_enquiry`, `volunteer`, `register`, `submit_service_form`: a lead, a contact, one `lead_captured` signal |
 | `QuoteHandler`, `OrderHandler` | `get_quote`, `place_order`, `order_status`, `request_return`: the quote keeps the signed release's price into the order (A-I25); an order is its buyer's |
-| `PaymentHandler` | `pay_order`, `donate`, `subscribe`, `buy_ticket`: through the owner's `PaymentDesk`, refused without one; `pay_order` takes the buyer's AP2 mandate or a rail credential, and pays an order once |
+| `PaymentHandler` | `pay_order`, `donate`, `subscribe`, `buy_ticket`: through the owner's `PaymentDesk`, refused without one; `pay_order` takes the buyer's AP2 mandate or a rail credential, and pays an order once; `awp.payment.created`, `settled` and `rejected` records with an audit trail |
 | `BookingHandler` | `check_availability`, `book`, `book_appointment` |
 | `SearchHandler`, `ListingHandler`, `StatusHandler` | `search_site`, the listings of published items, `lookup_status` |
+
+Quotes, orders and bookings live in an `edge::commerce::CommerceStore`:
+`SiteEdge::build_with_commerce` takes a durable one (`SqliteCommerceStore`, with
+`StoredCalendar` for `calendar.json`'s slots), and `SiteEdge::build` keeps them in memory. An
+order moves from `awaiting_payment` to `paying` by the store's compare-and-set, so two payments
+for one order never both start.
 
 `edge::ap2::Ap2Desk` takes payments under AP2 with the site as the merchant, over
 `adk-payments`' `Ap2Adapter` and the owner's payment processor; `edge::token::TokenDesk` takes
@@ -169,7 +175,8 @@ CLI and the running site share one log, host and journal:
 | `approvals.json` | The owner's amount thresholds, such as `{"place_order": 20000}`; optional |
 | `data/site-log.db`, `data/host/`, `data/history/` | The site log, the `DirectoryHost`, every saved version |
 | `data/keys/` | `release.jwk`, `card.jwk` (and `receipt.jwk`) as private JWKs, made on first start, owner-only; never the root |
-| `data/kernel.db`, `data/edge.db` | The kernel's stores (charters, KPIs, ladder, signals, agenda, approvals, devices, runs) and the edge's |
+| `data/kernel.db`, `data/edge.db` | The kernel's stores (charters, KPIs, ladder, signals, agenda, approvals, devices, runs) and the edge's, with the quotes, orders, bookings, rate-limit windows, the back office's drafts and the owner's alarms |
+| `data/audit.jsonl` | The audit trail (`adk-core`'s `FileAuditRecorder`): the pipeline's, the edge's, payments', the update engine's, the alarms', the review's and the signals' records, and `adk-rust awp keys`' |
 | `data/updates/` | `batches.jsonl` and `feeds.json`, read by `adk-rust site batches` and `site feeds` |
 
 The owner signs at a terminal: `adk-rust awp keys rotate` makes the root and the key set,
@@ -185,8 +192,10 @@ site made. Until the release key is delegated, every build fails the gate's
 | `ReviewComposer` | With the alarms, the experiments and the updates; the weekly review when the owner has a channel |
 | Concierge | With a model, `edge::concierge` over the edge's own public tools, through `AwpEdge::public_agent` |
 
-A restart keeps the charter, the jobs' levels, the signals, the approvals and the paired
-device, and continues after the release the host serves; no second setup code is offered.
+A restart keeps the charter, the jobs' levels, the signals, the approvals, the paired device,
+the quotes and orders, the bookings, the back office's drafts, the open, deferred and waiting
+alarms and the edge's rate-limit windows, and continues after the release the host serves; no
+second setup code is offered.
 
 ## Incidents and alarms
 

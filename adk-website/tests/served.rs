@@ -542,3 +542,150 @@ async fn the_served_kernel_keeps_the_charters_quiet_hours() {
     );
     served.shutdown().await.unwrap();
 }
+
+/// One governed call by a known buyer agent.
+async fn buy(
+    served: &Served,
+    capability: &str,
+    input: Value,
+    key: &str,
+    consent: Vec<uuid::Uuid>,
+) -> Value {
+    use adk_awp::v2::executor::{Binding, Invocation, InvocationOutcome};
+    let requester = awp_types::RequesterId::new("key:buyer");
+    let mut buyer = adk_server::awp::tiers::EdgeCaller::public("id:key:buyer");
+    buyer.tier = awp_types::TrustTier::Known;
+    buyer.requester = Some(requester.clone());
+    let mut call = Invocation::new(capability, input, Binding::Http);
+    call.tier = awp_types::TrustTier::Known;
+    call.requester = Some(requester);
+    call.idempotency_key = Some(key.into());
+    call.consent = consent;
+    match served.sites[0].edge.edge.executor().invoke_as(&buyer, call).await {
+        InvocationOutcome::Completed(output) => output,
+        other => panic!("{capability}: {other:?}"),
+    }
+}
+
+/// Spec 3.5 §7.5, §7.8.2, §7.9, §7.21, §9.3: a served site keeps its quotes and orders, the
+/// back office's drafts, the owner's open alarm, the edge's call windows and its audit trail
+/// across a restart.
+#[tokio::test]
+async fn a_served_site_keeps_commerce_drafts_alarms_windows_and_its_audit_trail() {
+    use adk_harness::website::back_office_tools;
+    use adk_website::alarms::Alarm;
+
+    let dir = project(SiteKind::Ecommerce).await;
+    owner_signs(dir.path()).await;
+    let links = json!([{ "rail": "mpesa", "instructions": "Pay till 123456 with the order id" }]);
+    std::fs::write(dir.path().join("payments.json"), links.to_string()).unwrap();
+    let limited = |options: &mut ServeOptions| {
+        options.site.limits = Some(Arc::new(|| {
+            adk_server::awp::EdgeLimits::default().tier_default(
+                awp_types::TrustTier::Public,
+                awp_types::RateClass { requests_per_minute: 600, calls_per_day: 2 },
+            )
+        }));
+    };
+    let served = start(dir.path(), limited).await;
+    let charter = commit(&served, dir.path()).await;
+    let launched = launch(&served, &charter, vec![product("rye-loaf", 450)]).await;
+    assert!(matches!(launched, PipelineOutcome::Published(_)), "{launched:?}");
+
+    // A buyer agent's quote, order and payment through the owner's payment link.
+    let grant = json!({ "scope": "payment_data", "policyVersion": "1", "jurisdiction": "KE" });
+    let (status, receipt) = http(served.edge_addr, "POST", "/awp/v2/consent", Some(&grant)).await;
+    assert_eq!(status, 201, "{receipt}");
+    let receipt: uuid::Uuid =
+        serde_json::from_str::<Value>(&receipt).unwrap()["id"].as_str().unwrap().parse().unwrap();
+    let items = json!({ "items": [{ "sku": "rye-loaf", "quantity": 2 }] });
+    let quote = buy(&served, "get_quote", items, "q-1", Vec::new()).await;
+    assert_eq!(quote["total"], 900, "{quote}");
+    let order =
+        buy(&served, "place_order", json!({ "quoteId": quote["id"] }), "o-1", vec![receipt]).await;
+    let order_id = order["id"].as_str().unwrap().to_string();
+    let paid = json!({ "orderId": order_id, "rail": "mpesa" });
+    let payment = buy(&served, "pay_order", paid, "p-1", vec![receipt]).await;
+    assert_eq!(payment["status"], "awaiting_payment", "{payment}");
+
+    // Two anonymous calls use up the day's window.
+    let list = json!({});
+    for _ in 0..2 {
+        let (status, body) =
+            http(served.edge_addr, "POST", "/awp/v2/capabilities/list_products", Some(&list)).await;
+        assert_eq!(status, 200, "{body}");
+    }
+
+    // The owner's open alarm and a draft the Steward has not published.
+    let site = served.sites[0].site.clone();
+    let down = Alarm::new(
+        site.id,
+        awp_types::Urgency::P1,
+        "incident",
+        "The site is down",
+        chrono::Utc::now(),
+    );
+    served.sites[0].alarms.raise(down).await;
+    fn tool(
+        name: &str,
+        runtime: &Arc<adk_harness::website::SiteRuntime>,
+    ) -> Arc<dyn adk_core::Tool> {
+        back_office_tools(runtime).into_iter().find(|tool| tool.name() == name).unwrap()
+    }
+    let ctx =
+        || Arc::new(adk_tool::SimpleToolContext::new("steward")) as Arc<dyn adk_core::ToolContext>;
+    let hours = json!({
+        "kind": "page", "slug": "hours", "language": "en",
+        "fields": { "title": "Opening hours", "summary": "When we bake." },
+        "body": "We open at seven.", "job": "freshness"
+    });
+    let drafted =
+        tool("content_draft", &served.sites[0].runtime).execute(ctx(), hours).await.unwrap();
+    let draft = drafted["draft"].as_str().unwrap().to_string();
+    served.shutdown().await.unwrap();
+
+    let served = start(dir.path(), limited).await;
+    let kept = served.sites[0].edge.orders.get(&order_id).await.expect("the order survives");
+    assert_eq!((kept.status.as_str(), kept.quote.total), ("awaiting_payment", 900));
+    let quote_id: uuid::Uuid = quote["id"].as_str().unwrap().parse().unwrap();
+    let kept_quote = served.sites[0].edge.quotes.get(&quote_id).await;
+    assert_eq!(kept_quote.map(|quote| quote.total), Some(900));
+    let status = buy(&served, "order_status", json!({ "orderId": order_id }), "s-1", vec![]).await;
+    assert_eq!(status["status"], "awaiting_payment");
+    let (status, _) =
+        http(served.edge_addr, "POST", "/awp/v2/capabilities/list_products", Some(&list)).await;
+    assert_eq!(status, 429, "the day's window survives the restart");
+    let open = served.sites[0].alarms.open().await;
+    assert_eq!(open.iter().map(|alarm| alarm.kind.as_str()).collect::<Vec<_>>(), ["incident"]);
+    let mut about = json!({
+        "kind": "page", "slug": "about-us", "language": "en",
+        "fields": { "title": "About us", "summary": "Who bakes." }, "body": "A family bakery."
+    });
+    about["draft"] = json!(draft);
+    let joined =
+        tool("content_draft", &served.sites[0].runtime).execute(ctx(), about).await.unwrap();
+    assert_eq!(joined["items"], json!(["pages/hours/en", "pages/about-us/en"]), "{joined}");
+
+    // Every record is in `data/audit.jsonl`, numbered without a gap across the restart.
+    served.shutdown().await.unwrap();
+    let records = adk_core::audit_log::FileAuditRecorder::read(
+        ProjectPaths::new(dir.path()).data().join("audit.jsonl"),
+    )
+    .unwrap();
+    let seqs: Vec<u64> = records.iter().map(|record| record.seq).collect();
+    assert_eq!(seqs, (0..records.len() as u64).collect::<Vec<_>>());
+    let actions: Vec<&str> = records.iter().map(|record| record.action.as_str()).collect();
+    for action in [
+        "site.content.drafted",
+        "site.content.approved",
+        "site.release.built",
+        "site.release.signed",
+        "site.release.published",
+        "site.content.published",
+        "awp.capability.called",
+        "awp.payment.created",
+        "website.alarm.raised",
+    ] {
+        assert!(actions.contains(&action), "{action} in {actions:?}");
+    }
+}

@@ -10,6 +10,11 @@
 //! threads, reads the charter's reporting routes and quiet hours, and is the product's
 //! `CharterEventSink` (guardrail breaches, pauses, autonomy changes) and `WalletAlarmHook`
 //! (payment anomalies, reconciliation mismatches).
+//!
+//! With an [`AlarmStore`] ([`AlarmRouter::with_store`]) the open P1 alarms, the P2 alarms
+//! deferred to the end of quiet hours and the alarms waiting for the weekly review survive a
+//! restart: [`SqliteAlarmStore`] keeps them in a served site's `data/edge.db`, and every store
+//! passes [`conformance::alarm_store`].
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -130,6 +135,227 @@ struct RouterState {
     raised: Vec<Alarm>,
 }
 
+/// Where an alarm stands (spec 3.5 §7.21).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", rename_all_fields = "camelCase")]
+pub enum AlarmState {
+    /// A P1 alarm no person has acknowledged: it repeats.
+    Open {
+        /// Sends so far.
+        attempts: u32,
+        /// The last send.
+        last: DateTime<Utc>,
+    },
+    /// A P2 alarm raised inside quiet hours: sent when they end.
+    Deferred,
+    /// Waiting for the weekly review.
+    Review,
+    /// Sent, acknowledged or carried by a review.
+    Done,
+}
+
+/// An alarm and where it stands, as an [`AlarmStore`] keeps it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlarmRecord {
+    /// The alarm.
+    pub alarm: Alarm,
+    /// Where it stands.
+    pub state: AlarmState,
+}
+
+/// Where an [`AlarmRouter`] keeps its alarms, so a restart neither drops an open P1 alarm
+/// nor a deferred or waiting one (spec 3.5 §7.21).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_website::alarms::{Alarm, AlarmRecord, AlarmState, AlarmStore, InMemoryAlarmStore};
+/// use awp_types::Urgency;
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> adk_core::Result<()> {
+/// let store = InMemoryAlarmStore::default();
+/// let mut alarm = Alarm::new(uuid::Uuid::nil(), Urgency::P3, "freshness", "Two pages are stale", chrono::Utc::now());
+/// alarm.id = "alarm-1".into();
+/// store.save(&AlarmRecord { alarm, state: AlarmState::Review }).await?;
+/// assert_eq!(store.alarms(uuid::Uuid::nil()).await?.len(), 1);
+/// # Ok(())
+/// # }
+/// ```
+#[async_trait]
+pub trait AlarmStore: Send + Sync {
+    /// Keeps `record`, replacing the one with its alarm's id; a new alarm is listed after
+    /// those kept before it.
+    ///
+    /// # Errors
+    ///
+    /// The store's error.
+    async fn save(&self, record: &AlarmRecord) -> Result<()>;
+
+    /// The alarms of `site`, in the order they were first kept.
+    ///
+    /// # Errors
+    ///
+    /// The store's error.
+    async fn alarms(&self, site: Uuid) -> Result<Vec<AlarmRecord>>;
+}
+
+/// An [`AlarmStore`] in memory, for tests.
+#[derive(Debug, Default)]
+pub struct InMemoryAlarmStore {
+    records: Mutex<Vec<AlarmRecord>>,
+}
+
+#[async_trait]
+impl AlarmStore for InMemoryAlarmStore {
+    async fn save(&self, record: &AlarmRecord) -> Result<()> {
+        let mut records = self.records.lock().await;
+        match records
+            .iter_mut()
+            .find(|kept| kept.alarm.site == record.alarm.site && kept.alarm.id == record.alarm.id)
+        {
+            Some(kept) => *kept = record.clone(),
+            None => records.push(record.clone()),
+        }
+        Ok(())
+    }
+
+    async fn alarms(&self, site: Uuid) -> Result<Vec<AlarmRecord>> {
+        Ok(self.records.lock().await.iter().filter(|r| r.alarm.site == site).cloned().collect())
+    }
+}
+
+fn alarm_store_error(error: impl std::fmt::Display) -> AdkError {
+    AdkError::config(format!("the site's alarm store: {error}"))
+}
+
+/// An [`AlarmStore`] in SQLite, such as a served site's `data/edge.db`.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_website::alarms::{AlarmStore, SqliteAlarmStore};
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> adk_core::Result<()> {
+/// let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+/// let store = SqliteAlarmStore::new(pool);
+/// store.migrate().await?;
+/// assert!(store.alarms(uuid::Uuid::nil()).await?.is_empty());
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+pub struct SqliteAlarmStore {
+    pool: sqlx::SqlitePool,
+}
+
+impl SqliteAlarmStore {
+    /// The store over `pool`; call [`migrate`](Self::migrate) once.
+    pub fn new(pool: sqlx::SqlitePool) -> Self {
+        Self { pool }
+    }
+
+    /// Creates the table.
+    ///
+    /// # Errors
+    ///
+    /// The database's error.
+    pub async fn migrate(&self) -> Result<()> {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS website_alarms (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                site TEXT NOT NULL, id TEXT NOT NULL, record TEXT NOT NULL,
+                UNIQUE (site, id))",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(alarm_store_error)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl AlarmStore for SqliteAlarmStore {
+    async fn save(&self, record: &AlarmRecord) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO website_alarms (site, id, record) VALUES (?, ?, ?)
+             ON CONFLICT (site, id) DO UPDATE SET record = excluded.record",
+        )
+        .bind(record.alarm.site.to_string())
+        .bind(&record.alarm.id)
+        .bind(serde_json::to_string(record).map_err(alarm_store_error)?)
+        .execute(&self.pool)
+        .await
+        .map_err(alarm_store_error)?;
+        Ok(())
+    }
+
+    async fn alarms(&self, site: Uuid) -> Result<Vec<AlarmRecord>> {
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT record FROM website_alarms WHERE site = ? ORDER BY seq")
+                .bind(site.to_string())
+                .fetch_all(&self.pool)
+                .await
+                .map_err(alarm_store_error)?;
+        rows.iter()
+            .map(|(record,)| serde_json::from_str(record).map_err(alarm_store_error))
+            .collect()
+    }
+}
+
+/// The conformance check every [`AlarmStore`] passes (spec 3.5 §7.21).
+pub mod conformance {
+    use awp_types::Urgency;
+    use uuid::Uuid;
+
+    use super::{Alarm, AlarmRecord, AlarmState, AlarmStore};
+
+    fn alarm(site: Uuid, id: &str, urgency: Urgency) -> Alarm {
+        let mut alarm =
+            Alarm::new(site, urgency, "incident", "The site is down", chrono::Utc::now());
+        alarm.id = id.to_string();
+        alarm
+    }
+
+    /// Records read back in the order they were first kept, replaced by id, each site's
+    /// apart.
+    ///
+    /// # Panics
+    ///
+    /// When the store breaks its contract.
+    pub async fn alarm_store(store: &dyn AlarmStore) {
+        let (site, other) = (Uuid::new_v4(), Uuid::new_v4());
+        let last = chrono::Utc::now();
+        let open = AlarmRecord {
+            alarm: alarm(site, "alarm-1", Urgency::P1),
+            state: AlarmState::Open { attempts: 1, last },
+        };
+        let waiting =
+            AlarmRecord { alarm: alarm(site, "alarm-2", Urgency::P3), state: AlarmState::Review };
+        store.save(&open).await.unwrap();
+        store.save(&waiting).await.unwrap();
+        store
+            .save(&AlarmRecord {
+                alarm: alarm(other, "alarm-1", Urgency::P2),
+                state: AlarmState::Deferred,
+            })
+            .await
+            .unwrap();
+        assert_eq!(store.alarms(site).await.unwrap(), vec![open.clone(), waiting.clone()]);
+        let acknowledged = AlarmRecord { state: AlarmState::Done, ..open.clone() };
+        store.save(&acknowledged).await.unwrap();
+        assert_eq!(
+            store.alarms(site).await.unwrap(),
+            vec![acknowledged, waiting],
+            "replaced in place"
+        );
+        assert_eq!(store.alarms(other).await.unwrap()[0].state, AlarmState::Deferred);
+        assert!(store.alarms(Uuid::new_v4()).await.unwrap().is_empty());
+    }
+}
+
 /// Routes alarms to the owner by urgency (spec 3.5 §7.21).
 ///
 /// # Example
@@ -158,6 +384,8 @@ pub struct AlarmRouter {
     audit: Option<AuditTrail>,
     state: Mutex<RouterState>,
     next: AtomicU64,
+    store: Option<Arc<dyn AlarmStore>>,
+    loaded: tokio::sync::OnceCell<()>,
 }
 
 impl std::fmt::Debug for AlarmRouter {
@@ -205,6 +433,75 @@ impl AlarmRouter {
             audit: None,
             state: Mutex::new(RouterState::default()),
             next: AtomicU64::new(1),
+            store: None,
+            loaded: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    /// Keeps the alarms in `store`: the open, deferred and waiting ones are read back on
+    /// first use, so a restarted site repeats its open P1 alarms, sends its deferred P2
+    /// alarms and reviews what was waiting (spec 3.5 §7.21).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_website::alarms::{AlarmRouter, InMemoryAlarmStore};
+    /// use awp_types::{Cadence, Reporting};
+    ///
+    /// let reporting = Reporting { review: Cadence::Weekly, routes: vec![], quiet_hours: None };
+    /// let router = AlarmRouter::new(uuid::Uuid::nil(), &reporting)
+    ///     .with_store(Arc::new(InMemoryAlarmStore::default()));
+    /// # let _ = router;
+    /// ```
+    #[must_use]
+    pub fn with_store(mut self, store: Arc<dyn AlarmStore>) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    /// The router's state, read from its store on first use.
+    async fn state(&self) -> tokio::sync::MutexGuard<'_, RouterState> {
+        self.loaded
+            .get_or_init(|| async {
+                let Some(store) = &self.store else { return };
+                let records = match store.alarms(self.site).await {
+                    Ok(records) => records,
+                    Err(error) => {
+                        tracing::warn!(error = %error, "the alarms could not be read back");
+                        return;
+                    }
+                };
+                let mut state = self.state.lock().await;
+                let mut highest = 0;
+                for record in records {
+                    if let Some(n) =
+                        record.alarm.id.strip_prefix("alarm-").and_then(|n| n.parse::<u64>().ok())
+                    {
+                        highest = highest.max(n);
+                    }
+                    match record.state {
+                        AlarmState::Open { attempts, last } => {
+                            let alarm = record.alarm.clone();
+                            state.open.insert(alarm.id.clone(), OpenP1 { alarm, attempts, last });
+                        }
+                        AlarmState::Deferred => state.deferred.push(record.alarm.clone()),
+                        AlarmState::Review => state.review.push(record.alarm.clone()),
+                        AlarmState::Done => {}
+                    }
+                    state.raised.push(record.alarm);
+                }
+                self.next.fetch_max(highest + 1, Ordering::Relaxed);
+            })
+            .await;
+        self.state.lock().await
+    }
+
+    /// Keeps where `alarm` stands; a failure is logged and never stops the alarm.
+    async fn keep(&self, alarm: &Alarm, state: AlarmState) {
+        let Some(store) = &self.store else { return };
+        if let Err(error) = store.save(&AlarmRecord { alarm: alarm.clone(), state }).await {
+            tracing::warn!(website.alarm = %alarm.id, error = %error, "an alarm's state could not be kept");
         }
     }
 
@@ -281,37 +578,41 @@ impl AlarmRouter {
     /// open until acknowledged; P2 on its channel outside quiet hours, deferred inside them,
     /// and to the weekly review when the charter routes it nowhere; P3 to the weekly review.
     pub async fn raise(&self, mut alarm: Alarm) -> Routed {
+        // Read the kept alarms first, so a new id follows theirs.
+        drop(self.state().await);
         if alarm.id.is_empty() {
             alarm.id = format!("alarm-{}", self.next.fetch_add(1, Ordering::Relaxed));
         }
         let now = self.clock.now();
-        let routed = match alarm.urgency {
+        let (routed, kept) = match alarm.urgency {
             Urgency::P1 => {
                 let deliveries = self.send(&alarm, &self.channels(Urgency::P1), 1).await;
-                self.state.lock().await.open.insert(
+                self.state().await.open.insert(
                     alarm.id.clone(),
                     OpenP1 { alarm: alarm.clone(), attempts: 1, last: now },
                 );
-                Routed::Sent { deliveries }
+                (Routed::Sent { deliveries }, AlarmState::Open { attempts: 1, last: now })
             }
             Urgency::P2 => {
                 let channels = self.channels(Urgency::P2);
                 if channels.is_empty() {
-                    self.state.lock().await.review.push(alarm.clone());
-                    Routed::Review
+                    self.state().await.review.push(alarm.clone());
+                    (Routed::Review, AlarmState::Review)
                 } else if self.in_quiet_hours(now) {
-                    self.state.lock().await.deferred.push(alarm.clone());
-                    Routed::Deferred
+                    self.state().await.deferred.push(alarm.clone());
+                    (Routed::Deferred, AlarmState::Deferred)
                 } else {
-                    Routed::Sent { deliveries: self.send(&alarm, &channels, 1).await }
+                    let deliveries = self.send(&alarm, &channels, 1).await;
+                    (Routed::Sent { deliveries }, AlarmState::Done)
                 }
             }
             _ => {
-                self.state.lock().await.review.push(alarm.clone());
-                Routed::Review
+                self.state().await.review.push(alarm.clone());
+                (Routed::Review, AlarmState::Review)
             }
         };
-        self.state.lock().await.raised.push(alarm.clone());
+        self.state().await.raised.push(alarm.clone());
+        self.keep(&alarm, kept).await;
         tracing::info!(website.alarm = %alarm.id, website.alarm.kind = %alarm.kind, urgency = ?alarm.urgency, "website.alarm.raised");
         audit::record(
             self.audit.as_ref(),
@@ -343,14 +644,15 @@ impl AlarmRouter {
                 format!("{} is not a person; only a person acknowledges an alarm", by.id),
             ));
         }
-        if self.state.lock().await.open.remove(id).is_none() {
+        let Some(open) = self.state().await.open.remove(id) else {
             return Err(AdkError::new(
                 ErrorComponent::Agent,
                 ErrorCategory::NotFound,
                 "website.alarm.not_open",
                 format!("alarm {id} is not open"),
             ));
-        }
+        };
+        self.keep(&open.alarm, AlarmState::Done).await;
         audit::record(
             self.audit.as_ref(),
             audit::ALARM_ACKNOWLEDGED,
@@ -367,7 +669,7 @@ impl AlarmRouter {
     pub async fn tick(&self) -> Vec<Delivery> {
         let now = self.clock.now();
         let due: Vec<(Alarm, u32)> = {
-            let mut state = self.state.lock().await;
+            let mut state = self.state().await;
             state
                 .open
                 .values_mut()
@@ -382,12 +684,14 @@ impl AlarmRouter {
         let mut deliveries = Vec::new();
         for (alarm, attempt) in due {
             deliveries.extend(self.send(&alarm, &self.channels(Urgency::P1), attempt).await);
+            self.keep(&alarm, AlarmState::Open { attempts: attempt, last: now }).await;
         }
         if !self.in_quiet_hours(now) {
-            let deferred = std::mem::take(&mut self.state.lock().await.deferred);
+            let deferred = std::mem::take(&mut self.state().await.deferred);
             let channels = self.channels(Urgency::P2);
             for alarm in deferred {
                 deliveries.extend(self.send(&alarm, &channels, 1).await);
+                self.keep(&alarm, AlarmState::Done).await;
             }
         }
         deliveries
@@ -395,28 +699,46 @@ impl AlarmRouter {
 
     /// The P1 alarms still open.
     pub async fn open(&self) -> Vec<Alarm> {
-        self.state.lock().await.open.values().map(|open| open.alarm.clone()).collect()
+        self.state().await.open.values().map(|open| open.alarm.clone()).collect()
+    }
+
+    /// The P2 alarms deferred until quiet hours end.
+    pub async fn deferred(&self) -> Vec<Alarm> {
+        self.state().await.deferred.clone()
     }
 
     /// The alarms waiting for the weekly review.
     pub async fn review_items(&self) -> Vec<Alarm> {
-        self.state.lock().await.review.clone()
+        self.state().await.review.clone()
     }
 
     /// Takes the alarms waiting for the weekly review, which the review then carries.
     pub async fn take_review_items(&self) -> Vec<Alarm> {
-        std::mem::take(&mut self.state.lock().await.review)
+        let taken = std::mem::take(&mut self.state().await.review);
+        for alarm in &taken {
+            self.keep(alarm, AlarmState::Done).await;
+        }
+        taken
     }
 
     /// Clears the alarms `ids` from those waiting for the weekly review: a review that
     /// carried them reached the owner (spec 3.5 §7.21).
     pub async fn clear_review_items(&self, ids: &[String]) {
-        self.state.lock().await.review.retain(|alarm| !ids.contains(&alarm.id));
+        let cleared: Vec<Alarm> = {
+            let mut state = self.state().await;
+            let (cleared, kept) =
+                std::mem::take(&mut state.review).into_iter().partition(|a| ids.contains(&a.id));
+            state.review = kept;
+            cleared
+        };
+        for alarm in &cleared {
+            self.keep(alarm, AlarmState::Done).await;
+        }
     }
 
     /// Every alarm raised since `since`, for the weekly review's incidents.
     pub async fn raised_since(&self, since: DateTime<Utc>) -> Vec<Alarm> {
-        self.state.lock().await.raised.iter().filter(|a| a.raised_at >= since).cloned().collect()
+        self.state().await.raised.iter().filter(|a| a.raised_at >= since).cloned().collect()
     }
 }
 

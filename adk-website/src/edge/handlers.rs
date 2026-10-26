@@ -18,9 +18,16 @@
 //! quote's total, the order's total, the slot's price — so an owner's amount threshold
 //! ([`ApprovalThresholds`](crate::packs::ApprovalThresholds)) holds a large call for the owner
 //! (`ApprovalHint::AboveAmount`, spec 3.5 §7.4, S9).
+//!
+//! Quotes, orders and bookings live in a [`CommerceStore`](super::commerce::CommerceStore),
+//! in memory by default and in `data/edge.db` on a served site (spec 3.5 §7.9). The payment
+//! handler writes `awp.payment.created`, `awp.payment.settled` and `awp.payment.rejected`
+//! (spec 3.5 §9.3) when it has an audit trail.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, PoisonError};
+
+use adk_core::audit_log::{AuditActor, AuditTrail};
 
 use adk_awp::v2::capability::{CapabilityCall, CapabilityError, CapabilityHandler};
 use adk_awp::v2::store::{Lead, LeadStore};
@@ -252,26 +259,41 @@ impl CapabilityHandler for FormHandler {
     }
 }
 
-/// The quotes the site issued, for orders against them (spec 3.5 A-I25).
-#[derive(Debug, Default)]
+/// The quotes the site issued, for orders against them (spec 3.5 A-I25), kept in a
+/// [`CommerceStore`](super::commerce::CommerceStore).
 pub struct QuoteBook {
-    // A blocking lock, never held across an await: the edge reads a call's amount through
-    // `CapabilityHandler::call_amount`, which is synchronous.
-    quotes: std::sync::Mutex<BTreeMap<Uuid, QuoteDocument>>,
+    store: Arc<dyn super::commerce::CommerceStore>,
+}
+
+impl Default for QuoteBook {
+    /// The quotes in memory.
+    fn default() -> Self {
+        Self::new(Arc::new(super::commerce::InMemoryCommerceStore::default()))
+    }
+}
+
+impl std::fmt::Debug for QuoteBook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QuoteBook").finish_non_exhaustive()
+    }
 }
 
 impl QuoteBook {
-    /// The quote `id`.
+    /// The quotes kept in `store`, such as a served site's `data/edge.db` (spec 3.5 §7.9).
+    pub fn new(store: Arc<dyn super::commerce::CommerceStore>) -> Self {
+        Self { store }
+    }
+
+    /// The quote `id`; `None` as well when the store cannot be read, which is logged.
     pub async fn get(&self, id: &Uuid) -> Option<QuoteDocument> {
-        self.quote(id)
+        self.store.quote(*id).await.unwrap_or_else(|error| {
+            tracing::warn!(quote = %id, error = %error, "a quote could not be read");
+            None
+        })
     }
 
-    fn quote(&self, id: &Uuid) -> Option<QuoteDocument> {
-        self.quotes.lock().unwrap_or_else(PoisonError::into_inner).get(id).cloned()
-    }
-
-    fn insert(&self, quote: QuoteDocument) {
-        self.quotes.lock().unwrap_or_else(PoisonError::into_inner).insert(quote.id, quote);
+    async fn insert(&self, quote: &QuoteDocument) -> Result<(), CapabilityError> {
+        self.store.put_quote(quote).await.map_err(failed)
     }
 }
 
@@ -342,7 +364,7 @@ impl CapabilityHandler for QuoteHandler {
             valid_until: now + self.validity,
             proof: None,
         };
-        self.quotes.insert(quote.clone());
+        self.quotes.insert(&quote).await?;
         serde_json::to_value(quote).map_err(failed)
     }
 }
@@ -368,18 +390,36 @@ pub const PAYING: &str = "paying";
 /// An order paid in full (spec 3.5 §7.5 "Commerce").
 pub const PAID: &str = "paid";
 
-/// The site's orders.
-#[derive(Debug, Default)]
+/// The site's orders, kept in a [`CommerceStore`](super::commerce::CommerceStore).
 pub struct OrderBook {
-    // A blocking lock, never held across an await: the edge reads a call's amount through
-    // `CapabilityHandler::call_amount`, which is synchronous.
-    orders: std::sync::Mutex<BTreeMap<String, Order>>,
+    store: Arc<dyn super::commerce::CommerceStore>,
+}
+
+impl Default for OrderBook {
+    /// The orders in memory.
+    fn default() -> Self {
+        Self::new(Arc::new(super::commerce::InMemoryCommerceStore::default()))
+    }
+}
+
+impl std::fmt::Debug for OrderBook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OrderBook").finish_non_exhaustive()
+    }
 }
 
 impl OrderBook {
-    /// The order `id`.
+    /// The orders kept in `store`, such as a served site's `data/edge.db` (spec 3.5 §7.9).
+    pub fn new(store: Arc<dyn super::commerce::CommerceStore>) -> Self {
+        Self { store }
+    }
+
+    /// The order `id`; `None` as well when the store cannot be read, which is logged.
     pub async fn get(&self, id: &str) -> Option<Order> {
-        self.order(id)
+        self.order(id).await.unwrap_or_else(|error| {
+            tracing::warn!(order = id, error = %error, "an order could not be read");
+            None
+        })
     }
 
     /// Moves order `id` to `status`, such as [`PAID`] once a payment desk took its money
@@ -397,33 +437,30 @@ impl OrderBook {
     /// # }
     /// ```
     pub async fn set_status(&self, id: &str, status: &str) -> Option<Order> {
-        let mut orders = self.orders.lock().unwrap_or_else(PoisonError::into_inner);
-        let order = orders.get_mut(id)?;
-        order.status = status.to_string();
-        Some(order.clone())
+        self.store.set_order_status(id, status).await.unwrap_or_else(|error| {
+            tracing::warn!(order = id, error = %error, "an order's status could not be written");
+            None
+        })
     }
 
-    fn order(&self, id: &str) -> Option<Order> {
-        self.orders.lock().unwrap_or_else(PoisonError::into_inner).get(id).cloned()
+    async fn order(&self, id: &str) -> Result<Option<Order>, CapabilityError> {
+        self.store.order(id).await.map_err(failed)
     }
 
     /// Moves order `id` from `from` to `to` in one step; `None` when there is no such order
     /// or it is not in `from`.
-    fn transition(&self, id: &str, from: &str, to: &str) -> Option<Order> {
-        let mut orders = self.orders.lock().unwrap_or_else(PoisonError::into_inner);
-        let order = orders.get_mut(id).filter(|order| order.status == from)?;
-        order.status = to.to_string();
-        Some(order.clone())
+    async fn transition(
+        &self,
+        id: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<Option<Order>, CapabilityError> {
+        self.store.transition_order(id, from, to).await.map_err(failed)
     }
 
     /// Keeps `order` unless one with its id exists; returns the order kept.
-    fn place(&self, order: Order) -> Order {
-        self.orders
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .entry(order.id.clone())
-            .or_insert(order)
-            .clone()
+    async fn place(&self, order: &Order) -> Result<Order, CapabilityError> {
+        self.store.place_order(order).await.map_err(failed)
     }
 }
 
@@ -452,13 +489,13 @@ impl OrderHandler {
 #[async_trait]
 impl CapabilityHandler for OrderHandler {
     /// A `place_order` call's amount is its quote's total; a call naming an order, the
-    /// order's total (spec 3.5 §7.4).
-    fn call_amount(&self, input: &Value) -> Option<u64> {
+    /// order's total (spec 3.5 §7.4), both read from the store.
+    async fn amount(&self, input: &Value) -> Option<u64> {
         if let Some(quote) = input["quoteId"].as_str() {
-            return self.quotes.quote(&quote.parse().ok()?).map(|quote| quote.total);
+            return self.quotes.get(&quote.parse().ok()?).await.map(|quote| quote.total);
         }
         let order = input["orderId"].as_str()?;
-        self.orders.order(order).map(|order| order.quote.total)
+        self.orders.get(order).await.map(|order| order.quote.total)
     }
 
     async fn handle(&self, call: CapabilityCall) -> Result<Value, CapabilityError> {
@@ -478,7 +515,7 @@ impl CapabilityHandler for OrderHandler {
                 }
                 // The idempotency key names the order, so a retry finds the same one (A-I7).
                 let id = format!("order-{}", call.idempotency_key);
-                let order = self.orders.order(&id).unwrap_or_else(|| Order {
+                let order = self.orders.order(&id).await?.unwrap_or_else(|| Order {
                     id,
                     quote,
                     status: AWAITING_PAYMENT.into(),
@@ -490,7 +527,7 @@ impl CapabilityHandler for OrderHandler {
                     Some(desk) => desk.checkout(&order).await?,
                     None => None,
                 };
-                let order = self.orders.place(order);
+                let order = self.orders.place(&order).await?;
                 let mut placed = serde_json::to_value(order).map_err(failed)?;
                 if let Some(payment) = payment {
                     placed["payment"] = payment;
@@ -504,6 +541,7 @@ impl CapabilityHandler for OrderHandler {
                 let order = self
                     .orders
                     .order(id)
+                    .await?
                     .filter(|order| {
                         order.quote.requester.is_none() || order.quote.requester == call.requester
                     })
@@ -568,16 +606,78 @@ pub trait PaymentDesk: Send + Sync {
     }
 }
 
+/// A payment was started through the site's desk (spec 3.5 §9.3).
+pub const PAYMENT_CREATED: &str = "awp.payment.created";
+/// A payment settled: the desk answered `paid`.
+pub const PAYMENT_SETTLED: &str = "awp.payment.settled";
+/// A payment was refused or failed.
+pub const PAYMENT_REJECTED: &str = "awp.payment.rejected";
+
 /// Payments, donations, subscriptions and tickets (spec 3.5 §7.16 `order`, §7.5).
 pub struct PaymentHandler {
     desk: Option<Arc<dyn PaymentDesk>>,
     orders: Option<Arc<OrderBook>>,
+    audit: Option<AuditTrail>,
 }
 
 impl PaymentHandler {
     /// Payments through `desk`, or refused without one.
     pub fn new(desk: Option<Arc<dyn PaymentDesk>>) -> Self {
-        Self { desk, orders: None }
+        Self { desk, orders: None, audit: None }
+    }
+
+    /// Writes `awp.payment.created`, `awp.payment.settled` and `awp.payment.rejected` to
+    /// `trail` (spec 3.5 §9.3), each with the capability, the requester, the order, the amount
+    /// and the desk's status.
+    #[must_use]
+    pub fn with_audit(mut self, trail: AuditTrail) -> Self {
+        self.audit = Some(trail);
+        self
+    }
+
+    /// Writes one payment record.
+    async fn record(&self, action: &str, call: &CapabilityCall, fields: Value) {
+        let mut fields = fields;
+        fields["capability"] = json!(call.capability);
+        fields["requester"] = json!(call.requester.as_ref().map(ToString::to_string));
+        fields["idempotencyKey"] = json!(call.idempotency_key);
+        crate::audit::record(self.audit.as_ref(), action, AuditActor::default(), fields).await;
+    }
+
+    /// Takes one payment through `desk` with its records: created, then settled when the
+    /// desk answers `paid`, rejected when it refuses or fails.
+    async fn take(
+        &self,
+        desk: &Arc<dyn PaymentDesk>,
+        call: &CapabilityCall,
+        order: Option<&Order>,
+    ) -> Result<Value, CapabilityError> {
+        let amount = match order {
+            Some(order) => Some(order.quote.total),
+            None => call.input.get("amount").and_then(Value::as_u64),
+        };
+        let currency = order.map(|order| order.quote.currency.clone());
+        let order_id = order.map(|order| order.id.clone());
+        let base = json!({ "order": order_id, "amount": amount, "currency": currency });
+        self.record(PAYMENT_CREATED, call, base.clone()).await;
+        let receipt = match order {
+            Some(order) => desk.take_for(call, order).await,
+            None => desk.take(call).await,
+        };
+        let mut fields = base;
+        match &receipt {
+            Ok(receipt) => {
+                fields["status"] = receipt["status"].clone();
+                if receipt["status"] == PAID {
+                    self.record(PAYMENT_SETTLED, call, fields).await;
+                }
+            }
+            Err(error) => {
+                fields["error"] = json!(error.to_string());
+                self.record(PAYMENT_REJECTED, call, fields).await;
+            }
+        }
+        receipt
     }
 
     /// Pays the orders in `orders`: `pay_order` names an order awaiting payment, the desk
@@ -599,50 +699,69 @@ impl CapabilityHandler for PaymentHandler {
             ));
         };
         let (Some(orders), Some(id)) = (&self.orders, call.input["orderId"].as_str()) else {
-            return desk.take(&call).await;
+            return self.take(desk, &call, None).await;
         };
         let not_found = || refused(ErrorCode::ResourceNotFound, "no order");
-        let order = orders.order(id).ok_or_else(not_found)?;
+        let order = orders.order(id).await?.ok_or_else(not_found)?;
         if order.quote.requester.is_some() && order.quote.requester != call.requester {
             return Err(not_found());
         }
         // One payment at a time per order: the order is `paying` while the desk takes it, so a
         // second call, under another key, is refused instead of paying twice.
-        let Some(paying) = orders.transition(&order.id, AWAITING_PAYMENT, PAYING) else {
-            let status = orders.order(&order.id).map_or(order.status, |order| order.status);
+        let Some(paying) = orders.transition(&order.id, AWAITING_PAYMENT, PAYING).await? else {
+            let status = orders.order(&order.id).await?.map_or(order.status, |order| order.status);
             return Err(refused(
                 ErrorCode::PaymentPolicyRejected,
                 format!("order {} is {status}, not awaiting payment", order.id),
             ));
         };
-        let mut payment = Paying { orders: orders.as_ref(), id: &paying.id, settled: false };
-        let receipt = desk.take_for(&call, &paying).await?;
-        payment.settled = receipt["status"] == PAID;
-        Ok(receipt)
+        let mut payment = Paying { orders: Some(orders.clone()), id: paying.id.clone() };
+        let receipt = self.take(desk, &call, Some(&paying)).await;
+        let settled = matches!(&receipt, Ok(receipt) if receipt["status"] == PAID);
+        payment.finish(settled).await;
+        receipt
     }
 
-    /// A call naming an order is for the order's total; any other, its `amount` member
-    /// (spec 3.5 §7.4).
-    fn call_amount(&self, input: &Value) -> Option<u64> {
+    /// A call naming an order is for the order's total, read from the store; any other, its
+    /// `amount` member (spec 3.5 §7.4).
+    async fn amount(&self, input: &Value) -> Option<u64> {
         match (&self.orders, input["orderId"].as_str()) {
-            (Some(orders), Some(id)) => orders.order(id).map(|order| order.quote.total),
+            (Some(orders), Some(id)) => orders.get(id).await.map(|order| order.quote.total),
             _ => input.get("amount").and_then(Value::as_u64),
         }
     }
 }
 
-/// An order's payment in progress: when it ends — answered, refused, failed or dropped — the
-/// order is paid if the desk settled it, and awaits payment again otherwise.
-struct Paying<'a> {
-    orders: &'a OrderBook,
-    id: &'a str,
-    settled: bool,
+/// An order's payment in progress: when it ends — answered, refused or failed — the order is
+/// paid if the desk settled it, and awaits payment again otherwise; when the call is dropped
+/// mid-payment, it awaits payment again.
+struct Paying {
+    orders: Option<Arc<OrderBook>>,
+    id: String,
 }
 
-impl Drop for Paying<'_> {
+impl Paying {
+    async fn finish(&mut self, settled: bool) {
+        let Some(orders) = self.orders.take() else { return };
+        let next = if settled { PAID } else { AWAITING_PAYMENT };
+        if let Err(error) = orders.transition(&self.id, PAYING, next).await {
+            tracing::warn!(order = %self.id, error = %error, "an order's payment state could not be written");
+        }
+    }
+}
+
+impl Drop for Paying {
     fn drop(&mut self) {
-        let next = if self.settled { PAID } else { AWAITING_PAYMENT };
-        self.orders.transition(self.id, PAYING, next);
+        let Some(orders) = self.orders.take() else { return };
+        let id = std::mem::take(&mut self.id);
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn(async move {
+                    let _ = orders.transition(&id, PAYING, AWAITING_PAYMENT).await;
+                });
+            }
+            Err(_) => tracing::warn!(order = %id, "a dropped payment leaves its order paying"),
+        }
     }
 }
 

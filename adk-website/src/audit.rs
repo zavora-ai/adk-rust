@@ -7,6 +7,12 @@
 //! | `website.alarm.raised`, `website.alarm.acknowledged` | [`crate::alarms::AlarmRouter`] |
 //! | `website.review.sent` | [`crate::review::ReviewComposer::send`] |
 //! | `site.status.changed`, `site.rollback` | [`crate::incident::IncidentPath`] |
+//! | `awp.payment.created`, `awp.payment.settled`, `awp.payment.rejected` | [`crate::edge::handlers::PaymentHandler`] |
+//!
+//! A served site keeps every record — these, the pipeline's `site.content.*` and
+//! `site.release.*`, the update engine's, the edge's and the kernel's — in `data/audit.jsonl`
+//! through `adk-core`'s `FileAuditRecorder`; `adk-rust awp keys` appends `awp.keys.*` to the
+//! same file.
 //!
 //! Each is an `AuditRecordKind::Other("website")` record whose fields carry the site, the
 //! charter version and the release sequence where there is one; the kernel and the harness

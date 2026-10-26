@@ -8,6 +8,7 @@
 //! | [`preview_verification`] | The full tier runs `awp verify` against the preview of the next release (spec 3.5 §7.8.1), over the host's site log, with the edge's documents read from the served router |
 //! | [`PaymentLinks`] | `pay_order`, `donate`, `subscribe` and `buy_ticket` answer with the owner's payment instructions from `payments.json`; the money never passes through the site |
 //! | [`LogRecorder`] | Writes audit records to the logs, for the edge's meter |
+//! | [`metered_trail`] | The edge's meter over a durable recorder, such as the served site's `data/audit.jsonl` |
 
 use std::sync::Arc;
 
@@ -125,6 +126,25 @@ impl AuditRecorder for LogRecorder {
         tracing::info!(audit.action = %draft.action, "audit record");
         Ok(())
     }
+}
+
+/// The edge's meter over `recorder`, counting into `counts`: a served site's edge keeps its
+/// records in `data/audit.jsonl` through `adk_core::audit_log::FileAuditRecorder` (spec 3.5
+/// §7.9, §9.3).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let recorder = Arc::new(FileAuditRecorder::open("data/audit.jsonl")?);
+/// let trail = metered_trail(recorder, counts);
+/// ```
+pub fn metered_trail(
+    recorder: Arc<dyn AuditRecorder>,
+    counts: Arc<dyn adk_server::awp::BeaconStore>,
+) -> adk_core::audit_log::AuditTrail {
+    adk_core::audit_log::AuditTrail::new(Arc::new(crate::measurement::EdgeMeter::new(
+        recorder, counts,
+    )))
 }
 
 /// The edge's meter over [`LogRecorder`], counting into `counts`.

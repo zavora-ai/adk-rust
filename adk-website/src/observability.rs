@@ -5,7 +5,8 @@
 //! | `website.onboarding.{stage}` | [`crate::onboarding::Stage::span`], [`crate::onboarding::OnboardingProgress`] |
 //! | `site.probe` | [`crate::incident::GuardianProbe::run`] |
 //! | `website.job.{job}` | the jobs' runs: `website.job.protect` (incident path), `website.job.weekly-review` (review composer) |
-//! | `site.release`, `kernel.signal` | `adk-site` and the kernel |
+//! | `site.release` | `adk-site`'s pipeline: every release, with its sequence, source and items |
+//! | `kernel.signal` | [`crate::edge::adapters::KernelSignals`]: every signal the edge files, with its kind, id and emitter |
 //! | `awp.request`, `awp.capability.call` | the agent edge |
 //!
 //! Metrics are `tracing` events whose fields follow the OpenTelemetry metrics layer's
@@ -34,15 +35,15 @@ use crate::wallet::WalletKpi;
 pub mod spans {
     /// Prefix of the onboarding stages' spans.
     pub const ONBOARDING: &str = "website.onboarding";
-    /// A release.
-    pub const SITE_RELEASE: &str = "site.release";
+    /// A release: `adk-site`'s pipeline span.
+    pub const SITE_RELEASE: &str = adk_site::pipeline::RELEASE_SPAN;
     /// A probe.
     pub const SITE_PROBE: &str = "site.probe";
     /// A request at the edge.
     pub const AWP_REQUEST: &str = "awp.request";
     /// A capability call at the edge.
     pub const AWP_CAPABILITY_CALL: &str = "awp.capability.call";
-    /// A signal.
+    /// A signal filed in the back office.
     pub const KERNEL_SIGNAL: &str = "kernel.signal";
     /// Prefix of the jobs' spans.
     pub const JOB: &str = "website.job";

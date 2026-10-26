@@ -17,11 +17,15 @@
 //! Payments go through the owner's [`handlers::PaymentDesk`]: [`ap2::Ap2Desk`] for AP2
 //! mandates, [`token::TokenDesk`] for token rails, [`token::PaymentRails`] for both.
 //! Bookings go through a [`handlers::Calendar`]: [`caldav::CalDavCalendar`] over the owner's
-//! CalDAV calendar, or [`handlers::InMemoryCalendar`] from `calendar.json`.
+//! CalDAV calendar, or [`commerce::StoredCalendar`] (in memory, [`handlers::InMemoryCalendar`])
+//! from `calendar.json`. Quotes, orders and the bookings of `calendar.json`'s slots live in a
+//! [`commerce::CommerceStore`]: [`SiteEdge::build_with_commerce`] takes a durable one,
+//! [`SiteEdge::build`] keeps them in memory.
 
 pub mod adapters;
 pub mod ap2;
 pub mod caldav;
+pub mod commerce;
 pub mod handlers;
 pub mod token;
 
@@ -236,8 +240,11 @@ impl SiteEdge {
             order = order.with_payments(desk.clone());
         }
         let order: Arc<dyn CapabilityHandler> = Arc::new(order);
-        let payment: Arc<dyn CapabilityHandler> =
-            Arc::new(PaymentHandler::new(parts.payments.clone()).with_orders(orders.clone()));
+        let mut payment = PaymentHandler::new(parts.payments.clone()).with_orders(orders.clone());
+        if let Some(audit) = &parts.audit {
+            payment = payment.with_audit(audit.clone());
+        }
+        let payment: Arc<dyn CapabilityHandler> = Arc::new(payment);
         let mut registry = CapabilityRegistry::new(domain);
         for declaration in parts.template.capabilities() {
             let declaration = parts.thresholds.apply(declaration);
@@ -286,8 +293,22 @@ impl SiteEdge {
     ///
     /// A refused declaration, or the edge builder's error.
     pub fn build(parts: SiteEdgeParts) -> Result<Self> {
-        let quotes = Arc::new(QuoteBook::default());
-        let orders = Arc::new(OrderBook::default());
+        Self::build_with_commerce(parts, Arc::new(commerce::InMemoryCommerceStore::default()))
+    }
+
+    /// Builds the site's edge with its quotes and orders in `commerce`, such as a served
+    /// site's [`commerce::SqliteCommerceStore`] in `data/edge.db`, so they survive a restart
+    /// (spec 3.5 §7.5, §7.9).
+    ///
+    /// # Errors
+    ///
+    /// A refused declaration, or the edge builder's error.
+    pub fn build_with_commerce(
+        parts: SiteEdgeParts,
+        commerce: Arc<dyn commerce::CommerceStore>,
+    ) -> Result<Self> {
+        let quotes = Arc::new(QuoteBook::new(commerce.clone()));
+        let orders = Arc::new(OrderBook::new(commerce));
         let registry = Self::registry(&parts, &quotes, &orders)?;
         let mut builder = AwpEdge::builder(registry, parts.keys, parts.edge_url)
             .stores(parts.stores.clone())
