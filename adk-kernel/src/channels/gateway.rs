@@ -799,6 +799,10 @@ impl ChannelGateway {
                 tracing::debug!(channel.name = %inbound.channel, "a dismissed chat account wrote");
                 return Ok(InboundOutcome::PairingDismissed);
             }
+            // The account never received its code: a new one takes its place.
+            if waiting.undelivered {
+                return self.send_code(sink, &inbound.thread, waiting).await;
+            }
             let notice = ChannelNotice::PairingWaiting { expires_at: waiting.expires_at };
             self.notify(sink, &inbound.thread, &notice).await;
             return Ok(InboundOutcome::PairingWaiting);
@@ -817,10 +821,9 @@ impl ChannelGateway {
             self.notify(sink, &inbound.thread, &ChannelNotice::PairingBusy).await;
             return Ok(InboundOutcome::PairingBusy);
         }
-        let code = secret::new_code()?;
         let expires_at = now + chrono::Duration::from_std(self.inner.code_ttl).unwrap_or_default();
         let mut request = ChannelPairingRequest::new(
-            secret::code_hash(&code),
+            String::new(),
             &inbound.channel,
             &inbound.account,
             &inbound.thread,
@@ -840,11 +843,29 @@ impl ChannelGateway {
             &[],
         )
         .await?;
+        self.send_code(sink, &inbound.thread, request).await
+    }
+
+    /// Stores `request` under a new code and sends the code to `thread`. A code that cannot
+    /// be sent keeps the request, marked undelivered: it holds the account's place and its
+    /// one record, so an account the agent cannot reply to — a stranger who blocked the bot —
+    /// starts no new request and no new record with each message, and its next message is
+    /// sent a new code (spec 3.3 §10 K1, §11 S-I6).
+    async fn send_code(
+        &self,
+        sink: &dyn ChannelSink,
+        thread: &str,
+        mut request: ChannelPairingRequest,
+    ) -> Result<InboundOutcome> {
+        let store = &self.inner.bindings;
+        let code = secret::new_code()?;
+        request.code_hash = secret::code_hash(&code);
+        request.undelivered = false;
         store.put_request(request.clone()).await?;
-        let notice = ChannelNotice::PairingCode { code, expires_at };
-        if let Err(error) = sink.send_notice(&inbound.thread, &notice).await {
-            // A code the account never received would block it until it expires.
-            store.take_request(&request.code_hash).await?;
+        let notice = ChannelNotice::PairingCode { code, expires_at: request.expires_at };
+        if let Err(error) = sink.send_notice(thread, &notice).await {
+            request.undelivered = true;
+            store.put_request(request).await?;
             return Err(error);
         }
         Ok(InboundOutcome::PairingRequested)

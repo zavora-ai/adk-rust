@@ -231,7 +231,10 @@ at a time, so the limit holds for messages that arrive together and an account t
 twice at once gets one code. `adk-rust pair list` shows the waiting accounts, and
 `adk-rust pair revoke <id>` (`POST /api/kernel/channels/waiting/{id}/dismiss`) dismisses one:
 its code stops working, its place frees, and for a day its messages get no new code and no
-answer, so strangers cannot hold every place.
+answer, so strangers cannot hold every place. An account the gateway cannot reply to, such as
+one that blocked the bot, keeps the one request and the one `pairing.requested` record its
+first message made: it holds one place like any account that waits, and each later message is
+sent a new code in place of the one that never arrived.
 
 ### Building the gateway
 
