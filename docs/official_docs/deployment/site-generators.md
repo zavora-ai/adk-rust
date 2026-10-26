@@ -26,7 +26,7 @@ adk-site = { version = "3.0.0", features = ["gen-hugo"] }
 | Step | Method | What happens |
 |------|--------|--------------|
 | Export | `export` | The built-in renderer builds the site with templates that write each page's template context — `site`, `page` and `t`, the data the built-in templates read — instead of HTML. Every other file of that build is kept. The contexts become a project in the generator's layout |
-| Run | `run` | The generator runs under `adk-sandbox`'s OS enforcer (Seatbelt on macOS, bubblewrap on Linux) with no network, reading only its program, its toolchain and the project, and writing only the project and its output. Without an enforcer the build fails |
+| Run | `run` | The generator runs under `adk-sandbox`'s OS enforcer (Seatbelt on macOS, bubblewrap on Linux) with no network, reading only its program, its toolchain and the project, and writing only the project and its output. Without an enforcer the build fails. On Windows it runs under the restricted token only with `with_restricted_token` ([below](#windows)) |
 | Assemble | `assemble` | Each page's HTML comes from the generator; stylesheets, scripts, images and fonts the generator adds are kept where they do not collide; every other file is the built-in build's. A page the generator did not write fails the build |
 
 `ExternalGenerator` implements `SiteGenerator`, so `build` runs all three and a release is built
@@ -45,6 +45,24 @@ async fn build(project: &SiteProject, out: &std::path::Path) -> adk_site::Result
     Ok(())
 }
 ```
+
+## Windows
+
+On Windows a generator runs under `adk-sandbox`'s restricted token (spec 3.2 §10 W5), in a Job
+Object that ends every process it starts. The token confines the generator's writes to its run
+directory, but it leaves the network open and lets the generator read what the user may read,
+so a build runs there only when you accept that:
+
+```rust
+use adk_site::generator::external::ExternalGenerator;
+
+fn zola() -> ExternalGenerator {
+    ExternalGenerator::zola(r"C:\tools\zola.exe").with_restricted_token()
+}
+```
+
+Without `with_restricted_token`, a Windows build fails before the generator starts; elsewhere
+the setting changes nothing.
 
 ## Project layouts
 
@@ -86,4 +104,6 @@ ADK_SITE_ELEVENTY_MODULES=/path/to/eleventy/node_modules \
 ```
 
 `ADK_SITE_GEN_RECORD=1` records the output again after a change to the fixture site, the
-renderer or a starter template.
+renderer or a starter template. The nightly `site-generators` job runs them with pinned
+releases of the four generators under bubblewrap on Linux and under the restricted token on
+Windows.

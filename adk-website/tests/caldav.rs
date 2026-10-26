@@ -430,10 +430,14 @@ async fn caldav_json_configures_the_served_calendar() {
 /// and removes it. With Radicale:
 ///
 /// ```sh
-/// docker run -d --name adk-caldav -p 127.0.0.1:5232:5232 tomsquest/docker-radicale
+/// pipx install radicale
+/// radicale --server-hosts 127.0.0.1:5232 --auth-type none --rights-type none \
+///   --storage-filesystem-folder /tmp/radicale &
 /// ADK_WEBSITE_CALDAV_HOME=http://127.0.0.1:5232/juniper/ \
 ///   cargo nextest run -p adk-website --test caldav --run-ignored only live_caldav
 /// ```
+///
+/// The nightly `site-hosts` job runs it so.
 ///
 /// `ADK_WEBSITE_CALDAV_USER` and `ADK_WEBSITE_CALDAV_PASSWORD` sign in where the server asks.
 #[tokio::test]
@@ -449,6 +453,9 @@ async fn live_caldav_lists_and_books_once() {
         None => request,
     };
     let run = Utc::now().timestamp_millis();
+    // A server that makes no home of its own (Radicale without accounts) needs it made first;
+    // elsewhere the home exists and this is refused.
+    let _ = signed(client.request(Method::from_bytes(b"MKCOL").unwrap(), &home)).send().await;
     let collection = format!("{home}adk-live-{run}/");
     let made = signed(client.request(Method::from_bytes(b"MKCALENDAR").unwrap(), &collection))
         .send()

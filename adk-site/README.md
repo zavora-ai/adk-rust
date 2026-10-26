@@ -216,7 +216,8 @@ See [Site hosts](../docs/official_docs/deployment/site-hosts.md).
 `ExternalGenerator` builds a site with Zola, Hugo, Astro or Build Awesome (Eleventy) and
 publishes the same twins, site files and redirects the built-in renderer does. The generator
 runs under `adk-sandbox`'s OS enforcer — Seatbelt on macOS, bubblewrap on Linux — with no
-network; without an enforcer the build fails.
+network; without an enforcer the build fails. On Windows it runs under the restricted token,
+which leaves the network open, only with `ExternalGenerator::with_restricted_token`.
 
 | Feature | Constructor | Needs |
 |---------|-------------|-------|

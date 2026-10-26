@@ -108,7 +108,12 @@ batches of 30, and the whole zone above 300 URLs.
 |------|---------|----------|---------------|
 | `NetlifyHost` | A deploy from SHA-1 file digests; only the files Netlify asks for are uploaded; drafts for previews; a ready deploy that is not live is restored | The earlier deploy's files, checked through its permalink, deployed again with the current log | The site URL |
 | `GitPagesHost` | One commit on top of the pages branch, written with `git fast-import` and pushed without force; `.nojekyll` and an optional `CNAME` | A commit of the earlier release's blobs, checked against its manifest | The pages branch |
-| `RsyncHost` | `rsync --checksum --link-dest` into a staging directory, unchanged files hard-linked, the log linked forward, renamed into `releases/<seq>/`, `current` swapped with one rename | A new directory hard-linked from the earlier release after its files are hashed on the server | `<root>/current` |
+| `RsyncHost` | `rsync --checksum --copy-dest` into a staging directory, unchanged files copied on the server and only changed ones sent, every file read-only, the log's tiles and manifests linked forward read-only, renamed into `releases/<seq>/`, `current` swapped with one rename | A new directory of copies of the earlier release's files after they are hashed on the server | `<root>/current` |
+
+Each `RsyncHost` release directory holds its own read-only copies, so a write through one
+release's file — even after a `chmod` — changes no other release, and a rollback finds the
+files it checks as they were published. Only the log's tiles and manifests, which never change
+once written, are shared.
 
 Point the web server's document root at `<root>/current` for `RsyncHost`. The server needs
 `rsync`, a POSIX shell, and `sha256sum` or `shasum`. Host keys are always checked; pin them with
@@ -137,7 +142,8 @@ tests run it against provider fakes that check request signatures independently,
 `git` remote and a local `rsync` target. The `#[ignore]`d tests in
 `adk-site/tests/host_adapters/` run it against MinIO or S3, Azurite or Azure, a Cloud Storage
 bucket, Netlify, a GitHub repository and an SSH server; each names the environment variables it
-reads.
+reads. The nightly `site-hosts` job in `.github/workflows/ci-nightly.yml` runs the MinIO,
+Azurite and SSH ones against servers it starts.
 
 ```bash
 cargo nextest run -p adk-site --features host-s3,host-gcs,host-azure,host-cloudflare,host-netlify,host-github-pages,host-rsync
