@@ -589,3 +589,35 @@ async fn a_remote_member_runs_as_an_audited_a2a_delegation() {
     assert_eq!(spawned[0].ext["member"], "remote");
     assert_eq!(f.records("harness.member.finished").len(), 1);
 }
+
+/// A `TeamSpec` whose coordinator is a harness compiles its delegate edges: the harness
+/// reports that its root consumes runtime toolsets (spec 3.5 §7.19).
+#[tokio::test]
+async fn a_team_spec_led_by_a_harness_compiles_its_delegate_edges() {
+    let dir = tempfile::tempdir().unwrap();
+    let harness = |name: &str| -> Arc<dyn Agent> {
+        let workspace = dir.path().join(name);
+        std::fs::create_dir_all(&workspace).unwrap();
+        Arc::new(
+            adk_harness::HarnessAgent::builder(name)
+                .model(Arc::new(ScriptedLlm::new("scripted", Vec::<ScriptedResponse>::new())))
+                .workspace(adk_devtools::Workspace::new(&workspace))
+                .project_instructions(no_user_file())
+                .without_default_members()
+                .build()
+                .unwrap(),
+        )
+    };
+    let (lead, member) = (harness("lead"), harness("member"));
+    assert!(lead.capabilities().runtime_tools, "{:?}", lead.capabilities());
+    let spec = adk_agent::TeamSpec {
+        name: "office".into(),
+        description: "the back office".into(),
+        coordinator: "lead".into(),
+        members: vec![TeamMemberSpec::new("lead"), TeamMemberSpec::new("member")],
+        relationships: vec![TeamRelationship::new("lead", "member", RelationshipKind::Delegate)],
+        policy: TeamPolicy::default(),
+    };
+    let team = spec.compile([lead, member]).expect("the delegate edge compiles");
+    assert_eq!(team.name(), "office");
+}

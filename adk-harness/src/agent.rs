@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use adk_core::audit_log::AuditActor;
 use adk_core::{
-    AdkError, Agent, AgentTopology, ApprovalService, ApprovalStore,
+    AdkError, Agent, AgentCapabilities, AgentTopology, ApprovalService, ApprovalStore,
     DEFAULT_TOOL_CONFIRMATION_TIMEOUT, ErrorCategory, ErrorComponent, EventStream,
     EventsCompactionConfig, InvocationContext, Result, RunBudget, RunConfig, Session, SpendLedger,
     ToolConfirmationHandler, ToolPolicy, async_trait,
@@ -818,6 +818,13 @@ impl Agent for HarnessAgent {
 
     fn topology(&self) -> Option<AgentTopology> {
         self.root.topology()
+    }
+
+    // The root consumes the run's runtime toolsets under the harness's policy, so a
+    // `TeamSpec` whose coordinator is a harness compiles its delegate edges (spec 3.5
+    // §7.19); handoff follows the harness's own transfer support.
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities { handoff: self.supports_agent_transfer(), ..self.root.capabilities() }
     }
 
     // With members, every turn starts at the harness, never at a member the runner found

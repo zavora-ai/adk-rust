@@ -5,7 +5,7 @@
 //! | Observe | read-only | read-only tools only; output goes to reports |
 //! | Propose | plan | read-only tools, drafts and decision cards; everything else is proposed as a draft or an agenda item |
 //! | Act with approval | ask | every other call is held through the approval service |
-//! | Act, reversible only | auto | drafts and a rollback to a signed release run; every other call is held |
+//! | Act, reversible only | auto | drafts, a rollback to a signed release and the edge's read-only switch run; every other call is held |
 //! | Act within budget | auto | drafts and reversible acts run; every other call runs within `DeclarativePolicy` rules (`for_agent`, `at_most`) and a `RunBudget`, and is held beyond them |
 //!
 //! A level above Propose lets a call run only through a standing rule the owner's decision
@@ -91,8 +91,8 @@ pub fn level_decision(
         }
         AutonomyLevel::ActReversibleOnly if draft || reversible => LevelDecision::Allow,
         AutonomyLevel::ActReversibleOnly => LevelDecision::Hold(
-            "the job acts alone only where the act is reversible: drafts and a rollback to a \
-             signed release"
+            "the job acts alone only where the act is reversible: drafts, a rollback to a \
+             signed release and the edge's read-only switch"
                 .into(),
         ),
         AutonomyLevel::ActWithinBudget if draft || reversible => LevelDecision::Allow,
@@ -275,6 +275,34 @@ impl LadderCompiler {
         self
     }
 
+    /// Pins the origin of each of `tools` outside the catalogue — a driver's, the wallet's —
+    /// in every job that covers it, so the standing rules a promotion grants admit exactly
+    /// the publisher the agent is given (spec 3.5 §7.11, A-I13).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let tools = email_tools(outbox, Side::BackOffice);
+    /// let compiler = LadderCompiler::new(site)
+    ///     .with_charter(&charter, bindings)
+    ///     .with_tool_origins(&tools);
+    /// ```
+    #[must_use]
+    pub fn with_tool_origins(mut self, tools: &[Arc<dyn adk_core::Tool>]) -> Self {
+        for binding in &mut self.jobs {
+            for tool in tools {
+                let name = tool.name();
+                let catalogued = catalog::spec(name).is_some_and(|spec| {
+                    spec.partition == WebsitePartition::BackOffice && name != catalog::WALLET_PAY
+                });
+                if !catalogued && binding.covers(name) {
+                    binding.origins.insert(name.to_string(), tool.origin().to_string());
+                }
+            }
+        }
+        self
+    }
+
     /// The site.
     pub fn site(&self) -> &SiteRef {
         &self.site
@@ -353,11 +381,19 @@ impl LadderCompiler {
         Some(builder.build())
     }
 
-    /// The tools of `job` a standing rule must allow at `level` for the harness to let them
-    /// run: none below "act, reversible only"; its reversible acts there; every tool that
-    /// is not read-only, a draft or a decision card within budget.
+    /// The standing rules `job` holds at `level` (spec 3.5 §7.11, A-I13): the tools of the
+    /// job an owner's decision lets past the harness's mode.
+    ///
+    /// | Level | Tools |
+    /// |---|---|
+    /// | Observe, Propose | none: drafts and decision cards need no rule |
+    /// | Act with approval | every tool of the job that is not read-only, a draft or a decision card; the ladder still holds each of their calls for the owner, so the rules record what the owner granted |
+    /// | Act, reversible only | its reversible acts: a rollback to a signed release and the edge's read-only switch (A-I11) |
+    /// | Act within budget | every tool of the job that is not read-only, a draft or a decision card |
     pub fn rule_tools(&self, job: &str, level: AutonomyLevel) -> Vec<String> {
         let Some(binding) = self.binding(job) else { return Vec::new() };
+        let every =
+            matches!(level, AutonomyLevel::ActWithApproval | AutonomyLevel::ActWithinBudget);
         let mut names: BTreeSet<String> = BTreeSet::new();
         for pattern in &binding.tools {
             let catalogued: Vec<&ToolSpec> = catalog::CATALOG
@@ -367,7 +403,7 @@ impl LadderCompiler {
                         && glob_matches(pattern, spec.name)
                 })
                 .collect();
-            if catalogued.is_empty() && level == AutonomyLevel::ActWithinBudget {
+            if catalogued.is_empty() && every {
                 names.insert(pattern.clone());
             }
             for spec in catalogued {
@@ -375,8 +411,7 @@ impl LadderCompiler {
                     spec.effect != ToolEffect::ReadOnly && !spec.draft && spec.hold != Hold::Always;
                 let allowed = match level {
                     AutonomyLevel::ActReversibleOnly => spec.reversible,
-                    AutonomyLevel::ActWithinBudget => true,
-                    _ => false,
+                    _ => every,
                 };
                 if needs_rule && allowed {
                     names.insert(spec.name.to_string());
@@ -590,9 +625,10 @@ pub struct Promotion {
 }
 
 /// Promotes `job` one rung by the owner's `decision` and grants the standing rules its new
-/// level needs, each created by the owner (spec 3.5 §7.11, D-7, A-I13). The kernel's ladder
-/// refuses a decision no person made, and one by a person who is not an owner when it knows
-/// the site's charters; the site itself can never call this to raise its own level.
+/// level holds ([`LadderCompiler::rule_tools`]), each created by the owner, revoking those
+/// of the old level the new one does not hold (spec 3.5 §7.11, D-7, A-I13). The kernel's
+/// ladder refuses a decision no person made, and one by a person who is not an owner when it
+/// knows the site's charters; the site itself can never call this to raise its own level.
 ///
 /// # Errors
 ///
@@ -610,6 +646,7 @@ pub async fn promote_job(
     for rule in compiler.standing_rules(job, record.level, decision, user) {
         granted.push(rules.grant(rule).await?);
     }
+    apply_demotion(compiler, rules, job, record.level).await?;
     tracing::info!(website.job = job, website.level = ?record.level, decision = %decision.decision_id, "website.job.promoted");
     Ok(Promotion { job: record, rules: granted })
 }

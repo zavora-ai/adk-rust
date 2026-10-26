@@ -117,6 +117,8 @@ struct DraftArgs {
     schedule: Option<ScheduleArgs>,
     #[serde(default)]
     job: Option<String>,
+    #[serde(default)]
+    draft: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -131,6 +133,8 @@ struct EditArgs {
     sources: Option<Vec<String>>,
     #[serde(default)]
     job: Option<String>,
+    #[serde(default)]
+    draft: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -144,6 +148,8 @@ struct TranslationArgs {
     body: Option<String>,
     #[serde(default)]
     job: Option<String>,
+    #[serde(default)]
+    draft: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -156,6 +162,8 @@ struct MediaArgs {
     alt: Option<String>,
     #[serde(default)]
     generated: bool,
+    #[serde(default)]
+    item: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -280,7 +288,8 @@ fn content_schema() -> Value {
             "sources": { "type": "array", "items": { "type": "string" }, "description": "Ids of the Known facts the claims rest on" },
             "volatile": { "type": "array", "items": { "type": "string" } },
             "schedule": { "$ref": "#/$defs/schedule" },
-            "job": { "type": "string" }
+            "job": { "type": "string" },
+            "draft": { "type": "string", "description": JOIN_DRAFT }
         },
         "required": ["kind", "slug", "language"],
         "additionalProperties": false,
@@ -301,6 +310,10 @@ fn schedule_schema() -> Value {
     })
 }
 
+/// What the `draft` argument of the drafting tools does (spec 3.5 §7.8.2 step 1).
+const JOIN_DRAFT: &str = "The id of an earlier draft this item joins, so one release carries \
+    several items, such as the pages of release 1; without it the item starts a new draft";
+
 fn object(properties: Value, required: &[&str]) -> Value {
     json!({ "type": "object", "properties": properties, "required": required, "additionalProperties": false })
 }
@@ -317,7 +330,7 @@ pub fn back_office_tools(site: &Arc<SiteRuntime>) -> Vec<Arc<dyn Tool>> {
     let entries: Vec<(&str, &'static str, Value)> = vec![
         (
             catalog::CONTENT_DRAFT,
-            "Drafts a content item on a draft branch and checks it. Nothing goes live until it is published.",
+            "Drafts a content item on a draft branch and checks it; pass `draft` to add it to an earlier draft, so one release carries several pages. Nothing goes live until it is published.",
             content_schema(),
         ),
         (
@@ -326,7 +339,8 @@ pub fn back_office_tools(site: &Arc<SiteRuntime>) -> Vec<Arc<dyn Tool>> {
             object(
                 json!({
                     "id": { "type": "string" }, "fields": { "type": "object" }, "body": { "type": "string" },
-                    "sources": { "type": "array", "items": { "type": "string" } }, "job": { "type": "string" }
+                    "sources": { "type": "array", "items": { "type": "string" } }, "job": { "type": "string" },
+                    "draft": { "type": "string", "description": JOIN_DRAFT }
                 }),
                 &["id"],
             ),
@@ -337,7 +351,8 @@ pub fn back_office_tools(site: &Arc<SiteRuntime>) -> Vec<Arc<dyn Tool>> {
             object(
                 json!({
                     "id": { "type": "string" }, "language": { "type": "string" }, "fields": { "type": "object" },
-                    "body": { "type": "string" }, "job": { "type": "string" }
+                    "body": { "type": "string" }, "job": { "type": "string" },
+                    "draft": { "type": "string", "description": JOIN_DRAFT }
                 }),
                 &["id", "language"],
             ),
@@ -348,7 +363,8 @@ pub fn back_office_tools(site: &Arc<SiteRuntime>) -> Vec<Arc<dyn Tool>> {
             object(
                 json!({
                     "draft": { "type": "string" }, "name": { "type": "string" }, "dataBase64": { "type": "string" },
-                    "alt": { "type": "string" }, "generated": { "type": "boolean" }
+                    "alt": { "type": "string" }, "generated": { "type": "boolean" },
+                    "item": { "type": "string", "description": "The id of the draft's item the upload belongs to; its first item by default" }
                 }),
                 &["draft", "name", "dataBase64"],
             ),
@@ -523,7 +539,7 @@ impl Tool for BackOfficeTool {
                     schedule: args.schedule.and_then(ScheduleArgs::into_schedule),
                     state: ContentState::Draft,
                 };
-                draft(site, &ctx, vec![item], args.job).await
+                draft(site, &ctx, item, args.job, args.draft).await
             }
             catalog::CONTENT_EDIT => {
                 let args: EditArgs = parse(name, args)?;
@@ -542,7 +558,7 @@ impl Tool for BackOfficeTool {
                     item.sources = sources.into_iter().map(FactRef).collect();
                 }
                 item.state = ContentState::Draft;
-                draft(site, &ctx, vec![item], args.job).await
+                draft(site, &ctx, item, args.job, args.draft).await
             }
             catalog::TRANSLATION_DRAFT => {
                 let args: TranslationArgs = parse(name, args)?;
@@ -565,7 +581,7 @@ impl Tool for BackOfficeTool {
                 item.fields.extend(args.fields);
                 item.body = args.body.map(Markdown).or(source.body);
                 item.state = ContentState::Draft;
-                draft(site, &ctx, vec![item], args.job).await
+                draft(site, &ctx, item, args.job, args.draft).await
             }
             catalog::MEDIA_INTAKE => {
                 let args: MediaArgs = parse(name, args)?;
@@ -585,12 +601,11 @@ impl Tool for BackOfficeTool {
                 let record = drafts
                     .get_mut(&args.draft)
                     .ok_or_else(|| invalid(name, format!("no draft '{}'", args.draft)))?;
-                let item = record
-                    .draft
-                    .change
-                    .items
-                    .first_mut()
-                    .ok_or_else(|| invalid(name, "the draft holds no item"))?;
+                let item = match &args.item {
+                    Some(id) => record.draft.change.items.iter_mut().find(|item| item.id.0 == *id),
+                    None => record.draft.change.items.first_mut(),
+                }
+                .ok_or_else(|| invalid(name, "the draft holds no such item"))?;
                 let dir = format!("content/{}/{}", kind_directory(item.kind), item.slug);
                 let media = processed.media_ref(&dir);
                 item.media.retain(|held| held.path != media.path);
@@ -832,26 +847,51 @@ impl Tool for BackOfficeTool {
     }
 }
 
-/// Step 1 and 2: holds the change apart and runs the fast tier on it.
+/// Step 1 and 2: holds the change apart and runs the fast tier on it. With `join`, the item
+/// joins that draft — replacing an earlier version of the same item — so one release
+/// carries several items (spec 3.5 §7.8.2 step 1, §7.18 stage 6).
 async fn draft(
     site: &Arc<SiteRuntime>,
     ctx: &Arc<dyn ToolContext>,
-    items: Vec<ContentItem>,
+    item: ContentItem,
     job: Option<String>,
+    join: Option<String>,
 ) -> Result<Value> {
-    let ids: Vec<String> = items.iter().map(|item| item.id.0.clone()).collect();
     let change = Change {
-        items,
+        items: vec![item],
         media: Vec::new(),
         entry: entry_point(ctx),
         proposer: proposer(ctx),
         job: job.unwrap_or_else(|| "content".to_string()),
         action_class: PUBLISH_ACTION.to_string(),
     };
-    let draft: Draft = site.pipeline.draft(change).await.map_err(site_error)?;
-    let gate = site.pipeline.check(&draft).await.map_err(site_error)?;
-    let id = site.next_id("draft");
-    site.drafts.lock().await.insert(id.clone(), DraftRecord { draft, preview: None });
+    // The pipeline checks and records the new item alone, so a joined draft's earlier items
+    // are not recorded again.
+    let single: Draft = site.pipeline.draft(change).await.map_err(site_error)?;
+    let mut drafts = site.drafts.lock().await;
+    let (joined, candidate) = match join {
+        Some(id) => {
+            let mut held = drafts
+                .get(&id)
+                .map(|record| record.draft.clone())
+                .ok_or_else(|| invalid("content_draft", format!("no draft '{id}'")))?;
+            for item in single.change.items {
+                match held.change.items.iter_mut().find(|known| known.id == item.id) {
+                    Some(known) => *known = item,
+                    None => {
+                        held.ids.insert(item.id.clone());
+                        held.change.items.push(item);
+                    }
+                }
+            }
+            (Some(id), held)
+        }
+        None => (None, single),
+    };
+    let ids: Vec<String> = candidate.change.items.iter().map(|item| item.id.0.clone()).collect();
+    let gate = site.pipeline.check(&candidate).await.map_err(site_error)?;
+    let id = joined.unwrap_or_else(|| site.next_id("draft"));
+    drafts.insert(id.clone(), DraftRecord { draft: candidate, preview: None });
     Ok(json!({
         "draft": id,
         "items": ids,

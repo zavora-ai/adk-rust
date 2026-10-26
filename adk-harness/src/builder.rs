@@ -34,7 +34,7 @@ use crate::shell::{
     resolve_isolation,
 };
 use crate::tools::{ExitPlanModeTool, HarnessBashTool, TodoList, UpdateTodoTool, WriteTodosTool};
-use crate::toolset::HarnessToolset;
+use crate::toolset::{HarnessToolset, mode_banner, website_banner};
 
 /// A pack: a feature that adds tools or a surface under the same policy
 /// (spec 3.1 §7.16–§7.18).
@@ -153,6 +153,12 @@ pub struct HarnessAgentBuilder {
     isolated_shell_only: bool,
     /// The website preset leaves `bash` out (spec 3.5 §10 X10).
     preset_without_shell: bool,
+    /// The website preset: its mode banner, and no `exit_plan_mode`, since the charter's
+    /// autonomy levels set the mode (spec 3.5 §7.11, A-I13).
+    website_preset: bool,
+    /// The public partition's tools: of the harness's own tools the agent is offered these
+    /// and nothing else (spec 3.5 §7.10, A-I2).
+    public_only: Option<BTreeSet<String>>,
     /// `allow_unsandboxed_retry` was set explicitly, so a container shell keeps it.
     retry_explicit: bool,
     trust_mcp_read_only_hints: bool,
@@ -274,6 +280,8 @@ impl HarnessAgentBuilder {
             shell_enabled: true,
             isolated_shell_only: false,
             preset_without_shell: false,
+            website_preset: false,
+            public_only: None,
             retry_explicit: false,
             trust_mcp_read_only_hints: false,
             todos: true,
@@ -1046,6 +1054,22 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// The website preset's mode banner and no `exit_plan_mode`, for as long as the preset
+    /// holds (spec 3.5 §7.11, A-I13).
+    #[cfg(feature = "website")]
+    pub(crate) fn website_preset(mut self) -> Self {
+        self.website_preset = true;
+        self
+    }
+
+    /// Offers the agent no tool of the harness's own beyond `tools`: no workspace, memory,
+    /// plan or web tool, and no harness toolset (spec 3.5 A-I2).
+    #[cfg(feature = "website")]
+    pub(crate) fn public_only(mut self, tools: BTreeSet<String>) -> Self {
+        self.public_only = Some(tools);
+        self
+    }
+
     /// Undoes what a preset set that another preset leaves alone (spec 3.3 §10 H1).
     pub(crate) fn clear_preset(mut self) -> Self {
         if self.description.as_deref() == Some(crate::personal::PERSONAL_DESCRIPTION) {
@@ -1056,6 +1080,7 @@ impl HarnessAgentBuilder {
             self.description = None;
         }
         self.preset_without_shell = false;
+        self.website_preset = false;
         self.isolated_shell_only(false)
     }
 
@@ -1571,6 +1596,7 @@ impl HarnessAgentBuilder {
     pub fn build(mut self) -> Result<HarnessAgent> {
         // The website preset runs without a shell, whatever the workspace allows (X10).
         self.shell_enabled &= !self.preset_without_shell;
+        let public_only = self.public_only.take();
         let model = self.model.ok_or_else(|| AdkError::config("HarnessAgent requires a model"))?;
         let mut workspace =
             self.workspace.ok_or_else(|| AdkError::config("HarnessAgent requires a workspace"))?;
@@ -1941,7 +1967,10 @@ impl HarnessAgentBuilder {
             Some(graphs) => plan_exit.with_plan_graph(graphs.clone()),
             None => plan_exit,
         };
-        tools.push(Arc::new(plan_exit));
+        // A website agent's mode is its jobs' autonomy, which only the owner raises (A-I13).
+        if !self.website_preset {
+            tools.push(Arc::new(plan_exit));
+        }
         // Follow-ups go on the agenda of the kernel hosting the harness (spec 3.2 §7.5).
         #[cfg(feature = "kernel")]
         tools.push(Arc::new(crate::kernel::ProposeFollowupTool::new(
@@ -2084,6 +2113,11 @@ impl HarnessAgentBuilder {
                 })
                 .collect();
         }
+        // A public-partition agent is offered its partition's tools and nothing else, so no
+        // workspace, memory or plan tool reaches a model that reads untrusted text (A-I2).
+        if let Some(allowed) = &public_only {
+            tools.retain(|tool| allowed.contains(tool.name()));
+        }
         let tool_names: Vec<String> = tools.iter().map(|tool| tool.name().to_string()).collect();
         #[cfg(feature = "auth")]
         let (tools, identity_gate) = {
@@ -2156,6 +2190,7 @@ impl HarnessAgentBuilder {
         }
         #[cfg_attr(not(feature = "memory"), allow(unused_mut))]
         let mut toolset = HarnessToolset::new(tools, mode_store.clone(), self.mode)
+            .with_banner(if self.website_preset { website_banner } else { mode_banner })
             .with_observers(&observers)
             .with_effort(self.effort)
             .with_rules_digest(rules.clone());
@@ -2510,10 +2545,13 @@ impl HarnessAgentBuilder {
         {
             match crate::skills::wire(workspace.root(), &self.skills)? {
                 crate::skills::SkillsWiring::None => {}
+                crate::skills::SkillsWiring::Toolset(_) if public_only.is_some() => {}
                 crate::skills::SkillsWiring::Toolset(skills) => builder = builder.toolset(skills),
                 crate::skills::SkillsWiring::Inject(index) => builder = builder.with_skills(index),
             }
         }
+        // The operator's own tools and toolsets stay, so the public partition's policy refuses
+        // one attached by mistake on the record; the harness adds no toolset of its own there.
         for tool in self.tools {
             let tool = match &self.take_over {
                 Some(_) => crate::take_over::ScopedTool::wrap(tool, self.tool_timeout),
@@ -2532,7 +2570,7 @@ impl HarnessAgentBuilder {
         }
         // The coordinator's crossings into other partitions' drivers (spec 3.2 §7.8).
         #[cfg(feature = "kernel")]
-        if let Some(wired) = &partition {
+        if let Some(wired) = partition.as_ref().filter(|_| public_only.is_none()) {
             for crossings in &wired.toolsets {
                 let crossings = match &self.take_over {
                     Some(_) => {
@@ -2544,11 +2582,11 @@ impl HarnessAgentBuilder {
             }
         }
         #[cfg(feature = "web")]
-        if let Some(provider_web) = &provider_web {
+        if let Some(provider_web) = provider_web.as_ref().filter(|_| public_only.is_none()) {
             builder = builder.toolset(provider_web.clone());
         }
         #[cfg(feature = "mcp")]
-        if let Some(mcp) = &mcp {
+        if let Some(mcp) = mcp.as_ref().filter(|_| public_only.is_none()) {
             builder = builder.toolset(mcp.manager());
         }
         if let Some(customize) = self.customize {

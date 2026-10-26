@@ -77,6 +77,10 @@ fn every_tool_has_its_effect_class_and_holds() {
             Hold::Always,
         ),
         ("wallet_pay", BackOffice, NonIdempotent, Financial, false, false, Hold::Ladder),
+        ("edge_read_only", BackOffice, Idempotent, PublishPublic, false, true, Hold::Ladder),
+        ("experiment_start", BackOffice, NonIdempotent, PublishPublic, false, false, Hold::Ladder),
+        ("experiment_report", BackOffice, ReadOnly, Read, false, false, Hold::Ladder),
+        ("lead_handoff", BackOffice, NonIdempotent, WriteLocal, false, false, Hold::Ladder),
         ("search_site", Public, ReadOnly, Read, false, false, Hold::Ladder),
         ("reply_in_thread", Public, NonIdempotent, SendExternal, false, false, Hold::Ladder),
         ("emit_signal", Public, NonIdempotent, WriteLocal, false, false, Hold::Ladder),
@@ -290,7 +294,8 @@ async fn promotion_without_an_owners_decision_is_refused() {
         "no rule without an owner"
     );
 
-    // Twice by the owner: act with approval needs no rule, act reversible only does.
+    // By the owner: act with approval grants the rules of the job's acting tools — the ladder
+    // still holds each of their calls — and act reversible only keeps only reversible acts.
     let first = promote_job(
         &world.ladder,
         &world.compiler,
@@ -302,7 +307,15 @@ async fn promotion_without_an_owners_decision_is_refused() {
     .await
     .unwrap();
     assert_eq!(first.job.level, AutonomyLevel::ActWithApproval);
-    assert!(first.rules.is_empty());
+    let granted: Vec<&str> = first.rules.iter().map(|rule| rule.tool.as_str()).collect();
+    assert_eq!(granted, ["content_correct", "content_correct", "site_publish", "site_publish"]);
+    assert!(first.rules.iter().all(|rule| rule.created_by == SubjectRef::human(OWNER)));
+    let held = world
+        .compiler
+        .policy(world.autonomy.clone(), Arc::new(world.compiler.job_pauses()))
+        .evaluate(&call(&world, "growth", "site_publish", json!({})))
+        .await;
+    assert!(matches!(held, PolicyDecision::RequireApproval { .. }), "{held:?}");
     let second = promote_job(
         &world.ladder,
         &world.compiler,
@@ -315,6 +328,10 @@ async fn promotion_without_an_owners_decision_is_refused() {
     .unwrap();
     assert_eq!(second.job.level, AutonomyLevel::ActReversibleOnly);
     assert!(second.rules.is_empty(), "freshness has no reversible tool that needs a rule");
+    assert!(
+        rules.list(&world.site.name, OWNER).await.unwrap().is_empty(),
+        "the act-with-approval rules go: this level allows only reversible acts"
+    );
     let third = promote_job(
         &world.ladder,
         &world.compiler,
@@ -340,6 +357,107 @@ async fn promotion_without_an_owners_decision_is_refused() {
     let revoked = apply_demotion(&world.compiler, rules, "freshness", lowered.level).await.unwrap();
     assert_eq!(revoked.len(), 4);
     assert!(rules.list(&world.site.name, OWNER).await.unwrap().is_empty());
+}
+
+/// A-I11: at "act, reversible only" the owner's decision pre-authorises the two incident
+/// acts — the rollback and the edge's read-only switch — and nothing else.
+#[tokio::test]
+async fn act_reversible_only_pre_authorises_the_incident_acts() {
+    let world = World::new(true, false).await;
+    let compiler = world.compiler.clone().job(
+        adk_harness::website::JobBinding::new(
+            "protect",
+            "guardian",
+            ["site_rollback", "edge_read_only", "host_fetch", "site_publish"],
+        )
+        .in_area("run-and-protect"),
+    );
+    world
+        .ladder
+        .register(world.site.id, "protect", AutonomyLevel::ActWithApproval, Some("run-and-protect"))
+        .await
+        .unwrap();
+    let promoted = promote_job(
+        &world.ladder,
+        &compiler,
+        world.rules.as_ref(),
+        "protect",
+        &owner_decision("d-protect"),
+        OWNER,
+    )
+    .await
+    .unwrap();
+    assert_eq!(promoted.job.level, AutonomyLevel::ActReversibleOnly);
+    let mut tools: Vec<&str> = promoted.rules.iter().map(|rule| rule.tool.as_str()).collect();
+    tools.dedup();
+    assert_eq!(tools, ["edge_read_only", "site_rollback"]);
+    for rule in &promoted.rules {
+        assert_eq!(
+            rule.origin,
+            adk_harness::OriginPin::AnyDeclaration {
+                source: adk_harness::website::BACK_OFFICE_ORIGIN.into()
+            }
+        );
+    }
+    let policy = compiler.policy(world.autonomy.clone(), Arc::new(compiler.job_pauses()));
+    let switch = |tool: &str| call(&world, "guardian", tool, json!({ "reason": "drift" }));
+    assert_eq!(policy.evaluate(&switch("edge_read_only")).await, PolicyDecision::Allow);
+    let publish = policy.evaluate(&switch("site_publish")).await;
+    assert!(matches!(publish, PolicyDecision::RequireApproval { .. }), "{publish:?}");
+}
+
+/// The standing rules of a tool outside the catalogue pin the origin the agent is given.
+#[tokio::test]
+async fn a_drivers_standing_rule_pins_its_origin() {
+    let world = World::new(true, false).await;
+    struct Driver;
+    #[async_trait::async_trait]
+    impl adk_core::Tool for Driver {
+        fn name(&self) -> &str {
+            "email_send_sequence_step"
+        }
+        fn description(&self) -> &str {
+            "sends"
+        }
+        fn origin(&self) -> &str {
+            "adk-drivers:email/in-memory"
+        }
+        async fn execute(
+            &self,
+            _: Arc<dyn adk_core::ToolContext>,
+            _: serde_json::Value,
+        ) -> adk_core::Result<serde_json::Value> {
+            Ok(json!({}))
+        }
+    }
+    let tools: Vec<Arc<dyn adk_core::Tool>> = vec![Arc::new(Driver)];
+    let compiler = world
+        .compiler
+        .clone()
+        .job(adk_harness::website::JobBinding::new(
+            "nurture",
+            "revenue",
+            ["email_send_sequence_step"],
+        ))
+        .with_tool_origins(&tools);
+    world.ladder.register(world.site.id, "nurture", AutonomyLevel::Propose, None).await.unwrap();
+    let promoted = promote_job(
+        &world.ladder,
+        &compiler,
+        world.rules.as_ref(),
+        "nurture",
+        &owner_decision("d-nurture"),
+        OWNER,
+    )
+    .await
+    .unwrap();
+    assert_eq!(promoted.rules.len(), 2, "one per subject kind");
+    for rule in &promoted.rules {
+        assert_eq!(
+            rule.origin,
+            adk_harness::OriginPin::AnyDeclaration { source: "adk-drivers:email/in-memory".into() }
+        );
+    }
 }
 
 proptest! {

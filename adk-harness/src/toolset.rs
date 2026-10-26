@@ -160,6 +160,8 @@ pub struct HarnessToolset {
     effort: Option<crate::posture::EffortPolicy>,
     /// A team member's toolset, whose requests run at `members` rather than the mode's level.
     member: bool,
+    /// The line that tells the model what its mode allows.
+    banner: fn(HarnessMode) -> String,
     #[cfg(feature = "memory")]
     facts: Option<Arc<crate::facts::runtime::FactsRuntime>>,
     /// The session containers of the container shell, stopped when the toolset closes
@@ -183,6 +185,7 @@ impl HarnessToolset {
             rules: None,
             effort: None,
             member: false,
+            banner: mode_banner,
             #[cfg(feature = "memory")]
             facts: None,
             #[cfg(feature = "docker")]
@@ -280,6 +283,14 @@ impl HarnessToolset {
         Self { member: true, ..Self::new(tools, mode_store, default_mode) }
     }
 
+    /// Tells the model what its mode allows with `banner` instead of the harness's own
+    /// (the website preset's, spec 3.5 §7.11).
+    #[must_use]
+    pub(crate) fn with_banner(mut self, banner: fn(HarnessMode) -> String) -> Self {
+        self.banner = banner;
+        self
+    }
+
     /// Names of the tools, in declaration order.
     pub fn tool_names(&self) -> Vec<String> {
         self.tools.iter().map(|tool| tool.name().to_string()).collect()
@@ -309,6 +320,33 @@ pub(crate) fn mode_banner(mode: HarnessMode) -> String {
     format!(
         "Harness mode is {rule}. The <harness> block's class lines say which calls run, ask or \
          are refused in this mode."
+    )
+}
+
+/// The website preset's banner (spec 3.5 §7.11): the mode is the agent's jobs' autonomy
+/// level, set by the charter and raised only by the owner, so the agent never asks to leave
+/// it; at Propose it drafts, and drafts run in plan mode.
+pub(crate) fn website_banner(mode: HarnessMode) -> String {
+    let rule = match mode {
+        HarnessMode::ReadOnly => "read-only: read and report; nothing changes",
+        HarnessMode::Plan => {
+            "propose: draft every change with the drafting tools (content_draft, content_edit, \
+             translation_draft, media_intake, charter_draft) and raise decision cards; drafts \
+             and cards run in this mode, and nothing goes live until the owner approves it"
+        }
+        HarnessMode::Ask => {
+            "act with approval: call the tools you need directly; a call that needs the owner is \
+             held as a decision card, so do not ask for permission in your reply"
+        }
+        HarnessMode::Auto => {
+            "act: call the tools you need directly; a call beyond your authority is held for \
+             the owner"
+        }
+    };
+    format!(
+        "Your mode is {rule}. Your jobs' autonomy levels set the mode and only the owner raises \
+         them, so never ask to leave it. The <harness> block's class lines say which calls run, \
+         ask or are refused in this mode."
     )
 }
 
@@ -377,7 +415,7 @@ impl Toolset for HarnessToolset {
             let level = if self.member { policy.members } else { policy.for_mode(mode) };
             request.config.get_or_insert_with(Default::default).effort = Some(level);
         }
-        let mut lines = vec![mode_banner(mode)];
+        let mut lines = vec![(self.banner)(mode)];
         // Rules change mid-session: the digest is rebuilt for every request and never
         // saved, so it stays out of the cached prefix (spec 3.1 §7.25, I56).
         if let Some(digest) = &self.rules
