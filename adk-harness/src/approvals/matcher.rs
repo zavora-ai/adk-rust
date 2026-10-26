@@ -453,6 +453,110 @@ fn fold(component: &str) -> String {
     component.nfc().collect::<String>().to_lowercase()
 }
 
+/// Folds display text so wording that only looks different matches: compatibility
+/// decomposition (NFKD) with accents and other combining marks dropped, case folded,
+/// zero-width, bidirectional and other invisible controls removed, letters from other scripts
+/// that look like Latin ones mapped to them, `0` and `1` read as `o` and `l`, apostrophes
+/// unified and whitespace collapsed to single spaces.
+///
+/// It extends [`is_protected_path`]'s path folding to text a person reads: agent-drawn UI may
+/// not show a decision's words (spec 3.3 §7.4 rule 5), whatever their spelling.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_harness::approvals::matcher::fold_display_text;
+///
+/// assert_eq!(fold_display_text("Allow once"), "allow once");
+/// // Full-width letters, a zero-width space and a Cyrillic `о`.
+/// assert_eq!(fold_display_text("Ａllow\u{200B} \u{043E}nce"), "allow once");
+/// assert_eq!(fold_display_text("Confirm it\u{2019}s  you"), "confirm it's you");
+/// assert_eq!(fold_display_text("D\u{0301}eny"), "deny");
+/// ```
+pub fn fold_display_text(text: &str) -> String {
+    let mut folded = String::with_capacity(text.len());
+    let mut space = false;
+    for c in text.nfkd() {
+        if unicode_normalization::char::is_combining_mark(c) || invisible(c) {
+            continue;
+        }
+        if c.is_whitespace() {
+            space = !folded.is_empty();
+            continue;
+        }
+        if space {
+            folded.push(' ');
+            space = false;
+        }
+        for lower in c.to_lowercase() {
+            folded.push(look_alike(lower));
+        }
+    }
+    folded
+}
+
+/// Characters that draw nothing or reorder what is drawn: zero-width characters, the soft
+/// hyphen, bidirectional controls, variation selectors and tags.
+fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{061C}'
+            | '\u{115F}'
+            | '\u{1160}'
+            | '\u{17B4}'
+            | '\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}'
+            | '\u{FFA0}'
+            | '\u{FFF0}'..='\u{FFF8}'
+            | '\u{E0000}'..='\u{E007F}'
+            | '\u{E0100}'..='\u{E01EF}'
+    )
+}
+
+/// The Latin letter a lowercase character is commonly mistaken for, or the character.
+fn look_alike(c: char) -> char {
+    match c {
+        // Cyrillic.
+        'а' => 'a',
+        'в' => 'b',
+        'с' | 'ϲ' => 'c',
+        'ԁ' => 'd',
+        'е' | 'ё' | 'є' => 'e',
+        'һ' => 'h',
+        'і' | 'ї' | 'ı' | 'ɩ' | 'ι' => 'i',
+        'ј' | 'ϳ' => 'j',
+        'к' | 'κ' => 'k',
+        'ӏ' | 'ℓ' | '1' | '|' => 'l',
+        'м' => 'm',
+        'п' | 'η' | 'ո' => 'n',
+        'о' | 'ο' | 'օ' | 'σ' | '0' => 'o',
+        'р' | 'ρ' => 'p',
+        'ԛ' => 'q',
+        'г' => 'r',
+        'ѕ' => 's',
+        'т' | 'τ' => 't',
+        'υ' | 'ս' => 'u',
+        'ν' | 'ѵ' => 'v',
+        'ԝ' | 'ω' | 'ѡ' => 'w',
+        'х' | 'χ' => 'x',
+        'у' | 'ү' | 'γ' => 'y',
+        'ɑ' | 'α' => 'a',
+        'ɡ' => 'g',
+        // Apostrophes and primes.
+        '\u{2018}' | '\u{2019}' | '\u{201B}' | '\u{2032}' | '\u{02BC}' | '\u{FF07}' | '`'
+        | '\u{00B4}' => '\'',
+        other => other,
+    }
+}
+
 /// Whether `path` (relative to the workspace root) is a protected path (spec 3.1 §9.2 I29).
 ///
 /// Instruction, memory, hook and tool-configuration names are protected at any depth; the
