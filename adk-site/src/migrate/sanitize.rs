@@ -96,6 +96,12 @@ pub enum DropReason {
     },
     /// Any other element outside the allowlist that is dropped with its content.
     Other,
+    /// A link or image to a page of the site that the crawl could not read, such as one
+    /// `robots.txt` disallows: the link becomes its text, the image is left out.
+    UnreadTarget {
+        /// The target, as a path on the site.
+        target: String,
+    },
 }
 
 /// One dropped element.
@@ -190,7 +196,8 @@ impl Sanitiser {
         })
     }
 
-    /// Sanitises `html`, writing every resolved `http` and `https` URL as `map` returns it.
+    /// Sanitises `html`, writing every resolved `http` and `https` URL as `map` returns it. A
+    /// link `map` writes as an empty string becomes its text, and such an image is left out.
     pub fn sanitise_mapped(
         &self,
         html: &str,
@@ -679,7 +686,7 @@ impl Converter<'_, '_> {
                 let text = self.inline_children(node);
                 let href = element.attr("href").and_then(|h| self.url(h, UrlUse::Link));
                 match href {
-                    Some(href) if !text.trim().is_empty() => {
+                    Some(href) if !href.is_empty() && !text.trim().is_empty() => {
                         self.out.links.push(href.clone());
                         format!("[{}]({href})", text.trim())
                     }
@@ -689,13 +696,13 @@ impl Converter<'_, '_> {
             "img" => {
                 let src = element.attr("src").and_then(|s| self.url(s, UrlUse::Image));
                 match src {
-                    Some(src) => {
+                    Some(src) if !src.is_empty() => {
                         self.out.images.push(src.clone());
                         let alt =
                             escape(&super::html::collapse(element.attr("alt").unwrap_or_default()));
                         format!("![{alt}]({src})")
                     }
-                    None => String::new(),
+                    _ => String::new(),
                 }
             }
             "iframe" => self.iframe(element, node).unwrap_or_default(),
@@ -708,10 +715,10 @@ impl Converter<'_, '_> {
             "video" | "audio" | "source" => {
                 let src = element.attr("src").and_then(|s| self.url(s, UrlUse::Link));
                 match src {
-                    Some(src) => {
+                    Some(src) if !src.is_empty() => {
                         format!("[{}]({src})", if name == "audio" { "Audio" } else { "Video" })
                     }
-                    None => String::new(),
+                    _ => String::new(),
                 }
             }
             _ => self.inline_children(node),

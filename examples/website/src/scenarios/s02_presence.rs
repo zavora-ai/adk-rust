@@ -75,17 +75,19 @@ pub async fn run(mode: Mode) -> Result<Checks> {
             && found.iter().any(|f| f.source.url == profiles[2]),
         "telephone from the listing, rating from the review page, description from the profile",
     );
+    // The listing is typed `Bakery`, a schema.org subtype of `LocalBusiness`.
     let kind = discovered.cards().into_iter().find_map(|card| match card {
         OwnerCard::ConfirmKind { proposal } => Some(proposal),
         _ => None,
     });
-    if kind.is_none() {
-        checks.gap(
-            "kind detection proposes nothing from a presence: `Presence` records no `@type` \
-             fact (the type is only in each fact's locator), so `KindEvidence::from_inventory` \
-             finds no type and the owner is asked",
-        );
-    }
+    checks.check(
+        "discovery proposes the kind from the listing's schema.org type",
+        fact("@type").is_some_and(|f| f.value == "Bakery" && f.source.url == profiles[0])
+            && kind.as_ref().is_some_and(|k| k.kind == SiteKind::Business),
+        kind.as_ref()
+            .map(|k| format!("{:?}: {}", k.kind, k.reasons.join("; ")))
+            .unwrap_or_else(|| "no kind proposed".into()),
+    );
     let scope = site.partitions.fact_scope(OWNER);
     let recorded = record_facts(found, site.facts.as_ref(), &scope, "discovery").await?;
     let stored = site.facts.list(FactFilter::recall(&scope)).await?;
@@ -177,6 +179,37 @@ pub async fn run(mode: Mode) -> Result<Checks> {
         format!("{} found, {} quotable after approval", reviews.len(), quoted.len()),
     );
 
+    // The launch gate polices quotes: a Steward draft quoting the anonymous review is held.
+    site.gate = site.gate.clone().with_reviews(reviews.iter().map(Into::into).collect());
+    site.runtime = site.assemble(None);
+    let mut anonymous = SitePlan::new(&charter, "Juniper Bakery")
+        .items(&charter, &known, &["KE".to_string()])
+        .into_iter()
+        .find(|item| item.slug == "reviews")
+        .ok_or_else(|| anyhow!("a reviews page"))?;
+    let unattributed = reviews.iter().find(|r| r.author.is_none()).map(|r| r.text.clone());
+    anonymous.body = Some(Markdown(format!(
+        "What people say.\n\n> {}\n",
+        unattributed.clone().unwrap_or_default()
+    )));
+    let draft = site
+        .runtime
+        .pipeline()
+        .draft(site.steward_change(vec![anonymous.clone()], "onboarding"))
+        .await?;
+    let verdict = site.runtime.pipeline().check(&draft).await?;
+    let rules: Vec<String> = verdict
+        .check(adk_site::gate::GateCheck::Claims)
+        .map(|c| c.findings.iter().map(|f| f.rule.clone()).collect())
+        .unwrap_or_default();
+    checks.check(
+        "a draft quoting an anonymous review is held by the launch gate",
+        unattributed.is_some()
+            && verdict.held_items().contains(&anonymous.id)
+            && rules.iter().any(|r| r == "review-quote-anonymous"),
+        format!("{}: {rules:?}", verdict.summary()),
+    );
+
     // Release 1: the plan's pages from Known facts, the reviews page quoting what may be quoted.
     let mut items: Vec<ContentItem> =
         SitePlan::new(&charter, "Juniper Bakery").items(&charter, &known, &["KE".to_string()]);
@@ -225,11 +258,6 @@ pub async fn run(mode: Mode) -> Result<Checks> {
             && !all_pages.contains("Kenyatta Avenue")
             && !all_pages.contains("4.8"),
         format!("release {release}: the phone shows; the address and the rating do not"),
-    );
-    checks.gap(
-        "nothing in the build or the launch gate places or polices review quotes: release 1 \
-         quotes reviews only because the scenario filters them with `ReviewQuote::usable`; a \
-         Steward draft quoting an anonymous or unapproved review would pass every check",
     );
     checks.check(
         "review quotes appear only with attribution and the owner's approval",

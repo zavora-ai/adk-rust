@@ -1801,6 +1801,22 @@ impl WebsiteDesk {
                 "the site is live; a new design is a release",
             ));
         }
+        if matches!(
+            state.started.as_ref().map(|s| &s.start),
+            Some(StartingPoint::ExistingSite { .. })
+        ) {
+            // The owner's design choice for a migration is recorded in the migration audit.
+            crate::audit::record(
+                self.inner.audit.as_ref(),
+                "site.migration.decided",
+                adk_core::audit_log::AuditActor::default(),
+                serde_json::json!({
+                    "site": self.inner.site.id,
+                    "migration": adk_site::migrate::parity::design_choice_fields(&choice.parity()),
+                }),
+            )
+            .await;
+        }
         if let Some(assembly) = &self.inner.assembly {
             let theme = match choice {
                 DesignChoice::KeepCurrent => None,

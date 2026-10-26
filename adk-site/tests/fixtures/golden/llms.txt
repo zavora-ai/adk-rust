@@ -5,6 +5,7 @@
 Every page has a Markdown version at `<page>/index.md` and a structured version at `<page>/index.awp.json`.
 
 - [Home](https://example.com/index.md)
+- [Product feed](https://example.com/products/feed.xml)
 
 ## Pages
 

@@ -181,7 +181,7 @@ many sites from one harness:
 |------|--------|
 | Keys | `data/keys/release.jwk` signs the site log; `card.jwk` (and `receipt.jwk`) sign the Agent Card, the status, consent receipts and stream entries. No root key is kept in the project |
 | Publishing | Refused until `well-known/awp/keys.json` delegates the release key: the gate's `release-delegation` finding names `adk-rust awp keys rotate` and `adk-rust awp keys delegate` |
-| Updates | `UpdateEngine` over the runtime's pipeline, the edge's live store and a stream lane signed by the receipt key; feeds from `feeds.json`; `UpdateDriver` ticks it when due and journals to `data/updates/`; held deliveries and items become approval requests (decision cards); `GET /awp/v2/stream` serves `stream_since` |
+| Updates | `UpdateEngine` over the runtime's pipeline, the edge's live store and a stream lane signed by the receipt key; feeds from `feeds.json`; `UpdateDriver` ticks it when due and journals to `data/updates/`; held deliveries and items become approval requests (decision cards) and survive a restart in `data/updates/held.json`; `GET /awp/v2/stream` serves `stream_since` |
 | Experiments | `ExperimentGenerator` around the built-in generator; `ExperimentRunner` with `BeaconKpi`, the job pauses, the ladder, the alarms and `RepublishOnStop`; its trigger fires through the kernel's watermarked cron source for the expression |
 | Measurement | `MeteredActionLedger` and `EdgeMeter` on the edge, `MeteredSpendLedger` for agents' spend, and the tracker's sources |
 | Channels | Inbox threads with `SiteOptions::repliers`; the calendar and payment links from `calendar.json` and `payments.json`, or `SiteOptions`; refused without them |

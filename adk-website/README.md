@@ -163,7 +163,7 @@ site made. Until the release key is delegated, every build fails the gate's
 
 | Part | Runs |
 |------|------|
-| `UpdateEngine` | On the runtime's pipeline, driven when `next_due` says; each held delivery or item is an approval request in the owner's inbox — a decision card on the phone — and the answer releases or discards it (A-I23, A-I27) |
+| `UpdateEngine` | On the runtime's pipeline, driven when `next_due` says; each held delivery or item is an approval request in the owner's inbox — a decision card on the phone — and the answer releases or discards it (A-I23, A-I27); what it holds is kept in `data/updates/held.json`, so a card answered after a restart still decides its change |
 | `ExperimentRunner` | Its daily look as the kernel run `website.experiments`, on a cron trigger |
 | `KpiTracker` | With the beacon, commerce, spend and agent-search sources; AEO with search providers |
 | `ReviewComposer` | With the alarms, the experiments and the updates; the weekly review when the owner has a channel |

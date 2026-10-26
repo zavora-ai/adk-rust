@@ -8,12 +8,14 @@ mod support;
 use std::path::Path;
 use std::sync::Arc;
 
+use adk_core::audit_log::{AuditRecorder, InMemoryAuditRecorder};
 use adk_site::content::{SiteConfig, SiteProject};
 use adk_site::gate::{CheckResult, CheckStatus, GateCheck, GateExtension, GateInput, Quarantine};
 use adk_site::generator::{BuildReport, BuiltinGenerator, SiteGenerator};
 use adk_site::migrate::convert::{ConvertOptions, to_content};
 use adk_site::migrate::parity::{
-    ChromeScreenshotter, MigrationParity, Screenshotter, perceptual_difference, text_similarity,
+    ChromeScreenshotter, MigrationParity, ParityConfig, Screenshotter, SiteDesign,
+    perceptual_difference, record_design_choice, text_similarity,
 };
 use adk_site::migrate::serve::StaticServer;
 use adk_site::migrate::sources::Crawl;
@@ -112,6 +114,86 @@ async fn a_faithful_migration_passes_and_each_break_fails() {
     assert!(
         !rules(&result).iter().any(|(rule, path)| rule == "url-not-covered" && path == "/contact/")
     );
+}
+
+/// Legacy pages are white, new pages half red: every page looks different.
+#[derive(Debug)]
+struct Restyled {
+    legacy: String,
+}
+
+#[async_trait::async_trait]
+impl Screenshotter for Restyled {
+    async fn screenshot(
+        &self,
+        url: &Url,
+        width: u32,
+        height: u32,
+    ) -> adk_site::migrate::Result<image::RgbImage> {
+        let mut image = image::RgbImage::from_pixel(width, height, image::Rgb([255, 255, 255]));
+        if !url.as_str().starts_with(&self.legacy) {
+            for x in 0..width {
+                for y in 0..height / 2 {
+                    image.put_pixel(x, y, image::Rgb([200, 20, 20]));
+                }
+            }
+        }
+        Ok(image)
+    }
+}
+
+/// The owner's design choice (owner decision of 2026-10-25): keeping the design gates the
+/// launch on the perceptual difference; a new theme reports it and gates URL coverage, text
+/// and metadata only, and the choice is recorded in the migration audit.
+#[tokio::test]
+async fn the_design_choice_decides_whether_looks_gate_the_launch() {
+    let (inventory, project, out, report) = migrate().await;
+    let legacy = "http://legacy.invalid/";
+    let parity = MigrationParity::new(Arc::new(inventory))
+        .with_legacy(Url::parse(legacy).unwrap())
+        .with_screenshotter(Arc::new(Restyled { legacy: legacy.into() }))
+        .with_config(ParityConfig { top_n: 3, widths: vec![64], height: 48, ..Default::default() });
+
+    let kept = run(&parity, &project, out.path(), &report).await;
+    assert_eq!(kept.status, CheckStatus::Failed, "{:#?}", kept.findings);
+    assert!(
+        kept.findings.iter().all(|f| f.rule == "perceptual-difference" && f.blocking),
+        "{:#?}",
+        kept.findings
+    );
+    assert!(kept.note.unwrap().starts_with("design kept"));
+
+    let themed = parity.clone().with_design(SiteDesign::NewTheme);
+    let result = run(&themed, &project, out.path(), &report).await;
+    assert_eq!(result.status, CheckStatus::Passed, "{:#?}", result.findings);
+    assert!(!result.findings.is_empty(), "the difference is still reported");
+    assert!(result.findings.iter().all(|f| f.rule == "perceptual-difference" && !f.blocking));
+    assert!(result.note.unwrap().starts_with("new theme"));
+
+    // A new theme still gates text: a page that says something else fails.
+    let about = out.path().join("about/index.html");
+    let html = std::fs::read_to_string(&about).unwrap().replace(
+        "We are a team of eight engineers and installers.",
+        "Prices start at nothing and quality is optional for every buyer today.",
+    );
+    std::fs::write(&about, html).unwrap();
+    let result = run(&themed, &project, out.path(), &report).await;
+    assert_eq!(result.status, CheckStatus::Failed);
+    assert!(result.findings.iter().any(|f| f.rule == "text-similarity" && f.blocking));
+
+    // The choice is recorded in the migration audit.
+    let recorder = Arc::new(InMemoryAuditRecorder::new());
+    let audit: Arc<dyn AuditRecorder> = recorder.clone();
+    record_design_choice(&audit, &acting(), &ParityConfig::new_theme()).await.unwrap();
+    let records = recorder.records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].action, "site.migration.decided");
+    let site = &records[0].ext["site"];
+    assert_eq!(site["design"], "new_theme");
+    assert_eq!(site["gates"], serde_json::json!(["url-coverage", "text-similarity", "metadata"]));
+    assert_eq!("new-theme".parse::<SiteDesign>().unwrap(), SiteDesign::NewTheme);
+    assert_eq!("keep".parse::<SiteDesign>().unwrap(), SiteDesign::Keep);
+    assert!("purple".parse::<SiteDesign>().is_err());
 }
 
 #[test]

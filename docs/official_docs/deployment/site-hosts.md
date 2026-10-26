@@ -4,7 +4,9 @@
 §7.8 "Hosts", §7.8.3). `DirectoryHost` is built in; the adapters below arrive as features. Every
 adapter uploads a release's files, then its manifest, then the log's tiles, then the checkpoint,
 so a reader never sees a checkpoint for files that are not there; declares its `HostLimits`; and
-passes the host conformance suite.
+passes the host conformance suite. `DirectoryHost` keeps its stored files read-only and checks
+each one's digest before a rollback, so a write through one release's served file cannot change
+the releases that share it.
 
 > **Note:** `adk-site` is **Experimental**. Its API may change while spec 3.5 lands.
 

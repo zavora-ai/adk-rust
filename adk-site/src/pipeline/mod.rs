@@ -41,7 +41,7 @@ use crate::host::{HostTarget, PublishReport, SiteHost};
 use crate::log::SiteLog;
 use crate::release::{
     PreviousRelease, ReleaseBuilder, ReleaseOptions, StagedDelta, StagedRelease, file_digest,
-    manifest_path,
+    manifest_digest, manifest_path,
 };
 
 pub use batch::BatchRelease;
@@ -474,6 +474,15 @@ fn catalog_changes(
         .map(|(index, chunk)| CatalogChangesPage { items: chunk.to_vec(), next: next(index + 2) })
         .collect();
     (Some(catalog), pages)
+}
+
+/// Writes `bytes` at the site path `path` under `dir`.
+async fn write_file(dir: &Path, path: &str, bytes: &[u8]) -> Result<()> {
+    let local = dir.join(path.trim_start_matches('/'));
+    if let Some(parent) = local.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| SiteError::io(parent, e))?;
+    }
+    tokio::fs::write(&local, bytes).await.map_err(|e| SiteError::io(&local, e))
 }
 
 /// Approval chains are satisfied only by distinct principals, and the proposer of a release
@@ -1033,17 +1042,41 @@ impl PublishingPipeline {
     /// Rolls the whole site back to release `to_seq`: the host serves its files at once
     /// (A-I11), then a new release with the same files records the rollback in the log.
     ///
+    /// Every manifest the rollback reads from the host — the target's and its delta chain's —
+    /// must match the digest the site log recorded for it, so a forged manifest on the host
+    /// rolls nothing back. When the host cannot roll back, or serves a file whose digest is not
+    /// the signed one, the rollback republishes instead: it gathers each file of the signed
+    /// release from wherever a copy with the signed digest exists — the host's current
+    /// files, the last build, or a rebuild of the content history as it stood at release
+    /// `to_seq` — and publishes them as the new release. A file with no such copy fails the
+    /// rollback; nothing unsigned is published.
+    ///
     /// # Errors
     ///
-    /// [`SiteError::ReleaseNotFound`] when the host does not serve that release's manifest;
-    /// digest, log and host errors.
+    /// [`SiteError::ReleaseNotFound`] when the host does not serve that release's manifest or
+    /// a file of it has no copy with its signed digest; [`SiteError::DigestMismatch`] when a
+    /// manifest is not the one the site log recorded; log and host errors.
     pub async fn rollback(&self, to_seq: u64) -> Result<Published> {
         let fetch_manifest = |seq: u64| async move {
             let bytes = self.host.fetch(&manifest_path(seq)).await?.ok_or_else(|| {
                 SiteError::ReleaseNotFound { seq, message: "the host serves no manifest".into() }
             })?;
-            serde_json::from_slice::<ReleaseManifest>(&bytes)
-                .map_err(|e| SiteError::serde("release manifest", e))
+            let manifest = serde_json::from_slice::<ReleaseManifest>(&bytes)
+                .map_err(|e| SiteError::serde("release manifest", e))?;
+            // The log, not the host, says which manifest release `seq` was.
+            let entry = self.log.entry(seq).await?.ok_or_else(|| SiteError::ReleaseNotFound {
+                seq,
+                message: "the site log has no such release".into(),
+            })?;
+            let (digest, _) = manifest_digest(&manifest)?;
+            if manifest.seq != seq || digest != entry.manifest {
+                return Err(SiteError::DigestMismatch {
+                    path: format!("/{}", manifest_path(seq)),
+                    expected: entry.manifest.to_string(),
+                    actual: digest.to_string(),
+                });
+            }
+            Ok(manifest)
         };
         let target = fetch_manifest(to_seq).await?;
         let mut chain = vec![target.clone()];
@@ -1054,27 +1087,20 @@ impl PublishingPipeline {
         for manifest in chain.iter().rev() {
             files = manifest.apply_to(&files);
         }
-        self.host.rollback(&target).await?;
-        tracing::warn!(site.rollback.to = to_seq, "site.rollback");
         let dir = self.work.join(format!("rollback-{to_seq}-{}", self.clock.now().timestamp()));
-        for (path, entry) in &files {
-            let bytes = self.host.fetch(path).await?.ok_or_else(|| SiteError::ReleaseNotFound {
-                seq: to_seq,
-                message: format!("{path} is missing after the rollback"),
-            })?;
-            if file_digest(&bytes) != entry.sha256 {
-                return Err(SiteError::DigestMismatch {
-                    path: path.clone(),
-                    expected: entry.sha256.to_string(),
-                    actual: file_digest(&bytes).to_string(),
-                });
-            }
-            let local = dir.join(path.trim_start_matches('/'));
-            if let Some(parent) = local.parent() {
-                tokio::fs::create_dir_all(parent).await.map_err(|e| SiteError::io(parent, e))?;
-            }
-            tokio::fs::write(&local, &bytes).await.map_err(|e| SiteError::io(&local, e))?;
+        let switched = match self.host.rollback(&target).await {
+            Ok(_) => self.copy_served(to_seq, &files, &dir).await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = switched {
+            tracing::warn!(
+                site.rollback.to = to_seq,
+                error = %error,
+                "the host could not roll back; republishing the signed release"
+            );
+            self.gather_signed_files(to_seq, &target, &files, &dir).await?;
         }
+        tracing::warn!(site.rollback.to = to_seq, "site.rollback");
         let mut state = self.state.lock().await;
         let source = ReleaseSource::Rollback { to_seq };
         let options = ReleaseOptions {
@@ -1093,6 +1119,114 @@ impl PublishingPipeline {
         state.report = None;
         drop(state);
         self.publish_staged(staged, Vec::new(), source).await
+    }
+
+    /// Copies what the host serves after a rollback into `dir`, checking every file against
+    /// its signed digest.
+    async fn copy_served(
+        &self,
+        to_seq: u64,
+        files: &BTreeMap<String, awp_types::FileEntry>,
+        dir: &Path,
+    ) -> Result<()> {
+        for (path, entry) in files {
+            let bytes = self.host.fetch(path).await?.ok_or_else(|| SiteError::ReleaseNotFound {
+                seq: to_seq,
+                message: format!("{path} is missing after the rollback"),
+            })?;
+            if file_digest(&bytes) != entry.sha256 {
+                return Err(SiteError::DigestMismatch {
+                    path: path.clone(),
+                    expected: entry.sha256.to_string(),
+                    actual: file_digest(&bytes).to_string(),
+                });
+            }
+            write_file(dir, path, &bytes).await?;
+        }
+        Ok(())
+    }
+
+    /// The republish fallback: writes every file of release `to_seq` into `dir` from a copy
+    /// whose digest is the signed one — the host's current files, the last build, or a rebuild
+    /// of the content history at `to_seq`.
+    async fn gather_signed_files(
+        &self,
+        to_seq: u64,
+        target: &ReleaseManifest,
+        files: &BTreeMap<String, awp_types::FileEntry>,
+        dir: &Path,
+    ) -> Result<()> {
+        let _ = tokio::fs::remove_dir_all(dir).await;
+        let mut missing: Vec<&String> = Vec::new();
+        for (path, entry) in files {
+            let mut found = None;
+            if let Ok(Some(bytes)) = self.host.fetch(path).await
+                && file_digest(&bytes) == entry.sha256
+            {
+                found = Some(bytes.to_vec());
+            }
+            if found.is_none()
+                && let Ok(bytes) =
+                    tokio::fs::read(self.work.join("build").join(path.trim_start_matches('/')))
+                        .await
+                && file_digest(&bytes) == entry.sha256
+            {
+                found = Some(bytes);
+            }
+            match found {
+                Some(bytes) => write_file(dir, path, &bytes).await?,
+                None => missing.push(path),
+            }
+        }
+        if !missing.is_empty() {
+            let rebuilt = self.rebuild_at(to_seq, target).await?;
+            let mut still = Vec::new();
+            for path in missing {
+                let entry = &files[path];
+                match tokio::fs::read(rebuilt.join(path.trim_start_matches('/'))).await {
+                    Ok(bytes) if file_digest(&bytes) == entry.sha256 => {
+                        write_file(dir, path, &bytes).await?;
+                    }
+                    _ => still.push(path.clone()),
+                }
+            }
+            let _ = tokio::fs::remove_dir_all(&rebuilt).await;
+            if !still.is_empty() {
+                return Err(SiteError::ReleaseNotFound {
+                    seq: to_seq,
+                    message: format!(
+                        "{} file(s) of the release have no copy with their signed digest, so it \
+                         cannot be republished: {}",
+                        still.len(),
+                        still.iter().take(10).cloned().collect::<Vec<_>>().join(", ")
+                    ),
+                });
+            }
+        }
+        tracing::warn!(site.rollback.to = to_seq, "site.rollback.republished");
+        Ok(())
+    }
+
+    /// Builds the site as release `to_seq` served it: each item's version released at or
+    /// before it, at the release's build time.
+    async fn rebuild_at(&self, to_seq: u64, target: &ReleaseManifest) -> Result<PathBuf> {
+        let history = self.history.as_ref().ok_or_else(|| SiteError::ReleaseNotFound {
+            seq: to_seq,
+            message: "files are missing and there is no content history to rebuild them from"
+                .into(),
+        })?;
+        let mut items = Vec::new();
+        for item in self.store.list().await? {
+            if let Some(version) = history.at_release(&item.id, to_seq).await? {
+                items.push(version.item);
+            }
+        }
+        let mut project = self.project(items, to_seq, false).await?;
+        project.as_of = target.created_at;
+        let dir = self.work.join(format!("rebuild-{to_seq}-{}", self.clock.now().timestamp()));
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        self.generator.build(&project, &dir).await?;
+        Ok(dir)
     }
 
     /// Runs the scheduled actions due after `after` and up to now: publications, embargo

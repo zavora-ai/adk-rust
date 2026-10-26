@@ -119,7 +119,12 @@ async fn s17_a_writers_blog_becomes_a_personal_site_with_four_agents_inside_its_
         "a feed: {:?}",
         report.outputs
     );
-    assert!(migration.converted.redirects.iter().all(|r| r.status == 301));
+    // Content URLs move with 301s; only the legacy runtime's paths answer 410 Gone.
+    assert!(migration.converted.redirects.iter().all(|r| {
+        r.status == 301
+            || (r.status == 410 && adk_site::migrate::convert::legacy_runtime_path(&r.from))
+    }));
+    assert!(migration.converted.redirects.iter().any(|r| r.from == "/wp-login.php"));
 
     // The charter: hosting and a small model allowance; no advertising or sales.
     let mut inputs = CharterInputs::new(

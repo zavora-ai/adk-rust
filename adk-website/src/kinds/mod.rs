@@ -345,9 +345,18 @@ impl KindTemplate {
                 quiet_hours: inputs.quiet_hours.clone(),
             },
             public: PublicTerms {
-                usage: self
-                    .has(&KindRule::ContentUsageTerms)
-                    .then(|| "train-ai=n, search=y".to_string()),
+                // Every launched site states its AI preferences in `robots.txt` (spec 3.5
+                // §4.4); the owner reviews them with the charter. A newsroom licenses its
+                // reporting, so it opts out of training; other kinds state only that search
+                // and answer engines may use the site.
+                usage: Some(
+                    if self.has(&KindRule::ContentUsageTerms) {
+                        "train-ai=n, search=y"
+                    } else {
+                        "search=y"
+                    }
+                    .to_string(),
+                ),
                 policies,
                 consent_scopes,
                 contact: ContactLinks {

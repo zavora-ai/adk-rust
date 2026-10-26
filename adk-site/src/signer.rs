@@ -47,7 +47,7 @@ pub trait ReleaseSigner: Send + Sync {
 
 /// The checkpoint origin of a site: `{domain}/.well-known/awp/log` (AWP 2.0 §14.5).
 pub fn log_origin(domain: &str) -> String {
-    format!("{domain}/.well-known/awp/log")
+    adk_awp::signing::log::log_origin(domain)
 }
 
 /// An Ed25519 [`ReleaseSigner`] over an `adk-auth` note signer.

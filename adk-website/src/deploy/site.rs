@@ -6,7 +6,7 @@
 //! |---|---|
 //! | Runtime | The content repository, `ExperimentGenerator` around the built-in generator, the SQLite site log signed with `data/keys/release.jwk`, the `DirectoryHost`, the history, the charter store, the kind's launch gate with [`ReleaseDelegation`] |
 //! | Edge | The kind's capabilities with the packs' handlers; SQLite edge stores; the kernel's approvals and signals; the consent policy; `MeteredActionLedger` and `EdgeMeter`; inbox threads, the calendar and payment links when configured; `card.jwk` and `receipt.jwk` |
-//! | Updates | `UpdateEngine` over the runtime's pipeline, the edge's live store and the stream lane signed with the receipt key; the feeds in `feeds.json`; [`UpdateDriver`] with its journal and cards |
+//! | Updates | `UpdateEngine` over the runtime's pipeline, the edge's live store and the stream lane signed with the receipt key, its held items and deliveries in `data/updates/held.json`; the feeds in `feeds.json`; [`UpdateDriver`] with its journal and cards |
 //! | Experiments | `ExperimentRunner` with `BeaconKpi`, the job pauses, the ladder, the alarms and `RepublishOnStop`; its daily trigger |
 //! | Measurement | `KpiTracker` with the beacon, commerce, spend and agent-search sources (and AEO with search providers) |
 //! | Review | `ReviewComposer` with the alarms, the experiments and the updates |
@@ -34,7 +34,7 @@ use adk_site::host::DirectoryHost;
 use adk_site::log::SiteLog;
 use adk_site::signer::Ed25519ReleaseSigner;
 use adk_site::stream::StreamLane;
-use adk_site::updates::UpdateEngine;
+use adk_site::updates::{FileHeldStore, UpdateEngine};
 use awp_types::{Cadence, Charter, Reporting, SiteKind};
 use tokio::task::JoinHandle;
 
@@ -356,6 +356,9 @@ impl RunningSite {
         let lane = Arc::new(StreamLane::new(Arc::new(ReceiptEntrySigner::new(receipt_signer))));
         let updates = Arc::new(
             UpdateEngine::builder(runtime.shared_pipeline(), edge.live.clone())
+                // Held items and deliveries outlive a restart, so the owner's cards still
+                // decide them.
+                .held_store(Arc::new(FileHeldStore::new(paths.journal().join("held.json"))))
                 .streams(lane)
                 .alarms(Arc::new(SiteAlarms::new(alarms.clone(), site.id)))
                 .build()

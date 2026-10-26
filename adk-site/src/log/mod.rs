@@ -20,9 +20,7 @@ mod tiles;
 use std::sync::Arc;
 
 use adk_auth::signed_audit::merkle::{leaf_hash, node_hash, verify_consistency, verify_inclusion};
-use adk_auth::signed_audit::{
-    AuditSigner, CheckpointBody, Note, NoteVerifier, canonicalize, sign_note,
-};
+use adk_auth::signed_audit::{AuditSigner, CheckpointBody, Note, NoteVerifier, sign_note};
 use adk_core::audit_log::{
     AuditAppend, AuditCheckpoint, AuditHash, AuditLogEntry, AuditLogStore, AuditTreeNode,
 };
@@ -63,8 +61,7 @@ pub const CHECKPOINT_PATH: &str = ".well-known/awp/log/checkpoint";
 ///
 /// [`SiteError::Log`] when `seq` exceeds 2^53.
 pub fn entry_jcs(entry: &LogEntry) -> Result<Vec<u8>> {
-    let value = serde_json::to_value(entry).map_err(|e| SiteError::Log(e.to_string()))?;
-    canonicalize(&value).map(String::into_bytes).map_err(|e| SiteError::Log(e.to_string()))
+    adk_awp::signing::log::entry_bytes(entry).map_err(|e| SiteError::Log(e.to_string()))
 }
 
 /// Parses leaf bytes as a site-log entry and checks they are in JCS form.
@@ -396,9 +393,9 @@ impl SiteLog {
         let size = checkpoint.size;
         let store = self.store.as_ref();
         let mut files = Vec::new();
-        for (level, index, width) in tiles::changed_tiles(since.min(size), size) {
-            let start = index * TILE_WIDTH;
-            match level {
+        for tile in tiles::changed_tiles(since.min(size), size) {
+            let (index, width, start) = (tile.index, tile.width, tile.positions().start);
+            match tile.level {
                 None => {
                     let entries = store.read(&self.log_id, start..start + width).await?;
                     let bodies = entries
@@ -415,17 +412,15 @@ impl SiteLog {
                     ));
                 }
                 Some(level) => {
-                    let mut bytes = Vec::with_capacity(width as usize * 32);
+                    let mut hashes = Vec::with_capacity(width as usize);
                     for position in start..start + width {
-                        bytes.extend_from_slice(
-                            stored_hash(store, &self.log_id, level * TILE_HEIGHT, position)
-                                .await?
-                                .as_bytes(),
+                        hashes.push(
+                            stored_hash(store, &self.log_id, level * TILE_HEIGHT, position).await?,
                         );
                     }
                     files.push((
                         format!("{LOG_PREFIX}/{}", hash_tile_path(level, index, width)),
-                        Bytes::from(bytes),
+                        Bytes::from(tiles::hash_tile(&hashes)),
                     ));
                 }
             }

@@ -822,6 +822,7 @@ version = "3.0.0"
 dependencies = [
  "adk-artifact",
  "adk-auth",
+ "adk-awp",
  "adk-core",
  "adk-guardrail",
  "async-trait",

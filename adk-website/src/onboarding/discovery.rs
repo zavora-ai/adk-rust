@@ -21,9 +21,9 @@ use adk_harness::{
     Provenance, redact_fact_text,
 };
 use adk_site::migrate::convert::{ConvertOptions, Converted, to_content};
-use adk_site::migrate::detect::Detectors;
+use adk_site::migrate::detect::{Detectors, Finding};
 use adk_site::migrate::mapping::{FeatureMap, OwnerDecision, map_features};
-use adk_site::migrate::parity::ParityConfig;
+use adk_site::migrate::parity::{ParityConfig, SiteDesign};
 use adk_site::migrate::quarantine::{QuarantineBook, QuarantineEntry, QuarantineState};
 use adk_site::migrate::sources::{Crawl, Presence};
 use adk_site::migrate::{Fact, SiteInventory, SiteSource, SourceContext, SourceKind};
@@ -34,6 +34,10 @@ use url::Url;
 use super::StartingPoint;
 use crate::kinds::{KindEvidence, KindProposal, detect};
 use crate::themes::ThemeId;
+
+/// Pages the cloaking check fetches twice: the home page and the top pages, as many as the
+/// launch gate's parity compares (spec 3.5 §7.8.1).
+const CLOAKING_PAGES: usize = 20;
 
 fn migrate_error(error: adk_site::migrate::MigrateError) -> adk_core::AdkError {
     adk_core::AdkError::config(error.to_string())
@@ -52,15 +56,18 @@ pub enum DesignChoice {
 }
 
 impl DesignChoice {
-    /// The parity thresholds the migration's launch gate runs with.
-    pub fn parity(self) -> ParityConfig {
+    /// The design choice the migration's parity check runs with.
+    pub fn site_design(self) -> SiteDesign {
         match self {
-            Self::KeepCurrent => ParityConfig::default(),
-            // A perceptual difference never exceeds 1: a new theme is not gated on looks.
-            Self::NewTheme(_) => {
-                ParityConfig { max_perceptual_difference: 1.0, ..ParityConfig::default() }
-            }
+            Self::KeepCurrent => SiteDesign::Keep,
+            Self::NewTheme(_) => SiteDesign::NewTheme,
         }
+    }
+
+    /// The parity thresholds the migration's launch gate runs with: a new theme reports the
+    /// perceptual difference without gating on it.
+    pub fn parity(self) -> ParityConfig {
+        ParityConfig::for_design(self.site_design())
     }
 }
 
@@ -115,7 +122,22 @@ pub struct Migration {
 ///
 /// Returns the conversion's error.
 pub async fn migrate(inventory: &SiteInventory, language: LanguageTag) -> Result<Migration> {
-    let findings = Detectors::new().scan_inventory(inventory).await;
+    migrate_with(inventory, language, Vec::new()).await
+}
+
+/// As [`migrate`], quarantining `findings` too, such as the cloaking check's
+/// ([`Detectors::scan_cloaking`]), which reads the live site.
+///
+/// # Errors
+///
+/// Returns the conversion's error.
+pub async fn migrate_with(
+    inventory: &SiteInventory,
+    language: LanguageTag,
+    findings: Vec<Finding>,
+) -> Result<Migration> {
+    let mut findings = findings;
+    findings.extend(Detectors::new().scan_inventory(inventory).await);
     let options = ConvertOptions::new(language);
     let first = to_content(inventory, &options).map_err(migrate_error)?;
     let quarantine = QuarantineBook::new(findings, &first);
@@ -214,7 +236,8 @@ impl Discovery {
     }
 
     /// Runs discovery with `ctx` (spec 3.5 §7.18 stage 2): inventories the source, proposes
-    /// the kind, flags a legacy runtime, and migrates an existing site.
+    /// the kind, flags a legacy runtime, and migrates an existing site, with the cloaking
+    /// check when the owner proved the domain (A-I9).
     ///
     /// # Errors
     ///
@@ -241,7 +264,14 @@ impl Discovery {
             .any(|url| url.path.ends_with(".php") || url.path.contains("/wp-"));
         let migration = match &self.start {
             StartingPoint::ExistingSite { .. } => {
-                Some(migrate(&inventory, self.language.clone()).await?)
+                // The dual fetch reads the live site: it runs once the owner proved the
+                // domain (A-I9), and the scan notes why when it did not.
+                let cloaking =
+                    Detectors::new().scan_cloaking(ctx, &inventory, CLOAKING_PAGES).await;
+                for note in &cloaking.notes {
+                    tracing::info!(note = %note, "website.onboarding.discover");
+                }
+                Some(migrate_with(&inventory, self.language.clone(), cloaking.findings).await?)
             }
             _ => None,
         };

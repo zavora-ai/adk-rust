@@ -203,3 +203,34 @@ proptest! {
         });
     }
 }
+
+/// One C2SP tile writer (spec 3.5 §7.7): the tiles the site log publishes release by release
+/// are byte for byte the tiles `adk-awp`'s `signing::log::tiles` writes for the same entries.
+#[tokio::test]
+async fn published_tiles_are_adk_awps_tiles() {
+    let signer = Arc::new(Ed25519ReleaseSigner::generate(DOMAIN).unwrap());
+    let log = SiteLog::open(Arc::new(InMemoryAuditLogStore::new()), DOMAIN, signer).await.unwrap();
+    let mut published: BTreeMap<String, Bytes> = BTreeMap::new();
+    let mut entries = Vec::new();
+    for target in [1u64, 2, 255, 256, 257, 520] {
+        let last = entries.len() as u64;
+        while (entries.len() as u64) < target {
+            let seq = entries.len() as u64 + 1;
+            let entry = LogEntry { seq, manifest: Digest::from_sha256_bytes([seq as u8; 32]) };
+            log.append(&entry).await.unwrap();
+            entries.push(entry);
+        }
+        for (path, bytes) in log.publication(last).await.unwrap().tiles {
+            published.insert(path, bytes);
+        }
+        let expected = adk_awp::signing::log::tiles(&entries).unwrap();
+        for (path, bytes) in expected {
+            let path = format!("{LOG_PREFIX}/{path}");
+            assert_eq!(
+                published.get(&path).map(|b| b.to_vec()),
+                Some(bytes),
+                "{path} at {target} entries"
+            );
+        }
+    }
+}

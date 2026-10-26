@@ -92,13 +92,14 @@ pub async fn run(_mode: Mode) -> Result<Checks> {
         report.release_seq,
         report.sampled.len()
     );
-    if posture.usage.is_none() || !posture.robots_content_usage {
-        checks.gap(
-            "readiness: the launched site states no usage preferences — its public terms carry \
-             no IETF AI preferences, so `robots.txt` has no `Content-Usage` (spec 3.5 §4.4: \
-             generated from the charter's public terms)",
-        );
-    }
+    checks.check(
+        "readiness: the launched site states its AI usage preferences",
+        posture.usage.is_some() && posture.robots_content_usage,
+        format!(
+            "public terms usage {:?}; robots.txt Content-Usage {}",
+            posture.usage, posture.robots_content_usage
+        ),
+    );
     checks.check(
         "the first run passes and prints posture and readiness",
         report.passed()

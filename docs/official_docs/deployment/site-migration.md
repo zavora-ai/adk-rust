@@ -29,7 +29,7 @@ command line ([Sites and AWP from the command line](site-cli.md#migration-and-fr
 | Content | `convert::to_content` | Items keep their URLs through the `path` field; uploads keep their paths; archives, feeds and legacy redirects become 301s |
 | Feature mapping | `mapping::map_features` | `CapabilityV2` drafts and named owner decisions |
 | Freeze | `Freeze` | A crawl from a private vantage point published as a signed release; forms post to edge capabilities; the old server is never contacted at request time |
-| Parity | `MigrationParity` | The launch gate's migration rows: URL coverage, perceptual difference under 0.05 at two widths, main-text similarity of 0.95 or more, metadata preserved |
+| Parity | `MigrationParity` | The launch gate's migration rows: URL coverage, main-text similarity of 0.95 or more, metadata preserved, and — when the owner keeps the design — a perceptual difference under 0.05 at two widths |
 | Probes | `Prober` | Sampled digests on the host and at the origin against the release window, status, certificate expiry, DNS records, security headers; `Drift` for the Guardian |
 | Archive | `LegacyArchive` | The legacy export stored AES-256-GCM encrypted through `adk-artifact`; storing appends a version and nothing deletes (A-I10) |
 
@@ -40,13 +40,19 @@ command line ([Sites and AWP from the command line](site-cli.md#migration-and-fr
 | `WordPressRest` | `wp-json/wp/v2` posts, pages, media, categories and tags; WooCommerce's Store API products; drafts and menus with a read-scoped application password from the `CredentialBroker` | Drafts: a proven domain and a credential whose only scope is `read` (A-I19) |
 | `Wxr` | A WordPress export file; with `with_uploads`, every file in the uploads directory, also files no attachment names | Nothing |
 | `Crawl` | Any site, from its sitemaps and links, same origin only | Nothing |
-| `Presence` | Business profiles, listings, reviews and social pages: schema.org JSON-LD and Open Graph tags | Nothing |
+| `Presence` | Business profiles, listings, reviews and social pages: schema.org JSON-LD and Open Graph tags; the subject is the most specific organisation, business, person or place of worship on the page, any schema.org subtype such as `Bakery` included, and its type is the `@type` fact | Nothing |
 | `IsolatedReplay` | A database dump and uploads served by containers on an internal network, published on `127.0.0.1` only, crawled, then destroyed | A proven domain and a `ContainerDriver` (`DockerCliDriver` runs the Docker CLI) |
 
 Every fact a source finds is `Assumed` and names the page and property it came from.
 `SiteInventory::fact_table` turns them into a claim check, so a page that cites one fails the
 launch gate until the owner confirms it (A-I18). A review quote is usable only with the
-reviewer's public name and the owner's approval (`ReviewQuote::usable`).
+reviewer's public name and the owner's approval (`ReviewQuote::usable`); the launch gate
+enforces it: given the reviews (`LaunchGate::with_reviews`, a `QuotableReview` from each
+`ReviewQuote`), the claims check holds a page that quotes one — found by its words, whatever
+the markup — when the review is anonymous (`review-quote-anonymous`), not approved
+(`review-quote-unapproved`) or not named on the page (`review-quote-unattributed`).
+`schema_org_ancestry` gives a type's parents, so kind detection reads a `Bakery` as a
+`LocalBusiness`.
 
 The isolated replay records every request its crawler made; `ReplayReport::outbound_connections`
 lists those that went anywhere but loopback and is empty, and the replay refuses its result
@@ -96,10 +102,13 @@ use adk_site::migrate::convert::{ConvertOptions, to_content};
 use adk_site::migrate::detect::Detectors;
 use adk_site::migrate::mapping::map_features;
 use adk_site::migrate::quarantine::QuarantineBook;
-use adk_site::migrate::SiteInventory;
+use adk_site::migrate::{SiteInventory, SourceContext};
 
-async fn migrate(inventory: &SiteInventory) -> adk_site::migrate::Result<()> {
-    let findings = Detectors::new().scan_inventory(inventory).await;
+async fn migrate(ctx: &SourceContext, inventory: &SiteInventory) -> adk_site::migrate::Result<()> {
+    let detectors = Detectors::new();
+    let mut findings = detectors.scan_inventory(inventory).await;
+    // The dual fetch reads the live site: it runs for a proven domain only (A-I9).
+    findings.extend(detectors.scan_cloaking(ctx, inventory, 20).await.findings);
     let options = ConvertOptions::new("en".parse().unwrap());
     let first = to_content(inventory, &options)?;
     let book = QuarantineBook::new(findings, &first);
@@ -127,6 +136,20 @@ async fn migrate(inventory: &SiteInventory) -> adk_site::migrate::Result<()> {
 `QuarantineBook::decide` asks the `ApprovalGate` about one item, bound to the digest of its
 evidence, under the action class `site.migration.release_quarantined`; an approval by the
 proposer keeps the item held. `QuarantineBook::quarantine` is the launch gate's `Quarantine`.
+
+`Detectors::scan_cloaking` fetches the home page and the top pages twice, as the crawler and
+as a browser, and returns a `CloakingScan` with the findings, the pages checked and notes; for
+a domain the owner has not proved it fetches nothing and says why. `adk-website`'s
+`Discovery::run` and `adk-rust site migrate` run it.
+
+After a crawl (`Crawl`, `IsolatedReplay`) the converter turns a link to a page of the site the
+crawl could not read — one `robots.txt` disallows, say — into its text, records a
+`DropReason::UnreadTarget` and a note, so the gate's link check does not hold the release on
+a page the new site never had. Legacy runtime paths the new site does not serve answer 410
+Gone: anything under `LEGACY_RUNTIME_PREFIXES` (`/wp-includes/`, theme and plugin files,
+`/wp-json/`) or ending in a server-script extension, and after a WordPress migration
+`WORDPRESS_ENDPOINTS` such as `/wp-login.php` and `/xmlrpc.php`; a page the crawl read keeps
+its 301 (A-I4).
 
 ## Feature mapping
 
@@ -156,9 +179,20 @@ comparison needs a `Screenshotter` and a legacy view (the live site, a replay or
 snapshot) and is reported as not measured without them. `ChromeScreenshotter` runs headless
 Chrome; `perceptual_difference` is one minus `image-compare`'s hybrid score.
 
+The owner chooses the design during migration, and `ParityConfig::design` carries the choice:
+
+| `SiteDesign` | When | Gates the launch | Looks |
+|--------------|------|------------------|-------|
+| `Keep` (default) | A freeze, or the old design carried over | URL coverage, main text, metadata, perceptual difference under 0.05 | Gated |
+| `NewTheme` | A new theme | URL coverage, main text, metadata | Reported as non-blocking findings; the owner approves the look from the preview |
+
+`MigrationParity::with_design` sets it; `record_design_choice` writes it to the migration
+audit as `site.migration.decided` with `design_choice_fields`. `adk-rust site migrate
+--design keep|new-theme` records it in the migration report.
+
 > **Note:** a migration onto a new theme changes how pages look. Measured with Chrome on the
 > recorded WordPress fixture, the built-in theme differs from the legacy theme by up to 0.17,
-> so visual parity holds for a frozen snapshot or a ported theme.
+> which is why a new theme's looks are approved by the owner rather than gated.
 
 ## Probes
 

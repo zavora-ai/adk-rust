@@ -10,93 +10,18 @@
 
 use std::sync::Arc;
 
-use adk_awp::signing::keys::{Dated, delegated_key, verify_key_set};
 use adk_awp::v2::capability::{CapabilityCall, CapabilityError};
 use adk_core::audit_log::{AuditRecordDraft, AuditRecorder};
-use adk_site::gate::{
-    CheckResult, CheckStatus, Finding, GateCheck, GateExtension, GateInput, GateMode, Severity,
-};
 use async_trait::async_trait;
-use awp_types::{ErrorCode, KeyScope, KeySet, PublicKeyJwk};
+use awp_types::ErrorCode;
 use serde_json::{Value, json};
 
 use super::project::PaymentLink;
 use crate::edge::handlers::PaymentDesk;
 
-/// The key set's path in a release.
-const KEYS: &str = ".well-known/awp/keys.json";
-
 /// Refuses to publish until the owner's root has delegated the release key (spec 3.5 §7.2,
-/// D-11, A-I5): a served site never signs its own contract or delegations.
-pub struct ReleaseDelegation {
-    kid: String,
-    key: PublicKeyJwk,
-    key_file: String,
-}
-
-impl ReleaseDelegation {
-    /// The check for the release key `kid` with public key `key`, kept at `key_file`.
-    pub fn new(kid: impl Into<String>, key: PublicKeyJwk, key_file: impl Into<String>) -> Self {
-        Self { kid: kid.into(), key, key_file: key_file.into() }
-    }
-
-    fn problem(&self, keys: Option<&[u8]>) -> Option<String> {
-        let Some(bytes) = keys else {
-            return Some("the site has no AWP key set".to_string());
-        };
-        let keys: KeySet = match serde_json::from_slice(bytes) {
-            Ok(keys) => keys,
-            Err(error) => return Some(format!("its key set is not valid: {error}")),
-        };
-        if let Err(error) = verify_key_set(&keys) {
-            return Some(format!("its key set does not verify: {error}"));
-        }
-        match delegated_key(&keys, &self.kid, KeyScope::Release, Dated::Live(chrono::Utc::now())) {
-            Ok(key) if *key == self.key => None,
-            Ok(_) => Some(format!("the key set's `{}` is not the release key", self.kid)),
-            Err(error) => Some(format!("the release key `{}` is not delegated: {error}", self.kid)),
-        }
-    }
-}
-
-#[async_trait]
-impl GateExtension for ReleaseDelegation {
-    fn check(&self) -> GateCheck {
-        GateCheck::MachineViews
-    }
-
-    fn runs_in(&self, _mode: GateMode) -> bool {
-        true
-    }
-
-    async fn run(&self, input: &GateInput<'_>) -> adk_site::Result<CheckResult> {
-        let keys = input.project.documents.get(KEYS).map(|bytes| bytes.as_ref());
-        let findings: Vec<Finding> = self
-            .problem(keys)
-            .map(|problem| Finding {
-                rule: "release-delegation".into(),
-                severity: Severity::Critical,
-                blocking: true,
-                path: Some(format!("/{KEYS}")),
-                item: None,
-                message: format!(
-                    "{problem}. The owner signs at a terminal: `adk-rust awp keys rotate` makes \
-                     the root and the key set, then `adk-rust awp keys delegate --scope release \
-                     --key {}` delegates the release key (spec 3.5 D-11)",
-                    self.key_file
-                ),
-            })
-            .into_iter()
-            .collect();
-        let status = if findings.is_empty() { CheckStatus::Passed } else { CheckStatus::Failed };
-        Ok(CheckResult {
-            check: GateCheck::MachineViews,
-            status,
-            findings,
-            note: Some("the release key is delegated by the owner's root".into()),
-        })
-    }
-}
+/// D-11, A-I5); it lives in `adk-site`'s gate and reports as `GateCheck::Signing`.
+pub use adk_site::gate::ReleaseDelegation;
 
 /// Payments through the owner's own payment links (spec 3.5 §7.5 "Commerce", §7.14): the
 /// buyer is told how to pay with the order as the reference; nothing is charged here.

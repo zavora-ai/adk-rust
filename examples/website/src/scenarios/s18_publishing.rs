@@ -402,13 +402,18 @@ pub async fn run(mode: Mode) -> Result<Checks> {
             && verify_served(&shop.host, SHOP, &shop.release_key).await.ok() == Some(seq),
         format!("release {seq}: {uploaded:?}"),
     );
-    if feed.is_none() {
-        checks.gap(
-            "the built-in renderer writes no product feed: `feed.xml` carries posts and articles \
-             only, so a shop's release has no feed of its products",
-        );
-    }
-    checks.check("the release carries the product feed", feed.is_some(), format!("{feed:?}"));
+    let listed =
+        match &feed {
+            Some(path) => shop.host.fetch(path).await?.is_some_and(|bytes| {
+                String::from_utf8_lossy(&bytes).contains("/products/seeded-rye/")
+            }),
+            None => false,
+        };
+    checks.check(
+        "the release carries the product feed",
+        feed.as_deref() == Some("/products/feed.xml") && listed,
+        format!("{feed:?}, listing the new product: {listed}"),
+    );
     let untouched = [
         "/about/index.html",
         "/index.html",

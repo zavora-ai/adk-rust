@@ -87,9 +87,7 @@ pub fn all() -> Vec<Scenario> {
         scenario!("S15", "Agency mode", agent: false, s15_agency),
         scenario!("S16", "A public body", agent: false, s16_government),
         scenario!("S17", "A personal site", agent: false, s17_personal),
-        scenario!("S18", "Publishing at speed", agent: true, s18_publishing, known: [
-            "the release carries the product feed"
-        ]),
+        scenario!("S18", "Publishing at speed", agent: true, s18_publishing),
         scenario!("S19", "A site that never stops changing", agent: false, s19_constant),
     ]
 }

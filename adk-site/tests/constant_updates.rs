@@ -23,7 +23,10 @@ use adk_site::pipeline::{Announcement, Announcer, EntryPoint, PublishingPipeline
 use adk_site::redirects::RedirectsFormat;
 use adk_site::release::{StagedDelta, StagedRelease, manifest_path};
 use adk_site::signer::{Ed25519ReleaseSigner, ReleaseSigner};
-use adk_site::updates::{Decision, HoldReason, InMemoryAlarms, UpdateEngine};
+use adk_site::updates::{
+    Decision, FileHeldStore, HeldStore, HoldReason, InMemoryAlarms, InMemoryHeldStore,
+    UpdateEngine, held_store_conformance,
+};
 use adk_site::{Result, SiteError};
 use async_trait::async_trait;
 use awp_types::{
@@ -638,4 +641,120 @@ async fn hosts_and_lanes_that_cannot_keep_the_rules_are_refused() {
     };
     let records = shop.engine.submit(flush).await.unwrap();
     assert_eq!(records.len(), 1, "an emergency notice flushes at once");
+}
+
+/// What the engine holds for the owner survives a restart (spec 3.5 §7.8.3, A-I25, A-I27):
+/// a delivery held whole and an item held alone are still there for the owner's decision on
+/// a new engine over the same store, and delivery numbers are never reused.
+#[tokio::test]
+async fn held_items_and_deliveries_survive_a_restart() {
+    let shop = shop().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("updates/held.json");
+    let engine = || {
+        UpdateEngine::builder(shop.engine.pipeline().clone(), shop.live.clone())
+            .held_store(Arc::new(FileHeldStore::new(&path)))
+            .build()
+            .unwrap()
+    };
+
+    let first = engine();
+    first.add_feed(mapping(), bounds()).await.unwrap();
+    let corrupted: Vec<FeedRecord> =
+        (0..30).map(|i| record(i, &[("price", json!(1.0 + i as f64))])).collect();
+    let held = first.ingest("supplier", corrupted).await.unwrap();
+    assert!(held.held, "60% of the collection breaks the bounds");
+    let mut item = shop.store.get(&"SKU-007".into()).await.unwrap().unwrap();
+    item.fields.insert("price".into(), json!(5_000));
+    first.submit(shop.update(item, "urn:person:editor")).await.unwrap();
+    shop.advance(120);
+    first.tick().await.unwrap();
+    assert_eq!(first.held_items().await.len(), 1, "a price outside the rule is held alone");
+    drop(first);
+
+    let second = engine();
+    second.add_feed(mapping(), bounds()).await.unwrap();
+    let deliveries: Vec<u64> = second.held_deliveries().await.iter().map(|d| d.delivery).collect();
+    assert_eq!(deliveries, [held.delivery]);
+    let items = second.held_items().await;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].update.id(), &ContentId::from("SKU-007"));
+    assert!(matches!(items[0].reason, HoldReason::PriceRule { .. }));
+    let next = second.ingest("supplier", vec![record(1, &[("qty", json!(4))])]).await.unwrap();
+    assert!(next.delivery > held.delivery, "{} after {}", next.delivery, held.delivery);
+
+    second.decide_item(&"SKU-007".into(), Decision::Release, "urn:person:owner").await.unwrap();
+    shop.advance(120);
+    second.tick().await.unwrap();
+    assert!(shop.page(7).await.contains("5000 KES"), "the owner's release publishes");
+    second.decide_delivery(held.delivery, Decision::Discard, "urn:person:owner").await.unwrap();
+    drop(second);
+
+    let third = engine();
+    assert!(third.held_items().await.is_empty() && third.held_deliveries().await.is_empty());
+}
+
+#[tokio::test]
+async fn held_stores_pass_the_conformance_suite() {
+    let shop = shop().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("held.json");
+    let engine = UpdateEngine::builder(shop.engine.pipeline().clone(), shop.live.clone())
+        .held_store(Arc::new(FileHeldStore::new(&path)))
+        .build()
+        .unwrap();
+    engine.add_feed(mapping(), bounds()).await.unwrap();
+    let corrupted: Vec<FeedRecord> =
+        (0..30).map(|i| record(i, &[("price", json!(2.0 + i as f64))])).collect();
+    assert!(engine.ingest("supplier", corrupted).await.unwrap().held);
+    let mut item = shop.store.get(&"SKU-003".into()).await.unwrap().unwrap();
+    item.fields.insert("price".into(), json!(9_000));
+    engine.submit(shop.update(item, "urn:person:editor")).await.unwrap();
+    shop.advance(120);
+    engine.tick().await.unwrap();
+    let sample = FileHeldStore::new(&path).load().await.unwrap();
+    assert!(!sample.items.is_empty() && !sample.deliveries.is_empty(), "{sample:?}");
+
+    held_store_conformance(&InMemoryHeldStore::default(), &sample).await;
+    held_store_conformance(&FileHeldStore::new(dir.path().join("other/held.json")), &sample).await;
+}
+
+/// A live store that refuses every write.
+struct Unwritable;
+
+#[async_trait]
+impl LiveStore for Unwritable {
+    async fn set(
+        &self,
+        _id: &ContentId,
+        _values: BTreeMap<String, adk_site::live::LiveValue>,
+    ) -> Result<()> {
+        Err(SiteError::Pipeline("the live store is down".into()))
+    }
+    async fn get(&self, _id: &ContentId) -> Result<BTreeMap<String, adk_site::live::LiveValue>> {
+        Ok(BTreeMap::new())
+    }
+}
+
+/// An owner's release that fails to take effect leaves the delivery held, in memory and in
+/// the store, so the decision can be made again (spec 3.5 A-I27).
+#[tokio::test]
+async fn a_release_that_fails_keeps_the_delivery_held() {
+    let shop = shop().await;
+    let held_store = Arc::new(InMemoryHeldStore::default());
+    let engine = UpdateEngine::builder(shop.engine.pipeline().clone(), Arc::new(Unwritable))
+        .held_store(held_store.clone())
+        .build()
+        .unwrap();
+    engine.add_feed(mapping(), bounds()).await.unwrap();
+    let records: Vec<FeedRecord> = (0..30)
+        .map(|i| record(i, &[("price", json!(3.0 + i as f64)), ("qty", json!(1))]))
+        .collect();
+    let held = engine.ingest("supplier", records).await.unwrap();
+    assert!(held.held);
+    let error = engine.decide_delivery(held.delivery, Decision::Release, "urn:person:owner").await;
+    assert!(error.is_err(), "the live store refuses the delivery's stock values");
+    let still: Vec<u64> = engine.held_deliveries().await.iter().map(|d| d.delivery).collect();
+    assert_eq!(still, [held.delivery]);
+    assert_eq!(held_store.load().await.unwrap().deliveries.len(), 1);
 }

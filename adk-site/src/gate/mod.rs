@@ -4,7 +4,7 @@
 //! | Check | Pass condition | Fast | Full |
 //! |-------|----------------|------|------|
 //! | Server code | Zero server-executable files or server-side include directives (A-I1); always fatal | written files | every file |
-//! | Claims | Zero published claims from facts that are not `Known` (A-I18), through a [`ClaimCheck`] | changed items | every item |
+//! | Claims | Zero published claims from facts that are not `Known` (A-I18), through a [`ClaimCheck`]; review quotes only with the reviewer's public name and the owner's approval ([`QuotableReview`]) | changed items | every item |
 //! | Links | Zero broken internal links | written pages | every page |
 //! | Accessibility | Zero serious WCAG 2.2 AA violations; image alt text confirmed; theme contrast | written pages | every page, contrast |
 //! | Performance | Critical path within the budget (LCP recorded as not measured) | — | every page |
@@ -15,10 +15,14 @@
 //! | Red lines | No item states a charter red line | changed items | every item |
 //! | Structured data | Fields each kind needs; JSON-LD parses | changed items | every item |
 //!
-//! Migration parity and `awp verify` against a preview plug in as [`GateExtension`]s.
+//! Further checks plug in as [`GateExtension`]s: migration parity (`migrate` feature),
+//! [`ThirdPartyResources`] for kinds that ship no third-party scripts or trackers, and
+//! [`ReleaseDelegation`] for a served site whose release key the owner's root delegates.
 
+mod extensions;
 mod html;
 mod links;
+mod reviews;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -37,7 +41,9 @@ use crate::error::{Result, SiteError};
 use crate::generator::BuildReport;
 use crate::scan::scan_file;
 
+pub use extensions::{ReleaseDelegation, ThirdPartyResources};
 pub use html::{A11yViolation, Severity};
+pub use reviews::QuotableReview;
 
 /// A launch-gate check (spec 3.5 §7.8.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -68,6 +74,10 @@ pub enum GateCheck {
     RedLines,
     /// Structured data per content kind.
     StructuredData,
+    /// Resources loaded from other origins ([`ThirdPartyResources`], spec 3.5 §7.16.1).
+    ThirdPartyResources,
+    /// Release signing and its delegation by the owner's root ([`ReleaseDelegation`], D-11).
+    Signing,
 }
 
 /// Which tier runs (spec 3.5 §7.8.3).
@@ -366,6 +376,7 @@ pub trait GateExtension: Send + Sync {
 pub struct LaunchGate {
     claims: Option<Arc<dyn ClaimCheck>>,
     red_lines: Vec<RedLine>,
+    reviews: Vec<QuotableReview>,
     extensions: Vec<Arc<dyn GateExtension>>,
 }
 
@@ -374,6 +385,7 @@ impl std::fmt::Debug for LaunchGate {
         f.debug_struct("LaunchGate")
             .field("claims", &self.claims.is_some())
             .field("red_lines", &self.red_lines)
+            .field("reviews", &self.reviews.len())
             .field("extensions", &self.extensions.len())
             .finish()
     }
@@ -400,6 +412,14 @@ impl LaunchGate {
     /// Refuses items that state one of the charter's red lines.
     pub fn with_red_lines(mut self, red_lines: Vec<RedLine>) -> Self {
         self.red_lines = red_lines;
+        self
+    }
+
+    /// The reviews discovery found, with their attribution and the owner's approvals: an
+    /// item quoting one fails the claims check unless it names the reviewer and the owner
+    /// approved quoting it (spec 3.5 S2).
+    pub fn with_reviews(mut self, reviews: Vec<QuotableReview>) -> Self {
+        self.reviews = reviews;
         self
     }
 
@@ -482,10 +502,12 @@ impl LaunchGate {
     }
 
     async fn claims(&self, items: &[&ContentItem]) -> Result<CheckResult> {
+        let quotes: Vec<Finding> =
+            items.iter().flat_map(|item| reviews::review_findings(item, &self.reviews)).collect();
         let Some(check) = &self.claims else {
             let citing: Vec<&&ContentItem> =
                 items.iter().filter(|i| !i.sources.is_empty()).collect();
-            if citing.is_empty() {
+            if citing.is_empty() && quotes.is_empty() {
                 return Ok(CheckResult {
                     check: GateCheck::Claims,
                     status: CheckStatus::NotMeasured,
@@ -493,7 +515,7 @@ impl LaunchGate {
                     note: Some("no claim check is configured and no item cites a fact".into()),
                 });
             }
-            let findings = citing
+            let mut findings: Vec<Finding> = citing
                 .iter()
                 .map(|item| {
                     Finding::blocking(
@@ -504,9 +526,10 @@ impl LaunchGate {
                     )
                 })
                 .collect();
+            findings.extend(quotes);
             return Ok(CheckResult::from_findings(GateCheck::Claims, findings));
         };
-        let mut findings = Vec::new();
+        let mut findings = quotes;
         for item in items {
             for claim in check.unsupported_claims(item).await? {
                 findings.push(Finding::blocking(

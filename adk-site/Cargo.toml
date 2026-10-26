@@ -30,11 +30,9 @@ migrate = [
     "dep:hickory-resolver",
     "dep:image-compare",
     "dep:quick-xml",
-    "dep:regex",
     "dep:reqwest",
     "dep:similar",
     "dep:tempfile",
-    "dep:url",
     "dep:x509-parser",
     "tokio/io-util",
     "tokio/net",
@@ -60,6 +58,9 @@ gen-build-awesome = ["dep:adk-sandbox", "minijinja/json", "tokio/process"]
 adk-core.workspace = true
 # Release signatures and the site log are adk-auth signed notes over a Merkle log (D-11).
 adk-auth = { workspace = true, features = ["signed-audit"] }
+# The site log's C2SP tiles are written by adk-awp's `signing::log`, one implementation for
+# both crates; the release-delegation gate check verifies key sets with its `signing::keys`.
+adk-awp = { workspace = true, features = ["signing"] }
 awp-types.workspace = true
 async-trait.workspace = true
 base64 = "0.22"
@@ -71,6 +72,8 @@ hex.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 minijinja = "2"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+# CSS references in the third-party resource check.
+regex.workspace = true
 # The launch gate parses generated HTML with an HTML5 parser, not patterns.
 scraper = "0.25"
 serde.workspace = true
@@ -81,6 +84,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "sync", "rt", "time"] }
 toml.workspace = true
 tracing.workspace = true
+url = "2.5"
 # Migration (feature `migrate`).
 adk-artifact = { workspace = true, optional = true }
 adk-guardrail = { workspace = true, optional = true }
@@ -89,11 +93,9 @@ ego-tree = { version = "0.10", optional = true }
 hickory-resolver = { version = "0.26", optional = true }
 image-compare = { version = "0.5", optional = true }
 quick-xml = { version = "0.41", optional = true }
-regex = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 similar = { version = "3", optional = true }
 tempfile = { version = "3", optional = true }
-url = { version = "2.5", optional = true }
 x509-parser = { version = "0.18", optional = true }
 # External generators (features `gen-*`): Seatbelt on macOS, bubblewrap on Linux.
 adk-sandbox = { workspace = true, optional = true, features = ["sandbox-macos", "sandbox-linux"] }
@@ -103,8 +105,6 @@ hmac = { version = "0.12", optional = true }
 sha1 = { version = "0.10", optional = true }
 
 [dev-dependencies]
-# Stream entries are checked against the edge's proof format.
-adk-awp = { path = "../adk-awp", default-features = false, features = ["signing"] }
 axum = "0.8"
 proptest = "1.5"
 tempfile = "3"

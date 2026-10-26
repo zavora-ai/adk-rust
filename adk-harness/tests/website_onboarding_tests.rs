@@ -232,7 +232,10 @@ async fn one_scripted_onboarding_pass() {
     assert_eq!(report.release, Some(1));
     let page = world.dirs[0].path().join("releases/1/hours/index.html");
     assert!(page.exists());
-    std::fs::write(&page, "<html>defaced</html>").unwrap();
+    // Replaced as an intruder replaces a file; `DirectoryHost`'s stored files are read-only.
+    let replacement = page.with_extension("tmp");
+    std::fs::write(&replacement, "<html>defaced</html>").unwrap();
+    std::fs::rename(&replacement, &page).unwrap();
     let report = verifier.verify(&server.url("")).await.unwrap();
     assert!(!report.passed());
     assert!(

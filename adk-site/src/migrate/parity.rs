@@ -1,14 +1,19 @@
 //! Migration parity for the launch gate (spec 3.5 §7.8.1 "Migration parity", S3): every
-//! inventoried URL answers 200 or a 301 to a 200, the top pages look the same at two widths
-//! (perceptual difference under 0.05) and say the same (main-text similarity at or above
-//! 0.95), and their metadata is preserved.
+//! inventoried URL answers 200 or a 301 to a 200, the top pages say the same (main-text
+//! similarity at or above 0.95) and keep their metadata, and — when the owner keeps the site's
+//! design — look the same at two widths (perceptual difference under 0.05).
 //!
-//! | Check | Rule | Finding |
-//! |-------|------|---------|
-//! | URL coverage | A file for the path, or a 301/308 redirect to one; refused and quarantined subjects are exempt | `url-not-covered` |
-//! | Main text | Word-level similarity of the main content ≥ `min_text_similarity` | `text-similarity` |
-//! | Metadata | Title, canonical path and language kept; a description kept when there was one | `metadata-*` |
-//! | Visual | 1 − the hybrid SSIM/RMS score of two screenshots < `max_perceptual_difference`, at each width | `perceptual-difference` |
+//! | Check | Rule | Finding | Gates the launch |
+//! |-------|------|---------|------------------|
+//! | URL coverage | A file for the path, or a 301/308 redirect to one; refused and quarantined subjects are exempt | `url-not-covered` | Always |
+//! | Main text | Word-level similarity of the main content ≥ `min_text_similarity` | `text-similarity` | Always |
+//! | Metadata | Title, canonical path and language kept; a description kept when there was one | `metadata-*` | Always |
+//! | Visual | 1 − the hybrid SSIM/RMS score of two screenshots < `max_perceptual_difference`, at each width | `perceptual-difference` | [`SiteDesign::Keep`] only; reported for [`SiteDesign::NewTheme`] |
+//!
+//! The owner chooses the design during migration (owner decision of 2026-10-25):
+//! [`SiteDesign::Keep`] for a freeze or the old design carried over, [`SiteDesign::NewTheme`]
+//! for a new look the owner approves from the preview. [`record_design_choice`] writes the
+//! choice to the migration audit.
 //!
 //! Screenshots come from a [`Screenshotter`]: [`ChromeScreenshotter`] runs headless Chrome;
 //! without one the visual comparison is reported as not measured.
@@ -18,11 +23,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use adk_core::ActingContext;
+use adk_core::audit_log::{AuditDecision, AuditRecorder};
 use async_trait::async_trait;
 use awp_types::Redirect;
 use image::RgbImage;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
+use super::audit::record;
 use super::error::{MigrateError, Result};
 use super::html::main_text;
 use super::http::{FetchOptions, HttpClient};
@@ -32,7 +41,66 @@ use crate::gate::{
     CheckResult, CheckStatus, Finding, GateCheck, GateExtension, GateInput, GateMode, Severity,
 };
 
-/// The parity thresholds (spec 3.5 §7.8.1).
+/// The design the owner chose for the migrated site (spec 3.5 §7.8.1, §7.18 stage 6; owner
+/// decision of 2026-10-25).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_site::migrate::parity::{ParityConfig, SiteDesign};
+///
+/// assert!(SiteDesign::Keep.gates_looks());
+/// assert!(!ParityConfig::new_theme().design.gates_looks());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SiteDesign {
+    /// Keep the same design — a freeze, or the old design carried over: URL coverage, main
+    /// text, metadata and the perceptual difference all gate the launch.
+    #[default]
+    Keep,
+    /// Move to a new theme: URL coverage, main text and metadata gate the launch; the
+    /// perceptual difference is reported, not gated, and the owner approves the new look from
+    /// the preview.
+    NewTheme,
+}
+
+impl SiteDesign {
+    /// Whether the perceptual difference gates the launch.
+    pub fn gates_looks(self) -> bool {
+        self == Self::Keep
+    }
+
+    /// The wire name: `keep` or `new_theme`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Keep => "keep",
+            Self::NewTheme => "new_theme",
+        }
+    }
+}
+
+impl std::fmt::Display for SiteDesign {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for SiteDesign {
+    type Err = MigrateError;
+
+    fn from_str(text: &str) -> Result<Self> {
+        match text.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "keep" | "keep_design" | "same" => Ok(Self::Keep),
+            "new_theme" | "new" | "theme" => Ok(Self::NewTheme),
+            other => Err(MigrateError::Service(format!(
+                "unknown design choice '{other}'; use `keep` or `new-theme`"
+            ))),
+        }
+    }
+}
+
+/// The parity thresholds and the owner's design choice (spec 3.5 §7.8.1).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParityConfig {
     /// Pages compared for text, metadata and looks (default 20).
@@ -45,6 +113,9 @@ pub struct ParityConfig {
     pub max_perceptual_difference: f64,
     /// The smallest main-text similarity allowed (default 0.95).
     pub min_text_similarity: f64,
+    /// The owner's design choice: whether the perceptual difference gates the launch
+    /// (default [`SiteDesign::Keep`]).
+    pub design: SiteDesign,
 }
 
 impl Default for ParityConfig {
@@ -55,8 +126,92 @@ impl Default for ParityConfig {
             height: 1600,
             max_perceptual_difference: 0.05,
             min_text_similarity: 0.95,
+            design: SiteDesign::Keep,
         }
     }
+}
+
+impl ParityConfig {
+    /// The spec's thresholds for a site that keeps its design: every check gates the launch.
+    pub fn keep_design() -> Self {
+        Self::default()
+    }
+
+    /// The spec's thresholds for a site that moves to a new theme: the perceptual difference
+    /// is reported, not gated.
+    pub fn new_theme() -> Self {
+        Self { design: SiteDesign::NewTheme, ..Self::default() }
+    }
+
+    /// The thresholds for `design`.
+    pub fn for_design(design: SiteDesign) -> Self {
+        Self { design, ..Self::default() }
+    }
+}
+
+/// The migration-audit fields of the owner's design choice (spec 3.5 §7.8.1, §9.3): the
+/// choice, the checks that gate the launch and the thresholds.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_site::migrate::parity::{ParityConfig, design_choice_fields};
+///
+/// let fields = design_choice_fields(&ParityConfig::keep_design());
+/// assert_eq!(fields["design"], "keep");
+/// assert_eq!(fields["gates"][3], "perceptual-difference");
+/// ```
+pub fn design_choice_fields(config: &ParityConfig) -> serde_json::Value {
+    let mut gates = vec!["url-coverage", "text-similarity", "metadata"];
+    if config.design.gates_looks() {
+        gates.push("perceptual-difference");
+    }
+    serde_json::json!({
+        "decision": "design",
+        "design": config.design,
+        "gates": gates,
+        "maxPerceptualDifference": config.max_perceptual_difference,
+        "minTextSimilarity": config.min_text_similarity,
+        "lookApprovedFromPreview": !config.design.gates_looks(),
+    })
+}
+
+/// Records the owner's design choice in the migration audit as `site.migration.decided`
+/// with [`design_choice_fields`] (spec 3.5 §7.8.1, §9.3; owner decision of 2026-10-25).
+///
+/// # Errors
+///
+/// [`MigrateError::Service`] when the recorder fails.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_core::audit_log::{AuditRecorder, InMemoryAuditRecorder};
+/// use adk_site::migrate::parity::{ParityConfig, record_design_choice};
+///
+/// # async fn demo(acting: adk_core::ActingContext) -> adk_site::migrate::Result<()> {
+/// let recorder = Arc::new(InMemoryAuditRecorder::new());
+/// let audit: Arc<dyn AuditRecorder> = recorder.clone();
+/// record_design_choice(&audit, &acting, &ParityConfig::new_theme()).await?;
+/// assert_eq!(recorder.records()[0].action, "site.migration.decided");
+/// # Ok(())
+/// # }
+/// ```
+pub async fn record_design_choice(
+    recorder: &Arc<dyn AuditRecorder>,
+    acting: &ActingContext,
+    config: &ParityConfig,
+) -> Result<()> {
+    tracing::info!(site.migration.design = %config.design, "migration design chosen");
+    record(
+        recorder,
+        acting,
+        "site.migration.decided",
+        Some(AuditDecision::Approved),
+        design_choice_fields(config),
+    )
+    .await
 }
 
 /// Takes screenshots of pages.
@@ -284,11 +439,23 @@ impl MigrationParity {
         self
     }
 
-    /// Sets the thresholds.
+    /// Sets the thresholds and the design choice.
     #[must_use]
     pub fn with_config(mut self, config: ParityConfig) -> Self {
         self.config = config;
         self
+    }
+
+    /// Sets the owner's design choice, keeping the thresholds (owner decision of 2026-10-25).
+    #[must_use]
+    pub fn with_design(mut self, design: SiteDesign) -> Self {
+        self.config.design = design;
+        self
+    }
+
+    /// The thresholds and the design choice.
+    pub fn config(&self) -> &ParityConfig {
+        &self.config
     }
 
     fn exempt(&self, url: &InventoryUrl) -> bool {
@@ -341,12 +508,15 @@ impl GateExtension for MigrationParity {
     }
 
     async fn run(&self, input: &GateInput<'_>) -> crate::Result<CheckResult> {
+        let gates_looks = self.config.design.gates_looks();
         let mut findings = Vec::new();
         let mut finding = |rule: &str, path: &str, message: String| {
+            // A new theme's looks are the owner's to approve from the preview: reported only.
+            let blocking = rule != "perceptual-difference" || gates_looks;
             findings.push(Finding {
                 rule: rule.into(),
-                severity: Severity::Serious,
-                blocking: true,
+                severity: if blocking { Severity::Serious } else { Severity::Minor },
+                blocking,
                 path: Some(path.to_string()),
                 item: None,
                 message,
@@ -524,8 +694,16 @@ impl GateExtension for MigrationParity {
             }
         }
         let failed = findings.iter().any(|f| f.blocking);
+        let design = if gates_looks {
+            format!(
+                "design kept: the perceptual difference gates the launch under {}",
+                self.config.max_perceptual_difference
+            )
+        } else {
+            "new theme: the perceptual difference is reported, not gated; the owner approves the look from the preview".to_string()
+        };
         let mut note = format!(
-            "{covered} URLs covered; {compared} pages compared, lowest text similarity {lowest_similarity:.3}, largest perceptual difference {largest_difference:.3}"
+            "{design}; {covered} URLs covered; {compared} pages compared, lowest text similarity {lowest_similarity:.3}, largest perceptual difference {largest_difference:.3}"
         );
         if unmeasured_text > 0 {
             note.push_str(&format!("; {unmeasured_text} pages had no legacy text to compare"));
@@ -534,12 +712,14 @@ impl GateExtension for MigrationParity {
             note.push_str("; ");
             note.push_str(visual);
         }
-        tracing::info!(covered, compared, failed, "migration parity checked");
+        tracing::info!(covered, compared, failed, design = %self.config.design, "migration parity checked");
+        // An unmeasured visual comparison leaves the check unmeasured only when looks gate it.
+        let unmeasured = (visual_note.is_some() && gates_looks) || unmeasured_text > 0;
         Ok(CheckResult {
             check: GateCheck::MigrationParity,
             status: if failed {
                 CheckStatus::Failed
-            } else if visual_note.is_some() || unmeasured_text > 0 {
+            } else if unmeasured {
                 CheckStatus::NotMeasured
             } else {
                 CheckStatus::Passed
