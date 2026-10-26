@@ -218,8 +218,6 @@ register one `spend` source, or rename `SpendLedgerKpi` with `named`.
 | Metrics counted through the beacon are proportions | The beacon counts events, not per-unit values; a mean metric needs a source that reports sums and sums of squares |
 | One running experiment per page | The variant is built from the control page as it is |
 | An id is never reused | The analysis spends its error budget from the first look |
-| The edge's beacon store is in memory | A look reads each whole day once and keeps the totals in the experiment's record, so a restart loses at most the current day's counts |
-| Card and manifest fetches at the edge are not counted | The edge records capability calls, not discovery requests; machine-view fetches are counted from host logs by claimed user agent |
 
 ## Verification
 

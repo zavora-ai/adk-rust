@@ -193,6 +193,8 @@ many sites from one harness:
 | Agenda, partitions, devices, cron watermarks | `adk_kernel` SQLite stores |
 | Runs (weekly reviews among them), approvals, action and spend ledgers | `adk_session` SQLite stores |
 | Leads, consent, held calls, idempotency | `adk_server::awp::stores::SqliteEdgeStores` in `data/edge.db` |
+| Retained events, catalogue pages, consent references, pending deliveries, beacon counts | The same `SqliteEdgeStores`, as the edge's event log and beacon store; the deliveries a stopped process left resume once their lease passes |
+| Measurement counts (`MeteredActionLedger`, `EdgeMeter`, `MeteredSpendLedger`, host logs, AEO) | `SqliteEdgeStores` in `data/edge.db`, under the namespace `{site}#measurement` |
 
 ## Audit records
 

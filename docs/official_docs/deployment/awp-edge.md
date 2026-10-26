@@ -259,7 +259,8 @@ Each delivery carries `webhook-id` (the event id), `webhook-timestamp`, `webhook
 `AWP-Version: 2.0`. A failed delivery is retried after 1 s, 5 s, 30 s, 5 min, 30 min and 2 h with
 jitter; six consecutive failures suspend the subscription, and `PATCH` with
 `{"state": "active"}` reactivates it. Events are retained 72 hours; `POST /awp/v2/events/replay`
-redelivers them under their original ids. `EdgeEvents::announce_catalog` publishes the
+redelivers them under their original ids. With a durable event log a retry survives a restart
+(see [Durable stores](#durable-stores)). `EdgeEvents::announce_catalog` publishes the
 `catalog.changed` of an `adk-site` announcement and serves its further pages; give the
 pipeline's `changes_url` the edge's `/awp/v2/events/changes` base. `EdgeEvents::retained`
 reads the retained events of a window with their audiences, for the site's own back office and
@@ -299,9 +300,52 @@ edge origin, so list it in the server's allowed origins.
 | PostgreSQL | `awp-postgres` | `adk_server::awp::stores::PostgresEdgeStores` |
 | Redis | `awp-redis` | `adk_server::awp::stores::RedisEdgeStores` |
 
-Each implements the six edge store traits, passes `adk_awp::edge_store_conformance_tests!`, and
+Each implements the six edge store traits, the edge's `EventLog` and its `BeaconStore`, passes
+`adk_awp::edge_store_conformance_tests!` and `adk_server::edge_log_conformance_tests!`, and
 keeps one site's records under its `with_site` namespace. Call `migrate` once, then pass
-`edge_stores()` to `AwpEdgeBuilder::stores`.
+`edge_stores()` to `AwpEdgeBuilder::stores`: the edge then keeps its retained events,
+catalogue pages, consent references, pending deliveries and beacon counts across a restart.
+
+| Kept | Survives a restart because |
+|------|----------------------------|
+| Retained events and catalogue pages | `EventLog::append`, `put_catalog_pages`; `purge_before` drops both after the retention |
+| Who referenced a consent receipt | `EventLog::note_consent_reference`, so `consent.revoked` still reaches them |
+| A delivery waiting for its retry | `EventLog::save_delivery` keeps it due at its next attempt plus `EventsConfig::delivery_lease` (70 s); `AwpEdge::spawn_delivery_resumer` claims the overdue ones (`claim_deliveries`, one claimer each) and attempts them where their retries stood |
+| Beacon counts | `BeaconStore::add` and `add_visitor` |
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+
+use adk_awp::signing::jws::Ed25519DocumentSigner;
+use adk_awp::v2::capability::CapabilityRegistry;
+use adk_core::Url;
+use adk_server::awp::stores::SqliteEdgeStores;
+use adk_server::awp::{AwpEdge, EdgeKeys};
+
+async fn durable_edge() -> Result<AwpEdge, Box<dyn std::error::Error>> {
+    let pool = sqlx::SqlitePool::connect("sqlite://edge.db?mode=rwc").await?;
+    let stores = SqliteEdgeStores::new(pool).with_site("example.com");
+    stores.migrate().await?;
+    let keys = EdgeKeys {
+        card: Arc::new(Ed25519DocumentSigner::generate("edge-card-2026-10")?),
+        receipt: Arc::new(Ed25519DocumentSigner::generate("edge-receipt-2026-10")?),
+    };
+    let edge = AwpEdge::builder(
+        CapabilityRegistry::new("example.com"),
+        keys,
+        Url::parse("https://agent.example.com")?,
+    )
+    .stores(stores.edge_stores())
+    .build()?;
+    let _resolver = edge.spawn_resolver(Duration::from_secs(5));
+    let _deliveries = edge.spawn_delivery_resumer(Duration::from_secs(30));
+    Ok(edge)
+}
+```
+
+An `EventLog` that overrides only the three required methods keeps catalogue pages and
+consent references in the process, and its retries last as long as the process does.
 
 ## Related
 
