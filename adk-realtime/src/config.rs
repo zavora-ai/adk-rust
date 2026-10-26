@@ -398,7 +398,8 @@ impl RealtimeConfig {
     /// native-audio output models choose the language automatically and do not honor it.
     ///
     /// Stored under `extra.language_code`. An `extra` value that is not a JSON object is
-    /// replaced. OpenAI Realtime and other providers ignore the key.
+    /// replaced. The OpenAI Realtime session copies every `extra` key into its
+    /// `session.update`, so set it only for a Gemini Live model.
     ///
     /// # Example
     ///
@@ -422,8 +423,9 @@ impl RealtimeConfig {
     /// Stored under `extra.context_window_compression`: `true`, or
     /// `{"trigger_tokens": n}` when a threshold is given. The object form also accepts
     /// `target_tokens`, the size to cut back to (default: half of `trigger_tokens`). An
-    /// `extra` value that is not a JSON object is replaced. OpenAI Realtime and other
-    /// providers ignore the key.
+    /// `extra` value that is not a JSON object is replaced. The OpenAI Realtime session
+    /// copies every `extra` key into its `session.update`, so set it only for a Gemini Live
+    /// model.
     ///
     /// # Example
     ///

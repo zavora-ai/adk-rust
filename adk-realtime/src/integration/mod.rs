@@ -555,7 +555,10 @@ impl IntegratedRealtimeRunner {
     /// The raw event is always forwarded to the caller.
     ///
     /// A hold a tool dispatch surfaced is returned as
-    /// [`ServerEvent::ToolConfirmationRequested`] ahead of the provider's next event.
+    /// [`ServerEvent::ToolConfirmationRequested`] ahead of the provider's next event. With
+    /// concurrent tool dispatch, a hold recorded while this call already waits on the provider
+    /// is returned by the next call, after the provider's next event; the hold is in the
+    /// session and the approval store as soon as it is recorded.
     /// The run's spend ledger meters each response; a refused reservation returns
     /// [`RealtimeError::SpendRefused`]. With output guardrails, a completed turn the
     /// guardrails block is interrupted, left out of the session, and reported as

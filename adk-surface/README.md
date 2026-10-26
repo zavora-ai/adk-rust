@@ -155,7 +155,7 @@ See [The Web Home](../docs/official_docs/surfaces/web-home.md).
 | `tui` | The terminal: full screen, inline and JSON lines (`adk_surface::tui`), decisions answered by key; the `adk-rust` binary's `tui` feature | Beta |
 | `channels` | Chat: the Telegram adapter (`adk_surface::channels`), over the kernel's channel contract, by long polling | Beta |
 | `mobile` | The phone: its routes, Web Push from the person's own kernel and "Confirm it's you" (`adk_surface::mobile`); implies `web` and links OpenSSL through webauthn-rs | Beta |
-| `voice` | Voice and video: spoken "allow once" and "deny" through the engine (`adk_surface::voice`); `voice-live` adds Gemini Live and the OpenAI Realtime API for the live test and the `voice_home` example | Beta |
+| `voice` | Voice and video (`adk_surface::voice`): the voice view with `web`, the voice line with `tui`; `voice-live` adds Gemini Live and the OpenAI Realtime API for the live test and the `voice_home` example | Beta |
 
 The desktop tray is a separate, unpublished app in `desktop/`, not a feature. Agent-drawn UI
 and the workflow observer arrive as further features (spec 3.3 §6.1, §12). See

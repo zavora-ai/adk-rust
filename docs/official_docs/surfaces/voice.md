@@ -28,7 +28,7 @@ Voice follows the voice row of spec 3.3 §7.2, whichever surface the words reach
 |---|---|
 | Low or medium risk | **Allow once**, after a cancel window; **Deny** |
 | High risk, or a call that spends money | **Deny**; approving needs you to confirm it is you, which voice cannot do, so the view says "Decide on screen" |
-| A call shown truncated | Nothing: it is decided on screen, where it is shown in full |
+| A call shown truncated | **Deny**; approving needs the call in full, on screen, so the view says "Decide on screen" |
 | Always allow, Edit | Never: they are standing permissions or need the call in front of you |
 
 No agent's words decide anything (§7.4 rule 6): only your own completed transcript counts,
@@ -56,17 +56,19 @@ the operator; resuming happens in the home.
 One decision is prompted at a time, on screen: the conversation's own call just held, else
 the oldest open decision voice may answer. The prompt names the agent, what will happen and
 the words: "Finance wants to send the October invoice to [CLIENT]. Say "allow once" or
-"deny"." A call voice cannot approve says so instead: ""Publish the release" is high risk, so
-voice can't approve it. Say "deny", or decide on screen."
+"deny"." Under it is the exact call, in full, and whether it can be taken back (§7.1). A call
+voice cannot approve says so instead: ""Publish the release" is high risk, so voice can't
+approve it. Say "deny", or decide on screen." A call shown cut short reads "Finance wants to
+write the report. Say "deny", or decide on screen."
 
 | Rule | Why |
 |---|---|
-| A spoken answer applies to the decision prompted when you started speaking | The prompt cannot change under your words |
+| A spoken answer applies to the decision prompted when you started speaking, even when its transcript arrives after you started speaking again | The prompt cannot change under your words |
 | The prompt is on screen for a second before speech counts | You see what you answer |
 | If the decision or its version changed before your words were transcribed, nothing is decided, and the view says so | A decision answered elsewhere is never answered twice (S-I2) |
-| Speech that starts while the model's audio plays, or within 300 ms of its end, decides nothing | The model's own voice in your microphone is not your answer |
+| Speech that starts while the model's audio plays, or within 300 ms of its end, decides nothing; once you speak over the model and the view has dropped the rest of its audio, speech counts again | The model's own voice in your microphone is not your answer |
 | Another agent's decision is shown with a chime and never told to the model | The provider sees only your conversation |
-| While every agent is stopped, nothing is prompted | The view says "All agents stopped" |
+| **Stop all** ends the conversation, and one opened while every agent is stopped ends at once | Stopping stops the model listening, answering and spending too (S-I10); the view says "All agents stopped" |
 
 The model is told never to approve or deny anything and that the app applies your own words.
 
@@ -94,7 +96,9 @@ words themselves.
 | `changed`, `already_decided` | The decision changed, or was answered first elsewhere |
 
 The conversation itself is a session, as typed text is: your words stay in it as your
-messages, listed in Threads under the agent. Each conversation has its own session.
+messages. Each conversation has its own session, and when you press **End** it opens in
+Threads under the agent. The harness also records `harness.voice.held` for each call the
+conversation holds and `harness.voice.resumed` (`executed`) for each it resumes.
 
 `SurfaceEngine::decide_spoken` is the one way a spoken answer is recorded; `execute` refuses a
 `decide` whose surface or origin is voice with `surface.invalid`, and so does
@@ -123,9 +127,10 @@ server offers voice.
 
 ## Serving voice
 
-A voice conversation is a realtime session of a harness marked `Pack::Voice`: its calls are
-governed by the harness as typed ones are, and a call it holds is a decision in the inbox
-like any other, answered by voice or on any other surface. `VoiceSource` wraps the engine's
+A voice conversation is a realtime session of a harness marked `Pack::Voice`: it has every
+tool the harness's model has (`HarnessAgent::voice_tools`), its calls are governed by the
+harness as typed ones are, under the harness runner's kill switch, and a call it holds is a
+decision in the inbox like any other, answered by voice or on any other surface. `VoiceSource` wraps the engine's
 source, so a decision on a call a live conversation holds resumes it in that conversation,
 never on the text runner too; a decision made outside the engine, in Telegram or with
 `adk-rust approvals`, is picked up on the next change.
@@ -218,11 +223,15 @@ Decision cards never travel on the socket: the view reads them from
 
 `TerminalSurface::voice` (features `tui` and `voice`) holds a conversation beside the thread,
 in the same process as the harness. The application records the microphone and plays the
-speaker, as channels of PCM16 mono. In the full-screen terminal one line above the message
-box says "Listening", `Heard "…"`, "Allowing once in 5 seconds — c to cancel", or that a call
-is high risk and is answered there; the inline terminal prints what was heard, each
-countdown, a call voice cannot approve and the end into the scrollback, once each. `c`
-cancels a spoken answer only while the message box is empty, and Esc never decides.
+speaker, as channels of PCM16 mono; `TerminalVoice::with_flush` lets it drop the audio it has
+queued when you speak over the model. A spoken answer in the terminal applies only to the
+voice session's own decisions, the ones its thread shows in full
+(`VoiceHub::open_in_thread`). In the full-screen terminal one line above the message box
+says "Listening", `Heard "…"`, the decision prompted ("Finance wants to send email to
+[CLIENT]. Say "allow once" or "deny"."), "Allowing once in 5 seconds: Send email to [CLIENT] —
+c to cancel", how a spoken answer ended when nothing was decided, or why voice cannot approve
+a call; the inline terminal prints each of these into the scrollback once. `c` cancels a
+spoken answer only while the message box is empty, and Esc never decides.
 
 `adk-rust --voice` (adk-cli features `tui`, `voice` and `voice-desktop`) opens the terminal
 this way on a terminal, talking on the first realtime model whose key resolves, through the
