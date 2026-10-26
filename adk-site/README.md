@@ -93,6 +93,13 @@ async fn publish(repo: &std::path::Path, out: &std::path::Path, served: &std::pa
 `SiteLog` stores its tree in any `adk_core::audit_log::AuditLogStore`; the SQLite and
 PostgreSQL stores in `adk-session` keep it across restarts.
 
+`PublishingPipelineBuilder::audit` takes an `AuditTrail` the pipeline writes its records to
+(spec 3.5 §9.3): `site.content.drafted`, `approved`, `scheduled`, `published`, `corrected` and
+`withdrawn`; `site.release.built`, `signed`, `published` and `refused`. Each release runs in a
+`site.release` span (`pipeline::RELEASE_SPAN`) with `site.release.seq`, `site.release.source`
+and `site.release.items`. A release made outside the pipeline writes the same release records
+with `pipeline::audit::record_release_logged` and `record_release_published`.
+
 ## Constantly updated sites
 
 A shop syncing its supplier every minute or a newsroom on election night stays static and

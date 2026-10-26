@@ -115,3 +115,5 @@ axum = "0.8"
 proptest = "1.5"
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+# The `site.release` span test reads spans through a layer (spec 3.5 §7.24).
+tracing-subscriber.workspace = true

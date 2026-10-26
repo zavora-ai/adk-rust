@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use adk_core::Clock;
 use awp_types::{ContentId, ContentItem, ReleaseSource};
+use tracing::Instrument as _;
 
 use super::{Published, PublishingPipeline};
 use crate::content::{ContentHistory, ContentStore, HistoryMeta, SiteConfig, SiteProject};
@@ -73,6 +74,17 @@ impl PublishingPipeline {
     /// [`SiteError::GateFailed`] when the build holds server code (A-I1): the release is
     /// refused whole and the working copy is restored; build, log and host errors.
     pub async fn publish_batch(
+        &self,
+        items: Vec<ContentItem>,
+        superseded: Vec<ContentItem>,
+        source: ReleaseSource,
+        actor: &str,
+    ) -> Result<BatchRelease> {
+        let span = super::release_span(&source, items.len());
+        self.publish_batch_in_span(items, superseded, source, actor).instrument(span).await
+    }
+
+    async fn publish_batch_in_span(
         &self,
         items: Vec<ContentItem>,
         superseded: Vec<ContentItem>,
@@ -204,8 +216,7 @@ impl PublishingPipeline {
             force_snapshot: false,
         };
         state.report = Some(report);
-        let staged =
-            self.builder.release(&build, state.previous.as_ref(), options, &self.log).await?;
+        let staged = self.release_logged(&build, state.previous.as_ref(), options, actor).await?;
         state.previous = Some(PreviousRelease::from_staged(&staged));
         drop(state);
         if let Some(history) = &self.history {
@@ -225,8 +236,10 @@ impl PublishingPipeline {
             site.batch.held = held.len(),
             "site.batch.published"
         );
-        let ids = pending.into_keys().collect();
-        let published = self.publish_staged(staged, ids, source).await?;
+        let released: Vec<ContentItem> = pending.into_values().collect();
+        let ids = released.iter().map(|item| item.id.clone()).collect();
+        let published = self.publish_staged(staged, ids, source, actor).await?;
+        self.record_content(&released, published.staged.manifest.seq, actor).await;
         Ok(BatchRelease { published: Some(published), held, gate: Some(gate) })
     }
 

@@ -12,8 +12,11 @@
 //! | 8 Measure | A [`ChangeTag`] for the KPI history, through a [`ChangeTagSink`] |
 //!
 //! Corrections, withdrawals (a notice or 410 Gone), per-item reverts, whole-site rollback and
-//! scheduled actions run through the same steps. Releases are serialised per site.
+//! scheduled actions run through the same steps. Releases are serialised per site, each in a
+//! [`RELEASE_SPAN`] span; with [`PublishingPipelineBuilder::audit`], each step writes its
+//! [`audit`] record (spec 3.5 §7.24, §9.3).
 
+pub mod audit;
 mod batch;
 mod schedule;
 
@@ -21,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use adk_core::audit_log::AuditTrail;
 use adk_core::{Clock, SystemClock};
 use async_trait::async_trait;
 use awp_types::{
@@ -30,8 +34,9 @@ use awp_types::{
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::sync::Mutex;
+use tracing::Instrument as _;
 
 use crate::content::{ContentHistory, ContentStore, HistoryMeta, SiteProject};
 use crate::error::{Result, SiteError};
@@ -44,6 +49,7 @@ use crate::release::{
     manifest_digest, manifest_path,
 };
 
+pub use audit::RELEASE_SPAN;
 pub use batch::BatchRelease;
 pub use schedule::{
     ScheduledAction, ScheduledActionKind, due_actions, next_wake, schedule_actions,
@@ -371,6 +377,7 @@ pub struct PublishingPipeline {
     work: PathBuf,
     state: Mutex<State>,
     changes_url: Option<String>,
+    audit: Option<AuditTrail>,
 }
 
 /// Builds a [`PublishingPipeline`].
@@ -436,6 +443,32 @@ impl PublishingPipelineBuilder {
         self
     }
 
+    /// Writes the pipeline's [`audit`] records — content drafted, approved, scheduled,
+    /// published, corrected and withdrawn; releases built, signed, published and refused —
+    /// to `trail` (spec 3.5 §9.3). A record that cannot be written is logged and never undoes
+    /// the step it records.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    /// use adk_core::audit_log::{AuditTrail, InMemoryAuditRecorder};
+    /// use adk_site::pipeline::PublishingPipeline;
+    /// # use adk_site::{content::{SiteProject, ContentStore}, generator::BuiltinGenerator, host::SiteHost, log::SiteLog};
+    ///
+    /// # async fn demo(base: SiteProject, store: Arc<dyn ContentStore>, host: Arc<dyn SiteHost>, log: Arc<SiteLog>) {
+    /// let recorder = InMemoryAuditRecorder::new();
+    /// let pipeline = PublishingPipeline::builder(base, store, Arc::new(BuiltinGenerator), host, log, "/var/lib/site/work")
+    ///     .audit(AuditTrail::new(Arc::new(recorder.clone())))
+    ///     .build();
+    /// # let _ = pipeline;
+    /// # }
+    /// ```
+    pub fn audit(mut self, trail: AuditTrail) -> Self {
+        self.pipeline.audit = Some(trail);
+        self
+    }
+
     /// Continues after `previous`, the release the host serves.
     pub fn previous(mut self, previous: PreviousRelease) -> Self {
         self.pipeline.state.get_mut().previous = Some(previous);
@@ -474,6 +507,16 @@ fn catalog_changes(
         .map(|(index, chunk)| CatalogChangesPage { items: chunk.to_vec(), next: next(index + 2) })
         .collect();
     (Some(catalog), pages)
+}
+
+/// The span a release runs in (spec 3.5 §7.24): its sequence is recorded once it is built.
+fn release_span(source: &ReleaseSource, items: usize) -> tracing::Span {
+    tracing::info_span!(
+        RELEASE_SPAN,
+        site.release.seq = tracing::field::Empty,
+        site.release.source = %audit::source_name(source),
+        site.release.items = items,
+    )
 }
 
 /// Writes `bytes` at the site path `path` under `dir`.
@@ -539,7 +582,66 @@ impl PublishingPipeline {
                     report: None,
                 }),
                 changes_url: None,
+                audit: None,
             },
+        }
+    }
+
+    /// Writes one audit record (spec 3.5 §9.3).
+    async fn record(&self, action: &str, principal: &str, fields: Value) {
+        audit::record(
+            self.audit.as_ref(),
+            action,
+            principal,
+            &self.base.config.domain,
+            self.base.config.charter_version,
+            fields,
+        )
+        .await;
+    }
+
+    /// Releases the build in `out` into the site log: `site.release.built` once its manifest
+    /// is built and `site.release.signed` once its digest is under a signed checkpoint.
+    async fn release_logged(
+        &self,
+        out: &Path,
+        previous: Option<&PreviousRelease>,
+        options: ReleaseOptions,
+        principal: &str,
+    ) -> Result<StagedRelease> {
+        let staged = self.builder.release(out, previous, options, &self.log).await?;
+        tracing::Span::current().record("site.release.seq", staged.manifest.seq);
+        if self.audit.is_some() {
+            let key = self.log.verifier_key().await;
+            audit::record_release_logged(
+                self.audit.as_ref(),
+                self.release_context(principal),
+                &staged,
+                &key,
+            )
+            .await;
+        }
+        Ok(staged)
+    }
+
+    fn release_context<'a>(&'a self, principal: &'a str) -> audit::ReleaseContext<'a> {
+        audit::ReleaseContext {
+            site: &self.base.config.domain,
+            charter_version: self.base.config.charter_version,
+            principal,
+        }
+    }
+
+    /// The content records of release `seq` for `items` (spec 3.5 §9.3).
+    async fn record_content(&self, items: &[ContentItem], seq: u64, principal: &str) {
+        for (action, matching) in audit::content_actions(items) {
+            let (ids, total) = audit::ids(matching.iter().map(|item| &item.id));
+            self.record(
+                action,
+                principal,
+                json!({ "releaseSeq": seq, "items": ids, "total": total }),
+            )
+            .await;
         }
     }
 
@@ -617,8 +719,21 @@ impl PublishingPipeline {
                 history.record(item, meta).await?;
             }
         }
-        let ids = change.items.iter().map(|i| i.id.clone()).collect();
+        let ids: BTreeSet<ContentId> = change.items.iter().map(|i| i.id.clone()).collect();
         tracing::info!(site.content.items = change.items.len(), site.content.proposer = %change.proposer, "site.content.drafted");
+        let (listed, total) = audit::ids(&ids);
+        self.record(
+            audit::CONTENT_DRAFTED,
+            &change.proposer,
+            json!({
+                "items": listed,
+                "total": total,
+                "job": change.job,
+                "actionClass": change.action_class,
+                "entry": change.entry,
+            }),
+        )
+        .await;
         Ok(Draft { change, ids })
     }
 
@@ -738,8 +853,22 @@ impl PublishingPipeline {
             diff: preview.diff.clone(),
         };
         let decision = self.approvals.decide(&request).await?;
-        if let ApprovalDecision::Approved { approvers, .. } = &decision {
+        if let ApprovalDecision::Approved { approvers, decision: record } = &decision {
             check_approvers(&draft.change.proposer, approvers)?;
+            let (items, total) = audit::ids(&draft.ids);
+            self.record(
+                audit::CONTENT_APPROVED,
+                &draft.change.proposer,
+                json!({
+                    "items": items,
+                    "total": total,
+                    "job": draft.change.job,
+                    "approvers": approvers,
+                    "decision": record,
+                    "preview": preview.staged.digest,
+                }),
+            )
+            .await;
         }
         Ok(decision)
     }
@@ -755,6 +884,13 @@ impl PublishingPipeline {
         let draft = self.draft(change).await?;
         let preview = self.preview(&draft).await?;
         if preview.gate.refuses_release() {
+            let (items, total) = audit::ids(&draft.ids);
+            self.record(
+                audit::RELEASE_REFUSED,
+                &draft.change.proposer,
+                json!({ "items": items, "total": total, "gate": preview.gate.summary() }),
+            )
+            .await;
             return Err(SiteError::GateFailed(preview.gate.summary()));
         }
         if !preview.gate.passed() {
@@ -811,15 +947,33 @@ impl PublishingPipeline {
             }
             let all = self.store.list().await?;
             tracing::info!(site.content.items = items.len(), "site.content.scheduled");
-            return Ok(PipelineOutcome::Scheduled { at: next_wake(&all, now) });
+            let at = next_wake(&all, now);
+            let (ids, total) = audit::ids(items.iter().map(|item| &item.id));
+            self.record(
+                audit::CONTENT_SCHEDULED,
+                &draft.change.proposer,
+                json!({ "items": ids, "total": total, "at": at }),
+            )
+            .await;
+            return Ok(PipelineOutcome::Scheduled { at });
         }
         let source = ReleaseSource::Edit { job: draft.change.job.clone(), decision };
         self.release_items(items, source, &draft.change.proposer).await
     }
 
     /// Writes items to the working copy and releases, restoring the copy when the gate
-    /// holds the change.
+    /// holds the change; in a [`RELEASE_SPAN`] span.
     async fn release_items(
+        &self,
+        items: Vec<ContentItem>,
+        source: ReleaseSource,
+        actor: &str,
+    ) -> Result<PipelineOutcome> {
+        let span = release_span(&source, items.len());
+        self.release_items_in_span(items, source, actor).instrument(span).await
+    }
+
+    async fn release_items_in_span(
         &self,
         items: Vec<ContentItem>,
         source: ReleaseSource,
@@ -855,6 +1009,14 @@ impl PublishingPipeline {
             state.graph = None;
             state.report = None;
             if gate.refuses_release() {
+                drop(state);
+                let (listed, total) = audit::ids(&ids);
+                self.record(
+                    audit::RELEASE_REFUSED,
+                    actor,
+                    json!({ "items": listed, "total": total, "gate": gate.summary() }),
+                )
+                .await;
                 return Err(SiteError::GateFailed(gate.summary()));
             }
             return Ok(PipelineOutcome::Held(gate));
@@ -869,8 +1031,7 @@ impl PublishingPipeline {
             written: state.previous.as_ref().map(|_| report.written.clone()),
             force_snapshot: false,
         };
-        let staged =
-            self.builder.release(&build, state.previous.as_ref(), options, &self.log).await?;
+        let staged = self.release_logged(&build, state.previous.as_ref(), options, actor).await?;
         state.previous = Some(PreviousRelease::from_staged(&staged));
         drop(state);
         if let Some(history) = &self.history {
@@ -884,7 +1045,9 @@ impl PublishingPipeline {
                 history.record(item, meta).await?;
             }
         }
-        let published = self.publish_staged(staged, ids.into_iter().collect(), source).await?;
+        let published =
+            self.publish_staged(staged, ids.into_iter().collect(), source, actor).await?;
+        self.record_content(&items, published.staged.manifest.seq, actor).await;
         Ok(PipelineOutcome::Published(published))
     }
 
@@ -893,6 +1056,7 @@ impl PublishingPipeline {
         staged: StagedRelease,
         items: Vec<ContentId>,
         source: ReleaseSource,
+        principal: &str,
     ) -> Result<Published> {
         let report = if !staged.manifest.is_snapshot() && self.host.limits().delta_upload {
             self.host
@@ -906,6 +1070,14 @@ impl PublishingPipeline {
             site.release.uploaded = report.uploaded.len(),
             "site.release.published"
         );
+        audit::record_release_published(
+            self.audit.as_ref(),
+            self.release_context(principal),
+            &staged,
+            report.uploaded.len(),
+            items.len(),
+        )
+        .await;
         let base_url = self.base.config.base_url();
         let changes_url =
             self.changes_url.clone().unwrap_or_else(|| format!("{base_url}/awp/v2/events/changes"));
@@ -1057,6 +1229,11 @@ impl PublishingPipeline {
     /// a file of it has no copy with its signed digest; [`SiteError::DigestMismatch`] when a
     /// manifest is not the one the site log recorded; log and host errors.
     pub async fn rollback(&self, to_seq: u64) -> Result<Published> {
+        let span = release_span(&ReleaseSource::Rollback { to_seq }, 0);
+        self.rollback_in_span(to_seq).instrument(span).await
+    }
+
+    async fn rollback_in_span(&self, to_seq: u64) -> Result<Published> {
         let fetch_manifest = |seq: u64| async move {
             let bytes = self.host.fetch(&manifest_path(seq)).await?.ok_or_else(|| {
                 SiteError::ReleaseNotFound { seq, message: "the host serves no manifest".into() }
@@ -1111,14 +1288,13 @@ impl PublishingPipeline {
             written: None,
             force_snapshot: true,
         };
-        let staged =
-            self.builder.release(&dir, state.previous.as_ref(), options, &self.log).await?;
+        let staged = self.release_logged(&dir, state.previous.as_ref(), options, "").await?;
         state.previous = Some(PreviousRelease::from_staged(&staged));
         // The working copy did not roll back; the next release rebuilds from it in full.
         state.graph = None;
         state.report = None;
         drop(state);
-        self.publish_staged(staged, Vec::new(), source).await
+        self.publish_staged(staged, Vec::new(), source, "").await
     }
 
     /// Copies what the host serves after a rollback into `dir`, checking every file against
