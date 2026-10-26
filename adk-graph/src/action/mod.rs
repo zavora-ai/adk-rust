@@ -324,6 +324,26 @@ impl Node for ActionNodeExecutor {
         &self.config.standard().id
     }
 
+    fn kind(&self) -> crate::shape::NodeKind {
+        use crate::shape::NodeKind;
+        match &self.config {
+            ActionNodeConfig::Trigger(_) => NodeKind::Trigger,
+            ActionNodeConfig::Http(_) => NodeKind::HttpCall,
+            ActionNodeConfig::Set(_) => NodeKind::Set,
+            ActionNodeConfig::Transform(_) => NodeKind::Transform,
+            ActionNodeConfig::Switch(_) => NodeKind::Switch,
+            ActionNodeConfig::Loop(_) => NodeKind::Loop,
+            ActionNodeConfig::Merge(_) => NodeKind::Merge,
+            ActionNodeConfig::Wait(_) => NodeKind::Wait,
+            ActionNodeConfig::Code(_) => NodeKind::Code,
+            ActionNodeConfig::Database(_) => NodeKind::Database,
+            ActionNodeConfig::Email(_) => NodeKind::Email,
+            ActionNodeConfig::Notification(_) => NodeKind::Notification,
+            ActionNodeConfig::Rss(_) => NodeKind::Rss,
+            ActionNodeConfig::File(_) => NodeKind::File,
+        }
+    }
+
     async fn execute(&self, ctx: &NodeContext) -> Result<NodeOutput> {
         // 1. Check skip condition
         if self.should_skip(ctx) {

@@ -99,10 +99,13 @@ pub mod deferred;
 pub mod edge;
 pub mod error;
 pub mod executor;
+pub mod governed;
 pub mod graph;
 pub mod interrupt;
 pub mod node;
+pub mod record;
 pub mod retry;
+pub mod shape;
 pub mod state;
 pub mod stream;
 pub mod subgraph;
@@ -142,9 +145,12 @@ pub use deferred::{DeferredNodeConfig, FanInTracker, MergeStrategy};
 pub use edge::{END, Edge, EdgeTarget, Router, START};
 pub use error::{GraphError, InterruptedExecution, Result};
 pub use executor::PregelExecutor;
+pub use governed::{EffectRecord, GovernedError, GovernedNode};
 pub use graph::{CompiledGraph, StateGraph};
 pub use interrupt::{GraphToolConfirmationPause, Interrupt, interrupt, interrupt_with_data};
 pub use node::{AgentNode, ExecutionConfig, FunctionNode, Node, NodeContext, NodeOutput};
+pub use record::{Lineage, NodeRecord, NodeStatus, RunRecord, StepKind, StepRecord};
+pub use shape::{EdgeShape, GraphShape, NodeKind, NodeShape};
 pub use state::{
     Channel, Checkpoint, PendingWrite, Reducer, State, StateSchema, StateSchemaBuilder,
 };

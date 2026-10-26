@@ -7,9 +7,14 @@ use crate::cache::compute_cache_key;
 use crate::checkpoint::Durability;
 use crate::deferred::{FAN_IN_METADATA_KEY, FanInSnapshot, FanInTracker};
 use crate::error::{GraphError, InterruptedExecution, Result};
+use crate::governed::{GovernedDispatch, GovernedRun};
 use crate::graph::{CompiledGraph, Route};
 use crate::interrupt::{GraphToolConfirmationPause, Interrupt};
-use crate::node::{ExecutionConfig, NodeContext};
+use crate::node::{ExecutionConfig, Node, NodeContext};
+use crate::record::{
+    LINEAGE_METADATA_KEY, Lineage, NodeRecord, NodeStatus, RUN_METADATA_KEY, RunRecord,
+    STEPS_METADATA_KEY, StepKind, StepRecord, now as record_now,
+};
 use crate::state::{Checkpoint, PendingWrite, State};
 use crate::stream::{StreamEvent, StreamMode};
 use crate::timeout::{OnTimeout, ProgressHandle, execute_with_timeout, item_timeout_budget};
@@ -97,10 +102,51 @@ pub struct PregelExecutor<'a> {
     /// Restored from the checkpoint on resume, so the step that resumes them
     /// hands each its answer from `ExecutionConfig::resume_values`.
     paused_nodes: BTreeSet<String>,
+    /// The run the next checkpoint belongs to; opened when the run starts from its
+    /// entry nodes and restored on resume.
+    run: Option<RunRecord>,
+    /// Where this thread was forked from, if it was.
+    lineage: Option<Lineage>,
+    /// Steps finished since the last checkpoint was written.
+    unsaved_steps: Vec<StepRecord>,
+    /// Completed runs of each governed node in this thread's lineage.
+    occurrences: BTreeMap<String, u32>,
+    /// The request each governed node paused with, while it waits for a decision.
+    held: BTreeMap<String, adk_core::ToolConfirmationRequest>,
+    /// The id the next checkpoint is written under, known in advance so a governed
+    /// node's effect-log entry can name the checkpoint that records its step.
+    next_checkpoint_id: String,
 }
 
 /// Checkpoint metadata naming the nodes a dynamic pause stopped.
-const PAUSED_NODES_METADATA_KEY: &str = "adk.graph.paused_nodes";
+pub(crate) const PAUSED_NODES_METADATA_KEY: &str = "adk.graph.paused_nodes";
+/// Checkpoint metadata counting each governed node's completed runs in the lineage.
+const OCCURRENCES_METADATA_KEY: &str = "adk.graph.occurrences";
+/// Checkpoint metadata holding the request each waiting governed node paused with.
+const HELD_METADATA_KEY: &str = "adk.graph.held";
+/// Every metadata key a checkpoint's revision by `update_state` carries over.
+const CARRIED_METADATA_KEYS: [&str; 7] = [
+    FAN_IN_METADATA_KEY,
+    PAUSED_NODES_METADATA_KEY,
+    RUN_METADATA_KEY,
+    STEPS_METADATA_KEY,
+    LINEAGE_METADATA_KEY,
+    OCCURRENCES_METADATA_KEY,
+    HELD_METADATA_KEY,
+];
+
+/// One node's dispatch within a super-step, as its future reports it.
+struct NodeRun {
+    name: String,
+    /// `None` when the node did not start, because the step had already failed.
+    output: Option<Result<crate::node::NodeOutput>>,
+    started_at: chrono::DateTime<chrono::Utc>,
+    duration_ms: u64,
+    step: usize,
+    attempts: u32,
+    /// The governed bracket's outcome, for a governed node.
+    governed: Option<GovernedRun>,
+}
 
 impl<'a> PregelExecutor<'a> {
     /// Create a new executor
@@ -134,6 +180,12 @@ impl<'a> PregelExecutor<'a> {
             inflight: None,
             unsaved: false,
             paused_nodes: BTreeSet::new(),
+            run: None,
+            lineage: None,
+            unsaved_steps: Vec::new(),
+            occurrences: BTreeMap::new(),
+            held: BTreeMap::new(),
+            next_checkpoint_id: uuid::Uuid::new_v4().to_string(),
         }
     }
 
@@ -171,6 +223,13 @@ impl<'a> PregelExecutor<'a> {
         };
 
         if let Some(checkpoint) = checkpoint {
+            // The lineage and each governed node's count belong to the thread, so a new
+            // turn on a finished thread keeps them; the run and its waiting requests do not.
+            self.lineage = checkpoint.lineage()?;
+            self.occurrences =
+                read_metadata(&checkpoint, OCCURRENCES_METADATA_KEY)?.unwrap_or_default();
+            let run = checkpoint.run_record()?;
+            let held = read_metadata(&checkpoint, HELD_METADATA_KEY)?.unwrap_or_default();
             // A fork from an earlier checkpoint continues after the thread's newest.
             self.head_version = checkpoint.version;
             if self.config.resume_from.is_some()
@@ -204,6 +263,10 @@ impl<'a> PregelExecutor<'a> {
                 if let Some(paused) = checkpoint.metadata.get(PAUSED_NODES_METADATA_KEY) {
                     self.paused_nodes = serde_json::from_value(paused.clone())?;
                 }
+                // A paused, failed or interrupted run continues; a checkpoint without a
+                // run, such as a fork's first, opens one.
+                self.run = run;
+                self.held = held;
             }
 
             // Merge input on top of restored state
@@ -227,6 +290,7 @@ impl<'a> PregelExecutor<'a> {
             self.state = self.initialize_state(input).await?;
             self.pending_nodes = self.entry_frontier()?;
         }
+        self.open_run();
 
         // Main execution loop
         while !self.pending_nodes.is_empty() {
@@ -330,6 +394,7 @@ impl<'a> PregelExecutor<'a> {
                     }
                 }
             }
+            self.open_run();
 
             // Stream initial state if requested
             if matches!(mode, StreamMode::Values) {
@@ -364,7 +429,10 @@ impl<'a> PregelExecutor<'a> {
                     // The same gate `execute_super_step` applies. This loop does
                     // not call it, so without this the mode ignored every gate.
                     let gated = self.gate_before(&self.pending_nodes);
+                    // What became of each node, for the step's record.
+                    let mut records: Vec<NodeRecord> = Vec::new();
                     if let Some(interrupt) = gated.clone() {
+                        records.push(node_record(&interrupt.0, record_now(), 0, NodeStatus::Paused, None, 0));
                         result.interrupts.push(interrupt);
                     }
 
@@ -382,6 +450,14 @@ impl<'a> PregelExecutor<'a> {
                             break;
                         }
                         if let Some(write) = self.pending_writes.get(node_name).cloned() {
+                            records.push(node_record(
+                                node_name,
+                                record_now(),
+                                0,
+                                NodeStatus::Done,
+                                Some(&write.updates),
+                                1,
+                            ));
                             result.executed_nodes.push(node_name.clone());
                             if let Some(targets) = write.goto.clone() {
                                 result.goto.insert(node_name.clone(), targets);
@@ -398,8 +474,80 @@ impl<'a> PregelExecutor<'a> {
                         }
                         if let Some(node) = self.graph.nodes.get(node_name) {
                             let ctx = self.node_context(node_name);
-                            let policy = self.graph.timeout_policy_for(node_name).cloned();
+                            let started_at = record_now();
                             let start = std::time::Instant::now();
+
+                            // A governed node runs through its bracket, not as a stream.
+                            if let Some(dispatch) = self.governed_dispatch(node_name, node) {
+                                let run = crate::governed::dispatch(dispatch, &ctx).await;
+                                let duration_ms = start.elapsed().as_millis() as u64;
+                                let mut record =
+                                    node_record(node_name, started_at, duration_ms, run.status, None, 1);
+                                record.effect_key = run.effect_key.clone();
+                                result.events.push(StreamEvent::node_end(node_name, self.step, duration_ms));
+                                match run.output {
+                                    Ok(output) => {
+                                        if let Some(interrupt) = output.interrupt {
+                                            records.push(record);
+                                            if let Some(held) = run.held {
+                                                self.held.insert(node_name.clone(), held);
+                                            }
+                                            result.interrupts.push((node_name.clone(), interrupt));
+                                            continue;
+                                        }
+                                        record = node_record(
+                                            node_name,
+                                            started_at,
+                                            duration_ms,
+                                            run.status,
+                                            Some(&output.updates),
+                                            1,
+                                        );
+                                        record.effect_key = run.effect_key;
+                                        records.push(record);
+                                        self.held.remove(node_name);
+                                        result.executed_nodes.push(node_name.clone());
+                                        result.events.extend(output.events);
+                                        if let Some(targets) = output.goto.clone() {
+                                            result.goto.insert(node_name.clone(), targets);
+                                        }
+                                        if let Some(targets) = output.goto_parent.clone() {
+                                            self.goto_parent = Some(targets);
+                                        }
+                                        let mut keys: Vec<String> = output.updates.keys().cloned().collect();
+                                        keys.sort();
+                                        self.ensure_channels_declared(node_name, keys.iter().map(String::as_str))?;
+                                        for key in keys {
+                                            if let Some(value) = output.updates.get(&key) {
+                                                self.graph.schema.apply_update(&mut self.state, &key, value.clone());
+                                            }
+                                        }
+                                        result.updates.insert(node_name.clone(), output.updates.clone());
+                                        step_writes.insert(
+                                            node_name.clone(),
+                                            PendingWrite {
+                                                updates: output.updates,
+                                                goto: output.goto,
+                                                goto_parent: output.goto_parent,
+                                            },
+                                        );
+                                    }
+                                    Err(e) => {
+                                        record.error = Some(e.to_string());
+                                        records.push(record);
+                                        self.held.remove(node_name);
+                                        self.state = step_start_state.clone();
+                                        self.pending_writes = step_writes.clone();
+                                        self.record_step(StepKind::Failed, std::mem::take(&mut records));
+                                        self.checkpoint_failed_step().await;
+                                        yield Err(e);
+                                        return;
+                                    }
+                                }
+                                continue;
+                            }
+
+                            let policy = self.graph.timeout_policy_for(node_name).cloned();
 
                             // The timeout policy now applies to the streamed
                             // execution itself. For a stream, "idle" means no
@@ -488,8 +636,19 @@ impl<'a> PregelExecutor<'a> {
                                 drop(node_stream);
 
                                 if let Some(e) = failure {
+                                    let mut record = node_record(
+                                        node_name,
+                                        started_at,
+                                        start.elapsed().as_millis() as u64,
+                                        NodeStatus::Failed,
+                                        None,
+                                        u32::try_from(attempt).unwrap_or(u32::MAX),
+                                    );
+                                    record.error = Some(e.to_string());
+                                    records.push(record);
                                     self.state = step_start_state.clone();
                                     self.pending_writes = step_writes.clone();
+                                    self.record_step(StepKind::Failed, std::mem::take(&mut records));
                                     self.checkpoint_failed_step().await;
                                     yield Err(e);
                                     return;
@@ -512,13 +671,25 @@ impl<'a> PregelExecutor<'a> {
                                         streamed_updates.clear();
                                     }
                                     OnTimeout::Fail | OnTimeout::Retry { .. } => {
-                                        self.state = step_start_state.clone();
-                                        self.pending_writes = step_writes.clone();
-                                        self.checkpoint_failed_step().await;
-                                        yield Err(GraphError::NodeTimedOut {
+                                        let error = GraphError::NodeTimedOut {
                                             node: node_name.clone(),
                                             elapsed,
-                                        });
+                                        };
+                                        let mut record = node_record(
+                                            node_name,
+                                            started_at,
+                                            start.elapsed().as_millis() as u64,
+                                            NodeStatus::Failed,
+                                            None,
+                                            u32::try_from(attempt).unwrap_or(u32::MAX),
+                                        );
+                                        record.error = Some(error.to_string());
+                                        records.push(record);
+                                        self.state = step_start_state.clone();
+                                        self.pending_writes = step_writes.clone();
+                                        self.record_step(StepKind::Failed, std::mem::take(&mut records));
+                                        self.checkpoint_failed_step().await;
+                                        yield Err(error);
                                         return;
                                     }
                                 }
@@ -530,6 +701,14 @@ impl<'a> PregelExecutor<'a> {
 
                             let node_interrupt = streamed_interrupt;
                             if let Some(interrupt) = node_interrupt {
+                                records.push(node_record(
+                                    node_name,
+                                    started_at,
+                                    duration_ms,
+                                    NodeStatus::Paused,
+                                    None,
+                                    u32::try_from(attempt).unwrap_or(u32::MAX),
+                                ));
                                 result.interrupts.push((node_name.clone(), interrupt));
                             } else {
                                 result.executed_nodes.push(node_name.clone());
@@ -541,6 +720,14 @@ impl<'a> PregelExecutor<'a> {
                                 for updates in &streamed_updates {
                                     write.updates.extend(updates.clone());
                                 }
+                                records.push(node_record(
+                                    node_name,
+                                    started_at,
+                                    duration_ms,
+                                    NodeStatus::Done,
+                                    Some(&write.updates),
+                                    u32::try_from(attempt).unwrap_or(u32::MAX),
+                                ));
                                 result.updates.insert(node_name.clone(), write.updates.clone());
                                 step_writes.insert(node_name.clone(), write);
                                 for updates in streamed_updates {
@@ -573,6 +760,10 @@ impl<'a> PregelExecutor<'a> {
                     {
                         result.interrupts.push(interrupt);
                     }
+                    self.count_governed_runs(&result.executed_nodes);
+                    let kind =
+                        if result.interrupts.is_empty() { StepKind::Completed } else { StepKind::Paused };
+                    self.record_step(kind, std::mem::take(&mut records));
 
                     // This branch returns rather than falling through to the shared
                     // handling below, so the pause is reported here.
@@ -1008,8 +1199,19 @@ impl<'a> PregelExecutor<'a> {
         // are deliberately outside the concurrency budget: counting them could
         // deadlock, because the parent holds its own slot while waiting.
         ctx.set_parent_schema(Arc::new(self.graph.schema.clone()));
+        // A governed node runs only through its bracket, so a node body cannot invoke it.
+        let children = if self.graph.governed_nodes.is_empty() {
+            self.graph.nodes.clone()
+        } else {
+            self.graph
+                .nodes
+                .iter()
+                .filter(|(name, _)| !self.graph.is_governed(name))
+                .map(|(name, node)| (name.clone(), Arc::clone(node)))
+                .collect()
+        };
         ctx.set_child_invoker(Arc::new(crate::child::ChildInvoker::new(
-            self.graph.nodes.clone(),
+            children,
             self.graph.retry_policies.clone(),
             Arc::clone(&self.child_ledger),
             node,
@@ -1060,6 +1262,8 @@ impl<'a> PregelExecutor<'a> {
         let mut result = SuperStepResult::default();
 
         if let Some(gate) = self.gate_before(&self.pending_nodes) {
+            let record = node_record(&gate.0, record_now(), 0, NodeStatus::Paused, None, 0);
+            self.record_step(StepKind::Paused, vec![record]);
             return Ok(SuperStepResult { interrupts: vec![gate], ..Default::default() });
         }
 
@@ -1067,6 +1271,8 @@ impl<'a> PregelExecutor<'a> {
         let mut all_updates = Vec::new();
         // Each successful node's output, kept as a pending write if the step fails.
         let mut step_writes: BTreeMap<String, PendingWrite> = BTreeMap::new();
+        // What became of each node, for the step's record.
+        let mut records: Vec<NodeRecord> = Vec::new();
 
         // Nodes that finished before an earlier attempt at this step failed are
         // answered from their pending writes instead of running again.
@@ -1075,6 +1281,14 @@ impl<'a> PregelExecutor<'a> {
             match self.pending_writes.get(node_name) {
                 Some(write) => {
                     tracing::debug!(node = %node_name, "applying pending write instead of re-running node");
+                    records.push(node_record(
+                        node_name,
+                        record_now(),
+                        0,
+                        NodeStatus::Done,
+                        Some(&write.updates),
+                        1,
+                    ));
                     result.executed_nodes.push(node_name.clone());
                     if let Some(targets) = &write.goto {
                         result.goto.insert(node_name.clone(), targets.clone());
@@ -1100,7 +1314,13 @@ impl<'a> PregelExecutor<'a> {
         let mut nodes_to_execute: Vec<String> = Vec::new();
         #[cfg(feature = "node-cache")]
         for node_name in &to_run {
-            let Some(cache) = self.graph.node_caches.get(node_name) else {
+            // A governed node's call goes through its bracket every time, never a cache.
+            let Some(cache) = self
+                .graph
+                .node_caches
+                .get(node_name)
+                .filter(|_| !self.graph.is_governed(node_name))
+            else {
                 nodes_to_execute.push(node_name.clone());
                 continue;
             };
@@ -1117,6 +1337,14 @@ impl<'a> PregelExecutor<'a> {
                     result.executed_nodes.push(node_name.clone());
                     result.events.push(StreamEvent::node_end(node_name, self.step, 0));
                     let updates: HashMap<String, serde_json::Value> = updates.into_iter().collect();
+                    records.push(node_record(
+                        node_name,
+                        record_now(),
+                        0,
+                        NodeStatus::Done,
+                        Some(&updates),
+                        0,
+                    ));
                     step_writes.insert(node_name.clone(), PendingWrite::new(updates.clone()));
                     result.updates.insert(node_name.clone(), updates.clone());
                     all_updates.push((node_name.clone(), updates));
@@ -1160,6 +1388,9 @@ impl<'a> PregelExecutor<'a> {
         // than starting again. adk-python does not persist this.
         let prior_attempts: Vec<u32> =
             nodes.iter().map(|(name, _)| self.attempts.get(name).copied().unwrap_or(0)).collect();
+        // A governed node runs through its bracket, once per dispatch.
+        let dispatches: Vec<Option<GovernedDispatch>> =
+            nodes.iter().map(|(name, node)| self.governed_dispatch(name, node)).collect();
 
         // Set by the first failure no error handler recovers. A node not yet
         // admitted then does not start, and a node waiting to retry stops waiting,
@@ -1173,17 +1404,43 @@ impl<'a> PregelExecutor<'a> {
             .zip(timeout_policies)
             .zip(retry_policies)
             .zip(prior_attempts)
-            .map(|((((name, node), policy), retry), spent)| {
+            .zip(dispatches)
+            .map(|(((((name, node), policy), retry), spent), dispatch)| {
                 let ctx = self.node_context(&name);
                 let step = self.step;
                 let recoverable = self.graph.error_handler_for(&name).is_some();
                 let failed_tx = Arc::clone(&failed_tx);
                 let mut failed = failed_rx.clone();
                 async move {
+                    let started_at = record_now();
                     if *failed.borrow() {
-                        return (name, None, 0, step, spent);
+                        return NodeRun {
+                            name,
+                            output: None,
+                            started_at,
+                            duration_ms: 0,
+                            step,
+                            attempts: spent,
+                            governed: None,
+                        };
                     }
                     let start = Instant::now();
+                    if let Some(dispatch) = dispatch {
+                        let mut run = crate::governed::dispatch(dispatch, &ctx).await;
+                        if run.output.is_err() && !recoverable {
+                            failed_tx.send_replace(true);
+                        }
+                        let output = std::mem::replace(&mut run.output, Ok(Default::default()));
+                        return NodeRun {
+                            name,
+                            output: Some(output),
+                            started_at,
+                            duration_ms: start.elapsed().as_millis() as u64,
+                            step,
+                            attempts: spent + 1,
+                            governed: Some(run),
+                        };
+                    }
                     let mut attempts = spent;
                     let output = loop {
                         begin_attempt(&ctx);
@@ -1227,8 +1484,15 @@ impl<'a> PregelExecutor<'a> {
                     if output.is_err() && !recoverable {
                         failed_tx.send_replace(true);
                     }
-                    let duration_ms = start.elapsed().as_millis() as u64;
-                    (name, Some(output), duration_ms, step, attempts)
+                    NodeRun {
+                        name,
+                        output: Some(output),
+                        started_at,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                        step,
+                        attempts,
+                        governed: None,
+                    }
                 }
             })
             .collect();
@@ -1241,20 +1505,39 @@ impl<'a> PregelExecutor<'a> {
             .max_concurrency
             .map_or(pending_for_execution.len(), |limit| limit.min(pending_for_execution.len()))
             .max(1);
-        let mut outputs: Vec<_> =
+        let mut outputs: Vec<NodeRun> =
             stream::iter(futures).buffer_unordered(concurrency).collect().await;
         // Completion order is intentionally nondeterministic under parallelism,
         // but selecting which of several simultaneous pauses to report cannot
         // be. Keep node event order stable and make the first node name win.
-        outputs.sort_by(|left, right| left.0.cmp(&right.0));
+        outputs.sort_by(|left, right| left.name.cmp(&right.name));
 
         let mut interrupts = Vec::new();
         let mut failure = None;
 
-        for (node_name, output_result, duration_ms, step, attempts) in outputs {
+        for run in outputs {
+            let NodeRun {
+                name: node_name,
+                output,
+                started_at,
+                duration_ms,
+                step,
+                attempts,
+                governed,
+            } = run;
             // Not started, because the step had already failed. It stays in the
             // frontier and runs when the step resumes.
-            let Some(output_result) = output_result else { continue };
+            let Some(output_result) = output else {
+                records.push(node_record(
+                    &node_name,
+                    started_at,
+                    0,
+                    NodeStatus::NotRun,
+                    None,
+                    attempts,
+                ));
+                continue;
+            };
             // Record the budget spent, so a resumed run does not restart it. A
             // node that finally succeeded keeps no entry: its budget is spent
             // only while it is failing.
@@ -1264,15 +1547,38 @@ impl<'a> PregelExecutor<'a> {
                 self.attempts.remove(&node_name);
             }
             result.events.push(StreamEvent::node_end(&node_name, step, duration_ms));
+            let (governed_status, effect_key, held) = match governed {
+                Some(run) => (Some(run.status), run.effect_key, run.held),
+                None => (None, None, None),
+            };
+            let mut record = |status: NodeStatus,
+                              writes: Option<&HashMap<String, serde_json::Value>>,
+                              error: Option<String>| {
+                let mut record =
+                    node_record(&node_name, started_at, duration_ms, status, writes, attempts);
+                record.effect_key = effect_key.clone();
+                record.error = error;
+                records.push(record);
+            };
 
             match output_result {
                 Ok(output) => {
                     // Check for dynamic interrupt. Every node that paused is
                     // reported, in name order.
                     if let Some(node_interrupt) = output.interrupt {
+                        record(NodeStatus::Paused, None, None);
+                        if let Some(held) = held {
+                            self.held.insert(node_name.clone(), held);
+                        }
                         interrupts.push((node_name, node_interrupt));
                         continue;
                     }
+                    record(
+                        governed_status.unwrap_or(NodeStatus::Done),
+                        Some(&output.updates),
+                        None,
+                    );
+                    self.held.remove(&node_name);
                     result.executed_nodes.push(node_name.clone());
 
                     // Collect custom events
@@ -1313,6 +1619,13 @@ impl<'a> PregelExecutor<'a> {
                     all_updates.push((node_name.clone(), output.updates));
                 }
                 Err(e) => {
+                    record(
+                        governed_status.unwrap_or(NodeStatus::Failed),
+                        None,
+                        Some(e.to_string()),
+                    );
+                    // A refused or failed governed call asks again from the start.
+                    self.held.remove(&node_name);
                     // The retry budget is spent. A handler may record what
                     // happened and name a recovery node instead of ending the run.
                     // An interrupt never reaches here as a failure.
@@ -1373,6 +1686,7 @@ impl<'a> PregelExecutor<'a> {
 
         if let Some(error) = failure {
             self.pending_writes = step_writes;
+            self.record_step(StepKind::Failed, records);
             return Err(error);
         }
         self.pending_writes.clear();
@@ -1403,7 +1717,78 @@ impl<'a> PregelExecutor<'a> {
         {
             interrupts.push(gate);
         }
+        self.count_governed_runs(&result.executed_nodes);
+        let kind = if interrupts.is_empty() { StepKind::Completed } else { StepKind::Paused };
+        self.record_step(kind, records);
         Ok(SuperStepResult { interrupts, ..result })
+    }
+
+    /// The bracket a governed node's dispatch runs through in this step, or `None` for a
+    /// node that is not governed.
+    fn governed_dispatch(&self, name: &str, node: &Arc<dyn Node>) -> Option<GovernedDispatch> {
+        let governed = *self.graph.governed_nodes.get(name)?;
+        Some(GovernedDispatch {
+            node_name: name.to_string(),
+            node: Arc::clone(node),
+            governed,
+            // A governed node that declares nothing is treated as having an effect.
+            effect: self
+                .graph
+                .node_effects
+                .get(name)
+                .copied()
+                .unwrap_or(adk_core::ToolEffect::NonIdempotent),
+            declaration: self
+                .graph
+                .node_shape(name)
+                .and_then(|shape| serde_json::to_value(shape).ok())
+                .unwrap_or(serde_json::Value::Null),
+            root: self.lineage_root(),
+            run_id: self.run.as_ref().map(|run| run.run_id.clone()).unwrap_or_default(),
+            occurrence: self.occurrences.get(name).copied().unwrap_or(0) + 1,
+            // Only the dispatch that resumes the node's own pause binds to its request.
+            held: if self.paused_nodes.contains(name) {
+                self.held.get(name).cloned()
+            } else {
+                None
+            },
+            checkpointer: self.graph.checkpointer.clone(),
+            thread_id: self.config.thread_id.clone(),
+            checkpoint_id: self.next_checkpoint_id.clone(),
+            run_timeout: self.graph.timeout_policy_for(name).and_then(|policy| policy.run_timeout),
+        })
+    }
+
+    /// The thread this thread's lineage started at: itself, unless it was forked.
+    fn lineage_root(&self) -> String {
+        self.lineage.as_ref().map_or_else(|| self.config.thread_id.clone(), |l| l.root.clone())
+    }
+
+    /// Counts a completed run of each governed node in `executed`, so the next run of
+    /// the node in this lineage is a new call.
+    fn count_governed_runs(&mut self, executed: &[String]) {
+        for node in executed.iter().filter(|node| self.graph.is_governed(node)) {
+            *self.occurrences.entry(node.clone()).or_insert(0) += 1;
+        }
+    }
+
+    /// Records the step that is ending, labelled with the step its completed checkpoint
+    /// carries.
+    fn record_step(&mut self, kind: StepKind, mut nodes: Vec<NodeRecord>) {
+        nodes.sort_by(|left, right| left.node.cmp(&right.node));
+        self.unsaved_steps.push(StepRecord { step: self.step + 1, kind, nodes });
+    }
+
+    /// Opens a run when none continues: a fresh start, a finished thread that starts
+    /// again from its entry, or a checkpoint without a run.
+    fn open_run(&mut self) {
+        if self.run.is_none() {
+            let run_id = self.config.parent_context.as_ref().map_or_else(
+                || uuid::Uuid::new_v4().to_string(),
+                |parent| parent.invocation_id().to_string(),
+            );
+            self.run = Some(RunRecord::new(run_id));
+        }
     }
 
     /// Save a checkpoint
@@ -1616,6 +2001,8 @@ impl<'a> PregelExecutor<'a> {
             self.pending_nodes.clone(),
         )
         .with_version(self.head_version);
+        checkpoint.checkpoint_id =
+            std::mem::replace(&mut self.next_checkpoint_id, uuid::Uuid::new_v4().to_string());
         checkpoint.cleared_interrupt = self.cleared_interrupt.clone();
         checkpoint.attempts = self.attempts.clone();
         checkpoint.child_ledger = self.child_ledger.lock().expect("child ledger").clone();
@@ -1634,6 +2021,24 @@ impl<'a> PregelExecutor<'a> {
                 PAUSED_NODES_METADATA_KEY.to_string(),
                 serde_json::to_value(&self.paused_nodes).unwrap_or_default(),
             );
+        }
+        // Run, step and lineage records (spec 3.3 §12): every step since the last write,
+        // so a run under `Durability::Exit` keeps the steps it did not checkpoint.
+        let steps = std::mem::take(&mut self.unsaved_steps);
+        let records = [
+            (RUN_METADATA_KEY, self.run.as_ref().map(serde_json::to_value)),
+            (STEPS_METADATA_KEY, (!steps.is_empty()).then(|| serde_json::to_value(&steps))),
+            (LINEAGE_METADATA_KEY, self.lineage.as_ref().map(serde_json::to_value)),
+            (
+                OCCURRENCES_METADATA_KEY,
+                (!self.occurrences.is_empty()).then(|| serde_json::to_value(&self.occurrences)),
+            ),
+            (HELD_METADATA_KEY, (!self.held.is_empty()).then(|| serde_json::to_value(&self.held))),
+        ];
+        for (key, value) in records {
+            if let Some(Ok(value)) = value {
+                checkpoint.metadata.insert(key.to_string(), value);
+            }
         }
         checkpoint
     }
@@ -1695,6 +2100,7 @@ impl<'a> PregelExecutor<'a> {
     async fn flush_before_side_effects(&mut self) -> Result<()> {
         let side_effecting = self.pending_nodes.iter().any(|node| {
             self.graph.node_effects.get(node) == Some(&adk_core::ToolEffect::NonIdempotent)
+                || self.graph.is_governed(node)
         });
         if side_effecting {
             self.finish_checkpoints().await?;
@@ -1711,11 +2117,14 @@ impl<'a> PregelExecutor<'a> {
     async fn checkpoint_failed_step(&mut self) {
         let any_retryable =
             self.pending_nodes.iter().any(|node| self.graph.retry_policy_for(node).is_some());
-        let result = if any_retryable || !self.pending_writes.is_empty() || self.unsaved {
-            self.save_checkpoint().await.map(drop)
-        } else {
-            self.await_inflight().await
-        };
+        // A governed step is always recorded, so its refusal or failure can be seen.
+        let any_governed = self.pending_nodes.iter().any(|node| self.graph.is_governed(node));
+        let result =
+            if any_retryable || any_governed || !self.pending_writes.is_empty() || self.unsaved {
+                self.save_checkpoint().await.map(drop)
+            } else {
+                self.await_inflight().await
+            };
         if let Err(error) = result {
             tracing::warn!(
                 thread_id = %self.config.thread_id,
@@ -1745,6 +2154,46 @@ fn arrival_output(
     serde_json::Value::Object(
         keys.into_iter().map(|key| (key.clone(), updates[key].clone())).collect(),
     )
+}
+
+/// A node's record in a step, with the keys of `writes` sorted.
+fn node_record(
+    node: &str,
+    started_at: chrono::DateTime<chrono::Utc>,
+    duration_ms: u64,
+    status: NodeStatus,
+    writes: Option<&HashMap<String, serde_json::Value>>,
+    attempt: u32,
+) -> NodeRecord {
+    let mut writes: Vec<String> = writes.map(|w| w.keys().cloned().collect()).unwrap_or_default();
+    writes.sort();
+    NodeRecord {
+        node: node.to_string(),
+        started_at,
+        duration_ms,
+        status,
+        writes,
+        attempt,
+        effect_key: None,
+        error: None,
+    }
+}
+
+/// Reads one metadata key of `checkpoint`, `None` when it is absent.
+fn read_metadata<T: serde::de::DeserializeOwned>(
+    checkpoint: &Checkpoint,
+    key: &str,
+) -> Result<Option<T>> {
+    checkpoint
+        .metadata
+        .get(key)
+        .map(|value| serde_json::from_value(value.clone()))
+        .transpose()
+        .map_err(|error| {
+            GraphError::SerializationError(format!(
+                "checkpoint metadata '{key}' is malformed: {error}"
+            ))
+        })
 }
 
 /// Every node reachable along `successors` from `sources`, the sources included,
@@ -1906,7 +2355,7 @@ impl CompiledGraph {
             new_checkpoint.attempts = checkpoint.attempts;
             new_checkpoint.child_ledger = checkpoint.child_ledger;
             new_checkpoint.pending_writes = checkpoint.pending_writes;
-            for key in [FAN_IN_METADATA_KEY, PAUSED_NODES_METADATA_KEY] {
+            for key in CARRIED_METADATA_KEYS {
                 if let Some(value) = checkpoint.metadata.get(key) {
                     new_checkpoint.metadata.insert(key.to_string(), value.clone());
                 }
