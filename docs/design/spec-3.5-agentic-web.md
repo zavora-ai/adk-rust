@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Implemented on `main` @ `6f264b32` except the items under [Remaining work](#remaining-work); [Implementation status](#implementation-status) records each item and [Deviations from this spec](#deviations-from-this-spec) every place the build differs from the text below |
+| **Status** | Implemented on `main` @ `7a498b3b9` except the items under [Remaining work](#remaining-work); [Implementation status](#implementation-status) records each item and [Deviations from this spec](#deviations-from-this-spec) every place the build differs from the text below |
 | **Companion** | [`awp-2.0-overview.md`](awp-2.0-overview.md): the product story for owners and developers |
 | **Builds on** | [`spec-3.1-harness-agent.md`](spec-3.1-harness-agent.md) (modes, standing rules, the governed path, governed fetch, packs, long-term facts, teams), [`spec-3.2-agent-kernel.md`](spec-3.2-agent-kernel.md) (agenda, wakes, partitions and crossings, drivers and effect classes, quiet hours, `adk-rust up`), [`spec-3.3-harness-ui.md`](spec-3.3-harness-ui.md) (the decision contract, park on timeout, diff before write, pairing, chat channels, the web home), [`spec-3.4-self-improving-harness.md`](spec-3.4-self-improving-harness.md) (the learning loop the site's playbooks reuse) |
 | **Layers** | **Protocol:** AWP 2.0, implemented by `awp-types` and `adk-awp`. **Runtime:** the ADK-Rust harness. **Product:** `adk-website`, a multi-agent proactive website shipped as a workspace crate |
@@ -17,10 +17,11 @@
 
 ## Implementation status
 
-On `origin/main` @ `6f264b32` (2026-10-26). A row names the pull requests that delivered it.
+On `origin/main` @ `7a498b3b9` (2026-10-26), after the wave-gate fixes (W1–W5: #1165, #1168,
+#1169, #1171, #1172, #1173). A row names the pull requests that delivered it.
 [Deviations from this spec](#deviations-from-this-spec) lists every place `main` differs from
-the text below, and [Remaining work](#remaining-work) lists what is not done, the runtime gaps
-the scenarios report among them; every item there is open on `main`.
+the text below, and [Remaining work](#remaining-work) lists what is not done; every item there
+is open on `main`. No scenario reports a runtime gap.
 Everything ships in the unreleased 3.0.0 (owner, 2026-10-21); the 3.5.0 target above is a
 design label.
 
@@ -42,66 +43,68 @@ design label.
 | 1 | External generators ([§7.8](#78-site-pipeline-adk-site) "Generator") | Done | #1143: `gen-zola`, `gen-hugo`, `gen-astro`, `gen-build-awesome` |
 | 1 | Charter store ([§7.11](#711-charter-store-kpi-tracker-and-earned-autonomy)) | Done | #1107: in-memory, SQLite, PostgreSQL, Redis |
 | 1 | `Preset::Website`, site toolsets, onboarding machinery ([§7.1](#71-layout-and-features), [§7.18](#718-onboarding-and-self-building), X10) | Done | #1127 (`adk-harness` `website`) |
-| 1 | `adk-website`: kinds, team, onboarding, themes, packs, playbooks, jobs, incidents, alarms, review ([§7.16](#716-adk-website)–[§7.21](#721-reviews-reports-and-escalation)) | Done | #1141 |
-| 1 | The agent edge of the site, the contract, deployment shapes, agency ([§7.9](#79-agent-edge-mcp-server-and-stores), [§7.22](#722-deployment-shapes)) | Done | #1145 |
-| 1 | The running site ([§7.17](#717-spinning-it-up), D-11) | Done | #1150: `deploy::serve` over durable kernel and edge stores, the update engine, experiments, measurement, channels, the Concierge |
-| 1 | Web editor, onboarding views, charter cards, site view, weekly review ([§8.2](#82-server-kernel-surfaces-and-templates)) | Done | #1156 (`adk-surface` `website`), mounted by `adk-rust website new` (#1159) |
+| 1 | `adk-website`: kinds, team, onboarding, themes, packs, playbooks, jobs, incidents, alarms, review ([§7.16](#716-adk-website)–[§7.21](#721-reviews-reports-and-escalation)) | Done | #1141; the back office compiles as one `TeamSpec` led by the Steward and runs governed (#1165, #1173) |
+| 1 | The agent edge of the site, the contract, deployment shapes, agency ([§7.9](#79-agent-edge-mcp-server-and-stores), [§7.22](#722-deployment-shapes)) | Done | #1145; an agency's sites under `adk-rust website` read the agency's kernel database (#1173) |
+| 1 | The running site ([§7.17](#717-spinning-it-up), D-11) | Done | #1150: `deploy::serve` over durable kernel and edge stores, the update engine, experiments, measurement, channels, the Concierge; the edge's durable event log and beacon (#1171); the AP2 desk and amount thresholds (#1172); with a model, the back office hosted on the kernel under the owner's standing rules, woken by the edge's signals and held to the charter's quiet hours, the durable contact book, the upkeep watch (#1173) |
+| 1 | Web editor, onboarding views, charter cards, site view, weekly review ([§8.2](#82-server-kernel-surfaces-and-templates)) | Done | #1156 (`adk-surface` `website`), mounted by `adk-rust website new` (#1159); the desk keeps its state across restarts and the home composes the weekly review (#1173) |
 | 1 | `adk-rust site …`, `adk-rust awp …` ([§8.1](#81-adk-cli)) | Done | #1144 (`adk-cli` `website`) |
 | 1 | `adk-rust website …` ([§8.1](#81-adk-cli)) | Done | #1159: `website new [dir] [--agency]` scaffolds, serves the kernel, the edge and the owner's views on a loopback home, and prints the setup code; `status`, `review`, `charter`, `jobs promote\|demote`. The `adk-website` binary keeps `new`, `kinds`, `plan`, `start`, `agency` and `deploy` (#1141, #1145) |
-| 1 | `cargo-adk` `website` template, umbrella `website` ([§8.2](#82-server-kernel-surfaces-and-templates)) | Done | #1147 |
+| 1 | `cargo-adk` `website` template, umbrella `website` ([§8.2](#82-server-kernel-surfaces-and-templates)) | Done | #1147; the edge signs with the delegated key files (#1173) |
 | 1 | Documentation ([§8.2](#82-server-kernel-surfaces-and-templates)), X14 | Done | #1160: "AWP 2.0", "Spin up an AWP website", "Move a WordPress site to AWP", "The charter", "Writing capability packs", the AWP 1.x migration guide, the publish tiers; the `STABILITY.md` rows came with #1108, #1118 and #1141 |
 | 2 | Web Bot Auth ([§7.3](#73-identity-and-trust-tiers)) | Done | Signer, verifier, key directory (#1081, `adk-auth` `web-bot-auth`); tiers on the edge (#1132); signed crawls and `awp verify` requests, and `web_fetch` by opt-in (#1127) |
 | 2 | MCP server ([§7.9](#79-agent-edge-mcp-server-and-stores)) | Done | #1082 (`adk-tool` `mcp-server`) |
-| 2 | Agent edge: tiers, bindings, held and exactly-once calls, the public partition ([§7.3](#73-identity-and-trust-tiers), [§7.4](#74-capabilities-bindings-and-machine-views), [§7.9](#79-agent-edge-mcp-server-and-stores), [§7.10](#710-partitions-and-signals)) | Done | #1132 (`adk-server` `awp`) |
-| 2 | Events, status, consent, the beacon, durable edge stores ([§7.5](#75-events-status-consent-and-commerce), [§7.9](#79-agent-edge-mcp-server-and-stores), [§7.12](#712-measurement-and-experiments)) | Done | #1139: `awp-sqlite`, `awp-postgres`, `awp-redis` |
+| 2 | Agent edge: tiers, bindings, held and exactly-once calls, the public partition ([§7.3](#73-identity-and-trust-tiers), [§7.4](#74-capabilities-bindings-and-machine-views), [§7.9](#79-agent-edge-mcp-server-and-stores), [§7.10](#710-partitions-and-signals)) | Done | #1132; the edge files its own signal for a refused or flagged conversation (#1169) |
+| 2 | Events, status, consent, the beacon, durable edge stores ([§7.5](#75-events-status-consent-and-commerce), [§7.9](#79-agent-edge-mcp-server-and-stores), [§7.12](#712-measurement-and-experiments)) | Done | #1139: `awp-sqlite`, `awp-postgres`, `awp-redis`; `LeadStore::delete` and erasure, audit records for discovery fetches (#1169); the event log, catalogue pages, consent references, pending deliveries and beacon counts in those stores, and a public read API for the events (#1171) |
 | 2 | Partitions and signals ([§7.10](#710-partitions-and-signals), X10) | Done | `SignalSink`, `AgendaOrigin::Signal`, `Wake::Signal` (#1107); `SitePartitions` and the public policy (#1127); the edge's public partition (#1132) |
 | 2 | X11 | Done | #1144: `adk-rust up` mounts a `WebhookIngress`, configured by `[[kernel.webhooks]]` |
 | 2 | Volatile lane and price rules ([§7.8.2](#782-publishing), [§7.8.3](#783-constantly-updated-sites)) | Done | Lanes and `PriceRule` (#1133); the edge's live store (#1150) |
-| 2 | Concierge and Agent desk, leads and handoff | Partial | The Concierge on the edge (#1150); forms keep leads and file `lead_captured` signals (#1145). No lead score, handoff threshold or nurture tools (S8) |
+| 2 | Concierge and Agent desk, leads and handoff | Done | The Concierge on the edge (#1150); forms keep leads and file `lead_captured` signals (#1145); lead scores and the handoff threshold, the `nurture` consent scope, nurture with consent from the edge's receipts outside quiet hours, one handoff card per lead, the durable contact book (#1173) |
 | 3 | Batching, delta releases, feed bounds, host limits, tiered checks, per-item revert ([§7.8.3](#783-constantly-updated-sites)) | Done | #1133 |
 | 3 | Streams, the S19 soak ([§7.8.3](#783-constantly-updated-sites), [§11](#11-testing-and-live-verification)) | Partial | Streams and the scaled S19 run in the PR tier (#1140); no nightly soak has completed 24 simulated hours |
-| 3 | KPI tracker and autonomy ladder ([§7.11](#711-charter-store-kpi-tracker-and-earned-autonomy)) | Done | Records, tracker and ladder (#1107); compiled to harness policy (#1127) |
-| 3 | Measurement and experiments ([§7.12](#712-measurement-and-experiments)) | Done | `ExperimentAnalyzer` (#1112, `adk-eval` `experiments`); the site's experiments and measurement sources (#1146) |
+| 3 | KPI tracker and autonomy ladder ([§7.11](#711-charter-store-kpi-tracker-and-earned-autonomy)) | Done | Records, tracker and ladder (#1107); compiled to harness policy (#1127); promotions survive a restart and grant their standing rules (#1165), which the served back office reads (#1173) |
+| 3 | Measurement and experiments ([§7.12](#712-measurement-and-experiments)) | Done | `ExperimentAnalyzer` (#1112, `adk-eval` `experiments`); the site's experiments and measurement sources (#1146); the Growth agent's experiment tools (#1165); verified agent discovery counted (#1169) |
 | 3 | Drivers ([§7.13](#713-drivers)) | Done | #1118: `adk-drivers` with DNS, registrar, email, analytics, search console, social and advertising contracts and manifests |
 | 3 | X12 | Not done | Spec 3.3's Telegram adapter is on `ChannelSink` (#1054); `adk-gateway`'s WhatsApp, Slack, Discord and Matrix adapters are not ported |
-| 3 | Growth, Inbox, the full weekly review, agency mode ([§7.19](#719-the-team)–[§7.21](#721-reviews-reports-and-escalation)) | Partial | #1141, #1145, #1146, #1150; S10 and S14 report gaps |
+| 3 | Growth, Inbox, the full weekly review, agency mode ([§7.19](#719-the-team)–[§7.21](#721-reviews-reports-and-escalation)) | Partial | #1141, #1145, #1146, #1150, #1165, #1173: S10, S14 and S15 pass; upgrade and renewal proposals, the publish delay and the weekly summary in plain words (#1173). The served site runs no Inbox agent: no email or social adapter is on `ChannelSink` (X12) |
 | 3 | Learning ([§7.15](#715-learning)) | Partial | One playbook per job, installed in each agent's `.skills/` (#1141); revision proposals are the `playbook-learning` job's playbook at Propose, with no code that turns outcomes into proposals |
-| 4 | Wallet and rails ([§7.14](#714-wallet-and-money)) | Done | #1111 (`adk-payments` `wallet`), durable stores (#1122) |
-| 4 | Commerce and receipts ([§7.5](#75-events-status-consent-and-commerce)) | Partial | Quotes keep their price (#1145); `PaymentLinks` gives the owner's payment instructions and takes no payment, and `calendar.json` slots are booked in memory (#1150); no AP2 `PaymentDesk` and no calendar driver (S9) |
+| 4 | Wallet and rails ([§7.14](#714-wallet-and-money)) | Done | #1111 (`adk-payments` `wallet`), durable stores (#1122); decisions by compare-and-set and one-step settlement (#1172); the Finance agent's wallet tools through `TeamKit::wallet` (#1172, served by #1173) |
+| 4 | Commerce and receipts ([§7.5](#75-events-status-consent-and-commerce)) | Partial | Quotes keep their price (#1145); `edge::ap2::Ap2Desk` takes AP2 mandates with signed receipts, and the owner's amount thresholds hold large orders, bookings and payments (#1172); `PaymentLinks` stays for owners without a processor. No calendar driver: `calendar.json` slots, quotes and orders are kept in memory |
 | 4 | Social and advertising drivers ([§7.13](#713-drivers)) | Done | #1118 |
 | — | Observability ([§7.24](#724-observability)) | Partial | Spans and metrics in `adk-website`'s `observability` (#1141); the `awp.request` and `awp.capability.call` spans from the edge (#1132). `adk-site` logs `site.release.*` events and opens no `site.release` span; `kernel.signal` is an audit record, not a span |
-| — | Scenarios and fixtures ([§5](#5-headline-capabilities-and-demonstration-scenarios), [§11](#11-testing-and-live-verification)) | Done | #1158: S1–S19 in `examples/website`, the recorded WordPress site, the presence fixture, the `website-scenarios` PR job and the nightly `website-wordpress` and `website-soak` jobs |
+| — | Scenarios and fixtures ([§5](#5-headline-capabilities-and-demonstration-scenarios), [§11](#11-testing-and-live-verification)) | Done | #1158: S1–S19 in `examples/website`, the recorded WordPress site, the presence fixture, the `website-scenarios` PR job and the nightly `website-wordpress` and `website-soak` jobs; every scenario passes scripted with no known gap, and the live set passes on `claude-sonnet-5-5` (#1165–#1173 and the final pass) |
 
 ### Scenarios
 
-Scripted runs on `main` @ `b25cfd23` (2026-10-26); live runs on `claude-sonnet-5-5` from #1158.
-`GAP` means only checks a runtime gap on `main` explains fail; the gaps are under
-[Remaining work](#remaining-work).
+Scripted runs on `main` @ `7a498b3b9` with the final pass's fixes (2026-10-26); live runs on
+`claude-sonnet-5-5` in the same pass. No scenario has a `known` gap left: every check passes.
 
 | # | Scripted | Live | Pull requests |
 |---|---|---|---|
 | S1 | PASS 20/20 | PASS 19/19 | #1141, #1145, #1150, #1158 |
-| S2 | PASS 9/9 | PASS 9/9 | #1125, #1141, #1158 |
-| S3 | PASS 14/14 | No agent turn | #1125, #1158 |
-| S4 | PASS 10/10 | No agent turn | #1125, #1158 |
+| S2 | PASS 11/11 | PASS 11/11 | #1125, #1141, #1158, #1168 |
+| S3 | PASS 15/15 | No agent turn | #1125, #1158, #1168 |
+| S4 | PASS 10/10 | No agent turn | #1125, #1158, #1173: the signature check covers the freeze's own crawl, since #1168's cloaking scan reads pages unsigned on purpose |
 | S5 | PASS 13/13 | PASS 13/13 | #1141, #1145, #1158 |
 | S6 | PASS 8/8 | No agent turn | #1081, #1132, #1158 |
-| S7 | PASS 8/8 | FAIL 5/6: the Concierge refuses but files no signal | #1132, #1150, #1158 |
-| S8 | GAP 3/6 | FAIL 2/6 | #1118, #1139, #1158 |
-| S9 | GAP 5/6 | No agent turn | #1132, #1139, #1145, #1158 |
-| S10 | GAP 6/8 | FAIL 4/8 | #1141, #1158 |
+| S7 | PASS 8/8 | PASS 7/7 | #1132, #1150, #1158, #1165, #1169 |
+| S8 | PASS 7/7 | PASS 7/7 | #1118, #1139, #1158, #1173 |
+| S9 | PASS 6/6 | No agent turn | #1132, #1139, #1145, #1158, #1172 |
+| S10 | PASS 9/9 | PASS 9/9 | #1141, #1158, #1165, #1173 |
 | S11 | PASS 5/5 | No agent turn | #1112, #1146 |
-| S12 | PASS 10/10 | PASS 10/10 in one run, 8/10 in another | #1111, #1122, #1158 |
-| S13 | PASS 6/6 | No agent turn | #1121, #1144, #1158 |
-| S14 | GAP 5/8 | GAP 5/8 | #1107, #1127, #1158 |
+| S12 | PASS 11/11 | PASS 11/11 | #1111, #1122, #1158, #1172 |
+| S13 | PASS 7/7 | No agent turn | #1121, #1144, #1158, #1168 |
+| S14 | PASS 8/8 | PASS 8/8 | #1107, #1127, #1158, #1165 |
 | S15 | PASS 8/8 | No agent turn | #1145, #1158 |
 | S16 | PASS 8/8 | No agent turn | #1141, #1158 |
 | S17 | PASS 7/7 | No agent turn | #1125, #1141, #1158 |
-| S18 | GAP 8/9 | Varies: one run scheduled the product and it went live at 09:00; the last did not schedule it | #1108, #1127, #1134, #1158 |
+| S18 | PASS 10/10 | PASS 10/10: the model scheduled the draft before the photos arrived, and they joined the scheduled item | #1108, #1127, #1134, #1158, #1168, #1173 |
 | S19 | PASS 11/11, scaled: 600 products over four hours | No agent turn | #1133, #1140, #1158 |
 
-No live run used `gemini-3.7-flash` (`--provider gemini` is supported). The WordPress compose
-fixture runs only in the nightly `website-wordpress` job, which has not run since #1158.
+S10 reports one note, not a failed check: the scenario runs its agents directly, so the
+charter's quiet hours and the jobs' run budgets bind them only by construction (the runs are
+at 10:00 UTC); a served site's kernel defers each proactive run inside the quiet hours and
+bounds it by its run budget. No live run used `gemini-3.7-flash` (`--provider gemini` is
+supported). The WordPress compose fixture runs only in the nightly `website-wordpress` job.
 
 ## Deviations from this spec
 
@@ -174,14 +177,14 @@ leaves open.
 | A-I4 | Every served file belongs to the release | `GitPagesHost` writes `.nojekyll` and an optional `CNAME` beside it | GitHub Pages host configuration | #1134 |
 | [§7.8](#78-site-pipeline-adk-site) | `fetch` reads what the host holds | `NetlifyHost::fetch` reads the live site URL | The deploy API serves no file contents | #1134 |
 | [§11](#11-testing-and-live-verification) | Host conformance in CI with emulators | `#[ignore]`d tests with instructions; provider fakes, a local `git` remote and `rsync` target in the PR tier | No CI job provides MinIO, Azurite or an SSH server | #1134 |
-| [§7.9](#79-agent-edge-mcp-server-and-stores) | Edge stores | Retained events, catalogue pages and the consent-reference index in memory (`EventLog` is a trait); retries in flight are lost on a restart; the default `LeadsData` erases nothing | [§7.9](#79-agent-edge-mcp-server-and-stores)'s store list; `LeadStore` has no deletion | #1139 |
+| [§7.9](#79-agent-edge-mcp-server-and-stores) | Edge stores | Retained events, catalogue pages, consent references, pending deliveries and beacon counts live in the edge's stores, whose `EventLog` and `BeaconStore` traits and conformance suite stay in `adk-server`; a resumed retry is attempted one lease (70 s) after its scheduled time | The traits were already the edge's; the lease keeps a live process's own retry from being taken by another | #1139, #1171 |
 | [§7.12](#712-measurement-and-experiments) | Global Privacy Control | A beacon with `Sec-GPC: 1` counts nothing | The reading that leaves no doubt | #1139 |
 | [§7.5](#75-events-status-consent-and-commerce) | Subject sessions | An HMAC-signed `v1.{subject}.{expiry}.{mac}` token, with a random per-process key unless configured | AWP 2.0 names no format | #1139 |
 | [§11](#11-testing-and-live-verification) | The soak against `DirectoryHost` and an S3 emulator | `DirectoryHost` only; the PR tier runs 600 products over four hours and 120 live-blog entries over an hour | The S3 hosts run their conformance with an emulator; the full run takes hours | #1140 |
 | [§5](#5-headline-capabilities-and-demonstration-scenarios) S19 | Live-blog entries appear within 10 s | Measured from `append` to the entry in the edge's feed | The page's polling is the edge's | #1140 |
-| [§7.19](#719-the-team) | The team is a `TeamSpec` | The `TeamSpec` holds the back office and is validated, not compiled; the public agents run on their own wakes | `HarnessAgent` reports no runtime tools; a delegate edge into the public partition would be a crossing | #1141 |
+| [§7.19](#719-the-team) | The team is a `TeamSpec` | The `TeamSpec` holds the back office, which the served kernel runs as one compiled team at the Steward's target, each agent also running alone for its jobs' processes; the public agents run on their own wakes | A delegate edge into the public partition would be a crossing; the kernel wakes each job's agent directly | #1141, #1165, #1173 |
 | [§7.18](#718-onboarding-and-self-building), [§7.20](#720-jobs) | Jobs start at their [§7.20](#720-jobs) level | Charter v1 starts every job at Observe or Propose and onboarding at "act with approval"; the [§7.20](#720-jobs) levels are the promotions `RunPlan` offers | [§7.18](#718-onboarding-and-self-building)'s rule | #1141 |
-| [§7.18](#718-onboarding-and-self-building) | Release 1 from nothing | Staged by `stage_release_one` through the pipeline's per-change checks; the launch is `site_publish`, held | The back-office tools draft one item per draft | #1141 |
+| [§7.18](#718-onboarding-and-self-building) | Release 1 from nothing | Staged by `stage_release_one` through the pipeline's per-change checks; the launch is `site_publish`, held | A-I21 holds the launch in every mode | #1141 |
 | [§7.21](#721-reviews-reports-and-escalation) | Incident demotion | Drift demotes no job; an incident a job caused demotes its area | Demoting the responder would block A-I11's reversal | #1141 |
 | [§7.8](#78-site-pipeline-adk-site) | External generators emit every file | They render page HTML; the twins and site files come from the built-in build, and page bodies arrive as HTML | One source for machine views; the built-in renderer escapes raw HTML | #1143 |
 | [§8.1](#81-adk-cli) | Root operations with a key file or hardware token, never in an agent | A key file only; standard input must be a terminal and the person confirms | No hardware-token signer exists | #1144 |
@@ -194,53 +197,51 @@ leaves open.
 | A-I22 | — | The agency declares `cross_site_request` as a crossing tool on each back office | Any such request is decided and recorded as a crossing | #1145 |
 | [§7.12](#712-measurement-and-experiments) | Guardrails in experiments | A charter guardrail maps to a relative tolerance against the KPI's baseline; `Absolute(0)` without one | The spec gives no mapping | #1146 |
 | [§7.12](#712-measurement-and-experiments) | Assignment by a stable anonymous bucket | The bucket lives in `sessionStorage`: the unit is an exposed tab session | A longer-lived bucket would be a persistent identifier | #1146 |
-| [§7.12](#712-measurement-and-experiments) | Measurement | Proportions only through the beacon; verified agent discovery is not counted; ledgers counted at write time by metering wrappers | The beacon counts events; the edge records no discovery fetches; ledgers have no window queries | #1146 |
-| [§7.17](#717-spinning-it-up) | The template is the same project as `website new` | The business kind and `paper` theme; a loopback edge, not `deploy::serve`; legal and About pages are drafts | A template is static files | #1147 |
-| [§7.10](#710-partitions-and-signals) | The Concierge through `website_public` | `edge::concierge` builds the preset over the edge's own tools | The edge's policy refuses the kit's `search_site` and `emit_signal` | #1150 |
+| [§7.12](#712-measurement-and-experiments) | Measurement | Proportions only through the beacon; ledgers counted at write time by metering wrappers; verified agent discovery counted from the edge's discovery records | The beacon counts events; ledgers have no window queries | #1146, #1169 |
+| [§7.17](#717-spinning-it-up) | The template is the same project as `website new` | The business kind and `paper` theme; a loopback edge, not `deploy::serve`, signing with the delegated key files; legal and About pages are drafts | A template is static files | #1147, #1173 |
+| [§7.10](#710-partitions-and-signals) | The Concierge through `website_public` | `edge::concierge` builds the preset over the edge's own tools with `website_public_served` | The edge's policy refuses the kit's `search_site` and `emit_signal` | #1150, #1165 |
 | [§7.8.3](#783-constantly-updated-sites) | — | `SiteRuntime::shared_pipeline` lets the update engine publish through the runtime's pipeline | A second pipeline over one log falls out of sequence | #1150 |
-| [§7.14](#714-wallet-and-money), [§7.20](#720-jobs) | Payments and calendars | `PaymentLinks` answers with the owner's payment instructions and charges nothing; `calendar.json` slots are booked in memory | No runtime rail or calendar driver exists | #1150 |
-| [§8.2](#82-server-kernel-surfaces-and-templates) | The views on the web home | Onboarding answers, the charter under review and drafts are in memory; `adk-website start` mounts no views, `adk-rust website new` does (#1159) | `adk-website` cannot depend on `adk-surface` | #1156 |
-| [§8.2](#82-server-kernel-surfaces-and-templates) | The weekly review on the home | The home's desk has no review composer; `adk-rust website review` composes the review from the stores | `ReviewComposer` is not `Clone`, and `RunningSite` holds the only one | #1159 |
-| [§7.11](#711-charter-store-kpi-tracker-and-earned-autonomy) | A promotion creates a standing rule | `website jobs promote` keeps the standing rules in `data/kernel.db` | The served site runs no back-office harness that reads them yet | #1159 |
-| [§11](#11-testing-and-live-verification) | Live runs on the Anthropic model and `gemini-3.7-flash` | `claude-sonnet-5-5` only; S9's sandbox desk signs receipts with the edge key; S8, S12 and S18 wire the outbox, the wallet tools and alt-text confirmation themselves | One provider was run; no AP2 mandate reaches the edge; the product does not wire them | #1158 |
+| [§7.14](#714-wallet-and-money), [§7.20](#720-jobs) | Payments and calendars | `edge::ap2::Ap2Desk` takes AP2 human-present mandates; no built-in desk reads a rail `credential`; `PaymentLinks` answers with the owner's payment instructions where no processor is configured; `calendar.json` slots are booked in memory | The buyer's wallet always has its credentials provider authorise; a token rail is the operator's desk; no calendar driver exists | #1150, #1172 |
+| [§8.2](#82-server-kernel-surfaces-and-templates) | The views on the web home | The desk keeps the paired device, onboarding answers, the charter under review and the editor's drafts in a `DeskStore` (`data/desk.json`); `adk-website start` mounts no views, `adk-rust website new` does (#1159) | `adk-website` cannot depend on `adk-surface` | #1156, #1173 |
+| [§7.11](#711-charter-store-kpi-tracker-and-earned-autonomy) | A promotion creates a standing rule | The rules live in `data/kernel.db`, which the served back office reads; a promotion to "act with approval" grants rules that change no decision by themselves, since that level holds every non-read call | §7.11's table does not name the rules of that level; they are the ones "act within budget" uses | #1159, #1165, #1173 |
+| [§11](#11-testing-and-live-verification) | Live runs on the Anthropic model and `gemini-3.7-flash` | `claude-sonnet-5-5` only; S8 builds the product's outbox over an in-memory email driver and S18 hands the photos to the product's `OwnerChannel` as a chat adapter would | One provider was run; no email driver or WhatsApp adapter is configured in the fixtures | #1158, #1173 |
 | [§5](#5-headline-capabilities-and-demonstration-scenarios) S3, A-I4 | Every inventoried URL is served or 301-redirected | Legacy runtime paths the new site does not serve — `/wp-includes/…`, theme and plugin files, `*.php`, WordPress's `/wp-login.php` and `/xmlrpc.php` — answer 410 Gone; after a crawl, a link to a page the crawl could not read becomes its text | A static site has no runtime to redirect them to; a robots-disallowed page was never migrated | #1168 |
 | [§7.8.2](#782-publishing) | The agent product feed | `products/feed.xml` per language: RSS 2.0 with the `g:` product attributes merchant and agent catalogues read; live fields are left out | The spec names no format | #1168 |
 | [§4.4](#44-the-standards-awp-20-binds) | `Content-Usage` from the charter's public terms | Every kind's charter drafts `usage`: `search=y`, and `train-ai=n, search=y` for news and media; the owner reviews it with the charter | A launched site states its preferences from release 1 | #1168 |
+| [§7.10](#710-partitions-and-signals), A-I2 | Public agents hold only the partition's tools | The operator's own tools attached to a public agent stay offered, so `PublicPolicy` refuses them on the audit record; the harness's own tools are not offered | S7's "refusals audited" | #1165 |
+| [§7.10](#710-partitions-and-signals) | Signals come from public agents through `emit_signal` | The edge also files `abuse_observed` or `inbound_message` itself for a refused or flagged turn the agent left unsignalled; an unverified caller's signal is `inbound_message` with category `other`; the edge screens with its own `InjectionScreen` | S7 needs one signal per input whatever the model does; `abuse_observed` names a verified requester; `adk-server` cannot depend on `adk-harness` | #1169 |
+| [§9.3](#93-audit-records) | `awp.request.{verified, refused}` | `awp.request.verified` is written for discovery fetches only; capability calls keep their `awp.capability.*` records | One record per request would grow the audit log with every call | #1169 |
+| [§7.4](#74-capabilities-bindings-and-machine-views), S9 | `ApprovalHint::AboveAmount` on the declaration | The owner sets thresholds in `adk-website` (`ApprovalThresholds`, `approvals.json`), applied to the kind's declarations when the edge is built; `book` and `book_appointment` read `Slot::price`; a call whose amount the site cannot read is not held by amount | The charter has no member for it | #1172 |
+| [§7.14](#714-wallet-and-money), [§7.19](#719-the-team) | The Finance agent pays from the wallet | `wallet::finance_tools` grants the payment scope when the owner gives `TeamKit` the wallet (`SiteOptions::wallet` in a served site) | Giving the wallet is the owner's grant; the mandates and the governed path decide each payment | #1172, #1173 |
+| [§5](#5-headline-capabilities-and-demonstration-scenarios) S8 | The lead's score crosses the charter threshold | `leads::LeadScorer` scores 0–100 against the product's threshold of 70 | The charter has no member for a threshold | #1173 |
+| [§5](#5-headline-capabilities-and-demonstration-scenarios) S10 | `publish_delay` | A product setting (`SiteOptions::publish_delay`, 24 hours, AWP 1.0's default) that `publish_delay::PublishDelay` enforces on the drafts of `freshness`, `seo` and `aeo` by requiring `schedule.publishAt` | The charter and the pipeline have none | #1173 |
+| [§7.20](#720-jobs) | The hosting job is the Guardian's | Its daily watch runs `upkeep::UpkeepCheck` without a model (`jobs::WATCH_WORKFLOW`): advisories against the edge's lockfile and the certificate's expiry become one decision card each | A proposal needs no model; the upgrade or renewal stays the owner's | #1173 |
+| [§5](#5-headline-capabilities-and-demonstration-scenarios) S18, [§7.8.2](#782-publishing) | Photos on the WhatsApp path | A chat adapter hands a message's photos to `channel::OwnerChannel`, which attaches them to the Steward's draft — or to the item it scheduled — and takes the alt-text confirmation from the thread | The kernel's `ChannelInbound` carries no attachments, and no WhatsApp adapter is on `ChannelSink` (X12) | #1173 |
+| [§7.21](#721-reviews-reports-and-escalation) | Quiet hours | A served site's kernel defers proactive runs inside its charter's quiet hours; an agency's kernel holds none, since its sites' hours may differ | The kernel holds one set of quiet hours | Final pass |
 | A-I11 | Rollback to a signed release | When the host cannot roll back, the pipeline republishes the release's signed files from any copy with the signed digest (the host's current files, the last build, a rebuild of the content history) and fails rather than publish anything else; manifests are trusted only when the site log recorded their digest | A host's stored copy can be corrupted | #1168 |
 
 ## Remaining work
 
 | Item | Spec | State |
 |---|---|---|
-| Promotions across a restart | [§7.11](#711-charter-store-kpi-tracker-and-earned-autonomy), A-I13 | `RunningSite::open` runs `AutonomyLadder::sync`, which lowers every job above the charter's authority, so a job the owner promoted past the charter's level falls back the next time the site starts or `website review` opens it; the standing rules a promotion grants have no back-office harness reading them while the site serves |
-| The team as a compiled `TeamSpec` | [§7.19](#719-the-team) | `HarnessAgent` does not report `AgentCapabilities::runtime_tools`, so the back office is validated, not compiled |
-| Wallet races | [§7.14](#714-wallet-and-money), A-I16 | Two decisions on one held payment both proceed (`WalletStore::update` has no compare-and-set), so the spend ledger records the amount twice; an in-cap payment is sometimes held because a committed reservation counts twice; the cap is never exceeded |
-| State in memory | [§7.9](#79-agent-edge-mcp-server-and-stores), [§7.12](#712-measurement-and-experiments) | Rate-limit windows per process; retained events, catalogue pages and the consent-reference index; retries in flight; the `BeaconStore` |
-| Durable records | [§7.9](#79-agent-edge-mcp-server-and-stores), [§9.3](#93-audit-records) | No durable `AuditRecorder` in `adk-core`; the default `LeadsData` erases nothing; the edge writes no audit record for card or manifest fetches |
+| State in memory | [§7.9](#79-agent-edge-mcp-server-and-stores), [§7.20](#720-jobs) | Rate-limit windows are per process; quotes, orders and calendar bookings; the harness's own drafts (`SiteRuntime`); the alarm router's open, deferred and waiting alarms |
+| Durable records | [§7.9](#79-agent-edge-mcp-server-and-stores), [§9.3](#93-audit-records) | `adk-core` has no durable `AuditRecorder`; a served site's audit trail counts records for measurement and keeps none |
 | Audit records | [§9.3](#93-audit-records) | No code writes `site.content.{approved, published, corrected, withdrawn}`, `site.release.{built, signed}`, `awp.payment.*` or `awp.keys.*`; the publishing pipeline logs `site.content.drafted`, `site.content.scheduled` and `site.release.published` as tracing events |
 | Observability | [§7.24](#724-observability) | No `site.release` span: `adk-site` logs release events only, and `adk-website`'s `SITE_RELEASE` and `KERNEL_SIGNAL` span names are unused |
 | Launch gate | [§7.8.1](#781-the-launch-gate) | No gate extension runs `awp verify` against the preview |
-| The weekly review's summary | [§7.21](#721-reviews-reports-and-escalation) | `WeeklyReview::summary` sends "N promotion offer(s); N question(s)" to the owner's channel |
-| Workspace build | [§7.1](#71-layout-and-features) | `adk-website` turns on `adk-harness/website` and `adk-site/migrate`, so the default workspace build compiles both |
+| The served site | [§7.20](#720-jobs), [§7.22](#722-deployment-shapes) | `deploy::serve` hosts no Guardian probe (`GuardianProbe` needs a domain claim and resolver the served options do not carry) and no Inbox agent (X12); email, advisories, the certificate and the wallet are `SiteOptions`, which neither the `adk-website` binary nor `adk-rust website new` sets yet |
+| The owner's settings | S8, S10, [§7.4](#74-capabilities-bindings-and-machine-views) | The handoff threshold, the publish delay and the amount thresholds are product settings, not charter members, so the charter cards do not show them |
+| Workspace build | [§7.1](#71-layout-and-features) | `adk-website` turns on `adk-harness/website`, `adk-harness/sqlite` and `adk-site/migrate`, so the default workspace build compiles them |
 | Capability packs as signed bundles | [§7.23](#723-for-developers) | A pack is code: declarations and handlers registered on the edge; no signed, installable bundle with skills and driver manifests |
 | Files and git as an entry point | [§7.8.2](#782-publishing) | No signed webhook from an authorised committer proposes a release |
-| Commerce | [§7.5](#75-events-status-consent-and-commerce), S9 | No `PaymentDesk` speaks AP2; `pay_order`'s schema admits no mandate; no pack capability has an amount threshold and the owner cannot set one; `OrderBook::set_status` is private; neither `TeamKit` nor `BackOfficeKit` carries a wallet; no calendar driver |
-| Leads and nurture | S8 | No lead score or handoff threshold; the nurture and handoff jobs bind no tools; `EmailOutbox` reaches no agent and ignores quiet hours; consent receipts do not feed its `ConsentCheck`; the form asks only `contact` consent |
-| A week on duty | S10 | No `publish_delay`; no RustSec or certificate-renewal proposals; at Propose the Growth agent runs in plan mode, which a live model asks to leave; outside the kernel's process runner no record of proactive runs is held against budget and quiet hours |
-| Earned autonomy | S14 | The `social` job binds no tools, so the Growth agent cannot draft review replies and a promotion grants no standing rule |
-| Publishing at speed | S18 | Alt text on the WhatsApp path is confirmable only in the web editor; WhatsApp photos have no path into a draft |
-| The public partition | S7, A-I2 | The edge files no signal of its own for a conversation; the Concierge is offered the harness's `write_file` and `edit_file`, which the public policy refuses; `website_public` always adds the kit's `search_site` and `emit_signal`; `edge_read_only` is not in the harness catalogue, so standing rules cannot pre-authorise it (A-I11) |
-| Harness gaps | [§7.8.2](#782-publishing), A-I23 | One vote by someone without the role makes every later chain check in `SiteApprovals` refuse; back-office tools draft one item per draft |
-| Experiments | [§7.12](#712-measurement-and-experiments) | The Growth agent has no `experiment_start` or `experiment_report` tool |
-| Kernel | [§7.11](#711-charter-store-kpi-tracker-and-earned-autonomy), [§7.20](#720-jobs) | A standing cron trigger needs its own `CronWakeSource`; no control-plane address getter; no public read API for the edge's events |
+| Commerce | [§7.5](#75-events-status-consent-and-commerce) | No calendar driver; no built-in desk reads a rail `credential` |
+| Learning | [§7.15](#715-learning) | Revision proposals are the `playbook-learning` job's playbook at Propose; no code turns outcomes into proposals |
 | Channel adapters | [§10](#10-changes-outside-the-feature) X12 | WhatsApp, Slack, Discord and Matrix are not on `ChannelSink` |
 | Generators | [§7.8](#78-site-pipeline-adk-site) | No sandbox on Windows, so external generators refuse to run there; the real generator runs (`#[ignore]`d) have run under Seatbelt, not bubblewrap; recorded outputs are re-recorded when the fixture site, renderer or a starter template changes |
-| Hosts | [§11](#11-testing-and-live-verification) | No service-backed CI job for MinIO, Azurite or sshd |
+| Hosts | [§7.8](#78-site-pipeline-adk-site), [§11](#11-testing-and-live-verification) | `RsyncHost` shares files across releases with `--link-dest`; `adk-rust site build` runs no parity check; no service-backed CI job for MinIO, Azurite or sshd |
 | S19 full day | [§11](#11-testing-and-live-verification) | Neither nightly soak (`site-soak`, `website-soak`) has completed 50,000 products over 24 simulated hours |
-| Live runs | [§11](#11-testing-and-live-verification) | S7, S8 and S10 fail live; S12 and S18 vary; no live run on `gemini-3.7-flash`; the WordPress compose fixture has not run |
+| Live runs | [§11](#11-testing-and-live-verification) | No live run on `gemini-3.7-flash`; the WordPress compose fixture runs only in the nightly job |
 | Protocol home | [§13](#13-open-questions) Q1 | The AWP 2.0 text, the well-known URI and `application/awp+json` await a published home and IANA registration |
-| Outside spec 3.5 | — | `clippy -p adk-harness --no-default-features --features kernel` fails on an unused import; some `adk-harness` test targets need `runner`; `clippy -p adk-payments --features ap2` fails in the ap2 tests; the `mcp_elicitation`, `mcp_resources` and `mcp_sampling` example lockfiles fail `cargo metadata --locked`; nextest reports one `adk-awp` test as leaky |
-| CI on `main` | — | On #1159's pull-request run, `docs` fails on two rustdoc links in `adk-website` (`deploy/site.rs`, `deploy/mod.rs`) and `web` on spec 3.3's `home.test.tsx` quiet-time fixture, both fixed by open #1157; `test` fails on `adk-cli`'s `harness_cli::manifest::tests::the_adk_rust_block_fits_its_cap_and_keeps_its_commands` on every try, and `adk-awp`'s `vectors_are_deterministic_and_committed` failed once before passing; `kernel-scenarios` failed on K8; `adk-cli/tests/website_cli.rs` had not completed its first CI run when #1159 merged |
 
 ## 1. Summary
 
