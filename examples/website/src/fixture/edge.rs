@@ -62,6 +62,8 @@ pub struct EdgeOptions {
     pub public_agent: Option<PublicAgentFactory>,
     /// The owner's amount thresholds: orders, bookings and payments above them wait.
     pub thresholds: adk_website::packs::ApprovalThresholds,
+    /// The site's contact book, such as `leads::SqliteLeadRecords`; in memory otherwise.
+    pub contacts: Option<Arc<dyn adk_website::edge::handlers::ContactBook>>,
 }
 
 /// A site's edge and what a scenario drives it with.
@@ -180,7 +182,8 @@ pub async fn edge_with(site: &Site, domain: &str, options: EdgeOptions) -> Resul
             .with_router(ApprovalPolicy::new([ApproverSelector::human(OWNER)])),
     );
     let stores = MemoryEdgeStores::default();
-    let contacts = Arc::new(InMemoryContactBook::default());
+    let contacts: Arc<dyn adk_website::edge::handlers::ContactBook> =
+        options.contacts.unwrap_or_else(|| Arc::new(InMemoryContactBook::default()));
     let signer: Arc<dyn DocumentSigner> = keys.edge.clone();
     let policy = ConsentPolicy { digest: Digest::from_sha256_bytes([1; 32]), ttl: None };
     let origin = site.site.origin.clone();
@@ -245,6 +248,21 @@ impl EdgeSite {
                 .headers_mut()
                 .insert("awp-consent", format!("\"{receipt}\"").parse().expect("a header"));
         }
+        request
+    }
+
+    /// A capability call carrying several consent receipts, as a form that asks for more than
+    /// one scope sends them.
+    pub fn call_with_receipts(
+        &self,
+        capability: &str,
+        key: &str,
+        receipts: &[&str],
+        body: &Value,
+    ) -> Request<Body> {
+        let mut request = self.call(capability, key, None, body);
+        let list: Vec<String> = receipts.iter().map(|r| format!("\"{r}\"")).collect();
+        request.headers_mut().insert("awp-consent", list.join(", ").parse().expect("a header"));
         request
     }
 

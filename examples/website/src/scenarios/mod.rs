@@ -69,15 +69,9 @@ pub fn all() -> Vec<Scenario> {
         scenario!("S5", "Tamper, detect, reverse", agent: true, s05_tamper),
         scenario!("S6", "Identity, not claims", agent: false, s06_identity),
         scenario!("S7", "Injection reaches nothing privileged", agent: true, s07_injection),
-        scenario!("S8", "Lead to warm handoff", agent: true, s08_lead, known: [
-            "the nurture emails respect quiet hours",
-            "the lead's score crosses the charter threshold",
-            "the owner gets one handoff card with the conversation summary on their chosen channel"
-        ]),
+        scenario!("S8", "Lead to warm handoff", agent: true, s08_lead),
         scenario!("S9", "Agent-to-agent business", agent: false, s09_agent_business),
-        scenario!("S10", "A week on duty", agent: true, s10_week, known: [
-            "upgrade and renewal proposals"
-        ]),
+        scenario!("S10", "A week on duty", agent: true, s10_week),
         scenario!("S11", "An experiment that respects its guardrails", agent: false, s11_experiment),
         scenario!("S12", "Money inside the box", agent: true, s12_money),
         scenario!("S13", "Anyone can check", agent: false, s13_verify),

@@ -70,12 +70,28 @@ pub async fn run(_mode: Mode) -> Result<Checks> {
     );
     let recorder = std::sync::Arc::new(adk_core::audit_log::InMemoryAuditRecorder::new());
     let ctx = proven_context(&upstream).await?.with_audit(recorder.clone());
+    // Discovery's cloaking check read pages as a browser does, unsigned on purpose; the
+    // freeze's own crawl is what must be signed.
+    let crawl_from = upstream.seen().len();
     let report = freeze.run(&ctx, out.path(), None, &site.log, site.host.as_ref()).await?;
+    let crawled: Vec<_> = upstream.seen().into_iter().skip(crawl_from).collect();
     checks.check(
         "the crawl reaches only the vantage point and is signed",
         report.connections.iter().all(|c| c.origin == upstream.origin && c.allowed)
-            && upstream.seen().iter().all(|s| s.signed),
-        format!("{} connections, {} requests", report.connections.len(), upstream.requests()),
+            && !crawled.is_empty()
+            && crawled.iter().all(|s| s.signed),
+        format!(
+            "{} connections, {} crawl requests; elsewhere or refused: {:?}; unsigned: {}",
+            report.connections.len(),
+            crawled.len(),
+            report
+                .connections
+                .iter()
+                .filter(|c| c.origin != upstream.origin || !c.allowed)
+                .map(|c| (&c.origin, c.allowed))
+                .collect::<Vec<_>>(),
+            crawled.iter().filter(|s| !s.signed).count()
+        ),
     );
     checks.check(
         "the snapshot is a signed release with no server code (A-I1)",
