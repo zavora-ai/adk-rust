@@ -194,6 +194,9 @@
 # Checkpointers for shared databases: compiles them and runs the in-process conformance
 # suites; the live-server suites run in the nightly `durable-stores` job.
 3 adk-graph postgres,redis,mongodb,neo4j,firestore
+# Governed HTTP nodes and forks with lineage (spec 3.3 §12): the HTTP call arguments and
+# the governed fork tests meet only under both features.
+3 adk-graph action-http,time-travel
 # The harness's shared mode and rule stores and its plan checkpointer URLs over the same
 # backends (spec 3.1 §13 Q2, Q5); the live-server suites run in the postgres job.
 3 adk-harness postgres,redis,mongodb,neo4j,firestore

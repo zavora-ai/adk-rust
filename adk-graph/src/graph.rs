@@ -192,6 +192,7 @@ impl StateGraph {
             max_concurrency: None,
             retry_policies: HashMap::new(),
             node_effects: HashMap::new(),
+            governed_nodes: HashMap::new(),
             strict_channels: false,
             retention: None,
             #[cfg(feature = "node-cache")]
@@ -407,6 +408,8 @@ pub struct CompiledGraph {
     pub(crate) retry_policies: HashMap<String, crate::retry::RetryPolicy>,
     /// Side effects nodes declared, keyed by node name.
     pub(crate) node_effects: HashMap<String, adk_core::ToolEffect>,
+    /// Nodes whose calls go through the governed path, keyed by node name.
+    pub(crate) governed_nodes: HashMap<String, crate::governed::GovernedNode>,
     /// Whether a node writing an undeclared channel fails the run.
     pub(crate) strict_channels: bool,
     /// How many checkpoints to keep per thread. `None` keeps every one.
