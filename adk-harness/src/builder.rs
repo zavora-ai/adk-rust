@@ -22,7 +22,6 @@ use crate::instructions::{
     InMemoryWorkspaceTrustStore, InstructionsConfig, ProjectInstructions, WorkspaceTrustStore,
 };
 use crate::mode::{HarnessMode, InMemoryModeStore, ModeStore};
-#[cfg(any(feature = "auth", feature = "payments"))]
 use crate::policy::ToolKind;
 use crate::policy::{
     HARNESS_TOOL_NAMES, HarnessPolicy, PolicyInner, PolicySwitches, PromptContexts, ShellView,
@@ -123,6 +122,7 @@ pub struct HarnessAgentBuilder {
     read_records: Option<Arc<dyn adk_devtools::ReadLedger>>,
     operator_policy: Option<Arc<dyn ToolPolicy>>,
     origin_classes: Vec<Arc<dyn crate::policy::OriginClasses>>,
+    team_delegates: Vec<String>,
     prompter: Option<Arc<dyn ApprovalPrompter>>,
     confirmation_handler: Option<Arc<dyn ToolConfirmationHandler>>,
     approval_store: Option<Arc<dyn ApprovalStore>>,
@@ -256,6 +256,7 @@ impl HarnessAgentBuilder {
             read_records: None,
             operator_policy: None,
             origin_classes: Vec::new(),
+            team_delegates: Vec::new(),
             prompter: None,
             confirmation_handler: None,
             approval_store: None,
@@ -819,6 +820,25 @@ impl HarnessAgentBuilder {
     /// such as the kernel's drivers (spec 3.2 §7.7).
     pub fn tool_classes(mut self, classes: Arc<dyn crate::policy::OriginClasses>) -> Self {
         self.origin_classes.push(classes);
+        self
+    }
+
+    /// The members an `adk-agent` `TeamSpec` lets this harness delegate to as its
+    /// coordinator (spec 3.5 §7.19): their delegation tools, which the team adds to each run,
+    /// are classed `Delegate`, as a member of the harness's own team is, so the mode table
+    /// lets the coordinator hand work over and each member's own harness decides its calls.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let steward = HarnessAgent::builder("steward")
+    ///     .website_back_office(&kit)
+    ///     .team_delegates(["growth", "revenue", "guardian", "finance"])
+    ///     .build()?;
+    /// ```
+    #[must_use]
+    pub fn team_delegates(mut self, members: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.team_delegates.extend(members.into_iter().map(Into::into));
         self
     }
 
@@ -1760,6 +1780,9 @@ impl HarnessAgentBuilder {
         );
         for classes in &self.origin_classes {
             registry = registry.with_origin_classes(classes.clone());
+        }
+        for member in &self.team_delegates {
+            registry.register(member.clone(), ToolKind::Delegate);
         }
         // The payments pack (spec 3.1 §7.16): every payment tool name is class Payment,
         // declared or not, so a lookalike attached as an extra never classes as External.
