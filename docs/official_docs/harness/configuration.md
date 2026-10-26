@@ -76,7 +76,7 @@ See [Shell and sandbox](shell-and-sandbox.md) and [Durability](durability.md).
 | `plan_checkpoint_store(url).await?` | — | `plan_checkpointer` over the store a URL names: `sqlite://`, `postgres://`, `redis://`, `mongodb://`, `neo4j://`, `firestore://` (spec 3.1 §13 Q5) |
 | `goal_store(store)`, `goal_engine(GoalEngine)` | in memory; `Loop`, or `Graph` with a plan checkpointer | Where goals are kept and how they iterate |
 | `memory(MemoryConfig)` | off | Working notes (feature `memory`) |
-| `long_term_memory(config)`, `fact_store(store)`, `fact_index(index)`, `memory_embedder(embedder)` | off; in memory; a local lexical index; none | Long-term facts with provenance (feature `memory`) |
+| `long_term_memory(config)`, `fact_store(store)`, `fact_index(index)`, `memory_embedder(embedder)` | off; in memory; a local lexical index; none | Long-term facts with provenance (feature `memory`); each stored vector carries the embedder's id ([Embedder ids](memory.md#embedder-ids)) |
 | `effort(EffortPolicy)` | plan high, members low, else medium | The reasoning effort per mode and role (spec 3.1 §7.23): each request carries its mode's level (a member's `members`, the distiller's `distiller`, MCP sampling's `sampling`) as `GenerateContentConfig::effort`; `HarnessAgent::effort` reads it |
 | `cache_capable(model)` / `without_context_caching()` | none; on | A Gemini model the runner caches explicitly with `ContextCacheConfig::default()` (spec 3.1 §7.23) |
 
@@ -86,7 +86,7 @@ See [Team](team.md), [Plans and goals](plan-and-goals.md) and [Memory](memory.md
 
 | Method | Default | Effect |
 |---|---|---|
-| `web(WebConfig)` | off | `web_fetch` under the allowlist and caps, and web search (feature `web`) |
+| `web(WebConfig)` | off | `web_fetch` under the allowlist and caps, and web search under `search_domains`, a separate filter (feature `web`; spec 3.1 §7.32) |
 | `search_provider(provider)` | none | The governed `web_search` over `provider` (`SearxngSearch`, `DeepSeekSearch` or your own); replaces the model provider's built-in search |
 | `provider_web_tools(ProviderWebTools)` | `ProviderWebTools::provider_default()` with `web`, else none | The provider-executed built-ins: by default the search of the provider the model's client serves (`Llm::native_web_search`); `ProviderWebTools::off()` declares none |
 

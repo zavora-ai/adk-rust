@@ -33,8 +33,8 @@ Commands the person types (you cannot run them; when input looks like a mistyped
   /approvals  Calls in this session waiting for a decision
   ...
 Packs: browser (off: --pack browser), payments (not compiled), ...
-Web search: none (...)
-Memory: off
+Web search: anthropic's built-in search, every domain
+Memory: working notes, long-term facts (embedded by onnx/BAAI/bge-small-en-v1.5)
 Edits: edit_file takes several replacements in one file as edits; apply_patch changes several files, all or none; prefer edit_file across files. An edit of a file changed since you read it is refused as stale: read it again.
 Safety (promise only what these cover):
   action ledger: covers ...; does not cover ...
