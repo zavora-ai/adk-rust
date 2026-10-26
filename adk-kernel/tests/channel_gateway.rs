@@ -727,3 +727,93 @@ async fn a_turn_another_replica_ran_is_answered_once() {
     let replies = chat.messages("t-ana").iter().filter(|text| *text == "Two meetings.").count();
     assert_eq!(replies, 1);
 }
+
+/// A chat whose sends to `blocked` accounts' threads fail, as Telegram refuses a bot an
+/// account blocked.
+struct Blocking {
+    chat: Arc<InMemoryChannel>,
+    blocked: std::sync::Mutex<Vec<String>>,
+}
+
+impl Blocking {
+    fn refuses(&self, thread: &str) -> adk_kernel::Result<()> {
+        if self.blocked.lock().unwrap().iter().any(|blocked| blocked == thread) {
+            return Err(adk_kernel::KernelError::ControlPlane {
+                reason: "Forbidden: bot was blocked by the user".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl adk_kernel::channels::ChannelSink for Blocking {
+    fn channel(&self) -> &str {
+        CHANNEL
+    }
+    async fn send_message(&self, thread: &str, text: &str) -> adk_kernel::Result<()> {
+        self.refuses(thread)?;
+        self.chat.send_message(thread, text).await
+    }
+    async fn send_decision(
+        &self,
+        thread: &str,
+        card: &adk_kernel::channels::DecisionCard,
+    ) -> adk_kernel::Result<()> {
+        self.refuses(thread)?;
+        self.chat.send_decision(thread, card).await
+    }
+    async fn send_stopped(
+        &self,
+        thread: &str,
+        notice: &adk_kernel::channels::StopNotice,
+    ) -> adk_kernel::Result<()> {
+        self.refuses(thread)?;
+        self.chat.send_stopped(thread, notice).await
+    }
+    async fn send_notice(&self, thread: &str, notice: &ChannelNotice) -> adk_kernel::Result<()> {
+        self.refuses(thread)?;
+        self.chat.send_notice(thread, notice).await
+    }
+}
+
+/// Wave 2 gate, core item c (spec 3.3 §10 K1, §11 S-I6): a stranger the gateway cannot
+/// reply to — one who blocked the bot — keeps one request and one record however often it
+/// writes, holds its place among those waiting, and once it can be reached its next message
+/// is sent a code that pairs it.
+#[tokio::test]
+async fn a_stranger_who_cannot_be_answered_keeps_one_request() {
+    let host = Host::new(None);
+    let bindings: Arc<dyn ChannelBindingStore> = Arc::new(InMemoryChannelBindingStore::new());
+    let chat = Arc::new(InMemoryChannel::new(CHANNEL));
+    let sink = Arc::new(Blocking { chat: chat.clone(), blocked: vec!["t-s".to_string()].into() });
+    let gateway = ChannelGateway::builder(host.clone(), bindings.clone())
+        .sink(sink.clone())
+        .max_waiting(1)
+        .build();
+    let records = host.contract.channel_origins().len();
+    for _ in 0..3 {
+        let hello = chat.text("stranger", "t-s", "hi");
+        assert!(gateway.receive(hello).await.is_err(), "the code could not be sent");
+    }
+    let waiting = bindings.list_requests().await.unwrap();
+    assert_eq!(waiting.len(), 1, "one request for the account: {waiting:?}");
+    assert_eq!(host.contract.channel_origins().len(), records + 1, "one record of it");
+    let other = chat.text("other", "t-o", "hello");
+    assert_eq!(
+        gateway.receive(other).await.unwrap(),
+        InboundOutcome::PairingBusy,
+        "it holds its place"
+    );
+
+    // Unblocked, its next message is sent a new code, which pairs it.
+    let records = host.contract.channel_origins().len();
+    sink.blocked.lock().unwrap().clear();
+    let again = chat.text("stranger", "t-s", "hi again");
+    assert_eq!(gateway.receive(again).await.unwrap(), InboundOutcome::PairingRequested);
+    assert_eq!(host.contract.channel_origins().len(), records, "no second request on record");
+    let code = chat.pairing_code("t-s").expect("a code");
+    accept_pairing(bindings.as_ref(), &code, PERSON, &[GROUP.to_string()], Utc::now())
+        .await
+        .expect("the code it was sent pairs it");
+}

@@ -1,7 +1,7 @@
 // Agents a person adds on the web home (spec 3.3 §5.7): the roster's New agent slot, the New
 // agent screen with both tabs and the live preview, an agent's settings with "Was … Now …",
-// Copy one of your rules, Pause and the remove confirmation, and the definition on a card, in
-// the home and on the phone.
+// Copy one of your rules, Pause and the remove confirmation, the definition on a card, in the
+// home and on the phone, and every agent in Memory & rules.
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -10,7 +10,9 @@ import { AgentSettings } from "../src/agents/AgentSettings";
 import { agentsPlaceOf, newAgentPath } from "../src/agents/route";
 import { NewAgent } from "../src/agents/NewAgent";
 import { RosterFoot } from "../src/agents/RosterFoot";
-import { FixtureAgents, suggestionCard } from "../src/fixture/agents";
+import { App } from "../src/App";
+import { FixtureClient, fixtureSeams } from "../src/fixture/fixture";
+import { FixtureAgents, suggestionCard, withAgents } from "../src/fixture/agents";
 import { FixturePhoneClient } from "../src/fixture/phone";
 import { Decide } from "../src/phone/Decide";
 import type { AgentRow } from "../src/generated/api";
@@ -285,6 +287,27 @@ describe("the phone", () => {
     expect(screen.getByRole("button", { name: "Add this agent" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Don't add" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Change it first" })).toBeNull();
+  });
+});
+
+describe("Memory & rules", () => {
+  it("lists every agent with its area, how much it asks first, and Settings", async () => {
+    window.history.replaceState(null, "", "/ui/memory");
+    render(<App client={withAgents(new FixtureClient())} seams={fixtureSeams()} initialSection="memory" />);
+    const list = await screen.findByRole("list", { name: "Your agents" });
+    const finance = within(list)
+      .getAllByRole("listitem")
+      .find((item) => within(item).queryByText("Finance") && within(item).queryByText(/Home · Asks first/));
+    expect(finance).toBeTruthy();
+    expect(within(list).getByRole("button", { name: "Settings: Chief of staff" })).toBeTruthy();
+    await userEvent.click(within(finance!).getByRole("button", { name: "Settings: Finance" }));
+    expect(window.location.pathname).toBe("/ui/agents/finance");
+  });
+
+  it("lists no agents where the home keeps none", async () => {
+    render(<App client={new FixtureClient()} seams={fixtureSeams()} initialSection="memory" />);
+    await screen.findByRole("heading", { name: "What your agents can do" });
+    expect(screen.queryByRole("list", { name: "Your agents" })).toBeNull();
   });
 });
 

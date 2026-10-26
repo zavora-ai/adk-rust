@@ -383,7 +383,10 @@ that has a decision. The decision does not depend on the model issuing the call 
   answer it, or resume held calls with an empty message before sending a new one.
 
 `CodeActAgent` resumes a held call from its checkpoint (`Disposition::AwaitingConfirmation`),
-which already re-dispatches the call through the governed path. Realtime agents answer a held
+which already re-dispatches the call through the governed path. The event that records the
+call's result answers the held call with a function response under its ID, as `LlmAgent`'s
+resumed response does, so the session no longer holds it and compaction may pass it; the
+model is never sent that response. Realtime agents answer a held
 call with the reason inside the live session and have no later run to resume it in.
 
 ### Calls Held Inside an Agent Tool
@@ -1129,6 +1132,30 @@ The graph retains node lifecycle, intermediate state, nested subgraphs, and
 the pending frontier. Nodes that completed alongside the confirmation request
 are checkpointed and are not replayed after approval. The agent itself uses the
 same `RunConfig` decision semantics as a normal ADK run.
+
+## Governed Graph Nodes
+
+A graph node opted in with `CompiledGraph::with_governed_node` (or
+`GraphAgentBuilder::governed_node`) goes through the governed path as a tool call does,
+and runs at most once per call in its thread's lineage. See
+[Graph Agents](../agents/graph-agents.md#governed-nodes) for the API.
+
+| Order | Check | Outcome |
+|-------|-------|---------|
+| 0 | Gate: `ToolGate::for_context` on the parent invocation, or the `RunConfig` of `invoke_with_run_config` | No gate: not run (`graph.not_run`). A governed node never falls back to running ungoverned |
+| 1 | Kill switch | Frozen: refused before the ledger is read (`graph.frozen`) |
+| 2 | Action ledger lookup, under `graph/{acting agent id}/{lineage root}/{node}/{occurrence}/{json_digest(call args)}` | Completed: answered from the effect log; nothing runs and no decision is created. Failed: fails with the recorded error. Refused or denied before: no record, so step 3 asks again. Begun without an outcome: fails closed (`graph.outcome_unknown`) |
+| 3 | `authorize_tool_call` with a `GovernedCall` named after the node, `requiring_confirmation` from the node's `requires_approval`, and origin `ToolOrigin::new("graph:{agent}", <the node's shape entry>, None)`; `resuming` the held request when the node resumes its own pause | Pending: the node pauses with a `GraphToolConfirmationPause`, and the call is in the approval store and service. Refuse: not run (`graph.refused`). Execute: begin in the ledger, run, complete, append the writes to the effect log |
+
+| Topic | Rule |
+|-------|------|
+| Order | The ledger lookup comes before the governed path, unlike `LlmAgent`, where the ledger begins after it. A fork whose call already happened is answered from its record, so it never shows a person a decision for a call that will not run (spec 3.3 §11 S-I1) |
+| Binding | The fingerprint binds the acting agent, the node's shape entry, the node name and the call's arguments, so a decision never authorizes another graph agent's node of the same name, or a node whose declaration changed |
+| Edits | An approver's edit runs through `Node::run_call`. A node that cannot run an edited call refuses it (`graph.edit_unsupported`); the unedited call never runs after an edit |
+| Credentials | An HTTP action node shows each credential — authorization and cookie headers, and headers, query parameters and form fields with secret-looking names — as a `sha256:` digest. An approved call is sent with the current credential, and a digest that no longer matches it refuses the call unsent |
+| Outcome unknown | A call that timed out or was cut off after it began stays begun, and every later run in the lineage fails closed with `graph.outcome_unknown` |
+| Kill switch again | A freeze that lands between the decision and the call completes the begun record as not run |
+| Waiting | A run that resumes the node's own pause before a decision exists pauses again without calling `authorize_tool_call`, as `LlmAgent` resumes a held call only once `confirmation_decision_available`; a changed call, or one a record answers, has its waiting decision withdrawn with `withdraw_held_call` |
 
 ## Combining Mechanisms
 

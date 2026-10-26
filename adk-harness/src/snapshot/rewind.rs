@@ -546,6 +546,26 @@ impl Harness {
             if summary.chars().count() == 100 {
                 summary.push('…');
             }
+            // A background shell keeps running through a rewind (spec 3.1 §7.29).
+            if let Some(id) = &call.shell_id {
+                let running = match runtime.toolset().shells() {
+                    Some(shells) => shells
+                        .list(self.app_name(), user.as_ref(), session.as_ref())
+                        .await
+                        .iter()
+                        .any(|shell| {
+                            shell.shell_id == *id && shell.status == crate::ShellStatus::Running
+                        }),
+                    None => false,
+                };
+                if running {
+                    summary.push_str(&format!(
+                        " (background shell {id}, still running; /shells kill {id} stops it)"
+                    ));
+                } else {
+                    summary.push_str(&format!(" (background shell {id})"));
+                }
+            }
             out.push(NotUndone {
                 tool: call.name,
                 summary,

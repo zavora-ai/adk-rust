@@ -100,9 +100,9 @@ async fn take_over_route(
     Path(id): Path<String>,
     Json(request): Json<TakeOverRequest>,
 ) -> Response {
-    let (surface, origin) = match request.surface {
-        SurfaceKind::Web => (TakeOverSurface::Web, Origin::Pointer),
-        SurfaceKind::Phone => (TakeOverSurface::Phone, Origin::Touch),
+    let origin = match request.surface {
+        SurfaceKind::Web => Origin::Pointer,
+        SurfaceKind::Phone => Origin::Touch,
         other => {
             return failed(SurfaceError::Invalid(format!(
                 "a secret is typed on the web home or the phone, not the {other:?} surface"
@@ -112,6 +112,17 @@ async fn take_over_route(
     let caller = match caller(context, request.surface, Some(origin)) {
         Ok(caller) => caller,
         Err(Unauthenticated) => return unauthenticated(),
+    };
+    // A paired device takes over as its kind's surface, whatever the body says, and only a
+    // phone may (spec 3.3 §8.2): the record names where the secret was typed.
+    let surface = match caller.surface {
+        SurfaceKind::Web => TakeOverSurface::Web,
+        SurfaceKind::Phone => TakeOverSurface::Phone,
+        SurfaceKind::Terminal | SurfaceKind::Tray | SurfaceKind::Voice | SurfaceKind::Chat => {
+            return failed(SurfaceError::NotHere(
+                "a secret is typed on the web home or a paired phone: take over in the home".into(),
+            ));
+        }
     };
     // The caller's own decision, and a take over (S-I8).
     let card = match state.engine.decision(&caller, &id).await {

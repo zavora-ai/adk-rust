@@ -11,7 +11,7 @@ import { TrayPanel } from "../tray/TrayPanel";
 import { Website } from "../website/Website";
 import { agentsFixture } from "./agents";
 import { FixtureClient, fixtureSeams, takeOverCard } from "./fixture";
-import { FixturePhoneClient } from "./phone";
+import { phoneFixture } from "./phone";
 import { TrayFixture } from "./tray";
 import { VoiceFixtureClient, fixtureDevices } from "./voice";
 import { WebsiteFixture } from "./website";
@@ -25,19 +25,14 @@ const client = new FixtureClient();
 // `?takeOver` adds Household's take over (spec 3.3 §8.2) to the example.
 if (params.has("takeOver")) client.hold(takeOverCard());
 // The phone's screen (spec 3.3 §5.4): `&phone=decide` its high-risk decision, `&phone=pair`
-// its pairing, else Decisions.
-const phone = params.get("phone");
-const phoneInitial =
-  phone === "decide"
-    ? ({ screen: "decide", id: "apr_release" } as const)
-    : phone === "pair"
-      ? ({ screen: "pair", code: "K7Q4-9MXC" } as const)
-      : ({ screen: "decisions" } as const);
+// its pairing, `&phone=long` a command cut short, `&phone=takeOver` a take over,
+// `&phone=unreachable` a read that fails, else Decisions.
+const phone = phoneFixture(params.get("phone"));
 // `?screen=` shows another surface's screen over its own example: one line per surface.
 const screens: Record<string, () => ReactNode> = {
   agents: () => agentsFixture(params, client),
   tray: () => <TrayPanel client={new TrayFixture()} />,
-  phone: () => <PhoneApp client={new FixturePhoneClient(phone !== "pair")} initial={phoneInitial} />,
+  phone: () => <PhoneApp client={phone.client} initial={phone.initial} />,
   voice: () => <Voice client={new VoiceFixtureClient()} devices={fixtureDevices()} onEnd={() => undefined} />,
   // `&fresh` starts at the setup code.
   website: () => <Website client={new WebsiteFixture({ fresh: params.has("fresh") })} onThreads={() => undefined} />,

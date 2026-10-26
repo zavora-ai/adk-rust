@@ -1085,3 +1085,50 @@ fn the_goal_mirror_never_follows_a_planted_link() {
         serde_json::from_str(&std::fs::read_to_string(&state).unwrap()).unwrap();
     assert_eq!(mirror["goal"], "create done.txt");
 }
+
+/// Wave 2 gate, core item d: the action ledger every persistent command records in —
+/// `adk-rust up` included — is in `harness.db`, so a call with side effects is on record after
+/// the process ends, `kill -9` included (spec 3.1 §7.12; spec 3.3 §12 phase 1).
+#[test]
+fn a_calls_ledger_record_outlives_the_process() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let script = r#"[
+        {"call": {"name": "write_file", "args": {"path": "notes.txt", "content": "hi"}}},
+        {"text": "Written."}
+    ]"#;
+    let dir = dir_arg(ws.path());
+    let args = [
+        "code",
+        "write a note",
+        "--mode",
+        "auto",
+        "--yes",
+        "--dir",
+        &dir,
+        "--model-script",
+        script,
+    ];
+    let output = run(&args, home.path(), ws.path());
+    let shown = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{shown}");
+    assert!(ws.path().join("notes.txt").exists(), "{shown}");
+
+    let url = format!("sqlite://{}", common::config_dir(home.path()).join("harness.db").display());
+    let recorded: Vec<(String, Option<String>)> =
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+            let rows = sqlx::query_as("SELECT tool_name, outcome FROM adk_action_ledger")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+            pool.close().await;
+            rows
+        });
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(recorded[0].0, "write_file");
+    assert!(
+        recorded[0].1.as_deref().is_some_and(|outcome| outcome.contains("succeeded")),
+        "{recorded:?}"
+    );
+}

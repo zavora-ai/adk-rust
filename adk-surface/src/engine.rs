@@ -504,6 +504,14 @@ impl SurfaceEngineBuilder {
         if !self.quiet_set {
             self.projector.quiet = self.source.quiet_hours();
         }
+        // The source's rating counts beside the request's (spec 3.3 §7.2, spec 3.2 K-I9), so a
+        // call a kernel rates high needs presence or a paired local terminal on every surface.
+        let source = Arc::clone(&self.source);
+        let money = Arc::clone(&self.projector.money);
+        self.projector.money =
+            Arc::new(move |request| money(request) || source.moves_money(request));
+        let source = Arc::clone(&self.source);
+        self.projector.rates_high = Arc::new(move |request| source.rates_high(request));
         self.projector.voice_window_secs =
             u32::try_from(self.voice_window.as_millis().div_ceil(1000)).unwrap_or(u32::MAX);
         SurfaceEngine {
@@ -580,6 +588,8 @@ struct Inner {
 struct Spoken {
     /// The task that commits it.
     handle: JoinHandle<()>,
+    /// Which answer this is: the task commits only while its own entry is here.
+    token: Arc<()>,
     /// Who said it: only they cancel it.
     user: String,
     /// The decision.
@@ -1393,9 +1403,29 @@ impl SurfaceEngine {
         let id = request.id.clone();
         let task_id = id.clone();
         let spoken = request.clone();
+        let token = Arc::new(());
+        let mine = Arc::clone(&token);
+        let (go, entered) = oneshot::channel::<()>();
         let handle = tokio::spawn(with_digest(digest.clone(), async move {
+            // Its entry is in place before the window starts, so a cancel always finds it.
+            if entered.await.is_err() {
+                return;
+            }
             tokio::time::sleep(window).await;
-            engine.inner.spoken.lock().unwrap_or_else(|e| e.into_inner()).remove(&task_id);
+            // Cancel and Stop all remove the entry before they abort the task: an answer whose
+            // entry is gone, or was replaced, is withdrawn, whatever the abort's timing.
+            let withdrawn = {
+                let mut spoken = engine.inner.spoken.lock().unwrap_or_else(|e| e.into_inner());
+                let current =
+                    spoken.get(&task_id).is_some_and(|entry| Arc::ptr_eq(&entry.token, &mine));
+                if current {
+                    spoken.remove(&task_id);
+                }
+                !current
+            };
+            if withdrawn {
+                return;
+            }
             // Everything stopped meanwhile, here or on another surface: nothing runs.
             let result = if engine.inner.source.stopped().await.unwrap_or(false) {
                 if let Err(error) = engine
@@ -1427,12 +1457,14 @@ impl SurfaceEngine {
                 let _ = settle.send(result);
             }
         }));
-        let entry = Spoken { handle, user: caller.user_id().to_string(), request: spoken, digest };
+        let entry =
+            Spoken { handle, token, user: caller.user_id().to_string(), request: spoken, digest };
         if let Some(previous) =
             self.inner.spoken.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), entry)
         {
             previous.handle.abort();
         }
+        let _ = go.send(());
         Ok(CommandOutcome::Pending {
             decision_id: id,
             cancel_until,

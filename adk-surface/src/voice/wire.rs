@@ -44,6 +44,9 @@ pub struct VoiceModel {
 pub struct VoiceModels {
     /// The agent the person talks with, by its display name: "Talking with Chief of staff".
     pub agent: String,
+    /// The agent's name, as `GET /surface/agents` lists it: a conversation opens in Threads
+    /// under it when it ends.
+    pub agent_name: String,
     /// The models, the default first.
     pub models: Vec<VoiceModel>,
 }

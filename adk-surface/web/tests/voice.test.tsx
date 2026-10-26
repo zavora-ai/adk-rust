@@ -4,19 +4,22 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import type { DecisionCard } from "../src/generated/api";
 import { App } from "../src/App";
 import { Composer } from "../src/components/Composer";
 import { FixtureClient } from "../src/fixture/fixture";
-import { FakeDevices, VoiceFixtureClient } from "../src/fixture/voice";
+import { invoiceCard } from "../src/fixture/fixture";
+import { FakeDevices, VoiceFixtureClient, voiceCard } from "../src/fixture/voice";
 import { Voice } from "../src/screens/Voice";
 import { VoiceEntryContext, voiceOffered } from "../src/voice/context";
 import { allowingIn, voiceCantApprove, wantsTo } from "../src/voice/labels";
 
-/** The voice view, connected, with the example's two decisions. */
-async function connected() {
+/** The voice view, connected, with the example's two decisions and any `more`. */
+async function connected(more: DecisionCard[] = [], onEnd = vi.fn()) {
   const client = new VoiceFixtureClient();
+  client.cards.push(...more);
   const devices = new FakeDevices();
-  render(<Voice client={client} devices={devices} onEnd={vi.fn()} />);
+  render(<Voice client={client} devices={devices} onEnd={onEnd} />);
   await waitFor(() => expect(devices.sent[0]).toEqual({ text: { type: "hello", ticket: "fixture" } }));
   act(() => devices.say({ type: "ready", sessionId: "voice-1", inputRate: 16_000, outputRate: 24_000 }));
   await waitFor(() => expect(devices.streams.mic).toBeDefined());
@@ -106,6 +109,44 @@ describe("a spoken answer", () => {
     ).toBeTruthy();
   });
 
+  it("shows the exact call in full under the prompt (§7.1)", async () => {
+    const { client, devices } = await connected();
+    act(() => devices.say({ type: "prompted", decisionId: "apr_invoice", version: 1 }));
+    const invoice = client.cards.find((card) => card.id === "apr_invoice")!;
+    const call = await screen.findByLabelText("The exact call");
+    expect(call.textContent).toBe(invoice.call.text);
+    expect(screen.getByText(invoice.reversibilityText)).toBeTruthy();
+  });
+
+  it("decides a call shown cut short on screen: deny by voice, never allow (§7.2)", async () => {
+    const card = voiceCard(invoiceCard());
+    const cut: DecisionCard = {
+      ...card,
+      id: "apr_long",
+      call: { ...card.call, truncated: true },
+      allowed: {
+        ...card.allowed,
+        options: card.allowed.options.map((option) =>
+          option.answer === "allowOnce" ? { ...option, needsExpanded: true } : option,
+        ),
+      },
+    };
+    const { devices } = await connected([cut]);
+    act(() => devices.say({ type: "prompted", decisionId: "apr_long", version: 1 }));
+    const prompt = (await screen.findByText(wantsTo("Finance", card.heading), { exact: false })).closest("p")!;
+    expect(prompt.textContent).toBe(`${wantsTo("Finance", card.heading)} Say "deny", or decide on screen.`);
+    expect(within(prompt).getByRole("link", { name: "decide on screen" }).getAttribute("href")).toBe(
+      "/ui/decisions/apr_long",
+    );
+  });
+
+  it("gives back the conversation's session when it ends", async () => {
+    const onEnd = vi.fn();
+    await connected([], onEnd);
+    await userEvent.click(screen.getByRole("button", { name: "End" }));
+    expect(onEnd).toHaveBeenCalledWith("voice-1");
+  });
+
   it("shows what the person said as text, never as markup", async () => {
     const { devices } = await connected();
     act(() => devices.say({ type: "heard", text: "<img src=x onerror=alert(1)>" }));
@@ -149,7 +190,7 @@ describe("the microphone in the message box", () => {
   it("is hidden by the app in an insecure context", async () => {
     const client = new FixtureClient();
     const withVoice = Object.assign(client, {
-      voiceModels: async () => ({ agent: "Chief of staff", models: [{ id: "gemini", name: "Gemini Live", inputRate: 16_000, outputRate: 24_000 }] }),
+      voiceModels: async () => ({ agent: "Chief of staff", agentName: "finance", models: [{ id: "gemini", name: "Gemini Live", inputRate: 16_000, outputRate: 24_000 }] }),
       voiceTicket: vi.fn(),
       voiceDecisions: async () => [],
       voiceCommand: vi.fn(),

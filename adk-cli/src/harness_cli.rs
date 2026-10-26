@@ -35,6 +35,7 @@ use crate::{BuiltModel, ResolvedModel};
 
 pub(crate) mod agents;
 mod books;
+mod embedder;
 mod manifest;
 mod service;
 #[cfg(feature = "tui")]
@@ -76,6 +77,9 @@ struct Setup {
     plans: Option<(Arc<dyn adk_graph::Checkpointer>, String)>,
     /// `--preset personal`: the first-run answers (spec 3.3 §10 H1, §13 Q7).
     personal: Option<PersonalSetup>,
+    /// The background shells every harness of this process runs, so a harness rebuilt by
+    /// `/sandbox` or `/effort` keeps the session's shells (spec 3.1 §7.29).
+    shells: std::sync::OnceLock<Arc<adk_harness::ShellSupervisor>>,
 }
 
 /// `--preset personal`: the first-run answers and the limits in force (spec 3.3 §10 H1,
@@ -320,7 +324,8 @@ impl Setup {
             );
         }
         let models = Models { harness: model.built() };
-        let embedder = if resolved.memory { memory_embedder(&model) } else { None };
+        let embedder =
+            if resolved.memory { embedder::build(&model, resolved.embedder)? } else { None };
         #[cfg(feature = "persist")]
         let plans =
             plan_checkpointer(&resolved, args.ephemeral, shared.as_deref(), db.as_deref()).await?;
@@ -341,7 +346,33 @@ impl Setup {
             db,
             #[cfg(feature = "persist")]
             store_note,
+            shells: std::sync::OnceLock::new(),
         })
+    }
+
+    /// The process's background shells: no lifetime limit when a person at the console
+    /// answers prompts, 30 minutes per shell otherwise (spec 3.1 §7.29 "Limits"); processes
+    /// recorded in `harness.db`, so the next start reaps what a crash left running.
+    fn shells(&self, attended: bool) -> Arc<adk_harness::ShellSupervisor> {
+        self.shells
+            .get_or_init(|| {
+                let config = self.resolved.shells.apply(if attended {
+                    adk_harness::BackgroundShellConfig::attended()
+                } else {
+                    adk_harness::BackgroundShellConfig::unattended()
+                });
+                let shells = adk_harness::ShellSupervisor::new(
+                    Arc::new(adk_harness::ShellOutputs::default()),
+                    config,
+                );
+                #[cfg(feature = "persist")]
+                let shells = match &self.db {
+                    Some(db) => shells.with_pid_registry(db.shell_pids.clone()),
+                    None => shells,
+                };
+                Arc::new(shells)
+            })
+            .clone()
     }
 
     fn sessions(&self) -> Arc<dyn SessionService> {
@@ -392,7 +423,8 @@ impl Setup {
         extras: AgentExtras,
     ) -> Result<HarnessAgent> {
         let workspace = Workspace::new(&self.resolved.workspace).allow_bash(true);
-        let mut builder = HarnessAgent::builder(name);
+        let attended = prompter.is_some() && approval_service.is_none();
+        let mut builder = HarnessAgent::builder(name).shell_supervisor(self.shells(attended));
         // An added agent runs on its own model when it names one (spec 3.3 decision 21).
         let model = extras
             .added
@@ -438,7 +470,11 @@ impl Setup {
                 .shell_ledger(db.ledger.clone())
                 .approval_store(db.approvals.clone())
                 .goal_store(db.goals.clone())
-                .read_records(db.reads.clone());
+                .read_records(db.reads.clone())
+                // A restart, `kill -9` included, keeps what ran and what was spent (spec 3.1
+                // §7.12, §7.13; spec 3.3 §12 phase 1).
+                .action_ledger(db.actions.clone())
+                .spend_ledger(db.spend.clone());
             // Long-term memory in harness.db; off when served (spec 3.1 §7.15.2), on in
             // `adk-rust up`, the user's own kernel (spec 3.2 §8.1).
             if self.resolved.memory && (approval_service.is_none() || extras.memory_with_inbox) {
@@ -455,7 +491,9 @@ impl Setup {
                 .mode_store(shared.modes.clone())
                 .standing_rules(shared.rules.clone())
                 .approval_store(shared.approvals.clone())
-                .read_records(shared.reads.clone());
+                .read_records(shared.reads.clone())
+                .action_ledger(shared.actions.clone())
+                .spend_ledger(shared.spend.clone());
         }
         // Snapshots before each turn (spec 3.1 §7.27, §13 Q11): records in harness.db and
         // objects beside it, in memory with --ephemeral; a harness served from a shared store
@@ -544,8 +582,10 @@ impl Setup {
             builder = builder.member(member.to_spec()?);
         }
         if self.resolved.web {
+            // The fetch allowlist and the search filter are separate (spec 3.1 §7.32).
             builder = builder.web(adk_harness::WebConfig {
                 allowed_domains: self.resolved.allow_domains.clone(),
+                search_domains: self.resolved.search_domains.clone(),
                 ..adk_harness::WebConfig::default()
             });
             // Web search (spec 3.1 §7.20): the model provider's built-in search unless the
@@ -707,6 +747,11 @@ impl Setup {
         }
         launcher = launcher.with_status_line("Plans", self.plans_note());
         launcher = launcher.with_status_line("Snapshots", self.snapshots_note());
+        // The embedder is named in every session: recall queries carry the user's messages
+        // (spec 3.1 §7.32, I73).
+        if self.memory_on() {
+            launcher = launcher.with_status_line("Embedder", self.embedder_label());
+        }
         if let Some(personal) = &self.personal {
             for (label, line) in personal.status_lines() {
                 launcher = launcher.with_status_line(label, line);
@@ -769,6 +814,16 @@ impl Setup {
         }
     }
 
+    /// The personal preset's two limits, which every start shows (spec 3.3 §13 Q7), for the
+    /// commands that print their own banner rather than the launcher's.
+    fn print_limits(&self) {
+        if let Some(personal) = &self.personal {
+            for (label, line) in personal.status_lines() {
+                println!("{label}: {line}");
+            }
+        }
+    }
+
     /// Says once, on the first run with long-term memory, what is stored and where
     /// (spec 3.1 §7.15.2).
     fn memory_notice(&self) {
@@ -791,7 +846,7 @@ impl Setup {
             return None;
         }
         let recall = match &self.embedder {
-            Some((_, name)) => format!("Facts are embedded with {name} so related ones are found."),
+            Some((_, name)) => format!("Related facts are found with {name}."),
             None => "Facts are found by shared words; nothing leaves this machine for it.".into(),
         };
         let notice = format!(
@@ -810,53 +865,19 @@ impl Setup {
         Some(notice)
     }
 
+    /// What embeds long-term facts, as the banner names it (spec 3.1 §7.32).
+    fn embedder_label(&self) -> String {
+        self.embedder
+            .as_ref()
+            .map_or_else(|| embedder::LEXICAL.to_string(), |(_, name)| name.clone())
+    }
+
     fn memory_on(&self) -> bool {
         #[cfg(feature = "persist")]
         return self.resolved.memory && self.db.is_some();
         #[cfg(not(feature = "persist"))]
         false
     }
-}
-
-/// The embedder long-term memory recalls with (spec 3.1 §7.15.2): the local ONNX model for
-/// a local provider (nothing leaves the machine, H10), else the model's provider when it
-/// embeds (Gemini, OpenAI), else Gemini or OpenAI when its key is set; with none, recall
-/// matches shared words.
-fn memory_embedder(model: &ResolvedModel) -> Option<(Arc<adk_harness::RagEmbedder>, String)> {
-    use crate::cli::Provider;
-    use adk_model::ModelProvider;
-    const GEMINI: &str = "Gemini (gemini-embedding-2)";
-    const OPENAI: &str = "OpenAI (text-embedding-3-small)";
-    const LOCAL: &str = "a local ONNX model (BAAI/bge-small-en-v1.5); nothing leaves this machine";
-    if model.provider().is_some_and(Provider::is_local) {
-        #[cfg(feature = "memory-local")]
-        match adk_harness::RagEmbedder::local() {
-            Ok(embedder) => return Some((Arc::new(embedder), LOCAL.into())),
-            Err(error) => println!(
-                "note: the local embedding model is unavailable ({error}); facts are found by \
-                 shared words"
-            ),
-        }
-        let _ = LOCAL;
-        return None;
-    }
-    let env = |names: &[&str]| {
-        names.iter().find_map(|name| std::env::var(name).ok().filter(|key| !key.trim().is_empty()))
-    };
-    let own = match (model.provider(), model.api_key.clone()) {
-        (Some(Provider::Model(ModelProvider::Gemini)), Some(key)) => Some((key, true)),
-        (Some(Provider::Model(ModelProvider::Openai)), Some(key)) => Some((key, false)),
-        _ => None,
-    };
-    let (key, gemini) = own
-        .or_else(|| env(&["GOOGLE_API_KEY", "GEMINI_API_KEY"]).map(|key| (key, true)))
-        .or_else(|| env(&["OPENAI_API_KEY"]).map(|key| (key, false)))?;
-    let built = if gemini {
-        adk_harness::RagEmbedder::gemini(&key).map(|embedder| (embedder, GEMINI))
-    } else {
-        adk_harness::RagEmbedder::openai(&key).map(|embedder| (embedder, OPENAI))
-    };
-    built.ok().map(|(embedder, name)| (Arc::new(embedder), name.to_string()))
 }
 
 const APP_NAME: &str = "adk-rust";
@@ -1034,6 +1055,7 @@ pub async fn code(
         shell_label(&info),
         setup.plans_note()
     );
+    setup.print_limits();
     let outcome = launcher.run_once(&task).await?;
     println!();
     // The turn is distilled into long-term memory before the process ends (spec 3.1 §7.15.2).
@@ -1118,6 +1140,7 @@ pub async fn voice(
         shell_label(&info),
         realtime.id
     );
+    setup.print_limits();
     let surface = adk_harness::VoiceSurface::open(
         Arc::new(agent),
         realtime.model,
@@ -1224,6 +1247,7 @@ pub async fn goal(
 
     println!("goal mode ({}) on {}", setup.model_id, workspace.display());
     println!("plans {}", setup.plans_note());
+    setup.print_limits();
     let outcome = if goal.resume && (resumed.is_some() || setup.args.session.is_some()) {
         let session = resumed.as_deref().or(setup.args.session.as_deref()).unwrap_or_default();
         println!("resuming goal in session {session}");
@@ -1609,6 +1633,7 @@ pub async fn ultracode(
 
     let workspace = setup.resolved.workspace.clone();
     println!("ultracode ({}) on {}", setup.model_id, workspace.display());
+    setup.print_limits();
     println!("task: {task}");
     println!(
         "budget: at most {} model calls (worst case {}) · max rounds {}\n",

@@ -215,7 +215,130 @@ mod engine {
 /// Conversations through the hub, on a scripted realtime model; the commands run in `bash`.
 #[cfg(unix)]
 mod conversation {
+    use std::sync::Arc;
+
+    use adk_core::{
+        ApprovalCall, ApprovalDelegation, ApprovalService, ApprovalStore, ApprovalTick, InboxPage,
+        InboxQuery,
+    };
+    use chrono::{DateTime, Utc};
+
     use super::*;
+
+    /// How long [`SlowDecide`] takes to record a decision.
+    const SLOW_DECIDE: Duration = Duration::from_millis(800);
+
+    /// An approval service whose decisions take [`SLOW_DECIDE`] to record.
+    #[derive(Debug)]
+    struct SlowDecide(Arc<dyn ApprovalService>);
+
+    #[async_trait::async_trait]
+    impl ApprovalService for SlowDecide {
+        async fn submit(&self, request: ApprovalRequest) -> adk_core::Result<ApprovalRequest> {
+            self.0.submit(request).await
+        }
+
+        async fn submit_call(
+            &self,
+            call: ApprovalCall,
+        ) -> adk_core::Result<Option<ApprovalRequest>> {
+            self.0.submit_call(call).await
+        }
+
+        async fn get(&self, id: &str) -> adk_core::Result<Option<ApprovalRequest>> {
+            self.0.get(id).await
+        }
+
+        async fn inbox(&self, query: InboxQuery) -> adk_core::Result<InboxPage> {
+            self.0.inbox(query).await
+        }
+
+        async fn decide(
+            &self,
+            id: &str,
+            expected_version: u64,
+            decision: ApprovalDecision,
+        ) -> adk_core::Result<ApprovalRequest> {
+            tokio::time::sleep(SLOW_DECIDE).await;
+            self.0.decide(id, expected_version, decision).await
+        }
+
+        async fn delegate(
+            &self,
+            delegation: ApprovalDelegation,
+        ) -> adk_core::Result<ApprovalDelegation> {
+            self.0.delegate(delegation).await
+        }
+
+        async fn revoke_delegation(&self, id: &str) -> adk_core::Result<bool> {
+            self.0.revoke_delegation(id).await
+        }
+
+        async fn delegations_to(
+            &self,
+            to: &SubjectRef,
+        ) -> adk_core::Result<Vec<ApprovalDelegation>> {
+            self.0.delegations_to(to).await
+        }
+
+        async fn cancel(
+            &self,
+            id: &str,
+            reason: Option<String>,
+        ) -> adk_core::Result<ApprovalRequest> {
+            self.0.cancel(id, reason).await
+        }
+
+        async fn withdraw(
+            &self,
+            id: &str,
+            reason: Option<String>,
+        ) -> adk_core::Result<ApprovalRequest> {
+            self.0.withdraw(id, reason).await
+        }
+
+        async fn tick(&self, now: DateTime<Utc>) -> adk_core::Result<ApprovalTick> {
+            self.0.tick(now).await
+        }
+
+        fn approval_store(&self) -> Option<Arc<dyn ApprovalStore>> {
+            self.0.approval_store()
+        }
+    }
+
+    /// Another agent's medium-risk call, waiting in its own session.
+    async fn other_session_decision(voice: &Voice) -> ApprovalRequest {
+        voice
+            .sessions
+            .create(CreateRequest {
+                app_name: APP.into(),
+                user_id: OWNER.into(),
+                session_id: Some("finance".into()),
+                state: Default::default(),
+            })
+            .await
+            .unwrap();
+        let call = ToolConfirmationRequest {
+            tool_name: "send_email".into(),
+            function_call_id: Some("call-f".into()),
+            args: json!({ "to": "[CLIENT]" }),
+            origin: None,
+            acting: None,
+        };
+        voice
+            .service
+            .submit(
+                ApprovalRequest::new(
+                    "apr-finance",
+                    ApprovalScope::new(APP, OWNER, "finance"),
+                    &call,
+                    ApprovalPolicy::new([ApproverSelector::group("owner")]).allow_self_approval(),
+                )
+                .with_risk(ApprovalRisk::Medium),
+            )
+            .await
+            .unwrap()
+    }
 
     /// The agent's own call: "allow once" runs it exactly once, after the window, and every
     /// screen reads "You said yes by voice".
@@ -500,7 +623,8 @@ mod conversation {
         assert!(voice.model.log().texts().is_empty(), "{:?}", voice.model.log().texts());
     }
 
-    /// A decision made straight in the inbox resumes the voice-held call within a tick, once.
+    /// A decision made straight in the inbox resumes the voice-held call within a tick, once,
+    /// and the hold and the resumed call are on the record (harness/voice.md, "Audits").
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_decision_in_the_inbox_resumes_the_voice_held_call_once() {
         let mut script = asks_for(SEND);
@@ -521,6 +645,301 @@ mod conversation {
         eventually("the call ran", async || (voice.sent() == 1).then_some(())).await;
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert_eq!(voice.sent(), 1);
+        let records = |action: &str| {
+            voice
+                .audit
+                .records()
+                .into_iter()
+                .filter(|record| record.action == action)
+                .map(|record| {
+                    (record.ext["functionCallId"].clone(), record.ext.get("executed").cloned())
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(records(adk_harness::VOICE_AUDIT_HELD), [(json!("call-1"), None)]);
+        assert_eq!(
+            records(adk_harness::VOICE_AUDIT_RESUMED),
+            [(json!("call-1"), Some(json!(true)))]
+        );
+    }
+
+    /// Stop all reaches a live conversation: a call it held does not run when it is approved
+    /// after the stop, and the conversation ends; one opened while every agent is stopped
+    /// ends at once (spec 3.3 S-I10, §12 phase 5).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn stop_all_ends_the_conversation_and_refuses_its_calls() {
+        let mut script = asks_for(SEND);
+        script.push(ScriptedReply::new(scripted::spoken("Sent.")).on_tool_output());
+        let voice = voice(script).await;
+        let mut link = voice.hub.open(&web(), "scripted", None).await.unwrap();
+        speak(&link).await;
+        let (id, version) = prompted(&mut link).await;
+        voice.engine.execute(&web(), Command::StopAll { reason: None }).await.unwrap();
+        let terminal = Caller::human(OWNER, SurfaceKind::Terminal, Origin::Keyboard)
+            .with_groups(["owner"])
+            .with_paired_local();
+        voice
+            .engine
+            .execute(
+                &terminal,
+                Command::Decide {
+                    decision_id: id.clone(),
+                    version,
+                    answer: Answer::AllowOnce,
+                    edited_args: None,
+                    reason: None,
+                    expanded: true,
+                },
+            )
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert_eq!(voice.sent(), 0, "nothing runs while every agent is stopped");
+        let stopped = VoiceUpdate::Error {
+            code: "surface.stopped".into(),
+            message: words::ALL_AGENTS_STOPPED.into(),
+        };
+        until(&mut link, "the stop", |u| *u == stopped).await;
+        until(&mut link, "the end", |u| matches!(u, VoiceUpdate::Ended)).await;
+
+        let mut again = voice.hub.open(&web(), "scripted", None).await.unwrap();
+        let first = until(&mut again, "the first update", |_| true).await;
+        assert_eq!(first, stopped, "no conversation runs while every agent is stopped");
+        until(&mut again, "the end", |u| matches!(u, VoiceUpdate::Ended)).await;
+        assert_eq!(voice.sent(), 0);
+    }
+
+    /// A tool the harness's model has beside the harness toolset — here one added with
+    /// `.tool()` — is a tool of the voice conversation too (spec 3.3 §5.6).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_conversation_has_every_tool_the_harness_model_has() {
+        let voice = voice(vec![
+            ScriptedReply::new(
+                [
+                    vec![speech_started(), scripted::input_transcript("what's on today?")],
+                    scripted::calls("call-c", "calendar", json!({})),
+                ]
+                .concat(),
+            )
+            .on_audio(),
+        ])
+        .await;
+        let mut link = voice.hub.open(&web(), "scripted", None).await.unwrap();
+        until(&mut link, "the conversation", |u| matches!(u, VoiceUpdate::Ready { .. })).await;
+        let declared: Vec<String> = voice.model.log().configs()[0]
+            .tools
+            .iter()
+            .flatten()
+            .map(|tool| tool.name.clone())
+            .collect();
+        assert!(declared.contains(&"calendar".to_string()), "{declared:?}");
+        assert!(declared.contains(&"bash".to_string()), "{declared:?}");
+        speak(&link).await;
+        let output = eventually("the calendar's answer", async || {
+            voice.model.log().tool_outputs().into_iter().find(|output| output.call_id == "call-c")
+        })
+        .await;
+        assert_eq!(output.output, json!({ "events": ["Standup at 09:30"] }));
+    }
+
+    /// An approval recorded while the conversation is ending still runs the call: no later
+    /// run on the voice session would (spec 3.3 S-I3).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_approval_recorded_while_the_conversation_ends_still_runs() {
+        let mut script = asks_for(SEND);
+        script.push(says("allow once"));
+        script.push(ScriptedReply::new(scripted::spoken("Sent.")).on_tool_output());
+        // A store whose write takes a while, as a database's can.
+        let voice = voice_built(
+            script,
+            |model| Arc::new(model),
+            |service| Arc::new(SlowDecide(service)) as Arc<dyn ApprovalService>,
+        )
+        .await;
+        let mut link = voice.hub.open(&web(), "scripted", None).await.unwrap();
+        speak(&link).await;
+        let (id, _) = prompted(&mut link).await;
+        tokio::time::sleep(DWELL).await;
+        speak(&link).await;
+        until(&mut link, "the pending answer", |u| matches!(u, VoiceUpdate::Pending { .. })).await;
+        // The window ends and the approval is being written when the person presses End.
+        tokio::time::sleep(WINDOW + SLOW_DECIDE / 2).await;
+        link.input.send(VoiceInput::Message(VoiceClientMessage::End)).await.unwrap();
+        let outcome =
+            until(&mut link, "the outcome", |u| matches!(u, VoiceUpdate::Outcome { .. })).await;
+        assert_eq!(
+            outcome,
+            VoiceUpdate::Outcome { decision_id: id.clone(), decided: true, text: None }
+        );
+        until(&mut link, "the end", |u| matches!(u, VoiceUpdate::Ended)).await;
+        assert_eq!(state(&voice, &id).await, ApprovalState::Approved);
+        eventually("the approved call ran", async || (voice.sent() == 1).then_some(())).await;
+    }
+
+    /// Once the transport says it flushed the audio a barge-in interrupted, speech counts
+    /// again; until it does, speech over that audio is still taken for its echo (spec 3.3
+    /// §5.6).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn after_a_flushed_barge_in_a_spoken_deny_counts() {
+        let mut script = asks_for(SEND);
+        // Fifteen seconds of the model's audio, sent at once, and the person talks over it.
+        script.push(
+            ScriptedReply::new(vec![
+                model_audio(15_000),
+                speech_started(),
+                scripted::input_transcript("wait"),
+            ])
+            .on_audio(),
+        );
+        script.push(says("deny"));
+        script.push(says("deny"));
+        let voice = voice(script).await;
+        let mut link = voice.hub.open(&web(), "scripted", None).await.unwrap();
+        speak(&link).await;
+        let (id, _) = prompted(&mut link).await;
+        tokio::time::sleep(DWELL).await;
+        speak(&link).await;
+        until(&mut link, "the barge-in", |u| matches!(u, VoiceUpdate::BargeIn)).await;
+        until(&mut link, "the interruption", |u| matches!(u, VoiceUpdate::Heard { .. })).await;
+
+        // Not flushed yet: the model's audio may still play into the microphone.
+        speak(&link).await;
+        until(
+            &mut link,
+            "the echo",
+            |u| matches!(u, VoiceUpdate::Heard { text } if text == "deny"),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(state(&voice, &id).await, ApprovalState::Pending);
+
+        link.input.send(VoiceInput::Message(VoiceClientMessage::PlaybackEnded)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        speak(&link).await;
+        let outcome =
+            until(&mut link, "the outcome", |u| matches!(u, VoiceUpdate::Outcome { .. })).await;
+        assert_eq!(
+            outcome,
+            VoiceUpdate::Outcome { decision_id: id.clone(), decided: true, text: None }
+        );
+        assert_eq!(state(&voice, &id).await, ApprovalState::Rejected);
+    }
+
+    /// Speech that starts before the prompt has been on screen for a second decides nothing
+    /// (spec 3.3 §5.6).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn speech_before_the_prompt_dwell_decides_nothing() {
+        let mut script = asks_for(SEND);
+        script.push(says("deny"));
+        script.push(says("deny"));
+        let voice = voice(script).await;
+        let mut link = voice.hub.open(&web(), "scripted", None).await.unwrap();
+        speak(&link).await;
+        let (id, _) = prompted(&mut link).await;
+        speak(&link).await;
+        until(&mut link, "the early answer", |u| matches!(u, VoiceUpdate::Heard { .. })).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(state(&voice, &id).await, ApprovalState::Pending);
+        assert!(decide_records(&voice.audit).is_empty(), "nothing was answered");
+
+        tokio::time::sleep(DWELL).await;
+        speak(&link).await;
+        until(&mut link, "the outcome", |u| matches!(u, VoiceUpdate::Outcome { .. })).await;
+        assert_eq!(state(&voice, &id).await, ApprovalState::Rejected);
+    }
+
+    /// A transcript that arrives after the next utterance started answers the decision
+    /// prompted when its own speech started (spec 3.3 §5.6): here that decision was answered
+    /// elsewhere meanwhile, so nothing is decided.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_late_transcript_is_bound_to_its_own_utterance() {
+        let mut script = asks_for(SEND);
+        // The person starts speaking; its transcript comes only after the next utterance began.
+        script.push(ScriptedReply::new(vec![speech_started()]).on_audio());
+        script.push(
+            ScriptedReply::new(vec![speech_started(), scripted::input_transcript("allow once")])
+                .on_audio(),
+        );
+        let voice = voice(script).await;
+        let finance = other_session_decision(&voice).await;
+        let mut link = voice.hub.open(&web(), "scripted", None).await.unwrap();
+        speak(&link).await;
+        let own = until(&mut link, "the conversation's own call", |u| {
+            matches!(u, VoiceUpdate::Prompted { decision_id: Some(id), .. } if *id != finance.id)
+        })
+        .await;
+        let VoiceUpdate::Prompted { decision_id: Some(own), version: Some(version) } = own else {
+            unreachable!()
+        };
+        tokio::time::sleep(DWELL).await;
+        speak(&link).await;
+        // Answered elsewhere while the person speaks: the next decision is prompted.
+        voice
+            .service
+            .decide(
+                &own,
+                version,
+                ApprovalDecision::reject(SubjectRef::human(OWNER), "no").with_groups(["owner"]),
+            )
+            .await
+            .unwrap();
+        until(&mut link, "the next decision", |u| {
+            matches!(u, VoiceUpdate::Prompted { decision_id: Some(id), .. } if *id == finance.id)
+        })
+        .await;
+        tokio::time::sleep(DWELL).await;
+        speak(&link).await;
+        let outcome =
+            until(&mut link, "the outcome", |u| matches!(u, VoiceUpdate::Outcome { .. })).await;
+        assert_eq!(
+            outcome,
+            VoiceUpdate::Outcome {
+                decision_id: own.clone(),
+                decided: false,
+                text: Some(words::CHANGED_WHILE_YOU_SPOKE.into())
+            }
+        );
+        tokio::time::sleep(WINDOW + Duration::from_millis(200)).await;
+        assert_eq!(state(&voice, &finance.id).await, ApprovalState::Pending);
+    }
+
+    /// A call shown cut short is decided on screen: voice may deny it, never allow it, and it
+    /// is listed with the decisions voice cannot approve (spec 3.3 §5.6, §7.2).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_call_shown_cut_short_is_listed_for_the_screen_and_may_be_denied() {
+        let long = format!("printf x >> sent.txt # {}", "a".repeat(adk_surface::CALL_TEXT_LIMIT));
+        let mut script = asks_for(&long);
+        script.push(says("deny"));
+        let voice = voice(script).await;
+        let mut link = voice.hub.open(&web(), "scripted", None).await.unwrap();
+        speak(&link).await;
+        let (id, _) = prompted(&mut link).await;
+        let card = voice.engine.decision(&web(), &id).await.unwrap();
+        assert!(card.call.truncated);
+        until(&mut link, "needs a screen", |u| {
+            matches!(u, VoiceUpdate::NeedsScreen { decision_ids } if decision_ids.contains(&id))
+        })
+        .await;
+        tokio::time::sleep(DWELL).await;
+        speak(&link).await;
+        until(&mut link, "the outcome", |u| matches!(u, VoiceUpdate::Outcome { .. })).await;
+        assert_eq!(state(&voice, &id).await, ApprovalState::Rejected);
+        assert_eq!(voice.sent(), 0);
+    }
+
+    /// A conversation for a screen that shows only its own session — the terminal's thread —
+    /// prompts only its own decisions, never one that screen does not show (spec 3.3 §7.1).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_conversation_in_a_thread_answers_only_its_own_decisions() {
+        let voice = voice(asks_for(SEND)).await;
+        let finance = other_session_decision(&voice).await;
+        let terminal = Caller::human(OWNER, SurfaceKind::Terminal, Origin::Keyboard)
+            .with_groups(["owner", "operator"]);
+        let mut link = voice.hub.open_in_thread(&terminal, "scripted").await.unwrap();
+        speak(&link).await;
+        let (id, _) = prompted(&mut link).await;
+        assert_ne!(id, finance.id, "another session's decision is not prompted here");
+        assert_eq!(voice.engine.decision(&web(), &id).await.unwrap().session_id, link.session_id);
     }
 
     /// Only the caller's own voice conversation continues; anyone else's is refused (S-I8).

@@ -198,7 +198,14 @@ pub struct HarnessRuntime {
     pub(crate) payments: Option<Arc<crate::packs::payments::PaymentsReminder>>,
     /// Take over, when the harness was built with it (spec 3.3 §10 H2).
     pub(crate) take_over: Option<crate::take_over::TakeOver>,
+    /// The tools and toolsets the model is given besides `toolset`, for a realtime session
+    /// of the harness (spec 3.3 §5.6).
+    #[cfg_attr(not(feature = "voice"), allow(dead_code))]
+    pub(crate) agent_tools: AgentTools,
 }
+
+/// The tools and toolsets the model is given besides the harness toolset.
+pub(crate) type AgentTools = (Vec<Arc<dyn adk_core::Tool>>, Vec<Arc<dyn adk_core::Toolset>>);
 
 /// The harness's audit trail, in Block mode: `recorder`, or with feature `auth` an
 /// [`EphemeralAuditLog`](crate::EphemeralAuditLog) (spec 3.1 §9.2 I39).

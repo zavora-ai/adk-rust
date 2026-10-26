@@ -391,6 +391,7 @@ impl Tool for ApplyPatchTool {
                 }
                 None => self.workspace.forget_read(ctx.as_ref(), &file.path).await,
             }
+            // A patch names paths with `/`, so its report does too, on every platform.
             let mut entry = json!({
                 "path": self.workspace.record_path(&file.path),
                 "op": file.op,

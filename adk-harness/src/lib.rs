@@ -174,9 +174,9 @@ pub use facts::{
 };
 #[cfg(feature = "memory")]
 pub use facts::{
-    FACT_AUTHOR_PREFIX, FACT_TEXT_MAX_CHARS, FactFilter, FactIndex, FactKind, FactProjects,
-    FactScope, FactSource, FactStatus, FactStore, FileFactStore, InMemoryFactStore, LocalFactIndex,
-    LongTermMemoryConfig, MemoryFact, MemoryServiceIndex, Provenance, fact_digest,
+    FACT_AUTHOR_PREFIX, FACT_TEXT_MAX_CHARS, FactEmbedding, FactFilter, FactIndex, FactKind,
+    FactProjects, FactScope, FactSource, FactStatus, FactStore, FileFactStore, InMemoryFactStore,
+    LocalFactIndex, LongTermMemoryConfig, MemoryFact, MemoryServiceIndex, Provenance, fact_digest,
     redact_fact_text,
 };
 #[cfg(all(feature = "memory", feature = "kernel"))]
@@ -277,7 +277,14 @@ pub use read_records::RedisReadRecords;
 pub use read_records::SqliteReadRecords;
 #[cfg(feature = "sqlite")]
 pub use shell::SqliteShellLedger;
+#[cfg(feature = "sqlite")]
+pub use shell::SqliteShellPidRegistry;
 pub use shell::{AUTO_ALLOW_UNAVAILABLE_CODE, SANDBOX_PROTECTED_PATHS};
+pub use shell::{
+    BackgroundShellConfig, InMemoryShellPidRegistry, MAX_UNATTENDED_SHELL_LIFETIME, SHELL_KILL,
+    SHELL_OUTPUT, ShellInfo, ShellKillCause, ShellKillTool, ShellOutputTool, ShellOutputs,
+    ShellPidRecord, ShellPidRegistry, ShellStatus, ShellSupervisor, reap_orphaned_shells,
+};
 #[cfg(feature = "docker")]
 pub use shell::{ContainerBashTool, ContainerConfig, DEFAULT_CONTAINER_IMAGE};
 pub use shell::{
@@ -311,4 +318,4 @@ pub use toolset::HarnessToolset;
 pub use web::WebSearchPath;
 #[cfg(feature = "web")]
 pub use web::{DeepSeekSearch, SearxngSearch};
-pub use web::{ProviderWebTools, SearchHit, SearchProvider, WebConfig};
+pub use web::{ProviderWebTools, SearchDomains, SearchHit, SearchProvider, WebConfig};

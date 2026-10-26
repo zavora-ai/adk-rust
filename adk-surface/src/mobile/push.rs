@@ -178,8 +178,11 @@ pub(crate) enum Sent {
     Delivered,
     /// The subscription is gone (`404`, `410`): remove it.
     Gone,
-    /// It could not be sent; why, without secrets.
+    /// It could not be sent and would not be on a later try; why, without secrets.
     Failed(String),
+    /// The push service was busy, failing or out of reach on every attempt: a later try may
+    /// get through. Why, without secrets.
+    Unavailable(String),
 }
 
 /// Sends wake-ups (spec 3.3 §5.4): encrypted with aes128gcm for the subscription's keys,
@@ -262,7 +265,7 @@ impl PushSender {
                 wait = wait.saturating_mul(2);
             }
         }
-        Sent::Failed(last)
+        Sent::Unavailable(last)
     }
 
     fn request(

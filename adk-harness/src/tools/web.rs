@@ -440,11 +440,18 @@ impl Tool for WebSearchTool {
         let mut labelled = 0usize;
         let mut redactions = 0usize;
         let mut dropped = 0usize;
+        let mut filtered = 0usize;
+        let filter = self.runtime.config.search_domains.as_ref();
         for SearchHit { title, url, snippet } in hits.into_iter().take(limit) {
             let Some(host) = url_host(&url).filter(|host| !is_private_host(host)) else {
                 dropped += 1;
                 continue;
             };
+            // The search filter, never the fetch allowlist (spec 3.1 §7.32, I73).
+            if filter.is_some_and(|filter| !filter.permits(&host)) {
+                filtered += 1;
+                continue;
+            }
             if !hosts.contains(&host) {
                 hosts.push(host);
             }
@@ -487,6 +494,7 @@ impl Tool for WebSearchTool {
                         "results": results.len(),
                         "hosts": hosts,
                         "dropped": dropped,
+                        "filtered": filtered,
                     }),
                 )
                 .await?;

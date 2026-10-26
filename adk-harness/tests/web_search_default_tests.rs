@@ -1,6 +1,8 @@
 //! `web_search` defaults to the search built-in of the provider the harness model's client
 //! serves; a configured search provider replaces it (spec 3.1 §7.20, §9.2 I49, §13
-//! question 7). Scripted models behind a real runner, no network beyond loopback.
+//! question 7). The fetch allowlist is never a search filter; `search_domains` is, where
+//! the provider takes one (spec 3.1 §7.32, I73, §13 question 8). Scripted models behind a
+//! real runner, no network beyond loopback.
 
 #![cfg(all(feature = "runner", feature = "web"))]
 
@@ -11,8 +13,8 @@ use std::sync::{Arc, Mutex};
 use adk_core::{Content, LlmResponse, NativeWebSearch, NativeWebSearchTool, Part, Result};
 use adk_harness::HarnessMode;
 use adk_harness::web::{
-    DeepSeekSearch, ProviderWebTools, SearchHit, SearchProvider, SearxngSearch, WebConfig,
-    WebSearchPath,
+    DeepSeekSearch, ProviderWebTools, SearchDomains, SearchHit, SearchProvider, SearxngSearch,
+    WebConfig, WebSearchPath,
 };
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use serde_json::{Value, json};
@@ -85,6 +87,15 @@ impl SearchProvider for FixedSearch {
     }
 }
 
+/// A fetch allowlist of `internal.example` and a search filter of `docs.rs`.
+fn web_with_filter(filter: SearchDomains) -> WebConfig {
+    WebConfig { search_domains: Some(filter), ..web(&["internal.example"]) }
+}
+
+fn only_docs_rs() -> SearchDomains {
+    SearchDomains::Allowed(vec!["docs.rs".into()])
+}
+
 #[tokio::test]
 async fn each_providers_model_declares_its_search_by_default_and_none_when_the_run_starts_in_plan()
 {
@@ -102,7 +113,7 @@ async fn each_providers_model_declares_its_search_by_default_and_none_when_the_r
         ),
         (deepseek(), "deepseek_web_search", None),
     ];
-    for (search, tool, allowlist) in cases {
+    for (search, tool, forwarded) in cases {
         for (mode, declared) in [
             (HarnessMode::Ask, true),
             (HarnessMode::Auto, true),
@@ -110,7 +121,7 @@ async fn each_providers_model_declares_its_search_by_default_and_none_when_the_r
             (HarnessMode::Plan, false),
         ] {
             let f = common::fixture_on(model(Some(search), vec![done()]), |b| {
-                b.mode(mode).web(web(&["docs.rs"]))
+                b.mode(mode).web(web_with_filter(only_docs_rs()))
             })
             .await;
             f.send("hello").await;
@@ -127,7 +138,8 @@ async fn each_providers_model_declares_its_search_by_default_and_none_when_the_r
                 assert!(f.records("harness.web.provider_enabled").is_empty());
                 continue;
             }
-            match &allowlist {
+            let banner = banner(&request).unwrap();
+            match &forwarded {
                 Some((pointer, domains)) => {
                     assert_eq!(
                         request.tools[tool].pointer(pointer),
@@ -135,30 +147,140 @@ async fn each_providers_model_declares_its_search_by_default_and_none_when_the_r
                         "{}",
                         request.tools[tool]
                     );
+                    assert!(
+                        banner.contains(&format!("{} {tool} (only docs.rs)", search.provider)),
+                        "{banner}"
+                    );
                 }
                 None => {
-                    let banner = banner(&request).unwrap();
                     assert!(
                         banner.contains(&format!(
-                            "{} {tool} (every domain: {} takes no allowlist)",
+                            "{} {tool} (every domain: {} takes no search filter)",
                             search.provider, search.provider
                         )),
                         "{banner}"
                     );
                 }
             }
+            // The fetch allowlist reaches neither the declaration nor the banner (I73).
+            assert!(!request.tools[tool].to_string().contains("internal.example"));
+            assert!(!banner.contains("internal.example"), "{banner}");
             assert_eq!(f.records("harness.web.provider_enabled").len(), 1, "once per run");
             assert_eq!(
                 f.harness.agent().info().web_search,
                 WebSearchPath::Provider {
                     provider: search.provider.into(),
                     tool: tool.into(),
-                    allowlist: allowlist.as_ref().map(|_| vec!["docs.rs".to_string()]),
-                    allowlist_supported: search.allowed_domains,
+                    filter: Some(only_docs_rs()),
+                    filter_applied: forwarded.is_some(),
                 }
             );
         }
     }
+}
+
+/// spec 3.1 §7.32, I73: the fetch allowlist is never forwarded as a search filter.
+#[tokio::test]
+async fn the_fetch_allowlist_is_never_a_search_filter() {
+    for (search, tool) in [(anthropic(), "web_search"), (openai(), "openai_web_search")] {
+        let f = common::fixture_on(model(Some(search), vec![done()]), |b| {
+            b.web(web(&["docs.rs", "*.rust-lang.org"]))
+        })
+        .await;
+        f.send("hello").await;
+        let request = f.model.requests().into_iter().next().unwrap();
+        let declaration = request.tools[tool].to_string();
+        assert!(!declaration.contains("docs.rs"), "{declaration}");
+        assert!(!declaration.contains("rust-lang.org"), "{declaration}");
+        let banner = banner(&request).unwrap();
+        assert!(banner.contains(&format!("{} {tool} (every domain)", search.provider)), "{banner}");
+        let record = &f.records("harness.web.provider_enabled")[0].ext;
+        assert!(record.get("searchDomains").is_none_or(Value::is_null), "{record:?}");
+        assert_eq!(
+            f.harness.agent().info().web_search.to_string(),
+            format!("{} {tool}, run by the provider: every domain", search.provider)
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_blocked_filter_reaches_anthropic_and_is_named_as_not_applied_elsewhere() {
+    let blocked = SearchDomains::Blocked(vec!["pinterest.com".into()]);
+    let f = common::fixture_on(model(Some(anthropic()), vec![done()]), |b| {
+        b.web(web_with_filter(blocked.clone()))
+    })
+    .await;
+    f.send("hello").await;
+    let request = f.model.requests().into_iter().next().unwrap();
+    assert_eq!(
+        request.tools["web_search"].pointer("/x-adk-anthropic-tool/blocked_domains"),
+        Some(&json!(["pinterest.com"]))
+    );
+    assert_eq!(
+        f.records("harness.web.provider_enabled")[0].ext["searchDomains"],
+        json!({ "blocked": ["pinterest.com"] })
+    );
+
+    // OpenAI's search takes an allowed list only.
+    let f = common::fixture_on(model(Some(openai()), vec![done()]), |b| {
+        b.web(web_with_filter(blocked.clone()))
+    })
+    .await;
+    f.send("hello").await;
+    let request = f.model.requests().into_iter().next().unwrap();
+    assert!(!request.tools["openai_web_search"].to_string().contains("pinterest"));
+    let banner = banner(&request).unwrap();
+    assert!(
+        banner.contains("openai openai_web_search (every domain: openai takes no search filter)")
+    );
+    assert!(
+        f.harness.agent().info().web_search.to_string().contains("search_domains is not applied")
+    );
+}
+
+#[tokio::test]
+async fn a_filter_that_allows_no_domain_declares_no_search() {
+    let f = common::fixture_on(model(Some(anthropic()), vec![done()]), |b| {
+        b.web(web_with_filter(SearchDomains::Allowed(Vec::new())))
+    })
+    .await;
+    f.send("hello").await;
+    assert!(!f.model.requests()[0].tools.contains_key("web_search"));
+    match &f.harness.agent().info().web_search {
+        WebSearchPath::None { reason } => assert!(reason.contains("allows no domain"), "{reason}"),
+        other => panic!("expected no search, got {other:?}"),
+    }
+}
+
+/// The governed `web_search` applies the filter to its results.
+#[tokio::test]
+async fn the_governed_search_drops_results_outside_the_filter() {
+    let f = common::fixture_on(
+        model(
+            Some(gemini()),
+            vec![
+                ScriptedResponse::function_call(
+                    "web_search",
+                    json!({ "query": "adk core", "site": "docs.rs" }),
+                ),
+                done(),
+            ],
+        ),
+        |b| {
+            // docs.rs is fetched without approval, and its search results are filtered out.
+            let filter = SearchDomains::Blocked(vec!["docs.rs".into()]);
+            b.web(WebConfig { search_domains: Some(filter), ..web(&["docs.rs"]) })
+                .search_provider(Arc::new(FixedSearch))
+        },
+    )
+    .await;
+    f.send("search").await;
+    assert_eq!(
+        f.harness.agent().info().web_search.to_string(),
+        "web_search through fixed (governed): every domain except docs.rs"
+    );
+    let record = &searched(&f)[0].ext;
+    assert_eq!((record["results"].clone(), record["filtered"].clone()), (json!(0), json!(1)));
 }
 
 #[tokio::test]
@@ -192,7 +314,7 @@ async fn a_configured_search_provider_replaces_the_provider_search() {
     assert!(f.records("harness.web.provider_enabled").is_empty());
     assert_eq!(
         f.harness.agent().info().web_search,
-        WebSearchPath::Governed { provider: "fixed".into() }
+        WebSearchPath::Governed { provider: "fixed".into(), filter: None }
     );
 }
 

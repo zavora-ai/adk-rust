@@ -95,9 +95,34 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         };
         KernelSettings::resolve(user_config().as_deref(), &workspace)?
     };
-    let home = match home.or_else(|| settings.home.clone()) {
+    // The home every other command reads: `[kernel] home` in the user config, else the
+    // default; `--home` is this kernel's alone.
+    let shared_home = settings.home.clone().or_else(|| default_home().ok());
+    let home = match home.or_else(|| shared_home.clone()) {
         Some(home) => home,
         None => default_home()?,
+    };
+    // The personal preset's answers live in the home, so the REPL, `code` and `serve` show
+    // another `personal.toml` than this kernel keeps unless the user config names it (spec
+    // 3.3 §13 Q7).
+    let same = |a: &PathBuf, b: &PathBuf| {
+        a.canonicalize().unwrap_or_else(|_| a.clone())
+            == b.canonicalize().unwrap_or_else(|_| b.clone())
+    };
+    let home_note = match &shared_home {
+        Some(shared)
+            if harness.preset == Some(adk_harness::Preset::Personal) && !same(&home, shared) =>
+        {
+            Some(format!(
+                "--home {} is this kernel's alone: the REPL, `code` and `serve` read the \
+                 personal preset's answers in {}. Add `home = {:?}` under [kernel] in your user \
+                 config so they read this kernel's",
+                home.display(),
+                shared.display(),
+                home.display().to_string()
+            ))
+        }
+        _ => None,
     };
     // Its own `.adk/harness.toml` may restrict the kernel as a project's does.
     if personal_home {
@@ -133,7 +158,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     let agents_handle = adk_kernel::agents::AgentsHandle::new();
     setup.print_notes();
     setup.memory_notice();
-    for note in &settings.notes {
+    for note in settings.notes.iter().chain(&home_note) {
         println!("note: {note}");
     }
     // The first-run answers become the kernel's quiet hours and every partition's daily

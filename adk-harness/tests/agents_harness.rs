@@ -204,3 +204,29 @@ async fn the_folder_narrows_the_workspace() {
     assert!(reads[0].to_string().contains("due 31 March"), "{}", reads[0]);
     assert!(!reads[1].to_string().contains("not for Finance"), "{}", reads[1]);
 }
+
+/// An agent its record keeps from `web_search` declares no provider search either: the
+/// provider's search runs inside the model, outside the deny layer (spec 3.1 §7.32).
+#[tokio::test]
+async fn an_added_agent_kept_from_search_declares_no_provider_search() {
+    use adk_core::{NativeWebSearch, NativeWebSearchTool};
+    use adk_harness::web::{WebConfig, WebSearchPath};
+
+    for web in [WebAccess::None, WebAccess::listed(["docs.rs"])] {
+        let model = ScriptedLlm::new("scripted", vec![ScriptedResponse::text("ok")])
+            .with_native_web_search(NativeWebSearch::new(
+                "anthropic",
+                NativeWebSearchTool::AnthropicWebSearch,
+                true,
+            ));
+        let added = record(PartitionMode::Ask, AgentUses::default().with_web(web.clone()));
+        let f = fixture_on(model, |b| b.web(WebConfig::default()).added_agent(&added)).await;
+        f.send("hello").await;
+        let request = f.model.requests().into_iter().next().unwrap();
+        assert!(!request.tools.contains_key("web_search"), "{web:?}: {:?}", request.tools.keys());
+        assert!(
+            matches!(f.harness.agent().info().web_search, WebSearchPath::None { .. }),
+            "{web:?}"
+        );
+    }
+}

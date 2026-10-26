@@ -211,7 +211,7 @@ The `FactStore` is the system of record; a `FactIndex` only finds candidates.
 | `InMemoryFactStore` | The default; tests |
 | `FileFactStore` | One private JSON file per user under `~/.adk/harness/facts` |
 | `SqliteFactStore` (feature `sqlite`) | Tables `adk_harness_facts`, `adk_harness_fact_embeddings`, `adk_harness_fact_cursors` (how far distillation read each session) and `adk_harness_fact_ticks` (consolidation records); the CLI keeps it in `harness.db` |
-| `LocalFactIndex` | The default: cosine similarity over embeddings stored with each fact when an embedder is set, the share of query words a fact contains otherwise |
+| `LocalFactIndex` | The default: cosine similarity over embeddings stored with each fact when an embedder is set, the share of query words a fact contains otherwise. Compares only vectors of its own embedder (see [Embedder ids](#embedder-ids)) |
 | `MemoryServiceIndex` | Any `adk_memory::MemoryService` that supports project scoping: pgvector on PostgreSQL, MongoDB, Neo4j, Vertex AI Memory Bank, FTS5 on SQLite, Redis. Each fact is an entry whose `author` is `adk-harness:fact:<id>`, whose text parts are the fact and its id, in the fact's project |
 
 ```rust
@@ -277,6 +277,46 @@ fn local(model: Arc<dyn adk_core::Llm>) -> adk_core::Result<HarnessAgent> {
         .build()
 }
 ```
+
+### Embedder ids
+
+Each stored vector carries the id of the embedder that produced it, a `FactEmbedding`
+(spec 3.1 §7.32, I73). Recall compares the query only with vectors of the same id and embeds
+a fact again when its stored vector came from another model, even one whose vectors share
+the length; consolidation without an embedder compares only the vectors of the id most of the
+scope's facts carry.
+
+| Embedder | Id |
+|---|---|
+| `RagEmbedder::local()` | `onnx/BAAI/bge-small-en-v1.5` (`onnx/<model id>` for `RagEmbedder::onnx`) |
+| `RagEmbedder::gemini(key)` | `gemini/gemini-embedding-2` |
+| `RagEmbedder::openai(key)` | `openai/text-embedding-3-small` |
+| Your own `adk_memory::EmbeddingProvider` | Its `model_id()`, else `unnamed/<dimensions>` |
+| A vector stored before ids existed | Empty: embedded again on first recall |
+
+```rust
+use adk_memory::EmbeddingProvider;
+
+struct Lengths;
+
+#[async_trait::async_trait]
+impl EmbeddingProvider for Lengths {
+    async fn embed(&self, texts: &[String]) -> adk_core::Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|text| vec![text.len() as f32, 1.0]).collect())
+    }
+
+    fn dimensions(&self) -> usize {
+        2
+    }
+
+    fn model_id(&self) -> Option<&str> {
+        Some("example/lengths")
+    }
+}
+```
+
+`SqliteFactStore::migrate` adds the `embedder` column to an `adk_harness_fact_embeddings`
+table created before it. The capability block names the embedder on its `Memory` line.
 
 With a store key, the fact store seals every fact before it reaches `harness.db`
 (spec 3.1 §7.12); see [Durability](durability.md#the-encrypted-store).

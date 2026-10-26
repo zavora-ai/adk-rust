@@ -207,13 +207,20 @@ pub(crate) fn offer(
     launcher
 }
 
-/// What the microphone records and what the speaker plays, as PCM16 mono chunks.
+/// What the microphone records and what the speaker plays, as PCM16 mono chunks, and the
+/// signal that drops what the speaker has queued.
 #[cfg(all(feature = "tui", feature = "voice-desktop"))]
-type AudioChannels = (tokio::sync::mpsc::Receiver<Vec<u8>>, tokio::sync::mpsc::Sender<Vec<u8>>);
+type AudioChannels = (
+    tokio::sync::mpsc::Receiver<Vec<u8>>,
+    tokio::sync::mpsc::Sender<Vec<u8>>,
+    std::sync::Arc<tokio::sync::Notify>,
+);
 
 /// The microphone and the speaker as the terminal's voice mode takes them (spec 3.3 §5.6):
 /// PCM16 mono from the default input device at `input_rate`, and to the default output device
-/// at `output_rate`. Each device is released once its channel's other end is dropped.
+/// at `output_rate`; the speaker drops what it has queued when the signal is notified, as the
+/// person speaks over the model. Each device is released once its channel's other end is
+/// dropped.
 #[cfg(all(feature = "tui", feature = "voice-desktop"))]
 pub(crate) fn desktop_channels(input_rate: u32, output_rate: u32) -> Result<AudioChannels> {
     use adk_audio::{AudioCapture, AudioFrame, AudioPlayback, CaptureConfig};
@@ -239,17 +246,26 @@ pub(crate) fn desktop_channels(input_rate: u32, output_rate: u32) -> Result<Audi
         }
     });
     let (speaker, mut played) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+    let flush = std::sync::Arc::new(tokio::sync::Notify::new());
+    let flushed = flush.clone();
     let device = output.id().to_string();
     tokio::spawn(async move {
         let mut playback = AudioPlayback::new();
-        while let Some(pcm) = played.recv().await {
-            let frame = AudioFrame::new(pcm, output_rate, 1);
-            if let Err(error) = playback.play(&device, &frame).await {
-                tracing::debug!(error = %error, "playback failed");
+        loop {
+            tokio::select! {
+                biased;
+                () = flushed.notified() => while played.try_recv().is_ok() {},
+                pcm = played.recv() => {
+                    let Some(pcm) = pcm else { break };
+                    let frame = AudioFrame::new(pcm, output_rate, 1);
+                    if let Err(error) = playback.play(&device, &frame).await {
+                        tracing::debug!(error = %error, "playback failed");
+                    }
+                }
             }
         }
     });
-    Ok((heard, speaker))
+    Ok((heard, speaker, flush))
 }
 
 /// Drives the surface until the session ends: prints what is said and held, answers the

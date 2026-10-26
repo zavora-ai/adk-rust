@@ -54,13 +54,14 @@ The REPL, `code`, `goal`, `ultracode` and `serve` take the same harness flags.
 | `--member NAME=explore\|general` | Adds a team member |
 | `--no-memory` | Turns long-term memory off: nothing is recalled or learned |
 | `--no-consolidation` | Turns the kernel's consolidation tick off under `adk-rust up` ([Long-term memory](memory.md#consolidation)) |
+| `--embedder local\|gemini\|openai\|lexical` | What embeds long-term facts (spec 3.1 §7.32); without it `[memory] embedder`, else the chat provider's own embedder for Gemini and OpenAI and the local ONNX model for every other provider. See [Long-term memory](#long-term-memory) |
 | `--effort low\|medium\|high` | The reasoning effort of every model call in this session, whatever the mode or role (spec 3.1 §7.23); without it the `[effort]` policy applies per mode: plan high, members low, everything else medium |
 | `--store-key keychain:<entry>\|secret:<provider>/<name>\|env:<VAR>` | Where the key sealing `harness.db` is kept (spec 3.1 §7.12); without it `[store] key` in the user config, else the store is plaintext |
 | `--no-hooks` | Runs no hooks, the workspace's included (spec 3.1 §7.22); `/hooks` lists the effective set |
 | `--no-snapshots` | Takes no snapshot before each turn, so `/rewind` restores no file (spec 3.1 §7.27); see [Snapshots and rewind](snapshots-and-rewind.md) |
 | `--web` / `--no-web` | Declares the web tools (on by default) or none at all (spec 3.1 §7.20) |
-| `--allow-domain HOST` | A host `web_fetch` reads without approval: exact, or `*.example.com`; repeatable |
-| `--search provider\|off\|searxng\|deepseek` | Where web search runs (spec 3.1 §7.20): `provider` (the default) is the built-in search of the provider the model's client serves; `searxng` and `deepseek` replace it with the governed `web_search` over a SearXNG instance (`[web] searxng_url`, else `SEARXNG_URL`) or DeepSeek's Search API (`DEEPSEEK_API_KEY`); `off` declares none. The banner's `Search` line and `/web` name the path |
+| `--allow-domain HOST` | A host `web_fetch` and the browser pack reach without approval: exact, or `*.example.com`; repeatable. Never a search filter: search has its own, `[web] search_domains` (spec 3.1 §7.32) |
+| `--search provider\|off\|searxng\|deepseek` | Where web search runs (spec 3.1 §7.20): `provider` (the default) is the built-in search of the provider the model's client serves; `searxng` and `deepseek` replace it with the governed `web_search` over a SearXNG instance (`[web] searxng_url`, else `SEARXNG_URL`) or DeepSeek's Search API (`DEEPSEEK_API_KEY`); `off` declares none. The banner's `Search` line and `/web` name the path and its search filter |
 | `--preset coding\|personal` | Applies a preset (spec 3.3 §10 H1): `personal` works in `<home>/workspace` instead of the current directory, offers no host shell, and asks for quiet time and a daily spending limit at its first run; `coding` is the coding agent's prompt and no members. See [The personal preset and take over](personal.md) |
 | `--checkpointer URL` | Where plans and goal graphs are checkpointed: `sqlite://`, `postgres://`, `redis://`, `mongodb://`, `neo4j://` or `firestore://` (spec 3.1 §7.11); without it `[plan] checkpointer` in the user config, else the store the sessions are in. Not with `--ephemeral` |
 
@@ -104,12 +105,20 @@ key = "keychain:adk-rust"
 [web]                        # spec 3.1 §7.20; `web = false` turns the web tools off instead
 search = "searxng"           # provider (default), off, searxng or deepseek
 searxng_url = "http://localhost:8888"
+search_domains = { allowed = ["docs.rs", "rust-lang.org"] }  # or { blocked = [..] }; §7.32
+
+[memory]                     # spec 3.1 §7.32
+embedder = "local"           # local, gemini, openai or lexical
 
 [ultracode]                  # spec 3.1 §7.10; see Ultracode
 max_rounds = 2
 
 [plan]                       # the user config only (spec 3.1 §7.11)
 checkpointer = "postgres://plans@db/harness"
+
+[shells]                     # spec 3.1 §7.29; a project file may only lower these
+max_running = 8              # background shells per session
+lifetime_minutes = 30        # goal, served and kernel runs; at most 120; the REPL has none
 
 [snapshots]                  # the user config only (spec 3.1 §7.27)
 enabled = true
@@ -125,12 +134,23 @@ command = "cargo fmt"
 not permissions. `[store]` names where the store key lives and is read from the user config
 only; a project file setting it is ignored with a note. `[web]` names where web search runs:
 a project file may set `search = "off"`, and any other `search` or a `searxng_url` there is
-ignored with a note, since it would choose where the agent's queries go. `[plan] checkpointer` is read from the
+ignored with a note, since it would choose where the agent's queries go. `[web]
+search_domains` is the search filter, separate from `allow_domains` (the hosts `web_fetch`
+reads without approval): each entry covers the domain and its subdomains, it is forwarded to
+the provider's search where the provider takes one (Anthropic an allowed or a blocked list,
+OpenAI an allowed list) and applied to the governed `web_search`'s results, and the banner
+says when the provider takes none (Gemini, DeepSeek). A project file's `search_domains`
+narrows the user's: an allowed list keeps only what both cover, a blocked list removes what it
+touches. `[memory] embedder` chooses what embeds long-term facts; a project file may choose
+only `local` or `lexical`, and only to keep facts closer than the user config does.
+`[plan] checkpointer` is read from the
 user config only: a checkpointer location is not a permission, but a workspace file naming one would send
 plan state to a server the repository chose, so the flag wins, then the user config, then
 the store the sessions are in. `[snapshots]` sets whether the workspace is snapshotted before
 each turn and how many turns and bytes are kept; it is read from the user config only, and a
-project file setting it is ignored with a note. `[[hooks]]` tables are hooks on
+project file setting it is ignored with a note. `[shells]` sets the background shell limits
+([Background shells](shell-and-sandbox.md#background-shells)); a project file may lower
+them, never raise them. `[[hooks]]` tables are hooks on
 tool events ([Hooks](hooks.md#in-the-cli)): the user config's run before the workspace's,
 and the workspace's run only once the workspace is trusted.
 
@@ -241,6 +261,7 @@ asks again.
 | `/rewind [N]` | The session's turns with the files each changed; with `N`, shows what going back to before turn N restores, recreates and deletes, what it cannot undo, and asks once (spec 3.1 §7.27) |
 | `/redo` | Undoes the last `/rewind`: files, transcript and plan |
 | `/hooks` | The hooks on tool events — each with its source, isolation, timeout and whether it runs — and the bounds of one turn (spec 3.1 §7.22); a workspace hook runs only under the workspace's trust |
+| `/shells [kill N]` | The session's background shells, each with its id, state, age and command; `kill N` stops one (spec 3.1 §7.29, see [Background shells](shell-and-sandbox.md#background-shells)) |
 | `/help`, `exit` | Lists the commands; leaves the REPL |
 
 A slash line that names no command goes to the agent as typed, after one dim line on the
@@ -339,8 +360,9 @@ uncached prompt tokens per turn.
 id or .gguf path>` (feature `mistralrs`, a heavy build; GPU through `adk-mistralrs`'s `cuda`
 or `metal`) run the model on this machine (spec 3.1 §8.1, H10). With a local provider,
 long-term memory recalls with a local ONNX embedder (`BAAI/bge-small-en-v1.5`, fetched
-once into the Hugging Face hub cache, feature `memory-local`), so with `--sandbox` and
-`--store-key` nothing leaves the machine but the local model endpoint.
+once into the Hugging Face hub cache, feature `memory-local`), never another provider's,
+so with `--sandbox` and `--store-key` nothing leaves the machine but the local model
+endpoint.
 
 ```bash
 adk-rust --provider ollama --model qwen3.5 --sandbox --store-key keychain:adk-rust
@@ -379,10 +401,27 @@ what they added:
 | `assumed` | The agent inferred it, or read it in a command's output or a file; a hint until you confirm it |
 | `superseded`, `forgotten` | History: replaced by a newer fact, or forgotten; never recalled |
 
-Recall finds related facts with an embedder when one is available — the model's provider
-when it embeds (Gemini, OpenAI), else Gemini or OpenAI when its key is set — and by shared
-words otherwise, with nothing leaving the machine for it. The banner shows
-`Memory : long-term facts on`.
+Recall finds related facts with an embedder. Every user message is part of a recall query,
+so the embedder is a data boundary: facts and queries go to the chat model's own provider or
+stay on this machine, unless you choose another provider (spec 3.1 §7.32, §13 Q9).
+
+| Chat provider | Embedder |
+|---|---|
+| Ollama, mistral.rs | The local ONNX model (`BAAI/bge-small-en-v1.5`) |
+| Gemini, OpenAI | That provider's: `gemini-embedding-2`, `text-embedding-3-small` |
+| Anthropic, DeepSeek, Groq | The local ONNX model, whatever other keys are in the environment |
+| The local model unavailable | None: facts are found by shared words, never by another provider |
+| `--embedder local\|gemini\|openai\|lexical`, or `[memory] embedder` in the user config | As chosen; a second provider sees your facts only this way |
+
+`.adk/harness.toml` may set `[memory] embedder` to `local` or `lexical` only, and only to
+keep facts closer than your own choice: a workspace never sends them to a provider. Every
+session's banner names the embedder, and each stored vector carries its embedder's id, so
+recall embeds a fact again rather than compare two models' vectors:
+
+```text
+  Embedder  : a local ONNX model (BAAI/bge-small-en-v1.5); nothing leaves this machine
+  Memory    : long-term facts on (/memory)
+```
 
 ```bash
 adk-rust memory list                     # this project's facts and your preferences, known first

@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { AgentRow, Briefing, StatusLine } from "../generated/api";
 import type { HomeClient } from "../client";
+import { AgentsCanDo } from "../agents/AgentsCanDo";
 import { problemText } from "../client";
 import { AreaRoster, areaAgents } from "../components/AreaRoster";
 import { Icon } from "../components/Icon";
@@ -369,6 +370,7 @@ function CanDo({
           )}
         </>
       )}
+      {client.agentsSeam && <AgentsCanDo agents={agents} mode={status?.mode?.status} />}
       {problem && (
         <p className="decision-problem" role="alert">
           {problem}

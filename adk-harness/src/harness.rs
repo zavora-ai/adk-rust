@@ -122,6 +122,37 @@ fn store_error(message: impl Into<String>) -> AdkError {
     )
 }
 
+/// A call [`Harness::decide`] is recording a decision for: its approval store, by address,
+/// its scope and its fingerprint.
+type DecidingKey = (usize, ApprovalScope, String);
+
+/// The calls being decided in this process. The approval store's decision write is not
+/// conditional, so two decisions for one call that both found it pending would both be
+/// written; the second is refused instead (spec 3.3 §7.3, §11 S-I2).
+static DECIDING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<DecidingKey>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Holds a call in [`DECIDING`] until the decision is recorded or refused.
+struct Deciding(DecidingKey);
+
+impl Deciding {
+    fn claim(key: DecidingKey) -> Result<Self> {
+        let mut deciding = DECIDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !deciding.insert(key.clone()) {
+            return Err(store_error(
+                "another decision for this call is being recorded; the first one stands",
+            ));
+        }
+        Ok(Self(key))
+    }
+}
+
+impl Drop for Deciding {
+    fn drop(&mut self) {
+        DECIDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&self.0);
+    }
+}
+
 impl Harness {
     pub(crate) fn new(
         agent: Arc<HarnessAgent>,
@@ -750,9 +781,10 @@ impl Harness {
     /// # Errors
     ///
     /// Returns `harness.decision.invalid` when no pending call has `fingerprint`, a rule
-    /// cannot be remembered for the call, or an approver, an expiry or another decision
-    /// settled the call first — before its inbox request was withdrawn or while the person's
-    /// decision was being recorded — or the store's error.
+    /// cannot be remembered for the call, another decision for the call is being recorded in
+    /// this process, or an approver, an expiry or another decision settled the call first —
+    /// before its inbox request was withdrawn or while the person's decision was being
+    /// recorded — or the store's error.
     pub async fn decide(
         &self,
         user: &UserId,
@@ -763,6 +795,11 @@ impl Harness {
         let runtime = self.agent.runtime();
         let scope =
             ApprovalScope::new(self.app_name.clone(), user.to_string(), session.to_string());
+        let _deciding = Deciding::claim((
+            Arc::as_ptr(runtime.approval_store()).cast::<()>().addr(),
+            scope.clone(),
+            fingerprint.to_string(),
+        ))?;
         let pending = runtime.approval_store().pending(&scope).await?;
         // A decision for a call that is not pending — decided, cancelled by a mode change, or
         // never held — would authorize a later call with the same fingerprint unasked (I14).
@@ -1155,6 +1192,43 @@ impl Harness {
     /// Interrupts the session's active run.
     pub fn interrupt(&self, session: &SessionId) -> bool {
         self.runner.interrupt(session.as_ref())
+    }
+
+    /// `user`'s background shells in `session`, oldest first (spec 3.1 §7.29): what `/shells`
+    /// lists.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// for shell in harness.shells(&user, &session).await {
+    ///     println!("{}", shell.line());
+    /// }
+    /// ```
+    pub async fn shells(&self, user: &UserId, session: &SessionId) -> Vec<crate::ShellInfo> {
+        match self.agent.runtime().toolset().shells() {
+            Some(shells) => shells.list(&self.app_name, user.as_ref(), session.as_ref()).await,
+            None => Vec::new(),
+        }
+    }
+
+    /// Kills `user`'s background shell `shell_id` in `session` and removes it from the
+    /// reminder; `None` when the session has no such shell (spec 3.1 §7.29).
+    pub async fn kill_shell(
+        &self,
+        user: &UserId,
+        session: &SessionId,
+        shell_id: &str,
+    ) -> Option<crate::ShellInfo> {
+        let shells = self.agent.runtime().toolset().shells()?;
+        shells.kill(&self.app_name, user.as_ref(), session.as_ref(), shell_id).await
+    }
+
+    /// Kills every background shell of `user`'s `session`: the session's end (spec 3.1
+    /// §7.29).
+    pub async fn end_session_shells(&self, user: &UserId, session: &SessionId) {
+        if let Some(shells) = self.agent.runtime().toolset().shells() {
+            shells.end_session(&self.app_name, user.as_ref(), session.as_ref()).await;
+        }
     }
 
     /// The runner.

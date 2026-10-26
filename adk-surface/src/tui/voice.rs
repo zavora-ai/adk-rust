@@ -5,20 +5,23 @@
 //! Audio comes in and goes out on channels the host supplies, as PCM16 mono — the host
 //! records the microphone and plays the speaker. The conversation is the hub's, in process:
 //! the same spoken answers through the engine, the same echo rule, the same records as the
-//! voice view. `c` cancels a spoken "allow once" while it counts down and the message box is
-//! empty; Esc never decides.
+//! voice view. A spoken answer applies only to the voice session's own decisions, which the
+//! thread shows in full, and the line names the one prompted. `c` cancels a spoken "allow
+//! once" while it counts down and the message box is empty; Esc never decides.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 
 use super::app::Update;
 use super::safe::safe_line;
 use crate::engine::SurfaceEngine;
+use crate::model::DecisionCard;
 use crate::origin::Caller;
+use crate::rules::{Answer, Risk};
 use crate::voice::{VoiceClientMessage, VoiceHub, VoiceInput, VoiceOutput, VoiceUpdate};
 use crate::words;
 
@@ -50,6 +53,7 @@ pub struct TerminalVoice {
     model: String,
     microphone: mpsc::Receiver<Vec<u8>>,
     speaker: mpsc::Sender<Vec<u8>>,
+    flush: Option<Arc<Notify>>,
 }
 
 impl std::fmt::Debug for TerminalVoice {
@@ -66,7 +70,31 @@ impl TerminalVoice {
         microphone: mpsc::Receiver<Vec<u8>>,
         speaker: mpsc::Sender<Vec<u8>>,
     ) -> Self {
-        Self { hub, model: model.into(), microphone, speaker }
+        Self { hub, model: model.into(), microphone, speaker, flush: None }
+    }
+
+    /// Notifies `flush` when the person speaks over the model: the host then drops the audio
+    /// it has queued for the speaker. Without it the queued audio plays out, and speech is
+    /// taken for the model's echo until it would have ended (spec 3.3 §5.6).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    /// use adk_surface::tui::TerminalVoice;
+    ///
+    /// # fn example(hub: adk_surface::voice::VoiceHub) {
+    /// let (_microphone, heard) = tokio::sync::mpsc::channel(64);
+    /// let (speaker, _played) = tokio::sync::mpsc::channel(64);
+    /// let flush = Arc::new(tokio::sync::Notify::new());
+    /// let voice = TerminalVoice::new(hub, "gemini", heard, speaker).with_flush(flush.clone());
+    /// # let _ = voice;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_flush(mut self, flush: Arc<Notify>) -> Self {
+        self.flush = Some(flush);
+        self
     }
 }
 
@@ -82,8 +110,14 @@ pub(crate) struct VoiceLine {
     pub heard: Option<String>,
     /// A spoken "allow once" counting down: its decision and when it takes effect.
     pub pending: Option<(String, Instant)>,
-    /// The newest decision voice cannot approve, by its heading.
-    pub high_risk: Option<String>,
+    /// The heading of the decision counting down.
+    pub pending_heading: Option<String>,
+    /// The decision a spoken answer applies to now, and the words that answer it.
+    pub prompt: Option<String>,
+    /// The newest decision voice cannot approve, and where it is decided.
+    pub needs_screen: Option<String>,
+    /// How the last spoken answer ended, when nothing was decided.
+    pub outcome: Option<String>,
     /// What went wrong last, in the conversation's words.
     pub problem: Option<String>,
     /// The conversation ended.
@@ -97,13 +131,11 @@ impl VoiceLine {
             return ENDED.to_string();
         }
         if let Some((_, until)) = &self.pending {
-            return countdown(*until, now);
+            return countdown(*until, now, self.pending_heading.as_deref());
         }
-        if let Some(heading) = &self.high_risk {
-            return high_risk(heading);
-        }
-        if let Some(problem) = &self.problem {
-            return safe_line(problem);
+        let said = [&self.outcome, &self.problem, &self.prompt, &self.needs_screen];
+        if let Some(text) = said.into_iter().flatten().next() {
+            return safe_line(text);
         }
         if let Some(heard) = &self.heard {
             return words::heard(&safe_line(heard));
@@ -112,8 +144,9 @@ impl VoiceLine {
     }
 
     /// What the inline terminal prints when the line changes from `before`: what was heard, a
-    /// countdown starting, a call voice can't approve, a problem, the end. Listening, speaking
-    /// and the countdown's ticks print nothing, since the scrollback would repeat them.
+    /// countdown starting, how a spoken answer ended, the decision prompted, a call voice
+    /// can't approve, a problem, the end. Listening, speaking and the countdown's ticks print
+    /// nothing, since the scrollback would repeat them.
     pub(crate) fn news(&self, before: &VoiceLine, now: Instant) -> Vec<String> {
         let mut news = Vec::new();
         if self.heard != before.heard
@@ -124,17 +157,22 @@ impl VoiceLine {
         if let Some((id, until)) = &self.pending
             && before.pending.as_ref().is_none_or(|(was, _)| was != id)
         {
-            news.push(countdown(*until, now));
+            news.push(countdown(*until, now, self.pending_heading.as_deref()));
         }
-        if self.high_risk != before.high_risk
-            && let Some(heading) = &self.high_risk
-        {
-            news.push(high_risk(heading));
-        }
-        if self.problem != before.problem
-            && let Some(problem) = &self.problem
-        {
-            news.push(safe_line(problem));
+        // The prompted decision voice can't approve is printed once, as the prompt.
+        let needs_screen =
+            if self.needs_screen == self.prompt { &None } else { &self.needs_screen };
+        for (now_said, before_said) in [
+            (&self.outcome, &before.outcome),
+            (&self.prompt, &before.prompt),
+            (needs_screen, &before.needs_screen),
+            (&self.problem, &before.problem),
+        ] {
+            if now_said != before_said
+                && let Some(text) = now_said
+            {
+                news.push(safe_line(text));
+            }
         }
         if self.ended && !before.ended {
             news.push(ENDED.to_string());
@@ -146,15 +184,25 @@ impl VoiceLine {
 /// What the line says once the conversation has ended.
 const ENDED: &str = "The voice conversation ended.";
 
-/// A spoken "allow once" counting down to `until`.
-fn countdown(until: Instant, now: Instant) -> String {
+/// A spoken "allow once" of the decision `heading` counting down to `until`.
+fn countdown(until: Instant, now: Instant, heading: Option<&str>) -> String {
     let seconds = until.saturating_duration_since(now).as_millis().div_ceil(1000);
-    format!("{} — c to cancel", words::allowing_in(u64::try_from(seconds).unwrap_or(u64::MAX)))
+    let allowing = words::allowing_in(u64::try_from(seconds).unwrap_or(u64::MAX));
+    match heading {
+        Some(heading) => format!("{allowing}: {} — c to cancel", safe_line(heading)),
+        None => format!("{allowing} — c to cancel"),
+    }
 }
 
-/// A decision voice cannot approve, by its heading.
-fn high_risk(heading: &str) -> String {
-    format!("{} is high risk, so voice can't approve it — answer it here", safe_line(heading))
+/// What the line says of a decision voice cannot allow once, as the voice view says it.
+fn cant_approve(card: &DecisionCard) -> String {
+    let why = if card.money || card.risk == Risk::High {
+        words::voice_cant_approve(&card.heading, card.money)
+    } else {
+        // Shown cut short: approving needs the call in full, on screen.
+        words::wants_to(&card.agent.display_name, &card.heading)
+    };
+    format!("{why} {}", words::SAY_DENY_OR_DECIDE_ON_SCREEN)
 }
 
 /// A running voice conversation of the terminal.
@@ -199,8 +247,8 @@ pub(crate) async fn start(
     caller: Caller,
     updates: mpsc::UnboundedSender<Update>,
 ) -> std::io::Result<(String, Running)> {
-    let TerminalVoice { hub, model, mut microphone, speaker } = voice;
-    let link = hub.open(&caller, &model, None).await.map_err(std::io::Error::other)?;
+    let TerminalVoice { hub, model, mut microphone, speaker, flush } = voice;
+    let link = hub.open_in_thread(&caller, &model).await.map_err(std::io::Error::other)?;
     let session = link.session_id.clone();
     let input = link.input.clone();
     let task = tokio::spawn(async move {
@@ -222,6 +270,17 @@ pub(crate) async fn start(
                     Some(VoiceOutput::Audio(pcm)) => {
                         // A slow speaker drops audio rather than holding the conversation up.
                         let _ = speaker.try_send(pcm);
+                    }
+                    // Spoken over: the host drops what it queued, and the conversation is
+                    // told, so speech counts again from now on.
+                    Some(VoiceOutput::Update(VoiceUpdate::BargeIn)) => {
+                        if let Some(flush) = &flush {
+                            flush.notify_one();
+                            let ended = VoiceInput::Message(VoiceClientMessage::PlaybackEnded);
+                            if sender.send(ended).await.is_err() {
+                                break;
+                            }
+                        }
                     }
                     Some(VoiceOutput::Update(update)) => {
                         apply(&mut line, update, &engine, &caller).await;
@@ -245,25 +304,50 @@ async fn apply(line: &mut VoiceLine, update: VoiceUpdate, engine: &SurfaceEngine
         VoiceUpdate::Heard { text } => {
             line.heard = Some(text);
             line.problem = None;
+            line.outcome = None;
         }
         VoiceUpdate::Pending { decision_id, cancel_until, .. } => {
             let left = (cancel_until - Utc::now()).to_std().unwrap_or_default();
+            line.pending_heading =
+                engine.decision(caller, &decision_id).await.ok().map(|card| card.heading);
             line.pending = Some((decision_id, Instant::now() + left));
+            line.outcome = None;
         }
-        VoiceUpdate::Outcome { decision_id, .. } => {
+        VoiceUpdate::Outcome { decision_id, text, .. } => {
             if line.pending.as_ref().is_some_and(|(id, _)| *id == decision_id) {
                 line.pending = None;
+                line.pending_heading = None;
             }
+            line.outcome = text;
+        }
+        VoiceUpdate::Prompted { decision_id, .. } => {
+            let card = match decision_id {
+                Some(id) => engine.decision(caller, &id).await.ok(),
+                None => None,
+            };
+            line.prompt = card.map(|card| {
+                let allows = card
+                    .allowed
+                    .option(Answer::AllowOnce)
+                    .is_some_and(|option| !option.needs_expanded);
+                if allows {
+                    let wants = words::wants_to(&card.agent.display_name, &card.heading);
+                    format!("{wants} {}", words::SAY_ALLOW_ONCE_OR_DENY)
+                } else {
+                    cant_approve(&card)
+                }
+            });
+            line.outcome = None;
         }
         VoiceUpdate::NeedsScreen { decision_ids } => {
-            line.high_risk = match decision_ids.last() {
-                Some(id) => engine.decision(caller, id).await.ok().map(|card| card.heading),
+            line.needs_screen = match decision_ids.last() {
+                Some(id) => engine.decision(caller, id).await.ok().map(|card| cant_approve(&card)),
                 None => None,
             };
         }
         VoiceUpdate::Ended => line.ended = true,
         VoiceUpdate::Error { message, .. } => line.problem = Some(message),
-        VoiceUpdate::Prompted { .. } | VoiceUpdate::BargeIn => {}
+        VoiceUpdate::BargeIn => {}
     }
 }
 
@@ -380,9 +464,9 @@ mod tests {
         }
     }
 
-    /// The inline terminal prints what was heard, each countdown, a call voice can't approve
-    /// and the end once each, escaped; listening, speaking and the countdown's ticks print
-    /// nothing.
+    /// The inline terminal prints what was heard, each countdown, the prompt, how a spoken
+    /// answer ended, a call voice can't approve and the end once each, escaped; listening,
+    /// speaking and the countdown's ticks print nothing.
     #[test]
     fn the_inline_terminal_prints_each_piece_of_news_once() {
         fn step(printer: &mut Printer<Vec<u8>>, app: &mut App, line: &VoiceLine, at: Instant) {
@@ -402,11 +486,16 @@ mod tests {
         line.heard = Some("allow\u{1b}[2J once".into());
         step(&mut printer, &mut app, &line, now);
         line.pending = Some(("apr_1".into(), now + Duration::from_secs(5)));
+        line.pending_heading = Some("Send the invoice".into());
         step(&mut printer, &mut app, &line, now);
         step(&mut printer, &mut app, &line, now + Duration::from_secs(2));
         line.pending = None;
+        line.outcome = Some(words::CHANGED_WHILE_YOU_SPOKE.into());
         step(&mut printer, &mut app, &line, now + Duration::from_secs(5));
-        line.high_risk = Some("Publish the release".into());
+        let release = "\"Publish the release\" is high risk, so voice can't approve it. Say \"deny\", or decide on screen.";
+        line.outcome = None;
+        line.prompt = Some(release.into());
+        line.needs_screen = Some(release.into());
         step(&mut printer, &mut app, &line, now + Duration::from_secs(6));
         line.ended = true;
         step(&mut printer, &mut app, &line, now + Duration::from_secs(7));
@@ -416,10 +505,78 @@ mod tests {
             printed,
             [
                 "Heard \"allow\\u{1b}[2J once\"",
-                "Allowing once in 5 seconds — c to cancel",
-                "Publish the release is high risk, so voice can't approve it — answer it here",
+                "Allowing once in 5 seconds: Send the invoice — c to cancel",
+                words::CHANGED_WHILE_YOU_SPOKE,
+                release,
                 "The voice conversation ended.",
             ]
+        );
+    }
+
+    /// The line names the decision a spoken answer applies to, and the one counting down
+    /// (spec 3.3 §5.6, §7.1): the person sees what they answer.
+    #[test]
+    fn the_line_names_the_prompted_decision() {
+        let now = Instant::now();
+        let mut line = VoiceLine {
+            heard: Some("hello".into()),
+            prompt: Some(
+                "Finance wants to send email to [client email]. Say \"allow once\" or \"deny\"."
+                    .into(),
+            ),
+            ..VoiceLine::default()
+        };
+        assert_eq!(
+            line.text(now),
+            "Finance wants to send email to [client email]. Say \"allow once\" or \"deny\"."
+        );
+        line.pending = Some(("apr_1".into(), now + Duration::from_secs(5)));
+        line.pending_heading = Some("Send email to [client email]".into());
+        assert_eq!(
+            line.text(now),
+            "Allowing once in 5 seconds: Send email to [client email] — c to cancel"
+        );
+    }
+
+    /// How a spoken answer ended is on the line when nothing was decided (spec 3.3 S-I2).
+    #[test]
+    fn the_line_says_how_a_spoken_answer_ended() {
+        let now = Instant::now();
+        let mut line = VoiceLine {
+            heard: Some("allow once".into()),
+            prompt: Some("Finance wants to send email. Say \"allow once\" or \"deny\".".into()),
+            ..VoiceLine::default()
+        };
+        line.outcome = Some(words::VOICE_CANT_APPROVE_THIS.into());
+        assert_eq!(line.text(now), words::VOICE_CANT_APPROVE_THIS);
+        let before = VoiceLine { outcome: None, ..line.clone() };
+        assert_eq!(line.news(&before, now), [words::VOICE_CANT_APPROVE_THIS]);
+    }
+
+    /// A call voice cannot allow once says why in the voice view's words: money is not high
+    /// risk, and a call shown cut short is neither (spec 3.3 §8).
+    #[test]
+    fn a_call_voice_cant_approve_says_why() {
+        let mut money = crate::tui::tests::card("apr_1", "pay_invoice", serde_json::json!({}));
+        money.heading = "Pay the invoice".into();
+        money.risk = Risk::Low;
+        money.money = true;
+        assert_eq!(
+            cant_approve(&money),
+            "\"Pay the invoice\" spends money, so voice can't approve it. Say \"deny\", or decide on screen."
+        );
+        let mut high = money.clone();
+        high.money = false;
+        high.risk = Risk::High;
+        assert_eq!(
+            cant_approve(&high),
+            "\"Pay the invoice\" is high risk, so voice can't approve it. Say \"deny\", or decide on screen."
+        );
+        let mut cut = high.clone();
+        cut.risk = Risk::Low;
+        assert_eq!(
+            cant_approve(&cut),
+            "Finance wants to pay the invoice. Say \"deny\", or decide on screen."
         );
     }
 
@@ -430,11 +587,8 @@ mod tests {
         assert_eq!(line.text(now), "Listening");
         line.heard = Some("allow\u{1b}[2J once".into());
         assert_eq!(line.text(now), "Heard \"allow\\u{1b}[2J once\"");
-        line.high_risk = Some("Publish the release".into());
-        assert_eq!(
-            line.text(now),
-            "Publish the release is high risk, so voice can't approve it — answer it here"
-        );
+        line.needs_screen = Some("\"Publish\u{1b}[2J\" is high risk".into());
+        assert_eq!(line.text(now), "\"Publish\\u{1b}[2J\" is high risk");
         line.pending = Some(("apr_1".into(), now + Duration::from_millis(4_200)));
         assert_eq!(line.text(now), "Allowing once in 5 seconds — c to cancel");
     }

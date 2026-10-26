@@ -113,8 +113,9 @@
 2 adk-cli audit-sql
 # `serve --store postgres://…|redis://…` (spec 3.1 §8.2, §13 Q2).
 2 adk-cli postgres,redis
-# The `chat` end-to-end tests in a pseudo-terminal: held calls, Ctrl-C, sessions.
-2 adk-cli scripted-model
+# The `chat` end-to-end tests in a pseudo-terminal: held calls, Ctrl-C, sessions; with
+# `audit-sql`, "Hire a helper" (spec 3.3 §12 phase 4) checks the kernel's record with `audit verify`.
+2 adk-cli scripted-model,audit-sql
 # `adk-rust --voice` (spec 3.1 §7.17) and `up --pack voice` (spec 3.3 §5.6) end to end on a
 # scripted realtime provider; `voice-desktop` implies `voice` and adds the microphone and the
 # speaker of the console voice and the terminal's voice mode.
@@ -194,6 +195,9 @@
 # Checkpointers for shared databases: compiles them and runs the in-process conformance
 # suites; the live-server suites run in the nightly `durable-stores` job.
 3 adk-graph postgres,redis,mongodb,neo4j,firestore
+# Governed HTTP nodes and forks with lineage (spec 3.3 §12): the HTTP call arguments and
+# the governed fork tests meet only under both features.
+3 adk-graph action-http,time-travel
 # The harness's shared mode and rule stores and its plan checkpointer URLs over the same
 # backends (spec 3.1 §13 Q2, Q5); the live-server suites run in the postgres job.
 3 adk-harness postgres,redis,mongodb,neo4j,firestore

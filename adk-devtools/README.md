@@ -24,10 +24,14 @@ The `bash` tool emits its output incrementally as it runs, so UIs can display a
 live terminal (see the
 [`streaming_bash`](https://github.com/zavora-ai/adk-rust/tree/main/examples/streaming_bash)
 example). The framework forwards each chunk as a partial event on the agent's `EventStream`;
-consumers detect them with `event.tool_progress_stream()`. The output is also returned as the
-tool's final result for the model, capped per stream at `Workspace::max_output_bytes`
-(default 1 MiB) as it is read; excess output is drained and discarded, and the
-result sets `truncated: true`.
+consumers detect them with `event.tool_progress_stream()`. The tool's final result for the
+model carries at most `INLINE_OUTPUT_CHARS` (30,000) characters of output: a longer stream
+keeps its first third and last two thirds around a marker naming the bytes left out, and the
+result sets `truncated: true`. With an `OutputStore` (`BashTool::with_output_store`) the
+whole output, up to `Workspace::max_output_bytes` (default 64 MiB), goes to a file the result
+names as `output_id`; memory holds only the start and end of each stream.
+`BashTool::spawn` starts a command and returns a `RunningCommand` at once, for a caller that
+keeps it running in the background (`adk-harness` background shells).
 
 ## Installation
 
@@ -77,7 +81,8 @@ edit approved in another process finds its read.
 | `bash` timeout | 120 s; a call's `timeout_secs` can shorten it but not extend it | `bash_timeout` |
 | `bash` environment | Cleared, then `DEFAULT_ENV_ALLOWLIST` (`PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`, `TERM`, `USER`, `SHELL`) | `env_allowlist`, `inherit_env` |
 | `bash` background processes | Killed when the shell exits | `bash_kill_group_on_exit` |
-| Output per stream | 1 MiB | `max_output_bytes` |
+| Output in a result | 30,000 characters, head and tail (`INLINE_OUTPUT_CHARS`) | — |
+| Output file of an `OutputStore` | 64 MiB (`DEFAULT_MAX_OUTPUT_BYTES`) | `max_output_bytes` |
 | Secret files | `DEFAULT_EXCLUDE_GLOBS` (`.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `*.p12`, `*.pfx`) skipped by `grep`/`glob`, refused by `read_file`; `exclude_globs([])` turns exclusion off | `exclude_globs` |
 | Read-before-edit record | Per session and agent; clones of a workspace keep sessions apart | — |
 

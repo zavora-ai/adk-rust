@@ -1,6 +1,7 @@
 //! The phone's doorbell (spec 3.3 §5.4, §7.3, §11 S-I5): a wake-up when a decision waits,
 //! none during quiet time, one per phone when quiet time ends, each sent once across replicas.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,6 +22,15 @@ use super::SURFACE_AUDIT_NOTIFY;
 use super::push::{Deliveries, PushSender, Sent, Subscription, new_wake_id, wake_up};
 use super::quiet::QuietTime;
 use super::store::{Attachment, Attachments, Holder, PUSH, PUSH_KEY, WAKE};
+
+/// The longest wait between tries of a wake-up the push service could not take.
+const RETRY_AT_MOST: Duration = Duration::from_secs(60 * 60);
+/// How often the claims no wake-up needs any more are removed.
+const PRUNE_EVERY: chrono::TimeDelta = chrono::TimeDelta::hours(6);
+/// How long a claim stays whatever it covers: a wake-up being sent keeps its own.
+const PRUNE_AFTER: chrono::TimeDelta = chrono::TimeDelta::minutes(10);
+/// How long the claim of a quiet time's end is kept, for the replicas that wake at that end.
+const QUIET_CLAIM_KEPT: chrono::TimeDelta = chrono::TimeDelta::days(1);
 
 /// Tells the phone's push task about every decision submitted (spec 3.3 §5.4). Add it to the
 /// approval service with `StoreApprovalService::with_notifier`, beside Telegram's doorbell;
@@ -127,7 +137,8 @@ pub(crate) struct Ringer {
 
 impl Ringer {
     /// Runs until the doorbell is dropped: wakes for each decision it hears about, sweeps at
-    /// the start and at each end of quiet time.
+    /// the start and at each end of quiet time, and removes the claims no wake-up needs at the
+    /// start and every six hours.
     pub(crate) async fn run(
         self,
         receiver: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<ApprovalRequest>>>,
@@ -137,6 +148,8 @@ impl Ringer {
         if quiet_end.is_none() {
             self.sweep(None).await;
         }
+        self.prune().await;
+        let mut pruned = self.clock.now();
         loop {
             let wait = match quiet_end {
                 Some(end) => (end - self.clock.now()).to_std().unwrap_or_default().min(self.poll),
@@ -159,6 +172,10 @@ impl Ringer {
                                 self.sweep(Some(end)).await;
                             }
                         }
+                    }
+                    if now - pruned >= PRUNE_EVERY {
+                        self.prune().await;
+                        pruned = now;
                     }
                 }
             }
@@ -191,22 +208,38 @@ impl Ringer {
             // follows; ending together, they share one claim.
             let ringer = self.clone();
             tokio::spawn(async move {
-                // Reads the clock again each poll, so a clock set forward ends the wait.
+                // Reads the clock and the quiet time again each poll, as the sweep does: a clock
+                // set forward ends the wait, and a quiet time the person changed meanwhile holds
+                // it to the new end, which names the claim.
+                let mut until = until;
                 loop {
-                    let left = (until - ringer.clock.now()).to_std().unwrap_or_default();
-                    if left.is_zero() {
-                        break;
+                    let now = ringer.clock.now();
+                    match ringer.quiet.until(request.run_id.as_deref(), now).await {
+                        Some(end) => {
+                            until = end;
+                            let left = (end - now).to_std().unwrap_or_default();
+                            tokio::time::sleep(left.clamp(Duration::from_millis(1), ringer.poll))
+                                .await;
+                        }
+                        None => break,
                     }
-                    tokio::time::sleep(left.min(ringer.poll)).await;
                 }
                 let Ok(Some(current)) = ringer.approvals.get(&request.id).await else { return };
                 if current.state != ApprovalState::Pending {
                     return;
                 }
                 for phone in ringer.phones_for(&current).await.unwrap_or_default() {
-                    ringer
-                        .wake(&phone, &Claim::QuietEnded(until), std::slice::from_ref(&current))
-                        .await;
+                    // Every decision the phone's person has waiting, as the sweep at the same end
+                    // covers, so whichever takes the claim marks them all.
+                    let waiting = match ringer.waiting(&phone.device).await {
+                        Ok(waiting) if !waiting.is_empty() => waiting,
+                        Ok(_) => vec![current.clone()],
+                        Err(error) => {
+                            tracing::warn!(device.id = %phone.device.id, error = %error, "the waiting decisions could not be read");
+                            vec![current.clone()]
+                        }
+                    };
+                    ringer.wake(&phone, &Claim::QuietEnded(until), &waiting).await;
                 }
             });
             return;
@@ -265,8 +298,25 @@ impl Ringer {
     }
 
     /// Sends `phone` one wake-up for `covers`, unless `claim` was taken here or on another
-    /// replica. Every decision it covers is marked woken.
+    /// replica. Every decision it covers is marked woken. One the push service could not take
+    /// is tried again while its decisions wait (spec 3.3 §7.3).
     async fn wake(&self, phone: &Phone, claim: &Claim, covers: &[ApprovalRequest]) {
+        let Some(marked) = self.claim(phone, claim, covers).await else { return };
+        if self.ring(phone, claim, covers, &marked).await {
+            let ringer = self.clone();
+            let (phone, claim, covers) = (phone.clone(), claim.clone(), covers.to_vec());
+            tokio::spawn(async move { ringer.ring_again(phone, claim, covers).await });
+        }
+    }
+
+    /// Takes `claim` for `phone` and marks each decision of `covers` woken: the keys of the
+    /// marks it made, or `None` when the claim was taken here or on another replica.
+    async fn claim(
+        &self,
+        phone: &Phone,
+        claim: &Claim,
+        covers: &[ApprovalRequest],
+    ) -> Option<Vec<String>> {
         let holder = Holder::Device(phone.device.id.clone());
         let now = self.clock.now();
         let ids: Vec<String> = covers.iter().map(|request| request.id.clone()).collect();
@@ -274,33 +324,151 @@ impl Ringer {
             Attachment::new(holder.clone(), WAKE, claim.key(), json!({ "approvalIds": ids }), now);
         match self.store.put_if_absent(row).await {
             Ok(true) => {}
-            Ok(false) => return,
+            Ok(false) => return None,
             Err(error) => {
                 tracing::warn!(device.id = %phone.device.id, error = %error, "a wake-up could not be claimed; it is not sent");
-                return;
+                return None;
             }
         }
+        let mut marked = Vec::new();
         for request in covers {
-            let row = Attachment::new(holder.clone(), WAKE, decision_key(request), json!({}), now);
-            if let Err(error) = self.store.put_if_absent(row).await {
-                tracing::warn!(device.id = %phone.device.id, error = %error, "a woken decision could not be marked");
+            let key = decision_key(request);
+            let row = Attachment::new(holder.clone(), WAKE, key.clone(), json!({}), now);
+            match self.store.put_if_absent(row).await {
+                Ok(true) => marked.push(key),
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(device.id = %phone.device.id, error = %error, "a woken decision could not be marked");
+                }
             }
         }
+        Some(marked)
+    }
+
+    /// Sends one claimed wake-up and records what became of it. `true` when the push service
+    /// could not take it now: the claim and the marks it made (`marked`) are removed, so a
+    /// later try, the end of quiet time or a restart sends it.
+    async fn ring(
+        &self,
+        phone: &Phone,
+        claim: &Claim,
+        covers: &[ApprovalRequest],
+        marked: &[String],
+    ) -> bool {
+        let holder = Holder::Device(phone.device.id.clone());
+        let ids: Vec<String> = covers.iter().map(|request| request.id.clone()).collect();
         let id = new_wake_id();
         match self.sender.send(&phone.subscription, &wake_up(&id)).await {
             Sent::Delivered => {
                 self.deliveries.sent(&id, &phone.device.id, self.clock.now());
                 self.record(&phone.device, &ids, "sent", None).await;
+                false
             }
             Sent::Gone => {
                 if let Err(error) = self.store.remove(&holder, PUSH, PUSH_KEY).await {
                     tracing::warn!(device.id = %phone.device.id, error = %error, "a gone subscription could not be removed");
                 }
                 self.record(&phone.device, &ids, "dropped", Some("the subscription is gone")).await;
+                false
             }
             Sent::Failed(reason) => {
                 tracing::warn!(device.id = %phone.device.id, reason = %reason, "a wake-up could not be sent");
                 self.record(&phone.device, &ids, "dropped", Some(&reason)).await;
+                false
+            }
+            Sent::Unavailable(reason) => {
+                tracing::warn!(device.id = %phone.device.id, reason = %reason, "a wake-up could not be sent now; it is tried again");
+                self.record(&phone.device, &ids, "dropped", Some(&reason)).await;
+                for key in marked.iter().cloned().chain(std::iter::once(claim.key())) {
+                    if let Err(error) = self.store.remove(&holder, WAKE, &key).await {
+                        tracing::warn!(device.id = %phone.device.id, error = %error, "a wake-up's claim could not be released");
+                    }
+                }
+                true
+            }
+        }
+    }
+
+    /// Tries a wake-up the push service could not take again, after a wait that doubles from
+    /// the poll up to an hour, while its decisions wait, outside quiet time, and while the
+    /// phone stays paired. The end of quiet time and the next start wake for what is left.
+    async fn ring_again(self, phone: Phone, claim: Claim, covers: Vec<ApprovalRequest>) {
+        let mut wait = self.poll;
+        loop {
+            tokio::time::sleep(wait).await;
+            wait = wait.saturating_mul(2).min(RETRY_AT_MOST);
+            let mut waiting = Vec::new();
+            for request in &covers {
+                if let Ok(Some(current)) = self.approvals.get(&request.id).await
+                    && current.state == ApprovalState::Pending
+                {
+                    waiting.push(current);
+                }
+            }
+            let Some(first) = waiting.first() else { return };
+            if self.quiet.until(first.run_id.as_deref(), self.clock.now()).await.is_some() {
+                return;
+            }
+            let Some(phone) = self.phones().await.ok().and_then(|phones| {
+                phones.into_iter().find(|candidate| candidate.device.id == phone.device.id)
+            }) else {
+                return;
+            };
+            let Some(marked) = self.claim(&phone, &claim, &waiting).await else { return };
+            if !self.ring(&phone, &claim, &waiting, &marked).await {
+                return;
+            }
+        }
+    }
+
+    /// Removes what no wake-up needs any more (spec 3.3 §5.4): every attachment of a device
+    /// whose pairing ended, and an active device's claims of decisions that no longer wait and
+    /// of quiet times a day over. A claim younger than ten minutes stays, whatever it covers.
+    pub(crate) async fn prune(&self) {
+        let devices = match self.pairing.devices().await {
+            Ok(devices) => devices,
+            Err(error) => {
+                tracing::warn!(error = %error, "the paired devices could not be read; nothing is pruned");
+                return;
+            }
+        };
+        let now = self.clock.now();
+        for device in devices {
+            let holder = Holder::Device(device.id.clone());
+            if !device.is_active(now) {
+                if let Err(error) = self.store.remove_all(&holder).await {
+                    tracing::warn!(device.id = %device.id, error = %error, "an ended device's attachments could not be removed");
+                }
+                continue;
+            }
+            let rows = match self.store.list(&holder, WAKE).await {
+                Ok(rows) => rows,
+                Err(error) => {
+                    tracing::warn!(device.id = %device.id, error = %error, "the wake-ups sent could not be read");
+                    continue;
+                }
+            };
+            if rows.iter().all(|row| now - row.updated_at < PRUNE_AFTER) {
+                continue;
+            }
+            let waiting: HashSet<String> = match self.waiting(&device).await {
+                Ok(waiting) => waiting.iter().map(decision_key).collect(),
+                Err(error) => {
+                    tracing::warn!(device.id = %device.id, error = %error, "the waiting decisions could not be read");
+                    continue;
+                }
+            };
+            for row in rows {
+                let spent = match row.key.strip_prefix("quiet:") {
+                    Some(_) => now - row.updated_at >= QUIET_CLAIM_KEPT,
+                    None => !waiting.contains(&row.key),
+                };
+                if spent
+                    && now - row.updated_at >= PRUNE_AFTER
+                    && let Err(error) = self.store.remove(&holder, WAKE, &row.key).await
+                {
+                    tracing::warn!(device.id = %device.id, error = %error, "a spent wake-up claim could not be removed");
+                }
             }
         }
     }

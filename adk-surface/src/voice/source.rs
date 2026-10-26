@@ -229,6 +229,14 @@ impl Source for VoiceSource {
         self.inner.primary_agent()
     }
 
+    fn rates_high(&self, request: &ApprovalRequest) -> bool {
+        self.inner.rates_high(request)
+    }
+
+    fn moves_money(&self, request: &ApprovalRequest) -> bool {
+        self.inner.moves_money(request)
+    }
+
     async fn busy(&self, user: &str, session: &str) -> Result<bool> {
         self.inner.busy(user, session).await
     }
@@ -328,6 +336,15 @@ mod tests {
             self.resumed.lock().unwrap().push(request.scope.session_id.clone());
             Ok(())
         }
+
+        /// Rates `pay_invoice` as a mounted driver's `financial` tool.
+        fn rates_high(&self, request: &ApprovalRequest) -> bool {
+            request.tool_name == "pay_invoice"
+        }
+
+        fn moves_money(&self, request: &ApprovalRequest) -> bool {
+            request.tool_name == "pay_invoice"
+        }
     }
 
     fn decided(session: &str) -> ApprovalRequest {
@@ -344,6 +361,19 @@ mod tests {
             &call,
             ApprovalPolicy::new([ApproverSelector::group("owner")]),
         )
+    }
+
+    /// The wrapped source's rating of a call reaches the engine through the voice source, so a
+    /// driver's `financial` call stays high risk and money with voice on (spec 3.3 §7.2, spec
+    /// 3.2 K-I9).
+    #[test]
+    fn the_wrapped_source_rates_each_call() {
+        let source = VoiceSource::new(Arc::new(Recording::default()));
+        let mut pay = decided("typed");
+        pay.tool_name = "pay_invoice".into();
+        assert!(source.rates_high(&pay) && source.moves_money(&pay));
+        let list = decided("typed");
+        assert!(!source.rates_high(&list) && !source.moves_money(&list));
     }
 
     /// A decision on a live voice conversation's call wakes that conversation, never the

@@ -168,6 +168,9 @@ pub struct HarnessToolset {
     /// (spec 3.1 §7.9 "Container").
     #[cfg(feature = "docker")]
     containers: Option<Arc<crate::shell::ContainerPool>>,
+    /// Background shells: named in the reminder when they end, killed when the toolset
+    /// closes (spec 3.1 §7.29).
+    shells: Option<Arc<crate::shell::ShellSupervisor>>,
 }
 
 impl HarnessToolset {
@@ -190,7 +193,20 @@ impl HarnessToolset {
             facts: None,
             #[cfg(feature = "docker")]
             containers: None,
+            shells: None,
         }
+    }
+
+    /// Names the session's ended background shells in each reminder and kills every shell
+    /// when the toolset closes (spec 3.1 §7.29).
+    pub(crate) fn with_shells(mut self, shells: Arc<crate::shell::ShellSupervisor>) -> Self {
+        self.shells = Some(shells);
+        self
+    }
+
+    /// The background shells, when the harness has a shell.
+    pub fn shells(&self) -> Option<&Arc<crate::shell::ShellSupervisor>> {
+        self.shells.as_ref()
     }
 
     /// Stops the container shell's session containers when the toolset closes.
@@ -382,9 +398,13 @@ impl Toolset for HarnessToolset {
         Ok(self.tools.clone())
     }
 
-    /// Stops every session container of the container shell (`Harness::close` reaches it
-    /// through `Runner::close`, spec 3.1 §7.9).
+    /// Kills every background shell (spec 3.1 §7.29) and stops every session container of
+    /// the container shell (`Harness::close` reaches it through `Runner::close`, spec 3.1
+    /// §7.9).
     async fn close(&self) {
+        if let Some(shells) = &self.shells {
+            shells.close().await;
+        }
         #[cfg(feature = "docker")]
         if let Some(containers) = &self.containers {
             containers.close().await;
@@ -420,6 +440,12 @@ impl Toolset for HarnessToolset {
         // saved, so it stays out of the cached prefix (spec 3.1 §7.25, I56).
         if let Some(digest) = &self.rules
             && let Some(text) = digest.render(ctx.app_name(), ctx.user_id(), ctx.session_id()).await
+        {
+            lines.push(text);
+        }
+        if let Some(shells) = &self.shells
+            && let Some(text) =
+                shells.notices(ctx.app_name(), ctx.user_id(), ctx.session_id()).await
         {
             lines.push(text);
         }

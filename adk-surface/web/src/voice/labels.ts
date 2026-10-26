@@ -22,6 +22,7 @@ export const voiceLabels = {
   privacyNote: words.VOICE_PRIVACY_NOTE,
   sayAllowOnceOrDeny: words.SAY_ALLOW_ONCE_OR_DENY,
   sayDenyOrDecideOnScreen: words.SAY_DENY_OR_DECIDE_ON_SCREEN,
+  exactCall: "The exact call",
   mic: (on: boolean) => (on ? "Mic on" : "Mic off"),
   camera: (on: boolean) => (on ? "Camera on" : "Camera off"),
   screen: (on: boolean) => (on ? "Screen on" : "Screen off"),

@@ -68,6 +68,9 @@ pub struct ExecutionConfig {
     /// Set by [`GraphAgent`](crate::agent::GraphAgent), which streams these events
     /// to its caller, so a runner shows and records them while the graph runs.
     pub(crate) event_sink: Option<tokio::sync::mpsc::UnboundedSender<adk_core::Event>>,
+    /// The lineage root a subgraph's run keys its governed nodes' records by, derived from
+    /// the parent's, so a fork of the parent finds the records its source wrote.
+    pub(crate) lineage_root: Option<String>,
 }
 
 impl ExecutionConfig {
@@ -84,6 +87,7 @@ impl ExecutionConfig {
             #[cfg(feature = "functional")]
             cancellation_token: None,
             event_sink: None,
+            lineage_root: None,
         }
     }
 
@@ -546,6 +550,93 @@ pub trait Node: Send + Sync {
         adk_core::AgentCapabilities::default()
     }
 
+    /// What kind of step this node is, as a workflow observer labels it in
+    /// [`CompiledGraph::shape`](crate::graph::CompiledGraph::shape) (spec 3.3 §12).
+    ///
+    /// Defaults to [`NodeKind::Other`](crate::shape::NodeKind::Other).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::node::{FunctionNode, Node, NodeOutput};
+    /// use adk_graph::shape::NodeKind;
+    ///
+    /// let node = FunctionNode::new("receipt", |_ctx| async { Ok(NodeOutput::new()) });
+    /// assert_eq!(node.kind(), NodeKind::Function);
+    /// ```
+    fn kind(&self) -> crate::shape::NodeKind {
+        crate::shape::NodeKind::Other
+    }
+
+    /// The call this node makes, as an approver sees it and as its record binds it, when
+    /// the node is governed (spec 3.3 §12, §7.1).
+    ///
+    /// The value is shown in full on the decision and its
+    /// [`json_digest`](adk_core::json_digest) is part of the call's action-ledger key, so a
+    /// fork whose call is unchanged is answered from the record. `None`, the default,
+    /// binds the call to the whole state the node reads.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::node::{Node, NodeContext, NodeOutput};
+    /// use serde_json::{Value, json};
+    ///
+    /// struct Charge;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Node for Charge {
+    ///     fn name(&self) -> &str {
+    ///         "pay"
+    ///     }
+    ///     fn call_args(&self, ctx: &NodeContext) -> Option<Value> {
+    ///         Some(json!({ "amountCents": ctx.get("amountCents").cloned()? }))
+    ///     }
+    ///     async fn execute(&self, _ctx: &NodeContext) -> adk_graph::Result<NodeOutput> {
+    ///         Ok(NodeOutput::new())
+    ///     }
+    /// }
+    /// ```
+    fn call_args(&self, _ctx: &NodeContext) -> Option<Value> {
+        None
+    }
+
+    /// Runs exactly `args`: an approver's edit of [`Node::call_args`] (spec 3.3 §7.1, §7.5).
+    ///
+    /// Called instead of [`Node::execute`] when an approver edited a governed node's call.
+    /// It must send the call it is given and nothing else.
+    ///
+    /// # Errors
+    ///
+    /// The default returns [`GovernedError::EditUnsupported`](crate::governed::GovernedError::EditUnsupported):
+    /// the node cannot run an edited call, so the edited call is refused and nothing runs.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::node::{Node, NodeContext, NodeOutput};
+    /// use serde_json::Value;
+    ///
+    /// struct Charge;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Node for Charge {
+    ///     fn name(&self) -> &str {
+    ///         "pay"
+    ///     }
+    ///     async fn execute(&self, _ctx: &NodeContext) -> adk_graph::Result<NodeOutput> {
+    ///         Ok(NodeOutput::new())
+    ///     }
+    ///     async fn run_call(&self, _ctx: &NodeContext, args: Value) -> adk_graph::Result<NodeOutput> {
+    ///         Ok(NodeOutput::new().with_update("charged", args["amountCents"].clone()))
+    ///     }
+    /// }
+    /// ```
+    async fn run_call(&self, _ctx: &NodeContext, _args: Value) -> Result<NodeOutput> {
+        Err(crate::governed::GovernedError::EditUnsupported { node: self.name().to_string() }
+            .into())
+    }
+
     /// Execute the node and return state updates
     async fn execute(&self, ctx: &NodeContext) -> Result<NodeOutput>;
 
@@ -641,6 +732,10 @@ impl FunctionNode {
 impl Node for FunctionNode {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn kind(&self) -> crate::shape::NodeKind {
+        crate::shape::NodeKind::Function
     }
 
     async fn execute(&self, ctx: &NodeContext) -> Result<NodeOutput> {
@@ -824,6 +919,10 @@ impl Node for AgentNode {
 
     fn capabilities(&self) -> adk_core::AgentCapabilities {
         self.agent.capabilities()
+    }
+
+    fn kind(&self) -> crate::shape::NodeKind {
+        crate::shape::NodeKind::ModelStep
     }
 
     async fn execute(&self, ctx: &NodeContext) -> Result<NodeOutput> {
@@ -1038,9 +1137,9 @@ struct GraphInvocationContext {
 }
 
 /// Identity used when a graph runs with no parent invocation.
-const STANDALONE_USER_ID: &str = "graph_user";
+pub(crate) const STANDALONE_USER_ID: &str = "graph_user";
 /// Application name used when a graph runs with no parent invocation.
-const STANDALONE_APP_NAME: &str = "graph_app";
+pub(crate) const STANDALONE_APP_NAME: &str = "graph_app";
 
 impl GraphInvocationContext {
     /// `thread_id` identifies the session only in standalone mode; with a parent,

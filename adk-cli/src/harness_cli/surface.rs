@@ -637,6 +637,14 @@ async fn in_process(
     if text_ui && let Some(notice) = setup.memory_notice_text(MEMORY_COMMANDS) {
         notices.push(notice.replace('\n', " "));
     }
+    // Where searches go and what embeds facts, in every session (spec 3.1 §7.32).
+    if text_ui {
+        let mut session = format!("Search: {}.", harness.agent().info().web_search);
+        if setup.memory_on() {
+            session.push_str(&format!(" Memory embedder: {}.", setup.embedder_label()));
+        }
+        notices.push(session);
+    }
     // Sessions that ended without saving are distilled in the background (spec 3.1 §7.33
     // fix 9); JSON output answers one message and is no REPL.
     let user = UserId::new(setup.user.clone())?;
@@ -713,9 +721,10 @@ fn terminal_voice(
     }
     #[cfg(feature = "voice-desktop")]
     {
-        let (microphone, speaker) =
+        let (microphone, speaker, flush) =
             crate::voice_cli::desktop_channels(first.input_rate, first.output_rate)?;
-        Ok(adk_surface::tui::TerminalVoice::new(hub.build(), first.id, microphone, speaker))
+        Ok(adk_surface::tui::TerminalVoice::new(hub.build(), first.id, microphone, speaker)
+            .with_flush(flush))
     }
     #[cfg(not(feature = "voice-desktop"))]
     {

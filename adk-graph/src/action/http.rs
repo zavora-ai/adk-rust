@@ -193,19 +193,30 @@ pub async fn execute_http_with_policy(
     policy: &HttpActionPolicy,
 ) -> Result<NodeOutput> {
     let node_id = &config.standard.id;
-    let output_key = &config.standard.mapping.output_key;
-    let state = &ctx.state;
     let fail = |message: String| GraphError::NodeExecutionFailed { node: node_id.clone(), message };
+    let (client, request) = build_request(config, &ctx.state, policy).map_err(fail)?;
+    tracing::debug!(
+        node = %node_id,
+        url = %redact_url(request.url()),
+        method = ?config.method,
+        "executing HTTP node"
+    );
+    send(config, &client, request).await
+}
 
-    // Interpolate URL. The raw value is never echoed: it may carry a secret.
+/// The request an HTTP node sends for `state`, with a client that checks its redirects.
+///
+/// The URL is checked against `policy` before anything is built. The raw URL is never
+/// echoed in an error: it may carry a secret.
+fn build_request(
+    config: &HttpNodeConfig,
+    state: &HashMap<String, Value>,
+    policy: &HttpActionPolicy,
+) -> std::result::Result<(reqwest::Client, reqwest::Request), String> {
     let url = reqwest::Url::parse(&interpolate_variables(&config.url, state))
-        .map_err(|e| fail(format!("HTTP node URL is not a valid absolute URL: {e}")))?;
-    policy.check(&url).map_err(fail)?;
-    let shown_url = redact_url(&url);
-    tracing::debug!(node = %node_id, url = %shown_url, method = ?config.method, "executing HTTP node");
-
-    // Build request
-    let client = policy.client().map_err(fail)?;
+        .map_err(|e| format!("HTTP node URL is not a valid absolute URL: {e}"))?;
+    policy.check(&url)?;
+    let client = policy.client()?;
     let mut request = match config.method {
         HttpMethod::Get => client.get(url),
         HttpMethod::Post => client.post(url),
@@ -215,25 +226,31 @@ pub async fn execute_http_with_policy(
         HttpMethod::Head => client.head(url),
         HttpMethod::Options => client.request(reqwest::Method::OPTIONS, url),
     };
-
-    // Apply headers with interpolation
     for (key, value) in &config.headers {
-        let interpolated_value = interpolate_variables(value, state);
-        request = request.header(key.as_str(), interpolated_value);
+        request = request.header(key.as_str(), interpolate_variables(value, state));
     }
-
-    // Apply authentication
     request = apply_auth(request, &config.auth, state);
+    request = apply_body(request, &config.body, state).map_err(|e| e.to_string())?;
+    let request = request
+        .build()
+        .map_err(|e| format!("failed to build the HTTP request: {}", e.without_url()))?;
+    Ok((client, request))
+}
 
-    // Apply body
-    request = apply_body(request, &config.body, state)?;
-
-    // Send request
+/// Sends `request` and maps its response to the node's output.
+async fn send(
+    config: &HttpNodeConfig,
+    client: &reqwest::Client,
+    request: reqwest::Request,
+) -> Result<NodeOutput> {
+    let node_id = &config.standard.id;
+    let output_key = &config.standard.mapping.output_key;
+    let shown_url = redact_url(request.url());
     // `without_url` keeps the full URL, query string included, out of the error.
-    let response = request
-        .send()
-        .await
-        .map_err(|e| fail(format!("HTTP request to {shown_url} failed: {}", e.without_url())))?;
+    let response = client.execute(request).await.map_err(|e| GraphError::NodeExecutionFailed {
+        node: node_id.clone(),
+        message: format!("HTTP request to {shown_url} failed: {}", e.without_url()),
+    })?;
 
     let status = response.status().as_u16();
 
@@ -256,6 +273,251 @@ pub async fn execute_http_with_policy(
     });
 
     Ok(NodeOutput::new().with_update(output_key, output_value))
+}
+
+/// Whether a header, query parameter or form field named `name` carries a credential.
+fn is_credential(name: &str) -> bool {
+    const NAMES: [&str; 8] = [
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+        "key",
+        "sig",
+        "code",
+        "pwd",
+    ];
+    const PARTS: [&str; 13] = [
+        "auth",
+        "token",
+        "secret",
+        "passw",
+        "cookie",
+        "session",
+        "signature",
+        "credential",
+        "api-key",
+        "api_key",
+        "apikey",
+        "access_key",
+        "private",
+    ];
+    let name = name.to_ascii_lowercase();
+    NAMES.contains(&name.as_str()) || PARTS.iter().any(|part| name.contains(part))
+}
+
+/// The `sha256:` digest a credential named `name` is shown and bound as.
+///
+/// Domain-separated by the name, so equal values under different names differ.
+fn credential_digest(name: &str, value: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"adk-graph.http-credential\0");
+    hasher.update(name.to_ascii_lowercase().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(value);
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+/// Every value of the header `name`, joined as one field value.
+fn header_value(
+    headers: &reqwest::header::HeaderMap,
+    name: &reqwest::header::HeaderName,
+) -> Vec<u8> {
+    let values: Vec<&[u8]> = headers.get_all(name).iter().map(|value| value.as_bytes()).collect();
+    values.join(&b", "[..])
+}
+
+/// `url` with each credential in its query, and its password, replaced by its digest.
+fn digested_url(url: &reqwest::Url) -> reqwest::Url {
+    let mut shown = url.clone();
+    let pairs: Vec<(String, String)> = url.query_pairs().into_owned().collect();
+    if pairs.iter().any(|(name, _)| is_credential(name)) {
+        shown.query_pairs_mut().clear().extend_pairs(pairs.iter().map(|(name, value)| {
+            let value = if is_credential(name) {
+                credential_digest(name, value.as_bytes())
+            } else {
+                value.clone()
+            };
+            (name.clone(), value)
+        }));
+    }
+    if let Some(password) = url.password() {
+        // Fails only for URLs that cannot carry credentials, which have none.
+        let _ = shown.set_password(Some(&credential_digest("password", password.as_bytes())));
+    }
+    shown
+}
+
+/// The call an HTTP node makes for `state`, as an approver sees it and as its record
+/// binds it (spec 3.3 §12, §7.1).
+///
+/// Carries the method, the full URL with its query, every header (authentication
+/// included) and the body. Credentials — authorization and cookie headers, and headers,
+/// query parameters and form fields with secret-looking names — appear as `sha256:`
+/// digests, so the call is bound exactly while the decision shows no secret.
+pub(crate) fn call_args(
+    config: &HttpNodeConfig,
+    state: &HashMap<String, Value>,
+    policy: &HttpActionPolicy,
+) -> Option<Value> {
+    let (_, request) = build_request(config, state, policy).ok()?;
+    let mut headers = serde_json::Map::new();
+    for name in request.headers().keys() {
+        let raw = header_value(request.headers(), name);
+        let value = if is_credential(name.as_str()) {
+            credential_digest(name.as_str(), &raw)
+        } else {
+            String::from_utf8_lossy(&raw).into_owned()
+        };
+        headers.insert(name.as_str().to_string(), Value::String(value));
+    }
+    let mut call = json!({
+        "method": request.method().as_str(),
+        "url": digested_url(request.url()).as_str(),
+        "headers": headers,
+    });
+    match &config.body {
+        HttpBody::None => {}
+        HttpBody::Json { data } => call["body"] = interpolate_json_values(data, state),
+        HttpBody::Form { fields } => {
+            let form: serde_json::Map<String, Value> = fields
+                .iter()
+                .map(|(name, value)| {
+                    let value = interpolate_variables(value, state);
+                    let value = if is_credential(name) {
+                        credential_digest(name, value.as_bytes())
+                    } else {
+                        value
+                    };
+                    (name.clone(), Value::String(value))
+                })
+                .collect();
+            call["form"] = Value::Object(form);
+        }
+        HttpBody::Raw { content, .. } => {
+            call["rawBody"] = Value::String(interpolate_variables(content, state));
+        }
+    }
+    Some(call)
+}
+
+/// Sends exactly `args`, a call [`call_args`] described and an approver may have edited
+/// (spec 3.3 §7.1, §7.5).
+///
+/// Each digest in `args` is replaced by the credential `state` holds now; a digest that
+/// no longer matches it refuses the call, which is then not sent.
+///
+/// # Errors
+///
+/// Returns [`GovernedError::Refused`](crate::governed::GovernedError::Refused) when a
+/// credential changed or the policy refuses the URL, and the errors
+/// [`execute_http_with_policy`] returns.
+pub(crate) async fn run_call(
+    config: &HttpNodeConfig,
+    state: &HashMap<String, Value>,
+    policy: &HttpActionPolicy,
+    args: &Value,
+) -> Result<NodeOutput> {
+    let node = config.standard.id.clone();
+    let refuse = |reason: String| -> GraphError {
+        crate::governed::GovernedError::Refused { node: node.clone(), reason }.into()
+    };
+    let changed = |what: String| {
+        refuse(format!("{what} changed since the call was approved; the call was not sent"))
+    };
+    let (client, current) = build_request(config, state, policy).map_err(&refuse)?;
+
+    let method = args["method"]
+        .as_str()
+        .and_then(|method| reqwest::Method::from_bytes(method.as_bytes()).ok())
+        .ok_or_else(|| refuse("the call has no valid method".to_string()))?;
+    let mut url = args["url"]
+        .as_str()
+        .and_then(|url| reqwest::Url::parse(url).ok())
+        .ok_or_else(|| refuse("the call has no valid URL".to_string()))?;
+
+    // Credentials in the query and the password come back from the current request.
+    let pairs: Vec<(String, String)> = url.query_pairs().into_owned().collect();
+    if pairs.iter().any(|(name, value)| is_credential(name) && value.starts_with("sha256:")) {
+        let mut resolved = Vec::with_capacity(pairs.len());
+        for (name, value) in pairs {
+            if is_credential(&name) && value.starts_with("sha256:") {
+                let current_value = current
+                    .url()
+                    .query_pairs()
+                    .find(|(key, raw)| {
+                        *key == name && credential_digest(&name, raw.as_bytes()) == value
+                    })
+                    .map(|(_, raw)| raw.into_owned())
+                    .ok_or_else(|| {
+                        changed(format!("the credential in query parameter '{name}'"))
+                    })?;
+                resolved.push((name, current_value));
+            } else {
+                resolved.push((name, value));
+            }
+        }
+        url.query_pairs_mut().clear().extend_pairs(resolved);
+    }
+    if url.password().is_some() {
+        if digested_url(current.url()).password() != url.password() {
+            return Err(changed("the URL's password".to_string()));
+        }
+        let _ = url.set_password(current.url().password());
+    }
+    policy.check(&url).map_err(&refuse)?;
+
+    let mut request = client.request(method, url);
+    if let Some(headers) = args["headers"].as_object() {
+        for (name, value) in headers {
+            let value = value.as_str().unwrap_or_default();
+            if is_credential(name) && value.starts_with("sha256:") {
+                let header = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                    .map_err(|_| refuse(format!("'{name}' is not a valid header name")))?;
+                let raw = header_value(current.headers(), &header);
+                if raw.is_empty() || credential_digest(name, &raw) != value {
+                    return Err(changed(format!("the credential in header '{name}'")));
+                }
+                request = request.header(header, raw);
+            } else {
+                request = request.header(name.as_str(), value);
+            }
+        }
+    }
+    if let Some(body) = args.get("body") {
+        request = request.json(body);
+    } else if let Some(form) = args["form"].as_object() {
+        let current_form: HashMap<String, String> = match &config.body {
+            HttpBody::Form { fields } => fields
+                .iter()
+                .map(|(name, value)| (name.clone(), interpolate_variables(value, state)))
+                .collect(),
+            _ => HashMap::new(),
+        };
+        let mut fields = HashMap::with_capacity(form.len());
+        for (name, value) in form {
+            let value = value.as_str().unwrap_or_default().to_string();
+            let value = if is_credential(name) && value.starts_with("sha256:") {
+                current_form
+                    .get(name)
+                    .filter(|raw| credential_digest(name, raw.as_bytes()) == value)
+                    .cloned()
+                    .ok_or_else(|| changed(format!("the credential in form field '{name}'")))?
+            } else {
+                value
+            };
+            fields.insert(name.clone(), value);
+        }
+        request = request.form(&fields);
+    } else if let Some(raw) = args["rawBody"].as_str() {
+        request = request.body(raw.to_string());
+    }
+    let request = request
+        .build()
+        .map_err(|e| refuse(format!("the call could not be built: {}", e.without_url())))?;
+    tracing::debug!(node = %config.standard.id, url = %redact_url(request.url()), "sending an approved HTTP call");
+    send(config, &client, request).await
 }
 
 /// Apply authentication to the request builder.
