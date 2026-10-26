@@ -43,13 +43,14 @@ exact host the call named, never a wildcard the person did not type.
 
 ```rust
 use std::sync::Arc;
-use adk_harness::{HarnessAgent, WebConfig};
+use adk_harness::{HarnessAgent, SearchDomains, WebConfig};
 
 let harness = HarnessAgent::builder("harness")
     .model(model)
     .workspace(adk_devtools::Workspace::new("."))
     .web(WebConfig {
         allowed_domains: vec!["docs.rs".into(), "*.rust-lang.org".into()],
+        search_domains: Some(SearchDomains::Blocked(vec!["pinterest.com".into()])),
         ..WebConfig::default()
     })
     .build()?;
@@ -57,7 +58,8 @@ let harness = HarnessAgent::builder("harness")
 
 | `WebConfig` field | Default | Meaning |
 |---|---|---|
-| `allowed_domains` | empty | Exact hosts or `*.example.com`; the `DomainIn` grammar |
+| `allowed_domains` | empty | Hosts `web_fetch` and the browser pack's navigation reach without approval: exact hosts or `*.example.com`, the `DomainIn` grammar. Never forwarded to a search |
+| `search_domains` | `None`: every domain | The search filter (spec 3.1 §7.32): `SearchDomains::Allowed(..)` or `SearchDomains::Blocked(..)`, each entry covering the domain and its subdomains; see [Search scope](#search-scope) |
 | `max_bytes` | 1 MiB | Read on the wire; 64 KiB of text are delivered, the rest cut with a marker |
 | `max_url_len` | 2,048 | Longest URL sent |
 | `max_query_len` | 512 | Longest search query |
@@ -91,19 +93,48 @@ two paths, chosen at build (spec 3.1 §7.20):
 | No `.web(..)` | None, unless `.provider_web_tools(..)` asks for a built-in explicitly | — |
 
 A configured search provider always wins over the model provider's built-in search.
-`HarnessInfo::web_search` reports the path as a `WebSearchPath`; `adk-rust` prints it on
-the `Search` line of the banner and under `/web`.
+`HarnessInfo::web_search` reports the path and its search filter as a `WebSearchPath`;
+`adk-rust` prints it on the `Search` line of the banner and under `/web`, and the
+capability block names it on its `Web search` line.
+
+#### Search scope
+
+The fetch allowlist and the search filter are separate settings (spec 3.1 §7.32, §13 Q8,
+I73): provider search covers every domain unless `search_domains` says otherwise, and
+`allowed_domains` never reaches a search.
+
+| Setting | Meaning |
+|---|---|
+| `WebConfig::allowed_domains` | Hosts `web_fetch` and the browser pack's navigation reach without approval; never forwarded to a search |
+| `WebConfig::search_domains` | The search filter: forwarded where the provider's search takes one, applied to the governed `web_search`'s results, and named in the banner where the provider takes none |
+| Operator ceiling | `[web] search = "off"` or `search_domains` in the operator's or user's configuration; a workspace file may only narrow them (I3) |
+
+| Search | `Allowed(..)` | `Blocked(..)` |
+|---|---|---|
+| Anthropic `web_search` | Forwarded as `allowed_domains` | Forwarded as `blocked_domains` |
+| OpenAI `openai_web_search` | Forwarded as `filters.allowed_domains` | Not applied: the banner says OpenAI takes no such filter |
+| Gemini `google_search`, DeepSeek `deepseek_web_search` | Not applied: the banner says the provider takes no search filter | Not applied |
+| The governed `web_search` | Results outside the list are dropped, counted as `filtered` | Results inside the list are dropped |
+
+`SearchDomains::narrow(ceiling, workspace)` applies a workspace's filter to the operator's:
+two allowed lists keep what both cover, an allowed list loses the entries a blocked list
+touches, and two blocked lists combine. An allowed list left empty declares no search, and
+`HarnessInfo::web_search` says why.
+
+> **Note:** Provider search is declared only to runs that start in Ask or Auto (I49), so the
+> tool list changes when a session moves between Plan and Ask, and Anthropic's prompt cache
+> is written again once per such move.
 
 #### The provider's built-in search
 
 The provider is read from the model's client through `Llm::native_web_search()`, never
 from what the model writes:
 
-| Client | Built-in | Declared as | Allowlist |
+| Client | Built-in | Declared as | Search filter |
 |---|---|---|---|
-| `GeminiModel` (`generateContent`, Gemini API or Vertex AI) | `GoogleSearchTool` | `google_search` | None: every domain, and the request banner says Gemini takes no allowlist |
+| `GeminiModel` (`generateContent`, Gemini API or Vertex AI) | `GoogleSearchTool` | `google_search` | None: every domain, and the request banner says Gemini takes no search filter when one is configured |
 | `GeminiModel` on the Interactions transport | None | — | The transport refuses a built-in tool beside function tools |
-| `AnthropicClient` on `api.anthropic.com` | `WebSearchTool` | `web_search` | `allowed_domains` |
+| `AnthropicClient` on `api.anthropic.com` | `WebSearchTool` | `web_search` | `allowed_domains` or `blocked_domains` |
 | `AnthropicClient` on DeepSeek's Anthropic endpoint (`https://api.deepseek.com/anthropic`) | `WebSearchTool` | `web_search` | None documented: every domain |
 | `OpenAIResponsesClient` on `api.openai.com` | `OpenAIWebSearchTool` | `openai_web_search` | `filters.allowed_domains` |
 | `OpenAIResponsesClient` on `https://api.deepseek.com` with `deepseek-v4-pro` | `DeepSeekWebSearchTool` | `deepseek_web_search` | None documented: every domain |
@@ -124,7 +155,7 @@ The guards (spec 3.1 §9.2 I49):
 | Guard | Mechanism |
 |---|---|
 | Mode | Declared only to a run that starts in Ask or Auto; ReadOnly and Plan keep the Web class denial (I13). A tightening to ReadOnly or Plan while one is live ends the turn with `harness.web.provider_tightened` |
-| Allowlist | `WebConfig::allowed_domains` is forwarded where the provider takes one; the request banner says when the provider cannot |
+| Search filter | `WebConfig::search_domains` is forwarded where the provider takes it; the request banner names it, or says the provider cannot take it. The fetch allowlist is never forwarded (I73) |
 | Banner | Each request of the run names the live built-ins and says `web_fetch` is the governed path |
 | Refusal | A provider that refuses a request because it declares a built-in (no search quota on the account, no permission, a model without the tool: a rate-limit, forbidden, invalid-input or unsupported error before the first response) gets the request once more without the built-ins; when that succeeds they stay off for the harness and a warning names the reason |
 | Records | `harness.web.provider_enabled` once per run; after each model response that carries a provider search, `harness.web.searched` with `source: "provider"`, the queries (secret patterns redacted) and their digests, the cited URLs and their hosts |
@@ -223,7 +254,8 @@ prompts. Nothing a server sends changes its trust, its tools' class or any rule.
 | Surface | Behaviour |
 |---|---|
 | `--web` / `--no-web` | `web_fetch` is declared by default; `--no-web` removes it |
-| `--allow-domain HOST` | Repeatable; `web.allow_domains` in the user config too; a project file may only turn web off |
+| `--allow-domain HOST` | Repeatable; `allow_domains` in the user config too; a project file may only turn web off. Hosts `web_fetch` reads without approval, never a search filter |
+| `[web] search_domains` | The search filter, `{ allowed = [..] }` or `{ blocked = [..] }`, in the user config; a project file's narrows it |
 | `/web` | The allowlist; `/web allow HOST` grants a `DomainIn` rule for `web_fetch` to the user |
 | `.mcp.json` | Servers in the workspace, started once the workspace is trusted |
 | `/mcp` | The servers and their status; `/mcp resources SERVER` lists what one publishes |
@@ -234,9 +266,9 @@ prompts. Nothing a server sends changes its trust, its tools' class or any rule.
 | Action | Fields |
 |---|---|
 | `harness.web.fetched` | functionCallId, phase (request, response, refused), url, host, finalHost, allowlisted, status, bytes, contentSha256, redirects, truncated, screening, refusal (privateTarget, urlTooLong, secretInQuery, …), urlDigest |
-| `harness.web.searched` | provider, queryDigest, site, results, hosts, refusal |
+| `harness.web.searched` | provider, queryDigest, site, results, hosts, dropped, filtered (results outside `search_domains`), refusal |
 | `harness.web.screened` | url, contentSha256, patterns, lines, redactions, action |
-| `harness.web.provider_enabled` | provider, tool, allowlist, mode |
+| `harness.web.provider_enabled` | provider, tool, searchDomains (the filter forwarded, when one was), mode |
 | `harness.mcp.elicited` | server, kind, schemaDigest, decision, by, surface (prompt, inbox, none), approvalRequestId |
 | `harness.mcp.sampled` | server, spendKey, modelCalls, tokens, costMicroUsd, budgetRemaining, maxTokens, refused |
 | `harness.mcp.resource.read` | server, uri, mimeType, bytes, sha256, via (tool, mention) |
@@ -248,7 +280,8 @@ prompts. Nothing a server sends changes its trust, its tools' class or any rule.
 | I46 One plain `GET`, the target resolved and classified before connecting and at every redirect | `adk-harness/tests/web_tests.rs` (private literal, redirect to a private target), `web/domain.rs` unit tests |
 | I47 Fetched text reaches the model only delimited, size-capped, labelled and redacted | `web_tests.rs` (injection page), `web_property_tests.rs` (delivered text) |
 | I48 A composed URL is capped and refused on a secret pattern, audited by digest | `web_tests.rs` (secret in query), `web_property_tests.rs` (secrets and oversized queries) |
-| I49 Provider tools off by default, attached per provider in Ask or Auto with the allowlist, recorded | `web_tests.rs` (provider web tools) |
+| I49 Provider tools attached per provider in Ask or Auto with the search filter where the provider takes it, recorded | `web_tests.rs` (provider web tools), `web_search_default_tests.rs` |
+| I73 The fetch allowlist is never forwarded as a search filter | `web_search_default_tests.rs` (`the_fetch_allowlist_is_never_a_search_filter`), `adk-cli/tests/harness_search_cli.rs` |
 | I50 An elicitation is answered only through the prompter or the inbox, validated, never auto-accepted | `adk-harness/tests/mcp_interaction_tests.rs` |
 | I51 Sampling runs with no tools under the run's budget and the server's spend key | `mcp_interaction_tests.rs` (sampling) |
 | I52 Resources enter only through a `Read` tool or a mention, delimited | `mcp_interaction_tests.rs` (resources) |

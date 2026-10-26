@@ -1194,6 +1194,43 @@ impl Harness {
         self.runner.interrupt(session.as_ref())
     }
 
+    /// `user`'s background shells in `session`, oldest first (spec 3.1 §7.29): what `/shells`
+    /// lists.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// for shell in harness.shells(&user, &session).await {
+    ///     println!("{}", shell.line());
+    /// }
+    /// ```
+    pub async fn shells(&self, user: &UserId, session: &SessionId) -> Vec<crate::ShellInfo> {
+        match self.agent.runtime().toolset().shells() {
+            Some(shells) => shells.list(&self.app_name, user.as_ref(), session.as_ref()).await,
+            None => Vec::new(),
+        }
+    }
+
+    /// Kills `user`'s background shell `shell_id` in `session` and removes it from the
+    /// reminder; `None` when the session has no such shell (spec 3.1 §7.29).
+    pub async fn kill_shell(
+        &self,
+        user: &UserId,
+        session: &SessionId,
+        shell_id: &str,
+    ) -> Option<crate::ShellInfo> {
+        let shells = self.agent.runtime().toolset().shells()?;
+        shells.kill(&self.app_name, user.as_ref(), session.as_ref(), shell_id).await
+    }
+
+    /// Kills every background shell of `user`'s `session`: the session's end (spec 3.1
+    /// §7.29).
+    pub async fn end_session_shells(&self, user: &UserId, session: &SessionId) {
+        if let Some(shells) = self.agent.runtime().toolset().shells() {
+            shells.end_session(&self.app_name, user.as_ref(), session.as_ref()).await;
+        }
+    }
+
     /// The runner.
     pub fn runner(&self) -> &Runner {
         &self.runner

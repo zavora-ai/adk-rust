@@ -25,7 +25,9 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::protect::protected_paths;
-use super::{FileToolGate, IsolationStatus, ShellLedger, ShellLedgerEntry, sandbox_unavailable};
+use super::{
+    FileToolGate, IsolationStatus, ShellLedger, ShellLedgerEntry, ShellOutputs, sandbox_unavailable,
+};
 use crate::audit::{HARNESS_AUDIT_KIND, HarnessAudit};
 use crate::policy::has_harness_layer;
 use crate::tools::{GOVERNANCE_POLL_INTERVAL, HarnessBashTool, denial_suspected};
@@ -566,16 +568,6 @@ impl adk_devtools::CommandLauncher for ContainerCheckRefusal {
     }
 }
 
-/// Caps `text` at `cap` bytes on a character boundary, marking the cut.
-fn cap_output(mut text: String, cap: usize) -> (String, bool) {
-    if text.len() <= cap {
-        return (text, false);
-    }
-    text.truncate(text.floor_char_boundary(cap));
-    text.push_str("\n…[truncated]");
-    (text, true)
-}
-
 /// The harness `bash` tool inside a container (spec 3.1 §7.9 "Container").
 ///
 /// Each session's commands run in that session's container through
@@ -615,6 +607,8 @@ pub struct ContainerBashTool {
     description: String,
     /// Held exclusive while a container command runs unapproved (spec 3.1 §9.2 I26).
     file_gate: Option<FileToolGate>,
+    /// Keeps the whole output of a call whose result is cut (spec 3.1 §7.33 fix 8).
+    outputs: Option<Arc<ShellOutputs>>,
 }
 
 impl ContainerBashTool {
@@ -648,9 +642,19 @@ impl ContainerBashTool {
             }),
             description: String::new(),
             file_gate: None,
+            outputs: None,
         };
         tool.declare();
         tool
+    }
+
+    /// Keeps the whole output of a call whose result is cut in `outputs`, which
+    /// `shell_output` reads (spec 3.1 §7.33 fix 8).
+    #[must_use]
+    pub fn with_outputs(mut self, outputs: Arc<ShellOutputs>) -> Self {
+        self.host = self.host.with_outputs(outputs.clone());
+        self.outputs = Some(outputs);
+        self
     }
 
     /// Runs each container command while no host file tool runs (spec 3.1 §9.2 I26).
@@ -672,6 +676,9 @@ impl ContainerBashTool {
             self.ledger.clone(),
         )
         .allow_unsandboxed_retry(yes);
+        if let Some(outputs) = &self.outputs {
+            self.host = self.host.with_outputs(outputs.clone());
+        }
         self.declare();
         self
     }
@@ -856,16 +863,35 @@ impl Tool for ContainerBashTool {
                 Err(timeout_error(timeout))
             }
             Ok(Ok(Ok(output))) => {
-                let cap = self.workspace.max_output();
-                let (stdout, out_truncated) = cap_output(output.stdout, cap);
-                let (stderr, err_truncated) = cap_output(output.stderr, cap);
-                Ok(json!({
+                let bounded = adk_devtools::bound_output(
+                    self.outputs
+                        .clone()
+                        .map(|outputs| outputs as Arc<dyn adk_devtools::OutputStore>),
+                    ctx.clone(),
+                    &command,
+                    output.stdout.as_bytes(),
+                    output.stderr.as_bytes(),
+                    self.workspace.max_output(),
+                );
+                let mut value = json!({
                     "command": command,
                     "exit_code": output.exit_code,
-                    "stdout": stdout,
-                    "stderr": stderr,
-                    "truncated": out_truncated || err_truncated,
-                }))
+                    "stdout": bounded.stdout,
+                    "stderr": bounded.stderr,
+                    "truncated": bounded.truncated,
+                });
+                if let Some(id) = bounded.output_id {
+                    if let Some(outputs) = &self.outputs {
+                        outputs.finish(
+                            (&app, &user, &session),
+                            &id,
+                            Some(output.exit_code),
+                            started.elapsed(),
+                        );
+                    }
+                    value["output_id"] = Value::String(id);
+                }
+                Ok(value)
             }
         };
         let exit_code = result.as_ref().ok().and_then(|value| {
@@ -990,12 +1016,6 @@ mod tests {
         // The idle TTL changes nothing a command can observe.
         let longer = ContainerConfig { idle_ttl: Duration::from_secs(1), ..base.clone() };
         assert_eq!(base.profile_digest(), longer.profile_digest());
-    }
-
-    #[test]
-    fn output_is_capped_on_a_character_boundary() {
-        assert_eq!(cap_output("héllo".to_string(), 1024), ("héllo".to_string(), false));
-        assert_eq!(cap_output("€€€".to_string(), 4), ("€\n…[truncated]".to_string(), true));
     }
 
     /// Parsed, never run: on the host the sweep would end the host's processes.

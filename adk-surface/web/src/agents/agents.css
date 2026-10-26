@@ -370,3 +370,18 @@ li:has(> .roster-settings) .roster-text > span {
   white-space: nowrap;
 }
 
+/* "What your agents can do" in Memory & rules: one agent a row, Settings at its end. */
+.agents-can-do-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.agents-can-do-name {
+  font-weight: 650;
+}
+
+.agents-can-do-settings {
+  margin-left: auto;
+}
+

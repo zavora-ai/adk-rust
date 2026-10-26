@@ -657,6 +657,8 @@ pub(crate) struct RanCall {
     pub(crate) call_id: Option<String>,
     pub(crate) invocation_id: String,
     pub(crate) succeeded: bool,
+    /// The background shell the call started, which outlives a rewind (spec 3.1 §7.29).
+    pub(crate) shell_id: Option<String>,
 }
 
 /// The tool calls in `events` that have a response, with whether it was a success.
@@ -664,6 +666,7 @@ pub(crate) struct RanCall {
 pub(crate) fn calls_in(events: &[Event]) -> Vec<RanCall> {
     let mut calls: Vec<RanCall> = Vec::new();
     let mut answered: HashMap<String, bool> = HashMap::new();
+    let mut shells: HashMap<String, String> = HashMap::new();
     for event in events {
         for part in event.llm_response.content.iter().flat_map(|content| content.parts.iter()) {
             match part {
@@ -673,6 +676,7 @@ pub(crate) fn calls_in(events: &[Event]) -> Vec<RanCall> {
                     call_id: id.clone(),
                     invocation_id: event.invocation_id.clone(),
                     succeeded: false,
+                    shell_id: None,
                 }),
                 Part::FunctionResponse { function_response, id, .. } if id.is_some() => {
                     let failed = function_response.response.get("error").is_some()
@@ -683,6 +687,12 @@ pub(crate) fn calls_in(events: &[Event]) -> Vec<RanCall> {
                             .is_some_and(|status| {
                                 matches!(status, "denied" | "not_run" | "result_withheld" | "held")
                             });
+                    let response = &function_response.response;
+                    if response.get("status").and_then(Value::as_str) == Some("running")
+                        && let Some(shell) = response.get("shell_id").and_then(Value::as_str)
+                    {
+                        shells.insert(id.clone().unwrap_or_default(), shell.to_string());
+                    }
                     answered.insert(id.clone().unwrap_or_default(), !failed);
                 }
                 _ => {}
@@ -692,8 +702,9 @@ pub(crate) fn calls_in(events: &[Event]) -> Vec<RanCall> {
     calls
         .into_iter()
         .filter_map(|mut call| {
-            let succeeded = *answered.get(call.call_id.as_deref()?)?;
-            call.succeeded = succeeded;
+            let id = call.call_id.as_deref()?;
+            call.succeeded = *answered.get(id)?;
+            call.shell_id = shells.get(id).cloned();
             Some(call)
         })
         .collect()

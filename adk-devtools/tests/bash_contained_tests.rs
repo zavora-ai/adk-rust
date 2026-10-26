@@ -205,12 +205,12 @@ async fn output_and_exit_code_reach_the_result_and_stream_as_progress() {
 }
 
 #[tokio::test]
-async fn output_past_the_cap_is_discarded() {
+async fn long_output_keeps_its_head_and_tail_inline() {
     let layout = layout();
     let result = run(
-        workspace(&layout.workspace).max_output_bytes(1_000),
+        workspace(&layout.workspace),
         Arc::new(Streamed::default()),
-        "for /l %i in (1,1,2000) do @echo line %i",
+        "for /l %i in (1,1,6000) do @echo line %i",
         None,
     )
     .await
@@ -218,8 +218,10 @@ async fn output_past_the_cap_is_discarded() {
 
     assert_eq!(result["truncated"], json!(true), "{result}");
     let stdout = result["stdout"].as_str().unwrap();
-    assert!(stdout.len() <= 1_000 + "\n…[truncated]".len(), "{} bytes kept", stdout.len());
+    assert!(stdout.chars().count() <= 30_000 + 64, "{} characters kept", stdout.chars().count());
     assert!(stdout.starts_with("line 1"), "{stdout}");
+    assert!(stdout.contains(" bytes left out]"), "{stdout}");
+    assert!(stdout.trim_end().ends_with("line 6000"), "{stdout}");
 }
 
 #[tokio::test]

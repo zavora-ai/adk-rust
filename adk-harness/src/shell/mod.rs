@@ -4,12 +4,15 @@
 //! host commands run behind per-command approval, the sandbox is opt-in, and a strict
 //! deployment can fail at startup when it is unavailable.
 
+mod background;
 #[cfg(feature = "docker")]
 mod container;
 mod gate;
 mod ledger;
 #[cfg(feature = "sandbox")]
 mod os_sandbox;
+mod output;
+mod pids;
 mod protect;
 
 use std::fmt;
@@ -17,6 +20,11 @@ use std::fmt;
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result};
 use serde::{Deserialize, Serialize};
 
+pub use background::{
+    BackgroundShellConfig, MAX_UNATTENDED_SHELL_LIFETIME, SHELL_KILL, ShellInfo, ShellKillCause,
+    ShellKillTool, ShellStatus, ShellSupervisor,
+};
+pub(crate) use background::{Launch, LedgerNote, supervisor};
 #[cfg(feature = "docker")]
 pub use container::{ContainerBashTool, ContainerConfig, DEFAULT_CONTAINER_IMAGE};
 #[cfg(feature = "docker")]
@@ -27,6 +35,10 @@ pub use ledger::SqliteShellLedger;
 pub use ledger::{InMemoryShellLedger, ShellLedger, ShellLedgerEntry};
 #[cfg(feature = "sandbox")]
 pub use os_sandbox::{OsSandboxConfig, SandboxAccess, SandboxLauncher};
+pub use output::{SHELL_OUTPUT, ShellOutputTool, ShellOutputs};
+#[cfg(feature = "sqlite")]
+pub use pids::SqliteShellPidRegistry;
+pub use pids::{InMemoryShellPidRegistry, ShellPidRecord, ShellPidRegistry, reap_orphaned_shells};
 pub use protect::SANDBOX_PROTECTED_PATHS;
 pub(crate) use protect::protected_paths;
 

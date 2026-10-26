@@ -29,6 +29,9 @@ Graph-based workflow orchestration for Rust Agent Development Kit (ADK-Rust) age
 - **Invoking a node directly**: `ctx.run_node_with` runs a node the graph has no edge to, sized from state, and records it so a resume does not pay for it twice; concurrent calls under one run id run the child once
 - **As a tool**: `NodeTool` exposes a graph or a single node through the `Tool` trait, so an `LlmAgent` can call a whole graph
 - **Bounded growth**: `RetentionPolicy` limits how many checkpoints a thread keeps, by count or age
+- **Run records**: every checkpoint carries its run, the steps finished since the previous one (each node's start, duration, status, written keys and attempt) and a fork's lineage, so an observer reads a run's history from checkpoints alone; `CompiledGraph::shape` reports the graph's nodes, edges and entry nodes
+- **Fork with edits** (feature: `time-travel`): `TimeTravelHandle::fork` branches a new thread from a checkpoint with channels overwritten, keeps waiting joins, and records the fork's lineage; the source thread is never written
+- **Governed nodes**: `with_governed_node` puts a node's call on the governed path — approval, edits, the kill switch and the action ledger — so it runs at most once per call in its lineage, forks included
 - **Strictness, opt-in**: `with_strict_channels` fails the run when a node writes a channel the schema does not declare
 - **Streaming**: Five stream modes (values, updates, messages, custom, debug)
 - **ADK Integration**: Full callback support, works with existing runners
@@ -701,6 +704,22 @@ reads the turn's text with `ctx.resume_value()`, or what
 A turn yields the agent nodes' events before the output mapper's, and every event it builds
 carries the turn's invocation id. A step with several pauses yields one event per pause; read
 each with `GraphInterruptPayload::from_event`.
+
+### Run Records, Forks and Governed Nodes
+
+| Capability | API | Where it lives |
+|------------|-----|----------------|
+| Graph shape | `CompiledGraph::shape()` → `GraphShape { nodes, edges, entry }` | Computed from the compiled graph |
+| Run and step records | `Checkpoint::run_record()`, `step_records()`, `lineage()` | Checkpoint metadata `adk.graph.run`, `adk.graph.steps`, `adk.graph.lineage` |
+| Fork with edits | `TimeTravelHandle::fork(ForkSpec)`, `time_travel::fork_thread` | A new thread whose lineage names its root, parent and parent checkpoint |
+| Governed nodes | `CompiledGraph::with_governed_node`, `GraphAgentBuilder::governed_node`, `Node::call_args`, `Node::run_call` | The approval store, the action ledger and the effect log `{root}:effects` |
+
+A pause checkpoint has the same step number as the completed checkpoint before it, so
+checkpoints are addressed by id. A governed node's failures are `NodeExecutionFailed`
+messages that start with a stable code (`graph.not_run`, `graph.refused`, …), read back
+with `GovernedError::code_of`. See
+[Graph Checkpointing](../docs/official_docs/agents/graph-checkpointing.md#run-and-step-records)
+and [Graph Agents](../docs/official_docs/agents/graph-agents.md#governed-nodes).
 
 ## Examples
 

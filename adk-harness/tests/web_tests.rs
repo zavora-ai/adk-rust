@@ -512,14 +512,21 @@ async fn web_search_is_screened_delimited_and_audited_by_digest() {
 }
 
 #[tokio::test]
-async fn provider_web_tools_are_declared_only_to_ask_or_auto_runs_with_the_allowlist() {
+async fn provider_web_tools_are_declared_only_to_ask_or_auto_runs_with_the_search_filter() {
     for (mode, declared) in
         [(HarnessMode::Ask, true), (HarnessMode::ReadOnly, false), (HarnessMode::Plan, false)]
     {
         let f = common::fixture_on(anthropic_model(vec![done()]), |b| {
-            b.mode(mode).web(web(&["docs.rs", "*.rust-lang.org"])).provider_web_tools(
-                ProviderWebTools { anthropic_web_search: true, ..ProviderWebTools::off() },
-            )
+            let filter = adk_harness::web::SearchDomains::Allowed(vec![
+                "docs.rs".into(),
+                "rust-lang.org".into(),
+            ]);
+            b.mode(mode)
+                .web(WebConfig { search_domains: Some(filter), ..web(&["internal.example"]) })
+                .provider_web_tools(ProviderWebTools {
+                    anthropic_web_search: true,
+                    ..ProviderWebTools::off()
+                })
         })
         .await;
         f.send("hello").await;
@@ -534,7 +541,7 @@ async fn provider_web_tools_are_declared_only_to_ask_or_auto_runs_with_the_allow
             let declaration = &request.tools["web_search"];
             assert_eq!(
                 declaration["x-adk-anthropic-tool"]["allowed_domains"],
-                json!(["docs.rs", "*.rust-lang.org"]),
+                json!(["docs.rs", "rust-lang.org"]),
                 "{declaration}"
             );
             let banner = request
@@ -552,7 +559,8 @@ async fn provider_web_tools_are_declared_only_to_ask_or_auto_runs_with_the_allow
                 })
                 .next();
             assert!(banner.is_some_and(|b| {
-                b.contains("anthropic web_search (allowlist: docs.rs, *.rust-lang.org)")
+                b.contains("anthropic web_search (only docs.rs, rust-lang.org)")
+                    && !b.contains("internal.example")
             }));
             assert_eq!(f.records("harness.web.provider_enabled").len(), 1, "once per run");
         } else {

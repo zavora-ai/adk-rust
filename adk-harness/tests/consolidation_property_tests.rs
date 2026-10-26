@@ -247,7 +247,8 @@ async fn seed(case: &Case) -> Seeded {
         let mut vector = vec![0.0f32; 4];
         vector[spec.direction] = 1.0;
         vector[spec.direction + 1] = NOISE[spec.noise];
-        setup.store.put_embedding(&fact.id, vector).await.unwrap();
+        let embedding = adk_harness::FactEmbedding::new("test/seeded", vector);
+        setup.store.put_embedding(&fact.id, embedding).await.unwrap();
         facts.push(setup.store.get(&fact.id).await.unwrap().unwrap());
     }
     let mut sessions = Vec::new();

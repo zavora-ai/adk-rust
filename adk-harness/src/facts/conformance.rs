@@ -7,8 +7,8 @@ pub mod fact_store {
     use adk_core::principal::SubjectRef;
 
     use crate::{
-        FactFilter, FactKind, FactProjects, FactScope, FactSource, FactStatus, FactStore,
-        MemoryFact, Provenance,
+        FactEmbedding, FactFilter, FactKind, FactProjects, FactScope, FactSource, FactStatus,
+        FactStore, MemoryFact, Provenance,
     };
 
     fn fact(user: &str, project: Option<&str>, text: &str, status: FactStatus) -> MemoryFact {
@@ -139,19 +139,25 @@ pub mod fact_store {
         assert!(store.get(&next.id).await.unwrap().unwrap().valid_to.is_some());
     }
 
-    /// Embeddings are returned for the live facts of exactly the scope.
+    /// Embeddings are returned for the live facts of exactly the scope, each with the id
+    /// of the embedder that produced it; a new embedding replaces the fact's earlier one
+    /// (spec 3.1 §7.32, I73).
     pub async fn embeddings_follow_scope_and_status(store: &dyn FactStore) {
         let p1 = store.put(fact("alice", Some("p1"), "a", FactStatus::Assumed)).await.unwrap();
         let wide = store.put(fact("alice", None, "b", FactStatus::Assumed)).await.unwrap();
-        store.put_embedding(&p1.id, vec![1.0, 0.0]).await.unwrap();
-        store.put_embedding(&wide.id, vec![0.0, 1.0]).await.unwrap();
-        assert!(store.put_embedding("missing", vec![1.0]).await.is_err());
+        let gemini = FactEmbedding::new("gemini/gemini-embedding-2", vec![1.0, 0.0]);
+        store.put_embedding(&p1.id, gemini.clone()).await.unwrap();
+        let local = FactEmbedding::new("onnx/BAAI/bge-small-en-v1.5", vec![0.0, 1.0]);
+        store.put_embedding(&wide.id, local.clone()).await.unwrap();
+        assert!(store.put_embedding("missing", local.clone()).await.is_err());
         let scope = FactScope::new("app", "alice", Some("p1".into()));
-        assert_eq!(store.embeddings(&scope).await.unwrap(), vec![(p1.id.clone(), vec![1.0, 0.0])]);
+        assert_eq!(store.embeddings(&scope).await.unwrap(), vec![(p1.id.clone(), gemini)]);
         assert_eq!(
             store.embeddings(&scope.user_wide()).await.unwrap(),
-            vec![(wide.id.clone(), vec![0.0, 1.0])]
+            vec![(wide.id.clone(), local.clone())]
         );
+        store.put_embedding(&p1.id, local.clone()).await.unwrap();
+        assert_eq!(store.embeddings(&scope).await.unwrap(), vec![(p1.id.clone(), local)]);
         store.set_status(&p1.id, FactStatus::Forgotten, &SubjectRef::human("alice")).await.unwrap();
         assert!(store.embeddings(&scope).await.unwrap().is_empty());
     }

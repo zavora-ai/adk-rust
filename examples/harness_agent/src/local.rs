@@ -213,8 +213,12 @@ async fn local_posture(subject: Subject) -> anyhow::Result<Checks> {
     );
     let vectors = db.facts.embeddings(&scope).await?;
     checks.check(
-        "the fact was embedded locally with 384 dimensions",
-        vectors.iter().any(|(id, vector)| id == &fact.id && vector.len() == 384),
+        "the fact was embedded locally with 384 dimensions, tagged with the local model",
+        vectors.iter().any(|(id, embedding)| {
+            id == &fact.id
+                && embedding.vector.len() == 384
+                && embedding.embedder == "onnx/BAAI/bge-small-en-v1.5"
+        }),
     );
     let rules = db.rules.list(crate::APP, "alice").await?;
     checks.check(

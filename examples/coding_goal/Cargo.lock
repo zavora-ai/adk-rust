@@ -108,6 +108,7 @@ dependencies = [
  "dirs",
  "futures",
  "libc",
+ "regex",
  "serde",
  "serde_json",
  "sha2",

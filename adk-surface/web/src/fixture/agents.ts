@@ -251,7 +251,7 @@ export class FixtureAgents implements AgentsSeam {
     return detail;
   }
 
-  /** The roster rows of the added agents. */
+  /** The roster rows of the added agents, as the engine marks them: area by name, own mode. */
   rows(): AddedRow[] {
     return [...this.details.values()].map((detail) => ({
       agent: detail.agent,
@@ -259,7 +259,8 @@ export class FixtureAgents implements AgentsSeam {
       statusText: detail.state === "paused" ? "Paused" : "Ready",
       added: true,
       canChange: true,
-      area: detail.draft.area,
+      area: fixtureChoices().areas.find((area) => area.id === detail.draft.area)?.name ?? detail.draft.area,
+      mode: detail.mode,
     }));
   }
 
@@ -379,7 +380,7 @@ export function withAgents(client: FixtureClient, agents = new FixtureAgents(), 
     const added = agents.rows();
     const base = (await rows()).map((row) => {
       const mine = added.find((candidate) => candidate.agent.name === row.agent.name);
-      return mine ? { ...row, added: true, canChange: true, area: mine.area } : row;
+      return mine ? { ...row, added: true, canChange: true, area: mine.area, mode: mine.mode } : row;
     });
     return [...base, ...added.filter((row) => !base.some((candidate) => candidate.agent.name === row.agent.name))];
   };

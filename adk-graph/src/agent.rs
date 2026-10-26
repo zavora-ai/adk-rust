@@ -523,6 +523,7 @@ pub struct GraphAgentBuilder {
     timeout_policies: HashMap<String, TimeoutPolicy>,
     default_timeout: Option<TimeoutPolicy>,
     deferred_configs: HashMap<String, DeferredNodeConfig>,
+    governed_nodes: HashMap<String, crate::governed::GovernedNode>,
     #[cfg(feature = "node-cache")]
     cache_policies: HashMap<String, crate::cache::NodeCachePolicy>,
 }
@@ -549,6 +550,7 @@ impl GraphAgentBuilder {
             timeout_policies: HashMap::new(),
             default_timeout: None,
             deferred_configs: HashMap::new(),
+            governed_nodes: HashMap::new(),
             #[cfg(feature = "node-cache")]
             cache_policies: HashMap::new(),
         }
@@ -781,6 +783,34 @@ impl GraphAgentBuilder {
         self
     }
 
+    /// Puts a node's calls on the governed path (spec 3.3 §12).
+    ///
+    /// See [`CompiledGraph::with_governed_node`](crate::graph::CompiledGraph::with_governed_node)
+    /// and the [`governed`](crate::governed) module.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::agent::GraphAgent;
+    /// use adk_graph::edge::{END, START};
+    /// use adk_graph::governed::GovernedNode;
+    /// use adk_graph::node::NodeOutput;
+    ///
+    /// let agent = GraphAgent::builder("invoice-run")
+    ///     .channels(&["charge"])
+    ///     .node_fn("pay", |_ctx| async { Ok(NodeOutput::new()) })
+    ///     .edge(START, "pay")
+    ///     .edge("pay", END)
+    ///     .governed_node("pay", GovernedNode::new().with_approval().spending_money())
+    ///     .build()?;
+    /// assert!(agent.graph().shape().nodes[0].governed.is_some());
+    /// # Ok::<(), adk_graph::GraphError>(())
+    /// ```
+    pub fn governed_node(mut self, name: &str, governed: crate::governed::GovernedNode) -> Self {
+        self.governed_nodes.insert(name.to_string(), governed);
+        self
+    }
+
     /// Set a cache policy for a specific node.
     ///
     /// When a node has a cache policy, its execution results are cached keyed
@@ -965,6 +995,7 @@ impl GraphAgentBuilder {
         compiled.max_concurrency = self.max_concurrency;
         compiled.timeout_policies = self.timeout_policies;
         compiled.default_timeout = self.default_timeout;
+        compiled.governed_nodes = self.governed_nodes;
 
         #[cfg(feature = "node-cache")]
         {

@@ -1353,6 +1353,79 @@ let graph = StateGraph::with_channels(&["task", "plan", "result"])
     .with_interrupt_before(&["executor"]);  // Always pause before execution
 ```
 
+### Governed nodes
+
+A node with a consequence — a payment, an email, an order — can opt into the governed
+path. Its call then waits for a decision like any tool call, and runs at most once per
+call in the thread's lineage, forks included. A graph that governs no node behaves as
+before.
+
+```rust
+use adk_core::ToolEffect;
+use adk_graph::agent::GraphAgent;
+use adk_graph::checkpoint::MemoryCheckpointer;
+use adk_graph::edge::{END, START};
+use adk_graph::governed::GovernedNode;
+use adk_graph::graph::StateGraph;
+use adk_graph::node::NodeOutput;
+use serde_json::json;
+
+fn build() -> adk_graph::Result<GraphAgent> {
+    let graph = StateGraph::with_channels(&["invoice", "charge"])
+        .add_node_fn("draft", |_ctx| async {
+            Ok(NodeOutput::new().with_update("invoice", json!({ "amountCents": 4200 })))
+        })
+        .add_node_fn("pay", |_ctx| async {
+            Ok(NodeOutput::new().with_update("charge", json!({ "id": "ch_1" })))
+        })
+        .add_edge(START, "draft")
+        .add_edge("draft", "pay")
+        .add_edge("pay", END)
+        .compile()?
+        .with_checkpointer(MemoryCheckpointer::new())
+        .with_node_effect("pay", ToolEffect::NonIdempotent)
+        .with_governed_node("pay", GovernedNode::new().with_approval().spending_money());
+    Ok(GraphAgent::from_graph("invoice-run", graph))
+}
+```
+
+`GraphAgentBuilder::governed_node` does the same on a builder. Run the graph under a
+`Runner` (or with `CompiledGraph::invoke_with_run_config`) whose `RunConfig` has an
+approval store and an action ledger. Each dispatch of the node goes through one bracket:
+
+| Order | Check | Outcome |
+|-------|-------|---------|
+| 0 | The gate: the parent invocation, or the `RunConfig` of `invoke_with_run_config` | Without one — plain `invoke`, or a subgraph or `NodeTool` that does not pass it on — the node is not run (`graph.not_run`) |
+| 1 | The kill switch | Frozen: refused before anything is touched (`graph.frozen`) |
+| 2 | The action ledger, under `graph/{agent id}/{lineage root}/{node}/{occurrence}/{digest}` | Completed: answered from the effect log, not run, no decision (`recorded`). Failed: fails again (`graph.recorded_failure`). Begun without an outcome: fails closed (`graph.outcome_unknown`). Refused before: asks again |
+| 3 | `adk_core::authorize_tool_call` | Waiting: the node pauses and the call is in the inbox. Refused: not run (`graph.refused`). Approved: begin, run, complete, append to the effect log |
+
+- **The call.** `Node::call_args` describes the call, shown in full on the decision and
+  bound by its digest; a node that does not describe one is bound to the whole state it
+  reads. An HTTP action node describes its method, full URL, headers and body, with
+  credentials as `sha256:` digests.
+- **Edits.** An approver's edit runs through `Node::run_call`, which sends exactly the
+  edited call. A node without it refuses the edit (`graph.edit_unsupported`) and nothing
+  runs; the unedited call never runs after an edit.
+- **Occurrences.** The occurrence counts the node's completed runs in the lineage, so
+  each pass of a loop is a new call. Two graph agents in one session never share a
+  record, because the key names the acting agent.
+- **Failures.** Each is a `GraphError::NodeExecutionFailed` whose message starts with
+  its code; `GovernedError::code_of` reads it back. The step is checkpointed with the
+  node `refused`, `failed` or `notRun`.
+- **Waiting.** A run that resumes the node before its call is decided pauses again with
+  the same request, without asking anyone again. When the call's arguments changed
+  while it waited, or another fork's record answers it, its waiting decision is
+  withdrawn.
+- **Subgraphs.** A governed node inside a `SubgraphNode` keys its record by the parent's
+  lineage, so a fork of the parent finds the calls its source made.
+- **Not a child.** A governed node runs only through its bracket: a node body cannot
+  invoke it with `NodeContext::run_node`, and a node cache never answers it.
+
+> **Note:** an `AgentNode` is not a governed node. A tool call held inside an
+> `AgentNode` pauses the graph, and on resume the node runs its agent again, which asks
+> its model again; the held call resumes only if the model makes the same call.
+
 ## Streaming Execution
 
 Stream events as the graph executes:
@@ -1599,8 +1672,9 @@ state, which matters when state is large and steps are many.
 ### Time travel
 
 With the `time-travel` feature, `graph.time_travel(thread_id)?` returns a handle
-over a thread's checkpoint history: list the steps, read the state at one, or
-`fork_at` a checkpoint to branch a new thread from it. The call returns `Result`
+over a thread's checkpoint history: list the steps, read the state at one,
+`fork_at` a checkpoint to branch a new thread from it, or `fork` a checkpoint by id
+with edited state. See [Graph Checkpointing](graph-checkpointing.md#forking-with-edits). The call returns `Result`
 because every operation reads checkpoints, so a graph with no checkpointer reports
 `GraphError::CheckpointError` rather than panicking.
 

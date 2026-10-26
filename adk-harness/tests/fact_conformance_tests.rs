@@ -95,6 +95,53 @@ mod store_sqlite {
             store
         }
     );
+
+    /// A database written before embedder ids gains the column; its vectors read back
+    /// untagged, so recall embeds them again (spec 3.1 §7.32, I73).
+    #[tokio::test]
+    async fn vectors_stored_before_embedder_ids_read_back_untagged() {
+        use adk_harness::{
+            FactEmbedding, FactKind, FactScope, FactSource, FactStatus, FactStore, MemoryFact,
+            Provenance, SqliteFactStore,
+        };
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE adk_harness_fact_embeddings (id TEXT PRIMARY KEY, vector TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let store = SqliteFactStore::new(pool.clone());
+        store.migrate().await.unwrap();
+        let scope = FactScope::new("app", "alice", None);
+        let fact = store
+            .put(MemoryFact::new(
+                scope.clone(),
+                FactKind::Preference,
+                "Use pnpm",
+                FactStatus::Known,
+                Provenance::new(FactSource::UserStated, "s1", "inv-1"),
+            ))
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO adk_harness_fact_embeddings (id, vector) VALUES (?, '[0.6,0.8]')")
+            .bind(&fact.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        assert_eq!(
+            store.embeddings(&scope).await.unwrap(),
+            vec![(fact.id.clone(), FactEmbedding::new("", vec![0.6, 0.8]))]
+        );
+        let local = FactEmbedding::new("onnx/BAAI/bge-small-en-v1.5", vec![1.0, 0.0]);
+        store.put_embedding(&fact.id, local.clone()).await.unwrap();
+        assert_eq!(store.embeddings(&scope).await.unwrap(), vec![(fact.id, local)]);
+    }
 }
 
 fn in_memory_store() -> Arc<InMemoryFactStore> {
@@ -144,6 +191,42 @@ mod index_embedded {
         let hits = index.search(&scope, "sqlite tests", 5).await.unwrap();
         assert_eq!(hits[0].0, fact.id);
         assert_eq!(store.embeddings(&scope).await.unwrap().len(), 1);
+    }
+
+    /// A vector another embedder produced is embedded again, even when the two models'
+    /// vectors share a length, instead of being compared with this embedder's query
+    /// (spec 3.1 §7.32, I73).
+    #[tokio::test]
+    async fn a_vector_from_another_embedder_is_embedded_again() {
+        use adk_harness::{
+            FactEmbedding, FactIndex, FactKind, FactScope, FactSource, FactStatus, MemoryFact,
+            Provenance,
+        };
+        let store = in_memory_store();
+        let scope = FactScope::new("app", "alice", Some("p1".into()));
+        let fact = store
+            .put(MemoryFact::new(
+                scope.clone(),
+                FactKind::ProjectFact,
+                "the tests need sqlite",
+                FactStatus::Assumed,
+                Provenance::new(FactSource::AgentInferred, "s", "i"),
+            ))
+            .await
+            .unwrap();
+        // Another model's vector, of this embedder's length, pointing nowhere near the query.
+        let mut foreign = vec![0.0; DIMENSIONS];
+        foreign[DIMENSIONS - 1] = 1.0;
+        let foreign = FactEmbedding::new("gemini/gemini-embedding-2", foreign);
+        store.put_embedding(&fact.id, foreign).await.unwrap();
+
+        let index = LocalFactIndex::new(store.clone()).with_embedder(Arc::new(WordEmbedder));
+        let hits = index.search(&scope, "sqlite tests", 5).await.unwrap();
+        assert_eq!(hits.len(), 1, "the fact is found by this embedder's vector: {hits:?}");
+        assert_eq!(hits[0].0, fact.id);
+        let stored = store.embeddings(&scope).await.unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].1.embedder, format!("unnamed/{DIMENSIONS}"));
     }
 }
 

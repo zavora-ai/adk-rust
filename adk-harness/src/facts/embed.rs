@@ -33,11 +33,16 @@ use async_trait::async_trait;
 /// ```
 pub struct RagEmbedder {
     inner: Arc<dyn adk_rag::EmbeddingProvider>,
+    /// The id stored with each vector (spec 3.1 §7.32, I73).
+    model_id: Option<String>,
 }
 
 impl std::fmt::Debug for RagEmbedder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RagEmbedder").field("dimensions", &self.inner.dimensions()).finish()
+        f.debug_struct("RagEmbedder")
+            .field("model_id", &self.model_id)
+            .field("dimensions", &self.inner.dimensions())
+            .finish()
     }
 }
 
@@ -51,9 +56,30 @@ fn embedding_error(error: adk_rag::RagError) -> AdkError {
 }
 
 impl RagEmbedder {
-    /// Wraps `inner`.
+    /// Wraps `inner`, with no model id: give one with
+    /// [`with_model_id`](Self::with_model_id) so stored vectors name their model.
     pub fn new(inner: Arc<dyn adk_rag::EmbeddingProvider>) -> Self {
-        Self { inner }
+        Self { inner, model_id: None }
+    }
+
+    /// Names the model behind the vectors, stored with each fact's vector so recall never
+    /// compares two models' vectors (spec 3.1 §7.32, I73).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # #[cfg(feature = "memory-embeddings")]
+    /// # {
+    /// use adk_memory::EmbeddingProvider as _;
+    ///
+    /// let embedder = adk_harness::RagEmbedder::openai("key").unwrap();
+    /// assert_eq!(embedder.model_id(), Some("openai/text-embedding-3-small"));
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
+        self.model_id = Some(model_id.into());
+        self
     }
 
     /// OpenAI's `text-embedding-3-small` with `api_key`.
@@ -65,7 +91,8 @@ impl RagEmbedder {
     pub fn openai(api_key: &str) -> Result<Self> {
         Ok(Self::new(Arc::new(
             adk_rag::openai::OpenAIEmbeddingProvider::new(api_key).map_err(embedding_error)?,
-        )))
+        ))
+        .with_model_id("openai/text-embedding-3-small"))
     }
 
     /// Gemini's `gemini-embedding-2` with `api_key`.
@@ -77,7 +104,8 @@ impl RagEmbedder {
     pub fn gemini(api_key: &str) -> Result<Self> {
         Ok(Self::new(Arc::new(
             adk_rag::GeminiEmbeddingProvider::new(api_key).map_err(embedding_error)?,
-        )))
+        ))
+        .with_model_id("gemini/gemini-embedding-2"))
     }
 
     /// A sentence-transformer ONNX model run in process (feature `memory-embeddings-local`;
@@ -90,9 +118,11 @@ impl RagEmbedder {
     /// Returns an error when the model files cannot be fetched or loaded.
     #[cfg(feature = "memory-embeddings-local")]
     pub fn onnx(config: adk_rag::OnnxEmbeddingConfig) -> Result<Self> {
+        let model_id = format!("onnx/{}", config.model_id);
         Ok(Self::new(Arc::new(
             adk_rag::OnnxEmbeddingProvider::new(config).map_err(embedding_error)?,
-        )))
+        ))
+        .with_model_id(model_id))
     }
 
     /// [`onnx`](Self::onnx) with the default model, `BAAI/bge-small-en-v1.5`.
@@ -129,6 +159,10 @@ impl adk_memory::EmbeddingProvider for RagEmbedder {
     fn dimensions(&self) -> usize {
         self.inner.dimensions()
     }
+
+    fn model_id(&self) -> Option<&str> {
+        self.model_id.as_deref()
+    }
 }
 
 #[cfg(test)]
@@ -155,5 +189,7 @@ mod tests {
         let vectors = embedder.embed(&["a".into(), "abc".into()]).await.unwrap();
         assert_eq!(vectors, vec![vec![1.0, 1.0], vec![3.0, 1.0]]);
         assert_eq!(embedder.dimensions(), 2);
+        assert_eq!(embedder.model_id(), None);
+        assert_eq!(embedder.with_model_id("test/echo").model_id(), Some("test/echo"));
     }
 }

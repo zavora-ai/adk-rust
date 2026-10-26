@@ -119,6 +119,9 @@ pub struct HarnessAgentBuilder {
     mode_store: Option<Arc<dyn ModeStore>>,
     standing_rules: Option<Arc<dyn StandingRuleStore>>,
     shell_ledger: Option<Arc<dyn ShellLedger>>,
+    background_shells: crate::shell::BackgroundShellConfig,
+    shell_pids: Option<Arc<dyn crate::shell::ShellPidRegistry>>,
+    shell_supervisor: Option<Arc<crate::shell::ShellSupervisor>>,
     read_records: Option<Arc<dyn adk_devtools::ReadLedger>>,
     operator_policy: Option<Arc<dyn ToolPolicy>>,
     origin_classes: Vec<Arc<dyn crate::policy::OriginClasses>>,
@@ -253,6 +256,9 @@ impl HarnessAgentBuilder {
             mode_store: None,
             standing_rules: None,
             shell_ledger: None,
+            background_shells: crate::shell::BackgroundShellConfig::default(),
+            shell_pids: None,
+            shell_supervisor: None,
             read_records: None,
             operator_policy: None,
             origin_classes: Vec::new(),
@@ -556,6 +562,30 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// The limits of background shells (spec 3.1 §7.29); default
+    /// [`BackgroundShellConfig::unattended`](crate::BackgroundShellConfig::unattended),
+    /// and [`attended`](crate::BackgroundShellConfig::attended) for a REPL a person watches.
+    pub fn background_shells(mut self, config: crate::shell::BackgroundShellConfig) -> Self {
+        self.background_shells = config;
+        self
+    }
+
+    /// Where each background shell's process is recorded (default in memory), so the next
+    /// start reaps what a crash left running (spec 3.1 §7.29).
+    pub fn shell_pid_registry(mut self, registry: Arc<dyn crate::shell::ShellPidRegistry>) -> Self {
+        self.shell_pids = Some(registry);
+        self
+    }
+
+    /// Runs background shells on `shells`, which every harness of a process can share, so a
+    /// harness rebuilt for the same session keeps its shells (spec 3.1 §7.29). Its limits
+    /// and pid registry replace [`background_shells`](Self::background_shells) and
+    /// [`shell_pid_registry`](Self::shell_pid_registry).
+    pub fn shell_supervisor(mut self, shells: Arc<crate::shell::ShellSupervisor>) -> Self {
+        self.shell_supervisor = Some(shells);
+        self
+    }
+
     /// Where the file tools' read records are kept (default in memory): the sha256 each
     /// session's agent last read or wrote per file, which `edit_file` takes as its
     /// precondition (spec 3.1 §7.26, §10 D7). A durable store lets a held edit approved
@@ -699,15 +729,17 @@ impl HarnessAgentBuilder {
             );
         }
         match &added.uses.web {
+            // Provider search runs outside the deny layer, so an agent kept from
+            // `web_search` declares none (spec 3.1 §7.32).
             adk_kernel::agents::WebAccess::None => {
                 self.web = None;
                 self.search_provider = None;
-                self.provider_web_tools = Some(crate::web::ProviderWebTools::default());
+                self.provider_web_tools = Some(crate::web::ProviderWebTools::off());
             }
             adk_kernel::agents::WebAccess::Listed { hosts } => {
                 let web = self.web.take().unwrap_or_default();
                 self.web = Some(crate::web::WebConfig { allowed_domains: hosts.clone(), ..web });
-                self.provider_web_tools = Some(crate::web::ProviderWebTools::default());
+                self.provider_web_tools = Some(crate::web::ProviderWebTools::off());
             }
             adk_kernel::agents::WebAccess::Any => {}
         }
@@ -1872,6 +1904,11 @@ impl HarnessAgentBuilder {
             None => rules,
         };
         let ledger = self.shell_ledger.unwrap_or_else(|| Arc::new(InMemoryShellLedger::new()));
+        let shells = crate::shell::supervisor(
+            self.shell_supervisor.take(),
+            self.background_shells.clone(),
+            self.shell_pids.take(),
+        );
         let approval_store = self
             .approval_store
             .or_else(|| self.approval_service.as_ref().and_then(|service| service.approval_store()))
@@ -1922,7 +1959,8 @@ impl HarnessAgentBuilder {
                     ledger.clone(),
                 )
                 .allow_unsandboxed_retry(allow_unsandboxed_retry)
-                .with_file_gate(file_gate.clone());
+                .with_file_gate(file_gate.clone())
+                .with_outputs(shells.outputs().clone());
                 let pool = bash.pool();
                 tools.push(Arc::new(bash));
                 Some(pool)
@@ -1946,7 +1984,8 @@ impl HarnessAgentBuilder {
             )
             .with_mode_store(mode_store.clone(), self.mode)
             .allow_unsandboxed_retry(allow_unsandboxed_retry)
-            .with_file_gate(file_gate.clone());
+            .with_file_gate(file_gate.clone())
+            .with_shells(shells.clone());
             #[cfg(feature = "sandbox")]
             let bash = match shell.launcher.clone() {
                 Some(launcher) => bash.with_sandbox(launcher),
@@ -1957,6 +1996,10 @@ impl HarnessAgentBuilder {
             #[cfg(not(feature = "auth"))]
             let bash: Arc<dyn Tool> = Arc::new(bash);
             tools.push(bash);
+            tools.push(Arc::new(crate::shell::ShellKillTool::new(shells.clone())));
+        }
+        if tools.iter().any(|tool| tool.name() == "bash") {
+            tools.push(Arc::new(crate::shell::ShellOutputTool::new(shells.clone())));
         }
         if self.todos {
             match &self.last_todos {
@@ -2216,7 +2259,8 @@ impl HarnessAgentBuilder {
             .with_banner(if self.website_preset { website_banner } else { mode_banner })
             .with_observers(&observers)
             .with_effort(self.effort)
-            .with_rules_digest(rules.clone());
+            .with_rules_digest(rules.clone())
+            .with_shells(shells);
         // Under a kernel, each run's tool calls write their ledger rows (spec 3.2 §7.10).
         #[cfg(all(feature = "kernel", feature = "observe"))]
         run_trails.attach_ledger(self.kernel_ledger.clone(), &toolset.all_tools());
@@ -2241,13 +2285,13 @@ impl HarnessAgentBuilder {
             } else {
                 crate::web::ProviderWebTools::off()
             });
+            // The search filter, never the fetch allowlist (spec 3.1 §7.32, I73).
+            let filter = self.web.as_ref().and_then(|web| web.search_domains.clone());
             let toolset = if tools.any() {
-                let allowlist =
-                    self.web.as_ref().map(|web| web.allowed_domains.clone()).unwrap_or_default();
                 Some(crate::web::provider::ProviderWebToolset::new(
                     tools,
                     model.as_ref(),
-                    allowlist,
+                    filter.clone(),
                     self.search_provider.is_some(),
                     mode_store.clone(),
                     self.mode,
@@ -2256,9 +2300,10 @@ impl HarnessAgentBuilder {
                 None
             };
             let path = match (&self.search_provider, &self.web) {
-                (Some(provider), Some(_)) => {
-                    crate::web::WebSearchPath::Governed { provider: provider.name().to_string() }
-                }
+                (Some(provider), Some(_)) => crate::web::WebSearchPath::Governed {
+                    provider: provider.name().to_string(),
+                    filter,
+                },
                 _ => match toolset.as_ref().and_then(|toolset| toolset.search_path()) {
                     Some(path) => path,
                     None if self.web.is_none() => {
@@ -2402,8 +2447,8 @@ impl HarnessAgentBuilder {
                 working_notes: memory_resolver.is_some(),
                 long_term_facts: toolset.facts().is_some(),
                 embedder: toolset.facts().map(|_| {
-                    if self.long_term.embedder.is_some() {
-                        "embeddings".to_string()
+                    if let Some(embedder) = &self.long_term.embedder {
+                        format!("embedded by {}", crate::facts::embedder_id(embedder.as_ref()))
                     } else if self.long_term.index.is_some() {
                         "a custom index".to_string()
                     } else {

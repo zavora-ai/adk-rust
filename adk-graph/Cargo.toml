@@ -74,7 +74,7 @@ conformance = []
 # Action node feature flags
 action = ["dep:adk-action", "dep:regex"]
 action-trigger = ["action", "dep:tokio-cron-scheduler"]
-action-http = ["action", "dep:reqwest"]
+action-http = ["action", "dep:reqwest", "dep:sha2"]
 action-db = ["action"]
 action-db-mongo = ["action"]
 action-db-redis = ["action"]
