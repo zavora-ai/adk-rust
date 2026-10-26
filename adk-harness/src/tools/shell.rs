@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use adk_core::audit_log::{AuditRecordDraft, AuditRecordKind, AuditRecordOutcome};
-use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result, Tool, ToolContext};
-use adk_devtools::{BashTool, HostLauncher, Workspace};
+use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result, RunConfig, Tool, ToolContext};
+use adk_devtools::{BashTool, DevToolError, HostLauncher, Workspace};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
@@ -15,8 +15,8 @@ use crate::policy::has_harness_layer;
 #[cfg(feature = "sandbox")]
 use crate::shell::SandboxLauncher;
 use crate::shell::{
-    FileToolGate, IsolationStatus, ShellLedger, ShellLedgerEntry, ShellOutputs,
-    sandbox_unavailable,
+    FileToolGate, IsolationStatus, Launch, LedgerNote, ShellLedger, ShellLedgerEntry, ShellOutputs,
+    ShellSupervisor, sandbox_unavailable,
 };
 
 /// How often a running command checks the run's kill switch (spec 3.1 §7.9).
@@ -78,8 +78,14 @@ struct Selected<'a> {
 /// keeps its timeout ceiling, output cap, streaming, empty standard input, new session and
 /// process-group kill (D3). The harness tool adds:
 ///
-/// - its own declaration `{ command, timeout_secs? }`, plus `unsandboxed`, `reason` and
-///   `retry_of` when a sandbox is active and the unsandboxed retry is on;
+/// - its own declaration `{ command, timeout_secs?, description? }`, plus
+///   `run_in_background` with background shells ([`with_shells`](Self::with_shells),
+///   spec 3.1 §7.29), and `unsandboxed`, `reason` and `retry_of` when a sandbox is active
+///   and the unsandboxed retry is on;
+/// - with background shells, a call that reaches its timeout moves to the background under
+///   the same decision instead of being killed;
+/// - at most 30,000 characters of output per result, the whole of a longer one kept for
+///   `shell_output` (spec 3.1 §7.33 fix 8);
 /// - `annotations()` of `{enforcer, profileDigest, network}`, so the declaration digest —
 ///   and every standing rule or held call bound to it — differs per isolation (I9);
 /// - a refusal to run unless the harness policy is in the run's config (I17);
@@ -123,6 +129,8 @@ pub struct HarnessBashTool {
     file_gate: Option<FileToolGate>,
     /// Keeps the whole output of a call whose result is cut (spec 3.1 §7.33 fix 8).
     outputs: Option<Arc<ShellOutputs>>,
+    /// Runs commands in the background (spec 3.1 §7.29).
+    shells: Option<Arc<ShellSupervisor>>,
 }
 
 impl HarnessBashTool {
@@ -152,9 +160,39 @@ impl HarnessBashTool {
             description: String::new(),
             file_gate: None,
             outputs: None,
+            shells: None,
         };
         tool.declare();
         tool
+    }
+
+    /// Runs a call with `run_in_background: true` as a background shell of `shells`, moves
+    /// a call that reaches its timeout there instead of killing it, and keeps cut output in
+    /// its [`ShellOutputs`] (spec 3.1 §7.29, §7.33 fix 8). Declares `run_in_background`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use adk_core::Tool;
+    /// use adk_harness::{
+    ///     BackgroundShellConfig, HarnessBashTool, InMemoryShellLedger, IsolationStatus,
+    ///     ShellOutputs, ShellSupervisor,
+    /// };
+    ///
+    /// let shells = ShellSupervisor::new(Arc::new(ShellOutputs::default()), BackgroundShellConfig::default());
+    /// let ws = adk_devtools::Workspace::new(".").allow_bash(true);
+    /// let bash = HarnessBashTool::new(ws, IsolationStatus::Host, false, Arc::new(InMemoryShellLedger::new()))
+    ///     .with_shells(Arc::new(shells));
+    /// assert!(bash.parameters_schema().unwrap()["properties"].get("run_in_background").is_some());
+    /// ```
+    #[must_use]
+    pub fn with_shells(mut self, shells: Arc<ShellSupervisor>) -> Self {
+        self = self.with_outputs(shells.outputs().clone());
+        self.shells = Some(shells);
+        self.declare();
+        self
     }
 
     /// Keeps the whole output of a call whose result is cut in `outputs`, which
@@ -287,11 +325,24 @@ impl HarnessBashTool {
             "reads": if self.status.confines_reads() { "confined" } else { "unconfined" },
             "msys2Isolated": self.status.isolates_msys2(),
         });
+        let background = if self.shells.is_none() {
+            ""
+        } else if host {
+            " Set run_in_background for a dev server, a watcher or a long build: it returns a \
+             shell_id at once, and a command that reaches its timeout moves to the background."
+        } else {
+            " Set run_in_background for a build, a test run or a watcher: it returns a shell_id \
+             at once, and a command that reaches its timeout moves to the background. A server \
+             started in the sandbox is unreachable from later commands."
+        };
         self.description = if host {
-            "Run a shell command in the workspace root and return stdout, stderr and the exit \
-             code. The command runs on the host with the user's full permissions and network \
-             access, so each command may need the user's approval. Has a timeout."
-                .to_string()
+            format!(
+                "Run a shell command in the workspace root and return stdout, stderr and the exit \
+                 code. The command runs on the host with the user's full permissions and network \
+                 access, so each command may need the user's approval. Has a timeout. Output \
+                 over 30,000 characters keeps its start and end; shell_output reads the rest.\
+                 {background}"
+            )
         } else {
             let network = if network { "network access" } else { "no network" };
             let retry = if self.allow_unsandboxed_retry {
@@ -312,7 +363,8 @@ impl HarnessBashTool {
             };
             format!(
                 "Run a shell command in the workspace root inside an OS sandbox ({}) with {network}. \
-                 {paths}{retry}",
+                 {paths}{retry} Output over 30,000 characters keeps its start and end; \
+                 shell_output reads the rest.{background}",
                 self.status.enforcer()
             )
         };
@@ -394,6 +446,62 @@ impl HarnessBashTool {
     }
 }
 
+impl HarnessBashTool {
+    /// Runs `args`' command through `bash` until it exits, the run's kill switch is set or
+    /// its timeout passes. At the timeout it moves to the background when `launch` is given
+    /// and the session may run another shell (spec 3.1 §7.29); else it is killed. The outer
+    /// error is the kill switch's.
+    async fn foreground(
+        &self,
+        bash: &BashTool,
+        ctx: Arc<dyn ToolContext>,
+        config: &RunConfig,
+        args: &Value,
+        launch: Option<Launch<'_>>,
+    ) -> std::result::Result<Result<Value>, AdkError> {
+        // The operator's timeout is a ceiling: a model may ask for less time, never more.
+        let limit = self.workspace.bash_timeout_value();
+        let timeout = args
+            .get("timeout_secs")
+            .and_then(Value::as_u64)
+            .map_or(limit, |requested| Duration::from_secs(requested).min(limit));
+        let command = args.get("command").and_then(Value::as_str).unwrap_or_default();
+        let mut running = match bash.spawn(ctx.clone(), command).await {
+            Ok(running) => running,
+            Err(error) => return Ok(Err(error)),
+        };
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+        let mut poll = tokio::time::interval(GOVERNANCE_POLL_INTERVAL);
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // `None` is the timeout.
+        let stopped = loop {
+            tokio::select! {
+                exit = running.wait() => return Ok(exit.map(|exit_code| running.result(exit_code))),
+                () = &mut deadline => break None,
+                _ = poll.tick() => {
+                    if let Err(frozen) = config.check_governance() {
+                        break Some(frozen);
+                    }
+                }
+            }
+        };
+        if let Some(frozen) = stopped {
+            running.kill_and_wait().await;
+            return Err(frozen);
+        }
+        if let (Some(shells), Some(launch)) = (&self.shells, launch) {
+            match shells.adopt(running, timeout, launch).await {
+                Ok(result) => return Ok(result),
+                Err(back) => running = back,
+            }
+        }
+        running.kill_and_wait().await;
+        ctx.emit_progress("stderr", &format!("\n[timeout after {}s]\n", timeout.as_secs())).await;
+        Ok(Err(DevToolError::Timeout(timeout).into()))
+    }
+}
+
 fn refuse(code: &'static str, message: impl Into<String>) -> AdkError {
     AdkError::new(ErrorComponent::Tool, ErrorCategory::Forbidden, code, message)
 }
@@ -411,8 +519,12 @@ impl Tool for HarnessBashTool {
     fn parameters_schema(&self) -> Option<Value> {
         let mut properties = json!({
             "command": { "type": "string", "description": "The shell command to run." },
-            "timeout_secs": { "type": "integer", "description": "Optional timeout in seconds; cannot exceed the workspace limit." }
+            "timeout_secs": { "type": "integer", "description": "Optional timeout in seconds; cannot exceed the workspace limit." },
+            "description": { "type": "string", "description": "A few words on what the command does, shown to the user." }
         });
+        if self.shells.is_some() {
+            properties["run_in_background"] = json!({ "type": "boolean", "description": "Return a shell_id at once instead of waiting for the command to exit. A reminder tells you when it exits: do not poll. shell_output reads its output; shell_kill stops it." });
+        }
         // Declared only when the retry is on, as the container shell does.
         if self.sandbox_active() && self.allow_unsandboxed_retry {
             properties["unsandboxed"] = json!({ "type": "boolean", "description": "Retry a failed sandboxed command on the host. Needs retry_of and reason, and the user's approval." });
@@ -447,6 +559,18 @@ impl Tool for HarnessBashTool {
             .and_then(Value::as_str)
             .ok_or_else(|| AdkError::tool("bash needs a command"))?
             .to_string();
+        let background = args.get("run_in_background").and_then(Value::as_bool) == Some(true);
+        let description = args
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty());
+        if background && self.shells.is_none() {
+            return Err(refuse(
+                "harness.shell.background_off",
+                "background shells are off for this bash tool; run the command in the foreground",
+            ));
+        }
         let (app, user, session) =
             (ctx.app_name().to_string(), ctx.user_id().to_string(), ctx.session_id().to_string());
         let call_id = ctx.function_call_id().to_string();
@@ -539,6 +663,16 @@ impl Tool for HarnessBashTool {
             }
         };
         let enforcer = if selected.sandboxed { self.status.enforcer() } else { "host" };
+        // A background command would hold the host file tools off for its whole life (I26).
+        let gated = self.file_gate.is_some() && selected.sandboxed;
+        if background && gated {
+            return Err(refuse(
+                "harness.shell.background_gated",
+                "a sandboxed command cannot run in the background while sandboxed commands run \
+                 without approval, since no host file tool may run beside one; run it in the \
+                 foreground",
+            ));
+        }
         // No host file tool runs while a sandboxed command does (I26).
         let _exclusive = match (&self.file_gate, selected.sandboxed) {
             (Some(gate), true) => Some(gate.exclusive(config).await?),
@@ -566,33 +700,43 @@ impl Tool for HarnessBashTool {
                         "envKeys": selected.env_keys,
                         "retryOf": retry_of,
                         "goalCheck": false,
+                        "background": background,
                     }),
                 )
                 .await?;
         }
 
-        let mut inner_args = json!({ "command": command });
-        if let Some(timeout) = args.get("timeout_secs") {
-            inner_args["timeout_secs"] = timeout.clone();
-        }
         let started = Instant::now();
-        let mut run = Box::pin(selected.bash.execute(ctx.clone(), inner_args));
-        let mut poll = tokio::time::interval(GOVERNANCE_POLL_INTERVAL);
-        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let outcome = loop {
-            tokio::select! {
-                result = &mut run => break Ok(result),
-                _ = poll.tick() => {
-                    if let Err(frozen) = config.check_governance() {
-                        break Err(frozen);
-                    }
-                }
+        let launch = || Launch {
+            ctx: ctx.clone(),
+            command: &command,
+            description,
+            governance: config.governance.clone(),
+            audit: audit.clone(),
+            ledger: LedgerNote {
+                ledger: self.ledger.clone(),
+                call_id: call_id.clone(),
+                sandboxed: selected.sandboxed,
+                enforcer: selected.sandboxed.then(|| enforcer.to_string()),
+            },
+        };
+        let outcome = match &self.shells {
+            Some(shells) if background => Ok(shells.start(selected.bash, launch()).await),
+            // A gated command holds the host file tools off, so it cannot outlive its call.
+            _ => {
+                self.foreground(selected.bash, ctx.clone(), config, &args, (!gated).then(launch))
+                    .await
             }
         };
-        // Dropping the devtools future kills the command's whole process group.
-        drop(run);
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
+        // A background shell is recorded in the shell ledger when it ends (spec 3.1 §7.29).
+        let shell_id = match &outcome {
+            Ok(Ok(value)) if value.get("status").and_then(Value::as_str) == Some("running") => {
+                value.get("shell_id").and_then(Value::as_str).map(str::to_string)
+            }
+            _ => None,
+        };
         let (exit_code, timed_out, killed_by_freeze, truncated) = match &outcome {
             Ok(Ok(value)) => (
                 value
@@ -609,6 +753,7 @@ impl Tool for HarnessBashTool {
         let mut outcome = outcome;
         let mut suspected = false;
         if selected.sandboxed
+            && shell_id.is_none()
             && let Ok(Ok(value)) = &mut outcome
             && exit_code != Some(0)
         {
@@ -654,7 +799,9 @@ impl Tool for HarnessBashTool {
             entry.enforcer = Some(enforcer.to_string());
             entry.denial_suspected = suspected;
         }
-        if let Err(error) = self.ledger.record(&app, &user, &session, entry).await {
+        if shell_id.is_none()
+            && let Err(error) = self.ledger.record(&app, &user, &session, entry).await
+        {
             tracing::warn!(error = %error, "could not record the bash call in the shell ledger");
         }
         if let Some(audit) = &audit {
@@ -690,6 +837,7 @@ impl Tool for HarnessBashTool {
                         "truncated": truncated,
                         "denialSuspected": selected.sandboxed.then_some(suspected),
                         "retryOf": retry_of,
+                        "shellId": shell_id,
                     }),
                 )
                 .await?;

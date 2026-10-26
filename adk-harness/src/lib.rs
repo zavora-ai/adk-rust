@@ -275,14 +275,20 @@ pub use read_records::RedisReadRecords;
 pub use read_records::SqliteReadRecords;
 #[cfg(feature = "sqlite")]
 pub use shell::SqliteShellLedger;
+#[cfg(feature = "sqlite")]
+pub use shell::SqliteShellPidRegistry;
 pub use shell::{AUTO_ALLOW_UNAVAILABLE_CODE, SANDBOX_PROTECTED_PATHS};
+pub use shell::{
+    BackgroundShellConfig, InMemoryShellPidRegistry, MAX_UNATTENDED_SHELL_LIFETIME, SHELL_KILL,
+    SHELL_OUTPUT, ShellInfo, ShellKillCause, ShellKillTool, ShellOutputTool, ShellOutputs,
+    ShellPidRecord, ShellPidRegistry, ShellStatus, ShellSupervisor, reap_orphaned_shells,
+};
 #[cfg(feature = "docker")]
 pub use shell::{ContainerBashTool, ContainerConfig, DEFAULT_CONTAINER_IMAGE};
 pub use shell::{
     InMemoryShellLedger, IsolationStatus, SANDBOX_UNAVAILABLE_CODE, ShellConfig, ShellIsolation,
     ShellLedger, ShellLedgerEntry,
 };
-pub use shell::{SHELL_OUTPUT, ShellOutputTool, ShellOutputs};
 #[cfg(feature = "sandbox")]
 pub use shell::{OsSandboxConfig, SandboxAccess, SandboxLauncher};
 #[cfg(feature = "skills")]

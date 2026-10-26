@@ -864,7 +864,9 @@ impl Tool for ContainerBashTool {
             }
             Ok(Ok(Ok(output))) => {
                 let bounded = adk_devtools::bound_output(
-                    self.outputs.clone().map(|outputs| outputs as Arc<dyn adk_devtools::OutputStore>),
+                    self.outputs
+                        .clone()
+                        .map(|outputs| outputs as Arc<dyn adk_devtools::OutputStore>),
                     ctx.clone(),
                     &command,
                     output.stdout.as_bytes(),

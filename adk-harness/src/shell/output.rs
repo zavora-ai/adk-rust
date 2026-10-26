@@ -13,6 +13,8 @@ use adk_devtools::{INLINE_OUTPUT_CHARS, OutputFile, OutputStore};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
+use super::background::{ShellStatus, ShellSupervisor};
+
 /// Bytes read from a log for one answer: enough for every character of it at four bytes
 /// each.
 const WINDOW_BYTES: u64 = INLINE_OUTPUT_CHARS as u64 * 4;
@@ -142,7 +144,8 @@ impl ShellOutputs {
         drop(next);
         let mut records = self.records.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if records.len() >= MAX_RECORDS {
-            let oldest = records.iter().min_by_key(|(_, record)| record.started).map(|(k, _)| k.clone());
+            let oldest =
+                records.iter().min_by_key(|(_, record)| record.started).map(|(k, _)| k.clone());
             if let Some(oldest) = oldest {
                 records.remove(&oldest);
             }
@@ -225,10 +228,12 @@ pub const SHELL_OUTPUT: &str = "shell_output";
 /// `shell_output { shell_id, tail_lines?, offset?, limit?, pattern? }`: reads output the
 /// harness kept, by id (spec 3.1 §7.29, §7.33 fix 8).
 ///
-/// A `bash` call whose output does not fit its result names an `output_id`; this tool reads
-/// that output, at most 30,000 characters per call: by default its end, from `offset` the
-/// next `limit` bytes, the last `tail_lines` lines, or the lines matching `pattern`, a
-/// regular expression, numbered. It reads only the calling session's output. Class `Read`.
+/// Reads a background shell's output, or the whole output of a `bash` call whose result
+/// was cut, which names an `output_id`: at most 30,000 characters per call, by default its
+/// end; from `offset` the next `limit` bytes; the last `tail_lines` lines; or the lines
+/// matching `pattern`, a regular expression, numbered. Reports the status, exit code and
+/// duration. It reads only the calling session's output, and a background shell that ended
+/// leaves the reminder once read. Class `Read`.
 ///
 /// # Example
 ///
@@ -236,21 +241,22 @@ pub const SHELL_OUTPUT: &str = "shell_output";
 /// use std::sync::Arc;
 ///
 /// use adk_core::Tool;
-/// use adk_harness::{ShellOutputTool, ShellOutputs};
+/// use adk_harness::{BackgroundShellConfig, ShellOutputTool, ShellOutputs, ShellSupervisor};
 ///
-/// let tool = ShellOutputTool::new(Arc::new(ShellOutputs::default()));
+/// let shells = ShellSupervisor::new(Arc::new(ShellOutputs::default()), BackgroundShellConfig::default());
+/// let tool = ShellOutputTool::new(Arc::new(shells));
 /// assert_eq!(tool.name(), "shell_output");
 /// assert!(tool.is_read_only());
 /// ```
 #[derive(Debug)]
 pub struct ShellOutputTool {
-    outputs: Arc<ShellOutputs>,
+    shells: Arc<ShellSupervisor>,
 }
 
 impl ShellOutputTool {
-    /// A tool reading what `outputs` keeps.
-    pub fn new(outputs: Arc<ShellOutputs>) -> Self {
-        Self { outputs }
+    /// A tool reading the output `shells` keeps.
+    pub fn new(shells: Arc<ShellSupervisor>) -> Self {
+        Self { shells }
     }
 }
 
@@ -265,18 +271,19 @@ impl Tool for ShellOutputTool {
     }
 
     fn description(&self) -> &str {
-        "Read the output of a bash call by its output_id (a bash result cut to fit names \
-         one). Returns the command, exit code, duration and at most 30,000 characters of the \
-         output: by default its end; offset and limit read bytes from a position, such as \
-         the bytes a cut result left out; tail_lines reads the last lines; pattern, a regular \
-         expression, returns the matching lines with their numbers."
+        "Read the output of a background shell by its shell_id, or the whole output of a bash \
+         call whose result was cut by its output_id. Returns the status, exit code, duration \
+         and at most 30,000 characters of the output: by default its end; offset and limit \
+         read bytes from a position, such as the bytes a cut result left out; tail_lines reads \
+         the last lines; pattern, a regular expression, returns the matching lines with their \
+         numbers."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
         Some(json!({
             "type": "object",
             "properties": {
-                "shell_id": { "type": "string", "description": "The output_id a bash result named." },
+                "shell_id": { "type": "string", "description": "The shell_id or output_id a bash result named." },
                 "tail_lines": { "type": "integer", "minimum": 1, "description": "Read the last N lines." },
                 "offset": { "type": "integer", "minimum": 0, "description": "Read from this byte offset." },
                 "limit": { "type": "integer", "minimum": 1, "description": "With offset: how many bytes to read (default and most 30000 characters' worth)." },
@@ -298,11 +305,16 @@ impl Tool for ShellOutputTool {
         let id = match args.get("shell_id") {
             Some(Value::String(id)) => id.trim().to_string(),
             Some(Value::Number(id)) => id.to_string(),
-            _ => return Err(invalid("harness.shell_output.no_id", "shell_output needs a shell_id")),
+            _ => {
+                return Err(invalid("harness.shell_output.no_id", "shell_output needs a shell_id"));
+            }
         };
         let pattern = match args.get("pattern").and_then(Value::as_str) {
             Some(pattern) => Some(regex::Regex::new(pattern).map_err(|error| {
-                invalid("harness.shell_output.bad_pattern", format!("the pattern is not a valid regular expression: {error}"))
+                invalid(
+                    "harness.shell_output.bad_pattern",
+                    format!("the pattern is not a valid regular expression: {error}"),
+                )
             })?),
             None => None,
         };
@@ -310,10 +322,14 @@ impl Tool for ShellOutputTool {
             pattern,
             offset: args.get("offset").and_then(Value::as_u64),
             limit: args.get("limit").and_then(Value::as_u64),
-            tail_lines: args.get("tail_lines").and_then(Value::as_u64).map(|n| usize::try_from(n).unwrap_or(usize::MAX)),
+            tail_lines: args
+                .get("tail_lines")
+                .and_then(Value::as_u64)
+                .map(|n| usize::try_from(n).unwrap_or(usize::MAX)),
         };
         let session = (ctx.app_name(), ctx.user_id(), ctx.session_id());
-        let read = self.outputs.read(session, &id, &slice).map_err(|error| {
+        let outputs = self.shells.outputs();
+        let read = outputs.read(session, &id, &slice).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 AdkError::new(
                     ErrorComponent::Tool,
@@ -325,13 +341,11 @@ impl Tool for ShellOutputTool {
                 AdkError::tool(format!("output {id} could not be read: {error}"))
             }
         })?;
-        let record = self.outputs.record(session, &id);
+        let key = (session.0.to_string(), session.1.to_string(), session.2.to_string());
+        let shell = self.shells.read(&key, &id).await;
+        let record = outputs.record(session, &id);
         let mut result = json!({
             "shell_id": id,
-            "status": match record.as_ref().map(|record| record.finished) {
-                Some(None) => "running",
-                Some(Some(_)) | None => "exited",
-            },
             "total_bytes": read.total_bytes,
             "output": read.text,
         });
@@ -342,12 +356,30 @@ impl Tool for ShellOutputTool {
             result["next_offset"] = json!(read.range.1);
             result["truncated"] = json!(read.cut);
         }
-        if let Some(record) = record {
-            result["command"] = json!(record.command);
-            if let Some((exit_code, duration)) = record.finished {
-                result["exit_code"] = json!(exit_code);
-                result["duration_ms"] = json!(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX));
+        let millis = |duration: Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+        match (shell, record) {
+            (Some(shell), _) => {
+                result["status"] = json!(shell.status.name());
+                result["command"] = json!(shell.command);
+                result["duration_ms"] = json!(millis(shell.elapsed));
+                match shell.status {
+                    ShellStatus::Exited { exit_code } => result["exit_code"] = json!(exit_code),
+                    ShellStatus::Killed { cause } => result["killed_by"] = json!(cause),
+                    ShellStatus::Running => {}
+                }
             }
+            (None, Some(record)) => {
+                result["command"] = json!(record.command);
+                match record.finished {
+                    Some((exit_code, duration)) => {
+                        result["status"] = json!("exited");
+                        result["exit_code"] = json!(exit_code);
+                        result["duration_ms"] = json!(millis(duration));
+                    }
+                    None => result["status"] = json!("running"),
+                }
+            }
+            (None, None) => result["status"] = json!("exited"),
         }
         Ok(result)
     }
@@ -359,9 +391,7 @@ fn highest_id(dir: &Path) -> u64 {
         .into_iter()
         .flatten()
         .flatten()
-        .filter_map(|entry| {
-            entry.file_name().to_str()?.strip_suffix(".log")?.parse::<u64>().ok()
-        })
+        .filter_map(|entry| entry.file_name().to_str()?.strip_suffix(".log")?.parse::<u64>().ok())
         .max()
         .unwrap_or(0)
 }
@@ -401,9 +431,16 @@ fn read_slice(file: &mut std::fs::File, total: u64, slice: &Slice) -> std::io::R
         let limit = slice.limit.unwrap_or(INLINE_OUTPUT_CHARS as u64).min(WINDOW_BYTES);
         let window = read_at(file, offset, limit.min(total - offset))?;
         // A range starting or ending inside a character leaves those bytes to its neighbour.
-        let skipped =
-            if offset > 0 { window.iter().take(3).take_while(|&&b| b & 0xC0 == 0x80).count() } else { 0 };
-        let end = if offset + window.len() as u64 == total { window.len() } else { complete_end(&window) };
+        let skipped = if offset > 0 {
+            window.iter().take(3).take_while(|&&b| b & 0xC0 == 0x80).count()
+        } else {
+            0
+        };
+        let end = if offset + window.len() as u64 == total {
+            window.len()
+        } else {
+            complete_end(&window)
+        };
         let body = &window[skipped..end.max(skipped)];
         let used = prefix_len(body, INLINE_OUTPUT_CHARS);
         let start = offset + skipped as u64;
@@ -417,8 +454,11 @@ fn read_slice(file: &mut std::fs::File, total: u64, slice: &Slice) -> std::io::R
     // The end of the output: its last lines, or its last characters.
     let start = total.saturating_sub(WINDOW_BYTES);
     let window = read_at(file, start, total - start)?;
-    let skipped =
-        if start > 0 { window.iter().take(3).take_while(|&&b| b & 0xC0 == 0x80).count() } else { 0 };
+    let skipped = if start > 0 {
+        window.iter().take(3).take_while(|&&b| b & 0xC0 == 0x80).count()
+    } else {
+        0
+    };
     let window = &window[skipped..];
     let mut from = suffix_start(window, INLINE_OUTPUT_CHARS);
     let mut cut = false;
@@ -439,7 +479,11 @@ fn read_slice(file: &mut std::fs::File, total: u64, slice: &Slice) -> std::io::R
 }
 
 /// Lines of the file matching `pattern`, numbered from 1, up to [`INLINE_OUTPUT_CHARS`].
-fn grep(file: &mut std::fs::File, total: u64, pattern: &regex::Regex) -> std::io::Result<OutputRead> {
+fn grep(
+    file: &mut std::fs::File,
+    total: u64,
+    pattern: &regex::Regex,
+) -> std::io::Result<OutputRead> {
     use std::io::BufRead;
     file.seek(SeekFrom::Start(0))?;
     let mut reader = std::io::BufReader::new(file);
@@ -596,7 +640,8 @@ mod tests {
     #[test]
     fn a_pattern_returns_numbered_matching_lines() {
         let (_temp, mut file, total) = file_with(b"ok\nerror[E0308]: mismatched\nok\nerror: x\n");
-        let slice = Slice { pattern: Some(regex::Regex::new("^error").unwrap()), ..Slice::default() };
+        let slice =
+            Slice { pattern: Some(regex::Regex::new("^error").unwrap()), ..Slice::default() };
         let read = read_slice(&mut file, total, &slice).unwrap();
         assert_eq!(read.text, "2: error[E0308]: mismatched\n4: error: x\n");
         assert!(!read.cut);
