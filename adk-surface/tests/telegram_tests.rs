@@ -567,13 +567,11 @@ async fn a_stranger_who_blocked_the_bot_holds_up_no_one() {
     })
     .await;
     // Each of the stranger's messages tried once to send a code, under one pairing request.
-    let attempts = || {
-        api.to_chat(&json!(STRANGER)).iter().filter(|call| call.method == "sendMessage").count()
-    };
+    let attempts =
+        || api.to_chat(&json!(STRANGER)).iter().filter(|call| call.method == "sendMessage").count();
     let requested =
         || host.channel_actions().iter().filter(|action| *action == "pairing.requested").count();
-    eventually("the stranger's three messages", || async { (attempts() == 3).then_some(()) })
-        .await;
+    eventually("the stranger's three messages", || async { (attempts() == 3).then_some(()) }).await;
     tokio::time::sleep(Duration::from_millis(2500)).await;
     assert_eq!(attempts(), 3, "a stranger's failed message is not read again");
     assert_eq!(requested(), 1, "the stranger holds one pairing request");
