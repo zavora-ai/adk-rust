@@ -35,6 +35,7 @@ use crate::{BuiltModel, ResolvedModel};
 
 pub(crate) mod agents;
 mod books;
+mod embedder;
 mod manifest;
 mod service;
 #[cfg(feature = "tui")]
@@ -320,7 +321,8 @@ impl Setup {
             );
         }
         let models = Models { harness: model.built() };
-        let embedder = if resolved.memory { memory_embedder(&model) } else { None };
+        let embedder =
+            if resolved.memory { embedder::build(&model, resolved.embedder)? } else { None };
         #[cfg(feature = "persist")]
         let plans =
             plan_checkpointer(&resolved, args.ephemeral, shared.as_deref(), db.as_deref()).await?;
@@ -544,8 +546,10 @@ impl Setup {
             builder = builder.member(member.to_spec()?);
         }
         if self.resolved.web {
+            // The fetch allowlist and the search filter are separate (spec 3.1 §7.32).
             builder = builder.web(adk_harness::WebConfig {
                 allowed_domains: self.resolved.allow_domains.clone(),
+                search_domains: self.resolved.search_domains.clone(),
                 ..adk_harness::WebConfig::default()
             });
             // Web search (spec 3.1 §7.20): the model provider's built-in search unless the
@@ -707,6 +711,11 @@ impl Setup {
         }
         launcher = launcher.with_status_line("Plans", self.plans_note());
         launcher = launcher.with_status_line("Snapshots", self.snapshots_note());
+        // The embedder is named in every session: recall queries carry the user's messages
+        // (spec 3.1 §7.32, I73).
+        if self.memory_on() {
+            launcher = launcher.with_status_line("Embedder", self.embedder_label());
+        }
         if let Some(personal) = &self.personal {
             for (label, line) in personal.status_lines() {
                 launcher = launcher.with_status_line(label, line);
@@ -810,53 +819,19 @@ impl Setup {
         Some(notice)
     }
 
+    /// What embeds long-term facts, as the banner names it (spec 3.1 §7.32).
+    fn embedder_label(&self) -> String {
+        self.embedder
+            .as_ref()
+            .map_or_else(|| embedder::LEXICAL.to_string(), |(_, name)| name.clone())
+    }
+
     fn memory_on(&self) -> bool {
         #[cfg(feature = "persist")]
         return self.resolved.memory && self.db.is_some();
         #[cfg(not(feature = "persist"))]
         false
     }
-}
-
-/// The embedder long-term memory recalls with (spec 3.1 §7.15.2): the local ONNX model for
-/// a local provider (nothing leaves the machine, H10), else the model's provider when it
-/// embeds (Gemini, OpenAI), else Gemini or OpenAI when its key is set; with none, recall
-/// matches shared words.
-fn memory_embedder(model: &ResolvedModel) -> Option<(Arc<adk_harness::RagEmbedder>, String)> {
-    use crate::cli::Provider;
-    use adk_model::ModelProvider;
-    const GEMINI: &str = "Gemini (gemini-embedding-2)";
-    const OPENAI: &str = "OpenAI (text-embedding-3-small)";
-    const LOCAL: &str = "a local ONNX model (BAAI/bge-small-en-v1.5); nothing leaves this machine";
-    if model.provider().is_some_and(Provider::is_local) {
-        #[cfg(feature = "memory-local")]
-        match adk_harness::RagEmbedder::local() {
-            Ok(embedder) => return Some((Arc::new(embedder), LOCAL.into())),
-            Err(error) => println!(
-                "note: the local embedding model is unavailable ({error}); facts are found by \
-                 shared words"
-            ),
-        }
-        let _ = LOCAL;
-        return None;
-    }
-    let env = |names: &[&str]| {
-        names.iter().find_map(|name| std::env::var(name).ok().filter(|key| !key.trim().is_empty()))
-    };
-    let own = match (model.provider(), model.api_key.clone()) {
-        (Some(Provider::Model(ModelProvider::Gemini)), Some(key)) => Some((key, true)),
-        (Some(Provider::Model(ModelProvider::Openai)), Some(key)) => Some((key, false)),
-        _ => None,
-    };
-    let (key, gemini) = own
-        .or_else(|| env(&["GOOGLE_API_KEY", "GEMINI_API_KEY"]).map(|key| (key, true)))
-        .or_else(|| env(&["OPENAI_API_KEY"]).map(|key| (key, false)))?;
-    let built = if gemini {
-        adk_harness::RagEmbedder::gemini(&key).map(|embedder| (embedder, GEMINI))
-    } else {
-        adk_harness::RagEmbedder::openai(&key).map(|embedder| (embedder, OPENAI))
-    };
-    built.ok().map(|(embedder, name)| (Arc::new(embedder), name.to_string()))
 }
 
 const APP_NAME: &str = "adk-rust";

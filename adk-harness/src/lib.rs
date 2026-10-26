@@ -311,4 +311,4 @@ pub use toolset::HarnessToolset;
 pub use web::WebSearchPath;
 #[cfg(feature = "web")]
 pub use web::{DeepSeekSearch, SearxngSearch};
-pub use web::{ProviderWebTools, SearchHit, SearchProvider, WebConfig};
+pub use web::{ProviderWebTools, SearchDomains, SearchHit, SearchProvider, WebConfig};

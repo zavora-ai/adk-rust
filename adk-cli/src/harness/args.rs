@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use adk_core::{AdkError, Effort, Result};
 use adk_harness::hooks::{HookSet, HookSource};
-use adk_harness::{EffortPolicy, HarnessMode, MemberSpec, Pack, Preset, SnapshotConfig};
+use adk_harness::{
+    EffortPolicy, HarnessMode, MemberSpec, Pack, Preset, SearchDomains, SnapshotConfig,
+};
 use serde::Deserialize;
 
 /// The project file, relative to the workspace root.
@@ -98,6 +100,14 @@ pub struct HarnessArgs {
     /// sessions nor tidies assumed facts (spec 3.2 §7.5)
     #[arg(long)]
     pub no_consolidation: bool,
+
+    /// What embeds long-term facts: local, gemini, openai or lexical
+    ///
+    /// The default is the model provider's own embedder for Gemini and OpenAI, else the
+    /// local ONNX model, else lexical recall; another provider only when chosen here or in
+    /// `[memory] embedder` (spec 3.1 §7.32).
+    #[arg(long, value_parser = parse_embedder, value_name = "EMBEDDER")]
+    pub embedder: Option<EmbedderArg>,
 
     /// Declare web_fetch (on by default in this binary; spec 3.1 §7.20)
     #[arg(long, conflicts_with = "no_web")]
@@ -305,6 +315,85 @@ fn parse_search(value: &str) -> std::result::Result<SearchArg, String> {
     value.parse()
 }
 
+/// What embeds long-term facts: `--embedder` and `[memory] embedder` (spec 3.1 §7.32,
+/// §13 Q9).
+///
+/// Without a choice the model provider's own embedder is used when it has one (Gemini,
+/// OpenAI), else the local ONNX model, else lexical recall; a second provider sees the
+/// facts only when chosen here.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_cli::harness::EmbedderArg;
+///
+/// assert_eq!("local".parse::<EmbedderArg>(), Ok(EmbedderArg::Local));
+/// assert_eq!(EmbedderArg::Gemini.to_string(), "gemini");
+/// assert!(EmbedderArg::Lexical.keeps_data_local());
+/// assert!("cohere".parse::<EmbedderArg>().is_err());
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EmbedderArg {
+    /// The local ONNX model, `BAAI/bge-small-en-v1.5`: nothing leaves this machine.
+    Local,
+    /// Gemini's `gemini-embedding-2`, keyed from the Gemini chat key, `GOOGLE_API_KEY` or
+    /// `GEMINI_API_KEY`.
+    Gemini,
+    /// OpenAI's `text-embedding-3-small`, keyed from the OpenAI chat key or
+    /// `OPENAI_API_KEY`.
+    Openai,
+    /// No embedder: facts are found by shared words.
+    Lexical,
+}
+
+impl EmbedderArg {
+    /// Whether facts and recall queries stay on this machine.
+    pub fn keeps_data_local(self) -> bool {
+        matches!(self, Self::Local | Self::Lexical)
+    }
+
+    /// How far the facts travel: lexical, then local, then a provider. A workspace file
+    /// may only move down this order (spec 3.1 §9.2 I3).
+    fn reach(self) -> u8 {
+        match self {
+            Self::Lexical => 0,
+            Self::Local => 1,
+            Self::Gemini | Self::Openai => 2,
+        }
+    }
+}
+
+impl std::str::FromStr for EmbedderArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "local" => Ok(Self::Local),
+            "gemini" => Ok(Self::Gemini),
+            "openai" => Ok(Self::Openai),
+            "lexical" => Ok(Self::Lexical),
+            other => {
+                Err(format!("unknown embedder '{other}'; use local, gemini, openai or lexical"))
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for EmbedderArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Local => "local",
+            Self::Gemini => "gemini",
+            Self::Openai => "openai",
+            Self::Lexical => "lexical",
+        })
+    }
+}
+
+fn parse_embedder(value: &str) -> std::result::Result<EmbedderArg, String> {
+    value.parse()
+}
+
 fn parse_mode(value: &str) -> std::result::Result<HarnessMode, String> {
     match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
         "read-only" | "readonly" => Ok(HarnessMode::ReadOnly),
@@ -363,6 +452,8 @@ struct ConfigFile {
     /// `[snapshots]`: whether and how the workspace is snapshotted (spec 3.1 §7.27); the
     /// user config only.
     snapshots: Option<SnapshotsTable>,
+    /// `[memory]`: what embeds long-term facts (spec 3.1 §7.32).
+    memory: Option<MemoryTable>,
     /// `[[hooks]]` tables (spec 3.1 §7.22): the user config's are read by
     /// `HookSet::load_file`, the workspace's by the harness at build, so they are neither
     /// applied here nor reported as unknown.
@@ -415,6 +506,18 @@ struct WebTable {
     search: Option<String>,
     /// The SearXNG instance `search = "searxng"` queries.
     searxng_url: Option<String>,
+    /// The search filter, `{ allowed = [..] }` or `{ blocked = [..] }` (spec 3.1 §7.32).
+    search_domains: Option<SearchDomains>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
+}
+
+/// The `[memory]` table (spec 3.1 §7.32).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct MemoryTable {
+    /// `local`, `gemini`, `openai` or `lexical`.
+    embedder: Option<String>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
 }
@@ -536,8 +639,14 @@ pub struct ResolvedHarnessArgs {
     pub search: SearchArg,
     /// `[web] searxng_url` of the user config.
     pub searxng_url: Option<String>,
+    /// `[web] search_domains`: the search filter of the user config, which the workspace's
+    /// may only narrow (spec 3.1 §7.32); never the fetch allowlist.
+    pub search_domains: Option<SearchDomains>,
     /// Long-term memory: on unless `--no-memory` or `--ephemeral`.
     pub memory: bool,
+    /// `--embedder` / `[memory] embedder`: what embeds long-term facts; `None` chooses by
+    /// the model's provider (spec 3.1 §7.32).
+    pub embedder: Option<EmbedderArg>,
     /// The kernel's consolidation tick: allowed unless `--no-consolidation`, and only with
     /// long-term memory (spec 3.2 §7.5).
     pub consolidation: bool,
@@ -626,6 +735,8 @@ impl HarnessArgs {
         let mut allow_domains: Vec<String> = Vec::new();
         let mut search = SearchArg::default();
         let mut searxng_url = None;
+        let mut search_domains: Option<SearchDomains> = None;
+        let mut embedder: Option<EmbedderArg> = None;
         let mut effort = EffortPolicy::default();
         let mut effort_explicit = false;
         let mut store_key = None;
@@ -657,8 +768,18 @@ impl HarnessArgs {
                         value.parse().map_err(|error: String| config_error(&origin, &error))?;
                 }
                 searxng_url = table.searxng_url.clone();
+                search_domains = table.search_domains.clone();
                 for key in table.unknown.keys() {
                     notes.push(format!("{origin}: unknown key `web.{key}` ignored"));
+                }
+            }
+            if let Some(table) = &user.memory {
+                if let Some(value) = &table.embedder {
+                    embedder =
+                        Some(value.parse().map_err(|error: String| config_error(&origin, &error))?);
+                }
+                for key in table.unknown.keys() {
+                    notes.push(format!("{origin}: unknown key `memory.{key}` ignored"));
                 }
             }
             allow_domains.extend(user.allow_domains.iter().flatten().cloned());
@@ -720,8 +841,33 @@ impl HarnessArgs {
                         "it would choose where the agent's queries go",
                     ));
                 }
+                // A workspace may narrow the search filter, never widen it (spec 3.1 §7.32).
+                if let Some(filter) = &table.search_domains {
+                    search_domains = Some(SearchDomains::narrow(search_domains.as_ref(), filter));
+                }
                 for key in table.unknown.keys() {
                     notes.push(format!("{origin}: unknown key `web.{key}` ignored"));
+                }
+            }
+            // A workspace may keep facts on this machine; it may not send them to a
+            // provider (spec 3.1 §7.32, I73).
+            if let Some(table) = &project.memory {
+                if let Some(value) = &table.embedder {
+                    let requested: EmbedderArg =
+                        value.parse().map_err(|error: String| config_error(origin, &error))?;
+                    let narrower = requested.keeps_data_local()
+                        && embedder.is_none_or(|current| requested.reach() <= current.reach());
+                    if narrower {
+                        embedder = Some(requested);
+                    } else if Some(requested) != embedder {
+                        notes.push(loosening_note(
+                            "memory.embedder",
+                            "it would send your facts somewhere you did not choose",
+                        ));
+                    }
+                }
+                for key in table.unknown.keys() {
+                    notes.push(format!("{origin}: unknown key `memory.{key}` ignored"));
                 }
             }
             // Effort costs money, not permissions: a project may set it; flags win.
@@ -790,6 +936,9 @@ impl HarnessArgs {
         if let Some(flag) = self.search {
             search = flag;
         }
+        if let Some(flag) = self.embedder {
+            embedder = Some(flag);
+        }
         if let Some(level) = self.effort {
             effort = EffortPolicy::uniform(level);
             effort_explicit = true;
@@ -826,6 +975,8 @@ impl HarnessArgs {
             allow_domains,
             search,
             searxng_url,
+            search_domains,
+            embedder,
             effort,
             effort_explicit,
             store_key,
@@ -891,6 +1042,8 @@ mod tests {
                 allow_domains: vec![],
                 search: SearchArg::Provider,
                 searxng_url: None,
+                search_domains: None,
+                embedder: None,
                 effort: EffortPolicy::default(),
                 effort_explicit: false,
                 store_key: None,
@@ -1153,6 +1306,83 @@ enabled = false
         let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, None).unwrap();
         assert_eq!(resolved.search, SearchArg::Off);
         assert!(resolved.notes.is_empty(), "{:?}", resolved.notes);
+    }
+
+    /// spec 3.1 §7.32: the search filter is the user's; a workspace narrows it, and the
+    /// fetch allowlist never becomes one.
+    #[test]
+    fn a_workspace_search_filter_only_narrows_the_users() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("user.toml");
+        write(
+            &user,
+            "allow_domains = [\"internal.example\"]\n[web]\nsearch_domains = { allowed = [\"docs.rs\", \"rust-lang.org\"] }\n",
+        );
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap();
+        assert_eq!(
+            resolved.search_domains,
+            Some(SearchDomains::Allowed(vec!["docs.rs".into(), "rust-lang.org".into()]))
+        );
+        assert_eq!(resolved.allow_domains, vec!["internal.example".to_string()]);
+        write(
+            &dir.path().join(PROJECT_CONFIG_FILE),
+            "[web]\nsearch_domains = { allowed = [\"doc.rust-lang.org\", \"collector.example\"] }\n",
+        );
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap();
+        assert_eq!(
+            resolved.search_domains,
+            Some(SearchDomains::Allowed(vec!["doc.rust-lang.org".into()])),
+            "the workspace cannot add collector.example"
+        );
+        // Without a user filter, a workspace's blocked list applies.
+        let resolved = {
+            write(
+                &dir.path().join(PROJECT_CONFIG_FILE),
+                "[web]\nsearch_domains = { blocked = [\"pinterest.com\"] }\n",
+            );
+            args_in(dir.path()).resolve(HarnessMode::Ask, None).unwrap()
+        };
+        assert_eq!(
+            resolved.search_domains,
+            Some(SearchDomains::Blocked(vec!["pinterest.com".into()]))
+        );
+        assert!(resolved.notes.is_empty(), "{:?}", resolved.notes);
+    }
+
+    /// spec 3.1 §7.32, §13 Q9: the flag wins, then the user config; a workspace may keep
+    /// facts on this machine and may never send them to a provider.
+    #[test]
+    fn the_embedder_is_the_users_and_a_workspace_may_only_keep_facts_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("user.toml");
+        write(&user, "[memory]\nembedder = \"gemini\"\n");
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap();
+        assert_eq!(resolved.embedder, Some(EmbedderArg::Gemini));
+        let flag = HarnessArgs { embedder: Some(EmbedderArg::Lexical), ..args_in(dir.path()) };
+        assert_eq!(
+            flag.resolve(HarnessMode::Ask, Some(&user)).unwrap().embedder,
+            Some(EmbedderArg::Lexical)
+        );
+
+        let project = dir.path().join(PROJECT_CONFIG_FILE);
+        write(&project, "[memory]\nembedder = \"local\"\n");
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap();
+        assert_eq!(resolved.embedder, Some(EmbedderArg::Local), "local is narrower than gemini");
+        assert!(resolved.notes.is_empty(), "{:?}", resolved.notes);
+
+        write(&project, "[memory]\nembedder = \"openai\"\n");
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, None).unwrap();
+        assert_eq!(resolved.embedder, None, "a workspace never chooses a provider");
+        assert!(resolved.notes[0].contains("memory.embedder"), "{:?}", resolved.notes);
+
+        write(&user, "[memory]\nembedder = \"lexical\"\n");
+        write(&project, "[memory]\nembedder = \"local\"\n");
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap();
+        assert_eq!(resolved.embedder, Some(EmbedderArg::Lexical), "lexical stays lexical");
+
+        write(&user, "[memory]\nembedder = \"cohere\"\n");
+        let error = args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap_err();
+        assert!(error.to_string().contains("unknown embedder 'cohere'"), "{error}");
     }
 
     #[test]
