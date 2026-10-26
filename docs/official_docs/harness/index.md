@@ -69,6 +69,7 @@ turn runs it once (see [Modes and approvals](modes-and-approvals.md)).
 | Instructions and skills | `AGENTS.md` after a workspace trust decision; skills loaded on demand | [Configuration](configuration.md) |
 | Team | Local, ACP and A2A members under the parent's mode, budget and policy | [Team](team.md) |
 | Plans and goals | An approved plan runs as a checkpointed graph; goals iterate until a command passes, as durable runs | [Plans and goals](plan-and-goals.md) |
+| Snapshots and rewind | The whole workspace is snapshotted before each turn, shell writes included; `/rewind` restores files, transcript and plan, `/redo` undoes it | [Snapshots and rewind](snapshots-and-rewind.md) |
 | Durability | A completed call never runs twice; held approvals survive process loss | [Durability](durability.md) |
 | Identity | Roles per tool class, per-call shell credentials, authenticated serving | [Identity](identity.md) |
 | Observability | Spans, spend per agent and subject, a loop guard that tightens the mode | [Observability](observability.md) |
@@ -88,6 +89,7 @@ turn runs it once (see [Modes and approvals](modes-and-approvals.md)).
 | [Shell and sandbox](shell-and-sandbox.md) | Host and sandboxed `bash`, isolation status, unsandboxed retries, output and background shells |
 | [Team](team.md) | Members, isolation, budgets, discovery, review rounds |
 | [Plans and goals](plan-and-goals.md) | The plan graph, gates and rewind; loop-until goals, durable and ambient |
+| [Snapshots and rewind](snapshots-and-rewind.md) | Whole-workspace snapshots before each turn, `/rewind` and `/redo`: files, transcript and plan |
 | [Durability](durability.md) | The durability invariants and the tests that prove them |
 | [Identity](identity.md) | RBAC, credentials, authenticated identity, audit |
 | [Observability](observability.md) | Spans, spend, the loop guard, evaluation baselines |

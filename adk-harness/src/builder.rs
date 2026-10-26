@@ -179,6 +179,8 @@ pub struct HarnessAgentBuilder {
     memory: Option<crate::memory::MemoryConfig>,
     #[cfg(feature = "graph")]
     plan_checkpointer: Option<Arc<dyn adk_graph::Checkpointer>>,
+    /// Snapshots and rewind (spec 3.1 §7.27); off until `snapshots` is set.
+    snapshots: crate::snapshot::SnapshotSetup,
     goal_store: Option<Arc<dyn crate::goal::GoalStore>>,
     #[cfg(feature = "graph")]
     goal_engine: Option<crate::goal::GoalEngine>,
@@ -298,6 +300,7 @@ impl HarnessAgentBuilder {
             memory: None,
             #[cfg(feature = "graph")]
             plan_checkpointer: None,
+            snapshots: crate::snapshot::SnapshotSetup::default(),
             goal_store: None,
             #[cfg(feature = "graph")]
             goal_engine: None,
@@ -1164,6 +1167,39 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// Snapshots the workspace before each user turn, plan step and rewind, so
+    /// `Harness::rewind` can restore files, transcript and plan (spec 3.1 §7.27; off until
+    /// set, on in adk-cli). Records and objects stay in memory unless
+    /// [`snapshot_store`](Self::snapshot_store) and [`snapshot_objects`](Self::snapshot_objects)
+    /// say otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let agent = HarnessAgent::builder("harness")
+    ///     .model(model)
+    ///     .workspace(workspace)
+    ///     .snapshots(adk_harness::SnapshotConfig::default())
+    ///     .build()?;
+    /// ```
+    pub fn snapshots(mut self, config: crate::snapshot::SnapshotConfig) -> Self {
+        self.snapshots.config = Some(config);
+        self
+    }
+
+    /// Where snapshot records are kept, such as `SqliteSnapshotStore` in `harness.db`.
+    pub fn snapshot_store(mut self, store: Arc<dyn crate::snapshot::SnapshotStore>) -> Self {
+        self.snapshots.store = Some(store);
+        self
+    }
+
+    /// Where snapshot contents are kept, such as `FileSnapshotObjects::for_workspace` beside
+    /// `harness.db`; never inside the workspace (I68).
+    pub fn snapshot_objects(mut self, objects: Arc<dyn crate::snapshot::SnapshotObjects>) -> Self {
+        self.snapshots.objects = Some(objects);
+        self
+    }
+
     /// File memory (spec 3.1 §7.15; off until set): adds `memory_read`, `memory_write`
     /// and `memory_delete`, and the memory index at the end of the instruction.
     #[cfg(feature = "memory")]
@@ -1935,6 +1971,11 @@ impl HarnessAgentBuilder {
                 &self.name,
             ))
         });
+        let snapshots = std::mem::take(&mut self.snapshots).build(&workspace)?;
+        #[cfg(feature = "graph")]
+        if let (Some(graphs), Some(snapshots)) = (&plan_graphs, &snapshots) {
+            graphs.set_snapshots(snapshots.clone());
+        }
         let plan_exit = ExitPlanModeTool::new(mode_store.clone(), self.mode);
         #[cfg(feature = "graph")]
         let plan_exit = match &plan_graphs {
@@ -2379,6 +2420,7 @@ impl HarnessAgentBuilder {
                 memory,
                 ledger_durable: self.action_ledger.is_some(),
                 plan_rewind,
+                snapshots: snapshots.as_ref().map(|snapshots| snapshots.config().clone()),
                 model: model.name(),
             })
         };
@@ -2745,6 +2787,7 @@ impl HarnessAgentBuilder {
                 team,
                 #[cfg(feature = "graph")]
                 plan_graph: plan_graphs,
+                snapshots,
                 goals,
                 #[cfg(feature = "kernel")]
                 kernel_approvals: self.kernel_approvals,

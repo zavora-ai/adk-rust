@@ -361,3 +361,35 @@ async fn a_five_mib_output_returns_head_and_tail_and_shell_output_reads_the_midd
     assert_eq!(middle["exit_code"], 0);
     assert_eq!(middle["total_bytes"], 5 * 1024 * 1024);
 }
+
+/// A rewind lists a background shell its turn started as not undone, and says it still runs
+/// (spec 3.1 §7.27, §7.29).
+#[tokio::test]
+async fn a_rewind_lists_a_running_background_shell_as_not_undone() {
+    let outputs = tempfile::tempdir().unwrap();
+    let shells = Arc::new(ShellSupervisor::new(
+        Arc::new(ShellOutputs::new(outputs.path())),
+        BackgroundShellConfig::attended(),
+    ));
+    let f = fixture(vec![background("sleep 30"), ScriptedResponse::text("started")], |b| {
+        b.mode(HarnessMode::Auto)
+            .allow_host_shell_in_auto()
+            .shell_supervisor(shells)
+            .snapshots(adk_harness::snapshot::SnapshotConfig::default())
+    })
+    .await;
+    f.send("start the server").await;
+
+    let plan = f
+        .harness
+        .rewind_plan(&f.user, &f.session, adk_harness::snapshot::RewindTarget::Turn(1))
+        .await
+        .unwrap();
+
+    let shell = plan.not_undone.iter().find(|item| item.tool == "bash").expect("bash listed");
+    assert_eq!(
+        shell.summary,
+        "sleep 30 (background shell 1, still running; /shells kill 1 stops it)"
+    );
+    f.harness.close().await;
+}

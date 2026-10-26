@@ -41,6 +41,7 @@
 //! | `packs::computer_use::ComputerUsePack` (feature `computer-use`) | §7.24 |
 //! | `packs::voice::{VoiceSurface, VoiceConfig, VoiceEvent, SpokenDecision}` (feature `voice`) | §7.17 |
 //! | `website::*`, `Preset::Website` (feature `website`) | spec 3.5 §7.1, §7.3, §7.10, §7.11, §7.18 |
+//! | [`snapshot::Snapshots`], [`SnapshotConfig`], [`RewindTarget`], [`RewindPlan`], [`RewindReport`], `Harness::{rewind_plan, rewind, redo_plan, rewind_turns, snapshot_now}` | §7.27 |
 //! | `VoiceSurface::with_parked_processes`, `ParkedProcess` (features `voice` and `kernel`) | spec 3.2 §7.11 |
 //!
 //! # Example
@@ -108,6 +109,7 @@ mod run_context;
 mod shell;
 #[cfg(feature = "skills")]
 mod skills;
+pub mod snapshot;
 pub mod take_over;
 #[cfg(feature = "team")]
 mod team;
@@ -293,6 +295,7 @@ pub use shell::{
 pub use shell::{OsSandboxConfig, SandboxAccess, SandboxLauncher};
 #[cfg(feature = "skills")]
 pub use skills::{SkillsConfig, SkillsMode};
+pub use snapshot::{RewindPlan, RewindReport, RewindTarget, SnapshotConfig};
 #[cfg(feature = "team")]
 pub use team::{
     HarnessTeam, MEMBER_CIRCUIT_BREAKER, MEMBER_MAX_ITERATIONS, MEMBER_TIMEOUT, MemberKind,

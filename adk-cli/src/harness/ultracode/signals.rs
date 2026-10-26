@@ -1,9 +1,10 @@
 //! The signals the review router reads (spec 3.1 §7.10 "Adaptive review"): keyword features
 //! of the task, and a metadata snapshot of the workspace before and after the first turn.
-//! No file contents and no `git`: a snapshot is file paths, lengths and modification times.
+//! No file contents and no `git`: a snapshot is file paths, lengths and modification times,
+//! from the walker the harness snapshots share (`adk_harness::snapshot::walk`, §7.27).
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use adk_harness::approvals::matcher::{glob_matches, is_protected_path};
 use serde::{Deserialize, Serialize};
@@ -22,8 +23,7 @@ const MAX_LISTED_PATHS: usize = 64;
 
 /// Directories a snapshot enters only when a `sensitive_paths` glob names them from the
 /// workspace root: build output and dependencies.
-const SKIPPED_DIRS: &[&str] =
-    &["target", "node_modules", ".venv", "venv", "dist", "build", "__pycache__", ".next"];
+const SKIPPED_DIRS: &[&str] = adk_harness::snapshot::DEFAULT_SKIP_DIRS;
 
 /// The entries of a `.git` directory a snapshot records: what decides which code runs
 /// (configuration, hooks, excludes and attributes), not objects, refs or logs.
@@ -261,58 +261,24 @@ impl WorkspaceSnapshot {
     /// assert!(snapshot.files.contains_key("dist/index.js"));
     /// ```
     pub fn capture_with(root: &Path, sensitive_paths: &[String]) -> Self {
-        let reach: Vec<String> = sensitive_paths.iter().map(|glob| literal_prefix(glob)).collect();
-        let reached = |relative: &str| {
-            reach.iter().any(|prefix| {
-                !prefix.is_empty()
-                    && (prefix == relative
-                        || prefix.strip_prefix(relative).is_some_and(|rest| rest.starts_with('/'))
-                        || relative
-                            .strip_prefix(prefix.as_str())
-                            .is_some_and(|rest| rest.starts_with('/')))
-            })
+        let options = adk_harness::snapshot::WalkOptions {
+            max_files: SNAPSHOT_MAX_FILES,
+            max_file_bytes: None,
+            skip_dirs: SKIPPED_DIRS.iter().map(|dir| (*dir).to_string()).collect(),
+            enter: sensitive_paths.iter().map(|glob| literal_prefix(glob)).collect(),
+            git_entries: Some(GIT_RECORDED.iter().map(|name| (*name).to_string()).collect()),
+            gitignore: false,
+            exclude: None,
         };
-        let mut snapshot = Self::default();
-        // Breadth-first, so a large tree deep down cannot hide the files near the root.
-        let mut pending: VecDeque<(PathBuf, bool)> = VecDeque::from([(root.to_path_buf(), false)]);
-        while let Some((dir, git)) = pending.pop_front() {
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            let mut entries: Vec<_> = entries.flatten().collect();
-            entries.sort_by_key(std::fs::DirEntry::file_name);
-            for entry in entries {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if git && !GIT_RECORDED.contains(&name.as_str()) {
-                    continue;
-                }
-                let Ok(metadata) = entry.path().symlink_metadata() else {
-                    continue;
-                };
-                let Some(relative) = relative_path(root, &entry.path()) else {
-                    continue;
-                };
-                if metadata.is_dir() {
-                    if name == ".git" {
-                        pending.push_back((entry.path(), true));
-                    } else if !SKIPPED_DIRS.contains(&name.as_str()) || reached(&relative) {
-                        pending.push_back((entry.path(), false));
-                    }
-                    continue;
-                }
-                if snapshot.files.len() >= SNAPSHOT_MAX_FILES {
-                    snapshot.truncated = true;
-                    return snapshot;
-                }
-                let mtime_ns = metadata
-                    .modified()
-                    .ok()
-                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map_or(0, |since| u64::try_from(since.as_nanos()).unwrap_or(u64::MAX));
-                snapshot.files.insert(relative, FileStamp { len: metadata.len(), mtime_ns });
-            }
+        let walked = adk_harness::snapshot::walk(root, &options);
+        Self {
+            files: walked
+                .files
+                .into_iter()
+                .map(|file| (file.path, FileStamp { len: file.len, mtime_ns: file.mtime_ns }))
+                .collect(),
+            truncated: walked.partial,
         }
-        snapshot
     }
 
     /// What changed from this snapshot to `after`: added, removed and modified files, with
@@ -395,18 +361,6 @@ impl WorkspaceSnapshot {
             truncated: self.truncated || after.truncated,
         }
     }
-}
-
-/// `path` relative to `root`, with `/` separators.
-fn relative_path(root: &Path, path: &Path) -> Option<String> {
-    let relative = path.strip_prefix(root).ok()?;
-    Some(
-        relative
-            .components()
-            .map(|part| part.as_os_str().to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join("/"),
-    )
 }
 
 /// The path a glob names before its first wildcard component: `dist/**` gives `dist`.

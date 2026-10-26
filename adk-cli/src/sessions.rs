@@ -133,6 +133,33 @@ pub struct HarnessDb {
     /// The keyring the stores are sealed under, if any.
     #[cfg(feature = "encrypted")]
     pub keyring: Option<adk_harness::encrypted::StoreKeyring>,
+    /// Snapshot records (spec 3.1 §7.27), sealed under the store key when one is
+    /// configured; their objects live under [`snapshots_dir`](Self::snapshots_dir).
+    pub snapshots: Arc<adk_harness::snapshot::SqliteSnapshotStore>,
+    /// The directory `harness.db` is in: the config dir, or the kernel home.
+    pub dir: std::path::PathBuf,
+}
+
+#[cfg(feature = "harness")]
+impl HarnessDb {
+    /// Where snapshot objects live: `snapshots/` beside `harness.db`, one directory per
+    /// workspace (spec 3.1 §7.27, I68).
+    pub fn snapshots_dir(&self) -> std::path::PathBuf {
+        self.dir.join("snapshots")
+    }
+
+    /// The snapshot objects of the workspace at `root` (canonical), sealed like the
+    /// database.
+    pub fn snapshot_objects(&self, root: &Path) -> adk_harness::snapshot::FileSnapshotObjects {
+        let objects =
+            adk_harness::snapshot::FileSnapshotObjects::for_workspace(&self.snapshots_dir(), root);
+        #[cfg(feature = "encrypted")]
+        let objects = match &self.keyring {
+            Some(keyring) => objects.with_keyring(keyring.clone()),
+            None => objects,
+        };
+        objects
+    }
 }
 
 /// Opens `harness.db` with the keyring the user config names, if any (spec 3.1 §7.12).
@@ -190,6 +217,8 @@ pub async fn open_harness_db_in(
     reads.migrate().await?;
     let plans: Arc<dyn adk_graph::Checkpointer> =
         Arc::new(adk_graph::SqliteCheckpointer::from_pool(pool.clone()).await?);
+    let snapshots = adk_harness::snapshot::SqliteSnapshotStore::new(pool.clone());
+    snapshots.migrate().await?;
     let Some(keyring) = keyring else {
         return Ok(HarnessDb {
             pool,
@@ -206,13 +235,16 @@ pub async fn open_harness_db_in(
             key_id: None,
             plans,
             keyring: None,
+            snapshots: Arc::new(snapshots),
+            dir: dir.to_path_buf(),
         });
     };
     if marker.key_id().await?.is_none() {
         let (rows,): (i64,) = sqlx::query_as(
             "SELECT (SELECT count(*) FROM sessions) + (SELECT count(*) FROM adk_harness_rules) \
              + (SELECT count(*) FROM adk_harness_facts) + (SELECT count(*) FROM adk_approval_pending) \
-             + (SELECT count(*) FROM graph_checkpoints)",
+             + (SELECT count(*) FROM graph_checkpoints) \
+             + (SELECT count(*) FROM adk_harness_snapshots)",
         )
         .fetch_one(&pool)
         .await?;
@@ -249,6 +281,8 @@ pub async fn open_harness_db_in(
         key_id: Some(keyring.key_id()),
         plans: Arc::new(adk_harness::SealedCheckpointer::new(plans, keyring.clone())),
         keyring: Some(keyring.clone()),
+        snapshots: Arc::new(snapshots.with_keyring(keyring.clone())),
+        dir: dir.to_path_buf(),
     })
 }
 
@@ -282,6 +316,8 @@ pub async fn open_harness_db_in(dir: &Path) -> Result<HarnessDb> {
     let reads = adk_harness::SqliteReadRecords::new(pool.clone());
     reads.migrate().await?;
     let plans = adk_graph::SqliteCheckpointer::from_pool(pool.clone()).await?;
+    let snapshots = adk_harness::snapshot::SqliteSnapshotStore::new(pool.clone());
+    snapshots.migrate().await?;
     Ok(HarnessDb {
         pool,
         sessions,
@@ -296,6 +332,8 @@ pub async fn open_harness_db_in(dir: &Path) -> Result<HarnessDb> {
         reads: Arc::new(reads),
         key_id: None,
         plans: Arc::new(plans),
+        snapshots: Arc::new(snapshots),
+        dir: dir.to_path_buf(),
     })
 }
 

@@ -72,6 +72,7 @@ See [Shell and sandbox](shell-and-sandbox.md) and [Durability](durability.md).
 | `member_registry(registry)`, `team_policy(policy)`, `member_model(llm)` | none | Discovery, the team's budget and termination, and the members' model |
 | `plan_graph(bool)` | `true` with feature `graph` | Compiles approved plans with steps into a checkpointed graph |
 | `plan_checkpointer(checkpointer)` | in memory: plans do not survive a restart | Where plan graphs and the `Graph` goal engine are checkpointed |
+| `snapshots(SnapshotConfig)`, `snapshot_store(store)`, `snapshot_objects(objects)` | off; in memory; in memory | Snapshots before each turn and plan step, and `Harness::rewind` (spec 3.1 §7.27); see [Snapshots and rewind](snapshots-and-rewind.md) |
 | `plan_checkpoint_store(url).await?` | — | `plan_checkpointer` over the store a URL names: `sqlite://`, `postgres://`, `redis://`, `mongodb://`, `neo4j://`, `firestore://` (spec 3.1 §13 Q5) |
 | `goal_store(store)`, `goal_engine(GoalEngine)` | in memory; `Loop`, or `Graph` with a plan checkpointer | Where goals are kept and how they iterate |
 | `memory(MemoryConfig)` | off | Working notes (feature `memory`) |

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use adk_core::{AdkError, Effort, Result};
 use adk_harness::hooks::{HookSet, HookSource};
-use adk_harness::{EffortPolicy, HarnessMode, MemberSpec, Pack, Preset};
+use adk_harness::{EffortPolicy, HarnessMode, MemberSpec, Pack, Preset, SnapshotConfig};
 use serde::Deserialize;
 
 /// The project file, relative to the workspace root.
@@ -129,6 +129,10 @@ pub struct HarnessArgs {
     /// Run no hooks, not even the workspace's (spec 3.1 §7.22)
     #[arg(long = "no-hooks")]
     pub no_hooks: bool,
+
+    /// Take no snapshots before turns, so /rewind cannot restore files (spec 3.1 §7.27)
+    #[arg(long = "no-snapshots")]
+    pub no_snapshots: bool,
 
     /// Where plans and goal graphs are checkpointed: sqlite://, postgres://, redis://,
     /// mongodb://, neo4j:// or firestore:// (default: `[plan] checkpointer` in the user
@@ -359,6 +363,9 @@ struct ConfigFile {
     /// `[shells]`: background shell limits (spec 3.1 §7.29); a project file may only lower
     /// them.
     shells: Option<ShellsTable>,
+    /// `[snapshots]`: whether and how the workspace is snapshotted (spec 3.1 §7.27); the
+    /// user config only.
+    snapshots: Option<SnapshotsTable>,
     /// `[[hooks]]` tables (spec 3.1 §7.22): the user config's are read by
     /// `HookSet::load_file`, the workspace's by the harness at build, so they are neither
     /// applied here nor reported as unknown.
@@ -481,6 +488,40 @@ struct PlanTable {
     checkpointer: Option<String>,
 }
 
+/// The `[snapshots]` table (spec 3.1 §7.27, §13 Q11).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct SnapshotsTable {
+    enabled: Option<bool>,
+    keep_turns: Option<u32>,
+    max_bytes: Option<u64>,
+    max_files: Option<usize>,
+    max_file_bytes: Option<u64>,
+    skip_dirs: Option<Vec<String>>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
+}
+
+impl SnapshotsTable {
+    /// The configuration this table describes, or `None` when it turns snapshots off.
+    fn apply(&self, origin: &str, notes: &mut Vec<String>) -> Option<SnapshotConfig> {
+        if self.enabled == Some(false) {
+            return None;
+        }
+        let defaults = SnapshotConfig::default();
+        for key in self.unknown.keys() {
+            notes.push(format!("{origin}: unknown key `snapshots.{key}` ignored"));
+        }
+        Some(SnapshotConfig {
+            keep_turns: self.keep_turns.unwrap_or(defaults.keep_turns).max(1),
+            max_bytes: self.max_bytes.unwrap_or(defaults.max_bytes),
+            max_files: self.max_files.unwrap_or(defaults.max_files).max(1),
+            max_file_bytes: self.max_file_bytes.unwrap_or(defaults.max_file_bytes),
+            skip_dirs: self.skip_dirs.clone().unwrap_or(defaults.skip_dirs),
+        })
+    }
+}
+
 /// The `[deploy]` table is read by deployment tooling (spec 3.1 §8.5), not by the CLI.
 const DEPLOY_TABLE: &str = "deploy";
 
@@ -577,6 +618,9 @@ pub struct ResolvedHarnessArgs {
     pub shells: ShellLimits,
     /// Settings a config file made that were ignored, and why.
     pub notes: Vec<String>,
+    /// Snapshots before each turn (spec 3.1 §7.27): on by default, `None` with
+    /// `--no-snapshots` or `[snapshots] enabled = false` in the user config.
+    pub snapshots: Option<SnapshotConfig>,
 }
 
 impl HarnessArgs {
@@ -645,6 +689,7 @@ impl HarnessArgs {
         let mut store_key = None;
         let mut checkpointer = None;
         let mut shells = ShellLimits::default();
+        let mut snapshots = Some(SnapshotConfig::default());
         if let Some(user) = &user {
             let origin = user_config.map_or_else(String::new, |path| path.display().to_string());
             if let Some(value) = &user.mode {
@@ -687,6 +732,9 @@ impl HarnessArgs {
                     max_running: table.max_running,
                     lifetime_minutes: table.lifetime_minutes,
                 };
+            }
+            if let Some(table) = &user.snapshots {
+                snapshots = table.apply(&origin, &mut notes);
             }
             for key in user.unknown.keys().filter(|key| *key != DEPLOY_TABLE) {
                 notes.push(format!("{origin}: unknown key `{key}` ignored"));
@@ -758,6 +806,12 @@ impl HarnessArgs {
                      choose; set [plan] checkpointer in your user config or pass --checkpointer"
                 ));
             }
+            if project.snapshots.is_some() {
+                notes.push(format!(
+                    "{origin}: `snapshots` ignored — whether your workspace is snapshotted is yours \
+                     to choose; set [snapshots] in your user config or pass --no-snapshots"
+                ));
+            }
             if project.store.is_some() {
                 notes.push(format!(
                     "{origin}: `store` ignored — where your store key lives is yours to choose; \
@@ -815,6 +869,9 @@ impl HarnessArgs {
         if let Some(url) = &self.checkpointer {
             checkpointer = Some(url.clone());
         }
+        if self.no_snapshots {
+            snapshots = None;
+        }
         if fail_if_unavailable && !sandbox {
             return Err(AdkError::config(
                 "fail_if_unavailable needs the sandbox: pass --sandbox or set sandbox = true",
@@ -846,6 +903,7 @@ impl HarnessArgs {
             user_hooks,
             shells,
             notes,
+            snapshots,
         })
     }
 }
@@ -911,6 +969,7 @@ mod tests {
                 user_hooks: HookSet::default(),
                 shells: ShellLimits::default(),
                 notes: vec![],
+                snapshots: Some(SnapshotConfig::default()),
             }
         );
     }
@@ -936,6 +995,47 @@ mod tests {
         assert_eq!(unattended.lifetime(), Some(std::time::Duration::from_secs(600)));
         let attended = resolved.shells.apply(adk_harness::BackgroundShellConfig::attended());
         assert_eq!(attended.lifetime(), None, "the REPL sets no lifetime");
+    }
+
+    /// Snapshots are on unless the user config or the flag turns them off; the workspace
+    /// file cannot (spec 3.1 §7.27, §13 Q11, I3).
+    #[test]
+    fn snapshots_follow_the_user_config_and_the_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("user.toml");
+        write(
+            &user,
+            "[snapshots]
+keep_turns = 5
+max_file_bytes = 1024
+size = 3
+",
+        );
+        write(
+            &dir.path().join(PROJECT_CONFIG_FILE),
+            "[snapshots]
+enabled = false
+",
+        );
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap();
+        let config = resolved.snapshots.clone().expect("the workspace cannot turn them off");
+        assert_eq!((config.keep_turns, config.max_file_bytes), (5, 1024));
+        assert_eq!(config.max_files, SnapshotConfig::default().max_files);
+        assert!(resolved.notes.iter().any(|note| note.contains("`snapshots.size` ignored")));
+        assert!(resolved.notes.iter().any(|note| note.contains("`snapshots` ignored")));
+
+        let off = HarnessArgs { no_snapshots: true, ..args_in(dir.path()) }
+            .resolve(HarnessMode::Ask, Some(&user))
+            .unwrap();
+        assert_eq!(off.snapshots, None);
+        write(
+            &user,
+            "[snapshots]
+enabled = false
+",
+        );
+        let off = args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap();
+        assert_eq!(off.snapshots, None);
     }
 
     #[test]
