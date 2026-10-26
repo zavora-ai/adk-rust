@@ -708,6 +708,18 @@ pub(crate) async fn dispatch(dispatch: GovernedDispatch, ctx: &NodeContext) -> G
                 held: None,
             }
         }
+        Err(error) if GovernedError::code_of(&error) == Some("graph.refused") => {
+            // The node refused to send the call, such as for a changed credential.
+            let note =
+                adk_core::not_run_text(&adk_core::AdkError::agent("the node refused the call"));
+            complete(begun, &node, &key, ActionOutcome::Failed { error: note }).await;
+            GovernedRun {
+                output: Err(error),
+                status: NodeStatus::Refused,
+                effect_key: Some(key),
+                held: None,
+            }
+        }
         Err(error) if GovernedError::code_of(&error) == Some("graph.edit_unsupported") => {
             let note = adk_core::not_run_text(&adk_core::AdkError::agent(
                 "the node cannot run an edited call",

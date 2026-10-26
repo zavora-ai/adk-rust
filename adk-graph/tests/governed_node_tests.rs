@@ -661,3 +661,292 @@ async fn the_messages_stream_runs_a_governed_node_through_its_bracket() {
     assert_eq!(GovernedError::code_of(&error), Some("graph.not_run"));
     assert_eq!(rig.provider.hits(), 1);
 }
+
+// ── A governed HTTP call against a loopback provider ─────────────────
+
+#[cfg(feature = "action-http")]
+mod http {
+    use super::*;
+    use adk_action::{
+        ActionNodeConfig, BearerAuth, Callbacks, ErrorHandling, ErrorMode, ExecutionControl,
+        HttpAuth, HttpBody, HttpMethod, HttpNodeConfig, HttpResponse, InputOutputMapping, LogLevel,
+        StandardProperties, Tracing,
+    };
+    use adk_graph::action::ActionNodeExecutor;
+    use adk_graph::action::http::HttpActionPolicy;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// One request the provider received.
+    #[derive(Debug, Clone, PartialEq)]
+    struct Seen {
+        method: String,
+        target: String,
+        authorization: Option<String>,
+        body: Value,
+    }
+
+    /// A loopback payment provider that counts and records every request.
+    struct Mock {
+        base: String,
+        seen: Arc<Mutex<Vec<Seen>>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for Mock {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    impl Mock {
+        async fn start() -> Self {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
+            let record = Arc::clone(&seen);
+            let task = tokio::spawn(async move {
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    let record = Arc::clone(&record);
+                    tokio::spawn(async move {
+                        let mut buffer = Vec::new();
+                        let mut chunk = [0u8; 4096];
+                        let head_end = loop {
+                            let read = stream.read(&mut chunk).await.unwrap_or(0);
+                            if read == 0 {
+                                return;
+                            }
+                            buffer.extend_from_slice(&chunk[..read]);
+                            if let Some(at) = buffer.windows(4).position(|w| w == b"\r\n\r\n") {
+                                break at + 4;
+                            }
+                        };
+                        let head = String::from_utf8_lossy(&buffer[..head_end]).to_string();
+                        let mut lines = head.lines();
+                        let mut request_line = lines.next().unwrap_or_default().split(' ');
+                        let method = request_line.next().unwrap_or_default().to_string();
+                        let target = request_line.next().unwrap_or_default().to_string();
+                        let mut length = 0;
+                        let mut authorization = None;
+                        for line in lines {
+                            if let Some((name, value)) = line.split_once(':') {
+                                match name.trim().to_ascii_lowercase().as_str() {
+                                    "content-length" => length = value.trim().parse().unwrap_or(0),
+                                    "authorization" => {
+                                        authorization = Some(value.trim().to_string())
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        while buffer.len() < head_end + length {
+                            let read = stream.read(&mut chunk).await.unwrap_or(0);
+                            if read == 0 {
+                                break;
+                            }
+                            buffer.extend_from_slice(&chunk[..read]);
+                        }
+                        let body =
+                            serde_json::from_slice(&buffer[head_end..]).unwrap_or(Value::Null);
+                        let count = {
+                            let mut seen = record.lock().unwrap();
+                            seen.push(Seen { method, target, authorization, body });
+                            seen.len()
+                        };
+                        let reply = json!({ "id": format!("ch_{count}") }).to_string();
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                            reply.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes()).await;
+                    });
+                }
+            });
+            Self { base, seen, task }
+        }
+
+        fn seen(&self) -> Vec<Seen> {
+            self.seen.lock().unwrap().clone()
+        }
+    }
+
+    fn pay_node(base: &str) -> ActionNodeExecutor {
+        let standard = StandardProperties {
+            id: "pay".to_string(),
+            name: "pay".to_string(),
+            description: None,
+            position: None,
+            error_handling: ErrorHandling {
+                mode: ErrorMode::Stop,
+                retry_count: None,
+                retry_delay: None,
+                fallback_value: None,
+            },
+            tracing: Tracing { enabled: false, log_level: LogLevel::None },
+            callbacks: Callbacks { on_start: None, on_complete: None, on_error: None },
+            execution: ExecutionControl { timeout: 10_000, condition: None },
+            mapping: InputOutputMapping { input_mapping: None, output_key: "charge".to_string() },
+        };
+        ActionNodeExecutor::new(ActionNodeConfig::Http(HttpNodeConfig {
+            standard,
+            method: HttpMethod::Post,
+            url: format!("{base}/charges?account=acme&api_key={{{{apiKey}}}}"),
+            auth: HttpAuth::Bearer(BearerAuth { token: "{{token}}".to_string() }),
+            headers: [("X-Request".to_string(), "inv-1".to_string())].into(),
+            body: HttpBody::Json {
+                data: json!({ "customer": "{{customer}}", "amountCents": 4200 }),
+            },
+            response: HttpResponse { response_type: "json".to_string(), status_validation: None },
+            rate_limit: None,
+        }))
+        .with_http_policy(
+            HttpActionPolicy::new()
+                .allow_schemes(["http"])
+                .allow_hosts(["127.0.0.1"])
+                .max_redirects(0),
+        )
+    }
+
+    fn state(token: &str) -> State {
+        State::from([
+            ("customer".to_string(), json!("Acme")),
+            ("token".to_string(), json!(token)),
+            ("apiKey".to_string(), json!("key-1")),
+        ])
+    }
+
+    fn ctx(token: &str) -> NodeContext {
+        NodeContext::new(state(token), ExecutionConfig::new("t1"), 0)
+    }
+
+    #[tokio::test]
+    async fn the_call_carries_everything_sent_with_credentials_as_digests() {
+        let mock = Mock::start().await;
+        let node = pay_node(&mock.base);
+        let args = node.call_args(&ctx("tok-1")).expect("an HTTP node describes its call");
+
+        let digest = |value: &Value| value.as_str().unwrap_or_default().to_string();
+        let authorization = digest(&args["headers"]["authorization"]);
+        let url = digest(&args["url"]);
+        assert!(authorization.starts_with("sha256:"), "{authorization}");
+        assert!(
+            url.starts_with(&format!("{}/charges?account=acme&api_key=sha256%3A", mock.base)),
+            "{url}"
+        );
+        let shown = args.to_string();
+        assert!(
+            !shown.contains("tok-1") && !shown.contains("key-1"),
+            "no secret is shown: {shown}"
+        );
+        let mut expected = json!({
+            "method": "POST",
+            "url": url,
+            "headers": {
+                "authorization": authorization,
+                "content-type": "application/json",
+                "x-request": "inv-1",
+            },
+            "body": { "customer": "Acme", "amountCents": 4200 },
+        });
+        assert_eq!(args, expected);
+
+        // The digest binds the credential: a rotated token is a different call.
+        let rotated = node.call_args(&ctx("tok-2")).unwrap();
+        expected["headers"]["authorization"] = rotated["headers"]["authorization"].clone();
+        assert_eq!(rotated, expected);
+        assert_ne!(rotated["headers"]["authorization"], args["headers"]["authorization"]);
+        assert!(mock.seen().is_empty(), "describing a call sends nothing");
+    }
+
+    #[tokio::test]
+    async fn an_approved_call_is_sent_once_with_its_real_credentials() {
+        let mock = Mock::start().await;
+        let checkpointer = Arc::new(MemoryCheckpointer::new());
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let run_config = RunConfig::builder()
+            .approval_store(store.clone())
+            .action_ledger(Arc::new(InMemoryActionLedger::new()))
+            .build();
+        let graph = StateGraph::with_channels(&["customer", "token", "apiKey", "charge"])
+            .add_node(pay_node(&mock.base))
+            .add_edge(START, "pay")
+            .add_edge("pay", END)
+            .compile()
+            .unwrap()
+            .with_checkpointer_arc(checkpointer.clone())
+            .with_node_effect("pay", ToolEffect::NonIdempotent)
+            .with_governed_node("pay", GovernedNode::new().with_approval().spending_money());
+        let invoke = |thread: &'static str| {
+            graph.invoke_with_run_config(
+                state("tok-1"),
+                ExecutionConfig::new(thread),
+                run_config.clone(),
+            )
+        };
+
+        assert!(matches!(invoke("t1").await, Err(GraphError::Interrupted(_))));
+        assert!(mock.seen().is_empty());
+        let scope = ApprovalScope::new("graph_app", "graph_user", "t1");
+        let pending = store.pending(&scope).await.unwrap();
+        assert_eq!(pending.len(), 1);
+        let shown = pending[0].request.args.clone();
+        assert_eq!(Some(shown.clone()), pay_node(&mock.base).call_args(&ctx("tok-1")));
+
+        // The approver edits the amount; the edited call goes out once, as edited.
+        let mut edited = shown;
+        edited["body"]["amountCents"] = json!(5000);
+        store
+            .decide(
+                &scope,
+                &pending[0].fingerprint,
+                ToolApproval::approve().with_edited_args(edited),
+            )
+            .await
+            .unwrap();
+        let done = invoke("t1").await.unwrap();
+        assert_eq!(
+            mock.seen(),
+            vec![Seen {
+                method: "POST".to_string(),
+                target: "/charges?account=acme&api_key=key-1".to_string(),
+                authorization: Some("Bearer tok-1".to_string()),
+                body: json!({ "customer": "Acme", "amountCents": 5000 }),
+            }]
+        );
+        assert_eq!(done["charge"], json!({ "status": 200, "data": { "id": "ch_1" } }));
+
+        // Running the finished thread again sends nothing.
+        invoke("t1").await.unwrap();
+        assert_eq!(mock.seen().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_digest_that_no_longer_matches_the_credential_refuses_the_call() {
+        let mock = Mock::start().await;
+        let node = pay_node(&mock.base);
+        let approved = node.call_args(&ctx("tok-1")).unwrap();
+
+        // The token rotated after the approval: the call is refused, not sent.
+        let refused = node.run_call(&ctx("tok-2"), approved.clone()).await.err().expect("refused");
+        assert_eq!(GovernedError::code_of(&refused), Some("graph.refused"));
+        assert!(refused.to_string().contains("header 'authorization'"), "{refused}");
+
+        // A digest an approver altered is refused the same way.
+        let mut forged = approved.clone();
+        forged["url"] =
+            json!(format!("{}/charges?account=acme&api_key=sha256%3Aforged", mock.base));
+        let forged = node.run_call(&ctx("tok-1"), forged).await.err().expect("refused");
+        assert_eq!(GovernedError::code_of(&forged), Some("graph.refused"));
+
+        // A host outside the policy is refused too.
+        let mut elsewhere = approved.clone();
+        elsewhere["url"] = json!("http://example.com/charges");
+        let elsewhere = node.run_call(&ctx("tok-1"), elsewhere).await.err().expect("refused");
+        assert_eq!(GovernedError::code_of(&elsewhere), Some("graph.refused"));
+        assert!(mock.seen().is_empty());
+
+        // The unchanged credential sends exactly the approved call.
+        node.run_call(&ctx("tok-1"), approved).await.unwrap();
+        assert_eq!(mock.seen().len(), 1);
+        assert_eq!(mock.seen()[0].authorization.as_deref(), Some("Bearer tok-1"));
+    }
+}
