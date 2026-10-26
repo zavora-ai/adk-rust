@@ -64,7 +64,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use zeroize::Zeroizing;
 
 use crate::audit::HarnessAudit;
@@ -111,10 +111,6 @@ pub const TAKE_OVER_MAX_SECRET_CHARS: usize = 4096;
 
 /// How long the [`ScopedToken`] a take over returns stays live.
 pub const TAKE_OVER_TOKEN_LIFETIME: Duration = Duration::from_secs(600);
-
-/// How long an entry marked approved may wait for its secret before the call gives up: it
-/// was answered with a plain `decide` instead of [`TakeOver::provide`].
-const DELIVERY_GRACE: Duration = Duration::from_secs(5);
 
 fn error(category: ErrorCategory, code: &'static str, message: impl Into<String>) -> AdkError {
     AdkError::new(ErrorComponent::Tool, category, code, message)
@@ -360,9 +356,27 @@ struct Delivered {
     secret: Zeroizing<String>,
 }
 
+/// A typed secret on its way to the waiting call, which decides the entry at `version` and
+/// answers [`TakeOver::provide`] through `answer`: the call alone settles its entry, so a
+/// secret is accepted only by a call that takes it (spec 3.3 §8.2).
+struct Delivery {
+    delivered: Delivered,
+    version: u64,
+    answer: oneshot::Sender<Result<ApprovalRequest>>,
+}
+
 /// A call waiting for its secret.
 struct Waiter {
-    sender: Option<oneshot::Sender<Delivered>>,
+    sender: mpsc::UnboundedSender<Delivery>,
+}
+
+/// The answer to a [`TakeOver::provide`] whose call ended before it took the secret.
+fn ended_before(request_id: &str) -> AdkError {
+    error(
+        ErrorCategory::NotFound,
+        TAKE_OVER_NOT_WAITING_CODE,
+        format!("the call waiting for take over {request_id} ended before the secret arrived"),
+    )
 }
 
 #[derive(Clone)]
@@ -586,12 +600,12 @@ impl TakeOver {
                     + chrono::Duration::from_std(timeout).unwrap_or(chrono::Duration::seconds(300)),
             );
 
-        let (sender, mut receiver) = oneshot::channel();
+        let (sender, mut receiver) = mpsc::unbounded_channel();
         self.inner
             .waiting
             .lock()
             .map_err(|_| unavailable("the take-over table is poisoned"))?
-            .insert(id.clone(), Waiter { sender: Some(sender) });
+            .insert(id.clone(), Waiter { sender });
         let mut guard = WaitGuard {
             inner: self.inner.clone(),
             id: id.clone(),
@@ -631,6 +645,15 @@ impl TakeOver {
         );
 
         let ended = self.wait(ctx, &service, &id, &mut receiver, timeout).await;
+        // However the wait ended, no later secret is taken: the call leaves the table and a
+        // secret already on its way is answered as too late, before anything else is awaited.
+        if let Ok(mut waiting) = self.inner.waiting.lock() {
+            waiting.remove(&id);
+        }
+        receiver.close();
+        while let Ok(late) = receiver.try_recv() {
+            let _ = late.answer.send(Err(ended_before(&id)));
+        }
         let (reason, result) = match ended {
             Ended::Provided(delivered) => {
                 guard.settled = true;
@@ -703,49 +726,59 @@ impl TakeOver {
     }
 
     /// Waits for the secret, the entry's resolution elsewhere, the timeout, a freeze or the
-    /// call's cancellation.
+    /// call's cancellation. A secret that arrives is taken only while none of the others has
+    /// happened: the call decides its entry with it, and answers the surface that sent it.
     async fn wait(
         &self,
         ctx: &dyn ToolContext,
         service: &Arc<dyn ApprovalService>,
         id: &str,
-        receiver: &mut oneshot::Receiver<Delivered>,
+        receiver: &mut mpsc::UnboundedReceiver<Delivery>,
         timeout: Duration,
     ) -> Ended {
         let deadline = Instant::now() + timeout;
-        let mut approved_since: Option<Instant> = None;
         let mut poll = tokio::time::interval(crate::tools::GOVERNANCE_POLL_INTERVAL);
         poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let stopped = || match ctx.run_config().map(adk_core::RunConfig::check_governance) {
+            Some(Err(frozen)) => Some(Ended::Stopped(frozen)),
+            _ if ctx.is_cancelled() => Some(Ended::Gone),
+            _ if Instant::now() >= deadline => Some(Ended::TimedOut),
+            _ => None,
+        };
         loop {
             tokio::select! {
-                delivered = &mut *receiver => {
-                    return match delivered {
-                        Ok(delivered) => Ended::Provided(delivered),
-                        Err(_) => Ended::Gone,
-                    };
+                delivery = receiver.recv() => {
+                    let Some(delivery) = delivery else { return Ended::Gone };
+                    if let Some(ended) = stopped() {
+                        let _ = delivery.answer.send(Err(ended_before(id)));
+                        return ended;
+                    }
+                    let decision = ApprovalDecision::approve(delivery.delivered.by.clone())
+                        .with_reason(format!("taken over on the {}", delivery.delivered.surface));
+                    match service.decide(id, delivery.version, decision).await {
+                        Ok(decided) if decided.state == ApprovalState::Approved => {
+                            let _ = delivery.answer.send(Ok(decided));
+                            return Ended::Provided(delivery.delivered);
+                        }
+                        // Refused, or decided without settling: the call waits on.
+                        answered => {
+                            let _ = delivery.answer.send(answered);
+                        }
+                    }
                 }
                 () = tokio::time::sleep_until(deadline.into()) => return Ended::TimedOut,
                 _ = poll.tick() => {
-                    if let Some(config) = ctx.run_config()
-                        && let Err(frozen) = config.check_governance()
-                    {
-                        return Ended::Stopped(frozen);
-                    }
-                    if ctx.is_cancelled() {
-                        return Ended::Gone;
+                    if let Some(ended) = stopped() {
+                        return ended;
                     }
                     match service.get(id).await {
                         Ok(Some(request)) => match request.state {
                             ApprovalState::Pending => {}
-                            // `provide` sends right after its decision lands.
+                            // Only this call approves its entry with the secret.
                             ApprovalState::Approved => {
-                                let since = *approved_since.get_or_insert_with(Instant::now);
-                                if since.elapsed() >= DELIVERY_GRACE {
-                                    return Ended::Declined(
-                                        "it was marked done without a secret".to_string(),
-                                    );
-                                }
-                                continue;
+                                return Ended::Declined(
+                                    "it was marked done without a secret".to_string(),
+                                );
                             }
                             state => return Ended::Declined(match state {
                                 ApprovalState::Rejected => "the person declined".to_string(),
@@ -756,9 +789,6 @@ impl TakeOver {
                         Ok(None) => return Ended::Declined("the request is gone".to_string()),
                         Err(read) => tracing::warn!(error = %read, approval.id = %id, "approval inbox unavailable while a take over waited"),
                     }
-                    if Instant::now() >= deadline {
-                        return Ended::TimedOut;
-                    }
                 }
             }
         }
@@ -768,15 +798,16 @@ impl TakeOver {
     /// §8.2 "Take over, then Done"), deciding it at `version` — the version the surface
     /// showed — as approved by `answer.by` on `answer.surface`.
     ///
-    /// The decision is recorded in the inbox and the audit log without the value; the value
-    /// goes to the waiting call only.
+    /// The waiting call records the decision, in the inbox and the audit log without the
+    /// value, and takes the value; a call that stopped waiting first takes nothing and
+    /// leaves the entry undecided.
     ///
     /// # Errors
     ///
     /// | Code | When |
     /// |---|---|
     /// | `harness.take_over.invalid_secret` | The secret is shorter than [`TAKE_OVER_MIN_SECRET_CHARS`], longer than [`TAKE_OVER_MAX_SECRET_CHARS`], or holds control characters |
-    /// | `harness.take_over.not_waiting` | No call in this process waits for the entry: it ended, or the harness restarted |
+    /// | `harness.take_over.not_waiting` | No call in this process waits for the entry: it ended, it stopped waiting — Stop all, its timeout, a cancel — before it took the secret, or the harness restarted |
     /// | `approval.version_conflict`, `approval.not_an_approver`, `approval.already_resolved` | The inbox refused the decision, as for any other; nothing was delivered |
     pub async fn provide(
         &self,
@@ -818,38 +849,26 @@ impl TakeOver {
                 ),
             ));
         }
-        let decided = service
-            .decide(
-                request_id,
-                version,
-                ApprovalDecision::approve(answer.by.clone())
-                    .with_reason(format!("taken over on the {}", answer.surface)),
-            )
-            .await?;
-        if decided.state != ApprovalState::Approved {
-            return Ok(decided);
-        }
         let sender = self
             .inner
             .waiting
             .lock()
             .ok()
-            .and_then(|mut waiting| waiting.get_mut(request_id).and_then(|w| w.sender.take()));
-        let delivered = Delivered {
-            by: answer.by,
-            surface: answer.surface,
-            secret: Zeroizing::new(secret.to_string()),
+            .and_then(|waiting| waiting.get(request_id).map(|waiter| waiter.sender.clone()));
+        let (answer_to, answered) = oneshot::channel();
+        let delivery = Delivery {
+            delivered: Delivered {
+                by: answer.by,
+                surface: answer.surface,
+                secret: Zeroizing::new(secret.to_string()),
+            },
+            version,
+            answer: answer_to,
         };
-        match sender.map(|sender| sender.send(delivered).is_ok()) {
-            Some(true) => Ok(decided),
-            _ => Err(error(
-                ErrorCategory::NotFound,
-                TAKE_OVER_NOT_WAITING_CODE,
-                format!(
-                    "the call waiting for take over {request_id} ended before the secret arrived"
-                ),
-            )),
+        if sender.is_none_or(|sender| sender.send(delivery).is_err()) {
+            return Err(ended_before(request_id));
         }
+        answered.await.unwrap_or_else(|_| Err(ended_before(request_id)))
     }
 
     /// Declines the take-over entry `request_id` at `version` for `by` on `surface`: the
