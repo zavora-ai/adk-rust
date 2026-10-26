@@ -542,9 +542,9 @@ impl ChannelHost for FlakyHost {
 }
 
 /// Spec 3.3 S-I6, S-I10: a stranger who writes and blocks the bot makes every pairing code
-/// fail to send. Each of their messages is tried once and dropped, so the paired person's
-/// "stop all" behind them stops everything at once (on main each was read again for about
-/// 15 s first).
+/// fail to send. The stranger holds one pairing request; each of their messages tries once to
+/// send it a new code and is dropped, so the paired person's "stop all" behind them stops
+/// everything at once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stranger_who_blocked_the_bot_holds_up_no_one() {
     let api = FakeTelegram::start().await;
@@ -566,13 +566,15 @@ async fn a_stranger_who_blocked_the_bot_holds_up_no_one() {
         api.texts(ANA).into_iter().find(|text| text.starts_with("All agents stopped."))
     })
     .await;
-    // Each of the stranger's messages was tried once: one pairing request each, never again.
+    // Each of the stranger's messages tried once to send a code, under one pairing request.
+    let attempts =
+        || api.to_chat(&json!(STRANGER)).iter().filter(|call| call.method == "sendMessage").count();
     let requested =
         || host.channel_actions().iter().filter(|action| *action == "pairing.requested").count();
-    eventually("the stranger's three messages", || async { (requested() == 3).then_some(()) })
-        .await;
+    eventually("the stranger's three messages", || async { (attempts() == 3).then_some(()) }).await;
     tokio::time::sleep(Duration::from_millis(2500)).await;
-    assert_eq!(requested(), 3, "a stranger's failed message is not read again");
+    assert_eq!(attempts(), 3, "a stranger's failed message is not read again");
+    assert_eq!(requested(), 1, "the stranger holds one pairing request");
     assert!(api.texts(ANA).iter().all(|text| !text.contains("didn't reach")));
     assert!(!polling.is_finished());
 }
