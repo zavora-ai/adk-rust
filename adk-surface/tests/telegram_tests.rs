@@ -355,6 +355,12 @@ async fn a_held_write_is_allowed_once_from_telegram() {
         (answer.ext["approvalId"].as_str(), answer.ext["outcome"].as_str()),
         (Some(decision.as_str()), Some("decided"))
     );
+    // It names the call's tool and whose call it was, as the home's answer records do.
+    assert_eq!(answer.ext.get("tool"), Some(&json!(request.tool_name)));
+    assert_eq!(
+        answer.ext.get("actingAgent").and_then(Value::as_str),
+        request.acting.as_ref().map(|acting| acting.agent.id.as_str())
+    );
 
     // "stop all" stops everything; "resume" is refused; a message while stopped starts
     // nothing (S-I10).

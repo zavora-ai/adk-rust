@@ -82,6 +82,11 @@ pub struct RecordLine {
     /// The chat channel or device it was given from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
+    /// The surface it was given on, as the record names it: `web`, `tray`, `phone`,
+    /// `terminal`, `voice`, `chat`, or `device` for a paired device on the kernel's own routes
+    /// (spec 3.3 §11).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<String>,
     /// What it acted on: a process, a fact, an area.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
@@ -102,6 +107,7 @@ impl RecordLine {
             outcome: None,
             how: None,
             channel: None,
+            surface: None,
             target: None,
         }
     }
@@ -153,6 +159,14 @@ impl RecordLine {
     #[must_use]
     pub fn with_channel(mut self, channel: impl Into<String>) -> Self {
         self.channel = Some(channel.into());
+        self
+    }
+
+    /// Sets the surface it was given on, such as `tray` for an answer from the desktop tray
+    /// (spec 3.3 §11).
+    #[must_use]
+    pub fn with_surface(mut self, surface: impl Into<String>) -> Self {
+        self.surface = Some(surface.into());
         self
     }
 

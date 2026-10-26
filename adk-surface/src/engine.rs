@@ -1959,6 +1959,10 @@ impl SurfaceEngine {
         if let Some(decision) = decision {
             draft = draft.decision(decision);
         }
+        // Whose call it was, so the record can say "You let Finance send one email" (§11).
+        if let Some(acting) = &request.acting {
+            draft = draft.ext("actingAgent", json!(acting.agent.id.to_string()));
+        }
         if let Some(code) = code {
             draft = draft.ext("code", json!(code));
         }
