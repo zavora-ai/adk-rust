@@ -11,6 +11,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 - [Migrating 1.0 → 2.0](migration/1.0-to-2.0.md) - Complete breaking-change list with before/after code
 - [SQLx 0.9 in ADK-Rust 3.0](migration/sqlx-0.9.md) - Sharing SQLx pools, TLS flags, and migration-runner inputs
 - [Migrating from `CodingAgent` to the harness](migration/coding-agent-to-harness.md) - `adk_agent::coding` to `adk_harness::coding`, approvals in unattended runs, todos, nesting
+- [Migrating from AWP 1.x to 2.0](migration/awp-1-to-2.md) - What changes, `adk-rust awp migrate-config business.toml`, and the AWP 1.x reference
 
 ## Core
 
@@ -204,7 +205,11 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Server](deployment/server.md) - REST API, streaming and A2A integration
 - [A2A Getting Started](a2a/getting-started.md) - Create and run an A2A agent
 - [A2A Protocol](deployment/a2a.md) - Agent-to-Agent communication
-- [Agentic Web Protocol](deployment/awp.md) - AWP protocol for agent-native web services
+- [Agentic Web Protocol 2.0](deployment/awp.md) - The signed site contract: profiles, keys and releases, the edge, verification, and what each crate provides
+- [Spin Up an AWP Website](deployment/website-quickstart.md) - `adk-rust website new`, the `adk-website` binary, or `cargo adk new my-site --template website`: the setup code, keys, onboarding and deployment shapes
+- [Move a WordPress Site to AWP](deployment/wordpress-to-awp.md) - Prove the domain, freeze, migrate, decide the quarantine, publish signed releases and verify
+- [The Charter](deployment/charter.md) - A site's goals, KPIs with baselines, guardrails, authority, budget and public terms, and how its owners sign it
+- [Writing Capability Packs](deployment/capability-packs.md) - One declaration and one handler per capability, served over A2A, MCP and HTTP; the default packs
 - [The AWP Agent Edge](deployment/awp-edge.md) - A site's capabilities over A2A, MCP and HTTP: trust tiers, held and exactly-once calls, the public partition
 - [Site Migration](deployment/site-migration.md) - Moving an existing site onto a signed static AWP site
 - [Constantly Updated Sites](deployment/constant-updates.md) - Lanes, batching, feed bounds and delta releases for sites that change every minute

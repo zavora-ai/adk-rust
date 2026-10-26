@@ -26,7 +26,7 @@ $ adk-rust website new bakery --kind business --name "Juniper Bakery" --domain b
 Scaffolded a business site in bakery:
   site.toml
   …
-Juniper Bakery (bakery.example) is running:
+bakery-example (bakery.example) is running:
   edge    http://127.0.0.1:8080  the site and its agent edge
   kernel  http://127.0.0.1:7340  the control plane
   home    http://127.0.0.1:8090/ui/website  onboarding, the charter, the site and the review
