@@ -284,6 +284,10 @@ mod rules {
     async fn a_generator_runs_without_network_and_writes_only_its_run_directory() {
         use std::os::unix::fs::PermissionsExt;
         let tools = tempfile::tempdir().unwrap();
+        // The program's own directory is mounted read-only, so a write there fails in every
+        // sandbox; a write to the host's temporary directory may land in the sandbox's private
+        // root (bubblewrap), so only its absence on the host is checked.
+        let read_only = tools.path().join("escape");
         let escape = std::env::temp_dir().join(format!("adk-site-escape-{}", std::process::id()));
         let _ = std::fs::remove_file(&escape);
         let script = tools.path().join("zola");
@@ -294,9 +298,11 @@ mod rules {
 if [ "$1" = "--version" ]; then echo "zola 0.0.1"; exit 0; fi
 if {{ exec 3<>/dev/tcp/1.1.1.1/80; }} 2>/dev/null; then echo "network reachable" >&2; exit 10; fi
 if {{ printf x > "{}"; }} 2>/dev/null; then echo "wrote outside its run directory" >&2; exit 11; fi
+{{ printf x > "{}"; }} 2>/dev/null
 echo "confined" >&2
 exit 12
 "#,
+                read_only.display(),
                 escape.display()
             ),
         )
@@ -313,7 +319,8 @@ exit 12
         } else {
             assert!(error.contains("no OS sandbox"), "{error}");
         }
-        assert!(!escape.exists(), "nothing was written outside the run directory");
+        assert!(!read_only.exists(), "nothing was written into the read-only program directory");
+        assert!(!escape.exists(), "nothing reached the host's temporary directory");
     }
 
     #[tokio::test]
