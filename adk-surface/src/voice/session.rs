@@ -1,7 +1,7 @@
 //! One voice conversation (spec 3.3 §5.6): the realtime session of the harness, the prompted
 //! decision, spoken answers through the engine, and the camera and screen gate.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -38,6 +38,9 @@ pub(crate) const ECHO_TAIL: Duration = Duration::from_millis(300);
 
 /// How many messages wait between the conversation and its transport.
 const CHANNEL: usize = 256;
+
+/// How many utterances may wait for their transcripts; an older one is dropped.
+const UTTERANCES: usize = 8;
 
 /// What a transport sends a voice conversation (spec 3.3 §5.6).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +115,9 @@ pub(crate) struct Conversation {
     pub(crate) output_rate: u32,
     pub(crate) visual: VisualInputs,
     pub(crate) poll: Duration,
+    /// A spoken answer applies only to the conversation's own decisions: the terminal's
+    /// thread shows those, and no other, in full (spec 3.3 §7.1).
+    pub(crate) own_only: bool,
 }
 
 /// Opens the link and runs the conversation on its own task.
@@ -154,8 +160,15 @@ struct State {
     speaking: bool,
     /// Until when the model's audio plays, as far as the server can tell.
     playing_until: Option<Instant>,
+    /// A barge-in the transport has not yet answered with `playbackEnded`, and until when
+    /// the audio sent since it plays: until the transport flushed, everything sent before
+    /// the barge-in may still play.
+    barge_in: Option<Option<Instant>>,
     prompt: Option<Prompt>,
-    utterance: Option<Utterance>,
+    /// Utterances whose transcript has not arrived, oldest first: a provider that
+    /// transcribes after the next utterance started completes them in order.
+    utterances: VecDeque<Utterance>,
+    own_only: bool,
     /// The open decisions of this conversation's own session — the calls it held — oldest
     /// first.
     own: Vec<String>,
@@ -164,9 +177,12 @@ struct State {
     settled: FuturesUnordered<Settled>,
     needs_screen: Vec<String>,
     stopped: bool,
+    ended: bool,
     /// Resumes of the conversation's held calls, one at a time.
     resumes: JoinSet<()>,
     resume_lock: Arc<AsyncMutex<()>>,
+    /// A resume was asked for while two were in flight: one more follows the next to end.
+    resume_again: bool,
     /// Tells the provider pump a client action may have made the provider speak again.
     poke: Arc<Notify>,
     closing: Arc<AtomicBool>,
@@ -189,6 +205,7 @@ async fn run(
         output_rate,
         visual,
         poll,
+        own_only,
     } = conversation;
     let closing = Arc::new(AtomicBool::new(false));
     let poke = Arc::new(Notify::new());
@@ -209,29 +226,38 @@ async fn run(
         mic_on: true,
         speaking: false,
         playing_until: None,
+        barge_in: None,
         prompt: None,
-        utterance: None,
+        utterances: VecDeque::new(),
+        own_only,
         own: Vec::new(),
         pending: HashSet::new(),
         settled: FuturesUnordered::new(),
         needs_screen: Vec::new(),
         stopped: false,
+        ended: false,
         resumes: JoinSet::new(),
         resume_lock: Arc::new(AsyncMutex::new(())),
+        resume_again: false,
         poke,
         closing,
     };
-    state
-        .send(VoiceUpdate::Ready {
-            session_id: state.session_id.clone(),
-            input_rate: state.input_rate,
-            output_rate: state.output_rate,
-        })
-        .await;
-    state.send(VoiceUpdate::Listening).await;
-    // A call an earlier conversation on this session held may have been decided since.
-    state.resume();
-    state.refresh().await;
+    // While every agent is stopped no conversation runs (spec 3.3 S-I10).
+    if state.engine.source().stopped().await.unwrap_or(false) {
+        state.stopped = true;
+    } else {
+        state
+            .send(VoiceUpdate::Ready {
+                session_id: state.session_id.clone(),
+                input_rate: state.input_rate,
+                output_rate: state.output_rate,
+            })
+            .await;
+        state.send(VoiceUpdate::Listening).await;
+        // A call an earlier conversation on this session held may have been decided since.
+        state.resume();
+        state.refresh().await;
+    }
 
     let source = Arc::clone(state.engine.source());
     let changes = move || -> Pin<Box<dyn Future<Output = ()> + Send>> {
@@ -239,7 +265,7 @@ async fn run(
         Box::pin(async move { source.changed(poll).await })
     };
     let mut changed = changes();
-    loop {
+    while !state.stopped {
         tokio::select! {
             message = input.recv() => match message {
                 Some(message) => {
@@ -281,20 +307,40 @@ async fn run(
                     state.resume();
                 }
             }
-            Some(_) = state.resumes.join_next(), if !state.resumes.is_empty() => {}
+            Some(_) = state.resumes.join_next(), if !state.resumes.is_empty() => {
+                if std::mem::take(&mut state.resume_again) {
+                    state.resume();
+                }
+            }
         }
         if state.output.is_closed() {
             state.end().await;
             break;
         }
     }
+    // Stop all ends the conversation: the model stops listening, answering and spending
+    // (spec 3.3 S-I10, §12 phase 5).
+    if state.stopped && !state.ended {
+        state
+            .send(VoiceUpdate::Error {
+                code: "surface.stopped".into(),
+                message: words::ALL_AGENTS_STOPPED.to_string(),
+            })
+            .await;
+        state.end().await;
+    }
+    // A decision recorded from here on goes to the wrapped source. One recorded while the
+    // conversation was ending woke a signal no one listens to any more: resume it here.
     drop(registration);
+    while state.resumes.join_next().await.is_some() {}
+    if let Err(error) = state.surface.resume_held_calls().await {
+        tracing::debug!(error = %error, "the decided calls could not be resumed at the end");
+    }
     state.closing.store(true, Ordering::SeqCst);
     state.poke.notify_one();
     if let Err(error) = state.surface.runner().close().await {
         tracing::debug!(error = %error, "closing the realtime session failed");
     }
-    while state.resumes.join_next().await.is_some() {}
     if tokio::time::timeout(Duration::from_secs(5), pump).await.is_err() {
         tracing::warn!(session.id = %state.session_id, "the realtime session did not end in time");
     }
@@ -385,8 +431,12 @@ impl State {
                 },
                 VoiceClientMessage::PlaybackEnded => {
                     let now = Instant::now();
-                    self.playing_until =
-                        Some(self.playing_until.map_or(now, |until| until.max(now)));
+                    self.playing_until = match self.barge_in.take() {
+                        // The transport flushed what the barge-in interrupted: only audio
+                        // sent since still plays.
+                        Some(since) => Some(since.map_or(now, |until| until.max(now))),
+                        None => Some(self.playing_until.map_or(now, |until| until.max(now))),
+                    };
                 }
                 VoiceClientMessage::End => {
                     self.end().await;
@@ -411,7 +461,10 @@ impl State {
             .as_ref()
             .filter(|prompt| now.saturating_duration_since(prompt.since) >= PROMPT_DWELL)
             .map(|prompt| (prompt.id.clone(), prompt.version));
-        self.utterance = Some(Utterance { bound, echo: self.over_playback(now) });
+        if self.utterances.len() == UTTERANCES {
+            self.utterances.pop_front();
+        }
+        self.utterances.push_back(Utterance { bound, echo: self.over_playback(now) });
     }
 
     async fn on_event(&mut self, event: ServerEvent) {
@@ -420,16 +473,17 @@ impl State {
                 let now = Instant::now();
                 if self.over_playback(now) {
                     self.send(VoiceUpdate::BargeIn).await;
+                    self.barge_in = Some(None);
                 }
                 self.begin_utterance(now);
             }
             // A provider that reports no speech onset starts the utterance with its transcript.
-            ServerEvent::InputTranscriptDelta { .. } if self.utterance.is_none() => {
+            ServerEvent::InputTranscriptDelta { .. } if self.utterances.is_empty() => {
                 self.begin_utterance(Instant::now());
             }
             ServerEvent::InputTranscriptCompleted { transcript, .. } => {
                 let utterance =
-                    self.utterance.take().unwrap_or(Utterance { bound: None, echo: true });
+                    self.utterances.pop_front().unwrap_or(Utterance { bound: None, echo: true });
                 self.send(VoiceUpdate::Heard { text: transcript.clone() }).await;
                 self.on_utterance(&transcript, utterance).await;
             }
@@ -440,6 +494,10 @@ impl State {
                     Duration::from_micros(delta.len() as u64 * 1_000_000 / bytes_per_second);
                 let from = self.playing_until.filter(|until| *until > now).unwrap_or(now);
                 self.playing_until = Some(from + length);
+                if let Some(since) = &mut self.barge_in {
+                    let from = since.filter(|until| *until > now).unwrap_or(now);
+                    *since = Some(from + length);
+                }
                 if !self.speaking {
                     self.speaking = true;
                     self.send(VoiceUpdate::Speaking).await;
@@ -451,7 +509,12 @@ impl State {
                 self.send(VoiceUpdate::Listening).await;
             }
             // The conversation's own call was just held: it is offered first.
-            ServerEvent::ToolConfirmationRequested { .. } => self.refresh().await,
+            ServerEvent::ToolConfirmationRequested { call_id, request } => {
+                if let Err(error) = self.surface.record_held(&call_id, &request).await {
+                    tracing::warn!(error = %error, "the hold's audit record failed");
+                }
+                self.refresh().await;
+            }
             ServerEvent::Error { error, .. } => {
                 self.send(VoiceUpdate::Error {
                     code: "surface.voice.provider".into(),
@@ -568,8 +631,11 @@ impl State {
         }
     }
 
-    /// Ends the conversation: a spoken answer in its cancel window is cancelled.
+    /// Ends the conversation, once: a spoken answer in its cancel window is cancelled.
     async fn end(&mut self) {
+        if std::mem::replace(&mut self.ended, true) {
+            return;
+        }
         let viewer = self.viewer.clone();
         self.cancel_pending(&viewer).await;
         // The cancelled answers report through their aborted windows.
@@ -585,8 +651,11 @@ impl State {
     /// Resumes the conversation's held calls that have a decision, on their own task and one
     /// at a time: a resumed call runs its tool, which can take long.
     fn resume(&mut self) {
-        // One running and one waiting cover every decision made meanwhile.
+        while self.resumes.try_join_next().is_some() {}
+        // One running and one waiting cover every decision made meanwhile; a task that ends
+        // unjoined is counted until it is joined, so the ask is kept for the next to end.
         if self.resumes.len() >= 2 {
+            self.resume_again = true;
             return;
         }
         let surface = Arc::clone(&self.surface);
@@ -594,7 +663,7 @@ impl State {
         let output = self.output.clone();
         self.resumes.spawn(async move {
             let _one_at_a_time = lock.lock().await;
-            if let Err(error) = surface.runner().resume_held_calls().await {
+            if let Err(error) = surface.resume_held_calls().await {
                 tracing::warn!(error = %error, "a decided call could not be resumed");
                 let _ = output
                     .send(VoiceOutput::Update(VoiceUpdate::Error {
@@ -613,6 +682,9 @@ impl State {
             Vec::new()
         } else {
             match self.engine.decisions(&self.speaker).await {
+                Ok(cards) if self.own_only => {
+                    cards.into_iter().filter(|card| card.session_id == self.session_id).collect()
+                }
                 Ok(cards) => cards,
                 Err(error) => {
                     tracing::warn!(error = %error, "the open decisions could not be read");
@@ -647,9 +719,12 @@ impl State {
             })
             .await;
         }
+        // Every decision voice cannot allow once: high risk, money, or a call shown cut short.
         let needs_screen: Vec<String> = cards
             .iter()
-            .filter(|card| card.allowed.option(Answer::AllowOnce).is_none())
+            .filter(|card| {
+                card.allowed.option(Answer::AllowOnce).is_none_or(|option| option.needs_expanded)
+            })
             .map(|card| card.id.clone())
             .collect();
         if needs_screen != self.needs_screen {

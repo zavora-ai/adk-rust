@@ -1,9 +1,10 @@
 //! The voice fixture of the voice tests (spec 3.3 §5.6): "Chief of staff", a harness marked
 //! for voice in Ask first over a scripted realtime model, with the engine and the hub over it.
 //!
-//! The harness's voice session offers only the harness's own tools, so "send the invoice" and
-//! "publish the release" are `bash` commands that append to `sent.txt` and `published.txt`:
-//! the files' lengths count the runs. The inbox's router makes the release high risk.
+//! "Send the invoice" and "publish the release" are `bash` commands that append to `sent.txt`
+//! and `published.txt`: the files' lengths count the runs. The inbox's router makes the
+//! release high risk. The harness also has a `calendar` tool of its own, added with `.tool()`,
+//! and writes its records to the same audit log as the engine, as `adk-rust up` does.
 
 #![allow(dead_code)]
 
@@ -83,6 +84,32 @@ pub fn route(call: &ApprovalCall) -> Option<ApprovalRoute> {
     )
 }
 
+/// A tool of the harness's own, added with `.tool()`: today's events.
+pub struct Calendar;
+
+#[async_trait::async_trait]
+impl adk_core::Tool for Calendar {
+    fn name(&self) -> &str {
+        "calendar"
+    }
+
+    fn description(&self) -> &str {
+        "Today's events."
+    }
+
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
+    async fn execute(
+        &self,
+        _ctx: Arc<dyn adk_core::ToolContext>,
+        _args: serde_json::Value,
+    ) -> adk_core::Result<serde_json::Value> {
+        Ok(json!({ "events": ["Standup at 09:30"] }))
+    }
+}
+
 /// "Chief of staff" in Ask first, marked for voice, over `script`.
 pub async fn voice(script: Vec<ScriptedStep>) -> Voice {
     voice_with(script, |model| Arc::new(model)).await
@@ -93,10 +120,20 @@ pub async fn voice_with(
     script: Vec<ScriptedStep>,
     wrap: impl FnOnce(ScriptedRealtimeModel) -> BoxedModel,
 ) -> Voice {
+    voice_built(script, wrap, |service| service).await
+}
+
+/// [`voice_with`], with the inbox's approval service wrapped by `serve`.
+pub async fn voice_built(
+    script: Vec<ScriptedStep>,
+    wrap: impl FnOnce(ScriptedRealtimeModel) -> BoxedModel,
+    serve: impl FnOnce(Arc<dyn ApprovalService>) -> Arc<dyn ApprovalService>,
+) -> Voice {
     let dir = tempfile::tempdir().unwrap();
-    let service: Arc<dyn ApprovalService> = Arc::new(
+    let service: Arc<dyn ApprovalService> = serve(Arc::new(
         StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new())).with_router(route),
-    );
+    ));
+    let audit = InMemoryAuditRecorder::new();
     let agent = Arc::new(
         HarnessAgent::builder("chief_of_staff")
             .model(Arc::new(ScriptedLlm::new("scripted", Vec::<ScriptedResponse>::new())))
@@ -111,11 +148,12 @@ pub async fn voice_with(
             .mode(HarnessMode::Ask)
             .pack(Pack::Voice)
             .approval_service(Arc::clone(&service))
+            .tool(Arc::new(Calendar))
+            .audit_log(Arc::new(audit.clone()))
             .build()
             .unwrap(),
     );
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
-    let audit = InMemoryAuditRecorder::new();
     let runner = agent
         .configure_runner(
             Runner::builder()

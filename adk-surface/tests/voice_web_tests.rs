@@ -160,6 +160,7 @@ async fn the_models_are_listed_to_a_caller_and_tickets_need_one() {
         models,
         json!({
             "agent": "Chief of staff",
+            "agentName": "chief_of_staff",
             "models": [{ "id": "scripted", "name": "Scripted", "inputRate": 16000, "outputRate": 24000 }],
         })
     );

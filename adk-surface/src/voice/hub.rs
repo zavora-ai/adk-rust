@@ -264,6 +264,12 @@ impl VoiceHub {
     pub fn models(&self) -> VoiceModels {
         VoiceModels {
             agent: self.inner.agent.clone(),
+            agent_name: self
+                .inner
+                .engine
+                .source()
+                .primary_agent()
+                .unwrap_or_else(|| self.inner.harness.agent().info().name.clone()),
             models: self.inner.models.iter().map(|offered| offered.info.clone()).collect(),
         }
     }
@@ -353,7 +359,38 @@ impl VoiceHub {
     ) -> Result<VoiceLink, VoiceError> {
         let offered = self.offered(model)?;
         let session_id = self.session_for(caller, session_id).await?;
-        self.connect(caller, offered, session_id).await
+        self.connect(caller, offered, session_id, false).await
+    }
+
+    /// Opens a voice conversation in a new voice session of `caller`'s for a surface that
+    /// shows only that session, such as the terminal's thread: as [`open`](Self::open),
+    /// except that only the conversation's own decisions are prompted and answered by voice,
+    /// since no other is on that screen in full (spec 3.3 §5.6, §7.1).
+    ///
+    /// # Errors
+    ///
+    /// As [`open`](Self::open).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_surface::{Caller, Origin, SurfaceKind};
+    ///
+    /// # async fn example(hub: adk_surface::voice::VoiceHub) -> Result<(), adk_surface::voice::VoiceError> {
+    /// let me = Caller::human("ana", SurfaceKind::Terminal, Origin::Keyboard);
+    /// let link = hub.open_in_thread(&me, "gemini").await?;
+    /// println!("talking in {}", link.session_id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn open_in_thread(
+        &self,
+        caller: &Caller,
+        model: &str,
+    ) -> Result<VoiceLink, VoiceError> {
+        let offered = self.offered(model)?;
+        let session_id = self.session_for(caller, None).await?;
+        self.connect(caller, offered, session_id, true).await
     }
 
     async fn connect(
@@ -361,6 +398,7 @@ impl VoiceHub {
         caller: &Caller,
         offered: &Offered,
         session_id: String,
+        own_only: bool,
     ) -> Result<VoiceLink, VoiceError> {
         let hub = &self.inner;
         let user = caller.user_id().to_string();
@@ -373,9 +411,15 @@ impl VoiceHub {
             scopes: caller.groups.clone(),
             metadata: Default::default(),
         };
-        let mut config = VoiceConfig::new(hub.engine.source().app_name())
+        let app = hub.engine.source().app_name();
+        let tools = hub.harness.agent().voice_tools(app, &user, &session_id).await;
+        // The kill switch Stop all freezes is the harness runner's: every call of the
+        // conversation checks it, resumes included (spec 3.3 S-I10).
+        let mut config = VoiceConfig::new(app)
             .with_instruction(instruction)
-            .with_request_context(context);
+            .with_request_context(context)
+            .with_governance(hub.harness.runner().governance().clone())
+            .with_tools(tools);
         if offered.compress {
             config = config.with_context_window_compression();
         }
@@ -419,6 +463,7 @@ impl VoiceHub {
             output_rate: offered.info.output_rate,
             visual: VisualInputs::new(offered.frames),
             poll: hub.poll,
+            own_only,
         }))
     }
 
@@ -439,7 +484,7 @@ impl VoiceHub {
     #[cfg(feature = "web")]
     pub(crate) async fn open_ticket(&self, ticket: &Ticket) -> Result<VoiceLink, VoiceError> {
         let offered = self.offered(&ticket.model)?;
-        self.connect(&ticket.caller, offered, ticket.session_id.clone()).await
+        self.connect(&ticket.caller, offered, ticket.session_id.clone(), false).await
     }
 }
 

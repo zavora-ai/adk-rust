@@ -1133,6 +1133,11 @@ export interface VoiceModel {
 export interface VoiceModels {
   /** The agent the person talks with, by its display name: "Talking with Chief of staff". */
   agent: string;
+  /**
+   * The agent's name, as `GET /surface/agents` lists it: a conversation opens in Threads
+   * under it when it ends.
+   */
+  agentName: string;
   /** The models, the default first. */
   models: VoiceModel[];
 }

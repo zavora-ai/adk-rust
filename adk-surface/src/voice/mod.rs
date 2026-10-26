@@ -19,12 +19,15 @@
 //! # How a spoken answer binds to a decision
 //!
 //! One card is prompted at a time: the conversation's own call just held, else the oldest
-//! open decision voice may answer. A spoken answer applies to the card that was prompted when
-//! the person started speaking, and only when it had been on screen for a second by then; if
-//! the card or its version changed before the transcript arrived, nothing is decided. Only the
-//! person's own completed transcript counts, never the model's words, and speech that started
-//! while the model's audio was playing is ignored. Another agent's decision is shown on
-//! screen and never sent to the model.
+//! open decision voice may answer (`VoiceHub::open_in_thread`: only its own). A spoken
+//! answer applies to the card that was prompted when the person started speaking, and only
+//! when it had been on screen for a second by then; transcripts are matched to utterances in
+//! order, so one that arrives late keeps its own card. If the card or its version changed
+//! before the transcript arrived, nothing is decided. Only the person's own completed
+//! transcript counts, never the model's words, and speech that started while the model's
+//! audio was playing is ignored — after a barge-in, until the transport says it flushed that
+//! audio. Another agent's decision is shown on screen and never sent to the model. **Stop
+//! all** ends the conversation, whose calls check the harness runner's kill switch.
 //!
 //! # Records
 //!

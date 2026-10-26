@@ -3404,6 +3404,10 @@
             "description": "The agent the person talks with, by its display name: \"Talking with Chief of staff\".",
             "type": "string"
           },
+          "agentName": {
+            "description": "The agent's name, as `GET /surface/agents` lists it: a conversation opens in Threads\nunder it when it ends.",
+            "type": "string"
+          },
           "models": {
             "description": "The models, the default first.",
             "items": {
@@ -3414,6 +3418,7 @@
         },
         "required": [
           "agent",
+          "agentName",
           "models"
         ],
         "type": "object"
