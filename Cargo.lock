@@ -348,6 +348,7 @@ dependencies = [
  "adk-surface",
  "adk-telemetry",
  "adk-tool",
+ "adk-website",
  "anyhow",
  "async-trait",
  "awp-types",

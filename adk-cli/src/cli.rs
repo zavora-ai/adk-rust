@@ -819,6 +819,14 @@ pub enum Commands {
         #[command(subcommand)]
         command: crate::awp_cli::AwpCommands,
     },
+
+    /// An AWP 2.0 website: spin one up, its status, the weekly review, the charter, and the
+    /// jobs' autonomy levels (spec 3.5 §8.1)
+    #[cfg(feature = "website")]
+    Website {
+        #[command(subcommand)]
+        command: crate::website_cli::WebsiteCommands,
+    },
 }
 
 /// Options for `adk-rust chat` (spec 3.1 §8.1).
