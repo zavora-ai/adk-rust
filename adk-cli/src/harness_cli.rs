@@ -33,6 +33,7 @@ use serde_json::json;
 use crate::ultra::{self, UltraAgents};
 use crate::{BuiltModel, ResolvedModel};
 
+pub(crate) mod agents;
 mod books;
 mod manifest;
 mod service;
@@ -157,6 +158,13 @@ struct AgentExtras {
     /// For the coordinator: the partitions whose drivers it reaches as crossings (spec 3.2
     /// §7.8, K-I15).
     driver_crossings: Vec<adk_kernel::PartitionId>,
+    /// The kernel's agent table `propose_agent` suggests agents to: the primary agent only
+    /// (spec 3.3 §5.7).
+    agents: Option<adk_kernel::agents::AgentsHandle>,
+    /// The kernel target the harness stamps its sessions with (spec 3.3 §5.7 "Threads").
+    session_stamp: Option<String>,
+    /// The agent a person added that this harness is built for (spec 3.3 §5.7, §10 L1).
+    added: Option<agents::Added>,
 }
 
 /// Installs the process's tracing subscriber once, so a `warn!` or `error!` from the
@@ -385,13 +393,19 @@ impl Setup {
     ) -> Result<HarnessAgent> {
         let workspace = Workspace::new(&self.resolved.workspace).allow_bash(true);
         let mut builder = HarnessAgent::builder(name);
+        // An added agent runs on its own model when it names one (spec 3.3 decision 21).
+        let model = extras
+            .added
+            .as_ref()
+            .and_then(|added| added.model.clone())
+            .unwrap_or_else(|| self.models.harness.clone());
         // A preset first, so the flags and config files override what it sets (spec 3.3 §10
         // H1).
         if let Some(preset) = self.args.preset {
             builder = builder.preset(preset);
         }
         let mut builder = builder
-            .model(self.models.harness.llm.clone())
+            .model(model.llm.clone())
             .effort(effort)
             .workspace(workspace)
             .mode(mode)
@@ -407,7 +421,7 @@ impl Setup {
             builder = builder.hooks(self.resolved.user_hooks.clone());
         }
         // Explicit context caching for a model that supports it (spec 3.1 §7.23).
-        if let Some(cache) = &self.models.harness.cache_capable {
+        if let Some(cache) = &model.cache_capable {
             builder = builder.cache_capable(cache.clone());
         }
         if let Ok(trust) = FileWorkspaceTrustStore::in_home() {
@@ -423,7 +437,8 @@ impl Setup {
                 .standing_rules(db.rules.clone())
                 .shell_ledger(db.ledger.clone())
                 .approval_store(db.approvals.clone())
-                .goal_store(db.goals.clone());
+                .goal_store(db.goals.clone())
+                .read_records(db.reads.clone());
             // Long-term memory in harness.db; off when served (spec 3.1 §7.15.2), on in
             // `adk-rust up`, the user's own kernel (spec 3.2 §8.1).
             if self.resolved.memory && (approval_service.is_none() || extras.memory_with_inbox) {
@@ -439,7 +454,8 @@ impl Setup {
             builder = builder
                 .mode_store(shared.modes.clone())
                 .standing_rules(shared.rules.clone())
-                .approval_store(shared.approvals.clone());
+                .approval_store(shared.approvals.clone())
+                .read_records(shared.reads.clone());
         }
         // An area's mode the person changes while the kernel runs governs the harness's
         // sessions from their next step (spec 3.3 §10 K3).
@@ -488,7 +504,13 @@ impl Setup {
                 builder = builder.require_authenticated_identity();
             }
         }
-        for pack in &self.resolved.packs {
+        // An added agent has the packs its definition names, never the primary agent's
+        // (spec 3.3 §5.7).
+        let packs = match &extras.added {
+            Some(added) => agents::packs_of(&added.record),
+            None => self.resolved.packs.clone(),
+        };
+        for pack in &packs {
             builder = builder.pack(*pack);
         }
         // `--pack browser` (spec 3.1 §7.24): the WebDriver endpoint from ADK_WEBDRIVER_URL, else
@@ -504,7 +526,7 @@ impl Setup {
             let session = Arc::new(adk_browser::BrowserSession::new(config));
             builder = builder.pack_browser(adk_harness::BrowserPack::new(session));
         }
-        for member in &self.resolved.members {
+        for member in self.resolved.members.iter().filter(|_| extras.added.is_none()) {
             builder = builder.member(member.to_spec()?);
         }
         if self.resolved.web {
@@ -561,16 +583,37 @@ impl Setup {
                 }
             }
             (None, Some(drivers)) => {
+                // An added agent reaches only the drivers its definition names (spec 3.3 §5.7).
+                let toolset = match &extras.added {
+                    Some(added) => drivers.toolset_for(
+                        &adk_kernel::PartitionId::default(),
+                        &added.record.uses.drivers,
+                    ),
+                    None => drivers.toolset_for_manifests(&adk_kernel::PartitionId::default()),
+                };
                 builder = builder
-                    .toolset(drivers.toolset_for_manifests(&adk_kernel::PartitionId::default()))
+                    .toolset(toolset)
                     .tool_classes(Arc::new(adk_harness::DriverClasses::new(drivers.clone())))
                     .add_operator_policy(drivers.policy());
             }
             (None, None) => {}
         }
+        // The primary agent suggests agents and stamps its threads; an added agent is lowered
+        // from its record beside the primary, after its area (spec 3.3 §5.7, §10 H3, L1).
+        if let Some(handle) = extras.agents {
+            builder = builder.agents_handle(handle);
+        }
+        if let Some(stamp) = extras.session_stamp {
+            builder = builder.session_stamp(stamp);
+        }
+        if let Some(added) = &extras.added {
+            builder = added.lower(builder);
+        }
         // Servers the workspace declares in `.mcp.json` start once the workspace is trusted
         // (spec 3.1 §7.21, I3).
-        if let Some(servers) = workspace_mcp_servers(&self.resolved.workspace)? {
+        if let Some(servers) =
+            workspace_mcp_servers(&self.resolved.workspace)?.filter(|_| extras.added.is_none())
+        {
             builder = builder
                 .mcp_servers(adk_harness::McpServerSet::workspace(servers))
                 .mcp_interaction(adk_harness::McpInteractionConfig::default());

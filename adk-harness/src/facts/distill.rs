@@ -456,6 +456,9 @@ impl FactsRuntime {
                             .collect::<Vec<_>>(),
                         "modelCalls": report.model_calls,
                         "cost": report.cost_micro_usd,
+                        // A session the per-session distiller never reached, distilled
+                        // later (spec 3.1 §7.33 fix 9, spec 3.2 §10 HK2).
+                        "catchUp": tick.is_some(),
                     }),
                 )
                 .await?;

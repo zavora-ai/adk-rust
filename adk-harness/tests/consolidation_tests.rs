@@ -243,6 +243,34 @@ async fn the_distillation_entry_stores_a_quoted_fact_as_assumed() {
     assert_eq!((entry.provenance.quote.as_ref(), entry.provenance.tick.as_ref()), (None, None));
     assert_eq!(entry.provenance.session_id, "s2");
 
+    // The audit tells a catch-up from the per-session distiller (spec 3.1 §7.33 fix 9).
+    let caught_up: Vec<(Value, Value)> = world
+        .records("harness.memory.distilled")
+        .iter()
+        .map(|record| (record.ext["sessionId"].clone(), record.ext["catchUp"].clone()))
+        .collect();
+    assert_eq!(caught_up, vec![(json!("s1"), json!(false)), (json!("s2"), json!(true))]);
+    // Both cursors reach the sessions' last events, so a host finds nothing left unsaved.
+    let mut cursors = third.distilled_sessions(&alice()).await.unwrap();
+    cursors.sort();
+    let ids: Vec<&str> = cursors.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(ids, ["s1", "s2"]);
+    for (id, upto) in &cursors {
+        let session = world
+            .sessions
+            .get(adk_session::GetRequest {
+                app_name: APP.to_string(),
+                user_id: "alice".to_string(),
+                session_id: id.clone(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .unwrap();
+        let last = session.events().all().iter().map(|event| event.timestamp).max().unwrap();
+        assert_eq!(*upto, last, "{id}");
+    }
+
     // A second run finds nothing new: the entry moved the cursor too.
     let again = third
         .distill_sessions(

@@ -1,7 +1,10 @@
 //! Approval prompts for the harness at the console (spec 3.1 §8.1).
 
 use adk_core::Result;
-use adk_harness::{ApprovalPrompt, ApprovalPrompter, PromptAnswer, RuleSuggestion, ToolKind};
+use adk_harness::{
+    ApprovalPrompt, ApprovalPrompter, ChangeSetAnswer, ChangeSetPrompt, PromptAnswer,
+    RuleSuggestion, ToolKind,
+};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -33,6 +36,13 @@ const MENU_ONCE: &str = "  [y] allow once  [n] deny (reason)  [e] edit args  [?]
 /// non-waivable calls such as `exit_plan_mode`, protected-path edits or unsandboxed
 /// retries. A call whose arguments were cut for display can be approved only after `?`
 /// has shown them in full (spec 3.1 §9.2 I21).
+///
+/// Two or more held edits of one model turn are shown as one change set: a unified diff
+/// per file with its before and after sha256 and the change set's digest, then
+/// `[y] approve all  [f] choose files  [n] deny all (reason)  [e] edit  [?] full diff`.
+/// `e` opens the calls' arguments, under the diff as comments, in `$VISUAL`/`$EDITOR` and
+/// shows the change set again. Each approved edit runs bound to the content shown
+/// (spec 3.1 §7.26).
 ///
 /// Without a terminal every call is denied with a message saying how to approve it, so
 /// an unattended run never waits for input. [`approve_all`](Self::approve_all) is the
@@ -90,6 +100,15 @@ impl ConsolePrompter {
         self
     }
 
+    pub(super) fn console(&self) -> &ConsoleIo {
+        &self.console
+    }
+
+    /// `Some(allow_unsandboxed)` under `--yes`.
+    pub(super) fn approve_all_flag(&self) -> Option<bool> {
+        self.approve_all
+    }
+
     fn show(&self, prompt: &ApprovalPrompt) {
         let rendered = &prompt.rendered;
         let mut text = format!("\n[approval needed] {}\n", terminal_safe(&rendered.title));
@@ -110,10 +129,20 @@ impl ConsolePrompter {
         self.console.print(&text);
     }
 
-    /// Prints a decision made without asking, after the call's line (spec 3.1 §8.1): the
-    /// console holds it until its event reader has shown the call.
+    /// Prints a decision after the call's line (spec 3.1 §8.1): the console holds it until
+    /// its event reader has shown the call, and the call's response does not repeat it
+    /// after the call's output (§7.33 fix 2a).
     fn print_decision(&self, prompt: &ApprovalPrompt, text: &str) {
-        self.console.print_for_call(prompt.request.function_call_id.as_deref(), text);
+        self.console.print_decision(prompt.request.function_call_id.as_deref(), text);
+    }
+
+    /// `[approved] <tool>`, printed when the person answers, before the call runs.
+    fn approved(&self, prompt: &ApprovalPrompt, answer: PromptAnswer) -> PromptAnswer {
+        self.print_decision(
+            prompt,
+            &format!("\n[approved] {}\n", terminal_safe(&prompt.request.tool_name)),
+        );
+        answer
     }
 
     fn approved_unattended(
@@ -163,9 +192,15 @@ impl ConsolePrompter {
         PromptAnswer::DenyAllRemaining
     }
 
-    fn denied(&self, message: Option<String>) -> PromptAnswer {
+    fn denied(&self, prompt: &ApprovalPrompt, message: Option<String>) -> PromptAnswer {
         self.console.end_turn_after_responses();
-        self.console.print("  denied; the turn ends once the denial is recorded\n");
+        self.print_decision(
+            prompt,
+            &format!(
+                "\n[denied] {}; the turn ends once the denial is recorded\n",
+                terminal_safe(&prompt.request.tool_name)
+            ),
+        );
         PromptAnswer::Deny { message }
     }
 
@@ -240,7 +275,15 @@ fn kind_label(kind: &ToolKind) -> String {
 impl ApprovalPrompter for ConsolePrompter {
     /// `[allowed by rule N] bash: cargo test …` before the call runs (spec 3.1 §7.33 fix 3).
     fn rule_applied(&self, hit: &adk_harness::RuleHit) {
-        self.console.print(&format!("{}\n", terminal_safe(&hit.to_string())));
+        self.console.print_decision(
+            hit.function_call_id.as_deref(),
+            &format!("{}\n", terminal_safe(&hit.to_string())),
+        );
+    }
+
+    /// The change-set card: one diff, one answer (spec 3.1 §7.26).
+    async fn prompt_change_set(&self, prompt: ChangeSetPrompt) -> Result<Option<ChangeSetAnswer>> {
+        Ok(self.change_set(prompt).await)
     }
 
     async fn prompt(&self, prompt: ApprovalPrompt) -> Result<PromptAnswer> {
@@ -274,11 +317,12 @@ impl ApprovalPrompter for ConsolePrompter {
                         self.console.print("  press ? to see the whole call before approving it\n");
                         continue;
                     }
-                    return Ok(if args == original {
+                    let answer = if args == original {
                         PromptAnswer::ApproveOnce
                     } else {
                         PromptAnswer::ApproveWithArgs(args)
-                    });
+                    };
+                    return Ok(self.approved(&prompt, answer));
                 }
                 "a" | "always" if !prompt.suggestions.is_empty() => {
                     if !prompt.rendered.can_approve() {
@@ -294,7 +338,9 @@ impl ApprovalPrompter for ConsolePrompter {
                     }
                     match self.remember(&prompt.suggestions).await {
                         Remembered::Rule(rule) => {
-                            return Ok(PromptAnswer::ApproveAndRemember(rule));
+                            return Ok(
+                                self.approved(&prompt, PromptAnswer::ApproveAndRemember(rule))
+                            );
                         }
                         Remembered::Back => {}
                         Remembered::Interrupted => return Ok(self.interrupted()),
@@ -308,9 +354,9 @@ impl ApprovalPrompter for ConsolePrompter {
                     return Ok(match self.console.read_line("  reason (optional) > ").await {
                         ConsoleInput::Interrupted => self.interrupted(),
                         ConsoleInput::Line(reason) if !reason.trim().is_empty() => {
-                            self.denied(Some(reason.trim().to_string()))
+                            self.denied(&prompt, Some(reason.trim().to_string()))
                         }
-                        ConsoleInput::Line(_) | ConsoleInput::Eof => self.denied(None),
+                        ConsoleInput::Line(_) | ConsoleInput::Eof => self.denied(&prompt, None),
                     });
                 }
                 "e" | "edit" => match edit_json(&self.console, &args).await {
@@ -458,12 +504,30 @@ mod tests {
     async fn n_denies_with_a_reason_and_ends_the_turn() {
         let (prompter, console) = scripted([line("n"), line("  use the staging db  ")]);
         console.set_run(Some(CancellationToken::new()));
+        // The event reader showed the call's line before the prompt.
+        console.call_shown("call-1");
         assert_eq!(
             prompter.prompt(bash("psql prod")).await.unwrap(),
             PromptAnswer::Deny { message: Some("use the staging db".into()) }
         );
         assert!(console.end_turn_requested());
-        assert!(console.transcript().contains("the turn ends"));
+        assert!(console.transcript().contains("[denied] bash; the turn ends"));
+        assert!(console.take_printed_decision("call-1"), "the response repeats no decision");
+    }
+
+    /// The decision shows when the person answers, before the call runs and prints its
+    /// output (spec 3.1 §7.33 fix 2a).
+    #[tokio::test]
+    async fn y_prints_the_decision_before_the_call_runs() {
+        let (prompter, console) = scripted([line("y")]);
+        console.call_shown("call-1");
+        prompter.prompt(bash("cargo test")).await.unwrap();
+        assert!(
+            console.transcript().ends_with("> y\n\n[approved] bash\n"),
+            "{}",
+            console.transcript()
+        );
+        assert!(console.take_printed_decision("call-1"));
     }
 
     #[tokio::test]

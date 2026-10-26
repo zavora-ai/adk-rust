@@ -3,6 +3,7 @@ import type { MouseEvent } from "react";
 import type { AnswerOption, Command, CommandOutcome, DecisionCard, Origin } from "../generated/api";
 import { problemText } from "../client";
 import { Avatar } from "../components/Avatar";
+import { DECIDED_CLASS, DecidedLine } from "../components/DecidedLine";
 import { enterNeverDecides, originOf } from "../origin";
 import { decisionPath } from "../route";
 import { visible } from "../safe";
@@ -29,7 +30,8 @@ export function trayAnswers(card: DecisionCard): AnswerOption[] {
  * asks, the exact call in full and whether it can be taken back. The tray says yes once or no
  * to everyday calls; approving anything else — always allow, edit, high risk, money, a call
  * shown cut short — opens the home at the decision ("open to decide"). Enter and Esc never
- * decide (§7.4); ids and versions are never shown.
+ * decide (§7.4); ids and versions are never shown. Once decided it is one line, a
+ * `DecidedLine`, which opens to show the call again.
  */
 export function TrayDecision({
   card: given,
@@ -44,6 +46,8 @@ export function TrayDecision({
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [problem, setProblem] = useState("");
+  // The answer was given on this card: its line takes the focus the answer buttons had.
+  const [answeredHere, setAnsweredHere] = useState(false);
   const heading = useId();
 
   // A newer waiting version never replaces the card the person is looking at: the answer
@@ -71,6 +75,7 @@ export function TrayDecision({
       );
       if (outcome.type === "answered" || outcome.type === "alreadyDecided") {
         setCard(outcome.card);
+        setAnsweredHere(true);
         onSettled(outcome.card);
       } else if (outcome.type === "changed") {
         setCard(outcome.card);
@@ -84,12 +89,29 @@ export function TrayDecision({
   }
 
   const agent = visible(card.agent.displayName);
+  const call = (
+    <code className="tray-call" aria-label={trayLabels.exactCall}>
+      {visible(card.call.text)}
+    </code>
+  );
+  const details = <p className="tray-card-details">{card.reversibilityText}</p>;
+
+  if (decided) {
+    return (
+      <article className={`${DECIDED_CLASS} tray-decided`} aria-labelledby={heading} data-decision="decided">
+        <DecidedLine card={card} headingId={heading} focus={answeredHere}>
+          <p className="tray-card-meta">
+            {agent} · {card.sinceText} · {card.riskText}
+          </p>
+          {call}
+          {details}
+        </DecidedLine>
+      </article>
+    );
+  }
+
   return (
-    <article
-      className={`tray-card${decided ? " tray-card-decided" : ""}`}
-      aria-labelledby={heading}
-      data-decision={decided ? "decided" : "waiting"}
-    >
+    <article className="tray-card" aria-labelledby={heading} data-decision="waiting">
       <div className="tray-card-top">
         <Avatar agent={card.agent} size="md" />
         <div className="tray-card-text">
@@ -98,7 +120,7 @@ export function TrayDecision({
               {visible(card.heading)}
             </a>
           </h3>
-          {approvesHere || decided ? (
+          {approvesHere ? (
             <p className="tray-card-meta">
               {agent} · {card.sinceText} · {card.riskText}
             </p>
@@ -114,15 +136,8 @@ export function TrayDecision({
           </svg>
         </a>
       </div>
-      <code className="tray-call" aria-label={trayLabels.exactCall}>
-        {visible(card.call.text)}
-      </code>
-      <p className="tray-card-details">{card.reversibilityText}</p>
-      {decided && card.decided && (
-        <p className="tray-card-decided-text" role="status">
-          {visible(card.decided.text)}
-        </p>
-      )}
+      {call}
+      {details}
       {note && (
         <p className="tray-card-note" role="status">
           {note}

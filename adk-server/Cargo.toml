@@ -18,7 +18,7 @@ include = ["src/**/*", "Cargo.toml", "README.md"]
 all-features = true
 
 [dependencies]
-adk-core.workspace = true
+adk-core = { workspace = true, features = ["auth-bridge"] }
 adk-agent = { workspace = true, features = ["skills"] }
 adk-runner = { workspace = true, features = ["artifacts", "plugins", "skills"] }
 adk-session.workspace = true
@@ -60,6 +60,14 @@ regex = { workspace = true, optional = true }
 hmac = { version = "0.12", optional = true }
 sha2 = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
+# Optional: the AWP 2.0 agent edge (`awp` feature, spec 3.5 §7.9)
+adk-awp = { workspace = true, optional = true, features = ["signing"] }
+awp-types = { workspace = true, optional = true }
+adk-auth = { workspace = true, optional = true, features = ["web-bot-auth", "sso"] }
+http = { version = "1", optional = true }
+# Optional: the edge's durable stores (`awp-sqlite`, `awp-postgres`, `awp-redis`)
+sqlx = { workspace = true, optional = true, features = ["runtime-tokio"] }
+fred = { version = "10", optional = true, features = ["i-scripts"] }
 
 [features]
 default = []
@@ -83,6 +91,28 @@ approvals = ["adk-core/webhook-delivery"]
 agent-engine = ["dep:adk-memory", "tokio/net"]
 # Remote ReasoningEngine invocation: call other deployed Agent Engine agents
 # as sub-agents over reasoningEngines:streamQuery (alt=sse)
+# The AWP 2.0 agent edge: `ServerBuilder::awp(AwpEdge)`, trust tiers from verified credentials,
+# capabilities over A2A, MCP and HTTP through one governed path, held and exactly-once calls,
+# and the public partition's conversation endpoints (spec 3.5 §7.3, §7.4, §7.9, §7.10)
+awp = [
+    "a2a-v1",
+    "dep:adk-awp",
+    "dep:awp-types",
+    "dep:adk-auth",
+    "dep:adk-tool",
+    "adk-tool/mcp-server",
+    "dep:http",
+    "dep:sha2",
+    "dep:hex",
+    "dep:hmac",
+    "adk-core/webhook-delivery",
+    "axum/ws",
+    "tokio/net",
+]
+# The edge stores of spec 3.5 §7.9 in SQLite, PostgreSQL or Redis.
+awp-sqlite = ["awp", "dep:sqlx", "sqlx/sqlite", "adk-session/sqlite"]
+awp-postgres = ["awp", "dep:sqlx", "sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs", "adk-session/postgres"]
+awp-redis = ["awp", "dep:fred"]
 vertex-remote-engine = [
     "agent-engine",
     "dep:adk-gcp",
@@ -95,8 +125,9 @@ vertex-remote-engine = [
 # Input guardrails on the agents a recovering durable worker resumes.
 adk-agent = { path = "../adk-agent", features = ["guardrails"] }
 adk-graph = { path = "../adk-graph" }
-# ScriptedLlm for the durable worker's suspend and resume tests.
-adk-model = { path = "../adk-model", default-features = false }
+# ScriptedLlm for the durable worker's suspend and resume tests; Anthropic for the edge's live
+# conversation run (`awp`, ignored by default).
+adk-model = { path = "../adk-model", default-features = false, features = ["anthropic"] }
 adk-session = { path = "../adk-session", features = ["sqlite", "postgres"] }
 async-stream.workspace = true
 tracing-subscriber = "0.3"
@@ -108,3 +139,7 @@ http-body-util = "0.1.3"
 proptest = "1.4"
 tempfile = "3"
 tokio-test = "0.4"
+# The edge's chat socket tests (`awp`).
+tokio-tungstenite = "0.28"
+# The edge store conformance suite runs on a multi-threaded runtime.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

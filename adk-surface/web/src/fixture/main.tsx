@@ -6,10 +6,15 @@ import { createRoot } from "react-dom/client";
 import { App } from "../App";
 import { PhoneApp } from "../phone/PhoneApp";
 import type { Section } from "../route";
+import { Voice } from "../screens/Voice";
 import { TrayPanel } from "../tray/TrayPanel";
+import { Website } from "../website/Website";
+import { agentsFixture } from "./agents";
 import { FixtureClient, fixtureSeams, takeOverCard } from "./fixture";
 import { FixturePhoneClient } from "./phone";
 import { TrayFixture } from "./tray";
+import { VoiceFixtureClient, fixtureDevices } from "./voice";
+import { WebsiteFixture } from "./website";
 import "../styles/fonts.css";
 import "../styles/tokens.css";
 import "../styles/app.css";
@@ -30,8 +35,12 @@ const phoneInitial =
       : ({ screen: "decisions" } as const);
 // `?screen=` shows another surface's screen over its own example: one line per surface.
 const screens: Record<string, () => ReactNode> = {
+  agents: () => agentsFixture(params, client),
   tray: () => <TrayPanel client={new TrayFixture()} />,
   phone: () => <PhoneApp client={new FixturePhoneClient(phone !== "pair")} initial={phoneInitial} />,
+  voice: () => <Voice client={new VoiceFixtureClient()} devices={fixtureDevices()} onEnd={() => undefined} />,
+  // `&fresh` starts at the setup code.
+  website: () => <Website client={new WebsiteFixture({ fresh: params.has("fresh") })} onThreads={() => undefined} />,
 };
 const screen = screens[params.get("screen") ?? ""];
 const root = document.getElementById("root");

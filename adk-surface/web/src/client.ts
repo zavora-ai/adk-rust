@@ -19,7 +19,12 @@ import type {
   StatusLine,
   SurfaceKind,
   TakeOverRequest,
+  VoiceModels,
+  VoiceTicket,
+  VoiceTicketRequest,
 } from "./generated/api";
+import type { AgentsSeam } from "./agents/client";
+import { httpAgents } from "./agents/client";
 import type { TakeOverSeam } from "./components/DecisionCard";
 import { mergeAway } from "./away";
 import type {
@@ -138,6 +143,18 @@ export interface HomeClient {
   get<T>(path: string): Promise<T>;
   /** Sends the server's token from now on, for a server that asks for one. */
   signIn?(token: string): void;
+  /** The models voice can talk on; `undefined` when the server does not offer voice (spec 3.3 §5.6). */
+  voiceModels?(): Promise<VoiceModels | undefined>;
+  /** A single-use ticket for the voice socket, continuing the voice session `sessionId` when given. */
+  voiceTicket?(model: string, sessionId?: string): Promise<VoiceTicket>;
+  /** The open decisions with the answers voice may give them. */
+  voiceDecisions?(): Promise<DecisionCard[]>;
+  /** A command given on the voice view: surface voice. */
+  voiceCommand?(command: Command, origin: Origin): Promise<CommandOutcome>;
+  /** The agents a person adds (spec 3.3 §5.7): their reads, previews and changes. */
+  agentsSeam?(): AgentsSeam;
+  /** The roster with the primary agent and whether agents can be added here. */
+  agentsWithPrimary?(): Promise<AgentsResponse>;
 }
 
 async function problem(response: Response): Promise<ApiError> {
@@ -232,6 +249,15 @@ export class HttpClient implements HomeClient {
   /** The agents with the one a message goes to when the person names none (spec 3.3 §5.5). */
   agentsWithPrimary() {
     return this.request<AgentsResponse>(`/surface/agents?surface=${this.surface}`);
+  }
+
+  /** The agents a person adds (spec 3.3 §5.7), over the engine's reads and commands. */
+  agentsSeam(): AgentsSeam {
+    return httpAgents({
+      get: (path) => this.request(path),
+      post: (path, body) => this.post(path, body),
+      command: (command, origin) => this.command(command as Command, origin),
+    });
   }
 
   async decisions() {
@@ -396,6 +422,22 @@ export class HttpClient implements HomeClient {
 
   get<T>(path: string) {
     return this.request<T>(path);
+  }
+
+  voiceModels() {
+    return this.optional<VoiceModels>("/surface/voice");
+  }
+
+  voiceTicket(model: string, sessionId?: string) {
+    return this.post<VoiceTicket>("/surface/voice/sessions", { model, sessionId } satisfies VoiceTicketRequest);
+  }
+
+  voiceDecisions() {
+    return new HttpClient(this.base, "voice").decisions();
+  }
+
+  voiceCommand(command: Command, origin: Origin) {
+    return new HttpClient(this.base, "voice").command(command, origin);
   }
 
   /**

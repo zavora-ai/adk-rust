@@ -3,6 +3,8 @@ import type { Command, DecisionCard, Origin } from "./generated/api";
 import type { HomeClient } from "./client";
 import { ApiError, problemText } from "./client";
 import type { TakeOverSeam } from "./components/DecisionCard";
+import { AgentsScreen } from "./agents/AgentsScreen";
+import { agentsPlaceOf } from "./agents/route";
 import { Header } from "./components/Header";
 import { Developer } from "./developer/Developer";
 import { labels } from "./labels";
@@ -13,10 +15,16 @@ import { decisionOf, pathOf, sectionOf } from "./route";
 import { MemoryRules } from "./screens/MemoryRules";
 import { Threads } from "./screens/Threads";
 import { Today } from "./screens/Today";
+import { Voice } from "./screens/Voice";
+import type { VoiceClient } from "./screens/Voice";
+import { VoiceEntryContext, voiceOffered } from "./voice/context";
 import type { Seams } from "./seams";
 import { readStored, writeStored } from "./stored";
 import { applyTheme, nextTheme, storedTheme } from "./theme";
 import type { Theme } from "./theme";
+import type { WebsiteClient } from "./website/client";
+import { websiteLabels } from "./website/labels";
+import { Website } from "./website/Website";
 
 /** Where this tab keeps the session each agent's thread follows. */
 const FOLLOWED_KEY = "adk.home.followed";
@@ -31,11 +39,14 @@ export function App({
   seams = {},
   takeOver,
   initialSection,
+  website,
 }: {
   client: HomeClient;
   seams?: Seams;
   takeOver?: TakeOverSeam;
   initialSection?: Section;
+  /** The website's views, where the server serves a website (spec 3.5 §8.2). */
+  website?: WebsiteClient;
 }) {
   const [section, setSection] = useState<Section>(() => initialSection ?? sectionOf(window.location.pathname));
   const [theme, setTheme] = useState<Theme>(storedTheme);
@@ -51,8 +62,13 @@ export function App({
   useEffect(() => writeStored(FOLLOWED_KEY, followed), [followed]);
 
   useEffect(() => applyTheme(theme), [theme]);
+  // The agents screen the address names: New agent or one agent's settings (spec 3.3 §5.7).
+  const [agentsPlace, setAgentsPlace] = useState(() => agentsPlaceOf(window.location));
   useEffect(() => {
-    const back = () => setSection(sectionOf(window.location.pathname));
+    const back = () => {
+      setSection(sectionOf(window.location.pathname));
+      setAgentsPlace(agentsPlaceOf(window.location));
+    };
     window.addEventListener("popstate", back);
     return () => window.removeEventListener("popstate", back);
   }, []);
@@ -63,6 +79,11 @@ export function App({
   const status = usePoll(() => client.status(conversation.current));
   const agents = usePoll(() => client.agents());
   const decisions = usePoll(() => client.decisions());
+  // Whether the server serves a website: its tab shows only then (spec 3.5 §8.2).
+  const site = usePoll(async () => (website ? ((await website.home()) ?? null) : null), 60_000);
+  // Whether the roster ends with New agent, and the primary agent a description goes to.
+  const roster = usePoll(async () => (client.agentsWithPrimary ? await client.agentsWithPrimary() : undefined), 10_000);
+  const agentsSeam = useMemo(() => client.agentsSeam?.(), [client]);
   // "While you were away" and each area's settings, read once for every section that shows
   // them, so Today, the morning briefing and the status line never disagree (spec 3.3 §5.1).
   const away = usePoll(async () => (seams.whileAway ? await seams.whileAway.read() : undefined), 10_000);
@@ -99,10 +120,12 @@ export function App({
     [client, refresh],
   );
 
+  // The page never scrolls; the section does, under the header, and starts at its top.
+  const content = useRef<HTMLDivElement>(null);
   const navigate = useCallback((next: Section) => {
     setSection(next);
     if (window.location.pathname !== pathOf(next)) window.history.pushState(null, "", pathOf(next));
-    window.scrollTo?.({ top: 0 });
+    if (content.current) content.current.scrollTop = 0;
   }, []);
 
   const follow = useCallback(
@@ -188,7 +211,19 @@ export function App({
     void refreshStatus();
   }, [session, refreshStatus]);
 
-  return (
+  // Voice, where the server offers it and the page may use the microphone (spec 3.3 §5.6).
+  const voiceModels = usePoll(async () => client.voiceModels?.(), 60_000);
+  const voice = useMemo(() => voiceClient(client), [client]);
+  const voiceEntry = useMemo(
+    () =>
+      voice && voiceOffered(voiceModels.value?.models.length ?? 0) ? { open: () => navigate("voice") } : undefined,
+    [voice, voiceModels.value, navigate],
+  );
+  if (section === "voice" && voice) {
+    return <Voice client={voice} onEnd={() => navigate("threads")} />;
+  }
+
+  const home = (
     <div className="app">
       <a className="skip-link" href="#content">
         {labels.skipToContent}
@@ -199,6 +234,7 @@ export function App({
         areas={unreachable ? undefined : areas.value}
         conversationMode={section === "threads" && session ? status.value?.mode?.status : undefined}
         decisions={unreachable ? 0 : (decisions.value?.length ?? 0)}
+        website={site.value ? websiteLabels.tab : undefined}
         theme={theme}
         onNavigate={navigate}
         onTheme={() => setTheme(nextTheme)}
@@ -219,7 +255,7 @@ export function App({
           }}
         />
       )}
-      <div id="content" className="content" key={signIns}>
+      <div id="content" className="content" key={signIns} ref={content}>
         {section === "threads" && (
           <Threads
             client={client}
@@ -245,6 +281,7 @@ export function App({
             }}
             focusDecision={focusDecision}
             onOpenDecision={openDecision}
+            canAddAgents={roster.value?.canAdd ?? false}
           />
         )}
         {section === "today" && (
@@ -284,9 +321,52 @@ export function App({
           />
         )}
         {section === "developer" && <Developer client={client} sessionId={session} />}
+        {section === "website" && website && <Website client={website} onThreads={() => navigate("threads")} />}
+        {section === "agents" && agentsSeam && agentsPlace && (
+          <AgentsScreen
+            place={agentsPlace}
+            seam={agentsSeam}
+            rows={rows}
+            primary={
+              roster.value?.primary
+                ? { name: roster.value.primary.name, mode: status.value?.mode ?? undefined }
+                : undefined
+            }
+            decision={(id) => client.decision(id)}
+            onDescribe={async (text, origin) => {
+              // Describe it: a new thread with the primary agent, holding the request (§5.7).
+              const primary = roster.value?.primary?.name ?? rows.find((row) => !row.added)?.agent.name ?? "adk-rust";
+              const thread = crypto.randomUUID();
+              await client.command({ type: "newThread", agent: primary, sessionId: thread, text }, origin);
+              follow(primary, thread);
+              select(primary);
+              navigate("threads");
+            }}
+            onAddRoutine={() => navigate("today")}
+            onChanged={refresh}
+            onDone={(note) => {
+              if (note) setProblem(note);
+              navigate("threads");
+            }}
+          />
+        )}
       </div>
     </div>
   );
+  return <VoiceEntryContext.Provider value={voiceEntry}>{home}</VoiceEntryContext.Provider>;
+}
+
+/** The client's voice routes, when it has them. */
+function voiceClient(client: HomeClient): VoiceClient | undefined {
+  const { voiceModels, voiceTicket, voiceDecisions, voiceCommand } = client;
+  if (!voiceModels || !voiceTicket || !voiceDecisions || !voiceCommand) return undefined;
+  return {
+    voiceModels: () => voiceModels.call(client),
+    voiceTicket: (model, sessionId) => voiceTicket.call(client, model, sessionId),
+    voiceDecisions: () => voiceDecisions.call(client),
+    voiceCommand: (command, origin) => voiceCommand.call(client, command, origin),
+    status: () => client.status(),
+  };
 }
 
 /**

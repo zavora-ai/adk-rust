@@ -29,3 +29,57 @@ pub struct RequestContext {
     /// Additional metadata for custom middleware use.
     pub metadata: HashMap<String, String>,
 }
+
+/// Extracts authenticated identity from HTTP request headers.
+///
+/// Implementations typically parse a Bearer token from the `Authorization`
+/// header, validate it, and map claims to a [`RequestContext`]. `adk-server`
+/// re-exports it as `adk_server::auth_bridge::RequestContextExtractor`.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::RequestContext;
+/// use adk_core::request_context::{RequestContextError, RequestContextExtractor};
+///
+/// struct Header;
+///
+/// #[async_trait::async_trait]
+/// impl RequestContextExtractor for Header {
+///     async fn extract(
+///         &self,
+///         parts: &http::request::Parts,
+///     ) -> Result<RequestContext, RequestContextError> {
+///         let user = parts
+///             .headers
+///             .get("x-user")
+///             .and_then(|value| value.to_str().ok())
+///             .ok_or(RequestContextError::MissingAuth)?;
+///         Ok(RequestContext { user_id: user.to_string(), scopes: vec![], metadata: Default::default() })
+///     }
+/// }
+/// ```
+#[cfg(feature = "auth-bridge")]
+#[async_trait::async_trait]
+pub trait RequestContextExtractor: Send + Sync {
+    /// Extract identity from the request parts (headers, URI, etc.).
+    async fn extract(
+        &self,
+        parts: &http::request::Parts,
+    ) -> Result<RequestContext, RequestContextError>;
+}
+
+/// Errors that can occur during request context extraction.
+#[cfg(feature = "auth-bridge")]
+#[derive(Debug, thiserror::Error)]
+pub enum RequestContextError {
+    /// The `Authorization` header is missing from the request.
+    #[error("missing authorization header")]
+    MissingAuth,
+    /// The token was present but failed validation.
+    #[error("invalid token: {0}")]
+    InvalidToken(String),
+    /// An internal error occurred during extraction.
+    #[error("extraction failed: {0}")]
+    ExtractionFailed(String),
+}

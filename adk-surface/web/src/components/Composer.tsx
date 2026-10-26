@@ -1,7 +1,9 @@
-import { useId, useState } from "react";
+import { useContext, useId, useState } from "react";
 import type { FormEvent } from "react";
 import type { Origin } from "../generated/api";
 import { labels } from "../labels";
+import { VoiceEntryContext } from "../voice/context";
+import { voiceLabels } from "../voice/labels";
 
 /**
  * The message box under a thread. While a decision of the session is open, what is typed is
@@ -22,6 +24,8 @@ export function Composer({
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const field = useId();
+  // The microphone, where the server offers voice and the page may use it (spec 3.3 §5.6).
+  const voice = useContext(VoiceEntryContext);
 
   async function submit(event: FormEvent, origin: Origin) {
     event.preventDefault();
@@ -61,6 +65,16 @@ export function Composer({
           disabled={disabled}
           onChange={(event) => setText(event.target.value)}
         />
+        {voice && (
+          <button type="button" className="button composer-mic" aria-label={voiceLabels.talk} onClick={voice.open}>
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path
+                d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V21h2v-2.07A7 7 0 0 0 19 12h-2Z"
+                fill="currentColor"
+              />
+            </svg>
+          </button>
+        )}
         <button
           type="button"
           className="button button-stop composer-send"

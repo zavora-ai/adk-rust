@@ -15,7 +15,7 @@ use futures::stream::{self, BoxStream, StreamExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::answers::{AnswerLog, AnswerRecord, InMemoryAnswerLog, SURFACE_AUDIT_DECIDE};
@@ -46,6 +46,21 @@ pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// when nothing wakes it sooner. It waits as long as the session has an open decision or a
 /// running turn, however long that is (spec 3.3 §7.3, S-I4).
 const DRAIN_BACKOFF_MAX: Duration = Duration::from_secs(5);
+
+tokio::task_local! {
+    /// The transcript digest of the spoken answer being recorded: every `surface.decide`
+    /// record written while it is in scope carries it, and none carries the words
+    /// (spec 3.3 §5.6).
+    static SPOKEN_DIGEST: String;
+}
+
+/// Runs `future` with the transcript digest `digest` in scope, when there is one.
+async fn with_digest<F: std::future::Future>(digest: Option<String>, future: F) -> F::Output {
+    match digest {
+        Some(digest) => SPOKEN_DIGEST.scope(digest, future).await,
+        None => future.await,
+    }
+}
 
 /// A command from a surface (spec 3.3 §6). Every command runs as an authenticated
 /// [`Caller`], whose subject, surface and [`Origin`] reach its audit record.
@@ -130,6 +145,71 @@ pub enum Command {
         /// The mode.
         mode: Mode,
     },
+    /// Starts a thread with `agent`: the session's first message goes to it, and its
+    /// harness stamps the session as its own (spec 3.3 §5.7 "Threads").
+    #[serde(rename_all = "camelCase")]
+    NewThread {
+        /// The agent: a roster row's name.
+        agent: String,
+        /// The new session.
+        session_id: String,
+        /// The first message.
+        text: String,
+    },
+    /// Adds an agent by hand, previewed with `digest` (spec 3.3 §5.7).
+    #[serde(rename_all = "camelCase")]
+    AddAgent {
+        /// The definition.
+        draft: Box<crate::agents::AgentDraft>,
+        /// The digest of the preview the person confirmed.
+        digest: String,
+        /// The suggestion **Change it first** replaces, by the agent id it would get.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replaces: Option<String>,
+    },
+    /// Changes an agent at the version seen, previewed with `digest` (spec 3.3 §5.7).
+    #[serde(rename_all = "camelCase")]
+    ChangeAgent {
+        /// The agent.
+        agent: String,
+        /// The version seen.
+        version: u64,
+        /// The definition after the change.
+        draft: Box<crate::agents::AgentDraft>,
+        /// The digest of the preview the person confirmed.
+        digest: String,
+    },
+    /// Pauses an agent (spec 3.3 §5.7).
+    #[serde(rename_all = "camelCase")]
+    PauseAgent {
+        /// The agent.
+        agent: String,
+    },
+    /// Resumes an agent paused by hand: the web home or a paired local terminal (S-I10).
+    #[serde(rename_all = "camelCase")]
+    ResumeAgent {
+        /// The agent.
+        agent: String,
+    },
+    /// Removes an agent at the version seen, previewed with `digest` (spec 3.3 §5.7).
+    #[serde(rename_all = "camelCase")]
+    RemoveAgent {
+        /// The agent.
+        agent: String,
+        /// The version seen.
+        version: u64,
+        /// The digest of the preview that named what ends.
+        digest: String,
+    },
+    /// Copies one of the person's standing rules to an agent, pinned to it (spec 3.3 §5.7
+    /// "Copy one of your rules", S-I19).
+    #[serde(rename_all = "camelCase")]
+    CopyRuleToAgent {
+        /// The agent.
+        agent: String,
+        /// The rule.
+        rule_id: String,
+    },
 }
 
 /// What a command did (spec 3.3 §6).
@@ -202,6 +282,52 @@ pub enum CommandOutcome {
     ModeSet {
         /// The mode now.
         mode: ModeView,
+    },
+    /// The agent was added (spec 3.3 §5.7).
+    #[serde(rename_all = "camelCase")]
+    AgentAdded {
+        /// The agent now.
+        agent: crate::agents::AgentDetail,
+    },
+    /// The agent was changed.
+    #[serde(rename_all = "camelCase")]
+    AgentChanged {
+        /// The agent now.
+        agent: crate::agents::AgentDetail,
+    },
+    /// The agent was paused.
+    #[serde(rename_all = "camelCase")]
+    AgentPaused {
+        /// The agent now.
+        agent: crate::agents::AgentDetail,
+    },
+    /// The agent runs again.
+    #[serde(rename_all = "camelCase")]
+    AgentResumed {
+        /// The agent now.
+        agent: crate::agents::AgentDetail,
+    },
+    /// The agent was removed; its threads stay.
+    #[serde(rename_all = "camelCase")]
+    AgentRemoved {
+        /// What ended.
+        ended: crate::agents::EndedWork,
+    },
+    /// The agent changed since the version the surface showed: show it again (spec 3.3 §5.7).
+    #[serde(rename_all = "camelCase")]
+    AgentOutOfDate {
+        /// The agent now.
+        agent: crate::agents::AgentDetail,
+        /// "Finance was changed elsewhere at 10:01".
+        text: String,
+    },
+    /// A rule was copied to the agent (spec 3.3 S-I19).
+    #[serde(rename_all = "camelCase")]
+    RuleCopied {
+        /// The agent.
+        agent: String,
+        /// The rule's words.
+        label: String,
     },
 }
 
@@ -458,6 +584,8 @@ struct Spoken {
     user: String,
     /// The decision.
     request: ApprovalRequest,
+    /// The digest of what was said, for the record of its cancel (spec 3.3 §5.6).
+    digest: Option<String>,
 }
 
 impl fmt::Debug for SurfaceEngine {
@@ -596,6 +724,29 @@ impl SurfaceEngine {
                     .map(|offer| lower_first(&offer.label)),
                 Answer::Edit | Answer::Deny => None,
             };
+        }
+        // An added agent is drawn with its own name and colour (spec 3.3 §5.7).
+        if let Some(detail) = self.inner.source.agent(caller.user_id(), &card.agent.name).await? {
+            card.agent = detail.agent;
+        }
+        // "How it got here" for a suggested agent: the suggesting turn, naming what it read.
+        if card.adds_agent.is_some()
+            && let Ok(Some(events)) =
+                self.inner.source.transcript(caller.user_id(), &request.scope.session_id).await
+        {
+            let projector = &self.inner.projector;
+            let steps = crate::agents::suggestion_steps(
+                &events,
+                &card.agent.display_name,
+                request.created_at,
+                |at| projector.hh_mm(at),
+            );
+            let mut timeline: Vec<crate::model::TimelineStep> = steps
+                .into_iter()
+                .map(|text| crate::model::TimelineStep { text, current: false })
+                .collect();
+            timeline.extend(card.timeline.into_iter().skip(1));
+            card.timeline = timeline;
         }
         Ok(card)
     }
@@ -838,14 +989,20 @@ impl SurfaceEngine {
     ///
     /// Returns the source's error.
     pub async fn agents(&self, caller: &Caller) -> Result<Vec<AgentRow>> {
-        Ok(self
+        let rows: Vec<AgentRow> = self
             .inner
             .source
             .agents(caller.user_id())
             .await?
             .iter()
             .map(|state| self.inner.projector.agent_row(state))
-            .collect())
+            .collect();
+        // The person's own agents join the roster from their definitions, so one that has
+        // never run is listed as Ready (spec 3.3 §5.7 "The roster").
+        let definitions = self.inner.source.agent_definitions(caller.user_id()).await?;
+        let can_change =
+            !matches!(caller.origin, Origin::Agent { .. }) && rules::may_change_agents(caller);
+        Ok(crate::agents::roster(rows, &definitions, can_change))
     }
 
     /// The agent a message goes to when the person names none (spec 3.3 §5.5): the tray's
@@ -921,13 +1078,29 @@ impl SurfaceEngine {
     /// | `surface.call_not_expanded` | A truncated call approved before it was expanded |
     /// | `surface.not_here` | An agent answering, resuming outside the home, loosening the mode from chat or voice |
     /// | `surface.operator_only` | Stop all or Resume all from a caller outside the group [`stops_need`](SurfaceEngineBuilder::stops_need) names |
+    /// | `surface.invalid` | A spoken answer: it goes through `decide_spoken` with its transcript (feature `voice`) |
     /// | `surface.unsupported` | The source cannot do it |
     /// | the source's code | The source failed |
     pub async fn execute(&self, caller: &Caller, command: Command) -> Result<CommandOutcome> {
         match command {
+            // A spoken answer is recorded with its transcript's digest (spec 3.3 §5.6).
+            Command::Decide { .. } if rules::row(caller) == Row::Voice => {
+                Err(SurfaceError::Invalid(
+                    "a spoken answer goes through decide_spoken with its transcript".into(),
+                ))
+            }
             Command::Decide { decision_id, version, answer, edited_args, reason, expanded } => {
-                self.decide(caller, &decision_id, version, answer, edited_args, reason, expanded)
-                    .await
+                self.decide(
+                    caller,
+                    &decision_id,
+                    version,
+                    answer,
+                    edited_args,
+                    reason,
+                    expanded,
+                    None,
+                )
+                .await
             }
             Command::CancelAnswer { decision_id } => self.cancel_answer(caller, &decision_id).await,
             Command::Send { session_id, text } => self.send(caller, session_id, text, false).await,
@@ -941,7 +1114,72 @@ impl SurfaceEngine {
                 self.resume_all(caller).await
             }
             Command::SetMode { session_id, mode } => self.set_mode(caller, &session_id, mode).await,
+            Command::NewThread { agent, session_id, text } => {
+                self.new_thread(caller, &agent, session_id, text).await
+            }
+            command @ (Command::AddAgent { .. }
+            | Command::ChangeAgent { .. }
+            | Command::PauseAgent { .. }
+            | Command::ResumeAgent { .. }
+            | Command::RemoveAgent { .. }
+            | Command::CopyRuleToAgent { .. }) => self.agent_command(caller, command).await,
         }
+    }
+
+    /// Answers a decision by voice (spec 3.3 §5.6, §7.2): the one way a spoken answer is
+    /// recorded. `transcript` is what the person said; every `surface.decide` record of the
+    /// answer carries its SHA-256 as `transcriptDigest`, and none carries the words.
+    ///
+    /// The voice row of §7.2 applies: **Allow once** for an everyday call, which waits out
+    /// the cancel window ([`CommandOutcome::Pending`]; its end arrives on
+    /// [`SpokenAnswer::settled`](crate::voice::SpokenAnswer::settled)), and **Deny** for any
+    /// call. The call counts as not expanded, so a call shown truncated is decided on screen.
+    ///
+    /// # Errors
+    ///
+    /// `surface.invalid` when `caller` is not on the voice surface with origin voice; the
+    /// codes of [`execute`](Self::execute) otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_surface::{Answer, Caller, CommandOutcome, Origin, SurfaceEngine, SurfaceKind};
+    ///
+    /// # async fn example(engine: SurfaceEngine, id: &str, version: u64) -> adk_surface::Result<()> {
+    /// let ana = Caller::human("ana", SurfaceKind::Voice, Origin::Voice);
+    /// let spoken = engine.decide_spoken(&ana, id, version, Answer::AllowOnce, "allow once").await?;
+    /// if let CommandOutcome::Pending { text, .. } = &spoken.outcome {
+    ///     println!("{text}");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "voice")]
+    pub async fn decide_spoken(
+        &self,
+        caller: &Caller,
+        decision_id: &str,
+        version: u64,
+        answer: Answer,
+        transcript: &str,
+    ) -> Result<crate::voice::SpokenAnswer> {
+        use sha2::Digest as _;
+        if caller.origin != Origin::Voice || caller.surface != crate::origin::SurfaceKind::Voice {
+            return Err(SurfaceError::Invalid(
+                "decide_spoken records a spoken answer: the caller is on the voice surface and \
+                 its origin is voice"
+                    .into(),
+            ));
+        }
+        let digest = format!("{:x}", sha2::Sha256::digest(transcript.as_bytes()));
+        let (settle, settled) = oneshot::channel();
+        let outcome = with_digest(
+            Some(digest),
+            self.decide(caller, decision_id, version, answer, None, None, false, Some(settle)),
+        )
+        .await?;
+        let settled = matches!(outcome, CommandOutcome::Pending { .. }).then_some(settled);
+        Ok(crate::voice::SpokenAnswer { outcome, settled })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -954,6 +1192,7 @@ impl SurfaceEngine {
         edited_args: Option<Value>,
         reason: Option<String>,
         expanded: bool,
+        settle: Option<oneshot::Sender<Result<CommandOutcome>>>,
     ) -> Result<CommandOutcome> {
         let request = self.owned_request(caller, id).await?;
         if let Origin::Agent { agent } = &caller.origin {
@@ -991,7 +1230,7 @@ impl SurfaceEngine {
                 let card = self.card(caller, &request).await?;
                 return Ok(CommandOutcome::Changed { card });
             }
-            return self.speak_later(caller, request, version).await;
+            return self.speak_later(caller, request, version, settle).await;
         }
         self.commit(caller, &request, version, answer, edited_args, reason).await
     }
@@ -1135,25 +1374,47 @@ impl SurfaceEngine {
         Ok(CommandOutcome::AlreadyDecided { decided, card })
     }
 
-    /// A spoken "allow once" waits out its cancel window, then commits (spec 3.3 §5.6, §7.2).
+    /// A spoken "allow once" waits out its cancel window, then commits (spec 3.3 §5.6, §7.2);
+    /// how the window ended goes to `settle`.
     async fn speak_later(
         &self,
         caller: &Caller,
         request: ApprovalRequest,
         version: u64,
+        settle: Option<oneshot::Sender<Result<CommandOutcome>>>,
     ) -> Result<CommandOutcome> {
         let window = self.inner.voice_window;
         let cancel_until = self.now()
             + chrono::Duration::from_std(window).unwrap_or_else(|_| chrono::Duration::seconds(5));
+        self.audit_decide(caller, &request, Answer::AllowOnce, "pending", None).await?;
+        let digest = SPOKEN_DIGEST.try_with(Clone::clone).ok();
         let engine = self.clone();
         let speaker = caller.clone();
         let id = request.id.clone();
         let task_id = id.clone();
         let spoken = request.clone();
-        let handle = tokio::spawn(async move {
+        let handle = tokio::spawn(with_digest(digest.clone(), async move {
             tokio::time::sleep(window).await;
             engine.inner.spoken.lock().unwrap_or_else(|e| e.into_inner()).remove(&task_id);
-            match engine.commit(&speaker, &request, version, Answer::AllowOnce, None, None).await {
+            // Everything stopped meanwhile, here or on another surface: nothing runs.
+            let result = if engine.inner.source.stopped().await.unwrap_or(false) {
+                if let Err(error) = engine
+                    .audit_decide(
+                        &speaker,
+                        &request,
+                        Answer::AllowOnce,
+                        "cancelled",
+                        Some("surface.stopped"),
+                    )
+                    .await
+                {
+                    tracing::warn!(error = %error, decision.id = %task_id, "a spoken answer was cancelled; its audit record failed");
+                }
+                Err(SurfaceError::NotHere(words::ALL_AGENTS_STOPPED.to_string()))
+            } else {
+                engine.commit(&speaker, &request, version, Answer::AllowOnce, None, None).await
+            };
+            match &result {
                 Ok(CommandOutcome::Answered { .. }) => {}
                 Ok(outcome) => {
                     tracing::info!(decision.id = %task_id, outcome = ?outcome, "a spoken answer was not recorded: the decision changed in its cancel window");
@@ -1162,8 +1423,11 @@ impl SurfaceEngine {
                     tracing::warn!(error = %error, decision.id = %task_id, "a spoken answer could not be recorded");
                 }
             }
-        });
-        let entry = Spoken { handle, user: caller.user_id().to_string(), request: spoken };
+            if let Some(settle) = settle {
+                let _ = settle.send(result);
+            }
+        }));
+        let entry = Spoken { handle, user: caller.user_id().to_string(), request: spoken, digest };
         if let Some(previous) =
             self.inner.spoken.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), entry)
         {
@@ -1192,8 +1456,11 @@ impl SurfaceEngine {
             return Err(SurfaceError::not_found(format!("a spoken answer to '{id}' to cancel")));
         };
         spoken.handle.abort();
-        if let Err(error) =
-            self.audit_decide(caller, &spoken.request, Answer::AllowOnce, "cancelled", None).await
+        if let Err(error) = with_digest(
+            spoken.digest,
+            self.audit_decide(caller, &spoken.request, Answer::AllowOnce, "cancelled", None),
+        )
+        .await
         {
             tracing::warn!(error = %error, decision.id = %id, "the spoken answer was cancelled; its audit record failed");
         }
@@ -1469,7 +1736,23 @@ impl SurfaceEngine {
                     .into(),
             ));
         }
-        self.transcript(caller, session).await?;
+        // In an added agent's own thread the mode can only make it ask more (spec 3.3 §5.7).
+        if let Some(agent) = self.inner.source.agent_of_session(caller.user_id(), session).await?
+            && let Some(detail) = self.inner.source.agent(caller.user_id(), &agent).await?
+            && project::harness_mode(detail.mode.mode).is_stricter_than(target)
+        {
+            return Err(SurfaceError::NotHere(crate::agents::words::asks_at_most(
+                &detail.draft.display_name,
+                &detail.mode.label,
+            )));
+        }
+        // A thread with no message yet takes a mode where the source opens it for the caller,
+        // as a kernel's `/mode` does; elsewhere only the caller's own session does (S-I8).
+        if self.inner.source.transcript(caller.user_id(), session).await?.is_none()
+            && !self.inner.source.opens_sessions()
+        {
+            return Err(SurfaceError::not_found(format!("session '{session}'")));
+        }
         self.audit_command(
             caller,
             SURFACE_AUDIT_SET_MODE,
@@ -1478,6 +1761,159 @@ impl SurfaceEngine {
         .await?;
         self.inner.source.set_mode(caller, session, target).await?;
         Ok(CommandOutcome::ModeSet { mode: project::mode_view(target) })
+    }
+
+    // -----------------------------------------------------------------------
+    // Agents a person adds (spec 3.3 §5.7)
+    // -----------------------------------------------------------------------
+
+    /// Whether the roster ends with **New agent** for `caller` (spec 3.3 §5.7).
+    pub fn can_add_agents(&self, caller: &Caller) -> bool {
+        self.inner.source.keeps_agents()
+            && !matches!(caller.origin, Origin::Agent { .. })
+            && rules::may_change_agents(caller)
+    }
+
+    /// One agent `caller` added (spec 3.3 §5.7 "Agent settings").
+    ///
+    /// # Errors
+    ///
+    /// `surface.not_found` when the caller has no such agent, or the source's error.
+    pub async fn agent(&self, caller: &Caller, id: &str) -> Result<crate::agents::AgentDetail> {
+        self.inner
+            .source
+            .agent(caller.user_id(), id)
+            .await?
+            .ok_or_else(|| SurfaceError::not_found(format!("agent '{id}'")))
+    }
+
+    /// What `caller` may choose for an agent.
+    ///
+    /// # Errors
+    ///
+    /// `surface.not_here` where agents are not changed, or the source's error.
+    pub async fn agent_choices(&self, caller: &Caller) -> Result<crate::agents::AgentChoices> {
+        Self::may_change_agents(caller)?;
+        self.inner.source.agent_choices().await
+    }
+
+    /// **Here is what Finance can do**: the preview of `request` (spec 3.3 §5.7).
+    ///
+    /// # Errors
+    ///
+    /// `surface.not_here` where agents are not changed, or the kernel's refusal.
+    pub async fn preview_agent(
+        &self,
+        caller: &Caller,
+        request: crate::agents::AgentPreviewRequest,
+    ) -> Result<crate::agents::AgentPreview> {
+        Self::may_change_agents(caller)?;
+        self.inner.source.preview_agent(caller, request).await
+    }
+
+    /// Refuses a caller who may not change agents here: an agent, or a surface other than the
+    /// web home and the terminal (spec 3.3 §5.7, §7.2).
+    fn may_change_agents(caller: &Caller) -> Result<()> {
+        if let Origin::Agent { agent } = &caller.origin {
+            return Err(SurfaceError::NotHere(format!(
+                "an agent ({agent}) never adds, changes, pauses or removes an agent; a person \
+                 does (spec 3.3 §5.7)"
+            )));
+        }
+        if !rules::may_change_agents(caller) {
+            return Err(SurfaceError::NotHere(
+                "agents are set up and changed in the home app or the terminal (spec 3.3 §7.2)"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn new_thread(
+        &self,
+        caller: &Caller,
+        agent: &str,
+        session: String,
+        text: String,
+    ) -> Result<CommandOutcome> {
+        if text.trim().is_empty() {
+            return Err(SurfaceError::Invalid("the message is empty".into()));
+        }
+        if let Origin::Agent { agent } = &caller.origin {
+            return Err(SurfaceError::NotHere(format!(
+                "an agent ({agent}) never starts a thread for a person (spec 3.3 §7.4)"
+            )));
+        }
+        self.audit_command(
+            caller,
+            SURFACE_AUDIT_SEND,
+            json!({ "sessionId": session, "queued": false, "agent": agent }),
+        )
+        .await?;
+        self.inner.source.start_turn_with(caller, agent, &session, &text).await?;
+        Ok(CommandOutcome::Sent { session_id: session })
+    }
+
+    async fn agent_command(&self, caller: &Caller, command: Command) -> Result<CommandOutcome> {
+        Self::may_change_agents(caller)?;
+        let source = &self.inner.source;
+        let agent_of = |command: &Command| match command {
+            Command::ChangeAgent { agent, .. }
+            | Command::PauseAgent { agent }
+            | Command::ResumeAgent { agent }
+            | Command::RemoveAgent { agent, .. }
+            | Command::CopyRuleToAgent { agent, .. } => Some(agent.clone()),
+            _ => None,
+        };
+        let agent = agent_of(&command);
+        let result = match command {
+            Command::AddAgent { draft, digest, replaces } => source
+                .add_agent(caller, *draft, &digest, replaces)
+                .await
+                .map(|agent| CommandOutcome::AgentAdded { agent }),
+            Command::ChangeAgent { agent, version, draft, digest } => source
+                .change_agent(caller, &agent, version, *draft, &digest)
+                .await
+                .map(|agent| CommandOutcome::AgentChanged { agent }),
+            Command::PauseAgent { agent } => source
+                .pause_agent(caller, &agent)
+                .await
+                .map(|agent| CommandOutcome::AgentPaused { agent }),
+            Command::ResumeAgent { agent } => {
+                // Resuming is the person at the home or a paired local terminal (S-I10).
+                if !rules::may_resume_agent(caller) {
+                    return Err(SurfaceError::NotHere(
+                        words::ALL_AGENTS_STOPPED_RESUME_IN_HOME.to_string(),
+                    ));
+                }
+                source
+                    .resume_agent(caller, &agent)
+                    .await
+                    .map(|agent| CommandOutcome::AgentResumed { agent })
+            }
+            Command::RemoveAgent { agent, version, digest } => source
+                .remove_agent(caller, &agent, version, &digest)
+                .await
+                .map(|ended| CommandOutcome::AgentRemoved { ended }),
+            Command::CopyRuleToAgent { agent, rule_id } => source
+                .copy_rule_to_agent(caller, &agent, &rule_id)
+                .await
+                .map(|label| CommandOutcome::RuleCopied { agent, label }),
+            _ => return Err(SurfaceError::Invalid("not a command about an agent".into())),
+        };
+        match (result, agent) {
+            // Someone changed it since: shown again with what it is now, never overwritten.
+            (Err(error), Some(agent)) if crate::agents::local::out_of_date(&error) => {
+                let detail = self.agent(caller, &agent).await?;
+                let text = crate::agents::words::changed_in(
+                    &detail.draft.display_name,
+                    "elsewhere",
+                    &self.inner.projector.hh_mm(detail.changed_at),
+                );
+                Ok(CommandOutcome::AgentOutOfDate { agent: detail, text })
+            }
+            (result, _) => result,
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1525,6 +1961,9 @@ impl SurfaceEngine {
         }
         if let Some(code) = code {
             draft = draft.ext("code", json!(code));
+        }
+        if let Ok(digest) = SPOKEN_DIGEST.try_with(Clone::clone) {
+            draft = draft.ext("transcriptDigest", json!(digest));
         }
         trail.record(draft).await.map_err(SurfaceError::Source)
     }

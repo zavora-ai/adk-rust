@@ -1,5 +1,5 @@
 /** The web home's sections, each its own address under `/ui/` (spec 3.3 §5.1). */
-export type Section = "threads" | "today" | "memory" | "developer";
+export type Section = "threads" | "today" | "memory" | "developer" | "voice" | "agents" | "website";
 
 const BASE = "/ui/";
 
@@ -9,10 +9,19 @@ const DECISIONS = `${BASE}decisions/`;
 export function sectionOf(pathname: string): Section {
   const rest = pathname.startsWith(BASE) ? pathname.slice(BASE.length) : "";
   const first = rest.split("/")[0];
-  return first === "today" || first === "memory" || first === "developer" ? first : "threads";
+  return first === "today" ||
+    first === "memory" ||
+    first === "developer" ||
+    first === "voice" ||
+    first === "agents" ||
+    first === "website"
+    ? first
+    : "threads";
 }
 
 export function pathOf(section: Section): string {
+  // The agents a person adds: New agent, and each one's settings (spec 3.3 §5.7).
+  if (section === "agents") return `${BASE}agents/new`;
   return section === "threads" ? BASE : `${BASE}${section}`;
 }
 

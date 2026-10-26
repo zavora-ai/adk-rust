@@ -6,8 +6,11 @@ import { labels, words } from "../labels";
 import { enterNeverDecides, originOf } from "../origin";
 import { visible, visibleJson } from "../safe";
 import { TAKE_OVER_TOOL } from "../takeOver";
+import { AgentCard } from "../agents/AgentCard";
+import type { AgentCardView } from "../agents/types";
 import { Avatar } from "./Avatar";
 import { CallView } from "./CallView";
+import { DECIDED_CLASS, DecidedLine } from "./DecidedLine";
 import { Pill } from "./Pill";
 
 /** The reserved tool name of a take-over entry (spec 3.3 §10 H2). */
@@ -29,7 +32,7 @@ export type Send = (command: Command, origin: Origin) => Promise<CommandOutcome>
  * will happen, the exact call, how it got here, the answers this surface may give (§7.2) and
  * the details. It sits on its own background. Every answer carries the version this card
  * showed (S-I2); an answer someone else gave first is shown, never retried. Enter and Esc
- * never decide (§7.4).
+ * never decide (§7.4). Once decided, from any surface, it is a `DecidedLine` (§5.1).
  */
 export function DecisionCard({
   card: given,
@@ -50,6 +53,8 @@ export function DecisionCard({
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState("");
   const [note, setNote] = useState("");
+  // The answer was given on this card: its line takes the focus the answer buttons had.
+  const [answeredHere, setAnsweredHere] = useState(false);
   const heading = useId();
   const root = useRef<HTMLElement>(null);
 
@@ -71,6 +76,7 @@ export function DecisionCard({
     if (outcome.type === "answered" || outcome.type === "alreadyDecided") {
       setCard(outcome.card);
       setEditing(false);
+      setAnsweredHere(true);
       onSettled?.(outcome.card);
     } else if (outcome.type === "changed") {
       setCard(outcome.card);
@@ -132,42 +138,76 @@ export function DecisionCard({
     (option) => !isTakeOver || option.answer === "deny",
   );
 
+  // Who asks, the exact call, how it got here and the details: the card, and what its line
+  // shows again once it is decided.
+  const who = (
+    <header className="decision-who">
+      <Avatar agent={card.agent} size="sm" />
+      <span>
+        <strong>{visible(card.agent.displayName)}</strong> · {card.sinceText}
+      </span>
+      <Pill kind={decided ? "decided" : "waiting"} dot={!decided}>
+        {card.statusText}
+      </Pill>
+    </header>
+  );
+  const summary = card.summary ? <p className="decision-note">{visible(card.summary)}</p> : null;
+  // A suggested agent shows its definition in place of the call (spec 3.3 §5.7).
+  const addsAgent = (card as Card & { addsAgent?: AgentCardView | null }).addsAgent;
+  const call = addsAgent ? (
+    <AgentCard view={addsAgent} decisionId={card.id} expanded={expanded} onExpand={() => setExpanded(true)} decided={decided} />
+  ) : (
+    <CallView call={card.call} expanded={expanded} onExpand={() => setExpanded(true)} />
+  );
+  const timeline = (
+    <ol className="timeline" aria-label={labels.howItGotHere}>
+      {card.timeline.map((step, index) => (
+        <li key={index} className={step.current ? "current" : undefined} aria-current={step.current ? "step" : undefined}>
+          {visible(step.text)}
+        </li>
+      ))}
+    </ol>
+  );
+  const details = (
+    <p className="decision-details">
+      <span>{card.riskText}</span>
+      <span>{card.reversibilityText}</span>
+      {card.alsoShown && <span>{visible(card.alsoShown)}</span>}
+    </p>
+  );
+
+  // Decided here or anywhere else, the card keeps its place in the thread as one line; opened,
+  // it shows the call and the details again, and nothing on it answers (spec 3.3 §5.1, §7.4).
+  if (decided) {
+    return (
+      <article ref={root} className={`${DECIDED_CLASS} decision-line`} aria-labelledby={heading} data-decision="decided">
+        <DecidedLine card={card} headingId={heading} focus={focusOnMount || answeredHere}>
+          {who}
+          {summary}
+          {call}
+          {timeline}
+          {details}
+        </DecidedLine>
+      </article>
+    );
+  }
+
   return (
-    <article
-      ref={root}
-      tabIndex={-1}
-      className={`decision${decided ? " decision-decided" : ""}`}
-      aria-labelledby={heading}
-      data-decision={decided ? "decided" : "waiting"}
-    >
-      <header className="decision-who">
-        <Avatar agent={card.agent} size="sm" />
-        <span>
-          <strong>{visible(card.agent.displayName)}</strong> · {card.sinceText}
-        </span>
-        <Pill kind={decided ? "decided" : "waiting"} dot={!decided}>
-          {card.statusText}
-        </Pill>
-      </header>
+    <article ref={root} tabIndex={-1} className="decision" aria-labelledby={heading} data-decision="waiting">
+      {who}
       <h3 id={heading} className="decision-heading">
         {visible(card.heading)}
       </h3>
-      {card.summary ? <p className="decision-note">{visible(card.summary)}</p> : null}
-      <CallView call={card.call} expanded={expanded} onExpand={() => setExpanded(true)} />
-      <ol className="timeline" aria-label={labels.howItGotHere}>
-        {card.timeline.map((step, index) => (
-          <li key={index} className={step.current ? "current" : undefined} aria-current={step.current ? "step" : undefined}>
-            {visible(step.text)}
-          </li>
-        ))}
-      </ol>
+      {summary}
+      {call}
+      {timeline}
       {card.allowed.note && <p className="decision-note">{visible(card.allowed.note)}</p>}
       {note && (
         <p className="decision-note" role="status">
           {note}
         </p>
       )}
-      {!decided && (options.length > 0 || (isTakeOver && takeOver)) && !editing && (
+      {(options.length > 0 || (isTakeOver && takeOver)) && !editing && (
         <div className="decision-actions">
           {isTakeOver && takeOver && (
             <TakeOverButton
@@ -206,11 +246,7 @@ export function DecisionCard({
           {problem}
         </p>
       )}
-      <p className="decision-details">
-        <span>{card.riskText}</span>
-        <span>{card.reversibilityText}</span>
-        {card.alsoShown && <span>{visible(card.alsoShown)}</span>}
-      </p>
+      {details}
     </article>
   );
 }

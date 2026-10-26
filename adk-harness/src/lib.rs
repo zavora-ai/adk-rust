@@ -40,6 +40,7 @@
 //! | `packs::browser::BrowserPack` (feature `browser`) | §7.24 |
 //! | `packs::computer_use::ComputerUsePack` (feature `computer-use`) | §7.24 |
 //! | `packs::voice::{VoiceSurface, VoiceConfig, VoiceEvent, SpokenDecision}` (feature `voice`) | §7.17 |
+//! | `website::*`, `Preset::Website` (feature `website`) | spec 3.5 §7.1, §7.3, §7.10, §7.11, §7.18 |
 //! | `VoiceSurface::with_parked_processes`, `ParkedProcess` (features `voice` and `kernel`) | spec 3.2 §7.11 |
 //!
 //! # Example
@@ -64,11 +65,14 @@
 #[cfg(feature = "acp-server")]
 mod acp;
 mod agent;
+#[cfg(feature = "kernel")]
+mod agents;
 mod audit;
 mod builder;
 #[cfg(feature = "graph")]
 mod checkpoint;
 mod config;
+mod edits;
 #[cfg(feature = "encrypted")]
 pub mod encrypted;
 #[cfg(feature = "memory")]
@@ -98,6 +102,8 @@ mod plan_graph;
 mod policy;
 mod posture;
 mod prompt;
+#[cfg(any(feature = "sqlite", feature = "postgres", feature = "redis"))]
+mod read_records;
 mod run_context;
 mod shell;
 #[cfg(feature = "skills")]
@@ -108,6 +114,8 @@ mod team;
 mod tools;
 mod toolset;
 pub mod web;
+#[cfg(feature = "website")]
+pub mod website;
 
 pub mod approvals;
 #[path = "presets/coding.rs"]
@@ -121,6 +129,11 @@ pub mod personal;
 mod preset;
 
 pub use agent::{HARNESS_UNGOVERNED_CODE, HarnessAgent, HarnessInfo, HarnessLayer, HarnessRuntime};
+#[cfg(feature = "kernel")]
+pub use agents::{
+    AGENT_SESSION_CODE, AGENT_STATE_KEY, AddedAgent, PRIMARY_AGENT_STAMP, PROPOSE_AGENT,
+    PinnedOnlyRules, assess_agent, copy_rule_to, suggester_ceiling,
+};
 #[cfg(feature = "postgres")]
 pub use approvals::PostgresStandingRuleStore;
 #[cfg(feature = "redis")]
@@ -134,6 +147,10 @@ pub use approvals::{
     RuleSuggestion, SHELL_PREFIX_SUGGESTION_DENYLIST, StandingDecision, StandingRule,
     StandingRuleStore, SuggestedScope, escape_control,
 };
+pub use approvals::{
+    CHANGE_SET_MAX_BYTES, ChangeSet, ChangeSetAnswer, ChangeSetCall, ChangeSetFile,
+    ChangeSetPrompt, RenderedChangeSet,
+};
 #[cfg(feature = "observe")]
 pub use builder::LoopGuard;
 pub use builder::{HarnessAgentBuilder, Pack};
@@ -142,6 +159,7 @@ pub use checkpoint::SealedCheckpointer;
 #[cfg(feature = "graph")]
 pub use checkpoint::checkpointer_from_url;
 pub use config::{HARNESS_CONFIG_FILE, HarnessConfig};
+pub use edits::PREFERRED_MULTI_FILE_EDIT;
 #[cfg(any(feature = "memory-embeddings", feature = "memory-embeddings-local"))]
 pub use facts::RagEmbedder;
 #[cfg(all(feature = "memory", feature = "sqlite"))]
@@ -249,6 +267,12 @@ pub use policy::{
 pub use posture::{Effort, EffortPolicy};
 pub use preset::Preset;
 pub use prompt::HARNESS_SYSTEM_PROMPT;
+#[cfg(feature = "postgres")]
+pub use read_records::PostgresReadRecords;
+#[cfg(feature = "redis")]
+pub use read_records::RedisReadRecords;
+#[cfg(feature = "sqlite")]
+pub use read_records::SqliteReadRecords;
 #[cfg(feature = "sqlite")]
 pub use shell::SqliteShellLedger;
 pub use shell::{AUTO_ALLOW_UNAVAILABLE_CODE, SANDBOX_PROTECTED_PATHS};

@@ -85,6 +85,7 @@ fn card(id: &str, tool: &str, args: Value) -> DecisionCard {
         money: false,
         also_shown: Some("Also on your phone and in Telegram".into()),
         decided: None,
+        adds_agent: None,
     }
 }
 
@@ -328,6 +329,10 @@ fn the_full_screen_has_the_layout_of_the_concept() {
             status_text: "Waiting for you".into(),
             wake_at: None,
             session_id: Some(SESSION.into()),
+            area: None,
+            mode: None,
+            added: false,
+            can_change: false,
         }]),
         shown,
     );
@@ -479,6 +484,10 @@ proptest! {
             status_text: "Working".into(),
             wake_at: None,
             session_id: Some(SESSION.into()),
+            area: None,
+            mode: None,
+            added: false,
+            can_change: false,
         }]), shown);
         let entry = thread_entry(1, vec![
             ThreadItem::Message { from: Speaker::Agent, author: name.clone(), text: message.clone() },
@@ -566,6 +575,7 @@ fn decided_by_you() -> crate::model::Decided {
         at_text: "18:01".into(),
         answer: crate::model::DecidedAnswer::Yes,
         text: "You said yes in the terminal at 18:01".into(),
+        scope_text: None,
     }
 }
 
@@ -808,6 +818,8 @@ fn draw(app: &mut App, cols: u16, rows: u16, now: Instant) -> Vec<String> {
     let mut view = None;
     terminal.draw(|frame| view = renderer.draw(frame, app, now)).unwrap();
     app.set_box_view(view, now);
+    app.view_scroll = app.view_scroll.min(renderer.view_max_scroll);
+    app.view_page = renderer.view_page;
     let buffer = terminal.backend().buffer().clone();
     (0..rows)
         .map(|y| (0..cols).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
@@ -1124,7 +1136,7 @@ fn a_key_just_after_a_close_elsewhere_never_becomes_a_message() {
     effects.extend(app.key(key(KeyCode::Enter), armed + ms(150)));
     assert!(effects.is_empty(), "{effects:?}");
     assert!(app.composer.is_empty(), "{:?}", app.composer.text);
-    assert!(notices(&app).contains("Already answered somewhere else."), "{}", notices(&app));
+    assert!(notices(&app).contains("No longer waiting for you."), "{}", notices(&app));
 
     let mut app = app_with(vec![invoice()], shown);
     app.update(frame(FeedFrame::Decisions { cards: vec![] }), armed);
@@ -1265,6 +1277,23 @@ fn notices_pass_and_a_problem_stays_until_a_key() {
     assert!(shown(&app, now + ms(300)).is_empty());
 }
 
+/// A line the application sends while the terminal runs (`notices_from`) stays, as the
+/// start's notices do, until the next key.
+#[test]
+fn a_notice_sent_while_the_terminal_runs_stays_until_a_key() {
+    use super::app::NOTICE_TTL;
+
+    let now = Instant::now();
+    let mut app = App::new("adk-rust", SESSION.into());
+    app.update(Update::Notice("2 facts were added".into()), now);
+    let shown = |app: &App, at| {
+        app.visible_notices(at).map(|notice| notice.text.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(shown(&app, now + NOTICE_TTL * 3), ["2 facts were added"]);
+    app.key(key(KeyCode::Char('x')), now + NOTICE_TTL * 3);
+    assert!(shown(&app, now + NOTICE_TTL * 3).is_empty());
+}
+
 /// Tab during an edit or a reason does nothing: the call's arguments or the reason never
 /// become a message to another agent's thread.
 #[test]
@@ -1277,6 +1306,10 @@ fn tab_never_carries_an_edit_to_another_thread() {
         status_text: "Waiting for you".into(),
         wake_at: None,
         session_id: Some(session.into()),
+        area: None,
+        mode: None,
+        added: false,
+        can_change: false,
     });
     for answer in ['e', 'n'] {
         let mut app = app_with(vec![invoice()], shown);
@@ -1875,6 +1908,10 @@ fn tab_and_the_arrows_complete_a_command() {
         status_text: "Working".into(),
         wake_at: None,
         session_id: Some(session.into()),
+        area: None,
+        mode: None,
+        added: false,
+        can_change: false,
     });
     app.update(Update::Agents(rows.to_vec()), now);
     // `/today` and `/todos` share "tod"; Tab takes that, then the chosen name.
@@ -1980,6 +2017,8 @@ fn help_lists_every_command() {
     let first = draw(&mut app, 80, 24, now).join("\n");
     assert!(first.contains("more lines · PageDown"), "{first}");
     assert!(!first.contains("/mcp"), "{first}");
+    // Ctrl-G and `/agents` add a line each (spec 3.3 §5.7).
+    app.key(key(KeyCode::PageDown), now);
     app.key(key(KeyCode::PageDown), now);
     app.key(key(KeyCode::PageDown), now);
     let next = draw(&mut app, 80, 24, now).join("\n");
@@ -2127,4 +2166,261 @@ async fn an_added_command_runs_in_the_shown_session() {
         other => panic!("{other:?}"),
     }
     assert!(commands.finish(ms(100)).await.is_empty());
+}
+
+/// Ctrl-G and `/agents` open the Agents view, which lists the agents through `/agent` (spec 3.3
+/// §5.7); Ctrl-G again, or Esc, goes back to the thread.
+#[test]
+fn ctrl_g_and_slash_agents_open_the_agents_view() {
+    let now = Instant::now();
+    let mut app = App::new("adk-rust", SESSION.into());
+    let effects = app.key(ctrl('g'), now);
+    assert_eq!(app.view, View::Agents);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::RunCommand { name, args, .. }] if name == "agent" && args == "list --json"
+    ));
+    app.key(ctrl('g'), now);
+    assert_eq!(app.view, View::Thread);
+    let effects = type_text(&mut app, "/agents", now);
+    assert!(effects.is_empty());
+    let effects = app.key(key(KeyCode::Enter), now);
+    assert_eq!(app.view, View::Agents);
+    assert!(matches!(effects.as_slice(), [Effect::RunCommand { name, .. }] if name == "agent"));
+    let Some(Effect::RunCommand { serial, .. }) = effects.first() else { unreachable!() };
+    // The answer comes back to the view, not to the Output view.
+    app.update(
+        Update::CommandDone {
+            serial: *serial,
+            result: Ok(json!({ "agents": [{ "agent": {
+                "id": "finance", "displayName": "Finance", "area": "default", "mode": "ask",
+                "state": "active", "version": 1
+            } }] })
+            .to_string()),
+        },
+        now,
+    );
+    assert_eq!(app.view, View::Agents);
+    assert_eq!(app.agents_pane.listed.len(), 1);
+    assert!(app.output.is_none());
+    let screen = draw(&mut app, 100, 24, now).join("\n");
+    assert!(screen.contains("Your agents"), "{screen}");
+    assert!(screen.contains("Finance") && screen.contains("Ready"), "{screen}");
+    app.key(key(KeyCode::Esc), now);
+    assert_eq!(app.view, View::Thread);
+}
+
+/// Tab moves through the roster's agents, an added agent with no thread included: its new
+/// session's first message starts its thread, and the next one continues it (spec 3.3 §5.7).
+/// Enter in the Agents view opens the same new thread.
+#[test]
+fn tab_reaches_an_added_agent_without_a_thread() {
+    let now = Instant::now();
+    let mut app = App::new("adk-rust", SESSION.into());
+    let row = |name: &str, session: Option<&str>, added: bool| AgentRow {
+        agent: agent(name),
+        status: AgentStatus::Ready,
+        status_text: "Ready".into(),
+        wake_at: None,
+        session_id: session.map(str::to_string),
+        area: None,
+        mode: None,
+        added,
+        can_change: added,
+    };
+    let rows = vec![
+        row("adk-rust", Some(SESSION), false),
+        row("finance", None, true),
+        row("team", None, false),
+    ];
+    app.update(Update::Agents(rows), now);
+    assert_eq!(app.key(key(KeyCode::Tab), now), vec![Effect::OpenSession(None)]);
+    // The terminal opened a session for it.
+    assert_eq!(app.switch_session("new-1".into()), vec![Effect::Session("new-1".into())]);
+    assert_eq!(app.shown_agent().map(|row| row.agent.name.as_str()), Some("finance"));
+    type_text(&mut app, "hello", now);
+    assert_eq!(
+        app.key(key(KeyCode::Enter), now),
+        vec![Effect::Execute(Command::NewThread {
+            agent: "finance".into(),
+            session_id: "new-1".into(),
+            text: "hello".into(),
+        })]
+    );
+    type_text(&mut app, "again", now);
+    assert_eq!(
+        app.key(key(KeyCode::Enter), now),
+        vec![Effect::Execute(Command::Send { session_id: "new-1".into(), text: "again".into() })]
+    );
+    // An agent of the kernel's own without a thread is not reached; Tab comes back round.
+    app.switch_session(SESSION.into());
+    assert_eq!(app.key(key(KeyCode::BackTab), now), vec![Effect::OpenSession(None)]);
+    assert_eq!(app.fresh, Some(("finance".to_string(), None)));
+
+    // Enter on it in the Agents view does the same.
+    let mut app = App::new("adk-rust", SESSION.into());
+    app.update(Update::Agents(vec![row("finance", None, true)]), now);
+    let effects = app.key(ctrl('g'), now);
+    let Some(Effect::RunCommand { serial, .. }) = effects.first() else { unreachable!() };
+    app.update(
+        Update::CommandDone {
+            serial: *serial,
+            result: Ok(json!({ "agents": [{ "agent": {
+                "id": "finance", "displayName": "Finance", "area": "default", "mode": "ask",
+                "state": "active", "version": 1
+            } }] })
+            .to_string()),
+        },
+        now,
+    );
+    assert_eq!(app.key(key(KeyCode::Enter), now), vec![Effect::OpenSession(None)]);
+    assert_eq!(app.view, View::Thread);
+}
+
+/// No key of the Agents view answers a decision: decision keys answer only in the thread
+/// (spec 3.3 §5.7, §7.4).
+#[test]
+fn agents_view_keys_never_answer_a_decision() {
+    let shown = Instant::now();
+    let mut app = app_with(vec![invoice()], shown);
+    let later = shown + ARM_DELAY * 4;
+    app.key(ctrl('g'), later);
+    assert_eq!(app.view, View::Agents);
+    for c in ['y', 'a', 'e', 'n', 'p', 'x', '?'] {
+        let effects = app.key(key(KeyCode::Char(c)), later);
+        assert!(!decides(&effects), "{c} answered a decision from the Agents view");
+        app.agents_pane.waiting = None;
+        app.agents_pane.pane = super::agents::Pane::List;
+    }
+    assert!(!decides(&app.key(key(KeyCode::Enter), later)));
+}
+
+/// Wave 3 review finding 12: Tab completes a command's name and then does nothing while the
+/// command, its arguments included, is in the message box; it never moves to another agent's
+/// thread with the command (spec 3.3 §5.2).
+#[test]
+fn tab_never_moves_threads_while_a_command_with_arguments_is_typed() {
+    let now = Instant::now();
+    let mut app = app_with_commands();
+    let rows = ["s1", "s2"].map(|session| AgentRow {
+        agent: agent(session),
+        status: AgentStatus::Working,
+        status_text: "Working".into(),
+        wake_at: None,
+        session_id: Some(session.into()),
+        area: None,
+        mode: None,
+        added: false,
+        can_change: false,
+    });
+    app.update(Update::Agents(rows.to_vec()), now);
+    type_text(&mut app, "/todo", now);
+    app.key(key(KeyCode::Tab), now);
+    assert_eq!(app.composer.text, "/todos ");
+    assert!(app.key(key(KeyCode::Tab), now).is_empty(), "a second Tab after the name");
+    assert!(app.key(key(KeyCode::BackTab), now).is_empty());
+    assert_eq!(app.session, SESSION, "the command stays in its thread");
+    type_text(&mut app, "rm 2", now);
+    assert!(app.key(key(KeyCode::Tab), now).is_empty());
+    assert_eq!(app.session, SESSION);
+    app.key(ctrl('u'), now);
+    assert!(!app.key(key(KeyCode::Tab), now).is_empty(), "with a message box free of a command");
+}
+
+/// Wave 3 review finding 13: PageDown in a command's output moves by the rows a page shows,
+/// so on a pane of fewer than eleven rows (a 60 by 16 terminal with queued messages) no row
+/// is skipped.
+#[test]
+fn page_down_reads_every_row_of_a_long_output_on_a_short_pane() {
+    let now = Instant::now();
+    let mut app = app_with_commands();
+    type_text(&mut app, "/rules", now);
+    app.key(key(KeyCode::Enter), now);
+    let text: Vec<String> = (1..=25).map(|n| format!("rule {n:02}")).collect();
+    app.update(Update::CommandDone { serial: 1, result: Ok(text.join("\n")) }, now);
+    let mut seen = std::collections::BTreeSet::new();
+    for _ in 0..10 {
+        let rows = draw(&mut app, 60, 14, now);
+        for n in 1..=25 {
+            if rows.iter().any(|row| row.contains(&format!("rule {n:02}"))) {
+                seen.insert(n);
+            }
+        }
+        app.key(key(KeyCode::PageDown), now);
+    }
+    let missed: Vec<u32> = (1..=25).filter(|n| !seen.contains(n)).collect();
+    assert!(missed.is_empty(), "rows never shown: {missed:?}");
+}
+
+/// Wave 3 review finding 14: inline, a command's output is printed into the scrollback above
+/// the box printed last, so the box's keys answer it as they do in the thread; a key meant for
+/// the box never becomes a message.
+#[test]
+fn inline_a_decision_key_answers_the_box_printed_after_a_commands_output() {
+    let shown = Instant::now();
+    let armed = shown + ARM_DELAY * 2;
+    let mut app = app_with(vec![invoice()], shown);
+    app.inline = true;
+    app.commands = repl_commands();
+    type_text(&mut app, "/todos", armed);
+    app.key(key(KeyCode::Enter), armed);
+    assert_eq!(app.view, View::Output);
+    let later = armed + ARM_DELAY * 2;
+    let effects = app.key(key(KeyCode::Char('y')), later);
+    assert!(decide_of(&effects).is_some(), "{effects:?}");
+    assert!(app.composer.is_empty(), "{:?}", app.composer.text);
+}
+
+/// Wave 3 review finding 15: a decision that ended without an answer — cancelled, expired,
+/// or its agent removed — is never said to have been answered.
+#[test]
+fn a_key_after_a_decision_ended_without_an_answer_says_so() {
+    let shown = Instant::now();
+    let armed = shown + ARM_DELAY * 2;
+    let mut app = app_with(vec![invoice()], shown);
+    app.update(frame(FeedFrame::Decisions { cards: vec![] }), armed);
+    let mut ended = invoice();
+    ended.decided = Some(crate::model::Decided {
+        by: String::new(),
+        by_you: false,
+        answer: crate::model::DecidedAnswer::Ended,
+        text: crate::words::ENDED_WITHOUT_AN_ANSWER.into(),
+        ..decided_by_you()
+    });
+    ended.status = CardStatus::Decided;
+    app.update(Update::Decided { generation: 0, card: Box::new(ended) }, armed + ms(10));
+    let effects = app.key(key(KeyCode::Char('y')), armed + ms(100));
+    assert!(effects.is_empty(), "{effects:?}");
+    assert!(app.composer.is_empty());
+    assert!(notices(&app).contains("Ended without an answer."), "{}", notices(&app));
+    assert!(!notices(&app).contains("Already answered"), "{}", notices(&app));
+}
+
+/// Wave 3 review findings 16 and 17: a decision the kernel asks shows the engine's summary —
+/// who suggests it and when it runs — in the full screen and inline, as the home does
+/// (spec 3.3 §7.1, §8.1).
+#[test]
+fn a_kernel_asked_decision_shows_its_summary() {
+    let shown = Instant::now();
+    let mut agenda = card(
+        "apr_agenda",
+        "kernel:agenda",
+        json!({ "id": "01J", "partition": "default", "when": { "cron": "*/5 * * * *" } }),
+    );
+    agenda.heading = "Check the invoices".into();
+    agenda.summary =
+        Some("Finance suggests this. Once you say yes, it runs every 5 minutes.".into());
+    let mut app = app_with(vec![agenda], shown);
+    let rows = draw(&mut app, 150, 40, shown + ARM_DELAY * 2);
+    let summary = row_of(&rows, "Finance suggests this.").expect("the summary is drawn");
+    let heading = row_of(&rows, "Check the invoices").unwrap();
+    let tool = row_of(&rows, "kernel:agenda").unwrap();
+    assert!(heading < summary && summary < tool, "{rows:#?}");
+    assert!(rows[summary].contains("it runs every 5 minutes."), "{}", rows[summary]);
+
+    let mut printer =
+        Printer::new(Vec::new(), Theme::new(Appearance::Dark, false), false, false).with_width(90);
+    printer.sync(&app, shown).unwrap();
+    let printed = String::from_utf8(printer.into_inner()).unwrap();
+    assert!(printed.contains("Finance suggests this."), "{printed}");
 }

@@ -10,7 +10,7 @@
 //! | App and session | the rule's app, and its session for a session-scoped rule |
 //! | Origin | `source` and `declaration_digest` equal the pin; a mismatch is a stale rule |
 //! | `ShellPrefix` | plain words only, first N tokens equal |
-//! | `PathWithin` | normalized against the root, no `..`, never a protected path |
+//! | `PathWithin` | normalized against the root, no `..`, never a protected path; for `apply_patch`, every path of the patch |
 //! | Eligibility | Deny beats Allow; `PlanExit`, `Payment`, `MemoryWrite` never match; `ShellEscalation` only with `/unsandboxed == true` pinned |
 //! | Bash | an Allow rule for the shell matches only through `ShellPrefix` |
 
@@ -323,6 +323,14 @@ fn predicates_hold(rule: &StandingRule, call: &RuleCall<'_>) -> bool {
             .pointer(pointer)
             .and_then(Value::as_str)
             .is_some_and(|command| shell_prefix_matches(command, tokens)),
+        // An `apply_patch` call is within `dir` only when every path of its patch is
+        // (spec 3.1 §7.26, I67).
+        RulePredicate::PathWithin { dir, .. } if call.tool_name == crate::edits::APPLY_PATCH => {
+            crate::edits::edit_paths(call.tool_name, call.args).is_some_and(|paths| {
+                !paths.is_empty()
+                    && paths.iter().all(|path| path_within(call.workspace_root, path, dir))
+            })
+        }
         RulePredicate::PathWithin { pointer, dir } => call
             .args
             .pointer(pointer)

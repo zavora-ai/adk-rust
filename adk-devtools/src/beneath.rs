@@ -25,7 +25,9 @@ pub(crate) use unix::{
     rename_entry,
 };
 #[cfg(windows)]
-pub(crate) use windows::{is_symlink_refusal, read_beneath, write_beneath};
+pub(crate) use windows::{
+    is_symlink_refusal, read_beneath, remove_beneath, replace_beneath, write_beneath,
+};
 
 /// Whether a reparse tag names another entity in the system — a symlink or a junction —
 /// rather than keeping the file's own data elsewhere (`IsReparseTagNameSurrogate`).
@@ -264,7 +266,7 @@ mod unix {
 mod windows {
     use std::ffi::{OsStr, OsString};
     use std::fs::{File, OpenOptions};
-    use std::io::{self, Read as _, Write as _};
+    use std::io::{self, Read as _, Seek as _, Write as _};
     use std::os::windows::ffi::OsStringExt as _;
     use std::os::windows::fs::OpenOptionsExt as _;
     use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _};
@@ -281,6 +283,8 @@ mod windows {
         GetFileInformationByHandleEx, GetFinalPathNameByHandleW, ReOpenFile,
         SetFileInformationByHandle, VOLUME_NAME_DOS,
     };
+
+    use crate::workspace::{Precondition, StaleFile};
 
     /// Reads the file `relative` beneath `root`, or returns its link count when it has
     /// more than one hard link, since another link to it can lie outside the root
@@ -299,23 +303,14 @@ mod windows {
         Ok(Ok(contents))
     }
 
-    /// Writes `contents` to the entry `name` of the directory `relative` beneath `root`,
-    /// creating the file and its missing directories, or truncating it (spec 3.2 §10 W6).
-    ///
-    /// Each directory on the path is opened in turn without following a link on it,
-    /// created when missing, and held open without delete sharing until the write ends,
-    /// so none can be renamed or replaced by a link meanwhile. The file is opened without
-    /// truncation and truncated only once every check has passed; a file with more than
-    /// one hard link is replaced instead, so its other links keep their content.
-    pub(crate) fn write_beneath(
-        root: &Path,
-        relative: &Path,
-        name: &OsStr,
-        contents: &[u8],
-    ) -> io::Result<()> {
+    /// Opens the root, creating it when missing, and each directory of `parent` beneath
+    /// it without following a link on it, creating the missing ones when `create` is set.
+    /// Returns the parent's final path and the handles, which are held without delete
+    /// sharing so none can be renamed or replaced while they are open.
+    fn hold_dirs(root: &Path, parent: &Path, create: bool) -> io::Result<(PathBuf, Vec<File>)> {
         let root_dir = match open_dir(root, 0) {
             // The root is trusted, so a workspace whose root does not exist yet creates it.
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Err(error) if create && error.kind() == io::ErrorKind::NotFound => {
                 std::fs::create_dir_all(root)?;
                 open_dir(root, 0)?
             }
@@ -323,12 +318,70 @@ mod windows {
         };
         let mut dir = final_path(&root_dir)?;
         let mut held = vec![root_dir];
-        for component in plain(relative.parent().unwrap_or(Path::new("")))?.components() {
+        for component in plain(parent)?.components() {
             dir.push(component);
-            held.push(open_or_create_dir(&dir)?);
+            held.push(if create {
+                open_or_create_dir(&dir)?
+            } else {
+                let opened = open_dir(&dir, FILE_FLAG_OPEN_REPARSE_POINT)?;
+                verify(&opened, &dir)?;
+                opened
+            });
         }
+        Ok((dir, held))
+    }
+
+    /// Reads the file a verified handle holds, through a reopen for an in-place reparse
+    /// point, and checks it against `precondition`.
+    fn check_handle(file: &File, opened: &Opened, precondition: &Precondition) -> io::Result<()> {
+        if matches!(precondition, Precondition::Any) {
+            return Ok(());
+        }
+        let mut reader = follow_in_place(file.try_clone()?, opened, GENERIC_READ)?;
+        reader.rewind()?;
+        let mut current = Vec::new();
+        reader.read_to_end(&mut current)?;
+        precondition.check(Some(&current))
+    }
+
+    /// Opens the existing file `path` with `access` without following a link on it, and
+    /// verifies the handle; `None` when it does not exist.
+    fn open_existing(path: &Path, access: u32) -> io::Result<Option<(File, Opened)>> {
+        let opened = OpenOptions::new()
+            .access_mode(access | FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path);
+        let file = match opened {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let checked = verify(&file, path)?;
+        Ok(Some((file, checked)))
+    }
+
+    /// Writes `contents` to the entry `name` of the directory `relative` beneath `root`,
+    /// creating the file and its missing directories, or truncating it, once
+    /// `precondition` holds (spec 3.2 §10 W6, spec 3.1 §7.26).
+    ///
+    /// Each directory on the path is opened in turn without following a link on it,
+    /// created when missing, and held open without delete sharing until the write ends,
+    /// so none can be renamed or replaced by a link meanwhile. The file is opened without
+    /// truncation, its content checked against the precondition through the same handle,
+    /// and truncated only once every check has passed; a file with more than one hard
+    /// link is replaced instead, so its other links keep their content.
+    pub(crate) fn write_beneath(
+        root: &Path,
+        relative: &Path,
+        name: &OsStr,
+        contents: &[u8],
+        precondition: &Precondition,
+    ) -> io::Result<()> {
+        let (dir, held) = hold_dirs(root, relative.parent().unwrap_or(Path::new("")), true)?;
         let path = dir.join(name);
-        let (file, created) = open_for_write(&path)?;
+        let checking = matches!(precondition, Precondition::Sha256(_));
+        let (file, created) = open_for_write(&path, checking)?;
         let opened = match verify(&file, &path) {
             Ok(opened) => opened,
             Err(error) => {
@@ -339,15 +392,77 @@ mod windows {
                 return Err(error);
             }
         };
+        match precondition {
+            Precondition::Absent if !created => return Err(StaleFile::Exists.into()),
+            Precondition::Sha256(_) if created => {
+                let _ = delete_on_close(&file);
+                return Err(StaleFile::Missing.into());
+            }
+            Precondition::Sha256(_) => check_handle(&file, &opened, precondition)?,
+            Precondition::Any | Precondition::Absent => {}
+        }
         if opened.info.nNumberOfLinks > 1 {
             let permissions = file.metadata()?.permissions();
             drop(file);
-            return replace_entry(&dir, name, permissions, contents);
+            return replace_entry(&dir, name, Some(permissions), contents);
         }
         let mut file = follow_in_place(file, &opened, GENERIC_WRITE)?;
+        file.rewind()?;
         file.set_len(0)?;
         file.write_all(contents)?;
         file.flush()?;
+        drop(held);
+        Ok(())
+    }
+
+    /// Writes `contents` to a temporary sibling of the entry `name` of the directory
+    /// `relative` beneath `root` and renames it over `name`, once `precondition` holds
+    /// (spec 3.1 §7.26 `apply_patch`). The directories are held as
+    /// [`write_beneath`] holds them.
+    pub(crate) fn replace_beneath(
+        root: &Path,
+        relative: &Path,
+        name: &OsStr,
+        contents: &[u8],
+        precondition: &Precondition,
+    ) -> io::Result<()> {
+        let (dir, held) = hold_dirs(root, relative.parent().unwrap_or(Path::new("")), true)?;
+        let path = dir.join(name);
+        let permissions = match open_existing(&path, GENERIC_READ)? {
+            Some((file, opened)) => {
+                check_handle(&file, &opened, precondition)?;
+                if matches!(precondition, Precondition::Absent) {
+                    return Err(StaleFile::Exists.into());
+                }
+                Some(file.metadata()?.permissions())
+            }
+            None => {
+                precondition.check(None)?;
+                None
+            }
+        };
+        let result = replace_entry(&dir, name, permissions, contents);
+        drop(held);
+        result
+    }
+
+    /// Removes the entry `name` of the directory `relative` beneath `root` once
+    /// `precondition` holds, through a verified handle that follows no link (spec 3.1
+    /// §7.26 `apply_patch`).
+    pub(crate) fn remove_beneath(
+        root: &Path,
+        relative: &Path,
+        name: &OsStr,
+        precondition: &Precondition,
+    ) -> io::Result<()> {
+        let (dir, held) = hold_dirs(root, relative.parent().unwrap_or(Path::new("")), false)?;
+        let path = dir.join(name);
+        let Some((file, opened)) = open_existing(&path, GENERIC_READ | DELETE)? else {
+            return Err(io::Error::from(io::ErrorKind::NotFound));
+        };
+        check_handle(&file, &opened, precondition)?;
+        delete_on_close(&file)?;
+        drop(file);
         drop(held);
         Ok(())
     }
@@ -508,22 +623,24 @@ mod windows {
         Ok(dir)
     }
 
-    /// Opens `path` for writing without truncating it or following a link on it, creating
-    /// the file when missing; `true` when this open created it.
-    fn open_for_write(path: &Path) -> io::Result<(File, bool)> {
+    /// Opens `path` for writing, and for reading when `read` is set, without truncating it
+    /// or following a link on it, creating the file when missing; `true` when this open
+    /// created it.
+    fn open_for_write(path: &Path, read: bool) -> io::Result<(File, bool)> {
         let mut options = OpenOptions::new();
         options.write(true).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        let read = if read { GENERIC_READ } else { 0 };
         // A file this open creates can be deleted through its handle should a check
         // refuse it.
         let created = options
             .clone()
             .create_new(true)
-            .access_mode(GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE)
+            .access_mode(GENERIC_WRITE | read | FILE_READ_ATTRIBUTES | DELETE)
             .open(path);
         match created {
             Ok(file) => Ok((file, true)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => options
-                .access_mode(GENERIC_WRITE | FILE_READ_ATTRIBUTES)
+                .access_mode(GENERIC_WRITE | read | FILE_READ_ATTRIBUTES)
                 .open(path)
                 .map(|file| (file, false)),
             Err(error) => Err(error),
@@ -546,11 +663,11 @@ mod windows {
     }
 
     /// Writes `contents` to a new entry beside `name` in the held directory `dir` and
-    /// renames it over `name`.
+    /// renames it over `name`, with `permissions` when given.
     fn replace_entry(
         dir: &Path,
         name: &OsStr,
-        permissions: std::fs::Permissions,
+        permissions: Option<std::fs::Permissions>,
         contents: &[u8],
     ) -> io::Result<()> {
         let nanos = std::time::SystemTime::now()
@@ -568,7 +685,9 @@ mod windows {
                 .open(&temp)?;
             verify(&file, &temp)?;
             file.write_all(contents)?;
-            file.set_permissions(permissions)?;
+            if let Some(permissions) = permissions {
+                file.set_permissions(permissions)?;
+            }
             drop(file);
             std::fs::rename(&temp, dir.join(name))
         })();

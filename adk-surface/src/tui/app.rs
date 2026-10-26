@@ -85,6 +85,11 @@ pub(crate) enum Update {
         result: Result<String, String>,
     },
     Error(String),
+    /// The voice conversation's line (spec 3.3 §5.6).
+    #[cfg(feature = "voice")]
+    Voice(super::voice::VoiceLine),
+    /// A line the application sent while the terminal runs.
+    Notice(String),
 }
 
 /// What a key asks the runner to do.
@@ -117,6 +122,8 @@ pub(crate) enum View {
     Help,
     /// What a slash command an embedder added returned (spec 3.3 §5.2).
     Output,
+    /// The person's own agents (spec 3.3 §5.7): Ctrl-G or `/agents`.
+    Agents,
 }
 
 /// A slash command run from the message box, as the Output view shows it.
@@ -382,7 +389,21 @@ pub(crate) struct App {
     runs: u64,
     /// Rows scrolled down in a view other than the thread.
     pub view_scroll: usize,
+    /// The rows one page of a view other than the thread shows, as drawn last: PageDown moves
+    /// by it, so no row is skipped.
+    pub view_page: usize,
+    /// Inline: every view is printed into the scrollback above the box printed last, so the
+    /// box's keys answer it whatever view was printed (spec 3.3 §5.2).
+    pub inline: bool,
+    /// The Agents view (spec 3.3 §5.7).
+    pub agents_pane: super::agents::AgentsPane,
+    /// An added agent with no thread yet, and the new session opened for it once open: the
+    /// first message there starts the agent's thread (spec 3.3 §5.7 "Threads").
+    pub fresh: Option<(String, Option<String>)>,
     pub quit: bool,
+    /// The voice conversation beside the thread, when there is one (spec 3.3 §5.6).
+    #[cfg(feature = "voice")]
+    pub voice: Option<super::voice::VoiceLine>,
 }
 
 impl App {
@@ -431,7 +452,13 @@ impl App {
             output: None,
             runs: 0,
             view_scroll: 0,
+            view_page: PAGE,
+            inline: false,
+            agents_pane: super::agents::AgentsPane::default(),
+            fresh: None,
             quit: false,
+            #[cfg(feature = "voice")]
+            voice: None,
         }
     }
 
@@ -504,13 +531,20 @@ impl App {
             _ => now,
         };
         self.input == Input::Message
-            && self.view == View::Thread
+            && self.thread_shown()
             && self.composer.is_empty()
             && !self.typing
             && !self.box_hidden
             && !self.awaits_answer(now)
             && now.saturating_duration_since(focused) >= ARM_DELAY
             && self.last_typed.is_none_or(|at| now.saturating_duration_since(at) >= ARM_DELAY)
+    }
+
+    /// Whether the person sees the thread and the box the keys answer: the full screen shows
+    /// one view at a time; inline prints each view into the scrollback, above the box printed
+    /// last, except the Agents view, whose keys are its own.
+    fn thread_shown(&self) -> bool {
+        self.view == View::Thread || (self.inline && self.view != View::Agents)
     }
 
     /// An answer given by key is on its way: the keys wait for its outcome.
@@ -599,10 +633,33 @@ impl App {
 
     /// The agent whose thread is shown, when the roster names it.
     pub(crate) fn shown_agent(&self) -> Option<&AgentRow> {
-        self.agents.iter().find(|row| row.session_id.as_deref() == Some(self.session.as_str()))
+        let fresh = self.fresh_agent();
+        self.agents
+            .iter()
+            .find(|row| row.session_id.as_deref() == Some(self.session.as_str()))
+            .or_else(|| self.agents.iter().find(|row| Some(row.agent.name.as_str()) == fresh))
+    }
+
+    /// The agent whose new thread is shown, before its first message.
+    fn fresh_agent(&self) -> Option<&str> {
+        match &self.fresh {
+            Some((agent, Some(session))) if *session == self.session => Some(agent),
+            _ => None,
+        }
+    }
+
+    /// Opens a new session for `agent`'s first thread.
+    fn open_thread_with(&mut self, agent: String) -> Vec<Effect> {
+        self.fresh = Some((agent, None));
+        vec![Effect::OpenSession(None)]
     }
 
     pub(crate) fn switch_session(&mut self, session: String) -> Vec<Effect> {
+        // The session opened for an agent's first thread is that thread; any other leaves it.
+        self.fresh = match self.fresh.take() {
+            Some((agent, None)) => Some((agent, Some(session.clone()))),
+            _ => None,
+        };
         if session == self.session {
             return Vec::new();
         }
@@ -729,6 +786,9 @@ impl App {
                     Err(Failure { text, gone: None }) => self.notice(text, Tone::Problem),
                 }
             }
+            Update::CommandDone { serial, result } if self.agents_pane.takes(serial) => {
+                self.agents_pane.done(result);
+            }
             Update::CommandDone { serial, result } => {
                 if let Some(output) = &mut self.output
                     && output.serial == serial
@@ -737,6 +797,9 @@ impl App {
                 }
             }
             Update::Error(error) => self.notice(error, Tone::Problem),
+            #[cfg(feature = "voice")]
+            Update::Voice(line) => self.voice = Some(line),
+            Update::Notice(text) => self.notice_until_key(text, Tone::Info),
         }
     }
 
@@ -831,6 +894,27 @@ impl App {
             CommandOutcome::ModeSet { mode } => self.notice(mode.status, Tone::Info),
             CommandOutcome::Pending { text, .. } => self.notice(text, Tone::Info),
             CommandOutcome::Sent { .. } | CommandOutcome::AnswerCancelled { .. } => {}
+            // Changes to agents made through the engine (spec 3.3 §5.7); the Agents view
+            // makes its own through `/agent` and says what each did.
+            CommandOutcome::AgentAdded { agent } => self.notice(
+                format!("You added {}.", super::safe::safe_line(&agent.draft.display_name)),
+                Tone::Info,
+            ),
+            CommandOutcome::AgentChanged { agent } => self.notice(
+                format!("Saved {}.", super::safe::safe_line(&agent.draft.display_name)),
+                Tone::Info,
+            ),
+            CommandOutcome::AgentPaused { agent } => self.notice(
+                crate::agents::words::is_paused(&super::safe::safe_line(&agent.draft.display_name)),
+                Tone::Info,
+            ),
+            CommandOutcome::AgentResumed { agent } => self.notice(
+                format!("{} runs again.", super::safe::safe_line(&agent.draft.display_name)),
+                Tone::Info,
+            ),
+            CommandOutcome::AgentRemoved { ended } => self.notice(ended.text, Tone::Info),
+            CommandOutcome::AgentOutOfDate { text, .. } => self.notice(text, Tone::Problem),
+            CommandOutcome::RuleCopied { label, .. } => self.notice(label, Tone::Info),
         }
     }
 
@@ -907,6 +991,13 @@ impl App {
             self.composer.insert(c);
             return Vec::new();
         }
+        // The Agents view takes its own keys; none of them answers a decision (spec 3.3 §5.7).
+        if self.view == View::Agents && !ctrl {
+            let roster = self.agents.clone();
+            if let Some(asks) = self.agents_pane.key(key, &roster) {
+                return self.agents_asks(asks, now);
+            }
+        }
         // While a command's name is typed, Tab completes it, the arrows choose among the
         // commands it may be, and Esc clears it (spec 3.3 §5.2).
         if !ctrl && let Some(completion) = self.completion() {
@@ -958,6 +1049,7 @@ impl App {
                 self.toggle_view(View::Permissions, now);
                 Vec::new()
             }
+            (KeyCode::Char('g'), true) => self.toggle_agents(now),
             (KeyCode::Char('u'), true) => {
                 self.composer.take();
                 Vec::new()
@@ -970,15 +1062,19 @@ impl App {
             // An edit or a reason belongs to its decision: Tab never carries it to another
             // agent's thread.
             (KeyCode::Tab | KeyCode::BackTab, _) if self.input != Input::Message => Vec::new(),
+            // Nor does a command being typed, its arguments included (spec 3.3 §5.2).
+            (KeyCode::Tab | KeyCode::BackTab, _) if self.composer.text.starts_with('/') => {
+                Vec::new()
+            }
             (KeyCode::Tab, _) => self.next_agent(1),
             (KeyCode::BackTab, _) => self.next_agent(-1),
             // Help, Today and a command's output scroll by a page.
             (KeyCode::PageUp, _) if self.view != View::Thread => {
-                self.view_scroll = self.view_scroll.saturating_sub(PAGE);
+                self.view_scroll = self.view_scroll.saturating_sub(self.view_page.max(1));
                 Vec::new()
             }
             (KeyCode::PageDown, _) if self.view != View::Thread => {
-                self.view_scroll = self.view_scroll.saturating_add(PAGE);
+                self.view_scroll = self.view_scroll.saturating_add(self.view_page.max(1));
                 Vec::new()
             }
             // Within a box whose call shows a window at a time, the keys move the window by
@@ -1037,6 +1133,19 @@ impl App {
                 self.composer.cursor = self.composer.len();
                 Vec::new()
             }
+            // `c` cancels a spoken "allow once" counting down, from an empty message box only
+            // (spec 3.3 §5.6, S-I4).
+            #[cfg(feature = "voice")]
+            (KeyCode::Char('c'), false)
+                if self.composer.is_empty()
+                    && self.input == Input::Message
+                    && self.voice.as_ref().is_some_and(|voice| voice.pending.is_some()) =>
+            {
+                let pending = self.voice.as_ref().and_then(|voice| voice.pending.clone());
+                pending.map_or_else(Vec::new, |(decision_id, _)| {
+                    vec![Effect::Execute(Command::CancelAnswer { decision_id })]
+                })
+            }
             (KeyCode::Char(c), false) => self.char(c, key, now),
             _ => Vec::new(),
         }
@@ -1076,19 +1185,32 @@ impl App {
         }
     }
 
+    /// Moves through the roster's agents: each one's thread, or a new one for an agent the
+    /// person added that has none yet (spec 3.3 §5.7).
     fn next_agent(&mut self, step: isize) -> Vec<Effect> {
-        let sessions: Vec<String> =
-            self.agents.iter().filter_map(|row| row.session_id.clone()).collect();
-        if sessions.is_empty() {
+        let reachable: Vec<&AgentRow> =
+            self.agents.iter().filter(|row| row.session_id.is_some() || row.added).collect();
+        if reachable.is_empty() {
             return Vec::new();
         }
-        let at = sessions.iter().position(|session| *session == self.session);
-        let len = sessions.len() as isize;
+        let fresh = self.fresh_agent();
+        let at = reachable.iter().position(|row| {
+            row.session_id.as_deref() == Some(self.session.as_str())
+                || Some(row.agent.name.as_str()) == fresh
+        });
+        let len = reachable.len() as isize;
         let next = match at {
             Some(at) => (at as isize + step).rem_euclid(len),
             None => 0,
         };
-        self.switch_session(sessions[next as usize].clone())
+        let row = reachable[next as usize];
+        match row.session_id.clone() {
+            Some(session) => self.switch_session(session),
+            None => {
+                let agent = row.agent.name.clone();
+                self.open_thread_with(agent)
+            }
+        }
     }
 
     /// What a Permissions key does, once pressed twice: the mode, or Resume all while stopped.
@@ -1184,7 +1306,7 @@ impl App {
     fn box_waits(&self, now: Instant) -> bool {
         !self.cards.is_empty()
             && self.input == Input::Message
-            && self.view == View::Thread
+            && self.thread_shown()
             && self.composer.is_empty()
             && !self.typing
             && self.last_typed.is_none_or(|at| now.saturating_duration_since(at) >= ARM_DELAY)
@@ -1213,19 +1335,25 @@ impl App {
         if now.saturating_duration_since(at) >= CLOSE_HOLD
             || !self.composer.is_empty()
             || self.input != Input::Message
-            || self.view != View::Thread
+            || !self.thread_shown()
             || self.typing
         {
             return None;
         }
         if !self.closed_said {
-            let place = self
-                .decided
-                .iter()
-                .find(|line| line.id == id)
-                .and_then(|line| line.place.clone())
-                .unwrap_or_else(|| "somewhere else".to_string());
-            self.notice(format!("Already answered {place}."), Tone::Decided);
+            // A decision also closes with no answer: cancelled, expired, or its agent removed
+            // (S-I16); only an answer is said to be one.
+            let text = match self.decided.iter().find(|line| line.id == id) {
+                Some(line) if line.answer == DecidedAnswer::Ended => {
+                    format!("{}.", words::ENDED_WITHOUT_AN_ANSWER)
+                }
+                Some(line) => format!(
+                    "Already answered {}.",
+                    line.place.as_deref().unwrap_or("somewhere else")
+                ),
+                None => "No longer waiting for you.".to_string(),
+            };
+            self.notice(text, Tone::Decided);
         }
         // `n` opens a reason as it would have, so the reason typed next goes nowhere instead
         // of into a message; Enter then says it was not sent.
@@ -1388,6 +1516,14 @@ impl App {
                 self.scroll = 0;
                 // The next message clears what the terminal said before it.
                 self.notices_from = self.notice_count;
+                if let Some(agent) = self.fresh_agent().map(str::to_string) {
+                    self.fresh = None;
+                    return vec![Effect::Execute(Command::NewThread {
+                        agent,
+                        session_id: self.session.clone(),
+                        text: text.to_string(),
+                    })];
+                }
                 vec![Effect::Execute(Command::Send {
                     session_id: self.session.clone(),
                     text: text.to_string(),
@@ -1414,6 +1550,11 @@ impl App {
             "permissions" => {
                 self.set_view(View::Permissions, now);
                 Vec::new()
+            }
+            "agents" => {
+                self.set_view(View::Agents, now);
+                let asks = self.agents_pane.open();
+                self.agents_asks(asks, now)
             }
             "help" => {
                 self.set_view(View::Help, now);
@@ -1463,6 +1604,51 @@ impl App {
                 Vec::new()
             }
         }
+    }
+
+    /// Opens or closes the Agents view (spec 3.3 §5.7).
+    fn toggle_agents(&mut self, now: Instant) -> Vec<Effect> {
+        if self.view == View::Agents {
+            self.set_view(View::Thread, now);
+            return Vec::new();
+        }
+        self.set_view(View::Agents, now);
+        let asks = self.agents_pane.open();
+        self.agents_asks(asks, now)
+    }
+
+    /// What the Agents view asked for: `/agent` runs, a thread opened, or back to the thread.
+    fn agents_asks(&mut self, asks: Vec<super::agents::Ask>, now: Instant) -> Vec<Effect> {
+        let mut effects = Vec::new();
+        for ask in asks {
+            match ask {
+                super::agents::Ask::Run { args, purpose } => {
+                    self.runs += 1;
+                    self.agents_pane.sent(self.runs, purpose);
+                    effects.push(Effect::RunCommand {
+                        serial: self.runs,
+                        name: super::agents::AGENT_COMMAND.to_string(),
+                        args,
+                    });
+                }
+                super::agents::Ask::Describe { text } => {
+                    self.set_view(View::Thread, now);
+                    self.input = Input::Message;
+                    self.composer.set(text);
+                    effects.push(Effect::OpenSession(None));
+                }
+                super::agents::Ask::Open { session } => {
+                    self.set_view(View::Thread, now);
+                    effects.extend(self.switch_session(session));
+                }
+                super::agents::Ask::Start { agent } => {
+                    self.set_view(View::Thread, now);
+                    effects.extend(self.open_thread_with(agent));
+                }
+                super::agents::Ask::Close => self.set_view(View::Thread, now),
+            }
+        }
+        effects
     }
 
     /// Runs the embedder's command `name` with `args`; the Output view shows it running, then

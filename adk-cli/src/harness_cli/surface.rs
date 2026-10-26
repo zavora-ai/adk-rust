@@ -22,6 +22,8 @@ use adk_surface::tui::{
 };
 use adk_surface::{Caller, ControlSource, LocalSource, Origin, SurfaceEngine, SurfaceKind};
 use anyhow::{Context, Result};
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::task::JoinHandle;
 
 use super::{APP_NAME, AgentExtras, Setup};
 use crate::ResolvedModel;
@@ -169,6 +171,7 @@ pub async fn run(
     // Logs would draw over the terminal: they go to a file beside harness.db.
     let log = if drawn { log_to_file() } else { None };
     let text_ui = surface.output == OutputFormat::Text;
+    let mut ending = None;
     let (engine, place, model_id, local, session, notices, binding, commands) = match reach {
         Reach::Kernel { client, token, local } => {
             let place = if local { "kernel".to_string() } else { client.endpoint().to_string() };
@@ -187,16 +190,22 @@ pub async fn run(
             {
                 source = source.with_daily_limit(limit);
             }
-            let engine = SurfaceEngine::builder(Arc::new(source))
+            let (commands, notices, operator) = kernel_commands(&source_client).await;
+            let trail = source.audit_trail();
+            let mut engine = SurfaceEngine::builder(Arc::new(source))
                 .agent_name(APP_NAME, APP_NAME)
-                .answers(answers)
-                .build();
-            let (commands, notices) = kernel_commands(&source_client).await;
-            (engine, place, None, local, session, notices, None, commands)
+                .answers(answers);
+            // Every answer and stop, with the surface and how it was given, on the kernel's
+            // signed log (spec 3.3 §11); a paired device's answers the kernel records itself.
+            if operator {
+                engine = engine.audit(trail);
+            }
+            (engine.build(), place, None, local, session, notices, None, commands)
         }
         Reach::InProcess => {
             let model = model.context("the harness in this process needs a model")?;
             let here = in_process(model, instruction, harness, text_ui).await?;
+            ending = Some(here.ending);
             (
                 here.engine,
                 "in process".to_string(),
@@ -233,7 +242,12 @@ pub async fn run(
     for command in commands {
         terminal = terminal.command(command);
     }
-    if surface.output == OutputFormat::Json {
+    // What long-term memory caught up on reaches the terminal as it arrives (spec 3.1 §7.33
+    // fix 9).
+    if let Some(late) = ending.as_mut().and_then(|ending| ending.late.take()) {
+        terminal = terminal.notices_from(late);
+    }
+    let code = if surface.output == OutputFormat::Json {
         let message = match surface.message {
             Some(message) => Some(message),
             None if !std::io::IsTerminal::is_terminal(&std::io::stdin()) => {
@@ -243,25 +257,36 @@ pub async fn run(
             }
             None => None,
         };
-        return Ok(terminal.run_json(message, std::io::stdout()).await?);
-    }
-    #[cfg(not(unix))]
-    drop(log);
-    #[cfg(unix)]
-    let stderr = match &log {
-        Some(log) if drawn => StderrToLog::redirect(log),
-        _ => None,
+        terminal.run_json(message, std::io::stdout()).await?
+    } else {
+        #[cfg(not(unix))]
+        drop(log);
+        #[cfg(unix)]
+        let stderr = match &log {
+            Some(log) if drawn => StderrToLog::redirect(log),
+            _ => None,
+        };
+        let code = terminal.run(ui.unwrap_or_default()).await;
+        #[cfg(unix)]
+        drop(stderr);
+        code?
     };
-    let code = terminal.run(ui.unwrap_or_default()).await;
-    #[cfg(unix)]
-    drop(stderr);
-    Ok(code?)
+    // A signal ends the process now, as it asked: its sessions are left to the next start's
+    // catch-up (spec 3.1 §7.33 fix 9).
+    if let Some(ending) = ending
+        && !matches!(code, 129 | 130 | 143)
+    {
+        ending.finish(text_ui).await;
+    }
+    Ok(code)
 }
 
 /// The REPL's slash commands the kernel serves, each run there in the thread the terminal
-/// shows (spec 3.3 §5.2), and what the terminal says when it has none: a paired device's
-/// token reaches none of them.
-async fn kernel_commands(client: &ControlClient) -> (Vec<Arc<dyn TerminalCommand>>, Vec<String>) {
+/// shows (spec 3.3 §5.2), what the terminal says when it has none, and whether the kernel
+/// admits the terminal as the operator: a paired device's token reaches none of them.
+async fn kernel_commands(
+    client: &ControlClient,
+) -> (Vec<Arc<dyn TerminalCommand>>, Vec<String>, bool) {
     match client.commands().await {
         Ok(listed) => {
             let commands = listed
@@ -271,7 +296,7 @@ async fn kernel_commands(client: &ControlClient) -> (Vec<Arc<dyn TerminalCommand
                         as Arc<dyn TerminalCommand>
                 })
                 .collect();
-            (commands, Vec::new())
+            (commands, Vec::new(), true)
         }
         Err(error)
             if matches!(
@@ -279,16 +304,20 @@ async fn kernel_commands(client: &ControlClient) -> (Vec<Arc<dyn TerminalCommand
                 adk_core::ErrorCategory::Forbidden | adk_core::ErrorCategory::Unauthorized
             ) =>
         {
-            let notice = "The REPL's commands (/todos, /rules, /memory, ...) run only on the                           kernel's own machine or with its operator token; this paired terminal                           has the terminal's own."
-                .to_string();
-            (Vec::new(), vec![notice])
+            (Vec::new(), vec![PAIRED_TERMINAL.to_string()], false)
         }
         Err(error) => {
             tracing::debug!(error = %error, "the kernel offers no commands");
-            (Vec::new(), Vec::new())
+            (Vec::new(), Vec::new(), true)
         }
     }
 }
+
+/// What a terminal paired as a device says as it starts: the REPL's commands are the kernel
+/// operator's (spec 3.3 §5.2).
+const PAIRED_TERMINAL: &str = "The REPL's commands (/todos, /rules, /memory, ...) run only on \
+                               the kernel's own machine or with its operator token; this paired \
+                               terminal has the terminal's own.";
 
 /// One of the REPL's commands, run on the kernel the terminal is attached to.
 struct KernelCommand {
@@ -395,6 +424,46 @@ fn log_to_file() -> Option<std::fs::File> {
     Some(file)
 }
 
+/// What the terminal in process leaves to do when it ends.
+struct Ending {
+    harness: Arc<Harness>,
+    /// The notices of long-term memory catching up on the sessions that ended without saving
+    /// (spec 3.1 §7.33 fix 9), until the terminal takes them.
+    late: Option<UnboundedReceiver<String>>,
+    /// Waits for the catch-up and hands its notice to the terminal; ends with the notice
+    /// when the terminal had ended.
+    catch_up: Option<JoinHandle<Option<String>>>,
+    memory: bool,
+}
+
+impl Ending {
+    /// Waits for the catch-up, then closes the harness, distilling this run's sessions into
+    /// long-term memory as the REPL does when it ends (spec 3.1 §7.15.2). `text` says whether
+    /// to print, which JSON lines on standard output rule out.
+    async fn finish(self, text: bool) {
+        let left = match self.catch_up {
+            Some(catch_up) => catch_up.await.ok().flatten(),
+            None => None,
+        };
+        if text && let Some(notice) = left {
+            println!("{notice}");
+        }
+        if text && self.memory {
+            println!("Saving what this session taught to long-term memory…");
+        }
+        for (session, error) in self.harness.close_with_report().await.distillation_failures {
+            if text {
+                println!(
+                    "note: long-term memory was not updated for session {}: {error}",
+                    adk_harness::escape_control(&session)
+                );
+            } else {
+                tracing::warn!(session.id = %session, error = %error, "session distillation at close failed");
+            }
+        }
+    }
+}
+
 /// What the harness in this process gives the terminal.
 struct InProcess {
     engine: SurfaceEngine,
@@ -406,6 +475,7 @@ struct InProcess {
     binding: Binding,
     /// The REPL's slash commands, on this harness and session (spec 3.3 §5.2).
     commands: Vec<Arc<dyn TerminalCommand>>,
+    ending: Ending,
 }
 
 /// The harness in this process, held calls going to its approvals inbox, and the engine over
@@ -495,9 +565,41 @@ async fn in_process(
     if text_ui && let Some(notice) = setup.memory_notice_text(MEMORY_COMMANDS) {
         notices.push(notice.replace('\n', " "));
     }
+    // Sessions that ended without saving are distilled in the background (spec 3.1 §7.33
+    // fix 9); JSON output answers one message and is no REPL.
+    let user = UserId::new(setup.user.clone())?;
+    let mut ending =
+        Ending { harness: harness.clone(), late: None, catch_up: None, memory: setup.memory_on() };
+    if text_ui
+        && let Some(task) = adk_cli::harness::distill_unsaved_sessions(
+            harness.clone(),
+            setup.sessions(),
+            APP_NAME,
+            &user,
+            &setup.resolved.workspace,
+            &session,
+        )
+    {
+        let (tx, late) = tokio::sync::mpsc::unbounded_channel();
+        ending.late = Some(late);
+        ending.catch_up = Some(tokio::spawn(async move {
+            match task.await {
+                Ok(Some(notice)) => tx.send(notice).err().map(|unsent| unsent.0),
+                _ => None,
+            }
+        }));
+    }
     let source = LocalSource::builder(APP_NAME).approvals(decisions).harness(harness).build()?;
     let engine = SurfaceEngine::builder(Arc::new(source)).agent_name(APP_NAME, APP_NAME).build();
-    Ok(InProcess { engine, model_id: setup.model_id.clone(), session, notices, binding, commands })
+    Ok(InProcess {
+        engine,
+        model_id: setup.model_id.clone(),
+        session,
+        notices,
+        binding,
+        commands,
+        ending,
+    })
 }
 
 /// Where the terminal's memory notice points: the REPL's commands, which it has too (spec 3.3
@@ -613,6 +715,14 @@ mod tests {
 
         assert!(!terminal_caller("ana".into(), false).paired_local);
         assert!(terminal_caller("ana".into(), true).paired_local);
+    }
+
+    /// The paired terminal's notice reads as one sentence, with no run of spaces from a lost
+    /// line continuation (wave 3 review).
+    #[test]
+    fn the_paired_terminals_notice_is_one_sentence() {
+        assert!(!PAIRED_TERMINAL.contains("  "), "{PAIRED_TERMINAL}");
+        assert!(PAIRED_TERMINAL.ends_with("this paired terminal has the terminal's own."));
     }
 
     /// `--output json` ends with 4 against the daily spending limit in force, as the kernel

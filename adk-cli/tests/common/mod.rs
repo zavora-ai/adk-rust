@@ -75,6 +75,50 @@ impl Drop for Terminal {
     }
 }
 
+/// The binary's config directory, where `harness.db` lives, under the private home
+/// [`isolate`] points at.
+pub fn config_dir(home: &Path) -> std::path::PathBuf {
+    if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/adk-rust")
+    } else {
+        home.join(".config/adk-rust")
+    }
+}
+
+/// Moves every session and event in `harness.db` under `home` back by `by`, as if the person
+/// came back that much later.
+#[cfg(all(feature = "persist", feature = "harness"))]
+pub fn backdate_sessions(home: &Path, by: chrono::Duration) {
+    use sqlx::Row;
+
+    let url = format!("sqlite://{}", config_dir(home).join("harness.db").display());
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+        for (read, write) in [
+            (
+                "SELECT rowid, timestamp FROM events",
+                "UPDATE events SET timestamp = ? WHERE rowid = ?",
+            ),
+            (
+                "SELECT rowid, updated_at FROM sessions",
+                "UPDATE sessions SET updated_at = ? WHERE rowid = ?",
+            ),
+        ] {
+            for row in sqlx::query(read).fetch_all(&pool).await.unwrap() {
+                let (rowid, at): (i64, String) = (row.get(0), row.get(1));
+                let at = chrono::DateTime::parse_from_rfc3339(&at).unwrap() - by;
+                sqlx::query(write)
+                    .bind(at.with_timezone(&chrono::Utc).to_rfc3339())
+                    .bind(rowid)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+        }
+        pool.close().await;
+    });
+}
+
 /// Standard output and error of `output`, joined.
 pub fn text(output: &Output) -> String {
     format!(

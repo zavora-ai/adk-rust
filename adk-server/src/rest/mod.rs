@@ -488,6 +488,8 @@ pub struct ServerBuilder {
     webhook_ingress: Option<crate::webhooks::WebhookIngress>,
     #[cfg(feature = "approvals")]
     approval_service: Option<Arc<dyn adk_core::ApprovalService>>,
+    #[cfg(feature = "awp")]
+    awp_edge: bool,
 }
 
 impl ServerBuilder {
@@ -513,6 +515,8 @@ impl ServerBuilder {
             webhook_ingress: None,
             #[cfg(feature = "approvals")]
             approval_service: None,
+            #[cfg(feature = "awp")]
+            awp_edge: false,
         }
     }
 
@@ -546,6 +550,25 @@ impl ServerBuilder {
     pub fn add_root_routes(mut self, routes: Router) -> Self {
         self.root_routes.push(routes);
         self
+    }
+
+    /// Mounts the AWP 2.0 agent edge (spec 3.5 §7.9) through
+    /// [`add_root_routes`](Self::add_root_routes), so the host guard, CORS, timeouts and security
+    /// headers apply, and attaches the server's kill switch to it unless it carries its own.
+    ///
+    /// The edge serves `/.well-known/agent-card.json`; with an edge mounted,
+    /// [`with_a2a`](Self::with_a2a) keeps its JSON-RPC routes but not its card route.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let app = ServerBuilder::new(config).awp(edge).build();
+    /// ```
+    #[cfg(feature = "awp")]
+    pub fn awp(mut self, edge: crate::awp::AwpEdge) -> Self {
+        edge.attach_governance(self.config.governance.clone());
+        self.awp_edge = true;
+        self.add_root_routes(edge.router())
     }
 
     /// Enable A2A protocol support at the specified base URL.
@@ -1043,6 +1066,9 @@ impl ServerBuilder {
             };
             // Same split as `create_app_with_a2a`: discovery is public, RPC is authenticated.
             let a2a_discovery = a2a_discovery_router(a2a_controller.clone());
+            // The AWP edge serves the site's signed card at the same path.
+            #[cfg(feature = "awp")]
+            let a2a_discovery = if self.awp_edge { Router::new() } else { a2a_discovery };
             let a2a_rpc = Router::new()
                 .route("/a2a", post(controllers::a2a::handle_jsonrpc_for_caller))
                 .route("/a2a/stream", post(controllers::a2a::handle_jsonrpc_stream_for_caller))

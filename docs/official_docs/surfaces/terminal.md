@@ -78,14 +78,16 @@ after a stop is never one of them (S-I10). `adk-rust pair revoke` ends it.
 | `Esc` | Never decides: closes the details or a view, and switches between answering by key and typing |
 
 The keys answer the oldest open decision of the shown thread. It is the one box drawn; the
-others are listed under it, one line each.
+others are listed under it, one line each. For a decision the kernel itself asks, such as a
+follow-up an agent suggests, the box says under its heading who suggests it and when it runs
+once you say yes, as the home does, above the exact call.
 
 | Rule | How the terminal keeps it (§7.1, §7.4 rules 1 and 2, S-I4) |
 |---|---|
 | The box fits the screen | The box, its keys included, fits the thread pane. A call too long for it shows a window at a time, with a line saying how much more there is; `PgDn` and `PgUp` move the window, and the keys stay on screen |
 | The exact call is read before it is allowed | `y`, `a` and `e` answer only once every row of the call has been on screen; a call the box cuts short (more than ten arguments, or long values) only once `?` shows it in full. `n` and `?` always work |
 | A key meant for a message never answers | The keys answer only while the message box is empty, once the box has been on screen for a moment, and not within a moment of the last keystroke into the message box (also after Ctrl-C, Ctrl-U, Delete or Esc empties it). A box that takes the focus, changes, or comes back into view — scrolled back, or after Today, Permissions or Help — arms again |
-| A key meant for the box never becomes a message | While the message box is empty and you are not typing, `y`, `a`, `e`, `n` and `?` are the box's keys: before the box is lit, or while it is off screen, they do nothing and the terminal says why. Just after a box closes because it was answered somewhere else, they do nothing either and the terminal says where it was answered ("Already answered in Telegram."), and a reason typed after `n` is not sent |
+| A key meant for the box never becomes a message | While the message box is empty and you are not typing, `y`, `a`, `e`, `n` and `?` are the box's keys: before the box is lit, or while it is off screen, they do nothing and the terminal says why. Just after a box closes without a key here, they do nothing either and the terminal says why: where it was answered ("Already answered in Telegram."), that it ended without an answer (cancelled, expired, or its agent removed), or "No longer waiting for you." before it knows; a reason typed after `n` is not sent. Inline, the box printed last takes its keys whatever view was printed above it |
 | Esc never decides | Esc, also arriving with the next key in one read (tmux, screen, a slow link), switches to typing; that key is typed |
 | A paste is never an answer | Bracketed paste puts a paste in the message box. On a console without it (Windows), a decision key with more keys right behind it is typing |
 
@@ -108,6 +110,7 @@ as a refused key, stays until the next key.
 | `Tab` | The next agent's thread |
 | `Ctrl-T` | Today: "While you were away" |
 | `Ctrl-R` | Permissions: the mode (Just look · Suggest · Ask first · Go ahead), the daily spending limit, quiet time, Stop all. Its keys (`1`–`4`, and `r` for Resume all after a stop) act when pressed twice, so a message typed there changes nothing |
+| `Ctrl-G` | Your agents: add, change, pause and remove the agents you add, over `/agent`; see [Your Agents](agents.md#in-the-terminal) |
 | `Ctrl-K` | Stop all |
 | `PgUp` `PgDn` | Scroll the thread, or the call in a decision box |
 | `↑` | Take back the newest queued message, before it is sent |
@@ -118,9 +121,10 @@ as a refused key, stays until the next key.
 a session that works in another workspace is refused, and a new one records the workspace.
 
 "Always allow" is offered wherever the engine offers it: where the harness can make a standing
-rule of the call, in process and on the kernel's socket or with its operator token alike. On a
-kernel the rule is made while the decision waits and granted once the yes is recorded, so an
-answer that loses to one given elsewhere grants nothing. A paired device's token reaches no
+rule of the call, in process and on the kernel's socket or with its operator token alike, and
+never for a high-risk call. On a kernel the rule is made while the decision waits and granted
+once your own "Allow once" is recorded, so an answer that loses to one given elsewhere, or an
+edit, grants nothing. A paired device's token reaches no
 route that makes a rule, so a remote terminal paired by code offers Allow once, Edit and Deny,
 and `a` says the home app offers "Always allow" there.
 
@@ -129,13 +133,13 @@ and `a` says the home app offers "Always allow" there.
 `/` in the message box starts a command. The commands it may be are listed above the message
 box, the terminal's own first; `↑` and `↓` choose one, `Tab` completes the name (or the start
 the names share), Enter runs the one typed or chosen, and Esc clears it. While a command is
-typed, `Tab` never moves to another agent's thread.
+typed, its arguments included, `Tab` never moves to another agent's thread.
 
 | Command | Does |
 |---|---|
 | `/help` | Keys and every command, a page at a time (`PgDn`) |
 | `/today`, `/permissions` | Today and Permissions, as `Ctrl-T` and `Ctrl-R` |
-| `/mode` | The session's mode; `/mode ask first` or `/mode ask` (also `read-only`, `plan`, `auto`) sets it through the engine, as Permissions does |
+| `/mode` | The session's mode; `/mode ask first` or `/mode ask` (also `read-only`, `plan`, `auto`) sets it through the engine, as Permissions does. On a kernel the kernel's `/mode` sets it, also on a thread with no message yet, and the status line shows the mode the kernel reports |
 | `/session` | The session: id, user, workspace, mode; `/session new` or `/session ID` opens another |
 | `/stop`, `/resume` | Stop all, Resume all |
 | `/quit`, `/exit` | Leave |
@@ -152,7 +156,7 @@ effort (`/effort high`) takes a restart here, as the commands say.
 | Where the agents run | Where the REPL's commands run |
 |---|---|
 | In process | Over the harness in this process |
-| The kernel, on its socket or with the operator's token | On the kernel, over the harness `adk-rust up` runs (`GET /api/kernel/commands`, `POST /api/kernel/commands/run`); one that changes something waits while everything is stopped, and each run is on the kernel's record. `/session` says how the terminal reached the kernel |
+| The kernel, on its socket or with the operator's token | On the kernel, over the harness `adk-rust up` runs (`GET /api/kernel/commands`, `POST /api/kernel/commands/run`), and each run is on the kernel's record. While everything is stopped, one that lets the agents do more is refused at once (`409 kernel.frozen`; nothing is kept to run later) and one that makes them do less — `/rules rm`, `/memory forget`, `/sandbox on`, a stricter `/mode` — runs, so a rule can be revoked before Resume all. `/session` says how the terminal reached the kernel |
 | A kernel on another machine, paired by code | None: they are the kernel operator's, and the terminal says so when it starts. `adk-rust rules`, `adk-rust memory` and `adk-rust approvals` on the kernel's machine cover several |
 
 ## JSON lines and exit codes
@@ -194,6 +198,7 @@ esac
 | Pastes are pastes | Full screen and inline turn bracketed paste on, so pasted text goes into the message box and never answers a decision |
 | Nothing draws over the screen | While the full screen or the inline UI is up on a terminal, logs and standard error — what a tool server writes there too — go to `terminal.log` in the config directory's `adk-rust` (Unix) |
 | Any terminal that draws | The full screen never asks the terminal where its cursor is, so a terminal that does not answer that query (a hidden panel, some IDE consoles) still gets it |
+| Every answer is on record (§11) | On a kernel, with its socket or the operator's token, every answer, Stop all, Resume all, mode change and message the terminal sends is on the kernel's signed record with the surface and how it was given (`POST /api/kernel/surface/records`), so the home says "You said yes in the terminal". A terminal paired by code is recorded by the kernel as that device. In process, no signed record is kept |
 
 ## Embedding
 

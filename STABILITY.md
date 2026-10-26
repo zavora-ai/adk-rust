@@ -53,8 +53,8 @@ The table below assigns one stability tier to every public `adk-*` crate in the 
 | `adk-audio` | **Stable** | Audio processing and STT/TTS providers |
 | `adk-mistralrs` | **Stable** | Native local LLM inference via mistral.rs |
 | `adk-acp` | **Beta** | Agent Client Protocol client and server (tracks the upstream ACP spec) |
-| `adk-awp` | **Beta** | Agentic Web Protocol implementation (tracks the upstream AWP spec) |
-| `awp-types` | **Beta** | AWP protocol types, zero `adk-*` dependencies |
+| `adk-awp` | **Beta** | Agentic Web Protocol implementation: the AWP 2.0 routes, signing, verifier and conformance kit (spec 3.5); the AWP 1.x routes behind `awp-v1` for one release line |
+| `awp-types` | **Beta** | AWP 1.x and 2.0 protocol types and the 2.0 JSON Schemas, zero `adk-*` dependencies |
 | `adk-devtools` | **Beta** | Coding-agent dev tools scoped to a `Workspace` (new in 2.0.0) |
 | `adk-computer-use` | **Beta** | Governed orchestration for the `computer-use-mcp` server (new in 2.0.0) |
 | `adk-gcp` | **Beta** | Shared Google Cloud REST plumbing for Vertex AI backends (new in 2.1.0) |
@@ -66,6 +66,7 @@ The table below assigns one stability tier to every public `adk-*` crate in the 
 | `adk-codeact-monty` | **Experimental** | Python CodeRuntime for the CodeActAgent via the Monty interpreter |
 | `adk-site` | **Experimental** | Site pipeline for AWP 2.0 websites: content, generator, launch gate, signed releases, site log, hosts (spec 3.5) |
 | `adk-drivers` | **Experimental** | Service drivers: DNS and registrar, email, analytics and search console, social and advertising, as kernel driver manifests with conformance suites (spec 3.5 §7.13) |
+| `adk-website` | **Experimental** | The prebuilt AWP 2.0 website: site kinds, the team of eight agents, onboarding, themes, capability packs, playbooks, incidents, alarms and the weekly review (spec 3.5 Part C) |
 
 ### Beta Crate Rationale
 
@@ -76,7 +77,7 @@ minor release. Every other crate was promoted to Stable in 1.0.0.
 | Crate | Reason for Beta | Path to Stable |
 |-------|----------------|----------------|
 | `adk-acp` | Agent Client Protocol is evolving upstream; capability negotiation follows the SDK | Stabilize once the ACP wire spec settles past v1 |
-| `adk-awp` | Agentic Web Protocol is a young specification | Stabilize when the AWP spec reaches a versioned release |
+| `adk-awp` | Agentic Web Protocol is a young specification; AWP 2.0's normative text is not yet published (spec 3.5 §13 Q1) | Stabilize when the AWP 2.0 text is published at a domain the project controls |
 | `awp-types` | Mirrors the AWP wire format, so it moves with the spec | Stabilize alongside `adk-awp` |
 | `adk-devtools` | New in 2.0.0; the coding-agent tool surface is still being shaped by use | Promote after 1-2 release cycles without breaking changes |
 | `adk-computer-use` | New in 2.0.0; tracks the `computer-use-mcp` wire contracts | Stabilize when the upstream contracts are versioned |

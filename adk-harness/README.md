@@ -83,9 +83,11 @@ agent tool — and the harness refuses to run without it.
 | Modes | `ReadOnly`, `Plan`, `Ask` (default), `Auto` in a harness-owned `ModeStore` (in-memory, file, SQLite). Tightening applies at the next call; loosening only through `Harness::set_mode`, which cancels held calls first, or an approved `exit_plan_mode` |
 | Tool classes | A call's class comes from its origin and name in the harness registry, never from an MCP `readOnlyHint` alone |
 | Standing approvals | "Always allow `cargo test`" as a `StandingRule` bound to the subject and to the tool's declaration digest; `ShellPrefix` matches plain words only; a redeclared tool records `harness.rule.stale` and asks again |
+| Change sets | Two or more held edits of one model turn are shown as one diff (per file, with before and after sha256 and a digest) and decided once; each approved edit runs bound to the content shown (`ChangeSet`, `ApprovalPrompter::prompt_change_set`) |
 | Prompts | `PromptingConfirmationHandler` serializes prompts, caps them per turn of each session, escapes control characters, refuses a truncated call approved unexpanded, and returns edited arguments for the policy to check again. It re-checks a held call against the run's whole policy, so an operator policy's approval always reaches the person and a standing rule answers only the harness's own |
-| Durability | An action ledger on every run (in memory by default, `HarnessAgentBuilder::action_ledger` for a durable one, or the run's own): `bash`, `write_file` and `edit_file` are recorded before they execute and a re-issued or resumed call is answered from its record, never run twice. `Harness::send` and `Harness::resume` first settle a held call whose process stopped before saving its result: answered from the ledger, or held again |
+| Durability | An action ledger on every run (in memory by default, `HarnessAgentBuilder::action_ledger` for a durable one, or the run's own): `bash`, `write_file`, `edit_file` and `apply_patch` are recorded before they execute and a re-issued or resumed call is answered from its record, never run twice. `Harness::send` and `Harness::resume` first settle a held call whose process stopped before saving its result: answered from the ledger, or held again |
 | Shell | `bash` on the host behind approval, or opt-in under the OS sandbox (Seatbelt, bubblewrap, or on Windows the restricted token, which leaves the network open, runs MSYS2 from a private runtime per command while holding the user's namespaces of the installations on its `PATH`, and denies `bash` in Plan) through `SandboxLauncher`: workspace read-write with protected paths read-only (read-only in Plan), scratch `HOME`, no network, the enforcer probed at build and per call (`Degraded` or `harness.sandbox_unavailable`, never a host fallback); a failure hint and a once-only, non-waivable unsandboxed retry; `auto_allow_sandboxed` gated on the S3 conformance probe and the protected paths, with no host file tool running beside an unapproved command; a 250 ms kill-switch poll; `harness.bash.*` audit records. With `docker`, a container per session through `ContainerBashTool`: the workspace bind-mounted at `/workspace` with protected paths read-only, kept across runs, stopped on idle TTL or `Harness::close` |
+| Edits | `write_file`, `edit_file` (several replacements as `edits`) and `apply_patch` for every model; an edit of a file changed since the agent read it is refused as stale, and an `apply_patch` is judged on every path of its patch. Read records persist with `read_records` (`SqliteReadRecords`, `PostgresReadRecords`, `RedisReadRecords`), so a held edit approved after a restart runs |
 | Todos | `write_todos` / `update_todo` in session state, one list per session |
 | Instructions | `AGENTS.md` from the git root down to the workspace, verbatim, hashed, delimited as untrusted, after a workspace trust decision bound to the files' content (an edited file asks again and records `harness.instructions.changed`); nested files listed, never inlined |
 | Skills | Progressive disclosure (`list_skills`, `load_skill`, `load_skill_resource`) without convention documents |
@@ -97,7 +99,7 @@ agent tool — and the harness refuses to run without it.
 | Goals | `Harness::start_goal` iterates until the operator's `until` command passes (`LoopAgent` or a checkpointed graph); goal state in a `GoalStore`; durable goals as `harness.goal` runs for a `DurableWorker`; ambient goals on cron, file-watch and webhook triggers |
 | Durability | A completed call never runs twice after a crash (the turn after one answers it from the action ledger), held approvals survive process loss, resumed runs follow the current mode |
 | Long-term facts | `MemoryFact`s with provenance in a `FactStore` (in-memory, file, SQLite), found by a `FactIndex` (`LocalFactIndex` by embedding or shared words, `MemoryServiceIndex` over any `adk-memory` backend) and recalled into a `<memory-facts>` block on each user turn; written by `memory_remember` (assumed only), by distilling a session on a cheaper model, and by a person; `Known` only from the user's own quoted words or a person's confirmation; redacted before storage; `Harness::{facts, accept_fact, forget_fact, correct_fact}` |
-| Fact consolidation | The spec 3.2 consolidation tick's work on facts: `Harness::consolidate_memory` distils the sessions the per-session distiller never reached (assumed only), supersedes `Assumed` near-duplicates and expires stale `Assumed` facts without a model call, merges similar `Assumed` facts with provenance, never touches a `Known` fact, stops at a loss cap, and keeps a record `Harness::undo_consolidation` reverts |
+| Fact consolidation | The spec 3.2 consolidation tick's work on facts: `Harness::consolidate_memory` distils the sessions the per-session distiller never reached (assumed only), supersedes `Assumed` near-duplicates and expires stale `Assumed` facts without a model call, merges similar `Assumed` facts with provenance, never touches a `Known` fact, stops at a loss cap, and keeps a record `Harness::undo_consolidation` reverts; `Harness::distilled_sessions` lists how far distillation read each session, so a host finds the sessions that ended undistilled, as `adk-rust` does at start |
 
 ## Mode table
 
@@ -205,6 +207,23 @@ async fn host(harness: &adk_harness::Harness) -> Result<(), Box<dyn std::error::
 }
 ```
 
+## Website (feature `website`)
+
+The runtime half of an AWP 2.0 website (spec 3.5 §7.1, §7.10, §7.11, §7.18). A product builds
+its team from it; the product's agents, site kinds and onboarding questions are its own.
+
+| Part | What it does |
+|---|---|
+| `Preset::Website` | The website prompt, plan mode until the charter compiles to more, no shell, website tools classed by their catalogue |
+| `website_back_office(&BackOfficeKit)` | Content drafts, edits, schedules, corrections, withdrawals and reverts; translations; media; preview, publish and rollback over `adk-site`; host reads; the launch gate; `awp verify`; charter drafts; charter-commit and promotion requests as decision cards. The launch and every DNS change are held for the owner in every mode (A-I21) |
+| `website_public(PublicKit)` | `search_site` over the release's Markdown twins, `emit_signal` with screened bounded fields, `adk-drivers`' `reply_in_thread`, the declared capabilities, and nothing else (A-I2, A-I3) |
+| `LadderCompiler`, `promote_job`, `apply_demotion` | Each job's level compiled to a mode, a policy read at every call, within-budget rules and owner-created standing rules; only an owner's decision raises a level (A-I13) |
+| `AuthoringRouter` | Paired devices author through the Steward; everyone else reaches the public partition (A-I24) |
+| `SiteSigning`, `ReleaseLogVerifier` | Web Bot Auth on crawls, `awp verify` and opted-in `web_fetch`; the release-log half of `awp verify` before a site publishes its contract |
+| `OnboardingStage`, `InterviewForm` | Plan-graph steps for discovery, interview, charter, build, gate, connections and launch; facts `Known` only from the owner's words (A-I18) |
+
+See `docs/official_docs/harness/website.md`.
+
 ## Features
 
 | Feature | Default | Pulls in |
@@ -237,6 +256,7 @@ async fn host(harness: &adk_harness::Harness) -> Result<(), Box<dyn std::error::
 | `browser` | off | the browser pack (spec 3.1 §7.24): `adk-browser`'s tools as `Read`, `Web` and `External` classes under the web rules, `BrowserPack`, `harness.browser.*` |
 | `computer-use` | off | the computer-use pack (spec 3.1 §7.24): `computer_use_observe`, `computer_use_preview` and the never-waivable `computer_use_execute` through `adk-computer-use`'s reference graph, `ComputerUsePack` |
 | `voice` | off | the voice surface (spec 3.1 §7.17): `VoiceSurface` runs a harness marked `Pack::Voice` over `adk-realtime`'s `IntegratedRealtimeRunner`, with spoken or inbox approvals and `harness.voice.*` audit records; with `kernel` it also answers kernel processes parked on a held call (spec 3.2 §7.11) |
+| `website` | off | the website runtime (spec 3.5 §7.1): `Preset::Website`, the back-office and public toolsets over `adk-site`, the site's two partitions and their signals, the autonomy ladder compiled to policy, the authoring router, Web Bot Auth signing of crawls, `awp verify` and opted-in `web_fetch`, and the onboarding plan's steps |
 
 ## Status
 
@@ -258,6 +278,7 @@ The managed form (feature `managed`) is Experimental, as `adk-managed` is.
 | Serving over HTTP and on the managed runtime | [serving](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/serving.md) |
 | Identity, permissions and credentials | [identity](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/identity.md) |
 | Spans, spend, loop guard and evaluation | [observability](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/observability.md) |
+| The website runtime | [website](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/website.md) |
 | Hooks | [hooks](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/hooks.md) |
 | Web tools and MCP servers | [web and MCP](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/web-and-mcp.md) |
 | Browser and computer-use packs | [packs](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/packs.md) |

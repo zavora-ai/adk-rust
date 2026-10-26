@@ -120,6 +120,7 @@ pub struct HarnessAgentBuilder {
     mode_store: Option<Arc<dyn ModeStore>>,
     standing_rules: Option<Arc<dyn StandingRuleStore>>,
     shell_ledger: Option<Arc<dyn ShellLedger>>,
+    read_records: Option<Arc<dyn adk_devtools::ReadLedger>>,
     operator_policy: Option<Arc<dyn ToolPolicy>>,
     origin_classes: Vec<Arc<dyn crate::policy::OriginClasses>>,
     prompter: Option<Arc<dyn ApprovalPrompter>>,
@@ -134,6 +135,15 @@ pub struct HarnessAgentBuilder {
     kernel_ledger: adk_kernel::proc::LateLedgerSink,
     #[cfg(feature = "kernel")]
     partition: crate::partition::PartitionOptions,
+    /// The agent a person added that this harness is built for (spec 3.3 §5.7, H3).
+    #[cfg(feature = "kernel")]
+    added: Option<crate::agents::AddedAgent>,
+    /// Where `propose_agent` suggests agents: set on the primary agent only (spec 3.3 §5.7).
+    #[cfg(all(feature = "kernel", feature = "web"))]
+    agent_proposer: Option<Arc<dyn crate::agents::SuggestAgent>>,
+    /// The kernel target this harness stamps its sessions with (spec 3.3 §5.7 "Threads").
+    #[cfg(feature = "kernel")]
+    session_stamp: Option<String>,
     action_ledger: Option<Arc<dyn ActionLedger>>,
     confirmation_timeout: Duration,
     shell: ShellConfig,
@@ -141,6 +151,8 @@ pub struct HarnessAgentBuilder {
     /// The personal preset offers `bash` only in the OS sandbox or a container (spec 3.3
     /// §10 H1).
     isolated_shell_only: bool,
+    /// The website preset leaves `bash` out (spec 3.5 §10 X10).
+    preset_without_shell: bool,
     /// `allow_unsandboxed_retry` was set explicitly, so a container shell keeps it.
     retry_explicit: bool,
     trust_mcp_read_only_hints: bool,
@@ -187,6 +199,9 @@ pub struct HarnessAgentBuilder {
     unimplemented: Vec<String>,
     last_todos: Option<Arc<Mutex<TodoList>>>,
     web: Option<crate::web::WebConfig>,
+    /// Signs `web_fetch` requests (spec 3.5 §7.3 "Outbound").
+    #[cfg(feature = "web")]
+    web_signer: Option<Arc<dyn crate::web::RequestSigner>>,
     search_provider: Option<Arc<dyn crate::web::SearchProvider>>,
     /// `None`: the model provider's search when `web` is set (spec 3.1 §7.20).
     provider_web_tools: Option<crate::web::ProviderWebTools>,
@@ -230,6 +245,7 @@ impl HarnessAgentBuilder {
             mode_store: None,
             standing_rules: None,
             shell_ledger: None,
+            read_records: None,
             operator_policy: None,
             origin_classes: Vec::new(),
             prompter: None,
@@ -244,11 +260,18 @@ impl HarnessAgentBuilder {
             kernel_ledger: adk_kernel::proc::LateLedgerSink::new(),
             #[cfg(feature = "kernel")]
             partition: crate::partition::PartitionOptions::default(),
+            #[cfg(feature = "kernel")]
+            added: None,
+            #[cfg(all(feature = "kernel", feature = "web"))]
+            agent_proposer: None,
+            #[cfg(feature = "kernel")]
+            session_stamp: None,
             action_ledger: None,
             confirmation_timeout: Duration::from_secs(300),
             shell: ShellConfig::default(),
             shell_enabled: true,
             isolated_shell_only: false,
+            preset_without_shell: false,
             retry_explicit: false,
             trust_mcp_read_only_hints: false,
             todos: true,
@@ -292,6 +315,8 @@ impl HarnessAgentBuilder {
             unimplemented: Vec::new(),
             last_todos: None,
             web: None,
+            #[cfg(feature = "web")]
+            web_signer: None,
             search_provider: None,
             provider_web_tools: None,
             mcp_interaction: crate::mcp::McpInteractionConfig::default(),
@@ -335,6 +360,14 @@ impl HarnessAgentBuilder {
     /// ```
     pub fn web(mut self, config: crate::web::WebConfig) -> Self {
         self.web = Some(config);
+        self
+    }
+
+    /// Signs every `web_fetch` request, each redirect hop included, with `signer`: the
+    /// site's Web Bot Auth key, opt-in for general fetches (spec 3.5 §7.3 "Outbound").
+    #[cfg(feature = "web")]
+    pub fn web_signer(mut self, signer: Arc<dyn crate::web::RequestSigner>) -> Self {
+        self.web_signer = Some(signer);
         self
     }
 
@@ -511,6 +544,15 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// Where the file tools' read records are kept (default in memory): the sha256 each
+    /// session's agent last read or wrote per file, which `edit_file` takes as its
+    /// precondition (spec 3.1 §7.26, §10 D7). A durable store lets a held edit approved
+    /// from another process run (§7.33 fix 5).
+    pub fn read_records(mut self, records: Arc<dyn adk_devtools::ReadLedger>) -> Self {
+        self.read_records = Some(records);
+        self
+    }
+
     /// An operator policy, composed with the harness policy; the stricter decision wins.
     pub fn operator_policy(mut self, policy: Arc<dyn ToolPolicy>) -> Self {
         self.operator_policy = Some(policy);
@@ -566,6 +608,102 @@ impl HarnessAgentBuilder {
             Some(drivers) => self.partition_drivers(&drivers),
             None => self,
         }
+    }
+
+    /// Stamps every session this harness runs with `target`, its kernel target, on its first
+    /// run, and refuses a session another agent stamped (spec 3.3 §5.7 "Threads"):
+    /// [`AGENT_STATE_KEY`](crate::AGENT_STATE_KEY). `adk-rust up` stamps the primary agent's
+    /// sessions `adk-rust`; an added agent stamps its own id.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let builder = adk_harness::HarnessAgent::builder("adk-rust").session_stamp("adk-rust");
+    /// # let _ = builder;
+    /// ```
+    #[cfg(feature = "kernel")]
+    pub fn session_stamp(mut self, target: impl Into<String>) -> Self {
+        self.session_stamp = Some(target.into());
+        self
+    }
+
+    /// Gives this harness `propose_agent`, suggesting agents to the agent table of the kernel
+    /// `handle` is bound to (spec 3.3 §5.7, §10 H3). `adk-rust up` binds it on the primary
+    /// agent only; an added agent never has the tool. Needs feature `web`, whose screening the
+    /// suggestion's instructions pass.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let handle = adk_kernel::agents::AgentsHandle::new();
+    /// let builder = adk_harness::HarnessAgent::builder("adk-rust").agents_handle(handle);
+    /// # let _ = builder;
+    /// ```
+    #[cfg(all(feature = "kernel", feature = "web"))]
+    pub fn agents_handle(mut self, handle: adk_kernel::agents::AgentsHandle) -> Self {
+        self.agent_proposer = Some(Arc::new(handle));
+        self
+    }
+
+    /// The harness of the agent a person added (spec 3.3 §5.7, H3): see
+    /// [`added_agent`](Self::added_agent).
+    #[cfg(feature = "kernel")]
+    pub(crate) fn lower_added(mut self, added: crate::agents::AddedAgent) -> Self {
+        self.name = added.id.clone();
+        self.session_stamp = Some(added.id.clone());
+        if !added.description.is_empty() {
+            self.description = Some(added.description.clone());
+        }
+        if !added.instructions.is_empty() {
+            self.instruction = Some(added.instructions.clone());
+        }
+        self.mode = added.mode_in(self.mode);
+        #[cfg(feature = "team")]
+        self.members.clear();
+        self.default_members = false;
+        self.partition.coordinator = false;
+        self.goal_store = None;
+        #[cfg(feature = "graph")]
+        {
+            self.goal_engine = None;
+        }
+        #[cfg(feature = "web")]
+        {
+            self.agent_proposer = None;
+        }
+        let read_only = added.uses.files != adk_kernel::agents::FileAccess::ReadWrite;
+        if let Some(workspace) = self.workspace.take() {
+            let root = match &added.uses.folder {
+                Some(folder) => workspace.root().join(folder),
+                None => workspace.root().to_path_buf(),
+            };
+            self.workspace = Some(
+                Workspace::new(root)
+                    .writable(workspace.is_writable() && !read_only)
+                    .allow_bash(workspace.bash_allowed())
+                    .bash_timeout(workspace.bash_timeout_value())
+                    .max_output_bytes(workspace.max_output())
+                    .inherit_env(workspace.inherits_env()),
+            );
+        }
+        match &added.uses.web {
+            adk_kernel::agents::WebAccess::None => {
+                self.web = None;
+                self.search_provider = None;
+                self.provider_web_tools = Some(crate::web::ProviderWebTools::default());
+            }
+            adk_kernel::agents::WebAccess::Listed { hosts } => {
+                let web = self.web.take().unwrap_or_default();
+                self.web = Some(crate::web::WebConfig { allowed_domains: hosts.clone(), ..web });
+                self.provider_web_tools = Some(crate::web::ProviderWebTools::default());
+            }
+            adk_kernel::agents::WebAccess::Any => {}
+        }
+        if added.uses.shell == adk_kernel::agents::ShellAccess::Sandboxed {
+            self.isolated_shell_only = true;
+        }
+        self.added = Some(added);
+        self
     }
 
     /// Makes this partition's harness the coordinator, the one agent that may reach
@@ -898,11 +1036,23 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// Leaves `bash` out for as long as the preset that asked holds (spec 3.5 §10 X10).
+    #[cfg(feature = "website")]
+    pub(crate) fn preset_without_shell(mut self) -> Self {
+        self.preset_without_shell = true;
+        self
+    }
+
     /// Undoes what a preset set that another preset leaves alone (spec 3.3 §10 H1).
     pub(crate) fn clear_preset(mut self) -> Self {
         if self.description.as_deref() == Some(crate::personal::PERSONAL_DESCRIPTION) {
             self.description = None;
         }
+        #[cfg(feature = "website")]
+        if self.description.as_deref() == Some(crate::website::WEBSITE_DESCRIPTION) {
+            self.description = None;
+        }
+        self.preset_without_shell = false;
         self.isolated_shell_only(false)
     }
 
@@ -1383,9 +1533,14 @@ impl HarnessAgentBuilder {
     /// feature not yet implemented is requested, and `harness.sandbox_unavailable` when
     /// the requested sandbox is unavailable under `fail_if_unavailable`.
     pub fn build(mut self) -> Result<HarnessAgent> {
+        // The website preset runs without a shell, whatever the workspace allows (X10).
+        self.shell_enabled &= !self.preset_without_shell;
         let model = self.model.ok_or_else(|| AdkError::config("HarnessAgent requires a model"))?;
-        let workspace =
+        let mut workspace =
             self.workspace.ok_or_else(|| AdkError::config("HarnessAgent requires a workspace"))?;
+        if let Some(records) = self.read_records.take() {
+            workspace = workspace.with_read_ledger(records);
+        }
         let unimplemented = self.unimplemented;
         if let Some(first) = unimplemented.first() {
             return Err(AdkError::config(format!("not yet implemented: {first}")));
@@ -1625,6 +1780,12 @@ impl HarnessAgentBuilder {
         let mode_store = self.mode_store.unwrap_or_else(|| Arc::new(InMemoryModeStore::new()));
         let rules =
             self.standing_rules.unwrap_or_else(|| Arc::new(InMemoryStandingRuleStore::new()));
+        // An added agent applies only the rules pinned to its own id (spec 3.3 S-I19).
+        #[cfg(feature = "kernel")]
+        let rules: Arc<dyn StandingRuleStore> = match &self.added {
+            Some(added) => Arc::new(crate::agents::PinnedOnlyRules::new(rules, added.id.clone())),
+            None => rules,
+        };
         let ledger = self.shell_ledger.unwrap_or_else(|| Arc::new(InMemoryShellLedger::new()));
         let approval_store = self
             .approval_store
@@ -1646,6 +1807,7 @@ impl HarnessAgentBuilder {
         if workspace.is_writable() {
             tools.push(Arc::new(WriteFileTool::new(workspace.clone())));
             tools.push(Arc::new(EditFileTool::new(workspace.clone())));
+            tools.push(Arc::new(adk_devtools::ApplyPatchTool::new(workspace.clone())));
         }
         // While sandboxed commands run unapproved, no host file tool overlaps one (I26).
         let file_gate = shell.auto_allow_sandboxed.then(crate::shell::FileToolGate::default);
@@ -1747,6 +1909,22 @@ impl HarnessAgentBuilder {
             self.mode,
             partition.as_ref().map(|wired| wired.wiring.partition.id.clone()),
         )));
+        // Agents are suggested only by the primary agent, never by an added one (spec 3.3 §5.7).
+        #[cfg(all(feature = "kernel", feature = "web"))]
+        let agent_limits = Arc::new(OnceLock::new());
+        #[cfg(all(feature = "kernel", feature = "web"))]
+        if let Some(proposer) = self.agent_proposer.clone().filter(|_| self.added.is_none()) {
+            tools.push(Arc::new(crate::agents::ProposeAgentTool::new(
+                proposer,
+                mode_store.clone(),
+                self.mode,
+                agent_limits.clone(),
+                partition
+                    .as_ref()
+                    .map(|wired| wired.wiring.partition.id.clone())
+                    .unwrap_or_default(),
+            )));
+        }
         #[cfg(feature = "memory")]
         let memory_resolver = self.memory.clone().map(|config| {
             // A partition keeps working notes of its own (spec 3.2 K-I15).
@@ -1802,7 +1980,7 @@ impl HarnessAgentBuilder {
         // Governed web tools (spec 3.1 §7.20): `web_search` only with a provider.
         #[cfg(feature = "web")]
         if let Some(config) = self.web.clone() {
-            let runtime = crate::web::WebRuntime::new(config);
+            let runtime = crate::web::WebRuntime::new(config, self.web_signer.clone());
             tools.push(Arc::new(crate::tools::WebFetchTool::new(runtime.clone())));
             if let Some(provider) = &self.search_provider {
                 tools.push(Arc::new(crate::tools::WebSearchTool::new(runtime, provider.clone())));
@@ -2159,6 +2337,7 @@ impl HarnessAgentBuilder {
                 memory,
                 ledger_durable: self.action_ledger.is_some(),
                 plan_rewind,
+                model: model.name(),
             })
         };
         let harness_block = manifest.render();
@@ -2446,6 +2625,20 @@ impl HarnessAgentBuilder {
             IsolationStatus::Degraded { reason, .. } => Some(reason.clone()),
             _ => None,
         };
+        #[cfg(all(feature = "kernel", feature = "web"))]
+        let _ = agent_limits.set(
+            crate::agents::suggester_ceiling(
+                tool_names.iter().map(String::as_str),
+                &packs,
+                tool_names.iter().any(|tool| tool == "bash").then_some(&status),
+                self.mode,
+                &partition
+                    .as_ref()
+                    .map(|wired| wired.wiring.partition.drivers.clone())
+                    .unwrap_or_default(),
+            )
+            .uses,
+        );
         let info = HarnessInfo {
             name: self.name,
             default_mode: self.mode,
@@ -2519,6 +2712,8 @@ impl HarnessAgentBuilder {
                 kernel_ledger: self.kernel_ledger,
                 #[cfg(feature = "kernel")]
                 partition: partition.map(|wired| wired.wiring),
+                #[cfg(feature = "kernel")]
+                session_stamp: self.session_stamp,
                 #[cfg(feature = "web")]
                 provider_web,
                 #[cfg(feature = "mcp")]

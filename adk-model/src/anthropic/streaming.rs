@@ -4,7 +4,7 @@ use super::{client::convert_anthropic_error, convert};
 use adk_anthropic::{
     AccumulatingStream, ContentBlock, ContentBlockDelta, MessageStreamEvent, ToolUseBlock,
 };
-use adk_core::{AdkError, LlmResponseStream};
+use adk_core::{AdkError, Content, LlmResponse, LlmResponseStream};
 use futures::{Stream, StreamExt};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -29,6 +29,10 @@ where
         let (mut events, _) = AccumulatingStream::new(events);
         // Client tool calls by block index: id, name and the streamed argument JSON.
         let mut tool_calls: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
+        // Provider-executed blocks by block index, with a `server_tool_use` block's streamed
+        // input. Each is yielded as a partial response at its `content_block_stop`, so a
+        // search shows before the answer it informs; the complete message still carries it.
+        let mut server_blocks: BTreeMap<usize, (ContentBlock, String)> = BTreeMap::new();
         while let Some(event) = events.next().await {
             let event = match event {
                 Ok(event) => event,
@@ -64,12 +68,18 @@ where
                     ContentBlock::Thinking(thinking) if !thinking.thinking.is_empty() => {
                         yield convert::from_thinking_delta(&thinking.thinking);
                     }
-                    _ => {}
+                    block => {
+                        if convert::server_tool_part(&block).is_some() {
+                            server_blocks.insert(start.index, (block, String::new()));
+                        }
+                    }
                 },
                 MessageStreamEvent::ContentBlockDelta(delta) => match delta.delta {
                     ContentBlockDelta::InputJsonDelta(json) => {
                         if let Some((_, _, arguments)) = tool_calls.get_mut(&delta.index) {
                             arguments.push_str(&json.partial_json);
+                        } else if let Some((_, input)) = server_blocks.get_mut(&delta.index) {
+                            input.push_str(&json.partial_json);
                         }
                     }
                     ContentBlockDelta::TextDelta(text) if !text.text.is_empty() => {
@@ -80,6 +90,25 @@ where
                     }
                     _ => {}
                 },
+                MessageStreamEvent::ContentBlockStop(stop) => {
+                    let Some((mut block, input)) = server_blocks.remove(&stop.index) else {
+                        continue;
+                    };
+                    // As the accumulator resolves it, so this copy matches the complete one.
+                    if let ContentBlock::ServerToolUse(tool) = &mut block
+                        && !input.trim().is_empty()
+                    {
+                        tool.input = serde_json::from_str(&input).unwrap_or(Value::String(input));
+                    }
+                    if let Some(part) = convert::server_tool_part(&block) {
+                        yield LlmResponse {
+                            content: Some(Content { role: "model".to_string(), parts: vec![part] }),
+                            partial: true,
+                            turn_complete: false,
+                            ..Default::default()
+                        };
+                    }
+                }
                 MessageStreamEvent::MessageStop(_) => {
                     let mut message = events.finalize_partial().map_err(convert_anthropic_error)?;
                     if message.stop_reason.is_none() {

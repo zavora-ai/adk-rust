@@ -91,6 +91,27 @@ web = ["dep:reqwest", "dep:adk-guardrail", "dep:adk-tool"]
 mcp = ["dep:adk-tool", "adk-tool/mcp", "adk-tool/mcp-sampling"]
 # Test fixtures only: lets a loopback HTTP server stand in for the web (never on in adk-cli).
 web-fixture = ["web"]
+# The website runtime (spec 3.5 §7.1): `Preset::Website`, the back-office and public
+# toolsets, partitions and signals, the autonomy ladder compiler, authoring entry points,
+# Web Bot Auth signing of outbound requests and the onboarding machinery.
+website = [
+    "kernel",
+    "web",
+    "mcp",
+    "memory",
+    "auth",
+    "dep:adk-site",
+    "dep:adk-drivers",
+    "dep:adk-awp",
+    "adk-awp/verify",
+    "dep:awp-types",
+    "dep:adk-rag",
+    "dep:bytes",
+    "dep:base64",
+    "adk-kernel/charter",
+    "adk-kernel/channels",
+    "adk-auth/web-bot-auth",
+]
 
 [dependencies]
 adk-core.workspace = true
@@ -116,7 +137,14 @@ adk-payments = { workspace = true, optional = true }
 adk-realtime = { workspace = true, optional = true }
 adk-managed = { workspace = true, optional = true }
 adk-kernel = { workspace = true, optional = true }
+adk-site = { workspace = true, optional = true }
+adk-drivers = { workspace = true, optional = true }
+adk-awp = { workspace = true, optional = true }
+awp-types = { workspace = true, optional = true }
 async-stream.workspace = true
+bytes = { version = "1", optional = true }
+# Media uploads arrive base64-encoded in `media_intake` (spec 3.5 §7.8.2 "Media").
+base64 = { version = "0.22", optional = true }
 async-trait.workspace = true
 chrono.workspace = true
 dirs = "7"

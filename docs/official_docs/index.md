@@ -11,6 +11,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 - [Migrating 1.0 → 2.0](migration/1.0-to-2.0.md) - Complete breaking-change list with before/after code
 - [SQLx 0.9 in ADK-Rust 3.0](migration/sqlx-0.9.md) - Sharing SQLx pools, TLS flags, and migration-runner inputs
 - [Migrating from `CodingAgent` to the harness](migration/coding-agent-to-harness.md) - `adk_agent::coding` to `adk_harness::coding`, approvals in unattended runs, todos, nesting
+- [Migrating from AWP 1.x to 2.0](migration/awp-1-to-2.md) - What changes, `adk-rust awp migrate-config business.toml`, and the AWP 1.x reference
 
 ## Core
 
@@ -76,6 +77,7 @@ The governed, durable harness agent (`adk-harness`, spec 3.1): modes, approvals,
 - [Harness Payments](harness/payments.md) - The payments pack: `adk-payments` tools as class `Payment`, one non-waivable approval per call, mandate guardrails, spend ledger, `harness.payment` with the journal receipt
 - [Harness Voice](harness/voice.md) - The voice surface: the harness as the agent of an `IntegratedRealtimeRunner`, held calls surfaced as realtime events, spoken or inbox approvals, `harness.voice.*` in one audit trail
 - [The Personal Preset and Take Over](harness/personal.md) - `--preset personal`: a workspace of notes and files under the home, no host shell, quiet time and a daily spending limit asked at first run; take over: a typed secret reaches one tool call only
+- [The Website Runtime](harness/website.md) - feature `website`: `Preset::Website`, the back-office and public toolsets of an AWP 2.0 website, its two partitions and signals, the autonomy ladder compiled to policy, authoring, outbound Web Bot Auth and onboarding
 
 ## Agent Kernel
 
@@ -106,6 +108,8 @@ The interface to an always-on agent (`adk-surface`, spec 3.3): every surface is 
 - [Chat](surfaces/chat.md) - The Telegram adapter over the kernel's channel contract: cards with Allow once and Deny and never the call's arguments, pairing by code, "stop all", long polling
 - [The Phone](surfaces/phone.md) - The web home installed on a phone: wake-ups from your own kernel that say nothing, answers by touch, "Confirm it's you" with a passkey on the phone or the computer, pairing by QR code, `adk-rust up --home-url` behind Tailscale Serve
 - [The Desktop Tray](surfaces/desktop.md) - Experimental: the web home in a desktop window and a tray icon with the decisions badge; its panel says yes once or no to everyday calls, opens the home for the rest, and stops everything; loopback only
+- [Voice and Video](surfaces/voice.md) - Spoken "allow once" and "deny" through the engine with a cancel window, bound to the decision on screen, a digest on record and never the recording; the camera and the screen while their switches are on; the voice view and the terminal's voice line
+- [The Website's Views](surfaces/website.md) - Experimental, the `website` feature: a prebuilt website's setup code, onboarding, charter, site view, weekly review and web editor at `/ui/website`, over `adk-website`'s desk; who may decide what, and mounting it on your own server
 - [Scenarios](surfaces/scenarios.md) - The phase scenarios as programs you can run: "Approve it tomorrow" (a decision that waits through quiet time and a `kill -9`, answered in Telegram) and "The morning after" (one exact briefing across a restart), on SQLite and PostgreSQL
 
 ## Realtime & Multimodal
@@ -201,8 +205,19 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Server](deployment/server.md) - REST API, streaming and A2A integration
 - [A2A Getting Started](a2a/getting-started.md) - Create and run an A2A agent
 - [A2A Protocol](deployment/a2a.md) - Agent-to-Agent communication
-- [Agentic Web Protocol](deployment/awp.md) - AWP protocol for agent-native web services
+- [Agentic Web Protocol 2.0](deployment/awp.md) - The signed site contract: profiles, keys and releases, the edge, verification, and what each crate provides
+- [Spin Up an AWP Website](deployment/website-quickstart.md) - `adk-rust website new`, the `adk-website` binary, or `cargo adk new my-site --template website`: the setup code, keys, onboarding and deployment shapes
+- [Move a WordPress Site to AWP](deployment/wordpress-to-awp.md) - Prove the domain, freeze, migrate, decide the quarantine, publish signed releases and verify
+- [The Charter](deployment/charter.md) - A site's goals, KPIs with baselines, guardrails, authority, budget and public terms, and how its owners sign it
+- [Writing Capability Packs](deployment/capability-packs.md) - One declaration and one handler per capability, served over A2A, MCP and HTTP; the default packs
+- [The AWP Agent Edge](deployment/awp-edge.md) - A site's capabilities over A2A, MCP and HTTP: trust tiers, held and exactly-once calls, the public partition
 - [Site Migration](deployment/site-migration.md) - Moving an existing site onto a signed static AWP site
+- [Constantly Updated Sites](deployment/constant-updates.md) - Lanes, batching, feed bounds and delta releases for sites that change every minute
+- [Sites and AWP from the Command Line](deployment/site-cli.md) - `adk-rust site` and `adk-rust awp`: releases, content, migration, keys and verification
+- [Site Hosts](deployment/site-hosts.md) - Publishing signed releases to S3, GCS, Azure, Cloudflare, Netlify, GitHub Pages or any server over SSH
+- [Site Generators](deployment/site-generators.md) - Building a site with Zola, Hugo, Astro or Build Awesome in a sandbox with no network
+- [The AWP Website Product](deployment/adk-website.md) - `adk-website`: site kinds, the team of eight agents, onboarding from nothing, a presence or an existing site, incidents, alarms and the weekly review
+- [Website Experiments and Measurement](deployment/website-experiments.md) - Experiments on the charter's KPIs with guardrails that stop them, variants as static files, and the KPI sources that are not drivers
 - [Agent Engine](deployment/agent-engine.md) - Deploying on the Gemini Enterprise Agent Platform
 - [Agent Registry](deployment/agent-registry.md) - Discovery, registration, and remote invocation on the Agent Platform
 

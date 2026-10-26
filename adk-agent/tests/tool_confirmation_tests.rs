@@ -890,3 +890,86 @@ async fn parallel_approval_failure_lets_a_running_sibling_finish() {
         .collect();
     assert_eq!(results, vec![Some("call-slow")]);
 }
+
+// ── The batch reaches the handler before dispatch (spec 3.1 §10 A2) ──
+
+/// Records each batch and each decision, in order.
+#[derive(Debug, Default)]
+struct BatchRecorder {
+    log: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl ToolConfirmationHandler for BatchRecorder {
+    async fn decide(&self, request: &ToolConfirmationRequest) -> Result<ToolConfirmationDecision> {
+        let id = request.function_call_id.clone().unwrap_or_default();
+        self.log.lock().unwrap().push(format!("decide {id}"));
+        Ok(ToolConfirmationDecision::Approve)
+    }
+
+    async fn batch_started(&self, calls: &[adk_core::BatchCall<'_>]) {
+        let ids: Vec<String> = calls
+            .iter()
+            .map(|call| {
+                assert!(call.origin.is_some(), "a declared tool's origin is passed");
+                format!("{}={}", call.function_call_id.unwrap_or_default(), call.args["path"])
+            })
+            .collect();
+        self.log.lock().unwrap().push(format!("batch {}", ids.join(" ")));
+    }
+}
+
+#[tokio::test]
+async fn the_handler_sees_the_turns_batch_once_before_any_call_is_decided() {
+    let model = Arc::new(SequencedModel::new(vec![
+        two_calls_to_same_tool(),
+        SequencedModel::text_response("done"),
+    ]));
+    let handler = Arc::new(BatchRecorder::default());
+    let agent = LlmAgentBuilder::new("test-agent")
+        .model(model)
+        .tool(Arc::new(CountingTool::new()))
+        .require_tool_confirmation("test_tool")
+        .build()
+        .unwrap();
+    let run_config = RunConfig::builder().tool_confirmation_handler(handler.clone()).build();
+
+    let mut stream = agent.run(Arc::new(MockContext::new(run_config))).await.unwrap();
+    while let Some(event) = stream.next().await {
+        event.unwrap();
+    }
+
+    let log = handler.log.lock().unwrap().clone();
+    assert_eq!(log[0], r#"batch call-scratch="/tmp/scratch" call-sensitive="/etc/passwd""#);
+    assert_eq!(log.iter().filter(|line| line.starts_with("batch")).count(), 1, "{log:?}");
+    assert_eq!(log.len(), 3, "{log:?}");
+}
+
+#[tokio::test]
+async fn a_batch_the_run_budget_refuses_never_reaches_the_handler() {
+    let model = Arc::new(SequencedModel::new(vec![two_calls_to_same_tool()]));
+    let handler = Arc::new(BatchRecorder::default());
+    let agent = LlmAgentBuilder::new("test-agent")
+        .model(model)
+        .tool(Arc::new(CountingTool::new()))
+        .require_tool_confirmation("test_tool")
+        .build()
+        .unwrap();
+    let run_config = RunConfig::builder()
+        .tool_confirmation_handler(handler.clone())
+        .budget(adk_core::RunBudget::new().max_tool_calls(1))
+        .build();
+    let mut context = MockContext::new(run_config);
+    context.run_config.budget_tracker = context
+        .run_config
+        .budget
+        .clone()
+        .map(|budget| Arc::new(adk_core::BudgetTracker::new(budget)));
+
+    let mut stream = agent.run(Arc::new(context)).await.unwrap();
+    while let Some(event) = stream.next().await {
+        let _ = event;
+    }
+
+    assert!(handler.log.lock().unwrap().is_empty());
+}

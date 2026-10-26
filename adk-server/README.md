@@ -48,6 +48,8 @@ No feature is enabled by default.
 | `agent-registry` | The agent registry REST API |
 | `agent-engine` | The Gemini Enterprise Agent Platform (ReasoningEngine) dispatch surface and `serve_agent_engine` |
 | `vertex-remote-engine` | `RemoteReasoningEngineAgent`: deployed Agent Engine agents as sub-agents (implies `agent-engine`) |
+| `awp` | `ServerBuilder::awp(AwpEdge)`: the AWP 2.0 agent edge — trust tiers from verified credentials, capabilities over A2A, MCP and HTTP through one governed path, held and exactly-once calls, the public partition's conversation endpoints, event subscriptions, consent receipts and the beacon (implies `a2a-v1`) |
+| `awp-sqlite`, `awp-postgres`, `awp-redis` | The edge stores in SQLite, PostgreSQL or Redis (implies `awp`) |
 
 ## Quick Start
 
@@ -431,6 +433,21 @@ Share the run store with `BackgroundState::with_run_store` and the embedded `Dur
 | `DELETE /api/approvals/delegations/{id}` | Revoke a delegation |
 
 A stale `expectedVersion` returns `409` (`approval.version_conflict`). `spawn_approval_ticker` runs expiry and escalation, and `WebhookApprovalNotifier` sends Standard Webhooks-signed notifications. See [Approval Service](../docs/official_docs/security/approval-service.md).
+
+## AWP Agent Edge (feature: `awp`)
+
+`ServerBuilder::awp(edge)` mounts an `AwpEdge` through `add_root_routes`, so the host guard, CORS, timeouts and security headers apply, and attaches the server's kill switch to it. The edge serves one site's capabilities (spec 3.5 §7.9):
+
+| Route | Purpose |
+|-------|---------|
+| `GET /.well-known/agent-card.json` | The signed A2A card, one skill per capability the caller's tier sees |
+| `POST /awp/v2/a2a`, `/awp/v2/a2a/v1/…` | A2A v1.0 JSON-RPC and HTTP+JSON: capabilities and conversation with the public agent |
+| `/mcp`, `/.well-known/mcp/server-card.json` | The capabilities as MCP tools |
+| `GET /awp/v2/manifest`, `/awp/v2/status`, `/awp/v2/trust` | Contract surfaces |
+| `POST /awp/v2/capabilities/{name}`, `GET /awp/v2/calls/{id}` | Invocation (JSON or form-encoded) and held-call status |
+| `GET /awp/v2/chat` | The on-site assistant over a WebSocket |
+
+Tiers come only from verified credentials (`WebBotAuthTrustAssigner`, `OAuthClientCredentials`, `MtlsCredentials`, `ApiKeyCredentials`, owner rules). Every binding enters `GovernedExecutor`: `adk_core::authorize_tool_call` under a policy compiled from the manifest, the owner's `ApprovalService` for held calls (`202` with `Location`), the action ledger and a full-body idempotency record. `EdgeStatusControl` switches the edge to read-only and back. Subscriptions get Standard Webhooks deliveries with retries, suspension and replay; consent receipts are signed and revocable by their subject; the beacon counts without cookies or identifiers. See [The AWP Agent Edge](../docs/official_docs/deployment/awp-edge.md).
 
 ## API Endpoints
 

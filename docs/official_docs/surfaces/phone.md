@@ -2,9 +2,12 @@
 
 The phone is the web home installed on a phone and woken by push (spec 3.3 §5.4). A wake-up
 says only "A decision is waiting — Open the app to see it". **Decisions** carries the waiting
-count on its heading, its tab and the app's icon; a decision answered elsewhere reads "You
-said yes in Telegram at 07:31 · done once"; a high-risk decision shows the exact command and
-asks the person to confirm it is them before it is approved.
+count on its heading, its tab and the app's icon; a decision answered here or elsewhere is one
+line, "Send the October invoice · You said yes in Telegram at 07:31 · done once", which a tap
+opens to show the exact command again and which answers nothing; a high-risk decision shows
+the exact command and asks the person to confirm it is them before it is approved. The app
+fills the screen and never scrolls as a page: each screen scrolls inside itself above the
+tabs.
 
 The `mobile` feature of `adk-surface` ships the phone's routes, Web Push from the person's own
 kernel and "Confirm it's you". It implies `web`.

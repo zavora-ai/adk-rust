@@ -52,6 +52,12 @@ pub enum AgentStatus {
     Done,
     /// "Failed".
     Failed,
+    /// "Ready": an agent the person added that has not run yet (spec 3.3 §5.7, §8.1).
+    Ready,
+    /// "Paused": an agent paused by hand (spec 3.3 §5.7, §8.1).
+    Paused,
+    /// "Can't start": an agent the kernel cannot build (spec 3.3 §5.7, §8.1).
+    CantStart,
 }
 
 /// One agent in the roster (spec 3.3 §5.1, §8.1).
@@ -70,6 +76,19 @@ pub struct AgentRow {
     /// The session of its latest work, to open its thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Its area, for an agent the person added (spec 3.3 §5.7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<String>,
+    /// How much it asks first, for an agent the person added (spec 3.3 §5.7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ModeView>,
+    /// An agent the person added: it has settings beyond its mode and rules (spec 3.3 §5.7).
+    /// Absent when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub added: bool,
+    /// The caller may change it here (spec 3.3 §7.2). Absent when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub can_change: bool,
 }
 
 /// How much agents act on their own (spec 3.3 §8.1).
@@ -175,6 +194,8 @@ pub enum Reversibility {
     CantBeUnsent,
     /// "Can't be undone".
     CantBeUndone,
+    /// "You can remove it later": an agent a person adds (spec 3.3 §5.7).
+    CanBeRemoved,
 }
 
 /// One step of how a decision got here (spec 3.3 §7.1).
@@ -293,6 +314,9 @@ pub struct DecisionCard {
     /// The answer, once decided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decided: Option<Decided>,
+    /// The agent a suggestion would add, shown in place of the call (spec 3.3 §5.7, S-I13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adds_agent: Option<crate::agents::AgentCardView>,
 }
 
 /// Who wrote a message in a thread.

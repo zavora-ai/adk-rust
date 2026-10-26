@@ -83,6 +83,20 @@ struct Inner {
     completions: Arc<Completions>,
 }
 
+/// Writes through [`ConsoleIo::print`]; text that is not UTF-8 is printed lossily.
+pub(crate) struct ConsoleWriter(ConsoleIo);
+
+impl Write for ConsoleWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.print(&String::from_utf8_lossy(buf));
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Text printed for calls whose line the event reader has not shown yet (spec 3.1 §8.1).
 #[derive(Default)]
 struct CallPrints {
@@ -90,6 +104,8 @@ struct CallPrints {
     shown: HashSet<String>,
     /// `(call id, text)` waiting for the call's line, in print order.
     pending: Vec<(String, String)>,
+    /// Calls whose decision a prompter printed, so their response does not print it again.
+    decided: HashSet<String>,
 }
 
 enum Backend {
@@ -233,6 +249,33 @@ impl ConsoleIo {
         }
     }
 
+    /// Prints the decision a prompter took for the call `call_id`, as
+    /// [`print_for_call`](Self::print_for_call) does, and records it, so the call's
+    /// response does not print the decision again after the call's output (spec 3.1
+    /// §7.33 fix 2a).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_cli::console::ConsoleIo;
+    ///
+    /// let console = ConsoleIo::scripted([], true);
+    /// console.call_shown("call-1");
+    /// console.print_decision(Some("call-1"), "[approved] bash\n");
+    /// assert_eq!(console.transcript(), "[approved] bash\n");
+    /// ```
+    pub fn print_decision(&self, call_id: Option<&str>, text: &str) {
+        if let Some(id) = call_id {
+            lock(&self.inner.call_prints).decided.insert(id.to_string());
+        }
+        self.print_for_call(call_id, text);
+    }
+
+    /// Whether a prompter printed the decision for the call `call_id`, forgetting it.
+    pub(crate) fn take_printed_decision(&self, call_id: &str) -> bool {
+        lock(&self.inner.call_prints).decided.remove(call_id)
+    }
+
     /// Records that the event reader showed the line of call `call_id` and prints what
     /// was waiting for it, in the order it was printed.
     pub fn call_shown(&self, call_id: &str) {
@@ -256,6 +299,7 @@ impl ConsoleIo {
         let pending = {
             let mut prints = lock(&self.inner.call_prints);
             prints.shown.clear();
+            prints.decided.clear();
             std::mem::take(&mut prints.pending)
         };
         for (_, text) in pending {
@@ -327,6 +371,13 @@ impl ConsoleIo {
             }
             Backend::Scripted { transcript, .. } => lock(transcript).push_str(text),
         }
+    }
+
+    /// A writer that prints through [`print`](Self::print), so a printer's output and the
+    /// console's own lines reach the terminal, or a scripted console's transcript, in the
+    /// order they were written.
+    pub(crate) fn writer(&self) -> ConsoleWriter {
+        ConsoleWriter(self.clone())
     }
 
     /// Everything a scripted console showed and read. Empty for the terminal.

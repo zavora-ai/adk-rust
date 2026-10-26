@@ -36,6 +36,18 @@ channels = ["adk-kernel/channels"]
 # codes and "Confirm it's you" (passkeys checked by webauthn-rs, which links the system's
 # OpenSSL). Implies `web`; its wire types compile under `web`.
 mobile = ["web", "dep:web-push-native", "dep:p256", "dep:qrcode", "dep:base64ct", "dep:sha2", "dep:getrandom", "dep:webauthn-rs", "dep:url"]
+# Voice and video (spec 3.3 §5.6): spoken "allow once" and "deny" through the engine, with a
+# cancel window, the camera and the screen as input only while their switches are on. The
+# runtime drives the harness's realtime session (`adk-realtime`); hosts pass the provider
+# models, so no provider is compiled in here. With `web`, the voice view's socket.
+voice = ["adk-harness/voice", "dep:adk-realtime", "adk-realtime/integration", "dep:sha2", "dep:base64", "axum?/ws"]
+# The website's views on the web home (spec 3.5 §7.1, §8.2): the web editor, onboarding, the
+# charter cards, the site view and the weekly review over `adk-website`'s desk, with their own
+# OpenAPI document and generated TypeScript. Implies `web`.
+website = ["web", "dep:adk-website", "dep:base64"]
+# Gemini Live and the OpenAI Realtime API, for the live voice test and the `voice_home`
+# example only: a host builds its own provider models.
+voice-live = ["voice", "adk-realtime/gemini", "adk-realtime/openai"]
 
 [dependencies]
 adk-core.workspace = true
@@ -43,10 +55,17 @@ adk-session.workspace = true
 adk-runner.workspace = true
 # The control-plane client, the process table, freezing and the `/proc` ledger.
 adk-kernel.workspace = true
-# Modes, `Harness::set_mode` and standing rules for "Always allow".
-adk-harness.workspace = true
+# Modes, `Harness::set_mode` and standing rules for "Always allow"; `kernel` for the
+# assessment of agents a person adds (spec 3.3 §5.7).
+adk-harness = { workspace = true, features = ["kernel"] }
+# The realtime session a voice conversation runs on (`voice`).
+adk-realtime = { workspace = true, optional = true }
+# The website's desk: its views and the decisions people make on them (`website`).
+adk-website = { workspace = true, optional = true }
 async-trait.workspace = true
 axum = { version = "0.8", optional = true }
+# Camera and screen frames go to the realtime provider base64-encoded (`voice`).
+base64 = { version = "0.22", optional = true }
 chrono.workspace = true
 crossterm = { version = "0.29", optional = true, features = ["event-stream"] }
 futures.workspace = true
@@ -96,8 +115,14 @@ adk-kernel = { path = "../adk-kernel", features = ["channels", "conformance"] }
 # The kernel-hosted harness of the scenario tests.
 adk-harness = { path = "../adk-harness", features = ["kernel"] }
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic", "openai", "gemini"] }
+# The provider-free realtime model the voice tests and `scripted_voice_home` script.
+adk-realtime = { path = "../adk-realtime", features = ["scripted"] }
 adk-server = { path = "../adk-server", features = ["approvals"] }
 adk-session = { path = "../adk-session" }
+# The website's scripted site: its pipeline, wallet and wire types (feature `website`).
+adk-site = { path = "../adk-site" }
+adk-payments = { path = "../adk-payments" }
+awp-types = { path = "../awp-types" }
 # The fake Telegram Bot API the chat adapter's tests run against.
 axum = "0.8"
 dotenvy = "0.15"
@@ -110,6 +135,10 @@ tower = { version = "0.4", features = ["util"] }
 vt100 = "0.16"
 # The phone's passkey tests rebuild a ceremony around a recorded browser's challenge.
 webauthn-rs = { version = "=0.5.5", default-features = false, features = ["danger-allow-state-serialisation"] }
+# The voice view's socket, opened as a browser would (spec 3.3 §5.6).
+tokio-tungstenite = "0.29"
+# What the live voice test's provider says, with `RUST_LOG`.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # The web home over a scripted kernel, which the end-to-end test in `web/e2e` opens.
 [[example]]
@@ -125,6 +154,23 @@ required-features = ["web"]
 [[example]]
 name = "scripted_phone"
 required-features = ["mobile"]
+
+# The voice view over a scripted realtime model, which `web/e2e/voice.spec.ts` opens.
+[[example]]
+name = "scripted_voice_home"
+required-features = ["web", "voice"]
+
+# The website's views over a bakery's site, fresh or a week after launch, which the website
+# end-to-end tests in `web/e2e` open (spec 3.5 §8.2).
+[[example]]
+name = "scripted_website"
+path = "examples/scripted_website/main.rs"
+required-features = ["website"]
+
+# The voice view on Gemini Live or the OpenAI Realtime API, with keys from the repo's `.env`.
+[[example]]
+name = "voice_home"
+required-features = ["web", "voice-live"]
 
 [package.metadata.docs.rs]
 all-features = true

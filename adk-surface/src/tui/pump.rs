@@ -67,6 +67,21 @@ impl Pump {
         Self { session: sender, briefing, tasks: vec![state, feed] }
     }
 
+    /// Shows each line `notices` brings as a notice, until the terminal ends.
+    pub(crate) fn forward_notices(
+        &mut self,
+        mut notices: mpsc::UnboundedReceiver<String>,
+        tx: mpsc::UnboundedSender<Update>,
+    ) {
+        self.tasks.push(tokio::spawn(async move {
+            while let Some(text) = notices.recv().await {
+                if tx.send(Update::Notice(text)).is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
     /// Reads "While you were away" again at once.
     pub(crate) fn refresh_briefing(&self) {
         self.briefing.notify_one();

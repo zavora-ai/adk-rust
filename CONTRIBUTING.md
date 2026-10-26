@@ -435,7 +435,7 @@ Require exactly these stable contexts in the `main` ruleset:
 `pr-gate` covers `fmt`, `web`, `clippy`, Linux workspace tests, the eight
 `feature-coverage` shards driven by `scripts/feature-coverage-pairs.txt`, the
 `postgres` job driven by `scripts/test-postgres.sh`, docs and doctests, the four
-standalone-example shards, `kernel-scenarios`, `templates`, the macOS build, and the Windows build plus
+standalone-example shards, `kernel-scenarios`, `website-scenarios`, `templates`, the macOS build, and the Windows build plus
 sandbox portability smokes. `semver` stays separate because its
 workflow has an independent trigger and keeps stable crates strict while
 beta/experimental crates remain advisory.
@@ -447,7 +447,7 @@ skipped job only when the scope or the event skipped it:
 |-----|---------------|
 | Pull request that touches code | every job |
 | Pull request that touches only `docs/`, Markdown, or `LICENSE*` | `fmt`, `web`, `templates` (the documentation gates) |
-| Merge-queue build | every job except `docs`, the standalone-example shards, `kernel-scenarios` and the macOS and Windows builds, which the pull request already passed and a merge cannot break on its own |
+| Merge-queue build | every job except `docs`, the standalone-example shards, `kernel-scenarios`, `website-scenarios` and the macOS and Windows builds, which the pull request already passed and a merge cannot break on its own |
 
 ### NOT required (informational tiers)
 
@@ -459,7 +459,8 @@ These run post-merge or on a schedule and MUST NOT be branch-protection-required
   `doc-examples`; `sandbox-linux.yml` (`push: main`, path-filtered pull requests,
   `workflow_dispatch`): `bubblewrap`.
 - **Nightly tier** (`ci-nightly.yml`, `on: schedule`): the `features (…)`
-  feature-combination matrix jobs, `supply-chain`, `durable-stores`, `integration-tests`.
+  feature-combination matrix jobs, `supply-chain`, `durable-stores`, `integration-tests`,
+  `website-wordpress` and `website-soak` (spec 3.5's WordPress fixture and S19 soak).
 - **Code scanning** (`codeql.yml`, `on: push: branches:[main]` and weekly): the
   `Analyze (…)` CodeQL jobs. Alerts appear under Security → Code scanning; test
   code and examples are excluded by `.github/codeql/config.yml`.

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FormEvent, MouseEvent } from "react";
 import type {
   AgentsResponse,
@@ -24,8 +24,17 @@ import "./tray.css";
 /** Where the web home keeps the theme (`theme.ts`), which the panel follows. */
 const THEME_KEY = "adk.home.theme";
 
-/** At most this many answered cards stay on the panel, with who answered. */
+/** At most this many answered cards stay on the panel, each as one line with who answered. */
 const SETTLED_SHOWN = 3;
+
+/** How long an answered card's line stays on the panel after the answer. */
+const SETTLED_FOR_MS = 5 * 60_000;
+
+/** An answered card's line, and when it leaves the panel. */
+interface Settled {
+  card: DecisionCard;
+  until: number;
+}
 
 /** What the tray panel reads and does (spec 3.3 §5.5). `HttpClient` built for the tray is one. */
 export interface TrayClient {
@@ -66,7 +75,7 @@ export function TrayPanel({ client }: { client: TrayClient }) {
     ]);
     return { running, waiting, agenda };
   });
-  const [settled, setSettled] = useState<DecisionCard[]>([]);
+  const [settled, setSettled] = useState<Settled[]>([]);
   const [problem, setProblem] = useState("");
 
   const { refresh: refreshStatus } = status;
@@ -134,9 +143,32 @@ export function TrayPanel({ client }: { client: TrayClient }) {
     [client, refresh],
   );
 
+  // An answered card stays as one line for five minutes from the answer, until a decision the
+  // panel has not shown arrives, and three at most (spec 3.3 §5.5).
   const settle = useCallback((card: DecisionCard) => {
-    setSettled((all) => [card, ...all.filter((known) => known.id !== card.id)].slice(0, SETTLED_SHOWN));
+    const answered = Date.parse(card.decided?.at ?? "");
+    const until = (Number.isNaN(answered) ? Date.now() : answered) + SETTLED_FOR_MS;
+    setSettled((all) => [{ card, until }, ...all.filter((known) => known.card.id !== card.id)].slice(0, SETTLED_SHOWN));
   }, []);
+
+  useEffect(() => {
+    if (settled.length === 0) return;
+    const next = Math.min(...settled.map((line) => line.until));
+    const timer = window.setTimeout(
+      () => setSettled((all) => all.filter((line) => line.until > Date.now())),
+      Math.max(0, next - Date.now()),
+    );
+    return () => window.clearTimeout(timer);
+  }, [settled]);
+
+  const shownBefore = useRef<Set<string>>(undefined);
+  useEffect(() => {
+    const open = decisions.value;
+    if (!open) return;
+    const before = shownBefore.current;
+    shownBefore.current = new Set([...(before ?? []), ...open.map((card) => card.id)]);
+    if (before && open.some((card) => !before.has(card.id))) setSettled([]);
+  }, [decisions.value]);
 
   async function stopAll(event: MouseEvent<HTMLButtonElement>) {
     setProblem("");
@@ -151,7 +183,10 @@ export function TrayPanel({ client }: { client: TrayClient }) {
   const unreachable = !unauthorized && status.error !== undefined && !(status.error instanceof ApiError);
   const line = unreachable || unauthorized ? undefined : status.value;
   const open = unreachable ? [] : (decisions.value ?? []);
-  const shown = [...open, ...settled.filter((card) => !open.some((candidate) => candidate.id === card.id))];
+  const shown = [
+    ...open,
+    ...settled.map((line) => line.card).filter((card) => !open.some((candidate) => candidate.id === card.id)),
+  ];
   const agents = roster.value?.agents;
   const primary = roster.value?.primary ?? undefined;
   const nameOf = (target: string) =>

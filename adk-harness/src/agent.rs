@@ -175,6 +175,9 @@ pub struct HarnessRuntime {
     /// The partition the harness was built for and its policy (spec 3.2 §7.8).
     #[cfg(feature = "kernel")]
     pub(crate) partition: Option<crate::partition::PartitionWiring>,
+    /// The kernel target the harness stamps its sessions with (spec 3.3 §5.7 "Threads").
+    #[cfg(feature = "kernel")]
+    pub(crate) session_stamp: Option<String>,
     /// Provider-executed search and URL tools, when the operator enabled any (spec 3.1 §7.20).
     #[cfg(feature = "web")]
     pub(crate) provider_web: Option<Arc<crate::web::provider::ProviderWebToolset>>,
@@ -426,10 +429,12 @@ pub(crate) fn names_non_waivable(
     };
     match *tool {
         "bash" => args.get("unsandboxed").is_some_and(|value| *value != Value::Bool(false)),
-        "write_file" | "edit_file" => args
-            .get("path")
-            .and_then(Value::as_str)
-            .is_none_or(|path| is_protected_target(root, path)),
+        // A protected path anywhere in a patch makes the whole call non-waivable (I67).
+        "write_file" | "edit_file" | crate::edits::APPLY_PATCH => {
+            crate::edits::edit_paths(tool, &args).is_none_or(|paths| {
+                paths.is_empty() || paths.iter().any(|path| is_protected_target(root, path))
+            })
+        }
         _ => false,
     }
 }
@@ -832,6 +837,13 @@ impl Agent for HarnessAgent {
             Some(wiring) => wiring.session_mark(ctx.as_ref(), self.name())?,
             None => None,
         };
+        // A thread belongs to one agent: the agent's harness stamps it on its first run and
+        // every other agent refuses it (spec 3.3 §5.7 "Threads").
+        #[cfg(feature = "kernel")]
+        let stamp = match &self.runtime.session_stamp {
+            Some(stamp) => crate::agents::stamp_event(ctx.as_ref(), stamp, self.name())?,
+            None => None,
+        };
         // A run that starts in Ask or Auto with a provider-executed web tool declared
         // records that an ungoverned fetch path was live (spec 3.1 §7.20, I49).
         #[cfg(feature = "web")]
@@ -858,6 +870,14 @@ impl Agent for HarnessAgent {
             Some(mark) => {
                 use futures::StreamExt as _;
                 Box::pin(futures::stream::iter([Ok(mark)]).chain(events)) as EventStream
+            }
+            None => events,
+        };
+        #[cfg(feature = "kernel")]
+        let events = match stamp {
+            Some(stamp) => {
+                use futures::StreamExt as _;
+                Box::pin(futures::stream::iter([Ok(stamp)]).chain(events)) as EventStream
             }
             None => events,
         };
@@ -1239,11 +1259,10 @@ impl HarnessAgent {
             false,
         );
         let protected = kind == crate::ToolKind::Edit
-            && request
-                .args
-                .get("path")
-                .and_then(Value::as_str)
-                .is_none_or(|path| is_protected_target(runtime.workspace.root(), path));
+            && crate::edits::edit_paths(&request.tool_name, &request.args).is_none_or(|paths| {
+                paths.is_empty()
+                    || paths.iter().any(|path| is_protected_target(runtime.workspace.root(), path))
+            });
         if !kind.rule_eligible() || crate::TableRow::of(&kind, protected).is_non_waivable() {
             return Err(rule_refused("no standing rule applies to this call; decide it once"));
         }
@@ -1435,6 +1454,15 @@ mod tests {
         assert!(!strip(&key("bash", r#"{"command":"ls"}"#)));
         assert!(strip(&key("write_file", r#"{"path":"AGENTS.md"}"#)));
         assert!(!strip(&key("write_file", r#"{"path":"src/a.rs"}"#)));
+        let patch = |paths: &[&str]| {
+            let body: String =
+                paths.iter().map(|path| format!("*** Add File: {path}\n+x\n")).collect();
+            serde_json::json!({ "patch": format!("*** Begin Patch\n{body}*** End Patch") })
+                .to_string()
+        };
+        assert!(!strip(&key("apply_patch", &patch(&["src/a.rs", "src/b.rs"]))));
+        assert!(strip(&key("apply_patch", &patch(&["src/a.rs", "AGENTS.md"]))));
+        assert!(strip(&key("apply_patch", r#"{"patch":"not a patch"}"#)));
         assert!(strip("garbage"));
     }
 

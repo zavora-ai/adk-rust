@@ -1,5 +1,7 @@
 #[cfg(feature = "audit")]
 mod audit;
+#[cfg(feature = "website")]
+mod awp_cli;
 mod cli;
 mod deploy;
 mod graph;
@@ -24,12 +26,16 @@ mod sessions;
 mod setup;
 #[cfg(feature = "harness")]
 mod shared_store;
+#[cfg(feature = "website")]
+mod site_cli;
 mod skills;
 #[cfg(all(feature = "harness", feature = "persist", feature = "encrypted"))]
 mod store;
 mod ultra;
 #[cfg(feature = "voice")]
 mod voice_cli;
+#[cfg(feature = "website")]
+mod website_cli;
 
 use adk_agent::LlmAgentBuilder;
 use adk_cli::{Launcher, launcher::ThinkingDisplayMode};
@@ -271,6 +277,10 @@ async fn run() -> Result<()> {
             kernel_cli::act(&kernel, &pid, kernel_cli::Action::Resume).await
         }
         #[cfg(feature = "harness")]
+        Some(Commands::Agents { output, yes, kernel, args }) => {
+            harness_cli::agents::command(&kernel, &args, output == "json", yes).await
+        }
+        #[cfg(feature = "harness")]
         Some(Commands::Partitions { command, kernel }) => {
             kernel_cli::partitions(command, kernel).await
         }
@@ -339,6 +349,12 @@ async fn run() -> Result<()> {
         Some(Commands::Graph { command }) => graph::run(command).await,
         #[cfg(feature = "audit")]
         Some(Commands::Audit { command }) => audit::run(command).await,
+        #[cfg(feature = "website")]
+        Some(Commands::Site { command, target }) => site_cli::run(command, target).await,
+        #[cfg(feature = "website")]
+        Some(Commands::Awp { command }) => awp_cli::run(command).await,
+        #[cfg(feature = "website")]
+        Some(Commands::Website { command }) => website_cli::run(command).await,
     }
 }
 

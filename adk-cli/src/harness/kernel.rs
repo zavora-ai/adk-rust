@@ -29,6 +29,7 @@ use super::args::PROJECT_CONFIG_FILE;
 /// | `[kernel.consolidation] max_tokens_per_tick` | The tick's token cap | Applies only when lower |
 /// | `[[kernel.partitions]]`, `coordinator` | The partitions `up` runs, one harness each, and the one whose harness may cross into the others (spec 3.2 §7.8) | Ignored |
 /// | `drivers` | The driver manifests `up` mounts once you approve each (spec 3.2 §7.7) | Ignored; its `.adk/drivers/<id>.toml` restricts the driver of that id |
+/// | `[[kernel.webhooks]]` | Signed webhooks `up` serves at `/hooks/{name}` to wake the kernel's sleepers (spec 3.5 §10 X11): `name` and `secret` (`env:VAR` or `file:PATH`, a Standard Webhooks `whsec_` secret) | Ignored |
 ///
 /// The consolidation tick is on in the CLI's Ask and Auto partitions with long-term memory
 /// and off otherwise ([`enable_consolidation`](Self::enable_consolidation), spec 3.2 §13 Q1);
@@ -183,6 +184,8 @@ struct KernelTable {
     partitions: Option<Vec<PartitionTable>>,
     coordinator: Option<String>,
     drivers: Option<toml::Value>,
+    /// `[[kernel.webhooks]]`, which `up` reads for its webhook ingress (spec 3.5 §10 X11).
+    webhooks: Option<toml::Value>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
 }
@@ -537,6 +540,12 @@ impl KernelSettings {
                          user config"
                     ));
                 }
+            }
+            if project.webhooks.is_some() {
+                settings.notes.push(format!(
+                    "{origin}: `kernel.webhooks` ignored — which webhooks wake the kernel is \
+                     yours to choose; list them in your user config"
+                ));
             }
             if project.drivers.is_some() {
                 settings.notes.push(format!(

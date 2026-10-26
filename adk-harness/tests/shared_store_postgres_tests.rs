@@ -148,3 +148,22 @@ async fn a_postgres_url_checkpoints_plans_across_processes() {
     let second = adk_harness::checkpointer_from_url(&database_url()).await.unwrap();
     assert_eq!(second.load(&thread).await.unwrap(), Some(checkpoint));
 }
+
+/// The file tools' read records on PostgreSQL (spec 3.1 §7.26, §10 D7): the conformance
+/// cases, and a record written through one replica's store read through another's.
+#[tokio::test]
+#[ignore = "needs DATABASE_URL; CI's postgres job runs it"]
+async fn read_records_conform_and_reach_every_replica() {
+    use adk_harness::conformance::read_records;
+    async fn store(options: &PgConnectOptions) -> adk_harness::PostgresReadRecords {
+        let store = adk_harness::PostgresReadRecords::new(pool(options).await);
+        store.migrate().await.unwrap();
+        store
+    }
+    read_records::round_trip(&store(&scratch().await).await).await;
+    read_records::scopes_are_isolated(&store(&scratch().await).await).await;
+    read_records::forget_removes_one_path(&store(&scratch().await).await).await;
+    let options = scratch().await;
+    read_records::records_reach_every_instance(&store(&options).await, &store(&options).await)
+        .await;
+}

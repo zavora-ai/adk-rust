@@ -82,6 +82,9 @@ members = [
 
     # Service drivers: DNS, email, analytics, social, advertising (spec 3.5 §7.13)
     "adk-drivers",
+
+    # The prebuilt AWP website: kinds, team, onboarding, jobs (spec 3.5 Part C)
+    "adk-website",
 ]
 exclude = [
     # Extracted to standalone repo: https://github.com/zavora-ai/adk-studio
@@ -231,3 +234,4 @@ awp-types = { path = "awp-types", version = "3.0.0" }
 adk-awp = { path = "adk-awp", version = "3.0.0" }
 adk-acp = { path = "adk-acp", version = "3.0.0" }
 adk-site = { path = "adk-site", version = "3.0.0" }
+adk-website = { path = "adk-website", version = "3.0.0" }

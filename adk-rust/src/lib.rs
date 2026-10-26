@@ -1193,6 +1193,46 @@ pub mod surface {
     pub use adk_surface::*;
 }
 
+/// The AWP 2.0 website product (spec 3.5 Part C, §7.1, D-14): site kinds and their charter
+/// templates, the team of eight agents, onboarding, jobs, incidents, alarms and the weekly
+/// review.
+///
+/// Available with feature: `website` (in `full`).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_rust::website::onboarding::{StartingPoint, plan};
+///
+/// // The onboarding plan for a site that starts from nothing.
+/// let steps = plan(&StartingPoint::Nothing, None);
+/// assert!(!steps.is_empty());
+/// ```
+#[cfg(feature = "website")]
+#[cfg_attr(docsrs, doc(cfg(feature = "website")))]
+pub mod website {
+    pub use adk_website::*;
+}
+
+/// The site pipeline of an AWP 2.0 website (spec 3.5 §7.8): content as files, the built-in
+/// generator, the launch gate, signed releases in the site log, hosts, migration and freeze.
+///
+/// Available with feature: `website` (in `full`).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_rust::site::content::SiteConfig;
+///
+/// let config = SiteConfig::from_toml("name = \"Example\"\ndomain = \"example.com\"\nlanguages = [\"en\"]\n").unwrap();
+/// assert_eq!(config.base_url(), "https://example.com");
+/// ```
+#[cfg(feature = "website")]
+#[cfg_attr(docsrs, doc(cfg(feature = "website")))]
+pub mod site {
+    pub use adk_site::*;
+}
+
 // ============================================================================
 // Enterprise Client SDK (feature-gated, experimental)
 // ============================================================================

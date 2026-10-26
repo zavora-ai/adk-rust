@@ -27,6 +27,8 @@
 //! | `web` | The web home: its HTTP API under `/api/surface`, mounted with `ServerBuilder::add_api_routes`, with its OpenAPI document, and its page at `/ui/`, mounted with `ServerBuilder::add_root_routes` | Beta |
 //! | `channels` | Chat: the Telegram adapter over the kernel's channel contract, `channels::TelegramAdapter` (spec 3.3 §5.3) | Beta |
 //! | `mobile` | The phone: the web home installed on a phone, Web Push from the person's own kernel, pairing QR codes and "Confirm it's you", `mobile::router` (spec 3.3 §5.4); implies `web` | Beta |
+//! | `voice` | Voice and video: spoken "allow once" and "deny" through the engine with a cancel window, the camera and the screen as input while their switches are on; with `web`, the voice view's socket (`voice::router`, `voice::socket_routes`) (spec 3.3 §5.6) | Beta |
+//! | `website` | The website's views on the web home (spec 3.5 §8.2): the web editor, onboarding, the charter cards, the site view and the weekly review over `adk-website`'s desk, `web::website::router`; implies `web` | Experimental |
 //!
 //! ## Example
 //!
@@ -53,6 +55,7 @@
 
 #![warn(missing_docs)]
 
+mod agents;
 pub mod answers;
 #[cfg(feature = "channels")]
 pub mod channels;
@@ -70,10 +73,17 @@ pub mod rules;
 mod source;
 #[cfg(feature = "tui")]
 pub mod tui;
+#[cfg(any(feature = "voice", feature = "web"))]
+pub mod voice;
 #[cfg(feature = "web")]
 pub mod web;
 pub mod words;
 
+pub use agents::{
+    AgentCardView, AgentChoices, AgentColor, AgentDetail, AgentDraft, AgentLife, AgentPreview,
+    AgentPreviewRequest, AreaChoice, CardLine, ColorChoice, EndedWork, FileUse, ModelView,
+    ShellUse, UsesDraft, WebUse,
+};
 pub use answers::{
     AnswerLog, AnswerRecord, AuditAnswerLog, InMemoryAnswerLog, RECORD_LINES, RecordAnswerLog,
     SURFACE_AUDIT_DECIDE,

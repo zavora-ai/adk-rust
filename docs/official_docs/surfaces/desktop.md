@@ -26,10 +26,17 @@ opens the home at the decision (spec 3.3 §7.2).
 |---|---|---|
 | Low or medium risk, shown in full | "Finance · since 18:00 · Medium risk", the exact call in mono, whether it can be taken back | **Allow once** and **Deny** |
 | High risk, money, a call shown cut short, or an answer that needs you to confirm it is you | "Code · High risk · open to decide" | **Deny** when the engine offers it, since saying no is always safe; approving opens the home at `/ui/decisions/<id>` from the heading or the chevron |
-| Answered here or elsewhere | "You said yes from the tray at 07:40" | Nothing |
+| Answered here or elsewhere | One line: a check, the heading, then "You said yes from the tray at 07:40". A click, Enter or Space opens it to show the exact call again | Nothing: opening the line answers nothing |
 
 Every card's heading opens the home at that decision, where **Always allow**, **Edit** and
-**Confirm it's you and approve** are answered. Ids and versions are never shown.
+**Confirm it's you and approve** are answered. Ids and versions are never shown. An answered
+card's line leaves the panel five minutes after the answer, or as soon as a new decision
+arrives; at most three stay.
+
+The panel fills its window and never scrolls as a page: its header, **Open home** and
+**Stop all** stay put, and the decisions and what comes next scroll between them. The home
+window opened from **Open home** or a card's heading does the same at any size: the header
+stays put and each pane scrolls inside itself.
 
 | Rule | On the tray |
 |---|---|

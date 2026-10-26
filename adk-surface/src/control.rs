@@ -6,13 +6,15 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+use adk_core::audit_log::{AuditRecordDraft, AuditRecorder, AuditTrail};
 use adk_core::{
     ApprovalAction, ApprovalDecision, ApprovalPolicy, ApprovalRequest, ApprovalRisk, ErrorCategory,
     Event, RunCheckpointRef, RunState,
 };
+use adk_harness::HarnessMode;
 use adk_kernel::KernelEvent;
-use adk_kernel::control::ControlClient;
 use adk_kernel::control::api::{ApprovalItem, AttachRequest, LedgerParams, SpawnRequest};
+use adk_kernel::control::{ControlClient, SurfaceRecord};
 use adk_kernel::proc::LedgerEntry;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -70,6 +72,11 @@ struct Bus {
 /// while the decision waits and granted once the yes is recorded, as in process. A paired
 /// device's token reaches none of those routes, so a remote terminal offers Allow once, Edit
 /// and Deny.
+///
+/// The session's mode is read from the kernel (`GET /api/kernel/sessions/{id}/mode`) and set
+/// by the REPL's `/mode`, which the kernel runs over its harness (spec 3.3 §5.2), so the
+/// Permissions keys and `/mode` work on a thread that has no message yet. The engine's
+/// records reach the kernel's signed log through [`audit_trail`](Self::audit_trail).
 ///
 /// # Example
 ///
@@ -143,6 +150,32 @@ impl ControlSource {
     pub fn with_daily_limit(mut self, micro_usd: u64) -> Self {
         self.daily_limit = Some(micro_usd);
         self
+    }
+
+    /// The kernel's signed log, for the engine over this source: each record the engine
+    /// writes — every answer with the surface and how it was given, Stop all, Resume all, a
+    /// mode change, a message sent — goes to `POST /api/kernel/surface/records`, and the kernel
+    /// writes it with the caller as its actor (spec 3.3 §11). Only the person reaches that
+    /// route: give it to the engine of a caller the kernel admits as the operator, never a
+    /// paired device's, whose answers the kernel records itself.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    /// use adk_kernel::control::ControlClient;
+    /// use adk_surface::{ControlSource, SurfaceEngine};
+    ///
+    /// # async fn example(home: &std::path::Path) -> adk_surface::Result<()> {
+    /// let client = ControlClient::connect_local(home).await?.expect("a kernel is running");
+    /// let source = ControlSource::new(client, "adk-rust", "adk-rust");
+    /// let engine = SurfaceEngine::builder(Arc::new(source.clone())).audit(source.audit_trail()).build();
+    /// # let _ = engine;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn audit_trail(&self) -> AuditTrail {
+        AuditTrail::new(Arc::new(KernelRecorder { client: self.client.clone() }))
     }
 
     /// What the kernel's bus reports, from one subscription shared by every feed.
@@ -237,8 +270,47 @@ fn runs(state: RunState) -> bool {
     matches!(state, RunState::Running | RunState::Queued)
 }
 
+/// Whether an error of `category` may pass: the kernel was out of reach, busy or failed, not
+/// refusing.
+fn passing(category: ErrorCategory) -> bool {
+    matches!(
+        category,
+        ErrorCategory::Unavailable
+            | ErrorCategory::Timeout
+            | ErrorCategory::Internal
+            | ErrorCategory::RateLimited
+            | ErrorCategory::ResourceExhausted
+            | ErrorCategory::Cancelled
+    )
+}
+
 /// How many decisions' "Always allow" offers a source keeps.
 const OFFERS: usize = 256;
+
+/// The engine's records, written on the kernel's signed log over its control plane.
+struct KernelRecorder {
+    client: ControlClient,
+}
+
+#[async_trait]
+impl AuditRecorder for KernelRecorder {
+    fn digest(&self, value: &serde_json::Value) -> String {
+        adk_core::json_digest(value)
+    }
+
+    async fn record(&self, draft: AuditRecordDraft) -> adk_core::Result<()> {
+        // The kernel names the actor itself, as the caller it admitted.
+        let AuditRecordDraft { kind, action, decision, ext, .. } = draft;
+        let mut record = SurfaceRecord::new(kind, action);
+        if let Some(decision) = decision {
+            record = record.with_decision(decision);
+        }
+        for (key, value) in ext {
+            record = record.with_ext(key, value);
+        }
+        Ok(self.client.record_surface(&record).await?)
+    }
+}
 
 /// The standing rule the kernel prepared for a decision, granted once its yes is recorded.
 struct KernelRule {
@@ -384,8 +456,16 @@ impl Source for ControlSource {
         if let Some(label) = known(&self.offers.lock().unwrap_or_else(|e| e.into_inner())) {
             return label.map(|label| AlwaysAllowOffer { label });
         }
-        // A kernel without the route, or a device's token, offers none.
-        let label = self.client.always_allow_offer(&request.id).await.ok().flatten();
+        // A kernel without the route, or a device's token, offers none, for good; a kernel
+        // out of reach for a moment is asked again on the next draw.
+        let label = match self.client.always_allow_offer(&request.id).await {
+            Ok(label) => label,
+            Err(error) if passing(error.category()) => {
+                tracing::debug!(error = %error, decision.id = %request.id, "Always allow could not be looked up");
+                return None;
+            }
+            Err(_) => None,
+        };
         let mut offers = self.offers.lock().unwrap_or_else(|e| e.into_inner());
         if offers.len() >= OFFERS {
             offers.clear();
@@ -426,7 +506,56 @@ impl Source for ControlSource {
                 },
             );
         }
+        // A removed agent leaves the roster; the kernel's own targets are never in its table.
+        let mut gone = Vec::new();
+        for name in latest.keys() {
+            if let Ok(view) = self.client.agent(name).await
+                && matches!(
+                    view.agent.state,
+                    adk_kernel::agents::AgentRecordState::Removing
+                        | adk_kernel::agents::AgentRecordState::Removed
+                )
+            {
+                gone.push(name.clone());
+            }
+        }
+        latest.retain(|name, _| !gone.contains(name));
         Ok(latest.into_values().collect())
+    }
+
+    // The terminal changes agents through `/agent` on the kernel; this source reads them for
+    // the roster (spec 3.3 §5.7, §10 L1).
+    async fn agent_definitions(&self, user: &str) -> Result<Vec<crate::agents::AgentDetail>> {
+        let views = match self.client.agents().await {
+            Ok(views) => views,
+            // A kernel without agents of a person's own lists none.
+            Err(error)
+                if matches!(
+                    error.category(),
+                    adk_core::ErrorCategory::NotFound | adk_core::ErrorCategory::Unsupported
+                ) =>
+            {
+                return Ok(Vec::new());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let offset = *chrono::Local::now().offset();
+        Ok(views
+            .into_iter()
+            .map(|view| {
+                crate::agents::AgentDetail::of(
+                    &view.agent,
+                    view.cant_start,
+                    user,
+                    "ADK-Rust",
+                    offset,
+                )
+            })
+            .collect())
+    }
+
+    async fn agent(&self, user: &str, id: &str) -> Result<Option<crate::agents::AgentDetail>> {
+        Ok(self.agent_definitions(user).await?.into_iter().find(|detail| detail.id == id))
     }
 
     async fn busy(&self, user: &str, session: &str) -> Result<bool> {
@@ -462,6 +591,51 @@ impl Source for ControlSource {
 
     async fn stopped(&self) -> Result<bool> {
         Ok(self.client.health().await?.frozen)
+    }
+
+    async fn mode(&self, _user: &str, session: Option<&str>) -> Result<Option<HarnessMode>> {
+        let Some(session) = session else {
+            return Ok(None);
+        };
+        match self.client.session_mode(session).await {
+            Ok(mode) => Ok(mode.and_then(|mode| mode.parse().ok())),
+            // A paired device's token, or a kernel that offers no commands, reads no mode.
+            Err(error)
+                if matches!(
+                    error.category(),
+                    ErrorCategory::Forbidden
+                        | ErrorCategory::Unauthorized
+                        | ErrorCategory::InvalidInput
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    // The kernel's `/mode` opens a new thread of the person it serves.
+    fn opens_sessions(&self) -> bool {
+        true
+    }
+
+    // The REPL's `/mode`, which the kernel runs over its harness, sets it (spec 3.3 §5.2).
+    async fn set_mode(&self, _caller: &Caller, session: &str, mode: HarnessMode) -> Result<()> {
+        let word = match mode {
+            HarnessMode::ReadOnly => "read-only",
+            other => other.as_str(),
+        };
+        self.client.run_command("mode", word, session).await?;
+        Ok(())
+    }
+
+    async fn agent_of_session(&self, user: &str, session: &str) -> Result<Option<String>> {
+        Ok(self
+            .processes(user)
+            .await?
+            .into_iter()
+            .find(|process| process.run.session_id.as_deref() == Some(session))
+            .map(|process| process.run.target))
     }
 
     async fn spend(&self, user: &str) -> Result<Option<SpendToday>> {

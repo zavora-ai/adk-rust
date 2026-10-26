@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineConfig } from "@playwright/test";
@@ -31,6 +31,8 @@ interface Surface {
   ready: string;
   /** The example's arguments after its port and workspace. */
   args?: string;
+  /** What the project's browser runs with. */
+  use?: PlaywrightTestConfig["use"];
 }
 
 const surfaces: Surface[] = [
@@ -75,7 +77,92 @@ const surfaces: Surface[] = [
     testMatch: ["phone.spec.ts"],
     ready: "/ui/",
   },
+  {
+    // The app shell's layout over the web home's example (`e2e/fixture-server.sh`): no page
+    // scroll at any size, panes that scroll inside themselves, the tray panel's too.
+    name: "shell",
+    prefix: "SHELL",
+    command: "bash adk-surface/web/e2e/fixture-server.sh",
+    port: 8800,
+    testMatch: ["shell.spec.ts"],
+    ready: "/ui/fixture.html",
+  },
+  {
+    // The voice view (spec 3.3 §5.6): Chromium's fake microphone plays a tone recorded here, and
+    // grants the microphone and the camera without asking.
+    name: "voice",
+    prefix: "VOICE",
+    example: "scripted_voice_home",
+    port: 8797,
+    testMatch: ["voice.spec.ts"],
+    ready: "/ui/voice",
+    features: "web,voice",
+    use: {
+      launchOptions: {
+        args: [
+          "--use-fake-ui-for-media-stream",
+          "--use-fake-device-for-media-stream",
+          `--use-file-for-fake-audio-capture=${toneWav()}`,
+        ],
+      },
+    },
+  },
+  {
+    // Agents a person adds over `adk-rust up` with a scripted model (`e2e/agents-kernel.sh`),
+    // whose first turn suggests one (spec 3.3 §5.7).
+    name: "agents",
+    prefix: "AGENTS",
+    command: "bash adk-surface/web/e2e/agents-kernel.sh",
+    // 8792, 8796, 8797, 8799 and 8800 are taken.
+    port: 8801,
+    testMatch: ["agents.spec.ts"],
+    ready: "/ui/",
+  },
+  {
+    // The website's views (spec 3.5 §8.2): a fresh site claimed and onboarded to release 1.
+    name: "website",
+    prefix: "WEBSITE",
+    example: "scripted_website",
+    features: "website",
+    // 8791 to 8801 are taken.
+    port: 8803,
+    testMatch: ["website.spec.ts"],
+    ready: "/api/surface/website/setup",
+  },
+  {
+    // The same site a week after launch: the site view, the weekly review and the web editor.
+    name: "website-live",
+    prefix: "WEBSITE_LIVE",
+    example: "scripted_website",
+    features: "website",
+    port: 8804,
+    testMatch: ["website-live.spec.ts"],
+    ready: "/api/surface/website/setup",
+    args: "--live",
+  },
 ];
+
+/** One second of a 440 Hz tone, 16 kHz mono PCM16, for Chromium's fake microphone. */
+function toneWav(): string {
+  const rate = 16_000;
+  const samples = new Int16Array(rate).map((_, i) => Math.round(Math.sin((2 * Math.PI * 440 * i) / rate) * 8_000));
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + samples.byteLength, 4);
+  header.write("WAVEfmt ", 8);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(rate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(samples.byteLength, 40);
+  const path = join(tmpdir(), "adk-voice-e2e-tone.wav");
+  writeFileSync(path, Buffer.concat([header, Buffer.from(samples.buffer)]));
+  return path;
+}
 
 function env(surface: Surface, name: string): string | undefined {
   return process.env[`${surface.prefix}_E2E_${name}`];
@@ -107,8 +194,15 @@ const servers = surfaces.map((surface) => {
   };
 });
 
+// `--project <name>` starts only the servers of the projects named, so running one surface's
+// tests never builds every other surface's example.
+const named = process.argv.flatMap((arg, index, all) =>
+  arg === "--project" ? [all[index + 1]] : arg.startsWith("--project=") ? [arg.slice("--project=".length)] : [],
+);
+
 const webServer: PlaywrightTestConfig["webServer"] = servers
   .filter((server) => !server.external)
+  .filter((server) => named.length === 0 || named.includes(server.surface.name))
   .map((server) => ({
     command: `${server.command} ${server.port} ${server.workspace} ${server.surface.args ?? ""}`.trim(),
     cwd: "../..",
@@ -132,7 +226,7 @@ export default defineConfig({
   projects: servers.map((server) => ({
     name: server.surface.name,
     testMatch: server.surface.testMatch,
-    use: { baseURL: server.url },
+    use: { ...server.surface.use, baseURL: server.url },
   })),
   webServer,
 });

@@ -220,7 +220,7 @@ impl<'a> Renderer<'a> {
                 };
                 let mut map = base(kind, &name);
                 let released =
-                    |key: &str| (!item.is_volatile(key)).then(|| item.fields.get(key)).flatten();
+                    |key: &str| (!self.is_live(item, key)).then(|| item.fields.get(key)).flatten();
                 if let Some(summary) =
                     field_str(item, "summary").or_else(|| field_str(item, "description"))
                 {
@@ -345,12 +345,12 @@ impl<'a> Renderer<'a> {
         let mut resource: BTreeMap<String, Value> = item
             .fields
             .iter()
-            .filter(|(key, _)| !item.is_volatile(key) && !INTERNAL_FIELDS.contains(&key.as_str()))
+            .filter(|(key, _)| !self.is_live(item, key) && !INTERNAL_FIELDS.contains(&key.as_str()))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         resource.insert("id".into(), item.id.0.clone().into());
         resource.insert("url".into(), self.url(path).into());
-        for field in &item.volatile {
+        for field in crate::lanes::live_fields(&self.project.config, item) {
             let Some(value) = item.fields.get(field) else { continue };
             let mut live = Map::new();
             live.insert("value".into(), value.clone());
@@ -361,9 +361,44 @@ impl<'a> Renderer<'a> {
             if let Some(capability) = self.project.config.live_capabilities.get(field) {
                 live.insert("capability".into(), capability.clone().into());
             }
-            resource.insert(field.clone(), Value::Object(live));
+            resource.insert(field.to_string(), Value::Object(live));
         }
         resource
+    }
+
+    /// Whether `key` is one of `item`'s live fields: its own `volatile` list or its kind's
+    /// (spec 3.5 §7.8.3).
+    fn is_live(&self, item: &ContentItem, key: &str) -> bool {
+        crate::lanes::item_lane(&self.project.config, item, key) == crate::lanes::Lane::Live
+    }
+
+    /// The folded entries of `item`'s stream fields, newest first, for the page and its
+    /// Markdown twin (spec 3.5 §7.8.3 "Stream").
+    fn stream_entries(&self, item: &ContentItem, markdown: &mut String) -> Vec<Value> {
+        let mut entries = Vec::new();
+        for field in crate::lanes::stream_fields(&self.project.config, item.kind) {
+            let Some(list) = item.fields.get(field).and_then(Value::as_array) else { continue };
+            let mut folded: Vec<&Value> = list.iter().collect();
+            folded.sort_by_key(|entry| std::cmp::Reverse(entry.get("n").and_then(Value::as_u64)));
+            for entry in folded {
+                let text = entry.get("markdown").and_then(Value::as_str).unwrap_or_default();
+                let at = entry.get("publishedAt").and_then(Value::as_str).unwrap_or_default();
+                let n = entry.get("n").and_then(Value::as_u64).unwrap_or_default();
+                let corrects = entry.get("corrects").and_then(Value::as_u64);
+                markdown.push_str(&format!("- **{at}** {}\n", text.replace('\n', " ")));
+                entries.push(json!({
+                    "n": n,
+                    "at": at,
+                    "time": at.get(11..16).unwrap_or(at),
+                    "html": markdown_to_html(text),
+                    "corrects": corrects,
+                }));
+            }
+        }
+        if !entries.is_empty() {
+            markdown.push('\n');
+        }
+        entries
     }
 
     /// When an item's live values were last released: its update time, else the build's.
@@ -667,7 +702,7 @@ impl<'a> Renderer<'a> {
         ctx.insert("figures".into(), figures.into());
         let mut rows = Vec::new();
         for key in DISPLAY_FIELDS {
-            if item.is_volatile(key) {
+            if self.is_live(item, key) {
                 continue;
             }
             let Some(value) = item.fields.get(*key).filter(|v| !v.is_null()) else { continue };
@@ -699,9 +734,8 @@ impl<'a> Renderer<'a> {
         }
         ctx.insert("fields".into(), rows.into());
         let as_of = self.live_as_of(item);
-        let live: Vec<Value> = item
-            .volatile
-            .iter()
+        let live: Vec<Value> = crate::lanes::live_fields(&self.project.config, item)
+            .into_iter()
             .map(|name| {
                 json!({
                     "name": name,
@@ -717,6 +751,10 @@ impl<'a> Renderer<'a> {
             ctx.insert("body".into(), markdown_to_html(body).into());
             markdown.push_str(body.trim_end());
             markdown.push('\n');
+        }
+        let stream = self.stream_entries(item, markdown);
+        if !stream.is_empty() {
+            ctx.insert("stream".into(), json!({ "id": item.id.0, "entries": stream }));
         }
         let prefix = self.project.config.language_prefix(&page.language);
         let tag_links: Vec<Value> = tags(item)

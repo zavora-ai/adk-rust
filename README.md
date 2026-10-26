@@ -249,7 +249,8 @@ Each row links to its guide and a runnable example.
 | Servers — REST with SSE, A2A v1.0.0, durable background runs, cron, webhook wake-ups, approvals | [deployment](docs/official_docs/deployment/server.md) | [`examples/background_runs`](examples/background_runs) |
 | Governance — tool policies, a replicated kill switch, run budgets, a spend ledger, an action ledger, and signed audit logs | [tool authorization](docs/official_docs/security/tool-authorization.md) | [`examples/durable_company`](examples/durable_company) |
 | Gemini Enterprise Agent Platform — Agent Engine BYOC, managed state, memory, artifacts, telemetry and sandbox | [agent-engine](docs/official_docs/deployment/agent-engine.md) | [`examples/vertex_sandbox`](examples/vertex_sandbox) |
-| Agentic Web Protocol — discovery, manifests, trust levels, consent | [awp](docs/official_docs/deployment/awp.md) | [`examples/awp_agent`](examples/awp_agent) |
+| Agentic Web Protocol 2.0 — signed site contracts and releases, verified agent identity, capabilities over A2A, MCP and HTTP, `awp verify` | [awp](docs/official_docs/deployment/awp.md) | [`examples/awp_agent`](examples/awp_agent) (AWP 1.x) |
+| AWP websites — a static, signed site with an agent edge, run by a team of agents inside its owner's charter; migration from WordPress | [website quickstart](docs/official_docs/deployment/website-quickstart.md) | [`examples/website`](examples/website) |
 | Agentic commerce — ACP and AP2 with durable journals | [payments](docs/official_docs/security/payments.md) | [`examples/payments`](examples/payments) |
 | Editor interop — use an ACP coding agent as a tool, or expose yours | [acp](docs/official_docs/acp/index.md) | — |
 | Browser automation — WebDriver tools for navigation, extraction, forms, and screenshots | [browser-tools](docs/official_docs/tools/browser-tools.md) | — |
@@ -270,6 +271,7 @@ cargo adk new my-agent --template graph      # graph workflow with checkpoints
 cargo adk new my-agent --template realtime   # realtime voice agent
 cargo adk new my-agent --template agent-engine # Gemini Enterprise Agent Engine BYOC
 cargo adk new my-agent --template harness    # governed harness: REPL with approvals, AGENTS.md, skills
+cargo adk new my-site --template website     # AWP 2.0 website: content, theme, charter, data and its edge
 
 # Compose addons with any template
 cargo adk new my-agent --template tools --addon telemetry --addon sessions
@@ -345,8 +347,11 @@ checks an agent definition without building. `cargo adk templates` and
 | `adk-artifact` | Binary artifacts for agents | In-memory and GCS storage, versioning, MIME types, and image/PDF/video support |
 | `adk-memory` | Long-term memory | Semantic stores, Vertex AI Memory Bank, project isolation, and bi-temporal knowledge graphs |
 | `adk-payments` | Agentic commerce orchestration | ACP/AP2 adapters, canonical transaction kernel, durable journals, evidence-backed payment flows |
-| `awp-types` | AWP protocol types | Trust levels, requester types, discovery documents, capability manifests, payment intents, typed A2A messages — zero `adk-*` deps |
-| `adk-awp` | Agentic Web Protocol implementation | Business context loading, discovery/manifest generation, rate limiting, consent, events, health state machine, AWP routes |
+| `awp-types` | AWP protocol types | AWP 2.0 site contract, keys, releases, capabilities, status, events, consent, charter and signals, with JSON Schemas; the AWP 1.x types — zero `adk-*` deps |
+| `adk-awp` | Agentic Web Protocol implementation | AWP 2.0 routes and version negotiation, capabilities as tools, signing and the static bundle, the verifier and conformance kit; the AWP 1.x routes behind `awp-v1` |
+| `adk-site` | Site pipeline (Experimental) | Content, the built-in and sandboxed external generators, the launch gate, signed releases and the site log, host adapters, migration, constant updates |
+| `adk-drivers` | Service drivers (Experimental) | DNS and registrar, email, analytics and search console, social and advertising, as kernel driver manifests with conformance suites |
+| `adk-website` | The AWP website product (Experimental) | Site kinds, the team of eight agents, onboarding, capability packs, playbooks, incidents, alarms, the weekly review and deployment shapes |
 | `adk-acp` | Agent Client Protocol integration | Official stable v1 client and server, one-shot and persistent sessions, streaming, cancellation, async permissions, client files and terminals, per-session MCP, and editor-facing ADK agents |
 | `adk-rag` | RAG pipeline | Document chunking, embeddings, vector search, reranking, 6 backends |
 | `adk-runner` | Agent execution runtime | Event streaming, session persistence, transfer enforcement, plugins, run budgets, spend and action ledgers, durable cancellation, `Runner::close` |

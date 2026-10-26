@@ -1339,6 +1339,53 @@ impl ToolConfirmationRequest {
     }
 }
 
+/// One call of a model turn's batch, as [`ToolConfirmationHandler::batch_started`] sees
+/// it (spec 3.1 §10 C6).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::BatchCall;
+/// use serde_json::json;
+///
+/// let args = json!({ "path": "src/lib.rs" });
+/// let call = BatchCall::new("edit_file", &args).with_function_call_id("call-1");
+/// assert_eq!(call.function_call_id, Some("call-1"));
+/// ```
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct BatchCall<'a> {
+    /// The tool's name.
+    pub name: &'a str,
+    /// The call's ID.
+    pub function_call_id: Option<&'a str>,
+    /// The call's arguments as the model sent them.
+    pub args: &'a Value,
+    /// Who publishes the tool, when the agent knows it.
+    pub origin: Option<&'a crate::ToolOrigin>,
+}
+
+impl<'a> BatchCall<'a> {
+    /// A call to `name` with `args`.
+    pub fn new(name: &'a str, args: &'a Value) -> Self {
+        Self { name, function_call_id: None, args, origin: None }
+    }
+
+    /// Sets the call's ID.
+    #[must_use]
+    pub fn with_function_call_id(mut self, id: &'a str) -> Self {
+        self.function_call_id = Some(id);
+        self
+    }
+
+    /// Sets the tool's origin.
+    #[must_use]
+    pub fn with_origin(mut self, origin: &'a crate::ToolOrigin) -> Self {
+        self.origin = Some(origin);
+        self
+    }
+}
+
 /// Asynchronous decision source for tool calls that require confirmation.
 ///
 /// Front ends and protocol adapters can implement this trait to pause an
@@ -1427,6 +1474,50 @@ pub trait ToolConfirmationHandler: std::fmt::Debug + Send + Sync {
             ToolConfirmationDecision::Approve => ToolApproval::approve(),
             ToolConfirmationDecision::Deny => ToolApproval::deny(),
         })
+    }
+
+    /// Tells the handler the calls one model turn made, once per turn, before any of them
+    /// is dispatched and after the turn's run budget is reserved (spec 3.1 §10 C6, A2).
+    ///
+    /// A handler that reviews several held calls as one — a change set of edits — keeps
+    /// the batch and answers each call's [`decide_approval`](Self::decide_approval) from
+    /// one decision, whichever order the calls are dispatched in. The default does nothing,
+    /// so every call is decided on its own.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Mutex;
+    ///
+    /// use adk_core::{
+    ///     BatchCall, Result, ToolConfirmationDecision, ToolConfirmationHandler,
+    ///     ToolConfirmationRequest, async_trait,
+    /// };
+    ///
+    /// /// Remembers how many calls the last turn made.
+    /// #[derive(Debug, Default)]
+    /// struct Counting(Mutex<usize>);
+    ///
+    /// #[async_trait]
+    /// impl ToolConfirmationHandler for Counting {
+    ///     async fn decide(&self, _request: &ToolConfirmationRequest) -> Result<ToolConfirmationDecision> {
+    ///         Ok(ToolConfirmationDecision::Approve)
+    ///     }
+    ///
+    ///     async fn batch_started(&self, calls: &[BatchCall<'_>]) {
+    ///         *self.0.lock().unwrap() = calls.len();
+    ///     }
+    /// }
+    ///
+    /// # futures::executor::block_on(async {
+    /// let handler = Counting::default();
+    /// let args = serde_json::json!({});
+    /// handler.batch_started(&[BatchCall::new("a", &args), BatchCall::new("b", &args)]).await;
+    /// assert_eq!(*handler.0.lock().unwrap(), 2);
+    /// # });
+    /// ```
+    async fn batch_started(&self, calls: &[BatchCall<'_>]) {
+        let _ = calls;
     }
 }
 

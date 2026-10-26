@@ -248,12 +248,15 @@ async fn chat_voice_and_the_tray_never_approve_high_risk() {
     for caller in [
         telegram(),
         Caller::human("ana", SurfaceKind::Tray, Origin::Pointer).with_groups(["owner"]),
-        Caller::human("ana", SurfaceKind::Web, Origin::Voice).with_groups(["owner"]),
     ] {
         let error =
             home.engine.execute(&caller, decide(&request, Answer::AllowOnce)).await.unwrap_err();
         assert_eq!(error.code(), "surface.answer_not_allowed", "{caller:?}");
     }
+    // A spoken answer is recorded only with its transcript (spec 3.3 §5.6).
+    let voice = Caller::human("ana", SurfaceKind::Web, Origin::Voice).with_groups(["owner"]);
+    let error = home.engine.execute(&voice, decide(&request, Answer::AllowOnce)).await.unwrap_err();
+    assert_eq!(error.code(), "surface.invalid");
     // The phone approves after the person confirms it is them.
     let error =
         home.engine.execute(&phone(), decide(&request, Answer::AllowOnce)).await.unwrap_err();
@@ -267,7 +270,7 @@ async fn chat_voice_and_the_tray_never_approve_high_risk() {
         .into_iter()
         .filter(|record| record.ext["outcome"] == "refused")
         .count();
-    assert_eq!(refused, 4, "every refused answer is on record");
+    assert_eq!(refused, 3, "every refused answer is on record");
 }
 
 #[tokio::test]
@@ -403,6 +406,7 @@ async fn the_thread_links_a_held_call_to_its_card() {
     );
 }
 
+#[cfg(feature = "voice")]
 #[tokio::test]
 async fn a_spoken_allow_once_waits_out_its_cancel_window() {
     let home = home().await;
@@ -412,9 +416,12 @@ async fn a_spoken_allow_once_waits_out_its_cancel_window() {
         hold(&home, "ana", "s1", &call("send_sms", json!({ "to": "[number]" })), ApprovalRisk::Low)
             .await;
 
-    let CommandOutcome::Pending { text, .. } =
-        home.engine.execute(&voice, decide(&first, Answer::AllowOnce)).await.unwrap()
-    else {
+    let spoken = async |request: &ApprovalRequest| {
+        home.engine
+            .decide_spoken(&voice, &request.id, request.version, Answer::AllowOnce, "allow once")
+            .await
+    };
+    let CommandOutcome::Pending { text, .. } = spoken(&first).await.unwrap().outcome else {
         panic!("a spoken yes waits");
     };
     assert_eq!(text, "Allowing once in 1 second");
@@ -425,7 +432,7 @@ async fn a_spoken_allow_once_waits_out_its_cancel_window() {
             .unwrap(),
         CommandOutcome::AnswerCancelled { decision_id: first.id.clone() }
     );
-    home.engine.execute(&voice, decide(&second, Answer::AllowOnce)).await.unwrap();
+    spoken(&second).await.unwrap();
     tokio::time::sleep(Duration::from_millis(400)).await;
     assert_eq!(home.service.get(&first.id).await.unwrap().unwrap().state, ApprovalState::Pending);
     assert_eq!(home.service.get(&second.id).await.unwrap().unwrap().state, ApprovalState::Approved);

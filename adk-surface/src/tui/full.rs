@@ -53,15 +53,27 @@ async fn full_screen(surface: TerminalSurface) -> io::Result<i32> {
     let mut renderer = Renderer::new(theme);
 
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let pump = Pump::start(
+    let mut pump = Pump::start(
         surface.engine.clone(),
         surface.caller.clone(),
         session.clone(),
         surface.poll,
         tx.clone(),
     );
+    if let Some(notices) = surface.late.take() {
+        pump.forward_notices(notices, tx.clone());
+    }
     let mut commands = Commands::default();
     let mut shown = vec![session];
+    // A voice conversation shows its own session (spec 3.3 §5.6).
+    #[cfg(feature = "voice")]
+    let voice = super::voice::open(&surface.voice, &surface.engine, &surface.caller, &tx).await?;
+    #[cfg(feature = "voice")]
+    if let Some((session, _)) = &voice {
+        for effect in app.switch_session(session.clone()) {
+            surface.apply(effect, &mut app, &pump, &mut commands, &tx, &mut shown).await;
+        }
+    }
 
     term::enter_full(&mut io::stdout())?;
     let guard = Guard;
@@ -80,6 +92,7 @@ async fn full_screen(surface: TerminalSurface) -> io::Result<i32> {
         terminal.draw(|frame| box_view = renderer.draw(frame, &app, now))?;
         app.set_box_view(box_view, now);
         app.view_scroll = app.view_scroll.min(renderer.view_max_scroll);
+        app.view_page = renderer.view_page;
         let held = app.held_until();
         let effects = tokio::select! {
             exit = signals.recv() => {
@@ -112,6 +125,10 @@ async fn full_screen(surface: TerminalSurface) -> io::Result<i32> {
         if quit {
             break;
         }
+    }
+    #[cfg(feature = "voice")]
+    if let Some((_, running)) = voice {
+        running.end().await;
     }
     drop(terminal);
     drop(pump);

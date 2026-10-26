@@ -62,6 +62,7 @@ achievable reduction is the advertised surface, not the feature count.
 | mcp | 1 | `mcp` / `mcp-http` | 2 demoted |
 | harness | 1 | `harness` | the `harness-*` packs and add-ons are members (spec 3.1 §8.4); `harness-encrypted` links `adk-session`'s envelope and the OS keychain, `harness-memory-local` links the `ort` runtime (spec 3.1 §7.12, §7.15.2); `harness-kernel` links `adk-kernel`, the agent kernel (spec 3.2 §8.2) |
 | surface | 1 | `surface` | links `adk-surface`, the engine and web home every agent surface runs on (spec 3.3 §6.1), and with `cli` the launcher's web home; opt-in, in no tier. One feature per surface (`web`, `tui`, `channels`, `mobile`, …) stays on `adk-surface`, so the umbrella grows by this one key |
+| website | 1 | `website` | links `adk-website`, the AWP 2.0 website product, and `adk-site`, its pipeline (spec 3.5 §7.1, D-14); turns on the edge (`adk-server/awp`), AWP signing and the kernel, and with `cli` the `adk-rust site` and `awp` commands. In `full`. Hosts, generators and backends stay features of `adk-site` and `adk-kernel`, so the umbrella grows by this one key |
 | gcp | 0 | `gemini-agent-platform` | all 11 demoted; already bundled |
 | code | — | `code-tools` | 3 demoted |
 

@@ -1,5 +1,7 @@
+import { useId } from "react";
 import type { DecisionCard } from "../generated/api";
 import { Avatar } from "../components/Avatar";
+import { DECIDED_CLASS, DecidedLine } from "../components/DecidedLine";
 import { Pill } from "../components/Pill";
 import { visible } from "../safe";
 import { phoneLabels } from "./labels";
@@ -19,8 +21,9 @@ export function decidedLine(card: DecisionCard): string {
 
 /**
  * The phone's Decisions (spec 3.3 §5.4, §7.1): the waiting decisions first, each on the
- * decision background, then the ones decided lately, here or elsewhere. Questions wait for a
- * later phase: the badge counts decisions only.
+ * decision background, then the ones decided lately, here or elsewhere, each one line that
+ * opens to show the exact command. Questions wait for a later phase: the badge counts
+ * decisions only.
  */
 export function Decisions({
   cards,
@@ -51,13 +54,30 @@ export function Decisions({
       ))}
       {decided.map((card) => (
         <li key={card.id}>
-          <button type="button" className="phone-card phone-card-decided" onClick={() => onOpen(card)}>
-            <Pill kind="decided">{phoneLabels.decided}</Pill>
-            <span className="phone-card-heading">{visible(card.heading)}</span>
-            <span className="phone-card-line">{visible(decidedLine(card))}</span>
-          </button>
+          <Decided card={card} />
         </li>
       ))}
     </ul>
+  );
+}
+
+/** A decision answered lately, here or elsewhere: one line, opened in place. */
+function Decided({ card }: { card: DecisionCard }) {
+  const heading = useId();
+  return (
+    <article className={DECIDED_CLASS} aria-labelledby={heading}>
+      <DecidedLine card={card} headingId={heading} said={decidedLine(card)}>
+        <span className="phone-card-who">
+          <Avatar agent={card.agent} size="sm" />
+          <strong>{visible(card.agent.displayName)}</strong> · {card.sinceText}
+        </span>
+        <pre className="phone-decided-call">
+          <code>{visible(card.call.text)}</code>
+        </pre>
+        <p className="phone-card-line">
+          {card.riskText} · {card.reversibilityText}
+        </p>
+      </DecidedLine>
+    </article>
   );
 }

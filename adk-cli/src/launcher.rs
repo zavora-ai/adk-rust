@@ -52,7 +52,7 @@ use axum::Router;
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -1033,7 +1033,7 @@ pub(crate) async fn drive_turn(
     thinking_mode: ThinkingDisplayMode,
     echo: bool,
 ) -> TurnEnd {
-    let mut printer = StreamPrinter::new(thinking_mode);
+    let mut printer = StreamPrinter::with_writer(thinking_mode, console.writer());
     let mut text_deltas = adk_core::EventTextDeltas::default();
     let mut current_agent = String::new();
     let mut printed_header = false;
@@ -1093,6 +1093,9 @@ pub(crate) async fn drive_turn(
                         let (calls, responses) = call_ids(&evt);
                         for id in &responses {
                             console.call_shown(id);
+                            if console.take_printed_decision(id) {
+                                printer.decision_printed(id);
+                            }
                         }
                         if echo {
                             printer.handle_event(&evt);
@@ -1310,7 +1313,10 @@ pub(crate) fn terminal_safe(text: &str) -> std::borrow::Cow<'_, str> {
 ///
 /// A call held for confirmation is shown as `[approval needed] <tool> <args> — <reason>`,
 /// and the decision applied to a call as `[approved] <tool>` or `[denied] <tool>`
-/// (spec 3.1 §8.1).
+/// (spec 3.1 §8.1), unless a prompter already printed it
+/// ([`decision_printed`](Self::decision_printed)). A tool's streamed output starts with a
+/// `[<tool> <short call id>]` line, so output from calls that run side by side can be told
+/// apart (spec 3.1 §7.33 fix 2a).
 pub struct StreamPrinter<W: Write = io::Stdout> {
     thinking_mode: ThinkingDisplayMode,
     in_think_block: bool,
@@ -1319,6 +1325,15 @@ pub struct StreamPrinter<W: Write = io::Stdout> {
     /// Why each held call is waiting, by function call id (tool name for calls without
     /// one), from its pending response.
     hold_reasons: HashMap<String, String>,
+    /// Provider-executed calls and results already shown, by id, so the copy a complete
+    /// response repeats is not shown again.
+    shown_server_items: HashSet<String>,
+    /// Calls whose decision a prompter printed when the person answered.
+    decisions_printed: HashSet<String>,
+    /// Tool names by function call id, from the call lines shown.
+    call_names: HashMap<String, String>,
+    /// Calls whose streamed output has started.
+    progress_started: HashSet<String>,
     out: W,
 }
 
@@ -1349,8 +1364,39 @@ impl<W: Write> StreamPrinter<W> {
             in_thinking_part_stream: false,
             think_buffer: String::new(),
             hold_reasons: HashMap::new(),
+            shown_server_items: HashSet::new(),
+            decisions_printed: HashSet::new(),
+            call_names: HashMap::new(),
+            progress_started: HashSet::new(),
             out,
         }
+    }
+
+    /// Records that a prompter printed the decision for the call `call_id` when the person
+    /// answered, so the call's response does not print it again after the call's output.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_cli::launcher::{StreamPrinter, ThinkingDisplayMode};
+    /// use adk_core::{Content, Event, Part, ToolConfirmationDecision};
+    ///
+    /// let mut printer = StreamPrinter::with_writer(ThinkingDisplayMode::Auto, Vec::new());
+    /// printer.decision_printed("call-1");
+    /// let mut response = Event::new("invocation");
+    /// response.actions.tool_confirmation_decision = Some(ToolConfirmationDecision::Approve);
+    /// response.set_content(Content {
+    ///     role: "function".into(),
+    ///     parts: vec![Part::FunctionResponse {
+    ///         function_response: adk_core::FunctionResponseData::new("bash", serde_json::json!({})),
+    ///         id: Some("call-1".into()),
+    ///         annotations: None,
+    ///     }],
+    /// });
+    /// printer.handle_event(&response);
+    /// ```
+    pub fn decision_printed(&mut self, call_id: &str) {
+        self.decisions_printed.insert(call_id.to_string());
     }
 
     /// Writes `text` with terminal control characters escaped, then flushes.
@@ -1390,19 +1436,59 @@ impl<W: Write> StreamPrinter<W> {
             let text = text.replace('\n', "\n  ");
             self.emit(&format!("\n[hook:{source}] {text}\n"));
         }
+        if event.tool_progress_stream().is_some()
+            && let Some(call_id) = event.provider_metadata.get(adk_core::TOOL_PROGRESS_CALL_ID_KEY)
+            && self.progress_started.insert(call_id.clone())
+        {
+            self.flush_pending_thinking();
+            let tool = self.call_names.get(call_id).map_or("tool", String::as_str);
+            let short = call_id
+                .char_indices()
+                .rev()
+                .nth(5)
+                .map_or(call_id.as_str(), |(i, _)| &call_id[i..]);
+            let header = format!("\n[{tool} {short}]\n");
+            self.emit(&header);
+        }
         let held = event.actions.tool_confirmation.as_ref();
         let decision = event.actions.tool_confirmation_decision;
         let parts = event.llm_response.content.as_ref().map_or(&[][..], |c| c.parts.as_slice());
         for part in parts {
             match part {
                 Part::FunctionCall { .. } if event.llm_response.partial => continue,
-                // Provider items replayed to the model (such as OpenAI Responses commentary)
-                // stream as partial chunks; the complete item is shown once.
-                Part::ServerToolCall { .. } if event.llm_response.partial => continue,
+                // A provider-executed call is shown once, at its first chunk, so a search
+                // shows before the answer it informs (spec 3.1 §7.33 fix 2b). A model message
+                // kept for replay (OpenAI Responses commentary) streams its text in pieces,
+                // and an item without an id cannot be matched to its copy, so for those only
+                // the complete item is shown.
+                Part::ServerToolCall { server_tool_call } => {
+                    let id = server_tool_call
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .filter(|_| message_text(server_tool_call).is_none());
+                    let skip = match id {
+                        Some(id) => !self.shown_server_items.insert(format!("call:{id}")),
+                        None => event.llm_response.partial,
+                    };
+                    if skip {
+                        continue;
+                    }
+                }
+                Part::ServerToolResponse { server_tool_response } => {
+                    if let Some(id) =
+                        server_tool_response.get("tool_use_id").and_then(Value::as_str)
+                        && !self.shown_server_items.insert(format!("result:{id}"))
+                    {
+                        continue;
+                    }
+                }
                 // The held call's line below says what the text says, with the call.
                 Part::Text { .. } if held.is_some() => continue,
                 Part::FunctionResponse { function_response, id, .. } => {
-                    if let Some(decision) = decision {
+                    let printed = id.as_ref().is_some_and(|id| self.decisions_printed.remove(id));
+                    if let Some(decision) = decision
+                        && !printed
+                    {
                         self.flush_pending_thinking();
                         let label = match decision {
                             ToolConfirmationDecision::Approve => "approved",
@@ -1462,8 +1548,11 @@ impl<W: Write> StreamPrinter<W> {
                 self.think_buffer.push_str(thinking);
                 self.emit(thinking);
             }
-            Part::FunctionCall { name, args, .. } => {
+            Part::FunctionCall { name, args, id, .. } => {
                 self.flush_pending_thinking();
+                if let Some(id) = id {
+                    self.call_names.insert(id.clone(), name.clone());
+                }
                 self.emit(&format!("\n[tool-call] {name} {args}\n"));
             }
             Part::FunctionResponse { function_response, .. } => {
@@ -1837,6 +1926,56 @@ mod tests {
 
         let printed = String::from_utf8(printer.out).unwrap();
         assert_eq!(printed.matches("[tool-call] get_weather").count(), 1, "{printed}");
+    }
+
+    #[test]
+    fn a_provider_search_is_shown_before_the_answer_it_informs() {
+        let search = Part::ServerToolCall {
+            server_tool_call: serde_json::json!({
+                "type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search",
+                "input": {"query": "rust 1.95"},
+            }),
+        };
+        let result = Part::ServerToolResponse {
+            server_tool_response: serde_json::json!({
+                "type": "web_search_tool_result", "tool_use_id": "srvtoolu_1", "content": [],
+            }),
+        };
+        let text = |text: &str| Part::Text { text: text.into() };
+        let mut chunks: Vec<Event> =
+            [text("Let me check. "), search.clone(), result.clone(), text("Rust 1.95 is out.")]
+                .into_iter()
+                .map(|part| {
+                    let mut chunk = Event::with_id("response", "invocation");
+                    chunk.llm_response.partial = true;
+                    chunk.set_content(Content { role: "model".into(), parts: vec![part] });
+                    chunk
+                })
+                .collect();
+        let mut complete = Event::with_id("response", "invocation");
+        complete.llm_response.provider_metadata =
+            Some(serde_json::json!({"content_complete": true}));
+        complete.set_content(Content {
+            role: "model".into(),
+            parts: vec![text("Let me check. "), search, result, text("Rust 1.95 is out.")],
+        });
+        chunks.push(complete);
+
+        let captured = Captured::default();
+        let mut printer = StreamPrinter::with_writer(ThinkingDisplayMode::Auto, captured.clone());
+        let mut deltas = adk_core::EventTextDeltas::default();
+        for event in &chunks {
+            printer.handle_event(&deltas.push(event));
+        }
+        printer.finish();
+
+        let output = captured.text();
+        assert_eq!(output.matches("[server-tool-call]").count(), 1, "{output}");
+        assert_eq!(output.matches("[server-tool-response]").count(), 1, "{output}");
+        let searched = output.find("[server-tool-call]").unwrap();
+        let answered = output.find("Rust 1.95 is out.").unwrap();
+        assert!(searched < answered, "{output}");
+        assert_eq!(output.matches("Rust 1.95 is out.").count(), 1, "{output}");
     }
 
     #[test]

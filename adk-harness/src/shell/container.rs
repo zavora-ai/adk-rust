@@ -700,8 +700,9 @@ impl ContainerBashTool {
         self.description = format!(
             "Run a shell command in /workspace inside a container ({}) with {network}. The host \
              workspace is mounted at /workspace, so files you write there are visible to \
-             read_file and the user; .git, AGENTS.md and other protected paths are read-only, \
-             and nothing else on the host is reachable. Has a timeout.{retry}",
+             read_file and the user; AGENTS.md, git's hooks and config, and other protected \
+             paths are read-only (the rest of .git is writable, so git commit works), and \
+             nothing else on the host is reachable. Has a timeout.{retry}",
             self.pool.config.image
         );
     }

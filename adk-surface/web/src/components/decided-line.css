@@ -1,0 +1,108 @@
+/*
+ * A decided card as one line (spec 3.3 §5.1, §5.5, §7.1), in the decided tint of the §9
+ * tokens: green text on the decided background, AA in light and dark. Every surface that
+ * imports `DecidedLine` gets this sheet with it.
+ */
+.decided {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid color-mix(in srgb, var(--pill-decided) 28%, transparent);
+  border-radius: 12px;
+  background: var(--pill-decided-bg);
+  color: var(--text);
+}
+
+.decided-title {
+  margin: 0;
+  font: inherit;
+}
+
+.decided-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+
+.decided-check {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--pill-decided);
+  color: var(--pill-decided-bg);
+}
+
+.decided-check svg,
+.decided-chevron {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.decided-check svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 3;
+}
+
+/* The heading and the answer read as one sentence: one line where it fits, two at most on a
+   narrow panel, never cut mid-answer before that. */
+.decided-words {
+  display: -webkit-box;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.decided-heading {
+  font-weight: 650;
+}
+
+.decided-dot {
+  color: var(--pill-decided);
+}
+
+.decided-text {
+  color: var(--pill-decided);
+  font-weight: 600;
+}
+
+.decided-chevron {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  color: var(--text-2);
+  stroke-width: 2;
+  transition: transform 120ms ease;
+}
+
+.decided-line[aria-expanded="true"] .decided-chevron {
+  transform: rotate(180deg);
+}
+
+.decided-details:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 12px 12px;
+}

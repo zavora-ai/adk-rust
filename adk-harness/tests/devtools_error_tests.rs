@@ -1,5 +1,7 @@
 //! The model sees why a devtools call failed (spec 3.1 §7.33 fix 6).
 
+#![cfg(feature = "runner")]
+
 mod common;
 
 use adk_harness::{HarnessAgentBuilder, HarnessMode};

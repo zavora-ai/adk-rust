@@ -756,6 +756,8 @@ pub async fn greet(args: GreetArgs) -> std::result::Result<Value, AdkError> {
                 ],
             },
         },
+        // An AWP 2.0 website project (spec 3.5 §7.17, §8.2).
+        crate::website_template::template(),
     ]
 }
 

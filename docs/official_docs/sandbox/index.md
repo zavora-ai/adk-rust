@@ -219,7 +219,7 @@ exist yet cannot be protected from creation this way.
 
 | Policy entry | Read-write (Ask, Auto) | Read-only (Plan, ReadOnly) |
 |---|---|---|
-| Workspace root | `ReadWrite`, with each existing protected path (`.git`, `AGENTS.md`, …) `ReadOnly` inside it | `ReadOnly` |
+| Workspace root | `ReadWrite`, with each existing protected path (`.git/hooks`, `.git/config`, `.git/info`, `AGENTS.md`, …) `ReadOnly` inside it | `ReadOnly` |
 | Per-session scratch directory, also `HOME` and `TMPDIR` | `ReadWrite` | `ReadWrite` |
 | Toolchain directories (`PATH`, Cargo, rustup, Homebrew, …) | `ReadOnly` | `ReadOnly` |
 

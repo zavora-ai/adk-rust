@@ -80,6 +80,8 @@ pub(crate) struct Renderer {
     markdown: HashMap<(u64, usize, usize), (String, Vec<Line<'static>>)>,
     /// How far the view other than the thread drawn last can scroll.
     pub view_max_scroll: usize,
+    /// The rows of one page of that view: all but the last, which says how much more there is.
+    pub view_page: usize,
 }
 
 /// One row of a decision box: its spans and its background.
@@ -115,7 +117,7 @@ pub(crate) struct FocusedBox {
 
 impl Renderer {
     pub(crate) fn new(theme: Theme) -> Self {
-        Self { theme, markdown: HashMap::new(), view_max_scroll: 0 }
+        Self { theme, markdown: HashMap::new(), view_max_scroll: 0, view_page: 1 }
     }
 
     // -----------------------------------------------------------------------
@@ -179,7 +181,8 @@ impl Renderer {
     pub(crate) fn footer(&self) -> Line<'static> {
         let t = &self.theme;
         let hints = [
-            ("tab", "agents"),
+            ("tab", "next agent"),
+            ("ctrl-g", "agents"),
             ("ctrl-t", "today"),
             ("ctrl-r", "permissions"),
             ("/", "commands"),
@@ -207,6 +210,10 @@ impl Renderer {
             AgentStatus::Asleep => ('○', t.label()),
             AgentStatus::Done => ('✓', t.fg(p.done)),
             AgentStatus::Failed => ('✗', t.fg(p.failed)),
+            // Agents a person added (spec 3.3 §5.7).
+            AgentStatus::Ready => ('○', t.label()),
+            AgentStatus::Paused => ('‖', t.label()),
+            AgentStatus::CantStart => ('✗', t.fg(p.failed)),
         }
     }
 
@@ -599,6 +606,14 @@ impl Renderer {
             }
             heading.push((vec![Span::styled(right, t.accent())], strong));
         }
+        // What the heading alone does not say, for a decision the kernel itself asks: who
+        // suggests the work and when it runs once allowed (spec 3.3 §7.1, §8.1).
+        let mut summary: Vec<Row> = Vec::new();
+        if let Some(text) = &card.summary {
+            for line in wrap_spans(vec![Span::styled(safe_line(text), t.text())], inner, 0) {
+                summary.push((line.spans, body));
+            }
+        }
         let agent: Row = (
             vec![Span::styled(
                 format!("{} · {}", safe_line(&card.agent.display_name), card.since_text),
@@ -698,6 +713,7 @@ impl Renderer {
             [0, 1, 2, 3, 4, 5, 6];
         let others = |keep: &[bool; 7]| {
             2 + heading.len()
+                + summary.len()
                 + 1
                 + note.len()
                 + key_rows.len()
@@ -734,6 +750,7 @@ impl Renderer {
 
         let mut rows: Vec<Row> = Vec::new();
         rows.extend(heading);
+        rows.extend(summary);
         if keep[blank_head] {
             rows.push(blank.clone());
         }
@@ -966,6 +983,7 @@ impl Renderer {
             ("tab", "The next agent's thread"),
             ("ctrl-t", "Today: while you were away"),
             ("ctrl-r", "Permissions: what your agents can do"),
+            ("ctrl-g", "Your agents"),
             ("ctrl-k", "Stop all"),
             ("pgup pgdn", "Scroll the thread, or the call in a decision box"),
             ("↑", "Take back the newest queued message, into the empty message box"),
@@ -1220,13 +1238,25 @@ impl Renderer {
             _ => Vec::new(),
         };
         let completion_height = u16::try_from(completion.len()).unwrap_or(0);
-        let [main, completion_area, queued_area, input] = Layout::vertical([
+        #[cfg(feature = "voice")]
+        let voice_height = u16::from(app.voice.is_some());
+        #[cfg(not(feature = "voice"))]
+        let voice_height = 0;
+        let [main, completion_area, queued_area, voice_area, input] = Layout::vertical([
             Constraint::Min(1),
             Constraint::Length(completion_height),
             Constraint::Length(queued_height),
+            Constraint::Length(voice_height),
             Constraint::Length(3),
         ])
         .areas(right);
+        #[cfg(feature = "voice")]
+        if let Some(voice) = &app.voice {
+            let line = Line::from(Span::styled(voice.text(now), t.accent()));
+            frame.render_widget(Paragraph::new(line).style(t.base()), voice_area);
+        }
+        #[cfg(not(feature = "voice"))]
+        let _ = voice_area;
 
         let height = usize::from(main.height);
         let (lines, focused) = match app.view {
@@ -1235,6 +1265,7 @@ impl Renderer {
             View::Permissions => (self.permissions(app, width), None),
             View::Help => (self.help(app, width), None),
             View::Output => (self.output(app, width), None),
+            View::Agents => (super::agents::lines(&app.agents_pane, &self.theme, width), None),
         };
         let scroll = if app.view == View::Thread {
             app.scroll.min(lines.len().saturating_sub(height))
@@ -1270,6 +1301,7 @@ impl Renderer {
             // how much more there is.
             let max = lines.len().saturating_sub(height);
             self.view_max_scroll = max;
+            self.view_page = height.saturating_sub(1).max(1);
             let from = app.view_scroll.min(max);
             let below = lines.len().saturating_sub(from + height);
             let mut shown: Vec<Line<'static>> = lines.into_iter().skip(from).take(height).collect();
