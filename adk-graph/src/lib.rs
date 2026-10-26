@@ -179,7 +179,7 @@ pub use delta::{
 };
 
 #[cfg(feature = "time-travel")]
-pub use time_travel::{StepInfo, TimeTravelHandle};
+pub use time_travel::{ForkError, ForkSpec, StepInfo, TimeTravelHandle, fork_thread};
 
 /// Prelude module for convenient imports
 pub mod prelude {

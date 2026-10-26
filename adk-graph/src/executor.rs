@@ -121,7 +121,7 @@ pub struct PregelExecutor<'a> {
 /// Checkpoint metadata naming the nodes a dynamic pause stopped.
 pub(crate) const PAUSED_NODES_METADATA_KEY: &str = "adk.graph.paused_nodes";
 /// Checkpoint metadata counting each governed node's completed runs in the lineage.
-const OCCURRENCES_METADATA_KEY: &str = "adk.graph.occurrences";
+pub(crate) const OCCURRENCES_METADATA_KEY: &str = "adk.graph.occurrences";
 /// Checkpoint metadata holding the request each waiting governed node paused with.
 const HELD_METADATA_KEY: &str = "adk.graph.held";
 /// Every metadata key a checkpoint's revision by `update_state` carries over.
