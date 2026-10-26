@@ -1,6 +1,7 @@
 //! Spec 3.3 §12 phase 4 "Hire a helper" (§5.7): `adk-rust up` with a scripted model, on SQLite
-//! (`harness.db`) and on PostgreSQL (`--store`, `hire_a_helper_on_postgres`, run by
-//! `scripts/test-postgres.sh`).
+//! (`harness.db`) and on PostgreSQL (`--store`, `hire_a_helper_on_postgres`, run by hand:
+//! `DATABASE_URL=postgres://… cargo nextest run -p adk-cli --features
+//! scripted-model,audit-sql,postgres --test hire_a_helper --run-ignored only`).
 //!
 //! | Step | What the person does | What holds |
 //! |---|---|---|
@@ -622,7 +623,7 @@ async fn hire_a_helper() {
 /// The scenario with every store on PostgreSQL, in a database of its own.
 #[cfg(feature = "postgres")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "needs DATABASE_URL, a PostgreSQL server; scripts/test-postgres.sh runs it"]
+#[ignore = "needs DATABASE_URL, a PostgreSQL server; run by hand"]
 async fn hire_a_helper_on_postgres() {
     let server = std::env::var("DATABASE_URL").expect("DATABASE_URL names a PostgreSQL server");
     let admin = sqlx::PgPool::connect(&server).await.unwrap();
@@ -744,8 +745,9 @@ async fn adk_rust_agents_previews_and_asks_before_a_change() {
 }
 
 /// A shell the agent runs in the OS sandbox cannot reach the kernel's socket, so it cannot add
-/// an agent there (spec 3.3 §5.7, S-I8); the same request from outside the sandbox does. Skips,
-/// with a note, where no OS sandbox runs, unless `ADK_SANDBOX_REQUIRE_ENFORCER` is set.
+/// an agent there (spec 3.3 §5.7, S-I8); the same request from outside the sandbox does. Runs
+/// where an OS sandbox runs (Seatbelt on macOS, bubblewrap on Linux); skips, with a note, where
+/// none does, unless `ADK_SANDBOX_REQUIRE_ENFORCER` is set.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_sandboxed_shell_cannot_reach_the_kernel_socket() {
     use adk_harness::{IsolationStatus, OsSandboxConfig, SandboxLauncher};

@@ -20,7 +20,6 @@ on:
       - 'adk-harness/tests/shell_sandbox_tests.rs'
       - 'adk-kernel/src/drivers/**'
       - 'adk-kernel/tests/driver_sandbox_tests.rs'
-      - 'adk-cli/tests/hire_a_helper.rs'
       - '.github/workflows/sandbox-linux.yml'
       - '.github/actions/setup-rust/**'
       - '.github/actions/apt-install/**'
@@ -91,12 +90,6 @@ jobs:
 
     - name: Driver sandbox tests (adk-kernel)
       run: cargo nextest run -p adk-kernel --test driver_sandbox_tests --no-fail-fast
-
-    # A sandboxed shell under `adk-rust up` cannot reach the kernel's socket (spec 3.3 §5.7).
-    - name: Kernel socket from a sandboxed shell (adk-cli)
-      run: >-
-        cargo nextest run -p adk-cli --features scripted-model --test hire_a_helper
-        --no-fail-fast -E 'test(sandboxed_shell)'
 
     - name: Summary
       if: always()
