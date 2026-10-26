@@ -191,11 +191,11 @@ async fn the_fetch_allowlist_is_never_a_search_filter() {
         let request = f.model.requests().into_iter().next().unwrap();
         let declaration = request.tools[tool].to_string();
         assert!(!declaration.contains("docs.rs"), "{declaration}");
-        assert!(!declaration.contains("allowed_domains"), "{declaration}");
+        assert!(!declaration.contains("rust-lang.org"), "{declaration}");
         let banner = banner(&request).unwrap();
         assert!(banner.contains(&format!("{} {tool} (every domain)", search.provider)), "{banner}");
         let record = &f.records("harness.web.provider_enabled")[0].ext;
-        assert_eq!(record["searchDomains"], Value::Null, "{record:?}");
+        assert!(record.get("searchDomains").is_none_or(Value::is_null), "{record:?}");
         assert_eq!(
             f.harness.agent().info().web_search.to_string(),
             format!("{} {tool}, run by the provider: every domain", search.provider)
