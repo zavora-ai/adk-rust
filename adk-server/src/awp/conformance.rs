@@ -10,6 +10,9 @@
 //! [`edge_log_conformance_tests!`](crate::edge_log_conformance_tests) expands to one
 //! `#[tokio::test]` per case.
 //!
+//! Every [`RateLimitStore`] proves its contract the same way through a [`RateLimitHarness`]
+//! and [`rate_limit_conformance_tests!`](crate::rate_limit_conformance_tests).
+//!
 //! # Example
 //!
 //! ```rust,ignore
@@ -29,6 +32,7 @@ use uuid::Uuid;
 
 use super::beacon::{BeaconStore, InMemoryBeaconStore};
 use super::events::{EventLog, InMemoryEventLog, PendingDelivery, RetainedEvent};
+use super::limits::{InMemoryRateLimitStore, RateLimitStore, RateWindow};
 
 /// Opens the event log and beacon store of one backend (spec 3.5 §7.9).
 ///
@@ -262,6 +266,126 @@ pub async fn beacon_concurrent_adds_are_not_lost<H: EdgeLogHarness + ?Sized>(har
         task.await.unwrap();
     }
     assert_eq!(harness.beacon().await.total("pageviews", day(24), day(25)).await.unwrap(), 200);
+}
+
+/// Opens the shared rate-limit windows of one backend (spec 3.5 §7.9).
+///
+/// Each call returns a new handle over the same data.
+#[async_trait]
+pub trait RateLimitHarness: Send + Sync {
+    /// Opens the windows.
+    async fn rate_limits(&self) -> Arc<dyn RateLimitStore>;
+}
+
+/// The in-memory windows, shared by every handle.
+#[derive(Debug, Clone, Default)]
+pub struct MemoryRateLimits(pub InMemoryRateLimitStore);
+
+#[async_trait]
+impl RateLimitHarness for MemoryRateLimits {
+    async fn rate_limits(&self) -> Arc<dyn RateLimitStore> {
+        Arc::new(self.0.clone())
+    }
+}
+
+fn window(key: &str, class: &str, period: &str, start: i64) -> RateWindow {
+    RateWindow {
+        key: format!("{key}:{}", Uuid::now_v7().simple()),
+        class: class.to_owned(),
+        period: period.to_owned(),
+        start,
+        seconds: 60,
+    }
+}
+
+/// A window counts up to its limit and refuses the next hit, through any handle; another
+/// caller, class or period has its own window, and a later window starts again (spec 3.5
+/// §7.3, §7.9).
+pub async fn rate_windows_count_to_the_limit<H: RateLimitHarness + ?Sized>(harness: &H) {
+    let start = 1_761_465_600;
+    let first = window("ip:203.0.113.9", "tier-public", "minute", start);
+    for expected in 1..=3 {
+        assert_eq!(harness.rate_limits().await.hit(&first, 3).await.unwrap(), Some(expected));
+    }
+    assert_eq!(harness.rate_limits().await.hit(&first, 3).await.unwrap(), None, "the limit holds");
+    assert_eq!(harness.rate_limits().await.hit(&first, 3).await.unwrap(), None);
+    let other_caller = window("ip:198.51.100.7", "tier-public", "minute", start);
+    assert_eq!(harness.rate_limits().await.hit(&other_caller, 3).await.unwrap(), Some(1));
+    let other_class = RateWindow { class: "bulk".into(), ..first.clone() };
+    assert_eq!(harness.rate_limits().await.hit(&other_class, 3).await.unwrap(), Some(1));
+    let other_period = RateWindow { period: "day".into(), seconds: 86_400, ..first.clone() };
+    assert_eq!(harness.rate_limits().await.hit(&other_period, 3).await.unwrap(), Some(1));
+    let next = RateWindow { start: start + 60, ..first.clone() };
+    assert_eq!(
+        harness.rate_limits().await.hit(&next, 3).await.unwrap(),
+        Some(1),
+        "the next window starts again"
+    );
+    assert_eq!(harness.rate_limits().await.hit(&first, 0).await.unwrap(), None, "a zero limit");
+}
+
+/// Concurrent hits never pass the limit together (spec 3.5 §7.9).
+pub async fn rate_windows_concurrent_hits_never_pass_the_limit<H: RateLimitHarness + ?Sized>(
+    harness: &H,
+) {
+    let shared = window("id:wba:https://buyer.example#k1", "tier-verified", "day", 1_761_436_800);
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        let store = harness.rate_limits().await;
+        let shared = shared.clone();
+        tasks.push(tokio::spawn(async move {
+            let mut admitted = 0;
+            for _ in 0..10 {
+                if store.hit(&shared, 25).await.unwrap().is_some() {
+                    admitted += 1;
+                }
+            }
+            admitted
+        }));
+    }
+    let mut admitted = 0;
+    for task in tasks {
+        admitted += task.await.unwrap();
+    }
+    assert_eq!(admitted, 25);
+}
+
+/// Purging drops only windows that began before the cutoff; one still current keeps its
+/// count.
+pub async fn rate_windows_purge_keeps_current_windows<H: RateLimitHarness + ?Sized>(harness: &H) {
+    let old = window("ip:192.0.2.1", "tier-public", "minute", 100);
+    let current = window("ip:192.0.2.2", "tier-public", "minute", 1_000);
+    harness.rate_limits().await.hit(&old, 5).await.unwrap();
+    harness.rate_limits().await.hit(&current, 5).await.unwrap();
+    harness.rate_limits().await.hit(&current, 5).await.unwrap();
+    harness.rate_limits().await.purge_before(500).await.unwrap();
+    assert_eq!(harness.rate_limits().await.hit(&current, 5).await.unwrap(), Some(3));
+    assert_eq!(harness.rate_limits().await.hit(&old, 5).await.unwrap().map(|n| n >= 1), Some(true));
+}
+
+/// Generates one `#[tokio::test]` per rate-limit store conformance case for a
+/// [`RateLimitHarness`](crate::awp::conformance::RateLimitHarness) (spec 3.5 §7.9).
+///
+/// Attributes written before `harness =` apply to every generated test; each test builds its
+/// own harness. The calling crate needs `tokio` with the `macros` and `rt-multi-thread`
+/// features.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// adk_server::rate_limit_conformance_tests! {
+///     harness = adk_server::awp::conformance::MemoryRateLimits::default(),
+/// }
+/// ```
+#[macro_export]
+macro_rules! rate_limit_conformance_tests {
+    ($(#[$attr:meta])* harness = $harness:expr $(,)?) => {
+        $crate::edge_log_conformance_tests!(@cases [$(#[$attr])*] $harness;
+            rate_windows_count_to_the_limit,
+            rate_windows_concurrent_hits_never_pass_the_limit,
+            rate_windows_purge_keeps_current_windows,
+        );
+    };
 }
 
 /// Generates one `#[tokio::test]` per event log and beacon store conformance case for an

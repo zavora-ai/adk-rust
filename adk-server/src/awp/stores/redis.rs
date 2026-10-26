@@ -18,6 +18,7 @@
 //! | `…:deliveries`, `…:delivery` | Sorted set, Hash | Pending deliveries by due time; their failures so far |
 //! | `…:beacon:<day>`, `…:beacon-days` | Hash, Sorted set | One day's counts by metric; the days that have counts |
 //! | `…:visitors:<day>`, `…:visitor-days` | Set, Sorted set | One day's consenting visitors; the days that have them |
+//! | `…:rate:<period>:<start>:<class>:<key>` | String | One caller's hits in a rate-limit window, expiring with it |
 //! | `adk:awp:layout` | String | The layout version `migrate` recorded |
 //!
 //! Creates are `HSETNX`; every change is a compare-and-set Lua script that writes only when
@@ -165,6 +166,16 @@ redis.call('ZADD', KEYS[2], ARGV[2], ARGV[2])
 return 1
 ";
 
+/// KEYS: the window. ARGV: the limit, the window's length in seconds. The count after the
+/// hit, or -1 when the window has reached the limit.
+const RATE_HIT_SCRIPT: &str = r"
+local count = tonumber(redis.call('GET', KEYS[1]) or '0')
+if count >= tonumber(ARGV[1]) then return -1 end
+count = redis.call('INCR', KEYS[1])
+if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end
+return count
+";
+
 /// KEYS: layout. ARGV: this release's layout.
 const MIGRATE_SCRIPT: &str = r"
 local stored = tonumber(redis.call('GET', KEYS[1]) or '0')
@@ -174,9 +185,9 @@ if stored < mine then redis.call('SET', KEYS[1], ARGV[1]) end
 return mine
 ";
 
-/// The six edge stores, the event log and the beacon store in Redis, shared by every edge
-/// replica (spec 3.5 §7.9, feature
-/// `awp-redis`). See the module documentation for its keys.
+/// The six edge stores, the event log, the beacon store and the rate-limit windows in Redis,
+/// shared by every edge replica (spec 3.5 §7.9, feature `awp-redis`). See the module
+/// documentation for its keys.
 ///
 /// # Example
 ///
@@ -863,6 +874,35 @@ impl EventLog for RedisEdgeStores {
             )
             .await?;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl crate::awp::limits::RateLimitStore for RedisEdgeStores {
+    async fn hit(
+        &self,
+        window: &crate::awp::limits::RateWindow,
+        limit: u32,
+    ) -> StoreResult<Option<u32>> {
+        if limit == 0 {
+            return Ok(None);
+        }
+        let key =
+            format!("rate:{}:{}:{}:{}", window.period, window.start, window.class, window.key);
+        let count: i64 = self
+            .script(
+                RATE_HIT_SCRIPT,
+                &[&key],
+                vec![limit.to_string(), window.seconds.max(1).to_string()],
+                "count a rate-limit hit",
+            )
+            .await?;
+        Ok(u32::try_from(count).ok())
+    }
+
+    async fn purge_before(&self, _before: i64) -> StoreResult<usize> {
+        // Each window expires with its key.
+        Ok(0)
     }
 }
 

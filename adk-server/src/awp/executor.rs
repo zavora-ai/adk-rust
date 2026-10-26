@@ -402,7 +402,9 @@ impl GovernedExecutor {
             body.retryable = true;
             return InvocationOutcome::Failed(body);
         }
-        if let Err(limited) = inner.limits.check_call(caller, declaration.rate_class.as_deref()) {
+        if let Err(limited) =
+            inner.limits.admit_call(caller, declaration.rate_class.as_deref()).await
+        {
             let mut body = ErrorBody::new(
                 ErrorCode::RateLimitExceeded,
                 format!("the caller passed its daily call limit of {}", limited.limit),

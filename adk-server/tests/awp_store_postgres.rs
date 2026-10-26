@@ -90,3 +90,19 @@ mod log {
         harness = Site::new(),
     }
 }
+
+#[async_trait]
+impl adk_server::awp::conformance::RateLimitHarness for Site {
+    async fn rate_limits(&self) -> Arc<dyn adk_server::awp::RateLimitStore> {
+        Arc::new(self.stores().await)
+    }
+}
+
+mod rate {
+    use super::*;
+
+    adk_server::rate_limit_conformance_tests! {
+        #[ignore = "needs PostgreSQL: DATABASE_URL"]
+        harness = Site::new(),
+    }
+}

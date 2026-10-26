@@ -15,6 +15,7 @@
 //! | `adk_awp_deliveries` | One per pending delivery: failures so far and when it is due |
 //! | `adk_awp_beacon` | One per day and metric: the beacon's count |
 //! | `adk_awp_beacon_visitors` | One per day and consenting visitor |
+//! | `adk_awp_rate_windows` | One per caller, rate class and period: the current window's start and hits |
 //!
 //! Every row carries its site, the namespace that keeps one site's records apart. Both
 //! backends record their steps in `_adk_awp_edge_migrations` with adk-session's migration
@@ -83,10 +84,18 @@ metric TEXT NOT NULL, hits BIGINT NOT NULL, PRIMARY KEY (site, day, metric));\
 CREATE TABLE IF NOT EXISTS adk_awp_beacon_visitors (site TEXT NOT NULL, day BIGINT NOT NULL, \
 visitor TEXT NOT NULL, PRIMARY KEY (site, day, visitor));";
 
+/// The edge's shared rate-limit windows (spec 3.5 §7.9).
+const SCHEMA_RATE: &str = "\
+CREATE TABLE IF NOT EXISTS adk_awp_rate_windows (site TEXT NOT NULL, key TEXT NOT NULL, \
+class TEXT NOT NULL, period TEXT NOT NULL, start_s BIGINT NOT NULL, hits BIGINT NOT NULL, \
+PRIMARY KEY (site, key, class, period));\
+CREATE INDEX IF NOT EXISTS adk_awp_rate_windows_start ON adk_awp_rate_windows (site, start_s);";
+
 /// The steps both backends run; the schema is portable.
 const MIGRATIONS: &[(i64, &str, &str)] = &[
     (1, "create the AWP edge store tables", SCHEMA),
     (2, "create the AWP edge event log and beacon tables", SCHEMA_EVENTS),
+    (3, "create the AWP edge rate-limit windows", SCHEMA_RATE),
 ];
 
 const SUB_INSERT: &str = "INSERT INTO adk_awp_subscriptions (site, id, owner, state, version, record) \
@@ -175,6 +184,15 @@ const VISITOR_ADD: &str = "INSERT INTO adk_awp_beacon_visitors (site, day, visit
 VALUES ($1, $2, $3) ON CONFLICT (site, day, visitor) DO NOTHING";
 const VISITOR_TOTAL: &str = "SELECT COUNT(*) FROM adk_awp_beacon_visitors WHERE site = $1 \
 AND day >= $2 AND day < $3";
+/// One hit: a new window starts at one, the current one counts up while under the limit; no
+/// row comes back when the hit is refused.
+const RATE_HIT: &str = "INSERT INTO adk_awp_rate_windows (site, key, class, period, start_s, hits) \
+VALUES ($1, $2, $3, $4, $5, 1) ON CONFLICT (site, key, class, period) DO UPDATE SET \
+hits = CASE WHEN adk_awp_rate_windows.start_s = excluded.start_s \
+THEN adk_awp_rate_windows.hits + 1 ELSE 1 END, start_s = excluded.start_s \
+WHERE adk_awp_rate_windows.start_s <> excluded.start_s OR adk_awp_rate_windows.hits < $6 \
+RETURNING hits";
+const RATE_PURGE: &str = "DELETE FROM adk_awp_rate_windows WHERE site = $1 AND start_s < $2";
 
 /// A day as stored: days from the common era.
 fn day_number(day: NaiveDate) -> i64 {
@@ -211,6 +229,45 @@ fn lead_with_score(name: &str, lead: &str, score: Option<f64>) -> StoreResult<Le
         lead.score = score;
     }
     Ok(lead)
+}
+
+/// Implements the shared rate-limit windows for a store with `pool` and `site` fields.
+macro_rules! sql_rate_limits {
+    ($store:ty, $name:literal) => {
+        #[async_trait]
+        impl crate::awp::limits::RateLimitStore for $store {
+            async fn hit(
+                &self,
+                window: &crate::awp::limits::RateWindow,
+                limit: u32,
+            ) -> StoreResult<Option<u32>> {
+                if limit == 0 {
+                    return Ok(None);
+                }
+                let row: Option<(i64,)> = sqlx::query_as(RATE_HIT)
+                    .bind(&self.site)
+                    .bind(&window.key)
+                    .bind(&window.class)
+                    .bind(&window.period)
+                    .bind(window.start)
+                    .bind(i64::from(limit))
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "count a rate-limit hit", &e))?;
+                Ok(row.map(|(hits,)| u32::try_from(hits).unwrap_or(u32::MAX)))
+            }
+
+            async fn purge_before(&self, before: i64) -> StoreResult<usize> {
+                let done = sqlx::query(RATE_PURGE)
+                    .bind(&self.site)
+                    .bind(before)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "purge rate-limit windows", &e))?;
+                Ok(usize::try_from(done.rows_affected()).unwrap_or(usize::MAX))
+            }
+        }
+    };
 }
 
 /// Implements the six edge store traits for a store with `pool` and `site` fields.
@@ -921,8 +978,8 @@ macro_rules! sql_edge_stores {
     };
 }
 
-/// The six edge stores, the event log and the beacon store in SQLite (spec 3.5 §7.9, feature
-/// `awp-sqlite`).
+/// The six edge stores, the event log, the beacon store and the shared rate-limit windows in
+/// SQLite (spec 3.5 §7.9, feature `awp-sqlite`).
 ///
 /// One site's records sit under its `site` namespace, so a database such as `harness.db`
 /// holds several sites and other stores. Call [`migrate`](Self::migrate) once before use.
@@ -994,10 +1051,11 @@ impl SqliteEdgeStores {
 
 #[cfg(feature = "awp-sqlite")]
 sql_edge_stores!(SqliteEdgeStores, "sqlite");
+#[cfg(feature = "awp-sqlite")]
+sql_rate_limits!(SqliteEdgeStores, "sqlite");
 
-/// The six edge stores, the event log and the beacon store in PostgreSQL, shared by every
-/// edge replica (spec 3.5 §7.9, feature
-/// `awp-postgres`).
+/// The six edge stores, the event log, the beacon store and the rate-limit windows in
+/// PostgreSQL, shared by every edge replica (spec 3.5 §7.9, feature `awp-postgres`).
 ///
 /// [`migrate`](Self::migrate) runs under an advisory lock, so replicas starting together
 /// migrate one at a time.
@@ -1070,6 +1128,8 @@ impl PostgresEdgeStores {
 
 #[cfg(feature = "awp-postgres")]
 sql_edge_stores!(PostgresEdgeStores, "postgres");
+#[cfg(feature = "awp-postgres")]
+sql_rate_limits!(PostgresEdgeStores, "postgres");
 
 /// Runs the migrations under a session-level advisory lock keyed by the registry table.
 #[cfg(feature = "awp-postgres")]
@@ -1173,6 +1233,8 @@ mod tests {
             BEACON_TOTAL,
             VISITOR_ADD,
             VISITOR_TOTAL,
+            RATE_HIT,
+            RATE_PURGE,
         ] {
             let seen = parameters(statement);
             assert_eq!(seen, (1..=seen.len()).collect::<Vec<_>>(), "{statement}");

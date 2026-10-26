@@ -111,6 +111,21 @@ mod log {
     }
 }
 
+#[async_trait]
+impl adk_server::awp::conformance::RateLimitHarness for File {
+    async fn rate_limits(&self) -> Arc<dyn adk_server::awp::RateLimitStore> {
+        Arc::new(self.stores().await)
+    }
+}
+
+mod rate {
+    use super::*;
+
+    adk_server::rate_limit_conformance_tests! {
+        harness = File::new(),
+    }
+}
+
 struct Book(Arc<AtomicUsize>);
 
 #[async_trait]
@@ -363,4 +378,34 @@ async fn a_restarted_edge_resumes_its_deliveries_and_keeps_its_counts() {
         .await
         .unwrap();
     assert_eq!(views, Some(1.0));
+}
+
+/// Two edges over one database file count a caller against one window, as replicas and a
+/// restarted edge do (spec 3.5 §7.9).
+#[tokio::test]
+async fn two_edges_over_one_file_share_a_callers_window() {
+    use adk_server::awp::EdgeLimits;
+    use adk_server::awp::tiers::EdgeCaller;
+    use awp_types::RateClass;
+
+    let file = File::new();
+    let class = RateClass { requests_per_minute: 2, calls_per_day: 1 };
+    let limits = |stores: SqliteEdgeStores| {
+        EdgeLimits::default()
+            .tier_default(TrustTier::Public, class)
+            .store(Arc::new(stores) as Arc<dyn adk_server::awp::RateLimitStore>)
+    };
+    let (first, second) = (limits(file.stores().await), limits(file.stores().await));
+    let caller = EdgeCaller::public("ip:203.0.113.9");
+    assert_eq!(first.admit_request(&caller).await.unwrap().remaining, 1);
+    assert_eq!(second.admit_request(&caller).await.unwrap().remaining, 0);
+    assert!(first.admit_request(&caller).await.is_err(), "the window is shared");
+    assert!(second.admit_call(&caller, None).await.is_ok());
+    assert!(first.admit_call(&caller, None).await.is_err(), "so is the daily call window");
+    let restarted = limits(file.stores().await);
+    assert!(restarted.admit_request(&caller).await.is_err(), "and it survives a restart");
+    assert!(
+        restarted.admit_request(&EdgeCaller::public("ip:198.51.100.7")).await.is_ok(),
+        "another caller has its own"
+    );
 }

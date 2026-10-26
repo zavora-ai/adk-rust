@@ -106,6 +106,13 @@ pub trait CapabilityHandler: Send + Sync {
     fn call_amount(&self, input: &Value) -> Option<u64> {
         input.get("amount").and_then(Value::as_u64)
     }
+
+    /// The amount of a call in minor units, read where the handler keeps it, such as the
+    /// total of a stored quote or order (spec 3.5 §7.4, §7.9). The edge decides holds with
+    /// this; the default is [`call_amount`](Self::call_amount).
+    async fn amount(&self, input: &Value) -> Option<u64> {
+        self.call_amount(input)
+    }
 }
 
 /// Why a capability cannot be declared (spec 3.5 §7.4).
@@ -271,6 +278,16 @@ impl CapabilityTool {
         self.handler
             .call_amount(input)
             .or_else(|| self.declaration.price.as_ref().map(|price| price.amount))
+    }
+
+    /// The amount of a call as the edge decides it (spec 3.5 §7.4): the handler's
+    /// [`amount`](CapabilityHandler::amount), which may read its store, else the declared
+    /// price.
+    pub async fn amount(&self, input: &Value) -> Option<u64> {
+        match self.handler.amount(input).await {
+            Some(amount) => Some(amount),
+            None => self.declaration.price.as_ref().map(|price| price.amount),
+        }
     }
 
     /// Runs the handler on validated input.
@@ -516,6 +533,54 @@ mod tests {
                 "key": call.idempotency_key,
             }))
         }
+    }
+
+    /// Keeps its totals behind an async lock, as a store would.
+    struct Stored(tokio::sync::Mutex<std::collections::BTreeMap<String, u64>>);
+
+    #[async_trait]
+    impl CapabilityHandler for Stored {
+        async fn handle(&self, _call: CapabilityCall) -> Result<Value, CapabilityError> {
+            Ok(json!({}))
+        }
+
+        async fn amount(&self, input: &Value) -> Option<u64> {
+            let order = input["orderId"].as_str()?;
+            self.0.lock().await.get(order).copied()
+        }
+    }
+
+    #[tokio::test]
+    async fn the_edge_reads_amounts_where_the_handler_keeps_them() {
+        let totals = [("order-1".to_string(), 250_000)].into_iter().collect();
+        let mut declaration =
+            CapabilityV2::new("pay_order", "Pay", CapabilityEffect::NonIdempotent);
+        declaration.price =
+            Some(awp_types::Price { amount: 500, currency: "KES".into(), rails: Vec::new() });
+        let tool = CapabilityTool::new(
+            "example.com",
+            declaration,
+            Arc::new(Stored(tokio::sync::Mutex::new(totals))),
+        )
+        .unwrap();
+        assert_eq!(tool.amount(&json!({ "orderId": "order-1" })).await, Some(250_000));
+        assert_eq!(
+            tool.amount(&json!({ "orderId": "order-9" })).await,
+            Some(500),
+            "an amount the handler cannot read is the declared price"
+        );
+        assert_eq!(tool.call_amount(&json!({ "orderId": "order-1" })), Some(500));
+        let echo = CapabilityTool::new(
+            "example.com",
+            CapabilityV2::new("donate", "Donate", CapabilityEffect::NonIdempotent),
+            Arc::new(Echo),
+        )
+        .unwrap();
+        assert_eq!(
+            echo.amount(&json!({ "amount": 70 })).await,
+            Some(70),
+            "the default reads `amount`"
+        );
     }
 
     #[test]

@@ -140,7 +140,7 @@ impl ToolPolicy for CapabilityPolicy {
                 }
             }
         }
-        if declaration.approval.holds(tool.call_amount(&request.args)) {
+        if declaration.approval.holds(tool.amount(&request.args).await) {
             return PolicyDecision::RequireApproval {
                 reason: format!("the owner decides calls to '{}'", declaration.name),
             };

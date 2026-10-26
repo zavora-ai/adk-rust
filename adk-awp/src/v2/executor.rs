@@ -423,7 +423,7 @@ impl CapabilityExecutor for DirectExecutor {
         }
 
         let call_id = format!("call_{}", Uuid::new_v4().simple());
-        let outcome = if declaration.approval.holds(tool.call_amount(&invocation.input)) {
+        let outcome = if declaration.approval.holds(tool.amount(&invocation.input).await) {
             let mut call = HeldCall::pending(call_id, declaration.name.clone(), now);
             call.expires_at = self.hold_expiry.map(|expiry| now + expiry);
             let record = HeldCallRecord {

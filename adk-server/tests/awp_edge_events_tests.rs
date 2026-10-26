@@ -687,3 +687,9 @@ mod memory_log {
         harness = adk_server::awp::conformance::MemoryEdgeLog::default(),
     }
 }
+
+mod memory_rate_limits {
+    adk_server::rate_limit_conformance_tests! {
+        harness = adk_server::awp::conformance::MemoryRateLimits::default(),
+    }
+}

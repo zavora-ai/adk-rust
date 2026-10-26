@@ -49,7 +49,7 @@ No feature is enabled by default.
 | `agent-engine` | The Gemini Enterprise Agent Platform (ReasoningEngine) dispatch surface and `serve_agent_engine` |
 | `vertex-remote-engine` | `RemoteReasoningEngineAgent`: deployed Agent Engine agents as sub-agents (implies `agent-engine`) |
 | `awp` | `ServerBuilder::awp(AwpEdge)`: the AWP 2.0 agent edge — trust tiers from verified credentials, capabilities over A2A, MCP and HTTP through one governed path, held and exactly-once calls, the public partition's conversation endpoints, event subscriptions, consent receipts and the beacon (implies `a2a-v1`) |
-| `awp-sqlite`, `awp-postgres`, `awp-redis` | The edge stores in SQLite, PostgreSQL or Redis (implies `awp`) |
+| `awp-sqlite`, `awp-postgres`, `awp-redis` | The edge stores and shared rate-limit windows in SQLite, PostgreSQL or Redis (implies `awp`) |
 
 ## Quick Start
 

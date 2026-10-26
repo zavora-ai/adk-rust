@@ -114,7 +114,7 @@ pub use events::{
     EdgeEvents, EventLog, EventsConfig, InMemoryEventLog, PendingDelivery, RetainedEvent,
 };
 pub use executor::{GovernedExecutor, KeySources};
-pub use limits::EdgeLimits;
+pub use limits::{EdgeLimits, InMemoryRateLimitStore, RateLimitStore, RateWindow};
 pub use policy::{CapabilityPolicy, PublicPartitionPolicy};
 pub use public::{
     ConversationScreen, InjectionScreen, PublicTools, RecordingSignals, RecordingThreadSink,
@@ -919,7 +919,7 @@ async fn edge_guard(State(guard): State<Arc<Guard>>, request: Request, next: Nex
             );
         }
     };
-    let standing = match guard.limits.check_request(&caller) {
+    let standing = match guard.limits.admit_request(&caller).await {
         Ok(standing) => standing,
         Err(limited) => {
             let mut body = ErrorBody::new(
