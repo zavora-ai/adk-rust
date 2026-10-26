@@ -74,7 +74,7 @@ use serde_json::Value;
 use crate::principal::{ActingContext, SubjectKind, SubjectRef};
 use crate::{
     AdkError, ApprovalScope, ApprovalStore, Clock, DurableRunStore, ErrorCategory, ErrorComponent,
-    ErrorDetails, Result, SystemClock, ToolApproval, ToolConfirmationRequest,
+    ErrorDetails, Result, SystemClock, ToolApproval, ToolConfirmationRequest, ToolOrigin,
 };
 
 /// The most requests one [`ApprovalStore::list_requests`] page returns by default.
@@ -502,6 +502,11 @@ pub struct ApprovalRequest {
     pub fingerprint: String,
     /// The tool called.
     pub tool_name: String,
+    /// Who publishes the tool, from the held call: a surface tells one publisher's cards from
+    /// another's by it, never by the tool's name, which an MCP server can copy (spec 3.3 §7.1).
+    /// `None` for a call held without one, and for a request stored before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<ToolOrigin>,
     /// The call's arguments as shown to approvers, with secrets removed.
     pub args_redacted: Value,
     /// The agent making the call and on whose behalf.
@@ -550,7 +555,8 @@ pub struct ApprovalRequest {
 }
 
 impl ApprovalRequest {
-    /// A pending request for `call` in `scope` under `policy`, allowing every action.
+    /// A pending request for `call` in `scope` under `policy`, allowing every action, with
+    /// the call's [`origin`](Self::origin).
     pub fn new(
         id: impl Into<String>,
         scope: ApprovalScope,
@@ -562,6 +568,7 @@ impl ApprovalRequest {
             scope,
             fingerprint: call.fingerprint(),
             tool_name: call.tool_name.clone(),
+            origin: call.origin.clone(),
             args_redacted: call.args.clone(),
             acting: None,
             requester: None,
@@ -615,6 +622,32 @@ impl ApprovalRequest {
     #[must_use]
     pub fn with_risk(mut self, risk: ApprovalRisk) -> Self {
         self.risk = risk;
+        self
+    }
+
+    /// Names who publishes the tool (spec 3.3 §7.1).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{ApprovalPolicy, ApprovalRequest, ApprovalScope, ApproverSelector,
+    ///     ToolConfirmationRequest, ToolOrigin};
+    /// use serde_json::json;
+    ///
+    /// let call = ToolConfirmationRequest::new("verb_snooze", json!({ "item": "agenda-7" }));
+    /// let origin = ToolOrigin::new("verbs:adk-rust", &json!({ "name": "verb_snooze" }), None);
+    /// let request = ApprovalRequest::new(
+    ///     "apr-1",
+    ///     ApprovalScope::new("adk-rust", "ana", "s1"),
+    ///     &call,
+    ///     ApprovalPolicy::new([ApproverSelector::human("ana")]),
+    /// )
+    /// .with_origin(origin);
+    /// assert_eq!(request.origin.map(|origin| origin.source).as_deref(), Some("verbs:adk-rust"));
+    /// ```
+    #[must_use]
+    pub fn with_origin(mut self, origin: ToolOrigin) -> Self {
+        self.origin = Some(origin);
         self
     }
 
@@ -2782,5 +2815,79 @@ mod tests {
             blocked.get(&submitted.id).await.unwrap().unwrap().state,
             ApprovalState::Pending
         );
+    }
+
+    fn verb_origin() -> ToolOrigin {
+        ToolOrigin::new(
+            "verbs:adk-rust",
+            &json!({ "name": "verb_snooze", "parameters": { "type": "object" } }),
+            None,
+        )
+    }
+
+    /// Spec 3.3 §7.1: the request a held call becomes names who publishes the tool, so a
+    /// surface can tell one origin's cards from another's without parsing the fingerprint.
+    #[tokio::test]
+    async fn a_submitted_call_keeps_its_tools_origin() {
+        use crate::InMemoryApprovalStore;
+
+        let policy = ApprovalPolicy::new([ApproverSelector::human("ana")]);
+        let service = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+            .with_router(policy.clone());
+        let scope = ApprovalScope::new("adk-rust", "ana", "s-1");
+        let mut held = ToolConfirmationRequest::new("verb_snooze", json!({ "item": "agenda-7" }));
+        held.function_call_id = Some("call-1".into());
+        held.origin = Some(verb_origin());
+        let call = ApprovalCall {
+            scope: scope.clone(),
+            request: held.clone(),
+            reason: "Move News digest to 19:00".into(),
+            agent_name: "finance".into(),
+            invocation_id: "inv".into(),
+            run_id: None,
+            acting: None,
+        };
+
+        let request = service.submit_call(call).await.unwrap().unwrap();
+        let mut expected = ApprovalRequest::new(request.id.clone(), scope, &held, policy)
+            .with_summary("Move News digest to 19:00")
+            .with_requester(SubjectRef::human("ana"));
+        expected.created_at = request.created_at;
+        assert_eq!(request, expected);
+        assert_eq!(expected.origin, Some(verb_origin()));
+        assert_eq!(service.get(&request.id).await.unwrap(), Some(request));
+    }
+
+    #[test]
+    fn with_origin_names_the_tools_publisher() {
+        let call = ToolConfirmationRequest::new("pay", json!({}));
+        let policy = ApprovalPolicy::new([ApproverSelector::human("ana")]);
+        let request =
+            ApprovalRequest::new("apr-1", ApprovalScope::new("a", "u", "s"), &call, policy);
+        assert_eq!(request.origin, None);
+        let named = request.clone().with_origin(verb_origin());
+        assert_eq!(named, ApprovalRequest { origin: Some(verb_origin()), ..request });
+    }
+
+    /// A request stored before the field existed reads with no origin, and a request without
+    /// one writes no `origin` key, so stores keep reading what they wrote (spec 3.3 §7.1).
+    #[test]
+    fn a_record_without_an_origin_reads_as_none() {
+        let call = ToolConfirmationRequest::new("pay", json!({ "cents": 500 }));
+        let policy = ApprovalPolicy::new([ApproverSelector::human("ana")]);
+        let request =
+            ApprovalRequest::new("apr-1", ApprovalScope::new("a", "u", "s"), &call, policy);
+        let written = serde_json::to_value(&request).unwrap();
+        assert_eq!(written.get("origin"), None);
+        let read: ApprovalRequest = serde_json::from_value(written).unwrap();
+        assert_eq!(read, request);
+
+        let named = request.with_origin(verb_origin());
+        let written = serde_json::to_value(&named).unwrap();
+        assert_eq!(
+            written["origin"],
+            json!({ "source": "verbs:adk-rust", "declarationDigest": verb_origin().declaration_digest })
+        );
+        assert_eq!(serde_json::from_value::<ApprovalRequest>(written).unwrap(), named);
     }
 }

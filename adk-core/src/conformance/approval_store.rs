@@ -20,7 +20,8 @@
 //!
 //! Every request carries an [`ActingContext`] and a [`ToolOrigin`], and the cases compare
 //! whole requests, so each backend proves the acting agent and the tool's origin are
-//! recorded with the held call.
+//! recorded with the held call. Every [`ApprovalRequest`] carries its call's origin too
+//! (spec 3.3 §7.1), so the request cases prove each backend keeps it.
 //!
 //! `has_decision` may report `true` when no live decision exists (the trait's default
 //! does), so the suite checks only that it never misses a live decision and never
@@ -389,6 +390,7 @@ pub async fn requests_are_created_once<H: ApprovalStoreHarness + ?Sized>(harness
     let store = harness.open().await;
     let app = unique("app");
     let first = approval_request(&app, &unique_unicode("request"), 0);
+    assert_eq!(first.origin, request(0, "call-1").origin, "the request names its tool's origin");
     assert_eq!(store.create_request(&first).await.expect("create"), first, "created");
     assert_eq!(stored(&*store, &first.id).await, Some(first.clone()), "reads back exactly");
 
