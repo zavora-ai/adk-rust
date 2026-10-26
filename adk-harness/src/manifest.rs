@@ -615,7 +615,9 @@ impl HarnessManifest {
                 self.help_topics.join(", ")
             ),
         ));
-        let reserve = 160;
+        // Room for the line naming every section, should all of them be cut.
+        let reserve = "Cut for length: . harness_help <topic> returns them.\n".len()
+            + sections.iter().map(|(name, _)| name.len() + ", ".len()).sum::<usize>();
         let mut out = header;
         let mut cut = Vec::new();
         for (name, text) in sections {
