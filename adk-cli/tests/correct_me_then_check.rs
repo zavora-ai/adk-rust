@@ -201,6 +201,10 @@ impl Place {
         }
         common::isolate(&mut command, self.home.path());
         command.env_remove("TELEGRAM_BOT_TOKEN");
+        // What the kernel decided about each tick, for a failure to name.
+        command
+            .env("RUST_LOG", "adk_kernel::consolidation=debug")
+            .stderr(std::fs::File::create(self.tick_log()).unwrap());
         let mut child = command.spawn().expect("adk-rust starts");
         let started = Instant::now();
         while std::net::TcpStream::connect(("127.0.0.1", self.port)).is_err() {
@@ -211,6 +215,11 @@ impl Place {
             std::thread::sleep(Duration::from_millis(100));
         }
         Up(child)
+    }
+
+    /// Where `up` writes what it decided about each consolidation tick.
+    fn tick_log(&self) -> PathBuf {
+        self.home.path().join("ticks.log")
     }
 
     /// The kernel's signed log id and the verifier key `adk-rust audit verify` is given.
@@ -330,21 +339,13 @@ impl Api {
     }
 }
 
-async fn eventually<T, F, Fut>(what: &str, probe: F) -> T
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Option<T>>,
-{
-    eventually_within(Duration::from_secs(60), what, probe).await
-}
-
-async fn eventually_within<T, F, Fut>(within: Duration, what: &str, mut probe: F) -> T
+async fn eventually<T, F, Fut>(what: &str, mut probe: F) -> T
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Option<T>>,
 {
     let started = Instant::now();
-    while started.elapsed() <= within {
+    while started.elapsed() <= Duration::from_secs(60) {
         if let Some(value) = probe().await {
             return value;
         }
@@ -405,16 +406,26 @@ async fn correct_me_then_check_on(store: Option<String>) {
 
     // 1. The kernel's overnight tidy-up merges the two notes into one. The kernel weighs a tick
     // once a minute and holds it while another of its processes runs, such as the first daily
-    // `/proc` pass, so it may come a minute after the start.
-    let (ids, tidy_ups) =
-        eventually_within(Duration::from_secs(150), "the overnight tidy-up", || async {
-            let (ids, tidy_ups) = api.memory().await;
-            tidy_ups
-                .first()
-                .is_some_and(|tick| tick["finishedAt"].is_string())
-                .then_some((ids, tidy_ups))
-        })
-        .await;
+    // `/proc` pass, so it may come a minute or two after the start.
+    let mut tidied = None;
+    while tidied.is_none() && started.elapsed() < Duration::from_secs(210) {
+        let (ids, tidy_ups) = api.memory().await;
+        if tidy_ups.first().is_some_and(|tick| tick["finishedAt"].is_string()) {
+            tidied = Some((ids, tidy_ups));
+        } else {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+    let Some((ids, tidy_ups)) = tidied else {
+        let ran: Vec<String> = api
+            .processes()
+            .await
+            .iter()
+            .map(|process| format!("{} {}", process["run"]["target"], process["run"]["state"]))
+            .collect();
+        let decided = std::fs::read_to_string(place.tick_log()).unwrap_or_default();
+        panic!("no overnight tidy-up after {:?}; processes {ran:?}\n{decided}", started.elapsed());
+    };
     let tick = &tidy_ups[0];
     assert_eq!(
         (tick["merged"].as_u64(), tick["superseded"].as_u64()),

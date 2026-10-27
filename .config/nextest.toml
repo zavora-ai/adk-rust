@@ -45,6 +45,12 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 filter = "package(adk-cli) and binary(hire_a_helper)"
 slow-timeout = { period = "60s", terminate-after = 4 }
 
+# "Correct me, then check" waits out the same checkpoint, and up to three and a half minutes
+# for the kernel's first tidy-up, which is held while another of its processes runs.
+[[profile.default.overrides]]
+filter = "package(adk-cli) and binary(correct_me_then_check)"
+slow-timeout = { period = "60s", terminate-after = 5 }
+
 # The durability gates on one server share its stores (schedules are global to a
 # store), so they run one at a time per backend; different backends run in parallel.
 # Each gate starts several processes and waits out leases and staleness limits.
