@@ -101,6 +101,31 @@ impl AppServers for McpServerManager {
     }
 }
 
+/// One MCP server's toolset: its name is the server's.
+#[async_trait]
+impl<S> AppServers for adk_tool::mcp::McpToolset<S>
+where
+    S: adk_tool::mcp::rmcp::service::Service<adk_tool::mcp::rmcp::RoleClient>
+        + Send
+        + Sync
+        + 'static,
+{
+    async fn ui_bindings(&self, server: &str) -> Option<adk_core::Result<Vec<McpUiBinding>>> {
+        if adk_core::Toolset::name(self) != server {
+            return None;
+        }
+        Some(adk_tool::mcp::McpToolset::ui_bindings(self).await)
+    }
+
+    async fn read_resource(
+        &self,
+        _server: &str,
+        uri: &str,
+    ) -> adk_core::Result<Vec<ResourceContents>> {
+        adk_tool::mcp::McpToolset::read_resource(self, uri).await
+    }
+}
+
 /// An app's page on the apps origin.
 struct Frame {
     html: String,

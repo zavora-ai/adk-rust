@@ -168,6 +168,8 @@ tokio = { workspace = true, features = ["full", "test-util"] }
 tower = { version = "0.4", features = ["util"] }
 # Parses what the terminal surface writes, as a terminal would (spec 3.3 WP-E).
 vt100 = "0.16"
+# The in-process MCP server whose app the hostile-app tests show (`genui-apps`).
+rmcp = { version = "3.1", features = ["client", "server", "elicitation"] }
 # The phone's passkey tests rebuild a ceremony around a recorded browser's challenge.
 webauthn-rs = { version = "=0.5.5", default-features = false, features = ["danger-allow-state-serialisation"] }
 # The voice view's socket, opened as a browser would (spec 3.3 §5.6).
