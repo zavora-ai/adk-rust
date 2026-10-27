@@ -34,8 +34,8 @@ pub enum AwpCommands {
     /// broken link. Example: `adk-rust awp verify example.com`
     Verify(VerifyArgs),
 
-    /// Run the AWP 2.0 conformance kit against a deployment, such as https://example.com or
-    /// a local one at http://127.0.0.1:8080.
+    /// Run the AWP 2.0 conformance kit against a deployment, such as <https://example.com>
+    /// or a local one at <http://127.0.0.1:8080>.
     ///
     /// Exits 0 when no requirement fails and 1 otherwise.
     Conformance(ConformanceArgs),
@@ -60,8 +60,8 @@ pub enum AwpCommands {
 pub struct VerifyArgs {
     /// The domain, such as example.com
     pub domain: String,
-    /// Read the domain's documents from this origin instead of https://<domain>: a local or
-    /// staging deployment, such as http://127.0.0.1:8080
+    /// Read the domain's documents from this origin instead of the domain: a local or
+    /// staging deployment, such as <http://127.0.0.1:8080>
     #[arg(long, value_name = "URL")]
     pub origin: Option<String>,
     /// Check the root against this `_awp-root` record instead of DNS, for a deployment whose
@@ -75,7 +75,7 @@ pub struct VerifyArgs {
     #[arg(long, value_name = "TIME")]
     pub at: Option<DateTime<Utc>>,
     /// The file that pins each domain's root and last checkpoint (default:
-    /// <config dir>/adk-rust/awp-pins.json)
+    /// {config dir}/adk-rust/awp-pins.json)
     #[arg(long, value_name = "FILE")]
     pub pins: Option<PathBuf>,
     /// Sign each request with Web Bot Auth using this private JWK file
@@ -92,7 +92,7 @@ pub struct VerifyArgs {
 /// `adk-rust awp conformance`.
 #[derive(clap::Args, Debug, Clone)]
 pub struct ConformanceArgs {
-    /// The deployment: https://example.com, or a local one such as http://127.0.0.1:8080
+    /// The deployment: <https://example.com>, or a local one such as <http://127.0.0.1:8080>
     pub url: String,
     /// The site's domain, when the deployment is not served at it (default: the contract's
     /// `site.domain`)

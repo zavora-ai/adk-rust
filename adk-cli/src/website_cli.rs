@@ -123,8 +123,8 @@ pub struct NewArgs {
     /// The site project to create, or an existing one to start (default: the current
     /// directory); with --agency, the agency's directory
     pub dir: Option<PathBuf>,
-    /// One harness for many sites: the site goes into <dir>/<domain> and is listed in
-    /// <dir>/agency.toml, and every listed site is served, each isolated (A-I22)
+    /// One harness for many sites: the site goes into {dir}/{domain} and is listed in
+    /// {dir}/agency.toml, and every listed site is served, each isolated (A-I22)
     #[arg(long)]
     pub agency: bool,
     /// The site's kind

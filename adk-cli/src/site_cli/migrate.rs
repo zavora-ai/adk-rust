@@ -99,7 +99,7 @@ pub struct MigrateArgs {
     /// uploads/; needs Docker and a proven domain
     #[arg(long, value_name = "DIR", requires = "origin")]
     pub backup: Option<PathBuf>,
-    /// With --backup: the legacy site's public origin, such as https://example.com
+    /// With --backup: the legacy site's public origin, such as <https://example.com>
     #[arg(long, value_name = "URL")]
     pub origin: Option<String>,
     /// The currency of a shop's prices in a WordPress export
@@ -122,14 +122,14 @@ pub struct MigrateArgs {
 /// `adk-rust site freeze`.
 #[derive(clap::Args, Debug, Clone)]
 pub struct FreezeArgs {
-    /// The legacy site's public origin, such as https://example.com
+    /// The legacy site's public origin, such as <https://example.com>
     pub url: String,
-    /// Where the crawler reaches the legacy server privately, such as http://10.0.0.5:8080;
+    /// Where the crawler reaches the legacy server privately, such as <http://10.0.0.5:8080>;
     /// it reaches nothing else
     #[arg(long, value_name = "URL")]
     pub vantage: String,
     /// Where the edge serves capabilities: frozen forms post to
-    /// <edge>/awp/v2/capabilities/<name> (default: the site's origin)
+    /// {edge}/awp/v2/capabilities/{name} (default: the site's origin)
     #[arg(long, value_name = "URL")]
     pub edge: Option<String>,
     /// Publish without asking

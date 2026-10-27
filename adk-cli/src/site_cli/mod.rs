@@ -52,7 +52,7 @@ pub struct SiteTarget {
     /// The site project: site.toml, content/ and data/ (default: the current directory)
     #[arg(long, global = true, value_name = "DIR", default_value = ".")]
     pub site: PathBuf,
-    /// The directory releases are published to (default: <site>/data/host)
+    /// The directory releases are published to (default: {site}/data/host)
     #[arg(long, global = true, value_name = "DIR")]
     pub host_dir: Option<PathBuf>,
 }

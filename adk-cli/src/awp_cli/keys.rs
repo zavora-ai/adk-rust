@@ -56,7 +56,7 @@ pub struct RotateArgs {
     /// host and out of every agent's reach
     #[arg(long, value_name = "FILE")]
     pub new_root_key: PathBuf,
-    /// The new root's key id (default: site-root-<year>-<month>)
+    /// The new root's key id (default: site-root-{year}-{month})
     #[arg(long)]
     pub kid: Option<String>,
     /// The current root key is lost or compromised: the new root is anchored by the
@@ -113,10 +113,10 @@ pub struct DelegateArgs {
     /// An existing private key file to delegate again, such as data/keys/release.jwk
     #[arg(long, value_name = "FILE", conflicts_with = "out")]
     pub key: Option<PathBuf>,
-    /// Where to write a new key (default: <site>/data/keys/<scope>.jwk)
+    /// Where to write a new key (default: {site}/data/keys/{scope}.jwk)
     #[arg(long, value_name = "FILE")]
     pub out: Option<PathBuf>,
-    /// The new key's id (default: <scope>-<year>-<month>)
+    /// The new key's id (default: {scope}-{year}-{month})
     #[arg(long)]
     pub kid: Option<String>,
     /// Days the delegation stays valid

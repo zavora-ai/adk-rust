@@ -24,10 +24,9 @@ const SQLITE_PATHS_PER_SCOPE: usize = 4096;
 /// Read records in SQLite — `harness.db` in adk-cli — one row per session and agent
 /// holding its paths and digests (spec 3.1 §10 D7; feature `sqlite`).
 ///
-/// A row is sealed under the store key with
-/// [`with_keyring`](Self::with_keyring), so file names stay out of the database file as the
-/// sessions' content does (spec 3.1 §7.12, I57). A scope keeps its 4,096 most recently
-/// recorded paths.
+/// A row is sealed under the store key with `with_keyring` (feature `encrypted`), so file
+/// names stay out of the database file as the sessions' content does (spec 3.1 §7.12, I57).
+/// A scope keeps its 4,096 most recently recorded paths.
 ///
 /// # Example
 ///
