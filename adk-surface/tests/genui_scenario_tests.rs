@@ -177,18 +177,21 @@ async fn home(lasting: &Lasting, model: Arc<dyn Llm>, forced: bool) -> Home {
     home_with(lasting, model, forced, ControlPlaneConfig::default().without_socket()).await
 }
 
+/// The stores a home runs on: its sessions, approvals, durable runs and processes.
+type Stores = (
+    Arc<dyn SessionService>,
+    Arc<dyn ApprovalStore>,
+    Arc<dyn DurableRunStore>,
+    Arc<dyn ProcessStore>,
+);
+
 async fn home_with(
     lasting: &Lasting,
     model: Arc<dyn Llm>,
     forced: bool,
     control: ControlPlaneConfig,
 ) -> Home {
-    let (sessions, approvals, runs, processes): (
-        Arc<dyn SessionService>,
-        Arc<dyn ApprovalStore>,
-        Arc<dyn DurableRunStore>,
-        Arc<dyn ProcessStore>,
-    ) = match &lasting.postgres {
+    let (sessions, approvals, runs, processes): Stores = match &lasting.postgres {
         None => {
             let path = lasting.dir.path().join("harness.db");
             let url = format!("sqlite://{}?mode=rwc", path.display());

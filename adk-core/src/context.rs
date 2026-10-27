@@ -1762,7 +1762,7 @@ pub struct RunConfig {
     /// the agent, or refused, and the run ends without a model call. A run that is not
     /// authenticated, or whose user is not the person who asked, has it refused. A root that
     /// cannot hold a call refuses it before anything else runs: `CodeActAgent`, the workflow
-    /// agents, teams and `GraphAgent` do; another [`Agent`](crate::Agent) answers it with
+    /// agents, teams and `GraphAgent` do; another [`Agent`] answers it with
     /// [`RequestedCall::refusal_events`](crate::RequestedCall::refusal_events).
     pub requested_call: Option<crate::RequestedCall>,
 }
