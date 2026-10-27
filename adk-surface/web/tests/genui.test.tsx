@@ -243,6 +243,7 @@ describe("the ported A2UI parts", () => {
       text: "Finance can't use send_invoice here",
       tool: "send_invoice",
       version: 1,
+      via: "form" as const,
     };
     // The thread hands the hook a new object on every render, as the feed does.
     const { result, rerender } = renderHook(() => useFormState(client, "s1", { ...sent }, undefined, false));
