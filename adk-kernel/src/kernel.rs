@@ -6,7 +6,7 @@
 //!
 //! | Kernel part | Built from |
 //! |---|---|
-//! | Workers | One `DurableWorker` per [`QueueClass`], each with [`KernelConfig::worker_config`]: `on_governance_refusal: Park` (§10 S3), the class's poll interval, the S1 `WorkerHooks` turned into [`KernelEvent`]s, and the targets registered with [`KernelBuilder::agent`] (the harness runner as `adk-rust` and `harness.goal`) |
+//! | Workers | One `DurableWorker` per [`QueueClass`], each with [`KernelConfig::worker_config`]: `on_governance_refusal: Park` (§10 S3), the class's poll interval, the S1 `WorkerHooks` turned into [`KernelEvent`]s, and the targets registered with [`KernelBuilder::agent`] (the harness runner as `adk-rust` and `harness.goal`), on [`KernelConfig::clock`] |
 //! | Scheduler | `DurableScheduler::new(schedules, runs).with_governance(..).with_clock(..)`, ticking every [`KernelConfig::scheduler_tick`] on [`KernelConfig::clock`] |
 //! | Wake sources | [`KernelBuilder::wake_source`], [`KernelBuilder::trigger`] and [`KernelBuilder::queue_ingress`], routed by the [`WakeRouter`] (§7.4) |
 //! | Approvals | `StoreApprovalService::with_run_store`, so a decision wakes the parked run; the service's `tick` on the kernel's clock for expiries |
@@ -129,9 +129,10 @@ pub struct KernelConfig {
     /// to `false`.
     pub fail_if_sandbox_unavailable: bool,
     /// The time the kernel reads: [`Wake::At`] times and wake-set expiry, the scheduler's
-    /// due schedules, process ages and spend days. Defaults to `SystemClock`. Give the run
-    /// store the same clock (`SqliteRunStore::with_clock`), since it decides leases and
-    /// `not_before`.
+    /// due schedules, process ages, spend days, and the age at which the workers prune
+    /// finished runs. Defaults to `SystemClock`. Give the run store the same clock
+    /// (`SqliteRunStore::with_clock`), since it decides leases and `not_before` and stamps
+    /// the times the workers compare with it.
     pub clock: Arc<dyn Clock>,
     /// The proactivity limits of every partition: open proposals, the daily proactive
     /// budget, quiet hours, how proposals are approved, the consolidation tick (spec 3.2
@@ -2085,6 +2086,7 @@ impl KernelBuilder {
             .map(|queue| {
                 let mut worker = DurableWorker::new(runs.clone())
                     .with_config(config.worker_config(queue))
+                    .with_clock(Arc::clone(&config.clock))
                     .with_governance(config.governance.clone())
                     .with_workflows(workflows.clone())
                     .with_hooks(hooks.clone());
