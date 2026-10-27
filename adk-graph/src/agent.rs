@@ -996,6 +996,7 @@ impl GraphAgentBuilder {
         compiled.timeout_policies = self.timeout_policies;
         compiled.default_timeout = self.default_timeout;
         compiled.governed_nodes = self.governed_nodes;
+        compiled.check_governed_nodes()?;
 
         #[cfg(feature = "node-cache")]
         {

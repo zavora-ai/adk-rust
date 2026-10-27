@@ -201,7 +201,19 @@ pub async fn execute_http_with_policy(
         method = ?config.method,
         "executing HTTP node"
     );
-    send(config, &client, request).await
+    send(config, &client, request, ctx.governed_call()).await
+}
+
+/// Fails with why the node's request cannot be built for `state`, if it cannot: an
+/// invalid URL, one the policy refuses, or a client that cannot be built. Nothing is sent.
+pub(crate) fn buildable(
+    config: &HttpNodeConfig,
+    state: &HashMap<String, Value>,
+    policy: &HttpActionPolicy,
+) -> Result<()> {
+    build_request(config, state, policy).map(drop).map_err(|message| {
+        GraphError::NodeExecutionFailed { node: config.standard.id.clone(), message }
+    })
 }
 
 /// The request an HTTP node sends for `state`, with a client that checks its redirects.
@@ -238,18 +250,36 @@ fn build_request(
 }
 
 /// Sends `request` and maps its response to the node's output.
+///
+/// For a governed call (spec 3.3 §12) a failure after the request may have reached the
+/// server — no answer, an answer that fails validation, or one that cannot be read — is
+/// `graph.outcome_unknown`, because the call may have taken effect; only a connection that
+/// was never made is a plain failure.
 async fn send(
     config: &HttpNodeConfig,
     client: &reqwest::Client,
     request: reqwest::Request,
+    governed: bool,
 ) -> Result<NodeOutput> {
     let node_id = &config.standard.id;
     let output_key = &config.standard.mapping.output_key;
     let shown_url = redact_url(request.url());
+    let sent = |message: String| {
+        if governed {
+            crate::governed::sent_without_outcome(node_id, &message)
+        } else {
+            GraphError::NodeExecutionFailed { node: node_id.clone(), message }
+        }
+    };
     // `without_url` keeps the full URL, query string included, out of the error.
-    let response = client.execute(request).await.map_err(|e| GraphError::NodeExecutionFailed {
-        node: node_id.clone(),
-        message: format!("HTTP request to {shown_url} failed: {}", e.without_url()),
+    let response = client.execute(request).await.map_err(|e| {
+        let connect = e.is_connect();
+        let message = format!("HTTP request to {shown_url} failed: {}", e.without_url());
+        if connect {
+            GraphError::NodeExecutionFailed { node: node_id.clone(), message }
+        } else {
+            sent(message)
+        }
     })?;
 
     let status = response.status().as_u16();
@@ -258,14 +288,18 @@ async fn send(
     if let Some(pattern) = &config.response.status_validation
         && !validate_status(status, pattern)
     {
-        return Err(GraphError::NodeExecutionFailed {
-            node: node_id.clone(),
-            message: format!("HTTP status {status} does not match validation pattern '{pattern}'"),
-        });
+        return Err(sent(format!(
+            "HTTP status {status} does not match validation pattern '{pattern}'"
+        )));
     }
 
     // Parse response
-    let result = parse_response(response, &config.response.response_type, node_id).await?;
+    let result = parse_response(response, &config.response.response_type, node_id).await.map_err(
+        |error| match error {
+            GraphError::NodeExecutionFailed { message, .. } => sent(message),
+            other => other,
+        },
+    )?;
 
     let output_value = json!({
         "status": status,
@@ -349,23 +383,125 @@ fn digested_url(url: &reqwest::Url) -> reqwest::Url {
     shown
 }
 
+/// The header an API-key authentication sends its key in, lower-cased: a credential
+/// whatever its name.
+fn api_key_header(config: &HttpNodeConfig, state: &HashMap<String, Value>) -> Option<String> {
+    match &config.auth {
+        HttpAuth::ApiKey(api_key) => {
+            Some(interpolate_variables(&api_key.header, state).to_ascii_lowercase())
+        }
+        HttpAuth::None | HttpAuth::Bearer(_) | HttpAuth::Basic(_) => None,
+    }
+}
+
+/// `state` with each string under a secret-looking key replaced by its digest, and each
+/// digest paired with the value it stands for.
+fn digested_state(
+    state: &HashMap<String, Value>,
+) -> (HashMap<String, Value>, Vec<(String, String)>) {
+    let mut shown = state.clone();
+    let mut digests = Vec::new();
+    for (key, value) in state {
+        if let Value::String(raw) = value
+            && is_credential(key)
+        {
+            let digest = credential_digest(key, raw.as_bytes());
+            shown.insert(key.clone(), Value::String(digest.clone()));
+            digests.push((digest, raw.clone()));
+        }
+    }
+    (shown, digests)
+}
+
+/// `body` with each string under a secret-looking key, at any depth, replaced by its digest.
+fn digested_json(body: &Value, key: Option<&str>) -> Value {
+    match body {
+        Value::String(raw) if key.is_some_and(is_credential) => {
+            Value::String(credential_digest(key.unwrap_or_default(), raw.as_bytes()))
+        }
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(name, value)| (name.clone(), digested_json(value, Some(name))))
+                .collect(),
+        ),
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|item| digested_json(item, key)).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+/// `approved` with each digest under a secret-looking key replaced by the value `current`
+/// holds at the same place; fails naming the field whose credential changed.
+fn restored_json(
+    approved: &Value,
+    current: Option<&Value>,
+    key: Option<&str>,
+) -> std::result::Result<Value, String> {
+    match approved {
+        Value::String(digest)
+            if key.is_some_and(is_credential) && digest.starts_with("sha256:") =>
+        {
+            let name = key.unwrap_or_default();
+            current
+                .and_then(Value::as_str)
+                .filter(|raw| credential_digest(name, raw.as_bytes()) == *digest)
+                .map(|raw| Value::String(raw.to_string()))
+                .ok_or_else(|| format!("the credential in body field '{name}'"))
+        }
+        Value::Object(map) => map
+            .iter()
+            .map(|(name, value)| {
+                restored_json(value, current.and_then(|current| current.get(name)), Some(name))
+                    .map(|value| (name.clone(), value))
+            })
+            .collect::<std::result::Result<serde_json::Map<_, _>, _>>()
+            .map(Value::Object),
+        Value::Array(items) => items
+            .iter()
+            .enumerate()
+            .map(|(at, item)| restored_json(item, current.and_then(|current| current.get(at)), key))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map(Value::Array),
+        other => Ok(other.clone()),
+    }
+}
+
+/// Whether `text` still holds a credential digest: `sha256:` and 64 hex digits.
+fn holds_digest(text: &str) -> bool {
+    text.match_indices("sha256:").any(|(at, _)| {
+        let hex = &text.as_bytes()[at + 7..];
+        hex.len() >= 64 && hex[..64].iter().all(u8::is_ascii_hexdigit)
+    })
+}
+
 /// The call an HTTP node makes for `state`, as an approver sees it and as its record
 /// binds it (spec 3.3 §12, §7.1).
 ///
 /// Carries the method, the full URL with its query, every header (authentication
-/// included) and the body. Credentials — authorization and cookie headers, and headers,
-/// query parameters and form fields with secret-looking names — appear as `sha256:`
-/// digests, so the call is bound exactly while the decision shows no secret.
+/// included) and the body. Credentials appear as `sha256:` digests, so the call is bound
+/// exactly while the decision shows no secret: authorization and cookie headers, an API
+/// key's header whatever its name, headers, query parameters, form fields and JSON body
+/// fields with secret-looking names, and in a raw body the values of state keys with
+/// secret-looking names. A request that cannot be built is described by its method and
+/// why, never by the state it read.
 pub(crate) fn call_args(
     config: &HttpNodeConfig,
     state: &HashMap<String, Value>,
     policy: &HttpActionPolicy,
 ) -> Option<Value> {
-    let (_, request) = build_request(config, state, policy).ok()?;
+    let request = match build_request(config, state, policy) {
+        Ok((_, request)) => request,
+        Err(error) => {
+            return Some(json!({ "method": format!("{:?}", config.method), "error": error }));
+        }
+    };
+    let api_key = api_key_header(config, state);
+    let secret = |name: &str| is_credential(name) || api_key.as_deref() == Some(name);
     let mut headers = serde_json::Map::new();
     for name in request.headers().keys() {
         let raw = header_value(request.headers(), name);
-        let value = if is_credential(name.as_str()) {
+        let value = if secret(name.as_str()) {
             credential_digest(name.as_str(), &raw)
         } else {
             String::from_utf8_lossy(&raw).into_owned()
@@ -379,7 +515,9 @@ pub(crate) fn call_args(
     });
     match &config.body {
         HttpBody::None => {}
-        HttpBody::Json { data } => call["body"] = interpolate_json_values(data, state),
+        HttpBody::Json { data } => {
+            call["body"] = digested_json(&interpolate_json_values(data, state), None);
+        }
         HttpBody::Form { fields } => {
             let form: serde_json::Map<String, Value> = fields
                 .iter()
@@ -396,7 +534,8 @@ pub(crate) fn call_args(
             call["form"] = Value::Object(form);
         }
         HttpBody::Raw { content, .. } => {
-            call["rawBody"] = Value::String(interpolate_variables(content, state));
+            let (shown, _) = digested_state(state);
+            call["rawBody"] = Value::String(interpolate_variables(content, &shown));
         }
     }
     Some(call)
@@ -418,6 +557,7 @@ pub(crate) async fn run_call(
     state: &HashMap<String, Value>,
     policy: &HttpActionPolicy,
     args: &Value,
+    governed: bool,
 ) -> Result<NodeOutput> {
     let node = config.standard.id.clone();
     let refuse = |reason: String| -> GraphError {
@@ -427,6 +567,10 @@ pub(crate) async fn run_call(
         refuse(format!("{what} changed since the call was approved; the call was not sent"))
     };
     let (client, current) = build_request(config, state, policy).map_err(&refuse)?;
+    let api_key = api_key_header(config, state);
+    let secret = |name: &str| {
+        is_credential(name) || api_key.as_deref() == Some(name.to_ascii_lowercase().as_str())
+    };
 
     let method = args["method"]
         .as_str()
@@ -472,7 +616,7 @@ pub(crate) async fn run_call(
     if let Some(headers) = args["headers"].as_object() {
         for (name, value) in headers {
             let value = value.as_str().unwrap_or_default();
-            if is_credential(name) && value.starts_with("sha256:") {
+            if secret(name) && value.starts_with("sha256:") {
                 let header = reqwest::header::HeaderName::from_bytes(name.as_bytes())
                     .map_err(|_| refuse(format!("'{name}' is not a valid header name")))?;
                 let raw = header_value(current.headers(), &header);
@@ -486,7 +630,12 @@ pub(crate) async fn run_call(
         }
     }
     if let Some(body) = args.get("body") {
-        request = request.json(body);
+        let current_body = match &config.body {
+            HttpBody::Json { data } => Some(interpolate_json_values(data, state)),
+            _ => None,
+        };
+        let body = restored_json(body, current_body.as_ref(), None).map_err(changed)?;
+        request = request.json(&body);
     } else if let Some(form) = args["form"].as_object() {
         let current_form: HashMap<String, String> = match &config.body {
             HttpBody::Form { fields } => fields
@@ -511,13 +660,21 @@ pub(crate) async fn run_call(
         }
         request = request.form(&fields);
     } else if let Some(raw) = args["rawBody"].as_str() {
-        request = request.body(raw.to_string());
+        let (_, digests) = digested_state(state);
+        let mut raw = raw.to_string();
+        for (digest, value) in &digests {
+            raw = raw.replace(digest.as_str(), value);
+        }
+        if holds_digest(&raw) {
+            return Err(changed("a credential in the raw body".to_string()));
+        }
+        request = request.body(raw);
     }
     let request = request
         .build()
         .map_err(|e| refuse(format!("the call could not be built: {}", e.without_url())))?;
     tracing::debug!(node = %config.standard.id, url = %redact_url(request.url()), "sending an approved HTTP call");
-    send(config, &client, request).await
+    send(config, &client, request, governed).await
 }
 
 /// Apply authentication to the request builder.

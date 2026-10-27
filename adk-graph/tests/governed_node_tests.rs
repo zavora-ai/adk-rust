@@ -567,6 +567,230 @@ async fn a_waiting_call_another_fork_ran_is_answered_and_its_decision_withdrawn(
     assert!(rig.pending("t2").await.is_empty(), "t2's waiting decision is withdrawn");
 }
 
+/// Spec 3.3 §12: a node that pauses itself after its call was approved does not wait on the
+/// request it was approved for, which no longer waits in the inbox.
+#[tokio::test]
+async fn a_node_that_pauses_itself_after_its_approval_is_never_stuck() {
+    let rig = Rig::with_pay(|provider| {
+        Arc::new(adk_graph::node::FunctionNode::new("pay", move |ctx| {
+            let provider = Arc::clone(&provider);
+            async move {
+                if ctx.resume_value().is_none() {
+                    return Ok(NodeOutput::interrupt("which card?"));
+                }
+                provider.charge(ctx.get("invoice").cloned().unwrap_or_default()).await
+            }
+        })) as Arc<dyn Node>
+    });
+    let answered = |thread: &str| {
+        rig.graph.invoke_with_run_config(
+            State::new(),
+            ExecutionConfig::new(thread).with_resume_value("pay", json!("the usual card")),
+            rig.run_config(),
+        )
+    };
+    // Approved, the node runs and asks its own question.
+    assert!(matches!(rig.invoke("t1").await, Err(GraphError::Interrupted(_))));
+    rig.decide("t1", ToolApproval::approve()).await;
+    assert!(matches!(rig.invoke("t1").await, Err(GraphError::Interrupted(_))));
+    assert_eq!(rig.provider.hits(), 0);
+
+    // Its answer runs it again: as a new call, which waits for its own decision.
+    assert!(matches!(answered("t1").await, Err(GraphError::Interrupted(_))));
+    assert_eq!(rig.pending("t1").await.len(), 1, "a decision to answer, not a stale wait");
+    rig.decide("t1", ToolApproval::approve()).await;
+    answered("t1").await.unwrap();
+    assert_eq!(rig.provider.hits(), 1);
+}
+
+/// Spec 3.3 §11 S-I1: a node bound to the whole state is the same call in a fork, whose
+/// graph agent writes a new session id into the state.
+#[cfg(feature = "time-travel")]
+#[tokio::test]
+async fn a_fork_in_a_new_session_answers_a_node_bound_to_its_state_from_its_record() {
+    let rig = Rig::with_pay(|provider| {
+        Arc::new(adk_graph::node::FunctionNode::new("pay", move |ctx| {
+            let provider = Arc::clone(&provider);
+            async move { provider.charge(ctx.get("invoice").cloned().unwrap_or_default()).await }
+        })) as Arc<dyn Node>
+    });
+    let turn = |thread: &str, session: &str| {
+        rig.graph.invoke_with_run_config(
+            State::from([("session_id".to_string(), json!(session))]),
+            ExecutionConfig::new(thread),
+            rig.run_config(),
+        )
+    };
+    assert!(turn("t1", "s1").await.is_err());
+    rig.decide("t1", ToolApproval::approve()).await;
+    turn("t1", "s1").await.unwrap();
+    assert_eq!(rig.provider.hits(), 1);
+
+    // The fork changes nothing the node reads; only the session differs.
+    let after_draft = rig
+        .checkpointer
+        .list("t1")
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|checkpoint| checkpoint.pending_nodes == ["pay"] && !checkpoint.is_paused())
+        .expect("a completed checkpoint before pay");
+    rig.graph
+        .time_travel("t1")
+        .unwrap()
+        .fork(adk_graph::time_travel::ForkSpec::new(&after_draft.checkpoint_id, "t2"))
+        .await
+        .unwrap();
+    let forked = turn("t2", "s2").await.expect("answered from its record");
+    assert_eq!(rig.provider.hits(), 1, "not sent again");
+    assert!(rig.pending("t2").await.is_empty(), "no decision was created");
+    assert_eq!(forked["charge"]["id"], json!("ch_1"));
+}
+
+/// Spec 3.3 §12: a governed call is kept to once by the action ledger and the graph's
+/// checkpoints; without either it is not run, never run without the guarantee.
+#[tokio::test]
+async fn without_a_ledger_or_a_checkpointer_a_governed_node_is_not_run() {
+    let rig = Rig::new();
+    let no_ledger = rig
+        .graph
+        .invoke_with_run_config(
+            State::new(),
+            ExecutionConfig::new("t1"),
+            RunConfig::builder().approval_store(rig.store.clone()).build(),
+        )
+        .await;
+    assert_eq!(code(&no_ledger), Some("graph.unavailable"));
+    assert!(no_ledger.unwrap_err().to_string().contains("no action ledger"));
+
+    let graph = StateGraph::with_channels(&["invoice", "charge"])
+        .add_node(Pay(Arc::clone(&rig.provider)))
+        .add_edge(START, "pay")
+        .add_edge("pay", END)
+        .compile()
+        .unwrap()
+        .with_governed_node("pay", GovernedNode::new());
+    let no_checkpointer = graph
+        .invoke_with_run_config(
+            State::from([("invoice".to_string(), invoice(4200))]),
+            ExecutionConfig::new("t2"),
+            rig.run_config(),
+        )
+        .await;
+    assert_eq!(code(&no_checkpointer), Some("graph.unavailable"));
+    assert!(no_checkpointer.unwrap_err().to_string().contains("no checkpointer"));
+    assert_eq!(rig.provider.hits(), 0);
+    assert!(rig.pending("t1").await.is_empty());
+}
+
+/// Spec 3.3 §12: governing a name that is not a node fails the run before anything runs,
+/// instead of leaving the node meant ungoverned.
+#[tokio::test]
+async fn governing_a_name_that_is_not_a_node_fails_before_anything_runs() {
+    let rig = Rig::new();
+    let graph = StateGraph::with_channels(&["invoice", "charge"])
+        .add_node(Pay(Arc::clone(&rig.provider)))
+        .add_edge(START, "pay")
+        .add_edge("pay", END)
+        .compile()
+        .unwrap()
+        .with_checkpointer(MemoryCheckpointer::new())
+        .with_governed_node("Pay", GovernedNode::new().with_approval());
+    let ran = graph
+        .invoke_with_run_config(
+            State::from([("invoice".to_string(), invoice(4200))]),
+            ExecutionConfig::new("t1"),
+            rig.run_config(),
+        )
+        .await;
+    assert!(
+        matches!(&ran, Err(GraphError::InvalidGraph(message)) if message.contains("'Pay'")),
+        "{ran:?}"
+    );
+    assert_eq!(rig.provider.hits(), 0);
+
+    let built = GraphAgent::builder("invoice-run")
+        .channels(&["invoice", "charge"])
+        .node(Pay(Arc::clone(&rig.provider)))
+        .edge(START, "pay")
+        .edge("pay", END)
+        .governed_node("Pay", GovernedNode::new())
+        .build();
+    assert!(matches!(built, Err(GraphError::InvalidGraph(_))));
+}
+
+/// Spec 3.3 §11 S-I1: a governed node inside a subgraph that handed control to the parent
+/// is answered from its record with the same hand-off, so a fork routes as the original.
+#[cfg(feature = "time-travel")]
+#[tokio::test]
+async fn a_replayed_call_inside_a_subgraph_routes_the_parent_as_the_original() {
+    struct Escalating(Arc<Provider>);
+
+    #[async_trait]
+    impl Node for Escalating {
+        fn name(&self) -> &str {
+            "pay"
+        }
+        async fn execute(&self, ctx: &NodeContext) -> adk_graph::Result<NodeOutput> {
+            let charged = self.0.charge(ctx.get("invoice").cloned().unwrap_or_default()).await?;
+            Ok(charged.with_goto_parent(["escalate"]))
+        }
+    }
+
+    let provider = Arc::new(Provider::default());
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let inner = Arc::new(
+        StateGraph::with_channels(&["invoice", "charge"])
+            .add_node(Escalating(Arc::clone(&provider)))
+            .add_edge(START, "pay")
+            .add_edge("pay", END)
+            .compile()
+            .unwrap()
+            .with_checkpointer_arc(checkpointer.clone())
+            .with_governed_node("pay", GovernedNode::new()),
+    );
+    let graph = StateGraph::with_channels(&["invoice", "note", "charge", "next"])
+        .add_node_fn("draft", |_ctx| async {
+            Ok(NodeOutput::new().with_update("invoice", invoice(4200)))
+        })
+        .add_node(adk_graph::subgraph::SubgraphNode::new("billing", inner))
+        .add_node_fn("receipt", |_ctx| async {
+            Ok(NodeOutput::new().with_update("next", json!("receipt")))
+        })
+        .add_node_fn("escalate", |_ctx| async {
+            Ok(NodeOutput::new().with_update("next", json!("escalate")))
+        })
+        .add_edge(START, "draft")
+        .add_edge("draft", "billing")
+        .add_edge("billing", "receipt")
+        .add_edge("receipt", END)
+        .add_edge("escalate", END)
+        .compile()
+        .unwrap()
+        .with_checkpointer_arc(checkpointer.clone());
+    let run_config =
+        RunConfig::builder().action_ledger(Arc::new(InMemoryActionLedger::new())).build();
+
+    let original = graph
+        .invoke_with_run_config(State::new(), ExecutionConfig::new("t1"), run_config.clone())
+        .await
+        .unwrap();
+    assert_eq!((original["next"].clone(), provider.hits()), (json!("escalate"), 1));
+
+    let after_draft = checkpointer.list("t1").await.unwrap()[0].checkpoint_id.clone();
+    graph
+        .time_travel("t1")
+        .unwrap()
+        .fork(adk_graph::time_travel::ForkSpec::new(&after_draft, "t2").set("note", json!("again")))
+        .await
+        .unwrap();
+    let forked = graph
+        .invoke_with_run_config(State::new(), ExecutionConfig::new("t2"), run_config)
+        .await
+        .unwrap();
+    assert_eq!((forked["next"].clone(), provider.hits()), (json!("escalate"), 1));
+}
+
 // ── Through a GraphAgent ─────────────────────────────────────────────
 
 struct Turn {
@@ -824,6 +1048,8 @@ mod http {
     struct Mock {
         base: String,
         seen: Arc<Mutex<Vec<Seen>>>,
+        /// Every request as it arrived, head and body.
+        raw: Arc<Mutex<Vec<String>>>,
         task: tokio::task::JoinHandle<()>,
     }
 
@@ -835,13 +1061,21 @@ mod http {
 
     impl Mock {
         async fn start() -> Self {
+            Self::answering_after(Duration::ZERO).await
+        }
+
+        /// A provider that takes `delay` to answer each charge it received.
+        async fn answering_after(delay: Duration) -> Self {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let base = format!("http://{}", listener.local_addr().unwrap());
             let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
+            let raw: Arc<Mutex<Vec<String>>> = Arc::default();
             let record = Arc::clone(&seen);
+            let raw_record = Arc::clone(&raw);
             let task = tokio::spawn(async move {
                 while let Ok((mut stream, _)) = listener.accept().await {
                     let record = Arc::clone(&record);
+                    let raw_record = Arc::clone(&raw_record);
                     tokio::spawn(async move {
                         let mut buffer = Vec::new();
                         let mut chunk = [0u8; 4096];
@@ -880,6 +1114,10 @@ mod http {
                             }
                             buffer.extend_from_slice(&chunk[..read]);
                         }
+                        raw_record
+                            .lock()
+                            .unwrap()
+                            .push(String::from_utf8_lossy(&buffer).into_owned());
                         let body =
                             serde_json::from_slice(&buffer[head_end..]).unwrap_or(Value::Null);
                         let count = {
@@ -887,6 +1125,7 @@ mod http {
                             seen.push(Seen { method, target, authorization, body });
                             seen.len()
                         };
+                        tokio::time::sleep(delay).await;
                         let reply = json!({ "id": format!("ch_{count}") }).to_string();
                         let response = format!(
                             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
@@ -896,15 +1135,24 @@ mod http {
                     });
                 }
             });
-            Self { base, seen, task }
+            Self { base, seen, raw, task }
         }
 
         fn seen(&self) -> Vec<Seen> {
             self.seen.lock().unwrap().clone()
         }
+
+        fn raw(&self) -> Vec<String> {
+            self.raw.lock().unwrap().clone()
+        }
     }
 
     fn pay_node(base: &str) -> ActionNodeExecutor {
+        pay_node_with(base, |_| {})
+    }
+
+    /// The pay node, changed by `change` before it is built.
+    fn pay_node_with(base: &str, change: impl FnOnce(&mut HttpNodeConfig)) -> ActionNodeExecutor {
         let standard = StandardProperties {
             id: "pay".to_string(),
             name: "pay".to_string(),
@@ -921,7 +1169,7 @@ mod http {
             execution: ExecutionControl { timeout: 10_000, condition: None },
             mapping: InputOutputMapping { input_mapping: None, output_key: "charge".to_string() },
         };
-        ActionNodeExecutor::new(ActionNodeConfig::Http(HttpNodeConfig {
+        let mut config = HttpNodeConfig {
             standard,
             method: HttpMethod::Post,
             url: format!("{base}/charges?account=acme&api_key={{{{apiKey}}}}"),
@@ -932,8 +1180,9 @@ mod http {
             },
             response: HttpResponse { response_type: "json".to_string(), status_validation: None },
             rate_limit: None,
-        }))
-        .with_http_policy(
+        };
+        change(&mut config);
+        ActionNodeExecutor::new(ActionNodeConfig::Http(config)).with_http_policy(
             HttpActionPolicy::new()
                 .allow_schemes(["http"])
                 .allow_hosts(["127.0.0.1"])
@@ -1083,5 +1332,238 @@ mod http {
         node.run_call(&ctx("tok-1"), approved).await.unwrap();
         assert_eq!(mock.seen().len(), 1);
         assert_eq!(mock.seen()[0].authorization.as_deref(), Some("Bearer tok-1"));
+    }
+
+    /// A governed graph of the one HTTP node `node`, with its stores.
+    struct HttpRig {
+        checkpointer: Arc<MemoryCheckpointer>,
+        store: Arc<InMemoryApprovalStore>,
+        ledger: Arc<InMemoryActionLedger>,
+        graph: CompiledGraph,
+    }
+
+    impl HttpRig {
+        fn new(node: ActionNodeExecutor) -> Self {
+            let checkpointer = Arc::new(MemoryCheckpointer::new());
+            let graph = StateGraph::with_channels(&[
+                "customer",
+                "token",
+                "apiKey",
+                "charge",
+                "shouldCharge",
+            ])
+            .add_node(node)
+            .add_edge(START, "pay")
+            .add_edge("pay", END)
+            .compile()
+            .unwrap()
+            .with_checkpointer_arc(checkpointer.clone())
+            .with_node_effect("pay", ToolEffect::NonIdempotent)
+            .with_governed_node("pay", GovernedNode::new().with_approval().spending_money());
+            Self {
+                checkpointer,
+                store: Arc::new(InMemoryApprovalStore::new()),
+                ledger: Arc::new(InMemoryActionLedger::new()),
+                graph,
+            }
+        }
+
+        async fn invoke(&self, input: State) -> adk_graph::Result<State> {
+            let run_config = RunConfig::builder()
+                .approval_store(self.store.clone())
+                .action_ledger(self.ledger.clone())
+                .build();
+            self.graph.invoke_with_run_config(input, ExecutionConfig::new("t1"), run_config).await
+        }
+
+        async fn pending(&self) -> Vec<PendingApproval> {
+            self.store.pending(&ApprovalScope::new("graph_app", "graph_user", "t1")).await.unwrap()
+        }
+
+        /// Runs to the pause, approves the call as shown, and runs again.
+        async fn approved(&self, input: State) -> adk_graph::Result<State> {
+            assert!(matches!(self.invoke(input.clone()).await, Err(GraphError::Interrupted(_))));
+            let pending = self.pending().await;
+            assert_eq!(pending.len(), 1);
+            self.store
+                .decide(
+                    &ApprovalScope::new("graph_app", "graph_user", "t1"),
+                    &pending[0].fingerprint,
+                    ToolApproval::approve(),
+                )
+                .await
+                .unwrap();
+            self.invoke(input).await
+        }
+
+        /// The pay call's ledger outcome; `None` while it is begun without one.
+        async fn outcome(&self) -> Option<ActionOutcome> {
+            let key = self
+                .checkpointer
+                .list("t1")
+                .await
+                .unwrap()
+                .iter()
+                .flat_map(|checkpoint| checkpoint.step_records().unwrap())
+                .flat_map(|step| step.nodes)
+                .find_map(|node| node.effect_key)
+                .expect("pay has an effect key");
+            self.ledger.get(&key).await.unwrap().expect("a ledger record").outcome
+        }
+    }
+
+    /// Spec 3.3 §12: one approval sends the call once. The provider took the charge and its
+    /// answer failed validation, so the call's outcome is unknown: the node's Retry mode
+    /// does not send it again, and no later run does.
+    #[tokio::test]
+    async fn an_approved_call_is_never_retried_by_the_nodes_error_handling() {
+        let mock = Mock::start().await;
+        let rig = HttpRig::new(pay_node_with(&mock.base, |config| {
+            config.standard.error_handling = ErrorHandling {
+                mode: ErrorMode::Retry,
+                retry_count: Some(2),
+                retry_delay: None,
+                fallback_value: None,
+            };
+            config.response.status_validation = Some("201".to_string());
+        }));
+        let failed = rig.approved(state("tok-1")).await;
+        assert_eq!(code(&failed), Some("graph.outcome_unknown"));
+        assert_eq!(mock.seen().len(), 1, "sent once");
+        assert_eq!(rig.outcome().await, None, "the record stays begun");
+
+        let again = rig.invoke(state("tok-1")).await;
+        assert_eq!(code(&again), Some("graph.outcome_unknown"));
+        assert_eq!(mock.seen().len(), 1);
+        assert!(rig.pending().await.is_empty());
+    }
+
+    /// Spec 3.3 §12: a call whose node's own timeout fires may have taken effect, so its
+    /// outcome is unknown, never a recorded failure that invites a new call.
+    #[tokio::test]
+    async fn a_call_cut_off_by_its_nodes_timeout_has_an_unknown_outcome() {
+        let mock = Mock::answering_after(Duration::from_secs(5)).await;
+        let rig = HttpRig::new(pay_node_with(&mock.base, |config| {
+            config.standard.execution.timeout = 300;
+        }));
+        let cut = rig.approved(state("tok-1")).await;
+        assert!(matches!(cut, Err(GraphError::NodeTimedOut { .. })), "{cut:?}");
+        assert_eq!(rig.outcome().await, None, "the record stays begun");
+        let again = rig.invoke(state("tok-1")).await;
+        assert_eq!(code(&again), Some("graph.outcome_unknown"));
+        assert_eq!(mock.seen().len(), 1);
+    }
+
+    /// Spec 3.3 §12: a call that failed is recorded as failed, not hidden by the node's
+    /// Continue mode and recorded as a call that succeeded.
+    #[tokio::test]
+    async fn a_failed_call_is_not_recorded_as_sent_under_continue() {
+        // Nothing listens on a closed port, so the call fails before it is sent.
+        let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", closed.local_addr().unwrap());
+        drop(closed);
+        let rig = HttpRig::new(pay_node_with(&base, |config| {
+            config.standard.error_handling.mode = ErrorMode::Continue;
+        }));
+        let failed = rig.approved(state("tok-1")).await;
+        assert!(failed.is_err(), "the failure is the node's: {failed:?}");
+        assert!(
+            matches!(rig.outcome().await, Some(ActionOutcome::Failed { .. })),
+            "recorded as failed"
+        );
+    }
+
+    /// Spec 3.3 §7.4, §12: a node whose condition is false makes no call, so no one is
+    /// asked and nothing is recorded as sent.
+    #[tokio::test]
+    async fn a_node_whose_condition_is_false_asks_no_one_and_records_nothing() {
+        let mock = Mock::start().await;
+        let rig = HttpRig::new(pay_node_with(&mock.base, |config| {
+            config.standard.execution.condition = Some("{{shouldCharge}}".to_string());
+        }));
+        let mut input = state("tok-1");
+        input.insert("shouldCharge".to_string(), json!(false));
+        let done = rig.invoke(input).await.expect("the run completes without a decision");
+        assert!(!done.contains_key("charge"));
+        assert!(rig.pending().await.is_empty());
+        assert!(mock.seen().is_empty());
+        assert!(effect_log(rig.checkpointer.as_ref(), "t1").await.unwrap().is_empty());
+        let keys: Vec<Option<String>> = rig
+            .checkpointer
+            .list("t1")
+            .await
+            .unwrap()
+            .iter()
+            .flat_map(|checkpoint| checkpoint.step_records().unwrap())
+            .flat_map(|step| step.nodes)
+            .map(|node| node.effect_key)
+            .collect();
+        assert_eq!(keys, vec![None], "no ledger key was used");
+    }
+
+    /// Spec 3.3 §12: a request that cannot be built is never shown as the state it read,
+    /// and no one is asked about a call that could not be sent.
+    #[tokio::test]
+    async fn a_request_that_cannot_be_built_asks_no_one_and_shows_no_secret() {
+        let rig = HttpRig::new(pay_node("http://payments.example.com"));
+        let refused = rig.invoke(state("tok-secret-1")).await;
+        let error = refused.expect_err("the host is not allowed");
+        assert!(error.to_string().contains("not in the HTTP action policy allowlist"), "{error}");
+        assert!(!error.to_string().contains("tok-secret-1"));
+        assert!(rig.pending().await.is_empty(), "no decision for a call that cannot be sent");
+
+        let described = pay_node("http://payments.example.com")
+            .call_args(&ctx("tok-secret-1"))
+            .expect("an HTTP node always describes its call");
+        assert!(!described.to_string().contains("tok-secret-1"), "{described}");
+        assert!(!described.to_string().contains("key-1"), "{described}");
+    }
+
+    /// Spec 3.3 §12: an API key's header is a credential whatever its name, and so are JSON
+    /// body fields with secret-looking names and secret state in a raw body; the approved
+    /// call sends the real values.
+    #[tokio::test]
+    async fn api_keys_and_secrets_in_bodies_are_shown_as_digests_and_sent_as_themselves() {
+        let mock = Mock::start().await;
+        let node = pay_node_with(&mock.base, |config| {
+            config.url = format!("{}/charges", mock.base);
+            config.auth = HttpAuth::ApiKey(adk_action::ApiKeyAuth {
+                header: "x-functions-key".to_string(),
+                value: "{{apiKey}}".to_string(),
+            });
+            config.body = HttpBody::Json {
+                data: json!({ "customer": "{{customer}}", "auth": { "client_secret": "{{token}}" } }),
+            };
+        });
+        let args = node.call_args(&ctx("tok-1")).unwrap();
+        let shown = args.to_string();
+        assert!(!shown.contains("key-1") && !shown.contains("tok-1"), "{shown}");
+        assert!(args["headers"]["x-functions-key"].as_str().unwrap().starts_with("sha256:"));
+        assert!(args["body"]["auth"]["client_secret"].as_str().unwrap().starts_with("sha256:"));
+
+        let mut edited = args.clone();
+        edited["body"]["customer"] = json!("Acme Ltd");
+        node.run_call(&ctx("tok-1"), edited.clone()).await.unwrap();
+        let sent = mock.raw().remove(0);
+        assert!(sent.contains("x-functions-key: key-1"), "{sent}");
+        assert_eq!(
+            mock.seen()[0].body,
+            json!({ "customer": "Acme Ltd", "auth": { "client_secret": "tok-1" } })
+        );
+        // A rotated secret refuses the approved call.
+        let refused = node.run_call(&ctx("tok-2"), edited).await.err().expect("refused");
+        assert_eq!(GovernedError::code_of(&refused), Some("graph.refused"));
+
+        let raw = pay_node_with(&mock.base, |config| {
+            config.url = format!("{}/charges", mock.base);
+            config.body = HttpBody::Raw {
+                content: "customer={{customer}}&token={{token}}".to_string(),
+                content_type: "application/x-www-form-urlencoded".to_string(),
+            };
+        });
+        let args = raw.call_args(&ctx("tok-1")).unwrap();
+        assert!(!args["rawBody"].as_str().unwrap().contains("tok-1"), "{args}");
+        raw.run_call(&ctx("tok-1"), args).await.unwrap();
+        assert!(mock.raw()[1].ends_with("customer=Acme&token=tok-1"), "{:?}", mock.raw()[1]);
     }
 }

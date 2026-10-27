@@ -281,6 +281,64 @@ async fn a_failed_step_records_the_failure_and_the_nodes_that_did_not_start() {
     );
 }
 
+/// Spec 3.3 §12: a step that fails is checkpointed with its record even when no retry, no
+/// sibling write and no governed node asks for it, so an observer sees the run failed
+/// instead of a run still working.
+#[tokio::test]
+async fn a_failed_step_is_always_recorded_in_the_newest_checkpoint() {
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let graph = StateGraph::with_channels(&["invoice", "receipt"])
+        .add_node_fn("draft", |_ctx| async {
+            Ok(NodeOutput::new().with_update("invoice", json!({ "amountCents": 4200 })))
+        })
+        .add_node_fn("receipt", |_ctx| async {
+            Err(adk_graph::GraphError::NodeExecutionFailed {
+                node: "receipt".to_string(),
+                message: "printer offline".to_string(),
+            })
+        })
+        .add_edge(START, "draft")
+        .add_edge("draft", "receipt")
+        .add_edge("receipt", END)
+        .compile()
+        .unwrap()
+        .with_checkpointer_arc(checkpointer.clone());
+    assert!(graph.invoke(State::new(), ExecutionConfig::new("t1")).await.is_err());
+
+    let newest = checkpointer.load("t1").await.unwrap().unwrap();
+    assert_eq!(
+        outline(&newest.step_records().unwrap()),
+        vec![(
+            2,
+            StepKind::Failed,
+            vec![("receipt".to_string(), NodeStatus::Failed, Vec::new(), 1)]
+        )]
+    );
+    assert_eq!(newest.pending_nodes, vec!["receipt".to_string()], "the run resumes at the step");
+}
+
+/// Spec 3.3 §12: a run that stops at an `interrupt_after` gate has finished that step, so
+/// the step that resumes it takes the next label instead of sharing the gated step's.
+#[tokio::test]
+async fn the_step_after_an_after_gate_takes_the_next_label() {
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let graph = invoice_graph(checkpointer.clone()).with_interrupt_after(&["draft"]);
+    assert!(matches!(
+        graph.invoke(State::new(), ExecutionConfig::new("t1")).await,
+        Err(adk_graph::GraphError::Interrupted(_))
+    ));
+    graph.invoke(State::new(), ExecutionConfig::new("t1")).await.unwrap();
+    let steps = thread_steps(checkpointer.as_ref(), "t1").await;
+    assert_eq!(
+        outline(&steps),
+        vec![
+            (1, StepKind::Paused, vec![writes("draft", &["invoice"])]),
+            (2, StepKind::Completed, vec![writes("pay", &["charge"])]),
+            (3, StepKind::Completed, vec![writes("receipt", &["receipt"])]),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn a_checkpoint_written_before_records_loads_and_resumes() {
     // A checkpoint as a release before spec 3.3 wrote it: no record keys.

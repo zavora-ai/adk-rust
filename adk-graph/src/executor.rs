@@ -116,6 +116,8 @@ pub struct PregelExecutor<'a> {
     /// The id the next checkpoint is written under, known in advance so a governed
     /// node's effect-log entry can name the checkpoint that records its step.
     next_checkpoint_id: String,
+    /// How far step labels run ahead of `step`, after a pause at an `interrupt_after` gate.
+    label_offset: usize,
 }
 
 /// Checkpoint metadata naming the nodes a dynamic pause stopped.
@@ -186,6 +188,7 @@ impl<'a> PregelExecutor<'a> {
             occurrences: BTreeMap::new(),
             held: BTreeMap::new(),
             next_checkpoint_id: uuid::Uuid::new_v4().to_string(),
+            label_offset: 0,
         }
     }
 
@@ -230,6 +233,7 @@ impl<'a> PregelExecutor<'a> {
                 read_metadata(&checkpoint, OCCURRENCES_METADATA_KEY)?.unwrap_or_default();
             let run = checkpoint.run_record()?;
             let held = read_metadata(&checkpoint, HELD_METADATA_KEY)?.unwrap_or_default();
+            self.label_offset = checkpoint.label_offset();
             // A fork from an earlier checkpoint continues after the thread's newest.
             self.head_version = checkpoint.version;
             if self.config.resume_from.is_some()
@@ -282,6 +286,7 @@ impl<'a> PregelExecutor<'a> {
 
     /// Run the graph to completion
     pub async fn run(&mut self, input: State) -> Result<State> {
+        self.graph.check_governed_nodes()?;
         // Check for existing checkpoint to resume from
         let resumed = self.try_resume_from_checkpoint(&input).await?;
 
@@ -365,6 +370,10 @@ impl<'a> PregelExecutor<'a> {
         mode: StreamMode,
     ) -> impl futures::Stream<Item = Result<StreamEvent>> + 'a {
         async_stream::stream! {
+            if let Err(error) = self.graph.check_governed_nodes() {
+                yield Err(error);
+                return;
+            }
             // Check for existing checkpoint to resume from
             let resumed = match self.try_resume_from_checkpoint(&input).await {
                 Ok(r) => r,
@@ -489,8 +498,15 @@ impl<'a> PregelExecutor<'a> {
                                     Ok(output) => {
                                         if let Some(interrupt) = output.interrupt {
                                             records.push(record);
-                                            if let Some(held) = run.held {
-                                                self.held.insert(node_name.clone(), held);
+                                            // A node that paused itself after its call was
+                                            // approved waits on nothing in the inbox.
+                                            match run.held {
+                                                Some(held) => {
+                                                    self.held.insert(node_name.clone(), held);
+                                                }
+                                                None => {
+                                                    self.held.remove(node_name);
+                                                }
                                             }
                                             result.interrupts.push((node_name.clone(), interrupt));
                                             continue;
@@ -1192,6 +1208,9 @@ impl<'a> PregelExecutor<'a> {
         let mut ctx = NodeContext::new(self.state.clone(), self.config.clone(), self.step);
         // A subgraph's governed nodes key their records by this run's lineage.
         ctx.config.lineage_root = Some(self.lineage_root());
+        if self.graph.is_governed(node) {
+            ctx.set_governed_call();
+        }
         if let Some(run_config) = self.run_config.clone() {
             ctx.set_run_config(run_config);
         }
@@ -1569,8 +1588,15 @@ impl<'a> PregelExecutor<'a> {
                     // reported, in name order.
                     if let Some(node_interrupt) = output.interrupt {
                         record(NodeStatus::Paused, None, None);
-                        if let Some(held) = held {
-                            self.held.insert(node_name.clone(), held);
+                        // A node that paused itself after its call was approved waits on
+                        // nothing in the inbox, so the request it was approved for is gone.
+                        match held {
+                            Some(held) => {
+                                self.held.insert(node_name.clone(), held);
+                            }
+                            None => {
+                                self.held.remove(&node_name);
+                            }
                         }
                         interrupts.push((node_name, node_interrupt));
                         continue;
@@ -1783,7 +1809,11 @@ impl<'a> PregelExecutor<'a> {
     /// carries.
     fn record_step(&mut self, kind: StepKind, mut nodes: Vec<NodeRecord>) {
         nodes.sort_by(|left, right| left.node.cmp(&right.node));
-        self.unsaved_steps.push(StepRecord { step: self.step + 1, kind, nodes });
+        self.unsaved_steps.push(StepRecord {
+            step: self.step + 1 + self.label_offset,
+            kind,
+            nodes,
+        });
     }
 
     /// Opens a run when none continues: a fresh start, a finished thread that starts
@@ -2115,23 +2145,16 @@ impl<'a> PregelExecutor<'a> {
         Ok(())
     }
 
-    /// Checkpoints a super-step that failed, when a resume would gain from it.
+    /// Checkpoints a super-step that failed.
     ///
     /// The frontier still holds the failed node, so the run resumes at this step:
     /// the retry budget already spent is not handed out again, and the nodes that
-    /// finished are answered from their pending writes instead of re-running. A
-    /// failure to write is logged, not raised, so the node's own error is reported.
+    /// finished are answered from their pending writes instead of re-running. The
+    /// checkpoint carries the failed step's record, so an observer sees that the run
+    /// failed rather than a run still working (spec 3.3 §12). A failure to write is
+    /// logged, not raised, so the node's own error is reported.
     async fn checkpoint_failed_step(&mut self) {
-        let any_retryable =
-            self.pending_nodes.iter().any(|node| self.graph.retry_policy_for(node).is_some());
-        // A governed step is always recorded, so its refusal or failure can be seen.
-        let any_governed = self.pending_nodes.iter().any(|node| self.graph.is_governed(node));
-        let result =
-            if any_retryable || any_governed || !self.pending_writes.is_empty() || self.unsaved {
-                self.save_checkpoint().await.map(drop)
-            } else {
-                self.await_inflight().await
-            };
+        let result = self.save_checkpoint().await.map(drop);
         if let Err(error) = result {
             tracing::warn!(
                 thread_id = %self.config.thread_id,

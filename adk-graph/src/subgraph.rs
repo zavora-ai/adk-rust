@@ -210,6 +210,10 @@ impl Node for SubgraphNode {
         crate::shape::NodeKind::Subgraph
     }
 
+    fn subgraph(&self) -> Option<&CompiledGraph> {
+        Some(&self.graph)
+    }
+
     /// Rejects a mapping that names a channel the relevant side does not declare.
     ///
     /// This runs when the parent compiles, so a mismatch never reaches a run.
