@@ -691,14 +691,20 @@ async fn s19_scaled() {
 /// ADK_SITE_S19_FULL=1 cargo nextest run -p adk-site --features migrate --cargo-profile ci \
 ///   --run-ignored only -E 'test(s19_full_day)' --no-capture
 /// ```
+///
+/// `ADK_SITE_S19_PRODUCTS` runs the same day — 24 hours, the six-hour live blog, the
+/// corrupted delivery and the revert — over a smaller catalogue, so the day's timings
+/// reproduce locally in minutes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "nightly soak: 50,000 products over 24 simulated hours; set ADK_SITE_S19_FULL=1"]
 async fn s19_full_day() {
     if std::env::var("ADK_SITE_S19_FULL").is_err() {
         return;
     }
+    let products = std::env::var("ADK_SITE_S19_PRODUCTS")
+        .map_or(50_000, |n| n.parse().expect("ADK_SITE_S19_PRODUCTS is a number of products"));
     run(Scale {
-        products: 50_000,
+        products,
         hours: 24,
         corrupt_at_hour: 3,
         stream_entries: 600,

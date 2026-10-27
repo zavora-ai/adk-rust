@@ -360,16 +360,29 @@ impl StreamLane {
         Ok(())
     }
 
-    /// The streams whose fold is due at `now`: unfolded entries and `fold_interval` since the
-    /// last fold, or a closed stream with unfolded entries.
+    /// The streams whose fold is due at `now`: unfolded entries and a `fold_interval` boundary,
+    /// counted from the stream's opening, passed since the last fold; or a closed stream with
+    /// unfolded entries.
+    ///
+    /// Folds keep the stream's cadence: a fold taken late, after the boundary, does not push
+    /// the next boundary back, so a caller polling every few seconds or minutes still folds
+    /// every `fold_interval` (spec 3.5 §5 S19: "a signed fold lands every five minutes").
     pub async fn due(&self, now: DateTime<Utc>) -> Vec<ContentId> {
-        let interval = chrono::Duration::from_std(self.fold_interval).unwrap_or_default();
+        let interval =
+            chrono::Duration::from_std(self.fold_interval).unwrap_or_default().num_milliseconds();
+        let slot = |status: &StreamStatus, at: DateTime<Utc>| {
+            (at - status.opened_at).num_milliseconds().div_euclid(interval)
+        };
         self.streams
             .lock()
             .await
             .values()
             .filter(|s| s.status.entries > s.status.folded)
-            .filter(|s| s.status.closed_at.is_some() || now - s.status.last_fold >= interval)
+            .filter(|s| {
+                s.status.closed_at.is_some()
+                    || interval <= 0
+                    || slot(&s.status, now) > slot(&s.status, s.status.last_fold)
+            })
             .map(|s| s.status.item.clone())
             .collect()
     }
@@ -429,6 +442,56 @@ mod tests {
             corrects: None,
             proof: Proof::eddsa("edge", ""),
         }
+    }
+
+    /// S19's live blog as the soak drives it: an entry every 36 s for six hours, each followed
+    /// by a poll that arrives seconds late. Folds stay on the five-minute cadence from the
+    /// stream's opening (72: one per boundary and one at the close) instead of drifting by
+    /// each poll's lateness (spec 3.5 §5 S19).
+    #[tokio::test]
+    async fn late_polls_keep_the_five_minute_fold_cadence() {
+        let signer = std::sync::Arc::new(Ed25519EntrySigner::from_seed("edge", [9; 32]).unwrap());
+        let lane = StreamLane::new(signer);
+        let story = ContentItem {
+            id: "articles/count/en".into(),
+            kind: awp_types::ContentKind::Article,
+            slug: "count".into(),
+            language: "en".parse().unwrap(),
+            fields: BTreeMap::new(),
+            volatile: Vec::new(),
+            body: None,
+            media: Vec::new(),
+            sources: Vec::new(),
+            schedule: None,
+            state: ContentState::Published,
+        };
+        let t0 = DateTime::parse_from_rfc3339("2026-11-03T18:00:00Z").unwrap().with_timezone(&Utc);
+        lane.open(&story, "entries", t0).await.unwrap();
+        let mut fold_times = Vec::new();
+        for n in 0..600i64 {
+            let at = t0 + chrono::Duration::seconds(n * 36);
+            lane.append(&story.id, &format!("Update {n}."), None, at).await.unwrap();
+            if n == 599 {
+                lane.close(&story.id, at).await.unwrap();
+            }
+            // The poll after each entry runs late: ingesting a large delivery takes seconds.
+            let poll = at + chrono::Duration::seconds(4 + n % 17);
+            for id in lane.due(poll).await {
+                assert_eq!(id, story.id);
+                lane.fold(&story, poll).await.unwrap().unwrap();
+                fold_times.push(poll);
+            }
+        }
+        let status = lane.status().await.remove(0);
+        assert_eq!((status.folded, status.folds), (600, 72), "{fold_times:?}");
+        for (k, at) in fold_times.iter().take(71).enumerate() {
+            let boundary = t0 + chrono::Duration::minutes(5 * (k as i64 + 1));
+            assert!(
+                *at >= boundary && *at - boundary < chrono::Duration::seconds(60),
+                "fold {k} at {at}, boundary {boundary}"
+            );
+        }
+        assert!(lane.due(t0 + chrono::Duration::hours(7)).await.is_empty(), "nothing left");
     }
 
     #[tokio::test]
