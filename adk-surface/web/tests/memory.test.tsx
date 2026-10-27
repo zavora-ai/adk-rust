@@ -80,7 +80,9 @@ describe("What your agents remember", () => {
 
     const guess = (text: string) => within(remember).getByText(text).closest("li")!;
     await userEvent.click(within(guess("Your accountant is [NAME].")).getByRole("button", { name: "That's right" }));
-    await within(remember).findByText("You confirmed this");
+    // A confirmed guess reads as the person's own words (spec 3.3 §8.1, §12 phase 3).
+    await waitFor(() => expect(within(guess("Your accountant is [NAME].")).getByText("You said this")).toBeTruthy());
+    expect(within(remember).queryByText("You confirmed this")).toBeNull();
 
     await userEvent.click(
       within(guess("You send invoices on the last working day.")).getByRole("button", { name: "Fix it" }),
@@ -115,7 +117,7 @@ describe("What your agents remember", () => {
     await userEvent.clear(field);
     await userEvent.type(field, "You bill ACME at 150 USD an hour.{Enter}");
     const fixed = (await within(remember).findByText("You bill ACME at 150 USD an hour.")).closest("li")!;
-    expect(within(fixed).getByText("You confirmed this")).toBeTruthy();
+    expect(within(fixed).getByText("You said this")).toBeTruthy();
 
     await userEvent.click(within(fixed).getByRole("button", { name: "Forget it" }));
     await waitFor(() => expect(within(remember).queryByText("You bill ACME at 150 USD an hour.")).toBeNull());

@@ -198,9 +198,7 @@ async fn onboarding_runs_from_an_online_presence_to_a_signed_release() {
         assert_eq!(listed.len(), facts.len());
         for text in &confirmed {
             assert!(
-                listed
-                    .iter()
-                    .any(|f| &f["text"] == text && f["status"]["text"] == "You confirmed this"),
+                listed.iter().any(|f| &f["text"] == text && f["status"]["text"] == "You said this"),
                 "{text} is listed as confirmed"
             );
         }

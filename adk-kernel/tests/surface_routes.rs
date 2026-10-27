@@ -1311,7 +1311,10 @@ async fn memory_lists_provenance_and_takes_the_persons_corrections() {
     assert_eq!(owner.memory(Some("work")).await.unwrap().facts.len(), 1);
     assert_eq!(memory.tidy_ups.iter().filter(|tidy_up| tidy_up.undoable()).count(), 1);
 
-    assert_eq!(owner.confirm_fact("f3").await.unwrap().origin, FactOrigin::YouConfirmedThis);
+    let confirmed = owner.confirm_fact("f3").await.unwrap();
+    assert_eq!(confirmed.origin, FactOrigin::YouConfirmedThis);
+    // A confirmed guess reads as the person's own words (spec 3.3 §8.1, §12 phase 3).
+    assert_eq!(confirmed.origin.label(), "You said this");
     let fixed = owner.fix_fact("f2", "Your accountant is [OTHER].").await.unwrap();
     assert_eq!(
         (fixed.text.as_str(), fixed.origin),

@@ -21,9 +21,10 @@ import type { AgentSpend, Device, MemoryFact, PairingIssued, RecordCheck, Record
 import { agentOf, onThisDevice, typedWindow } from "../away";
 import { areaName, kernelMode, limitValue, modeOf, modeValue, quietValue, windowText } from "../settings";
 
+// A guess a person confirmed or corrected reads as their own words (spec 3.3 §8.1).
 const provenance = {
   youSaidThis: { text: labels.youSaidThis, kind: "decided" },
-  youConfirmedThis: { text: labels.youConfirmedThis, kind: "decided" },
+  youConfirmedThis: { text: labels.youSaidThis, kind: "decided" },
   aGuess: { text: labels.aGuess, kind: "neutral" },
 } as const;
 

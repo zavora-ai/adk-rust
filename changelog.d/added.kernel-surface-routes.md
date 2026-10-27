@@ -12,7 +12,7 @@
     counts, spend, whether quiet time was respected, one line per event linked to its ledger
     row — exact across restarts.
   - **Memory and record**: `GET /api/kernel/memory` lists facts with provenance ("You said
-    this", "You confirmed this", "A guess") and `POST /api/kernel/memory/facts/{id}/{confirm,fix,forget}`
+    this" for the person's own words and a confirmed guess, "A guess") and `POST /api/kernel/memory/facts/{id}/{confirm,fix,forget}`
     and `POST /api/kernel/memory/undo` correct them through a `MemoryBook`;
     `GET /api/kernel/record` and `GET /api/kernel/record/check` read the latest actions and
     check the signed audit log as `adk-rust audit verify` does, through a `RecordBook`.

@@ -177,9 +177,10 @@ before, after one held write allowed from the home:
 
 Each fact the agents remember is read from `GET /kernel/memory` (spec 3.3 §10 K5,
 [Settings, While You Were Away, Memory and Record](../kernel/today-and-memory.md#what-your-agents-remember))
-with where it came from: **You said this**, **You confirmed this**, or **A guess** with what
-noticed it. Every fact offers **Fix it** (the person's words replace it, in place, and it
-becomes **You confirmed this**; Esc closes it) and **Forget it**; a guess also offers
+with where it came from: **You said this** — the person's own words, or a guess they confirmed
+or corrected (spec 3.3 §8.1) — or **A guess** with what noticed it. Every fact offers **Fix it**
+(the person's words replace it, in place, and it reads **You said this**; Esc closes it) and
+**Forget it**; a guess also offers
 **That's right**. Each goes through the kernel's route for it, which takes the person's answer
 only, never a paired device's. The page says what became of each:
 "Forgotten. Your agents won't use it from their next step." The latest overnight tidy-up

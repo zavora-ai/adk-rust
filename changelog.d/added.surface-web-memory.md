@@ -1,6 +1,6 @@
 - **Agent Memory and Rules in the web home** (`adk-surface`, spec 3.3 §5.1, §12 phases 3–4):
   **What your agents remember** reads the kernel's memory routes with each fact's provenance
-  (You said this, You confirmed this, A guess) and corrects it — **Fix it** and **Forget it**
+  (You said this, for the person's words and a confirmed guess; A guess) and corrects it — **Fix it** and **Forget it**
   on every fact, **That's right** on a guess, and **Undo** of the latest overnight tidy-up —
   saying what became of each;
   **Allowed without asking** lists each rule as a sentence with its end date, **Extend** and

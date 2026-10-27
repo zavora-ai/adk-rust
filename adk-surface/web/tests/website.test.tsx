@@ -98,7 +98,7 @@ describe("onboarding", () => {
     await user.click(within(fact).getByRole("button", { name: "That's right" }));
 
     expect(client.taken.onboarding).toEqual([{ type: "fact", id: "fact-hours", answer: "right" }]);
-    const confirmed = (await screen.findByText("You confirmed this")).closest("li")!;
+    const confirmed = (await screen.findByText("You said this")).closest("li")!;
     expect(within(confirmed).queryByRole("button", { name: "That's right" })).toBeNull();
   });
 

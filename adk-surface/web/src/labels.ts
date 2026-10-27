@@ -133,7 +133,6 @@ export const labels = {
   whatTheyRemember: words.WHAT_YOUR_AGENTS_REMEMBER,
   whatTheyCanDo: "What your agents can do",
   whatTheyDid: words.WHAT_YOUR_AGENTS_DID,
-  youConfirmedThis: "You confirmed this",
   noticedThis: (agent: string) => `${agent} noticed this`,
   rememberEmpty: "Nothing your agents remember is shown here yet.",
   memoryOff: "Your agents keep no memory between conversations here, so there is nothing to show.",

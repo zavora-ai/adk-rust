@@ -339,7 +339,7 @@ export class WebsiteFixture implements WebsiteClient {
       const fact = this.boarding.discovery.facts.find((line) => line.id === command.id);
       if (fact && command.answer !== "forget") {
         fact.text = command.answer === "fix" && command.text ? command.text : fact.text;
-        fact.status = { text: "You confirmed this", tone: "good" };
+        fact.status = { text: "You said this", tone: "good" };
         fact.open = false;
       } else {
         this.boarding.discovery.facts = this.boarding.discovery.facts.filter((line) => line.id !== command.id);

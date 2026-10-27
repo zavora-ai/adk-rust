@@ -1248,7 +1248,8 @@ impl WebsiteDesk {
                 }
                 let (status, open) = match fact.status {
                     FactStatus::Assumed => (Pill::new("A guess", Tone::Waiting), true),
-                    FactStatus::Known => (Pill::new("You confirmed this", Tone::Good), false),
+                    // A confirmed guess reads as the owner's own words (spec 3.3 §8.1).
+                    FactStatus::Known => (Pill::new("You said this", Tone::Good), false),
                     _ => continue,
                 };
                 facts.push(FactView {

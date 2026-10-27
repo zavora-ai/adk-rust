@@ -35,7 +35,7 @@ test.describe("a fresh site", () => {
     for (const fact of ["Opening hours", "Address", "Telephone", "Description"]) {
       const row = page.locator("li.fact", { hasText: fact });
       await row.getByRole("button", { name: "That's right" }).click();
-      await expect(row.getByText("You confirmed this")).toBeVisible();
+      await expect(row.getByText("You said this")).toBeVisible();
     }
     await page.getByRole("button", { name: "Yes, that's it" }).click();
 

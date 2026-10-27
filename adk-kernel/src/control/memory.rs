@@ -9,7 +9,7 @@
 //! | Route (under `/api`) | Caller | Does |
 //! |---|---|---|
 //! | `GET /kernel/memory` | operator, or a device with `read` | The facts of the caller, live ones only, and the overnight tidy-ups ([`MemoryResponse`]) |
-//! | `POST /kernel/memory/facts/{id}/confirm` | the person, no device | "That's right": a guess becomes "You confirmed this" |
+//! | `POST /kernel/memory/facts/{id}/confirm` | the person, no device | "That's right": a guess becomes "You said this" |
 //! | `POST /kernel/memory/facts/{id}/fix` | the person, no device | "Fix it": the fact is replaced by the person's words ([`FixRequest`]) |
 //! | `POST /kernel/memory/facts/{id}/forget` | the person, no device | "Forget it": never recalled again |
 //! | `POST /kernel/memory/undo` | the person, no device | "Undo": reverts the latest overnight tidy-up, or the one named ([`UndoRequest`]) |
@@ -35,7 +35,9 @@ use super::settings::require_owner;
 use crate::error::{KernelError, Result};
 use crate::partition::PartitionId;
 
-/// Where a remembered fact came from, in the home's words (spec 3.3 §8.1).
+/// Where a remembered fact came from, in the home's words (spec 3.3 §8.1): a known fact
+/// reads "You said this", whether the person said it or confirmed or corrected a guess, and
+/// an assumed one "A guess".
 ///
 /// # Example
 ///
@@ -43,6 +45,7 @@ use crate::partition::PartitionId;
 /// use adk_kernel::control::FactOrigin;
 ///
 /// assert_eq!(serde_json::to_value(FactOrigin::YouSaidThis).unwrap(), "youSaidThis");
+/// assert_eq!(FactOrigin::YouConfirmedThis.label(), "You said this");
 /// assert_eq!(FactOrigin::Guess.label(), "A guess");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -51,18 +54,19 @@ use crate::partition::PartitionId;
 pub enum FactOrigin {
     /// The person's own words: a verified quote (`Known`, `UserStated`).
     YouSaidThis,
-    /// A person confirmed or corrected it (`Known`, `UserConfirmed`).
+    /// A person confirmed or corrected it (`Known`, `UserConfirmed`); it reads "You said
+    /// this" (spec 3.3 §8.1).
     YouConfirmedThis,
     /// The agents inferred or read it; it can be confirmed, fixed or forgotten (`Assumed`).
     Guess,
 }
 
 impl FactOrigin {
-    /// The words the home shows: "You said this", "You confirmed this", "A guess".
+    /// The words the home shows (spec 3.3 §8.1): "You said this" for a known fact, "A
+    /// guess" for an assumed one.
     pub fn label(self) -> &'static str {
         match self {
-            Self::YouSaidThis => "You said this",
-            Self::YouConfirmedThis => "You confirmed this",
+            Self::YouSaidThis | Self::YouConfirmedThis => "You said this",
             Self::Guess => "A guess",
         }
     }
@@ -303,15 +307,15 @@ pub trait MemoryBook: Send + Sync {
     /// The book's error.
     async fn facts(&self, user: &str, area: Option<&PartitionId>) -> Result<Vec<RememberedFact>>;
 
-    /// "That's right": `user`'s fact `id` becomes "You confirmed this".
+    /// "That's right": `user`'s fact `id` becomes "You said this".
     ///
     /// # Errors
     ///
     /// A `NotFound` error for a fact that is not `user`'s or not live, or the book's error.
     async fn confirm(&self, user: &str, id: &str, by: &SubjectRef) -> Result<RememberedFact>;
 
-    /// "Fix it": `user`'s fact `id` is replaced by `text`, which becomes "You confirmed
-    /// this"; the old one is kept in the history.
+    /// "Fix it": `user`'s fact `id` is replaced by `text`, which reads "You said this"; the
+    /// old one is kept in the history.
     ///
     /// # Errors
     ///

@@ -100,16 +100,16 @@ test("Memory and rules corrects the memory, extends and stops a rule, and agrees
   await expect(fact("You bill [CLIENT] at [RATE] an hour").getByText("You said this")).toBeVisible({ timeout: 20_000 });
   await expect(remember.getByText("A guess")).toHaveCount(3);
 
-  // That's right: the guess becomes "You confirmed this".
+  // That's right: the guess becomes "You said this" (spec 3.3 §8.1, §12 phase 3).
   await fact("Your accountant is [NAME]").getByRole("button", { name: "That's right" }).click();
-  await expect(fact("Your accountant is [NAME]").getByText("You confirmed this")).toBeVisible();
+  await expect(fact("Your accountant is [NAME]").getByText("You said this")).toBeVisible();
 
   // Fix it: the person's words replace the guess.
   await fact("You send invoices on the last working day").getByRole("button", { name: "Fix it" }).click();
   const words = remember.getByRole("textbox", { name: "Your words" });
   await words.fill("You send invoices on the first working day");
   await words.press("Enter");
-  await expect(fact("You send invoices on the first working day").getByText("You confirmed this")).toBeVisible();
+  await expect(fact("You send invoices on the first working day").getByText("You said this")).toBeVisible();
   await expect(remember.getByText("You send invoices on the last working day")).toHaveCount(0);
 
   // Forget it: the note is gone.
@@ -122,7 +122,7 @@ test("Memory and rules corrects the memory, extends and stops a rule, and agrees
   await fact("You bill [CLIENT] at [RATE] an hour").getByRole("button", { name: "Fix it" }).click();
   await words.fill("You bill [CLIENT] at [NEW RATE] an hour");
   await words.press("Enter");
-  await expect(fact("You bill [CLIENT] at [NEW RATE] an hour").getByText("You confirmed this")).toBeVisible();
+  await expect(fact("You bill [CLIENT] at [NEW RATE] an hour").getByText("You said this")).toBeVisible();
   await expect(remember.getByText("You bill [CLIENT] at [RATE] an hour")).toHaveCount(0);
   await fact("Your accountant is [NAME]").getByRole("button", { name: "Forget it" }).click();
   await expect(remember.getByText("Your accountant is [NAME]")).toHaveCount(0);

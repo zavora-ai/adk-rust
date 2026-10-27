@@ -126,12 +126,12 @@ curl -s -X POST http://127.0.0.1:8080/api/kernel/away/seen \
 | `origin` | Home's words | Harness fact |
 |---|---|---|
 | `youSaidThis` | You said this | `Known`, from the person's own words |
-| `youConfirmedThis` | You confirmed this | `Known`, confirmed or corrected by a person |
+| `youConfirmedThis` | You said this | `Known`, confirmed or corrected by a person; it reads as the person's own words (spec 3.3 §8.1) |
 | `guess` | A guess | `Assumed`; `noticedBy` names the agent that noticed it: the agent whose session it was learned in, as the session's first run stamped it |
 
 | Route | Home's action | Effect |
 |---|---|---|
-| `POST /kernel/memory/facts/{id}/confirm` | That's right | The guess becomes "You confirmed this" |
+| `POST /kernel/memory/facts/{id}/confirm` | That's right | The guess becomes "You said this" |
 | `POST /kernel/memory/facts/{id}/fix` | Fix it | Body `{"text": "..."}`: a confirmed fact replaces it; the old one stays in the history |
 | `POST /kernel/memory/facts/{id}/forget` | Forget it | Never recalled from the next model call on |
 | `POST /kernel/memory/undo` | Undo | Body `{}` undoes the latest finished tidy-up that changed something, `{"tidyUp": "<id>"}` a named one |
