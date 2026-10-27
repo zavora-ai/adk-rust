@@ -1388,9 +1388,10 @@ impl GovernedCall {
     /// decisions keyed by call ID, [`RunConfig::tool_approvals`], a decision already in the
     /// [`ApprovalStore`] (which is discarded) and the confirmation handler are all passed
     /// over, and the call is held for a person, even when the policy allows it. When the
-    /// held call [resumes](Self::resuming), its decision is consulted as for any held call
-    /// that needs confirmation, so a policy that allows the tool by then never runs a call
-    /// the person denied.
+    /// held call [resumes](Self::resuming), it runs only on a person's decision — one keyed
+    /// by its call ID, or one recorded in the [`ApprovalStore`] — so a policy that allows the
+    /// tool by then never runs a call the person denied, and neither
+    /// [`RunConfig::tool_approvals`] nor the confirmation handler answers it in their place.
     ///
     /// # Example
     ///
@@ -1466,9 +1467,12 @@ impl GovernedCall {
 /// resumes it (spec 3.3 §7.4 rule 5).
 pub const REQUESTED_CALL_ID_PREFIX: &str = "adk-call-requested-";
 
-/// Event metadata key ([`Event::provider_metadata`]) on the events an agent writes for a
-/// [`RequestedCall`]: its JSON, `{ "requestedBy": .., "via": .. }`, so surfaces can tell the
-/// call a person asked for from one the model made (spec 3.3 §7.4 rule 5).
+/// Metadata key on the events an agent writes for a [`RequestedCall`]: its JSON,
+/// `{ "requestedBy": .., "via": .. }`, so surfaces can tell the call a person asked for from
+/// one the model made (spec 3.3 §7.4 rule 5). [`RequestedCall::mark`] writes it in
+/// [`Event::provider_metadata`] and in the event's response metadata
+/// (`LlmResponse::provider_metadata`), which every session store keeps;
+/// [`RequestedCall::via_of`] reads it back.
 pub const REQUESTED_CALL_METADATA_KEY: &str = "adk.requested";
 
 /// What a person used to ask for a [`RequestedCall`] (spec 3.3 §7.4 rule 5).
@@ -1629,6 +1633,60 @@ impl RequestedCall {
     /// ```
     pub fn metadata(&self) -> String {
         serde_json::json!({ "requestedBy": self.requested_by, "via": self.via }).to_string()
+    }
+
+    /// Marks `event` as one an agent wrote for this call: [`metadata`](Self::metadata) under
+    /// [`REQUESTED_CALL_METADATA_KEY`] in [`Event::provider_metadata`], and in the response
+    /// metadata the session stores keep with the event.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Event, RequestedCall, RequestedVia, SubjectRef};
+    /// use serde_json::json;
+    ///
+    /// let call = RequestedCall::new(
+    ///     "send_invoice",
+    ///     json!({}),
+    ///     SubjectRef::human("ana"),
+    ///     RequestedVia::form("invoice-10", 2, "send"),
+    /// );
+    /// let mut event = Event::new("inv-1");
+    /// call.mark(&mut event);
+    /// // As a session store reads it back: without the event-level metadata.
+    /// let mut stored = event.clone();
+    /// stored.provider_metadata.clear();
+    /// assert_eq!(RequestedCall::via_of(&stored), Some(call.via.clone()));
+    /// assert_eq!(RequestedCall::via_of(&Event::new("inv-2")), None);
+    /// ```
+    pub fn mark(&self, event: &mut Event) {
+        event.provider_metadata.insert(REQUESTED_CALL_METADATA_KEY.to_string(), self.metadata());
+        let marker = serde_json::json!({ "requestedBy": self.requested_by, "via": self.via });
+        match &mut event.llm_response.provider_metadata {
+            Some(Value::Object(map)) => {
+                map.insert(REQUESTED_CALL_METADATA_KEY.to_string(), marker);
+            }
+            other => {
+                *other = Some(serde_json::json!({ REQUESTED_CALL_METADATA_KEY: marker }));
+            }
+        }
+    }
+
+    /// The drawn surface and action of the requested call `event` was written for, from
+    /// the mark [`mark`](Self::mark) left: `None` for every other event.
+    pub fn via_of(event: &Event) -> Option<RequestedVia> {
+        let stored = event
+            .llm_response
+            .provider_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get(REQUESTED_CALL_METADATA_KEY))
+            .and_then(|marker| marker.get("via"))
+            .and_then(|via| serde_json::from_value(via.clone()).ok());
+        stored.or_else(|| {
+            let metadata = event.provider_metadata.get(REQUESTED_CALL_METADATA_KEY)?;
+            let marker: Value = serde_json::from_str(metadata).ok()?;
+            serde_json::from_value(marker.get("via")?.clone()).ok()
+        })
     }
 
     /// Why a requested call may not name `tool_name`, or `None` when it may: the kernel's
@@ -2009,7 +2067,7 @@ pub async fn authorize_tool_call(
         acting: Some(Box::new(gate.acting.clone())),
         origin: origin.clone(),
     };
-    let Some((approval, source)) = resolve_confirmation(gate, &request).await? else {
+    let Some((approval, source)) = resolve_confirmation(gate, &request, requested).await? else {
         let held_by = if approval_reason.is_some() {
             policy_ref.as_deref()
         } else {
@@ -2327,7 +2385,7 @@ pub async fn confirm_tool_call(
 ) -> Result<Option<ToolApproval>> {
     let config = gate.run_config;
     config.check_governance()?;
-    let Some((approval, source)) = resolve_confirmation(gate, request).await? else {
+    let Some((approval, source)) = resolve_confirmation(gate, request, false).await? else {
         tracing::info!(
             tool.name = %request.tool_name,
             agent.id = %gate.acting.agent.id,
@@ -2560,6 +2618,7 @@ async fn evaluate_policy(
 async fn resolve_confirmation(
     gate: &ToolGate<'_>,
     request: &ToolConfirmationRequest,
+    people_only: bool,
 ) -> Result<Option<(ToolApproval, &'static str)>> {
     let config = gate.run_config;
     let fingerprint = request.fingerprint();
@@ -2581,7 +2640,9 @@ async fn resolve_confirmation(
         }
     }
 
-    if let Some(approval) = config.tool_approvals.get(&fingerprint) {
+    // A call a person asked for is answered only by a person's decision (spec 3.3 §7.4
+    // rule 5): never by a standing approval of the call or by the handler.
+    if !people_only && let Some(approval) = config.tool_approvals.get(&fingerprint) {
         if approval.is_live(Utc::now()) {
             return Ok(Some((approval.clone(), "fingerprint")));
         }
@@ -2594,7 +2655,7 @@ async fn resolve_confirmation(
         return Ok(Some((approval, "approval_store")));
     }
 
-    let Some(handler) = config.tool_confirmation_handler.as_ref() else {
+    let Some(handler) = config.tool_confirmation_handler.as_ref().filter(|_| !people_only) else {
         return Ok(None);
     };
     let timeout = config.tool_confirmation_timeout;
@@ -3132,17 +3193,23 @@ pub async fn confirmation_decision_available(
     {
         return Ok(true);
     }
-    if config.tool_approvals.get(&fingerprint).is_some_and(|approval| approval.is_live(Utc::now()))
+    // A call a person asked for waits for a person's decision (spec 3.3 §7.4 rule 5).
+    let requested = request.function_call_id.as_deref().is_some_and(RequestedCall::is_requested_id);
+    if !requested
+        && config
+            .tool_approvals
+            .get(&fingerprint)
+            .is_some_and(|approval| approval.is_live(Utc::now()))
     {
         return Ok(true);
     }
     let Some(store) = &config.approval_store else {
-        return Ok(config.tool_confirmation_handler.is_some());
+        return Ok(config.tool_confirmation_handler.is_some() && !requested);
     };
     if store.has_decision(&gate.scope, &fingerprint).await? {
         return Ok(true);
     }
-    if config.tool_confirmation_handler.is_none() {
+    if config.tool_confirmation_handler.is_none() || requested {
         return Ok(false);
     }
     // A call waiting in the store resumes on its decision, never by asking the handler again.
@@ -5623,6 +5690,58 @@ mod tests {
                 ToolAuthorization::Pending { .. }
             ),
             "the decision is spent by the call it ran"
+        );
+    }
+
+    /// A requested call that resumes is answered by a person only (spec 3.3 §7.4 rule 5,
+    /// §12 "Governed form" step 4): a handler that approves everything and a fingerprint
+    /// approval of the call neither answer it nor make a run take it up again.
+    #[tokio::test]
+    async fn a_resumed_requested_call_is_never_answered_by_the_handler_or_a_standing_approval() {
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let first = RunConfig::builder()
+            .tool_policy(allows_send_invoice())
+            .approval_store(store.clone())
+            .build();
+        let scope = ApprovalScope::new("app", "user", "session");
+        let call_id = format!("{REQUESTED_CALL_ID_PREFIX}c1");
+        let origin = ToolOrigin::new("static", &json!({ "name": "send_invoice" }), None);
+        let call = || {
+            let mut call =
+                GovernedCall::new("send_invoice", call_id.clone(), invoice_args()).requested(true);
+            call.origin = Some(origin.clone());
+            call
+        };
+        let ToolAuthorization::Pending { request, .. } =
+            authorize_tool_call(&gate(&first), call()).await.unwrap()
+        else {
+            panic!("a requested call is held");
+        };
+
+        let handler = Arc::new(CountingApproves::default());
+        let later = RunConfig::builder()
+            .tool_policy(allows_send_invoice())
+            .tool_approval(request.fingerprint(), ToolApproval::approve())
+            .tool_confirmation_handler(handler.clone())
+            .approval_store(store.clone())
+            .build();
+        let gate = gate(&later);
+        assert!(
+            !confirmation_decision_available(&gate, &request).await.unwrap(),
+            "no run takes it up before the person decides"
+        );
+        let resumed = authorize_tool_call(&gate, call().resuming(request.clone())).await.unwrap();
+        assert!(matches!(resumed, ToolAuthorization::Pending { .. }), "{resumed:?}");
+        assert_eq!(handler.0.load(Ordering::SeqCst), 0, "the handler was never asked");
+
+        store.decide(&scope, &request.fingerprint(), ToolApproval::approve()).await.unwrap();
+        assert!(confirmation_decision_available(&gate, &request).await.unwrap());
+        assert_eq!(
+            authorize_tool_call(&gate, call().resuming(request)).await.unwrap(),
+            ToolAuthorization::Execute {
+                args: invoice_args(),
+                confirmation: Some(ToolConfirmationDecision::Approve),
+            }
         );
     }
 
