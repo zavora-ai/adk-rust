@@ -309,6 +309,7 @@ function thread(variant: string): FeedEntry[] {
             actionId: "send",
             tool: "send_invoice",
             callId: "adk-call-requested-1",
+            via: "form",
             decisionId: "apr_form",
             held: true,
             at: at(10, 3),

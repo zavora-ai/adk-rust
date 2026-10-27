@@ -1085,12 +1085,17 @@ export interface DrawnSent {
   held: boolean;
   /** The surface sent. */
   surfaceId: string;
-  /** "Sent at 10:03", or "Finance can't use send_invoice here". */
+  /** "Sent at 10:03", "The app asked · 10:06", or "Finance can't use send_invoice here". */
   text: string;
   /** The tool asked for. */
   tool: string;
   /** The version sent. */
   version: number;
+  /**
+   * What asked for it: a form the person sent, or an app from an MCP server (spec 3.3 §6.1
+   * `genui-apps`).
+   */
+  via: SentVia;
 }
 
 /**
@@ -1474,6 +1479,9 @@ export type Reversibility = "cantBeUnsent" | "cantBeUndone" | "canBeRemoved" | "
 
 /** How much harm a call can do, as approvers see it (spec 3.3 §7.1). */
 export type Risk = "low" | "medium" | "high";
+
+/** What asked for a `DrawnSent` call (spec 3.3 §6.1 `genui`, `genui-apps`). */
+export type SentVia = "form" | "app";
 
 /** Where an agent's commands run: nowhere, in the sandbox, or on this computer. */
 export type ShellUse = "none" | "sandboxed" | "host";

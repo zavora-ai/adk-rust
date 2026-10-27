@@ -3116,7 +3116,7 @@
             "type": "string"
           },
           "text": {
-            "description": "\"Sent at 10:03\", or \"Finance can't use send_invoice here\".",
+            "description": "\"Sent at 10:03\", \"The app asked · 10:06\", or \"Finance can't use send_invoice here\".",
             "type": "string"
           },
           "tool": {
@@ -3128,6 +3128,11 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
+          },
+          "via": {
+            "$ref": "#/components/schemas/SentVia",
+            "default": "form",
+            "description": "What asked for it: a form the person sent, or an app from an MCP server (spec 3.3 §6.1\n`genui-apps`)."
           }
         },
         "required": [
@@ -3138,7 +3143,8 @@
           "callId",
           "held",
           "at",
-          "text"
+          "text",
+          "via"
         ],
         "type": "object"
       },
@@ -4189,6 +4195,21 @@
           {
             "const": "high",
             "description": "Needs a careful look.",
+            "type": "string"
+          }
+        ]
+      },
+      "SentVia": {
+        "description": "What asked for a `DrawnSent` call (spec 3.3 §6.1 `genui`, `genui-apps`).",
+        "oneOf": [
+          {
+            "const": "form",
+            "description": "The person pressed Send on a form an agent drew.",
+            "type": "string"
+          },
+          {
+            "const": "app",
+            "description": "An app from an MCP server asked, as its `tools/call`.",
             "type": "string"
           }
         ]

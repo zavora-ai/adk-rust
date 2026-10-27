@@ -145,3 +145,5 @@ export const SEND_IT = "Send it";
 export const MARKED_AS_SUGGESTED_BY_THE_APP = "It will be marked as suggested by the app";
 export const OPEN = "Open";
 export const APP_CALL_WAITS_FOR_YOU = "Sent to the person. It runs only once they decide.";
+export const APP_CALL_SENT = "Sent. It runs only if the person allows it.";
+export const APP_SERVER_DIDNT_ANSWER = "The app's server didn't answer. Try again in a moment.";

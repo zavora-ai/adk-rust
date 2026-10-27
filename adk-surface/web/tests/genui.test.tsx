@@ -164,6 +164,7 @@ describe("a drawn form's Send", () => {
             actionId: "send",
             tool: "send_invoice",
             callId: "adk-call-requested-1",
+            via: "form",
             decisionId: "apr_form",
             held: true,
             at: new Date().toISOString(),
@@ -457,7 +458,7 @@ describe("an app from an MCP server", () => {
         items: [
           {
             kind: "drawnSent",
-            sent: { surfaceId: "c-weather", version: 1, actionId: "set_rain_alert", tool: "set_rain_alert", callId: "adk-call-requested-3", decisionId: "apr_app", held: true, at, text: "Sent at 10:06" },
+            sent: { surfaceId: "c-weather", version: 1, actionId: "set_rain_alert", tool: "set_rain_alert", callId: "adk-call-requested-3", decisionId: "apr_app", held: true, at, text: "The app asked · 10:06", via: "app" },
           },
           { kind: "decision", decisionId: "apr_app", tool: "set_rain_alert", text: "Waiting for you" },
         ],
