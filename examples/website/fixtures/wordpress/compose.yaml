@@ -47,7 +47,8 @@ services:
       - "127.0.0.1:8080:80"
     volumes:
       - wordpress:/var/www/html
-      - ./mu-plugins:/var/www/html/wp-content/mu-plugins:ro
+      # Mounted file by file, so the infected overlay can add its own beside it.
+      - ./mu-plugins/fixture.php:/var/www/html/wp-content/mu-plugins/fixture.php:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost/wp-login.php"]
       interval: 5s
@@ -69,6 +70,8 @@ services:
     volumes:
       - wordpress:/var/www/html
       - ./seed.sh:/seed.sh:ro
+      # The uploads the recordings hold, shared with adk-site's migration tests.
+      - ../../../../adk-site/tests/fixtures/migrate/site/wp-content/uploads/2026/10:/fixture-uploads:ro
     entrypoint: ["sh", "/seed.sh"]
     networks: [fixture]
 

@@ -129,6 +129,18 @@ pub async fn against_live(origin: Url, infected: bool) -> Result<crate::checks::
         missing.is_empty(),
         format!("{} URLs live; missing {missing:?}", rest.urls.len()),
     );
+    let legacy = http
+        .fetch(
+            &Url::parse(&format!("{ORIGIN}/old-offers/"))?,
+            &adk_site::migrate::http::FetchOptions::crawler(),
+        )
+        .await?;
+    checks.check(
+        "the live WordPress keeps the legacy redirect the recordings hold",
+        legacy.status == 301
+            && legacy.location.as_ref().is_some_and(|l| l.path() == "/products/panel-400/"),
+        format!("{} to {:?}", legacy.status, legacy.location.as_ref().map(Url::as_str)),
+    );
     let crawl = Crawl::new(Url::parse(&format!("{ORIGIN}/"))?).inventory(&ctx).await?;
     let detectors = Detectors::new();
     let mut findings = detectors.scan_inventory(&crawl).await;
@@ -139,6 +151,13 @@ pub async fn against_live(origin: Url, infected: bool) -> Result<crate::checks::
         findings.push(cloaking);
     }
     let kinds: BTreeSet<String> = findings.iter().map(|f| format!("{:?}", f.kind)).collect();
+    let details: Vec<String> = findings
+        .iter()
+        .map(|f| {
+            let evidence: Vec<&str> = f.evidence.iter().map(|e| e.detail.as_str()).collect();
+            format!("{:?} in {:?}: {}", f.kind, f.subject, evidence.join("; "))
+        })
+        .collect();
     if infected {
         let expected =
             [FindingKind::HiddenLinks, FindingKind::ObfuscatedScript, FindingKind::Cloaking];
@@ -152,7 +171,7 @@ pub async fn against_live(origin: Url, infected: bool) -> Result<crate::checks::
             format!("{kinds:?}"),
         );
     } else {
-        checks.check("the clean site raises no finding", findings.is_empty(), format!("{kinds:?}"));
+        checks.check("the clean site raises no finding", findings.is_empty(), format!("{details:?}"));
     }
 
     // The freeze of the live site: served from a static host with no server code.
