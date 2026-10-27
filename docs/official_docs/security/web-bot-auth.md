@@ -204,6 +204,7 @@ Concurrent requests that miss the cache for one origin share a single fetch.
 | Draft Appendix E.2.2 | The legacy single-String `Signature-Agent` verifies |
 | Draft Appendix E.2.3 | `signed_response` reproduces the body, `Content-Digest`, `Signature-Input` and `Signature` byte for byte |
 | RFC 8037 Appendix A.3 | `jwk_thumbprint` reproduces the thumbprint |
+| The AWP 2.0 Web Bot Auth vectors (nine cases) | Each case reaches its recorded verdict — valid, unsigned, or invalid for a changed path, an expired or future signature, an uncovered `Signature-Agent` — and each signature reproduces from its key; the files match the protocol repository's `SHA256SUMS` (`adk-auth/tests/web_bot_auth_vectors.rs`) |
 | Cloudflare's research server (draft Appendix F) | The verifier fetches its directory and verifies a request signed for it; the server accepts this module's signature in the legacy `Signature-Agent` form; its directory proof verifies over the base this module reconstructs |
 
 > **Note:** the Cloudflare research server implements the earlier architecture draft and

@@ -1,0 +1,69 @@
+{
+  "vector": "web-bot-auth",
+  "case": "signature-agent-not-covered",
+  "description": "A cryptographically valid signature that does not cover the Signature-Agent member, so an intermediary could point it at another directory. The draft requires the member to be covered; the verifier refuses it.",
+  "references": [
+    "draft-ietf-webbotauth-httpsig-protocol-00 Section 5.2.1"
+  ],
+  "generatedBy": "adk-auth feature web-bot-auth, adk-rust 1857cc2a4",
+  "key": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "kid": "61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0",
+      "x": "lrXQJkPxkHDqGo-ZaL9-wKqyWJyRloHbm42bsVISb44",
+      "d": "NY0z3_XNcHzwHyNfVRglZX-CMNpcbXQruTe1Pqfie_8"
+    },
+    "thumbprint": "61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0"
+  },
+  "directory": {
+    "origin": "https://agents.buyer.example",
+    "url": "https://agents.buyer.example/.well-known/http-message-signatures-directory",
+    "document": {
+      "keys": [
+        {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "kid": "61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0",
+          "x": "lrXQJkPxkHDqGo-ZaL9-wKqyWJyRloHbm42bsVISb44",
+          "use": "sig"
+        }
+      ]
+    }
+  },
+  "request": {
+    "method": "GET",
+    "uri": "https://agent.example.com/awp/v2/manifest",
+    "headers": [
+      [
+        "signature-agent",
+        "sig1=\"https://agents.buyer.example\""
+      ],
+      [
+        "signature-input",
+        "sig1=(\"@authority\" \"@method\" \"@path\");created=1792900000;keyid=\"61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0\";alg=\"ed25519\";expires=1792900300;nonce=\"wvxnJd311eEc7/EnvS9oCQSmArKpiqiX3UjdIt/QKgo=\";tag=\"web-bot-auth\""
+      ],
+      [
+        "signature",
+        "sig1=:kWBjeBmRXKfKNrYmS93sNEgZ1Hp91baQQz6QHoY+kQdHr1eZkMC7CnUZ2tJMVFTbhJOzVzd/kre9/773g59IBg==:"
+      ]
+    ]
+  },
+  "signature": {
+    "label": "sig1",
+    "input": "(\"@authority\" \"@method\" \"@path\");created=1792900000;keyid=\"61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0\";alg=\"ed25519\";expires=1792900300;nonce=\"wvxnJd311eEc7/EnvS9oCQSmArKpiqiX3UjdIt/QKgo=\";tag=\"web-bot-auth\"",
+    "base": "\"@authority\": agent.example.com\n\"@method\": GET\n\"@path\": /awp/v2/manifest\n\"@signature-params\": (\"@authority\" \"@method\" \"@path\");created=1792900000;keyid=\"61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0\";alg=\"ed25519\";expires=1792900300;nonce=\"wvxnJd311eEc7/EnvS9oCQSmArKpiqiX3UjdIt/QKgo=\";tag=\"web-bot-auth\"",
+    "value": "kWBjeBmRXKfKNrYmS93sNEgZ1Hp91baQQz6QHoY+kQdHr1eZkMC7CnUZ2tJMVFTbhJOzVzd/kre9/773g59IBg=="
+  },
+  "verifier": {
+    "maxSkewSeconds": 60,
+    "maxSignatureLifetimeSeconds": 86400,
+    "allowRfc9421TestKey": false
+  },
+  "expected": {
+    "now": 1792900030,
+    "verdict": "invalid",
+    "reason": "missing_component",
+    "message": "signature `sig1` does not cover `\"signature-agent\";key=\"sig1\"`; sign it, as the Web Bot Auth draft §5.2 and the verifier's policy require"
+  }
+}

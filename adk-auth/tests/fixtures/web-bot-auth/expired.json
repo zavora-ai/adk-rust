@@ -1,0 +1,78 @@
+{
+  "vector": "web-bot-auth",
+  "case": "expired",
+  "description": "The signed manifest request presented 61 seconds after its expires time, beyond the 60-second skew.",
+  "references": [
+    "spec/awp-2.0.md Section 6.3",
+    "draft-ietf-webbotauth-httpsig-protocol-00 Section 5.2"
+  ],
+  "generatedBy": "adk-auth feature web-bot-auth, adk-rust 1857cc2a4",
+  "key": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "kid": "61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0",
+      "x": "lrXQJkPxkHDqGo-ZaL9-wKqyWJyRloHbm42bsVISb44",
+      "d": "NY0z3_XNcHzwHyNfVRglZX-CMNpcbXQruTe1Pqfie_8"
+    },
+    "thumbprint": "61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0"
+  },
+  "directory": {
+    "origin": "https://agents.buyer.example",
+    "url": "https://agents.buyer.example/.well-known/http-message-signatures-directory",
+    "document": {
+      "keys": [
+        {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "kid": "61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0",
+          "x": "lrXQJkPxkHDqGo-ZaL9-wKqyWJyRloHbm42bsVISb44",
+          "use": "sig"
+        }
+      ]
+    }
+  },
+  "request": {
+    "method": "GET",
+    "uri": "https://agent.example.com/awp/v2/manifest",
+    "headers": [
+      [
+        "accept",
+        "application/awp+json"
+      ],
+      [
+        "awp-version",
+        "2.0"
+      ],
+      [
+        "signature-agent",
+        "sig1=\"https://agents.buyer.example\""
+      ],
+      [
+        "signature-input",
+        "sig1=(\"@authority\" \"@method\" \"@path\" \"@query\" \"signature-agent\";key=\"sig1\");created=1792900000;keyid=\"61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0\";alg=\"ed25519\";expires=1792900300;nonce=\"wkGSYaiVG5rNHMgKqJ9Si4B/mfFJv0W4sDnwETCC0q8=\";tag=\"web-bot-auth\""
+      ],
+      [
+        "signature",
+        "sig1=:dnsn9favkhMHUkko/nMe8QnT+GrSDxV9BjqJyTjUnbiwGQFD9l99ZtVBP6VQCUdwy4tTdGEW5ApuSscY9Yc9Cg==:"
+      ]
+    ]
+  },
+  "signature": {
+    "label": "sig1",
+    "input": "(\"@authority\" \"@method\" \"@path\" \"@query\" \"signature-agent\";key=\"sig1\");created=1792900000;keyid=\"61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0\";alg=\"ed25519\";expires=1792900300;nonce=\"wkGSYaiVG5rNHMgKqJ9Si4B/mfFJv0W4sDnwETCC0q8=\";tag=\"web-bot-auth\"",
+    "base": "\"@authority\": agent.example.com\n\"@method\": GET\n\"@path\": /awp/v2/manifest\n\"@query\": ?\n\"signature-agent\";key=\"sig1\": \"https://agents.buyer.example\"\n\"@signature-params\": (\"@authority\" \"@method\" \"@path\" \"@query\" \"signature-agent\";key=\"sig1\");created=1792900000;keyid=\"61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0\";alg=\"ed25519\";expires=1792900300;nonce=\"wkGSYaiVG5rNHMgKqJ9Si4B/mfFJv0W4sDnwETCC0q8=\";tag=\"web-bot-auth\"",
+    "value": "dnsn9favkhMHUkko/nMe8QnT+GrSDxV9BjqJyTjUnbiwGQFD9l99ZtVBP6VQCUdwy4tTdGEW5ApuSscY9Yc9Cg=="
+  },
+  "verifier": {
+    "maxSkewSeconds": 60,
+    "maxSignatureLifetimeSeconds": 86400,
+    "allowRfc9421TestKey": false
+  },
+  "expected": {
+    "now": 1792900361,
+    "verdict": "invalid",
+    "reason": "expired",
+    "message": "signature `sig1` expired at 1792900300 (now 1792900361); sign each request afresh"
+  }
+}

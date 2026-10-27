@@ -1,0 +1,71 @@
+{
+  "vector": "web-bot-auth",
+  "case": "rfc9421-b-2-6",
+  "description": "RFC 9421 Appendix B.2.6: an Ed25519 request signature without tag=\"web-bot-auth\". The base and signature match the RFC; a Web Bot Auth verifier ignores the signature and the requester stays public.",
+  "references": [
+    "RFC 9421 Appendix B.2.6",
+    "RFC 9421 Appendix B.1.4"
+  ],
+  "generatedBy": "adk-auth feature web-bot-auth, adk-rust 1857cc2a4",
+  "key": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "kid": "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U",
+      "x": "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs",
+      "d": "n4Ni-HpISpVObnQMW0wOhCKROaIKqKtW_2ZYb2p9KcU"
+    },
+    "thumbprint": "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U"
+  },
+  "directory": null,
+  "request": {
+    "method": "POST",
+    "uri": "https://example.com/foo?param=Value&Pet=dog",
+    "headers": [
+      [
+        "host",
+        "example.com"
+      ],
+      [
+        "date",
+        "Tue, 20 Apr 2021 02:07:55 GMT"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "content-digest",
+        "sha-512=:WZDPaVn/7XgHaAy8pmojAkGWoRx2UFChF41A2svX+TaPm+AbwAgBWnrIiYllu7BNNyealdVLvRwEmTHWXvJwew==:"
+      ],
+      [
+        "content-length",
+        "18"
+      ],
+      [
+        "signature-input",
+        "sig-b26=(\"date\" \"@method\" \"@path\" \"@authority\" \"content-type\" \"content-length\");created=1618884473;keyid=\"test-key-ed25519\""
+      ],
+      [
+        "signature",
+        "sig-b26=:wqcAqbmYJ2ji2glfAMaRy4gruYYnx2nEFN2HN6jrnDnQCK1u02Gb04v9EDgwUPiu4A0w6vuQv5lIp5WPpBKRCw==:"
+      ]
+    ]
+  },
+  "signature": {
+    "label": "sig-b26",
+    "input": "(\"date\" \"@method\" \"@path\" \"@authority\" \"content-type\" \"content-length\");created=1618884473;keyid=\"test-key-ed25519\"",
+    "base": "\"date\": Tue, 20 Apr 2021 02:07:55 GMT\n\"@method\": POST\n\"@path\": /foo\n\"@authority\": example.com\n\"content-type\": application/json\n\"content-length\": 18\n\"@signature-params\": (\"date\" \"@method\" \"@path\" \"@authority\" \"content-type\" \"content-length\");created=1618884473;keyid=\"test-key-ed25519\"",
+    "value": "wqcAqbmYJ2ji2glfAMaRy4gruYYnx2nEFN2HN6jrnDnQCK1u02Gb04v9EDgwUPiu4A0w6vuQv5lIp5WPpBKRCw=="
+  },
+  "verifier": {
+    "maxSkewSeconds": 60,
+    "maxSignatureLifetimeSeconds": null,
+    "allowRfc9421TestKey": true
+  },
+  "expected": {
+    "now": 1618884473,
+    "verdict": "unsigned",
+    "tier": "public"
+  }
+}

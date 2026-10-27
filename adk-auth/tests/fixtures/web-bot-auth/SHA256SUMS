@@ -1,0 +1,9 @@
+e5352ed12f5cdd0c11178d3de89b01b7922925f4480783e4491620e74ffa5cb2  web-bot-auth/awp-get-manifest.json
+9750a845e8be60779aaff915b5e949665cdf8230d1d786aa9003a7bffd49282a  web-bot-auth/awp-post-capability.json
+27c4e77020599618e5e63c24c06a5c98dadceb17d8126a5e952de5317fdeddec  web-bot-auth/draft-e-2-1.json
+49b1b7f2e63459852dec58945efcfa0e0ad6121c67c5e2ae7f7f5e31565a9a60  web-bot-auth/expired.json
+94e2478b366c74f2ce19ef82dc39f7c1f371a4d8f84f988741ee94e9bc2127b0  web-bot-auth/not-yet-valid.json
+2d4bbfcdc93cb89b1a056ea0ab689366439a0e9babeab0a9fda910d8ab74929d  web-bot-auth/rfc9421-b-2-6.json
+1d08431f5dfa0fd36ea09529b4b1fe8eea8fdb4cca9da1ac2c48772a896744a6  web-bot-auth/signature-agent-not-covered.json
+bff64fd02f93ed9426f52fc766b32742a1acc341b84b2c7190d3ec59382fd52d  web-bot-auth/tampered-path.json
+0181b0182e1cd33b7a252a05dd93f9529227fb4e858289dd21193e89a80a2477  web-bot-auth/unsigned-claim.json

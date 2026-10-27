@@ -1,0 +1,36 @@
+{
+  "vector": "web-bot-auth",
+  "case": "unsigned-claim",
+  "description": "A request that claims to be an agent through User-Agent and the AWP 1.0 X-AWP-Channel header, without a signature. Claims never raise trust: the requester has no identity and stays public.",
+  "references": [
+    "spec/awp-2.0.md Section 6.4"
+  ],
+  "generatedBy": "adk-auth feature web-bot-auth, adk-rust 1857cc2a4",
+  "key": null,
+  "directory": null,
+  "request": {
+    "method": "GET",
+    "uri": "https://agent.example.com/awp/v2/manifest",
+    "headers": [
+      [
+        "user-agent",
+        "Mozilla/5.0 (compatible; GPTBot/1.2; +https://openai.com/gptbot)"
+      ],
+      [
+        "x-awp-channel",
+        "agent"
+      ]
+    ]
+  },
+  "signature": null,
+  "verifier": {
+    "maxSkewSeconds": 60,
+    "maxSignatureLifetimeSeconds": 86400,
+    "allowRfc9421TestKey": false
+  },
+  "expected": {
+    "now": 1792900030,
+    "verdict": "unsigned",
+    "tier": "public"
+  }
+}

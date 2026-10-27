@@ -1,0 +1,88 @@
+{
+  "vector": "web-bot-auth",
+  "case": "awp-post-capability",
+  "description": "A buyer agent calls get_quote over the HTTP binding, covering the body through Content-Digest and the Idempotency-Key field as well.",
+  "references": [
+    "spec/awp-2.0.md Sections 6.3, 7.4.1 and 7.7",
+    "RFC 9530"
+  ],
+  "generatedBy": "adk-auth feature web-bot-auth, adk-rust 1857cc2a4",
+  "key": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "kid": "61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0",
+      "x": "lrXQJkPxkHDqGo-ZaL9-wKqyWJyRloHbm42bsVISb44",
+      "d": "NY0z3_XNcHzwHyNfVRglZX-CMNpcbXQruTe1Pqfie_8"
+    },
+    "thumbprint": "61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0"
+  },
+  "directory": {
+    "origin": "https://agents.buyer.example",
+    "url": "https://agents.buyer.example/.well-known/http-message-signatures-directory",
+    "document": {
+      "keys": [
+        {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "kid": "61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0",
+          "x": "lrXQJkPxkHDqGo-ZaL9-wKqyWJyRloHbm42bsVISb44",
+          "use": "sig"
+        }
+      ]
+    }
+  },
+  "request": {
+    "method": "POST",
+    "uri": "https://agent.example.com/awp/v2/capabilities/get_quote",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "content-digest",
+        "sha-256=:kjbisX/dx8+kWugPd49QH5LtXnTAYXhyPYn+wkca7F8=:"
+      ],
+      [
+        "idempotency-key",
+        "\"q-2026-10-25-0001\""
+      ],
+      [
+        "awp-version",
+        "2.0"
+      ],
+      [
+        "signature-agent",
+        "sig1=\"https://agents.buyer.example\""
+      ],
+      [
+        "signature-input",
+        "sig1=(\"@authority\" \"@method\" \"@path\" \"@query\" \"content-digest\" \"idempotency-key\" \"signature-agent\";key=\"sig1\");created=1792900000;keyid=\"61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0\";alg=\"ed25519\";expires=1792900300;nonce=\"jpOpYRCENUmuc5m6rchyULhxbKa+BUgerSkDehIHh/0=\";tag=\"web-bot-auth\""
+      ],
+      [
+        "signature",
+        "sig1=:EY+V+2pJQxrGUqy4KOUY/vk07luLYDrDNT5nYpCIZ1yBD1SkNwDhkInU7Zeq//eVpfNf/5HS6wQeJKHKbJXgCg==:"
+      ]
+    ],
+    "body": "{\"lines\":[{\"sku\":\"PANEL-400\",\"quantity\":8}]}"
+  },
+  "signature": {
+    "label": "sig1",
+    "input": "(\"@authority\" \"@method\" \"@path\" \"@query\" \"content-digest\" \"idempotency-key\" \"signature-agent\";key=\"sig1\");created=1792900000;keyid=\"61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0\";alg=\"ed25519\";expires=1792900300;nonce=\"jpOpYRCENUmuc5m6rchyULhxbKa+BUgerSkDehIHh/0=\";tag=\"web-bot-auth\"",
+    "base": "\"@authority\": agent.example.com\n\"@method\": POST\n\"@path\": /awp/v2/capabilities/get_quote\n\"@query\": ?\n\"content-digest\": sha-256=:kjbisX/dx8+kWugPd49QH5LtXnTAYXhyPYn+wkca7F8=:\n\"idempotency-key\": \"q-2026-10-25-0001\"\n\"signature-agent\";key=\"sig1\": \"https://agents.buyer.example\"\n\"@signature-params\": (\"@authority\" \"@method\" \"@path\" \"@query\" \"content-digest\" \"idempotency-key\" \"signature-agent\";key=\"sig1\");created=1792900000;keyid=\"61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0\";alg=\"ed25519\";expires=1792900300;nonce=\"jpOpYRCENUmuc5m6rchyULhxbKa+BUgerSkDehIHh/0=\";tag=\"web-bot-auth\"",
+    "value": "EY+V+2pJQxrGUqy4KOUY/vk07luLYDrDNT5nYpCIZ1yBD1SkNwDhkInU7Zeq//eVpfNf/5HS6wQeJKHKbJXgCg=="
+  },
+  "verifier": {
+    "maxSkewSeconds": 60,
+    "maxSignatureLifetimeSeconds": 86400,
+    "allowRfc9421TestKey": false
+  },
+  "expected": {
+    "now": 1792900030,
+    "verdict": "valid",
+    "requesterId": "wba:https://agents.buyer.example#61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0",
+    "directoryOrigin": "https://agents.buyer.example",
+    "keyThumbprint": "61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0"
+  }
+}
