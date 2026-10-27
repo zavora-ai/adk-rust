@@ -85,31 +85,109 @@ pub(crate) enum TermLink {
     Tag,
 }
 
-/// Classes and ids a page's `<style>` blocks hide, for the hidden-element detector.
+/// The elements a page's `<style>` blocks hide, for the hidden-element detector.
+///
+/// Only a rule that hides an element by itself counts: its selector is a tag, classes and an
+/// id with nothing around them (`.ad`, `div.links`, `#promo`), outside any `@media`,
+/// `@supports` or `@container` block. A selector with context (`.menu .item`, `ul > li`),
+/// a pseudo-class (`.panel:not(.open)`) or a condition hides some elements only, and a class or
+/// id that another rule shows again — a responsive menu, a dropdown, a dialog — is a state of
+/// the page, not hidden content.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct HiddenRules {
-    pub classes: BTreeSet<String>,
-    pub ids: BTreeSet<String>,
+    rules: Vec<HidingRule>,
+}
+
+/// A context-free selector whose rule hides what it matches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HidingRule {
+    selector: String,
+    tag: Option<String>,
+    id: Option<String>,
+    classes: Vec<String>,
+}
+
+impl HidingRule {
+    /// `selector` when it is a compound of a tag, an id and classes only.
+    fn parse(selector: &str) -> Option<Self> {
+        static COMPOUND: OnceLock<Regex> = OnceLock::new();
+        static PART: OnceLock<Regex> = OnceLock::new();
+        let compound = COMPOUND.get_or_init(|| {
+            Regex::new(r"^(?:[A-Za-z][A-Za-z0-9-]*)?(?:[.#][A-Za-z0-9_-]+)+$")
+                .expect("static regex")
+        });
+        let part =
+            PART.get_or_init(|| Regex::new(r"([.#])([A-Za-z0-9_-]+)").expect("static regex"));
+        if !compound.is_match(selector) {
+            return None;
+        }
+        let tag_end = selector.find(['.', '#']).unwrap_or(selector.len());
+        let mut rule = Self {
+            selector: selector.to_string(),
+            tag: (tag_end > 0).then(|| selector[..tag_end].to_ascii_lowercase()),
+            id: None,
+            classes: Vec::new(),
+        };
+        for capture in part.captures_iter(&selector[tag_end..]) {
+            if &capture[1] == "#" {
+                rule.id = Some(capture[2].to_string());
+            } else {
+                rule.classes.push(capture[2].to_string());
+            }
+        }
+        Some(rule)
+    }
+
+    fn matches(&self, element: &scraper::node::Element) -> bool {
+        self.tag.as_deref().is_none_or(|tag| element.name().eq_ignore_ascii_case(tag))
+            && self.id.as_deref().is_none_or(|id| element.id() == Some(id))
+            && self.classes.iter().all(|class| element.classes().any(|c| c == class))
+    }
+}
+
+/// What kind of block a `{` opens in a style sheet.
+#[derive(Debug)]
+enum CssBlock {
+    /// A style rule: its selector list, whether a condition or a parent rule scopes it, and its
+    /// declarations so far.
+    Style { selectors: String, scoped: bool, declarations: String },
+    /// `@media`, `@supports`, `@container`, `@scope`: the rules inside apply on a condition.
+    Conditional,
+    /// `@layer` and other grouping at-rules: the rules inside apply as they stand.
+    Group,
+    /// `@keyframes`, `@font-face` and the like: no element rules inside.
+    Ignored,
 }
 
 impl HiddenRules {
-    /// Reads `.class { … }` and `#id { … }` rules that hide from every `<style>` in `html`.
+    /// Reads the hiding rules of every `<style>` in `document`.
     pub fn from_document(document: &Html) -> Self {
-        static RULE: OnceLock<Regex> = OnceLock::new();
-        let rule = RULE.get_or_init(|| {
-            Regex::new(r"([.#])([A-Za-z0-9_-]+)\s*\{([^}]*)\}").expect("static regex")
-        });
-        let mut rules = Self::default();
+        let mut hiding: Vec<HidingRule> = Vec::new();
+        let mut shown: BTreeSet<String> = BTreeSet::new();
         for style in document.select(&selector("style")) {
             let css: String = style.text().collect();
-            for capture in rule.captures_iter(&css) {
-                if hiding_style(&capture[3]).is_some() {
-                    let set = if &capture[1] == "." { &mut rules.classes } else { &mut rules.ids };
-                    set.insert(capture[2].to_string());
+            read_rules(&css, &mut |selectors, scoped, declarations| {
+                let hides = hiding_style(declarations).is_some();
+                let shows = showing_style(declarations);
+                for item in split_selectors(selectors) {
+                    if hides
+                        && !scoped
+                        && let Some(rule) = HidingRule::parse(item)
+                    {
+                        hiding.push(rule);
+                    }
+                    if shows {
+                        shown.extend(subject_names(item));
+                    }
                 }
-            }
+            });
         }
-        rules
+        hiding.retain(|rule| {
+            let mut names = rule.classes.iter().map(|c| format!(".{c}"));
+            let id = rule.id.as_ref().map(|i| format!("#{i}"));
+            !names.any(|name| shown.contains(&name)) && id.is_none_or(|id| !shown.contains(&id))
+        });
+        Self { rules: hiding }
     }
 
     /// Why `element` is hidden, when it is.
@@ -122,16 +200,121 @@ impl HiddenRules {
         {
             return Some(format!("style: {reason}"));
         }
-        if let Some(id) = element.id()
-            && self.ids.contains(id)
-        {
-            return Some(format!("#{id} hidden by a style block"));
-        }
-        element
-            .classes()
-            .find(|class| self.classes.contains(*class))
-            .map(|class| format!(".{class} hidden by a style block"))
+        self.rules
+            .iter()
+            .find(|rule| rule.matches(element))
+            .map(|rule| format!("{} hidden by a style block", rule.selector))
     }
+}
+
+/// Walks the style rules of a style sheet, calling `rule` with each rule's selector list,
+/// whether a condition or a parent rule scopes it, and its declarations.
+fn read_rules(css: &str, rule: &mut impl FnMut(&str, bool, &str)) {
+    static COMMENT: OnceLock<Regex> = OnceLock::new();
+    let comment = COMMENT.get_or_init(|| Regex::new(r"(?s)/\*.*?\*/").expect("static regex"));
+    let css = comment.replace_all(css, " ");
+    let mut stack: Vec<CssBlock> = Vec::new();
+    let mut segment = String::new();
+    for c in css.chars() {
+        match c {
+            '{' => {
+                let prelude = segment.trim().to_string();
+                segment.clear();
+                let ignored = stack.iter().any(|b| matches!(b, CssBlock::Ignored));
+                let scoped = stack
+                    .iter()
+                    .any(|b| matches!(b, CssBlock::Conditional | CssBlock::Style { .. }));
+                let block = if ignored {
+                    CssBlock::Ignored
+                } else if let Some(at) = prelude.strip_prefix('@') {
+                    let name = at.split(|c: char| !c.is_ascii_alphanumeric() && c != '-').next();
+                    match name.map(str::to_ascii_lowercase).as_deref() {
+                        Some("media" | "supports" | "container" | "scope" | "document") => {
+                            CssBlock::Conditional
+                        }
+                        Some("layer" | "starting-style") => CssBlock::Group,
+                        _ => CssBlock::Ignored,
+                    }
+                } else {
+                    CssBlock::Style { selectors: prelude, scoped, declarations: String::new() }
+                };
+                stack.push(block);
+            }
+            ';' => {
+                if let Some(CssBlock::Style { declarations, .. }) = stack.last_mut() {
+                    declarations.push_str(&segment);
+                    declarations.push(';');
+                }
+                segment.clear();
+            }
+            '}' => {
+                match stack.pop() {
+                    Some(CssBlock::Style { selectors, scoped, mut declarations }) => {
+                        declarations.push_str(&segment);
+                        rule(&selectors, scoped, &declarations);
+                    }
+                    Some(CssBlock::Conditional | CssBlock::Group | CssBlock::Ignored) | None => {}
+                }
+                segment.clear();
+            }
+            _ => segment.push(c),
+        }
+    }
+}
+
+/// The selectors of a selector list, split at the commas outside parentheses and brackets.
+fn split_selectors(list: &str) -> Vec<&str> {
+    let mut items = Vec::new();
+    let (mut depth, mut start) = (0i32, 0usize);
+    for (i, c) in list.char_indices() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                items.push(list[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    items.push(list[start..].trim());
+    items.retain(|item| !item.is_empty());
+    items
+}
+
+/// The `.class` and `#id` names of a selector's subject — its last compound — outside
+/// functional pseudo-classes such as `:not(…)`.
+fn subject_names(selector: &str) -> Vec<String> {
+    static NAME: OnceLock<Regex> = OnceLock::new();
+    let name = NAME.get_or_init(|| Regex::new(r"[.#][A-Za-z0-9_-]+").expect("static regex"));
+    let mut outside = String::new();
+    let mut depth = 0i32;
+    for c in selector.chars() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            _ if depth == 0 => outside.push(c),
+            _ => {}
+        }
+    }
+    let subject = outside
+        .rsplit(|c: char| c.is_whitespace() || matches!(c, '>' | '+' | '~'))
+        .find(|part| !part.is_empty())
+        .unwrap_or_default();
+    name.find_iter(subject).map(|m| m.as_str().to_string()).collect()
+}
+
+/// Whether a declaration block shows an element another rule may hide: a `display` other than
+/// `none`, or `visibility: visible`.
+fn showing_style(style: &str) -> bool {
+    style.split(';').filter_map(|d| d.split_once(':')).any(|(property, value)| {
+        let value = value.trim().trim_end_matches("!important").trim().to_ascii_lowercase();
+        match property.trim().to_ascii_lowercase().as_str() {
+            "display" => !value.is_empty() && value != "none",
+            "visibility" => value == "visible",
+            _ => false,
+        }
+    })
 }
 
 /// The declaration in a CSS declaration block that hides an element, when one does.
@@ -605,6 +788,59 @@ mod tests {
         for style in ["color:red", "display:block", "opacity:0.5", "position:absolute;left:-10px"] {
             assert!(hiding_style(style).is_none(), "{style}");
         }
+    }
+
+    /// Only rules that hide an element by themselves count: a selector with context, a
+    /// pseudo-class or a media condition hides some elements only, and a class another rule
+    /// shows again is a state of the page (spec 3.5 §7.8 "Sanitiser").
+    #[test]
+    fn style_blocks_hide_by_context_free_selectors_only() {
+        let document = Html::parse_document(
+            r#"<style>
+            .a{display:none} div.b, #c { visibility : hidden !important } .d.e{opacity:0}
+            .menu .item{display:none} ul>li.f{display:none} .g:not(.open){display:none}
+            @media (max-width:600px){.h{display:none}} @supports (display:grid){.i{display:none}}
+            @layer base{.j{display:none}} @font-face{font-family:x;src:url(x.woff)}
+            .k{display:none} .k.open{display:block} .l{display:none}
+            @media (min-width:600px){.wrap .l:not(.closed){display:flex}}
+            .m{display:none;/* } */} .n { color: red; .o { display:none } }
+            </style>"#,
+        );
+        let rules = HiddenRules::from_document(&document);
+        let hidden = |html: &str| {
+            let fragment = Html::parse_fragment(html);
+            let element = fragment.root_element().first_child().unwrap();
+            rules.hides(element.value().as_element().unwrap())
+        };
+        assert_eq!(hidden(r#"<p class="a"></p>"#).as_deref(), Some(".a hidden by a style block"));
+        assert_eq!(
+            hidden(r#"<div class="b"></div>"#).as_deref(),
+            Some("div.b hidden by a style block")
+        );
+        assert!(hidden(r#"<span class="b"></span>"#).is_none(), "div.b names the tag");
+        assert!(hidden(r#"<p id="c"></p>"#).is_some());
+        assert!(hidden(r#"<p class="d e"></p>"#).is_some());
+        assert!(hidden(r#"<p class="d"></p>"#).is_none(), ".d.e needs both classes");
+        assert!(hidden(r#"<p class="j"></p>"#).is_some(), "a layer applies unconditionally");
+        assert!(hidden(r#"<p class="m"></p>"#).is_some(), "comments are not CSS");
+        for html in [
+            r#"<p class="item"></p>"#,
+            r#"<li class="f"></li>"#,
+            r#"<p class="g"></p>"#,
+            r#"<p class="h"></p>"#,
+            r#"<p class="i"></p>"#,
+            r#"<p class="k"></p>"#,
+            r#"<p class="l"></p>"#,
+            r#"<p class="o"></p>"#,
+            r#"<p class="n"></p>"#,
+        ] {
+            assert!(hidden(html).is_none(), "{html}");
+        }
+        assert_eq!(hidden(r#"<p hidden></p>"#).as_deref(), Some("hidden attribute"));
+        assert_eq!(
+            hidden(r#"<p style="display:none"></p>"#).as_deref(),
+            Some("style: display:none")
+        );
     }
 
     #[test]

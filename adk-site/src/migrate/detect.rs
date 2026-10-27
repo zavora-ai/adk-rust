@@ -3,7 +3,7 @@
 //!
 //! | Detector | Finds | Evidence |
 //! |----------|-------|----------|
-//! | Hidden elements | Links inside elements hidden by a style or the `hidden` attribute | How it was hidden, the links, an excerpt |
+//! | Hidden elements | Links to other sites inside elements hidden by a style or the `hidden` attribute; a style block hides by a context-free selector no other rule shows again | How it was hidden, the links, an excerpt |
 //! | Link spam | Links whose text or target trips the spam [`ContentFilter`] (`adk-guardrail`) | The link and the filter's reason |
 //! | Cloaking | A page that differs when fetched as the crawler and as a browser: scripts, links, redirects, text | The difference, both digests; needs a proven domain (A-I9) |
 //! | Uploads | Server-executable files (A-I1), active SVG, a type that does not match the name or the declared type | The rule, the sniffed and the expected type |
@@ -222,7 +222,12 @@ impl Detectors {
                 for descendant in node.descendants() {
                     match descendant.value() {
                         Node::Element(e) if e.name() == "a" => {
-                            if let Some(href) = e.attr("href") {
+                            // Hidden links within the site are page states — skip links,
+                            // menus, a cart link shown once something is added — while
+                            // injected link spam points at other sites.
+                            if let Some(href) = e.attr("href")
+                                && leaves_site(href, page.as_ref())
+                            {
                                 hrefs.push(href.to_string());
                             }
                         }
@@ -610,6 +615,17 @@ impl Detectors {
     }
 }
 
+/// Whether `href` leads to another host than the page's.
+fn leaves_site(href: &str, page: Option<&Url>) -> bool {
+    let target = match page {
+        Some(page) => page.join(href),
+        None => Url::parse(href),
+    };
+    target.is_ok_and(|t| {
+        matches!(t.scheme(), "http" | "https") && t.host_str() != page.and_then(Url::host_str)
+    })
+}
+
 fn join_short(values: &[&String]) -> String {
     let mut out: Vec<String> =
         values.iter().take(5).map(|v| v.chars().take(120).collect()).collect();
@@ -740,5 +756,62 @@ mod tests {
         assert_eq!(kinds, [FindingKind::HiddenLinks, FindingKind::SpamLinks]);
         assert!(findings[0].evidence[0].detail.contains("cheap-casino.test"));
         assert!(findings[0].evidence[0].detail.contains("off-screen"));
+    }
+
+    /// The markup a current WordPress site serves (spec 3.5 §11 "Fixtures"): the navigation
+    /// block's inline styles hide its responsive container and submenus until a viewport, a
+    /// hover or the menu button shows them; the skip link is screen-reader text pointing into
+    /// the page; WooCommerce's "View cart" link waits, `hidden`, for the first item. None of
+    /// it is hidden-link spam; hidden links to other sites still are.
+    #[tokio::test]
+    async fn theme_menus_skip_links_and_cart_links_are_not_hidden_links() {
+        const HEAD: &str = r##"<!doctype html><html><head>
+            <style id="wp-block-navigation-inline-css">
+            .wp-block-navigation__container .is-responsive{display:none}
+            .wp-block-navigation .has-child .wp-block-navigation__submenu-container{height:0;opacity:0;overflow:hidden;visibility:hidden;width:0}
+            .wp-block-navigation .has-child:hover>.wp-block-navigation__submenu-container{height:auto;opacity:1;visibility:visible}
+            .wp-block-navigation__responsive-container{bottom:0;display:none;left:0;position:fixed;right:0;top:0}
+            .wp-block-navigation__responsive-container.is-menu-open{display:flex}
+            @media (min-width:600px){.wp-block-navigation__responsive-container:not(.hidden-by-default):not(.is-menu-open){display:block;position:relative}}
+            @media (max-width:599px){.desktop-only{display:none}}
+            @keyframes overlay-menu__fade-in-animation{0%{opacity:0}to{opacity:1}}
+            </style>
+            <style>/* screen-reader text */ .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+            .skip-link.screen-reader-text{clip-path:inset(50%);height:1px;overflow:hidden;position:absolute;width:1px}
+            .sneaky,#promo{display:none}</style></head><body>
+            <a class="skip-link screen-reader-text" href="#wp--skip-link--target">Skip to content</a>
+            <nav class="is-responsive wp-block-navigation"><div class="wp-block-navigation__responsive-container" id="modal-1">
+              <ul class="wp-block-navigation__container"><li class="has-child"><a href="/about/">About</a>
+                <ul class="wp-block-navigation__submenu-container"><li><a href="/about/team/">Team</a></li></ul></li></ul></div></nav>
+            <div class="desktop-only"><a href="/shop/">Shop</a></div>
+            <div class="sr-only"><a href="/contact/">Contact us</a> <a href="https://o.test/hello/#top">Top</a></div>
+            <p style="display:none"><a href="#comments">Comments</a></p>
+            <a href="https://o.test/cart/" class="added_to_cart wc-forward" hidden>View cart</a>
+            <main id="wp--skip-link--target"><p>Text.</p></main>"##;
+        let detectors = Detectors::new();
+        let subject = Subject::Url("/hello/".into());
+        let page = Some("https://o.test/hello/");
+        let clean = detectors.scan_html(&subject, page, &format!("{HEAD}</body></html>")).await;
+        assert_eq!(clean, Vec::new());
+
+        let infected = format!(
+            r#"{HEAD}<div class="sneaky"><a href="https://cheap-casino.test/">casino</a></div>
+            <section id="promo"><a href="/ok/">ok</a> <a href="https://bonus.test/">bonus</a></section>
+            <div class="sr-only"><a href="https://pills.test/">pills</a></div></body></html>"#
+        );
+        let found = detectors.scan_html(&subject, page, &infected).await;
+        let hidden: Vec<&str> = found
+            .iter()
+            .filter(|f| f.kind == FindingKind::HiddenLinks)
+            .map(|f| f.evidence[0].detail.as_str())
+            .collect();
+        assert_eq!(
+            hidden,
+            [
+                "1 link(s) hidden by .sneaky hidden by a style block: https://cheap-casino.test/",
+                "1 link(s) hidden by #promo hidden by a style block: https://bonus.test/",
+                "1 link(s) hidden by .sr-only hidden by a style block: https://pills.test/",
+            ]
+        );
     }
 }
