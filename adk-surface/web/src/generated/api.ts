@@ -1241,6 +1241,11 @@ export interface GrantedUse {
   /** The feature that grants it, such as `genui`: one line per id. Never shown. */
   id: string;
   /**
+   * The modes in which an agent can use it; empty for every mode. A surface lists it for an
+   * agent only in one of them, so what an agent's settings say it can do is true (S-I13).
+   */
+  modes?: Mode[];
+  /**
    * What it can do, in plain words: "Ask to change things on your screens — always asks
    * you first".
    */

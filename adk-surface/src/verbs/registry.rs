@@ -290,6 +290,9 @@ pub struct VerbScope {
     agenda: Arc<dyn AgendaAccess>,
     now: DateTime<Utc>,
     offset: FixedOffset,
+    /// Held from reading a wake to moving it, so two moves of this registry never both pass
+    /// their checks against the same wake.
+    moving: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl fmt::Debug for VerbScope {
@@ -383,6 +386,9 @@ impl VerbScope {
         from: DateTime<Utc>,
         to: DateTime<Utc>,
     ) -> Result<AgendaItem, VerbError> {
+        // The kernel moves the wake without comparing it with `from`: the check and the move
+        // are one step for every move this registry makes.
+        let _one_at_a_time = self.moving.lock().await;
         let item = self.item(id).await?;
         let wake = match &item.state {
             AgendaState::Scheduled { wake } => wake,
@@ -465,6 +471,7 @@ pub(crate) struct Inner {
     pub(crate) sessions: Option<Arc<dyn SessionService>>,
     pub(crate) answers: Option<Arc<dyn AnswerLog>>,
     pub(crate) names: HashMap<String, String>,
+    pub(crate) moving: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl fmt::Debug for VerbRegistry {
@@ -610,6 +617,7 @@ impl VerbRegistryBuilder {
                 sessions: self.sessions,
                 answers: self.answers,
                 names: self.names,
+                moving: Arc::new(tokio::sync::Mutex::new(())),
             }),
         })
     }
@@ -699,6 +707,7 @@ impl VerbRegistry {
             agenda: Arc::clone(&self.inner.agenda),
             now: self.inner.clock.now(),
             offset: self.inner.offset,
+            moving: Arc::clone(&self.inner.moving),
         }
     }
 
@@ -747,7 +756,8 @@ impl VerbRegistry {
     }
 
     /// What a host grants every agent it gives the action tools, for
-    /// `SurfaceEngineBuilder::grant` (spec 3.3 §5.7, S-I12, S-I13).
+    /// `SurfaceEngineBuilder::grant` (spec 3.3 §5.7, S-I12, S-I13): only in Ask first and Go
+    /// ahead, as Just look and Suggest refuse every change an agent asks for.
     ///
     /// # Example
     ///
@@ -758,5 +768,6 @@ impl VerbRegistry {
     /// ```
     pub fn grant(&self) -> GrantedUse {
         GrantedUse::new(GRANT_ID, words::GRANTED)
+            .only_in([crate::model::Mode::AskFirst, crate::model::Mode::GoAhead])
     }
 }

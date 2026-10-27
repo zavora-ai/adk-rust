@@ -336,6 +336,17 @@ mod policy {
                 &snooze_origin,
                 "finance",
                 json!({ "item": DIGEST, "to": to(at + Span::hours(2)) }),
+                Decided::Deny(format!(
+                    "It can only move to {} or {}",
+                    time_text(at + Span::hours(1)),
+                    time_text(at + Span::days(1))
+                )),
+            ),
+            (
+                "a time it is already at",
+                &snooze_origin,
+                "finance",
+                json!({ "item": DIGEST, "to": to(at) }),
                 Decided::Deny("It moved since you saw this".into()),
             ),
         ];
@@ -590,16 +601,98 @@ mod snoozing {
             assert_eq!(refusal(&agenda, args(id)).await, expected, "{id}");
             assert_eq!(agenda.get(id).unwrap().state, agenda.get(id).unwrap().state);
         }
-        // A `to` that is not one of its two times: it moved since the request was made.
+        // A `to` that is not one of its two times, as an Edit can give it, names the two; one
+        // it is already as late as means it moved since the request was made.
         let mut moved = base.clone();
         moved.id = "moved".into();
         agenda.put(moved);
-        let stale = json!({ "item": "moved", "to": to(at + Span::minutes(90)) });
+        let edited = json!({ "item": "moved", "to": to(at + Span::minutes(90)) });
+        assert_eq!(
+            refusal(&agenda, edited).await,
+            format!(
+                "It can only move to {} or {}",
+                time_text(at + Span::hours(1)),
+                time_text(at + Span::days(1))
+            )
+        );
+        let stale = json!({ "item": "moved", "to": to(at - Span::hours(1)) });
         assert_eq!(refusal(&agenda, stale).await, "It moved since you saw this");
         assert_eq!(
             refusal(&agenda, json!({ "item": "moved" })).await,
             "snooze takes `item`, the id coming_up lists, and `to`, one of its two times"
         );
+    }
+
+    /// An agenda whose every other "has it started" check waits, briefly, for the next one:
+    /// two snoozes check the same wake together, as two surfaces can.
+    struct Racing {
+        inner: MemoryAgenda,
+        checks: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl adk_surface::verbs::AgendaAccess for Racing {
+        async fn items(
+            &self,
+            subject: &str,
+            area: Option<&PartitionId>,
+        ) -> Result<Vec<adk_kernel::AgendaItem>, VerbError> {
+            self.inner.items(subject, area).await
+        }
+
+        async fn item(&self, id: &str) -> Result<Option<adk_kernel::AgendaItem>, VerbError> {
+            self.inner.item(id).await
+        }
+
+        async fn started(&self, item: &adk_kernel::AgendaItem) -> Result<bool, VerbError> {
+            use std::sync::atomic::Ordering;
+            let check = self.checks.fetch_add(1, Ordering::SeqCst) + 1;
+            if check % 2 == 1 {
+                let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+                while self.checks.load(Ordering::SeqCst) <= check
+                    && tokio::time::Instant::now() < deadline
+                {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            }
+            self.inner.started(item).await
+        }
+
+        async fn reschedule(
+            &self,
+            id: &str,
+            wake: WakeSet,
+            by: &adk_core::principal::SubjectRef,
+        ) -> Result<adk_kernel::AgendaItem, VerbError> {
+            self.inner.reschedule(id, wake, by).await
+        }
+    }
+
+    /// Two snoozes of one item at once, "1 hour later" in the home and "Tomorrow, same time"
+    /// in the terminal: one moves it, the other is refused — never both passing their checks
+    /// against the same wake, so the later one cannot move the wake back (spec 3.3 §2 item 7).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_snoozes_at_once_move_the_item_once() {
+        let home =
+            home(Setup::new(Arc::new(ScriptedLlm::new("s", Vec::<ScriptedResponse>::new())))).await;
+        let agenda = MemoryAgenda::default();
+        let at = digest_at();
+        agenda.put(scheduled(DIGEST, "News digest", OWNER, "default", at));
+        let racing = Racing { inner: agenda.clone(), checks: Default::default() };
+        let registry = adk_surface::verbs::VerbRegistry::builder(APP, Arc::new(racing))
+            .utc_offset(offset())
+            .build()
+            .unwrap();
+        let gate = adk_surface::verbs::VerbGate::new(registry, home.engine.clone());
+        let (home_app, keyboard) = (web(), terminal());
+        let (hour, day) = tokio::join!(
+            gate.call(&home_app, snooze(DIGEST, at + Span::hours(1))),
+            gate.call(&keyboard, snooze(DIGEST, at + Span::days(1))),
+        );
+        let moved: Vec<_> = [&hour, &day].into_iter().filter(|done| done.is_ok()).collect();
+        assert_eq!(moved.len(), 1, "{hour:?} {day:?}");
+        let refused = [hour.as_ref().err(), day.as_ref().err()].into_iter().flatten().next();
+        assert_eq!(refused.unwrap().to_string(), "It moved since you saw this");
     }
 
     /// Spec 3.3 S-I8: an agent sees only its own area's items; another person's are not found.
@@ -935,9 +1028,22 @@ mod person {
         );
         assert_eq!(calls[0].actor.on_behalf_of.as_ref().unwrap().id, OWNER);
         assert_eq!(calls[0].ext["toolSource"], json!("verbs:adk-rust"));
-        // The same request again: it moved since.
+        // The same request again: it moved since; its record names the item by its title.
         let again = home.gate.call(&web(), snooze(DIGEST, to)).await.unwrap_err();
         assert_eq!(again.to_string(), "It moved since you saw this");
+        let refused = home.verb_records().pop().unwrap();
+        assert_eq!(refused.ext["outcome"], json!("refused"));
+        assert_eq!(refused.ext["title"], json!("News digest"));
+        // A time of the person's own choosing is not one of the two.
+        let edited = home.gate.call(&web(), snooze(DIGEST, to + Span::minutes(30))).await;
+        assert_eq!(
+            edited.unwrap_err().to_string(),
+            format!(
+                "It can only move to {} or {}",
+                time_text(to + Span::hours(1)),
+                time_text(to + Span::days(1))
+            )
+        );
     }
 
     /// Spec 3.3 §7.2, owner question 27: chat and the tray take no screen action.
@@ -1363,10 +1469,28 @@ mod chat_card {
         let text = sent.body["text"].as_str().unwrap();
         assert!(text.contains("\n<b>Snooze something in Coming up</b>\n"), "{text}");
         assert!(!text.contains("verb"), "{text}");
+        assert!(sent.body.pointer("/reply_markup/inline_keyboard").is_some(), "Allow once · Deny");
         // Without the hints, the tool's name in plain words, as before.
         adapter(false).send_decision("4218", &card).await.unwrap();
         let plain = api.last_card(&json!(4218)).unwrap();
         assert!(plain.body["text"].as_str().unwrap().contains("<b>Verb snooze</b>"));
+        // A hint that marks the call as spending money: chat offers no answer (§7.4 rule 4).
+        struct Money;
+        #[async_trait::async_trait]
+        impl adk_surface::CardHints for Money {
+            async fn hint(&self, _: &ApprovalRequest) -> Option<adk_surface::CardHint> {
+                Some(adk_surface::CardHint::new().spends_money())
+            }
+        }
+        let money = TelegramAdapter::builder(super::fake_telegram::TOKEN)
+            .api_base(api.url())
+            .approvals(home.service.clone())
+            .card_hints(Arc::new(Money))
+            .build()
+            .unwrap();
+        money.send_decision("4219", &card).await.unwrap();
+        let paid = api.last_card(&json!(4219)).unwrap();
+        assert!(paid.body.pointer("/reply_markup/inline_keyboard").is_none(), "{:?}", paid.body);
     }
 }
 
@@ -1498,6 +1622,93 @@ mod spoken {
             .filter(|record| record.ext["outcome"] == "done")
             .collect();
         assert_eq!(done.len(), 1, "the snooze that ran is recorded");
+    }
+
+    /// "Snooze … tomorrow" for an item that ends before then says when it ends, as `/snooze`
+    /// does; an ordinary sentence reads nothing of Coming up.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_spoken_snooze_says_why_not_and_other_words_read_no_agenda() {
+        use adk_kernel::{AgendaItem, AgendaOrigin};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Counted {
+            inner: adk_surface::verbs::KernelAgenda,
+            reads: Arc<AtomicUsize>,
+        }
+        #[async_trait::async_trait]
+        impl adk_surface::verbs::AgendaAccess for Counted {
+            async fn items(
+                &self,
+                subject: &str,
+                area: Option<&PartitionId>,
+            ) -> Result<Vec<AgendaItem>, VerbError> {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                self.inner.items(subject, area).await
+            }
+            async fn item(&self, id: &str) -> Result<Option<AgendaItem>, VerbError> {
+                self.inner.item(id).await
+            }
+            async fn started(&self, item: &AgendaItem) -> Result<bool, VerbError> {
+                self.inner.started(item).await
+            }
+            async fn reschedule(
+                &self,
+                id: &str,
+                wake: WakeSet,
+                by: &adk_core::principal::SubjectRef,
+            ) -> Result<AgendaItem, VerbError> {
+                self.inner.reschedule(id, wake, by).await
+            }
+        }
+        let home =
+            home(Setup::new(Arc::new(ScriptedLlm::new("s", Vec::<ScriptedResponse>::new())))).await;
+        let ends = home.at + Span::hours(3);
+        let mut walk = AgendaItem::new(
+            "walk",
+            adk_core::principal::SubjectRef::human(OWNER),
+            "Evening walk",
+            "why",
+            AgendaOrigin::User,
+            Utc::now(),
+        )
+        .with_partition(PartitionId::default())
+        .with_state(AgendaState::Approved);
+        walk.expires_at = Some(ends);
+        home.kernel.agenda().store().put(walk).await.unwrap();
+        home.move_to("walk", home.at).await;
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = Counted {
+            inner: adk_surface::verbs::KernelAgenda::of(&home.kernel),
+            reads: reads.clone(),
+        };
+        let registry = adk_surface::verbs::VerbRegistry::builder(APP, Arc::new(counted))
+            .utc_offset(offset())
+            .build()
+            .unwrap();
+        let hub = verbs_support::voice::hub_with(
+            &home,
+            vec![says("what's on today"), says("snooze evening walk tomorrow")],
+            registry,
+        )
+        .await;
+        let mut link = hub.open(&web(), "scripted", None).await.unwrap();
+        speak(&link).await;
+        until(
+            &mut link,
+            "the sentence",
+            |u| matches!(u, VoiceUpdate::Heard { text } if text == "what's on today"),
+        )
+        .await;
+        speak(&link).await;
+        let outcome =
+            until(&mut link, "the outcome", |u| matches!(u, VoiceUpdate::ActionOutcome { .. }))
+                .await;
+        let VoiceUpdate::ActionOutcome { text, done, .. } = outcome else { unreachable!() };
+        assert!(!done);
+        assert_eq!(
+            text,
+            format!("Can't snooze: It ends at {}, so it can't move past then", time_text(ends))
+        );
+        assert_eq!(reads.load(Ordering::SeqCst), 1, "only the snooze read Coming up");
     }
 
     /// "Cancel" in the window withdraws it; the model's own audio never takes an action.

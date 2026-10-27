@@ -1,10 +1,18 @@
 //! Screen actions on `adk-rust up` (spec 3.3 §2 item 7, §12 "One verb, three origins"): an
 //! agent a person added asks to snooze something in Coming up, its request waits through a
-//! `kill -9` and a restart on SQLite (`harness.db`), Allow once on the phone runs it once, and
-//! the terminal attached to the kernel snoozes in up's own process.
+//! `kill -9` and a restart on SQLite (`harness.db`) and on PostgreSQL (`--store`), Allow once on
+//! the phone runs it once, and the terminal attached to the kernel draws its card and snoozes
+//! in up's own process.
 //!
 //! ```sh
 //! cargo nextest run -p adk-cli --features verb-ui,scripted-model --test verbs_added_agent
+//! ```
+//!
+//! The PostgreSQL leg runs by hand (owner question 31):
+//!
+//! ```sh
+//! DATABASE_URL=postgres://… cargo nextest run -p adk-cli \
+//!   --features verb-ui,scripted-model,postgres --test verbs_added_agent --run-ignored only
 //! ```
 
 #![cfg(all(unix, feature = "scripted-model", feature = "persist", feature = "verb-ui"))]
@@ -46,15 +54,17 @@ struct Place {
     ws: tempfile::TempDir,
     kernel: PathBuf,
     port: u16,
+    /// `--store`: every store in one shared backend; `None` keeps them in `harness.db`.
+    store: Option<String>,
 }
 
 impl Place {
-    fn new() -> Self {
+    fn new(store: Option<String>) -> Self {
         let home = tempfile::tempdir().unwrap();
         let ws = tempfile::tempdir().unwrap();
         let kernel = home.path().join("kernel");
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        Self { home, ws, kernel, port }
+        Self { home, ws, kernel, port, store }
     }
 
     /// `adk-rust up` in Ask first with `script`; returns once it listens.
@@ -73,6 +83,9 @@ impl Place {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        if let Some(store) = &self.store {
+            command.args(["--store", store]);
+        }
         common::isolate(&mut command, self.home.path());
         command.env_remove("TELEGRAM_BOT_TOKEN");
         let mut child = command.spawn().expect("adk-rust starts");
@@ -174,7 +187,45 @@ where
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_added_agents_snooze_waits_through_a_restart_and_runs_once() {
-    let place = Place::new();
+    snooze_on(None).await;
+}
+
+/// The scenario with every store on PostgreSQL, in a database of its own (spec 3.3 §12).
+#[cfg(feature = "postgres")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs DATABASE_URL, a PostgreSQL server; run by hand"]
+async fn an_added_agents_snooze_waits_through_a_restart_on_postgres() {
+    let server = std::env::var("DATABASE_URL").expect("DATABASE_URL names a PostgreSQL server");
+    let admin = sqlx::PgPool::connect(&server).await.unwrap();
+    let nanos =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    // A name of digits and underscores only, so it needs no quoting.
+    let database = format!("verbs_added_agent_{nanos}");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
+        .execute(&admin)
+        .await
+        .unwrap();
+    snooze_on(Some(with_database(&server, &database))).await;
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP DATABASE IF EXISTS {database} WITH (FORCE)")))
+        .execute(&admin)
+        .await
+        .unwrap();
+}
+
+/// `server` with its database path replaced by `database`, its query kept.
+#[cfg(feature = "postgres")]
+fn with_database(server: &str, database: &str) -> String {
+    let (base, query) = server.split_once('?').unwrap_or((server, ""));
+    let host = base.find("://").map_or(0, |at| at + 3);
+    let root = base[host..].find('/').map_or(base, |at| &base[..host + at]);
+    match query {
+        "" => format!("{root}/{database}"),
+        query => format!("{root}/{database}?{query}"),
+    }
+}
+
+async fn snooze_on(store: Option<String>) {
+    let place = Place::new(store);
     let api = place.api();
     let at = (Utc::now() + chrono::Duration::hours(8))
         .with_minute(0)
@@ -233,7 +284,11 @@ async fn an_added_agents_snooze_waits_through_a_restart_and_runs_once() {
     let finance = api.get("/api/surface/agents/finance?surface=web").await;
     assert_eq!(
         finance["granted"],
-        json!([{ "id": "verb-ui", "text": "Ask to change things on your screens — always asks you first" }])
+        json!([{
+            "id": "verb-ui",
+            "text": "Ask to change things on your screens — always asks you first",
+            "modes": ["askFirst", "goAhead"],
+        }])
     );
     first.kill();
 

@@ -491,8 +491,7 @@ impl TerminalSurface {
         let engine = &self.engine;
         let caller = &self.caller;
         let mut app = app::App::new(engine.source().app_name(), session.clone());
-        app.agents_pane.granted =
-            engine.granted().iter().map(|granted| granted.text.clone()).collect();
+        app.agents_pane.granted = engine.granted().to_vec();
         app.model = self.model.clone();
         app.place = self.place.clone();
         app.commands = self.commands.clone();

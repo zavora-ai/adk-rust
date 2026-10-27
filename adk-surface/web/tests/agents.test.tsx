@@ -163,6 +163,14 @@ describe("an agent's settings", () => {
       "Show forms and tables in your threads — sending asks you first",
       "Ask to change things on your screens — always asks you first",
     ]);
+    // In Suggest the agent can ask for no change: that use is not listed.
+    const mode = screen.getByRole("radiogroup", { name: "How much it asks first" });
+    await userEvent.click(within(mode).getByRole("radio", { name: "Suggest" }));
+    await waitFor(() =>
+      expect(within(granted).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+        "Show forms and tables in your threads — sending asks you first",
+      ]),
+    );
   });
 
   it("shows no granted block where the home grants nothing", async () => {

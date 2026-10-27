@@ -504,8 +504,7 @@ fn start(
     session: String,
 ) -> (App, Pump, mpsc::UnboundedSender<Update>, mpsc::UnboundedReceiver<Update>) {
     let mut app = App::new(surface.engine.source().app_name(), session.clone());
-    app.agents_pane.granted =
-        surface.engine.granted().iter().map(|granted| granted.text.clone()).collect();
+    app.agents_pane.granted = surface.engine.granted().to_vec();
     app.model = surface.model.clone();
     app.place = surface.place.clone();
     app.commands = surface.commands.clone();

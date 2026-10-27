@@ -219,7 +219,20 @@ impl VerbScope {
             return Err(VerbError::refused(words::NOT_ONE_TIME));
         };
         if to != at + Duration::hours(1) && to != at + Duration::days(1) {
-            return Err(VerbError::refused(words::IT_MOVED));
+            // Already as late as asked: someone moved it since. Any other time is not one of
+            // its two, as an Edit can give it.
+            if to <= at {
+                return Err(VerbError::refused(words::IT_MOVED));
+            }
+            let times: Vec<String> = self
+                .choices(at, item.expires_at)
+                .into_iter()
+                .map(|choice| choice.at_text)
+                .collect();
+            return Err(VerbError::refused(match (times.is_empty(), item.expires_at) {
+                (true, Some(ends)) => words::ends_at(&self.time_text(ends)),
+                _ => words::only_moves_to(&times),
+            }));
         }
         if let Some(ends) = item.expires_at.filter(|ends| to > *ends) {
             return Err(VerbError::refused(words::ends_at(&self.time_text(ends))));

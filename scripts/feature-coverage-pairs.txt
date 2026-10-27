@@ -178,10 +178,12 @@
 # setup code, the API contract with its generated types, and the doctests.
 2 adk-surface website doc
 # Screen actions (spec 3.3 §2 item 7): the registry, the policy, the gate and snooze; with
-# `web`, the routes, the API contract and the scenario; with `tui`, `/snooze`; with `voice`,
-# a spoken snooze; and `adk-rust up` hosting them on SQLite with a scripted model.
+# every surface, the routes, the API contract, `/snooze`, a spoken snooze, the Telegram card
+# and the "One verb, three origins" scenario, whose tests need `web`, `tui` and `voice`
+# together; the terminal and voice parts alone; and `adk-rust up` hosting them on SQLite with a
+# scripted model.
 2 adk-surface verb-ui doc
-2 adk-surface web,verb-ui
+2 adk-surface web,tui,voice,channels,verb-ui
 2 adk-surface tui,verb-ui
 2 adk-surface voice,verb-ui
 2 adk-cli verb-ui,scripted-model

@@ -75,6 +75,15 @@ pub fn cant_snooze(why: &str) -> String {
     format!("Can't snooze: {why}")
 }
 
+/// "It can only move to 19:00 or Tue 18:00": refused, a time that is neither of an item's two.
+pub fn only_moves_to(times: &[String]) -> String {
+    match times {
+        [one] => format!("It can only move to {one}"),
+        [first, second] => format!("It can only move to {first} or {second}"),
+        _ => format!("It can only move to {}", times.join(", ")),
+    }
+}
+
 /// "It ends at 18:30, so it can't move past then".
 pub fn ends_at(when: &str) -> String {
     format!("It ends at {when}, so it can't move past then")

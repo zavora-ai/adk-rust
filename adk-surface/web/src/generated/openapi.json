@@ -3550,6 +3550,13 @@
             "description": "The feature that grants it, such as `genui`: one line per id. Never shown.",
             "type": "string"
           },
+          "modes": {
+            "description": "The modes in which an agent can use it; empty for every mode. A surface lists it for an\nagent only in one of them, so what an agent's settings say it can do is true (S-I13).",
+            "items": {
+              "$ref": "#/components/schemas/Mode"
+            },
+            "type": "array"
+          },
           "text": {
             "description": "What it can do, in plain words: \"Ask to change things on your screens — always asks\nyou first\".",
             "type": "string"

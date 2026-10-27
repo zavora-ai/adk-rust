@@ -310,6 +310,7 @@ export function AgentSettings({
                   problem={previewProblem}
                   pending={pending}
                   granted={detail.granted ?? []}
+                  mode={draft.mode}
                 />
                 {preview && <WasNow preview={preview} />}
                 <div className="agent-foot">

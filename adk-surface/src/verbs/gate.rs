@@ -256,6 +256,11 @@ impl VerbGate {
                 fields.insert("code".into(), json!(error.code()));
                 if let Some(item) = args.get("item").and_then(Value::as_str) {
                     fields.insert("target".into(), json!(format!("agenda:{item}")));
+                    // The item's title, so the record names it as the person knows it (§8).
+                    let scope = self.registry.scope(caller.user_id(), None);
+                    if let Ok(found) = scope.item(item).await {
+                        fields.insert("title".into(), json!(found.title));
+                    }
                 }
             }
         }

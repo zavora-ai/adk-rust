@@ -451,12 +451,40 @@ pub struct GrantedUse {
     /// What it can do, in plain words: "Ask to change things on your screens — always asks
     /// you first".
     pub text: String,
+    /// The modes in which an agent can use it; empty for every mode. A surface lists it for an
+    /// agent only in one of them, so what an agent's settings say it can do is true (S-I13).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modes: Vec<Mode>,
 }
 
 impl GrantedUse {
-    /// The use `text`, granted by the feature `id`.
+    /// The use `text`, granted by the feature `id`, in every mode.
     pub fn new(id: impl Into<String>, text: impl Into<String>) -> Self {
-        Self { id: id.into(), text: text.into() }
+        Self { id: id.into(), text: text.into(), modes: Vec::new() }
+    }
+
+    /// Granted only to an agent in one of `modes`: one that asks, for a use that asks the
+    /// person, as the modes that only look or suggest refuse every such call (spec 3.3 §5.7).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_surface::{GrantedUse, Mode};
+    ///
+    /// let asks = GrantedUse::new("verb-ui", "Ask to change things on your screens")
+    ///     .only_in([Mode::AskFirst, Mode::GoAhead]);
+    /// assert!(asks.holds_in(Mode::GoAhead));
+    /// assert!(!asks.holds_in(Mode::Suggest));
+    /// ```
+    #[must_use]
+    pub fn only_in(mut self, modes: impl IntoIterator<Item = Mode>) -> Self {
+        self.modes = modes.into_iter().collect();
+        self
+    }
+
+    /// Whether an agent in `mode` can use it.
+    pub fn holds_in(&self, mode: Mode) -> bool {
+        self.modes.is_empty() || self.modes.contains(&mode)
     }
 }
 

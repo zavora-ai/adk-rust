@@ -333,8 +333,13 @@ impl TelegramAdapterBuilder {
 
     /// Heads a card with the chat heading a feature's [`CardHints`](crate::CardHints) give its
     /// decision — "Snooze something in Coming up" — in the order added, as the engine heads a
-    /// chat card (spec 3.3 §7.1). Needs [`approvals`](Self::approvals): a hint reads the
-    /// decision. Give the hints the engine was built with.
+    /// chat card (spec 3.3 §7.1), and offers no answer on a card a hint marks as spending money
+    /// (§7.4 rule 4). Needs [`approvals`](Self::approvals): a hint reads the decision. Give the
+    /// hints the engine was built with.
+    ///
+    /// The kernel's chat gateway decides from the inbox entry alone: a feature whose hint marks
+    /// money also rates the call high when it is held, through its approval router, so a chat
+    /// answer is refused there too (owner question 30).
     ///
     /// # Example
     ///
@@ -836,16 +841,23 @@ impl ChannelSink for TelegramAdapter {
             None => None,
         };
         let mut heading = wire::heading(card, request.as_ref());
-        // A feature's chat heading, as the engine heads a chat card (spec 3.3 §7.1).
+        let mut card = card.clone();
+        // A feature's chat heading, as the engine heads a chat card (spec 3.3 §7.1); a call
+        // a hint marks as spending money is never answered in chat (§7.4 rule 4).
         if let Some(request) = request.as_ref().filter(|request| request.id == card.decision) {
+            let mut headed = false;
             for hints in &self.inner.card_hints {
-                if let Some(chat) = hints.hint(request).await.and_then(|hint| hint.chat_heading) {
+                let Some(hint) = hints.hint(request).await else { continue };
+                if let Some(chat) = hint.chat_heading.filter(|_| !headed) {
                     heading.title = chat;
-                    break;
+                    headed = true;
+                }
+                if hint.money == Some(true) && !card.adds_agent {
+                    card.answers.clear();
                 }
             }
         }
-        self.send(thread, wire::card(card, &heading, self.inner.offset), None).await
+        self.send(thread, wire::card(&card, &heading, self.inner.offset), None).await
     }
 
     async fn send_stopped(&self, thread: &str, notice: &StopNotice) -> adk_kernel::Result<()> {

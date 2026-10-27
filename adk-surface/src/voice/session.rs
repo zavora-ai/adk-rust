@@ -723,6 +723,10 @@ impl State {
         let Some(gate) = self.verbs.clone() else {
             return;
         };
+        // An ordinary sentence reads no agenda, inside the conversation's loop.
+        if !crate::verbs::spoken::may_be_action(transcript) {
+            return;
+        }
         let Ok(items) = gate.coming_up(&self.speaker).await else {
             return;
         };
@@ -749,7 +753,13 @@ impl State {
         };
         let choice = found.choices.iter().find(|choice| choice.tomorrow == tomorrow);
         let Some(choice) = choice.filter(|_| found.why_not.is_none()) else {
-            let why = found.why_not.clone().unwrap_or_else(|| verb_words::NOT_ONE_TIME.to_string());
+            // The choice is gone when the item ends before it, as `/snooze` says.
+            let why = found.why_not.clone().unwrap_or_else(|| match found.ends {
+                Some(ends) => verb_words::ends_at(
+                    &gate.registry().scope(self.speaker.user_id(), None).time_text(ends),
+                ),
+                None => verb_words::NOT_ONE_TIME.to_string(),
+            });
             let text = verb_words::cant_snooze(&why);
             self.send(VoiceUpdate::ActionOutcome {
                 action_id: None,
