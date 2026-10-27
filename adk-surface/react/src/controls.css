@@ -1,0 +1,103 @@
+/*
+ * The web home's control classes the renderer draws with (from `web/src/styles/app.css`), so
+ * the package's styles stand on their own over the §9 tokens.
+ */
+.avatar {
+  --agent: #475569;
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--agent) 13%, var(--card));
+  color: var(--agent);
+  font-weight: 700;
+  font-family: var(--font);
+}
+
+:root[data-theme="dark"] .avatar {
+  background: color-mix(in srgb, var(--agent) 26%, var(--card));
+  color: color-mix(in srgb, var(--agent) 45%, #ffffff);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .avatar {
+    background: color-mix(in srgb, var(--agent) 26%, var(--card));
+    color: color-mix(in srgb, var(--agent) 45%, #ffffff);
+  }
+}
+
+.avatar-sm {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  font-size: 13px;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 17px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.button-primary {
+  background: var(--button);
+  color: var(--on-button);
+  font-weight: 700;
+}
+
+.button-secondary {
+  border-color: var(--border);
+  background: var(--card);
+  color: var(--text);
+}
+
+.icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-feature-settings: normal;
+}
+
+.muted {
+  color: var(--label);
+}
+
+.card-label {
+  margin-top: 4px;
+  color: var(--text-2);
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

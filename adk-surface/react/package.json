@@ -1,0 +1,36 @@
+{
+  "name": "@zavora-ai/adk-surface-react",
+  "version": "3.0.0",
+  "description": "The renderer of agent-drawn UI and apps from MCP servers of adk-surface's web home (spec 3.3 §6.1 genui): A2UI v0.9.1 drawings with no approval controls, and MCP Apps framed sandboxed",
+  "license": "Apache-2.0",
+  "author": "Zavora Technologies Ltd",
+  "homepage": "https://github.com/zavora-ai/adk-rust/tree/main/adk-surface/react",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zavora-ai/adk-rust.git",
+    "directory": "adk-surface/react"
+  },
+  "keywords": ["a2ui", "mcp-apps", "agents", "generative-ui", "react", "adk-rust"],
+  "type": "module",
+  "sideEffects": ["*.css"],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/types/react/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/react/src/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./style.css": "./dist/style.css",
+    "./tokens.css": "./dist/tokens.css"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "node ../web/node_modules/vite/bin/vite.js build && node ../web/node_modules/typescript/bin/tsc -p tsconfig.json && cp ../web/src/styles/tokens.css dist/tokens.css",
+    "prepack": "npm run build && cp ../../LICENSE LICENSE"
+  },
+  "peerDependencies": {
+    "react": ">=18.3 <20",
+    "react-dom": ">=18.3 <20"
+  }
+}

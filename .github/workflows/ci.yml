@@ -109,6 +109,12 @@ jobs:
         npm ci
         npm run verify
 
+    - name: Pack the React package
+      # @zavora-ai/adk-surface-react (spec 3.3 decision 11) builds from the web home's renderer
+      # with the web home's toolchain; it is published at release.
+      working-directory: adk-surface/react
+      run: npm pack --dry-run
+
     - name: Require generated assets to match source
       # `git status` also lists a rebuilt file that was never committed, which `git diff` skips.
       run: |
