@@ -181,12 +181,12 @@
 # every surface, the routes, the API contract, `/snooze`, a spoken snooze, the Telegram card
 # and the "One verb, three origins" scenario, whose tests need `web`, `tui` and `voice`
 # together; the terminal and voice parts alone; and `adk-rust up` hosting them on SQLite with a
-# scripted model.
+# scripted model, where text, click and voice leave signed records that differ only in how.
 2 adk-surface verb-ui doc
 2 adk-surface web,tui,voice,channels,verb-ui
 2 adk-surface tui,verb-ui
 2 adk-surface voice,verb-ui
-2 adk-cli verb-ui,scripted-model
+2 adk-cli verb-ui,voice,scripted-model,audit-sql
 # The workflow observer (spec 3.3 §12): runs, steps and forks of graph agents, card hints for
 # governed nodes, the fork command, and with `web` the Runs tab's routes, its API contract and
 # the "Approve, rewind, fork" scenario.

@@ -8,11 +8,22 @@
 //! cargo nextest run -p adk-cli --features verb-ui,scripted-model --test verbs_added_agent
 //! ```
 //!
-//! The PostgreSQL leg runs by hand (owner question 31):
+//! The PostgreSQL leg runs by hand (owner question 31) and in `scripts/test-postgres.sh`:
 //!
 //! ```sh
 //! DATABASE_URL=postgres://… cargo nextest run -p adk-cli \
 //!   --features verb-ui,scripted-model,postgres --test verbs_added_agent --run-ignored only
+//! ```
+//!
+//! With `voice`, "One verb, three origins" runs on `up` too (spec 3.3 §12, Experimental): the
+//! person snoozes News digest by typing `/snooze` in the terminal, by clicking in the home and
+//! by voice, and the kernel's record of the three, kept on SQLite (and on PostgreSQL), differs
+//! only in where and how each was given; with `audit-sql` the comparison is of the signed
+//! records `adk-rust audit export` reads back.
+//!
+//! ```sh
+//! cargo nextest run -p adk-cli --features verb-ui,voice,scripted-model,audit-sql \
+//!   --test verbs_added_agent -E 'test(/three_origins/)'
 //! ```
 
 #![cfg(all(unix, feature = "scripted-model", feature = "persist", feature = "verb-ui"))]
@@ -69,6 +80,11 @@ impl Place {
 
     /// `adk-rust up` in Ask first with `script`; returns once it listens.
     fn up(&self, script: &str) -> Up {
+        self.up_with(script, &[])
+    }
+
+    /// [`up`](Self::up) with `extra` flags.
+    fn up_with(&self, script: &str, extra: &[&str]) -> Up {
         let (kernel, dir, bind) = (
             self.kernel.display().to_string(),
             self.ws.path().display().to_string(),
@@ -79,6 +95,7 @@ impl Place {
             .args(["up", "--home", &kernel, "--bind", &bind, "--dir", &dir])
             .args(["--model-script", script, "--mode", "ask"])
             .args(["--no-memory", "--no-consolidation"])
+            .args(extra)
             .current_dir(self.ws.path())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -385,4 +402,304 @@ async fn snooze_on(store: Option<String>) {
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert_eq!(lines[0]["surface"], "terminal", "newest first");
     assert_eq!(lines[0]["how"], "keyboard");
+}
+
+/// "One verb, three origins" on `adk-rust up` over SQLite (spec 3.3 §12, Experimental).
+#[cfg(feature = "voice")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_verb_three_origins_on_up() {
+    three_origins::on(None).await;
+}
+
+/// The same on PostgreSQL, in a database of its own.
+#[cfg(all(feature = "voice", feature = "postgres"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs DATABASE_URL, a PostgreSQL server; run by hand"]
+async fn one_verb_three_origins_on_up_on_postgres() {
+    let server = std::env::var("DATABASE_URL").expect("DATABASE_URL names a PostgreSQL server");
+    let admin = sqlx::PgPool::connect(&server).await.unwrap();
+    let nanos =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let database = format!("three_origins_{nanos}");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
+        .execute(&admin)
+        .await
+        .unwrap();
+    three_origins::on(Some(with_database(&server, &database))).await;
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP DATABASE IF EXISTS {database} WITH (FORCE)")))
+        .execute(&admin)
+        .await
+        .unwrap();
+}
+
+#[cfg(feature = "voice")]
+mod three_origins {
+    use std::time::Duration;
+
+    use adk_realtime::ServerEvent;
+    use adk_realtime::scripted::{self, ScriptedReply};
+    use chrono::{DateTime, Timelike, Utc};
+    use futures::{SinkExt, StreamExt};
+    use serde_json::{Value, json};
+    use tokio_tungstenite::tungstenite::Message;
+
+    use super::{Api, Place, eventually};
+
+    type Socket = tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >;
+
+    /// What the person says: an action, not a decision.
+    const SAID: &str = "Snooze news digest";
+
+    /// The next update on `socket` whose `type` is `kind`.
+    async fn update(socket: &mut Socket, kind: &str) -> Value {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let message = tokio::time::timeout_at(deadline, socket.next())
+                .await
+                .unwrap_or_else(|_| panic!("timed out waiting for {kind}"))
+                .unwrap_or_else(|| panic!("the socket ended before {kind}"))
+                .unwrap();
+            if let Message::Text(text) = message {
+                let update: Value = serde_json::from_str(text.as_str()).unwrap();
+                if update["type"] == kind {
+                    return update;
+                }
+            }
+        }
+    }
+
+    /// Moves `id` back to `at`, as the person would before giving the same request again.
+    async fn move_back(api: &Api, id: &str, at: DateTime<Utc>) {
+        let (status, body) = api
+            .post(
+                &format!("/api/kernel/agenda/{id}/schedule"),
+                json!({ "wake": { "anyOf": [{ "at": at.to_rfc3339() }] } }),
+            )
+            .await;
+        assert_eq!(status, 200, "{body}");
+        eventually("News digest back in place", || async {
+            (api.wake_of("News digest").await == Some(at)).then_some(())
+        })
+        .await;
+    }
+
+    pub(super) async fn on(store: Option<String>) {
+        let place = Place::new(store);
+        let api = place.api();
+        let at = (Utc::now() + chrono::Duration::hours(8))
+            .with_minute(0)
+            .and_then(|at| at.with_second(0))
+            .and_then(|at| at.with_nanosecond(0))
+            .unwrap();
+        let to = at + chrono::Duration::hours(1);
+        let voice = json!([ScriptedReply::new(vec![
+            ServerEvent::SpeechStarted { event_id: "speech".into(), audio_start_ms: 0 },
+            scripted::input_transcript(SAID),
+        ])
+        .on_audio()]);
+        let voice_script = place.ws.path().join("voice-script.json");
+        std::fs::write(&voice_script, voice.to_string()).unwrap();
+        let voice_script = voice_script.display().to_string();
+        let _up = place.up_with(
+            &json!([
+                { "call": { "name": "propose_followup", "args": {
+                    "title": "News digest",
+                    "rationale": "The evening edition lands at 18:30",
+                    "when": { "at": at.to_rfc3339() }
+                } } },
+                { "text": "It waits for you." },
+                { "text": "Done." }
+            ])
+            .to_string(),
+            &["--pack", "voice", "--voice-script", &voice_script],
+        );
+
+        // News digest in Coming up, at a whole hour eight hours from now.
+        api.command_from(
+            "web",
+            "pointer",
+            json!({ "type": "send", "sessionId": "ask-1", "text": "Set up my evening." }),
+        )
+        .await;
+        let card =
+            eventually("the suggestion", || async { api.decisions().await.into_iter().next() })
+                .await;
+        api.command_from(
+            "web",
+            "pointer",
+            json!({ "type": "decide", "decisionId": card["id"], "version": card["version"], "answer": "allowOnce", "expanded": true }),
+        )
+        .await;
+        eventually("News digest scheduled", || async {
+            (api.wake_of("News digest").await == Some(at)).then_some(())
+        })
+        .await;
+        let item =
+            api.agenda("scheduled").await.into_iter().find(|item| item["title"] == "News digest");
+        let id = item.unwrap()["id"].as_str().unwrap().to_string();
+
+        // 1. Text: `/snooze News digest` in the terminal attached to the kernel.
+        let (status, ran) = api
+            .post(
+                "/api/kernel/commands/run",
+                json!({ "name": "snooze", "args": "News digest", "sessionId": "terminal" }),
+            )
+            .await;
+        assert_eq!(status, 200, "{ran}");
+        eventually("the typed snooze", || async {
+            (api.wake_of("News digest").await == Some(to)).then_some(())
+        })
+        .await;
+        move_back(&api, &id, at).await;
+
+        // 2. Click: Snooze → "1 hour later" in the home, which sends the time in this
+        // computer's zone, as `up` shows it.
+        let (status, done) = api
+            .post(
+                "/api/surface/verbs/call",
+                json!({
+                    "origin": { "kind": "pointer" },
+                    "intent": {
+                        "verb": "snooze",
+                        "objects": [{ "kind": "comingUp", "id": id }],
+                        "args": { "to": to.with_timezone(&chrono::Local).to_rfc3339() },
+                    },
+                }),
+            )
+            .await;
+        assert_eq!(status, 200, "{done}");
+        eventually("the clicked snooze", || async {
+            (api.wake_of("News digest").await == Some(to)).then_some(())
+        })
+        .await;
+        move_back(&api, &id, at).await;
+
+        // 3. Voice: "Snooze news digest", after the cancel window.
+        let ticket =
+            api.post("/api/surface/voice/sessions", json!({ "model": "scripted" })).await.1;
+        let path = ticket["socket"].as_str().expect("a socket path");
+        let (mut socket, _) =
+            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}{path}", place.port))
+                .await
+                .unwrap();
+        let hello = json!({ "type": "hello", "ticket": ticket["ticket"] }).to_string();
+        socket.send(Message::Text(hello.into())).await.unwrap();
+        update(&mut socket, "ready").await;
+        let mut frame = vec![0x01];
+        frame.extend_from_slice(&[0; 640]);
+        socket.send(Message::Binary(frame.into())).await.unwrap();
+        let pending = update(&mut socket, "pendingAction").await;
+        assert!(
+            pending["heading"].as_str().unwrap_or_default().contains("News digest"),
+            "{pending}"
+        );
+        let outcome = update(&mut socket, "actionOutcome").await;
+        assert_eq!(outcome["done"], true, "{outcome}");
+        assert_eq!(api.wake_of("News digest").await, Some(to));
+        socket.close(None).await.unwrap();
+
+        // The record of the three differs only in where and how each was given.
+        let lines = api.verb_lines().await;
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        let hows: Vec<(Value, Value)> =
+            lines.iter().rev().map(|line| (line["surface"].clone(), line["how"].clone())).collect();
+        assert_eq!(
+            hows,
+            [
+                (json!("terminal"), json!("keyboard")),
+                (json!("web"), json!("pointer")),
+                (json!("voice"), json!("voice")),
+            ]
+        );
+        let same = |line: &Value| {
+            let mut line = line.clone();
+            for key in ["seq", "at", "surface", "how", "channel"] {
+                line.as_object_mut().unwrap().remove(key);
+            }
+            line
+        };
+        assert_eq!(same(&lines[0]), same(&lines[1]), "{lines:?}");
+        assert_eq!(same(&lines[1]), same(&lines[2]), "{lines:?}");
+        assert_eq!(lines[0]["tool"], "snooze");
+        #[cfg(feature = "audit-sql")]
+        signed_records_differ_only_in_how(&place).await;
+    }
+
+    /// The signed `surface.verb` and `verb_snooze` records, exported as `adk-rust audit export`
+    /// writes them: equal but for where and how; the voice record carries the transcript's
+    /// digest and never the words.
+    #[cfg(feature = "audit-sql")]
+    async fn signed_records_differ_only_in_how(place: &Place) {
+        use sha2::{Digest, Sha256};
+
+        let id = std::fs::read_to_string(place.kernel.join("kernel-id")).unwrap();
+        let database = match &place.store {
+            Some(store) => store.clone(),
+            None => format!("sqlite://{}", place.kernel.join("harness.db").display()),
+        };
+        let out = place.home.path().join("record.jsonl");
+        let log = format!("kernel-{}", id.trim());
+        let export = super::common::run(
+            &[
+                "audit",
+                "export",
+                "--database-url",
+                &database,
+                "--log-id",
+                &log,
+                "--out",
+                &out.display().to_string(),
+            ],
+            place.home.path(),
+            place.ws.path(),
+        );
+        assert!(export.status.success(), "{}", super::common::text(&export));
+        let exported = std::fs::read_to_string(&out).unwrap();
+        let records: Vec<Value> = exported
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|line| line["type"] == "entry")
+            .filter_map(|entry| serde_json::from_str(entry["record"].as_str()?).ok())
+            .collect();
+        let without = |record: &Value, keys: &[&str], actor_keys: &[&str]| {
+            let mut record = record.clone();
+            for key in ["seq", "ts", "prevHash"] {
+                record.as_object_mut().unwrap().remove(key);
+            }
+            if let Some(ext) = record["ext"].as_object_mut() {
+                for key in keys {
+                    ext.remove(*key);
+                }
+            }
+            if let Some(actor) = record["actor"].as_object_mut() {
+                for key in actor_keys {
+                    actor.remove(*key);
+                }
+            }
+            record
+        };
+        let verbs: Vec<&Value> =
+            records.iter().filter(|record| record["action"] == "surface.verb").collect();
+        assert_eq!(verbs.len(), 3, "{verbs:?}");
+        let digest = format!("{:x}", Sha256::digest(SAID.as_bytes()));
+        assert_eq!(verbs[2]["ext"]["transcriptDigest"], json!(digest), "{:?}", verbs[2]);
+        assert!(!exported.to_lowercase().contains(&SAID.to_lowercase()), "never the words");
+        let how = ["surface", "origin", "device", "presence", "transcriptDigest", "functionCallId"];
+        let same: Vec<Value> = verbs.iter().map(|record| without(record, &how, &[])).collect();
+        assert_eq!(same[0], same[1], "{verbs:?}");
+        assert_eq!(same[1], same[2], "{verbs:?}");
+        let calls: Vec<Value> = records
+            .iter()
+            .filter(|record| {
+                record["ext"]["tool"] == "verb_snooze" || record["action"] == "verb_snooze"
+            })
+            .map(|record| without(record, &["functionCallId", "functionCall"], &["invocationId"]))
+            .collect();
+        assert_eq!(calls.len(), 3, "{calls:?}");
+        assert_eq!(calls[0], calls[1], "{calls:?}");
+        assert_eq!(calls[1], calls[2], "{calls:?}");
+        assert_eq!(calls[0]["actor"]["agent"], "urn:adk:agent:adk-rust/surface.verbs", "{calls:?}");
+    }
 }
