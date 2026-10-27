@@ -773,6 +773,18 @@ async fn a_suggestion_approved_in_the_home_is_added_as_the_home() {
     let added = world.kernel.agents().get("finance").await.unwrap().unwrap().agent;
     assert_eq!(added.state, adk_kernel::agents::AgentRecordState::Active);
     assert_eq!(added.changed_on.as_deref(), Some("web"));
+    // The web home reaches the engine over HTTP, and the record says so (spec 3.3 S-I18).
+    // Fails on `origin/main`, whose record of a web home's change has no transport.
+    let created = world
+        .audit
+        .records()
+        .into_iter()
+        .find(|record| record.action == adk_kernel::audit::AGENT_CREATED)
+        .unwrap();
+    assert_eq!(
+        (&created.ext["surface"], &created.ext["how"], &created.ext["transport"]),
+        (&json!("web"), &json!("pointer"), &json!("http"))
+    );
 }
 
 fn suggestion(instructions: &str) -> ApprovalRequest {

@@ -173,6 +173,8 @@ pub struct Launcher {
     session_id: Option<String>,
     console_commands: Vec<Arc<dyn ConsoleCommand>>,
     approval_service: Option<Arc<dyn ApprovalService>>,
+    /// The check of every decision on the approval inbox (spec 3.3 §7.2).
+    approval_guard: Option<Arc<dyn adk_server::approvals::DecideGuard>>,
     background_runs: Option<BackgroundState>,
     /// Routes mounted under `/api` behind the auth middleware, such as a served harness's
     /// standing-rule routes.
@@ -230,6 +232,7 @@ impl Launcher {
             session_id: None,
             console_commands: Vec::new(),
             approval_service: None,
+            approval_guard: None,
             background_runs: None,
             api_routes: Vec::new(),
             root_routes: Vec::new(),
@@ -508,6 +511,19 @@ impl Launcher {
     /// ```
     pub fn with_approval_service(mut self, service: Arc<dyn ApprovalService>) -> Self {
         self.approval_service = Some(service);
+        self
+    }
+
+    /// Checks every decision on the approval inbox with `guard` before the service records
+    /// it (spec 3.3 §7.2), as a kernel's
+    /// [`decide_guard`](adk_kernel::control::decide_guard) does for the surface each caller
+    /// is. Serve mode mounts the inbox through `ServerBuilder::with_approval_endpoints`.
+    #[cfg(feature = "harness")]
+    pub(crate) fn with_approval_guard(
+        mut self,
+        guard: Arc<dyn adk_server::approvals::DecideGuard>,
+    ) -> Self {
+        self.approval_guard = Some(guard);
         self
     }
 
@@ -890,6 +906,7 @@ impl Launcher {
         let span_exporter = self.init_telemetry();
         let a2a_base_url = self.a2a_base_url.clone();
         let approval_service = self.approval_service.clone();
+        let approval_guard = self.approval_guard.clone();
         let background_runs = self.background_runs.clone();
         let api_routes = self.api_routes.clone();
         #[cfg(all(feature = "surface", feature = "harness"))]
@@ -949,7 +966,12 @@ impl Launcher {
                     APPROVAL_TICK_INTERVAL,
                 );
             }
-            builder = builder.with_approval_service(service);
+            builder = match approval_guard {
+                Some(guard) => builder.with_approval_endpoints(
+                    adk_server::approvals::ApprovalEndpoints::new(service).with_decide_guard(guard),
+                ),
+                None => builder.with_approval_service(service),
+            };
         }
         if let Some(state) = background_runs {
             builder = builder.with_background_runs(state);

@@ -188,8 +188,8 @@ fn dollars(micro_usd: u64) -> String {
 }
 
 /// Why a suggested `definition` exceeds its suggester (spec 3.3 S-I12): what is over the
-/// suggester's `ceiling`, and what a suggestion never carries — a shell on this computer,
-/// payments or computer use. Empty when it fits.
+/// suggester's `ceiling` — its mode, uses and daily spending limit — and what a suggestion
+/// never carries — a shell on this computer, payments or computer use. Empty when it fits.
 ///
 /// # Example
 ///
@@ -200,6 +200,10 @@ fn dollars(micro_usd: u64) -> String {
 /// let ceiling = AgentCeiling::new(PartitionMode::Auto, AgentUses::default().with_shell(ShellAccess::Host));
 /// let host = AgentDefinition::new("Ops", "default").with_uses(AgentUses::default().with_shell(ShellAccess::Host));
 /// assert_eq!(over_ceiling(&host, &ceiling), ["a shell on this computer"]);
+///
+/// let capped = AgentCeiling::new(PartitionMode::Auto, AgentUses::default()).with_daily_limit(2_000_000);
+/// let unlimited = AgentDefinition::new("Ops", "default");
+/// assert_eq!(over_ceiling(&unlimited, &capped), ["spending with no daily limit, where it may spend $2.00"]);
 /// ```
 pub fn over_ceiling(definition: &AgentDefinition, ceiling: &AgentCeiling) -> Vec<String> {
     let mut over = Vec::new();
@@ -209,6 +213,20 @@ pub fn over_ceiling(definition: &AgentDefinition, ceiling: &AgentCeiling) -> Vec
             mode_words(definition.mode).to_lowercase(),
             mode_words(ceiling.mode).to_lowercase()
         ));
+    }
+    // Spending is at most the suggester's, so a suggestion under a limit carries one too
+    // (spec 3.3 S-I12).
+    if let Some(cap) = ceiling.daily_limit_micro_usd {
+        match definition.daily_limit_micro_usd {
+            Some(limit) if limit <= cap => {}
+            Some(limit) => over.push(format!(
+                "a daily spending limit of {}, above its {}",
+                dollars(limit),
+                dollars(cap)
+            )),
+            None => over
+                .push(format!("spending with no daily limit, where it may spend {}", dollars(cap))),
+        }
     }
     over.extend(definition.uses.over(&ceiling.uses));
     let host = "a shell on this computer".to_string();

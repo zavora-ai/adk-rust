@@ -99,6 +99,7 @@ pub use answers::{
     SURFACE_AUDIT_DECIDE,
 };
 pub use control::ControlSource;
+pub use engine::SURFACE_AUDIT_ANSWER;
 pub use engine::SURFACE_AUDIT_DRAWN_SUBMITTED;
 pub use engine::{
     Command, CommandOutcome, DEFAULT_POLL_INTERVAL, FeedFrame, SURFACE_AUDIT_RESUME_ALL,

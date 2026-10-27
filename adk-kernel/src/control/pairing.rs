@@ -257,7 +257,11 @@ async fn issue(
     // name as it is stored; a request the pairing refuses records nothing.
     let code = code.normalized();
     pairing.check(&code)?;
+    // Where the code was issued from, so the record says how the pairing began (spec 3.3 §11).
+    let (surface, how) = operator_surface(caller.transport);
     let extra = [
+        ("surface", json!(surface)),
+        ("how", json!(how)),
         ("scopes", json!(code.scopes)),
         ("name", json!(code.name)),
         ("expiresInDays", json!(request.expires_in_days)),
@@ -276,7 +280,11 @@ async fn claim(
     // recorded pairs nothing and leaves its code to be claimed again.
     let pending = pairing.take_for_claim(&request.code, request.name.as_deref()).await?;
     let device = pending.device();
+    // The device claims its code from its own surface (spec 3.3 §11).
+    let (surface, how) = kind_surface(Some(device.kind().as_str()));
     let extra = [
+        ("surface", json!(surface)),
+        ("how", json!(how)),
         ("device", json!(device.id)),
         ("name", json!(device.name)),
         ("scopes", json!(device.scopes)),
@@ -425,8 +433,11 @@ pub(super) async fn admit_device(
     }
     let device = context.metadata.get(DEVICE_ID_METADATA).cloned();
     let name = context.metadata.get(DEVICE_NAME_METADATA).cloned();
+    // The surface is the device's kind, as the issuer of its code set it (spec 3.3 §11).
+    let (surface, how) = device_surface(&context);
     let extra = [
-        ("surface", json!("device")),
+        ("surface", json!(surface)),
+        ("how", json!(how)),
         ("device", json!(device)),
         ("deviceName", json!(name)),
         ("answer", json!(answer)),
@@ -442,6 +453,30 @@ pub(super) async fn admit_device(
     .await
     .map_err(IntoResponse::into_response)?;
     Ok(context)
+}
+
+/// The surface and how of a device's context: its kind (spec 3.3 §7.2, §11).
+fn device_surface(context: &RequestContext) -> (&'static str, &'static str) {
+    kind_surface(context.metadata.get(crate::pairing::DEVICE_KIND_METADATA).map(String::as_str))
+}
+
+/// The surface and how of a device of `kind`: a phone by touch, a tray by pointer, anything
+/// else a terminal by keyboard (spec 3.3 §7.2, §11).
+fn kind_surface(kind: Option<&str>) -> (&'static str, &'static str) {
+    match kind {
+        Some("phone") => ("phone", "touch"),
+        Some("tray") => ("tray", "pointer"),
+        _ => ("terminal", "keyboard"),
+    }
+}
+
+/// The surface and how of an operator over `transport`: the kernel's socket or pipe is its
+/// own terminal, typed; HTTP is an operator client, `api` (spec 3.3 §11).
+fn operator_surface(transport: ControlTransport) -> (&'static str, &'static str) {
+    match transport {
+        ControlTransport::Socket | ControlTransport::Pipe => ("terminal", "keyboard"),
+        ControlTransport::Http => ("api", "api"),
+    }
 }
 
 /// `request` with its body read when it is a device's decision, and the `action` the body

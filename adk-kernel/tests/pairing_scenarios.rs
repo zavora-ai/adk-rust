@@ -214,7 +214,12 @@ async fn a_device_stops_everything_and_cannot_resume() {
     assert!(plane.kernel.health().frozen);
     assert_eq!(category(device.unfreeze().await.unwrap_err()), ErrorCategory::Forbidden);
     assert!(plane.kernel.health().frozen, "a device cannot resume");
-    plane.operator().unfreeze().await.unwrap();
+    // Nor does the operator over HTTP: resuming is the home's or the kernel's own terminal's
+    // (spec 3.3 S-I10), which resumes in the kernel's process.
+    let refused = plane.operator().unfreeze().await.unwrap_err();
+    assert_eq!(AdkError::from(refused).code, adk_kernel::error::RESUME_NOT_HERE_CODE);
+    assert!(plane.kernel.health().frozen);
+    plane.kernel.unfreeze(adk_core::audit_log::AuditActor::default()).await.unwrap();
     assert!(!plane.kernel.health().frozen);
     let freeze = plane
         .control_actions()
@@ -295,6 +300,16 @@ async fn a_code_pairs_one_device_and_pairing_is_recorded() {
     for action in ["pairing.issue", "pairing.claim", "devices.revoke"] {
         assert!(actions.contains(&action.to_string()), "{action} in {actions:?}");
     }
+    // Each pairing record names its surface and how it was given (spec 3.3 §11): the code was
+    // issued by an operator client over HTTP, and claimed by a device paired without a kind, a
+    // remote terminal. Fails on `origin/main`, whose pairing records carry neither.
+    let surface = |wanted: &str| {
+        let (_, record) =
+            plane.control_actions().into_iter().find(|(action, _)| action == wanted).unwrap();
+        (record["surface"].clone(), record["how"].clone())
+    };
+    assert_eq!(surface("pairing.issue"), (json!("api"), json!("api")));
+    assert_eq!(surface("pairing.claim"), (json!("terminal"), json!("keyboard")));
 }
 
 /// Pairing never widens the bind: beyond loopback the control plane still needs a token or

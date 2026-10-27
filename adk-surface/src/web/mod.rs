@@ -41,7 +41,10 @@
 //! A paired device's context (a device token, spec 3.3 §10 K2) is never the web home and never
 //! a paired local terminal, whatever it declares: it reads as the terminal row, typed, and
 //! carries its device to every audit record. `POST /surface/commands` answers it
-//! `403 surface.not_here`. A `decide` declaring the voice surface or origin answers
+//! `403 surface.not_here`. **Resume all** and resuming an agent are the web home's only when
+//! the request comes from the home's own page — a browser's same-origin request
+//! (`Sec-Fetch-Site: same-origin`) — and otherwise read as a terminal elsewhere, which may not
+//! resume (`403 surface.not_here`, spec 3.3 §11 S-I10). A `decide` declaring the voice surface or origin answers
 //! `400 surface.invalid`, because a spoken answer reaches the engine through the voice
 //! surface; `cancelAnswer` stays open (§5.6, §7.2).
 
@@ -583,9 +586,17 @@ async fn briefing(
     }
 }
 
+/// Whether `headers` are those of the web home's own page: a browser's same-origin request.
+/// Browsers set `Sec-Fetch-Site` themselves and page scripts cannot change it, so another
+/// client sends it only by imitating a browser on purpose.
+fn from_home_page(headers: &HeaderMap) -> bool {
+    headers.get("sec-fetch-site").and_then(|value| value.to_str().ok()) == Some("same-origin")
+}
+
 async fn command(
     State(engine): State<SurfaceEngine>,
     context: Context,
+    headers: HeaderMap,
     Json(request): Json<CommandRequest>,
 ) -> Response {
     // A device has its own routes, each opened by its token's scopes; commands would let it
@@ -615,7 +626,16 @@ async fn command(
             "a spoken answer reaches the engine through the voice surface, not this API".into(),
         ));
     }
-    let caller = try_or_respond!(caller(context, request.surface, Some(request.origin)));
+    // Resuming happens only in the web home or on a paired local terminal (spec 3.3 S-I10),
+    // and a declared surface never shows the web home: a resume is the home's only from its
+    // own page; from any other client it is a terminal's elsewhere, which may not resume.
+    let surface = match request.command {
+        Command::ResumeAll | Command::ResumeAgent { .. } if !from_home_page(&headers) => {
+            SurfaceKind::Terminal
+        }
+        _ => request.surface,
+    };
+    let caller = try_or_respond!(caller(context, surface, Some(request.origin)));
     match engine.execute(&caller, request.command).await {
         Ok(outcome) => Json::<CommandOutcome>(outcome).into_response(),
         Err(error) => failed(error),

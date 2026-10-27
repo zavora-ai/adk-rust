@@ -96,8 +96,10 @@ impl AgentAssessment {
 /// use adk_kernel::agents::{AgentCeiling, AgentUses, FileAccess};
 /// use adk_kernel::PartitionMode;
 ///
-/// let ceiling = AgentCeiling::new(PartitionMode::Ask, AgentUses::default().with_files(FileAccess::Read));
+/// let ceiling = AgentCeiling::new(PartitionMode::Ask, AgentUses::default().with_files(FileAccess::Read))
+///     .with_daily_limit(2_000_000);
 /// assert_eq!(ceiling.mode, PartitionMode::Ask);
+/// assert_eq!(ceiling.daily_limit_micro_usd, Some(2_000_000));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -107,12 +109,34 @@ pub struct AgentCeiling {
     pub mode: PartitionMode,
     /// What the suggesting agent can use.
     pub uses: AgentUses,
+    /// What the suggesting agent may spend a day, in micro-USD; `None` when nothing limits
+    /// it (spec 3.3 S-I12). The kernel lowers it to the area's daily limit, which every agent
+    /// in the area spends within.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_limit_micro_usd: Option<u64>,
 }
 
 impl AgentCeiling {
-    /// A ceiling of `mode` and `uses`.
+    /// A ceiling of `mode` and `uses`, with no spending limit of its own.
     pub fn new(mode: PartitionMode, uses: AgentUses) -> Self {
-        Self { mode, uses }
+        Self { mode, uses, daily_limit_micro_usd: None }
+    }
+
+    /// Sets what the suggesting agent may spend a day, in micro-USD (spec 3.3 S-I12).
+    #[must_use]
+    pub fn with_daily_limit(mut self, micro_usd: u64) -> Self {
+        self.daily_limit_micro_usd = Some(micro_usd);
+        self
+    }
+
+    /// This ceiling with its spending limit lowered to `cap`, when there is one.
+    #[must_use]
+    pub(crate) fn within_daily_limit(mut self, cap: Option<u64>) -> Self {
+        self.daily_limit_micro_usd = match (self.daily_limit_micro_usd, cap) {
+            (Some(own), Some(cap)) => Some(own.min(cap)),
+            (own, cap) => own.or(cap),
+        };
+        self
     }
 }
 

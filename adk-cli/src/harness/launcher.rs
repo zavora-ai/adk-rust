@@ -1139,6 +1139,10 @@ impl HarnessLauncher {
         launcher = launcher.with_security_config(security);
         if let Some(service) = self.approval_service {
             launcher = launcher.with_approval_service(service);
+            // A kernel answers each decision under spec 3.3 §7.2 for the caller's surface.
+            if let Some(kernel) = &kernel {
+                launcher = launcher.with_approval_guard(adk_kernel::control::decide_guard(kernel));
+            }
         }
         if let Some(state) = self.background_runs {
             launcher = launcher.with_background_runs(state);

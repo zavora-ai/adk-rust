@@ -17,7 +17,7 @@ own (spec 3.2 §8.1, K-I17).
 | `adk-rust nice PID QUEUE` | Moves a queued or sleeping process to `interactive`, `background` or `maintenance`; the moved process gets a new pid |
 | `adk-rust agenda [list\|approve ID\|reject ID\|schedule ID --at TIME\|--cron EXPR]` | The agenda: follow-ups proposed for later ([Proactivity](proactivity.md)) |
 | `adk-rust wake --file GLOB\|--cron EXPR\|--webhook NAME -- "task"` | A sleeping process that runs the task when it wakes |
-| `adk-rust freeze [--reason R]` / `unfreeze` | The kill switch, on every replica |
+| `adk-rust freeze [--reason R]` / `unfreeze` | The kill switch, on every replica; `unfreeze` only over the kernel's socket or pipe, never `--server` (spec 3.3 S-I10) |
 | `adk-rust events [--follow] [--after CURSOR] [--json]` | The event bus |
 | `adk-rust proc [ledger\|baselines\|observations]` | The activity ledger (`--export FILE` for JSONL), each partition's baselines, the observations ([`/proc`](proc.md)) |
 | `adk-rust goal TEXT --until CMD` | With a kernel running, enqueues the goal on its `background` queue and follows it |

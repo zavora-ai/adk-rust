@@ -42,6 +42,9 @@ pub const SURFACE_AUDIT_RESUME_ALL: &str = "surface.resume_all";
 pub const SURFACE_AUDIT_SET_MODE: &str = "surface.set_mode";
 /// The audit action of a drawn form's Send (spec 3.3 §7.4 rule 5, §11).
 pub const SURFACE_AUDIT_DRAWN_SUBMITTED: &str = "surface.drawn.submitted";
+/// The audit action of an answer as it is given, written before it takes effect; its
+/// `surface.decide` record says how it ended (spec 3.3 §11).
+pub const SURFACE_AUDIT_ANSWER: &str = "surface.answer";
 
 /// How often the feed reads the session store when the source has nothing faster.
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -1609,6 +1612,19 @@ impl SurfaceEngine {
         if answer == Answer::Deny && reason.as_deref().is_none_or(str::is_empty) {
             decision.reason = None;
         }
+        // The answer is on record before it takes effect, and one that cannot be recorded is
+        // not given (spec 3.3 §11).
+        let mut given = json!({
+            "approvalId": request.id,
+            "sessionId": request.scope.session_id,
+            "tool": request.tool_name,
+            "answer": answer,
+            "version": version,
+        });
+        if let Ok(digest) = SPOKEN_DIGEST.try_with(Clone::clone) {
+            given["transcriptDigest"] = json!(digest);
+        }
+        self.record(caller, SURFACE_AUDIT_ANSWER, given).await?;
         match self.inner.source.decide(&request.id, version, decision).await {
             Ok(updated) => {
                 // The decision is recorded and cannot be taken back: nothing after this point

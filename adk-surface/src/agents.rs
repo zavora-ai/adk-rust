@@ -1042,14 +1042,23 @@ pub(crate) fn area_name(area: &str) -> String {
 }
 
 /// The kernel's caller for a surface's `caller` (spec 3.3 §5.7, S-I18): who, from which
-/// surface and how, the paired device, and whether the person is present.
+/// surface and how, the paired device, whether the person is present, and the transport: the
+/// web home, the phone and the tray reach the engine over HTTP only; a terminal's own
+/// transport is recorded by the kernel's command routes.
 pub(crate) fn agent_caller(caller: &crate::origin::Caller) -> adk_kernel::agents::AgentCaller {
+    use crate::origin::SurfaceKind;
     let surface = serde_json::to_value(caller.surface)
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
         .unwrap_or_default();
     let mut agent =
         adk_kernel::agents::AgentCaller::new(caller.subject.clone(), surface, caller.origin.kind());
+    match caller.surface {
+        SurfaceKind::Web | SurfaceKind::Phone | SurfaceKind::Tray => {
+            agent = agent.with_transport(adk_kernel::control::ControlTransport::Http);
+        }
+        SurfaceKind::Terminal | SurfaceKind::Chat | SurfaceKind::Voice => {}
+    }
     if let Some(device) = &caller.device {
         agent = agent.with_device(device.clone());
     }

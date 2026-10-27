@@ -521,6 +521,49 @@ mod tests {
         assert_eq!(area_drivers(&calendar, &area), ["calendar"]);
     }
 
+    /// An added agent's model (spec 3.3 §10 L1): none of its own runs on the primary agent's,
+    /// a scripted run drives every agent on the scripted model, a provider the host does not
+    /// know is refused, and one whose key does not resolve is "No key for …", which the kernel
+    /// shows as Can't start; with the key, the model is built.
+    #[tokio::test]
+    async fn an_agents_model_needs_its_providers_key() {
+        use adk_kernel::agents::{AgentDefinition, AgentOrigin, AgentRecordState};
+        let record = |model: Option<ModelChoice>| {
+            let mut definition = AgentDefinition::new("Finance", "default");
+            if let Some(model) = model {
+                definition = definition.with_model(model);
+            }
+            AgentRecord::new(
+                "finance",
+                definition,
+                AgentRecordState::Active,
+                AgentOrigin::ByHand,
+                adk_core::SubjectRef::human("alice"),
+                chrono::Utc::now(),
+            )
+        };
+        assert!(model_of(&record(None), false).await.unwrap().is_none());
+        let sonnet = record(Some(ModelChoice::new("anthropic", "claude-sonnet-5-5")));
+        assert!(model_of(&sonnet, true).await.unwrap().is_none(), "scripted runs every agent");
+        let unknown = record(Some(ModelChoice::new("acme", "acme-1")));
+        let error = model_of(&unknown, false).await.err().unwrap();
+        assert_eq!(error.to_string(), "No provider called acme");
+        for (provider, model, label) in [
+            ("anthropic", "claude-sonnet-5-5", "Anthropic"),
+            ("openai", "gpt-5.6-terra", "OpenAI"),
+            ("gemini", "gemini-3.7-flash", "Gemini"),
+        ] {
+            let agent = record(Some(ModelChoice::new(provider, model)));
+            match model_of(&agent, false).await {
+                Ok(built) => assert!(built.is_some() && has_key(provider), "{provider}"),
+                Err(error) => {
+                    assert!(!has_key(provider), "{provider}: {error}");
+                    assert_eq!(error.to_string(), format!("No key for {label}"));
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn the_mode_store_caps_the_agents_sessions() {
         let inner: Arc<dyn ModeStore> = Arc::new(InMemoryModeStore::new());

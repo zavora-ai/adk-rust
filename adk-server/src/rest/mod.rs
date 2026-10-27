@@ -817,6 +817,26 @@ impl ServerBuilder {
         ))
     }
 
+    /// Serves `endpoints` as [`with_approval_service`](Self::with_approval_service) serves its
+    /// service: the endpoints keep what they were built with, such as a
+    /// [`DecideGuard`](crate::approvals::DecideGuard) that checks each decision (spec 3.3
+    /// §7.2).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let endpoints = ApprovalEndpoints::new(service).with_decide_guard(guard);
+    /// let app = ServerBuilder::new(config).with_approval_endpoints(endpoints).build();
+    /// ```
+    #[cfg(feature = "approvals")]
+    pub fn with_approval_endpoints(
+        mut self,
+        endpoints: crate::approvals::ApprovalEndpoints,
+    ) -> Self {
+        self.approval_service = Some(endpoints.service().clone());
+        self.add_api_routes(crate::approvals::approvals_router(endpoints))
+    }
+
     /// Build the final Axum router with all routes and middleware applied.
     pub fn build(self) -> Router {
         self.build_inner().0

@@ -691,12 +691,19 @@ async fn freeze_parks_and_only_unfreeze_resumes_what_it_parked() {
     let error = adk_core::AdkError::from(client.resume(&running).await.unwrap_err());
     assert_eq!(error.http_status_code(), 409, "a freeze-parked process resumes only on unfreeze");
 
-    let lifted = client.unfreeze().await.unwrap();
-    assert_eq!((lifted.frozen, lifted.parked_runs), (false, None));
+    // Resuming over HTTP is refused: it happens in the web home, in the kernel's process, or
+    // on the kernel's own terminal (spec 3.3 S-I10).
+    let refused = adk_core::AdkError::from(client.unfreeze().await.unwrap_err());
+    assert_eq!(
+        (refused.http_status_code(), refused.code),
+        (403, crate::error::RESUME_NOT_HERE_CODE)
+    );
+    assert!(client.health().await.unwrap().frozen);
+    fake.unfreeze(AuditActor::default()).await.unwrap();
     assert_eq!(fake.process(&running).await.unwrap().unwrap().run.state, RunState::Queued);
     let actions: Vec<_> =
         fake.control_records().iter().map(|record| record.ext["action"].clone()).collect();
-    assert_eq!(actions, [json!("freeze"), json!("resume"), json!("unfreeze")]);
+    assert_eq!(actions, [json!("freeze"), json!("resume")]);
     plane.shutdown().await.unwrap();
 }
 

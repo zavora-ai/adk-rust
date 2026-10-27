@@ -332,10 +332,12 @@ fn home(app: &str, stores: &Stores, provider: &Provider, audit: &InMemoryAuditRe
 
 impl Home {
     async fn call(&self, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+        // The web home's own page: a browser's same-origin request (spec 3.3 S-I10).
         let request = Request::builder()
             .method(method)
             .uri(uri)
             .header("content-type", "application/json")
+            .header("sec-fetch-site", "same-origin")
             .body(body.map_or_else(Body::empty, |body| Body::from(body.to_string())))
             .unwrap();
         let response = self.api.clone().oneshot(request).await.unwrap();
