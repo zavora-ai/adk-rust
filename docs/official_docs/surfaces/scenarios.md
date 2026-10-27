@@ -1,24 +1,39 @@
 # Scenarios
 
 Each phase of agent surfaces ships when its scenario passes end to end on SQLite and on one
-shared store (spec 3.3 §12). The scenarios are programs you can run and watch: each starts the
-`adk-rust up` binary as a real child process in a private home, plays one night, prints what
-happened in plain words, and exits non-zero when any pass condition fails. Every pass condition
-is read from the kernel's stores and routes, never from what a model wrote.
+shared store (spec 3.3 §12). Every scenario below runs on SQLite, and on PostgreSQL in a
+database of its own. Every pass condition is read from the kernel's stores and routes, or from
+what left the machine, never from what a model wrote.
 
-| Phase | Scenario | Example |
-|---|---|---|
-| 1. Decisions reach you | **Approve it tomorrow** | [`examples/surface_approve_tomorrow`](../../../examples/surface_approve_tomorrow/) |
-| 2. While you were away | **The morning after** | [`examples/surface_morning_after`](../../../examples/surface_morning_after/) |
-| Developer track | **Approve, rewind, fork** | `adk-surface/tests/workflow_scenario_tests.rs`, and `scripted_workflow` in the browser |
+| Phase | Scenario | SQLite | PostgreSQL |
+|---|---|---|---|
+| 1. Decisions reach you | **Approve it tomorrow**, **A stranger writes** | [`examples/surface_approve_tomorrow`](../../../examples/surface_approve_tomorrow/) | `--store postgres`; `scripts/test-postgres.sh` |
+| 2. While you were away | **The morning after** | [`examples/surface_morning_after`](../../../examples/surface_morning_after/) | `--store postgres`; `scripts/test-postgres.sh` |
+| 3. Memory and rules | **Correct me, then check** | In parts: `adk-harness/tests/consolidation_tests.rs`, and `adk-surface/web/e2e/memory.spec.ts` on `adk-rust up` | — |
+| 4. Areas and roster | **Work stays at work** | `adk-harness/tests/work_stays_at_work.rs` | `work_stays_at_work_on_postgres`; `scripts/test-postgres.sh` |
+| 4. Areas and roster | **Hire a helper** | `adk-cli/tests/hire_a_helper.rs` | `hire_a_helper_on_postgres`; `scripts/test-postgres.sh` |
+| 5. Presence and voice | **Speak, glance, stop** | `adk-cli/tests/speak_glance_stop.rs` | `speak_glance_stop_on_postgres`; `scripts/test-postgres.sh` |
+| Developer track | **Approve, rewind, fork** | `adk-surface/tests/workflow_scenario_tests.rs`, and `scripted_workflow` in the browser | `approve_rewind_fork_on_postgres`; `scripts/test-postgres.sh` |
+| Developer track | **Governed form**, **Hostile app** | `adk-surface/tests/genui_scenario_tests.rs`, `genui_apps_tests.rs` | `a_drawn_form_is_sent_held_and_runs_once_on_postgres`; `scripts/test-postgres.sh` |
+| Experimental | **One verb, three origins** | `adk-surface/tests/verbs_scenario_tests.rs`; on `adk-rust up`, `adk-cli/tests/verbs_added_agent.rs` | `one_verb_three_origins_on_up_on_postgres`; `scripts/test-postgres.sh` |
 
-## Running them
-
-Both run the `adk-rust` binary with the scripted model, the terminal and the PostgreSQL store
-compiled in. Build it once from the repository root:
+`scripts/test-postgres.sh` runs every PostgreSQL leg against the server `DATABASE_URL` names,
+and CI's `postgres` job runs the script:
 
 ```bash
-cargo build -p adk-cli --bin adk-rust --features scripted-model,tui,postgres
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres scripts/test-postgres.sh
+```
+
+## Running the examples
+
+The phase 1 and 2 scenarios are programs you can run and watch: each starts the `adk-rust up`
+binary as a real child process in a private home, plays one night, prints what happened in
+plain words, and exits non-zero when any pass condition fails. Both run the `adk-rust` binary
+with the scripted model, the terminal, the PostgreSQL store and the phone compiled in. Build it
+once from the repository root:
+
+```bash
+cargo build -p adk-cli --bin adk-rust --features scripted-model,tui,postgres,mobile
 ```
 
 | Run | Command |
@@ -51,13 +66,11 @@ pairing code and starts nothing.
 | Nothing runs before the tap, and the email is sent exactly once | The mail driver's outbox |
 | Nothing notifies during quiet time | Every message the Telegram adapter sent, with its time, from a fake Bot API on loopback |
 | The web home shows "You said yes in Telegram" | `GET /api/surface/decisions/{id}` |
+| The phone's card shows the same | `GET /api/surface/decisions/{id}?surface=phone` with the phone's device token |
+| Nothing wakes the phone during quiet time | Every Web Push wake-up, with its time, from a push service on loopback the phone subscribed to (`up --push-to-localhost`) |
 | The terminal shows the same | The `decided` line of `adk-rust --output json` |
 | The record names the channel | `GET /api/kernel/record`: how `chat`, channel `Telegram` |
 | A stranger gets a pairing code and starts nothing | The bot's reply, the process table and the inbox |
-
-The phone's push notification arrives with the phone (spec 3.3 §5.4): the scenario checks
-every notifier `adk-rust up` wires today, and its `phone-push` feature is where the push
-receiver joins that check.
 
 ## The morning after
 
@@ -67,9 +80,70 @@ a call from their phone, and the kernel restarts.
 | Pass condition | Read from |
 |---|---|
 | One briefing when quiet time ends | `GET /api/kernel/away` with the phone's device token; once marked seen it does not come back, across another restart |
+| No briefing before quiet time ends | Just before the end the phone's page holds the night while the quiet time `GET /api/kernel/settings/default` serves still holds, so the home's rule for the morning briefing holds it back |
 | Its counts match exactly across the restart | The process table, the agenda and the inbox |
-| Its spending matches exactly across the restart | The kernel's daily spend total (`GET /api/kernel/settings/default`) |
+| Its spending matches exactly across the restart, and is not zero | The kernel's daily spend total (`GET /api/kernel/settings/default`); each scripted reply names its price (`"cost"` in `--model-script`) |
 | Every line links to its record | `GET /api/kernel/away/lines/{seq}` for each line |
+
+## Work stays at work
+
+Home asks first; Work goes ahead with a 09:00 weekday routine (spec 3.3 §12 phase 4). One run
+of a kernel hosting both areas' harnesses on a scripted model and a manual clock.
+
+| Store | Command |
+|---|---|
+| SQLite | `cargo nextest run -p adk-harness --features kernel,memory --test work_stays_at_work` |
+| PostgreSQL | `DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres cargo nextest run -p adk-harness --features kernel,memory,postgres --test work_stays_at_work --run-ignored only` |
+
+| Pass condition | Read from |
+|---|---|
+| A Work agent reading the Home calendar waits, even in Go ahead | The inbox, and what reaches Work |
+| The routine runs on weekdays and skips Saturday and Sunday | The process table on a manual clock |
+| Spending per agent sums to the areas' and the day's totals | The spend ledger |
+
+## Hire a helper
+
+In the terminal the person asks ADK-Rust for a Finance agent (spec 3.3 §12 phase 4, §5.7). The
+test runs `adk-rust up` as a child process with a scripted model, killed with `kill -9` and
+started again halfway through.
+
+| Store | Command |
+|---|---|
+| SQLite | `cargo nextest run -p adk-cli --features scripted-model,audit-sql --test hire_a_helper` |
+| PostgreSQL | `DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres cargo nextest run -p adk-cli --features scripted-model,audit-sql,postgres --test hire_a_helper --run-ignored only` |
+
+| Pass condition | Read from |
+|---|---|
+| Before any answer nothing is added, and the chat card offers only **Don't add** | The roster, the process table, `GET /api/surface/decisions/{id}?surface=chat` |
+| After **Add this agent**, Finance is **Ready** in the terminal's roster on the kernel event that announces it, and in the web home's, in one colour | The engine over the kernel's control plane, following `GET /api/kernel/events`; `GET /api/surface/agents` |
+| After `kill -9` and a restart, Finance keeps its id, acts as `urn:adk:agent:adk-rust/finance`, and ADK-Rust refuses its thread | The roster, the record line of Finance's call, the refused run |
+| Renamed "Bills" in the web home, the terminal shows it on the event that announces it; in Suggest its next turn changes nothing | The terminal's roster, the workspace, the inbox |
+| A page asking for an agent with a shell on this computer is refused; Bills cannot suggest agents | `kernel.agent.refused`, the inbox |
+| Removed in the terminal, its waiting decision ends without an answer and the phone's late answer changes nothing; at its routine's time nothing of Bills runs, while ADK-Rust's routine at the same time does; a new Finance is `finance-2` with no rule | The inbox, the process table, the rules |
+| The record holds `proposed`, `created`, `changed`, `removing` and `removed` in order, each naming its surface, and `adk-rust audit verify` passes | `GET /api/kernel/record`, `adk-rust audit export` and `verify` |
+
+## Speak, glance, stop
+
+With work in flight, the person speaks, glances at the tray and stops everything (spec 3.3 §12
+phase 5). `adk-rust up` serves the phone (`--home-url`, an operator token) with the voice pack,
+a scripted model, a scripted realtime provider, and a press driver whose `publish_post` is
+`publish_public`, so it is high risk.
+
+| Store | Command |
+|---|---|
+| SQLite | `cargo nextest run -p adk-cli --features voice,mobile,scripted-model --test speak_glance_stop` |
+| PostgreSQL | `DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres cargo nextest run -p adk-cli --features voice,mobile,scripted-model,postgres --test speak_glance_stop --run-ignored only` |
+| The tray's shell on WebKitGTK, against `adk-rust up` on SQLite and PostgreSQL | `.github/workflows/desktop.yml` (`adk-surface/desktop/e2e.sh store_gate`), on Linux with a display |
+
+| Pass condition | Read from |
+|---|---|
+| A spoken "allow once" runs an everyday call once, after the cancel window | The voice socket's updates, the call's side effect |
+| A high-risk call is refused by voice and approved in the web home with **Confirm it's you** | `needsScreen`, the card's "High risk", a passkey answering `POST /api/surface/decisions/{id}/confirm`, the call's side effect |
+| The tray changes within one event | The tray's status read after each frame of `GET /api/kernel/events`: the waiting call shows on its `held` event |
+| Stop all from the tray stops a running turn, a voice call and a held call within about a second | The running turn's steps and run state, the voice socket's "All agents are stopped", the held call's side effect after it is allowed |
+
+A turn already inside a tool call finishes that call and parks at its next model or tool
+boundary (spec 3.2 §7.2, K-I8), so the running turn takes at most the step it was in.
 
 ## One verb, three origins
 
@@ -77,17 +151,23 @@ Ana snoozes News digest by typing `/snooze News digest` in the terminal, by clic
 the home and by saying "Snooze news digest"; then Finance, an agent she added, asks to snooze
 it (spec 3.3 §12, Experimental). The legs run as tests on an in-process kernel: the person's in
 `adk-surface/tests/verbs_scenario_tests.rs`, Finance's in `adk-surface/tests/verbs_tests.rs`, and
-`adk-rust up` on SQLite through a restart in `adk-cli/tests/verbs_added_agent.rs`, whose
-PostgreSQL leg runs by hand.
+`adk-rust up` on SQLite through a restart in `adk-cli/tests/verbs_added_agent.rs`.
 
 ```bash
 cargo nextest run -p adk-surface --features verb-ui,web,tui,voice --test verbs_scenario_tests --test verbs_tests
 cargo nextest run -p adk-cli --features verb-ui,scripted-model --test verbs_added_agent
 ```
 
+On `adk-rust up` the person's three origins run again on SQLite and on PostgreSQL, and the
+signed records `adk-rust audit export` reads back differ only in where and how each was given:
+
+```bash
+cargo nextest run -p adk-cli --features verb-ui,voice,scripted-model,audit-sql --test verbs_added_agent
+```
+
 | Store | Command |
 |---|---|
-| PostgreSQL | `DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres cargo nextest run -p adk-cli --features verb-ui,scripted-model,postgres --test verbs_added_agent --run-ignored only` |
+| PostgreSQL | `DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres cargo nextest run -p adk-cli --features verb-ui,voice,scripted-model,audit-sql,postgres --test verbs_added_agent --run-ignored only` |
 
 | Pass condition | Read from |
 |---|---|
@@ -104,7 +184,7 @@ The graph agent `invoice-run` drafts an invoice with a model step, charges it wi
 HTTP POST that asks first and spends money, and files a receipt. The charge goes to a loopback
 provider that counts every charge it receives. The scenario runs in-process on memory and on
 SQLite, where the runner, the engine and the routes are rebuilt over the same files halfway
-through; the PostgreSQL leg runs by hand.
+through; the PostgreSQL leg runs in `scripts/test-postgres.sh`.
 
 | Run | Command |
 |---|---|
@@ -130,12 +210,13 @@ approved call: the 4200 charge once and the 5000 charge once.
 An agent draws a form, a person sends it, and the call waits for them however the agent is
 configured (spec 3.3 §12 "Governed form", §7.4 rule 5). It runs as tests over the real
 kernel, durable worker, approval service, session store and audit trail on SQLite, and on
-PostgreSQL by hand, with a scripted model driving the harness agent Finance in "Ask first".
+PostgreSQL in `scripts/test-postgres.sh`, with a scripted model driving the harness agent
+Finance in "Ask first".
 
 | Run | Command |
 |---|---|
 | The scenario, the projection and the terminal over the control plane | `cargo nextest run -p adk-surface --features genui,web,tui --test genui_scenario_tests --test genui_projection_tests` |
-| PostgreSQL, by hand, on an empty database | `createdb genui_form`, then `DATABASE_URL=postgres://postgres:postgres@localhost:5432/genui_form cargo nextest run -p adk-surface --features genui,web,tui --test genui_scenario_tests --run-ignored only -E 'test(/on_postgres/)'`, then `dropdb genui_form` |
+| PostgreSQL, on an empty database (`scripts/test-postgres.sh` makes one) | `createdb genui_form`, then `DATABASE_URL=postgres://postgres:postgres@localhost:5432/genui_form cargo nextest run -p adk-surface --features genui,web,tui --test genui_scenario_tests --run-ignored only -E 'test(/on_postgres/)'`, then `dropdb genui_form` |
 | Another area's and an added agent's forms | `cargo nextest run -p adk-cli --features genui,scripted-model --test genui_up` |
 | The web home, light and dark | `npx playwright test --project genui --project genui-states`, from `adk-surface/web` |
 | Live, `claude-sonnet-5-5`: the model draws the form, and its next turn reads the call as the person's | `cargo test -p adk-surface --features genui,web --test genui_scenario_tests -- --ignored --nocapture` |
