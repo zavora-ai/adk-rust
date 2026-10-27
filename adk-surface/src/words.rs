@@ -1030,6 +1030,78 @@ pub fn from_a_form(agent: &str) -> String {
     format!("From a form {agent} drew")
 }
 
+// ---------------------------------------------------------------------------
+// Apps from MCP servers (spec 3.3 §6.1 `genui-apps`)
+// ---------------------------------------------------------------------------
+
+/// An app being fetched and checked before it is framed.
+pub const OPENING_THE_APP: &str = "Opening the app…";
+/// Where an app is not shown: the phone, a remote terminal, or a home without an apps origin.
+pub const OPEN_THE_HOME_TO_SEE_THIS_APP: &str = "Open the home on this computer to see this app";
+/// An app whose HTML shows a decision's words.
+pub const APP_BLOCKED_APPROVAL_BUTTONS: &str = "This app was blocked: it shows approval buttons";
+/// An app that loads or connects to a site it did not declare.
+pub const APP_BLOCKED_UNDECLARED_SITES: &str =
+    "This app was blocked: it asks for sites it didn't declare";
+/// An app that asks to reach this computer, its network or the home.
+pub const APP_BLOCKED_THIS_COMPUTER: &str = "This app was blocked: it asks to reach this computer";
+/// An app whose resource is not an MCP App's HTML.
+pub const APP_BLOCKED_NOT_AN_APP: &str = "This app was blocked: it isn't an app this home can show";
+/// An app whose server did not answer.
+pub const APP_CANT_BE_OPENED: &str = "This app can't be opened right now";
+/// An app asked for a tool only an app may call (wave 4 decision 15).
+pub const APP_NEEDS_A_TOOL: &str = "This app needs a tool this home can't run yet";
+/// Sends what an app suggested, as the person's message.
+pub const SEND_IT: &str = "Send it";
+/// Under what an app suggests sending.
+pub const MARKED_AS_SUGGESTED_BY_THE_APP: &str = "It will be marked as suggested by the app";
+/// Opens a link an app asked to open.
+pub const OPEN: &str = "Open";
+/// What an app's tool call answers the app once it is held: it ran nothing.
+pub const APP_CALL_WAITS_FOR_YOU: &str = "Sent to the person. It runs only once they decide.";
+
+/// Over an app in a thread: "App from Weather · it can't approve anything".
+pub fn app_from(app: &str) -> String {
+    format!("App from {app} · it can't approve anything")
+}
+
+/// An app in the terminal: "app from Weather · open it in the home".
+pub fn app_in_the_terminal(app: &str) -> String {
+    format!("app from {app} · open it in the home")
+}
+
+/// An app asked for a tool it may not use: "The app tried to use transfer_funds. Apps can't
+/// use it."
+pub fn app_cant_use(tool: &str) -> String {
+    format!("The app tried to use {tool}. Apps can't use it.")
+}
+
+/// An app suggests a message: "The app wants to send: “Remind me to take an umbrella”".
+pub fn app_wants_to_send(message: &str) -> String {
+    format!("The app wants to send: “{message}”")
+}
+
+/// An app asks to open a link: "Open example.com?"
+pub fn open_site(host: &str) -> String {
+    format!("Open {host}?")
+}
+
+/// The first step of a decision an app asked for: "The app from Weather asked · 10:06".
+pub fn app_asked(app: &str, hh_mm: &str) -> String {
+    format!("The app from {app} asked · {hh_mm}")
+}
+
+/// The detail line of a decision an app asked for: "From the Weather app in this thread".
+pub fn from_the_app(app: &str) -> String {
+    format!("From the {app} app in this thread")
+}
+
+/// The label of a message an app suggested and the person sent: "Suggested by the Weather
+/// app".
+pub fn suggested_by_the_app(app: &str) -> String {
+    format!("Suggested by the {app} app")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

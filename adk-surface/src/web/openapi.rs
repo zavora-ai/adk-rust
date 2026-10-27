@@ -155,6 +155,8 @@ pub fn openapi() -> Value {
     let agent_preview = schema_ref::<crate::agents::AgentPreview>(&mut out);
     let genui_capabilities = schema_ref::<super::genui::GenuiCapabilities>(&mut out);
     let genui_forms = schema_ref::<super::genui::FormsResponse>(&mut out);
+    let app_open = schema_ref::<super::genui::AppOpen>(&mut out);
+    let app_answer = schema_ref::<super::genui::AppAnswer>(&mut out);
     let mut schemas = out.take_definitions(true);
 
     let mut input = generator(Contract::Deserialize);
@@ -172,6 +174,8 @@ pub fn openapi() -> Value {
     let voice_request = schema_ref::<VoiceTicketRequest>(&mut input);
     let voice_message = schema_ref::<VoiceClientMessage>(&mut input);
     let preview_body = schema_ref::<crate::agents::AgentPreviewRequest>(&mut input);
+    let app_request = schema_ref::<super::genui::AppRequest>(&mut input);
+    let app_message = schema_ref::<super::genui::AppMessageRequest>(&mut input);
     let surface_query = input.subschema_for::<SurfaceQuery>().to_value();
     for (name, schema) in input.take_definitions(true) {
         schemas.entry(name).or_insert(schema);
@@ -516,6 +520,40 @@ pub fn openapi() -> Value {
             "The state of each drawn form sent in the session, from its decision and its call's result (spec 3.3 §7.4 rule 5); served with the `genui` feature",
             json!([path_param("session")]),
             answer("The forms sent", genui_forms),
+        ),
+    );
+    // Apps from MCP servers (spec 3.3 §6.1 `genui-apps`): served with that feature.
+    let app_params = json!([path_param("session"), path_param("call")]);
+    routes.insert(
+        with(super::genui::paths::APP),
+        read(
+            "An app an MCP server's tool showed in the session: framed on the apps origin, blocked with its reason, or not shown on this surface; served with the `genui-apps` feature",
+            json!([
+                path_param("session"),
+                path_param("call"),
+                query("surface", "The surface opening it; only the web home frames apps", surface.clone()),
+            ]),
+            answer("The app", app_open),
+        ),
+    );
+    routes.insert(
+        with(super::genui::paths::APP_REQUESTS),
+        write(
+            "post",
+            "A request the app made of the home, relayed by the page: tools/call is held for the person's decision or refused, ui/message and ui/open-link become prompts the person answers; nothing an app asks approves anything. Served with the `genui-apps` feature",
+            app_params.clone(),
+            Some(app_request),
+            ("200", answer("The JSON-RPC answer for the app, and what to show the person", app_answer)),
+        ),
+    );
+    routes.insert(
+        with(super::genui::paths::APP_MESSAGE),
+        write(
+            "post",
+            "The person pressed Send it on a message the app suggested: sent as their message, inside an untrusted-content block labelled as the app's suggestion; served with the `genui-apps` feature",
+            app_params,
+            Some(app_message),
+            ("200", answer("What the send did", outcome.clone())),
         ),
     );
     routes.insert(

@@ -1405,6 +1405,31 @@ impl SurfaceEngine {
         Ok(CommandOutcome::FormSent { session_id: session, surface_id: surface, version, call_id })
     }
 
+    /// The session's events, when it is the caller's own (S-I8): what an app in it showed.
+    #[cfg(feature = "genui-apps")]
+    pub(crate) async fn app_transcript(
+        &self,
+        caller: &Caller,
+        session: &str,
+    ) -> Result<Vec<adk_core::Event>> {
+        self.transcript(caller, session).await
+    }
+
+    /// Asks for `call`, a tool call the app from `app` asked for in `session` (spec 3.3 §6.1
+    /// `genui-apps`): held as the agent whose call showed the app, for the person's decision,
+    /// whose card says "The app from Weather asked" and never offers **Always allow**.
+    #[cfg(feature = "genui-apps")]
+    pub(crate) async fn ask_for_app_call(
+        &self,
+        caller: &Caller,
+        session: &str,
+        call: adk_core::RequestedCall,
+        app: &str,
+    ) -> Result<()> {
+        self.inner.drawn.app_asked(caller.user_id(), session, &call.tool_name, &call.args, app);
+        self.inner.source.request_call(caller, session, "", call).await
+    }
+
     #[cfg(not(feature = "genui"))]
     async fn submit_drawn(
         &self,

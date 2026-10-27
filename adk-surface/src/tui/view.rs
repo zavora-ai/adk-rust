@@ -487,6 +487,11 @@ impl Renderer {
                         )));
                     }
                 }
+                // An app is shown in the web home only (spec 3.3 §6.1 `genui-apps`).
+                ThreadItem::App { app } => {
+                    lines.push(Line::default());
+                    lines.extend(super::drawn::app_lines(&t, app, width));
+                }
             }
         }
         lines

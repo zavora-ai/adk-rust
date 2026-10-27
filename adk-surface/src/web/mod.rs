@@ -74,6 +74,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub use devices::{device_scope_for, devices_router, router_with_devices};
+#[cfg(feature = "genui-apps")]
+pub use home::home_with_apps_origin;
 pub use home::{HOME_PATH, home};
 pub use openapi::{openapi, typescript};
 pub use phone::{

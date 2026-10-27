@@ -452,6 +452,15 @@ pub enum ThreadItem {
         /// The call and the form it came from.
         sent: crate::genui::DrawnSent,
     },
+    /// An app an MCP server's tool showed (spec 3.3 §6.1 `genui-apps`): on the normal card
+    /// background, labelled as unable to approve anything, framed sandboxed by the web home
+    /// and shown as its text result elsewhere. Only the event of the MCP tool's own call, which
+    /// carries its `adk.mcp.app` record, makes one.
+    #[serde(rename_all = "camelCase")]
+    App {
+        /// The app.
+        app: Box<crate::genui::AppView>,
+    },
 }
 
 /// One event of a session's store, numbered by its position there (spec 3.3 §6).

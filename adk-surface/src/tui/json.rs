@@ -114,7 +114,8 @@ impl Settler {
                 // A drawing is a tool's result, never the agent's reply (spec 3.3 §7.4 rule 5).
                 ThreadItem::Drawn { .. }
                 | ThreadItem::DrawnRefused { .. }
-                | ThreadItem::DrawnSent { .. } => self.reply = false,
+                | ThreadItem::DrawnSent { .. }
+                | ThreadItem::App { .. } => self.reply = false,
             }
         }
     }

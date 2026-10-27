@@ -17,8 +17,8 @@ use super::theme::Theme;
 use super::view::fit;
 use crate::engine::Command;
 use crate::genui::{
-    DrawnActionView, DrawnField, DrawnInput, DrawnNode, DrawnSurface, FormState, FormStatus,
-    RefusedDrawing,
+    AppView, DrawnActionView, DrawnField, DrawnInput, DrawnNode, DrawnSurface, FormState,
+    FormStatus, RefusedDrawing,
 };
 use crate::model::{FeedEntry, ThreadItem};
 use crate::words;
@@ -80,7 +80,8 @@ impl Drawings {
                 | ThreadItem::Activity { .. }
                 | ThreadItem::Result { .. }
                 | ThreadItem::Decision { .. }
-                | ThreadItem::DrawnSent { .. } => {}
+                | ThreadItem::DrawnSent { .. }
+                | ThreadItem::App { .. } => {}
             }
         }
         let forms = crate::genui::form_states(entries, decided)
@@ -390,6 +391,26 @@ pub(crate) fn refused_lines(
         width,
         2,
     ));
+    lines
+}
+
+/// An app from an MCP server (spec 3.3 §6.1 `genui-apps`): never framed in a terminal, so
+/// "app from Weather · open it in the home" and the tool's text result.
+pub(crate) fn app_lines(theme: &Theme, app: &AppView, width: usize) -> Vec<Line<'static>> {
+    let mut lines = super::markdown::wrap_spans(
+        vec![Span::styled(safe_line(&app.terminal_text), theme.label())],
+        width,
+        2,
+    );
+    if !app.result_text.trim().is_empty() {
+        for line in app.result_text.lines() {
+            lines.extend(super::markdown::wrap_spans(
+                vec![Span::styled(safe_line(line), theme.text())],
+                width,
+                2,
+            ));
+        }
+    }
     lines
 }
 
@@ -736,8 +757,8 @@ fn next_choice(field: &DrawnField, value: &Value) -> Value {
 // JSON lines
 // ---------------------------------------------------------------------------
 
-/// The `drawn`, `drawn.submitted` and `drawn.refused` lines of `entry` in `session`
-/// (spec 3.3 §5.2 `--output json`).
+/// The `drawn`, `drawn.submitted`, `drawn.refused` and `app` lines of `entry` in `session`
+/// (spec 3.3 §5.2 `--output json`, §6.1 `genui-apps`).
 pub(crate) fn json_lines(session: &str, entry: &FeedEntry) -> Vec<Value> {
     entry
         .items
@@ -771,6 +792,15 @@ pub(crate) fn json_lines(session: &str, entry: &FeedEntry) -> Vec<Value> {
                 "reason": refusal.kind,
                 "component": refusal.component,
                 "detail": refusal.reason,
+            })),
+            ThreadItem::App { app } => Some(json!({
+                "type": "app",
+                "session": session,
+                "call": app.call_id,
+                "server": app.server,
+                "tool": app.tool,
+                "by": app.agent.name,
+                "text": app.result_text,
             })),
             ThreadItem::Message { .. }
             | ThreadItem::Activity { .. }

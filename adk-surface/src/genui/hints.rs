@@ -26,13 +26,15 @@ const HOLD_WRITTEN_WITHIN_SECS: i64 = 30;
 /// How many sends this engine made are remembered for the cards they cause.
 const PRESSED: usize = 256;
 
-/// A form this engine sent: its session, call and when.
+/// A form this engine sent, or a call an app asked for: its session, call and when.
 struct Pressed {
     user: String,
     session: String,
     tool: String,
     args: Value,
     at: DateTime<Utc>,
+    /// The app that asked, as a person reads it; `None` for a form.
+    app: Option<String>,
 }
 
 /// The hints of drawn-form calls: the sends this engine made, and the session's held call,
@@ -58,6 +60,17 @@ impl DrawnHints {
 
     /// Notes that `user` sent a drawn form in `session` asking for `tool` with `args`.
     pub(crate) fn pressed(&self, user: &str, session: &str, tool: &str, args: &Value) {
+        self.note(user, session, tool, args, None);
+    }
+
+    /// Notes that the app from `app` in `user`'s `session` asked for `tool` with `args`
+    /// (spec 3.3 §6.1 `genui-apps`).
+    #[cfg(feature = "genui-apps")]
+    pub(crate) fn app_asked(&self, user: &str, session: &str, tool: &str, args: &Value, app: &str) {
+        self.note(user, session, tool, args, Some(app.to_string()));
+    }
+
+    fn note(&self, user: &str, session: &str, tool: &str, args: &Value, app: Option<String>) {
         let mut pressed = self.pressed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if pressed.len() >= PRESSED {
             pressed.pop_front();
@@ -68,7 +81,17 @@ impl DrawnHints {
             tool: tool.to_string(),
             args: args.clone(),
             at: Utc::now(),
+            app,
         });
+    }
+
+    /// The hint of a call an app asked for: its first step, its detail line, and no Always
+    /// allow (spec 3.3 §6.1 `genui-apps`).
+    fn app_hint(&self, app: &str, at: DateTime<Utc>) -> CardHint {
+        CardHint::new()
+            .without_always_allow()
+            .with_first_step(words::app_asked(app, &self.projector.hh_mm(at)))
+            .with_detail(CardDetail::new(words::from_the_app(app)))
     }
 
     /// The hint of a form's call: its first step, its detail line, and no Always allow.
@@ -110,9 +133,12 @@ impl CardHints for DrawnHints {
                     && pressed.args == request.args_redacted
                     && pressed.at <= request.created_at + chrono::Duration::seconds(1)
             })
-            .map(|pressed| pressed.at);
-        if let Some(at) = sent_here {
-            let hint = self.form_hint(request, at);
+            .map(|pressed| (pressed.at, pressed.app.clone()));
+        if let Some((at, app)) = sent_here {
+            let hint = match app {
+                Some(app) => self.app_hint(&app, at),
+                None => self.form_hint(request, at),
+            };
             self.remember(&request.id, Some(hint.clone()));
             return Some(hint);
         }
@@ -145,6 +171,14 @@ impl CardHints for DrawnHints {
         };
         let hint = super::requested_via(held).map(|via| match via.kind {
             RequestedViaKind::Form => self.form_hint(request, held.timestamp),
+            // An app may call only its own server's tools, so the call's origin names the app.
+            RequestedViaKind::App => {
+                match request.origin.as_ref().and_then(|origin| origin.source.strip_prefix("mcp:"))
+                {
+                    Some(server) => self.app_hint(&super::app_name(server), held.timestamp),
+                    None => CardHint::new().without_always_allow(),
+                }
+            }
             // Whatever asked for it, a person's request is never made a standing rule.
             _ => CardHint::new().without_always_allow(),
         });

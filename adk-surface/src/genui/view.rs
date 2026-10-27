@@ -32,6 +32,11 @@ pub(crate) fn project(
     response: &Value,
     call_id: Option<&String>,
 ) -> Option<ThreadItem> {
+    // An app an MCP server's tool showed (spec 3.3 §6.1 `genui-apps`).
+    #[cfg(feature = "genui-apps")]
+    if let Some(item) = super::mcp_apps::project(projector, event, response, call_id) {
+        return Some(item);
+    }
     if !DRAW_TOOL_NAMES.contains(&tool) {
         return None;
     }

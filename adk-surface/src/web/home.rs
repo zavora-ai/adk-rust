@@ -20,18 +20,25 @@ const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; connect-src 'self'; \
 /// voice socket on that same host, `ws://{host} wss://{host}`, which not every browser counts
 /// as `'self'` (spec 3.3 §5.6). The host is the one the server's host guard admitted; one
 /// that is not a plain host and port gets no socket.
-fn content_security_policy(headers: &HeaderMap) -> String {
+///
+/// With an apps origin (spec 3.3 §6.1 `genui-apps`), `frame-src` names it and nothing else:
+/// the page frames apps from MCP servers there, sandboxed, and frames nothing without one.
+fn content_security_policy(headers: &HeaderMap, frames: Option<&str>) -> String {
     let host = headers.get(header::HOST).and_then(|host| host.to_str().ok()).filter(|host| {
         !host.is_empty() && host.chars().all(|c| c.is_ascii_alphanumeric() || ".-:[]".contains(c))
     });
-    match host {
+    let mut policy = match host {
         Some(host) => CONTENT_SECURITY_POLICY.replacen(
             "connect-src 'self'",
             &format!("connect-src 'self' ws://{host} wss://{host}"),
             1,
         ),
         None => CONTENT_SECURITY_POLICY.to_string(),
+    };
+    if let Some(frames) = frames {
+        policy.push_str(&format!("; frame-src {frames}"));
     }
+    policy
 }
 
 #[derive(RustEmbed)]
@@ -63,21 +70,55 @@ struct Assets;
 /// # }
 /// ```
 pub fn home() -> Router {
+    routes(None)
+}
+
+/// [`home`] for a home that frames apps from MCP servers on `apps_origin` (spec 3.3 §6.1
+/// `genui-apps`): the page's policy adds `frame-src` with that origin alone.
+///
+/// # Example
+///
+/// ```rust
+/// let page = adk_surface::web::home_with_apps_origin("http://127.0.0.1:41234");
+/// # let _ = page;
+/// ```
+#[cfg(feature = "genui-apps")]
+pub fn home_with_apps_origin(apps_origin: &str) -> Router {
+    let origin = apps_origin.trim_end_matches('/');
+    // Only an origin goes into the policy: no spaces, quotes or directives.
+    let plain = origin.split_once("://").is_some_and(|(scheme, rest)| {
+        matches!(scheme, "http" | "https")
+            && !rest.is_empty()
+            && rest.chars().all(|c| c.is_ascii_alphanumeric() || ".-:[]".contains(c))
+    });
+    routes(plain.then(|| std::sync::Arc::from(origin)))
+}
+
+fn routes(frames: Option<std::sync::Arc<str>>) -> Router {
+    let page = frames.clone();
     Router::new()
         .route("/", get(|| async { Redirect::to(HOME_PATH) }))
         .route("/ui", get(|| async { Redirect::to(HOME_PATH) }))
-        .route(HOME_PATH, get(index))
-        .route("/ui/{*path}", get(asset))
+        .route(
+            HOME_PATH,
+            get(move |headers: HeaderMap| {
+                let frames = page.clone();
+                async move { embedded("index.html", &headers, frames.as_deref()) }
+            }),
+        )
+        .route(
+            "/ui/{*path}",
+            get(move |uri: Uri, headers: HeaderMap| {
+                let frames = frames.clone();
+                async move { asset(uri, headers, frames.as_deref()) }
+            }),
+        )
 }
 
-async fn index(headers: HeaderMap) -> Response {
-    embedded("index.html", &headers)
-}
-
-async fn asset(uri: Uri, headers: HeaderMap) -> Response {
+fn asset(uri: Uri, headers: HeaderMap, frames: Option<&str>) -> Response {
     let path = uri.path().trim_start_matches(HOME_PATH);
     if Assets::get(path).is_some() {
-        return embedded(path, &headers);
+        return embedded(path, &headers, frames);
     }
     // A section of the app (`/ui/today`) is the page; a missing file is not. A decision's deep
     // link (spec 3.3 §7.2) is always the page: its id may contain a dot.
@@ -86,10 +127,10 @@ async fn asset(uri: Uri, headers: HeaderMap) -> Response {
     {
         return StatusCode::NOT_FOUND.into_response();
     }
-    embedded("index.html", &headers)
+    embedded("index.html", &headers, frames)
 }
 
-fn embedded(path: &str, headers: &HeaderMap) -> Response {
+fn embedded(path: &str, headers: &HeaderMap, frames: Option<&str>) -> Response {
     let Some(file) = Assets::get(path) else {
         return (
             StatusCode::NOT_FOUND,
@@ -100,7 +141,7 @@ fn embedded(path: &str, headers: &HeaderMap) -> Response {
     };
     let page = path == "index.html";
     let mime = mime_guess::from_path(path).first_or_octet_stream();
-    let policy = page.then(|| content_security_policy(headers));
+    let policy = page.then(|| content_security_policy(headers, frames));
     let mut response = Body::from(file.data).into_response();
     let headers = response.headers_mut();
     if let Ok(value) = header::HeaderValue::from_str(mime.as_ref()) {
