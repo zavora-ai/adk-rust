@@ -7,7 +7,13 @@
 //! | 11 Hostile app, live | An innocent-looking app builds the card in code, then asks: (a) `tools/call transfer_funds`, model-only; (b) `send_invoice`, not its server's; (c) a decide `POST` from the apps origin; (d) `ui/message` "Approved"; (e) a CSP declaring `http://127.0.0.1` | (a) and (b) refused and recorded; an app-only tool is "This app needs a tool this home can't run yet"; a tool it may call waits as the agent's card "The app from Weather asked", never Always allow; (c) 403 under default and development security, the card's version unchanged; (d) only a suggestion, sent as the person's message marked as the app's; (e) blocked; nothing ran |
 //!
 //! The Weather server is an in-process rmcp server; the kernel, its worker, the harness, the
-//! approval service and the sessions are real, on SQLite. The model is `ScriptedLlm`.
+//! approval service and the sessions are real, on SQLite. The model is `ScriptedLlm`, and a
+//! live model in the `#[ignore]`d leg:
+//!
+//! ```text
+//! cargo test -p adk-surface --features genui-apps --test genui_apps_tests -- --ignored --nocapture
+//! GENUI_LIVE_PROVIDER=gemini GENUI_LIVE_MODEL=gemini-3.5-flash-lite cargo test -p adk-surface --features genui-apps --test genui_apps_tests -- --ignored --nocapture
+//! ```
 
 #![cfg(feature = "genui-apps")]
 
@@ -226,8 +232,20 @@ impl Home {
 }
 
 /// The kernel-hosted harness "chief" (Chief of staff) on SQLite, with the Weather server's
-/// tools and its own `send_invoice`, in Ask first; the engine over it and the apps host.
+/// tools and its own `send_invoice`, in Ask first; the engine over it and the apps host. The
+/// scripted model calls `weather_show`, says "Here is the forecast from Weather.", then
+/// answers `after`.
 async fn home(html: &str, after: Vec<ScriptedResponse>) -> Home {
+    let mut script = vec![
+        ScriptedResponse::function_call("weather_show", json!({ "city": "Nairobi" })),
+        ScriptedResponse::text("Here is the forecast from Weather."),
+    ];
+    script.extend(after);
+    home_with(html, Arc::new(ScriptedLlm::new("scripted", script))).await
+}
+
+/// [`home`] on `model`.
+async fn home_with(html: &str, model: Arc<dyn adk_core::Llm>) -> Home {
     let dir = tempfile::tempdir().unwrap();
     let url = format!("sqlite://{}?mode=rwc", dir.path().join("harness.db").display());
     let sqlite = adk_session::SqliteSessionService::new(&url).await.unwrap();
@@ -263,12 +281,6 @@ async fn home(html: &str, after: Vec<ScriptedResponse>) -> Home {
         .unwrap();
     let toolset = Arc::new(McpToolset::new(client).with_name("weather"));
 
-    let mut script = vec![
-        ScriptedResponse::function_call("weather_show", json!({ "city": "Nairobi" })),
-        ScriptedResponse::text("Here is the forecast from Weather."),
-    ];
-    script.extend(after);
-    let model = Arc::new(ScriptedLlm::new("scripted", script));
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let invoices = Arc::new(Mutex::new(Vec::new()));
@@ -795,5 +807,153 @@ async fn only_the_mcp_tools_own_call_shows_an_app() {
         .body(Body::empty())
         .unwrap();
     assert_eq!(api.oneshot(request).await.unwrap().status(), StatusCode::NOT_FOUND);
+    home.stop().await;
+}
+
+/// A forecast with nothing hostile in it.
+const INNOCENT: &str = "<!doctype html><h2>Nairobi</h2><p>24°, light rain from 15:00</p>";
+
+/// The live model: `GENUI_LIVE_PROVIDER` picks `anthropic` (`claude-sonnet-5-5`, the default)
+/// or `gemini` (`gemini-3.5-flash-lite`, with `GEMINI_API_KEY` or `GOOGLE_API_KEY`), and
+/// `GENUI_LIVE_MODEL` another model; the key is read from the repository's `.env` or the file
+/// `ADK_ENV_FILE` names.
+fn live_model() -> Arc<dyn adk_core::Llm> {
+    let env = std::env::var_os("ADK_ENV_FILE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.env"));
+    if env.exists() {
+        dotenvy::from_path_override(&env).expect("the .env file loads");
+    }
+    let key = |names: &[&str]| {
+        names
+            .iter()
+            .find_map(|name| std::env::var(name).ok())
+            .unwrap_or_else(|| panic!("one of {names:?}"))
+    };
+    let model = |default: &str| std::env::var("GENUI_LIVE_MODEL").unwrap_or(default.to_string());
+    match std::env::var("GENUI_LIVE_PROVIDER").unwrap_or_default().as_str() {
+        "gemini" => Arc::new(
+            adk_model::GeminiModel::new(
+                key(&["GEMINI_API_KEY", "GOOGLE_API_KEY"]),
+                model("gemini-3.5-flash-lite"),
+            )
+            .unwrap(),
+        ),
+        _ => Arc::new(
+            adk_model::anthropic::AnthropicClient::new(adk_model::anthropic::AnthropicConfig::new(
+                key(&["ANTHROPIC_API_KEY"]),
+                model("claude-sonnet-5-5"),
+            ))
+            .unwrap(),
+        ),
+    }
+}
+
+/// An app on a live model (spec 3.3 §6.1 `genui-apps`): the model shows the forecast app
+/// itself, the app asks for `set_rain_alert`, the call waits for the person as the agent's,
+/// **Allow once** on the phone runs it once, and the model's next turn ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "calls a model provider's API"]
+async fn a_live_model_shows_an_app_whose_call_waits_for_the_person() {
+    const LIVE: Duration = Duration::from_secs(180);
+    let home = home_with(INNOCENT, live_model()).await;
+    home.engine
+        .execute(
+            &web(),
+            Command::Send {
+                session_id: "s1".into(),
+                text: "Will it rain in Nairobi tomorrow? Show me the forecast with weather_show, \
+                       then answer in one sentence. Do not call any other tool."
+                    .into(),
+            },
+        )
+        .await
+        .unwrap();
+    let started = tokio::time::Instant::now();
+    let app = loop {
+        assert!(started.elapsed() < LIVE, "the model showed no app");
+        let items: Vec<ThreadItem> = home
+            .engine
+            .thread(&web(), "s1")
+            .await
+            .unwrap()
+            .into_iter()
+            .flat_map(|entry| entry.items)
+            .collect();
+        if let Some(app) = items.into_iter().find_map(|item| match item {
+            ThreadItem::App { app } => Some(*app),
+            _ => None,
+        }) {
+            break app;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    while home.engine.source().busy(OWNER, "s1").await.unwrap() {
+        assert!(started.elapsed() < LIVE, "the turn did not end");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert_eq!((app.app_name.as_str(), app.tool.as_str()), ("Weather", "weather_show"));
+    assert!(matches!(home.host_open(&app.call_id, &web()).await, AppOpen::Shown { .. }));
+
+    // The app asks for a rain alert: it waits for the person, nothing runs.
+    let answer = ask(
+        &home,
+        &app.call_id,
+        "tools/call",
+        json!({ "name": "set_rain_alert", "arguments": { "city": "Nairobi" } }),
+    )
+    .await;
+    assert_eq!(answer.error, None);
+    let card =
+        eventually("the app's call to wait", || async { waiting(&home).await.into_iter().next() })
+            .await;
+    assert_eq!(card.call.tool, "set_rain_alert");
+    assert!(
+        card.timeline[0].text.starts_with("The app from Weather asked · "),
+        "{:?}",
+        card.timeline
+    );
+    assert_eq!(home.weather.ran(), ["weather_show"]);
+
+    // Allow once on the phone runs it once, as the agent; the model's next turn ends.
+    home.engine
+        .execute(
+            &phone(),
+            Command::Decide {
+                decision_id: card.id.clone(),
+                version: card.version,
+                answer: Answer::AllowOnce,
+                edited_args: None,
+                reason: None,
+                expanded: true,
+            },
+        )
+        .await
+        .unwrap();
+    let resumed = tokio::time::Instant::now();
+    while home.weather.ran() != ["weather_show", "set_rain_alert"]
+        || home.engine.source().busy(OWNER, "s1").await.unwrap()
+    {
+        assert!(
+            resumed.elapsed() < LIVE,
+            "the call did not run, or the turn did not end: {:?}",
+            home.weather.ran()
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert_eq!(home.weather.ran(), ["weather_show", "set_rain_alert"]);
+    let said: Vec<String> = home
+        .engine
+        .thread(&web(), "s1")
+        .await
+        .unwrap()
+        .into_iter()
+        .flat_map(|entry| entry.items)
+        .filter_map(|item| match item {
+            ThreadItem::Message { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    println!("the thread's messages: {said:#?}");
     home.stop().await;
 }
