@@ -120,6 +120,38 @@ through; the PostgreSQL leg runs by hand.
 The original thread's checkpoints never change. The provider counts one charge per distinct
 approved call: the 4200 charge once and the 5000 charge once.
 
+## Governed form
+
+An agent draws a form, a person sends it, and the call waits for them however the agent is
+configured (spec 3.3 §12 "Governed form", §7.4 rule 5). It runs as tests over the real
+kernel, durable worker, approval service, session store and audit trail on SQLite, with a
+scripted model driving the harness agent Finance in "Ask first".
+
+| Run | Command |
+|---|---|
+| The scenario, the projection and the terminal over the control plane | `cargo nextest run -p adk-surface --features genui,web,tui --test genui_scenario_tests --test genui_projection_tests` |
+| Another area's and an added agent's forms | `cargo nextest run -p adk-cli --features genui,scripted-model --test genui_up` |
+| The web home, light and dark | `npx playwright test --project genui --project genui-states`, from `adk-surface/web` |
+| Live, `claude-sonnet-5-5`: the model draws the form, and its next turn reads the call as the person's | `cargo test -p adk-surface --features genui,web --test genui_scenario_tests -- --ignored --nocapture` |
+| Live, `gemini-3.5-flash-lite` | `GENUI_LIVE_PROVIDER=gemini GENUI_LIVE_MODEL=gemini-3.5-flash-lite cargo test -p adk-surface --features genui,web --test genui_scenario_tests -- --ignored --nocapture` |
+
+The live runs read `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY` and then `GOOGLE_API_KEY`, from the
+repository's `.env` or the file `ADK_ENV_FILE` names; `GENUI_LIVE_MODEL` picks another model.
+
+| Pass condition | Read from |
+|---|---|
+| One drawing by Finance reading "Sending runs send_invoice and asks you first"; a drawn "Allow once" button is a plain refused notice; the inbox is empty | The thread and the inbox |
+| A send makes one waiting card for `send_invoice` with the typed `to` and `amount` and `invoice` INV-10 from the stored drawing; nothing runs | The card and the tool's count |
+| Its timeline starts "You pressed Send on a form Finance drew", no surface offers **Always allow**, and the chat card carries no arguments | The cards on the web home, the phone, the terminal and chat |
+| An old version (`surface.drawn_changed`), a forged constant, an undeclared action, another user's session (`404`) and a chat or agent origin (`surface.not_here`) are refused | `POST /api/surface/commands` and the inbox |
+| Go ahead, a standing rule, a confirmation handler and a stored approval of the identical call answer nothing: it still waits | The inbox and the tool's count |
+| After the engine and kernel are rebuilt over the same stores, the form says "Sent at 10:03 · waiting for you" | `GET /api/surface/genui/sessions/{session}/forms` |
+| **Allow once** on the phone runs `send_invoice` exactly once in Finance's own target; a denied twin never runs and says "Sent · you said no" | The tool's count and the forms route |
+| A rule that refuses the tool refuses a send before it is held, and again when a held one resumes | The thread |
+| A form sent from the terminal over the control plane waits as one card | The inbox |
+| A form drawn in the Home area and one drawn by the added agent Bookkeeper are each held and run in their own target; none is answered "not run" | The process table and each agent's workspace |
+| `surface.drawn.submitted` and `surface.decide` each name their own surface and origin | The audit trail |
+
 ## Related
 
 - [Screen Actions](verbs.md) — Snooze in Coming up
@@ -128,3 +160,4 @@ approved call: the 4200 charge once and the 5000 charge once.
 - [The Terminal](terminal.md) — JSON lines and exit codes
 - [Chat](chat.md) — the Telegram adapter
 - [Today and Memory](../kernel/today-and-memory.md) — "While you were away" and the record
+- [Agent-Drawn UI](genui.md) — forms agents draw and the calls a person asks for through them

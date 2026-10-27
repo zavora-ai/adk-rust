@@ -421,6 +421,66 @@ events receives only the last request, and the others are surfaced once it is de
 delegate's own confirmation events are not forwarded by `forward_events(true)`, so each held
 call is surfaced once per run.
 
+### Calls a Person Asks For
+
+A person asks an agent for a call through something the agent drew — a form's **Send** in
+[Agent-Drawn UI](../surfaces/genui.md). The call is an `adk_core::RequestedCall`: the tool,
+its arguments, the person (`requested_by`) and the drawn surface, version and action it came
+from (`via`). A run carries it as `RunConfig::requested_call`; only an authenticated run may
+(spec 3.3 §7.4 rule 5).
+
+| Step | What happens |
+|------|--------------|
+| Before the first model call | The run's root `LlmAgent` takes the call, finds the tool in its own toolset and checks the arguments against the tool's parameters |
+| Authorization | `authorize_tool_call` with `GovernedCall::requested`: the kill switch, the `ToolPolicy` and the tool guardrails as for any call, then a hold |
+| Held | The person's line — "I pressed the `send` button on the form `invoice-10` you drew (version 1). It asks to run send_invoice with {...}; it runs only once I decide." — then the call as the agent's own under an ID starting `adk-call-requested-` (`REQUESTED_CALL_ID_PREFIX`), each marked `adk.requested` with `requestedBy` and `via` (`RequestedCall::mark`); the call is submitted to the approval service and audited as `ApprovalRequired` with `policy_ref` `requested_call`; the run ends with no model call |
+| Refused | The policy's or guardrail's refusal is written as the call's response; the run ends with no model call |
+| Resumed | At the start of a later run, like any held call; it runs once, on a person's decision |
+| Read by the model | Never as a call the model made: the call leaves the model's turns, and its answer is the person's line — "The send_invoice call I asked for answered: {...}" — so no provider receives a function call it did not issue |
+
+The press is the request, never the approval. A requested call is held whatever would answer
+an ordinary call:
+
+| Would answer an ordinary call | For a requested call |
+|-------------------------------|----------------------|
+| A `ToolPolicy` allow, a standing rule, the harness's Go ahead mode | Held |
+| A fingerprint approval in `RunConfig::tool_approvals` | Ignored, when held and when it resumes |
+| A `ToolConfirmationHandler` | Not asked, when held or when it resumes |
+| An `ApprovalStore` decision recorded before the person asked | Discarded when the call is held |
+| A call-ID decision, or an `ApprovalStore` decision recorded after the hold | Resumes it |
+| A `ToolPolicy` that denies the tool when it resumes | Refuses it: `Tool 'send_invoice' denied by policy: ...` |
+
+A requested call never names a kernel tool (`kernel_*`) or a tool that draws
+(`DRAW_TOOL_NAMES`); `RequestedCall::refused_tool` says why. `CodeActAgent` refuses requested
+calls.
+
+A host asks for one through the agent that drew the form, so it is held in that agent's own
+runtime, with its policy, standing rules, acting context and approval store:
+
+| Host | Call |
+|------|------|
+| A harness | `Harness::send_requested(user, session, text, call, context)` |
+| A durable worker | A run whose input is `{"text": ..., "requestedCall": {...}}`, created with `NewRun::with_authenticated_user` |
+| `adk-surface` | `Source::request_call`, which `SurfaceEngine` calls for the `submitDrawn` command |
+
+```rust,ignore
+use adk_core::{RequestContext, RequestedCall, RequestedVia, SubjectRef};
+use serde_json::json;
+
+let call = RequestedCall::new(
+    "send_invoice",
+    json!({ "to": "ana@example.com", "amount": 4200, "invoice": "INV-10" }),
+    SubjectRef::human("ana"),
+    RequestedVia::form("invoice-10", 1, "send"),
+);
+let context = RequestContext {
+    user_id: "ana".into(),
+    scopes: Vec::new(),
+    metadata: Default::default(),
+};
+let events = harness.send_requested(&user, &session, "", call, context).await?;
+```
+
 ### Decisions Authorize One Exact Call
 
 A decision applies to one exact call: made by the same agent, to the same tool, with the same

@@ -30,6 +30,7 @@ with `default-features = false` to leave it out.
 | `website` | Experimental, implies `web`: a prebuilt website's setup code, onboarding, charter cards, site view, weekly review and web editor at `/ui/website`, over `adk-website`'s desk (spec 3.5 §8.2) | `web::website::router`, `web::website::setup_router` |
 | `verb-ui` | Experimental: screen actions people and agents share — Snooze in Coming up from the home, the terminal, voice and an agent, always through the governed path; an agent's request waits for the person every time (spec 3.3 §2 item 7) | `verbs::VerbRegistry`, `verbs::VerbGate`, `web::verbs::router` |
 | `workflow` | Beta: the workflow observer — a graph agent's runs, steps and forks, card hints and a money route for its governed nodes, the fork command; with `web`, the developer panel's Runs tab and its routes under `/api/surface/workflow` (spec 3.3 §12) | `workflow::Workflows`, `web::workflow::router` |
+| `genui` | Agent-drawn UI: forms, cards, tables and screens an agent draws in a thread (A2UI v0.9.1 on the `forms` 1.0 catalog), checked so they never contain approval controls; a form's Send asks the drawing agent for the call, held for the person (spec 3.3 §6.1, §7.4 rule 5) | `genui::DrawToolset`, `genui::Validator`, `web::genui::router` |
 
 ## Sources
 
@@ -126,6 +127,7 @@ under "On this home it can also:" (§5.7).
 | `GET /surface/agents/{id}`, `GET /surface/agents/choices`, `POST /surface/agents/preview` | Agents a person adds: one agent's definition, what may be chosen, and **Here is what Finance can do** with the digest a change applies with; changes are commands (spec 3.3 §5.7, [Your Agents](../docs/official_docs/surfaces/agents.md)) |
 | `/surface/phone/**`, `POST /surface/decisions/{id}/confirm[/options]` | The phone's push subscription, passkeys, pairing QR code and device list, and "Confirm it's you" (`mobile::router`, feature `mobile`) |
 | `/surface/website/**`, `GET /api/surface/website/setup` and `POST …/setup/claim` (root) | The website's views and the setup code (`web::website::router`, `setup_router`, feature `website`, [The Website's Views](../docs/official_docs/surfaces/website.md)) |
+| `GET /surface/genui/capabilities`, `GET /surface/genui/sessions/{session}/forms` | What the home claims of A2UI, AG-UI and MCP Apps, and each sent form's state (`web::genui::router`, feature `genui`, [Agent-Drawn UI](../docs/official_docs/surfaces/genui.md)) |
 
 Every route checks the caller against the session owner (S-I8). The OpenAPI document and the
 TypeScript types in `web/src/generated/` are generated from the Rust types;
@@ -165,9 +167,10 @@ See [The Web Home](../docs/official_docs/surfaces/web-home.md).
 | `channels` | Chat: the Telegram adapter (`adk_surface::channels`), over the kernel's channel contract, by long polling | Beta |
 | `mobile` | The phone: its routes, Web Push from the person's own kernel and "Confirm it's you" (`adk_surface::mobile`); implies `web` and links OpenSSL through webauthn-rs | Beta |
 | `voice` | Voice and video (`adk_surface::voice`): the voice view with `web`, the voice line with `tui`; `voice-live` adds Gemini Live and the OpenAI Realtime API for the live test and the `voice_home` example | Beta |
+| `genui` | Agent-drawn UI (`adk_surface::genui`): the render tools, the validator, the routes with `web`, the box and fill-in pane with `tui` | Beta |
 
-The desktop tray is a separate, unpublished app in `desktop/`, not a feature. Agent-drawn UI
-and the workflow observer arrive as further features (spec 3.3 §6.1, §12). See
+The desktop tray is a separate, unpublished app in `desktop/`, not a feature. The workflow
+observer arrives as a further feature (spec 3.3 §6.1, §12). See
 [the terminal](../docs/official_docs/surfaces/terminal.md) for its keys, modes and exit codes,
 and [the phone](../docs/official_docs/surfaces/phone.md) for serving it.
 

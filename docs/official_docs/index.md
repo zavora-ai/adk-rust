@@ -6,7 +6,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 
 - [Introduction](introduction.md) - Overview of ADK-Rust, its architecture, and key concepts
 - [Quickstart](quickstart.md) - Scaffold, run, and test your first agent in the embedded UI in under 5 minutes
-- [A2UI Quickstart](quickstart-a2ui.md) - Render A2UI JSONL in React; the `adk-ui` tools that emit it await an `adk-core` 3 release
+- [A2UI Quickstart](quickstart-a2ui.md) - Give an agent the `genui` render tools, see its drawings in the web home, and read them as A2UI v0.9.1 JSON lines
 - [Migrating 2.x → 3.0](migration/2.x-to-3.0.md) - Every breaking change since 2.3.0, with before/after code
 - [Migrating 1.0 → 2.0](migration/1.0-to-2.0.md) - Complete breaking-change list with before/after code
 - [SQLx 0.9 in ADK-Rust 3.0](migration/sqlx-0.9.md) - Sharing SQLx pools, TLS flags, and migration-runner inputs
@@ -111,7 +111,8 @@ The interface to an always-on agent (`adk-surface`, spec 3.3): every surface is 
 - [Voice and Video](surfaces/voice.md) - Spoken "allow once" and "deny" through the engine with a cancel window, bound to the decision on screen, a digest on record and never the recording; the camera and the screen while their switches are on; the voice view and the terminal's voice line
 - [The Website's Views](surfaces/website.md) - Experimental, the `website` feature: a prebuilt website's setup code, onboarding, charter, site view, weekly review and web editor at `/ui/website`, over `adk-website`'s desk; who may decide what, and mounting it on your own server
 - [The Workflow Observer](surfaces/workflow.md) - Beta, the `workflow` feature: a graph agent's runs, steps and what each changed on the developer panel's Runs tab; forks from an earlier step with edits, where a call that already happened is not sent again; a graph node's decision on every surface; `adk-rust graph steps` and `graph fork`
-- [Scenarios](surfaces/scenarios.md) - The phase scenarios as programs you can run: "Approve it tomorrow" (a decision that waits through quiet time and a `kill -9`, answered in Telegram) and "The morning after" (one exact briefing across a restart), on SQLite and PostgreSQL
+- [Agent-Drawn UI](surfaces/genui.md) - The `genui` feature: forms, cards, tables and screens agents draw in threads, never with approval controls; a form's Send asks the drawing agent for the call, held for the person on the home's own card; the terminal's fill-in pane; moving from `adk-ui`
+- [Scenarios](surfaces/scenarios.md) - The phase scenarios as programs you can run: "Approve it tomorrow" (a decision that waits through quiet time and a `kill -9`, answered in Telegram) and "The morning after" (one exact briefing across a restart), on SQLite and PostgreSQL; "Governed form" (a drawn form's call waits for the person whatever answered before)
 
 ## Realtime & Multimodal
 
@@ -146,7 +147,7 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 - [MCP security](mcp/security.md) - Authentication, visibility, authorization, approval, and secret handling
 - [MCP testing](mcp/testing.md) - Deterministic gates and deployment verification
 - [Browser Tools](tools/browser-tools.md) - 46 WebDriver tools for web automation
-- [UI Tools](tools/ui-tools.md) - `adk-ui` render tools and the server's UI protocol profiles (`adk_ui`, `a2ui`, `ag_ui`, `mcp_apps`)
+- [UI Tools](tools/ui-tools.md) - The `genui` render tools and the server's UI protocol profiles (`adk_ui`, `a2ui`, `ag_ui`, `mcp_apps`)
 - [RAG](tools/rag.md) - Retrieval-Augmented Generation for knowledge base search
 - [Vertex AI RAG Engine](rag/vertex-rag-engine.md) - Retrieval from managed RAG Engine corpora
 - [Agent Retrieval](rag/agent-retrieval.md) - The Agent Retrieval (Vector Search 2.0) vector store

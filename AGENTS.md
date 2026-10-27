@@ -398,6 +398,9 @@ adk-surface/     Agent surfaces (spec 3.3): SurfaceEngine over a LocalSource (ke
                  session-store position, decision cards and status in the plain words of §8,
                  commands with subject and Origin on the audit record, the §7.2 rules.
                  `web`: the API under /api/surface with OpenAPI and generated TypeScript.
+                 `genui`: agent-drawn forms, cards, tables and screens (A2UI v0.9.1, the
+                 forms 1.0 catalog, rule 5); a form's Send asks the drawing agent for a
+                 RequestedCall, held for the person.
                  `website` (spec 3.5 §8.2, Experimental): a prebuilt website's setup code,
                  onboarding, charter, site view, weekly review and web editor. Beta.
 adk-site/        Site pipeline of an AWP 2.0 website (spec 3.5 §7.7, §7.8): content as files,
@@ -483,10 +486,11 @@ adk-studio/      Visual agent builder — extracted to standalone repo.
                  Local dev: ../adk-studio/ with path deps back to this workspace.
                  Build: cargo check --manifest-path ../adk-studio/Cargo.toml
 
-adk-ui/          Dynamic UI generation (forms, cards, tables, charts) — extracted to standalone repo.
+adk-ui/          Retired, for ADK-Rust 2 only (spec 3.3 decision 11): agent-drawn UI is
+                 adk-surface's `genui` feature. Do not add code to it or depend on it.
                  Repo: https://github.com/zavora-ai/adk-ui
-                 Local dev: ../adk-ui/ with git dep on adk-core.
-                 UI protocol constants are inlined in adk-server/src/ui_protocol.rs.
+                 UI protocol constants stay in adk-server/src/ui_protocol.rs for the
+                 deprecated `adk_ui` profile and the /api/ui bridge.
 ```
 
 ### Examples and docs
