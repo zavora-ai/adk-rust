@@ -1,9 +1,14 @@
 import { useEffect, useState } from "react";
 import type { HomeClient } from "../client";
+import type { GraphView } from "../generated/workflow";
+import type { WorkflowClient } from "../workflow/client";
+import { workflowLabels } from "../workflow/labels";
+import { runsOf } from "../workflow/route";
+import { Runs } from "../workflow/Runs";
 import { topologyActivity } from "./topologyActivity";
 import type { A2aCard, AgentDetails, RuntimeEvent, Session, TopologyMember, TopologyRelationship, TraceSpan, UiCapabilities } from "./types";
 
-type Tab = "topology" | "protocols" | "telemetry" | "state";
+type Tab = "topology" | "protocols" | "telemetry" | "state" | "runs";
 
 /** The tabs' labels, in sentence case (spec 3.3 §8). */
 const TAB_LABELS: Record<Tab, string> = {
@@ -11,6 +16,7 @@ const TAB_LABELS: Record<Tab, string> = {
   protocols: "Protocols",
   telemetry: "Telemetry",
   state: "State",
+  runs: workflowLabels.tab,
 };
 
 const USER_KEY = "adk.home.developer.user";
@@ -29,7 +35,19 @@ function storedUser(): string {
  * protocols its server advertises, a session's telemetry and state — on the server's own
  * APIs. Developer panels may use technical words (§8).
  */
-export function Developer({ client, sessionId }: { client: HomeClient; sessionId?: string }) {
+export function Developer({
+  client,
+  sessionId,
+  workflow,
+}: {
+  client: HomeClient;
+  sessionId?: string;
+  /** The workflow observer's routes and graphs, where the server serves them (spec 3.3 §12). */
+  workflow?: { client: WorkflowClient; graphs: GraphView[] };
+}) {
+  // `/ui/developer/runs/<session>` opens the Runs tab on that session ("Open in Runs").
+  const [runsPlace] = useState(() => runsOf(window.location));
+  const [waiting, setWaiting] = useState(0);
   const [apps, setApps] = useState<string[]>([]);
   const [app, setApp] = useState("");
   const [agent, setAgent] = useState<AgentDetails>();
@@ -38,7 +56,7 @@ export function Developer({ client, sessionId }: { client: HomeClient; sessionId
   const [traces, setTraces] = useState<TraceSpan[]>([]);
   const [user, setUser] = useState(storedUser);
   const [session, setSession] = useState<Session>();
-  const [tab, setTab] = useState<Tab>("topology");
+  const [tab, setTab] = useState<Tab>(runsPlace ? "runs" : "topology");
   const [problem, setProblem] = useState("");
 
   useEffect(() => {
@@ -74,7 +92,8 @@ export function Developer({ client, sessionId }: { client: HomeClient; sessionId
     }
   }, [client, sessionId, app, user]);
 
-  const tabs: Tab[] = ["topology", "protocols", "telemetry", "state"];
+  const tabs: Tab[] = ["topology", "protocols", "telemetry", "state", ...(workflow ? (["runs"] as const) : [])];
+  const runsSession = runsPlace?.session ?? sessionId;
   return (
     <main className="developer">
       <header className="developer-head">
@@ -102,7 +121,9 @@ export function Developer({ client, sessionId }: { client: HomeClient; sessionId
             }}
           />
         </label>
-        {sessionId && <span className="mono muted">session {sessionId}</span>}
+        {(tab === "runs" ? runsSession : sessionId) && (
+          <span className="mono muted">session {tab === "runs" ? runsSession : sessionId}</span>
+        )}
       </header>
       {problem && (
         <p className="decision-problem" role="alert">
@@ -113,11 +134,22 @@ export function Developer({ client, sessionId }: { client: HomeClient; sessionId
         {tabs.map((name) => (
           <button key={name} type="button" aria-pressed={tab === name} onClick={() => setTab(name)}>
             {TAB_LABELS[name]}
+            {name === "runs" && waiting > 0 && <span className="tab-badge">{waiting}</span>}
           </button>
         ))}
       </nav>
       <section className="dev-content">
         {tab === "topology" && <Topology agent={agent} events={session?.events ?? []} />}
+        {tab === "runs" && workflow && (
+          <Runs
+            client={workflow.client}
+            home={client}
+            graphs={workflow.graphs}
+            agent={app}
+            session={runsSession}
+            onWaiting={setWaiting}
+          />
+        )}
         {tab === "protocols" && <Protocols agent={agent} protocols={protocols} a2a={a2a} traceCount={traces.length} />}
         {tab === "telemetry" &&
           (traces.length === 0 ? (

@@ -1,0 +1,727 @@
+/* The Runs tab of the developer panel (spec 3.3 §12), in the §9 tokens: the dark screen is the
+   light screen rendered with the dark set. Status is a word with a colour, never colour alone. */
+
+.runs {
+  display: grid;
+  gap: 14px;
+}
+
+/* The run graph and the steps side by side need the panel's full width. */
+.developer:has(.runs) {
+  max-width: 1440px;
+}
+
+.runs-empty {
+  padding: 24px 0;
+}
+
+.runs-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.runs-graph {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.runs-summary {
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.runs-thread {
+  margin-left: auto;
+  font-size: 12.5px;
+}
+
+.runs-body {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.runs-main {
+  display: grid;
+  gap: 16px;
+}
+
+.run-graph-card {
+  padding: 14px 16px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.run-graph-card > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.run-legend {
+  display: flex;
+  gap: 14px;
+  color: var(--label);
+  font-size: 12px;
+}
+
+.run-legend i {
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  margin-right: 4px;
+  vertical-align: middle;
+  border-top: 2px solid var(--border);
+}
+
+.run-legend .legend-taken {
+  border-top-color: var(--brand);
+}
+
+.run-legend .legend-conditional {
+  border-top: 2px dashed var(--label);
+}
+
+.run-graph {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.run-edge {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+
+.run-edge-conditional {
+  stroke: var(--label);
+  stroke-dasharray: 4 4;
+}
+
+/* A taken edge is solid, conditional or not. */
+.run-edge-taken {
+  stroke: var(--brand);
+  stroke-width: 2;
+  stroke-dasharray: none;
+}
+
+.run-graph marker path {
+  fill: var(--label);
+}
+
+.run-graph marker path.taken {
+  fill: var(--brand);
+}
+
+.run-node rect:first-child {
+  fill: var(--card);
+  stroke: var(--border);
+}
+
+.run-node-waiting rect:first-child {
+  fill: var(--decision);
+  stroke: var(--decision-border);
+}
+
+.run-node-working rect:first-child {
+  stroke: var(--working);
+  stroke-width: 2;
+}
+
+.run-node-failed rect:first-child {
+  stroke: var(--failed);
+}
+
+.run-node-paused rect:first-child {
+  stroke: #7c3aed;
+}
+
+.run-dot {
+  fill: none;
+  stroke: var(--label);
+  stroke-width: 1.5;
+}
+
+.run-node-done .run-dot,
+.run-node-recorded .run-dot {
+  fill: var(--done);
+  stroke: var(--done);
+}
+
+.run-node-waiting .run-dot {
+  fill: var(--waiting);
+  stroke: var(--waiting);
+}
+
+.run-node-working .run-dot {
+  fill: var(--working);
+  stroke: var(--working);
+  animation: run-pulse 1.4s ease-in-out infinite;
+}
+
+.run-node-failed .run-dot {
+  fill: var(--failed);
+  stroke: var(--failed);
+}
+
+.run-node-paused .run-dot {
+  fill: #7c3aed;
+  stroke: #7c3aed;
+}
+
+@keyframes run-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-node-working .run-dot {
+    animation: none;
+  }
+}
+
+.run-node-name {
+  fill: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.run-node-kind {
+  fill: var(--label);
+  font-size: 11px;
+}
+
+.run-state {
+  fill: var(--label);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.run-node-done .run-state,
+.run-node-recorded .run-state {
+  fill: var(--done);
+}
+
+.run-node-waiting .run-state {
+  fill: var(--waiting);
+}
+
+.run-node-working .run-state {
+  fill: var(--working);
+}
+
+.run-node-failed .run-state {
+  fill: var(--failed);
+}
+
+.run-chip,
+.run-badge {
+  fill: var(--raised);
+  stroke: var(--border);
+}
+
+.run-chip-text {
+  fill: var(--text-2);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+.run-badge-text {
+  fill: var(--text-2);
+  font-size: 10px;
+}
+
+.run-end rect {
+  fill: var(--card);
+  stroke: var(--label);
+}
+
+.run-end-reached rect {
+  stroke: var(--brand);
+  stroke-width: 1.5;
+}
+
+.run-end text {
+  fill: var(--text);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.run-question {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.runs-stopped {
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--stop);
+  color: var(--on-stop);
+  font-weight: 600;
+}
+
+.lineage-chip {
+  justify-self: start;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--raised);
+  font-size: 13px;
+}
+
+.notice {
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.notice-done {
+  background: var(--pill-decided-bg);
+  color: var(--pill-decided);
+  font-weight: 600;
+}
+
+.notice-problem {
+  background: var(--pill-failed-bg);
+  color: var(--pill-failed);
+}
+
+.step-error {
+  margin-top: 8px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: var(--pill-failed-bg);
+  color: var(--pill-failed);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+}
+
+.runs-loading {
+  display: grid;
+  gap: 12px;
+}
+
+.runs-loading span {
+  height: 22px;
+  border-radius: 8px;
+  background: var(--raised);
+}
+
+.runs-loading span:nth-child(2) {
+  height: 160px;
+}
+
+.runs-failure {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+
+.runs-failure pre {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--raised);
+  font-size: 12.5px;
+}
+
+/* ── Steps ───────────────────────────────────────────────────── */
+
+.run-steps h2,
+.step-detail h2 {
+  margin: 4px 0 10px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.run-steps ol {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.step-row {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+}
+
+.step-row[data-selected="true"],
+.step-row:hover {
+  border-color: var(--border);
+  background: var(--raised);
+}
+
+.step-open {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.step-open:disabled {
+  cursor: default;
+}
+
+.step-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.node-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+}
+
+.node-chip .duration {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.node-state {
+  font-weight: 600;
+}
+
+.run-node-done .node-state,
+.run-node-recorded .node-state {
+  color: var(--done);
+}
+
+.run-node-waiting .node-state {
+  color: var(--waiting);
+}
+
+.run-node-working .node-state {
+  color: var(--working);
+}
+
+.run-node-failed .node-state {
+  color: var(--failed);
+}
+
+.run-node-notRun .node-state,
+.run-node-idle .node-state {
+  color: var(--label);
+}
+
+.fork-here {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  padding: 3px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.fork-here:disabled {
+  border-color: var(--border);
+  color: var(--label);
+  cursor: not-allowed;
+}
+
+.step-row:hover .fork-here,
+.step-row:focus-within .fork-here,
+.step-row[data-selected="true"] .fork-here {
+  opacity: 1;
+}
+
+.steps-removed {
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--raised);
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.fork-list {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  font-size: 13px;
+  list-style: none;
+}
+
+.fork-list li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.fork-list .link {
+  margin-left: auto;
+}
+
+/* ── Step detail ─────────────────────────────────────────────── */
+
+.step-detail {
+  display: grid;
+  gap: 12px;
+}
+
+.step-detail > .link {
+  justify-self: start;
+}
+
+.step-detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.step-detail-head .muted {
+  font-size: 12px;
+}
+
+.step-node {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  font-size: 13.5px;
+}
+
+.step-node .link {
+  justify-self: start;
+}
+
+.changes {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.changes th,
+.changes td {
+  padding: 8px 6px;
+  border-top: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.changes thead th {
+  border-top: 0;
+  color: var(--label);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.changes tbody th {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+}
+
+.change-word {
+  padding: 1px 7px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.change-added {
+  background: var(--pill-decided-bg);
+  color: var(--pill-decided);
+}
+
+.change-changed {
+  background: var(--pill-question-bg);
+  color: var(--pill-question);
+}
+
+.change-removed {
+  background: var(--pill-failed-bg);
+  color: var(--pill-failed);
+}
+
+.change-note {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.json-value pre {
+  margin: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: var(--raised);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.step-fork {
+  justify-self: start;
+}
+
+/* ── Fork dialog ─────────────────────────────────────────────── */
+
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: start center;
+  padding: 72px 16px;
+  overflow-y: auto;
+  background: rgba(10, 22, 40, 0.45);
+}
+
+.fork-dialog {
+  display: grid;
+  gap: 12px;
+  width: min(560px, 100%);
+  padding: 22px 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.fork-dialog:focus {
+  outline: none;
+}
+
+.fork-dialog h2 {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.fork-what {
+  display: grid;
+  gap: 4px;
+  padding-left: 18px;
+  font-size: 13.5px;
+}
+
+.fork-editor {
+  display: grid;
+}
+
+.fork-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.fork-key {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fork-current {
+  display: block;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fork-value textarea {
+  width: 100%;
+  min-height: 64px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--code-bg);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.fork-value textarea[aria-invalid="true"] {
+  border-color: var(--failed);
+}
+
+.field-error {
+  margin-top: 4px;
+  color: var(--failed);
+  font-size: 12.5px;
+}
+
+.fork-row-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.fork-row-actions .button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.fork-start {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 14px;
+}
+
+.fork-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.dev-tabs .tab-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--button);
+  color: var(--on-button);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .runs-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .runs-thread {
+    margin-left: 0;
+  }
+}

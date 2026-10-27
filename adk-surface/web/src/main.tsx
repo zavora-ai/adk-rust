@@ -9,6 +9,7 @@ import { shellOf } from "./route";
 import { TrayPanel } from "./tray/TrayPanel";
 import { HttpVerbsClient } from "./verbs/client";
 import { HttpWebsiteClient } from "./website/client";
+import { HttpWorkflowClient } from "./workflow/client";
 import "./styles/fonts.css";
 import "./styles/tokens.css";
 import "./styles/app.css";
@@ -31,7 +32,18 @@ function shell(kind: Shell): ReactNode {
       const website = new HttpWebsiteClient("/api/surface/website", (token) => client.signIn(token));
       // Screen actions, where the server takes them (spec 3.3 §2 item 7).
       const verbs = new HttpVerbsClient();
-      return <App client={client} seams={seams} takeOver={client.takeOver()} website={website} verbs={verbs} />;
+      // The workflow observer's Runs tab, where the server observes graph runs (spec 3.3 §12).
+      const workflow = new HttpWorkflowClient();
+      return (
+        <App
+          client={client}
+          seams={seams}
+          takeOver={client.takeOver()}
+          website={website}
+          verbs={verbs}
+          workflow={workflow}
+        />
+      );
     }
     case "tray":
       return <TrayPanel client={new HttpClient("/api", "tray")} />;

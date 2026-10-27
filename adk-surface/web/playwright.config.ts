@@ -156,6 +156,17 @@ const surfaces: Surface[] = [
     testMatch: ["verbs.spec.ts"],
     ready: "/ui/",
   },
+  {
+    // The workflow observer (spec 3.3 §12): approve, rewind and fork the invoice-run graph,
+    // whose charge goes to a counting provider on the same server.
+    name: "workflow",
+    prefix: "WORKFLOW",
+    example: "scripted_workflow",
+    features: "web,workflow",
+    port: 8795,
+    testMatch: ["workflow.spec.ts"],
+    ready: "/ui/",
+  },
 ];
 
 /** One second of a 440 Hz tone, 16 kHz mono PCM16, for Chromium's fake microphone. */

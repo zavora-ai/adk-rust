@@ -16,6 +16,7 @@ import { TrayFixture } from "./tray";
 import { VerbsFixture, VerbsHomeFixture, snoozeCard, verbsSeams, verbsVoiceDevices } from "./verbs";
 import { VoiceFixtureClient, fixtureDevices } from "./voice";
 import { WebsiteFixture } from "./website";
+import { workflowFixture } from "./workflow";
 import "../styles/fonts.css";
 import "../styles/tokens.css";
 import "../styles/app.css";
@@ -53,6 +54,10 @@ const screens: Record<string, () => ReactNode> = {
   ),
   // `&fresh` starts at the setup code.
   website: () => <Website client={new WebsiteFixture({ fresh: params.has("fresh") })} onThreads={() => undefined} />,
+  // The Runs tab (spec 3.3 §12): `&runs=s-7f21` opens it, `&run=done` or `fork` picks the run.
+  workflow: () => (
+    <App client={client} seams={fixtureSeams()} initialSection="developer" workflow={workflowFixture(params, client)} />
+  ),
 };
 const screen = screens[params.get("screen") ?? ""];
 const root = document.getElementById("root");
