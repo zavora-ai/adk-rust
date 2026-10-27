@@ -690,7 +690,7 @@ impl FillIn {
                     if field.value.as_bool().unwrap_or(false) { "[x]" } else { "[ ]" }.to_string()
                 }
                 DrawnInput::Choice | DrawnInput::Choices => {
-                    format!("‹ {} ›", shown_value(&field.field, Some(&field.value)))
+                    format!("‹ {} ›", safe_line(&shown_value(&field.field, Some(&field.value))))
                 }
                 _ => safe_line(&field.text),
             };
@@ -829,7 +829,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::genui::{DrawnArg, DrawnCheck, DrawnKind};
+    use crate::genui::{DrawnArg, DrawnCheck, DrawnKind, DrawnOption};
     use crate::model::{AgentRef, Avatar};
     use crate::tui::theme::Appearance;
 
@@ -1106,6 +1106,32 @@ mod tests {
                 "decision": "apr-1",
             })
         );
+    }
+
+    /// A choice's option label, and a chosen value that matches no option, reach the
+    /// fill-in pane escaped (spec 3.3 §11 S-I9).
+    #[test]
+    fn the_fill_in_pane_escapes_a_choice() {
+        let mut surface = form("Invoice INV-10", "To");
+        let mut plan = field("plan", "Plan", DrawnInput::Choice, json!(["p"]), Vec::new());
+        if let Some(field) = plan.field.as_mut() {
+            field.options = vec![DrawnOption {
+                label: "Pending\u{1b}]52;c;Y3VybA==\u{7}".into(),
+                value: "p".into(),
+            }];
+        }
+        let mut stray = field("tier", "Tier", DrawnInput::Choice, json!(["\u{1b}[2J"]), Vec::new());
+        if let Some(field) = stray.field.as_mut() {
+            field.options = vec![DrawnOption { label: "Gold".into(), value: "gold".into() }];
+        }
+        if let Some(root) = surface.root.as_mut() {
+            root.children.extend([plan, stray]);
+        }
+        let fill = FillIn::of("s1", &surface).unwrap();
+        let theme = Theme::new(Appearance::Dark, true);
+        let shown = text(&fill.lines(&theme, 72));
+        assert!(!shown.chars().any(|c| c.is_control() && c != '\n'), "{shown:?}");
+        assert!(shown.contains("Pending\\u{1b}]52"), "{shown:?}");
     }
 
     proptest! {

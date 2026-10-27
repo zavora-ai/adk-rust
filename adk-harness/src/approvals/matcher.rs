@@ -472,6 +472,8 @@ fn fold(component: &str) -> String {
 /// assert_eq!(fold_display_text("Ａllow\u{200B} \u{043E}nce"), "allow once");
 /// assert_eq!(fold_display_text("Confirm it\u{2019}s  you"), "confirm it's you");
 /// assert_eq!(fold_display_text("D\u{0301}eny"), "deny");
+/// // Musical and shorthand format controls draw nothing either.
+/// assert_eq!(fold_display_text("Ap\u{1D173}pro\u{1BCA0}ved"), "approved");
 /// ```
 pub fn fold_display_text(text: &str) -> String {
     let mut folded = String::with_capacity(text.len());
@@ -495,8 +497,10 @@ pub fn fold_display_text(text: &str) -> String {
     folded
 }
 
-/// Characters that draw nothing or reorder what is drawn: zero-width characters, the soft
-/// hyphen, bidirectional controls, variation selectors and tags.
+/// Characters that draw nothing or reorder what is drawn: Unicode's whole
+/// Default_Ignorable_Code_Point set — zero-width characters, the soft hyphen, bidirectional
+/// controls, fillers, variation selectors, shorthand and musical format controls, tags and
+/// the ranges reserved as ignorable — plus the interlinear annotation controls.
 fn invisible(c: char) -> bool {
     matches!(
         c,
@@ -515,9 +519,10 @@ fn invisible(c: char) -> bool {
             | '\u{FE00}'..='\u{FE0F}'
             | '\u{FEFF}'
             | '\u{FFA0}'
-            | '\u{FFF0}'..='\u{FFF8}'
-            | '\u{E0000}'..='\u{E007F}'
-            | '\u{E0100}'..='\u{E01EF}'
+            | '\u{FFF0}'..='\u{FFFB}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0000}'..='\u{E0FFF}'
     )
 }
 

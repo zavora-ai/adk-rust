@@ -6,7 +6,7 @@
 //! literals, data model bindings and `formatString` and `pluralize` results, against the
 //! reserved words of a decision after [`fold_display_text`].
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use adk_harness::approvals::matcher::fold_display_text;
@@ -30,11 +30,14 @@ pub const RESERVED_PHRASES: &[&str] = &[
     "Stop all",
     "Resume all",
     "Take over",
+    "Add this agent",
 ];
 
-/// Single words of a decision, refused when they are a whole label or heading, so
-/// "Edit address" is shown and "Edit" is not (wave 4 decision 20).
-pub const RESERVED_LABELS: &[&str] = &["Edit", "Deny", "Done", "Approve", "Approved", "Decided"];
+/// Words of a decision refused when they are a whole label or heading, so "Edit address"
+/// is shown and "Edit" is not (wave 4 decision 20), and "Don't add sugar" is shown and the
+/// suggested agent's "Don't add" is not (spec 3.3 §8.2).
+pub const RESERVED_LABELS: &[&str] =
+    &["Edit", "Deny", "Done", "Approve", "Approved", "Decided", "Don't add"];
 
 /// The most components a drawing has.
 pub const MAX_COMPONENTS: usize = 256;
@@ -671,6 +674,40 @@ impl Check {
         Ok(())
     }
 
+    /// The values a choice picker or a slider shows as text: a chosen value that matches
+    /// none of the picker's options, or a slider's bound value.
+    fn shown_values(&self, scope: &str, name: &str, props: &Map<String, Value>) -> Vec<String> {
+        let value = match props.get("value") {
+            Some(Value::Object(binding)) => binding
+                .get("path")
+                .and_then(Value::as_str)
+                .and_then(|path| self.lookup(scope, path)),
+            other => other,
+        };
+        match (name, value) {
+            ("Slider", Some(value)) => vec![shown(Some(value))],
+            ("ChoicePicker", Some(value)) => {
+                let options: Vec<&str> = props
+                    .get("options")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|option| option.get("value")?.as_str())
+                    .collect();
+                let chosen = match value {
+                    Value::Array(items) => items.iter().collect(),
+                    one => vec![one],
+                };
+                chosen
+                    .into_iter()
+                    .filter(|chosen| !chosen.as_str().is_some_and(|value| options.contains(&value)))
+                    .map(|chosen| shown(Some(chosen)))
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// The value at `path`, absolute or relative to the list item `scope`.
     fn lookup(&self, scope: &str, path: &str) -> Option<&Value> {
         if path.starts_with('/') {
@@ -848,6 +885,10 @@ impl<'a> Walk<'a> {
                 let resolved = check.display(Some(at), item, &field, &text)?;
                 self.texts.push(resolved);
             }
+        }
+        // A choice that matches no option, or a slider's value, is shown as it is.
+        for text in check.shown_values(scope, component.name, component.props) {
+            check.display(Some(at), item, "value", &text)?;
         }
         path.push(id);
         for child in children(component.name, component.props) {
@@ -1033,8 +1074,8 @@ fn words(folded: &str) -> Vec<&str> {
 /// The reserved phrases as folded words, each with its wording.
 type FoldedPhrases = Vec<(Vec<String>, &'static str)>;
 
-/// The reserved labels by folded word.
-type FoldedLabels = HashMap<String, &'static str>;
+/// The reserved labels as folded words, each with its wording.
+type FoldedLabels = Vec<(Vec<String>, &'static str)>;
 
 /// The reserved wording, folded once.
 static RESERVED: LazyLock<(FoldedPhrases, FoldedLabels)> = LazyLock::new(|| {
@@ -1042,12 +1083,12 @@ static RESERVED: LazyLock<(FoldedPhrases, FoldedLabels)> = LazyLock::new(|| {
         words(&fold_display_text(text)).into_iter().map(str::to_string).collect::<Vec<_>>()
     };
     let phrases = RESERVED_PHRASES.iter().map(|phrase| (fold(phrase), *phrase)).collect();
-    let labels = RESERVED_LABELS.iter().map(|label| (fold(label).concat(), *label)).collect();
+    let labels = RESERVED_LABELS.iter().map(|label| (fold(label), *label)).collect();
     (phrases, labels)
 });
 
-/// The reserved wording `text` shows, if any: a phrase anywhere, or a single word as the
-/// whole text.
+/// The reserved wording `text` shows, if any: a phrase anywhere, or a label as the whole
+/// text.
 ///
 /// # Example
 ///
@@ -1070,10 +1111,12 @@ pub fn reserved(text: &str) -> Option<&'static str> {
             return Some(original);
         }
     }
-    match words.as_slice() {
-        [word] => labels.get(*word).copied(),
-        _ => None,
-    }
+    labels
+        .iter()
+        .find(|(label, _)| {
+            label.len() == words.len() && label.iter().zip(&words).all(|(part, word)| part == word)
+        })
+        .map(|(_, original)| *original)
 }
 
 /// The secret a field's label, id or path names, if any.

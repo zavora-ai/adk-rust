@@ -543,3 +543,65 @@ proptest! {
         prop_assert_eq!(decode_jsonl(&encode_jsonl(&messages)).unwrap(), messages);
     }
 }
+
+/// Every character Unicode marks default-ignorable draws nothing in a browser, so none of
+/// them hides a reserved word: musical and shorthand format controls, the reserved tag
+/// ranges and the interlinear annotation controls are dropped before matching.
+#[test]
+fn every_default_ignorable_character_is_dropped_before_matching() {
+    for disguised in [
+        "Ap\u{1D173}proved",
+        "You said y\u{1D173}es \u{00B7} Allow o\u{1D17A}nce",
+        "Allow o\u{1BCA0}nce",
+        "Allow\u{E0080} once",
+        "Take o\u{E0FFF}ver",
+        "Allow \u{FFF9}once\u{FFFB}",
+    ] {
+        let draft = screen(vec![text("root", json!(disguised))], json!({}), Vec::new());
+        assert_eq!(refused(&draft).kind, RefusalKind::LooksLikeDecision, "{disguised:?}");
+    }
+}
+
+/// Spec 3.3 §8.2: the suggested agent's decision controls are reserved too, and "Don't add"
+/// only as a whole label.
+#[test]
+fn the_suggested_agents_controls_are_reserved() {
+    for label in ["Add this agent", "Don't add", "Don\u{2019}t add", "Confirm it's you and add"] {
+        let mut draft = invoice_form();
+        draft.actions[0].label = label.to_string();
+        assert_eq!(refused(&draft).kind, RefusalKind::LooksLikeDecision, "{label}");
+    }
+    let draft = screen(vec![text("root", json!("Don't add sugar"))], json!({}), Vec::new());
+    assert!(Validator::forms().validate(&draft).is_ok());
+}
+
+/// A choice that matches no option, or a slider's value, is shown as text by the terminal,
+/// so reserved wording there is refused; a chosen option's value, which is never shown, is
+/// not read.
+#[test]
+fn values_a_choice_or_a_slider_shows_are_checked() {
+    let choice = |value: Value| {
+        screen(
+            vec![json!({
+                "id": "root", "component": "ChoicePicker", "label": "Status",
+                "options": [{ "label": "Approval granted", "value": "approved" }],
+                "value": value
+            })],
+            json!({ "status": ["You said yes"] }),
+            Vec::new(),
+        )
+    };
+    assert_eq!(refused(&choice(json!(["You said yes"]))).kind, RefusalKind::LooksLikeDecision);
+    assert_eq!(refused(&choice(json!({ "path": "/status" }))).kind, RefusalKind::LooksLikeDecision);
+    assert!(Validator::forms().validate(&choice(json!(["approved"]))).is_ok());
+
+    let slider = screen(
+        vec![json!({
+            "id": "root", "component": "Slider", "label": "Level", "max": 10,
+            "value": { "path": "/level" }
+        })],
+        json!({ "level": "Approved" }),
+        Vec::new(),
+    );
+    assert_eq!(refused(&slider).kind, RefusalKind::LooksLikeDecision);
+}
