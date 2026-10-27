@@ -24,6 +24,10 @@
       "ChannelValue": {
         "description": "One channel's value at a checkpoint, for the fork dialog's editor.",
         "properties": {
+          "editable": {
+            "description": "Whether a fork may edit it here: a value too large to show in full may not. A hidden\nor redacted part of an edited value keeps the value it stands for.",
+            "type": "boolean"
+          },
           "key": {
             "description": "The channel.",
             "type": "string"
@@ -41,7 +45,8 @@
         },
         "required": [
           "key",
-          "value"
+          "value",
+          "editable"
         ],
         "type": "object"
       },
@@ -166,6 +171,13 @@
               "$ref": "#/components/schemas/EffectView"
             },
             "type": "array"
+          },
+          "changedCalls": {
+            "description": "What becomes of a changed governed call, when one runs again: \"A changed call waits\nfor you.\" when its node asks first, else that the host's rules decide it.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "refusal": {
             "description": "Why not: \"Nothing runs after the last step\".",

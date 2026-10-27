@@ -25,6 +25,7 @@ import { runsOf } from "../src/workflow/route";
 import { Runs } from "../src/workflow/Runs";
 import type { RunsHome } from "../src/workflow/Runs";
 import { COLLAPSED_LINES, StepDetailView } from "../src/workflow/StepDetail";
+import { ForkDialog } from "../src/workflow/ForkDialog";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -210,6 +211,7 @@ describe("the fork dialog", () => {
     const dialog = await screen.findByRole("dialog", { name: "Fork from step 1" });
     expect(within(dialog).getByText("Runs again: pay, receipt")).toBeTruthy();
     expect(within(dialog).getByText(/Already happened and won't be sent again unless you change it: pay — POST/)).toBeTruthy();
+    expect(within(dialog).getByText("A changed call waits for you.")).toBeTruthy();
     const note = within(dialog).getAllByRole("button", { name: "Edit" })[2];
     await userEvent.click(note);
     const editor = within(dialog).getByRole("textbox", { name: "note" });
@@ -223,6 +225,20 @@ describe("the fork dialog", () => {
     await screen.findByText("Forked. The original run is unchanged.");
     expect(workflow.forks).toEqual([{ from: "cp-1", set: { note: "re-run for audit" }, start: true }]);
     expect(await screen.findByText("Fork of the 09:14 run at step 1 · edited note")).toBeTruthy();
+  });
+
+  it("names what becomes of a changed call only when the server says, and edits no capped value", async () => {
+    const detail = stepDetail();
+    const capped = {
+      ...detail,
+      fork: { ...detail.fork, changedCalls: undefined },
+      stateValues: [{ key: "document", value: "xxxx…", note: "Too large to show in full", editable: false }],
+    };
+    render(<ForkDialog detail={capped} channels={["document"]} onFork={() => Promise.reject(new Error("not sent"))} onClose={() => undefined} />);
+    const dialog = screen.getByRole("dialog", { name: "Fork from step 1" });
+    expect(within(dialog).queryByText("A changed call waits for you.")).toBeNull();
+    expect(within(dialog).getByText("Too large to show in full")).toBeTruthy();
+    expect((within(dialog).getByRole("button", { name: "Edit" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("is refused while a decision waits", async () => {

@@ -94,7 +94,41 @@ impl Display {
     /// One channel's value at a checkpoint.
     pub(crate) fn channel(&self, key: &str, value: Option<&Value>) -> ChannelValue {
         let (value, shown) = self.show(key, value.unwrap_or(&Value::Null));
-        ChannelValue { key: key.to_string(), value, note: shown.note() }
+        ChannelValue {
+            key: key.to_string(),
+            value,
+            note: shown.note(),
+            editable: shown != Shown::Capped,
+        }
+    }
+
+    /// What a fork's edit of `key` writes, from the value submitted and the channel's real
+    /// value (spec 3.3 §12, S-I9).
+    ///
+    /// The editor starts from the shown value, so a part shown as `[hidden]` or
+    /// `[redacted]` keeps the value it stands for, and an unchanged shown value is no edit.
+    /// A value too large to show in full is not edited here.
+    pub(crate) fn edited(
+        &self,
+        key: &str,
+        submitted: &Value,
+        real: Option<&Value>,
+    ) -> Result<Option<Value>, EditRefusal> {
+        let (shown_value, shown) = self.show(key, real.unwrap_or(&Value::Null));
+        if shown == Shown::AsIs {
+            return Ok(Some(submitted.clone()));
+        }
+        if *submitted == shown_value {
+            return Ok(None);
+        }
+        if shown == Shown::Capped {
+            return Err(EditRefusal::TooLarge);
+        }
+        let restored = restore(submitted, real);
+        if holds_placeholder(&restored) {
+            return Err(EditRefusal::Hidden);
+        }
+        Ok(Some(restored))
     }
 
     /// What changed from `before` to `after`, by key, as the observer shows it.
@@ -124,6 +158,66 @@ impl Display {
                 }
             })
             .collect()
+    }
+}
+
+/// Why a fork edit is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EditRefusal {
+    /// A hidden or redacted part has no value it stands for.
+    Hidden,
+    /// The value is too large to show, so it cannot be edited from what was shown.
+    TooLarge,
+}
+
+impl EditRefusal {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::Hidden => "fork.hidden_value",
+            Self::TooLarge => "fork.too_large_to_edit",
+        }
+    }
+
+    pub(crate) fn text(self, key: &str) -> String {
+        match self {
+            Self::Hidden => words::still_hidden(key),
+            Self::TooLarge => words::too_large_to_edit(key),
+        }
+    }
+}
+
+/// `submitted` with each `[hidden]` or `[redacted]` part replaced by what `real` holds at
+/// the same place.
+fn restore(submitted: &Value, real: Option<&Value>) -> Value {
+    match submitted {
+        Value::String(text) if text == words::HIDDEN || text == words::REDACTED => {
+            real.cloned().unwrap_or_else(|| submitted.clone())
+        }
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, value)| {
+                    (key.clone(), restore(value, real.and_then(|real| real.get(key))))
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .enumerate()
+                .map(|(at, item)| restore(item, real.and_then(|real| real.get(at))))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// Whether `value` still holds a `[hidden]` or `[redacted]` placeholder.
+fn holds_placeholder(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text == words::HIDDEN || text == words::REDACTED,
+        Value::Object(map) => map.values().any(holds_placeholder),
+        Value::Array(items) => items.iter().any(holds_placeholder),
+        _ => false,
     }
 }
 
@@ -281,13 +375,20 @@ mod tests {
                     key: "apiKey".into(),
                     value: json!("[hidden]"),
                     note: Some("Hidden: this home hides this key".into()),
+                    editable: true,
                 },
                 ChannelValue {
                     key: "charge".into(),
                     value: json!({ "id": "ch_1", "Card": "[hidden]" }),
                     note: Some("Hidden: this home hides this key".into()),
+                    editable: true,
                 },
-                ChannelValue { key: "receipt".into(), value: Value::Null, note: None },
+                ChannelValue {
+                    key: "receipt".into(),
+                    value: Value::Null,
+                    note: None,
+                    editable: true
+                },
             ]
         );
     }
@@ -330,5 +431,34 @@ mod tests {
                 prop_assert_ne!(before.get(&change.key), after.get(&change.key));
             }
         }
+    }
+    /// Spec 3.3 §12, S-I9: a fork's edit keeps the values a hidden or redacted part stands
+    /// for, drops an unchanged shown value, and refuses a value too large to show.
+    #[test]
+    fn a_fork_edit_keeps_what_hidden_parts_stand_for() {
+        let display = Display::new(["apiKey".to_string()]);
+        let real = json!({ "apiKey": "k-live-1", "retries": 3 });
+        let edited = json!({ "apiKey": "[hidden]", "retries": 5 });
+        assert_eq!(
+            display.edited("config", &edited, Some(&real)),
+            Ok(Some(json!({ "apiKey": "k-live-1", "retries": 5 })))
+        );
+        let shown = display.channel("config", Some(&real)).value;
+        assert_eq!(display.edited("config", &shown, Some(&real)), Ok(None));
+        assert_eq!(
+            display.edited("config", &json!({ "extra": "[hidden]" }), Some(&real)),
+            Err(EditRefusal::Hidden)
+        );
+        let large = json!("x".repeat(VALUE_CAP + 10));
+        let capped = display.channel("document", Some(&large));
+        assert!(!capped.editable);
+        assert_eq!(
+            display.edited("document", &json!("short"), Some(&large)),
+            Err(EditRefusal::TooLarge)
+        );
+        assert_eq!(
+            display.edited("note", &json!("again"), Some(&json!("x"))),
+            Ok(Some(json!("again")))
+        );
     }
 }

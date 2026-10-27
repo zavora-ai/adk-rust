@@ -39,11 +39,24 @@ use crate::node::{NodeContext, NodeOutput};
 ///     .max_redirects(0);
 /// let executor = ActionNodeExecutor::new(config).with_http_policy(policy);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HttpActionPolicy {
     allowed_schemes: Vec<String>,
     allowed_hosts: Option<Vec<String>>,
     max_redirects: usize,
+    /// The host's secret a governed call's credential digests are keyed with.
+    credential_key: Option<std::sync::Arc<[u8]>>,
+}
+
+impl std::fmt::Debug for HttpActionPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpActionPolicy")
+            .field("allowed_schemes", &self.allowed_schemes)
+            .field("allowed_hosts", &self.allowed_hosts)
+            .field("max_redirects", &self.max_redirects)
+            .field("credential_key", &self.credential_key.as_ref().map(|_| "[set]"))
+            .finish()
+    }
 }
 
 impl Default for HttpActionPolicy {
@@ -52,6 +65,7 @@ impl Default for HttpActionPolicy {
             allowed_schemes: vec!["https".to_string(), "http".to_string()],
             allowed_hosts: None,
             max_redirects: 5,
+            credential_key: None,
         }
     }
 }
@@ -94,6 +108,50 @@ impl HttpActionPolicy {
     pub fn max_redirects(mut self, max_redirects: usize) -> Self {
         self.max_redirects = max_redirects;
         self
+    }
+
+    /// Keys the digests a governed call shows its credentials as with `key`, a secret only
+    /// the host holds (spec 3.3 §12).
+    ///
+    /// Without a key a digest is a plain SHA-256 of the credential, which binds the call
+    /// exactly but lets anyone who sees the decision test guesses of a weak credential,
+    /// such as a password, against it. With a key the digest is an HMAC-SHA256 under it.
+    /// Keep the key stable: a call's digests are part of its action-ledger key, so a new
+    /// key makes an approved call, and a fork of it, a new call.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_graph::action::http::HttpActionPolicy;
+    ///
+    /// let policy = HttpActionPolicy::new().credential_key(std::env::var("DIGEST_KEY")?);
+    /// ```
+    #[must_use]
+    pub fn credential_key(mut self, key: impl AsRef<[u8]>) -> Self {
+        self.credential_key = Some(std::sync::Arc::from(key.as_ref()));
+        self
+    }
+
+    /// The `sha256:` digest a credential named `name` is shown and bound as.
+    ///
+    /// Domain-separated by the name, so equal values under different names differ.
+    fn digest(&self, name: &str, value: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        let mut message = b"adk-graph.http-credential\0".to_vec();
+        message.extend_from_slice(name.to_ascii_lowercase().as_bytes());
+        message.push(0);
+        message.extend_from_slice(value);
+        let digest = match &self.credential_key {
+            None => Sha256::digest(&message).to_vec(),
+            Some(key) => hmac_sha256(key, &message).to_vec(),
+        };
+        let mut shown = String::with_capacity(7 + 64);
+        shown.push_str("sha256:");
+        for byte in digest {
+            use std::fmt::Write as _;
+            let _ = write!(shown, "{byte:02x}");
+        }
+        shown
     }
 
     /// Explains why `url` is not permitted, if it is not.
@@ -147,6 +205,21 @@ impl HttpActionPolicy {
             }
         })
     }
+}
+
+/// HMAC-SHA256 of `message` under `key` (RFC 2104).
+fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    const BLOCK: usize = 64;
+    let mut block = [0u8; BLOCK];
+    if key.len() > BLOCK {
+        block[..32].copy_from_slice(&Sha256::digest(key));
+    } else {
+        block[..key.len()].copy_from_slice(key);
+    }
+    let pad = |byte: u8| block.iter().map(|k| k ^ byte).collect::<Vec<u8>>();
+    let inner = Sha256::new().chain_update(pad(0x36)).chain_update(message).finalize();
+    Sha256::new().chain_update(pad(0x5c)).chain_update(inner).finalize().into()
 }
 
 /// The URL as it may be logged: no credentials, query string, or fragment.
@@ -340,19 +413,6 @@ fn is_credential(name: &str) -> bool {
     NAMES.contains(&name.as_str()) || PARTS.iter().any(|part| name.contains(part))
 }
 
-/// The `sha256:` digest a credential named `name` is shown and bound as.
-///
-/// Domain-separated by the name, so equal values under different names differ.
-fn credential_digest(name: &str, value: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(b"adk-graph.http-credential\0");
-    hasher.update(name.to_ascii_lowercase().as_bytes());
-    hasher.update(b"\0");
-    hasher.update(value);
-    format!("sha256:{:x}", hasher.finalize())
-}
-
 /// Every value of the header `name`, joined as one field value.
 fn header_value(
     headers: &reqwest::header::HeaderMap,
@@ -363,13 +423,13 @@ fn header_value(
 }
 
 /// `url` with each credential in its query, and its password, replaced by its digest.
-fn digested_url(url: &reqwest::Url) -> reqwest::Url {
+fn digested_url(policy: &HttpActionPolicy, url: &reqwest::Url) -> reqwest::Url {
     let mut shown = url.clone();
     let pairs: Vec<(String, String)> = url.query_pairs().into_owned().collect();
     if pairs.iter().any(|(name, _)| is_credential(name)) {
         shown.query_pairs_mut().clear().extend_pairs(pairs.iter().map(|(name, value)| {
             let value = if is_credential(name) {
-                credential_digest(name, value.as_bytes())
+                policy.digest(name, value.as_bytes())
             } else {
                 value.clone()
             };
@@ -378,7 +438,7 @@ fn digested_url(url: &reqwest::Url) -> reqwest::Url {
     }
     if let Some(password) = url.password() {
         // Fails only for URLs that cannot carry credentials, which have none.
-        let _ = shown.set_password(Some(&credential_digest("password", password.as_bytes())));
+        let _ = shown.set_password(Some(&policy.digest("password", password.as_bytes())));
     }
     shown
 }
@@ -397,6 +457,7 @@ fn api_key_header(config: &HttpNodeConfig, state: &HashMap<String, Value>) -> Op
 /// `state` with each string under a secret-looking key replaced by its digest, and each
 /// digest paired with the value it stands for.
 fn digested_state(
+    policy: &HttpActionPolicy,
     state: &HashMap<String, Value>,
 ) -> (HashMap<String, Value>, Vec<(String, String)>) {
     let mut shown = state.clone();
@@ -405,7 +466,7 @@ fn digested_state(
         if let Value::String(raw) = value
             && is_credential(key)
         {
-            let digest = credential_digest(key, raw.as_bytes());
+            let digest = policy.digest(key, raw.as_bytes());
             shown.insert(key.clone(), Value::String(digest.clone()));
             digests.push((digest, raw.clone()));
         }
@@ -414,18 +475,18 @@ fn digested_state(
 }
 
 /// `body` with each string under a secret-looking key, at any depth, replaced by its digest.
-fn digested_json(body: &Value, key: Option<&str>) -> Value {
+fn digested_json(policy: &HttpActionPolicy, body: &Value, key: Option<&str>) -> Value {
     match body {
         Value::String(raw) if key.is_some_and(is_credential) => {
-            Value::String(credential_digest(key.unwrap_or_default(), raw.as_bytes()))
+            Value::String(policy.digest(key.unwrap_or_default(), raw.as_bytes()))
         }
         Value::Object(map) => Value::Object(
             map.iter()
-                .map(|(name, value)| (name.clone(), digested_json(value, Some(name))))
+                .map(|(name, value)| (name.clone(), digested_json(policy, value, Some(name))))
                 .collect(),
         ),
         Value::Array(items) => {
-            Value::Array(items.iter().map(|item| digested_json(item, key)).collect())
+            Value::Array(items.iter().map(|item| digested_json(policy, item, key)).collect())
         }
         other => other.clone(),
     }
@@ -434,6 +495,7 @@ fn digested_json(body: &Value, key: Option<&str>) -> Value {
 /// `approved` with each digest under a secret-looking key replaced by the value `current`
 /// holds at the same place; fails naming the field whose credential changed.
 fn restored_json(
+    policy: &HttpActionPolicy,
     approved: &Value,
     current: Option<&Value>,
     key: Option<&str>,
@@ -445,22 +507,29 @@ fn restored_json(
             let name = key.unwrap_or_default();
             current
                 .and_then(Value::as_str)
-                .filter(|raw| credential_digest(name, raw.as_bytes()) == *digest)
+                .filter(|raw| policy.digest(name, raw.as_bytes()) == *digest)
                 .map(|raw| Value::String(raw.to_string()))
                 .ok_or_else(|| format!("the credential in body field '{name}'"))
         }
         Value::Object(map) => map
             .iter()
             .map(|(name, value)| {
-                restored_json(value, current.and_then(|current| current.get(name)), Some(name))
-                    .map(|value| (name.clone(), value))
+                restored_json(
+                    policy,
+                    value,
+                    current.and_then(|current| current.get(name)),
+                    Some(name),
+                )
+                .map(|value| (name.clone(), value))
             })
             .collect::<std::result::Result<serde_json::Map<_, _>, _>>()
             .map(Value::Object),
         Value::Array(items) => items
             .iter()
             .enumerate()
-            .map(|(at, item)| restored_json(item, current.and_then(|current| current.get(at)), key))
+            .map(|(at, item)| {
+                restored_json(policy, item, current.and_then(|current| current.get(at)), key)
+            })
             .collect::<std::result::Result<Vec<_>, _>>()
             .map(Value::Array),
         other => Ok(other.clone()),
@@ -502,7 +571,7 @@ pub(crate) fn call_args(
     for name in request.headers().keys() {
         let raw = header_value(request.headers(), name);
         let value = if secret(name.as_str()) {
-            credential_digest(name.as_str(), &raw)
+            policy.digest(name.as_str(), &raw)
         } else {
             String::from_utf8_lossy(&raw).into_owned()
         };
@@ -510,13 +579,13 @@ pub(crate) fn call_args(
     }
     let mut call = json!({
         "method": request.method().as_str(),
-        "url": digested_url(request.url()).as_str(),
+        "url": digested_url(policy, request.url()).as_str(),
         "headers": headers,
     });
     match &config.body {
         HttpBody::None => {}
         HttpBody::Json { data } => {
-            call["body"] = digested_json(&interpolate_json_values(data, state), None);
+            call["body"] = digested_json(policy, &interpolate_json_values(data, state), None);
         }
         HttpBody::Form { fields } => {
             let form: serde_json::Map<String, Value> = fields
@@ -524,7 +593,7 @@ pub(crate) fn call_args(
                 .map(|(name, value)| {
                     let value = interpolate_variables(value, state);
                     let value = if is_credential(name) {
-                        credential_digest(name, value.as_bytes())
+                        policy.digest(name, value.as_bytes())
                     } else {
                         value
                     };
@@ -534,7 +603,7 @@ pub(crate) fn call_args(
             call["form"] = Value::Object(form);
         }
         HttpBody::Raw { content, .. } => {
-            let (shown, _) = digested_state(state);
+            let (shown, _) = digested_state(policy, state);
             call["rawBody"] = Value::String(interpolate_variables(content, &shown));
         }
     }
@@ -591,7 +660,7 @@ pub(crate) async fn run_call(
                     .url()
                     .query_pairs()
                     .find(|(key, raw)| {
-                        *key == name && credential_digest(&name, raw.as_bytes()) == value
+                        *key == name && policy.digest(&name, raw.as_bytes()) == value
                     })
                     .map(|(_, raw)| raw.into_owned())
                     .ok_or_else(|| {
@@ -605,7 +674,7 @@ pub(crate) async fn run_call(
         url.query_pairs_mut().clear().extend_pairs(resolved);
     }
     if url.password().is_some() {
-        if digested_url(current.url()).password() != url.password() {
+        if digested_url(policy, current.url()).password() != url.password() {
             return Err(changed("the URL's password".to_string()));
         }
         let _ = url.set_password(current.url().password());
@@ -620,7 +689,7 @@ pub(crate) async fn run_call(
                 let header = reqwest::header::HeaderName::from_bytes(name.as_bytes())
                     .map_err(|_| refuse(format!("'{name}' is not a valid header name")))?;
                 let raw = header_value(current.headers(), &header);
-                if raw.is_empty() || credential_digest(name, &raw) != value {
+                if raw.is_empty() || policy.digest(name, &raw) != value {
                     return Err(changed(format!("the credential in header '{name}'")));
                 }
                 request = request.header(header, raw);
@@ -634,7 +703,7 @@ pub(crate) async fn run_call(
             HttpBody::Json { data } => Some(interpolate_json_values(data, state)),
             _ => None,
         };
-        let body = restored_json(body, current_body.as_ref(), None).map_err(changed)?;
+        let body = restored_json(policy, body, current_body.as_ref(), None).map_err(changed)?;
         request = request.json(&body);
     } else if let Some(form) = args["form"].as_object() {
         let current_form: HashMap<String, String> = match &config.body {
@@ -650,7 +719,7 @@ pub(crate) async fn run_call(
             let value = if is_credential(name) && value.starts_with("sha256:") {
                 current_form
                     .get(name)
-                    .filter(|raw| credential_digest(name, raw.as_bytes()) == value)
+                    .filter(|raw| policy.digest(name, raw.as_bytes()) == value)
                     .cloned()
                     .ok_or_else(|| changed(format!("the credential in form field '{name}'")))?
             } else {
@@ -660,7 +729,7 @@ pub(crate) async fn run_call(
         }
         request = request.form(&fields);
     } else if let Some(raw) = args["rawBody"].as_str() {
-        let (_, digests) = digested_state(state);
+        let (_, digests) = digested_state(policy, state);
         let mut raw = raw.to_string();
         for (digest, value) in &digests {
             raw = raw.replace(digest.as_str(), value);
@@ -856,6 +925,27 @@ mod tests {
             "https://example.com/path?redacted"
         );
         assert_eq!(redact_url(&url("https://example.com/path")), "https://example.com/path");
+    }
+
+    #[test]
+    fn hmac_sha256_matches_rfc_4231() {
+        let mac = hmac_sha256(b"Jefe", b"what do ya want for nothing?");
+        let hex: String = mac.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(hex, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+    }
+
+    #[test]
+    fn a_keyed_digest_cannot_be_checked_without_the_key() {
+        let plain = HttpActionPolicy::new();
+        let keyed = HttpActionPolicy::new().credential_key("host-secret");
+        let guess = plain.digest("password", b"Summer2026!");
+        assert_ne!(keyed.digest("password", b"Summer2026!"), guess);
+        assert_eq!(
+            keyed.digest("password", b"Summer2026!"),
+            keyed.digest("Password", b"Summer2026!"),
+            "the name is compared without case"
+        );
+        assert!(!format!("{keyed:?}").contains("host-secret"));
     }
 
     #[test]

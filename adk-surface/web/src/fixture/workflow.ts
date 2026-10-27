@@ -161,14 +161,15 @@ export function stepDetail(): StepDetail {
       },
     ],
     stateValues: [
-      { key: "charge", value: null },
-      { key: "invoice", value: { customer: "Acme", amountCents: 4200 } },
-      { key: "note", value: "Bill Acme for October" },
-      { key: "receipt", value: null },
+      { key: "charge", value: null, editable: true },
+      { key: "invoice", value: { customer: "Acme", amountCents: 4200 }, editable: true },
+      { key: "note", value: "Bill Acme for October", editable: true },
+      { key: "receipt", value: null, editable: true },
     ],
     fork: {
       allowed: true,
       runsAgain: ["pay", "receipt"],
+      changedCalls: "A changed call waits for you.",
       alreadyHappened: [
         {
           node: "pay",

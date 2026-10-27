@@ -47,23 +47,23 @@ mod values;
 mod view;
 pub mod words;
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
 
 use adk_core::{
     AdkError, Agent, ApprovalCall, ApprovalRequest, ApprovalRisk, ApprovalRoute, ApprovalRouter,
     ApprovalState, Content, ErrorCategory, ErrorComponent, RequestContext, RunConfig, SessionId,
-    UserId,
+    ToolOrigin, UserId,
 };
 use adk_graph::agent::{GraphAgent, session_thread_id};
 use adk_graph::checkpoint::Checkpointer;
 use adk_graph::node::{ExecutionConfig, NodeContext};
 use adk_graph::record::{NodeRecord, NodeStatus};
-use adk_graph::shape::{GraphShape, NodeShape};
+use adk_graph::shape::{GovernedShape, GraphShape};
 use adk_graph::state::Checkpoint;
 use adk_graph::time_travel::{ForkError, ForkSpec};
 use adk_runner::Runner;
-use adk_session::{CreateRequest, GetRequest, ListRequest, SessionService};
+use adk_session::{CreateRequest, DeleteRequest, GetRequest, ListRequest, SessionService};
 use async_trait::async_trait;
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::StreamExt;
@@ -85,6 +85,10 @@ pub use view::{
 
 /// The audit action of a fork made on the web home (spec 3.3 §11, §12).
 pub const SURFACE_AUDIT_WORKFLOW_FORK: &str = "surface.workflow.fork";
+
+/// The audit action of a fork's run started from the web home, with the fork or later
+/// (spec 3.3 §11, §12).
+pub const SURFACE_AUDIT_WORKFLOW_START: &str = "surface.workflow.start";
 
 /// The largest value one fork edit may set, in bytes of compact JSON.
 pub const FORK_VALUE_LIMIT: usize = 64 * 1024;
@@ -119,6 +123,8 @@ struct Inner {
     display: Display,
     hidden: Vec<String>,
     offset: FixedOffset,
+    /// The threads of forks whose run this observer started and that have not ended.
+    starting: Arc<Mutex<BTreeSet<String>>>,
 }
 
 impl std::fmt::Debug for Workflows {
@@ -145,6 +151,7 @@ impl Workflows {
                 display: Display::default(),
                 hidden: Vec::new(),
                 offset: *chrono::Local::now().offset(),
+                starting: Arc::default(),
             }),
         }
     }
@@ -347,6 +354,7 @@ impl Workflows {
         let channels = agent.graph().state_channels();
 
         let mut found = Found {
+            starting: self.is_starting(&thread),
             waiting: self.waiting(engine, caller, session, agent.name()).await?,
             stopped: engine.source().stopped().await.unwrap_or(false),
             forks: self.forks(checkpoints.as_ref(), user, session, &thread).await,
@@ -398,7 +406,9 @@ impl Workflows {
             .map_err(source)?
             .into_iter()
             .next();
-        let later: Vec<Saved> = checkpoints
+        // What a fork from here would do is what the rest of this run did: a later run of the
+        // session, started by a later message, is not part of it.
+        let mut later: Vec<Saved> = checkpoints
             .list(&thread)
             .await
             .map_err(source)?
@@ -406,6 +416,14 @@ impl Workflows {
             .filter(|later| later.version > target.version)
             .map(Saved::new)
             .collect();
+        let run = target
+            .run_record()
+            .ok()
+            .flatten()
+            .or_else(|| later.iter().find_map(|later| later.run.clone()));
+        later.retain(|later| {
+            later.run.as_ref().map(|r| &r.run_id) == run.as_ref().map(|r| &r.run_id)
+        });
         let root = target.lineage().ok().flatten().map_or_else(|| thread.clone(), |l| l.root);
         let effects =
             adk_graph::governed::effect_log(checkpoints.as_ref(), &root).await.map_err(source)?;
@@ -511,17 +529,35 @@ impl Workflows {
         let thread = self.thread(user, session);
         let agent = self.graph_for(&thread, None).await?;
         let checkpoints = checkpointer(agent)?;
+        // An edit starts from the value the step showed: a hidden or redacted part keeps the
+        // value it stands for, and a value too large to show is not edited here.
+        let forked_from = checkpoints
+            .load_by_id(&request.from)
+            .await
+            .map_err(source)?
+            .filter(|found| found.thread_id == thread)
+            .ok_or_else(|| SurfaceError::not_found(format!("checkpoint '{}'", request.from)))?;
+        let mut set = BTreeMap::new();
+        for (key, value) in request.set {
+            match self.inner.display.edited(&key, &value, forked_from.state.get(&key)) {
+                Ok(Some(value)) => {
+                    set.insert(key, value);
+                }
+                Ok(None) => {}
+                Err(refusal) => return Err(refused(refusal.code(), refusal.text(&key))),
+            }
+        }
+        let start = request.start && !engine.source().stopped().await.unwrap_or(false);
+        if start && self.inner.runner.is_none() {
+            return Err(SurfaceError::unsupported("starting a fork without a runner"));
+        }
         let fork_session = format!("s-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
         let fork_thread = self.thread(user, &fork_session);
-        let spec = ForkSpec {
-            from: request.from.clone(),
-            new_thread_id: fork_thread.clone(),
-            set: request.set,
-        };
+        let spec = ForkSpec { from: request.from.clone(), new_thread_id: fork_thread.clone(), set };
         let handle = agent.graph().time_travel(&thread).map_err(source)?;
         let fork = handle.fork(spec).await.map_err(fork_refused)?;
-        let created = self
-            .session_service()?
+        let sessions = self.session_service()?;
+        let created = sessions
             .create(CreateRequest {
                 app_name: self.inner.app.clone(),
                 user_id: user.to_string(),
@@ -538,7 +574,7 @@ impl Workflows {
         }
         let edited: Vec<String> =
             fork.lineage().ok().flatten().map(|lineage| lineage.edited).unwrap_or_default();
-        engine
+        let recorded = engine
             .record(
                 caller,
                 SURFACE_AUDIT_WORKFLOW_FORK,
@@ -549,25 +585,51 @@ impl Workflows {
                     "edited": edited,
                 }),
             )
-            .await?;
+            .await;
+        if let Err(error) = recorded {
+            // A fork the audit does not hold is not left to be started (spec 3.3 §11).
+            let deleted = sessions
+                .delete(DeleteRequest {
+                    app_name: self.inner.app.clone(),
+                    user_id: user.to_string(),
+                    session_id: fork_session.clone(),
+                })
+                .await;
+            if let Err(cleanup) = deleted {
+                tracing::warn!(error = %cleanup, "an unrecorded fork's session could not be removed");
+            }
+            if let Err(cleanup) = checkpoints.delete(&fork_thread).await {
+                tracing::warn!(error = %cleanup, "an unrecorded fork could not be removed");
+            }
+            return Err(error);
+        }
         tracing::info!(
             session.id = %session,
             fork.session_id = %fork_session,
             fork.edited = edited.len(),
             "forked a workflow run"
         );
-        let started = request.start && !engine.source().stopped().await.unwrap_or(false);
-        if started {
-            self.start_turn(caller, &fork_session).await?;
-        }
+        let (started, text) = if start {
+            match self.start_turn(engine, caller, &fork_session, &request.from).await {
+                Ok(()) => (true, words::FORKED),
+                Err(error) => {
+                    // The fork exists and is recorded; it is started from its run.
+                    tracing::warn!(fork.session_id = %fork_session, error = %error, "a fork could not start");
+                    (false, words::FORKED_NOT_STARTED)
+                }
+            }
+        } else if request.start {
+            (false, words::FORKED_STOPPED)
+        } else {
+            (false, words::FORKED)
+        };
         Ok(ForkOutcome {
             session_id: fork_session,
             thread_id: fork_thread,
             from: request.from,
             edited,
             started,
-            text: if started || !request.start { words::FORKED } else { words::FORKED_STOPPED }
-                .to_string(),
+            text: text.to_string(),
         })
     }
 
@@ -594,9 +656,12 @@ impl Workflows {
         let thread = self.thread(user, session);
         let agent = self.graph_for(&thread, None).await?;
         let newest = checkpointer(agent)?.load(&thread).await.map_err(source)?;
-        // A fork not started is its first checkpoint alone: a lineage and no run.
+        // A fork not started is its first checkpoint alone: a lineage and no run, and no run
+        // of it under way.
         let lineage = match newest {
-            Some(newest) if newest.run_record().ok().flatten().is_none() => {
+            Some(newest)
+                if newest.run_record().ok().flatten().is_none() && !self.is_starting(&thread) =>
+            {
                 newest.lineage().ok().flatten()
             }
             _ => None,
@@ -610,7 +675,7 @@ impl Workflows {
                 words::FORKED_STOPPED,
             )));
         }
-        self.start_turn(caller, session).await?;
+        self.start_turn(engine, caller, session, &lineage.parent_checkpoint).await?;
         Ok(ForkOutcome {
             session_id: session.to_string(),
             thread_id: thread,
@@ -621,9 +686,21 @@ impl Workflows {
         })
     }
 
-    /// Runs a turn of `session` with no message, as the caller: the graph continues from its
-    /// newest checkpoint.
-    async fn start_turn(&self, caller: &Caller, session: &str) -> Result<()> {
+    /// Whether a run of `thread` this observer started is still under way.
+    fn is_starting(&self, thread: &str) -> bool {
+        self.inner.starting.lock().map(|starting| starting.contains(thread)).unwrap_or(false)
+    }
+
+    /// Runs a turn of the fork `session` with no message, as the caller: the graph continues
+    /// from its newest checkpoint. The start is recorded as [`SURFACE_AUDIT_WORKFLOW_START`],
+    /// and a second start while the run is under way is refused.
+    async fn start_turn(
+        &self,
+        engine: &SurfaceEngine,
+        caller: &Caller,
+        session: &str,
+        from: &str,
+    ) -> Result<()> {
         let runner = self
             .inner
             .runner
@@ -632,6 +709,24 @@ impl Workflows {
         let user =
             UserId::new(caller.user_id()).map_err(|e| SurfaceError::Invalid(e.to_string()))?;
         let id = SessionId::new(session).map_err(|e| SurfaceError::Invalid(e.to_string()))?;
+        let thread = self.thread(caller.user_id(), session);
+        let claimed = self
+            .inner
+            .starting
+            .lock()
+            .map(|mut starting| starting.insert(thread.clone()))
+            .unwrap_or(false);
+        if !claimed {
+            return Err(refused("workflow.started", "this run already started"));
+        }
+        let release = Release { starting: Arc::clone(&self.inner.starting), thread };
+        engine
+            .record(
+                caller,
+                SURFACE_AUDIT_WORKFLOW_START,
+                json!({ "sessionId": session, "from": from }),
+            )
+            .await?;
         let context = RequestContext {
             user_id: caller.user_id().to_string(),
             scopes: caller.groups.clone(),
@@ -642,6 +737,8 @@ impl Workflows {
             runner.run_with_config(user, id, Content::new("user"), Some(config)).await?;
         let session = session.to_string();
         tokio::spawn(async move {
+            // The run is under way until its stream ends.
+            let _release = release;
             while let Some(event) = stream.next().await {
                 if let Err(error) = event {
                     tracing::warn!(session.id = %session, error = %error, "a fork's run failed");
@@ -673,7 +770,17 @@ impl Workflows {
             })
             .collect();
         requests.sort_by_key(|request| request.created_at);
-        Ok(requests.into_iter().map(|request| (request.tool_name, request.id)).collect())
+        // A node inside a subgraph waits as the subgraph's node of this graph.
+        Ok(requests
+            .into_iter()
+            .map(|request| {
+                let node = self
+                    .governed_node(request.origin.as_ref(), &request.tool_name)
+                    .and_then(|(_, found)| found.path.first().cloned())
+                    .unwrap_or(request.tool_name);
+                (node, request.id)
+            })
+            .collect())
     }
 
     /// The decision each governed node of a step waited on, and what became of it.
@@ -799,18 +906,39 @@ impl Workflows {
         })
     }
 
-    /// The governed node `request` is for, when its origin is a graph observed here.
+    /// The governed node `request` is for, when its origin is a graph observed here, with the
+    /// graph's name: a node of the graph, or of a subgraph inside it, whose declaration the
+    /// origin binds. When none matches exactly, such as after the graph changed, the node of
+    /// that name that spends money, else the first.
     fn governed_node(
         &self,
-        request_origin: Option<&str>,
+        origin: Option<&ToolOrigin>,
         node: &str,
-    ) -> Option<(String, NodeShape)> {
-        let origin = request_origin?;
-        let agent = self.inner.graphs.iter().find(|agent| origin == origin_of(agent.name()))?;
-        let shape = agent.graph().shape();
-        let node =
-            shape.nodes.into_iter().find(|shape| shape.name == node && shape.governed.is_some())?;
-        Some((agent.name().to_string(), node))
+    ) -> Option<(String, GovernedShape)> {
+        let origin = origin?;
+        let agent =
+            self.inner.graphs.iter().find(|agent| origin.source == origin_of(agent.name()))?;
+        let candidates: Vec<GovernedShape> = agent
+            .graph()
+            .governed_shapes()
+            .into_iter()
+            .filter(|governed| governed.node.name == node)
+            .collect();
+        let binds = |governed: &&GovernedShape| {
+            serde_json::to_value(&governed.node).is_ok_and(|declaration| {
+                ToolOrigin::new(origin.source.clone(), &declaration, None).declaration_digest
+                    == origin.declaration_digest
+            })
+        };
+        let spends = |governed: &&GovernedShape| {
+            governed.node.governed.is_some_and(|governed| governed.spends_money)
+        };
+        let found = candidates
+            .iter()
+            .find(binds)
+            .or_else(|| candidates.iter().find(spends))
+            .or_else(|| candidates.first())?;
+        Some((agent.name().to_string(), found.clone()))
     }
 
     /// An approval router that keeps `fallback`'s route and raises the risk of a call from a
@@ -832,6 +960,20 @@ impl Workflows {
     }
 }
 
+/// Ends a fork's run under way when dropped: when its stream ends, or when it never started.
+struct Release {
+    starting: Arc<Mutex<BTreeSet<String>>>,
+    thread: String,
+}
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        if let Ok(mut starting) = self.starting.lock() {
+            starting.remove(&self.thread);
+        }
+    }
+}
+
 /// The router [`Workflows::approval_router`] builds.
 pub struct WorkflowRouter {
     workflows: Workflows,
@@ -847,11 +989,12 @@ impl std::fmt::Debug for WorkflowRouter {
 impl ApprovalRouter for WorkflowRouter {
     fn route(&self, call: &ApprovalCall) -> Option<ApprovalRoute> {
         let mut route = self.fallback.route(call)?;
-        let origin = call.request.origin.as_ref().map(|origin| origin.source.as_str());
         let money = self
             .workflows
-            .governed_node(origin, &call.request.tool_name)
-            .is_some_and(|(_, node)| node.governed.is_some_and(|governed| governed.spends_money));
+            .governed_node(call.request.origin.as_ref(), &call.request.tool_name)
+            .is_some_and(|(_, found)| {
+                found.node.governed.is_some_and(|governed| governed.spends_money)
+            });
         if money {
             route.risk = route.risk.max(ApprovalRisk::High);
         }
@@ -865,8 +1008,8 @@ impl CardHints for Workflows {
     /// that spends it, "Can't be undone" for a non-idempotent one, and "From the invoice-run
     /// workflow · Open in Runs".
     async fn hint(&self, request: &ApprovalRequest) -> Option<CardHint> {
-        let origin = request.origin.as_ref().map(|origin| origin.source.as_str());
-        let (graph, node) = self.governed_node(origin, &request.tool_name)?;
+        let (graph, found) = self.governed_node(request.origin.as_ref(), &request.tool_name)?;
+        let node = found.node;
         let mut hint = CardHint::new().without_always_allow().with_detail(
             CardDetail::new(words::from_the_workflow(&graph)).with_link(
                 words::OPEN_IN_RUNS,

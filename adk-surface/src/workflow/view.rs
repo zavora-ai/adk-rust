@@ -398,6 +398,9 @@ pub struct ChannelValue {
     /// Why the value is not shown as it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Whether a fork may edit it here: a value too large to show in full may not. A hidden
+    /// or redacted part of an edited value keeps the value it stands for.
+    pub editable: bool,
 }
 
 /// A governed call that already happened, from the effect log (spec 3.3 §12).
@@ -467,6 +470,10 @@ pub struct ForkPoint {
     /// Governed calls after this step that already happened and are answered from their
     /// record unless the fork changes them.
     pub already_happened: Vec<EffectView>,
+    /// What becomes of a changed governed call, when one runs again: "A changed call waits
+    /// for you." when its node asks first, else that the host's rules decide it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_calls: Option<String>,
 }
 
 /// `GET /surface/workflow/sessions/{session}/checkpoints/{id}`: one step, from one

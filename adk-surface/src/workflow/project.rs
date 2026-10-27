@@ -158,16 +158,30 @@ struct Row<'a> {
     step: usize,
     state: StepState,
     checkpoint: &'a Checkpoint,
+    /// Whether the checkpoint holds the state right after this step: it is the last step the
+    /// checkpoint records. Steps written together under `Durability::Exit`, or before a
+    /// flush, share one checkpoint that holds only the last one's state.
+    addressed: bool,
     nodes: Vec<NodeRecord>,
+}
+
+/// Whether a paused step's record is a stop at an `interrupt_after` gate: the step finished,
+/// and no node of it waits.
+fn after_gate(record: &StepRecord) -> bool {
+    record.kind == StepKind::Paused
+        && !record.nodes.iter().any(|node| node.status == NodeStatus::Paused)
 }
 
 /// Merges a run's step records into one row per step label, in order.
 fn rows<'a>(run: &RunRecords<'a>) -> Vec<Row<'a>> {
     let mut rows: Vec<Row<'a>> = Vec::new();
     for saved in &run.saved {
-        for record in &saved.steps {
+        for (at, record) in saved.steps.iter().enumerate() {
+            let addressed = at + 1 == saved.steps.len();
             let state = match record.kind {
                 StepKind::Completed => StepState::Completed,
+                // The step finished before the run stopped at the gate after it.
+                StepKind::Paused if after_gate(record) => StepState::Completed,
                 StepKind::Paused => StepState::Paused,
                 StepKind::Failed => StepState::Failed,
             };
@@ -181,11 +195,13 @@ fn rows<'a>(run: &RunRecords<'a>) -> Vec<Row<'a>> {
                     }
                     row.state = state;
                     row.checkpoint = &saved.checkpoint;
+                    row.addressed = addressed;
                 }
                 None => rows.push(Row {
                     step: record.step,
                     state,
                     checkpoint: &saved.checkpoint,
+                    addressed,
                     nodes: record.nodes.clone(),
                 }),
             }
@@ -231,6 +247,8 @@ fn starts_with_input(run: &RunRecords<'_>) -> bool {
 /// Facts the projection cannot read from the checkpoints.
 #[derive(Default)]
 pub(crate) struct Found {
+    /// A run of this fork that the observer started is under way.
+    pub(crate) starting: bool,
     /// The decision each waiting node waits on, by node.
     pub(crate) waiting: BTreeMap<String, String>,
     /// Everything is stopped.
@@ -313,11 +331,12 @@ fn run_step(context: &Context<'_>, row: &Row<'_>, found: &Found, running: bool) 
         state: row.state,
         at,
         at_text: context.hh_mm_ss(at),
-        checkpoint_id: Some(row.checkpoint.checkpoint_id.clone()),
+        checkpoint_id: row.addressed.then(|| row.checkpoint.checkpoint_id.clone()),
         nodes,
         text: (waiting && wrote.is_empty()).then(|| words::NOTHING_WRITTEN_YET.to_string()),
         wrote: wrote.into_iter().collect(),
-        forkable: row.state == StepState::Completed
+        forkable: row.addressed
+            && row.state == StepState::Completed
             && !row.checkpoint.pending_nodes.is_empty()
             && !row.checkpoint.is_paused(),
     }
@@ -407,17 +426,17 @@ pub(crate) fn run_view(context: &Context<'_>, saved: &[Saved], found: Found) -> 
 
     let status = match (newest, latest) {
         (None, _) => RunStatus::NoRun,
+        (Some(_), None) if lineage.is_some() && found.starting => RunStatus::Working,
         (Some(_), None) if lineage.is_some() => RunStatus::NotStarted,
         (Some(newest), latest) => {
-            let failed = latest
-                .and_then(|run| run.saved.last())
-                .and_then(|saved| saved.steps.last())
-                .is_some_and(|step| step.kind == StepKind::Failed);
+            let last_step =
+                latest.and_then(|run| run.saved.last()).and_then(|saved| saved.steps.last());
+            let failed = last_step.is_some_and(|step| step.kind == StepKind::Failed);
             if failed {
                 RunStatus::Failed
             } else if newest.pending_nodes.is_empty() {
                 RunStatus::Done
-            } else if newest.is_paused() {
+            } else if newest.is_paused() || last_step.is_some_and(after_gate) {
                 let paused: Vec<&NodeRecord> = latest
                     .and_then(|run| run.saved.last())
                     .and_then(|saved| saved.steps.last())
@@ -721,6 +740,18 @@ pub(crate) fn step_detail(
             })
         })
         .collect();
+    let asks: Vec<bool> = runs_again
+        .iter()
+        .filter_map(|node| context.shape.nodes.iter().find(|shape| shape.name == *node))
+        .filter_map(|shape| shape.governed.map(|governed| governed.requires_approval))
+        .collect();
+    let changed_calls = if asks.iter().any(|asks| *asks) {
+        Some(words::CHANGED_CALL_WAITS.to_string())
+    } else if !asks.is_empty() {
+        Some(words::CHANGED_CALL_RULES.to_string())
+    } else {
+        None
+    };
     let refusal = if checkpoint.is_paused() {
         Some(words::FORK_FROM_THE_COMPLETED_STEP.to_string())
     } else if checkpoint.pending_nodes.is_empty() {
@@ -743,7 +774,13 @@ pub(crate) fn step_detail(
         nodes,
         changes,
         state_values,
-        fork: ForkPoint { allowed: refusal.is_none(), refusal, runs_again, already_happened },
+        fork: ForkPoint {
+            allowed: refusal.is_none(),
+            refusal,
+            runs_again,
+            already_happened,
+            changed_calls,
+        },
     }
 }
 
@@ -756,5 +793,106 @@ fn effect_view(context: &Context<'_>, entry: &EffectRecord, call: Option<String>
         at: entry.at,
         at_text,
         writes: entry.writes.keys().cloned().collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use adk_graph::record::{RUN_METADATA_KEY, STEPS_METADATA_KEY};
+    use adk_graph::shape::{NodeKind, NodeShape};
+    use adk_graph::state::State;
+    use serde_json::json;
+
+    use super::*;
+
+    fn done(node: &str) -> NodeRecord {
+        NodeRecord {
+            node: node.to_string(),
+            started_at: Utc::now(),
+            duration_ms: 5,
+            status: NodeStatus::Done,
+            writes: vec![node.to_string()],
+            attempt: 1,
+            effect_key: None,
+            error: None,
+        }
+    }
+
+    fn saved(step: usize, pending: &[&str], steps: Vec<StepRecord>) -> Saved {
+        Saved::new(
+            Checkpoint::new(
+                "t1",
+                State::new(),
+                step,
+                pending.iter().map(|n| n.to_string()).collect(),
+            )
+            .with_metadata(RUN_METADATA_KEY, json!({ "runId": "r1", "startedAt": Utc::now() }))
+            .with_metadata(STEPS_METADATA_KEY, serde_json::to_value(steps).unwrap()),
+        )
+    }
+
+    fn shape(nodes: &[&str]) -> GraphShape {
+        GraphShape {
+            nodes: nodes
+                .iter()
+                .map(|name| NodeShape {
+                    name: name.to_string(),
+                    description: String::new(),
+                    kind: NodeKind::Function,
+                    effect: None,
+                    interrupt_before: false,
+                    interrupt_after: false,
+                    governed: None,
+                })
+                .collect(),
+            edges: Vec::new(),
+            entry: vec![nodes[0].to_string()],
+        }
+    }
+
+    fn view(saved: &[Saved], nodes: &[&str]) -> WorkflowRun {
+        let shape = shape(nodes);
+        let display = Display::default();
+        let context = Context {
+            session: "s1",
+            thread: "t1",
+            graph: "g",
+            shape: &shape,
+            channels: &[],
+            offset: FixedOffset::east_opt(0).unwrap(),
+            display: &display,
+        };
+        run_view(&context, saved, Found::default())
+    }
+
+    fn completed(step: usize, node: &str) -> StepRecord {
+        StepRecord { step, kind: StepKind::Completed, nodes: vec![done(node)] }
+    }
+
+    /// Spec 3.3 §12: steps written together under `Durability::Exit` share one checkpoint,
+    /// which holds the last one's state; the earlier steps are not opened or forked from it.
+    #[test]
+    fn steps_saved_together_address_only_the_last() {
+        let together = saved(2, &["c"], vec![completed(1, "a"), completed(2, "b")]);
+        let id = together.checkpoint.checkpoint_id.clone();
+        let run = view(&[together], &["a", "b", "c"]);
+        let rows: Vec<(usize, Option<String>, bool)> = run
+            .steps
+            .iter()
+            .filter(|step| step.state != StepState::Input)
+            .map(|step| (step.step, step.checkpoint_id.clone(), step.forkable))
+            .collect();
+        assert_eq!(rows, vec![(1, None, false), (2, Some(id), true)]);
+    }
+
+    /// Spec 3.3 §12: a run stopped at an `interrupt_after` gate is paused, not working, and
+    /// the gated step is a finished step a fork may start from.
+    #[test]
+    fn a_run_stopped_after_a_gate_is_paused() {
+        let gated = StepRecord { step: 1, kind: StepKind::Paused, nodes: vec![done("a")] };
+        let run = view(&[saved(0, &["b"], vec![gated])], &["a", "b"]);
+        assert_eq!(run.status, RunStatus::Paused);
+        let step = run.steps.iter().find(|step| step.step == 1).unwrap();
+        assert_eq!((step.state, step.forkable), (StepState::Completed, true));
     }
 }

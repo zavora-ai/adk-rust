@@ -39,7 +39,7 @@ the provider received.
 | Header | The graph, the run's status (Working, Waiting for you, Paused, Stopped, Done, Failed, Not started, No run yet), "Started 09:14 · 4.2 s · 3 steps" and the session's checkpoint thread |
 | Run graph | Each node with a status dot and word, its kind (Model step, HTTP call, Function, …), its duration and its badges — "Asks first", "Spends money", "Can't be undone". Taken edges are solid, others muted, conditional ones dashed |
 | The open decision | The inbox's card for the node that waits, drawn by the home's decision card and answered with the engine's `decide` command |
-| Steps | One row per step: "Step 1 · 09:14:01", each node's status and duration, and the keys it wrote; "Your message" for the input that started the run. **Fork from here** on a completed step with work after it |
+| Steps | One row per step: "Step 1 · 09:14:01", each node's status and duration, and the keys it wrote; "Your message" for the input that started the run. **Fork from here** on a completed step with work after it. Steps saved in one checkpoint, under `Durability::Exit`, open and fork only from the last of them, the one whose state the checkpoint holds |
 | Step detail | Each node's kind, status, start, duration and attempt; for a model step, a link to its activity in the thread; for a replayed call, "Not sent again — the record from 09:14 answered it"; for a governed node, the decision it waited on. Then "What changed": each key Added, Changed or Removed, before and after |
 | Forks of this run | The forks made from this thread: when, from which step, which keys they edited |
 
@@ -64,10 +64,12 @@ with the channels you edit overwritten whole. The original thread is never writt
 | Who | The session's owner, from the web home. Another person's session answers `404`; a paired device or another surface answers `403 surface.not_here` |
 | When | Not while a decision of the session waits: `409 workflow.decision_waiting`, "Answer the waiting decision first" |
 | From where | A completed step with work after it; a pause or the last step is refused ("Nothing runs after the last step") |
-| Edits | Declared channels only ("Not a channel of this graph: amount"), at most 64 KiB a key |
-| Calls that already happened | A governed call the fork makes unchanged is answered from its record: "Not sent again", with the original's writes. A changed call is a new call and waits for a person |
-| Stop all | The fork is made and not started: "Forked. Everything is stopped — start it after Resume all." **Start the fork** starts it later |
-| Record | `surface.workflow.fork` with `sessionId`, `from`, `forkSessionId`, `edited`, and the caller's `surface` and `origin` |
+| Edits | Declared channels only ("Not a channel of this graph: amount"), at most 64 KiB a key. An editor starts from the value as shown: a part shown `[hidden]` or `[redacted]` keeps the value it stands for, and a value too large to show in full is not edited here |
+| Calls that already happened | A governed call the fork makes unchanged is answered from its record: "Not sent again", with the original's writes. A changed call is a new call: it waits for a person when its node asks first ("A changed call waits for you."), and the host's rules decide it otherwise |
+| What runs again | The rest of the step's run; a later run of the session is not part of the fork |
+| Stop all | The fork is made and not started: "Forked. Everything is stopped — start it after Resume all." **Start the fork** starts it later, once; a second start while its run is under way is refused (`workflow.started`) |
+| Record | `surface.workflow.fork` with `sessionId`, `from`, `forkSessionId`, `edited`, and the caller's `surface` and `origin`; `surface.workflow.start` with `sessionId` and `from` when its run starts. A fork the audit cannot record is removed and the request fails |
+| No runner | A fork asked to start where `Workflows` has no runner is refused before anything is made |
 
 ![The fork's run: pay not sent again](../images/surfaces/web-workflow-fork-done-light.png)
 
@@ -75,7 +77,9 @@ with the channels you edit overwritten whole. The original thread is never writt
 
 A governed node's card is the inbox entry: it shows the exact call, offers **Confirm it's you
 and approve · Edit · Deny** for a node that spends money, never **Always allow**, and says
-where it came from — "From the invoice-run workflow · Open in Runs".
+where it came from — "From the invoice-run workflow · Open in Runs". A governed node inside a
+`SubgraphNode` is carded and routed the same way, and the run view shows its subgraph's node
+waiting for it.
 
 ![The charge's card in the thread](../images/surfaces/web-workflow-decision-light.png)
 
@@ -84,7 +88,10 @@ where it came from — "From the invoice-run workflow · Open in Runs".
 ```rust
 use std::sync::Arc;
 
-use adk_core::{ApprovalPolicy, ApproverSelector, InMemoryApprovalStore, RunConfig, StoreApprovalService};
+use adk_core::{
+    ApprovalPolicy, ApproverSelector, GovernanceControl, InMemoryActionLedger,
+    InMemoryApprovalStore, RunConfig, StoreApprovalService,
+};
 use adk_graph::agent::GraphAgent;
 use adk_runner::Runner;
 use adk_server::ServerBuilder;
@@ -102,16 +109,32 @@ fn mount(
     let approvals = Arc::new(StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new())).with_router(
         workflows.approval_router(ApprovalPolicy::new([ApproverSelector::group("owner")])),
     ));
+    // Stop all freezes this control, and a governed node is refused while it is frozen.
+    let governance = GovernanceControl::new();
     let runner = Arc::new(
         Runner::builder()
             .app_name("adk-rust")
             .agent(graph)
             .session_service(sessions.clone())
-            .run_config(RunConfig::builder().approval_service(approvals.clone()).build())
+            .governance(governance.clone())
+            .run_config(
+                RunConfig::builder()
+                    .approval_service(approvals.clone())
+                    // Keeps each governed call to once, so a fork's unchanged call is
+                    // answered from its record; without a ledger a governed node is not run.
+                    // Use a durable ledger, such as adk-session's SqliteActionLedger.
+                    .action_ledger(Arc::new(InMemoryActionLedger::new()))
+                    .build(),
+            )
             .build()?,
     );
     let workflows = workflows.runner(runner.clone());
-    let source = LocalSource::builder("adk-rust").sessions(sessions).approvals(approvals).runner(runner).build()?;
+    let source = LocalSource::builder("adk-rust")
+        .sessions(sessions)
+        .approvals(approvals)
+        .runner(runner)
+        .governance(governance)
+        .build()?;
     let engine = SurfaceEngine::builder(Arc::new(source)).card_hints(Arc::new(workflows.clone())).build();
     Ok(builder
         .add_api_routes(adk_surface::web::router(engine.clone()))
@@ -130,6 +153,10 @@ fn mount(
 | `POST /surface/workflow/sessions/{session}/fork` | `ForkRequest` → `ForkOutcome` |
 | `POST /surface/workflow/sessions/{session}/start` | Starts a fork made and not started |
 | `GET /surface/workflow/openapi.json` | This API's OpenAPI document |
+
+A server that pairs devices mounts `adk_surface::web::workflow::router_with_devices(workflows,
+engine, pairing)` beside `web::router_with_devices`, so a paired device's Runs feed ends when
+the device is removed or its pairing ends.
 
 Every route needs an authenticated caller (`401` without one). The Runs tab appears only when
 `GET /surface/workflow/graphs` answers; a server built without the feature answers `404` and the

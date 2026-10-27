@@ -22,6 +22,12 @@ pub const OPEN_IN_RUNS: &str = "Open in Runs";
 pub const FORKED: &str = "Forked. The original run is unchanged.";
 /// A fork made while everything is stopped.
 pub const FORKED_STOPPED: &str = "Forked. Everything is stopped — start it after Resume all.";
+/// A fork made whose run could not start.
+pub const FORKED_NOT_STARTED: &str = "Forked, but its run couldn't start — start it from its run.";
+/// In the fork dialog, when a call that runs again asks a person first.
+pub const CHANGED_CALL_WAITS: &str = "A changed call waits for you.";
+/// In the fork dialog, when the calls that run again are decided by the host's rules.
+pub const CHANGED_CALL_RULES: &str = "A changed call is a new call, decided by your rules.";
 /// A fork refused while a decision of the session waits.
 pub const ANSWER_THE_WAITING_DECISION_FIRST: &str = "Answer the waiting decision first";
 /// A fork refused at a checkpoint with nothing pending.
@@ -169,6 +175,16 @@ pub const FAILED_EARLIER: &str = "This step failed earlier — not sent again";
 /// "Asked at 09:14".
 pub fn asked_at(at: &str) -> String {
     crate::words::asked_at(at)
+}
+
+/// "invoice still holds a hidden value; replace it or reset it".
+pub fn still_hidden(key: &str) -> String {
+    format!("{key} still holds a hidden value; replace it or reset it")
+}
+
+/// "document is too large to edit here".
+pub fn too_large_to_edit(key: &str) -> String {
+    format!("{key} is too large to edit here")
 }
 
 /// A duration in words: `0.3 s`, `4.2 s`, `2 min 5 s`.

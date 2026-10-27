@@ -20,7 +20,9 @@
 //! | `GET /surface/workflow/openapi.json` | This API's OpenAPI document |
 //!
 //! Decisions stay on the engine's routes: a waiting node's card is the inbox entry, answered
-//! with `POST /surface/commands` `decide` (S-I1, S-I2). Errors are problem documents.
+//! with `POST /surface/commands` `decide` (S-I1, S-I2). Errors are problem documents. On a
+//! server that pairs devices, mount [`router_with_devices`] so a paired device's feed ends
+//! with its pairing (S-I7).
 
 use std::time::Duration;
 
@@ -29,11 +31,12 @@ use axum::http::HeaderMap;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Json, Router};
-use futures::Stream;
+use axum::{Extension, Json, Router};
+use futures::{FutureExt, Stream, StreamExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::devices::DeviceEnds;
 use super::{Context, Unauthenticated, caller, failed, unauthenticated};
 use crate::engine::SurfaceEngine;
 use crate::origin::{Caller, SurfaceKind};
@@ -118,6 +121,35 @@ pub fn router(workflows: Workflows, engine: SurfaceEngine) -> Router {
         .with_state(Routes { workflows, engine })
 }
 
+/// [`router`] for a server that pairs devices (spec 3.3 §10 K2, S-I7): a paired device's
+/// feed ends when the device is removed or its pairing ends, as the engine's feed does under
+/// [`router_with_devices`](super::router_with_devices).
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use std::sync::Arc;
+/// use adk_kernel::pairing::{InMemoryDeviceStore, Pairing};
+/// use adk_surface::{LocalSource, SurfaceEngine};
+/// use adk_surface::workflow::Workflows;
+///
+/// # fn example(source: LocalSource, workflows: Workflows, builder: adk_server::ServerBuilder) {
+/// let engine = SurfaceEngine::builder(Arc::new(source)).card_hints(Arc::new(workflows.clone())).build();
+/// let pairing = Pairing::new(Arc::new(InMemoryDeviceStore::new()));
+/// let builder = builder
+///     .add_api_routes(adk_surface::web::router_with_devices(engine.clone(), pairing.clone()))
+///     .add_api_routes(adk_surface::web::workflow::router_with_devices(workflows, engine, pairing));
+/// # let _ = builder;
+/// # }
+/// ```
+pub fn router_with_devices(
+    workflows: Workflows,
+    engine: SurfaceEngine,
+    pairing: adk_kernel::pairing::Pairing,
+) -> Router {
+    router(workflows, engine).layer(Extension(DeviceEnds(pairing)))
+}
+
 fn web_caller(context: Context) -> Result<Caller, Unauthenticated> {
     caller(context, SurfaceKind::Web, None)
 }
@@ -196,6 +228,7 @@ async fn start(
 async fn feed(
     State(routes): State<Routes>,
     context: Context,
+    ends: Option<Extension<DeviceEnds>>,
     headers: HeaderMap,
     Path(session): Path<String>,
 ) -> Response {
@@ -208,7 +241,14 @@ async fn feed(
     if let Err(error) = routes.workflows.version(&caller, &session).await {
         return failed(error);
     }
-    Sse::new(changes(routes.workflows, caller, session, after))
+    // A paired device's feed ends with the device: removed, or its pairing over (S-I7).
+    let device_ends = match (ends, caller.device.clone()) {
+        (Some(Extension(DeviceEnds(pairing))), Some(device)) => {
+            pairing.until_device_ends(device).boxed()
+        }
+        _ => futures::future::pending().boxed(),
+    };
+    Sse::new(changes(routes.workflows, caller, session, after).take_until(device_ends))
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
         .into_response()
 }

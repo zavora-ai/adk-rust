@@ -13,8 +13,10 @@ function textOf(value: unknown): string {
 
 /**
  * The fork dialog (spec 3.3 §12): what a fork from this step runs again, which calls already
- * happened and are answered from their record unless changed, one editor per channel, and
- * "Start the fork now". Esc closes it without forking; the original run is never written.
+ * happened and are answered from their record unless changed, what becomes of a changed call,
+ * one editor per channel, and "Start the fork now". Esc closes it without forking; the original
+ * run is never written. An editor starts from the value as shown: a hidden or redacted part
+ * keeps the value it stands for on the server, and a value too large to show is not edited.
  */
 export function ForkDialog({
   detail,
@@ -89,7 +91,7 @@ export function ForkDialog({
               {detail.fork.alreadyHappened.length > 0 && (
                 <li>{workflowLabels.alreadyHappened(detail.fork.alreadyHappened.map((effect) => visible(effect.text)))}</li>
               )}
-              <li>{workflowLabels.changedCallWaits}</li>
+              {detail.fork.changedCalls && <li>{visible(detail.fork.changedCalls)}</li>}
             </ul>
             <h3 className="card-label">{workflowLabels.stateAt(detail.step)}</h3>
             <div className="fork-editor">
@@ -115,6 +117,7 @@ export function ForkDialog({
                       ) : (
                         <span className="mono fork-current">{visibleJson(edits[channel.key] ?? JSON.stringify(channel.value) ?? "null")}</span>
                       )}
+                      {channel.note && <p className="muted fork-note">{visible(channel.note)}</p>}
                       {error && <p className="field-error">{error}</p>}
                     </div>
                     <div className="fork-row-actions">
@@ -134,7 +137,7 @@ export function ForkDialog({
                       <button
                         type="button"
                         className="button button-secondary"
-                        disabled={busy}
+                        disabled={busy || !channel.editable}
                         aria-pressed={open[channel.key] ?? false}
                         onClick={() => setOpen((all) => ({ ...all, [channel.key]: !all[channel.key] }))}
                       >

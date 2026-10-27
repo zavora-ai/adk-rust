@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use adk_core::audit_log::{
-    AuditActor, AuditRecordDraft, AuditRecordKind, AuditTrail, InMemoryAuditRecorder,
+    AuditActor, AuditRecordDraft, AuditRecordKind, AuditRecorder, AuditTrail, InMemoryAuditRecorder,
 };
 use adk_core::{
     ApprovalPolicy, ApproverSelector, GovernanceControl, InMemoryActionLedger,
@@ -97,43 +97,20 @@ impl Rig {
     }
 
     fn hiding(keys: &[&str]) -> Self {
+        Self::with(keys, invoice_run, None, true)
+    }
+
+    /// A rig whose graph `graph` builds, whose audit fails for the action `failing`, and that
+    /// starts forks only `with_runner`.
+    fn with(
+        keys: &[&str],
+        graph: fn(Arc<AtomicUsize>, Arc<MemoryCheckpointer>) -> GraphAgent,
+        failing: Option<&'static str>,
+        with_runner: bool,
+    ) -> Self {
         let checkpointer = Arc::new(MemoryCheckpointer::new());
         let hits = Arc::new(AtomicUsize::new(0));
-        let graph = Arc::new(
-            GraphAgent::builder("invoice-run")
-                .channels(&["invoice", "note", "charge", "receipt", "token"])
-                .node_fn("draft", |_ctx| async move {
-                    Ok(NodeOutput::new()
-                        .with_update("invoice", json!({ "customer": "Acme", "amountCents": 4200 })))
-                })
-                .node(Pay(Arc::clone(&hits)))
-                .node_fn("receipt", |ctx| async move {
-                    let id =
-                        ctx.get("charge").and_then(|charge| charge["id"].as_str()).unwrap_or("-");
-                    Ok(NodeOutput::new().with_update("receipt", json!(format!("R-{id}"))))
-                })
-                .edge(START, "draft")
-                .edge("draft", "pay")
-                .edge("pay", "receipt")
-                .edge("receipt", END)
-                .governed_node("pay", GovernedNode::new().with_approval().spending_money())
-                .checkpointer_arc(checkpointer.clone())
-                .input_mapper(|ctx| {
-                    let text: String =
-                        ctx.user_content().parts.iter().filter_map(|part| part.text()).collect();
-                    if text.is_empty() {
-                        adk_graph::state::State::new()
-                    } else {
-                        [
-                            ("note".to_string(), json!(text)),
-                            ("token".to_string(), json!("tok_live_0123456789abcdef")),
-                        ]
-                        .into()
-                    }
-                })
-                .build()
-                .unwrap(),
-        );
+        let graph = Arc::new(graph(Arc::clone(&hits), Arc::clone(&checkpointer)));
         let sessions = Arc::new(InMemorySessionService::new());
         let workflows = Workflows::new(APP)
             .graph(Arc::clone(&graph))
@@ -163,7 +140,7 @@ impl Rig {
                 .build()
                 .unwrap(),
         );
-        let workflows = workflows.runner(Arc::clone(&runner));
+        let workflows = if with_runner { workflows.runner(Arc::clone(&runner)) } else { workflows };
         let source = LocalSource::builder(APP)
             .sessions(sessions.clone())
             .approvals(approvals)
@@ -172,14 +149,76 @@ impl Rig {
             .build()
             .unwrap();
         let audit = InMemoryAuditRecorder::new();
+        let recorder: Arc<dyn AuditRecorder> = match failing {
+            Some(action) => Arc::new(Failing { inner: audit.clone(), action }),
+            None => Arc::new(audit.clone()),
+        };
         let engine = SurfaceEngine::builder(Arc::new(source))
             .card_hints(Arc::new(workflows.clone()))
-            .audit(AuditTrail::new(Arc::new(audit.clone())))
+            .audit(AuditTrail::new(recorder))
             .poll_interval(Duration::from_millis(20))
             .build();
         Self { checkpointer, sessions, governance, hits, audit, engine, workflows }
     }
+}
 
+/// An audit recorder that fails for one action and records every other.
+struct Failing {
+    inner: InMemoryAuditRecorder,
+    action: &'static str,
+}
+
+#[async_trait]
+impl AuditRecorder for Failing {
+    fn digest(&self, value: &Value) -> String {
+        self.inner.digest(value)
+    }
+
+    async fn record(&self, draft: AuditRecordDraft) -> adk_core::Result<()> {
+        if draft.action == self.action {
+            return Err(adk_core::AdkError::session("the audit store is unavailable"));
+        }
+        self.inner.record(draft).await
+    }
+}
+
+/// draft (writes the invoice) → pay (governed, money) → receipt.
+fn invoice_run(hits: Arc<AtomicUsize>, checkpointer: Arc<MemoryCheckpointer>) -> GraphAgent {
+    GraphAgent::builder("invoice-run")
+        .channels(&["invoice", "note", "charge", "receipt", "token"])
+        .node_fn("draft", |_ctx| async move {
+            Ok(NodeOutput::new()
+                .with_update("invoice", json!({ "customer": "Acme", "amountCents": 4200 })))
+        })
+        .node(Pay(hits))
+        .node_fn("receipt", |ctx| async move {
+            let id = ctx.get("charge").and_then(|charge| charge["id"].as_str()).unwrap_or("-");
+            Ok(NodeOutput::new().with_update("receipt", json!(format!("R-{id}"))))
+        })
+        .edge(START, "draft")
+        .edge("draft", "pay")
+        .edge("pay", "receipt")
+        .edge("receipt", END)
+        .governed_node("pay", GovernedNode::new().with_approval().spending_money())
+        .checkpointer_arc(checkpointer.clone())
+        .input_mapper(|ctx| {
+            let text: String =
+                ctx.user_content().parts.iter().filter_map(|part| part.text()).collect();
+            if text.is_empty() {
+                adk_graph::state::State::new()
+            } else {
+                [
+                    ("note".to_string(), json!(text)),
+                    ("token".to_string(), json!("tok_live_0123456789abcdef")),
+                ]
+                .into()
+            }
+        })
+        .build()
+        .unwrap()
+}
+
+impl Rig {
     fn thread(session: &str) -> String {
         session_thread_id(APP, OWNER, session)
     }
@@ -630,4 +669,227 @@ async fn the_feed_resumes_after_the_last_event_id() {
         first_frame(&router, Some(version - 1)).await,
         Some(format!("id: {version}\nevent: changed\ndata: {{\"version\":{version}}}\n\n"))
     );
+}
+
+// ── Wave 4 review fixes ────────────────────────────────────────────
+
+/// draft → billing, a subgraph whose governed `pay` spends money.
+fn billing_run(hits: Arc<AtomicUsize>, checkpointer: Arc<MemoryCheckpointer>) -> GraphAgent {
+    let billing = adk_graph::graph::StateGraph::with_channels(&["invoice", "charge"])
+        .add_node(Pay(hits))
+        .add_edge(START, "pay")
+        .add_edge("pay", END)
+        .compile()
+        .unwrap()
+        .with_checkpointer_arc(checkpointer.clone())
+        .with_governed_node("pay", GovernedNode::new().with_approval().spending_money());
+    GraphAgent::builder("invoice-run")
+        .channels(&["invoice", "note", "charge"])
+        .node_fn("draft", |_ctx| async move {
+            Ok(NodeOutput::new()
+                .with_update("invoice", json!({ "customer": "Acme", "amountCents": 4200 })))
+        })
+        .node(adk_graph::subgraph::SubgraphNode::new("billing", Arc::new(billing)))
+        .edge(START, "draft")
+        .edge("draft", "billing")
+        .edge("billing", END)
+        .checkpointer_arc(checkpointer)
+        .build()
+        .unwrap()
+}
+
+/// Spec 3.3 §7.1, §7.4 rule 4, §12: a governed node inside a subgraph is a money card with
+/// no Always allow and high risk, and the run view shows its subgraph waiting for it.
+#[tokio::test]
+async fn a_governed_node_inside_a_subgraph_is_carded_routed_and_shown_waiting() {
+    let rig = Rig::with(&[], billing_run, None, true);
+    rig.start("s1").await;
+    let run = rig.until("s1", RunStatus::Waiting).await;
+    let card = rig.engine.session_decisions(&web(), "s1").await.unwrap().remove(0);
+    let answers: Vec<Answer> = card.allowed.options.iter().map(|option| option.answer).collect();
+    assert_eq!(
+        (answers, card.risk_text.as_str(), card.money),
+        (vec![Answer::AllowOnce, Answer::Edit, Answer::Deny], "High risk", true)
+    );
+    let billing = run.nodes.iter().find(|node| node.node == "billing").unwrap();
+    assert_eq!(
+        (billing.state, billing.decision_id.as_deref()),
+        (NodeState::Waiting, Some(card.id.as_str()))
+    );
+}
+
+/// Spec 3.3 §12: a fork's run that is under way is not started again, and shows as working
+/// rather than not started.
+#[tokio::test]
+async fn a_fork_under_way_is_not_started_twice() {
+    let rig = Rig::new();
+    rig.done("s1").await;
+    let c1 = rig.after_draft("s1").await;
+    let outcome = rig
+        .workflows
+        .fork(
+            &rig.engine,
+            &web(),
+            "s1",
+            ForkRequest { from: c1, set: Default::default(), start: true },
+        )
+        .await
+        .unwrap();
+    assert!(outcome.started);
+    assert_ne!(rig.run(&outcome.session_id).await.status, RunStatus::NotStarted);
+    let again = rig.workflows.start(&rig.engine, &web(), &outcome.session_id).await;
+    assert_eq!(again.unwrap_err().code(), "workflow.started");
+
+    let done = rig.until(&outcome.session_id, RunStatus::Done).await;
+    let pay = done.nodes.iter().find(|node| node.node == "pay").unwrap();
+    assert_eq!((pay.state, rig.hits()), (NodeState::Recorded, 1));
+    let starts = rig
+        .audit
+        .records()
+        .into_iter()
+        .filter(|record| record.action == adk_surface::workflow::SURFACE_AUDIT_WORKFLOW_START)
+        .count();
+    assert_eq!(starts, 1, "the start is recorded once");
+}
+
+/// Spec 3.3 §11, §12: a fork the audit could not record is removed, so it cannot be started
+/// unrecorded.
+#[tokio::test]
+async fn a_fork_the_audit_could_not_record_is_removed() {
+    let rig =
+        Rig::with(&[], invoice_run, Some(adk_surface::workflow::SURFACE_AUDIT_WORKFLOW_FORK), true);
+    rig.done("s1").await;
+    let c1 = rig.after_draft("s1").await;
+    let failed = rig
+        .workflows
+        .fork(
+            &rig.engine,
+            &web(),
+            "s1",
+            ForkRequest { from: c1, set: Default::default(), start: true },
+        )
+        .await;
+    assert!(failed.is_err());
+    assert_eq!(rig.sessions.list(list()).await.unwrap().len(), 1, "no fork session is left");
+    assert_eq!(rig.run("s1").await.forks.len(), 0);
+    assert_eq!(rig.hits(), 1);
+}
+
+/// Spec 3.3 §12: a fork asked to start where no run can start is refused before anything is
+/// made, so a retry makes no second fork.
+#[tokio::test]
+async fn a_fork_that_cannot_start_is_refused_before_it_is_made() {
+    let rig = Rig::with(&[], invoice_run, None, false);
+    rig.done("s1").await;
+    let c1 = rig.after_draft("s1").await;
+    let refused = rig
+        .workflows
+        .fork(
+            &rig.engine,
+            &web(),
+            "s1",
+            ForkRequest { from: c1, set: Default::default(), start: true },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), "surface.unsupported");
+    assert_eq!(rig.sessions.list(list()).await.unwrap().len(), 1, "no fork was made");
+}
+
+/// Spec 3.3 §12: what a fork from a step would run again is the rest of that step's run, not
+/// a later run of the session.
+#[tokio::test]
+async fn a_fork_preview_names_only_its_own_runs_nodes() {
+    let rig = Rig::new();
+    rig.done("s1").await;
+    let c1 = rig.after_draft("s1").await;
+    rig.engine
+        .execute(&web(), Command::Send { session_id: "s1".into(), text: "And for November".into() })
+        .await
+        .unwrap();
+    rig.until("s1", RunStatus::Waiting).await;
+    let detail = rig.workflows.step(&rig.engine, &web(), "s1", &c1).await.unwrap();
+    assert_eq!(detail.fork.runs_again, vec!["pay".to_string(), "receipt".to_string()]);
+    assert_eq!(detail.fork.changed_calls.as_deref(), Some("A changed call waits for you."));
+}
+
+/// Spec 3.3 §12, S-I9: an edit made from a value shown with a hidden part keeps the value the
+/// part stands for.
+#[tokio::test]
+async fn a_fork_edit_keeps_the_value_a_hidden_part_stands_for() {
+    let rig = Rig::hiding(&["customer"]);
+    rig.done("s1").await;
+    let c1 = rig.after_draft("s1").await;
+    let outcome = rig
+        .workflows
+        .fork(
+            &rig.engine,
+            &web(),
+            "s1",
+            ForkRequest {
+                from: c1,
+                set: [(
+                    "invoice".to_string(),
+                    json!({ "customer": "[hidden]", "amountCents": 5000 }),
+                )]
+                .into(),
+                start: false,
+            },
+        )
+        .await
+        .unwrap();
+    let fork = rig.checkpoints(&outcome.session_id).await.remove(0);
+    assert_eq!(fork.state["invoice"], json!({ "customer": "Acme", "amountCents": 5000 }));
+}
+
+/// Spec 3.3 §10 K2, S-I7: a paired device's Runs feed ends when the device is revoked.
+#[tokio::test]
+async fn a_revoked_devices_feed_ends() {
+    use adk_kernel::pairing::{
+        DEVICE_ID_METADATA, DEVICE_KIND_METADATA, InMemoryDeviceStore, IssueCode, Pairing,
+    };
+    let rig = Rig::new();
+    rig.start("s1").await;
+    rig.until("s1", RunStatus::Waiting).await;
+    let pairing = Pairing::new(Arc::new(InMemoryDeviceStore::new()));
+    let issued =
+        pairing.issue(IssueCode::new(OWNER, ["owner"]).with_name("Your phone")).await.unwrap();
+    let device = pairing.claim(&issued.code, None).await.unwrap().device.id;
+    let context = RequestContext {
+        user_id: OWNER.into(),
+        scopes: vec!["owner".into()],
+        metadata: [
+            (DEVICE_ID_METADATA.to_string(), device.clone()),
+            (DEVICE_KIND_METADATA.to_string(), "phone".to_string()),
+        ]
+        .into(),
+    };
+    let app = axum::Router::new()
+        .nest(
+            "/api",
+            adk_surface::web::workflow::router_with_devices(
+                rig.workflows.clone(),
+                rig.engine.clone(),
+                pairing.clone(),
+            ),
+        )
+        .layer(axum::Extension(Some(context)));
+    let response = app
+        .oneshot(
+            Request::get("/api/surface/workflow/sessions/s1/feed").body(Body::empty()).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body();
+    // The newest version arrives, then the feed stays open while the phone is paired.
+    let _ = tokio::time::timeout(Duration::from_millis(500), body.frame()).await;
+    let open = tokio::time::timeout(Duration::from_millis(300), body.frame()).await;
+    assert!(open.is_err(), "the feed stays open while the phone is paired");
+    pairing.revoke(&device).await.unwrap();
+    let ended = tokio::time::timeout(Duration::from_secs(2), async {
+        while body.frame().await.is_some() {}
+    })
+    .await;
+    assert!(ended.is_ok(), "the feed ended with the phone");
 }

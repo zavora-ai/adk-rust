@@ -48,7 +48,6 @@ export const workflowLabels = {
   runsAgain: (nodes: string[]) => `Runs again: ${nodes.join(", ")}`,
   alreadyHappened: (effects: string[]) =>
     `Already happened and won't be sent again unless you change it: ${effects.join("; ")}`,
-  changedCallWaits: "A changed call waits for you.",
   stateAt: (step: number) => `State at step ${step}`,
   edit: "Edit",
   reset: "Reset",

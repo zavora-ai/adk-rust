@@ -673,6 +673,11 @@
   border-color: var(--failed);
 }
 
+.fork-note {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
 .field-error {
   margin-top: 4px;
   color: var(--failed);

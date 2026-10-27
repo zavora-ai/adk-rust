@@ -394,10 +394,17 @@ async fn fork_text(
     })?;
     let edited = fork.lineage().ok().flatten().map(|lineage| lineage.edited).unwrap_or_default();
 
-    // Governed calls after the fork point that already happened: answered from their record
-    // when the fork makes them unchanged.
+    // Governed calls after the fork point that already happened in the same run: answered
+    // from their record when the fork makes them unchanged. A later run of the thread is not
+    // part of what the fork runs again.
+    let run_of = |checkpoint: &Checkpoint| checkpoint.run_record().ok().flatten();
+    let later: Vec<&Checkpoint> =
+        checkpoints.iter().filter(|later| later.version > source.version).collect();
+    let run = run_of(source).or_else(|| later.iter().find_map(|later| run_of(later)));
     let mut happened: Vec<String> = Vec::new();
-    for later in checkpoints.iter().filter(|later| later.version > source.version) {
+    for later in later.into_iter().filter(|later| {
+        run_of(later).map(|later| later.run_id) == run.as_ref().map(|run| run.run_id.clone())
+    }) {
         for step in later.step_records().unwrap_or_default() {
             for node in step.nodes {
                 let done = matches!(node.status, NodeStatus::Done | NodeStatus::Recorded);
@@ -688,6 +695,48 @@ mod tests {
                     .to_string(),
             )
         );
+    }
+
+    #[tokio::test]
+    async fn a_fork_names_only_calls_its_own_run_made() {
+        let checkpointer = MemoryCheckpointer::new();
+        // inv-1 stopped at pay; inv-2, a later run of the thread, paid.
+        let first = run_record("inv-1", 0);
+        let second = run_record("inv-2", 30);
+        let drafted = json!({ "note": "Bill Acme", "invoice": { "amountCents": 4200 } });
+        let draft = |version, run| {
+            checkpoint(
+                "t1",
+                version,
+                drafted.clone(),
+                1,
+                &["pay"],
+                vec![StepRecord {
+                    step: 1,
+                    kind: StepKind::Completed,
+                    nodes: vec![record("draft", 1, NodeStatus::Done, &["invoice"], 1200)],
+                }],
+                Some(run),
+            )
+        };
+        let paid = checkpoint(
+            "t1",
+            3,
+            drafted.clone(),
+            2,
+            &[],
+            vec![StepRecord {
+                step: 2,
+                kind: StepKind::Completed,
+                nodes: vec![record("pay", 40, NodeStatus::Done, &["charge"], 300)],
+            }],
+            Some(&second),
+        );
+        for checkpoint in [draft(1, &first), draft(2, &second), paid] {
+            checkpointer.save(&checkpoint).await.unwrap();
+        }
+        let text = fork_text(&checkpointer, "t1", 1, "t2", BTreeMap::new()).await.unwrap();
+        assert_eq!(text, "Forked t1 at step 1 → t2");
     }
 
     #[test]

@@ -6,6 +6,11 @@ export type Change = "added" | "changed" | "removed";
 
 /** One channel's value at a checkpoint, for the fork dialog's editor. */
 export interface ChannelValue {
+  /**
+   * Whether a fork may edit it here: a value too large to show in full may not. A hidden
+   * or redacted part of an edited value keeps the value it stands for.
+   */
+  editable: boolean;
   /** The channel. */
   key: string;
   /** Why the value is not shown as it is. */
@@ -65,6 +70,11 @@ export interface ForkPoint {
    * record unless the fork changes them.
    */
   alreadyHappened: EffectView[];
+  /**
+   * What becomes of a changed governed call, when one runs again: "A changed call waits
+   * for you." when its node asks first, else that the host's rules decide it.
+   */
+  changedCalls?: string | null;
   /** Why not: "Nothing runs after the last step". */
   refusal?: string | null;
   /** The nodes that run again: `pay`, `receipt`. */

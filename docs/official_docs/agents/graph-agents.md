@@ -1397,13 +1397,20 @@ approval store and an action ledger. Each dispatch of the node goes through one 
 |-------|-------|---------|
 | 0 | The gate: the parent invocation, or the `RunConfig` of `invoke_with_run_config` | Without one — plain `invoke`, or a subgraph or `NodeTool` that does not pass it on — the node is not run (`graph.not_run`) |
 | 1 | The kill switch | Frozen: refused before anything is touched (`graph.frozen`) |
+| 1a | `Node::will_act` | Does nothing here (an action node whose condition is false): done, no writes, no decision. Cannot act (an HTTP request that cannot be built): fails with that error, no decision |
+| 1b | An action ledger and a checkpointer | Without either the node is not run (`graph.unavailable`): its call could not be kept to once |
 | 2 | The action ledger, under `graph/{agent id}/{lineage root}/{node}/{occurrence}/{digest}` | Completed: answered from the effect log, not run, no decision (`recorded`). Failed: fails again (`graph.recorded_failure`). Begun without an outcome: fails closed (`graph.outcome_unknown`). Refused before: asks again |
 | 3 | `adk_core::authorize_tool_call` | Waiting: the node pauses and the call is in the inbox. Refused: not run (`graph.refused`). Approved: begin, run, complete, append to the effect log |
 
 - **The call.** `Node::call_args` describes the call, shown in full on the decision and
   bound by its digest; a node that does not describe one is bound to the whole state it
-  reads. An HTTP action node describes its method, full URL, headers and body, with
-  credentials as `sha256:` digests.
+  reads, less the `session_id` a graph agent writes each turn. An HTTP action node
+  describes its method, full URL, headers and body, with credentials as `sha256:`
+  digests (keyed with `HttpActionPolicy::credential_key` when the host sets one).
+- **Sent once.** An action node's `Retry`, `Continue` and `Fallback` error handling does
+  not apply to a governed call: it is sent once and its failure is the node's. A timeout,
+  or an HTTP answer that fails validation or cannot be read, leaves the outcome unknown
+  (`graph.outcome_unknown`).
 - **Edits.** An approver's edit runs through `Node::run_call`, which sends exactly the
   edited call. A node without it refuses the edit (`graph.edit_unsupported`) and nothing
   runs; the unedited call never runs after an edit.
@@ -1421,6 +1428,10 @@ approval store and an action ledger. Each dispatch of the node goes through one 
   lineage, so a fork of the parent finds the calls its source made.
 - **Not a child.** A governed node runs only through its bracket: a node body cannot
   invoke it with `NodeContext::run_node`, and a node cache never answers it.
+- **Names.** Governing a name that is not a node fails the run with
+  `GraphError::InvalidGraph`, and `GraphAgentBuilder::build` refuses it.
+- **Observers.** `CompiledGraph::governed_shapes` lists every governed node, inside
+  subgraphs too, with its path; `Node::subgraph` exposes a subgraph's graph.
 
 > **Note:** an `AgentNode` is not a governed node. A tool call held inside an
 > `AgentNode` pauses the graph, and on resume the node runs its agent again, which asks
