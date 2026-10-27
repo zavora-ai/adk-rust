@@ -186,6 +186,26 @@ pub trait Source: Send + Sync {
         Err(SurfaceError::unsupported("sending a message"))
     }
 
+    /// Starts a turn of the session on `text` that carries `call`, a call `caller` asked for
+    /// through a form an agent drew (spec 3.3 §7.4 rule 5, wave 4 decision 13). The session's
+    /// agent holds the call as itself, inside its own kernel target, under its own policy,
+    /// standing rules, acting context and approval store, for the person's decision — or
+    /// refuses it — before any model call. The default reports `surface.unsupported`.
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` when the source cannot start such a turn, or the source's error.
+    async fn request_call(
+        &self,
+        caller: &Caller,
+        session: &str,
+        text: &str,
+        call: adk_core::RequestedCall,
+    ) -> Result<()> {
+        let _ = (caller, session, text, call);
+        Err(SurfaceError::unsupported("sending a form an agent drew"))
+    }
+
     /// Stops every agent (spec 3.3 §8.2 "Stop all").
     async fn stop_all(&self, caller: &Caller, reason: &str) -> Result<()> {
         let _ = (caller, reason);

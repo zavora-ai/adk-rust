@@ -918,6 +918,118 @@ pub fn agent_change(kind: &str, name: &str, place: &str) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Agent-drawn UI (spec 3.3 §6.1 `genui`, §7.4 rule 5)
+// ---------------------------------------------------------------------------
+
+/// A drawn form edited and not yet sent.
+pub const NOT_SENT_YET: &str = "Not sent yet";
+/// A drawn form's button while its send is on the way.
+pub const SENDING: &str = "Sending…";
+/// A drawn form sent and denied.
+pub const SENT_YOU_SAID_NO: &str = "Sent · you said no";
+/// A drawn form sent, allowed, and its call failed.
+pub const SENT_FAILED: &str = "Sent · failed";
+/// A drawn form sent at a version the agent had changed since (`surface.drawn_changed`).
+pub const FORM_CHANGED_SEND_AGAIN: &str =
+    "Couldn't send: this form changed — check it and send again";
+/// Under a drawn form's buttons in the terminal and in the scrollback.
+pub const SENDING_ASKS_YOU_FIRST: &str = "Sending asks you first";
+/// What the home lets every agent on it do with `genui`, under "On this home it can also:"
+/// (spec 3.3 §5.7, wave 4 decision 14).
+pub const SHOW_FORMS_AND_TABLES: &str =
+    "Show forms and tables in your threads — sending asks you first";
+/// A drawn form sent by voice, from chat or by an agent: only a person at a screen sends one.
+pub const SEND_FORMS_FROM_A_SCREEN: &str =
+    "A form an agent drew is sent from a screen, by the person who filled it in";
+
+/// Over a drawing: "Drawn by Finance · 10:02".
+pub fn drawn_by(agent: &str, hh_mm: &str) -> String {
+    format!("Drawn by {agent} · {hh_mm}")
+}
+
+/// Under a drawn form's button: "Sending runs send_invoice and asks you first".
+pub fn sending_runs(tool: &str) -> String {
+    format!("Sending runs {tool} and asks you first")
+}
+
+/// A drawing refused because it looks like a decision.
+pub fn looked_like_a_decision(agent: &str) -> String {
+    format!("{agent} tried to show something that looks like a decision. It wasn't shown.")
+}
+
+/// A drawing refused because the home's catalog cannot show it.
+pub fn cant_show_here(agent: &str) -> String {
+    format!("{agent} tried to show something this home can't show.")
+}
+
+/// A drawing refused because it asks for a password or another secret.
+pub fn asked_for_a_password(agent: &str) -> String {
+    format!("{agent} asked for a password in a form. Use Take over for passwords.")
+}
+
+/// A drawn form sent, before its call is held: "Sent at 10:03".
+pub fn sent_at(hh_mm: &str) -> String {
+    format!("Sent at {hh_mm}")
+}
+
+/// A drawn form sent and waiting: "Sent at 10:03 · waiting for you".
+pub fn sent_waiting(hh_mm: &str) -> String {
+    format!("Sent at {hh_mm} · waiting for you")
+}
+
+/// A drawn form sent, allowed and run: "Sent · done at 10:04".
+pub fn sent_done(hh_mm: &str) -> String {
+    format!("Sent · done at {hh_mm}")
+}
+
+/// A drawn form whose call the drawing agent's rules refuse: "Finance can't use send_invoice
+/// here".
+pub fn cant_use_here(agent: &str, tool: &str) -> String {
+    format!("{agent} can't use {tool} here")
+}
+
+/// A drawn form's call allowed, then refused when it resumed because a rule changed.
+pub fn cant_use_any_more(agent: &str, tool: &str) -> String {
+    format!("Not run: {agent} can't use {tool} any more")
+}
+
+/// Over the newer version of a drawn form: "Finance changed this form at 10:05".
+pub fn changed_this_form(agent: &str, hh_mm: &str) -> String {
+    format!("{agent} changed this form at {hh_mm}")
+}
+
+/// Over the newer version of a drawn card or table: "Finance changed this at 10:05".
+pub fn changed_this(agent: &str, hh_mm: &str) -> String {
+    format!("{agent} changed this at {hh_mm}")
+}
+
+/// Where a drawing an agent removed was: "Finance removed this at 10:06".
+pub fn removed_this(agent: &str, hh_mm: &str) -> String {
+    format!("{agent} removed this at {hh_mm}")
+}
+
+/// A collapsed older version of a drawing: "Earlier version · 10:02".
+pub fn earlier_version(hh_mm: &str) -> String {
+    format!("Earlier version · {hh_mm}")
+}
+
+/// Under a long drawn table cut short: "Show all 42".
+pub fn show_all(count: usize) -> String {
+    format!("Show all {count}")
+}
+
+/// The first step of a decision a drawn form asked for (spec 3.3 §7.1, wave 4 decision 12):
+/// "You pressed Send on a form Finance drew · 10:03".
+pub fn pressed_send_on_form(agent: &str, hh_mm: &str) -> String {
+    format!("You pressed Send on a form {agent} drew · {hh_mm}")
+}
+
+/// The detail line of a decision a drawn form asked for: "From a form Finance drew".
+pub fn from_a_form(agent: &str) -> String {
+    format!("From a form {agent} drew")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

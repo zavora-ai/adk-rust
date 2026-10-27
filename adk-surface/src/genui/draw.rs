@@ -17,12 +17,19 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::a2ui::{A2uiBody, A2uiMessage, DataModel};
-use super::validate::{DrawRefusal, DrawnAction, DrawnKind, SurfaceDraft, Validator};
+use super::drawn::DrawnKind;
+use super::validate::{DrawRefusal, DrawnAction, SurfaceDraft, Validator};
 
 /// The reserved session state key every drawing writes, `{ surfaceId, version, digest }`:
 /// the proof that a drawing tool result came from these tools, checked against the digest of
 /// the result's `drawn` record (spec 3.3 §6.1 `genui`).
 pub const DRAWN_STATE_KEY: &str = "adk.surface.drawn";
+
+/// The reserved session state key a refused drawing writes, its [`DrawRefusal`]: the proof
+/// that a render tool's error came from these tools, so the thread shows the refusal's plain
+/// notice and an MCP server's tool of the same name stays an ordinary failed result
+/// (spec 3.3 §7.4 rule 5).
+pub const REFUSED_STATE_KEY: &str = "adk.surface.refused";
 
 /// The session state key holding the latest version of every surface a session drew, so
 /// versions keep rising after a restart or a compaction.
@@ -857,6 +864,9 @@ impl DrawTool {
                 refusal.reason = %refusal.technical(),
                 "drawing refused"
             );
+            let mut actions = ctx.actions();
+            actions.state_delta.insert(REFUSED_STATE_KEY.to_string(), json!(refusal));
+            ctx.set_actions(actions);
             return Err(refused(&refusal));
         }
         let latest = self.latest(ctx, &draft.surface_id);

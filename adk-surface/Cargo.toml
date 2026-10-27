@@ -62,7 +62,7 @@ workflow = ["dep:adk-graph", "adk-graph/time-travel", "adk-harness/web"]
 # Agent-drawn UI (spec 3.3 §6.1, §7.4 rule 5): the A2UI v0.9.1 model, the embedded `forms` 1.0
 # catalog, the validator that keeps approval controls and secrets out of drawings, and the
 # render tools agents draw with (`genui::DrawToolset`).
-genui = ["dep:jsonschema", "dep:sha2"]
+genui = ["dep:jsonschema", "dep:sha2", "dep:regex"]
 
 [dependencies]
 adk-core.workspace = true
@@ -95,6 +95,8 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 mime_guess = { version = "2.0.5", optional = true }
 # The approvals inbox in full over the kernel's HTTP control plane (`ControlSource`).
 reqwest.workspace = true
+# A drawn field's `regex` check, evaluated again when the form is sent (`genui`).
+regex = { workspace = true, optional = true }
 # Agent messages as Markdown, code blocks highlighted (spec 3.3 §6.1 `tui`).
 pulldown-cmark = { version = "0.13", optional = true, default-features = false }
 ratatui = { version = "0.30", optional = true, default-features = false, features = ["crossterm"] }

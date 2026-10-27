@@ -16,6 +16,7 @@ use serde_json::{Map, Value};
 
 use super::a2ui::DataModel;
 use super::catalog::Catalog;
+use super::drawn::{DrawnKind, RefusalKind};
 
 /// Phrases of a decision and of the controls every surface owns, refused anywhere in a
 /// drawing after folding (spec 3.3 §8.1, §8.2; wave 4 decision 20).
@@ -93,21 +94,6 @@ const SECRET_PHRASES: &[&str] = &[
     "seed phrase",
     "social security",
 ];
-
-/// What a drawing is: a form a person fills in and sends, a card or table to read, or a
-/// screen of catalog components.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum DrawnKind {
-    /// Fields and actions.
-    Form,
-    /// Label and value rows; no buttons.
-    Card,
-    /// Columns and rows; no buttons.
-    Table,
-    /// Any catalog components, with declared actions.
-    Screen,
-}
 
 /// An argument of a [`DrawnAction`]: the value a person typed in a field, or a constant the
 /// drawing fixes.
@@ -210,19 +196,6 @@ pub struct ValidatedSurface {
     pub draft: SurfaceDraft,
     /// Every string it shows, in tree order.
     pub texts: Vec<ResolvedText>,
-}
-
-/// Why a drawing was refused, in a person's terms (spec 3.3 §7.4 rule 5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum RefusalKind {
-    /// It shows a decision's words or controls.
-    LooksLikeDecision,
-    /// It asks for a password or another secret.
-    AsksForSecret,
-    /// It uses something this home does not show: a component outside the catalog, a link,
-    /// a function, or a malformed tree.
-    CannotShow,
 }
 
 /// The component a refusal is about.
@@ -906,12 +879,12 @@ impl<'a> Walk<'a> {
 }
 
 /// A component's child: by id, or a template rendered once per item of a data model list.
-enum Child<'a> {
+pub(super) enum Child<'a> {
     Id(&'a str),
     Template { component: &'a str, list: &'a str },
 }
 
-fn children<'a>(name: &str, props: &'a Map<String, Value>) -> Vec<Child<'a>> {
+pub(super) fn children<'a>(name: &str, props: &'a Map<String, Value>) -> Vec<Child<'a>> {
     let mut out = Vec::new();
     match name {
         "Row" | "Column" | "List" => match props.get("children") {

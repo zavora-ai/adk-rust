@@ -249,6 +249,16 @@ impl Source for VoiceSource {
         self.inner.start_turn(caller, session, text).await
     }
 
+    async fn request_call(
+        &self,
+        caller: &Caller,
+        session: &str,
+        text: &str,
+        call: adk_core::RequestedCall,
+    ) -> Result<()> {
+        self.inner.request_call(caller, session, text, call).await
+    }
+
     async fn stop_all(&self, caller: &Caller, reason: &str) -> Result<()> {
         self.inner.stop_all(caller, reason).await
     }

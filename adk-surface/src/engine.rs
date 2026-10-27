@@ -40,6 +40,8 @@ pub const SURFACE_AUDIT_STOP_ALL: &str = "surface.stop_all";
 pub const SURFACE_AUDIT_RESUME_ALL: &str = "surface.resume_all";
 /// The audit action of a mode change (spec 3.3 §11).
 pub const SURFACE_AUDIT_SET_MODE: &str = "surface.set_mode";
+/// The audit action of a drawn form's Send (spec 3.3 §7.4 rule 5, §11).
+pub const SURFACE_AUDIT_DRAWN_SUBMITTED: &str = "surface.drawn.submitted";
 
 /// How often the feed reads the session store when the source has nothing faster.
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -212,6 +214,24 @@ pub enum Command {
         /// The rule.
         rule_id: String,
     },
+    /// Sends a form an agent drew, from the version the person saw (spec 3.3 §7.4 rule 5):
+    /// never runs its tool, but asks for the call, which the drawing agent holds for the
+    /// person's decision. Only a person at a screen sends one (`keyboard`, `pointer`,
+    /// `touch`). Feature `genui`.
+    #[serde(rename_all = "camelCase")]
+    SubmitDrawn {
+        /// The session the form is in.
+        session_id: String,
+        /// The drawn surface.
+        surface_id: String,
+        /// The version the person saw.
+        version: u64,
+        /// The declared action the person used.
+        action_id: String,
+        /// What the person typed or picked, by the field's data path (`/to`).
+        #[serde(default)]
+        values: serde_json::Map<String, Value>,
+    },
 }
 
 /// What a command did (spec 3.3 §6).
@@ -330,6 +350,20 @@ pub enum CommandOutcome {
         agent: String,
         /// The rule's words.
         label: String,
+    },
+    /// A drawn form was sent: its call is on its way to the drawing agent, which holds it for
+    /// the person's decision (spec 3.3 §7.4 rule 5). The form's state follows from that
+    /// decision, never from this answer.
+    #[serde(rename_all = "camelCase")]
+    FormSent {
+        /// The session.
+        session_id: String,
+        /// The drawn surface.
+        surface_id: String,
+        /// The version sent.
+        version: u64,
+        /// The call asked for.
+        call_id: String,
     },
 }
 
@@ -579,6 +613,15 @@ impl SurfaceEngineBuilder {
             Arc::new(move |request| money(request) || source.moves_money(request));
         let source = Arc::clone(&self.source);
         self.projector.rates_high = Arc::new(move |request| source.rates_high(request));
+        // A drawn form's call never offers Always allow, whatever hints the host adds
+        // (spec 3.3 §7.4 rule 5, wave 4 decision 12).
+        #[cfg(feature = "genui")]
+        let drawn = Arc::new(crate::genui::DrawnHints::new(
+            Arc::clone(&self.source),
+            self.projector.clone(),
+        ));
+        #[cfg(feature = "genui")]
+        self.card_hints.insert(0, Arc::clone(&drawn) as Arc<dyn CardHints>);
         self.projector.voice_window_secs =
             u32::try_from(self.voice_window.as_millis().div_ceil(1000)).unwrap_or(u32::MAX);
         SurfaceEngine {
@@ -593,6 +636,8 @@ impl SurfaceEngineBuilder {
                 stops_need: self.stops_need,
                 card_hints: self.card_hints,
                 granted: self.granted,
+                #[cfg(feature = "genui")]
+                drawn,
                 queues: Mutex::new(HashMap::new()),
                 draining: Mutex::new(HashSet::new()),
                 wake: Notify::new(),
@@ -646,6 +691,9 @@ struct Inner {
     card_hints: Vec<Arc<dyn CardHints>>,
     /// What every agent the home runs may also do (spec 3.3 §5.7).
     granted: Vec<GrantedUse>,
+    /// The cards of drawn forms this engine sent (spec 3.3 §7.4 rule 5).
+    #[cfg(feature = "genui")]
+    drawn: Arc<crate::genui::DrawnHints>,
     /// Input queued behind an open decision, per (user, session), oldest first.
     queues: Mutex<HashMap<(String, String), VecDeque<String>>>,
     /// Sessions with a delivery loop running. Changed only under the `queues` lock, so a
@@ -1300,7 +1348,75 @@ impl SurfaceEngine {
             | Command::ResumeAgent { .. }
             | Command::RemoveAgent { .. }
             | Command::CopyRuleToAgent { .. }) => self.agent_command(caller, command).await,
+            Command::SubmitDrawn { session_id, surface_id, version, action_id, values } => {
+                self.submit_drawn(caller, session_id, surface_id, version, &action_id, &values)
+                    .await
+            }
         }
+    }
+
+    /// Sends a drawn form (spec 3.3 §7.4 rule 5), checked in order: the session is the
+    /// caller's (S-I8), the caller is a person at a screen, the surface is at `version`, the
+    /// action is declared, and the values fit their fields. Then it is recorded and the call
+    /// is asked for; nothing runs until the person decides.
+    #[cfg(feature = "genui")]
+    async fn submit_drawn(
+        &self,
+        caller: &Caller,
+        session: String,
+        surface: String,
+        version: u64,
+        action: &str,
+        values: &serde_json::Map<String, Value>,
+    ) -> Result<CommandOutcome> {
+        let events = self.transcript(caller, &session).await?;
+        if !matches!(caller.origin, Origin::Keyboard | Origin::Pointer | Origin::Touch) {
+            return Err(SurfaceError::NotHere(words::SEND_FORMS_FROM_A_SCREEN.to_string()));
+        }
+        let sent = crate::genui::submission(&events, &surface, version, action, values)?;
+        let call = adk_core::RequestedCall::new(
+            sent.tool.clone(),
+            sent.args.clone(),
+            caller.subject.clone(),
+            adk_core::RequestedVia::form(surface.clone(), version, action),
+        );
+        // Recorded before it is asked for: a send whose record failed is never asked for.
+        let fingerprint =
+            adk_core::ToolConfirmationRequest::new(sent.tool.clone(), sent.args).fingerprint();
+        self.record(
+            caller,
+            SURFACE_AUDIT_DRAWN_SUBMITTED,
+            json!({
+                "sessionId": session,
+                "surfaceId": surface,
+                "version": version,
+                "actionId": action,
+                "tool": sent.tool,
+                "fingerprint": fingerprint,
+                "valuesDigest": sent.values_digest,
+                "callId": call.function_call_id,
+                "drawnBy": sent.drawn_by,
+            }),
+        )
+        .await?;
+        let call_id = call.function_call_id.clone();
+        self.inner.drawn.pressed(caller.user_id(), &session, &call.tool_name, &call.args);
+        self.inner.source.request_call(caller, &session, "", call).await?;
+        Ok(CommandOutcome::FormSent { session_id: session, surface_id: surface, version, call_id })
+    }
+
+    #[cfg(not(feature = "genui"))]
+    async fn submit_drawn(
+        &self,
+        caller: &Caller,
+        session: String,
+        _surface: String,
+        _version: u64,
+        _action: &str,
+        _values: &serde_json::Map<String, Value>,
+    ) -> Result<CommandOutcome> {
+        self.transcript(caller, &session).await?;
+        Err(SurfaceError::unsupported("sending a form an agent drew"))
     }
 
     /// Answers a decision by voice (spec 3.3 §5.6, §7.2): the one way a spoken answer is

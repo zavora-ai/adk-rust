@@ -430,6 +430,28 @@ pub enum ThreadItem {
         /// "Waiting for you".
         text: String,
     },
+    /// Something an agent drew (spec 3.3 §6.1 `genui`, §7.4 rule 5): a form, card, table or
+    /// screen on the normal card background, never a decision. Only a render tool's result
+    /// with the reserved state key and the drawing's digest makes one.
+    #[serde(rename_all = "camelCase")]
+    Drawn {
+        /// The drawing, its strings resolved on the server.
+        surface: Box<crate::genui::DrawnSurface>,
+    },
+    /// A drawing that was not shown: a plain notice (spec 3.3 §7.4 rule 5).
+    #[serde(rename_all = "camelCase")]
+    DrawnRefused {
+        /// What the thread says, and the reason the developer panel shows.
+        refusal: crate::genui::RefusedDrawing,
+    },
+    /// A person sent a drawn form: the call they asked for, held as the drawing agent for
+    /// their decision, or refused by its rules (spec 3.3 §7.4 rule 5). The decision's own
+    /// `Decision` item follows it in the same entry.
+    #[serde(rename_all = "camelCase")]
+    DrawnSent {
+        /// The call and the form it came from.
+        sent: crate::genui::DrawnSent,
+    },
 }
 
 /// One event of a session's store, numbered by its position there (spec 3.3 §6).

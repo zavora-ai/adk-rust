@@ -359,6 +359,16 @@ impl LocalSource {
         let runtime = harness.agent().runtime();
         let pending = runtime.approval_store().pending(&request.scope).await.ok()?;
         let held = pending.into_iter().find(|entry| entry.fingerprint == request.fingerprint)?;
+        // A call a person asked for through a drawn form is never made a standing rule
+        // (spec 3.3 §7.4 rule 5, wave 4 decision 12).
+        if held
+            .request
+            .function_call_id
+            .as_deref()
+            .is_some_and(adk_core::RequestedCall::is_requested_id)
+        {
+            return None;
+        }
         let suggestions = StandingRule::suggestions(&held.request);
         let suggestion = suggestions
             .iter()
@@ -807,6 +817,58 @@ impl Source for LocalSource {
             return Ok(());
         }
         self.run_turn(user, session, text, Some(caller)).await
+    }
+
+    async fn request_call(
+        &self,
+        caller: &Caller,
+        session: &str,
+        text: &str,
+        call: adk_core::RequestedCall,
+    ) -> Result<()> {
+        let user = caller.user_id();
+        self.ensure_session(user, session).await?;
+        if let Some((kernel, _)) = &self.kernel {
+            // Held as the drawing agent inside its own target — the target of the session's
+            // latest run, an area's or an added agent's — parked durably and woken by the
+            // decision on any surface (spec 3.3 §7.4 rule 5, wave 4 decision 13).
+            let latest = self
+                .processes(user)
+                .await?
+                .into_iter()
+                .find(|process| process.run.session_id.as_deref() == Some(session))
+                .map(|process| process.run.target);
+            let target = match latest {
+                Some(target) => target,
+                None => self.target_for(user, session).await?,
+            };
+            let run = NewRun::new(
+                QueueClass::Interactive.as_str(),
+                self.app.clone(),
+                user,
+                target,
+                serde_json::json!({ "text": text, "requestedCall": call }),
+            )
+            .with_session_id(session)
+            .with_authenticated_user();
+            kernel.processes().spawn(run, ProcessSpec::new(ProcessKind::Interactive)).await?;
+            return Ok(());
+        }
+        let Some(harness) = &self.harness else {
+            return Err(SurfaceError::unsupported(
+                "sending a form an agent drew without a kernel or harness",
+            ));
+        };
+        let (user_id, session_id) = Self::ids(user, session)?;
+        let context = RequestContext {
+            user_id: user.to_string(),
+            scopes: caller.groups.clone(),
+            metadata: Default::default(),
+        };
+        let stream = harness.send_requested(&user_id, &session_id, text, call, context).await?;
+        let session = session.to_string();
+        tokio::spawn(async move { drain(stream, &session).await });
+        Ok(())
     }
 
     async fn stop_all(&self, caller: &Caller, reason: &str) -> Result<()> {
