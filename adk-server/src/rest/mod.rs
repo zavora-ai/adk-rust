@@ -490,6 +490,8 @@ pub struct ServerBuilder {
     approval_service: Option<Arc<dyn adk_core::ApprovalService>>,
     #[cfg(feature = "awp")]
     awp_edge: bool,
+    /// What the host adds to protocol-native AG-UI runs (spec 3.3 §6.1 `genui`).
+    ag_ui_extension: Option<Arc<dyn controllers::AgUiExtension>>,
 }
 
 impl ServerBuilder {
@@ -517,7 +519,23 @@ impl ServerBuilder {
             approval_service: None,
             #[cfg(feature = "awp")]
             awp_edge: false,
+            ag_ui_extension: None,
         }
+    }
+
+    /// Adds `extension` to protocol-native AG-UI runs, and its features to `ag_ui` in
+    /// `GET /api/ui/capabilities` (spec 3.3 §6.1 `genui`; see
+    /// [`RuntimeController::with_ag_ui_extension`]).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let app = ServerBuilder::new(config).with_ag_ui_extension(Arc::new(extension)).build();
+    /// ```
+    #[must_use]
+    pub fn with_ag_ui_extension(mut self, extension: Arc<dyn controllers::AgUiExtension>) -> Self {
+        self.ag_ui_extension = Some(extension);
+        self
     }
 
     /// Add custom routes nested under `/api`.
@@ -835,9 +853,17 @@ impl ServerBuilder {
             Some(service) => runtime_controller.with_approval_service(service.clone()),
             None => runtime_controller,
         };
+        let runtime_controller = match &self.ag_ui_extension {
+            Some(extension) => runtime_controller.with_ag_ui_extension(extension.clone()),
+            None => runtime_controller,
+        };
         // An AG-UI resume decides inbox entries for an authenticated caller.
         let resume_wired =
             runtime_controller.answers_ag_ui_resume() && config.request_context_extractor.is_some();
+        let served_ui = controllers::ui::ServedUi {
+            resume: resume_wired,
+            ag_ui_features: runtime_controller.ag_ui_features(),
+        };
         let apps_controller = AppsController::new(config.clone());
         let artifacts_controller = ArtifactsController::new(config.clone());
         let debug_controller = DebugController::new(config.clone());
@@ -873,7 +899,7 @@ impl ServerBuilder {
             .with_state(apps_controller)
             .route(
                 "/ui/capabilities",
-                get(controllers::ui::served_ui_capabilities).with_state(resume_wired),
+                get(controllers::ui::served_ui_capabilities).with_state(served_ui),
             )
             .route("/ui/initialize", post(controllers::ui::ui_initialize))
             .route("/ui/message", post(controllers::ui::ui_message))

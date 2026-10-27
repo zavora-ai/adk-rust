@@ -155,6 +155,15 @@ pub const UI_PROTOCOL_CAPABILITIES: &[UiProtocolCapabilitySpec] = &[
 /// (spec 3.3 §10 S2): it has an approval service and authenticates callers.
 pub(crate) const AG_UI_RESUME_FEATURE: &str = "interrupt_resume";
 
+/// The `ag_ui` feature a server lists when its AG-UI extension sends agent-drawn surfaces as
+/// `a2ui-surface` activities (spec 3.3 §6.1 `genui`); only a server with that extension wired
+/// lists it.
+pub const AG_UI_A2UI_ACTIVITY_FEATURE: &str = "a2ui_activity";
+
+/// The `activityType` of an agent-drawn surface in an AG-UI `ACTIVITY_SNAPSHOT` (spec 3.3
+/// §6.1 `genui`): a community convention, not part of the AG-UI specification.
+pub const A2UI_SURFACE_ACTIVITY_TYPE: &str = "a2ui-surface";
+
 /// Normalize runtime UI profile aliases to canonical values.
 pub fn normalize_runtime_ui_protocol(raw: &str) -> Option<&'static str> {
     match raw.trim().to_ascii_lowercase().as_str() {

@@ -945,17 +945,33 @@ pub async fn ui_capabilities() -> Json<UiCapabilities> {
     })
 }
 
+/// What a server adds to [`ui_capabilities`] for `ag_ui` (spec 3.3 §10 S2, §6.1 `genui`).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ServedUi {
+    /// `resume` is wired: `interrupt_resume`.
+    pub(crate) resume: bool,
+    /// The AG-UI extension's features.
+    pub(crate) ag_ui_features: Vec<&'static str>,
+}
+
 /// GET /api/ui/capabilities as a server serves it: [`ui_capabilities`], plus
-/// `interrupt_resume` for `ag_ui` when `resume` is wired (spec 3.3 §10 S2).
+/// `interrupt_resume` for `ag_ui` when `resume` is wired (spec 3.3 §10 S2), and the features
+/// of the host's AG-UI extension (spec 3.3 §6.1 `genui`).
 pub(crate) async fn served_ui_capabilities(
-    axum::extract::State(resume): axum::extract::State<bool>,
+    axum::extract::State(served): axum::extract::State<ServedUi>,
 ) -> Json<UiCapabilities> {
     let Json(mut capabilities) = ui_capabilities().await;
-    if resume
-        && let Some(ag_ui) =
-            capabilities.protocols.iter_mut().find(|protocol| protocol.protocol == "ag_ui")
+    if let Some(ag_ui) =
+        capabilities.protocols.iter_mut().find(|protocol| protocol.protocol == "ag_ui")
     {
-        ag_ui.features.push(crate::ui_protocol::AG_UI_RESUME_FEATURE);
+        if served.resume {
+            ag_ui.features.push(crate::ui_protocol::AG_UI_RESUME_FEATURE);
+        }
+        for feature in served.ag_ui_features {
+            if !ag_ui.features.contains(&feature) {
+                ag_ui.features.push(feature);
+            }
+        }
     }
     Json(capabilities)
 }
