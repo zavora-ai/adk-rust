@@ -3507,6 +3507,24 @@
               "type"
             ],
             "type": "object"
+          },
+          {
+            "description": "**Cancel** on a spoken screen action in its cancel window (spec 3.3 §5.6).",
+            "properties": {
+              "actionId": {
+                "description": "The action, as `VoiceUpdate::PendingAction` named it.",
+                "type": "string"
+              },
+              "type": {
+                "const": "cancelAction",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "actionId"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -3758,6 +3776,77 @@
               "type",
               "decisionId",
               "cancelUntil",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A spoken screen action runs at `cancelUntil` unless cancelled (spec 3.3 §5.6): \"Snoozing\nin 5 s\", under the heading \"Move News digest to 19:00\".",
+            "properties": {
+              "actionId": {
+                "description": "The action, for `VoiceClientMessage::CancelAction`.",
+                "type": "string"
+              },
+              "cancelUntil": {
+                "description": "When it runs.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "heading": {
+                "description": "What it will do, in the kernel's words: \"Move News digest to 19:00\".",
+                "type": "string"
+              },
+              "text": {
+                "description": "\"Snoozing in 5 s\".",
+                "type": "string"
+              },
+              "type": {
+                "const": "pendingAction",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "actionId",
+              "cancelUntil",
+              "text",
+              "heading"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A spoken screen action ended, or was not taken: done, cancelled, refused, or words\nthat match several things (spec 3.3 §5.6).",
+            "properties": {
+              "actionId": {
+                "description": "The action, when one was pending.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "done": {
+                "description": "It ran.",
+                "type": "boolean"
+              },
+              "heading": {
+                "description": "What it did or would have done: \"Moved News digest to 19:00\".",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "description": "What happened, in plain words: \"Cancelled · nothing changed\".",
+                "type": "string"
+              },
+              "type": {
+                "const": "actionOutcome",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "done",
               "text"
             ],
             "type": "object"

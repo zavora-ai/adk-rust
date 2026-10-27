@@ -1202,6 +1202,10 @@ export type VoiceClientMessage = {
   type: "playbackEnded";
 } | {
   type: "end";
+} | {
+  /** The action, as `VoiceUpdate::PendingAction` named it. */
+  actionId: string;
+  type: "cancelAction";
 };
 
 /** A realtime model the person can talk on (spec 3.3 §5.6). */
@@ -1296,6 +1300,26 @@ export type VoiceUpdate = {
   /** "Allowing once in 5 seconds". */
   text: string;
   type: "pending";
+} | {
+  /** The action, for `VoiceClientMessage::CancelAction`. */
+  actionId: string;
+  /** When it runs. */
+  cancelUntil: string;
+  /** What it will do, in the kernel's words: "Move News digest to 19:00". */
+  heading: string;
+  /** "Snoozing in 5 s". */
+  text: string;
+  type: "pendingAction";
+} | {
+  /** The action, when one was pending. */
+  actionId?: string | null;
+  /** It ran. */
+  done: boolean;
+  /** What it did or would have done: "Moved News digest to 19:00". */
+  heading?: string | null;
+  /** What happened, in plain words: "Cancelled · nothing changed". */
+  text: string;
+  type: "actionOutcome";
 } | {
   /** The answer was recorded. */
   decided: boolean;
