@@ -47,12 +47,15 @@ impl Notifier for crate::telegram::FakeTelegram {
     }
 }
 
+/// The wake-ups a push service got: when each arrived and how many bytes it carried.
+type WakeUps = Arc<Mutex<Vec<(DateTime<Utc>, usize)>>>;
+
 /// A push service on loopback: every wake-up the kernel sends it, with when it arrived and
 /// how many bytes it carried.
 #[derive(Clone)]
 pub struct PushService {
     port: u16,
-    got: Arc<Mutex<Vec<(DateTime<Utc>, usize)>>>,
+    got: WakeUps,
     task: Arc<tokio::task::JoinHandle<()>>,
 }
 
@@ -67,7 +70,7 @@ impl Drop for PushService {
 impl PushService {
     /// Starts it on `127.0.0.1`; the phone subscribes at `http://localhost:<port>`.
     pub async fn start() -> Result<Self> {
-        let got: Arc<Mutex<Vec<(DateTime<Utc>, usize)>>> = Arc::default();
+        let got: WakeUps = Arc::default();
         let seen = Arc::clone(&got);
         let app = Router::new().fallback(move |body: Bytes| {
             let seen = Arc::clone(&seen);
