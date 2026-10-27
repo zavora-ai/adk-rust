@@ -73,6 +73,12 @@ function call(line: KernelRecordLine): string {
   return line.tool ?? "a call";
 }
 
+/** The form a call came from, by its tool: `send_invoice` is "the invoice form". */
+function formOf(tool: string | undefined): string {
+  const subject = tool?.split("_").slice(1).join(" ");
+  return subject ? `the ${subject} form` : "a form";
+}
+
 /**
  * The sentence of an answer to a decision: yes or no to the call, whose call it was when the
  * record names the agent, and where: "You let Finance use send_email, from Telegram."
@@ -169,6 +175,9 @@ export function recordSentence(line: KernelRecordLine, agents: AgentRow[]): stri
       return `You resumed all agents${where(line)}.`;
     case "surface.set_mode":
       return "You changed how much your agents ask first.";
+    // A form an agent drew, sent (spec 3.3 §7.4 rule 5): "You sent the invoice form Finance drew."
+    case "surface.drawn.submitted":
+      return `You sent ${formOf(line.tool)} ${(line.agent && agentOf(line.agent, agents)) ?? "an agent"} drew${where(line)}.`;
     // A rule refuses calls when its record says `denied`, and allows them otherwise.
     case "harness.rule.created":
       return line.decision === "denied"

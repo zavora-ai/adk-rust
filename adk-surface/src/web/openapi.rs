@@ -153,6 +153,8 @@ pub fn openapi() -> Value {
     let agent_detail = schema_ref::<crate::agents::AgentDetail>(&mut out);
     let agent_choices = schema_ref::<crate::agents::AgentChoices>(&mut out);
     let agent_preview = schema_ref::<crate::agents::AgentPreview>(&mut out);
+    let genui_capabilities = schema_ref::<super::genui::GenuiCapabilities>(&mut out);
+    let genui_forms = schema_ref::<super::genui::FormsResponse>(&mut out);
     let mut schemas = out.take_definitions(true);
 
     let mut input = generator(Contract::Deserialize);
@@ -497,6 +499,24 @@ pub fn openapi() -> Value {
                 ok
             }),
         } }),
+    );
+    // Agent-drawn UI (spec 3.3 §6.1 `genui`): its types are in every build's document; the
+    // routes are served with the `genui` feature. A drawn form is sent with `submitDrawn`.
+    routes.insert(
+        with(super::genui::paths::CAPABILITIES),
+        read(
+            "What this home claims of A2UI, AG-UI and MCP Apps, and the catalogs it renders; served with the `genui` feature",
+            json!([]),
+            answer("The claims", genui_capabilities),
+        ),
+    );
+    routes.insert(
+        with(super::genui::paths::FORMS),
+        read(
+            "The state of each drawn form sent in the session, from its decision and its call's result (spec 3.3 §7.4 rule 5); served with the `genui` feature",
+            json!([path_param("session")]),
+            answer("The forms sent", genui_forms),
+        ),
     );
     routes.insert(
         with(paths::OPENAPI),

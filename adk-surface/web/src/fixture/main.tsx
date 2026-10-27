@@ -11,6 +11,7 @@ import { TrayPanel } from "../tray/TrayPanel";
 import { Website } from "../website/Website";
 import { agentsFixture } from "./agents";
 import { FixtureClient, fixtureSeams, releaseCard, takeOverCard } from "./fixture";
+import { genuiFixture } from "./genui";
 import { phoneFixture } from "./phone";
 import { TrayFixture } from "./tray";
 import { VerbsFixture, VerbsHomeFixture, snoozeCard, verbsSeams, verbsVoiceDevices } from "./verbs";
@@ -58,6 +59,8 @@ const screens: Record<string, () => ReactNode> = {
   workflow: () => (
     <App client={client} seams={fixtureSeams()} initialSection="developer" workflow={workflowFixture(params, client)} />
   ),
+  // Agent-drawn UI (spec 3.3 §6.1 `genui`): `&genui=form|sent|display|refused|states|…`.
+  genui: () => genuiFixture(params),
 };
 const screen = screens[params.get("screen") ?? ""];
 const root = document.getElementById("root");

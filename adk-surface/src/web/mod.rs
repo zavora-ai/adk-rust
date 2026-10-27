@@ -28,6 +28,7 @@
 //! | `GET /surface/openapi.json` | The OpenAPI 3.1 document of these routes |
 //! | `POST /surface/decisions/{id}/take-over` | [`TakeOverRequest`] → [`CommandOutcome`]; mounted by [`take_over_router`] beside a harness that takes over |
 //! | `/surface/workflow/…` | The Runs tab's routes (feature `workflow`), mounted by `workflow::router` beside these |
+//! | `GET /surface/genui/capabilities`, `GET /surface/genui/sessions/{session}/forms` | Agent-drawn UI (spec 3.3 §6.1 `genui`): mounted by [`genui::router`](mod@genui) with feature `genui` |
 //!
 //! Reads take `?surface=` (`web`, `terminal`, `phone`, `tray`, `chat`, `voice`) so a card
 //! lists the answers that surface may give (§7.2). A declared surface or origin can only
@@ -45,6 +46,7 @@
 //! surface; `cancelAnswer` stays open (§5.6, §7.2).
 
 mod devices;
+pub mod genui;
 mod home;
 mod openapi;
 pub(crate) mod phone;

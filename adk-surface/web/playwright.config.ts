@@ -167,6 +167,27 @@ const surfaces: Surface[] = [
     testMatch: ["workflow.spec.ts"],
     ready: "/ui/",
   },
+  {
+    // Agent-drawn UI (spec 3.3 §6.1 `genui`, §12 "Governed form"): Finance draws the invoice
+    // form, the person sends it, and the call waits for them.
+    name: "genui",
+    prefix: "GENUI",
+    example: "scripted_genui",
+    features: "web,genui",
+    // 8791 to 8804 are taken.
+    port: 8805,
+    testMatch: ["genui.spec.ts"],
+    ready: "/ui/",
+  },
+  {
+    // Every state of the agent-drawn UI concepts over the web home's example, light and dark.
+    name: "genui-states",
+    prefix: "GENUI_STATES",
+    command: "bash adk-surface/web/e2e/fixture-server.sh",
+    port: 8806,
+    testMatch: ["genui-states.spec.ts"],
+    ready: "/ui/fixture.html",
+  },
 ];
 
 /** One second of a 440 Hz tone, 16 kHz mono PCM16, for Chromium's fake microphone. */

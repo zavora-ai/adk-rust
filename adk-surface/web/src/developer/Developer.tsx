@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { HomeClient } from "../client";
 import type { GraphView } from "../generated/workflow";
+import { GenuiProtocols } from "../genui/Protocols";
 import type { WorkflowClient } from "../workflow/client";
 import { workflowLabels } from "../workflow/labels";
 import { runsOf } from "../workflow/route";
@@ -150,7 +151,12 @@ export function Developer({
             onWaiting={setWaiting}
           />
         )}
-        {tab === "protocols" && <Protocols agent={agent} protocols={protocols} a2a={a2a} traceCount={traces.length} />}
+        {tab === "protocols" && (
+          <div className="dev-protocols-split">
+            <GenuiProtocols client={client} sessionId={sessionId} />
+            <Protocols agent={agent} protocols={protocols} a2a={a2a} traceCount={traces.length} />
+          </div>
+        )}
         {tab === "telemetry" &&
           (traces.length === 0 ? (
             <p className="muted">No spans for this session.</p>

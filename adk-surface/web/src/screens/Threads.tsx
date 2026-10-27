@@ -233,6 +233,7 @@ export function Threads({
             onSettled={onChanged}
             focusDecision={focusDecision}
             takeOver={takeOver}
+            session={session}
           />
           {problem && (
             <p className="decision-problem" role="alert">
