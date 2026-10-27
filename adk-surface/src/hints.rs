@@ -36,8 +36,9 @@ use async_trait::async_trait;
 
 use crate::model::{CardDetail, Reversibility};
 
-/// What a feature says about one of its decisions (spec 3.3 §7.1). Every field is optional;
-/// see the [module](self) for how each one changes the card.
+/// What a feature says about one of its decisions (spec 3.3 §7.1). Every field is optional.
+/// When several hints answer the same decision, the first that sets a wording field wins, and
+/// any of them can mark money or remove **Always allow**.
 ///
 /// # Example
 ///
