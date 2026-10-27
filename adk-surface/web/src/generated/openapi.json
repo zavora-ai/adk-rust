@@ -1084,6 +1084,140 @@
           }
         ]
       },
+      "CatalogView": {
+        "description": "A catalog this home renders.",
+        "properties": {
+          "components": {
+            "description": "The components it renders.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "description": "Its id.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Its name and version: `forms 1.0`.",
+            "type": "string"
+          },
+          "leftOut": {
+            "description": "The upstream components it leaves out, because they could fake a decision or cover\nthe home.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "components",
+          "leftOut"
+        ],
+        "type": "object"
+      },
+      "Claim": {
+        "description": "One claim of a protocol.",
+        "properties": {
+          "id": {
+            "description": "Its key, such as `version_0_9_1`.",
+            "type": "string"
+          },
+          "label": {
+            "description": "What it says: \"Version 0.9.1\", \"No approval controls in drawn UI\".",
+            "type": "string"
+          },
+          "note": {
+            "description": "A line on what it covers.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ClaimScope",
+            "description": "Where it holds."
+          },
+          "status": {
+            "$ref": "#/components/schemas/ClaimStatus",
+            "description": "How far the home supports it."
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "status",
+          "scope"
+        ],
+        "type": "object"
+      },
+      "ClaimScope": {
+        "description": "Where a claim holds (adk-ui's vocabulary).",
+        "oneOf": [
+          {
+            "const": "runtime",
+            "description": "The agent runtime.",
+            "type": "string"
+          },
+          {
+            "const": "client",
+            "description": "The renderer.",
+            "type": "string"
+          },
+          {
+            "const": "transport",
+            "description": "The wire between them.",
+            "type": "string"
+          },
+          {
+            "const": "host",
+            "description": "The page hosting the renderer.",
+            "type": "string"
+          },
+          {
+            "const": "security",
+            "description": "A guarantee to the person.",
+            "type": "string"
+          }
+        ]
+      },
+      "ClaimStatus": {
+        "description": "How far a home supports a claim (adk-ui's vocabulary).",
+        "oneOf": [
+          {
+            "const": "supported",
+            "description": "End to end.",
+            "type": "string"
+          },
+          {
+            "const": "partial",
+            "description": "In part; the note says which part.",
+            "type": "string"
+          },
+          {
+            "const": "host_owned",
+            "description": "The host provides it.",
+            "type": "string"
+          },
+          {
+            "const": "candidate",
+            "description": "A release candidate of the protocol, not yet relied on.",
+            "type": "string"
+          },
+          {
+            "const": "planned",
+            "description": "Not yet.",
+            "type": "string"
+          },
+          {
+            "const": "legacy",
+            "description": "Kept for compatibility only.",
+            "type": "string"
+          }
+        ]
+      },
       "ColorChoice": {
         "description": "A colour a person may choose.",
         "properties": {
@@ -1456,6 +1590,47 @@
               "ruleId"
             ],
             "type": "object"
+          },
+          {
+            "description": "Sends a form an agent drew, from the version the person saw (spec 3.3 §7.4 rule 5):\nnever runs its tool, but asks for the call, which the drawing agent holds for the\nperson's decision. Only a person at a screen sends one (`keyboard`, `pointer`,\n`touch`). Feature `genui`.",
+            "properties": {
+              "actionId": {
+                "description": "The declared action the person used.",
+                "type": "string"
+              },
+              "sessionId": {
+                "description": "The session the form is in.",
+                "type": "string"
+              },
+              "surfaceId": {
+                "description": "The drawn surface.",
+                "type": "string"
+              },
+              "type": {
+                "const": "submitDrawn",
+                "type": "string"
+              },
+              "values": {
+                "additionalProperties": true,
+                "default": {},
+                "description": "What the person typed or picked, by the field's data path (`/to`).",
+                "type": "object"
+              },
+              "version": {
+                "description": "The version the person saw.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "type",
+              "sessionId",
+              "surfaceId",
+              "version",
+              "actionId"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -1798,6 +1973,41 @@
               "type",
               "agent",
               "label"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A drawn form was sent: its call is on its way to the drawing agent, which holds it for\nthe person's decision (spec 3.3 §7.4 rule 5). The form's state follows from that\ndecision, never from this answer.",
+            "properties": {
+              "callId": {
+                "description": "The call asked for.",
+                "type": "string"
+              },
+              "sessionId": {
+                "description": "The session.",
+                "type": "string"
+              },
+              "surfaceId": {
+                "description": "The drawn surface.",
+                "type": "string"
+              },
+              "type": {
+                "const": "formSent",
+                "type": "string"
+              },
+              "version": {
+                "description": "The version sent.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "type",
+              "sessionId",
+              "surfaceId",
+              "version",
+              "callId"
             ],
             "type": "object"
           }
@@ -2223,6 +2433,447 @@
         ],
         "type": "object"
       },
+      "DrawnActionView": {
+        "description": "A declared action of a drawing, as its button shows it.",
+        "properties": {
+          "args": {
+            "description": "The call's arguments: a field's value, or a constant the drawing fixed.",
+            "items": {
+              "$ref": "#/components/schemas/DrawnArg"
+            },
+            "type": "array"
+          },
+          "id": {
+            "description": "The action's id.",
+            "type": "string"
+          },
+          "label": {
+            "description": "The button's label, agent text checked by rule 5.",
+            "type": "string"
+          },
+          "note": {
+            "description": "The engine's line under the button: \"Sending runs send_invoice and asks you first\".",
+            "type": "string"
+          },
+          "tool": {
+            "description": "The tool sending runs.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "tool",
+          "note"
+        ],
+        "type": "object"
+      },
+      "DrawnArg": {
+        "description": "One argument of a drawn action's call, as a preview of the call shows it.",
+        "properties": {
+          "name": {
+            "description": "The argument's name.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The field whose value it takes, by data path.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "description": "The constant it takes, when it takes no field's value."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "DrawnCheck": {
+        "description": "A check a drawn field makes: the catalog's `required`, `regex`, `length`, `numeric`,\n`email`, `and`, `or` and `not` functions, and the message shown when it fails.",
+        "properties": {
+          "condition": {
+            "description": "The A2UI function call that must be true, its bindings at data model paths."
+          },
+          "message": {
+            "description": "\"Enter an email address\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "condition",
+          "message"
+        ],
+        "type": "object"
+      },
+      "DrawnField": {
+        "description": "A field of a drawing: where its value goes, what it takes and what it checks.",
+        "properties": {
+          "checks": {
+            "description": "What it checks before the form is sent, in order.",
+            "items": {
+              "$ref": "#/components/schemas/DrawnCheck"
+            },
+            "type": "array"
+          },
+          "input": {
+            "$ref": "#/components/schemas/DrawnInput",
+            "description": "What it takes."
+          },
+          "max": {
+            "description": "The highest value of a slider, or the latest date."
+          },
+          "min": {
+            "description": "The lowest value of a slider, or the earliest date."
+          },
+          "options": {
+            "description": "The options of a choice.",
+            "items": {
+              "$ref": "#/components/schemas/DrawnOption"
+            },
+            "type": "array"
+          },
+          "path": {
+            "description": "The data model path its value is at, such as `/to`: the key of its value when the\nform is sent.",
+            "type": "string"
+          },
+          "value": {
+            "description": "The value it starts with."
+          }
+        },
+        "required": [
+          "path",
+          "input",
+          "value"
+        ],
+        "type": "object"
+      },
+      "DrawnInput": {
+        "description": "The kind of value a drawn field takes.",
+        "oneOf": [
+          {
+            "const": "shortText",
+            "description": "One line of text.",
+            "type": "string"
+          },
+          {
+            "const": "longText",
+            "description": "Several lines of text.",
+            "type": "string"
+          },
+          {
+            "const": "number",
+            "description": "A number.",
+            "type": "string"
+          },
+          {
+            "const": "date",
+            "description": "A date, `2026-11-15`.",
+            "type": "string"
+          },
+          {
+            "const": "time",
+            "description": "A time, `10:30`.",
+            "type": "string"
+          },
+          {
+            "const": "dateTime",
+            "description": "A date and a time, ISO 8601.",
+            "type": "string"
+          },
+          {
+            "const": "checkbox",
+            "description": "Yes or no.",
+            "type": "string"
+          },
+          {
+            "const": "choice",
+            "description": "One of the options.",
+            "type": "string"
+          },
+          {
+            "const": "choices",
+            "description": "Any of the options.",
+            "type": "string"
+          },
+          {
+            "const": "slider",
+            "description": "A number between `min` and `max`.",
+            "type": "string"
+          }
+        ]
+      },
+      "DrawnKind": {
+        "description": "What a drawing is: a form a person fills in and sends, a card or table to read, or a\nscreen of catalog components.",
+        "oneOf": [
+          {
+            "const": "form",
+            "description": "Fields and actions.",
+            "type": "string"
+          },
+          {
+            "const": "card",
+            "description": "Label and value rows; no buttons.",
+            "type": "string"
+          },
+          {
+            "const": "table",
+            "description": "Columns and rows; no buttons.",
+            "type": "string"
+          },
+          {
+            "const": "screen",
+            "description": "Any catalog components, with declared actions.",
+            "type": "string"
+          }
+        ]
+      },
+      "DrawnNode": {
+        "description": "One component of a drawing, resolved for a renderer: templates expanded, every string a\nperson reads already in place (spec 3.3 §7.4 rule 5).\n\n| Component | `text` | `variant` | Other |\n|---|---|---|---|\n| `Text` | The text | `h1`–`h5`, `caption`, `body` | — |\n| `Row`, `Column`, `List` | — | `justify` (Row, Column) or `direction` (List) | `children`; a long `List` has `showAllText` |\n| `Card` | — | — | `children` |\n| `Tabs` | — | — | `tabs` titles and one child per tab |\n| `Divider` | — | `axis` | — |\n| `Button` | Its label | `primary`, `default`, `borderless` | `action` |\n| `TextField`, `DateTimeInput`, `CheckBox`, `ChoicePicker`, `Slider` | The label | the catalog's variant | `field` |",
+        "properties": {
+          "action": {
+            "description": "The declared action a button asks for.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "children": {
+            "description": "Its children, in order.",
+            "items": {
+              "$ref": "#/components/schemas/DrawnNode"
+            },
+            "type": "array"
+          },
+          "component": {
+            "description": "The catalog component.",
+            "type": "string"
+          },
+          "field": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DrawnField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A field the person fills in."
+          },
+          "key": {
+            "description": "Unique within the drawing: the component's id, and for a template's copy the list\nitem it was drawn for, `cell-0@/rows/3`.",
+            "type": "string"
+          },
+          "showAllText": {
+            "description": "A long list's \"Show all 42\", when a renderer cuts it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tabs": {
+            "description": "The titles of a `Tabs`' tabs, one per child.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "What it reads, or its label.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "variant": {
+            "description": "A style hint from the catalog.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "component"
+        ],
+        "type": "object"
+      },
+      "DrawnOption": {
+        "description": "One option of a drawn choice.",
+        "properties": {
+          "label": {
+            "description": "What the person reads.",
+            "type": "string"
+          },
+          "value": {
+            "description": "The value sent.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ],
+        "type": "object"
+      },
+      "DrawnSent": {
+        "description": "A person sent a drawn form: the call they asked for, held as the drawing agent for their\ndecision, or refused by its rules before it was held (spec 3.3 §7.4 rule 5).",
+        "properties": {
+          "actionId": {
+            "description": "The action used.",
+            "type": "string"
+          },
+          "at": {
+            "description": "When.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "callId": {
+            "description": "The call's id: its result names it.",
+            "type": "string"
+          },
+          "decisionId": {
+            "description": "The decision it waits on, once held.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "held": {
+            "description": "Held for a decision; `false` when the agent's rules refused the call first.",
+            "type": "boolean"
+          },
+          "surfaceId": {
+            "description": "The surface sent.",
+            "type": "string"
+          },
+          "text": {
+            "description": "\"Sent at 10:03\", or \"Finance can't use send_invoice here\".",
+            "type": "string"
+          },
+          "tool": {
+            "description": "The tool asked for.",
+            "type": "string"
+          },
+          "version": {
+            "description": "The version sent.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "surfaceId",
+          "version",
+          "actionId",
+          "tool",
+          "callId",
+          "held",
+          "at",
+          "text"
+        ],
+        "type": "object"
+      },
+      "DrawnSurface": {
+        "description": "A drawing in a thread (spec 3.3 §6.1 `genui`): drawn on the normal card background,\nnever the decision's, with its strings already resolved on the server.",
+        "properties": {
+          "actions": {
+            "description": "What its buttons ask for.",
+            "items": {
+              "$ref": "#/components/schemas/DrawnActionView"
+            },
+            "type": "array"
+          },
+          "agent": {
+            "$ref": "#/components/schemas/AgentRef",
+            "description": "The agent that drew it."
+          },
+          "atText": {
+            "description": "Local `HH:MM` it was drawn at.",
+            "type": "string"
+          },
+          "callId": {
+            "description": "The render tool's call.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "catalog": {
+            "description": "The catalog it was checked against, such as `forms 1.0`.",
+            "type": "string"
+          },
+          "changedText": {
+            "description": "What a newer version says above itself: \"Finance changed this form at 10:05\", or\n\"Finance removed this at 10:06\" for a removal.",
+            "type": "string"
+          },
+          "deleted": {
+            "description": "This version removes the surface.",
+            "type": "boolean"
+          },
+          "drawnAt": {
+            "description": "When it was drawn.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "drawnText": {
+            "description": "\"Drawn by Finance · 10:02\".",
+            "type": "string"
+          },
+          "earlierText": {
+            "description": "What this version says once a newer one replaces it: \"Earlier version · 10:02\".",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DrawnKind",
+            "description": "What it is."
+          },
+          "root": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DrawnNode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What it shows; `None` for a removal."
+          },
+          "surfaceId": {
+            "description": "The surface; a later drawing of it is its next version.",
+            "type": "string"
+          },
+          "title": {
+            "description": "The title, agent text checked by rule 5.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "This version. Only the latest version of a surface is live.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "surfaceId",
+          "version",
+          "kind",
+          "catalog",
+          "agent",
+          "drawnAt",
+          "atText",
+          "drawnText",
+          "changedText",
+          "earlierText"
+        ],
+        "type": "object"
+      },
       "EndedWork": {
         "description": "What removing an agent ends, counted (spec 3.3 §5.7 \"Pausing and removing\").",
         "properties": {
@@ -2388,6 +3039,138 @@
             "type": "string"
           }
         ]
+      },
+      "FormState": {
+        "description": "A drawn form's state after it was sent (spec 3.3 §7.4 rule 5).",
+        "properties": {
+          "decisionId": {
+            "description": "The decision it waits on or waited on.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "locked": {
+            "description": "Its fields can no longer be changed: it was sent and the call was not refused.",
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/FormStatus",
+            "description": "Where it is."
+          },
+          "surfaceId": {
+            "description": "The surface.",
+            "type": "string"
+          },
+          "text": {
+            "description": "\"Sent at 10:03 · waiting for you\", \"Sent · done at 10:04\", …",
+            "type": "string"
+          },
+          "version": {
+            "description": "The version sent.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "surfaceId",
+          "version",
+          "status",
+          "text",
+          "locked"
+        ],
+        "type": "object"
+      },
+      "FormStatus": {
+        "description": "Where a drawn form is after it was sent, from its decision and its call's result\n(spec 3.3 §7.4 rule 5).",
+        "oneOf": [
+          {
+            "const": "waiting",
+            "description": "Sent, and the call is held: its decision is not answered here yet.",
+            "type": "string"
+          },
+          {
+            "const": "sent",
+            "description": "Sent and answered yes; the call has not finished yet.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "The call ran.",
+            "type": "string"
+          },
+          {
+            "const": "saidNo",
+            "description": "The person said no.",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "description": "The call ran and failed.",
+            "type": "string"
+          },
+          {
+            "const": "notRun",
+            "description": "Allowed, then refused when it resumed because a rule changed.",
+            "type": "string"
+          },
+          {
+            "const": "refused",
+            "description": "The drawing agent's rules refused the call before it was held; the form can be\nchanged and sent again.",
+            "type": "string"
+          },
+          {
+            "const": "ended",
+            "description": "The decision ended without an answer.",
+            "type": "string"
+          }
+        ]
+      },
+      "FormsResponse": {
+        "description": "`GET /surface/genui/sessions/{session}/forms` answer (spec 3.3 §7.4 rule 5).",
+        "properties": {
+          "forms": {
+            "description": "Each form sent, its latest send per version.",
+            "items": {
+              "$ref": "#/components/schemas/FormState"
+            },
+            "type": "array"
+          },
+          "sessionId": {
+            "description": "The session.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "forms"
+        ],
+        "type": "object"
+      },
+      "GenuiCapabilities": {
+        "description": "What `GET /api/surface/genui/capabilities` answers: a table of claims per protocol, and\nthe catalogs this home renders.",
+        "properties": {
+          "catalogs": {
+            "description": "The catalogs this home renders.",
+            "items": {
+              "$ref": "#/components/schemas/CatalogView"
+            },
+            "type": "array"
+          },
+          "protocols": {
+            "description": "A2UI, AG-UI and MCP Apps, in that order.",
+            "items": {
+              "$ref": "#/components/schemas/ProtocolClaims"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "protocols",
+          "catalogs"
+        ],
+        "type": "object"
       },
       "GrantedUse": {
         "description": "Something the home lets every agent on it do beyond its definition, because the host\ngives each agent it runs the tools for it (spec 3.3 §5.7, S-I12, S-I13): shown under\n\"Here is what Finance can do\" as \"On this home it can also:\". Hosts register each with\n`SurfaceEngineBuilder::grant`.",
@@ -2735,6 +3518,32 @@
           }
         ]
       },
+      "ProtocolClaims": {
+        "description": "One protocol's claims.",
+        "properties": {
+          "claims": {
+            "description": "What this home claims, in order.",
+            "items": {
+              "$ref": "#/components/schemas/Claim"
+            },
+            "type": "array"
+          },
+          "id": {
+            "description": "Its key: `a2ui`, `ag_ui`, `mcp_apps`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Its name: `A2UI`, `AG-UI`, `MCP Apps`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "claims"
+        ],
+        "type": "object"
+      },
       "PushKeys": {
         "description": "The keys a browser gives with its push subscription.",
         "properties": {
@@ -2843,6 +3652,84 @@
           "start",
           "end",
           "text"
+        ],
+        "type": "object"
+      },
+      "RefusalKind": {
+        "description": "Why a drawing was refused, in a person's terms (spec 3.3 §7.4 rule 5).",
+        "oneOf": [
+          {
+            "const": "looksLikeDecision",
+            "description": "It shows a decision's words or controls.",
+            "type": "string"
+          },
+          {
+            "const": "asksForSecret",
+            "description": "It asks for a password or another secret.",
+            "type": "string"
+          },
+          {
+            "const": "cannotShow",
+            "description": "It uses something this home does not show: a component outside the catalog, a link,\na function, or a malformed tree.",
+            "type": "string"
+          }
+        ]
+      },
+      "RefusedDrawing": {
+        "description": "A drawing that was not shown (spec 3.3 §7.4 rule 5): a plain notice in the thread; the\ntechnical reason only in the developer panel and the terminal.",
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/AgentRef",
+            "description": "The agent that tried to draw it."
+          },
+          "at": {
+            "description": "When.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "atText": {
+            "description": "Local `HH:MM:SS`.",
+            "type": "string"
+          },
+          "callId": {
+            "description": "The render tool's call.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "component": {
+            "description": "The component at fault, when one is.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RefusalKind",
+            "description": "Why, in a person's terms."
+          },
+          "reason": {
+            "description": "The technical reason: \"catalog forms 1.0 · component c7 Button · label matches\nreserved word \\\"Allow once\\\" after normalisation\".",
+            "type": "string"
+          },
+          "text": {
+            "description": "\"Finance tried to show something that looks like a decision. It wasn't shown.\"",
+            "type": "string"
+          },
+          "tool": {
+            "description": "The render tool.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent",
+          "kind",
+          "text",
+          "reason",
+          "at",
+          "atText",
+          "tool"
         ],
         "type": "object"
       },
@@ -3323,6 +4210,60 @@
               "kind",
               "tool",
               "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Something an agent drew (spec 3.3 §6.1 `genui`, §7.4 rule 5): a form, card, table or\nscreen on the normal card background, never a decision. Only a render tool's result\nwith the reserved state key and the drawing's digest makes one.",
+            "properties": {
+              "kind": {
+                "const": "drawn",
+                "type": "string"
+              },
+              "surface": {
+                "$ref": "#/components/schemas/DrawnSurface",
+                "description": "The drawing, its strings resolved on the server."
+              }
+            },
+            "required": [
+              "kind",
+              "surface"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A drawing that was not shown: a plain notice (spec 3.3 §7.4 rule 5).",
+            "properties": {
+              "kind": {
+                "const": "drawnRefused",
+                "type": "string"
+              },
+              "refusal": {
+                "$ref": "#/components/schemas/RefusedDrawing",
+                "description": "What the thread says, and the reason the developer panel shows."
+              }
+            },
+            "required": [
+              "kind",
+              "refusal"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A person sent a drawn form: the call they asked for, held as the drawing agent for\ntheir decision, or refused by its rules (spec 3.3 §7.4 rule 5). The decision's own\n`Decision` item follows it in the same entry.",
+            "properties": {
+              "kind": {
+                "const": "drawnSent",
+                "type": "string"
+              },
+              "sent": {
+                "$ref": "#/components/schemas/DrawnSent",
+                "description": "The call and the form it came from."
+              }
+            },
+            "required": [
+              "kind",
+              "sent"
             ],
             "type": "object"
           }
@@ -4932,6 +5873,111 @@
           }
         },
         "summary": "Take over, then Done (spec 3.3 §8.2, §10 H2): the secret the person typed goes to the one call that asked; mounted beside a harness that takes over"
+      }
+    },
+    "/api/surface/genui/capabilities": {
+      "get": {
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenuiCapabilities"
+                }
+              }
+            },
+            "description": "The claims"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "What this home claims of A2UI, AG-UI and MCP Apps, and the catalogs it renders; served with the `genui` feature"
+      }
+    },
+    "/api/surface/genui/sessions/{session}/forms": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FormsResponse"
+                }
+              }
+            },
+            "description": "The forms sent"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "The state of each drawn form sent in the session, from its decision and its call's result (spec 3.3 §7.4 rule 5); served with the `genui` feature"
       }
     },
     "/api/surface/openapi.json": {

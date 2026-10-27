@@ -390,6 +390,41 @@ export interface CardLine {
 /** Where a decision is in its life. */
 export type CardStatus = "waiting" | "decided";
 
+/** A catalog this home renders. */
+export interface CatalogView {
+  /** The components it renders. */
+  components: string[];
+  /** Its id. */
+  id: string;
+  /** Its name and version: `forms 1.0`. */
+  label: string;
+  /**
+   * The upstream components it leaves out, because they could fake a decision or cover
+   * the home.
+   */
+  leftOut: string[];
+}
+
+/** One claim of a protocol. */
+export interface Claim {
+  /** Its key, such as `version_0_9_1`. */
+  id: string;
+  /** What it says: "Version 0.9.1", "No approval controls in drawn UI". */
+  label: string;
+  /** A line on what it covers. */
+  note?: string | null;
+  /** Where it holds. */
+  scope: ClaimScope;
+  /** How far the home supports it. */
+  status: ClaimStatus;
+}
+
+/** Where a claim holds (adk-ui's vocabulary). */
+export type ClaimScope = "runtime" | "client" | "transport" | "host" | "security";
+
+/** How far a home supports a claim (adk-ui's vocabulary). */
+export type ClaimStatus = "supported" | "partial" | "host_owned" | "candidate" | "planned" | "legacy";
+
 /** A colour a person may choose. */
 export interface ColorChoice {
   /** The colour. */
@@ -499,6 +534,18 @@ export type Command = {
   /** The rule. */
   ruleId: string;
   type: "copyRuleToAgent";
+} | {
+  /** The declared action the person used. */
+  actionId: string;
+  /** The session the form is in. */
+  sessionId: string;
+  /** The drawn surface. */
+  surfaceId: string;
+  type: "submitDrawn";
+  /** What the person typed or picked, by the field's data path (`/to`). */
+  values?: Record<string, unknown>;
+  /** The version the person saw. */
+  version: number;
 };
 
 /** What a command did (spec 3.3 §6). */
@@ -582,6 +629,16 @@ export type CommandOutcome = {
   /** The rule's words. */
   label: string;
   type: "ruleCopied";
+} | {
+  /** The call asked for. */
+  callId: string;
+  /** The session. */
+  sessionId: string;
+  /** The drawn surface. */
+  surfaceId: string;
+  type: "formSent";
+  /** The version sent. */
+  version: number;
 };
 
 /** `POST /surface/commands` body: the command, the surface it was given on and how. */
@@ -755,6 +812,182 @@ export interface Delivery {
   sentAt: string;
 }
 
+/** A declared action of a drawing, as its button shows it. */
+export interface DrawnActionView {
+  /** The call's arguments: a field's value, or a constant the drawing fixed. */
+  args?: DrawnArg[];
+  /** The action's id. */
+  id: string;
+  /** The button's label, agent text checked by rule 5. */
+  label: string;
+  /** The engine's line under the button: "Sending runs send_invoice and asks you first". */
+  note: string;
+  /** The tool sending runs. */
+  tool: string;
+}
+
+/** One argument of a drawn action's call, as a preview of the call shows it. */
+export interface DrawnArg {
+  /** The argument's name. */
+  name: string;
+  /** The field whose value it takes, by data path. */
+  path?: string | null;
+  /** The constant it takes, when it takes no field's value. */
+  value?: unknown;
+}
+
+/**
+ * A check a drawn field makes: the catalog's `required`, `regex`, `length`, `numeric`,
+ * `email`, `and`, `or` and `not` functions, and the message shown when it fails.
+ */
+export interface DrawnCheck {
+  /** The A2UI function call that must be true, its bindings at data model paths. */
+  condition: unknown;
+  /** "Enter an email address". */
+  message: string;
+}
+
+/** A field of a drawing: where its value goes, what it takes and what it checks. */
+export interface DrawnField {
+  /** What it checks before the form is sent, in order. */
+  checks?: DrawnCheck[];
+  /** What it takes. */
+  input: DrawnInput;
+  /** The highest value of a slider, or the latest date. */
+  max?: unknown;
+  /** The lowest value of a slider, or the earliest date. */
+  min?: unknown;
+  /** The options of a choice. */
+  options?: DrawnOption[];
+  /**
+   * The data model path its value is at, such as `/to`: the key of its value when the
+   * form is sent.
+   */
+  path: string;
+  /** The value it starts with. */
+  value: unknown;
+}
+
+/** The kind of value a drawn field takes. */
+export type DrawnInput = "shortText" | "longText" | "number" | "date" | "time" | "dateTime" | "checkbox" | "choice" | "choices" | "slider";
+
+/**
+ * What a drawing is: a form a person fills in and sends, a card or table to read, or a
+ * screen of catalog components.
+ */
+export type DrawnKind = "form" | "card" | "table" | "screen";
+
+/**
+ * One component of a drawing, resolved for a renderer: templates expanded, every string a
+ * person reads already in place (spec 3.3 §7.4 rule 5).
+ * 
+ * | Component | `text` | `variant` | Other |
+ * |---|---|---|---|
+ * | `Text` | The text | `h1`–`h5`, `caption`, `body` | — |
+ * | `Row`, `Column`, `List` | — | `justify` (Row, Column) or `direction` (List) | `children`; a long `List` has `showAllText` |
+ * | `Card` | — | — | `children` |
+ * | `Tabs` | — | — | `tabs` titles and one child per tab |
+ * | `Divider` | — | `axis` | — |
+ * | `Button` | Its label | `primary`, `default`, `borderless` | `action` |
+ * | `TextField`, `DateTimeInput`, `CheckBox`, `ChoicePicker`, `Slider` | The label | the catalog's variant | `field` |
+ */
+export interface DrawnNode {
+  /** The declared action a button asks for. */
+  action?: string | null;
+  /** Its children, in order. */
+  children?: DrawnNode[];
+  /** The catalog component. */
+  component: string;
+  /** A field the person fills in. */
+  field?: DrawnField | null;
+  /**
+   * Unique within the drawing: the component's id, and for a template's copy the list
+   * item it was drawn for, `cell-0@/rows/3`.
+   */
+  key: string;
+  /** A long list's "Show all 42", when a renderer cuts it. */
+  showAllText?: string | null;
+  /** The titles of a `Tabs`' tabs, one per child. */
+  tabs?: string[];
+  /** What it reads, or its label. */
+  text?: string | null;
+  /** A style hint from the catalog. */
+  variant?: string | null;
+}
+
+/** One option of a drawn choice. */
+export interface DrawnOption {
+  /** What the person reads. */
+  label: string;
+  /** The value sent. */
+  value: string;
+}
+
+/**
+ * A person sent a drawn form: the call they asked for, held as the drawing agent for their
+ * decision, or refused by its rules before it was held (spec 3.3 §7.4 rule 5).
+ */
+export interface DrawnSent {
+  /** The action used. */
+  actionId: string;
+  /** When. */
+  at: string;
+  /** The call's id: its result names it. */
+  callId: string;
+  /** The decision it waits on, once held. */
+  decisionId?: string | null;
+  /** Held for a decision; `false` when the agent's rules refused the call first. */
+  held: boolean;
+  /** The surface sent. */
+  surfaceId: string;
+  /** "Sent at 10:03", or "Finance can't use send_invoice here". */
+  text: string;
+  /** The tool asked for. */
+  tool: string;
+  /** The version sent. */
+  version: number;
+}
+
+/**
+ * A drawing in a thread (spec 3.3 §6.1 `genui`): drawn on the normal card background,
+ * never the decision's, with its strings already resolved on the server.
+ */
+export interface DrawnSurface {
+  /** What its buttons ask for. */
+  actions?: DrawnActionView[];
+  /** The agent that drew it. */
+  agent: AgentRef;
+  /** Local `HH:MM` it was drawn at. */
+  atText: string;
+  /** The render tool's call. */
+  callId?: string | null;
+  /** The catalog it was checked against, such as `forms 1.0`. */
+  catalog: string;
+  /**
+   * What a newer version says above itself: "Finance changed this form at 10:05", or
+   * "Finance removed this at 10:06" for a removal.
+   */
+  changedText: string;
+  /** This version removes the surface. */
+  deleted?: boolean;
+  /** When it was drawn. */
+  drawnAt: string;
+  /** "Drawn by Finance · 10:02". */
+  drawnText: string;
+  /** What this version says once a newer one replaces it: "Earlier version · 10:02". */
+  earlierText: string;
+  /** What it is. */
+  kind: DrawnKind;
+  /** What it shows; `None` for a removal. */
+  root?: DrawnNode | null;
+  /** The surface; a later drawing of it is its next version. */
+  surfaceId: string;
+  /** The title, agent text checked by rule 5. */
+  title?: string | null;
+  /** This version. Only the latest version of a surface is live. */
+  version: number;
+}
+
 /** What removing an agent ends, counted (spec 3.3 §5.7 "Pausing and removing"). */
 export interface EndedWork {
   /** Decisions waiting for you that end without an answer. */
@@ -806,6 +1039,47 @@ export type FeedFrame = {
 
 /** Where an agent's files are: none, read, or read and change (spec 3.3 §5.7). */
 export type FileUse = "none" | "read" | "readWrite";
+
+/** A drawn form's state after it was sent (spec 3.3 §7.4 rule 5). */
+export interface FormState {
+  /** The decision it waits on or waited on. */
+  decisionId?: string | null;
+  /** Its fields can no longer be changed: it was sent and the call was not refused. */
+  locked: boolean;
+  /** Where it is. */
+  status: FormStatus;
+  /** The surface. */
+  surfaceId: string;
+  /** "Sent at 10:03 · waiting for you", "Sent · done at 10:04", … */
+  text: string;
+  /** The version sent. */
+  version: number;
+}
+
+/**
+ * Where a drawn form is after it was sent, from its decision and its call's result
+ * (spec 3.3 §7.4 rule 5).
+ */
+export type FormStatus = "waiting" | "sent" | "done" | "saidNo" | "failed" | "notRun" | "refused" | "ended";
+
+/** `GET /surface/genui/sessions/{session}/forms` answer (spec 3.3 §7.4 rule 5). */
+export interface FormsResponse {
+  /** Each form sent, its latest send per version. */
+  forms: FormState[];
+  /** The session. */
+  sessionId: string;
+}
+
+/**
+ * What `GET /api/surface/genui/capabilities` answers: a table of claims per protocol, and
+ * the catalogs this home renders.
+ */
+export interface GenuiCapabilities {
+  /** The catalogs this home renders. */
+  catalogs: CatalogView[];
+  /** A2UI, AG-UI and MCP Apps, in that order. */
+  protocols: ProtocolClaims[];
+}
 
 /**
  * Something the home lets every agent on it do beyond its definition, because the host
@@ -932,6 +1206,16 @@ export interface PhoneInfo {
 /** A pill on a briefing line (spec 3.3 §5.1 Today). */
 export type Pill = "done" | "failed" | "waitingForYou" | "youDecided" | "suggestion" | "question";
 
+/** One protocol's claims. */
+export interface ProtocolClaims {
+  /** What this home claims, in order. */
+  claims: Claim[];
+  /** Its key: `a2ui`, `ag_ui`, `mcp_apps`. */
+  id: string;
+  /** Its name: `A2UI`, `AG-UI`, `MCP Apps`. */
+  name: string;
+}
+
 /** The keys a browser gives with its push subscription. */
 export interface PushKeys {
   /** The subscription's authentication secret, base64url. */
@@ -984,6 +1268,37 @@ export interface QuietView {
   start: string;
   /** "Quiet from 22:00", or "Quiet until 07:00" while it holds. */
   text: string;
+}
+
+/** Why a drawing was refused, in a person's terms (spec 3.3 §7.4 rule 5). */
+export type RefusalKind = "looksLikeDecision" | "asksForSecret" | "cannotShow";
+
+/**
+ * A drawing that was not shown (spec 3.3 §7.4 rule 5): a plain notice in the thread; the
+ * technical reason only in the developer panel and the terminal.
+ */
+export interface RefusedDrawing {
+  /** The agent that tried to draw it. */
+  agent: AgentRef;
+  /** When. */
+  at: string;
+  /** Local `HH:MM:SS`. */
+  atText: string;
+  /** The render tool's call. */
+  callId?: string | null;
+  /** The component at fault, when one is. */
+  component?: string | null;
+  /** Why, in a person's terms. */
+  kind: RefusalKind;
+  /**
+   * The technical reason: "catalog forms 1.0 · component c7 Button · label matches
+   * reserved word \"Allow once\" after normalisation".
+   */
+  reason: string;
+  /** "Finance tried to show something that looks like a decision. It wasn't shown." */
+  text: string;
+  /** The render tool. */
+  tool: string;
 }
 
 /**
@@ -1142,6 +1457,18 @@ export type ThreadItem = {
   text: string;
   /** The tool. */
   tool: string;
+} | {
+  kind: "drawn";
+  /** The drawing, its strings resolved on the server. */
+  surface: DrawnSurface;
+} | {
+  kind: "drawnRefused";
+  /** What the thread says, and the reason the developer panel shows. */
+  refusal: RefusedDrawing;
+} | {
+  kind: "drawnSent";
+  /** The call and the form it came from. */
+  sent: DrawnSent;
 };
 
 /** `GET /surface/sessions/{session}/thread` answer. */
