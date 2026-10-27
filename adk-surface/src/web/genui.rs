@@ -6,7 +6,7 @@
 //! | `GET /surface/genui/sessions/{session}/forms` | [`FormsResponse`]: the state of each form sent in the session, from its decision and its call's result |
 //!
 //! A drawn form is sent with `POST /surface/commands` and a `submitDrawn` command. The routes
-//! are mounted with [`router`] by a host built with `genui`; the page probes them and hides
+//! are mounted with `genui::router` by a host built with `genui`; the page probes them and hides
 //! what a server built without `genui` lacks. Their types are in the OpenAPI document of
 //! every `web` build.
 
