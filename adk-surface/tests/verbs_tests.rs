@@ -998,7 +998,6 @@ mod held {
     /// the one resolved last for another call of the same tool in the session.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn the_record_cites_the_approval_of_this_call() {
-        use adk_core::ApprovalStore as _;
         let home =
             home(Setup::new(Arc::new(ScriptedLlm::new("s", Vec::<ScriptedResponse>::new())))).await;
         let tool = home
