@@ -27,6 +27,7 @@
 //! | `POST /surface/commands` | [`CommandRequest`] → [`CommandOutcome`] |
 //! | `GET /surface/openapi.json` | The OpenAPI 3.1 document of these routes |
 //! | `POST /surface/decisions/{id}/take-over` | [`TakeOverRequest`] → [`CommandOutcome`]; mounted by [`take_over_router`] beside a harness that takes over |
+//! | `/surface/workflow/…` | The Runs tab's routes (feature `workflow`), mounted by `workflow::router` beside these |
 //!
 //! Reads take `?surface=` (`web`, `terminal`, `phone`, `tray`, `chat`, `voice`) so a card
 //! lists the answers that surface may give (§7.2). A declared surface or origin can only
@@ -53,6 +54,8 @@ pub mod verbs;
 mod vocabulary;
 #[cfg(feature = "website")]
 pub mod website;
+#[cfg(feature = "workflow")]
+pub mod workflow;
 
 use std::time::Duration;
 

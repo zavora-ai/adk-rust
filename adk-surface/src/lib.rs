@@ -30,6 +30,7 @@
 //! | `voice` | Voice and video: spoken "allow once" and "deny" through the engine with a cancel window, the camera and the screen as input while their switches are on; with `web`, the voice view's socket (`voice::router`, `voice::socket_routes`) (spec 3.3 §5.6) | Beta |
 //! | `website` | The website's views on the web home (spec 3.5 §8.2): the web editor, onboarding, the charter cards, the site view and the weekly review over `adk-website`'s desk, `web::website::router`; implies `web` | Experimental |
 //! | `verb-ui` | Screen actions people and agents share (spec 3.3 §2 item 7, §6.1): snoozing something in Coming up from the home, the terminal, voice and an agent, always through the governed path, `verbs::VerbRegistry`; with `web`, `web::verbs::router` | Experimental |
+//! | `workflow` | The workflow observer (spec 3.3 §12 developer track): a graph agent's runs, steps and forks, card hints for its governed nodes, `workflow::Workflows`; with `web`, the Runs tab's routes, `web::workflow::router` | Beta |
 //!
 //! ## Example
 //!
@@ -82,6 +83,8 @@ pub mod voice;
 #[cfg(feature = "web")]
 pub mod web;
 pub mod words;
+#[cfg(feature = "workflow")]
+pub mod workflow;
 
 pub use agents::GrantedUse;
 pub use agents::{

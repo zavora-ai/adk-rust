@@ -37,6 +37,9 @@ pub(super) mod website;
 // The screen actions' document (spec 3.3 §2 item 7): its own, for the same reason.
 #[cfg(feature = "verb-ui")]
 pub(super) mod verbs;
+// The Runs tab's document (spec 3.3 §12): its own, for the same reason.
+#[cfg(feature = "workflow")]
+pub(super) mod workflow;
 
 fn generator(contract: Contract) -> SchemaGenerator {
     SchemaSettings::draft2020_12()

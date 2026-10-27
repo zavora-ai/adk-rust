@@ -185,6 +185,11 @@
 2 adk-surface tui,verb-ui
 2 adk-surface voice,verb-ui
 2 adk-cli verb-ui,scripted-model
+# The workflow observer (spec 3.3 §12): runs, steps and forks of graph agents, card hints for
+# governed nodes, the fork command, and with `web` the Runs tab's routes, its API contract and
+# the "Approve, rewind, fork" scenario.
+2 adk-surface workflow doc
+2 adk-surface web,workflow
 # `adk-rust` as the terminal surface in a pseudo-terminal: full screen, inline, JSON, a
 # kernel on its socket and a paired one over HTTP (spec 3.3 §5.2, §10 K2).
 2 adk-cli tui,scripted-model

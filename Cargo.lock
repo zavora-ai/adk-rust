@@ -1408,8 +1408,11 @@ dependencies = [
 name = "adk-surface"
 version = "3.0.0"
 dependencies = [
+ "adk-action",
+ "adk-agent",
  "adk-core",
  "adk-devtools",
+ "adk-graph",
  "adk-harness",
  "adk-kernel",
  "adk-model",

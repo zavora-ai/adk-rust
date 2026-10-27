@@ -53,6 +53,12 @@ voice-live = ["voice", "adk-realtime/gemini", "adk-realtime/openai"]
 # agent, always through the governed path. It adds no dependency; its web, terminal and voice
 # parts compile with `web`, `tui` and `voice`.
 verb-ui = []
+# The workflow observer (spec 3.3 §6.1 `workflow`, §12 developer track): a graph agent's runs,
+# steps and forks from its checkpoints, card hints for its governed nodes and the fork command;
+# with `web`, its routes under `/api/surface/workflow`. adk-graph with time-travel, which
+# adk-harness's default `graph` feature already compiles; adk-harness `web` for the secret
+# redaction every shown value passes.
+workflow = ["dep:adk-graph", "adk-graph/time-travel", "adk-harness/web"]
 
 [dependencies]
 adk-core.workspace = true
@@ -67,6 +73,8 @@ adk-harness = { workspace = true, features = ["kernel"] }
 adk-realtime = { workspace = true, optional = true }
 # The website's desk: its views and the decisions people make on them (`website`).
 adk-website = { workspace = true, optional = true }
+# Graph agents' checkpoints, records and forks (`workflow`).
+adk-graph = { workspace = true, optional = true }
 async-trait.workspace = true
 axum = { version = "0.8", optional = true }
 # Camera and screen frames go to the realtime provider base64-encoded (`voice`).
@@ -123,11 +131,16 @@ adk-model = { path = "../adk-model", default-features = false, features = ["anth
 # The provider-free realtime model the voice tests and `scripted_voice_home` script.
 adk-realtime = { path = "../adk-realtime", features = ["scripted"] }
 adk-server = { path = "../adk-server", features = ["approvals"] }
-adk-session = { path = "../adk-session" }
+adk-session = { path = "../adk-session", features = ["sqlite", "postgres"] }
 # The website's scripted site: its pipeline, wallet and wire types (feature `website`).
 adk-site = { path = "../adk-site" }
 adk-payments = { path = "../adk-payments" }
 awp-types = { path = "../awp-types" }
+# The invoice-run workflow of `scripted_workflow` and the workflow tests: a governed HTTP
+# node, its draft agent and the SQLite checkpointer (feature `workflow`).
+adk-action = { path = "../adk-action" }
+adk-agent = { path = "../adk-agent" }
+adk-graph = { path = "../adk-graph", features = ["time-travel", "action-http", "sqlite", "postgres"] }
 # The fake Telegram Bot API the chat adapter's tests run against.
 axum = "0.8"
 dotenvy = "0.15"
@@ -182,6 +195,11 @@ required-features = ["web", "voice-live"]
 [[example]]
 name = "scripted_verbs"
 required-features = ["web", "verb-ui"]
+# The invoice-run workflow on the web home's Runs tab (spec 3.3 §12 developer track), which
+# `web/e2e/workflow.spec.ts` opens; `--live` drafts on whichever provider key is set.
+[[example]]
+name = "scripted_workflow"
+required-features = ["web", "workflow"]
 
 [package.metadata.docs.rs]
 all-features = true
