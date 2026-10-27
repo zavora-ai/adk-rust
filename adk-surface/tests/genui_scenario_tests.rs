@@ -5,8 +5,8 @@
 //! | Step | What happens | What holds |
 //! |---|---|---|
 //! | 1 Draw | Finance draws two invoice forms, then a screen with "Allow once" and "Approved" | Two drawings, version 1, by Finance, each Send "Sending runs send_invoice and asks you first"; the screen is a plain notice; no decision; the render tools asked nobody |
-//! | 4 Forced | Go ahead, a policy that allows `send_invoice` and a confirmation handler that approves everything, set before anything is sent | — |
-//! | 2 Submit | The person types the address and presses Send | One decision for `send_invoice` with the typed values and `invoice` INV-10 from the stored form, still waiting under step 4's conditions; its timeline starts "You pressed Send on a form Finance drew"; no Always allow; the chat card carries no arguments; nothing ran; `surface.drawn.submitted` recorded (web, pointer) |
+//! | 4 Forced | Go ahead, a policy that allows `send_invoice`, a confirmation handler that approves everything, a standing rule the person made for it and an approval of the identical call, set before anything is sent | — |
+//! | 2 Submit | The person types the address and presses Send | One decision for `send_invoice` with the typed values and `invoice` INV-10 from the stored form, still waiting under step 4's conditions, the earlier approval discarded; its timeline starts "You pressed Send on a form Finance drew"; no Always allow; the chat card carries no arguments; nothing ran; `surface.drawn.submitted` recorded (web, pointer) |
 //! | 3 Tampering | Version 0, a forged INV-99, action `approve`, another person's session, an agent's, a chat's and a spoken send | `surface.drawn_changed`, `surface.invalid`, `surface.invalid`, `surface.not_found`, `surface.not_here`; still one decision, same version |
 //! | 5 Restart | The engine and kernel are dropped and rebuilt over the same SQLite stores | Both decisions still wait; the forms say "Sent at … · waiting for you" |
 //! | 6 Decide on the phone | Allow once on the first, Deny on its twin | `send_invoice` runs exactly once with the card's arguments: "Sent · done"; the denied twin never runs: "Sent · you said no"; the records name their own surfaces |
@@ -26,13 +26,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use adk_core::audit_log::{AuditTrail, InMemoryAuditRecorder};
+use adk_core::principal::{SubjectKind, SubjectRef};
 use adk_core::{
-    ApprovalPolicy, ApprovalService, ApproverSelector, DeclarativePolicy, DurableRunStore, Llm,
-    PolicyDecision, RequestContext, Result as AdkResult, StoreApprovalService, Tool,
-    ToolConfirmationDecision, ToolConfirmationHandler, ToolConfirmationRequest, ToolContext,
-    ToolEffect, ToolPolicy, ToolPolicyRequest,
+    ActingContext, ApprovalPolicy, ApprovalScope, ApprovalService, ApproverSelector,
+    DeclarativePolicy, DurableRunStore, Llm, PolicyDecision, RequestContext, Result as AdkResult,
+    StoreApprovalService, Tool, ToolApproval, ToolConfirmationDecision, ToolConfirmationHandler,
+    ToolConfirmationRequest, ToolContext, ToolEffect, ToolOrigin, ToolPolicy, ToolPolicyRequest,
 };
-use adk_harness::{Harness, HarnessAgent, HarnessMode, InstructionsConfig};
+use adk_harness::{
+    Harness, HarnessAgent, HarnessMode, InstructionsConfig, OriginPin, RuleScope, StandingDecision,
+    StandingRule,
+};
 use adk_kernel::control::ControlPlaneConfig;
 use adk_kernel::{Kernel, KernelConfig, ProcessStore};
 use adk_model::{ScriptedLlm, ScriptedResponse};
@@ -155,6 +159,7 @@ struct Home {
     kernel: Kernel,
     engine: SurfaceEngine,
     api: axum::Router,
+    harness: Arc<Harness>,
 }
 
 async fn home(lasting: &Lasting, model: Arc<dyn Llm>, forced: bool) -> Home {
@@ -250,7 +255,7 @@ async fn home_with(
     let source = LocalSource::builder(APP)
         .sessions(Arc::clone(&sessions))
         .approvals(Arc::clone(&service))
-        .harness(harness)
+        .harness(Arc::clone(&harness))
         .kernel(kernel.clone(), APP)
         .build()
         .unwrap();
@@ -269,7 +274,7 @@ async fn home_with(
             scopes: vec!["owner".into(), "operator".into()],
             metadata: Default::default(),
         })));
-    Home { kernel, engine, api }
+    Home { kernel, engine, api, harness }
 }
 
 /// `wipe_invoices`: the operator's policy never lets it run.
@@ -514,6 +519,42 @@ async fn a_drawn_form_is_sent_held_as_finance_and_runs_once_on_a_yes() {
         .await
         .unwrap();
 
+    // Step 4's other conditions: a standing rule the person made that allows `send_invoice`
+    // for Finance, and an approval of the identical call recorded before the send.
+    let origin = ToolOrigin::of(&SendInvoice { runs: Arc::clone(&lasting.runs) });
+    home1
+        .harness
+        .standing_rules()
+        .grant(StandingRule {
+            id: "rule-send-invoice".into(),
+            scope: RuleScope::User {
+                app_name: APP.into(),
+                user_id: OWNER.into(),
+                subject_kind: SubjectKind::Human,
+            },
+            tool: "send_invoice".into(),
+            origin: OriginPin::exact(&origin),
+            agent: None,
+            predicates: Vec::new(),
+            decision: StandingDecision::Allow,
+            created_by: SubjectRef::human(OWNER),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            label: "send invoices".into(),
+            source_fingerprint: None,
+        })
+        .await
+        .unwrap();
+    let identical = ToolConfirmationRequest::new(
+        "send_invoice",
+        json!({ "to": "ana@example.com", "amount": 4200, "invoice": "INV-10" }),
+    )
+    .with_acting_context(ActingContext::derived(APP, "finance", OWNER, SubjectKind::Human))
+    .with_origin(origin);
+    let store = home1.harness.agent().runtime().approval_store().clone();
+    let scope = ApprovalScope::new(APP, OWNER, "s1");
+    store.decide(&scope, &identical.fingerprint(), ToolApproval::approve()).await.unwrap();
+
     // 2. Submit from the web home, by pointer: it waits, whatever would answer for the person.
     let body = json!({
         "surface": "web",
@@ -528,6 +569,10 @@ async fn a_drawn_form_is_sent_held_as_finance_and_runs_once_on_a_yes() {
     assert_eq!(outcome["type"], "formSent");
     let cards = waiting(&home1.engine, 1).await;
     let card = &cards[0];
+    assert!(
+        !store.has_decision(&scope, &identical.fingerprint()).await.unwrap(),
+        "the approval recorded before the send is discarded, not used"
+    );
     assert_eq!(card.call.tool, "send_invoice");
     assert_eq!(
         card.call.args,
