@@ -3893,7 +3893,7 @@ impl Agent for LlmAgent {
 
                 // Call IDs the agent generated for a provider that sent none stay out of
                 // what the provider receives.
-                let mut contents = conversation_history.clone();
+                let mut contents = crate::requested_call::for_model(conversation_history.clone());
                 contents.iter_mut().for_each(Content::strip_generated_call_ids);
                 let mut request = LlmRequest {
                     model: model.name().to_string(),

@@ -35,14 +35,41 @@ impl CountingModel {
         self.requests.lock().unwrap().len()
     }
 
-    /// The function responses of the latest request, by call ID.
-    fn function_responses(&self) -> Vec<(Option<String>, Value)> {
+    /// The contents of the latest request: each one's role and its text, or the function
+    /// parts' names.
+    fn contents(&self) -> Vec<(String, Vec<String>)> {
+        let requests = self.requests.lock().unwrap();
+        let Some(last) = requests.last() else { return Vec::new() };
+        last.contents
+            .iter()
+            .map(|content| {
+                let parts = content
+                    .parts
+                    .iter()
+                    .map(|part| match part {
+                        Part::Text { text } => text.clone(),
+                        Part::FunctionCall { name, .. } => format!("call {name}"),
+                        Part::FunctionResponse { function_response, .. } => {
+                            format!("response {}", function_response.name)
+                        }
+                        _ => "other".to_string(),
+                    })
+                    .collect();
+                (content.role.clone(), parts)
+            })
+            .collect()
+    }
+
+    /// The function calls' arguments and the function responses of the latest request, in
+    /// order, by call ID.
+    fn function_parts(&self) -> Vec<(Option<String>, Value)> {
         let requests = self.requests.lock().unwrap();
         let Some(last) = requests.last() else { return Vec::new() };
         last.contents
             .iter()
             .flat_map(|content| &content.parts)
             .filter_map(|part| match part {
+                Part::FunctionCall { args, id, .. } => Some((id.clone(), args.clone())),
                 Part::FunctionResponse { function_response, id, .. } => {
                     Some((id.clone(), function_response.response.clone()))
                 }
@@ -236,6 +263,32 @@ fn written(call: &RequestedCall, answer: Value) -> Vec<(String, Vec<Part>, Optio
     ]
 }
 
+/// What the person says they asked for, before the call.
+fn asked_line(call: &RequestedCall) -> String {
+    format!(
+        "I pressed the `send` button on the form `inv-10` you drew (version 1). It asks to run \
+         send_invoice with {}; it runs only once I decide.",
+        call.args
+    )
+}
+
+/// What the person said in the run: each user event's role, parts and requested-call
+/// metadata.
+fn person_says(events: &[Event]) -> Vec<(String, Vec<Part>, Option<String>)> {
+    events
+        .iter()
+        .filter(|event| event.author == "user")
+        .filter_map(|event| {
+            let content = event.llm_response.content.clone()?;
+            Some((
+                content.role,
+                content.parts,
+                event.provider_metadata.get(REQUESTED_CALL_METADATA_KEY).cloned(),
+            ))
+        })
+        .collect()
+}
+
 /// What the agent wrote: each event's role, parts and requested-call metadata.
 fn agent_writes(events: &[Event]) -> Vec<(String, Vec<Part>, Option<String>)> {
     events
@@ -290,6 +343,15 @@ async fn a_requested_call_is_held_as_the_agent_with_no_model_call() {
         agent_writes(&events),
         written(&call, adk_core::confirmation_pending_response(reason))
     );
+    // The person's words: what they asked for.
+    assert_eq!(
+        person_says(&events),
+        vec![(
+            "user".to_string(),
+            vec![Part::Text { text: asked_line(&call) }],
+            Some(call.metadata())
+        )]
+    );
     let marked =
         events.iter().filter(|event| event.actions.tool_confirmation.is_some()).all(|event| {
             event.provider_metadata.get(REQUESTED_CALL_METADATA_KEY) == Some(&call.metadata())
@@ -316,8 +378,19 @@ async fn the_held_call_runs_exactly_once_after_allow_once() {
     assert_eq!(*fixture.executions.lock().unwrap(), vec![invoice_args()]);
     assert!(holds(&events).is_empty(), "the call is not held again");
     assert_eq!(fixture.model.calls(), 1, "the model sees the result once it ran");
-    // The requested call's ID never reaches the provider.
-    assert_eq!(fixture.model.function_responses(), vec![(None, json!({ "status": "sent" }))]);
+    // The model never reads the call as one it made: the person says what they asked for and
+    // what it answered, and no function part of it reaches the provider.
+    assert!(fixture.model.function_parts().is_empty());
+    assert_eq!(
+        fixture.model.contents(),
+        vec![(
+            "user".to_string(),
+            vec![
+                asked_line(&call),
+                r#"The send_invoice call I asked for answered: {"status":"sent"}"#.to_string(),
+            ]
+        )]
+    );
 
     run(&fixture.runner, "", signed_in(Some(call))).await;
     assert_eq!(fixture.executions.lock().unwrap().len(), 1, "it ran exactly once");
@@ -335,11 +408,16 @@ async fn a_denied_requested_call_never_runs() {
     run(&fixture.runner, "", signed_in(None)).await;
 
     assert!(fixture.executions.lock().unwrap().is_empty(), "a denied call never runs");
+    assert!(fixture.model.function_parts().is_empty());
     assert_eq!(
-        fixture.model.function_responses(),
+        fixture.model.contents(),
         vec![(
-            None,
-            json!({ "error": "Tool 'send_invoice' execution denied by confirmation policy" })
+            "user".to_string(),
+            vec![
+                asked_line(&call),
+                r#"The send_invoice call I asked for answered: {"error":"Tool 'send_invoice' execution denied by confirmation policy"}"#
+                    .to_string(),
+            ]
         )]
     );
 }

@@ -1,16 +1,17 @@
 //! A call a person asked for through something the agent drew (spec 3.3 §7.4 rule 5).
 //!
-//! The run that carries a [`RequestedCall`] writes it as the agent's own call, then holds it
-//! for the person's decision or refuses it; either way the run ends before any model call.
+//! The run that carries a [`RequestedCall`] writes what the person asked for in their words,
+//! then the call as the agent's own, then holds it for the person's decision or refuses it;
+//! either way the run ends before any model call. The model reads the call as the person's
+//! ([`for_model`]): never as a call it made.
 //! A later run resumes the held call as it resumes any other.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use adk_core::{
-    Content, Event, FunctionResponseData, GovernedCall, InvocationContext, Part,
-    REQUESTED_CALL_METADATA_KEY, RequestedCall, Result, Tool, ToolAuthorization, ToolGate,
-    authorize_tool_call,
+    Content, Event, FunctionResponseData, GovernedCall, InvocationContext, Part, RequestedCall,
+    RequestedViaKind, Result, Tool, ToolAuthorization, ToolGate, authorize_tool_call,
 };
 
 use crate::guardrails::{GuardrailScreen, ToolGuardrailSet};
@@ -73,13 +74,12 @@ fn call_events(
     call: &RequestedCall,
     response: serde_json::Value,
 ) -> Vec<Event> {
-    let metadata = call.metadata();
     let event = |content: Content| {
         let mut event = Event::new(ctx.invocation_id());
         event.author = agent_name.to_string();
         event.branch = ctx.branch().to_string();
-        event.provider_metadata.insert(REQUESTED_CALL_METADATA_KEY.to_string(), metadata.clone());
         event.llm_response.content = Some(content);
+        call.mark(&mut event);
         event
     };
     let issued = event(Content {
@@ -99,7 +99,70 @@ fn call_events(
             annotations: None,
         }],
     });
-    vec![issued, answered]
+    vec![asked(ctx, call), issued, answered]
+}
+
+/// What the person asked for, in their words, before the call.
+fn asked(ctx: &dyn InvocationContext, call: &RequestedCall) -> Event {
+    let what = match call.via.kind {
+        RequestedViaKind::Form => format!(
+            "I pressed the `{}` button on the form `{}` you drew (version {}).",
+            call.via.action_id, call.via.surface_id, call.via.version
+        ),
+        _ => format!(
+            "I used the app `{}` you showed (version {}, action `{}`).",
+            call.via.surface_id, call.via.version, call.via.action_id
+        ),
+    };
+    let mut event = Event::new(ctx.invocation_id());
+    event.author = "user".to_string();
+    event.llm_response.content = Some(Content {
+        role: "user".to_string(),
+        parts: vec![Part::Text {
+            text: format!(
+                "{what} It asks to run {} with {}; it runs only once I decide.",
+                call.tool_name, call.args
+            ),
+        }],
+    });
+    call.mark(&mut event);
+    event
+}
+
+/// `contents` as the model reads them: a requested call leaves the model's turns, and its
+/// answer is the person's line after what they asked for. A model that reads a call it did
+/// not make as its own disowns it, and a provider that pairs a call with its result by ID
+/// never receives one it did not issue.
+pub(crate) fn for_model(contents: Vec<Content>) -> Vec<Content> {
+    let mut out: Vec<Content> = Vec::with_capacity(contents.len());
+    for mut content in contents {
+        let mut said = Vec::new();
+        content.parts.retain(|part| match part {
+            Part::FunctionCall { id: Some(id), .. } => !RequestedCall::is_requested_id(id),
+            Part::FunctionResponse { function_response, id: Some(id), .. }
+                if RequestedCall::is_requested_id(id) =>
+            {
+                said.push(Part::Text {
+                    text: format!(
+                        "The {} call I asked for answered: {}",
+                        function_response.name, function_response.response
+                    ),
+                });
+                false
+            }
+            _ => true,
+        });
+        if !content.parts.is_empty() {
+            out.push(content);
+        }
+        if !said.is_empty() {
+            match out.last_mut() {
+                Some(last) if last.role == "user" => last.parts.extend(said),
+                _ => out.push(Content { role: "user".to_string(), parts: said }),
+            }
+        }
+    }
+    out
 }
 
 /// The events that refuse `call` with `error`, the answer the model reads.
@@ -175,7 +238,7 @@ pub(crate) async fn take(
             let mut held =
                 crate::llm_agent::confirmation_event(ctx.invocation_id(), agent_name, request);
             held.branch = ctx.branch().to_string();
-            held.provider_metadata.insert(REQUESTED_CALL_METADATA_KEY.to_string(), call.metadata());
+            call.mark(&mut held);
             events.push(held);
             Ok(events)
         }
