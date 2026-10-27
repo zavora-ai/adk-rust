@@ -5,6 +5,7 @@
  * once and tells the server before anything else is sent.
  */
 import type { InputSource, VoiceTicket, VoiceUpdate } from "../generated/api";
+import type { SpokenAction } from "../verbs/VoiceAction";
 import type { VoiceDevices, VoicePlayer, VoiceSocket } from "./devices";
 import { voiceLabels } from "./labels";
 
@@ -30,6 +31,8 @@ export interface VoiceState {
   pending?: { id: string; cancelUntil: number; text: string };
   outcome?: { id: string; decided: boolean; text?: string };
   needsScreen: string[];
+  /** A screen action said aloud: waiting out its cancel window, or how it ended (spec 3.3 §5.6). */
+  action?: SpokenAction;
   problem?: string;
   inputs: Record<InputSource, boolean>;
   /** What "What it can see" shows: the screen, else the camera. */
@@ -135,6 +138,28 @@ export class VoiceSession {
       case "needsScreen":
         this.set({ needsScreen: update.decisionIds });
         break;
+      case "pendingAction":
+        this.set({
+          action: {
+            kind: "pending",
+            actionId: update.actionId,
+            heard: this.state.heard,
+            heading: update.heading,
+            cancelUntil: update.cancelUntil,
+          },
+        });
+        break;
+      case "actionOutcome":
+        this.set({
+          action: {
+            kind: "ended",
+            done: update.done,
+            heard: this.state.action?.heard ?? this.state.heard,
+            heading: update.heading ?? undefined,
+            text: update.text,
+          },
+        });
+        break;
       case "bargeIn":
         this.player?.flush();
         break;
@@ -213,6 +238,11 @@ export class VoiceSession {
         if (this.live[source] === live) this.frame(tag, jpeg);
       });
     }
+  }
+
+  /** **Cancel** on a spoken screen action in its cancel window (spec 3.3 §5.6). */
+  cancelAction(actionId: string) {
+    this.text({ type: "cancelAction", actionId });
   }
 
   /** Ends the conversation: a spoken answer in its cancel window is cancelled by the server. */

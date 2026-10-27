@@ -37,6 +37,37 @@ function where(line: KernelRecordLine): string {
   }
 }
 
+/** Where a screen action was taken (spec 3.3 §2 item 7): "in the terminal", "by voice". */
+function screenWhere(line: KernelRecordLine): string {
+  switch (line.surface) {
+    case "terminal":
+      return " in the terminal";
+    case "web":
+      return " in the home app";
+    case "voice":
+      return " by voice";
+    case "phone":
+      return " on your phone";
+    case "tray":
+      return " from the tray";
+    default:
+      return "";
+  }
+}
+
+/**
+ * A screen action's sentence (spec 3.3 §2 item 7): "You snoozed News digest by voice.", and an
+ * agent's request "Finance asked to snooze News digest; you said yes on your phone."
+ */
+function screenAction(line: KernelRecordLine, agents: AgentRow[]): string | undefined {
+  if (line.tool !== "snooze") return undefined;
+  const what = line.target ?? "something in Coming up";
+  const agent = line.agent ? agentOf(line.agent, agents) : undefined;
+  if (!agent) return line.outcome === "done" ? `You snoozed ${what}${screenWhere(line)}.` : undefined;
+  if (line.outcome === "done") return `${agent} asked to snooze ${what}; you said yes${screenWhere(line)}.`;
+  return `${agent} asked to snooze ${what}; it had moved, so nothing changed.`;
+}
+
 /** What a call was, by its tool, or "a call". */
 function call(line: KernelRecordLine): string {
   return line.tool ?? "a call";
@@ -122,7 +153,16 @@ function kernelSentence(line: KernelRecordLine, agents: AgentRow[]): string | un
 export function recordSentence(line: KernelRecordLine, agents: AgentRow[]): string | undefined {
   switch (line.action) {
     case "surface.decide":
+      // An agent's screen action: its own record says the yes; a no changed nothing.
+      if (line.tool === "verb_snooze" && line.outcome === "decided") {
+        const agent = line.agent ? agentOf(line.agent, agents) : undefined;
+        return line.decision === "rejected"
+          ? `${agent ?? "Your agent"} asked to snooze something in Coming up; you said no. Nothing changed.`
+          : undefined;
+      }
       return line.outcome === "decided" ? answer(line, agents) : undefined;
+    case "surface.verb":
+      return screenAction(line, agents);
     case "surface.stop_all":
       return `You stopped all agents${where(line)}.`;
     case "surface.resume_all":

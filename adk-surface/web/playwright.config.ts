@@ -145,6 +145,17 @@ const surfaces: Surface[] = [
     ready: "/api/surface/website/setup",
     args: "--live",
   },
+  {
+    // Screen actions (spec 3.3 §2 item 7): an agent's request answered on its card, then
+    // Snooze on Coming up with a real pointer, over a scripted kernel.
+    name: "verbs",
+    prefix: "VERBS",
+    example: "scripted_verbs",
+    features: "web,verb-ui",
+    port: 8812,
+    testMatch: ["verbs.spec.ts"],
+    ready: "/ui/",
+  },
 ];
 
 /** One second of a 440 Hz tone, 16 kHz mono PCM16, for Chromium's fake microphone. */

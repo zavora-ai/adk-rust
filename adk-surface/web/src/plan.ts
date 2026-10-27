@@ -11,6 +11,8 @@ export interface Planned {
   at: Date;
   agent?: string;
   title: string;
+  /** The agenda item it runs, which a screen action names (spec 3.3 §2 item 7). */
+  item?: string;
 }
 
 export function planned(
@@ -28,12 +30,12 @@ export function planned(
     const title = processTitle(process, agenda ?? []);
     if (!at || !title) continue;
     if (process.meta.agendaItem) seen.add(process.meta.agendaItem);
-    out.push({ key: process.meta.pid, at, agent: nameOf(process.run.target), title });
+    out.push({ key: process.meta.pid, at, agent: nameOf(process.run.target), title, item: process.meta.agendaItem ?? undefined });
   }
   for (const item of agenda ?? []) {
     if (seen.has(item.id) || agendaState(item) !== "scheduled" || typeof item.state === "string") continue;
     const at = "scheduled" in item.state ? nextWake(item.state.scheduled.wake, now) : undefined;
-    if (at) out.push({ key: item.id, at, title: item.title });
+    if (at) out.push({ key: item.id, at, title: item.title, item: item.id });
   }
   return out.sort((a, b) => a.at.getTime() - b.at.getTime());
 }

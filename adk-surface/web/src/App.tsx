@@ -23,6 +23,7 @@ import type { Seams } from "./seams";
 import { readStored, writeStored } from "./stored";
 import { applyTheme, nextTheme, storedTheme } from "./theme";
 import type { Theme } from "./theme";
+import type { VerbsClient } from "./verbs/client";
 import type { WebsiteClient } from "./website/client";
 import { websiteLabels } from "./website/labels";
 import { Website } from "./website/Website";
@@ -41,6 +42,7 @@ export function App({
   takeOver,
   initialSection,
   website,
+  verbs,
 }: {
   client: HomeClient;
   seams?: Seams;
@@ -48,6 +50,8 @@ export function App({
   initialSection?: Section;
   /** The website's views, where the server serves a website (spec 3.5 §8.2). */
   website?: WebsiteClient;
+  /** Screen actions, where the server takes them (spec 3.3 §2 item 7). */
+  verbs?: VerbsClient;
 }) {
   const [section, setSection] = useState<Section>(() => initialSection ?? sectionOf(window.location.pathname));
   const [theme, setTheme] = useState<Theme>(storedTheme);
@@ -82,6 +86,8 @@ export function App({
   const decisions = usePoll(() => client.decisions());
   // Whether the server serves a website: its tab shows only then (spec 3.5 §8.2).
   const site = usePoll(async () => (website ? ((await website.home()) ?? null) : null), 60_000);
+  // Whether the server takes screen actions, and what Coming up may be snoozed to (spec 3.3 §2 item 7).
+  const screens = usePoll(async () => (verbs ? ((await verbs.list()) ?? null) : null), 10_000);
   // Whether the roster ends with New agent, and the primary agent a description goes to.
   const roster = usePoll(async () => (client.agentsWithPrimary ? await client.agentsWithPrimary() : undefined), 10_000);
   const agentsSeam = useMemo(() => client.agentsSeam?.(), [client]);
@@ -103,6 +109,7 @@ export function App({
   const { refresh: refreshKernel } = kernel;
   const { refresh: refreshAway } = away;
   const { refresh: refreshAreas } = areas;
+  const { refresh: refreshScreens } = screens;
   const refresh = useCallback(() => {
     void refreshStatus();
     void refreshAgents();
@@ -110,7 +117,8 @@ export function App({
     void refreshKernel();
     void refreshAway();
     void refreshAreas();
-  }, [refreshStatus, refreshAgents, refreshDecisions, refreshKernel, refreshAway, refreshAreas]);
+    void refreshScreens();
+  }, [refreshStatus, refreshAgents, refreshDecisions, refreshKernel, refreshAway, refreshAreas, refreshScreens]);
 
   const send = useCallback(
     async (command: Command, origin: Origin) => {
@@ -231,7 +239,7 @@ export function App({
       }
       navigate("threads");
     };
-    return <Voice client={voice} onEnd={ended} />;
+    return <Voice client={voice} onEnd={ended} screenActions={screens.value != null} />;
   }
 
   const home = (
@@ -294,6 +302,8 @@ export function App({
             onOpenDecision={openDecision}
             canAddAgents={roster.value?.canAdd ?? false}
             removed={roster.value?.removed ?? []}
+            verbs={screens.value ?? undefined}
+            snooze={verbs ? (item, choice, origin) => verbs.snooze(item, choice, origin) : undefined}
           />
         )}
         {section === "today" && (
@@ -330,6 +340,7 @@ export function App({
             agents={rows}
             seams={seams}
             onChanged={refresh}
+            screens={screens.value?.verbs}
           />
         )}
         {section === "developer" && <Developer client={client} sessionId={session} />}

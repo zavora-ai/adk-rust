@@ -18,6 +18,8 @@ import { allowingIn, heard, voiceCantApprove, voiceLabels, wantsTo } from "../vo
 import { VoiceSession, initialState } from "../voice/session";
 import type { VoiceState } from "../voice/session";
 import "../voice/voice.css";
+import { verbLabels } from "../verbs/labels";
+import { VoiceAction } from "../verbs/VoiceAction";
 
 /** What the voice view reads and does (spec 3.3 §5.6). */
 export interface VoiceClient {
@@ -46,10 +48,13 @@ export function Voice({
   client,
   devices: given,
   onEnd,
+  screenActions = false,
 }: {
   client: VoiceClient;
   devices?: VoiceDevices;
   onEnd: (sessionId?: string) => void;
+  /** The home takes screen actions by voice: "snooze news digest" (spec 3.3 §5.6). */
+  screenActions?: boolean;
 }) {
   const devices = useMemo(() => given ?? browserDevices(), [given]);
   const [models, setModels] = useState<VoiceModels>();
@@ -205,6 +210,9 @@ export function Voice({
             </article>
           )}
           {state.outcome?.text && !state.pending && <p className="voice-outcome">{state.outcome.text}</p>}
+          {state.action && (
+            <VoiceAction action={state.action} onCancel={(id) => session.current?.cancelAction(id)} />
+          )}
           {!stopped &&
             onScreen.map((high) => (
               <p className="voice-screen" key={high.id}>
@@ -246,7 +254,7 @@ export function Voice({
               })}
             </div>
           </section>
-          <p className="voice-note">{voiceLabels.privacyNote}</p>
+          <p className="voice-note">{screenActions ? verbLabels.voicePrivacyNote : voiceLabels.privacyNote}</p>
         </aside>
       </main>
     </div>

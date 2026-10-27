@@ -7,6 +7,7 @@ import { phoneShell } from "./phone/shell";
 import type { Shell } from "./route";
 import { shellOf } from "./route";
 import { TrayPanel } from "./tray/TrayPanel";
+import { HttpVerbsClient } from "./verbs/client";
 import { HttpWebsiteClient } from "./website/client";
 import "./styles/fonts.css";
 import "./styles/tokens.css";
@@ -28,7 +29,9 @@ function shell(kind: Shell): ReactNode {
       };
       // The website's views, where the server serves a website (spec 3.5 §8.2).
       const website = new HttpWebsiteClient("/api/surface/website", (token) => client.signIn(token));
-      return <App client={client} seams={seams} takeOver={client.takeOver()} website={website} />;
+      // Screen actions, where the server takes them (spec 3.3 §2 item 7).
+      const verbs = new HttpVerbsClient();
+      return <App client={client} seams={seams} takeOver={client.takeOver()} website={website} verbs={verbs} />;
     }
     case "tray":
       return <TrayPanel client={new HttpClient("/api", "tray")} />;

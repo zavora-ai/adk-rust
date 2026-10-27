@@ -16,6 +16,9 @@ import { dayAndTime, dollars, whenAhead } from "../format";
 import type { AreaSettings, AwayPage } from "../kernel";
 import { labels } from "../labels";
 import type { Planned } from "../plan";
+import type { VerbsResponse } from "../generated/verbs";
+import { ComingUpRow } from "../verbs/Snooze";
+import type { Snooze } from "../verbs/Snooze";
 
 /** A session for an agent that has none yet: the engine creates it on the first message. */
 function newSession() {
@@ -56,6 +59,8 @@ export function Threads({
   onOpenDecision,
   canAddAgents = false,
   removed = [],
+  verbs,
+  snooze,
 }: {
   client: HomeClient;
   agents: AgentRow[];
@@ -88,6 +93,9 @@ export function Threads({
   canAddAgents?: boolean;
   /** The agents the person removed: their threads open read only (spec 3.3 §5.7). */
   removed?: RemovedAgent[];
+  /** What Coming up may be snoozed to, where the server takes screen actions (spec 3.3 §2 item 7). */
+  verbs?: VerbsResponse;
+  snooze?: Snooze;
 }) {
   // A removed agent's thread, read only, in place of the selected agent's.
   const [reading, setReading] = useState<{ agent: RemovedAgent; session: string }>();
@@ -263,14 +271,24 @@ export function Threads({
           </h2>
           {planned.length === 0 && <p className="side-empty">{labels.nothingComingUp}</p>}
           <ul className="coming-up">
-            {planned.slice(0, 6).map((item) => (
-              <li key={item.key}>
-                <span>{item.agent ? `${item.agent} · ${item.title}` : item.title}</span>
-                <time className="mono" dateTime={item.at.toISOString()}>
-                  {whenAhead(item.at)}
-                </time>
-              </li>
-            ))}
+            {planned.slice(0, 6).map((item) =>
+              verbs ? (
+                <ComingUpRow
+                  key={item.key}
+                  planned={item}
+                  entry={verbs.comingUp.find((entry) => entry.id === item.item)}
+                  snooze={snooze}
+                  onSnoozed={onChanged}
+                />
+              ) : (
+                <li key={item.key}>
+                  <span>{item.agent ? `${item.agent} · ${item.title}` : item.title}</span>
+                  <time className="mono" dateTime={item.at.toISOString()}>
+                    {whenAhead(item.at)}
+                  </time>
+                </li>
+              ),
+            )}
           </ul>
           <a
             className="link link-accent"

@@ -12,6 +12,8 @@ import type { AreaSettings, ChannelWaiting, KernelRecordLine, QuietWindow, Stand
 import { accountName, allows, channelName } from "../kernel";
 import { labels, modes, words } from "../labels";
 import { undoText } from "../memory";
+import type { VerbView } from "../generated/verbs";
+import { OnYourScreens } from "../verbs/OnYourScreens";
 import { phoneLabels } from "../phone/labels";
 import { RECORD_READ, recentLines } from "../record";
 import { dateValue, earliestExtension, endOfDay, ended, ruleSentence, suggestedExtension } from "../rules";
@@ -37,6 +39,7 @@ export function MemoryRules({
   agents = [],
   seams,
   onChanged,
+  screens,
 }: {
   client: HomeClient;
   status?: StatusLine;
@@ -46,6 +49,8 @@ export function MemoryRules({
   agents?: AgentRow[];
   seams: Seams;
   onChanged: () => void;
+  /** The screen actions agents may ask for, where the server takes them (spec 3.3 §2 item 7). */
+  screens?: VerbView[];
 }) {
   return (
     <main className="memory glow">
@@ -55,7 +60,15 @@ export function MemoryRules({
       <p className="subhead subhead-memory">{labels.memorySubhead}</p>
       <div className="memory-grid">
         <Remember seams={seams} agents={agents} />
-        <CanDo client={client} status={status} areas={areas} agents={agents} seams={seams} onChanged={onChanged} />
+        <CanDo
+          client={client}
+          status={status}
+          areas={areas}
+          agents={agents}
+          seams={seams}
+          onChanged={onChanged}
+          screens={screens}
+        />
         <Did client={client} agents={agents} seams={seams} />
       </div>
     </main>
@@ -204,6 +217,7 @@ function CanDo({
   agents,
   seams,
   onChanged,
+  screens,
 }: {
   client: HomeClient;
   status?: StatusLine;
@@ -211,6 +225,7 @@ function CanDo({
   agents: AgentRow[];
   seams: Seams;
   onChanged: () => void;
+  screens?: VerbView[];
 }) {
   const [rules, setRules] = useState<StandingRule[]>();
   const [problem, setProblem] = useState("");
@@ -404,6 +419,7 @@ function CanDo({
         </>
       )}
       <p className="always-asks">{labels.alwaysAsks}</p>
+      {screens && <OnYourScreens verbs={screens} />}
       {area && limits ? (
         <ul className="bordered settings">
           <SettingRow
