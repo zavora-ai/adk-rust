@@ -8,7 +8,7 @@
 //!
 //! | Part | Role |
 //! |---|---|
-//! | [`FactStore`] | the system of record: [`InMemoryFactStore`], [`FileFactStore`], `SqliteFactStore` (feature `sqlite`) |
+//! | [`FactStore`] | the system of record: [`InMemoryFactStore`], [`FileFactStore`], `SqliteFactStore` (feature `sqlite`), `PostgresFactStore` (feature `postgres`) |
 //! | [`FactIndex`] | finds candidates: [`LocalFactIndex`] (embedded or lexical), [`MemoryServiceIndex`] over any `adk_memory::MemoryService` |
 //! | recall | a `<memory-facts>` block in the untrusted section on the first model call of each user turn |
 //! | writing | `memory_remember` (assumed only), session distillation, verified quotes, human promotion |
@@ -43,6 +43,8 @@ pub use index::{FactIndex, LocalFactIndex, MemoryServiceIndex};
 #[cfg(feature = "kernel")]
 pub use kernel_tick::{HarnessConsolidator, HarnessObservations, SessionStateFilter};
 pub use redact::redact_fact_text;
+#[cfg(feature = "postgres")]
+pub use store::PostgresFactStore;
 #[cfg(feature = "sqlite")]
 pub use store::SqliteFactStore;
 pub use store::{FactEmbedding, FactStore, FileFactStore, InMemoryFactStore};

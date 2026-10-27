@@ -61,7 +61,8 @@ hooks = []
 sqlite = ["dep:sqlx", "sqlx/sqlite", "adk-graph?/sqlite", "adk-session?/sqlite"]
 # PostgreSQL backends for the mode and standing-rule stores, shared by every replica of a
 # served harness, and the plan checkpointer (spec 3.1 §7.4, §7.5, §7.11, §13 Q2, Q5); with
-# `kernel`, the kernel's own stores too.
+# `kernel`, the kernel's own stores too; with `memory`, the long-term fact store (spec 3.3
+# §12 phase 3).
 postgres = ["dep:sqlx", "sqlx/postgres", "dep:adk-session", "adk-session/postgres", "adk-graph?/postgres", "adk-kernel?/postgres"]
 # Redis backends for the mode and standing-rule stores, and the plan checkpointer
 # (spec 3.1 §7.4, §7.5, §7.11, §13 Q2, Q5).

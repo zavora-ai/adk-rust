@@ -1,14 +1,16 @@
 //! Conformance suites over every long-term fact store and index (spec 3.1 §11
-//! "Long-term memory"): `fact_store_conformance_tests!` over in-memory, file and SQLite;
-//! `fact_index_conformance_tests!` over `LocalFactIndex` (lexical and embedded) and
-//! `MemoryServiceIndex` on the in-memory, SQLite FTS5 and PostgreSQL pgvector backends.
+//! "Long-term memory"): `fact_store_conformance_tests!` over in-memory, file, SQLite and
+//! PostgreSQL (feature `postgres`, spec 3.3 §12 phase 3); `fact_index_conformance_tests!` over
+//! `LocalFactIndex` (lexical and embedded) and `MemoryServiceIndex` on the in-memory, SQLite
+//! FTS5 and PostgreSQL pgvector backends.
 //!
-//! The PostgreSQL suite is `#[ignore]`d and runs in CI's postgres job
+//! The PostgreSQL suites are `#[ignore]`d and run in CI's postgres job
 //! (`scripts/test-postgres.sh`):
 //!
 //! ```bash
 //! DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
-//!   cargo nextest run -p adk-harness --run-ignored only --test fact_conformance_tests
+//!   cargo nextest run -p adk-harness --features postgres --run-ignored only \
+//!   --test fact_conformance_tests
 //! ```
 
 #![cfg(feature = "memory")]
@@ -141,6 +143,101 @@ mod store_sqlite {
         let local = FactEmbedding::new("onnx/BAAI/bge-small-en-v1.5", vec![1.0, 0.0]);
         store.put_embedding(&fact.id, local.clone()).await.unwrap();
         assert_eq!(store.embeddings(&scope).await.unwrap(), vec![(fact.id, local)]);
+    }
+}
+
+/// The fact store on PostgreSQL, the shared store of `adk-rust up --store postgres://…`
+/// (spec 3.3 §12 phase 3), each test in a scratch schema of its own.
+#[cfg(feature = "postgres")]
+mod store_postgres {
+    use std::str::FromStr;
+    use std::sync::Arc;
+
+    use adk_harness::{
+        FactFilter, FactKind, FactScope, FactSource, FactStatus, FactStore, MemoryFact,
+        PostgresFactStore, Provenance,
+    };
+    use sqlx::Connection as _;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+
+    fn database_url() -> String {
+        std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://postgres@localhost:5432/postgres".to_string())
+    }
+
+    /// Connection options whose search path is a fresh scratch schema.
+    async fn scratch() -> PgConnectOptions {
+        let schema = format!("adk_harness_fact_store_{}", uuid::Uuid::new_v4().simple());
+        let mut admin = sqlx::PgConnection::connect(&database_url()).await.expect("connect");
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+            .execute(&mut admin)
+            .await
+            .expect("create schema");
+        PgConnectOptions::from_str(&database_url())
+            .expect("parse DATABASE_URL")
+            .options([("search_path", schema.as_str())])
+    }
+
+    /// A store with a pool of its own, as a replica holds, migrated.
+    async fn store(options: &PgConnectOptions) -> PostgresFactStore {
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect_with(options.clone())
+            .await
+            .expect("connect");
+        let store = PostgresFactStore::new(pool);
+        store.migrate().await.unwrap();
+        store
+    }
+
+    adk_harness::fact_store_conformance_tests!(
+        #[ignore = "needs DATABASE_URL; CI's postgres job runs it"]
+        store = {
+            let options = scratch().await;
+            let store = store(&options).await;
+            store.migrate().await.unwrap();
+            store
+        }
+    );
+
+    /// Two replicas storing one fact at the same moment keep one fact, used twice, and a
+    /// status one replica sets is what the other reads.
+    #[tokio::test]
+    #[ignore = "needs DATABASE_URL; CI's postgres job runs it"]
+    async fn two_replicas_storing_one_fact_keep_one() {
+        let options = scratch().await;
+        let (a, b) = (Arc::new(store(&options).await), Arc::new(store(&options).await));
+        let fact = || {
+            MemoryFact::new(
+                FactScope::new("app", "alice", Some("p1".into())),
+                FactKind::Preference,
+                "Use pnpm, not npm",
+                FactStatus::Assumed,
+                Provenance::new(FactSource::AgentInferred, "s1", "inv-1"),
+            )
+        };
+        let mut puts = Vec::new();
+        for replica in [&a, &b, &a, &b] {
+            let (replica, fact) = (replica.clone(), fact());
+            puts.push(tokio::spawn(async move { replica.put(fact).await.unwrap() }));
+        }
+        let mut ids = Vec::new();
+        for put in puts {
+            ids.push(put.await.unwrap().id);
+        }
+        ids.dedup();
+        assert_eq!(ids.len(), 1, "one fact: {ids:?}");
+        let listed = b.list(FactFilter::user("app", "alice")).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].uses, 3, "the three later puts used it");
+        a.set_status(
+            &ids[0],
+            FactStatus::Forgotten,
+            &adk_core::principal::SubjectRef::human("alice"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(b.get(&ids[0]).await.unwrap().unwrap().status, FactStatus::Forgotten);
     }
 }
 

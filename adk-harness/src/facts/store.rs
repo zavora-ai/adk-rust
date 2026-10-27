@@ -70,8 +70,9 @@ impl From<StoredEmbedding> for FactEmbedding {
 ///
 /// The store keeps every fact with its provenance and history; a [`FactIndex`] only finds
 /// candidates, so status, scope and forgetting are enforced by reading the store
-/// (spec 3.1 §9.2 I44). Implementations: [`InMemoryFactStore`], [`FileFactStore`] and,
-/// with feature `sqlite`, `SqliteFactStore`.
+/// (spec 3.1 §9.2 I44). Implementations: [`InMemoryFactStore`], [`FileFactStore`], with
+/// feature `sqlite` `SqliteFactStore`, and with feature `postgres` `PostgresFactStore`, the
+/// shared store of `adk-rust up --store postgres://…` (spec 3.3 §12 phase 3).
 ///
 /// | Method | Contract |
 /// |---|---|
@@ -187,7 +188,7 @@ fn consolidation_unsupported() -> AdkError {
         ErrorCategory::Unsupported,
         "harness.memory.consolidation_unsupported",
         "this fact store keeps no consolidation records, so a tick could not be undone; use \
-         InMemoryFactStore, FileFactStore or SqliteFactStore, or implement \
+         InMemoryFactStore, FileFactStore, SqliteFactStore or PostgresFactStore, or implement \
          put_consolidation, consolidations and restore_assumed",
     )
 }
@@ -1067,5 +1068,394 @@ impl FactStore for SqliteFactStore {
         apply_restore(&mut fact)?;
         self.write(&mut *tx, &fact).await?;
         tx.commit().await.map_err(crate::fsutil::db_error)
+    }
+}
+
+/// Migrations of [`PostgresFactStore`], recorded in `_adk_harness_fact_migrations`.
+#[cfg(feature = "postgres")]
+const POSTGRES_FACT_MIGRATIONS: &[(i64, &str, &str)] = &[(
+    1,
+    "create long-term fact tables",
+    "CREATE TABLE IF NOT EXISTS adk_harness_facts (\
+        id TEXT PRIMARY KEY, app_name TEXT NOT NULL, user_id TEXT NOT NULL, \
+        project TEXT, digest TEXT NOT NULL, live BOOLEAN NOT NULL, \
+        valid_from TEXT NOT NULL, record TEXT NOT NULL); \
+     CREATE INDEX IF NOT EXISTS adk_harness_facts_scope \
+        ON adk_harness_facts (app_name, user_id, project, digest); \
+     CREATE TABLE IF NOT EXISTS adk_harness_fact_embeddings (\
+        id TEXT PRIMARY KEY, vector TEXT NOT NULL, embedder TEXT NOT NULL DEFAULT ''); \
+     CREATE TABLE IF NOT EXISTS adk_harness_fact_cursors (\
+        app_name TEXT NOT NULL, user_id TEXT NOT NULL, session_id TEXT NOT NULL, \
+        upto TEXT NOT NULL, PRIMARY KEY (app_name, user_id, session_id)); \
+     CREATE TABLE IF NOT EXISTS adk_harness_fact_ticks (\
+        tick_id TEXT PRIMARY KEY, app_name TEXT NOT NULL, user_id TEXT NOT NULL, \
+        at TEXT NOT NULL, record TEXT NOT NULL);",
+)];
+
+/// A fixed-width UTC timestamp, so text order is time order.
+#[cfg(feature = "postgres")]
+fn sortable(at: DateTime<Utc>) -> String {
+    at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
+}
+
+#[cfg(feature = "postgres")]
+fn corrupt_record(what: &str, error: &serde_json::Error) -> AdkError {
+    AdkError::new(
+        ErrorComponent::Agent,
+        ErrorCategory::Internal,
+        "harness.memory.store_corrupt",
+        format!("a stored {what} does not parse: {error}"),
+    )
+}
+
+/// A [`FactStore`] in PostgreSQL, shared by every replica of a served harness and by
+/// `adk-rust up --store postgres://…` (spec 3.1 §7.15.2, §13 Q2; spec 3.3 §12 phase 3;
+/// feature `postgres`).
+///
+/// The tables are the SQLite store's, by the same names: `adk_harness_facts`,
+/// `adk_harness_fact_embeddings`, `adk_harness_fact_cursors` and `adk_harness_fact_ticks`.
+/// [`put`](FactStore::put) takes a transaction-scoped advisory lock on the fact's (scope,
+/// digest), so two replicas storing the same fact keep one; every other change reads its
+/// row `FOR UPDATE`. [`migrate`](Self::migrate) records its steps in
+/// `_adk_harness_fact_migrations` under an advisory lock, so replicas starting together
+/// migrate one at a time. Records are not sealed: encrypt the shared database at rest, as
+/// for the mode and standing-rule stores.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use adk_harness::{FactKind, FactScope, FactSource, FactStatus, FactStore, MemoryFact};
+/// use adk_harness::{PostgresFactStore, Provenance};
+///
+/// # async fn example() -> adk_core::Result<()> {
+/// let store = PostgresFactStore::connect("postgres://localhost/app").await?;
+/// store.migrate().await?;
+/// let fact = MemoryFact::new(FactScope::new("app", "alice", None), FactKind::Preference,
+///     "Use pnpm, not npm", FactStatus::Known, Provenance::new(FactSource::UserStated, "s1", "inv-1"));
+/// let stored = store.put(fact).await?;
+/// assert_eq!(store.get(&stored.id).await?.map(|fact| fact.uses), Some(stored.uses));
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(feature = "postgres")]
+#[derive(Debug, Clone)]
+pub struct PostgresFactStore {
+    pool: sqlx::PgPool,
+}
+
+#[cfg(feature = "postgres")]
+impl PostgresFactStore {
+    /// A store over `pool`, such as the one the session service and the approval store use.
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Connects to `database_url` with a pool of its own.
+    ///
+    /// # Errors
+    ///
+    /// Returns `harness.store.database` when the server cannot be reached.
+    pub async fn connect(database_url: &str) -> Result<Self> {
+        let pool = sqlx::PgPool::connect(database_url).await.map_err(crate::fsutil::db_error)?;
+        Ok(Self::new(pool))
+    }
+
+    /// Creates or upgrades the store's tables.
+    ///
+    /// # Errors
+    ///
+    /// Returns the database error when a statement fails, or a version mismatch when the
+    /// database was migrated by a newer release.
+    pub async fn migrate(&self) -> Result<()> {
+        crate::fsutil::migrate_postgres(
+            &self.pool,
+            "_adk_harness_fact_migrations",
+            POSTGRES_FACT_MIGRATIONS,
+        )
+        .await
+    }
+
+    fn decode_fact(text: &str) -> Result<MemoryFact> {
+        serde_json::from_str(text).map_err(|error| corrupt_record("fact", &error))
+    }
+
+    /// The fact `id`, its row locked until `tx` ends.
+    async fn locked(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        id: &str,
+    ) -> Result<Option<MemoryFact>> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT record FROM adk_harness_facts WHERE id = $1 FOR UPDATE")
+                .bind(id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(crate::fsutil::db_error)?;
+        row.map(|(record,)| Self::decode_fact(&record)).transpose()
+    }
+
+    async fn write(
+        executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
+        fact: &MemoryFact,
+    ) -> Result<()> {
+        let record = serde_json::to_string(fact)
+            .map_err(|error| crate::fsutil::serialize_error("fact", &error))?;
+        sqlx::query(
+            "INSERT INTO adk_harness_facts \
+             (id, app_name, user_id, project, digest, live, valid_from, record) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (id) DO UPDATE SET live = excluded.live, record = excluded.record",
+        )
+        .bind(&fact.id)
+        .bind(&fact.scope.app)
+        .bind(&fact.scope.user)
+        .bind(&fact.scope.project)
+        .bind(&fact.digest)
+        .bind(fact.status.is_live())
+        .bind(sortable(fact.valid_from))
+        .bind(record)
+        .execute(executor)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+        Ok(())
+    }
+
+    /// Applies `change` to the fact `id` under its row lock.
+    async fn update(
+        &self,
+        id: &str,
+        change: impl FnOnce(&mut MemoryFact) -> Result<()>,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await.map_err(crate::fsutil::db_error)?;
+        let mut fact = Self::locked(&mut tx, id).await?.ok_or_else(|| not_found(id))?;
+        change(&mut fact)?;
+        Self::write(&mut *tx, &fact).await?;
+        tx.commit().await.map_err(crate::fsutil::db_error)
+    }
+}
+
+#[cfg(feature = "postgres")]
+#[async_trait]
+impl FactStore for PostgresFactStore {
+    async fn put(&self, fact: MemoryFact) -> Result<MemoryFact> {
+        let mut tx = self.pool.begin().await.map_err(crate::fsutil::db_error)?;
+        // Two replicas storing the same fact at once keep one: the lock orders them, and the
+        // second finds the first's row.
+        let key = format!(
+            "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+            fact.scope.app,
+            fact.scope.user,
+            fact.scope.project.as_deref().unwrap_or("\u{1f}"),
+            fact.digest
+        );
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(key)
+            .execute(&mut *tx)
+            .await
+            .map_err(crate::fsutil::db_error)?;
+        let existing: Option<(String,)> = sqlx::query_as(
+            "SELECT record FROM adk_harness_facts WHERE app_name = $1 AND user_id = $2 \
+             AND project IS NOT DISTINCT FROM $3 AND digest = $4 AND live LIMIT 1 FOR UPDATE",
+        )
+        .bind(&fact.scope.app)
+        .bind(&fact.scope.user)
+        .bind(&fact.scope.project)
+        .bind(&fact.digest)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+        let stored = match existing {
+            Some((record,)) => {
+                let mut existing = Self::decode_fact(&record)?;
+                existing.uses = existing.uses.saturating_add(1);
+                existing
+            }
+            None => fact,
+        };
+        Self::write(&mut *tx, &stored).await?;
+        tx.commit().await.map_err(crate::fsutil::db_error)?;
+        Ok(stored)
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<MemoryFact>> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT record FROM adk_harness_facts WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(crate::fsutil::db_error)?;
+        row.map(|(record,)| Self::decode_fact(&record)).transpose()
+    }
+
+    async fn list(&self, filter: FactFilter) -> Result<Vec<MemoryFact>> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT record FROM adk_harness_facts WHERE app_name = $1 AND user_id = $2 \
+             AND (NOT $3 OR live)",
+        )
+        .bind(&filter.app)
+        .bind(&filter.user)
+        .bind(filter.live_only)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+        let mut facts = Vec::with_capacity(rows.len());
+        for (record,) in rows {
+            let fact = Self::decode_fact(&record)?;
+            if filter.matches(&fact) {
+                facts.push(fact);
+            }
+        }
+        sort_newest_first(&mut facts);
+        Ok(facts)
+    }
+
+    async fn set_status(&self, id: &str, status: FactStatus, _by: &SubjectRef) -> Result<()> {
+        self.update(id, |fact| apply_status(fact, status)).await
+    }
+
+    async fn put_embedding(&self, id: &str, embedding: FactEmbedding) -> Result<()> {
+        let vector = serde_json::to_string(&embedding.vector)
+            .map_err(|error| crate::fsutil::serialize_error("embedding", &error))?;
+        let mut tx = self.pool.begin().await.map_err(crate::fsutil::db_error)?;
+        // The fact's row lock keeps its vector from outliving a concurrent removal.
+        if Self::locked(&mut tx, id).await?.is_none() {
+            return Err(not_found(id));
+        }
+        sqlx::query(
+            "INSERT INTO adk_harness_fact_embeddings (id, vector, embedder) VALUES ($1, $2, $3) \
+             ON CONFLICT (id) DO UPDATE SET vector = excluded.vector, \
+             embedder = excluded.embedder",
+        )
+        .bind(id)
+        .bind(vector)
+        .bind(&embedding.embedder)
+        .execute(&mut *tx)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+        tx.commit().await.map_err(crate::fsutil::db_error)
+    }
+
+    async fn embeddings(&self, scope: &FactScope) -> Result<Vec<(String, FactEmbedding)>> {
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT e.id, e.vector, e.embedder FROM adk_harness_fact_embeddings e \
+             JOIN adk_harness_facts f ON f.id = e.id \
+             WHERE f.app_name = $1 AND f.user_id = $2 AND f.project IS NOT DISTINCT FROM $3 \
+             AND f.live ORDER BY e.id",
+        )
+        .bind(&scope.app)
+        .bind(&scope.user)
+        .bind(&scope.project)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(id, vector, embedder)| {
+                serde_json::from_str::<Vec<f32>>(&vector)
+                    .ok()
+                    .map(|vector| (id, FactEmbedding::new(embedder, vector)))
+            })
+            .collect())
+    }
+
+    async fn record_recall(&self, ids: &[String], at: DateTime<Utc>) -> Result<()> {
+        for id in ids {
+            let recalled = self
+                .update(id, |fact| {
+                    fact.last_recalled = Some(at);
+                    fact.uses = fact.uses.saturating_add(1);
+                    Ok(())
+                })
+                .await;
+            match recalled {
+                Err(error) if error.code == "harness.memory.fact_not_found" => {}
+                other => other?,
+            }
+        }
+        Ok(())
+    }
+
+    async fn distilled_sessions(
+        &self,
+        app: &str,
+        user: &str,
+    ) -> Result<Vec<(String, DateTime<Utc>)>> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT session_id, upto FROM adk_harness_fact_cursors \
+             WHERE app_name = $1 AND user_id = $2 ORDER BY session_id",
+        )
+        .bind(app)
+        .bind(user)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(session, upto)| {
+                let upto = DateTime::parse_from_rfc3339(&upto).ok()?.with_timezone(&Utc);
+                Some((session, upto))
+            })
+            .collect())
+    }
+
+    async fn mark_distilled(
+        &self,
+        app: &str,
+        user: &str,
+        session: &str,
+        upto: DateTime<Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO adk_harness_fact_cursors (app_name, user_id, session_id, upto) \
+             VALUES ($1, $2, $3, $4) ON CONFLICT (app_name, user_id, session_id) \
+             DO UPDATE SET upto = excluded.upto WHERE excluded.upto > adk_harness_fact_cursors.upto",
+        )
+        .bind(app)
+        .bind(user)
+        .bind(session)
+        .bind(sortable(upto))
+        .execute(&self.pool)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+        Ok(())
+    }
+
+    async fn put_consolidation(&self, record: &ConsolidationRecord) -> Result<()> {
+        let text = serde_json::to_string(record)
+            .map_err(|error| crate::fsutil::serialize_error("consolidation record", &error))?;
+        sqlx::query(
+            "INSERT INTO adk_harness_fact_ticks (tick_id, app_name, user_id, at, record) \
+             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (tick_id) DO UPDATE SET record = excluded.record",
+        )
+        .bind(&record.tick_id)
+        .bind(&record.app)
+        .bind(&record.user)
+        .bind(sortable(record.at))
+        .bind(text)
+        .execute(&self.pool)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+        Ok(())
+    }
+
+    async fn consolidations(&self, app: &str, user: &str) -> Result<Vec<ConsolidationRecord>> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT record FROM adk_harness_fact_ticks \
+             WHERE app_name = $1 AND user_id = $2 ORDER BY at DESC, tick_id DESC",
+        )
+        .bind(app)
+        .bind(user)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+        rows.into_iter()
+            .map(|(text,)| {
+                serde_json::from_str(&text)
+                    .map_err(|error| corrupt_record("consolidation record", &error))
+            })
+            .collect()
+    }
+
+    async fn restore_assumed(&self, id: &str, _by: &SubjectRef) -> Result<()> {
+        self.update(id, apply_restore).await
     }
 }

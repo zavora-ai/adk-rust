@@ -164,6 +164,8 @@ pub use checkpoint::SealedCheckpointer;
 pub use checkpoint::checkpointer_from_url;
 pub use config::{HARNESS_CONFIG_FILE, HarnessConfig};
 pub use edits::PREFERRED_MULTI_FILE_EDIT;
+#[cfg(all(feature = "memory", feature = "postgres"))]
+pub use facts::PostgresFactStore;
 #[cfg(any(feature = "memory-embeddings", feature = "memory-embeddings-local"))]
 pub use facts::RagEmbedder;
 #[cfg(all(feature = "memory", feature = "sqlite"))]
