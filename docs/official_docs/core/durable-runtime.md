@@ -163,7 +163,15 @@ the same fire times, and their idempotency keys enqueue nothing new.
 Cron expressions take five fields (`min hour dom month dow`) or six or seven (`sec min hour
 dom month dow [year]`) and are evaluated in an IANA time zone. A local time skipped by a
 spring-forward change does not fire; a local time repeated by a fall-back change fires once.
-Evaluating cron specs needs the `cron` feature:
+The day-of-week field counts days by the number of fields:
+
+| Expression | Sunday | Monday to Saturday | `1-5` fires |
+|------------|--------|--------------------|-------------|
+| Five fields, as Unix cron | `0` or `7` | `1` to `6` | Monday to Friday |
+| Six or seven fields, as the `cron` crate | `1` | `2` to `7` | Sunday to Thursday |
+
+Day names (`Mon-Fri`, `SAT,SUN`) mean the same days in both. Evaluating cron specs needs the
+`cron` feature:
 
 ```toml
 [dependencies]

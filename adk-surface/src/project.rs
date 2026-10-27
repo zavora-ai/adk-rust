@@ -504,6 +504,11 @@ impl Projector {
                     "*" => "every day".to_string(),
                     // Another day where the person lives: the days would read wrong.
                     _ if local.date_naive() != at.date_naive() => return written(),
+                    // Six and seven fields number the days as the `cron` crate does (1 is
+                    // Sunday); only five follow Unix cron (`adk_core::schedule`).
+                    other if all.len() != 5 && other.bytes().any(|b| b.is_ascii_digit()) => {
+                        return written();
+                    }
                     "1-5" | "MON-FRI" => "every weekday".to_string(),
                     other => match WEEKDAYS.iter().find(|(number, name, _)| {
                         *number == other || name.eq_ignore_ascii_case(other)
@@ -1345,6 +1350,24 @@ mod tests {
                 item("Read the overnight mail", agent.clone()).with_when(cron("0 0 4 * * MON-FRI")),
                 "Read the overnight mail",
                 "Finance suggests this. Once you say yes, it runs every weekday at 07:00.",
+            ),
+            // Five fields number the days as Unix cron does, so 1-5 is Monday to Friday and
+            // 0 is Sunday; six number them as the `cron` crate does, where 1-5 starts on
+            // Sunday, so its numbers are not read.
+            (
+                item("Send the standup", agent.clone()).with_when(cron("0 6 * * 1-5")),
+                "Send the standup",
+                "Finance suggests this. Once you say yes, it runs every weekday at 09:00.",
+            ),
+            (
+                item("Plan the week", agent.clone()).with_when(cron("0 6 * * 0")),
+                "Plan the week",
+                "Finance suggests this. Once you say yes, it runs every Sunday at 09:00.",
+            ),
+            (
+                item("Sum the week", agent.clone()).with_when(cron("0 0 6 * * 1-5")),
+                "Sum the week",
+                "Finance suggests this. Once you say yes, it runs on the schedule 0 0 6 * * 1-5.",
             ),
             (
                 item("Book the dentist", agent.clone())
