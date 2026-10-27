@@ -98,6 +98,7 @@ pub fn parse(transcript: &str, items: &[ComingUpItem]) -> Option<SpokenAction> {
 
 /// Whether `transcript` can be a spoken screen action at all, read before Coming up is: so an
 /// ordinary sentence never reads the agenda.
+#[cfg(feature = "voice")]
 pub(crate) fn may_be_action(transcript: &str) -> bool {
     phrase(transcript).is_some()
 }

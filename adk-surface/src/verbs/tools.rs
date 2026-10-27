@@ -190,24 +190,20 @@ impl VerbTool {
                         .and_then(|decision| decision.edited_args.as_ref())
                         .is_some_and(|edited| edited == args))
         };
-        let mut query = ApprovalRequestQuery::default()
+        let query = ApprovalRequestQuery::default()
             .with_session(&scope)
             .with_states([ApprovalState::Approved]);
         let mut found: Option<ApprovalRequest> = None;
-        loop {
-            let page = store.list_requests(&query).await.ok()?;
-            let full = page.len() >= query.limit;
-            let next = page.last().map(ApprovalRequest::cursor);
-            for request in page.into_iter().filter(|request| this_call(request)) {
-                if found.as_ref().is_none_or(|newest| request.resolved_at > newest.resolved_at) {
-                    found = Some(request);
-                }
+        super::policy::every_request(store.as_ref(), query, |request| {
+            if this_call(request)
+                && found.as_ref().is_none_or(|newest| request.resolved_at > newest.resolved_at)
+            {
+                found = Some(request.clone());
             }
-            match next {
-                Some(cursor) if full => query = query.with_after(Some(cursor)),
-                _ => break,
-            }
-        }
+            false
+        })
+        .await
+        .ok()?;
         let request = found?;
         let answered = match &registry.answers {
             Some(answers) => answers.find(&request.id).await.ok().flatten().map(|record| {

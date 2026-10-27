@@ -136,7 +136,10 @@ its threads, asking to change things on the person's screens — grants it with
 `SurfaceEngineBuilder::grant(GrantedUse::new(id, text))`. An agent that runs, added or paused,
 lists each grant in its detail (`AgentDetail::granted`), which the web home and the terminal's
 settings show under "On this home it can also:"; a removed or suggested agent lists none, and
-the block is absent when the host grants nothing (spec 3.3 §5.7, S-I12, S-I13).
+the block is absent when the host grants nothing (spec 3.3 §5.7, S-I12, S-I13). A grant an agent
+can use only in some modes names them with `GrantedUse::only_in`, and the settings list it only
+while the form holds one of them: asking to change things on the screens is listed in Ask first
+and Go ahead, never in Just look or Suggest, which refuse every such request.
 
 ## In the terminal
 

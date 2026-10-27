@@ -130,7 +130,7 @@ impl VerbPolicy {
 }
 
 /// Reads every request `query` selects, a page at a time, until `seen` returns true.
-async fn every_request(
+pub(crate) async fn every_request(
     store: &dyn ApprovalStore,
     mut query: ApprovalRequestQuery,
     mut seen: impl FnMut(&ApprovalRequest) -> bool,

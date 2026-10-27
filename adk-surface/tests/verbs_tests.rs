@@ -942,6 +942,103 @@ mod held {
         assert_eq!(done[0].ext["surface"], json!("web"));
     }
 
+    /// Finance's call, as the runtime hands it to the tool.
+    struct FinanceCall {
+        content: adk_core::Content,
+        actions: std::sync::Mutex<adk_core::EventActions>,
+    }
+
+    impl adk_core::ReadonlyContext for FinanceCall {
+        fn invocation_id(&self) -> &str {
+            "inv-1"
+        }
+        fn agent_name(&self) -> &str {
+            "finance"
+        }
+        fn user_id(&self) -> &str {
+            OWNER
+        }
+        fn app_name(&self) -> &str {
+            APP
+        }
+        fn session_id(&self) -> &str {
+            "s1"
+        }
+        fn branch(&self) -> &str {
+            ""
+        }
+        fn user_content(&self) -> &adk_core::Content {
+            &self.content
+        }
+    }
+
+    impl adk_core::CallbackContext for FinanceCall {
+        fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+            None
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl adk_core::ToolContext for FinanceCall {
+        fn function_call_id(&self) -> &str {
+            "call-a"
+        }
+        fn actions(&self) -> adk_core::EventActions {
+            self.actions.lock().unwrap().clone()
+        }
+        fn set_actions(&self, actions: adk_core::EventActions) {
+            *self.actions.lock().unwrap() = actions;
+        }
+        async fn search_memory(&self, _: &str) -> adk_core::Result<Vec<adk_core::MemoryEntry>> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Spec 3.3 §11: an agent's record cites the decision that let this very call run, never
+    /// the one resolved last for another call of the same tool in the session.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_record_cites_the_approval_of_this_call() {
+        use adk_core::ApprovalStore as _;
+        let home =
+            home(Setup::new(Arc::new(ScriptedLlm::new("s", Vec::<ScriptedResponse>::new())))).await;
+        let tool = home
+            .registry
+            .toolset(PartitionId::default())
+            .tools()
+            .into_iter()
+            .find(|tool| tool.name() == "verb_snooze")
+            .unwrap();
+        let to = |at: chrono::DateTime<Utc>| at.with_timezone(&offset()).to_rfc3339();
+        let finance = ActingContext::derived(APP, "finance", OWNER, SubjectKind::Human);
+        let approved = |id: &str, args: Value, minute: u32| {
+            let call = ToolConfirmationRequest::for_tool(tool.as_ref(), args)
+                .with_acting_context(finance.clone());
+            let mut request = ApprovalRequest::new(
+                id,
+                ApprovalScope::new(APP, OWNER, "s1"),
+                &call,
+                ApprovalPolicy::new([ApproverSelector::human(OWNER)]),
+            )
+            .with_acting(finance.clone());
+            request.state = ApprovalState::Approved;
+            request.resolved_at = Some(Utc::now() + Span::minutes(i64::from(minute)));
+            request
+        };
+        // Ana said yes to this call first, then to another call of Finance's.
+        let this = json!({ "item": DIGEST, "to": to(home.at + Span::hours(1)) });
+        let other = json!({ "item": DIGEST, "to": to(home.at + Span::days(1)) });
+        home.store.create_request(&approved("apr-this", this.clone(), 1)).await.unwrap();
+        home.store.create_request(&approved("apr-other", other, 2)).await.unwrap();
+        let ctx = Arc::new(FinanceCall {
+            content: adk_core::Content::new("user"),
+            actions: Default::default(),
+        });
+        tool.execute(ctx, this).await.unwrap();
+        let record = home.verb_records().pop().unwrap();
+        assert_eq!(record.ext["outcome"], json!("done"));
+        assert_eq!(record.ext["approvalId"], json!("apr-this"));
+    }
+
     /// Owner question 23: while everything is stopped, a person's snooze still runs — it only
     /// delays work — and an agent asks nothing.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1380,8 +1477,20 @@ mod card_hints {
             ],
         )
         .await;
-        let hint = home.registry.hints().hint(&request).await.unwrap();
+        let hints = home.registry.hints();
+        let hint = hints.hint(&request).await.unwrap();
         assert_eq!(hint.first_step.as_deref(), Some("Finance read 1 web page (example.com)"));
+        // The asking turn is read once, not each time a surface draws the card.
+        home.sessions
+            .delete(adk_session::DeleteRequest {
+                app_name: APP.into(),
+                user_id: OWNER.into(),
+                session_id: "s9".into(),
+            })
+            .await
+            .unwrap();
+        let again = hints.hint(&request).await.unwrap();
+        assert_eq!(again.first_step.as_deref(), Some("Finance read 1 web page (example.com)"));
         assert_eq!(hint.heading.as_deref(), Some("Move News digest to 19:00"));
         assert_eq!(hint.chat_heading.as_deref(), Some("Snooze something in Coming up"));
         assert_eq!(hint.offer_always, Some(false));

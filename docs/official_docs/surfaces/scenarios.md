@@ -77,19 +77,24 @@ Ana snoozes News digest by typing `/snooze News digest` in the terminal, by clic
 the home and by saying "Snooze news digest"; then Finance, an agent she added, asks to snooze
 it (spec 3.3 §12, Experimental). The legs run as tests on an in-process kernel: the person's in
 `adk-surface/tests/verbs_scenario_tests.rs`, Finance's in `adk-surface/tests/verbs_tests.rs`, and
-`adk-rust up` on SQLite through a restart in `adk-cli/tests/verbs_added_agent.rs`.
+`adk-rust up` on SQLite through a restart in `adk-cli/tests/verbs_added_agent.rs`, whose
+PostgreSQL leg runs by hand.
 
 ```bash
 cargo nextest run -p adk-surface --features verb-ui,web,tui,voice --test verbs_scenario_tests --test verbs_tests
 cargo nextest run -p adk-cli --features verb-ui,scripted-model --test verbs_added_agent
 ```
 
+| Store | Command |
+|---|---|
+| PostgreSQL | `DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres cargo nextest run -p adk-cli --features verb-ui,scripted-model,postgres --test verbs_added_agent --run-ignored only` |
+
 | Pass condition | Read from |
 |---|---|
 | Each origin moves the wake by an hour and writes one `surface.verb` record and one `tool_call` allowed under `urn:adk:agent:adk-rust/surface.verbs` | The agenda, the audit log |
 | The three records are equal but for where and how; the voice record carries the transcript's digest and never the words | The audit log |
 | Finance's request waits in Go ahead with a matching standing rule: one inbox entry, origin `verbs:adk-rust`, low risk, never **Always allow** on any surface | The inbox, `GET /api/surface/decisions?surface=…` |
-| The card waits through a restart; Allow once on the phone moves the item exactly once, and a second answer reads "already decided" | The agenda, the inbox, the record |
+| The card waits through a restart and reads the same in the terminal attached to the kernel; Allow once on the phone moves the item exactly once, and a second answer reads "already decided" | The agenda, the inbox, the record |
 | "/snooze" typed in the home's message box or written by an agent, and the model's own audio, change nothing | The agenda, the audit log |
 | While everything is stopped, Ana's snooze runs and Finance asks nothing | The agenda, the inbox |
 
