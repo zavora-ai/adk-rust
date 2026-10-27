@@ -942,6 +942,11 @@ pub const SHOW_FORMS_AND_TABLES: &str =
 /// A drawn form sent by voice, from chat or by an agent: only a person at a screen sends one.
 pub const SEND_FORMS_FROM_A_SCREEN: &str =
     "A form an agent drew is sent from a screen, by the person who filled it in";
+/// A drawn form sent while its thread's agent is working or input waits for it.
+pub const SEND_FORM_WHEN_FREE: &str =
+    "Couldn't send: your agent is still working in this thread — send it when it's done";
+/// A drawn form sent again before its first send reached the agent.
+pub const FORM_BEING_SENT: &str = "Couldn't send: this form is being sent already";
 
 /// Over a drawing: "Drawn by Finance · 10:02".
 pub fn drawn_by(agent: &str, hh_mm: &str) -> String {

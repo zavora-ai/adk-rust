@@ -239,8 +239,7 @@ impl AgUiExtension for GenuiAgUi {
         );
         // Recorded before it is asked for, as the web home's send is.
         if let Some(trail) = &self.audit {
-            let fingerprint =
-                adk_core::ToolConfirmationRequest::new(sent.tool.clone(), sent.args).fingerprint();
+            let args_digest = trail.digest(&sent.args);
             let draft = AuditRecordDraft::new(
                 AuditRecordKind::Other("surface".to_string()),
                 SURFACE_AUDIT_DRAWN_SUBMITTED,
@@ -252,7 +251,7 @@ impl AgUiExtension for GenuiAgUi {
             .ext("version", json!(pressed.version))
             .ext("actionId", json!(pressed.action_id))
             .ext("tool", json!(sent.tool))
-            .ext("fingerprint", json!(fingerprint))
+            .ext("argsDigest", json!(args_digest))
             .ext("valuesDigest", json!(sent.values_digest))
             .ext("callId", json!(call.function_call_id))
             .ext("drawnBy", json!(sent.drawn_by));

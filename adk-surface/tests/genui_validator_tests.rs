@@ -605,3 +605,27 @@ fn values_a_choice_or_a_slider_shows_are_checked() {
     );
     assert_eq!(refused(&slider).kind, RefusalKind::LooksLikeDecision);
 }
+
+/// The server checks a sent value against a field's pattern, so a pattern it cannot read is
+/// refused when the form is drawn, with the reason, rather than refusing every send.
+#[test]
+fn a_pattern_the_server_cannot_read_is_refused_when_drawn() {
+    let field = |pattern: &str| {
+        screen(
+            vec![json!({
+                "id": "root", "component": "TextField", "label": "Code",
+                "value": { "path": "/code" },
+                "checks": [{
+                    "condition": { "call": "regex", "args": { "value": { "path": "/code" }, "pattern": pattern } },
+                    "message": "Enter a code like AB12CD"
+                }]
+            })],
+            json!({ "code": "" }),
+            Vec::new(),
+        )
+    };
+    let refusal = refused(&field("(?=.*[0-9])[A-Z0-9]{6}"));
+    assert_eq!(refusal.kind, RefusalKind::CannotShow);
+    assert!(refusal.detail.contains("can't be read here"), "{}", refusal.detail);
+    assert!(Validator::forms().validate(&field("[A-Z0-9]{6}")).is_ok());
+}

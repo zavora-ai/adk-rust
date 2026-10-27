@@ -319,7 +319,12 @@ pub(crate) fn holds(condition: &Value, model: &DataModel) -> bool {
                 _ => None,
             };
             match number {
-                None => matches!(value, None | Some(Value::Null)),
+                // A blank field has no number to check, as on the web page.
+                None => match value {
+                    None | Some(Value::Null) => true,
+                    Some(Value::String(text)) => text.trim().is_empty(),
+                    Some(_) => false,
+                },
                 Some(number) => {
                     bound("min").is_none_or(|min| number >= min)
                         && bound("max").is_none_or(|max| number <= max)
@@ -337,5 +342,22 @@ pub(crate) fn holds(condition: &Value, model: &DataModel) -> bool {
         }
         "not" => !arg("value").is_some_and(truth),
         _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A blank field has no number to check, as on the web page, so an optional quantity
+    /// left blank is sent; a number out of range is not.
+    #[test]
+    fn a_blank_number_passes_a_numeric_check() {
+        let check = json!({ "call": "numeric", "args": { "value": { "path": "/qty" }, "min": 1 } });
+        for blank in [json!(""), json!("  "), Value::Null] {
+            assert!(holds(&check, &DataModel::new(json!({ "qty": blank }))), "{blank}");
+        }
+        assert!(!holds(&check, &DataModel::new(json!({ "qty": "0" }))));
+        assert!(!holds(&check, &DataModel::new(json!({ "qty": "lots" }))));
     }
 }

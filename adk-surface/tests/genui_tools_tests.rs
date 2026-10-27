@@ -254,3 +254,65 @@ async fn versions_rise_across_redraws_patches_parallel_drawings_and_restarts() {
         DrawnEnvelope::from_response(&drawings(&send(&second, "remove it").await)[0].1).unwrap();
     assert_eq!((removed.version, removed.deleted, removed.draft()), (4, true, None));
 }
+
+/// Drawings made side by side in one turn each keep their stored version, so a session whose
+/// history was compacted away still gives each surface a higher version after a restart.
+#[tokio::test]
+async fn side_by_side_drawings_each_keep_their_stored_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let status = json!({ "surfaceId": "status", "title": "Status", "rows": [{ "label": "Invoice", "value": "Draft" }] });
+    let both = || {
+        vec![
+            ScriptedResponse::function_calls([
+                ("render_card", status.clone()),
+                ("render_form", invoice_form()),
+            ]),
+            ScriptedResponse::text("both"),
+        ]
+    };
+    let first = harness(both(), sessions.clone(), &dir).await;
+    send(&first, "two at once").await;
+    let state = sessions
+        .get(adk_session::GetRequest {
+            app_name: "home".into(),
+            user_id: "ana".into(),
+            session_id: "thread-1".into(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .unwrap()
+        .state()
+        .all();
+
+    // The history is gone, as after a compaction; the session's state stays.
+    let compacted = SessionId::new("thread-2").unwrap();
+    sessions
+        .create(adk_session::CreateRequest {
+            app_name: "home".into(),
+            user_id: "ana".into(),
+            session_id: Some(compacted.to_string()),
+            state,
+        })
+        .await
+        .unwrap();
+    let second = harness(both(), sessions, &dir).await;
+    let stream = second.send(&ana(), &compacted, "two again").await.unwrap();
+    let events: Vec<Event> =
+        tokio::time::timeout(Duration::from_secs(10), stream.collect::<Vec<_>>())
+            .await
+            .expect("the run must finish")
+            .into_iter()
+            .map(|event| event.expect("event"))
+            .collect();
+    let mut versions: Vec<(String, u64)> = drawings(&events)
+        .into_iter()
+        .map(|(_, response, _)| {
+            let envelope = DrawnEnvelope::from_response(&response).expect("{response}");
+            (envelope.surface_id, envelope.version)
+        })
+        .collect();
+    versions.sort();
+    assert_eq!(versions, vec![("invoice-10".to_string(), 2), ("status".to_string(), 2)]);
+}

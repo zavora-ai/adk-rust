@@ -2,7 +2,7 @@
  * Where each drawn form is once sent (spec 3.3 §7.4 rule 5): read from the server, which words
  * it from the form's decision and its call's result, never from the click.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { DecisionCard, DrawnSent, FormState, FormsResponse } from "../generated/api";
 import type { HomeClient } from "../client";
 import { probe } from "../features";
@@ -40,18 +40,22 @@ export function useFormState(
     };
     // The state moves with the decision and the result.
   }, [client, session, key, card?.version, card?.status, resultSeen]);
-  if (!sent) return undefined;
-  if (!sent.held) {
-    return { surfaceId: sent.surfaceId, version: sent.version, status: "refused", text: sent.text, locked: false };
-  }
-  return (
-    read ?? {
+  // The same send keeps the same state object, so a form that waits on it does not take every
+  // render for a new answer and enable Send again while a send is on its way.
+  const sentState = useMemo<FormState | undefined>(() => {
+    if (!sent) return undefined;
+    if (!sent.held) {
+      return { surfaceId: sent.surfaceId, version: sent.version, status: "refused", text: sent.text, locked: false };
+    }
+    return {
       surfaceId: sent.surfaceId,
       version: sent.version,
       status: "waiting",
       text: sent.text,
       locked: true,
       decisionId: sent.decisionId,
-    }
-  );
+    };
+  }, [sent?.surfaceId, sent?.version, sent?.callId, sent?.held, sent?.text, sent?.decisionId]);
+  if (!sent) return undefined;
+  return sent.held ? (read ?? sentState) : sentState;
 }

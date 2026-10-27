@@ -522,6 +522,22 @@ impl Check {
                 ));
             }
         }
+        // The server checks a sent value against the pattern, so one it cannot read would
+        // refuse every send; the page leaves the check to the server.
+        let mut patterns = Vec::new();
+        regex_patterns(value, &mut patterns);
+        for pattern in patterns {
+            if regex::Regex::new(&format!("^(?:{pattern})$")).is_err() {
+                return Err(self.cannot_show(
+                    Some((id, name)),
+                    format!(
+                        "its regex check's pattern '{}' can't be read here: use one without \
+                         look-around or back-references",
+                        truncate(pattern)
+                    ),
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -1019,6 +1035,23 @@ fn calls(value: &Value, found: &mut Vec<String>) {
             map.values().for_each(|value| calls(value, found));
         }
         Value::Array(items) => items.iter().for_each(|value| calls(value, found)),
+        _ => {}
+    }
+}
+
+/// The pattern of every `regex` check in `value`.
+fn regex_patterns<'a>(value: &'a Value, found: &mut Vec<&'a str>) {
+    match value {
+        Value::Object(map) => {
+            if map.get("call").and_then(Value::as_str) == Some("regex")
+                && let Some(pattern) =
+                    map.get("args").and_then(|args| args.get("pattern")).and_then(Value::as_str)
+            {
+                found.push(pattern);
+            }
+            map.values().for_each(|value| regex_patterns(value, found));
+        }
+        Value::Array(items) => items.iter().for_each(|value| regex_patterns(value, found)),
         _ => {}
     }
 }

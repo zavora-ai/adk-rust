@@ -1374,34 +1374,63 @@ impl SurfaceEngine {
             return Err(SurfaceError::NotHere(words::SEND_FORMS_FROM_A_SCREEN.to_string()));
         }
         let sent = crate::genui::submission(&events, &surface, version, action, values)?;
+        // A running turn writes the session meanwhile, so the call waits until it ends, as a
+        // message does: a second run would interleave its events with the turn's (S-I4).
+        let key = (caller.user_id().to_string(), session.clone());
+        let queued = self
+            .inner
+            .queues
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+            .is_some_and(|queued| !queued.is_empty())
+            || self.inner.draining.lock().unwrap_or_else(|e| e.into_inner()).contains(&key);
+        if queued || self.inner.source.busy(caller.user_id(), &session).await? {
+            return Err(SurfaceError::Invalid(words::SEND_FORM_WHEN_FREE.to_string()));
+        }
         let call = adk_core::RequestedCall::new(
             sent.tool.clone(),
             sent.args.clone(),
             caller.subject.clone(),
             adk_core::RequestedVia::form(surface.clone(), version, action),
         );
-        // Recorded before it is asked for: a send whose record failed is never asked for.
-        let fingerprint =
-            adk_core::ToolConfirmationRequest::new(sent.tool.clone(), sent.args).fingerprint();
-        self.record(
-            caller,
-            SURFACE_AUDIT_DRAWN_SUBMITTED,
-            json!({
-                "sessionId": session,
-                "surfaceId": surface,
-                "version": version,
-                "actionId": action,
-                "tool": sent.tool,
-                "fingerprint": fingerprint,
-                "valuesDigest": sent.values_digest,
-                "callId": call.function_call_id,
-                "drawnBy": sent.drawn_by,
-            }),
-        )
-        .await?;
         let call_id = call.function_call_id.clone();
-        self.inner.drawn.pressed(caller.user_id(), &session, &call.tool_name, &call.args);
-        self.inner.source.request_call(caller, &session, "", call).await?;
+        if !self.inner.drawn.begin_send(
+            caller.user_id(),
+            &session,
+            (&surface, version),
+            &call,
+            &events,
+        ) {
+            return Err(SurfaceError::Invalid(words::FORM_BEING_SENT.to_string()));
+        }
+        // Recorded before it is asked for: a send whose record failed is never asked for. The
+        // record carries digests, never the values: the arguments' digest is the one the
+        // call's own approval records carry.
+        let args_digest = self.inner.audit.as_ref().map(|trail| trail.digest(&sent.args));
+        let asked = async {
+            self.record(
+                caller,
+                SURFACE_AUDIT_DRAWN_SUBMITTED,
+                json!({
+                    "sessionId": session,
+                    "surfaceId": surface,
+                    "version": version,
+                    "actionId": action,
+                    "tool": sent.tool,
+                    "argsDigest": args_digest,
+                    "valuesDigest": sent.values_digest,
+                    "callId": call_id,
+                    "drawnBy": sent.drawn_by,
+                }),
+            )
+            .await?;
+            self.inner.source.request_call(caller, &session, "", call).await
+        };
+        if let Err(error) = asked.await {
+            self.inner.drawn.withdraw(&call_id);
+            return Err(error);
+        }
         Ok(CommandOutcome::FormSent { session_id: session, surface_id: surface, version, call_id })
     }
 
@@ -1426,7 +1455,7 @@ impl SurfaceEngine {
         call: adk_core::RequestedCall,
         app: &str,
     ) -> Result<()> {
-        self.inner.drawn.app_asked(caller.user_id(), session, &call.tool_name, &call.args, app);
+        self.inner.drawn.app_asked(caller.user_id(), session, &call, app);
         self.inner.source.request_call(caller, session, "", call).await
     }
 

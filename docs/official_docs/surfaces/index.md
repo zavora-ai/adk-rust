@@ -207,8 +207,9 @@ Every answer is written to the audit trail as `surface.decide` (kind `approval`)
 `changed`, `refused`, `cancelled`), `surface` and `origin`; the actor is the person.
 `surface.send`, `surface.stop_all`, `surface.resume_all` and `surface.set_mode` record the
 other commands the same way. `surface.drawn.submitted` records a drawn form's send with
-`sessionId`, `surfaceId`, `version`, `actionId`, `tool`, the call's `fingerprint`,
-`valuesDigest`, `callId` and `drawnBy`, never the values.
+`sessionId`, `surfaceId`, `version`, `actionId`, `tool`, `argsDigest` (the audit trail's
+digest of the call's arguments, as the call's approval records carry it), `valuesDigest`,
+`callId` and `drawnBy`, never the values.
 
 How an answer was given — "in Telegram", "on your phone" — is not part of the approval
 service's decision, so the engine keeps it in an `AnswerLog`. The default,

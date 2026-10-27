@@ -3,7 +3,7 @@
 // the version seen and asks first, the decision under the form, the stale and refused states,
 // the refused notice, and the developer panel's section; apps from MCP servers (§6.1
 // `genui-apps`): framed sandboxed, labelled, and asking only — a press of the person's does it.
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../src/client";
@@ -14,6 +14,7 @@ import { DrawnView } from "../src/genui/DrawnView";
 import { GenuiProtocols } from "../src/genui/Protocols";
 import { RefusedNotice } from "../src/genui/Refused";
 import { firstFailure, holds } from "../src/genui/bindings";
+import { useFormState } from "../src/genui/forms";
 import { parseJsonl } from "../src/genui/parser";
 import { sanitizeUrl } from "../src/genui/security";
 import { SurfaceStore, getPath, setPath } from "../src/genui/store";
@@ -229,6 +230,37 @@ describe("the ported A2UI parts", () => {
     expect(holds({ call: "not", args: { value: { call: "length", args: { value: "abc", max: 2 } } } }, {})).toBe(true);
     expect(holds({ call: "regex", args: { value: "INV-10", pattern: "INV-\\d+" } }, {})).toBe(true);
     expect(firstFailure([{ condition: email, message: "Enter an email address" }], { "/to": "x" })).toBe("Enter an email address");
+  });
+
+  it("keeps a refused send's state while the page draws again, so Send stays busy", () => {
+    const client = new FixtureClient();
+    const sent = {
+      actionId: "send",
+      at: "2026-10-27T10:03:00Z",
+      callId: "adk-call-requested-1",
+      held: false,
+      surfaceId: "invoice-10",
+      text: "Finance can't use send_invoice here",
+      tool: "send_invoice",
+      version: 1,
+    };
+    // The thread hands the hook a new object on every render, as the feed does.
+    const { result, rerender } = renderHook(() => useFormState(client, "s1", { ...sent }, undefined, false));
+    const first = result.current;
+    rerender();
+    expect(result.current).toBe(first);
+  });
+
+  it("leaves a pattern to the server and passes a blank number, as the server does", () => {
+    const code = { call: "regex", args: { value: { path: "/code" }, pattern: "(a+)+" } };
+    const started = Date.now();
+    expect(firstFailure([{ condition: code, message: "Check the code" }], { "/code": `${"a".repeat(40)}!` })).toBeUndefined();
+    expect(firstFailure([{ condition: { call: "not", args: { value: code } }, message: "No" }], { "/code": "aaa" })).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(1000);
+    const quantity = { call: "numeric", args: { value: { path: "/qty" }, min: 1 } };
+    expect(holds(quantity, { "/qty": "" })).toBe(true);
+    expect(holds(quantity, { "/qty": "  " })).toBe(true);
+    expect(holds(quantity, { "/qty": "0" })).toBe(false);
   });
 
   it("reads A2UI v0.9.1 JSON lines into surfaces", () => {

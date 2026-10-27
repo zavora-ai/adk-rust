@@ -3,8 +3,8 @@
  * sent (spec 3.3 §7.4 rule 5). Ported from adk-ui's `packages/adk-ui-react/src/a2ui/bindings.ts`
  * (Apache-2.0), narrowed to what the home renders: every string a person reads arrives
  * resolved by the server, so only data paths and the catalog's check functions are read here
- * — `required`, `regex`, `length`, `numeric`, `email`, `and`, `or` and `not` — the same ones
- * the server checks again when the form is sent.
+ * — `required`, `length`, `numeric`, `email`, `and`, `or` and `not` — the same ones the server
+ * checks again when the form is sent. A check with a `regex` is the server's alone.
  */
 
 /** A form's values, by data path. */
@@ -81,16 +81,11 @@ export function holds(condition: unknown, values: Values): boolean {
       const given = text(value);
       return given === "" || isEmail(given);
     }
-    case "regex": {
-      const given = text(value);
-      const pattern = typeof args.pattern === "string" ? args.pattern : undefined;
-      if (given === "" || pattern === undefined) return true;
-      try {
-        return new RegExp(`^(?:${pattern})$`, "u").test(given);
-      } catch {
-        return false;
-      }
-    }
+    // The server checks a pattern when the form is sent, with an engine whose time is linear
+    // in the text: an agent's pattern never runs in the page, where it could backtrack for
+    // minutes or read differently.
+    case "regex":
+      return true;
     case "length": {
       const size = [...text(value)].length;
       const min = bound(args, "min");
@@ -98,7 +93,7 @@ export function holds(condition: unknown, values: Values): boolean {
       return (min === undefined || size >= min) && (max === undefined || size <= max);
     }
     case "numeric": {
-      if (value === undefined || value === null || value === "") return true;
+      if (value === undefined || value === null || (typeof value === "string" && value.trim() === "")) return true;
       const number = typeof value === "number" ? value : Number(String(value).trim());
       if (Number.isNaN(number)) return false;
       const min = bound(args, "min");
@@ -117,7 +112,14 @@ export function holds(condition: unknown, values: Values): boolean {
   }
 }
 
-/** The message of the first of `checks` that fails over `values`, if any. */
+/** Whether `condition` calls `regex` anywhere: the server checks those when the form is sent. */
+function checksPattern(condition: unknown): boolean {
+  if (Array.isArray(condition)) return condition.some(checksPattern);
+  if (typeof condition !== "object" || condition === null) return false;
+  return (condition as { call?: unknown }).call === "regex" || Object.values(condition).some(checksPattern);
+}
+
+/** The message of the first of `checks` that fails over `values`, if any; a check with a pattern is left to the server. */
 export function firstFailure(checks: { condition: unknown; message: string }[], values: Values): string | undefined {
-  return checks.find((check) => !holds(check.condition, values))?.message;
+  return checks.find((check) => !checksPattern(check.condition) && !holds(check.condition, values))?.message;
 }

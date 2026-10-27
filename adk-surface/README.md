@@ -169,11 +169,11 @@ See [The Web Home](../docs/official_docs/surfaces/web-home.md).
 | `channels` | Chat: the Telegram adapter (`adk_surface::channels`), over the kernel's channel contract, by long polling | Beta |
 | `mobile` | The phone: its routes, Web Push from the person's own kernel and "Confirm it's you" (`adk_surface::mobile`); implies `web` and links OpenSSL through webauthn-rs | Beta |
 | `voice` | Voice and video (`adk_surface::voice`): the voice view with `web`, the voice line with `tui`; `voice-live` adds Gemini Live and the OpenAI Realtime API for the live test and the `voice_home` example | Beta |
+| `workflow` | The workflow observer (`adk_surface::workflow`): a graph agent's runs, steps and forks; the Runs tab and its routes with `web` | Beta |
 | `genui` | Agent-drawn UI (`adk_surface::genui`): the render tools, the validator, the routes with `web`, the box and fill-in pane with `tui` | Beta |
 | `genui-apps` | Apps from MCP servers (`adk_surface::genui::McpAppsHost`), with `adk-harness/mcp` and `adk-tool/mcp-apps` | Beta |
 
-The desktop tray is a separate, unpublished app in `desktop/`, not a feature. The workflow
-observer arrives as a further feature (spec 3.3 §6.1, §12). See
+The desktop tray is a separate, unpublished app in `desktop/`, not a feature. See
 [the terminal](../docs/official_docs/surfaces/terminal.md) for its keys, modes and exit codes,
 and [the phone](../docs/official_docs/surfaces/phone.md) for serving it.
 

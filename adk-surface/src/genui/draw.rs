@@ -31,8 +31,9 @@ pub const DRAWN_STATE_KEY: &str = "adk.surface.drawn";
 /// (spec 3.3 §7.4 rule 5).
 pub const REFUSED_STATE_KEY: &str = "adk.surface.refused";
 
-/// The session state key holding the latest version of every surface a session drew, so
-/// versions keep rising after a restart or a compaction.
+/// The prefix of the session state keys holding the latest version of each surface a
+/// session drew, `adk.surface.versions.<surface id>`, so versions keep rising after a
+/// restart or a compaction.
 const VERSIONS_STATE_KEY: &str = "adk.surface.versions";
 
 /// What [`DRAWN_STATE_KEY`] holds: the latest drawing of the session.
@@ -792,8 +793,8 @@ impl DrawTool {
     ) -> u64 {
         let stored = ctx
             .session()
-            .and_then(|session| session.state().get(VERSIONS_STATE_KEY))
-            .and_then(|versions| versions.get(surface_id).and_then(Value::as_u64))
+            .and_then(|session| session.state().get(&format!("{VERSIONS_STATE_KEY}.{surface_id}")))
+            .and_then(|version| version.as_u64())
             .unwrap_or(0);
         let seen = latest.map_or(0, |envelope| envelope.version);
         let key = (
@@ -817,15 +818,13 @@ impl DrawTool {
             version: envelope.version,
             digest: envelope.digest(),
         };
-        let mut versions = ctx
-            .session()
-            .and_then(|session| session.state().get(VERSIONS_STATE_KEY))
-            .filter(Value::is_object)
-            .unwrap_or_else(|| json!({}));
-        versions[&envelope.surface_id] = json!(envelope.version);
         let mut actions = ctx.actions();
         actions.state_delta.insert(DRAWN_STATE_KEY.to_string(), json!(record));
-        actions.state_delta.insert(VERSIONS_STATE_KEY.to_string(), versions);
+        // One key per surface: drawings made side by side in one turn each keep theirs.
+        actions.state_delta.insert(
+            format!("{VERSIONS_STATE_KEY}.{}", envelope.surface_id),
+            json!(envelope.version),
+        );
         ctx.set_actions(actions);
         tracing::info!(
             surface.id = %envelope.surface_id,

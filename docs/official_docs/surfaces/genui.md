@@ -176,11 +176,17 @@ The engine checks, in order:
    send again".
 4. The action is declared on that version, and the form was not sent already (`surface.invalid`).
 5. Each value fits its field's type and checks (`surface.invalid`).
+6. No turn of the thread is running and no input waits for one: "Couldn't send: your agent is
+   still working in this thread — send it when it's done" (`surface.invalid`), so the call's
+   run never writes the session beside another.
+7. No send of the same version is on its way to the agent: "Couldn't send: this form is being
+   sent already" (`surface.invalid`).
 
 The arguments come from the stored drawing: a constant such as `"invoice": "INV-10"` is
 never read from the request. The engine writes a `surface.drawn.submitted` audit record —
-`sessionId`, `surfaceId`, `version`, `actionId`, `tool`, the call's `fingerprint`,
-`valuesDigest`, `callId` and `drawnBy`, never the values — and then asks for the call
+`sessionId`, `surfaceId`, `version`, `actionId`, `tool`, `argsDigest` (the audit trail's
+digest of the call's arguments, as the call's approval records carry it), `valuesDigest`,
+`callId` and `drawnBy`, never the values — and then asks for the call
 (`Source::request_call`). The answer is `formSent` with the call's ID; nothing has run.
 
 ### Held as the drawing agent
