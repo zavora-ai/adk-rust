@@ -298,5 +298,6 @@ generated from the Rust types. `bash scripts/check-surface-api.sh` fails when th
 - [Your Agents](agents.md) — agents a person adds by asking or by hand: the roster, New agent, settings, `/agent` and the decision that adds one
 - [The Website's Views](website.md) — the `website` feature: a prebuilt website's onboarding, site view, weekly review and web editor at `/ui/website`
 - [Screen Actions](verbs.md) — the `verb-ui` feature, Experimental: Snooze in Coming up from every surface, and an agent's request that always waits for you
+- [The Workflow Observer](workflow.md) — the `workflow` feature: a graph agent's runs, steps and forks on the developer panel's Runs tab
 - [The Control Plane](../kernel/control-plane.md) — the kernel routes the web API sits beside
 - [Harness Modes and Approvals](../harness/modes-and-approvals.md) — held calls, standing rules, modes

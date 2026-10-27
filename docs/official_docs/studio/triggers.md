@@ -7,6 +7,10 @@ Triggers define how workflows start in [ADK Studio](studio.md). Every workflow b
 > crates. The endpoints below are served by the Studio server (port 3000 by default) while you
 > develop a workflow.
 
+> **Note:** ADK Studio is retired in favour of the [workflow observer](../surfaces/workflow.md),
+> which watches graph agents' runs, steps and forks on the web home's Runs tab (spec 3.3 §13
+> decision 12). This page describes the last Studio release.
+
 ![Trigger Properties Panel](images/09_trigger_properties.png)
 
 ## Trigger Types

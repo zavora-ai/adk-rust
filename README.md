@@ -423,7 +423,7 @@ per-platform tool matrix and the CI cost tiers.
 
 | Project | What it is |
 |---------|------------|
-| [adk-studio](https://github.com/zavora-ai/adk-studio) | Visual agent builder — canvas, code generation, live testing |
+| [adk-studio](https://github.com/zavora-ai/adk-studio) | Visual agent builder, retired in favour of the [workflow observer](docs/official_docs/surfaces/workflow.md) (spec 3.3 §13 decision 12) |
 | [adk-ui](https://github.com/zavora-ai/adk-ui) | Dynamic UI generation — components, React client, streaming |
 | [adk-playground](https://github.com/zavora-ai/adk-playground) | Working examples, and a hosted playground |
 

@@ -10,6 +10,7 @@ is read from the kernel's stores and routes, never from what a model wrote.
 |---|---|---|
 | 1. Decisions reach you | **Approve it tomorrow** | [`examples/surface_approve_tomorrow`](../../../examples/surface_approve_tomorrow/) |
 | 2. While you were away | **The morning after** | [`examples/surface_morning_after`](../../../examples/surface_morning_after/) |
+| Developer track | **Approve, rewind, fork** | `adk-surface/tests/workflow_scenario_tests.rs`, and `scripted_workflow` in the browser |
 
 ## Running them
 
@@ -92,10 +93,38 @@ cargo nextest run -p adk-cli --features verb-ui,scripted-model --test verbs_adde
 | "/snooze" typed in the home's message box or written by an agent, and the model's own audio, change nothing | The agenda, the audit log |
 | While everything is stopped, Ana's snooze runs and Finance asks nothing | The agenda, the inbox |
 
+## Approve, rewind, fork
+
+The graph agent `invoice-run` drafts an invoice with a model step, charges it with a governed
+HTTP POST that asks first and spends money, and files a receipt. The charge goes to a loopback
+provider that counts every charge it receives. The scenario runs in-process on memory and on
+SQLite, where the runner, the engine and the routes are rebuilt over the same files halfway
+through; the PostgreSQL leg runs by hand.
+
+| Run | Command |
+|---|---|
+| Memory and SQLite | `cargo nextest run -p adk-surface --features web,workflow --test workflow_scenario_tests` |
+| PostgreSQL | `DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres cargo nextest run -p adk-surface --features web,workflow --test workflow_scenario_tests --run-ignored only` |
+| In the browser | `cargo run -p adk-surface --features web,workflow --example scripted_workflow -- 8795 /tmp/workflow`, then `npx playwright test --project workflow` in `adk-surface/web` |
+
+| Step | Pass condition | Read from |
+|---|---|---|
+| Start | One card for `pay`, with the full POST, money, **Confirm it's you and approve · Edit · Deny**, no **Always allow** and "From the invoice-run workflow · Open in Runs"; `draft` done, `pay` waiting with that decision; no charge | `GET /api/surface/decisions`, `GET /api/surface/workflow/sessions/{session}/run`, the provider's count |
+| Approve from the Runs tab | The run is done; one charge; `surface.decide` recorded with surface `web`; one completed action-ledger record under `graph/<agent id>/<thread>/pay/1/<digest>`; the charge's writes in the effect log | The run view, the provider, the audit records, the ledger, `adk_graph::governed::effect_log` |
+| Restart (SQLite) | The run view is the same | The run view, rebuilt over the same files |
+| Rewind | The step before the charge holds no charge; the thread's checkpoints are unchanged | `GET …/checkpoints/{id}`, the checkpointer |
+| Fork, call unchanged | Done with no decision; `pay` "Not sent again" with the original charge; still one charge; the lineage names the thread, the checkpoint and `note`; `surface.workflow.fork` recorded with surface `web` | The fork's run view and checkpoints, the provider, the audit records |
+| Fork, call changed | A new decision for 5000; denied, `pay` not run and the run failed; a sibling, approved, charges once, and the next sibling is answered from the effect log | The fork's run view, the provider |
+| Stop all | A fork is made and not started; started after **Resume all**, it is answered from the record; a freeze before a changed call's charge leaves no ledger record and no charge | The fork's run view, the ledger, the provider |
+
+The original thread's checkpoints never change. The provider counts one charge per distinct
+approved call: the 4200 charge once and the 5000 charge once.
+
 ## Related
 
 - [Screen Actions](verbs.md) — Snooze in Coming up
 - [The Engine](index.md) — decision cards, what each surface may decide, the answer log
+- [The Workflow Observer](workflow.md) — the Runs tab, forks and `adk-rust graph`
 - [The Terminal](terminal.md) — JSON lines and exit codes
 - [Chat](chat.md) — the Telegram adapter
 - [Today and Memory](../kernel/today-and-memory.md) — "While you were away" and the record
