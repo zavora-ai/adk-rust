@@ -483,16 +483,6 @@ impl Setup {
                 // §7.12, §7.13; spec 3.3 §12 phase 1).
                 .action_ledger(db.actions.clone())
                 .spend_ledger(db.spend.clone());
-            // Long-term memory in harness.db; off when served (spec 3.1 §7.15.2), on in
-            // `adk-rust up`, the user's own kernel (spec 3.2 §8.1).
-            if self.resolved.memory && (approval_service.is_none() || extras.memory_with_inbox) {
-                builder = builder
-                    .long_term_memory(adk_harness::LongTermMemoryConfig::default())
-                    .fact_store(db.facts.clone());
-                if let Some((embedder, _)) = &self.embedder {
-                    builder = builder.memory_embedder(embedder.clone());
-                }
-            }
         }
         if let Some(shared) = &self.shared {
             builder = builder
@@ -502,6 +492,20 @@ impl Setup {
                 .read_records(shared.reads.clone())
                 .action_ledger(shared.actions.clone())
                 .spend_ledger(shared.spend.clone());
+        }
+        // Long-term memory in harness.db or the `--store` backend; off when served (spec 3.1
+        // §7.15.2), on in `adk-rust up`, the user's own kernel (spec 3.2 §8.1; spec 3.3 §12
+        // phase 3).
+        if self.resolved.memory
+            && (approval_service.is_none() || extras.memory_with_inbox)
+            && let Some(facts) = self.fact_store()
+        {
+            builder = builder
+                .long_term_memory(adk_harness::LongTermMemoryConfig::default())
+                .fact_store(facts);
+            if let Some((embedder, _)) = &self.embedder {
+                builder = builder.memory_embedder(embedder.clone());
+            }
         }
         // Snapshots before each turn (spec 3.1 §7.27, §13 Q11): records in harness.db and
         // objects beside it, in memory with --ephemeral; a harness served from a shared store
@@ -883,17 +887,21 @@ impl Setup {
             Some((_, name)) => format!("Related facts are found with {name}."),
             None => "Facts are found by shared words; nothing leaves this machine for it.".into(),
         };
+        // `up --store` keeps them in the shared backend (spec 3.3 §12 phase 3).
+        let place = match &self.shared {
+            Some(shared) => format!("the shared store {}", shared.label),
+            None => format!("{} on this machine", dir.join("harness.db").display()),
+        };
         let notice = format!(
             "Long-term memory is on. The harness keeps short facts from your sessions: the \
              preferences you state, how a project builds and tests, what fixed a failure. They \
-             live in {} on this machine, with personal data redacted and secrets refused, and \
+             live in {place}, with personal data redacted and secrets refused, and \
              are recalled in later sessions. What you said is \"known\"; what the agent \
              inferred is \"assumed\" until you confirm it. {recall}\n{commands}, \
              `adk-rust memory export` writes them out, and \
              --no-memory turns memory off. Under `adk-rust up` in ask or auto mode, a \
              consolidation tick also tidies assumed facts after new sessions — `adk-rust memory \
-             undo TICK` reverts one, --no-consolidation turns it off. This notice is shown once.",
-            dir.join("harness.db").display()
+             undo TICK` reverts one, --no-consolidation turns it off. This notice is shown once."
         );
         let _ = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&marker, "shown\n"));
         Some(notice)
@@ -907,10 +915,17 @@ impl Setup {
     }
 
     fn memory_on(&self) -> bool {
+        self.resolved.memory && self.fact_store().is_some()
+    }
+
+    /// Where long-term facts are kept: `harness.db`, or the `--store` backend when it keeps
+    /// them (spec 3.1 §7.15.2; spec 3.3 §12 phase 3).
+    fn fact_store(&self) -> Option<Arc<dyn adk_harness::FactStore>> {
         #[cfg(feature = "persist")]
-        return self.resolved.memory && self.db.is_some();
-        #[cfg(not(feature = "persist"))]
-        false
+        if let Some(db) = &self.db {
+            return Some(db.facts.clone());
+        }
+        self.shared.as_ref().and_then(|shared| shared.facts.clone())
     }
 }
 

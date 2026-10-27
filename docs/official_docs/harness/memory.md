@@ -211,6 +211,7 @@ The `FactStore` is the system of record; a `FactIndex` only finds candidates.
 | `InMemoryFactStore` | The default; tests |
 | `FileFactStore` | One private JSON file per user under `~/.adk/harness/facts` |
 | `SqliteFactStore` (feature `sqlite`) | Tables `adk_harness_facts`, `adk_harness_fact_embeddings`, `adk_harness_fact_cursors` (how far distillation read each session) and `adk_harness_fact_ticks` (consolidation records); the CLI keeps it in `harness.db` |
+| `PostgresFactStore` (feature `postgres`) | The same tables in PostgreSQL, shared by every replica; `adk-rust up --store postgres://…` keeps long-term memory there. Two replicas storing one fact keep one. Records are not sealed: encrypt the database at rest |
 | `LocalFactIndex` | The default: cosine similarity over embeddings stored with each fact when an embedder is set, the share of query words a fact contains otherwise. Compares only vectors of its own embedder (see [Embedder ids](#embedder-ids)) |
 | `MemoryServiceIndex` | Any `adk_memory::MemoryService` that supports project scoping: pgvector on PostgreSQL, MongoDB, Neo4j, Vertex AI Memory Bank, FTS5 on SQLite, Redis. Each fact is an entry whose `author` is `adk-harness:fact:<id>`, whose text parts are the fact and its id, in the fact's project |
 
@@ -426,8 +427,8 @@ forgot are `assumed` again, the facts it wrote are forgotten, and a fact a perso
 since is left as it is. Only a finished tick (`finished_at` set) is undone; one still running
 is refused with `harness.memory.tick_unfinished`. `Harness::distill_sessions` runs the distillation step alone, and `Harness::distilled_sessions` lists how far distillation read each session. A
 fact store keeps records through `put_consolidation`, `consolidations` and
-`restore_assumed`; `InMemoryFactStore`, `FileFactStore` and `SqliteFactStore` implement
-them, and a store that does not refuses a tick before it changes anything.
+`restore_assumed`; `InMemoryFactStore`, `FileFactStore`, `SqliteFactStore` and
+`PostgresFactStore` implement them, and a store that does not refuses a tick before it changes anything.
 
 ```rust
 use adk_core::UserId;

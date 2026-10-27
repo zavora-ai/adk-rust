@@ -6,17 +6,17 @@
 use std::sync::Arc;
 
 use adk_core::AdkError;
-#[cfg(feature = "persist")]
+#[cfg(any(feature = "persist", feature = "postgres"))]
 use adk_core::principal::SubjectRef;
-#[cfg(feature = "persist")]
+#[cfg(any(feature = "persist", feature = "postgres"))]
 use adk_core::{ErrorCategory, ErrorComponent, UserId};
-#[cfg(feature = "persist")]
+#[cfg(any(feature = "persist", feature = "postgres"))]
 use adk_harness::{FactSource, FactStatus, FactStore, MemoryFact};
 use adk_harness::{HarnessMode, ModeRecord, ModeSource, ModeStore};
-#[cfg(any(feature = "persist", feature = "audit"))]
+#[cfg(any(feature = "persist", feature = "postgres", feature = "audit"))]
 use adk_kernel::KernelError;
 use adk_kernel::control::ControlStore;
-#[cfg(feature = "persist")]
+#[cfg(any(feature = "persist", feature = "postgres"))]
 use adk_kernel::control::{FactOrigin, MemoryBook, RememberedFact, TidyUp, TidyUpUndo};
 use adk_kernel::{PartitionId, PartitionMode};
 use async_trait::async_trait;
@@ -115,14 +115,15 @@ impl ModeStore for AreaModeStore {
 
 /// The memory of each area's harness, read and corrected through the harness, so recall,
 /// the index and the harness's own audit records follow every correction (spec 3.3 §10 K5).
-/// Built over `harness.db`'s fact store (feature `persist`).
-#[cfg(feature = "persist")]
+/// Built over `harness.db`'s fact store (feature `persist`) or the `--store` backend's
+/// (feature `postgres`).
+#[cfg(any(feature = "persist", feature = "postgres"))]
 pub(super) struct HarnessMemoryBook {
     areas: Vec<(PartitionId, Arc<adk_harness::Harness>)>,
     store: Arc<dyn FactStore>,
 }
 
-#[cfg(feature = "persist")]
+#[cfg(any(feature = "persist", feature = "postgres"))]
 impl HarnessMemoryBook {
     /// The book over `areas`' harnesses, whose facts and tidy-ups `store` keeps.
     pub(super) fn new(
@@ -134,7 +135,7 @@ impl HarnessMemoryBook {
 }
 
 /// The error a fact no area's harness holds answers with.
-#[cfg(feature = "persist")]
+#[cfg(any(feature = "persist", feature = "postgres"))]
 fn no_fact(id: &str) -> KernelError {
     KernelError::Core(AdkError::new(
         ErrorComponent::Agent,
@@ -145,7 +146,7 @@ fn no_fact(id: &str) -> KernelError {
 }
 
 /// The caller as the harness names users.
-#[cfg(feature = "persist")]
+#[cfg(any(feature = "persist", feature = "postgres"))]
 fn user_id(user: &str) -> adk_kernel::Result<UserId> {
     UserId::new(user).map_err(|error| {
         KernelError::Core(AdkError::new(
@@ -158,13 +159,13 @@ fn user_id(user: &str) -> adk_kernel::Result<UserId> {
 }
 
 /// Whether `error` says the harness holds no such fact of the user.
-#[cfg(feature = "persist")]
+#[cfg(any(feature = "persist", feature = "postgres"))]
 fn not_held(error: &AdkError) -> bool {
     error.code == "harness.memory.fact_not_found"
 }
 
 /// A fact as the home shows it; a guess names `noticed_by`, the agent that noticed it.
-#[cfg(feature = "persist")]
+#[cfg(any(feature = "persist", feature = "postgres"))]
 fn remembered(fact: MemoryFact, area: &PartitionId, noticed_by: Option<String>) -> RememberedFact {
     let origin = match (&fact.status, fact.provenance.source) {
         (FactStatus::Known, FactSource::UserStated) => FactOrigin::YouSaidThis,
@@ -190,7 +191,7 @@ fn remembered(fact: MemoryFact, area: &PartitionId, noticed_by: Option<String>) 
 /// The agent whose session `session` of `user` is: the stamp its harness writes on the
 /// session's first run (spec 3.3 §5.7 "Threads"), or `None` for a session no agent stamped,
 /// such as an overnight tidy-up's own.
-#[cfg(feature = "persist")]
+#[cfg(any(feature = "persist", feature = "postgres"))]
 async fn session_agent(
     harness: &adk_harness::Harness,
     user: &str,
@@ -211,7 +212,7 @@ async fn session_agent(
     session.state().get(adk_harness::AGENT_STATE_KEY)?.as_str().map(str::to_string)
 }
 
-#[cfg(feature = "persist")]
+#[cfg(any(feature = "persist", feature = "postgres"))]
 #[async_trait]
 impl MemoryBook for HarnessMemoryBook {
     async fn facts(

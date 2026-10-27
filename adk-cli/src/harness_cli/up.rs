@@ -473,14 +473,14 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         let mode = super::books::partition_mode(hosted.agent.info().default_mode);
         control = control.with_start_mode(hosted.partition.clone().unwrap_or_default(), mode);
     }
-    #[cfg(feature = "persist")]
-    if let Some(db) = setup.db.as_ref().filter(|_| setup.memory_on()) {
+    // The facts in harness.db or the `--store` backend (spec 3.3 §12 phase 3).
+    #[cfg(any(feature = "persist", feature = "postgres"))]
+    if let Some(facts) = setup.fact_store().filter(|_| setup.memory_on()) {
         let areas = hosted
             .iter()
             .map(|hosted| (hosted.partition.clone().unwrap_or_default(), hosted.harness.clone()))
             .collect();
-        control = control
-            .with_memory(Arc::new(super::books::HarnessMemoryBook::new(areas, db.facts.clone())));
+        control = control.with_memory(Arc::new(super::books::HarnessMemoryBook::new(areas, facts)));
     }
     if let Some(record) = record {
         control = control.with_record(record);

@@ -53,7 +53,7 @@ There is no file backend: no durable store is file-backed, and the CLI keeps its
 | Where the kernel runs | Backend | How it is opened |
 |---|---|---|
 | One machine, `adk-rust up` | SQLite | `harness.db` in the kernel home, on the harness's pool with a migration table per store |
-| Replicas, `adk-rust up --store` | PostgreSQL or Redis | The `--store` URL, which also holds sessions, approvals, runs, modes, standing rules and plan checkpoints |
+| Replicas, `adk-rust up --store` | PostgreSQL or Redis | The `--store` URL, which also holds sessions, approvals, runs, modes, standing rules and plan checkpoints; on PostgreSQL, long-term memory too (`PostgresFactStore`, spec 3.3 §12 phase 3), which Redis does not keep |
 | A kernel built in code on MongoDB, Firestore or Neo4j | MongoDB, Firestore or Neo4j | `KernelBuilder` with the stores below |
 
 `--store` takes PostgreSQL and Redis URLs only: it also keeps the harness's modes and

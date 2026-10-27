@@ -10,7 +10,8 @@ use adk_session::SessionService;
 use anyhow::{Result, bail};
 
 /// The stores of a served harness in one backend: sessions, approvals, durable runs, modes,
-/// standing rules, plan checkpoints, read records and the kill switch every replica shares.
+/// standing rules, plan checkpoints, read records, long-term facts and the kill switch every
+/// replica shares.
 pub struct SharedStores {
     /// The store URL with its password redacted, for the banner.
     pub label: String,
@@ -30,6 +31,9 @@ pub struct SharedStores {
     pub actions: Arc<dyn adk_core::ActionLedger>,
     /// The spend ledger model calls reserve against (spec 3.1 §7.13).
     pub spend: Arc<dyn adk_core::SpendLedger>,
+    /// Long-term facts, which `adk-rust up` remembers and tidies (spec 3.1 §7.15.2; spec 3.3
+    /// §12 phase 3): on PostgreSQL; `None` on a backend with no fact store.
+    pub facts: Option<Arc<dyn adk_harness::FactStore>>,
 }
 
 /// Opens and migrates the standing-rule store at `url`, for `adk-rust rules --store`.
@@ -72,6 +76,8 @@ async fn postgres(url: &str, label: String) -> Result<SharedStores> {
     actions.migrate().await?;
     let spend = adk_session::PostgresSpendLedger::from_pool(pool.clone());
     spend.migrate().await?;
+    let facts = adk_harness::PostgresFactStore::new(pool.clone());
+    facts.migrate().await?;
     let checkpointer = adk_graph::PostgresCheckpointer::from_pool(pool);
     checkpointer.migrate().await?;
     let governance = adk_session::PostgresGovernanceStateStore::new(url).await?;
@@ -88,6 +94,7 @@ async fn postgres(url: &str, label: String) -> Result<SharedStores> {
         reads: Arc::new(reads),
         actions: Arc::new(actions),
         spend: Arc::new(spend),
+        facts: Some(Arc::new(facts)),
     })
 }
 
@@ -134,6 +141,7 @@ async fn redis(url: &str, label: String) -> Result<SharedStores> {
         reads: Arc::new(reads),
         actions: Arc::new(actions),
         spend: Arc::new(spend),
+        facts: None,
     })
 }
 
