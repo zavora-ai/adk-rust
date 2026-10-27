@@ -302,6 +302,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                     added: None,
                     #[cfg(feature = "verb-ui")]
                     verbs: Some((verbs.clone(), adk_kernel::PartitionId::default())),
+                    #[cfg(feature = "genui")]
+                    draws: true,
                 },
             )?);
             vec![host(&setup, agent, None, &governance, &run_store)?]
@@ -324,6 +326,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                 agents: Some(agents_handle.clone()),
                 session_stamp: Some(adk_harness::PRIMARY_AGENT_STAMP.to_string()),
                 added: None,
+                #[cfg(feature = "genui")]
+                draws: true,
             };
             partition_harnesses(&setup, &settings, table, &service, &governance, &run_store, extras)
                 .await?
@@ -392,6 +396,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                         #[cfg(feature = "verb-ui")]
                         verbs: Some((verbs, record.area.clone())),
                         added: Some(added),
+                        #[cfg(feature = "genui")]
+                        draws: true,
                         ..AgentExtras::default()
                     },
                 )?);

@@ -173,6 +173,10 @@ struct AgentExtras {
     /// (spec 3.3 §2 item 7).
     #[cfg(feature = "verb-ui")]
     verbs: Option<(adk_surface::verbs::VerbRegistry, adk_kernel::PartitionId)>,
+    /// A harness `serve` or `up` hosts draws forms and tables in the person's threads
+    /// (spec 3.3 §6.1 `genui`, wave 4 decision 14).
+    #[cfg(feature = "genui")]
+    draws: bool,
 }
 
 /// Installs the process's tracing subscriber once, so a `warn!` or `error!` from the
@@ -549,6 +553,12 @@ impl Setup {
         }
         if let Some(prompter) = prompter {
             builder = builder.prompter(prompter);
+        }
+        // The render tools, read-only: a drawn form's Send asks the person first (spec 3.3
+        // §7.4 rule 5).
+        #[cfg(feature = "genui")]
+        if extras.draws {
+            builder = builder.toolset(Arc::new(adk_surface::genui::DrawToolset::forms()));
         }
         if let Some(service) = approval_service {
             builder = builder.approval_service(service);
@@ -2157,12 +2167,18 @@ pub async fn serve(
             .with_router(routing)
             .with_run_store(run_store.clone()),
     );
-    let agent = setup.agent(
+    let agent = setup.agent_with(
+        setup.resolved.effort,
         APP_NAME,
         setup.resolved.mode,
         setup.resolved.sandbox,
         None,
         Some(service.clone()),
+        AgentExtras {
+            #[cfg(feature = "genui")]
+            draws: true,
+            ..AgentExtras::default()
+        },
     )?;
 
     // One kill switch for the server's runs, the background runs and the web home's turns,

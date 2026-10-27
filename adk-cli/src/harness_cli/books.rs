@@ -387,6 +387,14 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
         .as_ref()
         .map(ToString::to_string)
         .or_else(|| text(record.ext.get("actingAgent")));
+    // A drawn form a person sent names the agent that drew it and the form (spec 3.3 §7.4
+    // rule 5): "You sent the invoice form Finance drew".
+    let (agent, record_target) = match record.action.as_str() {
+        "surface.drawn.submitted" => {
+            (agent.or_else(|| text(record.ext.get("drawnBy"))), text(record.ext.get("surfaceId")))
+        }
+        _ => (agent, None),
+    };
     if let Some(agent) = agent {
         line = line.with_agent(agent);
     }
@@ -449,7 +457,9 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
             }
         }
     }
-    let target = text(record.ext.get("target")).or_else(|| text(record.ext.get("approvalId")));
+    let target = text(record.ext.get("target"))
+        .or_else(|| text(record.ext.get("approvalId")))
+        .or(record_target);
     if let Some(target) = target {
         line = line.with_target(target);
     }

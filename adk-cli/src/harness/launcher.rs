@@ -981,6 +981,13 @@ impl HarnessLauncher {
                     take_over,
                 ));
             }
+            // What agents draw: the capabilities the developer panel shows and the state of
+            // each form sent (spec 3.3 §6.1 `genui`).
+            #[cfg(feature = "genui")]
+            {
+                launcher =
+                    launcher.with_api_routes(adk_surface::web::genui::router(surface.clone()));
+            }
             // Paired devices answer and stop through their own routes, and a device's feed
             // ends with it (spec 3.3 §10 K2, S-I7).
             if let Some(pairing) = &pairing {
