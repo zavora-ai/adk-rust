@@ -126,6 +126,8 @@ pub(crate) enum View {
     Output,
     /// The person's own agents (spec 3.3 §5.7): Ctrl-G or `/agents`.
     Agents,
+    /// Filling in a form an agent drew (spec 3.3 §5.2, §7.4 rule 5): Ctrl-F.
+    FillIn,
 }
 
 /// A slash command run from the message box, as the Output view shows it.
@@ -402,6 +404,8 @@ pub(crate) struct App {
     pub inline: bool,
     /// The Agents view (spec 3.3 §5.7).
     pub agents_pane: super::agents::AgentsPane,
+    /// The form the fill-in pane fills in (spec 3.3 §5.2, §7.4 rule 5).
+    pub fill: Option<super::drawn::FillIn>,
     /// An added agent with no thread yet, and the new session opened for it once open: the
     /// first message there starts the agent's thread (spec 3.3 §5.7 "Threads").
     pub fresh: Option<(String, Option<String>)>,
@@ -461,6 +465,7 @@ impl App {
             view_page: PAGE,
             inline: false,
             agents_pane: super::agents::AgentsPane::default(),
+            fill: None,
             fresh: None,
             quit: false,
             #[cfg(feature = "voice")]
@@ -797,7 +802,15 @@ impl App {
                             }
                         }
                     }
-                    Err(Failure { text, gone: None }) => self.notice(text, Tone::Problem),
+                    Err(Failure { text, gone: None }) => {
+                        // A form that could not be sent stays open with why (§7.4 rule 5).
+                        if let Some(fill) = self.fill.as_mut().filter(|fill| fill.sending) {
+                            fill.sending = false;
+                            fill.preview = false;
+                            fill.problem = Some(text.clone());
+                        }
+                        self.notice(text, Tone::Problem);
+                    }
                 }
             }
             Update::CommandDone { serial, result } if self.agents_pane.takes(serial) => {
@@ -929,6 +942,13 @@ impl App {
             CommandOutcome::AgentRemoved { ended } => self.notice(ended.text, Tone::Info),
             CommandOutcome::AgentOutOfDate { text, .. } => self.notice(text, Tone::Problem),
             CommandOutcome::RuleCopied { label, .. } => self.notice(label, Tone::Info),
+            // The form's box says it was sent once its call is held (spec 3.3 §7.4 rule 5).
+            CommandOutcome::FormSent { .. } => {
+                self.fill = None;
+                if self.view == View::FillIn {
+                    self.set_view(View::Thread, now);
+                }
+            }
         }
     }
 
@@ -1005,6 +1025,23 @@ impl App {
             self.composer.insert(c);
             return Vec::new();
         }
+        // The fill-in pane takes every key but Ctrl's: the decision keys type into its fields
+        // and answer nothing (spec 3.3 §5.2, wave 4 decision 19).
+        if self.view == View::FillIn && !ctrl {
+            let Some(fill) = self.fill.as_mut() else {
+                self.set_view(View::Thread, now);
+                return Vec::new();
+            };
+            return match fill.key(key) {
+                super::drawn::FillAsk::Stay => Vec::new(),
+                super::drawn::FillAsk::Leave => {
+                    self.fill = None;
+                    self.set_view(View::Thread, now);
+                    Vec::new()
+                }
+                super::drawn::FillAsk::Send(command) => vec![Effect::Execute(command)],
+            };
+        }
         // The Agents view takes its own keys; none of them answers a decision (spec 3.3 §5.7).
         if self.view == View::Agents && !ctrl {
             let roster = self.agents.clone();
@@ -1064,6 +1101,10 @@ impl App {
                 Vec::new()
             }
             (KeyCode::Char('g'), true) => self.toggle_agents(now),
+            (KeyCode::Char('f'), true) => {
+                self.toggle_fill(now);
+                Vec::new()
+            }
             (KeyCode::Char('u'), true) => {
                 self.composer.take();
                 Vec::new()
@@ -1648,6 +1689,39 @@ impl App {
     }
 
     /// Opens or closes the Agents view (spec 3.3 §5.7).
+    /// Opens the fill-in pane on the thread's latest form an agent drew that can be sent, or
+    /// closes it (spec 3.3 §5.2, wave 4 decision 19).
+    fn toggle_fill(&mut self, now: Instant) {
+        if self.view == View::FillIn {
+            self.fill = None;
+            self.set_view(View::Thread, now);
+            return;
+        }
+        let drawings = super::drawn::Drawings::of(&self.entries, |id| {
+            self.decided.iter().find(|line| line.id == id).map(|line| line.answer)
+        });
+        let form =
+            self.entries.iter().rev().flat_map(|entry| entry.items.iter().rev()).find_map(|item| {
+                match item {
+                    ThreadItem::Drawn { surface }
+                        if drawings.live(surface)
+                            && !surface.actions.is_empty()
+                            && drawings.state(surface).is_none_or(|state| !state.locked) =>
+                    {
+                        super::drawn::FillIn::of(&self.session, surface)
+                    }
+                    _ => None,
+                }
+            });
+        match form {
+            Some(fill) => {
+                self.fill = Some(fill);
+                self.set_view(View::FillIn, now);
+            }
+            None => self.notice("No form to fill in here.", Tone::Info),
+        }
+    }
+
     fn toggle_agents(&mut self, now: Instant) -> Vec<Effect> {
         if self.view == View::Agents {
             self.set_view(View::Thread, now);

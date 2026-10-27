@@ -48,6 +48,7 @@
 mod agents;
 mod app;
 mod commands;
+mod drawn;
 mod full;
 mod inline;
 mod json;

@@ -82,6 +82,9 @@ pub(crate) struct Renderer {
     pub view_max_scroll: usize,
     /// The rows of one page of that view: all but the last, which says how much more there is.
     pub view_page: usize,
+    /// The drawings of the thread drawn last: which version of each is live, and each sent
+    /// form's state (spec 3.3 §7.4 rule 5).
+    pub(crate) drawings: super::drawn::Drawings,
 }
 
 /// One row of a decision box: its spans and its background.
@@ -117,7 +120,13 @@ pub(crate) struct FocusedBox {
 
 impl Renderer {
     pub(crate) fn new(theme: Theme) -> Self {
-        Self { theme, markdown: HashMap::new(), view_max_scroll: 0, view_page: 1 }
+        Self {
+            theme,
+            markdown: HashMap::new(),
+            view_max_scroll: 0,
+            view_page: 1,
+            drawings: super::drawn::Drawings::default(),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -180,7 +189,7 @@ impl Renderer {
 
     pub(crate) fn footer(&self) -> Line<'static> {
         let t = &self.theme;
-        let hints = [
+        let mut hints = vec![
             ("tab", "next agent"),
             ("ctrl-g", "agents"),
             ("ctrl-t", "today"),
@@ -189,6 +198,10 @@ impl Renderer {
             ("ctrl-k", "stop all"),
             ("esc", "never decides"),
         ];
+        // A form an agent drew is filled in with ctrl-f (spec 3.3 §5.2, wave 4 decision 19).
+        if cfg!(feature = "genui") {
+            hints.insert(1, ("ctrl-f", "fill in"));
+        }
         let mut spans = vec![Span::raw(" ")];
         for (key, what) in hints {
             spans.push(Span::styled(key, t.text().add_modifier(Modifier::BOLD)));
@@ -406,6 +419,9 @@ impl Renderer {
                         }
                     }
                 }
+                // A render call is shown as its drawing.
+                ThreadItem::Activity { call_id: Some(id), .. }
+                    if self.drawings.calls.contains(id) => {}
                 ThreadItem::Activity { text, call_id, .. } => {
                     let ended = results.and_then(|results| {
                         call_id.as_ref().and_then(|id| results.get(id)).cloned()
@@ -444,6 +460,33 @@ impl Renderer {
                 // A decision is drawn only as its box, from its open inbox entry (S-I1): the
                 // event that held the call says "Waiting for you" also once it is decided.
                 ThreadItem::Decision { .. } => {}
+                // A drawing: its box on the full screen, a plain block in the scrollback
+                // (spec 3.3 §5.2, §7.4 rule 5).
+                ThreadItem::Drawn { surface } => {
+                    lines.push(Line::default());
+                    match results {
+                        Some(_) => lines.extend(super::drawn::box_lines(
+                            &t,
+                            surface,
+                            &self.drawings,
+                            width,
+                        )),
+                        None => lines.extend(super::drawn::inline_lines(&t, surface, width)),
+                    }
+                }
+                ThreadItem::DrawnRefused { refusal } => {
+                    lines.push(Line::default());
+                    lines.extend(super::drawn::refused_lines(&t, refusal, width));
+                }
+                // On the full screen the form's box says it was sent; the scrollback prints it.
+                ThreadItem::DrawnSent { sent } => {
+                    if results.is_none() {
+                        lines.push(Line::from(Span::styled(
+                            fit(&safe_line(&sent.text), width),
+                            t.label(),
+                        )));
+                    }
+                }
             }
         }
         lines
@@ -473,6 +516,8 @@ impl Renderer {
         }
         let open = |id: &str| app.cards.iter().any(|open| open.card.id == id);
         let decided = |id: &str| app.decided.iter().find(|line| line.id == id && !open(id));
+        self.drawings =
+            super::drawn::Drawings::of(&app.entries, |id| decided(id).map(|line| line.answer));
         let mut placed = std::collections::HashSet::new();
         let mut lines = Vec::new();
         for entry in &app.entries {
@@ -1360,22 +1405,44 @@ impl Renderer {
         #[cfg(not(feature = "voice"))]
         let _ = voice_area;
 
+        // The fill-in pane of a drawn form sits beside the thread where there is room, else
+        // in its place (spec 3.3 §5.2, wave 4 decision 19).
+        let (main, width, beside) = match (&app.fill, app.view) {
+            (Some(fill), View::FillIn) if main.width >= 90 => {
+                let [thread, divider, pane] = Layout::horizontal([
+                    Constraint::Min(40),
+                    Constraint::Length(1),
+                    Constraint::Length(44),
+                ])
+                .areas(main);
+                for y in divider.top()..divider.bottom() {
+                    frame.buffer_mut()[(divider.x, y)].set_symbol("│").set_style(t.border());
+                }
+                let pane = Rect { x: pane.x + 2, width: pane.width.saturating_sub(2), ..pane };
+                let lines = fill.lines(&t, usize::from(pane.width));
+                frame.render_widget(Paragraph::new(lines).style(t.base()), pane);
+                (thread, usize::from(thread.width), true)
+            }
+            _ => (main, width, false),
+        };
         let height = usize::from(main.height);
+        let thread_shown = app.view == View::Thread || beside;
         let (lines, focused) = match app.view {
             View::Thread => self.thread(app, width, height, now),
+            View::FillIn if beside => self.thread(app, width, height, now),
+            View::FillIn => {
+                (app.fill.as_ref().map(|fill| fill.lines(&t, width)).unwrap_or_default(), None)
+            }
             View::Today => (self.today(app, width), None),
             View::Permissions => (self.permissions(app, width), None),
             View::Help => (self.help(app, width), None),
             View::Output => (self.output(app, width), None),
             View::Agents => (super::agents::lines(&app.agents_pane, &self.theme, width), None),
         };
-        let scroll = if app.view == View::Thread {
-            app.scroll.min(lines.len().saturating_sub(height))
-        } else {
-            0
-        };
+        let scroll =
+            if thread_shown { app.scroll.min(lines.len().saturating_sub(height)) } else { 0 };
         let mut box_view = None;
-        let visible: Vec<Line<'static>> = if app.view == View::Thread {
+        let visible: Vec<Line<'static>> = if thread_shown {
             let mut end = lines.len().saturating_sub(scroll);
             let mut start = end.saturating_sub(height);
             // Unscrolled, the box the keys answer is kept in view from its top, before what
