@@ -4,10 +4,10 @@
 
 use std::collections::HashMap;
 
-use adk_core::{Event, RequestedCall, RequestedVia};
+use adk_core::{Event, RequestedCall, RequestedVia, RequestedViaKind};
 use serde_json::Value;
 
-use super::drawn::{DrawnSent, FormState, FormStatus};
+use super::drawn::{DrawnSent, FormState, FormStatus, SentVia};
 use crate::model::{DecidedAnswer, FeedEntry, ThreadItem};
 use crate::words;
 
@@ -27,6 +27,10 @@ pub(crate) fn sent(
     refused_by: Option<&str>,
     decision_id: Option<String>,
 ) -> ThreadItem {
+    let sent_via = match via.kind {
+        RequestedViaKind::Form => SentVia::Form,
+        _ => SentVia::App,
+    };
     ThreadItem::DrawnSent {
         sent: DrawnSent {
             surface_id: via.surface_id.clone(),
@@ -37,10 +41,12 @@ pub(crate) fn sent(
             decision_id,
             held: refused_by.is_none(),
             at: event.timestamp,
-            text: match refused_by {
-                Some(agent) => words::cant_use_here(agent, tool),
-                None => words::sent_at(hh_mm),
+            text: match (refused_by, sent_via) {
+                (Some(agent), _) => words::cant_use_here(agent, tool),
+                (None, SentVia::Form) => words::sent_at(hh_mm),
+                (None, SentVia::App) => words::app_asked_at(hh_mm),
             },
+            via: sent_via,
         },
     }
 }
@@ -90,6 +96,8 @@ pub fn form_states(
     for entry in entries {
         for item in &entry.items {
             match item {
+                // A call an app asked for is not a form's send.
+                ThreadItem::DrawnSent { sent } if sent.via == SentVia::App => {}
                 ThreadItem::DrawnSent { sent } => {
                     sends.retain(|(known, _)| {
                         (known.surface_id.as_str(), known.version)

@@ -263,10 +263,14 @@ impl HarnessLauncher {
         let origin = self.apps_origin.clone().unwrap_or_else(|| format!("http://{local}"));
         let mut host = adk_surface::genui::McpAppsHost::builder()
             .servers(mcp.manager())
-            .apps_origin(origin.clone())
-            .home_origin(format!("http://{home}"));
-        if home.ip().is_loopback() {
-            host = host.home_origin(format!("http://localhost:{}", home.port()));
+            .apps_origin(origin.clone());
+        for home in home_origins(home) {
+            host = host.home_origin(home);
+        }
+        // The address people open a remote home at frames its apps too.
+        #[cfg(feature = "mobile")]
+        if let Some(setup) = &self.phone {
+            host = host.home_origin(setup.origin());
         }
         let host = host.build();
         println!("  apps from MCP servers: framed sandboxed at {origin} (listener {local})");
@@ -895,6 +899,9 @@ impl HarnessLauncher {
         #[cfg(feature = "genui-apps")]
         let apps_origin =
             self.apps.as_ref().and_then(|host| host.apps_origin().map(str::to_string));
+        // Refusals from the apps origin go on the surface's trail (spec 3.3 §6.1 `genui-apps`).
+        #[cfg(feature = "genui-apps")]
+        let apps_trail = self.surface_records.as_ref().map(|records| records.trail.clone());
         // A paired device's token admits it, scoped, on every route (spec 3.3 §10 K2).
         let pairing = kernel.as_ref().and_then(|kernel| kernel.config().control.pairing.clone());
         let devices = |extractor: Arc<dyn RequestContextExtractor>| match &pairing {
@@ -1039,8 +1046,18 @@ impl HarnessLauncher {
             // each form sent (spec 3.3 §6.1 `genui`).
             #[cfg(feature = "genui")]
             {
-                launcher =
-                    launcher.with_api_routes(adk_surface::web::genui::router(surface.clone()));
+                // The Protocols tab claims what is wired here: AG-UI always, apps once hosted.
+                let wiring = adk_surface::genui::GenuiWiring {
+                    ag_ui: true,
+                    #[cfg(feature = "genui-apps")]
+                    mcp_apps: self.apps.is_some(),
+                    #[cfg(not(feature = "genui-apps"))]
+                    mcp_apps: false,
+                };
+                launcher = launcher.with_api_routes(adk_surface::web::genui::router_wired(
+                    surface.clone(),
+                    wiring,
+                ));
                 // Drawings as AG-UI activities, and forms AG-UI clients send held as requested
                 // calls (spec 3.3 §6.1 `genui`, §10 S2).
                 let mut ag_ui = adk_surface::genui::GenuiAgUi::new();
@@ -1167,9 +1184,12 @@ impl HarnessLauncher {
         // Nothing an app's frame sends reaches any route, whatever the security config admits
         // (spec 3.3 §6.1 `genui-apps`).
         #[cfg(feature = "genui-apps")]
-        let router = match &apps_origin {
-            Some(origin) => adk_surface::web::genui::refuse_apps_origin(router, origin),
-            None => router,
+        let router = match (&apps_origin, apps_trail) {
+            (Some(origin), Some(trail)) => {
+                adk_surface::web::genui::refuse_apps_origin_recorded(router, origin, trail)
+            }
+            (Some(origin), None) => adk_surface::web::genui::refuse_apps_origin(router, origin),
+            (None, _) => router,
         };
         Ok(match loopback {
             Some(extractor) => extractor.layer(router),
@@ -1227,6 +1247,26 @@ impl HarnessLauncher {
             .await
             .map_err(|e| AdkError::config(format!("server error: {e}")))
     }
+}
+
+/// The origins the home's page is opened at on this computer when the server listens on
+/// `home`: the address itself, and for loopback or every interface the names a person types
+/// (spec 3.3 §6.1 `genui-apps`). The page's own origin is added per request.
+#[cfg(feature = "genui-apps")]
+fn home_origins(home: SocketAddr) -> Vec<String> {
+    let port = home.port();
+    if home.ip().is_unspecified() {
+        return vec![
+            format!("http://127.0.0.1:{port}"),
+            format!("http://localhost:{port}"),
+            format!("http://[::1]:{port}"),
+        ];
+    }
+    let mut origins = vec![format!("http://{home}")];
+    if home.ip().is_loopback() {
+        origins.push(format!("http://localhost:{port}"));
+    }
+    origins
 }
 
 /// Where `bash` runs, or `none` when the harness offers no shell (spec 3.3 §10 H1).
@@ -1896,6 +1936,24 @@ pub(crate) fn unknown_slash_notice(line: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    /// A home on every interface is opened at loopback names, never at `0.0.0.0`, so those
+    /// are the origins that frame its apps (spec 3.3 §6.1 `genui-apps`).
+    #[cfg(feature = "genui-apps")]
+    #[test]
+    fn a_home_frames_apps_at_the_addresses_people_open_it_at() {
+        let at = |text: &str| super::home_origins(text.parse().unwrap());
+        assert_eq!(
+            at("0.0.0.0:8080"),
+            ["http://127.0.0.1:8080", "http://localhost:8080", "http://[::1]:8080"]
+        );
+        assert_eq!(
+            at("[::]:8080"),
+            ["http://127.0.0.1:8080", "http://localhost:8080", "http://[::1]:8080"]
+        );
+        assert_eq!(at("127.0.0.1:8080"), ["http://127.0.0.1:8080", "http://localhost:8080"]);
+        assert_eq!(at("192.168.1.20:8080"), ["http://192.168.1.20:8080"]);
+    }
+
     use super::unknown_slash_notice;
 
     #[test]

@@ -131,6 +131,60 @@ function loopback(host: string): boolean {
   return host === "localhost" || host === "[::1]" || host.startsWith("127.") || host.endsWith(".localhost");
 }
 
+/** The four numbers of `host` when it is an IPv4 address, as a URL normalises one. */
+function ipv4(host: string): number[] | undefined {
+  const parts = host.split(".");
+  if (parts.length !== 4 || !parts.every((part) => /^\d{1,3}$/.test(part))) return undefined;
+  return parts.map(Number);
+}
+
+/**
+ * Whether `host`, a URL's normalised hostname, is this computer or its network: loopback,
+ * unspecified, private, link-local and shared addresses (IPv4, IPv6 and IPv4 inside IPv6), and
+ * names only the local network resolves. The server refuses the same links first.
+ */
+export function onThisNetwork(host: string): boolean {
+  const name = host.toLowerCase().replace(/\.$/, "");
+  if (name.startsWith("[")) {
+    const v6 = name.slice(1, -1);
+    const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(v6);
+    if (mapped) {
+      const high = parseInt(mapped[1], 16);
+      const low = parseInt(mapped[2], 16);
+      return onThisNetwork(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
+    }
+    return v6 === "::" || v6 === "::1" || /^f[cd]/.test(v6) || /^fe[89ab]/.test(v6) || v6.startsWith("::ffff:");
+  }
+  const v4 = ipv4(name);
+  if (v4) {
+    const [a, b] = v4;
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b < 128) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b < 32) ||
+      (a === 192 && b === 168) ||
+      a >= 224
+    );
+  }
+  return (
+    !name.includes(".") ||
+    [".localhost", ".local", ".internal", ".home.arpa", ".lan", ".ts.net"].some((suffix) => name.endsWith(suffix))
+  );
+}
+
+/** Whether a link an app asked to open goes somewhere on the web, not this computer or its network. */
+export function openable(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (parsed.protocol === "https:" || parsed.protocol === "http:") && !onThisNetwork(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Whether the page can frame an app at `frameUrl` on `frameOrigin`: the URL is on that origin,
  * over http or https, and a loopback origin is framed only by a page opened on this computer,

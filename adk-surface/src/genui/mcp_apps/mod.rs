@@ -5,10 +5,10 @@
 //! | Step | What the host does |
 //! |---|---|
 //! | Projection | A tool call whose event carries the MCP tool's own `adk.mcp.app` record becomes [`ThreadItem::App`](crate::ThreadItem::App) |
-//! | Open | Reads the `ui://` resource from the server that published the tool, checks its MIME type, checks every declared site (nothing on this computer, its network or the home), scans the HTML for a decision's words and undeclared sites, and frames it on the apps origin under a CSP built from what passed |
-//! | `tools/call` | Only a tool the same server publishes for both the model and the app, asked for as a requested call held by the agent whose call showed the app; an app-only tool is "This app needs a tool this home can't run yet" |
-//! | `ui/message` | "The app wants to send: …" with **Send it** and **Not now**; sent as the person's message inside an untrusted-content block labelled "Suggested by the Weather app" |
-//! | `ui/open-link` | "Open example.com?", opened only by the person's press |
+//! | Open | Reads the `ui://` resource from the server that published the tool, checks its MIME type, checks every declared site (nothing on this computer, its network, the home or the page's own origin, nor a wildcard over them), scans the HTML for a decision's words and undeclared sites, and frames it on the apps origin under a CSP built from what passed, which only the home's page may frame |
+//! | `tools/call` | Only a tool the same server publishes for both the model and the app, a tool without `_meta.ui` included, by the name the agent knows that tool by, asked for as a requested call held by the agent whose call showed the app and answered once the agent has held or refused it; an app-only tool is "This app needs a tool this home can't run yet"; the same call again is the same decision, and an app with three calls waiting asks for no more |
+//! | `ui/message` | "The app wants to send: …" with **Send it** and **Not now**; sent as the person's message inside an untrusted-content block labelled "Suggested by the Weather app", which every surface shows as the message and that label |
+//! | `ui/open-link` | "Open example.com?", opened only by the person's press; a link to this computer or its network is refused |
 //! | `ui/update-model-context` | Logged, never forwarded to the model |
 //! | Anything else | "not supported here" |
 //!
@@ -21,14 +21,14 @@
 mod scan;
 mod sites;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use adk_core::{Event, Part, RequestedCall, RequestedVia, RequestedViaKind};
 use adk_tool::mcp::{
     MCP_APP_STATE_KEY, MCP_APPS_VERSION, McpAppRecord, McpAppResource, McpServerManager,
-    McpUiBinding, ResourceContents,
+    McpUiBinding, McpUiVisibility, ResourceContents,
 };
 use async_trait::async_trait;
 use axum::Router;
@@ -42,17 +42,22 @@ use super::app_view::app_name;
 use super::{AppAnswer, AppBlockReason, AppError, AppOpen, AppPrompt, AppRequest, AppView};
 use crate::engine::{Command, CommandOutcome, SurfaceEngine};
 use crate::error::{Result, SurfaceError};
-use crate::model::ThreadItem;
+use crate::model::{DecisionCard, ThreadItem};
 use crate::origin::{Caller, SurfaceKind};
 use crate::project::Projector;
 use crate::words;
 
 /// Audit record: an app was not framed, with its reason.
 pub const SURFACE_AUDIT_APP_BLOCKED: &str = "surface.app.blocked";
-/// Audit record: an app asked for a tool it may not use.
+/// Audit record: an app's tool call was refused, by the home or by the agent.
 pub const SURFACE_AUDIT_APP_CALL_REFUSED: &str = "surface.app.call_refused";
-/// Audit record: an app's tool call was held for the person's decision.
+/// Audit record: an app's tool call was asked of the agent whose call showed the app.
+pub const SURFACE_AUDIT_APP_CALL_ASKED: &str = "surface.app.call_asked";
+/// Audit record: the agent held an app's tool call for the person's decision.
 pub const SURFACE_AUDIT_APP_CALL_HELD: &str = "surface.app.call_held";
+/// Audit record: requests from the apps origin, or an app's opaque frame, were refused
+/// (at most one record a minute, with the count).
+pub const SURFACE_AUDIT_APP_ORIGIN_REFUSED: &str = "surface.app.origin_refused";
 /// Audit record: the person sent a message an app suggested.
 pub const SURFACE_AUDIT_APP_MESSAGE_SENT: &str = "surface.app.message_sent";
 
@@ -68,6 +73,13 @@ const METHOD_NOT_FOUND: i64 = -32_601;
 const INVALID_PARAMS: i64 = -32_602;
 /// JSON-RPC: the home refused the request.
 const REFUSED: i64 = -32_000;
+/// The most calls one app may have waiting for the person at once.
+const MAX_WAITING: usize = 3;
+/// How long an app's tool call waits for the agent to hold or refuse it before the app is
+/// answered anyway.
+const OUTCOME_WAIT: Duration = Duration::from_secs(10);
+/// How often the thread is read for that outcome.
+const OUTCOME_POLL: Duration = Duration::from_millis(50);
 
 /// The MCP servers whose apps a home shows (spec 3.3 §6.1 `genui-apps`): each server's tool
 /// bindings and its `ui://` resources. [`McpServerManager`] is one.
@@ -83,6 +95,31 @@ pub trait AppServers: Send + Sync {
         server: &str,
         uri: &str,
     ) -> adk_core::Result<Vec<ResourceContents>>;
+
+    /// Who may call each tool `server` publishes, by its name on the server: its
+    /// `_meta.ui.visibility`, or the model and the app when it declares none; `None` when this
+    /// set does not run `server`. The default reads [`ui_bindings`](Self::ui_bindings), which
+    /// lists only the tools with an app.
+    async fn tool_visibility(
+        &self,
+        server: &str,
+    ) -> Option<adk_core::Result<Vec<(String, McpUiVisibility)>>> {
+        let bindings = self.ui_bindings(server).await?;
+        Some(bindings.map(|bindings| {
+            bindings.into_iter().map(|binding| (binding.tool, binding.visibility)).collect()
+        }))
+    }
+
+    /// The name the agent's tools give `server`'s tool `tool`: prefixed with the server when
+    /// another server publishes the same name, or `None` when the agent is not given that
+    /// tool. The default is `tool` itself, for a set that renames nothing.
+    ///
+    /// # Errors
+    ///
+    /// The set's error when it cannot list the agent's tools.
+    async fn agent_tool_name(&self, _server: &str, tool: &str) -> adk_core::Result<Option<String>> {
+        Ok(Some(tool.to_string()))
+    }
 }
 
 #[async_trait]
@@ -90,6 +127,18 @@ impl AppServers for McpServerManager {
     async fn ui_bindings(&self, server: &str) -> Option<adk_core::Result<Vec<McpUiBinding>>> {
         self.server_config(server).await.ok()?;
         Some(self.server_ui_bindings(server).await)
+    }
+
+    async fn tool_visibility(
+        &self,
+        server: &str,
+    ) -> Option<adk_core::Result<Vec<(String, McpUiVisibility)>>> {
+        self.server_config(server).await.ok()?;
+        Some(self.server_tool_visibility(server).await)
+    }
+
+    async fn agent_tool_name(&self, server: &str, tool: &str) -> adk_core::Result<Option<String>> {
+        McpServerManager::agent_tool_name(self, server, tool).await
     }
 
     async fn read_resource(
@@ -123,6 +172,26 @@ where
         uri: &str,
     ) -> adk_core::Result<Vec<ResourceContents>> {
         adk_tool::mcp::McpToolset::read_resource(self, uri).await
+    }
+
+    async fn tool_visibility(
+        &self,
+        server: &str,
+    ) -> Option<adk_core::Result<Vec<(String, McpUiVisibility)>>> {
+        if adk_core::Toolset::name(self) != server {
+            return None;
+        }
+        Some(adk_tool::mcp::McpToolset::tool_visibility(self).await)
+    }
+
+    async fn agent_tool_name(&self, server: &str, tool: &str) -> adk_core::Result<Option<String>> {
+        if adk_core::Toolset::name(self) != server {
+            return Ok(None);
+        }
+        let listing: Arc<dyn adk_core::ReadonlyContext> =
+            Arc::new(adk_tool::SimpleToolContext::new("mcp-apps"));
+        let tools = adk_core::Toolset::tools(self, listing).await?;
+        Ok(tools.iter().any(|known| known.name() == tool).then(|| tool.to_string()))
     }
 }
 
@@ -263,7 +332,11 @@ impl McpAppsHost {
                     Part::FunctionResponse { function_response, id: Some(id), .. }
                         if id == call_id =>
                     {
-                        let record = record_of(event, call_id)?;
+                        // A held call's placeholder answer carries no record; the answer of
+                        // the call once allowed follows under the same id.
+                        let Some(record) = record_of(event, call_id) else {
+                            continue;
+                        };
                         return Some(ShownApp {
                             record,
                             called_as: function_response.name.clone(),
@@ -310,13 +383,100 @@ impl McpAppsHost {
         Err(adk_core::AdkError::tool(format!("no MCP server named '{server}' runs on this home")))
     }
 
-    /// Origins no app may declare or load from: the home's and the apps origin.
-    fn refused_origins(&self) -> Vec<String> {
-        self.inner.home_origins.iter().chain(&self.inner.apps_origin).cloned().collect()
+    /// The origin of the home's page that asked, from the request's `Host` and the apps
+    /// origin's scheme: a remote home's own origin, or the address a person opened a home
+    /// listening on every interface at.
+    fn page_origin(&self, host: Option<&str>) -> Option<String> {
+        let (scheme, _) = self.inner.apps_origin.as_deref()?.split_once("://")?;
+        let origin = format!("{scheme}://{}", host?.trim().to_ascii_lowercase());
+        sites::parse(&origin, false).filter(sites::Parsed::is_plain)?;
+        Some(origin)
+    }
+
+    /// Who may call `server`'s tool `tool`, and the name the agent knows it by when the model
+    /// and the app may both call it, from the first set that runs `server`; `None` when the
+    /// server does not publish it.
+    async fn app_tool(
+        &self,
+        server: &str,
+        tool: &str,
+    ) -> adk_core::Result<Option<(McpUiVisibility, Option<String>)>> {
+        for servers in &self.inner.servers {
+            let Some(listed) = servers.tool_visibility(server).await else {
+                continue;
+            };
+            let Some((_, visibility)) = listed?.into_iter().find(|(name, _)| name == tool) else {
+                return Ok(None);
+            };
+            let name = if visibility.model && visibility.app {
+                servers.agent_tool_name(server, tool).await?
+            } else {
+                None
+            };
+            return Ok(Some((visibility, name)));
+        }
+        Err(adk_core::AdkError::tool(format!("no MCP server named '{server}' runs on this home")))
+    }
+
+    /// The open decisions of the calls the app `call_id` asked for in `session`.
+    async fn waiting_calls(
+        engine: &SurfaceEngine,
+        caller: &Caller,
+        session: &str,
+        call_id: &str,
+    ) -> Result<Vec<DecisionCard>> {
+        let asked: HashSet<String> = engine
+            .thread(caller, session)
+            .await?
+            .into_iter()
+            .flat_map(|entry| entry.items)
+            .filter_map(|item| match item {
+                ThreadItem::DrawnSent { sent } if sent.surface_id == call_id => sent.decision_id,
+                _ => None,
+            })
+            .collect();
+        Ok(engine
+            .session_decisions(caller, session)
+            .await?
+            .into_iter()
+            .filter(|card| card.decided.is_none() && asked.contains(&card.id))
+            .collect())
+    }
+
+    /// Whether the agent held the requested call `requested` (`true`) or refused it, with the
+    /// thread's words for it, once its run took it; `None` when it has not within
+    /// [`OUTCOME_WAIT`].
+    async fn outcome(
+        engine: &SurfaceEngine,
+        caller: &Caller,
+        session: &str,
+        requested: &str,
+    ) -> Result<Option<(bool, String)>> {
+        let until = Instant::now() + OUTCOME_WAIT;
+        loop {
+            let sent = engine
+                .thread(caller, session)
+                .await?
+                .into_iter()
+                .flat_map(|entry| entry.items)
+                .find_map(|item| match item {
+                    ThreadItem::DrawnSent { sent } if sent.call_id == requested => Some(sent),
+                    _ => None,
+                });
+            if let Some(sent) = sent {
+                return Ok(Some((sent.held, sent.text)));
+            }
+            if Instant::now() >= until {
+                return Ok(None);
+            }
+            tokio::time::sleep(OUTCOME_POLL).await;
+        }
     }
 
     /// Opens the app `call_id` showed in `session` for `caller` (spec 3.3 §6.1 `genui-apps`):
     /// framed when every check passes, blocked with its reason, or not shown on this surface.
+    /// `page_host` is the request's `Host`: the page that frames the app, which its policy
+    /// names beside the home's origins and no app may declare.
     ///
     /// # Errors
     ///
@@ -327,6 +487,7 @@ impl McpAppsHost {
         caller: &Caller,
         session: &str,
         call_id: &str,
+        page_host: Option<&str>,
     ) -> Result<AppOpen> {
         let app = self.app(engine, caller, session, call_id).await?;
         let result_text = result_text(&app.response);
@@ -341,6 +502,15 @@ impl McpAppsHost {
             return Ok(elsewhere(words::OPEN_THE_HOME_TO_SEE_THIS_APP));
         };
         let record = &app.record;
+        let mut home_origins = self.inner.home_origins.clone();
+        if let Some(page) = self.page_origin(page_host)
+            && !home_origins.contains(&page)
+        {
+            home_origins.push(page);
+        }
+        // Origins no app may declare or load from: the home's, the page's and the apps origin.
+        let refused: Vec<String> =
+            home_origins.iter().chain(&self.inner.apps_origin).cloned().collect();
         let published = match self.bindings(&record.server).await {
             Ok(bindings) => bindings,
             Err(error) => {
@@ -363,9 +533,8 @@ impl McpAppsHost {
         let checked = McpAppResource::from_contents(&record.resource_uri, &contents)
             .map_err(|error| (AppBlockReason::NotAnApp, error.message.clone()))
             .and_then(|resource| {
-                let declared = sites::checked(&resource.csp, &self.refused_origins())?;
-                let refused_hosts: Vec<String> = self
-                    .refused_origins()
+                let declared = sites::checked(&resource.csp, &refused)?;
+                let refused_hosts: Vec<String> = refused
                     .iter()
                     .filter_map(|origin| origin.split_once("://").map(|(_, rest)| rest))
                     .map(|rest| rest.rsplit_once(':').map_or(rest, |(host, _)| host).to_string())
@@ -405,7 +574,7 @@ impl McpAppsHost {
         let token = uuid::Uuid::new_v4().simple().to_string();
         let frame = Frame {
             html: resource.html.clone(),
-            policy: declared.policy(&self.inner.home_origins),
+            policy: declared.policy(&home_origins),
             until: Instant::now() + FRAME_LIFETIME,
         };
         {
@@ -460,43 +629,87 @@ impl McpAppsHost {
             }))),
             "ping" => Ok(ok(json!({}))),
             "tools/call" => {
-                let Some(tool) = request.params.get("name").and_then(Value::as_str) else {
-                    return Ok(error(INVALID_PARAMS, "tools/call needs a tool name".into(), None));
+                // Only a tool's name, so nothing else the app sends reaches the home's words
+                // or the audit trail in its place.
+                let Some(tool) = request
+                    .params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .filter(|name| is_tool_name(name))
+                else {
+                    return Ok(error(
+                        INVALID_PARAMS,
+                        "tools/call needs the name of one of its server's tools".into(),
+                        None,
+                    ));
                 };
                 let args = request.params.get("arguments").cloned().unwrap_or_else(|| json!({}));
-                let bindings = self.bindings(&app.record.server).await.unwrap_or_default();
-                let binding = bindings.iter().find(|binding| binding.tool == tool);
-                let refusal = match binding {
-                    Some(binding) if binding.visibility.app && binding.visibility.model => None,
-                    Some(binding) if binding.visibility.app => {
-                        Some(words::APP_NEEDS_A_TOOL.to_string())
+                let server = app.record.server.as_str();
+                let found = match self.app_tool(server, tool).await {
+                    Ok(found) => found,
+                    Err(failure) => {
+                        tracing::warn!(app.server = %server, error = %failure, "an app's server did not list its tools");
+                        return Ok(error(REFUSED, words::APP_SERVER_DIDNT_ANSWER.into(), None));
                     }
-                    // A model-only tool, or one the app's own server does not publish.
-                    _ => Some(words::app_cant_use(tool)),
                 };
-                if let Some(text) = refusal {
+                let record = |reason: &str, extra: Value| {
+                    let mut fields = json!({
+                        "sessionId": session,
+                        "callId": call_id,
+                        "server": server,
+                        "tool": tool,
+                        "via": "app",
+                        "reason": reason,
+                    });
+                    if let (Some(fields), Value::Object(extra)) = (fields.as_object_mut(), extra) {
+                        fields.extend(extra);
+                    }
+                    fields
+                };
+                let refused =
+                    |text: String| error(REFUSED, text.clone(), Some(AppPrompt::Notice { text }));
+                let tool_name = match found {
+                    Some((visibility, Some(name))) if visibility.model && visibility.app => name,
+                    Some((visibility, _)) if visibility.app && !visibility.model => {
+                        engine
+                            .record(
+                                caller,
+                                SURFACE_AUDIT_APP_CALL_REFUSED,
+                                record("appOnly", json!({})),
+                            )
+                            .await?;
+                        return Ok(refused(words::APP_NEEDS_A_TOOL.to_string()));
+                    }
+                    // A model-only tool, one the app's own server does not publish, or one the
+                    // agent is not given.
+                    _ => {
+                        engine
+                            .record(
+                                caller,
+                                SURFACE_AUDIT_APP_CALL_REFUSED,
+                                record("notTheApps", json!({})),
+                            )
+                            .await?;
+                        return Ok(refused(words::app_cant_use(tool)));
+                    }
+                };
+                // The same call again, as an app asks on every load, is the decision already
+                // waiting; an app with enough waiting asks for no more.
+                let waiting = Self::waiting_calls(engine, caller, session, call_id).await?;
+                if waiting.iter().any(|card| card.call.tool == tool_name && card.call.args == args)
+                {
+                    return Ok(ok(sent_text(words::APP_CALL_WAITS_FOR_YOU)));
+                }
+                if waiting.len() >= MAX_WAITING {
                     engine
                         .record(
                             caller,
                             SURFACE_AUDIT_APP_CALL_REFUSED,
-                            json!({
-                                "sessionId": session,
-                                "callId": call_id,
-                                "server": app.record.server,
-                                "tool": tool,
-                                "via": "app",
-                            }),
+                            record("tooManyWaiting", json!({})),
                         )
                         .await?;
-                    return Ok(error(REFUSED, text.clone(), Some(AppPrompt::Notice { text })));
+                    return Ok(refused(words::app_asked_enough(MAX_WAITING)));
                 }
-                // The agent knows the tool by the name it called the app's own tool by: with
-                // the server's prefix when another server publishes the same name.
-                let tool_name = if app.called_as == app.record.tool {
-                    tool.to_string()
-                } else {
-                    format!("{}__{tool}", app.record.server)
-                };
                 let call = RequestedCall::new(
                     tool_name,
                     args,
@@ -508,30 +721,45 @@ impl McpAppsHost {
                         action_id: tool.to_string(),
                     },
                 );
+                let requested = call.function_call_id.clone();
+                let fingerprint = adk_core::ToolConfirmationRequest::new(
+                    call.tool_name.clone(),
+                    call.args.clone(),
+                )
+                .fingerprint();
+                let asked = json!({ "requestedCallId": requested, "fingerprint": fingerprint });
                 engine
-                    .record(
-                        caller,
-                        SURFACE_AUDIT_APP_CALL_HELD,
-                        json!({
-                            "sessionId": session,
-                            "callId": call_id,
-                            "server": app.record.server,
-                            "tool": tool,
-                            "requestedCallId": call.function_call_id,
-                            "fingerprint": adk_core::ToolConfirmationRequest::new(
-                                call.tool_name.clone(),
-                                call.args.clone(),
-                            )
-                            .fingerprint(),
-                            "via": "app",
-                        }),
-                    )
+                    .record(caller, SURFACE_AUDIT_APP_CALL_ASKED, record("asked", asked.clone()))
                     .await?;
-                engine.ask_for_app_call(caller, session, call, &label).await?;
-                Ok(ok(json!({
-                    "content": [{ "type": "text", "text": words::APP_CALL_WAITS_FOR_YOU }],
-                    "isError": false,
-                })))
+                if let Err(failure) = engine.ask_for_app_call(caller, session, call, &label).await {
+                    let reason =
+                        json!({ "requestedCallId": requested, "detail": failure.to_string() });
+                    engine
+                        .record(caller, SURFACE_AUDIT_APP_CALL_REFUSED, record("notAsked", reason))
+                        .await?;
+                    return Err(failure);
+                }
+                // Answered for what the agent did with the call, never before it did.
+                match Self::outcome(engine, caller, session, &requested).await? {
+                    Some((true, _)) => {
+                        engine
+                            .record(caller, SURFACE_AUDIT_APP_CALL_HELD, record("held", asked))
+                            .await?;
+                        Ok(ok(sent_text(words::APP_CALL_WAITS_FOR_YOU)))
+                    }
+                    Some((false, text)) => {
+                        let reason = json!({ "requestedCallId": requested, "detail": text });
+                        engine
+                            .record(
+                                caller,
+                                SURFACE_AUDIT_APP_CALL_REFUSED,
+                                record("byTheAgent", reason),
+                            )
+                            .await?;
+                        Ok(error(REFUSED, text, None))
+                    }
+                    None => Ok(ok(sent_text(words::APP_CALL_SENT))),
+                }
             }
             "ui/message" => {
                 let message = message_text(&request.params);
@@ -553,15 +781,21 @@ impl McpAppsHost {
             }
             "ui/open-link" => {
                 let url = request.params.get("url").and_then(Value::as_str).unwrap_or_default();
-                let host = sites::parse(url, true)
-                    .filter(|_| url.starts_with("https://") || url.starts_with("http://"))
-                    .map(|_| link_host(url));
-                match host {
-                    Some(host) => Ok(AppAnswer {
+                let parsed = sites::parse(url, true).filter(|parsed| {
+                    parsed.is_plain() && (url.starts_with("https://") || url.starts_with("http://"))
+                });
+                match parsed {
+                    Some(parsed) if sites::is_this_computer(parsed.host()) => Ok(error(
+                        REFUSED,
+                        "ui/open-link opens sites on the web, never this computer or its network"
+                            .into(),
+                        None,
+                    )),
+                    Some(_) => Ok(AppAnswer {
                         result: Some(json!({})),
                         error: None,
                         prompt: Some(AppPrompt::Link {
-                            text: words::open_site(&host),
+                            text: words::open_site(&link_host(url)),
                             url: url.to_string(),
                             open_label: words::OPEN.to_string(),
                             dismiss_label: words::CANCEL.to_string(),
@@ -640,12 +874,17 @@ async fn frame(State(host): State<McpAppsHost>, Path(token): Path<String>) -> Re
     let Some((html, policy)) = page else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    // Never served without its policy.
+    let Ok(policy) = HeaderValue::from_str(&policy) else {
+        tracing::warn!(
+            "an app's content security policy is not a header value; its page was not served"
+        );
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
     let mut response = html.into_response();
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
-    if let Ok(policy) = HeaderValue::from_str(&policy) {
-        headers.insert(header::CONTENT_SECURITY_POLICY, policy);
-    }
+    headers.insert(header::CONTENT_SECURITY_POLICY, policy);
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -655,6 +894,19 @@ async fn frame(State(host): State<McpAppsHost>, Path(token): Path<String>) -> Re
     );
     headers.insert("cross-origin-resource-policy", HeaderValue::from_static("cross-origin"));
     response
+}
+
+/// Whether `name` can be an MCP tool's name: 1 to 128 letters, digits, `_`, `-`, `.` and `/`.
+fn is_tool_name(name: &str) -> bool {
+    (1..=128).contains(&name.len())
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/'))
+}
+
+/// The answer to an app's `tools/call` that ran nothing: `text` for the app.
+fn sent_text(text: &str) -> Value {
+    json!({ "content": [{ "type": "text", "text": text }], "isError": false })
 }
 
 /// The app record `event` carries for `call_id`.
@@ -754,6 +1006,56 @@ mod tests {
             "Approved"
         );
         assert_eq!(message_text(&json!({ "content": { "type": "text", "text": "hi" } })), "hi");
+    }
+
+    #[tokio::test]
+    async fn a_page_whose_policy_cannot_be_sent_is_not_served() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt as _;
+
+        let host = McpAppsHost::builder().apps_origin("http://127.0.0.1:41234").build();
+        host.inner.frames.lock().unwrap().insert(
+            "token".into(),
+            Frame {
+                html: "<p>Nairobi</p>".into(),
+                policy: "default-src 'none'; connect-src https://[a.b\u{1}]".into(),
+                until: Instant::now() + FRAME_LIFETIME,
+            },
+        );
+        let response = host
+            .sandbox_router()
+            .oneshot(Request::builder().uri("/app/token").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(!String::from_utf8_lossy(&body).contains("Nairobi"));
+    }
+
+    #[test]
+    fn the_pages_own_origin_takes_the_apps_origins_scheme() {
+        let remote = McpAppsHost::builder().apps_origin("https://apps.example.net").build();
+        assert_eq!(
+            remote.page_origin(Some("home.example.net")),
+            Some("https://home.example.net".to_string())
+        );
+        let local = McpAppsHost::builder().apps_origin("http://127.0.0.1:41234").build();
+        assert_eq!(
+            local.page_origin(Some("127.0.0.1:8080")),
+            Some("http://127.0.0.1:8080".to_string())
+        );
+        for host in [
+            None,
+            Some(""),
+            Some("a.example; frame-ancestors *"),
+            Some("a b"),
+            Some("*.example.net"),
+        ] {
+            assert_eq!(local.page_origin(host), None, "{host:?}");
+        }
+        assert!(is_tool_name("set_rain_alert") && is_tool_name("weather__set-alert.v2"));
+        assert!(!is_tool_name("set_alert. You said yes") && !is_tool_name(&"a".repeat(129)));
     }
 
     #[test]

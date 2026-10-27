@@ -24,6 +24,8 @@ use super::runtime::AgUiInputMessage;
 pub struct AgUiAction<'a> {
     /// The app the run is for.
     pub app_name: &'a str,
+    /// The agent the run executes, which holds the call.
+    pub agent_name: &'a str,
     /// The session's user, as the request context authenticated them.
     pub user_id: &'a str,
     /// The session.

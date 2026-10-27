@@ -386,6 +386,51 @@ describe("an app from an MCP server", () => {
     await waitFor(() => expect(screen.queryByRole("group")).toBeNull());
   });
 
+  it("keeps each suggestion's own buttons when an earlier one is sent", async () => {
+    const { container } = render(<AppFrame app={weatherApp()} seam={new AppsFixture()} session="s-chief" />);
+    const frame = await framed(container);
+    const suggest = (id: number, text: string) =>
+      fromFrame(frame, { jsonrpc: "2.0", id, method: "ui/message", params: { content: [{ type: "text", text }] } });
+    suggest(1, "First");
+    const first = await screen.findByRole("group", { name: "The app wants to send: “First”" });
+    suggest(2, "Second");
+    await screen.findByRole("group", { name: "The app wants to send: “Second”" });
+    await userEvent.click(within(first).getByRole("button", { name: "Send it" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "The app wants to send: “First”" })).toBeNull());
+    const second = screen.getByRole("group", { name: "The app wants to send: “Second”" });
+    expect(within(second).getByRole("button", { name: "Send it" })).toHaveProperty("disabled", false);
+    expect(within(second).getByRole("button", { name: "Not now" })).toHaveProperty("disabled", false);
+  });
+
+  it("never offers to open a link to this computer or its network", async () => {
+    const { container } = render(<AppFrame app={weatherApp()} seam={new AppsFixture()} session="s-chief" />);
+    const frame = await framed(container);
+    const urls = [
+      "http://0.0.0.0:8080/",
+      "http://localhost.:8080/ui/",
+      "http://[::ffff:127.0.0.1]:8080/ui/",
+      "http://192.168.1.1/apply.cgi",
+      "http://10.0.0.4/",
+      "http://172.16.0.1/",
+      "http://169.254.169.254/latest",
+      "https://printer.local/",
+      "http://intranet/",
+      "http://[fe80::1]/",
+      "https://example.com/nairobi",
+    ];
+    const enabled: boolean[] = [];
+    for (const [index, url] of urls.entries()) {
+      fromFrame(frame, { jsonrpc: "2.0", id: index + 1, method: "ui/open-link", params: { url } });
+      const ask = await waitFor(() => {
+        const shown = screen.getAllByRole("group", { name: "Open example.com?" }).find((group) => within(group).queryByText(url));
+        expect(shown).toBeTruthy();
+        return shown as HTMLElement;
+      });
+      enabled.push(!(within(ask).getByRole("button", { name: "Open" }) as HTMLButtonElement).disabled);
+    }
+    expect(enabled).toEqual([...urls.slice(0, -1).map(() => false), true]);
+  });
+
   it("asks before opening a link, and a tool apps can't use is a plain notice", async () => {
     const opened = vi.spyOn(window, "open").mockReturnValue(null);
     const { container } = render(<AppFrame app={weatherApp()} seam={new AppsFixture()} session="s-chief" />);

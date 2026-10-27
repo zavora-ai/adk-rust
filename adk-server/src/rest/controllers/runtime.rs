@@ -1881,6 +1881,8 @@ pub(crate) async fn run_sse_compat_for_request(
     let native_ag_ui =
         ui_profile == UiProfile::AgUi && transport == UiTransportMode::ProtocolNative;
     let mut requested_call = None;
+    // The agent that holds the call, loaded once for the run.
+    let mut action_agent = None;
     if native_ag_ui
         && let Some(extension) = &extension
         && let Some(props) = ag_ui_input.as_ref().and_then(|input| input.forwarded_props.as_ref())
@@ -1915,9 +1917,16 @@ pub(crate) async fn run_sse_compat_for_request(
             .map_err(adk_err_to_runtime)?;
         let events = session.events().all();
         let requested_by = adk_core::principal::SubjectRef::human(caller.user_id.clone());
+        let agent = controller
+            .config
+            .agent_loader
+            .load_agent(&app_name)
+            .await
+            .map_err(adk_err_to_runtime)?;
         requested_call = extension
             .requested_call(AgUiAction {
                 app_name: &app_name,
+                agent_name: agent.name(),
                 user_id: &effective_user_id,
                 session_id: &session_id,
                 requested_by: &requested_by,
@@ -1926,6 +1935,7 @@ pub(crate) async fn run_sse_compat_for_request(
             })
             .await
             .map_err(adk_err_to_runtime)?;
+        action_agent = Some(agent);
     }
     let submitting = requested_call.is_some();
 
@@ -2002,8 +2012,15 @@ pub(crate) async fn run_sse_compat_for_request(
     }
 
     // Load agent
-    let agent =
-        controller.config.agent_loader.load_agent(&app_name).await.map_err(adk_err_to_runtime)?;
+    let agent = match action_agent {
+        Some(agent) => agent,
+        None => controller
+            .config
+            .agent_loader
+            .load_agent(&app_name)
+            .await
+            .map_err(adk_err_to_runtime)?,
+    };
 
     // Create runner with streaming config from request
     let streaming_mode =

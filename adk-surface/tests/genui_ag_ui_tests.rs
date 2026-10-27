@@ -94,6 +94,7 @@ struct Fixture {
     app: Router,
     sent: Arc<AtomicUsize>,
     service: Arc<StoreApprovalService>,
+    sessions: Arc<dyn SessionService>,
 }
 
 /// Finance draws the invoice form on its first turn; the server carries [`GenuiAgUi`].
@@ -118,13 +119,14 @@ fn fixture() -> Fixture {
             move |_: &adk_core::ApprovalCall| Some(ApprovalRoute::new(policy.clone())),
         ));
     let sessions = Arc::new(InMemorySessionService::new()) as Arc<dyn SessionService>;
-    let config = ServerConfig::new(Arc::new(SingleAgentLoader::new(Arc::new(agent))), sessions)
-        .with_request_context(Arc::new(UserExtractor));
+    let config =
+        ServerConfig::new(Arc::new(SingleAgentLoader::new(Arc::new(agent))), sessions.clone())
+            .with_request_context(Arc::new(UserExtractor));
     let app = ServerBuilder::new(config)
         .with_approval_service(service.clone())
         .with_ag_ui_extension(Arc::new(GenuiAgUi::new()))
         .build();
-    Fixture { app, sent, service }
+    Fixture { app, sent, service, sessions }
 }
 
 fn run_body(input: Value) -> Value {
@@ -282,4 +284,47 @@ async fn an_echoed_activity_is_kept_only_when_it_passes_the_validator() {
     assert!(!extension.keeps_activity(&echoed(ours["content"].clone(), "a2ui-surface")));
     assert!(!extension.keeps_activity(&echoed(json!({ "anything": 1 }), "a2ui-surface")));
     assert!(extension.keeps_activity(&echoed(json!({ "anything": 1 }), "progress")));
+}
+
+/// A form another agent of the home drew is not the run's agent's to hold: the drawing agent
+/// holds its own forms, in its own target (wave 4 decision 13).
+#[tokio::test]
+async fn a_form_another_agent_drew_is_refused() {
+    let fx = fixture();
+    draw(&fx).await;
+    let session = fx
+        .sessions
+        .get(adk_session::GetRequest {
+            app_name: APP.into(),
+            user_id: "ana".into(),
+            session_id: "thread-1".into(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .unwrap();
+    let drawn = session
+        .events()
+        .all()
+        .into_iter()
+        .find(|event| {
+            event.llm_response.content.as_ref().is_some_and(|content| {
+                content.parts.iter().any(|part| {
+                    matches!(part, adk_core::Part::FunctionResponse { function_response, .. }
+                        if function_response.name == "render_form")
+                })
+            })
+        })
+        .unwrap();
+    // The same drawing, as the added agent Bookkeeper drew it, latest in the session.
+    let mut other = drawn.clone();
+    other.id = "bookkeeper-drew".into();
+    other.author = "bookkeeper".into();
+    fx.sessions.append_event("thread-1", other).await.unwrap();
+
+    let (status, events) =
+        post(&fx.app, submit(1, "send", json!({ "/to": "ana@example.com" }))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{events:?}");
+    assert!(waiting(&fx).await.is_empty());
+    assert_eq!(fx.sent.load(Ordering::SeqCst), 0);
 }

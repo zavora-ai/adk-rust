@@ -679,7 +679,9 @@ impl Projector {
                     ThreadItem::Message {
                         from: Speaker::You,
                         author: "You".to_string(),
-                        text: text.to_string(),
+                        // An app's suggestion the person sent reads as its words and label.
+                        text: crate::genui::suggested_message(text)
+                            .unwrap_or_else(|| text.to_string()),
                     }
                 } else {
                     ThreadItem::Message {

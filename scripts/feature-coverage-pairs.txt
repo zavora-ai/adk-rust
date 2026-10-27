@@ -200,6 +200,9 @@
 # Apps from MCP servers (spec 3.3 §6.1 `genui-apps`): the host, its routes and the hostile app
 # legs, with the doctests.
 2 adk-surface genui-apps doc
+# `adk-rust serve` and `up` hosting apps: the sandbox listener, the home's origins and the
+# apps-origin refusal wrapped around the served router.
+2 adk-cli genui-apps,scripted-model
 # `adk-rust` as the terminal surface in a pseudo-terminal: full screen, inline, JSON, a
 # kernel on its socket and a paired one over HTTP (spec 3.3 §5.2, §10 K2).
 2 adk-cli tui,scripted-model

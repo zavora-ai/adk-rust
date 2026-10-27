@@ -59,7 +59,9 @@ fn decoded(text: &str) -> String {
     while let Some(start) = rest.find('&') {
         out.push_str(&rest[..start]);
         rest = &rest[start..];
-        let Some(end) = rest[..rest.len().min(12)].find(';') else {
+        // Bytes, not characters: the window may end inside a character, and ';' is ASCII.
+        let window = &rest.as_bytes()[..rest.len().min(12)];
+        let Some(end) = window.iter().position(|byte| *byte == b';') else {
             out.push('&');
             rest = &rest[1..];
             continue;
@@ -208,6 +210,23 @@ mod tests {
                 "{html}"
             );
         }
+    }
+
+    #[test]
+    fn an_entity_before_text_in_any_script_is_read_whole() {
+        for html in [
+            "<p>Q&A: 天気予報です</p>",
+            "<p>&amp;日本語のテキスト</p>",
+            "<p>Rain & 🌧🌧🌧 later</p>",
+            "<img src=\"https://api.weather.example/x?a=1&b=é\">",
+        ] {
+            assert_eq!(
+                scan(html, &declared(&["https://api.weather.example"]), &[]),
+                None,
+                "{html}"
+            );
+        }
+        assert_eq!(decoded("&#65;&日本"), "A&日本");
     }
 
     #[test]

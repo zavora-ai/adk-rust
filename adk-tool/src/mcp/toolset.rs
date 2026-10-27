@@ -1626,8 +1626,40 @@ where
     /// [discovery limits](Self::with_discovery_limits).
     #[cfg(feature = "mcp-apps")]
     pub async fn ui_bindings(&self) -> Result<Vec<super::apps::McpUiBinding>> {
+        let listed = self.listed_tools().await?;
+        Ok(listed.iter().filter_map(super::apps::McpUiBinding::of_tool).collect())
+    }
+
+    /// Who may call each tool this server publishes, by its name on the server, in the
+    /// server's order: its `_meta.ui.visibility`, or the model and the app when it declares
+    /// none (spec 3.3 §6.1 `genui-apps`; see [`McpUiVisibility::of_tool`](super::apps::McpUiVisibility::of_tool)).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// for (tool, visibility) in toolset.tool_visibility().await? {
+    ///     println!("{tool}: model {}, app {}", visibility.model, visibility.app);
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` when the server cannot be reached or its listing exceeds the
+    /// [discovery limits](Self::with_discovery_limits).
+    #[cfg(feature = "mcp-apps")]
+    pub async fn tool_visibility(&self) -> Result<Vec<(String, super::apps::McpUiVisibility)>> {
+        let listed = self.listed_tools().await?;
+        Ok(listed
+            .iter()
+            .map(|tool| (tool.name.to_string(), super::apps::McpUiVisibility::of_tool(tool)))
+            .collect())
+    }
+
+    /// Every tool the server lists now, uncached, within the discovery limits.
+    #[cfg(feature = "mcp-apps")]
+    async fn listed_tools(&self) -> Result<Vec<rmcp::model::Tool>> {
         let connection = self.client.open_connection(&self.name).await?;
-        let listed = tokio::time::timeout(
+        tokio::time::timeout(
             self.discovery_limits.timeout,
             list_tools(connection.peer(), self.discovery_limits.max_pages),
         )
@@ -1639,8 +1671,7 @@ where
         .and_then(|listed| listed)
         .map_err(|error| {
             AdkError::tool(format!("Failed to list MCP tools from '{}': {error}", self.name))
-        })?;
-        Ok(listed.iter().filter_map(super::apps::McpUiBinding::of_tool).collect())
+        })
     }
 
     /// Reads the app at `uri`, a `ui://` resource, with what its `_meta.ui` declares
@@ -1928,11 +1959,12 @@ where
                 );
                 continue;
             }
-            // A tool only an app may call is never the model's (spec 3.3 §6.1 `genui-apps`).
+            // A tool only an app may call, with an app of its own or not, is never the model's
+            // (spec 3.3 §6.1 `genui-apps`).
             #[cfg(feature = "mcp-apps")]
             let ui = super::apps::McpUiBinding::of_tool(&mcp_tool);
             #[cfg(feature = "mcp-apps")]
-            if ui.as_ref().is_some_and(|ui| !ui.visibility.model) {
+            if !super::apps::McpUiVisibility::of_tool(&mcp_tool).model {
                 debug!(
                     toolset.name = %self.name,
                     tool.name = %logged_name,

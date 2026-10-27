@@ -304,8 +304,23 @@ pub struct DrawnSent {
     pub held: bool,
     /// When.
     pub at: DateTime<Utc>,
-    /// "Sent at 10:03", or "Finance can't use send_invoice here".
+    /// "Sent at 10:03", "The app asked · 10:06", or "Finance can't use send_invoice here".
     pub text: String,
+    /// What asked for it: a form the person sent, or an app from an MCP server (spec 3.3 §6.1
+    /// `genui-apps`).
+    #[serde(default)]
+    pub via: SentVia,
+}
+
+/// What asked for a [`DrawnSent`] call (spec 3.3 §6.1 `genui`, `genui-apps`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum SentVia {
+    /// The person pressed Send on a form an agent drew.
+    #[default]
+    Form,
+    /// An app from an MCP server asked, as its `tools/call`.
+    App,
 }
 
 /// Where a drawn form is after it was sent, from its decision and its call's result

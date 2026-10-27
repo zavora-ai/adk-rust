@@ -76,12 +76,15 @@ impl Drawings {
                     calls.extend(surface.call_id.clone());
                 }
                 ThreadItem::DrawnRefused { refusal } => calls.extend(refusal.call_id.clone()),
+                // The app stands for the call that showed it, as a drawing does.
+                ThreadItem::App { app } => {
+                    calls.insert(app.call_id.clone());
+                }
                 ThreadItem::Message { .. }
                 | ThreadItem::Activity { .. }
                 | ThreadItem::Result { .. }
                 | ThreadItem::Decision { .. }
-                | ThreadItem::DrawnSent { .. }
-                | ThreadItem::App { .. } => {}
+                | ThreadItem::DrawnSent { .. } => {}
             }
         }
         let forms = crate::genui::form_states(entries, decided)
@@ -775,6 +778,16 @@ pub(crate) fn json_lines(session: &str, entry: &FeedEntry) -> Vec<Value> {
                 "title": surface.title,
                 "deleted": surface.deleted,
             })),
+            ThreadItem::DrawnSent { sent } if sent.via == crate::genui::SentVia::App => {
+                Some(json!({
+                    "type": "app.asked",
+                    "session": session,
+                    "call": sent.surface_id,
+                    "tool": sent.tool,
+                    "held": sent.held,
+                    "decision": sent.decision_id,
+                }))
+            }
             ThreadItem::DrawnSent { sent } => Some(json!({
                 "type": "drawn.submitted",
                 "session": session,
@@ -1029,6 +1042,70 @@ mod tests {
         assert_eq!(lines[0]["version"], 3);
         assert_eq!(lines[0]["by"], "finance");
         assert_eq!(lines[0]["catalog"], "forms/1.0");
+    }
+
+    /// The call that showed an app is shown as the app, and a call the app asked for is the
+    /// app's, never a form's send (spec 3.3 §6.1 `genui-apps`).
+    #[test]
+    fn an_apps_call_is_the_apps_not_a_forms_send() {
+        let app: crate::genui::AppView = serde_json::from_value(json!({
+            "callId": "c-weather",
+            "server": "weather",
+            "appName": "Weather",
+            "tool": "weather_show",
+            "agent": {
+                "name": "chief",
+                "displayName": "Chief of staff",
+                "avatar": { "monogram": "C", "color": "#C2410C" },
+            },
+            "at": "2026-10-27T10:05:00Z",
+            "headerText": "App from Weather · it can't approve anything",
+            "resultText": "Nairobi: 24°",
+            "elsewhereText": "Open the home on this computer to see this app",
+            "terminalText": "app from Weather · open it in the home",
+        }))
+        .unwrap();
+        let asked = crate::genui::DrawnSent {
+            surface_id: "c-weather".into(),
+            version: 1,
+            action_id: "set_rain_alert".into(),
+            tool: "set_rain_alert".into(),
+            call_id: "adk-call-requested-1".into(),
+            decision_id: Some("apr-1".into()),
+            held: true,
+            at: chrono::Utc::now(),
+            text: "The app asked · 10:06".into(),
+            via: crate::genui::SentVia::App,
+        };
+        let entry = FeedEntry {
+            seq: 2,
+            at: chrono::Utc::now(),
+            at_text: "10:06".into(),
+            items: vec![
+                ThreadItem::Activity {
+                    tool: "weather_show".into(),
+                    text: "Weather show city: Nairobi".into(),
+                    call_id: Some("c-weather".into()),
+                },
+                ThreadItem::App { app: Box::new(app) },
+                ThreadItem::DrawnSent { sent: asked },
+            ],
+        };
+        let drawings = Drawings::of(std::slice::from_ref(&entry), |_| None);
+        assert_eq!(drawings.calls, HashSet::from(["c-weather".to_string()]));
+        assert!(drawings.forms.is_empty(), "an app's call is not a form");
+        let lines = json_lines("s1", &entry);
+        assert_eq!(
+            lines[1],
+            json!({
+                "type": "app.asked",
+                "session": "s1",
+                "call": "c-weather",
+                "tool": "set_rain_alert",
+                "held": true,
+                "decision": "apr-1",
+            })
+        );
     }
 
     proptest! {

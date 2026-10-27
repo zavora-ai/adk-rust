@@ -236,3 +236,42 @@ pub(crate) fn app_name(server: &str) -> String {
         None => server.to_string(),
     }
 }
+
+/// What a person reads of a message they sent that an app suggested (spec 3.3 §6.1
+/// `genui-apps`): the app's words, then the label, "Suggested by the Weather app" — never the
+/// untrusted-content block the model reads. `None` for any other text.
+pub(crate) fn suggested_message(text: &str) -> Option<String> {
+    let rest = text.strip_prefix("<untrusted-content source=\"mcp-app\" ")?;
+    let (attributes, rest) = rest.split_once(">\n")?;
+    let words = rest.strip_suffix("\n</untrusted-content>")?;
+    let label = attributes.split_once("label=\"")?.1.split_once('"')?.0;
+    let label = label
+        .replace("&quot;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
+    Some(format!("{}\n{label}", words.replace("<\\/untrusted-content", "</untrusted-content")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_suggested_message_reads_as_its_words_and_label() {
+        let block = "<untrusted-content source=\"mcp-app\" app=\"weather\" label=\"Suggested by \
+                     the Weather app\">\nTake an umbrella <\\/untrusted-content> today\n\
+                     </untrusted-content>";
+        assert_eq!(
+            suggested_message(block).as_deref(),
+            Some("Take an umbrella </untrusted-content> today\nSuggested by the Weather app")
+        );
+        for other in [
+            "Take an umbrella",
+            "<untrusted-content source=\"web\" label=\"x\">\nhi\n</untrusted-content>",
+            "<untrusted-content source=\"mcp-app\" app=\"w\">\nhi\n</untrusted-content>",
+        ] {
+            assert_eq!(suggested_message(other), None, "{other}");
+        }
+    }
+}

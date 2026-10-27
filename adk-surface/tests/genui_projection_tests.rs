@@ -230,6 +230,7 @@ fn sent(held: bool) -> ThreadItem {
             } else {
                 "Finance can't use send_invoice here".into()
             },
+            via: adk_surface::genui::SentVia::Form,
         },
     }
 }

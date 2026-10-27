@@ -8,10 +8,11 @@
 //! | [`McpAppResource`] | A `ui://` resource read back: its HTML and the sites its `_meta.ui.csp` declares |
 //! | [`McpAppRecord`] | What a tool with an app writes under [`MCP_APP_STATE_KEY`] when its call succeeds |
 //!
-//! A tool only an app may call (`visibility: ["app"]`) is left out of
-//! [`McpToolset::tools`](adk_core::Toolset::tools): a model never sees it.
+//! A tool only an app may call (`visibility: ["app"]`, with or without an app of its own) is
+//! left out of [`McpToolset::tools`](adk_core::Toolset::tools): a model never sees it.
 //! [`McpToolset::ui_bindings`](super::McpToolset::ui_bindings) lists every binding, those
-//! included, so a host can refuse what an app asks for.
+//! included, and [`McpToolset::tool_visibility`](super::McpToolset::tool_visibility) who may
+//! call each tool, so a host can refuse what an app asks for.
 
 use adk_core::{AdkError, Result};
 use rmcp::model::{ResourceContents, Tool};
@@ -52,6 +53,42 @@ impl Default for McpUiVisibility {
     /// Both, as MCP Apps reads a tool that declares no visibility.
     fn default() -> Self {
         Self { model: true, app: true }
+    }
+}
+
+impl McpUiVisibility {
+    /// Who may call `tool`: its `_meta.ui.visibility`, whether or not it shows an app, or
+    /// both when it declares none (spec 3.3 §6.1 `genui-apps`; MCP Apps 2026-01-26).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_tool::mcp::McpUiVisibility;
+    /// use rmcp::model::{JsonObject, MetaObject, Tool};
+    /// use std::sync::Arc;
+    ///
+    /// let mut helper = Tool::new("refresh_radar", "Refreshes the radar", Arc::new(JsonObject::new()));
+    /// helper.meta = Some(MetaObject(
+    ///     serde_json::from_value(serde_json::json!({ "ui": { "visibility": ["app"] } })).unwrap(),
+    /// ));
+    /// assert_eq!(McpUiVisibility::of_tool(&helper), McpUiVisibility { model: false, app: true });
+    /// let plain = Tool::new("plain", "Plain", Arc::new(JsonObject::new()));
+    /// assert_eq!(McpUiVisibility::of_tool(&plain), McpUiVisibility::default());
+    /// ```
+    pub fn of_tool(tool: &Tool) -> Self {
+        let listed = tool
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.0.get("ui"))
+            .and_then(|ui| ui.get("visibility"))
+            .and_then(Value::as_array);
+        match listed {
+            Some(listed) => {
+                let has = |name: &str| listed.iter().any(|entry| entry.as_str() == Some(name));
+                Self { model: has("model"), app: has("app") }
+            }
+            None => Self::default(),
+        }
     }
 }
 
@@ -96,17 +133,10 @@ impl McpUiBinding {
         if !resource_uri.starts_with("ui://") {
             return None;
         }
-        let visibility = match ui.get("visibility").and_then(Value::as_array) {
-            Some(listed) => {
-                let has = |name: &str| listed.iter().any(|entry| entry.as_str() == Some(name));
-                McpUiVisibility { model: has("model"), app: has("app") }
-            }
-            None => McpUiVisibility::default(),
-        };
         Some(Self {
             tool: tool.name.to_string(),
             resource_uri: resource_uri.to_string(),
-            visibility,
+            visibility: McpUiVisibility::of_tool(tool),
         })
     }
 }

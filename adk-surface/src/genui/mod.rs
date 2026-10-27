@@ -61,7 +61,7 @@ pub use app_view::{
     AppAnswer, AppBlockReason, AppError, AppMessageRequest, AppOpen, AppPrompt, AppRequest, AppView,
 };
 #[cfg(feature = "genui")]
-pub use capabilities::capabilities;
+pub use capabilities::{GenuiWiring, capabilities, capabilities_wired};
 pub use capabilities_wire::{
     CatalogView, Claim, ClaimScope, ClaimStatus, GenuiCapabilities, ProtocolClaims,
 };
@@ -72,11 +72,13 @@ pub use draw::{DRAWN_STATE_KEY, DrawToolset, DrawnEnvelope, DrawnRecord, REFUSED
 pub use drawn::{
     DrawnActionView, DrawnArg, DrawnCheck, DrawnField, DrawnInput, DrawnKind, DrawnNode,
     DrawnOption, DrawnSent, DrawnSurface, FormState, FormStatus, RefusalKind, RefusedDrawing,
+    SentVia,
 };
 #[cfg(feature = "genui-apps")]
 pub use mcp_apps::{
     AppServers, McpAppsHost, McpAppsHostBuilder, SURFACE_AUDIT_APP_BLOCKED,
-    SURFACE_AUDIT_APP_CALL_HELD, SURFACE_AUDIT_APP_CALL_REFUSED, SURFACE_AUDIT_APP_MESSAGE_SENT,
+    SURFACE_AUDIT_APP_CALL_ASKED, SURFACE_AUDIT_APP_CALL_HELD, SURFACE_AUDIT_APP_CALL_REFUSED,
+    SURFACE_AUDIT_APP_MESSAGE_SENT, SURFACE_AUDIT_APP_ORIGIN_REFUSED,
 };
 pub use status::form_states;
 #[cfg(feature = "genui")]
@@ -92,6 +94,7 @@ pub use view::SHOWN_ROWS;
 
 #[cfg(feature = "genui")]
 pub(crate) use app_view::app_name;
+pub(crate) use app_view::suggested_message;
 #[cfg(feature = "genui")]
 pub(crate) use hints::DrawnHints;
 pub(crate) use status::{is_requested, refused_on_resume, requested_via, sent};

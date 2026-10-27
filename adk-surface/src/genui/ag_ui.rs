@@ -67,7 +67,9 @@ struct ActivityContent {
 /// A run whose `forwardedProps.a2uiAction` is `{ surfaceId, version, actionId, values }` sends
 /// that form as the web home's Send does: the stored surface at that version, its declared
 /// action, the values typed per field and the constants from the stored surface; the run's
-/// agent holds the call for the person, so the run ends with a `tool_call` interrupt.
+/// agent holds the call for the person, so the run ends with a `tool_call` interrupt. A form
+/// another agent drew is refused (`403 surface.not_here`): its drawing agent holds it, in its own
+/// target (wave 4 decision 13).
 ///
 /// # Example
 ///
@@ -221,6 +223,14 @@ impl AgUiExtension for GenuiAgUi {
             &pressed.values,
         )
         .map_err(adk_core::AdkError::from)?;
+        // The drawing agent holds its form's call; another agent never does (decision 13).
+        if sent.drawn_by != action.agent_name {
+            return Err(adk_core::AdkError::from(SurfaceError::NotHere(format!(
+                "this form was drawn by '{}', not '{}', which runs here; send it from the home, \
+                 where '{}' holds it",
+                sent.drawn_by, action.agent_name, sent.drawn_by
+            ))));
+        }
         let call = RequestedCall::new(
             sent.tool.clone(),
             sent.args.clone(),

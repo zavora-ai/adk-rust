@@ -74,7 +74,9 @@ pub(crate) fn parse(text: &str, path: bool) -> Option<Parsed> {
             None if after.is_empty() => None,
             None => return None,
         };
-        (format!("[{host}]"), port)
+        // Only an IPv6 address is bracketed; anything else could end a policy's directive.
+        let address: Ipv6Addr = host.parse().ok()?;
+        (format!("[{address}]"), port)
     } else {
         match authority.rsplit_once(':') {
             Some((host, port)) => (host.to_string(), Some(port.parse().ok()?)),
@@ -83,13 +85,26 @@ pub(crate) fn parse(text: &str, path: bool) -> Option<Parsed> {
     };
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     let named = host.strip_prefix("*.").unwrap_or(&host);
-    // A wildcard covers the subdomains of one registered name, never a whole suffix.
+    // A wildcard covers the subdomains of a name of two labels or more, never a top-level
+    // domain; the public suffix list is not consulted.
     let wildcard_ok = !host.starts_with('*') || named.contains('.');
     let valid = !host.is_empty()
         && wildcard_ok
         && (host.starts_with('[')
             || named.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.'));
     valid.then_some(Parsed { scheme, host, port })
+}
+
+impl Parsed {
+    /// The host, lowercase, an IPv6 address in brackets.
+    pub(crate) fn host(&self) -> &str {
+        &self.host
+    }
+
+    /// Whether this is a single origin a person can open, not a wildcard.
+    pub(crate) fn is_plain(&self) -> bool {
+        !self.host.starts_with('*')
+    }
 }
 
 /// Whether `host` is this computer, its network, or a name only it resolves.
@@ -105,9 +120,10 @@ pub(crate) fn is_this_computer(host: &str) -> bool {
     {
         return true;
     }
-    // A single-label name resolves on the local network.
+    // A single-label name resolves on the local network, and a tailnet's names resolve to its
+    // devices.
     !bare.contains('.')
-        || [".localhost", ".local", ".internal", ".home.arpa", ".lan"]
+        || [".localhost", ".local", ".internal", ".home.arpa", ".lan", ".ts.net"]
             .iter()
             .any(|suffix| bare.ends_with(suffix))
 }
@@ -155,8 +171,13 @@ pub(crate) fn checked(csp: &McpUiCsp, refused: &[String]) -> Result<Declared, Re
                         format!("{name} lists '{entry}', which is not an origin"),
                     ));
                 };
+                // A wildcard over a refused host names it too.
+                let names = |host: &str| match parsed.host.strip_prefix("*.") {
+                    Some(suffix) => host.ends_with(&format!(".{suffix}")),
+                    None => host == parsed.host,
+                };
                 if is_this_computer(&parsed.host)
-                    || refused.iter().any(|origin| origin.host == parsed.host)
+                    || refused.iter().any(|origin| names(&origin.host))
                 {
                     return Err((
                         AppBlockReason::ThisComputer,
@@ -305,6 +326,48 @@ mod tests {
              worker-src 'none'; frame-ancestors http://127.0.0.1:8080; \
              sandbox allow-scripts allow-forms"
         );
+    }
+
+    #[test]
+    fn a_bracketed_host_is_an_ipv6_address_or_nothing() {
+        for site in [
+            "https://[a.b; connect-src *; x]",
+            "https://[a.b\u{1}]",
+            "https://[evil.example]",
+            "https://[2001:db8::1; x]",
+        ] {
+            assert_eq!(
+                checked(&csp(&[site]), &[]).unwrap_err().0,
+                AppBlockReason::UndeclaredSites,
+                "{site:?}"
+            );
+        }
+        assert_eq!(
+            parse("https://[::ffff:127.0.0.1]:8080/ui/", true).unwrap().host,
+            "[::ffff:127.0.0.1]"
+        );
+        assert!(is_this_computer(&parse("https://[::ffff:127.0.0.1]", false).unwrap().host));
+        let declared = checked(&csp(&["https://[2001:db8::1]:8443"]), &[]).unwrap();
+        assert!(declared.policy(&[]).contains("connect-src https://[2001:db8::1]:8443;"));
+    }
+
+    #[test]
+    fn a_wildcard_over_the_home_or_a_tailnet_is_refused() {
+        let home = ["https://home.example.net".to_string(), "https://apps.example.org".to_string()];
+        for site in [
+            "https://home.example.net",
+            "https://*.example.net",
+            "wss://*.example.org",
+            "https://*.tail1234.ts.net",
+            "https://nas.tail1234.ts.net",
+        ] {
+            assert_eq!(
+                checked(&csp(&[site]), &home).unwrap_err().0,
+                AppBlockReason::ThisComputer,
+                "{site}"
+            );
+        }
+        assert!(checked(&csp(&["https://*.weather.example"]), &home).is_ok());
     }
 
     #[test]

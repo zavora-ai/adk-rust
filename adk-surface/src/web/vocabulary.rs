@@ -160,6 +160,8 @@ const WORDS: &[(&str, &str)] = listed![
     MARKED_AS_SUGGESTED_BY_THE_APP,
     OPEN,
     APP_CALL_WAITS_FOR_YOU,
+    APP_CALL_SENT,
+    APP_SERVER_DIDNT_ANSWER,
 ];
 
 /// The words of [`words`](crate::words) as a TypeScript module, one exported constant each

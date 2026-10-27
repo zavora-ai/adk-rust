@@ -1059,6 +1059,10 @@ pub const MARKED_AS_SUGGESTED_BY_THE_APP: &str = "It will be marked as suggested
 pub const OPEN: &str = "Open";
 /// What an app's tool call answers the app once it is held: it ran nothing.
 pub const APP_CALL_WAITS_FOR_YOU: &str = "Sent to the person. It runs only once they decide.";
+/// What an app's tool call answers the app when the agent has not yet held or refused it.
+pub const APP_CALL_SENT: &str = "Sent. It runs only if the person allows it.";
+/// What an app's tool call answers the app when its server did not list its tools.
+pub const APP_SERVER_DIDNT_ANSWER: &str = "The app's server didn't answer. Try again in a moment.";
 
 /// Over an app in a thread: "App from Weather · it can't approve anything".
 pub fn app_from(app: &str) -> String {
@@ -1084,6 +1088,17 @@ pub fn app_wants_to_send(message: &str) -> String {
 /// An app asks to open a link: "Open example.com?"
 pub fn open_site(host: &str) -> String {
     format!("Open {host}?")
+}
+
+/// An app that already has `count` calls waiting asks for another: "The app already asked for 3
+/// things. Answer those first."
+pub fn app_asked_enough(count: usize) -> String {
+    format!("The app already asked for {count} things. Answer those first.")
+}
+
+/// The thread's line for a call an app asked for: "The app asked · 10:06".
+pub fn app_asked_at(hh_mm: &str) -> String {
+    format!("The app asked · {hh_mm}")
 }
 
 /// The first step of a decision an app asked for: "The app from Weather asked · 10:06".
@@ -1197,6 +1212,8 @@ mod tests {
         CHANGED_WHILE_YOU_SPOKE,
         VOICE_CANT_APPROVE_THIS,
         STOPPING_NEEDS_THE_OPERATOR,
+        APP_CALL_SENT,
+        APP_SERVER_DIDNT_ANSWER,
     ];
 
     #[test]

@@ -1997,14 +1997,22 @@ impl SurfaceEngine {
             .and_then(VecDeque::pop_back)
     }
 
-    /// The input queued for the session, oldest first.
+    /// The input queued for the session, oldest first, as the person reads it: an app's
+    /// suggestion is its words and label.
     pub fn queued(&self, caller: &Caller, session: &str) -> Vec<String> {
         self.inner
             .queues
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&(caller.user_id().to_string(), session.to_string()))
-            .map(|queue| queue.iter().cloned().collect())
+            .map(|queue| {
+                queue
+                    .iter()
+                    .map(|text| {
+                        crate::genui::suggested_message(text).unwrap_or_else(|| text.clone())
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 

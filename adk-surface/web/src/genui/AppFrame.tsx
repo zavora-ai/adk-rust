@@ -4,7 +4,7 @@ import type { AppOpen, AppPrompt, AppView } from "../generated/api";
 import { OPENING_THE_APP } from "../generated/words";
 import { visible } from "../safe";
 import type { AppsSeam } from "./apps";
-import { AppBridge, frameable, pageTheme } from "./apps";
+import { AppBridge, frameable, openable, pageTheme } from "./apps";
 import "./genui.css";
 
 /** The frame's height before the app says how tall it is, in CSS pixels. */
@@ -40,7 +40,9 @@ export function AppFrame({
     [app.elsewhereText, app.resultText],
   );
   const [open, setOpen] = useState<AppOpen | undefined>(seam && session ? undefined : elsewhere);
-  const [prompts, setPrompts] = useState<AppPrompt[]>([]);
+  // Each prompt keeps its own key, so one sent or dismissed never hands its state to the next.
+  const [prompts, setPrompts] = useState<Array<{ key: number; prompt: AppPrompt }>>([]);
+  const nextKey = useRef(0);
   useEffect(() => {
     if (!seam || !session) {
       setOpen(elsewhere);
@@ -63,9 +65,14 @@ export function AppFrame({
     };
   }, [seam, session, app.callId, elsewhere]);
 
-  const prompt = (next: AppPrompt) =>
-    setPrompts((all) => [...all.filter((known) => known.kind !== "notice" || known.text !== next.text), next]);
-  const dismiss = (gone: AppPrompt) => setPrompts((all) => all.filter((known) => known !== gone));
+  const prompt = (next: AppPrompt) => {
+    const key = nextKey.current++;
+    setPrompts((all) => [
+      ...all.filter(({ prompt: known }) => known.kind !== "notice" || known.text !== next.text),
+      { key, prompt: next },
+    ]);
+  };
+  const dismiss = (gone: number) => setPrompts((all) => all.filter(({ key }) => key !== gone));
 
   return (
     <div className="drawn-place app-place">
@@ -94,8 +101,8 @@ export function AppFrame({
           </div>
         )}
       </section>
-      {prompts.map((shown, index) => (
-        <Prompt key={`${shown.kind}-${index}`} prompt={shown} app={app} seam={seam} session={session} onDone={() => dismiss(shown)} />
+      {prompts.map(({ key, prompt: shown }) => (
+        <Prompt key={key} prompt={shown} app={app} seam={seam} session={session} onDone={() => dismiss(key)} />
       ))}
       {below}
     </div>
@@ -151,18 +158,6 @@ function Framed({
       style={{ height }}
     />
   );
-}
-
-/** Whether a link an app asked to open goes somewhere on the web, not this computer. */
-function openable(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    const host = parsed.hostname;
-    const local = host === "localhost" || host.endsWith(".localhost") || host.startsWith("127.") || host === "[::1]";
-    return (parsed.protocol === "https:" || parsed.protocol === "http:") && !local;
-  } catch {
-    return false;
-  }
 }
 
 /** What the app asked for, outside its frame: a notice, a message to send, or a link to open. */
