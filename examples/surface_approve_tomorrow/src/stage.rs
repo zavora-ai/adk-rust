@@ -133,8 +133,8 @@ impl Options {
         if !bin.exists() {
             bail!(
                 "no adk-rust binary at {}: build it from the workspace root with \
-                 `cargo build -p adk-cli --bin adk-rust --features scripted-model,tui,postgres`, \
-                 or pass --bin or ADK_RUST_BIN",
+                 `cargo build -p adk-cli --bin adk-rust --features \
+                 scripted-model,tui,postgres,mobile`, or pass --bin or ADK_RUST_BIN",
                 bin.display()
             );
         }
@@ -259,6 +259,8 @@ pub struct Stage {
     pub model: ModelKind,
     /// The store.
     pub store: Store,
+    /// The operator's token when the kernel serves the phone ([`serve_phone`](Self::serve_phone)).
+    token: Option<String>,
     boots: std::cell::Cell<u32>,
 }
 
@@ -285,8 +287,29 @@ impl Stage {
             bin: options.bin.clone(),
             model: options.model,
             store,
+            token: None,
             boots: std::cell::Cell::new(0),
         })
+    }
+
+    /// Serves the phone from the next start on: `up --home-url http://localhost:<port>` with an
+    /// operator token, and wake-ups to a push service on `http://localhost`
+    /// (`--push-to-localhost`, a build with the `mobile` and `scripted-model` features).
+    pub fn serve_phone(&mut self) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos());
+        self.token = Some(format!("scenario-{}-{nanos:x}", std::process::id()));
+    }
+
+    /// The operator's token, when the kernel serves the phone.
+    pub fn token(&self) -> Option<&str> {
+        self.token.as_deref()
+    }
+
+    /// The home's address as the phone opens it, when the kernel serves the phone.
+    pub fn home_url(&self) -> String {
+        format!("http://localhost:{}", self.port)
     }
 
     /// The scenario's folder.
@@ -414,6 +437,10 @@ impl Stage {
         if let Some(url) = self.store.url() {
             command.args(["--store", url]);
         }
+        if let Some(token) = &self.token {
+            command.args(["--home-url", &self.home_url(), "--auth-token", token]);
+            command.arg("--push-to-localhost");
+        }
         match (self.model, model) {
             (ModelKind::Scripted, model) => {
                 let replies = match model {
@@ -444,13 +471,13 @@ impl Stage {
             if let Some(status) = kernel.try_wait()? {
                 bail!("adk-rust up exited with {status}:\n{}", kernel.log());
             }
+            let mut health = http.get(format!("{}/api/kernel/health", self.base_url()));
+            if let Some(token) = &self.token {
+                health = health.bearer_auth(token);
+            }
             if let Some(client) = ControlClient::connect_local(&self.home).await.ok().flatten()
                 && client.health().await.is_ok()
-                && http
-                    .get(format!("{}/api/kernel/health", self.base_url()))
-                    .send()
-                    .await
-                    .is_ok_and(|response| response.status().is_success())
+                && health.send().await.is_ok_and(|response| response.status().is_success())
             {
                 return Ok(kernel);
             }

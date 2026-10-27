@@ -11,7 +11,10 @@ pairing code and starts nothing.
 The kernel is the `adk-rust up` binary, a real child process, with the Telegram adapter on.
 Telegram is a fake Bot API on loopback that this program serves and that outlives the
 kernel's restart, as Telegram's servers do; with it the program sees every message that would
-leave the machine, and when. The email is a supervised MCP driver this binary also serves
+leave the machine, and when. The kernel serves the phone (`--home-url http://localhost:<port>`
+with an operator token): Ana's phone is paired, and its browser subscribes to Web Push through
+a push service on loopback this program also serves (`--push-to-localhost`), which records
+every wake-up and when it arrived. The email is a supervised MCP driver this binary also serves
 (`serve-mail-driver`), declared `send_external` — `NonIdempotent`, "Can't be unsent" — which
 writes each email it sends to a file. Every pass condition is read from the kernel's stores and
 routes, the driver's file and the fake Bot API, never from model prose. The program prints a
@@ -20,10 +23,10 @@ plain-words transcript and exits non-zero when any pass condition fails.
 ## Run it
 
 Build the binary once, from the repository root. `scripted-model` lets `up` run on a script
-with no key, `tui` is the terminal, `postgres` the shared store:
+with no key, `tui` is the terminal, `postgres` the shared store and `mobile` the phone:
 
 ```bash
-cargo build -p adk-cli --bin adk-rust --features scripted-model,tui,postgres
+cargo build -p adk-cli --bin adk-rust --features scripted-model,tui,postgres,mobile
 ```
 
 Then, from this directory:
@@ -61,14 +64,15 @@ transcript line is labelled with the time of the story it stands for and the rea
 |---|---|
 | A stranger gets a pairing code and starts nothing (S-I6) | The fake Bot API sent the unpaired account an `adk-rust pair accept <code>` message; the kernel holds no new agent process and no decision; at the end the account is still not paired and was never sent a card |
 | The decision reaches the Telegram thread before quiet time | The card arrived before quiet time started, with **Allow once** and **Deny** only (§7.2) and no address, amount or body (S-I5) |
+| The phone is woken for it before quiet time | A wake-up reached the push service on loopback before quiet time started |
 | The decision waits through a crash (§7.3, S-I3) | `kill -9` ends the kernel (`SIGKILL`) and its mail driver; after the restart the decision is the same inbox entry at the same version and the routine still waits |
-| Nothing notifies during quiet time | No message reached anyone through the fake Bot API between the start and the end of quiet time, before or after the restart. A decision that waited through a restart is sent to the thread again when quiet time ends |
+| Nothing notifies during quiet time | No message reached anyone through the fake Bot API, and no wake-up reached the phone's push service, between the start and the end of quiet time, before or after the restart. A decision that waited through a restart is sent to the thread again when quiet time ends |
 | Nothing runs before the tap; the email is sent exactly once | The driver's outbox is empty until the tap and holds exactly one email to the client afterwards |
 | The web home shows "You said yes in Telegram" | `GET /api/surface/decisions/{id}` answers `decided.text` "You said yes in Telegram at HH:MM", and `/ui/` serves the page |
+| The phone's card shows "You said yes in Telegram" | `GET /api/surface/decisions/{id}?surface=phone` with the phone's device token answers the same `decided.text` |
 | The terminal shows the same | `adk-rust --output json --session <session>`, attached to the kernel's socket, writes a `decided` line whose card says "You said yes in Telegram at HH:MM" and exits 0 |
 | The record names the channel | `GET /api/kernel/record` has the `surface.decide` line of the decision, approved, how `chat`, channel `Telegram` |
 | No program is left running | The kernel is reaped and the mail driver's process is gone |
-| The phone is not woken during quiet time | Not wired yet: `adk-rust up` sends no Web Push until WP M (spec 3.3 §5.4). The quiet-time check reads every notifier through `phone::Notifier`; the `phone-push` feature is where WP M adds its push receiver, and until then it refuses to run rather than pass without looking |
 
 A run on SQLite and a run on PostgreSQL together are the phase's pass (§12: SQLite and one
 shared store).

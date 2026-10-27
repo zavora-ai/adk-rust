@@ -27,7 +27,7 @@ mail driver with [`surface_approve_tomorrow`](../surface_approve_tomorrow/), thr
 Build the binary once, from the repository root:
 
 ```bash
-cargo build -p adk-cli --bin adk-rust --features scripted-model,tui,postgres
+cargo build -p adk-cli --bin adk-rust --features scripted-model,tui,postgres,mobile
 ```
 
 Then, from this directory:
@@ -53,11 +53,13 @@ The flags are those of `surface_approve_tomorrow`: `--store sqlite|postgres`, `-
 | 01:00 | The report routine asks to send an email; Ana allows it on her phone | `send_email` waits; the phone answers with its device token; the email is sent once |
 | 02:00 | The kernel is killed and starts again; its model can no longer be reached | `kill -9`; scripted mode starts it with an empty script, live mode with a key the provider refuses |
 | 04:00 | The statement routine fails | Its model call fails |
+| 06:59 | The night is on the phone's page; quiet time still holds the briefing back | `GET /api/kernel/away` with the device token, and the quiet time `GET /api/kernel/settings/default` serves |
 | 07:00 | Quiet time ends; the phone reads "While you were away" | `GET /api/kernel/away` with the device token |
 | 07:05 | Ana marks it seen; the kernel restarts again; she reads it again | `POST /api/kernel/away/seen`; nothing comes back |
 
 The night is compressed: `adk-rust up` runs on the system clock, so quiet time is a one-minute
-window 40 seconds after the start and the routines fire inside it. Each transcript line is
+window from the first whole minute at least 40 seconds after the start, which the `HH:MM` quiet
+time the kernel serves names exactly, and the routines fire inside it. Each transcript line is
 labelled with the time of the story it stands for and the real time.
 
 ## What this proves
@@ -66,7 +68,8 @@ labelled with the time of the story it stands for and the real time.
 |---|---|
 | The phone's answer runs the call once | The inbox answers `approved`; the driver's outbox holds exactly one email; the routine's run completes |
 | Its counts match the ledger exactly across the restart | The briefing's 2 done, 1 failed, 1 suggestion and 1 decided equal the routines' runs in the process table (two completed, one failed), the agenda (one item) and the decision; its `waiting` equals the inbox |
-| Its spending matches across the restart | `spentMicroUsd`, the `/proc` ledger's spend rows, equals the kernel's daily total in its process store (`GET /api/kernel/settings/default`, `spentToday`). The scripted model costs nothing, so the scripted check is 0 = 0; the live run compares real spend |
+| One briefing at 07:00, not before | Four seconds before quiet time ends the phone's page already holds the night, and the quiet time the kernel serves still holds, so the home's rule for the morning briefing (`briefingDue` in `adk-surface/web/src/away.ts`) holds it back; once quiet time ends it is due |
+| Its spending matches across the restart | `spentMicroUsd`, the `/proc` ledger's spend rows, equals the kernel's daily total in its process store (`GET /api/kernel/settings/default`, `spentToday`), and is not zero. Each scripted reply names its price (`"cost"` in `--model-script`), so the scripted run spends exactly the sum of the evening's four replies, 41,000 micro-USD; the live run compares real spend |
 | Quiet time was respected | The briefing reports no suggestion's work started in quiet time: the payment waited for Ana |
 | Every line links to its record | Each line's `record`, `GET /api/kernel/away/lines/{seq}` with the phone's token, answers its ledger row: same `seq`, same kind |
 | No line appears twice across the restart | Line sequence numbers are strictly increasing |

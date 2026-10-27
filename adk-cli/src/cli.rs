@@ -909,6 +909,11 @@ pub struct UpArgs {
     #[cfg(feature = "mobile")]
     #[arg(long, value_name = "FILE", requires = "home_url")]
     pub push_key: Option<std::path::PathBuf>,
+    /// Phones subscribe through a push service on `http://localhost` instead of the browsers'
+    /// own (end-to-end tests: a fake push service on loopback, spec 3.3 §12 phase 1).
+    #[cfg(all(feature = "mobile", feature = "scripted-model"))]
+    #[arg(long, hide = true, requires = "home_url")]
+    pub push_to_localhost: bool,
     /// The origin apps from MCP servers are framed on, such as
     /// `https://apps.example.ts.net` for a remote home, proxied to the sandbox listener whose
     /// port is printed at start (default: that loopback listener; spec 3.3 §6.1 `genui-apps`)

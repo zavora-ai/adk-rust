@@ -6,18 +6,19 @@
 //! gets a pairing code and starts nothing.
 //!
 //! The kernel is the `adk-rust up` binary, a real child process with the Telegram adapter on,
-//! talking to a fake Bot API on loopback this program serves; its email is a supervised MCP
-//! driver this binary also serves (`serve-mail-driver`), which writes each sent email to a
-//! file. Every pass condition is read from what the kernel stored and what left the machine,
-//! never from model prose. The run prints what happened in plain words and exits non-zero
-//! when any pass condition fails.
+//! talking to a fake Bot API on loopback this program serves, and serving the phone: Ana's
+//! phone is paired and its browser subscribed to Web Push through a push service on loopback
+//! this program also serves. Its email is a supervised MCP driver this binary serves
+//! (`serve-mail-driver`), which writes each sent email to a file. Every pass condition is read
+//! from what the kernel stored and what left the machine, never from model prose. The run
+//! prints what happened in plain words and exits non-zero when any pass condition fails.
 //!
 //! The night is compressed: the kernel runs on the system clock, so quiet time is a
 //! half-minute window a few seconds ahead, and each step is labelled with the time of the
 //! story it stands for.
 //!
 //! ```sh
-//! cargo build -p adk-cli --bin adk-rust --features scripted-model,tui,postgres   # repo root
+//! cargo build -p adk-cli --bin adk-rust --features scripted-model,tui,postgres,mobile   # repo root
 //! cargo run                                   # SQLite, scripted model
 //! DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres cargo run -- --store postgres
 //! cargo run -- --live                         # gemini-3.5-flash-lite
@@ -37,7 +38,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{TimeDelta, Utc};
 use serde_json::{Value, json};
 
-use phone::Notifier;
+use phone::{Notifier, Phone, PushService};
 use stage::{Model, Options, Report, Stage, until};
 use telegram::FakeTelegram;
 
@@ -93,10 +94,12 @@ fn script(boot: u32) -> Vec<Value> {
 async fn run(options: &Options) -> Result<ExitCode> {
     println!("Approve it tomorrow — spec 3.3 §12, phase 1 \"Decisions reach you\"");
     println!("{}\n", options.describe());
-    let stage = Stage::new(options, "approve_tomorrow").await?;
+    let mut stage = Stage::new(options, "approve_tomorrow").await?;
+    stage.serve_phone();
     let fake = FakeTelegram::start().await?;
+    let push = PushService::start().await?;
     let mut report = Report::default();
-    let outcome = night(&stage, &fake, &mut report).await;
+    let outcome = night(&stage, &fake, &push, &mut report).await;
     let kept = stage.close(options.keep).await?;
     if let Some(root) = kept {
         println!("\nkept {}", root.display());
@@ -105,7 +108,12 @@ async fn run(options: &Options) -> Result<ExitCode> {
     Ok(report.finish("Approve it tomorrow"))
 }
 
-async fn night(stage: &Stage, fake: &FakeTelegram, report: &mut Report) -> Result<()> {
+async fn night(
+    stage: &Stage,
+    fake: &FakeTelegram,
+    push: &PushService,
+    report: &mut Report,
+) -> Result<()> {
     // The night, compressed: quiet time is a 30-second window starting 45 seconds from now,
     // or 75 for a live model, which takes longer to prepare the email.
     let lead = match stage.model {
@@ -125,21 +133,25 @@ async fn night(stage: &Stage, fake: &FakeTelegram, report: &mut Report) -> Resul
 
     let kernel = stage.start_kernel(Model::Answers(&script(1)), &env).await?;
     let client = stage.client().await?;
-    // The phone's push receiver joins the notifiers the quiet-time check reads (WP M).
-    #[cfg(feature = "phone-push")]
-    let push = phone::PhonePush::subscribe(&stage.base_url()).await?;
     report.say(
         "17:50",
         Utc::now(),
         &format!(
-            "adk-rust up runs as process {} ({}), with Telegram, the web home at {}/ui/ and \
-             quiet time {}–{} (22:00–07:00 in the story).",
+            "adk-rust up runs as process {} ({}), with Telegram, the web home and the phone at \
+             {}/ui/ and quiet time {}–{} (22:00–07:00 in the story).",
             kernel.pid(),
             stage.store.label(),
-            stage.base_url(),
+            stage.home_url(),
             stage::clock(quiet_start),
             stage::clock(quiet_end),
         ),
+    );
+    // Ana's phone: paired, and its browser subscribed to wake-ups (spec 3.3 §5.4).
+    let phone = Phone::pair(stage, push).await?;
+    report.say(
+        "17:50",
+        Utc::now(),
+        "Ana pairs her phone; its browser subscribes to wake-ups through a push service on loopback.",
     );
 
     // A stranger writes: a pairing code, and nothing starts.
@@ -244,6 +256,8 @@ async fn night(stage: &Stage, fake: &FakeTelegram, report: &mut Report) -> Resul
         .context("the decision")?;
     let carded =
         until(Duration::from_secs(15), || async { Ok(!fake.cards(PERSON).is_empty()) }).await?;
+    let woken =
+        until(Duration::from_secs(15), || async { Ok(!push.wake_ups().is_empty()) }).await?;
     let first_card = fake.cards(PERSON).into_iter().next();
     report.say(
         "18:00",
@@ -259,6 +273,12 @@ async fn night(stage: &Stage, fake: &FakeTelegram, report: &mut Report) -> Resul
         "the decision reaches the Telegram thread before quiet time",
         carded && first_card.as_ref().is_some_and(|card| card.at < quiet_start),
         "no card before quiet time",
+    );
+    let wake_ups = push.wake_ups();
+    report.check(
+        "the phone is woken for it before quiet time",
+        woken && wake_ups.first().is_some_and(|(at, _)| *at < quiet_start),
+        format!("wake-ups {wake_ups:?}"),
     );
     report.check(
         "the chat card carries no arguments: no address, no amount, no body (S-I5)",
@@ -331,10 +351,13 @@ async fn night(stage: &Stage, fake: &FakeTelegram, report: &mut Report) -> Resul
     if rang_again {
         report.note("The decision that waited through the restart is in the thread again.");
     }
-    let mut notifiers: Vec<&dyn Notifier> = Vec::new();
-    notifiers.push(fake);
-    #[cfg(feature = "phone-push")]
-    notifiers.push(&push);
+    let notifiers: [&dyn Notifier; 2] = [fake, push];
+    let woken_at: Vec<String> = push
+        .wake_ups()
+        .iter()
+        .map(|(at, bytes)| format!("{} ({bytes} bytes)", stage::clock(*at)))
+        .collect();
+    report.note(&format!("the phone was woken at {}", woken_at.join(", ")));
     let during: Vec<String> = notifiers
         .iter()
         .flat_map(|notifier| {
@@ -385,12 +408,14 @@ async fn night(stage: &Stage, fake: &FakeTelegram, report: &mut Report) -> Resul
     );
 
     // Every other surface shows who decided, and how.
-    let (page, _) = stage::get_json(&format!("{}/ui/", stage.base_url()), None)
+    let (page, _) = stage::get_json(&format!("{}/ui/", stage.base_url()), stage.token())
         .await
         .unwrap_or((0, Value::Null));
-    let (status, card_json) =
-        stage::get_json(&format!("{}/api/surface/decisions/{}", stage.base_url(), item.id), None)
-            .await?;
+    let (status, card_json) = stage::get_json(
+        &format!("{}/api/surface/decisions/{}", stage.base_url(), item.id),
+        stage.token(),
+    )
+    .await?;
     let web_text =
         card_json.pointer("/decided/text").and_then(Value::as_str).unwrap_or_default().to_string();
     report.say("07:31", Utc::now(), "The web home shows the decision:");
@@ -399,6 +424,18 @@ async fn night(stage: &Stage, fake: &FakeTelegram, report: &mut Report) -> Resul
         "the web home shows \"You said yes in Telegram\"",
         page == 200 && web_text.starts_with("You said yes in Telegram at"),
         format!("page {page}; card {status}: {web_text:?}"),
+    );
+    let (status, phone_card) = phone.card(&item.id).await?;
+    let phone_text =
+        phone_card.pointer("/decided/text").and_then(Value::as_str).unwrap_or_default().to_string();
+    report.say("07:31", Utc::now(), "The phone shows the decision:");
+    report.note(&format!(
+        "GET /api/surface/decisions/…?surface=phone with its device token → {status}: \"{phone_text}\""
+    ));
+    report.check(
+        "the phone's card shows \"You said yes in Telegram\"",
+        status == 200 && phone_text.starts_with("You said yes in Telegram at"),
+        format!("card {status}: {phone_card}"),
     );
 
     let session = item.scope.session_id.clone();

@@ -1095,6 +1095,9 @@ impl HarnessLauncher {
                         .home_url(setup.home_url.clone())
                         .push_key(setup.key.clone())
                         .doorbell(setup.doorbell.clone());
+                    if let Some(allowlist) = &setup.push_allowlist {
+                        phone = phone.push_allowlist(allowlist.clone());
+                    }
                 }
                 if let Some(approvals) = &self.approval_service {
                     phone = phone.approvals(approvals.clone());

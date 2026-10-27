@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use adk_core::{AdkError, Result};
-use adk_surface::mobile::{PushDoorbell, PushKey};
+use adk_surface::mobile::{PushAllowlist, PushDoorbell, PushKey};
 
 /// What `adk-rust up --home-url` gives the served harness for the phone (spec 3.3 §5.4).
 ///
@@ -24,6 +24,7 @@ pub struct PhoneSetup {
     pub(crate) home_url: String,
     pub(crate) key: PushKey,
     pub(crate) doorbell: Arc<PushDoorbell>,
+    pub(crate) push_allowlist: Option<PushAllowlist>,
     host: String,
     origin: String,
 }
@@ -56,7 +57,28 @@ impl PhoneSetup {
             )));
         }
         let origin = url.origin().ascii_serialization();
-        Ok(Self { home_url, key, doorbell, host, origin })
+        Ok(Self { home_url, key, doorbell, push_allowlist: None, host, origin })
+    }
+
+    /// Lets phones subscribe through `allowlist`'s push services instead of the browsers' own
+    /// (spec 3.3 §5.4), such as a fake push service on `http://localhost` in an end-to-end test.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_cli::harness::PhoneSetup;
+    /// use adk_surface::mobile::{PushAllowlist, PushDoorbell, PushKey};
+    ///
+    /// let setup = PhoneSetup::new("http://localhost:8080", PushKey::generate().unwrap(), Arc::new(PushDoorbell::new()))
+    ///     .unwrap()
+    ///     .with_push_allowlist(PushAllowlist::new(["localhost"]).with_plain_http_to_localhost());
+    /// # let _ = setup;
+    /// ```
+    #[must_use]
+    pub fn with_push_allowlist(mut self, allowlist: PushAllowlist) -> Self {
+        self.push_allowlist = Some(allowlist);
+        self
     }
 
     /// The home's host, which the server answers beside loopback.

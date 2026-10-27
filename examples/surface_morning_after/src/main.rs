@@ -13,11 +13,11 @@
 //! what happened in plain words and exits non-zero when any pass condition fails.
 //!
 //! The night is compressed: the kernel runs on the system clock, so quiet time is a
-//! fifty-second window a few seconds ahead, and each step is labelled with the time of the
-//! story it stands for.
+//! one-minute window starting on a whole minute shortly ahead, and each step is labelled with
+//! the time of the story it stands for.
 //!
 //! ```sh
-//! cargo build -p adk-cli --bin adk-rust --features scripted-model,tui,postgres   # repo root
+//! cargo build -p adk-cli --bin adk-rust --features scripted-model,tui,postgres,mobile   # repo root
 //! cargo run                                   # SQLite, scripted model
 //! DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres cargo run -- --store postgres
 //! cargo run -- --live                         # gemini-3.5-flash-lite
@@ -34,8 +34,9 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use adk_core::RunState;
+use adk_kernel::QuietHours;
 use adk_kernel::control::ControlClient;
-use adk_kernel::control::api::{AwayCounts, AwayQuery, AwayResponse, ProcessesQuery};
+use adk_kernel::control::api::{AreaView, AwayCounts, AwayQuery, AwayResponse, ProcessesQuery};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::{Value, json};
@@ -76,23 +77,33 @@ async fn main() -> ExitCode {
     }
 }
 
-/// The model's replies before the restart, in scripted mode.
+/// The model's replies before the restart, in scripted mode, each with the price a provider
+/// would report for it.
 fn evening_replies() -> Vec<Value> {
     vec![
         // 23:00, the bills routine: a suggestion, which waits for the person.
         json!({ "call": { "name": "propose_followup", "args": {
                 "title": "Pay the electricity bill of 84.20 USD",
                 "rationale": "It is due on Friday and it is the only bill this week."
-            } } }),
-        json!({ "text": "I suggested paying the electricity bill; nothing was paid." }),
+            } }, "cost": 0.0125 }),
+        json!({ "text": "I suggested paying the electricity bill; nothing was paid.", "cost": 0.0031 }),
         // 01:00, the report routine: an email, which waits for a decision.
         json!({ "call": { "name": "send_email", "args": {
                 "to": "team@northwind.example",
                 "subject": "Weekly report",
                 "body": "All invoices are out."
-            } } }),
-        json!({ "text": "The weekly report is sent." }),
+            } }, "cost": 0.021 }),
+        json!({ "text": "The weekly report is sent.", "cost": 0.0044 }),
     ]
+}
+
+/// What the evening's scripted replies cost, in micro-USD.
+fn evening_spend() -> u64 {
+    evening_replies()
+        .iter()
+        .filter_map(|reply| reply["cost"].as_f64())
+        .map(|usd| (usd * 1_000_000.0).round() as u64)
+        .sum()
 }
 
 async fn run(options: &Options) -> Result<ExitCode> {
@@ -119,8 +130,9 @@ struct Routine {
 }
 
 async fn night(stage: &Stage, report: &mut Report) -> Result<()> {
-    // The night, compressed: quiet time is a minute starting 40 seconds from now.
-    let quiet_start = stage::whole_second(Utc::now() + TimeDelta::seconds(40));
+    // The night, compressed: quiet time is a minute starting on the first whole minute at least
+    // 40 seconds from now, so the quiet time the kernel serves (`HH:MM`) names it exactly.
+    let quiet_start = whole_minute(Utc::now() + TimeDelta::seconds(40));
     let quiet_end = quiet_start + TimeDelta::seconds(60);
     stage.write_user_config(&format!(
         "[kernel]\nquiet_hours = \"{}-{}\"\n",
@@ -337,9 +349,40 @@ async fn night(stage: &Stage, report: &mut Report) -> Result<()> {
         bail!("the statement routine did not fail:\n{}", kernel.log());
     }
 
+    // 06:59: the night is on the phone's page, and quiet time still holds the briefing back.
+    stage::sleep_until(quiet_end - TimeDelta::seconds(4)).await;
+    let early = phone.away(&AwayQuery::default()).await?;
+    let windows = quiet_windows(&client.area_settings("default").await?);
+    let early_at = Utc::now();
+    report.say(
+        "06:59",
+        early_at,
+        &format!(
+            "The phone's page already holds {} lines, but quiet time still holds the morning \
+             briefing back.",
+            early.lines.len()
+        ),
+    );
+    report.check(
+        "no briefing before quiet time ends: the night is on the page, and the quiet time the home reads still holds",
+        !early.lines.is_empty() && early_at < quiet_end && !briefing_due(&early, &windows, early_at),
+        format!(
+            "{} lines at {}; due: {}",
+            early.lines.len(),
+            stage::clock(early_at),
+            briefing_due(&early, &windows, early_at)
+        ),
+    );
+
     // 07:00: quiet time ends; the phone reads "While you were away".
     stage::sleep_until(quiet_end).await;
     let away = phone.away(&AwayQuery::default()).await?;
+    let morning = Utc::now();
+    report.check(
+        "the briefing is due once quiet time ends",
+        briefing_due(&away, &windows, morning),
+        format!("{} lines at {}", away.lines.len(), stage::clock(morning)),
+    );
     report.say(
         "07:00",
         Utc::now(),
@@ -391,11 +434,18 @@ async fn night(stage: &Stage, report: &mut Report) -> Result<()> {
             && away.waiting == waiting,
         format!("briefing {:?}, waiting {}; stores: runs {runs:?}, agenda {suggestions}, inbox {waiting}", away.counts, away.waiting),
     );
+    // Scripted, the evening cost exactly what its replies say; a live model reports its own.
+    let expected = match stage.model {
+        stage::ModelKind::Scripted => Some(evening_spend()),
+        stage::ModelKind::Live(_) => None,
+    };
     report.check(
-        "its spending matches the kernel's spend ledger across the restart",
-        away.spent_micro_usd == area.spent_today,
+        "its spending matches the kernel's spend ledger across the restart, and is not zero",
+        away.spent_micro_usd == area.spent_today
+            && away.spent_micro_usd > 0
+            && expected.is_none_or(|expected| away.spent_micro_usd == expected),
         format!(
-            "briefing {} micro-USD, the kernel's daily total {}",
+            "briefing {} micro-USD, the kernel's daily total {}, the replies' price {expected:?}",
             away.spent_micro_usd, area.spent_today
         ),
     );
@@ -492,6 +542,35 @@ async fn finished(client: &ControlClient, routine: &str) -> Result<bool> {
         run_of(process, routine)
             && matches!(process.run.state, RunState::Completed | RunState::Failed)
     }))
+}
+
+/// `at` rounded up to the next whole minute.
+fn whole_minute(at: DateTime<Utc>) -> DateTime<Utc> {
+    use chrono::{DurationRound, TimeDelta};
+    let floor = at.duration_trunc(TimeDelta::minutes(1)).unwrap_or(at);
+    if floor == at { at } else { floor + TimeDelta::minutes(1) }
+}
+
+/// The quiet windows the home reads for an area: the person's and the workspace's.
+fn quiet_windows(area: &AreaView) -> Vec<QuietHours> {
+    area.quiet_time.iter().chain(&area.also_quiet).cloned().collect()
+}
+
+/// Whether the home shows the morning briefing at `now` (spec 3.3 §5.1, §12 phase 2), by its
+/// own rule (`briefingDue` in `adk-surface/web/src/away.ts`): no quiet window holds, one ended
+/// since the person last marked the page seen, and the page has something to say.
+fn briefing_due(page: &AwayResponse, windows: &[QuietHours], now: DateTime<Utc>) -> bool {
+    if windows.iter().any(|window| window.contains(now))
+        || (page.lines.is_empty() && page.waiting == 0)
+    {
+        return false;
+    }
+    // A window ended since `since`: some second between then and now was quiet.
+    let span = (now - page.since).num_seconds().clamp(0, 2 * 86_400);
+    (1..=span).any(|back| {
+        let at = now - TimeDelta::seconds(back);
+        windows.iter().any(|window| window.contains(at))
+    })
 }
 
 /// Whether a briefing has nothing to say.

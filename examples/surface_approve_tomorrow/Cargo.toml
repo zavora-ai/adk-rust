@@ -7,12 +7,6 @@ description = "Approve it tomorrow: the phase 1 scenario of spec 3.3 (decisions 
 
 [workspace]
 
-[features]
-default = []
-# The phone's Web Push joins the notifiers the quiet-time check reads (spec 3.3 §5.4). WP M
-# adds the receiver; until then the feature refuses to run.
-phone-push = []
-
 [dependencies]
 adk-core = { path = "../../adk-core" }
 # The control-plane client the scenario checks the kernel through, as `adk-rust ps` does.

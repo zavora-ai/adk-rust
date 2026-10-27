@@ -73,6 +73,10 @@ struct KernelStores {
 pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -> Result<()> {
     #[cfg(feature = "mobile")]
     let (home_url, push_key) = (up.home_url.clone(), up.push_key.clone());
+    #[cfg(all(feature = "mobile", feature = "scripted-model"))]
+    let push_to_localhost = up.push_to_localhost;
+    #[cfg(all(feature = "mobile", not(feature = "scripted-model")))]
+    let push_to_localhost = false;
     #[cfg(feature = "genui-apps")]
     let apps_origin = up.apps_origin.clone();
     let UpArgs { home, bind, auth_token, store, mut harness, .. } = up;
@@ -140,7 +144,16 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     // The phone at the home's public address (spec 3.3 §5.4).
     #[cfg(feature = "mobile")]
     let phone = match &home_url {
-        Some(url) => Some(phone::Phone::open(url, push_key.as_deref(), &home, token.as_deref())?),
+        Some(url) => {
+            let mut phone = phone::Phone::open(url, push_key.as_deref(), &home, token.as_deref())?;
+            if push_to_localhost {
+                phone.setup = phone.setup.with_push_allowlist(
+                    adk_surface::mobile::PushAllowlist::new(["localhost"])
+                        .with_plain_http_to_localhost(),
+                );
+            }
+            Some(phone)
+        }
         None => None,
     };
     if !bind.ip().is_loopback() && token.is_none() {
