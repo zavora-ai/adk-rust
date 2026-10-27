@@ -712,7 +712,7 @@ each with `GraphInterruptPayload::from_event`.
 | Graph shape | `CompiledGraph::shape()` → `GraphShape { nodes, edges, entry }` | Computed from the compiled graph |
 | Run and step records | `Checkpoint::run_record()`, `step_records()`, `lineage()` | Checkpoint metadata `adk.graph.run`, `adk.graph.steps`, `adk.graph.lineage` |
 | Fork with edits | `TimeTravelHandle::fork(ForkSpec)`, `time_travel::fork_thread` | A new thread whose lineage names its root, parent and parent checkpoint |
-| Governed nodes | `CompiledGraph::with_governed_node`, `GraphAgentBuilder::governed_node`, `Node::call_args`, `Node::run_call` | The approval store, the action ledger and the effect log `{root}:effects` |
+| Governed nodes | `CompiledGraph::with_governed_node`, `GraphAgentBuilder::governed_node`, `Node::call_args`, `Node::run_call`, `Node::will_act`, `CompiledGraph::governed_shapes`, `HttpActionPolicy::credential_key` | The approval store, the action ledger and the effect log `{root}:effects` |
 
 A pause checkpoint has the same step number as the completed checkpoint before it, so
 checkpoints are addressed by id. A governed node's failures are `NodeExecutionFailed`

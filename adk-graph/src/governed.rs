@@ -210,7 +210,8 @@ pub enum GovernedError {
         /// The governed node.
         node: String,
     },
-    /// The action ledger, the approval gate or the effect log could not be read or written.
+    /// The action ledger, the approval gate or the effect log could not be read or written,
+    /// or the run has no action ledger or the graph no checkpointer to keep the call to once.
     #[error("graph.unavailable: governed node '{node}' was not run: {detail}")]
     Unavailable {
         /// The governed node.
