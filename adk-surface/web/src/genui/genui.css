@@ -480,3 +480,143 @@ textarea.drawn-input {
     grid-template-columns: 1fr;
   }
 }
+
+/*
+ * Apps from MCP servers (spec 3.3 §6.1 `genui-apps`): the same card container as a drawing,
+ * the frame inside it with a thin border, and what the app asks for in boxes of their own
+ * below it, never on a decision's background.
+ */
+.app-mark {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--raised);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.app-frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: var(--card);
+  color-scheme: normal;
+}
+
+.app-frame-border {
+  border: 1px solid var(--border);
+}
+
+.app-opening {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 120px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.app-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--text-2);
+  border-radius: 50%;
+  animation: app-spin 0.9s linear infinite;
+}
+
+@keyframes app-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-spinner {
+    animation: none;
+  }
+}
+
+.app-blocked,
+.app-elsewhere p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.app-elsewhere {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-2);
+}
+
+.app-elsewhere .app-result {
+  color: var(--text);
+  font-weight: 500;
+  white-space: pre-wrap;
+}
+
+.app-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 560px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--text);
+}
+
+.app-ask p {
+  margin: 0;
+}
+
+.app-ask-text {
+  font-size: 15px;
+}
+
+.app-ask-url {
+  color: var(--text-2);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.app-ask-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.app-ask-actions .button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: 14px;
+}
+
+/* An app's ask is not a decision: its press is ink, never the decision's rust. */
+.app-ask-actions .button-primary {
+  background: var(--stop);
+  color: var(--on-stop);
+}
+
+.app-ask-note {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+@media (max-width: 600px) {
+  .app-ask {
+    max-width: 100%;
+  }
+}

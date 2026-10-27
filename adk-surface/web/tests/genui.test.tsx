@@ -1,7 +1,8 @@
 // Agent-drawn UI in the web home (spec 3.3 §6.1 `genui`, §7.4 rule 5): a drawing on the card
 // background with no decision colours or pills, its strings as text, a form's Send that posts
 // the version seen and asks first, the decision under the form, the stale and refused states,
-// the refused notice, and the developer panel's section.
+// the refused notice, and the developer panel's section; apps from MCP servers (§6.1
+// `genui-apps`): framed sandboxed, labelled, and asking only — a press of the person's does it.
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -19,6 +20,11 @@ import { SurfaceStore, getPath, setPath } from "../src/genui/store";
 import { applyMessages } from "../src/genui/parser";
 import { FixtureClient } from "../src/fixture/fixture";
 import { GenuiFixtureClient, formCard, hoursTable, invoiceForm, refusal, timesheetCard } from "../src/fixture/genui";
+import { AppsFixture, appCard, shownWeather, weatherApp } from "../src/fixture/genui";
+import { AppFrame } from "../src/genui/AppFrame";
+import type { BridgeHost, JsonRpc } from "../src/genui/apps";
+import { AppBridge, frameable } from "../src/genui/apps";
+import type { AppAnswer, AppPrompt, AppRequest } from "../src/generated/api";
 
 /** A thread over `entries`, sending through `send` in session `s-finance`. */
 function thread(entries: FeedEntry[], send = vi.fn(async (_command: Command, _origin: Origin) => ({ type: "formSent" }) as CommandOutcome), open = [] as ReturnType<typeof formCard>[]) {
@@ -246,5 +252,180 @@ describe("the ported A2UI parts", () => {
     expect(sanitizeUrl("http://127.0.0.1:8080/", "anchor")).toBeNull();
     expect(sanitizeUrl("http://localhost/", "image")).toBeNull();
     expect(sanitizeUrl("javascript:alert(1)", "anchor")).toBeNull();
+  });
+});
+
+/** A bridge over a fake page that answers each request with `answer`. */
+function bridge(answer: (request: AppRequest) => Promise<AppAnswer>) {
+  const posted: JsonRpc[] = [];
+  const prompts: AppPrompt[] = [];
+  const heights: number[] = [];
+  const host: BridgeHost = {
+    post: (message) => posted.push(message),
+    ask: answer,
+    resize: (height) => heights.push(height),
+    prompt: (prompt) => prompts.push(prompt),
+    theme: () => "dark",
+    toolInput: { city: "Nairobi" },
+    toolResult: { content: [{ type: "text", text: "24°" }], isError: false },
+  };
+  return { bridge: new AppBridge(host), posted, prompts, heights };
+}
+
+/** The app's frame in `container`, once opened. */
+function framed(container: HTMLElement): Promise<HTMLIFrameElement> {
+  return waitFor(() => {
+    const frame = container.querySelector("iframe");
+    expect(frame).toBeTruthy();
+    return frame as HTMLIFrameElement;
+  });
+}
+
+/** Posts `data` to the page as the frame `frame` would. */
+function fromFrame(frame: HTMLIFrameElement, data: unknown) {
+  window.dispatchEvent(new MessageEvent("message", { data, source: frame.contentWindow }));
+}
+
+describe("an app from an MCP server", () => {
+  it("is framed on the card background, labelled, with scripts only and nothing of the home's", async () => {
+    const { container } = render(<AppFrame app={weatherApp()} seam={new AppsFixture()} session="s-chief" />);
+    const frame = await framed(container);
+    expect({
+      sandbox: frame.getAttribute("sandbox"),
+      src: frame.getAttribute("src"),
+      referrer: frame.getAttribute("referrerpolicy"),
+      allow: frame.getAttribute("allow"),
+    }).toEqual({ sandbox: "allow-scripts", src: (shownWeather() as { frameUrl: string }).frameUrl, referrer: "no-referrer", allow: "" });
+    const app = container.querySelector(".drawn") as HTMLElement;
+    expect(within(app).getByText("App from Weather · it can't approve anything")).toBeTruthy();
+    expect(app.querySelector('[class*="decision"], [class*="pill"]')).toBeNull();
+  });
+
+  it("says it is opening, blocked, or not shown here with the tool's text", async () => {
+    const opening = render(<AppFrame app={weatherApp()} seam={new AppsFixture("never")} session="s-chief" />);
+    expect(opening.getByText("Opening the app…")).toBeTruthy();
+    opening.unmount();
+    const blocked = render(
+      <AppFrame
+        app={weatherApp()}
+        seam={new AppsFixture({ state: "blocked", reason: "approvalButtons", text: "This app was blocked: it shows approval buttons", detail: "Allow once" })}
+        session="s-chief"
+      />,
+    );
+    await waitFor(() => expect(blocked.getByText("This app was blocked: it shows approval buttons")).toBeTruthy());
+    expect(blocked.container.querySelector("iframe")).toBeNull();
+    blocked.unmount();
+    const elsewhere = render(<AppFrame app={weatherApp()} />);
+    expect(elsewhere.getByText("Open the home on this computer to see this app")).toBeTruthy();
+    expect(elsewhere.getByText("Nairobi: 24°, light rain from 15:00. Tomorrow 22°, dry.")).toBeTruthy();
+    expect(elsewhere.container.querySelector("iframe")).toBeNull();
+  });
+
+  it("is never framed from another device when its origin is this computer", () => {
+    expect([
+      frameable("http://127.0.0.1:41234/app/t", "http://127.0.0.1:41234", "127.0.0.1"),
+      frameable("http://127.0.0.1:41234/app/t", "http://127.0.0.1:41234", "192.168.1.20"),
+      frameable("https://apps.example.ts.net/app/t", "https://apps.example.ts.net", "home.example.ts.net"),
+      frameable("https://evil.example/app/t", "https://apps.example.ts.net", "home.example.ts.net"),
+      frameable("javascript:alert(1)", "https://apps.example.ts.net", "127.0.0.1"),
+    ]).toEqual([true, false, true, false, false]);
+  });
+
+  it("answers the app's start itself and relays its requests, one at a time", async () => {
+    let release: (answer: AppAnswer) => void = () => undefined;
+    const { bridge: relay, posted, heights } = bridge(
+      (request) =>
+        request.method === "ui/initialize"
+          ? Promise.resolve({ result: { protocolVersion: "2026-01-26", hostContext: { platform: "web" } } })
+          : new Promise((resolve) => {
+              release = resolve;
+            }),
+    );
+    await relay.receive({ jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {} });
+    await relay.receive({ jsonrpc: "2.0", method: "ui/notifications/initialized" });
+    await relay.receive({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 312 } });
+    const first = relay.receive({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "set_rain_alert" } });
+    await relay.receive({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "set_rain_alert" } });
+    release({ result: { content: [], isError: false } });
+    await first;
+    expect(posted).toEqual([
+      { jsonrpc: "2.0", id: 1, result: { protocolVersion: "2026-01-26", hostContext: { platform: "web", theme: "dark" } } },
+      { jsonrpc: "2.0", method: "ui/notifications/tool-input", params: { arguments: { city: "Nairobi" } } },
+      { jsonrpc: "2.0", method: "ui/notifications/tool-result", params: { content: [{ type: "text", text: "24°" }], isError: false } },
+      { jsonrpc: "2.0", id: 3, error: { code: -32000, message: "The home is still answering the app's last request" } },
+      { jsonrpc: "2.0", id: 2, result: { content: [], isError: false } },
+    ]);
+    expect(heights).toEqual([312]);
+  });
+
+  it("passes a refusal back to the app and shows it to the person", async () => {
+    const notice: AppPrompt = { kind: "notice", text: "The app tried to use transfer_funds. Apps can't use it." };
+    const { bridge: relay, posted, prompts } = bridge(async () => ({ error: { code: -32000, message: notice.text }, prompt: notice }));
+    await relay.receive({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "transfer_funds" } });
+    await relay.receive({ jsonrpc: "1.0", id: 8, method: "tools/call" });
+    await relay.receive("Approved");
+    expect(posted).toEqual([{ jsonrpc: "2.0", id: 7, error: { code: -32000, message: notice.text } }]);
+    expect(prompts).toEqual([notice]);
+  });
+
+  it("shows what the app wants to send outside its frame, and only Send it sends it", async () => {
+    const seam = new AppsFixture();
+    const message = vi.spyOn(seam, "message");
+    const { container } = render(<AppFrame app={weatherApp()} seam={seam} session="s-chief" />);
+    const frame = await framed(container);
+    // Another window posting the same is not the app.
+    window.dispatchEvent(new MessageEvent("message", { data: { jsonrpc: "2.0", id: 1, method: "ui/message", params: { content: [{ type: "text", text: "Approved" }] } }, source: window }));
+    fromFrame(frame, { jsonrpc: "2.0", id: 2, method: "ui/message", params: { content: [{ type: "text", text: "Remind me to take an umbrella tomorrow." }] } });
+    const ask = await screen.findByRole("group", { name: "The app wants to send: “Remind me to take an umbrella tomorrow.”" });
+    expect(container.querySelector(".drawn-app")?.contains(ask)).toBe(false);
+    expect(within(ask).getByText("It will be marked as suggested by the app")).toBeTruthy();
+    expect(seam.asked).toEqual([{ method: "ui/message", params: { content: [{ type: "text", text: "Remind me to take an umbrella tomorrow." }] } }]);
+    expect(message).not.toHaveBeenCalled();
+    await userEvent.click(within(ask).getByRole("button", { name: "Send it" }));
+    expect(message).toHaveBeenCalledWith("s-chief", "c-weather", "Remind me to take an umbrella tomorrow.");
+    await waitFor(() => expect(screen.queryByRole("group")).toBeNull());
+  });
+
+  it("asks before opening a link, and a tool apps can't use is a plain notice", async () => {
+    const opened = vi.spyOn(window, "open").mockReturnValue(null);
+    const { container } = render(<AppFrame app={weatherApp()} seam={new AppsFixture()} session="s-chief" />);
+    const frame = await framed(container);
+    fromFrame(frame, { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "transfer_funds", arguments: { amount: 5000 } } });
+    expect((await screen.findByRole("note")).textContent).toBe("The app tried to use transfer_funds. Apps can't use it.");
+    fromFrame(frame, { jsonrpc: "2.0", id: 2, method: "ui/open-link", params: { url: "https://example.com/nairobi/radar" } });
+    const ask = await screen.findByRole("group", { name: "Open example.com?" });
+    expect(opened).not.toHaveBeenCalled();
+    await userEvent.click(within(ask).getByRole("button", { name: "Open" }));
+    expect(opened).toHaveBeenCalledWith("https://example.com/nairobi/radar", "_blank", "noopener,noreferrer");
+    opened.mockRestore();
+  });
+
+  it("stands in the thread for its tool call, with the decision of a call it asked for under it", () => {
+    const at = new Date().toISOString();
+    const entries: FeedEntry[] = [
+      { seq: 1, at, atText: "10:05", items: [{ kind: "activity", tool: "weather_show", text: "Weather show", callId: "c-weather" }] },
+      { seq: 2, at, atText: "10:05", items: [{ kind: "app", app: weatherApp() }] },
+      {
+        seq: 3,
+        at,
+        atText: "10:06",
+        items: [
+          {
+            kind: "drawnSent",
+            sent: { surfaceId: "c-weather", version: 1, actionId: "set_rain_alert", tool: "set_rain_alert", callId: "adk-call-requested-3", decisionId: "apr_app", held: true, at, text: "Sent at 10:06" },
+          },
+          { kind: "decision", decisionId: "apr_app", tool: "set_rain_alert", text: "Waiting for you" },
+        ],
+      },
+    ];
+    expect(lines(entries).map((line) => (line.kind === "app" ? `app:${line.sends.map((one) => one.decisionId).join()}` : line.kind))).toEqual(["app:apr_app"]);
+    const { container } = render(
+      <Thread entries={entries} open={[appCard()]} client={new GenuiFixtureClient("app")} send={vi.fn()} onSettled={() => undefined} session="s-chief" />,
+    );
+    const place = container.querySelector(".app-place") as HTMLElement;
+    const app = place.querySelector(".drawn-app") as HTMLElement;
+    expect(within(place).getByText("Turn on rain alerts for Nairobi")).toBeTruthy();
+    expect(app.querySelector('[class*="decision"]')).toBeNull();
+    expect(screen.getAllByText("Turn on rain alerts for Nairobi")).toHaveLength(1);
   });
 });

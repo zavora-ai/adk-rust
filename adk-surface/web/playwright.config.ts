@@ -188,6 +188,16 @@ const surfaces: Surface[] = [
     testMatch: ["genui-states.spec.ts"],
     ready: "/ui/fixture.html",
   },
+  {
+    // Apps from MCP servers (spec 3.3 §6.1 `genui-apps`): Weather's app framed sandboxed over
+    // the web home's example, every concept state, light and dark.
+    name: "genui-apps",
+    prefix: "GENUI_APPS",
+    command: "bash adk-surface/web/e2e/fixture-server.sh",
+    port: 8810,
+    testMatch: ["genui-apps.spec.ts"],
+    ready: "/ui/fixture.html",
+  },
 ];
 
 /** One second of a 440 Hz tone, 16 kHz mono PCM16, for Chromium's fake microphone. */

@@ -7,6 +7,10 @@
  */
 import type { CSSProperties, ReactNode } from "react";
 import type {
+  AppAnswer,
+  AppOpen,
+  AppRequest,
+  AppView,
   CommandOutcome,
   Command,
   DecisionCard,
@@ -25,6 +29,8 @@ import { ApiError } from "../client";
 import { App } from "../App";
 import { DecisionCard as CardView } from "../components/DecisionCard";
 import { Developer } from "../developer/Developer";
+import { AppFrame } from "../genui/AppFrame";
+import type { AppsSeam } from "../genui/apps";
 import { DrawnView } from "../genui/DrawnView";
 import { RefusedNotice } from "../genui/Refused";
 import { FixtureClient, agents, fixtureSeams } from "./fixture";
@@ -266,6 +272,16 @@ function thread(variant: string): FeedEntry[] {
     atText: `${hh}:${String(mm).padStart(2, "0")}`,
     items,
   });
+  if (variant === "app") {
+    return [
+      entry(1, 10, 4, [{ kind: "message", from: "you", author: "You", text: "Will it rain in Nairobi tomorrow?" }]),
+      entry(2, 10, 5, [
+        { kind: "message", from: "agent", author: "Chief of staff", text: "Here is the forecast from Weather." },
+        { kind: "activity", tool: "weather_show", text: "Weather show", callId: "c-weather" },
+      ]),
+      entry(3, 10, 5, [{ kind: "app", app: weatherApp() }]),
+    ];
+  }
   const asked = entry(1, 10, 1, [{ kind: "message", from: "you", author: "You", text: "Prepare the October invoice for ACME" }]);
   if (variant === "display") {
     return [
@@ -313,8 +329,15 @@ export class GenuiFixtureClient extends FixtureClient {
     if (variant === "sent") this.hold(formCard());
   }
 
+  /** Weather's app over the example (spec 3.3 §6.1 `genui-apps`). */
+  readonly appsFixture = new AppsFixture();
+
+  apps(): AppsSeam {
+    return this.appsFixture;
+  }
+
   override async *feed(session: string, after: number | undefined, signal: AbortSignal): AsyncIterable<FeedMessage> {
-    if (session !== "s-finance") {
+    if (session !== (this.variant === "app" ? "s-chief" : "s-finance")) {
       yield* super.feed(session, after, signal);
       return;
     }
@@ -355,7 +378,7 @@ function refusedLog(): RefusedDrawing[] {
   ];
 }
 
-/** What a home built with `genui` claims (as `adk_surface::genui::capabilities` answers). */
+/** What a home built with `genui-apps` claims (as `adk_surface::genui::capabilities` answers). */
 export function capabilities(): GenuiCapabilities {
   const claim = (id: string, label: string, status: GenuiCapabilities["protocols"][number]["claims"][number]["status"], scope: GenuiCapabilities["protocols"][number]["claims"][number]["scope"]) => ({ id, label, status, scope });
   return {
@@ -374,17 +397,17 @@ export function capabilities(): GenuiCapabilities {
         id: "ag_ui",
         name: "AG-UI",
         claims: [
-          claim("a2ui_surface_activity", "a2ui-surface activity", "planned", "transport"),
-          claim("drawn_submit_interrupts", "Interrupts for a drawn submit", "planned", "transport"),
+          claim("a2ui_surface_activity", "a2ui-surface activity", "supported", "transport"),
+          claim("drawn_submit_interrupts", "Interrupts for a drawn submit", "supported", "transport"),
         ],
       },
       {
         id: "mcp_apps",
         name: "MCP Apps",
         claims: [
-          claim("version_2026_01_26", "Version 2026-01-26", "planned", "host"),
-          claim("sandbox_and_csp", "Sandbox and CSP", "planned", "host"),
-          claim("app_tool_calls_governed", "App tool calls governed", "planned", "security"),
+          claim("version_2026_01_26", "Version 2026-01-26", "supported", "host"),
+          claim("sandbox_and_csp", "Sandbox and CSP", "host_owned", "host"),
+          claim("app_tool_calls_governed", "App tool calls governed", "supported", "security"),
           claim("fullscreen", "Fullscreen and picture-in-picture", "planned", "client"),
         ],
       },
@@ -616,10 +639,205 @@ function CardStates() {
   );
 }
 
+/** The forecast Weather's `weather_show` answered. */
+const FORECAST = {
+  city: "Nairobi",
+  updated: "10:05",
+  temp: 24,
+  summary: "Light rain from 15:00",
+  wind: "Wind 12 km/h",
+  days: [
+    { day: "Tue", temp: 22 },
+    { day: "Wed", temp: 25 },
+    { day: "Thu", temp: 26 },
+    { day: "Fri", temp: 23 },
+    { day: "Sat", temp: 24 },
+  ],
+};
+
+/** The app Weather's `weather_show` showed in Chief of staff's thread. */
+export function weatherApp(): AppView {
+  return {
+    callId: "c-weather",
+    server: "weather",
+    appName: "Weather",
+    tool: "weather_show",
+    agent: agents.chief,
+    at: at(10, 5),
+    headerText: "App from Weather · it can't approve anything",
+    resultText: "Nairobi: 24°, light rain from 15:00. Tomorrow 22°, dry.",
+    elsewhereText: "Open the home on this computer to see this app",
+    terminalText: "app from Weather · open it in the home",
+  };
+}
+
+/** Weather framed from `e2e/genui-fixtures/weather.html`; `ask` makes it ask the home for something. */
+export function shownWeather(ask?: "tool" | "forbidden" | "message" | "link"): AppOpen {
+  const origin = window.location.origin;
+  return {
+    state: "shown",
+    frameUrl: `${origin}/ui/e2e/genui-fixtures/weather.html${ask ? `?ask=${ask}` : ""}`,
+    frameOrigin: origin,
+    maxHeight: 640,
+    prefersBorder: true,
+    toolInput: { city: "Nairobi" },
+    toolResult: {
+      content: [{ type: "text", text: weatherApp().resultText }],
+      isError: false,
+      structuredContent: FORECAST,
+    },
+    refusedPermissions: [],
+  };
+}
+
+/** What the home answers an app's request (as `McpAppsHost` does): it never approves anything. */
+export function appAnswer(request: AppRequest): AppAnswer {
+  const params = (request.params ?? {}) as Record<string, unknown>;
+  switch (request.method) {
+    case "ui/initialize":
+      return {
+        result: {
+          protocolVersion: "2026-01-26",
+          hostInfo: { name: "adk-rust", version: "3.0.0" },
+          hostCapabilities: { openLinks: {}, serverTools: {}, logging: {} },
+          hostContext: { displayMode: "inline", availableDisplayModes: ["inline"], platform: "web" },
+        },
+      };
+    case "tools/call": {
+      if (params.name === "set_rain_alert") {
+        return { result: { content: [{ type: "text", text: "Sent to the person. It runs only once they decide." }], isError: false } };
+      }
+      const text = `The app tried to use ${String(params.name)}. Apps can't use it.`;
+      return { error: { code: -32000, message: text }, prompt: { kind: "notice", text } };
+    }
+    case "ui/message": {
+      const content = Array.isArray(params.content) ? (params.content as Array<{ text?: string }>) : [];
+      const message = content.map((block) => block.text ?? "").join("\n");
+      return {
+        result: {},
+        prompt: {
+          kind: "message",
+          text: `The app wants to send: “${message}”`,
+          message,
+          sendLabel: "Send it",
+          dismissLabel: "Not now",
+          note: "It will be marked as suggested by the app",
+        },
+      };
+    }
+    case "ui/open-link":
+      return {
+        result: {},
+        prompt: { kind: "link", text: "Open example.com?", url: String(params.url), openLabel: "Open", dismissLabel: "Cancel" },
+      };
+    default:
+      return { error: { code: -32601, message: `${request.method} is not supported here` } };
+  }
+}
+
+/** The home's app routes over the example: `opened` is what opening the app answers, `never` while it opens. */
+export class AppsFixture implements AppsSeam {
+  readonly asked: AppRequest[] = [];
+  readonly sent: string[] = [];
+
+  constructor(private readonly opened: AppOpen | "never" = shownWeather()) {}
+
+  open(): Promise<AppOpen | undefined> {
+    return this.opened === "never" ? new Promise(() => undefined) : Promise.resolve(this.opened);
+  }
+
+  async request(_session: string, _call: string, request: AppRequest): Promise<AppAnswer> {
+    this.asked.push(request);
+    return appAnswer(request);
+  }
+
+  async message(session: string, _call: string, message: string): Promise<CommandOutcome> {
+    this.sent.push(message);
+    return { type: "sent", sessionId: session } as unknown as CommandOutcome;
+  }
+}
+
+/** The decision of the call Weather asked for: held as Chief of staff, never Always allow. */
+export function appCard(overrides: Partial<DecisionCard> = {}): DecisionCard {
+  return {
+    ...formCard(),
+    id: "apr_app",
+    sessionId: "s-chief",
+    agent: agents.chief,
+    waitingSince: at(10, 6),
+    sinceText: "since 10:06",
+    heading: "Turn on rain alerts for Nairobi",
+    call: {
+      tool: "set_rain_alert",
+      args: { city: "Nairobi", from: "2026-10-27" },
+      text: 'set_rain_alert(city: "Nairobi", from: "2026-10-27")',
+      truncated: false,
+    },
+    timeline: [
+      { text: "The app from Weather asked · 10:06", current: false },
+      { text: "Waiting for you", current: true },
+    ],
+    risk: "low",
+    riskText: "Low risk",
+    reversibility: "canBeChangedBack",
+    reversibilityText: "You can change it back",
+    detail: { text: "From the Weather app in this thread" },
+    ...overrides,
+  };
+}
+
+/** Every state of an app in a thread, as the concept's strip shows them. */
+function AppStates() {
+  const send = async () => ({ type: "answered" }) as unknown as CommandOutcome;
+  const app = weatherApp();
+  const blocked = (reason: "approvalButtons" | "undeclaredSites" | "thisComputer", text: string): AppOpen => ({
+    state: "blocked",
+    reason,
+    text,
+    detail: reason,
+  });
+  const frames: Array<[string, ReactNode]> = [
+    ["Opening", <AppFrame key="1" app={app} seam={new AppsFixture("never")} session="s-chief" />],
+    ["Shown, at the app's height up to a cap", <AppFrame key="2" app={app} seam={new AppsFixture()} session="s-chief" />],
+    [
+      "Blocked",
+      <div key="3" style={{ display: "grid", gap: 12 }}>
+        <AppFrame app={app} seam={new AppsFixture(blocked("approvalButtons", "This app was blocked: it shows approval buttons"))} session="s-chief" />
+        <AppFrame app={app} seam={new AppsFixture(blocked("undeclaredSites", "This app was blocked: it asks for sites it didn't declare"))} session="s-chief" />
+        <AppFrame app={app} seam={new AppsFixture(blocked("thisComputer", "This app was blocked: it asks to reach this computer"))} session="s-chief" />
+      </div>,
+    ],
+    ["Can't be shown here", <AppFrame key="4" app={app} />],
+    [
+      "The app asked to use a tool: the ordinary card below",
+      <AppFrame
+        key="5"
+        app={app}
+        seam={new AppsFixture(shownWeather("tool"))}
+        session="s-chief"
+        below={<CardView card={appCard()} send={send} onSettled={() => undefined} />}
+      />,
+    ],
+    ["A tool apps can't use", <AppFrame key="6" app={app} seam={new AppsFixture(shownWeather("forbidden"))} session="s-chief" />],
+    ["The app wants to send a message", <AppFrame key="7" app={app} seam={new AppsFixture(shownWeather("message"))} session="s-chief" />],
+    ["The app wants to open a link", <AppFrame key="8" app={app} seam={new AppsFixture(shownWeather("link"))} session="s-chief" />],
+  ];
+  return (
+    <main className="genui-states" style={{ ...STRIP, gridTemplateColumns: "repeat(auto-fill, minmax(560px, 1fr))" }}>
+      {frames.map(([title, view], index) => (
+        <Frame key={title} index={index + 1} title={title}>
+          {view}
+        </Frame>
+      ))}
+    </main>
+  );
+}
+
 /**
  * The fixture page of `?screen=genui&genui=`: `form`, `sent`, `display` and `refused` show the
  * home's Threads over Finance's thread drawn that way; `states`, `display-states`,
- * `refused-states` and `card-states` the concept strips; `protocols` the developer panel.
+ * `refused-states` and `card-states` the concept strips; `protocols` the developer panel;
+ * `app` Chief of staff's thread with Weather's app and `app-states` its strip (`genui-apps`).
  */
 export function genuiFixture(params: URLSearchParams): ReactNode {
   const variant = params.get("genui") ?? "form";
@@ -632,6 +850,8 @@ export function genuiFixture(params: URLSearchParams): ReactNode {
       return <RefusedStates />;
     case "card-states":
       return <CardStates />;
+    case "app-states":
+      return <AppStates />;
     case "protocols":
       return <Developer client={new GenuiFixtureClient("refused")} sessionId="s-finance" />;
     default: {

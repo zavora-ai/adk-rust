@@ -17,3 +17,6 @@ export { SurfaceStore, fieldsOf, getPath, initialValues, setPath } from "./store
 export type { A2uiComponent, SurfaceState } from "./store";
 export { isExternalNavigationUrl, sanitizeUrl } from "./security";
 export type { SafeUrlKind } from "./security";
+export { AppFrame } from "./AppFrame";
+export { AppBridge, appPath, frameable, pageTheme } from "./apps";
+export type { AppsSeam, BridgeHost, JsonRpc } from "./apps";

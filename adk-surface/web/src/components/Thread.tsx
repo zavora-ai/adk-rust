@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
-import type { DecisionCard as Card, DrawnSent, DrawnSurface, FeedEntry, RefusedDrawing, ThreadItem } from "../generated/api";
+import { useEffect, useMemo, useState } from "react";
+import type { AppView, DecisionCard as Card, DrawnSent, DrawnSurface, FeedEntry, RefusedDrawing, ThreadItem } from "../generated/api";
 import type { HomeClient } from "../client";
+import { AppFrame } from "../genui/AppFrame";
+import type { AppsSeam } from "../genui/apps";
 import { DrawnView } from "../genui/DrawnView";
 import { useFormState } from "../genui/forms";
 import { RefusedNotice } from "../genui/Refused";
@@ -31,7 +33,14 @@ type Line =
       sent?: DrawnSent;
       result?: Result;
     }
-  | { kind: "refused"; key: string; refusal: RefusedDrawing };
+  | { kind: "refused"; key: string; refusal: RefusedDrawing }
+  | {
+      kind: "app";
+      key: string;
+      app: AppView;
+      /** The calls the app asked for, each with its decision (spec 3.3 §6.1 `genui-apps`). */
+      sends: DrawnSent[];
+    };
 
 /**
  * The thread's lines: activities joined with their results, decisions in place, and what
@@ -46,11 +55,18 @@ export function lines(entries: FeedEntry[]): Line[] {
   const latest = new Map<string, number>();
   const first = new Map<string, number>();
   const results = new Map<string, Result>();
-  // The render calls whose drawing, or refused drawing, the thread shows in their place.
+  // The render calls whose drawing, or refused drawing, the thread shows in their place, and
+  // the MCP tool calls whose app it shows in theirs.
   const drawing = new Set<string>();
+  const apps = new Set<string>();
+  const sent: DrawnSent[] = [];
   for (const entry of entries) {
     for (const item of entry.items) {
-      if (item.kind === "drawnSent") sends.set(`${item.sent.surfaceId}@${item.sent.version}`, item.sent);
+      if (item.kind === "drawnSent") sent.push(item.sent);
+      if (item.kind === "app") {
+        apps.add(item.app.callId);
+        drawing.add(item.app.callId);
+      }
       if (item.kind === "result" && item.callId) results.set(item.callId, item);
       if (item.kind === "drawnRefused" && item.refusal.callId) drawing.add(item.refusal.callId);
       if (item.kind === "drawn") {
@@ -61,8 +77,14 @@ export function lines(entries: FeedEntry[]): Line[] {
       }
     }
   }
-  const claimed = new Set([...sends.values()].map((sent) => sent.callId));
-  const decisions = new Set([...sends.values()].flatMap((sent) => (sent.decisionId ? [sent.decisionId] : [])));
+  // A call an app asked for is sent under the app, by the app's call; a form's, under the form.
+  const appSends = new Map<string, DrawnSent[]>();
+  for (const one of sent) {
+    if (apps.has(one.surfaceId)) appSends.set(one.surfaceId, [...(appSends.get(one.surfaceId) ?? []), one]);
+    else sends.set(`${one.surfaceId}@${one.version}`, one);
+  }
+  const claimed = new Set([...sends.values()].map((one) => one.callId));
+  const decisions = new Set(sent.flatMap((one) => (one.decisionId ? [one.decisionId] : [])));
   for (const entry of entries) {
     entry.items.forEach((item, index) => {
       const key = `${entry.seq}:${index}`;
@@ -107,6 +129,9 @@ export function lines(entries: FeedEntry[]): Line[] {
         case "drawnRefused":
           out.push({ kind: "refused", key, refusal: item.refusal });
           break;
+        case "app":
+          out.push({ kind: "app", key, app: item.app, sends: appSends.get(item.app.callId) ?? [] });
+          break;
         case "drawnSent":
           break;
       }
@@ -147,9 +172,16 @@ export function Thread({
     onSettled(card);
   };
   const shown = lines(entries);
+  const apps = useMemo(() => client.apps?.(), [client]);
   const named = new Set(
     shown.flatMap((line) =>
-      line.kind === "decision" && line.id ? [line.id] : line.kind === "drawn" && line.sent?.decisionId ? [line.sent.decisionId] : [],
+      line.kind === "decision" && line.id
+        ? [line.id]
+        : line.kind === "drawn" && line.sent?.decisionId
+          ? [line.sent.decisionId]
+          : line.kind === "app"
+            ? line.sends.flatMap((one) => (one.decisionId ? [one.decisionId] : []))
+            : [],
     ),
   );
   // One list keyed by id, so a card answered here keeps its place when it leaves `open`.
@@ -176,6 +208,21 @@ export function Thread({
             return <ActivityChip key={line.key} line={line} />;
           case "refused":
             return <RefusedNotice key={line.key} refusal={line.refusal} />;
+          case "app":
+            return (
+              <AppLine
+                key={line.key}
+                line={line}
+                apps={apps}
+                open={open}
+                client={client}
+                send={send}
+                session={session}
+                onSettled={settle}
+                focusDecision={focusDecision}
+                takeOver={takeOver}
+              />
+            );
           case "drawn":
             return (
               <DrawnLine
@@ -299,6 +346,59 @@ function DrawnLine({
           />
         ) : undefined
       }
+    />
+  );
+}
+
+/**
+ * An app an MCP server's tool showed, and under it the decision of each call the app asked
+ * for, on the decision's own background outside the app (spec 3.3 §6.1 `genui-apps`). A call
+ * the agent's rules refused before holding it is a plain notice.
+ */
+function AppLine({
+  line,
+  apps,
+  open,
+  client,
+  send,
+  session,
+  onSettled,
+  focusDecision,
+  takeOver,
+}: {
+  line: Extract<Line, { kind: "app" }>;
+  apps?: AppsSeam;
+  open: Card[];
+  client: HomeClient;
+  send: Send;
+  session?: string;
+  onSettled: (card: Card) => void;
+  focusDecision?: string;
+  takeOver?: TakeOverSeam;
+}) {
+  return (
+    <AppFrame
+      app={line.app}
+      seam={apps}
+      session={session}
+      below={line.sends.map((one) =>
+        one.decisionId ? (
+          <DecisionSlot
+            key={one.callId}
+            id={one.decisionId}
+            card={open.find((candidate) => candidate.id === one.decisionId)}
+            client={client}
+            send={send}
+            onSettled={onSettled}
+            focus={focusDecision === one.decisionId}
+            takeOver={takeOver}
+          />
+        ) : one.held ? null : (
+          <p key={one.callId} className="drawn-notice" role="note">
+            {visible(one.text)}
+          </p>
+        ),
+      )}
     />
   );
 }

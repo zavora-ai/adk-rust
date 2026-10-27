@@ -1,0 +1,188 @@
+<!doctype html>
+<!--
+  The Weather app of the web home's example (spec 3.3 §6.1 `genui-apps`): an MCP App that
+  speaks the 2026-01-26 handshake to the page's bridge (ui/initialize, then
+  ui/notifications/initialized, then the tool's input and result) and reports its height.
+  `?ask=tool|forbidden|message|link` makes it ask the home for something once shown.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Weather</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --card: linear-gradient(180deg, #eef3fb 0%, #f7f9fd 100%);
+        --border: #d7e0ee;
+        --tile: #ffffff;
+        --text: #0f172a;
+        --muted: #475569;
+        --accent: #1d4ed8;
+        color-scheme: light;
+      }
+      :root[data-theme="dark"] {
+        --bg: #15233b;
+        --card: linear-gradient(180deg, #1e3256 0%, #1a2b49 100%);
+        --border: #2f4670;
+        --tile: #15233b;
+        --text: #e8eef6;
+        --muted: #b4c2d6;
+        --accent: #93b4ff;
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      .card {
+        margin: 8px;
+        padding: 14px 16px 16px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--card);
+      }
+      .top {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+      }
+      .city {
+        font-size: 16px;
+        font-weight: 700;
+      }
+      .updated {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .now {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin: 8px 0 12px;
+      }
+      .temp {
+        font-size: 38px;
+        font-weight: 300;
+        line-height: 1;
+      }
+      .summary {
+        color: var(--text);
+        font-size: 13px;
+      }
+      .days {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 6px;
+      }
+      .day {
+        padding: 6px 4px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--tile);
+        text-align: center;
+        font-size: 12px;
+      }
+      .day b {
+        display: block;
+        font-size: 12px;
+      }
+      button {
+        margin-top: 12px;
+        padding: 5px 12px;
+        border: 1px solid var(--accent);
+        border-radius: 999px;
+        background: transparent;
+        color: var(--accent);
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card" id="card" hidden>
+      <div class="top"><span class="city" id="city"></span><span class="updated" id="updated"></span></div>
+      <div class="now">
+        <span class="temp" id="temp"></span>
+        <span class="summary" id="summary"></span>
+      </div>
+      <div class="days" id="days"></div>
+      <button type="button" id="alert">Alert me if it rains</button>
+    </div>
+    <script>
+      let next = 0;
+      const waiting = new Map();
+      const request = (method, params) =>
+        new Promise((resolve) => {
+          const id = ++next;
+          waiting.set(id, resolve);
+          window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+        });
+      const notify = (method, params) => window.parent.postMessage({ jsonrpc: "2.0", method, params }, "*");
+      const size = () => notify("ui/notifications/size-changed", { height: document.documentElement.scrollHeight });
+      const ask = new URLSearchParams(window.location.search).get("ask");
+
+      function show(result) {
+        const forecast = (result && result.structuredContent) || {};
+        document.getElementById("city").textContent = forecast.city || "";
+        document.getElementById("updated").textContent = forecast.updated ? `Updated ${forecast.updated}` : "";
+        document.getElementById("temp").textContent = `${forecast.temp}°`;
+        const summary = document.getElementById("summary");
+        summary.textContent = "";
+        for (const line of [forecast.summary, forecast.wind]) {
+          const div = document.createElement("div");
+          div.textContent = line || "";
+          summary.append(div);
+        }
+        const days = document.getElementById("days");
+        days.textContent = "";
+        for (const day of forecast.days || []) {
+          const tile = document.createElement("div");
+          tile.className = "day";
+          const name = document.createElement("span");
+          name.textContent = day.day;
+          const temp = document.createElement("b");
+          temp.textContent = `${day.temp}°`;
+          tile.append(name, temp);
+          days.append(tile);
+        }
+        document.getElementById("card").hidden = false;
+        size();
+        if (ask === "tool") request("tools/call", { name: "set_rain_alert", arguments: { city: forecast.city, from: "2026-10-28" } });
+        if (ask === "forbidden") request("tools/call", { name: "transfer_funds", arguments: { to: "acct-9", amount: 5000 } });
+        if (ask === "message") request("ui/message", { role: "user", content: [{ type: "text", text: "Remind me to take an umbrella tomorrow." }] });
+        if (ask === "link") request("ui/open-link", { url: "https://example.com/nairobi/radar" });
+      }
+
+      window.addEventListener("message", (event) => {
+        const message = event.data;
+        if (!message || message.jsonrpc !== "2.0") return;
+        if (message.id != null && waiting.has(message.id)) {
+          waiting.get(message.id)(message);
+          waiting.delete(message.id);
+          return;
+        }
+        if (message.method === "ui/notifications/tool-result") show(message.params);
+      });
+
+      document.getElementById("alert").addEventListener("click", () =>
+        request("tools/call", { name: "set_rain_alert", arguments: { city: document.getElementById("city").textContent, from: "2026-10-28" } }),
+      );
+
+      request("ui/initialize", { protocolVersion: "2026-01-26", appInfo: { name: "weather", version: "1.0.0" }, appCapabilities: {} }).then(
+        (answer) => {
+          const theme = answer && answer.result && answer.result.hostContext && answer.result.hostContext.theme;
+          if (theme === "dark" || theme === "light") document.documentElement.dataset.theme = theme;
+          notify("ui/notifications/initialized", {});
+        },
+      );
+    </script>
+  </body>
+</html>

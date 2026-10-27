@@ -7,6 +7,9 @@
 import type {
   AgentRow,
   AgentsResponse,
+  AppAnswer,
+  AppMessageRequest,
+  AppOpen,
   Briefing,
   Command,
   CommandOutcome,
@@ -25,6 +28,8 @@ import type {
 } from "./generated/api";
 import type { AgentsSeam } from "./agents/client";
 import { httpAgents } from "./agents/client";
+import type { AppsSeam } from "./genui/apps";
+import { appPath } from "./genui/apps";
 import type { TakeOverSeam } from "./components/DecisionCard";
 import { mergeAway } from "./away";
 import type {
@@ -159,6 +164,8 @@ export interface HomeClient {
   confirmAgentChange?(command: AgentCommand): Promise<AgentOutcome>;
   /** The roster with the primary agent and whether agents can be added here. */
   agentsWithPrimary?(): Promise<AgentsResponse>;
+  /** Apps from MCP servers in a thread (spec 3.3 §6.1 `genui-apps`): opening them and relaying what they ask. */
+  apps?(): AppsSeam;
 }
 
 async function problem(response: Response): Promise<ApiError> {
@@ -261,6 +268,15 @@ export class HttpClient implements HomeClient {
   }
 
   /** The agents a person adds (spec 3.3 §5.7), over the engine's reads and commands. */
+  apps(): AppsSeam {
+    return {
+      open: (session, call) => this.optional<AppOpen>(`${appPath(session, call)}?surface=${this.surface}`),
+      request: (session, call, request) => this.post<AppAnswer>(`${appPath(session, call)}/requests`, request),
+      message: (session, call, message) =>
+        this.post<CommandOutcome>(`${appPath(session, call)}/message`, { message } satisfies AppMessageRequest),
+    };
+  }
+
   agentsSeam(): AgentsSeam {
     return httpAgents({
       get: (path) => this.request(path),
