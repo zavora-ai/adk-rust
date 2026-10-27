@@ -177,6 +177,14 @@
 # The website's views (spec 3.5 §8.2): the desk's routes under `/api/surface/website`, the
 # setup code, the API contract with its generated types, and the doctests.
 2 adk-surface website doc
+# Screen actions (spec 3.3 §2 item 7): the registry, the policy, the gate and snooze; with
+# `web`, the routes, the API contract and the scenario; with `tui`, `/snooze`; with `voice`,
+# a spoken snooze; and `adk-rust up` hosting them on SQLite with a scripted model.
+2 adk-surface verb-ui doc
+2 adk-surface web,verb-ui
+2 adk-surface tui,verb-ui
+2 adk-surface voice,verb-ui
+2 adk-cli verb-ui,scripted-model
 # `adk-rust` as the terminal surface in a pseudo-terminal: full screen, inline, JSON, a
 # kernel on its socket and a paired one over HTTP (spec 3.3 §5.2, §10 K2).
 2 adk-cli tui,scripted-model
