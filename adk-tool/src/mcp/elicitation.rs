@@ -213,8 +213,8 @@ impl ElicitationScope {
     }
 }
 
-/// The scopes a connection's elicitations resolve against, mirroring
-/// [`SamplingScopes`](crate::sampling::SamplingScopes) (spec 3.1 §10 T1).
+/// The scopes a connection's elicitations resolve against, mirroring `SamplingScopes`
+/// (`mcp-sampling`; spec 3.1 §10 T1).
 ///
 /// A toolset [`enter`](Self::enter)s the scope of each tool call it makes; a request that
 /// arrives while none is in flight resolves to the [fallback](Self::set_fallback).
