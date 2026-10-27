@@ -195,6 +195,12 @@ pub struct Launcher {
     /// with the device (spec 3.3 §10 K2).
     #[cfg(all(feature = "surface", feature = "harness"))]
     surface_pairing: Option<adk_kernel::pairing::Pairing>,
+    /// The web home's page with `frame-src` for an apps origin (spec 3.3 §6.1 `genui-apps`).
+    #[cfg(feature = "genui-apps")]
+    surface_home: Option<Router>,
+    /// What agent-drawn UI adds to AG-UI runs (spec 3.3 §6.1 `genui`).
+    #[cfg(feature = "genui")]
+    ag_ui_extension: Option<Arc<dyn adk_server::rest::controllers::AgUiExtension>>,
     thinking_mode: ThinkingDisplayMode,
     bind_address: IpAddr,
 }
@@ -235,6 +241,10 @@ impl Launcher {
             surface: None,
             #[cfg(all(feature = "surface", feature = "harness"))]
             surface_pairing: None,
+            #[cfg(feature = "genui-apps")]
+            surface_home: None,
+            #[cfg(feature = "genui")]
+            ag_ui_extension: None,
             thinking_mode: ThinkingDisplayMode::Auto,
             bind_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
         }
@@ -536,6 +546,24 @@ impl Launcher {
     #[cfg(all(feature = "surface", feature = "harness"))]
     pub(crate) fn with_surface(mut self, engine: adk_surface::SurfaceEngine) -> Self {
         self.surface = Some(engine);
+        self
+    }
+
+    /// Serves `page` as the web home's page in place of the plain one: the page that frames
+    /// apps from MCP servers on an apps origin (spec 3.3 §6.1 `genui-apps`).
+    #[cfg(feature = "genui-apps")]
+    pub(crate) fn with_surface_home(mut self, page: Router) -> Self {
+        self.surface_home = Some(page);
+        self
+    }
+
+    /// Adds `extension` to protocol-native AG-UI runs (spec 3.3 §6.1 `genui`).
+    #[cfg(feature = "genui")]
+    pub(crate) fn with_ag_ui_extension(
+        mut self,
+        extension: Arc<dyn adk_server::rest::controllers::AgUiExtension>,
+    ) -> Self {
+        self.ag_ui_extension = Some(extension);
         self
     }
 
@@ -868,6 +896,10 @@ impl Launcher {
         let surface = self.surface.clone();
         #[cfg(all(feature = "surface", feature = "harness"))]
         let surface_pairing = self.surface_pairing.clone();
+        #[cfg(feature = "genui-apps")]
+        let surface_home = self.surface_home.clone();
+        #[cfg(feature = "genui")]
+        let ag_ui_extension = self.ag_ui_extension.clone();
         let root_routes = self.root_routes.clone();
         #[cfg(feature = "harness")]
         let kernel_governance = self.kernel_governance.clone();
@@ -893,7 +925,15 @@ impl Launcher {
                     .merge(adk_surface::web::devices_router(surface)),
                 None => adk_surface::web::router(surface),
             };
-            builder = builder.add_api_routes(routes).add_root_routes(adk_surface::web::home());
+            #[cfg(feature = "genui-apps")]
+            let page = surface_home.unwrap_or_else(adk_surface::web::home);
+            #[cfg(not(feature = "genui-apps"))]
+            let page = adk_surface::web::home();
+            builder = builder.add_api_routes(routes).add_root_routes(page);
+        }
+        #[cfg(feature = "genui")]
+        if let Some(extension) = ag_ui_extension {
+            builder = builder.with_ag_ui_extension(extension);
         }
         #[cfg(feature = "harness")]
         if let Some((_, delegate)) = kernel_governance {

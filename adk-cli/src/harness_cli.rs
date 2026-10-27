@@ -2105,6 +2105,8 @@ impl UltraAgents for HarnessUltra {
 }
 
 /// `adk-rust serve` on the harness (spec 3.1 §8.2).
+// One argument per `serve` flag.
+#[allow(clippy::too_many_arguments)]
 pub async fn serve(
     model: ResolvedModel,
     instruction: Option<String>,
@@ -2113,6 +2115,7 @@ pub async fn serve(
     host: IpAddr,
     auth_token: Option<String>,
     store: Option<String>,
+    apps_origin: Option<String>,
 ) -> Result<()> {
     // The realtime models the home's voice view offers a harness marked for voice (spec 3.3
     // §5.6).
@@ -2211,6 +2214,13 @@ pub async fn serve(
         .with_background_runs(background)
         .with_governance(governance)
         .with_bind_address(host);
+    // Apps from MCP servers, framed on `apps_origin` or the sandbox listener (spec 3.3 §6.1).
+    #[cfg(feature = "genui-apps")]
+    {
+        launcher = launcher.with_apps_origin(apps_origin);
+    }
+    #[cfg(not(feature = "genui-apps"))]
+    let _ = apps_origin;
     if let Some(token) = token {
         launcher = launcher.with_auth_token(token);
     }

@@ -162,12 +162,26 @@ async fn run() -> Result<()> {
             agent: cli::ServeAgent::Harness,
             auth_token,
             store,
+            #[cfg(feature = "genui-apps")]
+            apps_origin,
             harness,
         }) => {
             let model = resolve_model(&options).await?;
             let auth_token = auth_token.or_else(|| std::env::var("ADK_SERVE_TOKEN").ok());
             let instruction = options.instruction.clone();
-            harness_cli::serve(model, instruction, harness, port, host, auth_token, store).await
+            #[cfg(not(feature = "genui-apps"))]
+            let apps_origin = None;
+            harness_cli::serve(
+                model,
+                instruction,
+                harness,
+                port,
+                host,
+                auth_token,
+                store,
+                apps_origin,
+            )
+            .await
         }
         #[cfg(feature = "harness")]
         Some(Commands::Serve { port, host, agent: cli::ServeAgent::Chat, .. }) => {

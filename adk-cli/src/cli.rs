@@ -343,6 +343,12 @@ pub enum Commands {
         #[cfg(feature = "harness")]
         #[arg(long, value_name = "URL", conflicts_with = "ephemeral")]
         store: Option<String>,
+        /// The origin apps from MCP servers are framed on, such as
+        /// `https://apps.example.ts.net` for a remote home, proxied to the sandbox listener whose
+        /// port is printed at start (default: that loopback listener; spec 3.3 §6.1 `genui-apps`)
+        #[cfg(feature = "genui-apps")]
+        #[arg(long, value_name = "URL")]
+        apps_origin: Option<String>,
         #[cfg(feature = "harness")]
         #[command(flatten)]
         harness: adk_cli::harness::HarnessArgs,
@@ -902,6 +908,12 @@ pub struct UpArgs {
     #[cfg(feature = "mobile")]
     #[arg(long, value_name = "FILE", requires = "home_url")]
     pub push_key: Option<std::path::PathBuf>,
+    /// The origin apps from MCP servers are framed on, such as
+    /// `https://apps.example.ts.net` for a remote home, proxied to the sandbox listener whose
+    /// port is printed at start (default: that loopback listener; spec 3.3 §6.1 `genui-apps`)
+    #[cfg(feature = "genui-apps")]
+    #[arg(long, value_name = "URL")]
+    pub apps_origin: Option<String>,
     #[command(flatten)]
     pub harness: adk_cli::harness::HarnessArgs,
 }

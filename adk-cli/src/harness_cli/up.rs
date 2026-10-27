@@ -73,6 +73,8 @@ struct KernelStores {
 pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -> Result<()> {
     #[cfg(feature = "mobile")]
     let (home_url, push_key) = (up.home_url.clone(), up.push_key.clone());
+    #[cfg(feature = "genui-apps")]
+    let apps_origin = up.apps_origin.clone();
     let UpArgs { home, bind, auth_token, store, mut harness, .. } = up;
     // The baseline pass's observations are worded by the harness's model (spec 3.2 §7.10).
     let phraser = Arc::new(LlmPhraser::new(model.llm.clone()));
@@ -679,6 +681,11 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     #[cfg(feature = "verb-ui")]
     {
         launcher = launcher.with_verbs(verbs);
+    }
+    // Apps from MCP servers, framed on `--apps-origin` or the sandbox listener (spec 3.3 §6.1).
+    #[cfg(feature = "genui-apps")]
+    {
+        launcher = launcher.with_apps_origin(apps_origin);
     }
     #[cfg(feature = "mobile")]
     if let Some(phone) = phone {
