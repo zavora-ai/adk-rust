@@ -293,8 +293,6 @@ impl McpAppsHostBuilder {
 /// The app a session's tool call showed, as its events record it.
 pub(crate) struct ShownApp {
     record: McpAppRecord,
-    /// The tool's name as the agent called it, prefixed when two servers share it.
-    called_as: String,
     args: Value,
     response: Value,
 }
@@ -339,7 +337,6 @@ impl McpAppsHost {
                         };
                         return Some(ShownApp {
                             record,
-                            called_as: function_response.name.clone(),
                             args,
                             response: function_response.response.clone(),
                         });

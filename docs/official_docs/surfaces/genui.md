@@ -60,7 +60,7 @@ cargo install adk-cli --features genui-apps
 | Flag or line | What it does |
 |---|---|
 | `apps from MCP servers: framed sandboxed at http://127.0.0.1:<port>` | Printed at start: the second loopback listener the apps are framed on |
-| `--apps-origin https://apps.example.ts.net` | A remote home's apps origin, proxied by you to that listener; the home's page frames that origin alone |
+| `--apps-origin https://apps.example.ts.net` | A remote home's apps origin, proxied by you to that listener; the home's page frames that origin alone, and only the page — at whatever address it was opened, `up --home-url` included — frames an app |
 
 ## Drawing
 
@@ -256,9 +256,9 @@ drawings with their technical reasons.
 | A2UI (`a2ui`) | Version 0.9.1 | Supported |
 | A2UI | Version 1.0 | Candidate |
 | A2UI | Trusted component catalog; no approval controls in drawn UI | Supported (security) |
-| AG-UI (`ag_ui`) | a2ui-surface activity; interrupts for a drawn submit | Supported (transport) |
-| MCP Apps (`mcp_apps`) | Version 2026-01-26; app tool calls governed | Supported with `genui-apps`, planned without |
-| MCP Apps | Sandbox and CSP | Host-owned with `genui-apps` |
+| AG-UI (`ag_ui`) | a2ui-surface activity; interrupts for a drawn submit | Supported (transport) where `GenuiAgUi` is set; planned, "Not set on this server", where not |
+| MCP Apps (`mcp_apps`) | Version 2026-01-26; app tool calls governed | Supported with `genui-apps` where an apps host is mounted; planned without |
+| MCP Apps | Sandbox and CSP | Host-owned with `genui-apps` where an apps host is mounted |
 | MCP Apps | Fullscreen and picture-in-picture | Planned |
 
 The phone app shows the decision a form asks for, as any decision; it has no thread view, so the drawing itself is shown in the web home and the terminal. Chat
@@ -288,9 +288,11 @@ notice, with the technical reason on a muted second line. `--output json` adds t
 | `drawn.submitted` | `session`, `surface`, `version`, `action`, `tool`, `held`, `decision` |
 | `drawn.refused` | `session`, `by`, `reason`, `component`, `detail` |
 | `app` | `session`, `call`, `server`, `tool`, `by`, `text` |
+| `app.asked` | `session`, `call` (the app's), `tool`, `held`, `decision`: a call the app asked for |
 
 An app from an MCP server is never framed in a terminal: it is "app from Weather · open it in
-the home" and the tool's text result. Every string passes the terminal's escape filter.
+the home" and the tool's text result, in place of the call that showed it; a call the app
+asked for is "The app asked · 10:06". Every string passes the terminal's escape filter.
 
 ## Mounting it on your own server
 
@@ -311,6 +313,10 @@ let app = ServerBuilder::new(config)
     .build();
 ```
 
+`genui::router` claims A2UI only: AG-UI and MCP Apps read "Not set on this server" on the
+Protocols tab. A host that sets `GenuiAgUi` or mounts an apps host says so with
+`genui::router_wired(engine, GenuiWiring { ag_ui: true, mcp_apps: true })`.
+
 `examples/scripted_genui.rs` is a complete home over a kernel and a scripted model: Finance
 draws the invoice form, then a screen with an "Allow once" button, which is refused.
 
@@ -328,7 +334,7 @@ extension point (`ServerBuilder::with_ag_ui_extension`), so `adk-server` gains n
 |---|---|
 | A render tool's result | An `ACTIVITY_SNAPSHOT` with `activityType: "a2ui-surface"` and `content.a2ui_operations`, for a drawing the event proves and the validator passes again |
 | An `a2ui-surface` activity the client sends back | Kept only when it passes the validator again; dropped otherwise, from the stream, the session state and the messages snapshot |
-| `forwardedProps.a2uiAction` (`surfaceId`, `version`, `actionId`, `values`) | The governed send: checked against the stored drawing as `submitDrawn` is, recorded as `surface.drawn.submitted`, and held by the run's agent as a requested call, so the run ends with the `tool_call` interrupt and nothing runs |
+| `forwardedProps.a2uiAction` (`surfaceId`, `version`, `actionId`, `values`) | The governed send: checked against the stored drawing as `submitDrawn` is, recorded as `surface.drawn.submitted`, and held by the run's agent as a requested call, so the run ends with the `tool_call` interrupt and nothing runs. A form another agent drew answers `403 surface.not_here`: its drawing agent holds it, in its own target |
 | `GET /api/ui/capabilities` | `ag_ui` lists `a2ui_activity` |
 
 ```rust,ignore
@@ -367,27 +373,34 @@ reason:
 | Check | Blocked as |
 |---|---|
 | The MIME type is `text/html;profile=mcp-app` | "This app was blocked: it isn't an app this home can show" |
-| No declared site is this computer, its network or the home's own origin (`http://localhost`, `http://127.0.0.1` and private ranges included) | "This app was blocked: it asks to reach this computer" |
+| No declared site is this computer, its network, the home's own origin or the origin of the page that opens it (`http://localhost`, `http://127.0.0.1`, private ranges, a bracketed host that is not an IPv6 address, `*.ts.net` tailnet names, and a wildcard over any of them included) | "This app was blocked: it asks to reach this computer" |
 | The HTML loads and connects to declared sites only | "This app was blocked: it asks for sites it didn't declare" |
 | A best-effort scan finds no decision's words ("Allow once", "Approved", …) | "This app was blocked: it shows approval buttons" |
 
 **Framed on its own origin.** The app's page is served by a second listener, under a content
-security policy built from what passed and `frame-ancestors` naming the home; the home's page
+security policy built from what passed and `frame-ancestors` naming the home: its own origins
+and the origin of the page that opened the app, from the request's `Host` with the apps
+origin's scheme, so a remote home behind `--apps-origin` and a home listening on every
+interface both frame it. A page whose policy cannot be sent is not served. The home's page
 adds `frame-src` for that origin only. The frame is `sandbox="allow-scripts"`: no same-origin
 access, forms, popups or navigation of the page. The surface API answers every request whose
 `Origin` is the apps origin, or the opaque `null` a sandboxed frame sends, `403
-surface.not_here`, whatever `SecurityConfig` admits (`refuse_apps_origin`).
+surface.not_here`, whatever `SecurityConfig` admits (`refuse_apps_origin`);
+`refuse_apps_origin_recorded` also records `surface.app.origin_refused`, at most once a minute
+with the number refused since, so a page that keeps trying cannot fill the trail.
 
 **What an app asks** reaches the home through the page, one request at a time:
 
 | Request | Answer |
 |---|---|
 | `ui/initialize`, `ping` | Answered; display mode inline |
-| `tools/call` for a tool its own server publishes for both the model and the app | Held as the agent whose call showed the app, as a requested call: the ordinary card follows the app, its first step "The app from Weather asked · 10:06", its detail "From the Weather app in this thread", never **Always allow**; `surface.app.call_held` |
-| `tools/call` for a model-only tool, or another server's tool | Refused: "The app tried to use transfer_funds. Apps can't use it."; `surface.app.call_refused` |
+| `tools/call` for a tool its own server publishes for both the model and the app, a tool that declares no `_meta.ui` included | Asked of the agent whose call showed the app as a requested call, by the name the agent knows that server's tool by (`surface.app.call_asked`), and answered once the agent holds it — the ordinary card follows the app, its first step "The app from Weather asked · 10:06", its detail "From the Weather app in this thread", never **Always allow**; `surface.app.call_held` — or refuses it (`surface.app.call_refused`, by the agent). The same call again is the decision already waiting; an app with three calls waiting is told "The app already asked for 3 things. Answer those first." |
+| `tools/call` for a model-only tool, another server's tool, or one the agent is not given | Refused: "The app tried to use transfer_funds. Apps can't use it."; `surface.app.call_refused` |
+| `tools/call` whose name is not a tool's name | A malformed request: nothing it sent is shown or recorded |
+| `tools/call` when the app's server does not list its tools | "The app's server didn't answer. Try again in a moment.": not a refusal |
 | `tools/call` for an app-only tool | Refused: "This app needs a tool this home can't run yet" |
-| `ui/message` | "The app wants to send: “…”" with **Send it** and **Not now**; **Send it** sends it as the person's message inside an untrusted-content block labelled "Suggested by the Weather app"; `surface.app.message_sent` |
-| `ui/open-link` | "Open example.com?" with **Open** and **Cancel**; only **Open** opens it |
+| `ui/message` | "The app wants to send: “…”" with **Send it** and **Not now**; **Send it** sends it as the person's message inside an untrusted-content block labelled "Suggested by the Weather app", which the model reads and every surface shows as the message with "Suggested by the Weather app" under it; `surface.app.message_sent` |
+| `ui/open-link` | "Open example.com?" with **Open** and **Cancel**; only **Open** opens it. A link to this computer or its network (loopback, `0.0.0.0`, private and link-local addresses, IPv4 inside IPv6, `.local` and single-label names) is refused, on the server and again on the page |
 | `ui/update-model-context` | Logged, never forwarded to the model |
 | Anything else | "not supported here" |
 
@@ -400,7 +413,7 @@ Mount the host on your own server:
 ```rust,ignore
 use std::sync::Arc;
 
-use adk_surface::genui::McpAppsHost;
+use adk_surface::genui::{GenuiWiring, McpAppsHost};
 
 let host = McpAppsHost::builder()
     .servers(manager) // Arc<adk_tool::mcp::McpServerManager>
@@ -408,12 +421,14 @@ let host = McpAppsHost::builder()
     .home_origin("http://127.0.0.1:8080")
     .build();
 let sandbox = host.sandbox_router(); // serve on the apps origin's own listener
+let wiring = GenuiWiring { ag_ui: false, mcp_apps: true };
 let app = ServerBuilder::new(config)
     .add_api_routes(adk_surface::web::router(engine.clone()))
+    .add_api_routes(adk_surface::web::genui::router_wired(engine.clone(), wiring))
     .add_api_routes(adk_surface::web::genui::apps_router(engine, host))
     .add_root_routes(adk_surface::web::home_with_apps_origin("http://127.0.0.1:41234"))
     .build();
-let app = adk_surface::web::genui::refuse_apps_origin(app, "http://127.0.0.1:41234");
+let app = adk_surface::web::genui::refuse_apps_origin_recorded(app, "http://127.0.0.1:41234", trail);
 ```
 
 The renderer is also a React package, `@zavora-ai/adk-surface-react` (`adk-surface/react`),

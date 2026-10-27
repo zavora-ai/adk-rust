@@ -287,7 +287,9 @@ adk-tool = { version = "3.0.0", features = ["mcp", "mcp-apps"] }
 |---|---|
 | `AdkClientHandler::with_apps` | Declares the `io.modelcontextprotocol/ui` extension with `text/html;profile=mcp-app` in the handshake; `McpServerManager` declares it for every managed server |
 | `McpToolset::ui_bindings` | Each tool's `McpUiBinding`: the resource it shows and its visibility (`model`, `app`), app-only tools included |
-| `McpToolset::tools` | Leaves out tools only an app may call (`visibility: ["app"]`): a model never sees them |
+| `McpToolset::tool_visibility`, `McpServerManager::server_tool_visibility` | Who may call each tool the server publishes (`McpUiVisibility::of_tool`): its `_meta.ui.visibility`, with or without an app of its own, or the model and the app when it declares none |
+| `McpToolset::tools` | Leaves out tools only an app may call (`visibility: ["app"]`), with or without an app of their own: a model never sees them |
+| `McpServerManager::agent_tool_name` | The name the manager's `tools()` give one server's tool: its own, `{server}__{tool}` when another server publishes the same name, or none when the agent is not given it, so a host never asks for another server's tool |
 | `McpToolset::read_app` | The `McpAppResource`: its HTML, the sites its `_meta.ui.csp` declares, the device permissions it asks for, and whether it prefers a border |
 | `MCP_APP_STATE_KEY` (`adk.mcp.app`) | The `McpAppRecord` a tool with an app writes when its call succeeds, so a host shows an app only for a call the server's own tool made |
 

@@ -169,8 +169,8 @@ approval service and sessions are real, on SQLite.
 | `weather_show`'s HTML carries an "Approved ✓ Allow once" card: "This app was blocked: it shows approval buttons", no frame, a `surface.app.blocked` record | `GET /api/surface/genui/sessions/{session}/apps/{call}` and the audit trail |
 | An innocent-looking app asks for `transfer_funds` (model-only) and `send_invoice` (another server's): both refused and recorded; an app-only tool is "This app needs a tool this home can't run yet" | The app's answers and the audit trail |
 | A tool the app may call waits as the agent's card, "The app from Weather asked", never **Always allow**; nothing runs | The inbox and the tool's count |
-| A decide `POST` from the apps origin answers `403` under default and development security; the card's version is unchanged | `POST /api/surface/commands` and the card |
-| `ui/message` "Approved" is only a suggestion; **Send it** sends it as the person's message, marked as the app's | The thread |
+| A decide `POST` from the apps origin answers `403` under default and development security, recorded as `surface.app.origin_refused`; the card's version is unchanged | `POST /api/surface/commands`, the audit trail and the card |
+| `ui/message` "Approved" is only a suggestion; **Send it** sends it as the person's message, marked as the app's: the model reads it in an untrusted-content block, the thread and the queue show "Approved" and "Suggested by the Weather app" | The thread, the queue and the session |
 | A CSP declaring `http://127.0.0.1` is blocked | The app's open answer |
 | The frame is labelled "it can't approve anything", sandboxed with scripts only, and outside the decision background | The Playwright screenshots |
 
