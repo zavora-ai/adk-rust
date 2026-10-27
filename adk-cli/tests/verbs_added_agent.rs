@@ -267,6 +267,21 @@ async fn an_added_agents_snooze_waits_through_a_restart_and_runs_once() {
         .collect();
     assert_eq!(answers, ["allowOnce", "edit", "deny"], "never Always allow");
     assert_eq!(api.wake_of("News digest").await, Some(at), "nothing moves before an answer");
+    // The terminal attached to the kernel draws the same card (spec 3.3 §7.1).
+    let kernel = place.kernel.display().to_string();
+    let attached =
+        common::run(&["--home", &kernel, "--output", "json"], place.home.path(), place.ws.path());
+    let shown = String::from_utf8_lossy(&attached.stdout).into_owned();
+    let drawn = shown
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|line| line["type"] == "decisions")
+        .flat_map(|line| line["cards"].as_array().cloned().unwrap_or_default())
+        .find(|drawn| drawn["call"]["tool"] == "verb_snooze")
+        .unwrap_or_else(|| panic!("no screen-action card in:\n{shown}"));
+    assert_eq!(drawn["heading"], card["heading"], "{drawn}");
+    assert_eq!(drawn["reversibilityText"], "You can change it back");
+    assert_eq!(drawn["detail"]["text"], card["detail"]["text"]);
     second.kill();
 
     // 3. After another restart the card still waits; Allow once on the phone runs it once.

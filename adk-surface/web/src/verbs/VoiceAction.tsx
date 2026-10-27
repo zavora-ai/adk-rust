@@ -4,12 +4,13 @@
  * it ended.
  */
 import { useEffect, useState } from "react";
+import { visible } from "../safe";
 import { verbLabels } from "./labels";
 import { trusted } from "./trust";
 
 export type SpokenAction =
   | { kind: "pending"; actionId: string; heard?: string; heading: string; cancelUntil: string }
-  | { kind: "ended"; done: boolean; heard?: string; heading?: string; text: string };
+  | { kind: "ended"; actionId?: string; done: boolean; heard?: string; heading?: string; text: string };
 
 export function VoiceAction({ action, onCancel }: { action: SpokenAction; onCancel: (actionId: string) => void }) {
   const [now, setNow] = useState(() => Date.now());
@@ -24,21 +25,21 @@ export function VoiceAction({ action, onCancel }: { action: SpokenAction; onCanc
   if (!pending && !action.heading) {
     return (
       <section className="voice-action voice-action-plain" aria-live="polite">
-        {action.heard && <p className="voice-action-heard">{verbLabels.heard(action.heard)}</p>}
-        <p className="voice-action-text">{action.text}</p>
+        {action.heard && <p className="voice-action-heard">{verbLabels.heard(visible(action.heard))}</p>}
+        <p className="voice-action-text">{visible(action.text)}</p>
       </section>
     );
   }
   return (
     <section className="voice-action" aria-live="polite">
       <div className="voice-action-top">
-        {action.heard && <p className="voice-action-heard">{verbLabels.heard(action.heard)}</p>}
+        {action.heard && <p className="voice-action-heard">{verbLabels.heard(visible(action.heard))}</p>}
         <span className={`voice-action-pill${pending ? " counting" : action.done ? " done" : ""}`}>{pill}</span>
       </div>
-      <h2 className="voice-action-heading">{action.heading}</h2>
+      <h2 className="voice-action-heading">{visible(action.heading ?? "")}</h2>
       <div className="voice-action-foot">
         <span className="voice-action-sub">
-          {pending ? `${verbLabels.comingUp} · ${verbLabels.changeItBack}` : action.text}
+          {pending ? `${verbLabels.comingUp} · ${verbLabels.changeItBack}` : visible(action.text)}
         </span>
         {pending && (
           <button

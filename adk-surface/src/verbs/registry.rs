@@ -192,6 +192,39 @@ impl AgendaAccess for KernelAgenda {
     }
 }
 
+/// No agenda: a process that only draws the cards of another process's actions.
+struct NoAgenda;
+
+impl NoAgenda {
+    fn refused() -> VerbError {
+        VerbError::refused("Coming up isn't available here — use the home")
+    }
+}
+
+#[async_trait]
+impl AgendaAccess for NoAgenda {
+    async fn items(&self, _: &str, _: Option<&PartitionId>) -> Result<Vec<AgendaItem>, VerbError> {
+        Err(Self::refused())
+    }
+
+    async fn item(&self, _: &str) -> Result<Option<AgendaItem>, VerbError> {
+        Err(Self::refused())
+    }
+
+    async fn started(&self, _: &AgendaItem) -> Result<bool, VerbError> {
+        Err(Self::refused())
+    }
+
+    async fn reschedule(
+        &self,
+        _: &str,
+        _: WakeSet,
+        _: &SubjectRef,
+    ) -> Result<AgendaItem, VerbError> {
+        Err(Self::refused())
+    }
+}
+
 /// Runs one screen action (spec 3.3 §2 item 7).
 ///
 /// A handler gets a [`VerbScope`] and nothing else: no approval service, agent table, rules,
@@ -599,6 +632,25 @@ impl VerbRegistry {
             answers: None,
             names: HashMap::new(),
         }
+    }
+
+    /// A builder of the first catalogue in `app` with no agenda, for a process that draws the
+    /// cards and lists the grant of actions another process takes, such as a terminal attached
+    /// to `adk-rust up` (spec 3.3 §7.1): its [`hints`](Self::hints) and [`grant`](Self::grant)
+    /// are those of the process that hosts the actions, and every action it would run is
+    /// refused.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_surface::verbs::VerbRegistry;
+    ///
+    /// let drawn = VerbRegistry::catalogue("adk-rust").build().unwrap();
+    /// assert_eq!(drawn.origin(), "verbs:adk-rust");
+    /// let _hints = drawn.hints();
+    /// ```
+    pub fn catalogue(app: impl Into<String>) -> VerbRegistryBuilder {
+        Self::builder(app, Arc::new(NoAgenda))
     }
 
     pub(crate) fn inner(&self) -> &Inner {

@@ -963,7 +963,7 @@ impl HarnessLauncher {
             #[cfg(feature = "verb-ui")]
             let verbs = self.verbs.clone();
             #[cfg(feature = "verb-ui")]
-            let hinted = verbs.clone();
+            let hinted = verbs.clone().map(|registry| (registry, source.clone()));
             let engine = crate::surface::harness_engine(
                 &app,
                 source,
@@ -973,10 +973,10 @@ impl HarnessLauncher {
                     // An agent's request reads as the kernel's words on every surface, and
                     // every agent lists what it may ask (spec 3.3 §5.7, §7.1).
                     #[cfg(feature = "verb-ui")]
-                    let engine = match &hinted {
-                        Some(registry) => {
-                            engine.card_hints(Arc::new(registry.hints())).grant(registry.grant())
-                        }
+                    let engine = match hinted {
+                        Some((registry, source)) => engine
+                            .card_hints(Arc::new(registry.hints().reading(source)))
+                            .grant(registry.grant()),
                         None => engine,
                     };
                     engine

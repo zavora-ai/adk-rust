@@ -12,6 +12,7 @@ import { problemText } from "../client";
 import { whenAhead } from "../format";
 import { originOf } from "../origin";
 import type { Planned } from "../plan";
+import { visible } from "../safe";
 import { verbLabels } from "./labels";
 import { trusted } from "./trust";
 import "./verbs.css";
@@ -64,7 +65,7 @@ export function ComingUpRow({
   return (
     <li className={`coming-up-item${can ? " can-snooze" : ""}${open ? " menu-open" : ""}`} onKeyDown={closeOnEscape}>
       <div className="coming-up-row">
-        <span>{planned.agent ? `${planned.agent} · ${planned.title}` : planned.title}</span>
+        <span>{visible(planned.agent ? `${planned.agent} · ${planned.title}` : planned.title)}</span>
         <span className="coming-up-end">
           <time className="mono" dateTime={planned.at.toISOString()}>
             {whenAhead(planned.at)}
@@ -76,7 +77,7 @@ export function ComingUpRow({
               aria-haspopup="menu"
               aria-expanded={open}
               aria-controls={menu}
-              aria-label={verbLabels.menu(planned.title)}
+              aria-label={verbLabels.menu(visible(planned.title))}
               onClick={(event) => {
                 if (trusted(event)) setOpen(!open);
               }}
@@ -113,7 +114,7 @@ export function ComingUpRow({
       {state.kind === "done" && <p className="coming-up-note">{verbLabels.snoozedByYou}</p>}
       {state.kind === "cant" && (
         <p className="coming-up-note" role="status">
-          {state.text}
+          {visible(state.text)}
         </p>
       )}
     </li>

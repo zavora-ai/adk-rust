@@ -244,7 +244,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         let mut registry = adk_surface::verbs::VerbRegistry::builder(APP_NAME, Arc::new(agenda))
             .approval_store(verb_approvals)
             .governance(governance.clone())
-            .sessions(setup.sessions());
+            .sessions(setup.sessions())
+            .agent_name(APP_NAME, "ADK-Rust");
         if let Some((trail, answers)) = &surface_records {
             registry = registry.audit(trail.clone()).answers(answers.clone());
         }
