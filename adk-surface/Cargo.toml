@@ -208,6 +208,11 @@ required-features = ["web", "verb-ui"]
 [[example]]
 name = "scripted_workflow"
 required-features = ["web", "workflow"]
+# Agent-drawn UI over a scripted kernel: Finance draws the invoice form, which
+# `web/e2e/genui.spec.ts` sends and allows once (spec 3.3 §6.1 `genui`, §12).
+[[example]]
+name = "scripted_genui"
+required-features = ["web", "genui"]
 
 [package.metadata.docs.rs]
 all-features = true
