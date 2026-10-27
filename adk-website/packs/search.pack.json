@@ -1,0 +1,46 @@
+{
+  "format": "adk-website.pack/1",
+  "name": "search",
+  "version": "1.0.0",
+  "publisher": {
+    "id": "adk-website",
+    "name": "ADK-Rust adk-website"
+  },
+  "description": "Search over the current release",
+  "capabilities": [
+    {
+      "name": "search_site",
+      "description": "Search the site's pages",
+      "effect": "read_only",
+      "minTrust": "public",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    }
+  ],
+  "handlers": {
+    "search_site": {
+      "handler": "search"
+    }
+  },
+  "digest": "sha256:b27d13f47511110e9722e00e42458f5750d8a4f54e125eb908b37d7a02afeafd",
+  "proof": {
+    "alg": "EdDSA",
+    "kid": "adk-website-builtin-packs-test",
+    "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFkay13ZWJzaXRlLWJ1aWx0aW4tcGFja3MtdGVzdCJ9..xer3gV086FswketzSEi8oF0TTyerbFAyRaq_VA0YaRY-YenWXBBza9lTCfULR-iLUztASOPQKhXmpUk5M9VDCQ"
+  }
+}

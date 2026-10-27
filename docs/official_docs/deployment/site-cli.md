@@ -77,6 +77,7 @@ languages = ["en"]
 | `well-known/` | Files released under `/.well-known/`: the root-signed contract and `keys.json` that `awp keys` writes |
 | `static/` | Files released at their own paths, such as a migrated site's uploads |
 | `feeds.json` | The feeds the owner configured: `[{"mapping": …, "bounds": …}]` |
+| `packs/` | Installed capability packs: `trust.json`, each `{name}.pack.json` as signed, and their driver manifests in `drivers/{name}/` ([Signed bundles](capability-packs.md#signed-bundles)) |
 | `data/site-log.db` | The site log (SQLite) |
 | `data/history/` | Every saved version of every item, for reverts and replays |
 | `data/keys/` | `release.jwk` signs the log; `web-bot-auth.jwk` signs crawls; `archive.key` seals legacy exports. Each is created owner-only on first use |
@@ -107,6 +108,7 @@ it publishes only through its approvals, each role by a different person (A-I23)
 | `site feeds [--json]` | The configured feeds with their bounds and rates; model calls are always zero |
 | `site migrate URL \| --wxr FILE [--uploads DIR] \| --backup DIR --origin URL` | Moves an existing site into the project ([below](#migration-and-freeze)) |
 | `site freeze URL --vantage URL [--edge URL]` | Publishes a crawled snapshot of the legacy site as a signed release |
+| `site packs list [--json]`, `install FILE`, `remove NAME`, `trust PUBLISHER KEY`, `sign FILE --key KEY` | Capability packs as signed bundles: install only from publishers in `packs/trust.json`, refused when unsigned, tampered, invalid, conflicting or a downgrade ([Trusting and installing](capability-packs.md#trusting-and-installing)) |
 
 Item ids are `<kind directory>/<slug>/<language>`, such as `posts/hello-world/en`.
 

@@ -1,0 +1,63 @@
+{
+  "format": "adk-website.pack/1",
+  "name": "quote",
+  "version": "1.0.0",
+  "publisher": {
+    "id": "adk-website",
+    "name": "ADK-Rust adk-website"
+  },
+  "description": "Quotes at the release's published prices",
+  "capabilities": [
+    {
+      "name": "get_quote",
+      "description": "Quote products or services at their published prices",
+      "effect": "idempotent",
+      "minTrust": "known",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "properties": {
+                "quantity": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "sku": {
+                  "maxLength": 100,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "sku",
+                "quantity"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100,
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    }
+  ],
+  "handlers": {
+    "get_quote": {
+      "handler": "quote"
+    }
+  },
+  "digest": "sha256:5a78120c39610d0409a4affcb66915fd3cf9fca2aecd23556307125b914f741d",
+  "proof": {
+    "alg": "EdDSA",
+    "kid": "adk-website-builtin-packs-test",
+    "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFkay13ZWJzaXRlLWJ1aWx0aW4tcGFja3MtdGVzdCJ9..V6bgnQqlniGXqfeiwX1zxFlWoasXSAxNa6InnGQwM2mZoA-v0HS-W862USUC_3iOoMWybWc5UUBL-uk8nvDkBg"
+  }
+}

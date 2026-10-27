@@ -1,0 +1,178 @@
+{
+  "format": "adk-website.pack/1",
+  "name": "booking",
+  "version": "1.0.0",
+  "publisher": {
+    "id": "adk-website",
+    "name": "ADK-Rust adk-website"
+  },
+  "description": "Availability, bookings, appointments and registrations",
+  "capabilities": [
+    {
+      "name": "check_availability",
+      "description": "List open booking slots",
+      "effect": "read_only",
+      "minTrust": "public",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "format": "date",
+            "type": "string"
+          },
+          "to": {
+            "format": "date",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "book",
+      "description": "Book a slot",
+      "effect": "non_idempotent",
+      "minTrust": "known",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "format": "email",
+            "maxLength": 254,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "type": "string"
+          },
+          "slot": {
+            "maxLength": 100,
+            "type": "string"
+          }
+        },
+        "required": [
+          "slot",
+          "name",
+          "email"
+        ],
+        "type": "object"
+      },
+      "consent": {
+        "scope": "contact",
+        "policyVersion": "1"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "book_appointment",
+      "description": "Book an appointment",
+      "effect": "non_idempotent",
+      "minTrust": "known",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "format": "email",
+            "maxLength": 254,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 500,
+            "type": "string"
+          },
+          "slot": {
+            "maxLength": 100,
+            "type": "string"
+          }
+        },
+        "required": [
+          "slot",
+          "name",
+          "email"
+        ],
+        "type": "object"
+      },
+      "consent": {
+        "scope": "appointment",
+        "policyVersion": "1"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "register",
+      "description": "Register for an event or a sign-up list",
+      "effect": "non_idempotent",
+      "minTrust": "public",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "format": "email",
+            "maxLength": 254,
+            "type": "string"
+          },
+          "event": {
+            "maxLength": 200,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "name",
+          "email"
+        ],
+        "type": "object"
+      },
+      "consent": {
+        "scope": "contact",
+        "policyVersion": "1"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    }
+  ],
+  "handlers": {
+    "book": {
+      "handler": "booking",
+      "operation": "book"
+    },
+    "book_appointment": {
+      "handler": "booking",
+      "operation": "book"
+    },
+    "check_availability": {
+      "handler": "booking",
+      "operation": "availability"
+    },
+    "register": {
+      "handler": "form"
+    }
+  },
+  "digest": "sha256:8bccb872c8a1d6f0144ded319706fe55f34ca0cd0ad0744e1944c58a0d23568b",
+  "proof": {
+    "alg": "EdDSA",
+    "kid": "adk-website-builtin-packs-test",
+    "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFkay13ZWJzaXRlLWJ1aWx0aW4tcGFja3MtdGVzdCJ9..e4K4asJGPpyLSsthSCbfGypbS_JrxgDIxLfNePpnKZvOkYj4I6uGEhzRi71ten2xQDWdC0OWmC_TSlUoac1aBw"
+  }
+}

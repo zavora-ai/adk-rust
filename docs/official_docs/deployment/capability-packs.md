@@ -7,10 +7,12 @@ search. One declaration, `awp_types::CapabilityV2`, and one handler,
 a set of declarations with their handlers; `adk-website` ships six, and a site adds its own
 (spec 3.5 §7.16 `packs`, §7.23).
 
-> **Note:** a pack in 3.0.0 is code: declarations and handlers registered on the edge. The
-> signed, installable bundle of declarations, handlers, skills and driver manifests that spec
-> 3.5 §7.23 describes is not built
-> ([Remaining work](../../design/spec-3.5-agentic-web.md#remaining-work)).
+A pack ships as a signed bundle: its declarations, the configuration of the built-in handlers
+that serve them, its playbooks and its driver manifests, sealed with a content digest and its
+publisher's AWP 2.0 signature, and verified against the site's trust list when it is installed
+and every time the site starts ([Signed bundles](#signed-bundles)). A capability whose handler
+is your own code runs on an edge you build with `CapabilityRegistry`
+([Registering a pack](#registering-a-pack)).
 
 ```toml
 [dependencies]
@@ -344,6 +346,131 @@ Secrets in `caldav.json` are references — `env:VAR` or `file:PATH` relative to
 never the secret itself; `token` takes an OAuth bearer token in place of `username` and
 `password`. The server must be `https`, or plain `http` on loopback, since the credentials
 travel with every request.
+
+## Signed bundles
+
+A bundle is one JSON document (spec 3.5 §7.23), format `adk-website.pack/1`:
+
+```json
+{
+  "format": "adk-website.pack/1",
+  "name": "waitlist",
+  "version": "1.0.0",
+  "publisher": { "id": "tables.example", "name": "Tables" },
+  "description": "A waiting list, the menu and table reservations for restaurants",
+  "capabilities": [ { "name": "join_waitlist", "effect": "non_idempotent", "…": "…" } ],
+  "handlers": {
+    "join_waitlist": { "handler": "form" },
+    "list_menu": { "handler": "listing", "content": "product" },
+    "table_availability": { "handler": "booking", "operation": "availability" }
+  },
+  "playbooks": [ { "id": "waitlist-capture", "job": "capture", "agents": ["concierge"], "text": "---\nname: waitlist-capture\n…" } ],
+  "drivers": [ { "id": "tables-pos", "manifest": "id = \"tables-pos\"\n…" } ],
+  "digest": "sha256:…",
+  "proof": { "alg": "EdDSA", "kid": "tables-2026", "jws": "<detached JWS>" }
+}
+```
+
+| Member | Holds |
+|--------|-------|
+| `name`, `version` | Lowercase letters, digits and `-`; a Semantic Version without build metadata |
+| `publisher` | The `id` a trust list names, and a display `name` |
+| `capabilities` | Declarations, as [above](#the-declaration) |
+| `handlers` | The built-in handler serving each capability ([below](#handler-configuration)) |
+| `playbooks` | Skill files for a job of spec 3.5 §7.20, each for agents that run the job; the front matter's `name` is the playbook's `id`, which is not one of the product's playbooks |
+| `drivers` | Kernel driver manifests (TOML), each sandboxed (`os` or `container`), serving the `public` or `back-office` partition, every tool with an effect class other than `other` |
+| `digest` | SHA-256 of the JCS form of the bundle without `digest` and `proof` |
+| `proof` | The publisher's detached JWS (EdDSA) over the JCS form of the bundle without `proof`, so it covers the digest |
+
+A pack runs no code in the site's process: its capabilities run on the built-in handlers, and
+its drivers are MCP servers the kernel runs sandboxed once the owner mounts them.
+
+### Handler configuration
+
+| `handler` | Serves | Effect at least | Input members it reads |
+|-----------|--------|-----------------|------------------------|
+| `form` | The contact, a lead and a `lead_captured` signal | `idempotent` | — |
+| `quote` | Quotes at the release's prices | `idempotent` | `items` |
+| `order` with `operation` `place`, `status` or `return` | Orders against quotes | `non_idempotent`; `read_only` for `status` | `quoteId`; `orderId` |
+| `payment` | Payments through the owner's payment desk | `non_idempotent` | — |
+| `booking` with `operation` `availability` or `book` | The owner's calendar | `read_only`; `non_idempotent` for `book` | —; `slot` |
+| `search` | The release's index | `read_only` | `query` |
+| `listing` with `content` | Published items of one content kind | `read_only` | — |
+| `status` | An application's status by its reference | `read_only` | `reference` |
+
+A capability declared weaker than its handler, or whose input schema lacks a member the handler
+reads, is refused. A capability that takes an `email` must ask for consent (A-I8), under policy
+version `1`, the site's public terms; its scope joins the edge's consent scopes.
+
+### Publishing a pack
+
+The publisher writes the bundle without `digest` and `proof` and seals it with their key file —
+a private Ed25519 JWK, the format `adk-rust awp keys` writes:
+
+```text
+$ adk-rust site packs sign waitlist.json --key tables-2026.jwk
+Signed waitlist 1.0.0 as waitlist-1.0.0.pack.json; digest sha256:….
+Owners trust this key with `adk-rust site packs trust tables.example KEY_FILE`; its thumbprint is ….
+{"crv":"Ed25519","kid":"tables-2026","kty":"OKP","x":"…"}
+```
+
+`sign` checks the content first. In Rust, `PackBundle::check` and `PackBundle::seal` do the same
+with any `DocumentSigner`, such as a KMS-backed one.
+
+### Trusting and installing
+
+| Command | Does |
+|---------|------|
+| `site packs trust PUBLISHER KEY [--kid ID] [--note TEXT]` | Adds the publisher's public JWK to `packs/trust.json`, after showing its RFC 7638 thumbprint to compare with the publisher's; a private key file is refused |
+| `site packs install FILE` | Verifies the bundle, shows what it adds and installs it: `packs/{name}.pack.json` byte for byte, its driver manifests in `packs/drivers/{name}/` |
+| `site packs list [--json]` | The built-in packs, the installed ones, and the installed files the site does not load, with why |
+| `site packs remove NAME` | Removes an installed pack and its driver manifests |
+
+Each asks at the terminal; `--yes` answers for a script. A pack takes effect when the site next
+starts: `deploy::serve` verifies every installed bundle again, serves its capabilities on the
+edge with the kind's, and writes its playbooks into each agent's workspace under
+`.skills/packs/{name}/`. A file that no longer verifies is not loaded and is logged. Driver
+manifests are never mounted by installation: mount each with `adk-rust drivers mount
+packs/drivers/{name}/{id}.toml`, which asks the owner again.
+
+| Refusal | When |
+|---------|------|
+| `unsigned` | The bundle has no `proof` |
+| `tampered` | The content does not match `digest`, or `proof` does not verify with the publisher's trusted key |
+| `unknown_publisher` | `packs/trust.json` holds no key for the bundle's publisher and key id |
+| `downgrade` | The installed version is newer |
+| `republished` | The installed version has other content |
+| `conflict` | Another pack holds the name, a capability, a playbook or a driver; a built-in pack's name belongs to its publisher |
+| `invalid` | The content breaks a rule above |
+| `malformed`, `format` | Not a bundle, or a later format |
+
+The conformance vectors in `adk-website/tests/fixtures/packs/` — a valid pack, its upgrade and a
+bundle for each refusal, with `cases.json` naming each outcome — are checked by
+`tests/packs.rs`; another implementation can run the same cases.
+
+### The built-in packs as bundles
+
+The six default packs ship as bundles in `adk-website/packs/`, generated from
+`packs::capability` and `Pack::handler` and checked by a test that regenerates them. They are
+signed with a test key whose seed is public in `packs::builtin`, so the signature proves only
+that the compiled-in copy is the generated one. Its trust is explicit: `builtin_trust()` names it
+for the built-in bundles alone, and `site packs trust` refuses it, so a pack anyone signs with it
+never installs.
+
+```rust
+use adk_website::packs::Pack;
+use adk_website::packs::installed::PackDir;
+
+fn packs(project: &std::path::Path) -> adk_core::Result<()> {
+    let booking = Pack::Booking.bundle()?;
+    assert_eq!(booking.bundle.publisher.id, "adk-website");
+    let loaded = PackDir::new(project).load()?;
+    for refused in loaded.refused() {
+        tracing::warn!(file = %refused.file.display(), error = %refused.error, "pack not loaded");
+    }
+    Ok(())
+}
+```
 
 ## Checking a pack
 

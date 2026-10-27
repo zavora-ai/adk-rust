@@ -80,6 +80,8 @@ pub struct Shop {
     pub payments: Option<Arc<dyn adk_website::edge::handlers::PaymentDesk>>,
     pub calendar: Option<Arc<dyn adk_website::edge::handlers::Calendar>>,
     pub thresholds: adk_website::packs::ApprovalThresholds,
+    /// The packs the edge serves; the built-in ones when not set.
+    pub packs: Option<adk_website::packs::installed::PackSet>,
 }
 
 /// The edge of `site` with a payment desk, a calendar and the owner's thresholds.
@@ -105,7 +107,7 @@ pub async fn edge_shop(site: &Site, domain: &str, shop: Shop) -> EdgeSite {
     let signer: Arc<dyn DocumentSigner> = keys.edge.clone();
     let policy = ConsentPolicy { digest: Digest::from_sha256_bytes([1; 32]), ttl: None };
     let origin = site.site.origin.clone();
-    let edge = SiteEdge::build(SiteEdgeParts {
+    let parts = SiteEdgeParts {
         template: site.template.clone(),
         runtime: site.runtime.clone(),
         keys: EdgeKeys { card: signer.clone(), receipt: signer },
@@ -129,7 +131,15 @@ pub async fn edge_shop(site: &Site, domain: &str, shop: Shop) -> EdgeSite {
         beacon: None,
         limits: None,
         public_agent: shop.public_agent,
-    })
+    };
+    let edge = match shop.packs {
+        Some(packs) => SiteEdge::build_with_packs(
+            parts,
+            Arc::new(adk_website::edge::commerce::InMemoryCommerceStore::default()),
+            &packs,
+        ),
+        None => SiteEdge::build(parts),
+    }
     .unwrap();
     let router = site_router(&edge.edge, site.host.clone(), &site.base.config.name);
     let announced = Arc::new(Recorded { target: edge.announcer(), seen: Mutex::default() });

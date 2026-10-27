@@ -129,6 +129,8 @@ impl RunningSite {
                 .approval_service(approvals.clone())
                 .add_operator_policy(delay.clone())
         };
+        // The packs' playbooks join each agent's own (spec 3.5 §7.23).
+        self.packs.install_playbooks(&self.paths.data().join("agents")).await?;
         let kit = TeamKit {
             model,
             root: self.paths.data().join("agents"),

@@ -1,0 +1,14 @@
+{
+  "keys": [
+    {
+      "publisher": "tables.example",
+      "kid": "tables-2026",
+      "publicKey": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "n0lDnp2wlbxBEe0l01eV2DG8VaBH9LHX9q7jd3u0EiA"
+      },
+      "note": "The conformance vectors' publisher"
+    }
+  ]
+}

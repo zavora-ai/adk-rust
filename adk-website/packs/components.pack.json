@@ -1,0 +1,102 @@
+{
+  "format": "adk-website.pack/1",
+  "name": "components",
+  "version": "1.0.0",
+  "publisher": {
+    "id": "adk-website",
+    "name": "ADK-Rust adk-website"
+  },
+  "description": "Read-only components: practice information, status lookups, notices, events and schedules",
+  "capabilities": [
+    {
+      "name": "practice_information",
+      "description": "Opening hours, services and how to reach the practice",
+      "effect": "read_only",
+      "minTrust": "public",
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "lookup_status",
+      "description": "Look up the status of an application by its reference",
+      "effect": "read_only",
+      "minTrust": "verified",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "reference": {
+            "maxLength": 100,
+            "type": "string"
+          }
+        },
+        "required": [
+          "reference"
+        ],
+        "type": "object"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "list_notices",
+      "description": "List the official notices in force",
+      "effect": "read_only",
+      "minTrust": "public",
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "list_events",
+      "description": "List upcoming events",
+      "effect": "read_only",
+      "minTrust": "public",
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "get_schedule",
+      "description": "The event's schedule",
+      "effect": "read_only",
+      "minTrust": "public",
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    }
+  ],
+  "handlers": {
+    "get_schedule": {
+      "handler": "listing",
+      "content": "event"
+    },
+    "list_events": {
+      "handler": "listing",
+      "content": "event"
+    },
+    "list_notices": {
+      "handler": "listing",
+      "content": "notice"
+    },
+    "lookup_status": {
+      "handler": "status"
+    },
+    "practice_information": {
+      "handler": "listing",
+      "content": "service"
+    }
+  },
+  "digest": "sha256:d3f9c1b171f433e36bed0fcc25d29d3aaad1e4176d736622dffcc2bafe50eb84",
+  "proof": {
+    "alg": "EdDSA",
+    "kid": "adk-website-builtin-packs-test",
+    "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFkay13ZWJzaXRlLWJ1aWx0aW4tcGFja3MtdGVzdCJ9..GRibayKZUs3KmgZd79fgnt26YdUZLUeewHfDOTIVLsBBMQpW8AAa--zAkA2XLZAIH6J4DcXFTMs_t_iGUtCMCg"
+  }
+}

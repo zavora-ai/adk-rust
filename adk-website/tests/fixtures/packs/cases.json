@@ -1,0 +1,166 @@
+{
+  "cases": [
+    {
+      "name": "a trusted pack installs once",
+      "steps": [
+        {
+          "expect": "new",
+          "install": "waitlist-1.0.0.pack.json"
+        },
+        {
+          "expect": "unchanged",
+          "install": "waitlist-1.0.0.pack.json"
+        }
+      ]
+    },
+    {
+      "name": "a newer version upgrades",
+      "steps": [
+        {
+          "expect": "new",
+          "install": "waitlist-1.0.0.pack.json"
+        },
+        {
+          "expect": "upgrade",
+          "install": "waitlist-1.1.0.pack.json"
+        }
+      ]
+    },
+    {
+      "name": "an older version is a downgrade",
+      "steps": [
+        {
+          "expect": "new",
+          "install": "waitlist-1.1.0.pack.json"
+        },
+        {
+          "expect": "downgrade",
+          "install": "waitlist-1.0.0.pack.json"
+        }
+      ]
+    },
+    {
+      "name": "a version never changes",
+      "steps": [
+        {
+          "expect": "new",
+          "install": "waitlist-1.0.0.pack.json"
+        },
+        {
+          "expect": "republished",
+          "install": "republished.pack.json"
+        }
+      ]
+    },
+    {
+      "name": "unsigned",
+      "steps": [
+        {
+          "expect": "unsigned",
+          "install": "unsigned.pack.json"
+        }
+      ]
+    },
+    {
+      "name": "content changed after signing",
+      "steps": [
+        {
+          "expect": "tampered",
+          "install": "tampered-content.pack.json"
+        }
+      ]
+    },
+    {
+      "name": "content and digest changed after signing",
+      "steps": [
+        {
+          "expect": "tampered",
+          "install": "tampered-digest.pack.json"
+        }
+      ]
+    },
+    {
+      "name": "signed with another key under a trusted id",
+      "steps": [
+        {
+          "expect": "tampered",
+          "install": "wrong-key.pack.json"
+        }
+      ]
+    },
+    {
+      "name": "a publisher the site does not trust",
+      "steps": [
+        {
+          "expect": "unknown_publisher",
+          "install": "unknown-publisher.pack.json"
+        }
+      ]
+    },
+    {
+      "name": "a driver outside the sandbox",
+      "steps": [
+        {
+          "expect": "invalid",
+          "install": "unsandboxed-driver.pack.json"
+        }
+      ]
+    },
+    {
+      "name": "a driver tool with no effect class",
+      "steps": [
+        {
+          "expect": "invalid",
+          "install": "undeclared-effect.pack.json"
+        }
+      ]
+    },
+    {
+      "name": "a capability declared weaker than its handler",
+      "steps": [
+        {
+          "expect": "invalid",
+          "install": "understated-effect.pack.json"
+        }
+      ]
+    },
+    {
+      "name": "a built-in pack's capability",
+      "steps": [
+        {
+          "expect": "conflict",
+          "install": "takes-a-built-in-capability.pack.json"
+        }
+      ]
+    },
+    {
+      "name": "a built-in pack's name",
+      "steps": [
+        {
+          "expect": "conflict",
+          "install": "takes-a-built-in-name.pack.json"
+        }
+      ]
+    },
+    {
+      "name": "a later format",
+      "steps": [
+        {
+          "expect": "format",
+          "install": "future-format.pack.json"
+        }
+      ]
+    },
+    {
+      "name": "a member the format does not know",
+      "steps": [
+        {
+          "expect": "malformed",
+          "install": "unknown-member.pack.json"
+        }
+      ]
+    }
+  ],
+  "outcomes": "new, upgrade and unchanged install; any other is the refusal's code",
+  "trust": "trust.json"
+}

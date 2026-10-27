@@ -1,0 +1,312 @@
+{
+  "format": "adk-website.pack/1",
+  "name": "order",
+  "version": "1.0.0",
+  "publisher": {
+    "id": "adk-website",
+    "name": "ADK-Rust adk-website"
+  },
+  "description": "The catalogue, orders, payments, returns, donations, subscriptions and tickets",
+  "capabilities": [
+    {
+      "name": "list_products",
+      "description": "List the catalogue at its published prices",
+      "effect": "read_only",
+      "minTrust": "public",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "maxLength": 100,
+            "type": "string"
+          },
+          "cursor": {
+            "maxLength": 200,
+            "type": "string"
+          },
+          "query": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "place_order",
+      "description": "Place an order against a quote",
+      "effect": "non_idempotent",
+      "minTrust": "known",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "quoteId": {
+            "maxLength": 100,
+            "type": "string"
+          }
+        },
+        "required": [
+          "quoteId"
+        ],
+        "type": "object"
+      },
+      "consent": {
+        "scope": "payment_data",
+        "policyVersion": "1"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "pay_order",
+      "description": "Pay for an order through an accepted rail, with the buyer's AP2 payment mandate or rail credential",
+      "effect": "non_idempotent",
+      "minTrust": "known",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "credential": {
+            "description": "A single-use payment token from the buyer's payment provider, for rails that take one",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "mandate": {
+            "description": "The buyer's AP2 payment mandate for the cart the order returned, with its user authorization",
+            "required": [
+              "payment_mandate_contents"
+            ],
+            "type": "object"
+          },
+          "orderId": {
+            "maxLength": 100,
+            "type": "string"
+          },
+          "rail": {
+            "maxLength": 50,
+            "type": "string"
+          }
+        },
+        "required": [
+          "orderId",
+          "rail"
+        ],
+        "type": "object"
+      },
+      "consent": {
+        "scope": "payment_data",
+        "policyVersion": "1"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "order_status",
+      "description": "Report an order's status",
+      "effect": "read_only",
+      "minTrust": "known",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "orderId": {
+            "maxLength": 100,
+            "type": "string"
+          }
+        },
+        "required": [
+          "orderId"
+        ],
+        "type": "object"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "request_return",
+      "description": "Request a return; every return is held for the owner",
+      "effect": "non_idempotent",
+      "minTrust": "known",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "orderId": {
+            "maxLength": 100,
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "type": "string"
+          }
+        },
+        "required": [
+          "orderId",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "approval": {
+        "mode": "always"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "donate",
+      "description": "Make a donation and receive a receipt",
+      "effect": "non_idempotent",
+      "minTrust": "public",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "currency": {
+            "maxLength": 3,
+            "type": "string"
+          },
+          "email": {
+            "format": "email",
+            "maxLength": 254,
+            "type": "string"
+          },
+          "giftAid": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "amount",
+          "currency",
+          "email"
+        ],
+        "type": "object"
+      },
+      "consent": {
+        "scope": "payment_data",
+        "policyVersion": "1"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "subscribe",
+      "description": "Start a paid subscription",
+      "effect": "non_idempotent",
+      "minTrust": "known",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "format": "email",
+            "maxLength": 254,
+            "type": "string"
+          },
+          "plan": {
+            "maxLength": 100,
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan",
+          "email"
+        ],
+        "type": "object"
+      },
+      "consent": {
+        "scope": "payment_data",
+        "policyVersion": "1"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "buy_ticket",
+      "description": "Buy tickets",
+      "effect": "non_idempotent",
+      "minTrust": "known",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "format": "email",
+            "maxLength": 254,
+            "type": "string"
+          },
+          "quantity": {
+            "maximum": 20,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "ticket": {
+            "maxLength": 100,
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket",
+          "quantity",
+          "email"
+        ],
+        "type": "object"
+      },
+      "consent": {
+        "scope": "payment_data",
+        "policyVersion": "1"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    }
+  ],
+  "handlers": {
+    "buy_ticket": {
+      "handler": "payment"
+    },
+    "donate": {
+      "handler": "payment"
+    },
+    "list_products": {
+      "handler": "listing",
+      "content": "product"
+    },
+    "order_status": {
+      "handler": "order",
+      "operation": "status"
+    },
+    "pay_order": {
+      "handler": "payment"
+    },
+    "place_order": {
+      "handler": "order",
+      "operation": "place"
+    },
+    "request_return": {
+      "handler": "order",
+      "operation": "return"
+    },
+    "subscribe": {
+      "handler": "payment"
+    }
+  },
+  "digest": "sha256:6b7d14f3b031dd816855b7428cb26aca1b5c6905f3f36b8946375c46e05aa24c",
+  "proof": {
+    "alg": "EdDSA",
+    "kid": "adk-website-builtin-packs-test",
+    "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFkay13ZWJzaXRlLWJ1aWx0aW4tcGFja3MtdGVzdCJ9..iDqhJeM2Ny0mKwtRe4KS6BNSNx1GR7S31Fm7jGeA_rWCWC2WBoY0ThNwPOsGfNH6OxuzHfbPLyD_t_0a1XO2Bg"
+  }
+}

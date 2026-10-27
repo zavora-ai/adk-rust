@@ -27,7 +27,7 @@ is for each kind of site.
 | `jobs` | The §7.20 jobs, their ladder bindings, first-week authority, and the kernel processes that run them | §7.20, §7.11 |
 | `onboarding` | The nine-stage plan, three starting points, the setup-code gate, discovery, release 1, the live preview, the cost estimate, the scaffold | §7.17, §7.18 |
 | `themes` | `paper`, `harbour` and `meadow`, each with light and dark tokens that pass WCAG 2.2 AA | §7.16 |
-| `packs` | Capability declarations: contact, quote, booking, order, search, components | §7.16, §7.4 |
+| `packs` | Capability declarations: contact, quote, booking, order, search, components; packs as signed, installable bundles of declarations, handler configuration, playbooks and driver manifests, verified against the site's trust list (`bundle`, `trust`, `builtin`, `installed`) | §7.16, §7.4, §7.23 |
 | `edge` | The site on `adk-server`'s agent edge: the packs' handlers, the adapters to the back office and the pipeline, the read-only step, the public router with the release behind the edge | §7.9, §7.10, §7.16, A-I11 |
 | `contract` | The site's keys and signed documents: the contract, the key set with its delegations, the public terms, the `_awp-root` record | §7.2, §7.3, §7.7 |
 | `deploy` | The four deployment shapes, `serve` for one site and `serve_agency` for many, agency isolation at the kernel and the edge; with a model, the back office hosted on the kernel under the owner's standing rules | §7.22, §7.17, §7.19, A-I22 |

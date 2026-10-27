@@ -11,12 +11,14 @@
 //! | `site revert <item> [--to <seq>]` | `UpdateEngine::revert` |
 //! | `site batches`, `site feeds` | `UpdateEngine::batches` and `feeds`, through the engine's journal in `data/updates/` |
 //! | `site migrate`, `site freeze` | `adk_site::migrate`: sources, detectors, quarantine, conversion, feature mapping, archive, `Freeze` |
+//! | `site packs list\|install\|remove\|trust\|sign` | `adk_website::packs`: capability packs as signed bundles (spec 3.5 §7.23) |
 //!
 //! Every change is the act of the person at the terminal: they confirm it, or pass `--yes`.
 //! A site whose charter names an approval chain for publication publishes only through its
 //! approvals (A-I23).
 
 mod migrate;
+mod packs;
 pub(crate) mod project;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -201,6 +203,13 @@ pub enum SiteCommands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Capability packs: signed bundles of capabilities, handler configuration, playbooks
+    /// and driver manifests, installed from publishers the site trusts.
+    Packs {
+        #[command(subcommand)]
+        command: packs::PacksCommands,
+    },
 }
 
 /// `adk-rust site content` subcommands.
@@ -308,6 +317,7 @@ pub async fn run(command: SiteCommands, target: SiteTarget) -> Result<()> {
         SiteCommands::Revert { item, to, yes } => revert(&paths, &item, to, yes).await,
         SiteCommands::Batches { json } => batches(&paths, json),
         SiteCommands::Feeds { json } => feeds(&paths, json).await,
+        SiteCommands::Packs { command } => packs::run(paths.root(), command).await,
     }
 }
 

@@ -251,6 +251,7 @@ pub fn plan(
                 "capabilities.json",
                 "public-terms.json",
                 "charter.draft.json",
+                "packs",
             ]
             .into_iter()
             .map(str::to_string)

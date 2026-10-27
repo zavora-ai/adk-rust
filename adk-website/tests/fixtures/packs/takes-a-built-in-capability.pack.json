@@ -1,0 +1,169 @@
+{
+  "format": "adk-website.pack/1",
+  "name": "waitlist",
+  "version": "1.0.0",
+  "publisher": {
+    "id": "tables.example",
+    "name": "Tables"
+  },
+  "description": "A waiting list, the menu and table reservations for restaurants",
+  "capabilities": [
+    {
+      "name": "join_waitlist",
+      "description": "Join tonight's waiting list",
+      "effect": "non_idempotent",
+      "minTrust": "public",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "format": "email",
+            "maxLength": 254,
+            "type": "string"
+          },
+          "party": {
+            "maximum": 12,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "email",
+          "party"
+        ],
+        "type": "object"
+      },
+      "consent": {
+        "scope": "waitlist",
+        "policyVersion": "1"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "list_menu",
+      "description": "Tonight's menu at its published prices",
+      "effect": "read_only",
+      "minTrust": "public",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "maxLength": 100,
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "table_availability",
+      "description": "Open tables",
+      "effect": "read_only",
+      "minTrust": "public",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "format": "date",
+            "type": "string"
+          },
+          "to": {
+            "format": "date",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "book",
+      "description": "Reserve a table",
+      "effect": "non_idempotent",
+      "minTrust": "known",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "format": "email",
+            "maxLength": 254,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "type": "string"
+          },
+          "slot": {
+            "maxLength": 100,
+            "type": "string"
+          }
+        },
+        "required": [
+          "slot",
+          "name",
+          "email"
+        ],
+        "type": "object"
+      },
+      "consent": {
+        "scope": "contact",
+        "policyVersion": "1"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    }
+  ],
+  "handlers": {
+    "book": {
+      "handler": "booking",
+      "operation": "book"
+    },
+    "join_waitlist": {
+      "handler": "form"
+    },
+    "list_menu": {
+      "handler": "listing",
+      "content": "product"
+    },
+    "table_availability": {
+      "handler": "booking",
+      "operation": "availability"
+    }
+  },
+  "playbooks": [
+    {
+      "id": "waitlist-capture",
+      "job": "capture",
+      "agents": [
+        "concierge"
+      ],
+      "text": "---\nname: waitlist-capture\ndescription: \"Offer the waiting list when the evening is full.\"\ntags: [website, \"job:capture\", \"agent:concierge\"]\n---\n\n# Waiting list\n\nWhen no table is open, offer `join_waitlist`; never promise a table.\n"
+    }
+  ],
+  "drivers": [
+    {
+      "id": "tables-pos",
+      "manifest": "# The restaurant's point of sale.\nid = \"tables-pos\"\ncommand = \"mcp-tables-pos\"\npartitions = [\"back-office\"]\nsandbox = \"os\"\n\n[tools]\ntables_list = \"read\"\ntables_hold = \"schedule_with_others\"\n"
+    }
+  ],
+  "digest": "sha256:3452eaa971159267eb5496d91fd2eb4b1a37a653e2c3abe071778d1fcefbdd8f",
+  "proof": {
+    "alg": "EdDSA",
+    "kid": "tables-2026",
+    "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6InRhYmxlcy0yMDI2In0..jTFTOVpBTZG1BxcNHeGlm0G8LlS4qARymXn2ho6PfpWi19n18E3-TEczpgjK3temTlw6zuigucWdRBklX0LcCA"
+  }
+}

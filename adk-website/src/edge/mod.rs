@@ -21,6 +21,11 @@
 //! from `calendar.json`. Quotes, orders and the bookings of `calendar.json`'s slots live in a
 //! [`commerce::CommerceStore`]: [`SiteEdge::build_with_commerce`] takes a durable one,
 //! [`SiteEdge::build`] keeps them in memory.
+//!
+//! The declarations and their handlers come from the site's capability packs (spec 3.5
+//! §7.23): [`SiteEdge::build_with_packs`] serves the kind's capabilities and every capability
+//! of the packs a site installed ([`PackSet`]), each with the built-in handler its pack's
+//! configuration names; the other constructors serve the built-in packs.
 
 pub mod adapters;
 pub mod ap2;
@@ -46,7 +51,7 @@ use adk_server::awp::{
 };
 use adk_site::host::SiteHost;
 use async_trait::async_trait;
-use awp_types::{ConsentScope, ContentKind, SiteState};
+use awp_types::{CapabilityV2, ConsentScope, SiteState};
 use chrono::Duration;
 use serde_json::{Value, json};
 
@@ -58,18 +63,9 @@ use self::handlers::{
 };
 use crate::incident::{InMemoryStatusBoard, StatusRecord, StatusSink};
 use crate::kinds::KindTemplate;
+use crate::packs::bundle::HandlerConfig;
+use crate::packs::installed::{Dispatched, PackSet};
 use crate::team::{AgentRole, SiteTeam};
-
-/// The capabilities whose handler is a form (spec 3.5 §7.16 `contact`).
-const FORMS: &[&str] = &[
-    "submit_inquiry",
-    "subscribe_newsletter",
-    "request_prospectus",
-    "licensing_enquiry",
-    "volunteer",
-    "register",
-    "submit_service_form",
-];
 
 /// What a site's edge is built from (spec 3.5 §7.9).
 pub struct SiteEdgeParts {
@@ -205,7 +201,7 @@ pub struct SiteEdge {
 
 impl SiteEdge {
     /// The kind's capability declarations with the packs' handlers (spec 3.5 §7.16 `packs`),
-    /// each under the owner's amount threshold (§7.4).
+    /// each under the owner's amount threshold (§7.4), from the built-in packs.
     ///
     /// # Errors
     ///
@@ -215,6 +211,32 @@ impl SiteEdge {
         parts: &SiteEdgeParts,
         quotes: &Arc<QuoteBook>,
         orders: &Arc<OrderBook>,
+    ) -> Result<CapabilityRegistry> {
+        Self::registry_with_packs(parts, quotes, orders, &PackSet::builtin()?)
+    }
+
+    /// The capabilities `packs` serve for the kind ([`PackSet::served`]), each with the
+    /// built-in handler its pack's configuration names and under the owner's amount threshold
+    /// (spec 3.5 §7.4, §7.23).
+    ///
+    /// # Errors
+    ///
+    /// A threshold on a capability whose calls carry no amount, or a declaration the
+    /// registry refuses.
+    pub fn registry_with_packs(
+        parts: &SiteEdgeParts,
+        quotes: &Arc<QuoteBook>,
+        orders: &Arc<OrderBook>,
+        packs: &PackSet,
+    ) -> Result<CapabilityRegistry> {
+        Self::registry_of(parts, quotes, orders, packs.served(&parts.template))
+    }
+
+    fn registry_of(
+        parts: &SiteEdgeParts,
+        quotes: &Arc<QuoteBook>,
+        orders: &Arc<OrderBook>,
+        served: Vec<(CapabilityV2, HandlerConfig)>,
     ) -> Result<CapabilityRegistry> {
         let site = parts.runtime.site();
         let domain = Url::parse(&site.origin)
@@ -246,39 +268,31 @@ impl SiteEdge {
         }
         let payment: Arc<dyn CapabilityHandler> = Arc::new(payment);
         let mut registry = CapabilityRegistry::new(domain);
-        for declaration in parts.template.capabilities() {
+        for (declaration, config) in served {
             let declaration = parts.thresholds.apply(declaration);
-            let handler: Arc<dyn CapabilityHandler> = match declaration.name.as_str() {
-                name if FORMS.contains(&name) => forms.clone(),
-                "get_quote" => Arc::new(QuoteHandler::new(
+            let handler: Arc<dyn CapabilityHandler> = match config {
+                HandlerConfig::Form => forms.clone(),
+                HandlerConfig::Quote => Arc::new(QuoteHandler::new(
                     content.clone(),
                     quotes.clone(),
                     parts.quote_validity,
                 )),
-                "place_order" | "order_status" | "request_return" => order.clone(),
-                "pay_order" | "donate" | "subscribe" | "buy_ticket" => payment.clone(),
-                "check_availability" | "book" | "book_appointment" => booking.clone(),
-                "search_site" => Arc::new(SearchHandler::new(parts.search.clone())),
-                "list_products" => {
-                    Arc::new(ListingHandler::new(content.clone(), ContentKind::Product))
+                HandlerConfig::Order { .. } => order.clone(),
+                HandlerConfig::Payment => payment.clone(),
+                HandlerConfig::Booking { .. } => booking.clone(),
+                HandlerConfig::Search => Arc::new(SearchHandler::new(parts.search.clone())),
+                HandlerConfig::Listing { content: kind } => {
+                    Arc::new(ListingHandler::new(content.clone(), kind))
                 }
-                "list_notices" => {
-                    Arc::new(ListingHandler::new(content.clone(), ContentKind::Notice))
+                HandlerConfig::Status => Arc::new(StatusHandler::new(parts.stores.leads.clone())),
+            };
+            // A pack's capability reaches a handler that dispatches on a built-in name as
+            // that name (spec 3.5 §7.23).
+            let handler = match config.dispatches_as() {
+                Some(builtin) if builtin != declaration.name => {
+                    Arc::new(Dispatched::new(builtin, handler)) as Arc<dyn CapabilityHandler>
                 }
-                "list_events" | "get_schedule" => {
-                    Arc::new(ListingHandler::new(content.clone(), ContentKind::Event))
-                }
-                "practice_information" => {
-                    Arc::new(ListingHandler::new(content.clone(), ContentKind::Service))
-                }
-                "lookup_status" => Arc::new(StatusHandler::new(parts.stores.leads.clone())),
-                other => {
-                    tracing::warn!(
-                        capability = other,
-                        "no pack handles this capability; it is not served"
-                    );
-                    continue;
-                }
+                _ => handler,
             };
             registry
                 .declare(declaration, handler)
@@ -307,9 +321,52 @@ impl SiteEdge {
         parts: SiteEdgeParts,
         commerce: Arc<dyn commerce::CommerceStore>,
     ) -> Result<Self> {
+        Self::build_with_packs(parts, commerce, &PackSet::builtin()?)
+    }
+
+    /// Builds the site's edge over `packs`, such as a served site's [`PackDir::load`]
+    /// (spec 3.5 §7.9, §7.23): the kind's capabilities and those of the installed packs, each
+    /// with the handler its pack configures, quotes and orders in `commerce`. The consent
+    /// scopes the served capabilities ask for join `parts.consent`'s.
+    ///
+    /// [`PackDir::load`]: crate::packs::installed::PackDir::load
+    ///
+    /// # Errors
+    ///
+    /// A refused declaration, or the edge builder's error.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    ///
+    /// use adk_website::edge::commerce::InMemoryCommerceStore;
+    /// use adk_website::edge::{SiteEdge, SiteEdgeParts};
+    /// use adk_website::packs::installed::PackDir;
+    ///
+    /// fn edge(parts: SiteEdgeParts, project: &std::path::Path) -> adk_core::Result<SiteEdge> {
+    ///     let packs = PackDir::new(project).load()?;
+    ///     SiteEdge::build_with_packs(parts, Arc::new(InMemoryCommerceStore::default()), &packs)
+    /// }
+    /// ```
+    pub fn build_with_packs(
+        mut parts: SiteEdgeParts,
+        commerce: Arc<dyn commerce::CommerceStore>,
+        packs: &PackSet,
+    ) -> Result<Self> {
         let quotes = Arc::new(QuoteBook::new(commerce.clone()));
         let orders = Arc::new(OrderBook::new(commerce));
-        let registry = Self::registry(&parts, &quotes, &orders)?;
+        let served = packs.served(&parts.template);
+        if let Some(consent) = parts.consent.as_mut() {
+            for (declaration, _) in &served {
+                if let Some(required) = &declaration.consent
+                    && !consent.scopes.contains(&required.scope)
+                {
+                    consent.scopes.push(required.scope.clone());
+                }
+            }
+        }
+        let registry = Self::registry_of(&parts, &quotes, &orders, served)?;
         let mut builder = AwpEdge::builder(registry, parts.keys, parts.edge_url)
             .stores(parts.stores.clone())
             .signals(parts.signals.clone())

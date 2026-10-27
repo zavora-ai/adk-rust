@@ -13,6 +13,7 @@
 //! | Leads | The contact book and nurture counts in `data/edge.db` ([`SqliteLeadRecords`]), scored against the kind's threshold; the email outbox, when configured, reading consent from the edge's receipts |
 //! | Upkeep | [`UpkeepCheck`] over the edge's lockfile and the certificate, when configured |
 //! | Durable state | In `data/edge.db`: the back office's drafts and requests (`SqliteSiteDraftStore`), quotes, orders and the bookings of `calendar.json`'s slots ([`SqliteCommerceStore`], [`StoredCalendar`]), the owner's open, deferred and waiting alarms ([`SqliteAlarmStore`]), and the edge's rate-limit windows |
+//! | Packs | The built-in capability packs and those installed in `packs/`, verified against `packs/trust.json` ([`PackDir::load`](crate::packs::installed::PackDir::load)): their capabilities on the edge, their playbooks in the agents' workspaces (spec 3.5 §7.23) |
 //! | Audit trail | `data/audit.jsonl` (`adk-core`'s `FileAuditRecorder`): the pipeline's, the edge's, the update engine's, the alarms', the review's, the experiments', the ladder's, the tracker's and the signals' records (spec 3.5 §9.3) |
 
 use std::collections::BTreeMap;
@@ -193,6 +194,8 @@ pub struct RunningSite {
     pub partitions: SitePartitions,
     /// The edge.
     pub edge: SiteEdge,
+    /// The capability packs it loaded (spec 3.5 §7.23).
+    pub packs: crate::packs::installed::PackSet,
     /// The update engine.
     pub updates: Arc<UpdateEngine>,
     /// The engine's driver: journal and cards.
@@ -445,7 +448,9 @@ impl RunningSite {
             .as_ref()
             .map_or_else(adk_server::awp::EdgeLimits::default, |limits| limits())
             .store(Arc::new(edge_stores.clone()));
-        let edge = SiteEdge::build_with_commerce(
+        // The installed packs verify again on every start; one that does not is not loaded.
+        let packs = crate::packs::installed::PackDir::new(paths.root()).load()?;
+        let edge = SiteEdge::build_with_packs(
             SiteEdgeParts {
                 template: template.clone(),
                 runtime: runtime.clone(),
@@ -483,6 +488,7 @@ impl RunningSite {
                 }),
             },
             commerce,
+            &packs,
         )?;
         announcer.set(edge.announcer());
 
@@ -585,6 +591,7 @@ impl RunningSite {
             runtime,
             partitions,
             edge,
+            packs,
             updates,
             driver,
             cards,

@@ -17,6 +17,20 @@
 //! The edge serves them through [`crate::edge::handlers`] (spec 3.5 §7.9). An owner's
 //! [`ApprovalThresholds`] hold the orders, bookings and payments above an amount for the
 //! owner's decision (`ApprovalHint::AboveAmount`, spec 3.5 §7.4, S9).
+//!
+//! A pack is a signed, installable bundle (spec 3.5 §7.23):
+//!
+//! | Module | Contents |
+//! |---|---|
+//! | [`bundle`] | The bundle: declarations, [`HandlerConfig`](bundle::HandlerConfig)s, playbooks and driver manifests, sealed with a content digest and the publisher's AWP 2.0 JWS; verification and the format's rules |
+//! | [`trust`] | The trust list of publisher keys a site installs packs from |
+//! | [`builtin`] | The six packs above as bundles signed with a test key whose trust is explicit |
+//! | [`installed`] | The packs a site loads ([`PackSet`](installed::PackSet)) and the project's `packs/` directory ([`PackDir`](installed::PackDir)): install, upgrade, remove |
+
+pub mod builtin;
+pub mod bundle;
+pub mod installed;
+pub mod trust;
 
 use std::collections::BTreeMap;
 

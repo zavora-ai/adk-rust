@@ -1,0 +1,260 @@
+{
+  "format": "adk-website.pack/1",
+  "name": "contact",
+  "version": "1.0.0",
+  "publisher": {
+    "id": "adk-website",
+    "name": "ADK-Rust adk-website"
+  },
+  "description": "Enquiries, newsletter sign-ups, prospectus requests, licensing enquiries, volunteering and service forms",
+  "capabilities": [
+    {
+      "name": "submit_inquiry",
+      "description": "Send the site's owner an enquiry",
+      "effect": "non_idempotent",
+      "minTrust": "public",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "format": "email",
+            "maxLength": 254,
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 5000,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "email",
+          "message"
+        ],
+        "type": "object"
+      },
+      "consent": {
+        "scope": "contact",
+        "policyVersion": "1"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "subscribe_newsletter",
+      "description": "Subscribe to the site's newsletter",
+      "effect": "idempotent",
+      "minTrust": "public",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "format": "email",
+            "maxLength": 254,
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "type": "object"
+      },
+      "consent": {
+        "scope": "newsletter",
+        "policyVersion": "1"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "request_prospectus",
+      "description": "Request a prospectus",
+      "effect": "non_idempotent",
+      "minTrust": "public",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "format": "email",
+            "maxLength": 254,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "type": "string"
+          },
+          "programme": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "email"
+        ],
+        "type": "object"
+      },
+      "consent": {
+        "scope": "contact",
+        "policyVersion": "1"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "licensing_enquiry",
+      "description": "Ask to license the site's content",
+      "effect": "non_idempotent",
+      "minTrust": "public",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "format": "email",
+            "maxLength": 254,
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "maxLength": 500,
+              "type": "string"
+            },
+            "maxItems": 50,
+            "type": "array"
+          },
+          "organisation": {
+            "maxLength": 200,
+            "type": "string"
+          },
+          "use": {
+            "maxLength": 2000,
+            "type": "string"
+          }
+        },
+        "required": [
+          "organisation",
+          "email",
+          "use"
+        ],
+        "type": "object"
+      },
+      "consent": {
+        "scope": "contact",
+        "policyVersion": "1"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "volunteer",
+      "description": "Offer to volunteer",
+      "effect": "non_idempotent",
+      "minTrust": "public",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "availability": {
+            "maxLength": 500,
+            "type": "string"
+          },
+          "email": {
+            "format": "email",
+            "maxLength": 254,
+            "type": "string"
+          },
+          "interests": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "email"
+        ],
+        "type": "object"
+      },
+      "consent": {
+        "scope": "contact",
+        "policyVersion": "1"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "submit_service_form",
+      "description": "Apply for a public service; the applicant's identity comes from a verified identity provider",
+      "effect": "non_idempotent",
+      "minTrust": "verified",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "maxProperties": 50,
+            "type": "object"
+          },
+          "service": {
+            "maxLength": 100,
+            "type": "string"
+          }
+        },
+        "required": [
+          "service",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "consent": {
+        "scope": "service",
+        "policyVersion": "1"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    }
+  ],
+  "handlers": {
+    "licensing_enquiry": {
+      "handler": "form"
+    },
+    "request_prospectus": {
+      "handler": "form"
+    },
+    "submit_inquiry": {
+      "handler": "form"
+    },
+    "submit_service_form": {
+      "handler": "form"
+    },
+    "subscribe_newsletter": {
+      "handler": "form"
+    },
+    "volunteer": {
+      "handler": "form"
+    }
+  },
+  "digest": "sha256:e39e8ed12952023a9a5571b120ef72305e7f924e1d0537ab71f3ec55d2b6869c",
+  "proof": {
+    "alg": "EdDSA",
+    "kid": "adk-website-builtin-packs-test",
+    "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFkay13ZWJzaXRlLWJ1aWx0aW4tcGFja3MtdGVzdCJ9..pwOtxf1zQryK2kx4_dN7h9XZ9zF64k268D9OZ0nhlVcM_xOsZkMGkHtKds7KwMfEXdjg9qb1NCqvegwm0C2qBQ"
+  }
+}

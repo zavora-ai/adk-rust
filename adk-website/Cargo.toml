@@ -12,7 +12,7 @@ documentation = "https://docs.rs/adk-website"
 readme = "README.md"
 keywords = ["adk", "awp", "website", "agent", "cms"]
 categories = ["web-programming", "asynchronous"]
-include = ["src/**/*", "tests/**/*", "playbooks/**/*", "Cargo.toml", "README.md"]
+include = ["src/**/*", "tests/**/*", "playbooks/**/*", "packs/**/*", "Cargo.toml", "README.md"]
 
 # Spec 3.5 §7.1, D-14: the product is the default build. It holds no framework code (D-1):
 # everything it runs comes from the harness, the kernel, the site pipeline and the wallet.
@@ -72,12 +72,15 @@ quick-xml = "0.41"
 reqwest.workspace = true
 # JSON Schema of the owner's views, for the surfaces' generated types (spec 3.5 §7.16 `ui`).
 schemars = { version = "1.0", features = ["chrono04"] }
-# Advisory version ranges against the edge's lockfile (spec 3.5 §7.20, S10).
+# Advisory version ranges against the edge's lockfile (spec 3.5 §7.20, S10), and pack versions
+# (spec 3.5 §7.23).
 semver = "1"
 serde.workspace = true
 # The edge's SQLite stores in a served project (spec 3.5 §7.9).
 sqlx = { workspace = true, features = ["sqlite"] }
 serde_json.workspace = true
+# Capability pack refusals (spec 3.5 §7.23).
+thiserror.workspace = true
 toml.workspace = true
 tokio = { workspace = true, features = ["fs", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
