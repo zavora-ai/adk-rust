@@ -16,7 +16,7 @@
 //! Then `adk-rust agents` on the kernel's socket (spec 3.3 §10 L1), and the kernel's socket as a
 //! sandboxed shell sees it.
 
-#![cfg(all(unix, feature = "scripted-model", feature = "persist"))]
+#![cfg(all(unix, feature = "scripted-model", feature = "persist", feature = "surface"))]
 
 mod common;
 

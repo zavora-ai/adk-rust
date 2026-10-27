@@ -12,9 +12,9 @@
 //!
 //! The tray is the HTTP client the desktop tray is (`adk-desktop-core`'s `StatusWatcher` and
 //! `stop_all`): `GET /api/kernel/events`, `GET /api/surface/status?surface=tray` after each
-//! frame, and `POST /api/surface/commands` with surface `tray`. The binary runs as a process on
-//! SQLite (`harness.db`); the PostgreSQL leg is `#[ignore]`d and runs in
-//! `scripts/test-postgres.sh`:
+//! frame, and `POST /api/surface/commands` with surface `tray`. The press driver is a Python
+//! script, so `python3` must resolve. The binary runs as a process on SQLite (`harness.db`); the
+//! PostgreSQL leg is `#[ignore]`d and runs in `scripts/test-postgres.sh`:
 //!
 //! ```sh
 //! cargo nextest run -p adk-cli --features voice,mobile,scripted-model --test speak_glance_stop
