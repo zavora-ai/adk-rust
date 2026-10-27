@@ -288,6 +288,151 @@ export interface AnswerRequest {
   version: number;
 }
 
+/**
+ * The home's answer to an `AppRequest`: the JSON-RPC `result` or `error` the page passes
+ * back to the app, and what it shows the person.
+ */
+export interface AppAnswer {
+  /** The JSON-RPC error, when it did not. */
+  error?: AppError | null;
+  /** What the page shows the person. */
+  prompt?: AppPrompt | null;
+  /** The JSON-RPC result, when the request succeeded. */
+  result?: unknown;
+}
+
+/** Why an app was blocked (spec 3.3 §6.1 `genui-apps`). */
+export type AppBlockReason = "approvalButtons" | "undeclaredSites" | "thisComputer" | "notAnApp";
+
+/** A JSON-RPC error for an app. */
+export interface AppError {
+  /** The JSON-RPC code. */
+  code: number;
+  /** What happened. */
+  message: string;
+}
+
+/**
+ * `POST /surface/genui/sessions/{session}/apps/{call}/message`: the person pressed **Send
+ * it** on what an app suggested (spec 3.3 §6.1 `genui-apps`). The home sends it as the
+ * person's message, inside an untrusted-content block labelled as the app's suggestion.
+ */
+export interface AppMessageRequest {
+  /** The message the app suggested. */
+  message: string;
+}
+
+/**
+ * What `GET /surface/genui/sessions/{session}/apps/{call}` answers (spec 3.3 §6.1
+ * `genui-apps`): the app to frame, why it was blocked, or that it is not shown here.
+ */
+export type AppOpen = {
+  /** The apps origin, which the page frames and nothing else. */
+  frameOrigin: string;
+  /** The app's page on the apps origin. */
+  frameUrl: string;
+  /** The tallest the frame grows, in CSS pixels. */
+  maxHeight: number;
+  /** Whether the app asked for a border around it. */
+  prefersBorder: boolean;
+  /** The device permissions it asked for, all refused here. */
+  refusedPermissions: string[];
+  state: "shown";
+  /** The arguments of the call that showed it: `ui/notifications/tool-input`. */
+  toolInput: unknown;
+  /** Its result as an MCP `CallToolResult`: `ui/notifications/tool-result`. */
+  toolResult: unknown;
+} | {
+  /** The technical reason, for the developer panel. */
+  detail: string;
+  /** Why. */
+  reason: AppBlockReason;
+  state: "blocked";
+  /** What the thread says. */
+  text: string;
+} | {
+  /** The tool's text result. */
+  resultText: string;
+  state: "elsewhere";
+  /** What the thread says. */
+  text: string;
+};
+
+/**
+ * What the page shows a person for an app's request (spec 3.3 §6.1 `genui-apps`): the app
+ * only ever asks; the person's own press does what it asks.
+ */
+export type AppPrompt = {
+  kind: "notice";
+  /** The notice. */
+  text: string;
+} | {
+  /** "Not now". */
+  dismissLabel: string;
+  kind: "message";
+  /** The message the app suggests. */
+  message: string;
+  /** "It will be marked as suggested by the app". */
+  note: string;
+  /** "Send it". */
+  sendLabel: string;
+  /** "The app wants to send: “Remind me to take an umbrella tomorrow.”" */
+  text: string;
+} | {
+  /** "Cancel". */
+  dismissLabel: string;
+  kind: "link";
+  /** "Open". */
+  openLabel: string;
+  /** "Open example.com?" */
+  text: string;
+  /** The link, an `https` or `http` URL. */
+  url: string;
+};
+
+/**
+ * A request an app made of the home, as the page relays it: `POST
+ * /surface/genui/sessions/{session}/apps/{call}/requests` (spec 3.3 §6.1 `genui-apps`). Only
+ * requests with an `id` reach the home; the page answers notifications itself.
+ */
+export interface AppRequest {
+  /**
+   * The JSON-RPC method: `ui/initialize`, `tools/call`, `ui/message`, `ui/open-link`,
+   * `ui/update-model-context`, `ping`.
+   */
+  method: string;
+  /** Its parameters. */
+  params?: unknown;
+}
+
+/**
+ * An app an MCP server's tool showed in a thread (spec 3.3 §6.1 `genui-apps`): on the normal
+ * card background, labelled as unable to approve anything. The page opens it sandboxed on a
+ * second origin; the phone, the terminal and chat show its text result instead.
+ */
+export interface AppView {
+  /** The agent whose call showed it. */
+  agent: AgentRef;
+  /** The server as a person reads it: "Weather". */
+  appName: string;
+  /** When. */
+  at: string;
+  /** The call that showed it: the app's id in its session. */
+  callId: string;
+  /** "Open the home on this computer to see this app": where the app is not shown. */
+  elsewhereText: string;
+  /** "App from Weather · it can't approve anything". */
+  headerText: string;
+  /** The tool's text result, which every surface can show. */
+  resultText: string;
+  /** The MCP server, by its name on this home. */
+  server: string;
+  /** "app from Weather · open it in the home": the terminal's line. */
+  terminalText: string;
+  /** The tool that showed it, by its name on the server. */
+  tool: string;
+}
+
 /** An area a person may put an agent in. */
 export interface AreaChoice {
   /** The drivers mounted for it. */
@@ -1469,6 +1614,10 @@ export type ThreadItem = {
   kind: "drawnSent";
   /** The call and the form it came from. */
   sent: DrawnSent;
+} | {
+  /** The app. */
+  app: AppView;
+  kind: "app";
 };
 
 /** `GET /surface/sessions/{session}/thread` answer. */

@@ -833,6 +833,371 @@
         ],
         "type": "object"
       },
+      "AppAnswer": {
+        "description": "The home's answer to an `AppRequest`: the JSON-RPC `result` or `error` the page passes\nback to the app, and what it shows the person.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AppError"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The JSON-RPC error, when it did not."
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AppPrompt"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the page shows the person."
+          },
+          "result": {
+            "description": "The JSON-RPC result, when the request succeeded."
+          }
+        },
+        "type": "object"
+      },
+      "AppBlockReason": {
+        "description": "Why an app was blocked (spec 3.3 §6.1 `genui-apps`).",
+        "oneOf": [
+          {
+            "const": "approvalButtons",
+            "description": "Its HTML shows a decision's words: \"This app was blocked: it shows approval buttons\".",
+            "type": "string"
+          },
+          {
+            "const": "undeclaredSites",
+            "description": "It loads or connects to a site its declaration does not list, or declares one in a form\nthis home does not accept.",
+            "type": "string"
+          },
+          {
+            "const": "thisComputer",
+            "description": "It asks to reach this computer, its network, or the home itself.",
+            "type": "string"
+          },
+          {
+            "const": "notAnApp",
+            "description": "Its resource is not an MCP App's HTML.",
+            "type": "string"
+          }
+        ]
+      },
+      "AppError": {
+        "description": "A JSON-RPC error for an app.",
+        "properties": {
+          "code": {
+            "description": "The JSON-RPC code.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "message": {
+            "description": "What happened.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "AppMessageRequest": {
+        "description": "`POST /surface/genui/sessions/{session}/apps/{call}/message`: the person pressed **Send\nit** on what an app suggested (spec 3.3 §6.1 `genui-apps`). The home sends it as the\nperson's message, inside an untrusted-content block labelled as the app's suggestion.",
+        "properties": {
+          "message": {
+            "description": "The message the app suggested.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
+      "AppOpen": {
+        "description": "What `GET /surface/genui/sessions/{session}/apps/{call}` answers (spec 3.3 §6.1\n`genui-apps`): the app to frame, why it was blocked, or that it is not shown here.",
+        "oneOf": [
+          {
+            "description": "Frame `frameUrl`, on the apps origin, sandboxed.",
+            "properties": {
+              "frameOrigin": {
+                "description": "The apps origin, which the page frames and nothing else.",
+                "type": "string"
+              },
+              "frameUrl": {
+                "description": "The app's page on the apps origin.",
+                "type": "string"
+              },
+              "maxHeight": {
+                "description": "The tallest the frame grows, in CSS pixels.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "prefersBorder": {
+                "description": "Whether the app asked for a border around it.",
+                "type": "boolean"
+              },
+              "refusedPermissions": {
+                "description": "The device permissions it asked for, all refused here.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "state": {
+                "const": "shown",
+                "type": "string"
+              },
+              "toolInput": {
+                "description": "The arguments of the call that showed it: `ui/notifications/tool-input`."
+              },
+              "toolResult": {
+                "description": "Its result as an MCP `CallToolResult`: `ui/notifications/tool-result`."
+              }
+            },
+            "required": [
+              "state",
+              "frameUrl",
+              "frameOrigin",
+              "maxHeight",
+              "prefersBorder",
+              "toolInput",
+              "toolResult",
+              "refusedPermissions"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Not shown: \"This app was blocked: it shows approval buttons\".",
+            "properties": {
+              "detail": {
+                "description": "The technical reason, for the developer panel.",
+                "type": "string"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/AppBlockReason",
+                "description": "Why."
+              },
+              "state": {
+                "const": "blocked",
+                "type": "string"
+              },
+              "text": {
+                "description": "What the thread says.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "reason",
+              "text",
+              "detail"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Not shown on this surface or without an apps origin: \"Open the home on this computer\nto see this app\", and the tool's text result.",
+            "properties": {
+              "resultText": {
+                "description": "The tool's text result.",
+                "type": "string"
+              },
+              "state": {
+                "const": "elsewhere",
+                "type": "string"
+              },
+              "text": {
+                "description": "What the thread says.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "text",
+              "resultText"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AppPrompt": {
+        "description": "What the page shows a person for an app's request (spec 3.3 §6.1 `genui-apps`): the app\nonly ever asks; the person's own press does what it asks.",
+        "oneOf": [
+          {
+            "description": "A plain notice under the app: \"The app tried to use transfer_funds. Apps can't use it.\"",
+            "properties": {
+              "kind": {
+                "const": "notice",
+                "type": "string"
+              },
+              "text": {
+                "description": "The notice.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "\"The app wants to send: “…”\", with **Send it** and **Not now**.",
+            "properties": {
+              "dismissLabel": {
+                "description": "\"Not now\".",
+                "type": "string"
+              },
+              "kind": {
+                "const": "message",
+                "type": "string"
+              },
+              "message": {
+                "description": "The message the app suggests.",
+                "type": "string"
+              },
+              "note": {
+                "description": "\"It will be marked as suggested by the app\".",
+                "type": "string"
+              },
+              "sendLabel": {
+                "description": "\"Send it\".",
+                "type": "string"
+              },
+              "text": {
+                "description": "\"The app wants to send: “Remind me to take an umbrella tomorrow.”\"",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text",
+              "message",
+              "sendLabel",
+              "dismissLabel",
+              "note"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "\"Open example.com?\", with **Open** and **Cancel**.",
+            "properties": {
+              "dismissLabel": {
+                "description": "\"Cancel\".",
+                "type": "string"
+              },
+              "kind": {
+                "const": "link",
+                "type": "string"
+              },
+              "openLabel": {
+                "description": "\"Open\".",
+                "type": "string"
+              },
+              "text": {
+                "description": "\"Open example.com?\"",
+                "type": "string"
+              },
+              "url": {
+                "description": "The link, an `https` or `http` URL.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text",
+              "url",
+              "openLabel",
+              "dismissLabel"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AppRequest": {
+        "description": "A request an app made of the home, as the page relays it: `POST\n/surface/genui/sessions/{session}/apps/{call}/requests` (spec 3.3 §6.1 `genui-apps`). Only\nrequests with an `id` reach the home; the page answers notifications itself.",
+        "properties": {
+          "method": {
+            "description": "The JSON-RPC method: `ui/initialize`, `tools/call`, `ui/message`, `ui/open-link`,\n`ui/update-model-context`, `ping`.",
+            "type": "string"
+          },
+          "params": {
+            "default": null,
+            "description": "Its parameters."
+          }
+        },
+        "required": [
+          "method"
+        ],
+        "type": "object"
+      },
+      "AppView": {
+        "description": "An app an MCP server's tool showed in a thread (spec 3.3 §6.1 `genui-apps`): on the normal\ncard background, labelled as unable to approve anything. The page opens it sandboxed on a\nsecond origin; the phone, the terminal and chat show its text result instead.",
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/AgentRef",
+            "description": "The agent whose call showed it."
+          },
+          "appName": {
+            "description": "The server as a person reads it: \"Weather\".",
+            "type": "string"
+          },
+          "at": {
+            "description": "When.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "callId": {
+            "description": "The call that showed it: the app's id in its session.",
+            "type": "string"
+          },
+          "elsewhereText": {
+            "description": "\"Open the home on this computer to see this app\": where the app is not shown.",
+            "type": "string"
+          },
+          "headerText": {
+            "description": "\"App from Weather · it can't approve anything\".",
+            "type": "string"
+          },
+          "resultText": {
+            "description": "The tool's text result, which every surface can show.",
+            "type": "string"
+          },
+          "server": {
+            "description": "The MCP server, by its name on this home.",
+            "type": "string"
+          },
+          "terminalText": {
+            "description": "\"app from Weather · open it in the home\": the terminal's line.",
+            "type": "string"
+          },
+          "tool": {
+            "description": "The tool that showed it, by its name on the server.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "callId",
+          "server",
+          "appName",
+          "tool",
+          "agent",
+          "at",
+          "headerText",
+          "resultText",
+          "elsewhereText",
+          "terminalText"
+        ],
+        "type": "object"
+      },
       "AreaChoice": {
         "description": "An area a person may put an agent in.",
         "properties": {
@@ -4266,6 +4631,24 @@
               "sent"
             ],
             "type": "object"
+          },
+          {
+            "description": "An app an MCP server's tool showed (spec 3.3 §6.1 `genui-apps`): on the normal card\nbackground, labelled as unable to approve anything, framed sandboxed by the web home\nand shown as its text result elsewhere. Only the event of the MCP tool's own call, which\ncarries its `adk.mcp.app` record, makes one.",
+            "properties": {
+              "app": {
+                "$ref": "#/components/schemas/AppView",
+                "description": "The app."
+              },
+              "kind": {
+                "const": "app",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "app"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -5921,6 +6304,248 @@
           }
         },
         "summary": "What this home claims of A2UI, AG-UI and MCP Apps, and the catalogs it renders; served with the `genui` feature"
+      }
+    },
+    "/api/surface/genui/sessions/{session}/apps/{call}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "call",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The surface opening it; only the web home frames apps",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppOpen"
+                }
+              }
+            },
+            "description": "The app"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "An app an MCP server's tool showed in the session: framed on the apps origin, blocked with its reason, or not shown on this surface; served with the `genui-apps` feature"
+      }
+    },
+    "/api/surface/genui/sessions/{session}/apps/{call}/message": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "call",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandOutcome"
+                }
+              }
+            },
+            "description": "What the send did"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "The person pressed Send it on a message the app suggested: sent as their message, inside an untrusted-content block labelled as the app's suggestion; served with the `genui-apps` feature"
+      }
+    },
+    "/api/surface/genui/sessions/{session}/apps/{call}/requests": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "call",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppAnswer"
+                }
+              }
+            },
+            "description": "The JSON-RPC answer for the app, and what to show the person"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "A request the app made of the home, relayed by the page: tools/call is held for the person's decision or refused, ui/message and ui/open-link become prompts the person answers; nothing an app asks approves anything. Served with the `genui-apps` feature"
       }
     },
     "/api/surface/genui/sessions/{session}/forms": {
