@@ -798,6 +798,10 @@ impl Agents {
                 "session": proposer.session,
                 "run": proposer.run,
                 "unattended": unattended,
+                // No person acted: the suggesting agent did, through `propose_agent` (spec 3.3
+                // §12 phase 4 step 7: every record names its surface).
+                "surface": "agent",
+                "how": "agent",
             }),
         )
         .await?;

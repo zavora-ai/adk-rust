@@ -5,13 +5,13 @@
 //!
 //! | Step | What the person does | What holds |
 //! |---|---|---|
-//! | 1–2 | Asks ADK-Rust for a Finance agent | One "Add an agent called Finance" decision, no Always allow; nothing added |
-//! | 3 | Says yes in the web home | Finance is Ready in the roster |
-//! | 4 | `kill -9` and a restart | The same id and colour; a message runs as Finance; ADK-Rust refuses its thread |
-//! | 5 | Renames it Bills and sets Suggest | Its next turn writes nothing and leaves no decision |
+//! | 1–2 | Asks ADK-Rust for a Finance agent | One "Add an agent called Finance" decision, no Always allow; in chat its card offers only **Don't add**; nothing added |
+//! | 3 | Says yes in the web home | Finance is Ready in the web home's roster, and in the terminal's on the kernel event that announces it |
+//! | 4 | `kill -9` and a restart | The same id and colour; a message runs as `urn:adk:agent:adk-rust/finance`; ADK-Rust refuses its thread |
+//! | 5 | Renames it Bills and sets Suggest | The terminal shows "Bills" on the kernel event that announces it; its next turn writes nothing and leaves no decision |
 //! | 6 | Has ADK-Rust read a page asking for an agent with a shell on this computer | Refused by the ceiling, recorded `kernel.agent.refused`, no card; Bills has no `propose_agent` |
-//! | 7 | Gives Bills a routine, a waiting decision and a rule, then removes it with `/agent` | The preview and the record name one routine and one decision; the decision ended without an answer and answering it changes nothing; the routine and its target are gone; a new Finance is `finance-2` with no rule |
-//! | 8 | Exports the kernel's record | `adk-rust audit verify` passes; `proposed`, `created`, `changed` (with `displayName` and `mode`), `refused`, `removing` and `removed` in order |
+//! | 7 | Gives Bills a routine, a waiting decision and a rule, then removes it with `/agent` | The preview and the record name one routine and one decision; the decision ended without an answer and answering it from the phone changes nothing; the routine's time comes and nothing of Bills runs, while ADK-Rust's routine at the same time does; its target is gone; a new Finance is `finance-2` with no rule |
+//! | 8 | Exports the kernel's record | `adk-rust audit verify` passes; `proposed`, `created`, `changed` (with `displayName` and `mode`), `refused`, `removing` and `removed` in order, each naming its surface |
 //!
 //! Then `adk-rust agents` on the kernel's socket (spec 3.3 §10 L1), and the kernel's socket as a
 //! sandboxed shell sees it.
@@ -22,10 +22,18 @@ mod common;
 
 use common::{Terminal, text};
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use adk_kernel::KernelEvent;
+use adk_kernel::agents::AgentChange;
+use adk_kernel::control::ControlClient;
+use adk_surface::model::{AgentRow, AgentStatus};
+use adk_surface::{Caller, ControlSource, Origin, SurfaceEngine, SurfaceKind};
+use chrono::{SubsecRound, TimeDelta, Timelike, Utc};
+use futures::StreamExt;
 use serde_json::{Value, json};
 
 /// `adk-rust up` as a child process, killed when dropped, so a failing test leaves nothing
@@ -192,6 +200,69 @@ fn record_of<'a>(records: &'a [Value], action: &str, id: &str) -> Option<&'a Val
     records.iter().find(|record| record["action"] == action && record["ext"]["id"] == id)
 }
 
+/// The terminal attached to the kernel, as `adk-rust --home` builds it: the engine over the
+/// control plane for the person `up` runs as (`USER`, which [`common::isolate`] sets), a
+/// paired local terminal.
+struct Attached {
+    engine: SurfaceEngine,
+    caller: Caller,
+    client: ControlClient,
+}
+
+impl Attached {
+    async fn connect(kernel: &Path) -> Self {
+        let client = ControlClient::connect_local(kernel)
+            .await
+            .unwrap()
+            .expect("the kernel's socket answers");
+        let source = ControlSource::new(client.clone(), "adk-rust", "adk-rust");
+        let engine =
+            SurfaceEngine::builder(Arc::new(source)).agent_name("adk-rust", "adk-rust").build();
+        let caller = Caller::human("pty-tester", SurfaceKind::Terminal, Origin::Keyboard)
+            .with_groups(["operator"])
+            .with_paired_local();
+        Self { engine, caller, client }
+    }
+
+    /// Carries out `act`, then follows the kernel's events as the terminal does, reading its
+    /// roster once after each (spec 3.3 §5.2, §12 phase 4 "within one event"). Returns the
+    /// row of `id` from the first read that `shown` accepts, which must come no later than the
+    /// read after the first event about agent `id` that `announces` matches.
+    async fn shows_within_one_event(
+        &self,
+        act: impl std::future::Future<Output = ()>,
+        id: &str,
+        announces: impl Fn(AgentChange) -> bool,
+        shown: impl Fn(&AgentRow) -> bool,
+    ) -> AgentRow {
+        let mut events = self.client.events(None).await.unwrap();
+        act.await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let mut seen = Vec::new();
+        loop {
+            let record = tokio::time::timeout_at(deadline, events.next())
+                .await
+                .unwrap_or_else(|_| panic!("no kernel event showed {id}; events: {seen:?}"))
+                .expect("the kernel's event stream ended")
+                .unwrap();
+            let rows = self.engine.agents(&self.caller).await.unwrap();
+            let row = rows.into_iter().find(|row| row.agent.name == id);
+            if let Some(row) = row.filter(|row| shown(row)) {
+                return row;
+            }
+            let announced = matches!(
+                &record.event,
+                KernelEvent::Agent { id: about, change, .. } if about == id && announces(*change)
+            );
+            seen.push(record.event);
+            assert!(
+                !announced,
+                "the terminal's read after the event that announced it did not show {id}: {seen:?}"
+            );
+        }
+    }
+}
+
 struct Api {
     base: String,
     client: reqwest::Client,
@@ -222,6 +293,14 @@ impl Api {
             .await;
         assert_eq!(status, 200, "{body}");
         body
+    }
+
+    /// The kernel's record lines, newest first.
+    async fn record(&self) -> Vec<Value> {
+        self.get("/api/kernel/record?limit=500").await["lines"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// `/agent args` on the kernel, as the terminal runs it.
@@ -279,16 +358,25 @@ impl Api {
 
     /// The kernel actions on record, oldest first (the route answers newest first).
     async fn actions(&self) -> Vec<String> {
-        let record = self.get("/api/kernel/record?limit=500").await;
-        let mut lines: Vec<(u64, String)> = record["lines"]
-            .as_array()
+        self.agent_lines()
+            .await
             .into_iter()
-            .flatten()
-            .filter_map(|line| Some((line["seq"].as_u64()?, line["action"].as_str()?.to_string())))
-            .filter(|(_, action)| action.starts_with("kernel.agent."))
+            .filter_map(|line| Some(line["action"].as_str()?.to_string()))
+            .collect()
+    }
+
+    /// The `kernel.agent.*` record lines, oldest first.
+    async fn agent_lines(&self) -> Vec<Value> {
+        let mut lines: Vec<Value> = self
+            .record()
+            .await
+            .into_iter()
+            .filter(|line| {
+                line["action"].as_str().is_some_and(|action| action.starts_with("kernel.agent."))
+            })
             .collect();
-        lines.sort();
-        lines.into_iter().map(|(_, action)| action).collect()
+        lines.sort_by_key(|line| line["seq"].as_u64());
+        lines
     }
 
     /// Previews `draft` as agent `id`'s next definition, then applies it.
@@ -342,10 +430,12 @@ const SUGGEST: &str = r#"[
 ]"#;
 
 /// The kernel after the restart. Every agent shares the scripted model, one step a call:
-/// Finance's hello (4); Bills's write in Suggest and its answer (5); ADK-Rust reading the page,
-/// suggesting an agent with a host shell, and its answer (6); Bills trying `propose_agent` and
-/// its answer (6); Bills's write in Ask first, held for a person (7).
+/// Finance's hello, a read of the invoices whose record names the agent that acted (4); Bills's
+/// write in Suggest and its answer (5); ADK-Rust reading the page, suggesting an agent with a
+/// host shell, and its answer (6); Bills trying `propose_agent` and its answer (6); Bills's
+/// write in Ask first, held for a person (7); ADK-Rust's routine at Bills's routine's time (7).
 const AFTER_RESTART: &str = r#"[
+  {"call": {"name": "read_file", "args": {"path": "march.txt"}}},
   {"text": "Finance here."},
   {"call": {"name": "write_file", "args": {"path": "reminder-7.txt", "content": "Dear client, INV-7 is overdue."}}},
   {"text": "In Suggest I only suggest: draft a reminder for INV-7."},
@@ -360,6 +450,8 @@ const AFTER_RESTART: &str = r#"[
   {"call": {"name": "propose_agent", "args": {"name": "Helper", "whatItDoes": "Helps", "instructions": "Help."}}},
   {"text": "I can't suggest agents."},
   {"call": {"name": "write_file", "args": {"path": "reminder-7.txt", "content": "Dear client, INV-7 is overdue."}}},
+  {"text": "Done."},
+  {"text": "Done."},
   {"text": "Done."},
   {"text": "Done."}
 ]"#;
@@ -394,21 +486,54 @@ async fn hire_a_helper_on(store: Option<String>) {
         .collect();
     assert_eq!(labels, ["Add this agent", "Don't add"], "no Always allow");
     assert_eq!(card["addsAgent"]["id"], "finance");
+    // In chat the card offers only Don't add (spec 3.3 §5.7, §7.2).
+    let in_chat = api
+        .get(&format!("/api/surface/decisions/{}?surface=chat", card["id"].as_str().unwrap()))
+        .await;
+    let labels: Vec<&str> = in_chat["allowed"]["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(labels, ["Don't add"], "{in_chat}");
     assert!(api.row("finance").await.is_none(), "nothing is added before a person says yes");
+    assert!(
+        !api.processes().await.iter().any(|process| process["run"]["target"] == "finance"),
+        "no finance target before a person says yes"
+    );
 
-    // 3. Add this agent, in the web home: Finance is Ready in the roster.
-    api.command(json!({
-        "type": "decide",
-        "decisionId": card["id"],
-        "version": card["version"],
-        "answer": "allowOnce",
-        "expanded": true
-    }))
-    .await;
+    // 3. Add this agent, in the web home: Finance is Ready in the terminal's roster on the
+    // kernel event that announces it, and in the web home's on its next read, in one colour.
+    let terminal = Attached::connect(&place.kernel).await;
+    let shown = terminal
+        .shows_within_one_event(
+            async {
+                api.command(json!({
+                    "type": "decide",
+                    "decisionId": card["id"],
+                    "version": card["version"],
+                    "answer": "allowOnce",
+                    "expanded": true
+                }))
+                .await;
+            },
+            "finance",
+            |change| matches!(change, AgentChange::Created | AgentChange::Hosted),
+            |row| row.status == AgentStatus::Ready,
+        )
+        .await;
+    assert_eq!(shown.status_text, "Ready");
     let row = eventually("Finance in the roster", || async { api.row("finance").await }).await;
     assert_eq!(row["statusText"], "Ready");
     assert_eq!(row["added"], true);
     let color = row["agent"]["avatar"]["color"].clone();
+    assert_eq!(
+        serde_json::to_value(&shown.agent.avatar).unwrap()["color"],
+        color,
+        "the same colour"
+    );
+    drop(terminal);
 
     // 4. kill -9 and start again: the same id, and a message runs as Finance.
     first.kill();
@@ -425,6 +550,13 @@ async fn hire_a_helper_on(store: Option<String>) {
         runs.iter().all(|run| run["target"] == "finance" && run["state"] == "completed"),
         "{runs:?}"
     );
+    // It acted as Finance: its call's record names `urn:adk:agent:adk-rust/finance`.
+    let record = api.record().await;
+    let read = record
+        .iter()
+        .find(|line| line["tool"] == "read_file" && line["decision"] == "allowed")
+        .unwrap_or_else(|| panic!("Finance's read on record: {record:?}"));
+    assert_eq!(read["agent"], "urn:adk:agent:adk-rust/finance", "{read}");
     // ADK-Rust refuses Finance's thread.
     let (status, spawned) = api
         .post(
@@ -444,13 +576,24 @@ async fn hire_a_helper_on(store: Option<String>) {
 
     // 5. In the web home: renamed Bills, set to Suggest. Its next turn writes nothing and
     // leaves no decision: Suggest changes nothing until a person says yes.
-    let changed = api
-        .change("finance", |draft| {
-            draft["displayName"] = json!("Bills");
-            draft["mode"] = json!("suggest");
-        })
+    let terminal = Attached::connect(&place.kernel).await;
+    terminal
+        .shows_within_one_event(
+            async {
+                let changed = api
+                    .change("finance", |draft| {
+                        draft["displayName"] = json!("Bills");
+                        draft["mode"] = json!("suggest");
+                    })
+                    .await;
+                assert_eq!(changed["type"], "agentChanged", "{changed}");
+            },
+            "finance",
+            |change| change == AgentChange::Changed,
+            |row| row.agent.display_name == "Bills",
+        )
         .await;
-    assert_eq!(changed["type"], "agentChanged", "{changed}");
+    drop(terminal);
     assert_eq!(api.row("finance").await.unwrap()["agent"]["displayName"], "Bills");
     api.command(json!({ "type": "send", "sessionId": "finance-1", "text": "Draft the reminder for INV-7." }))
         .await;
@@ -485,21 +628,7 @@ async fn hire_a_helper_on(store: Option<String>) {
         api.actions().await.into_iter().filter(|action| action == "kernel.agent.proposed");
     assert_eq!(proposed.count(), 1, "only ADK-Rust's first suggestion was kept");
 
-    // 7. A routine, a waiting decision and a rule of its own; then removed from the terminal.
-    let (status, routine) = api
-        .post(
-            "/api/kernel/processes",
-            json!({
-                "target": "finance",
-                "input": { "text": "Check the invoices" },
-                "kind": "scheduled",
-                "queue": "background",
-                "wake": { "anyOf": [{ "cron": { "expr": "17 3 1 1 *", "missed": "skip" } }] },
-                "labels": { "title": "Check the invoices" }
-            }),
-        )
-        .await;
-    assert_eq!(status, 200, "{routine}");
+    // 7. A waiting decision, a rule and a routine of its own; then removed from the terminal.
     let changed = api.change("finance", |draft| draft["mode"] = json!("askFirst")).await;
     assert_eq!(changed["type"], "agentChanged", "{changed}");
     let (status, rule) = api.post("/api/rules", json!({ "tool": "read_file" })).await;
@@ -521,6 +650,28 @@ async fn hire_a_helper_on(store: Option<String>) {
             .find(|card| card["sessionId"] == "finance-1" && card["call"]["tool"] == "write_file")
     })
     .await;
+    // Bills's routine comes due a few seconds after the removal, and so does one of ADK-Rust's,
+    // which shows the time came (a cron in UTC, with seconds).
+    let due = Utc::now().trunc_subsecs(0) + TimeDelta::seconds(8);
+    let cron = format!("{} {} {} * * *", due.second(), due.minute(), due.hour());
+    let mut routines = Vec::new();
+    for target in ["finance", "adk-rust"] {
+        let (status, routine) = api
+            .post(
+                "/api/kernel/processes",
+                json!({
+                    "target": target,
+                    "input": { "text": "Check the invoices" },
+                    "kind": "scheduled",
+                    "queue": "background",
+                    "wake": { "anyOf": [{ "cron": { "expr": cron, "missed": "skip" } }] },
+                    "labels": { "title": "Check the invoices" }
+                }),
+            )
+            .await;
+        assert_eq!(status, 200, "{routine}");
+        routines.push(routine["process"]["meta"]["pid"].as_str().unwrap().to_string());
+    }
     let preview = api.agent("remove finance --json").await;
     let ended = &preview["preview"]["ended"];
     assert_eq!(ended["routines"].as_array().map(Vec::len), Some(1), "{preview}");
@@ -528,6 +679,7 @@ async fn hire_a_helper_on(store: Option<String>) {
     let code = preview["code"].as_str().expect("a confirming code").to_string();
     let removed = api.agent(&format!("remove finance --confirm {code} --json")).await;
     assert_eq!(removed["outcome"]["outcome"], "removed", "{removed}");
+    assert!(Utc::now() < due, "the removal finished before the routine's time; run again");
     // Its rule — the one copied to it — is revoked with it (S-I16).
     assert_eq!(removed["outcome"]["ended"]["rules"], 1, "{removed}");
     let rules = api.get("/api/rules").await;
@@ -544,10 +696,11 @@ async fn hire_a_helper_on(store: Option<String>) {
         card.to_string().contains("Ended without an answer").then_some(card)
     })
     .await;
+    // The late answer comes from the phone.
     let (_, answered) = api
         .post(
             "/api/surface/commands",
-            json!({ "surface": "web", "origin": { "kind": "pointer" }, "command": {
+            json!({ "surface": "phone", "origin": { "kind": "touch" }, "command": {
                 "type": "decide", "decisionId": waiting["id"], "version": ended_card["version"],
                 "answer": "allowOnce", "expanded": true
             } }),
@@ -555,12 +708,41 @@ async fn hire_a_helper_on(store: Option<String>) {
         .await;
     assert_ne!(answered["type"], "answered", "{answered}");
     assert!(!ws.join("Invoices/reminder-7.txt").exists());
-    // Its routine is gone and its target refuses new work.
-    let live = api.processes().await.into_iter().filter(|process| {
-        process["run"]["target"] == "finance"
-            && matches!(process["run"]["state"].as_str(), Some("queued" | "waiting" | "running"))
-    });
-    assert_eq!(live.count(), 0, "nothing of Bills runs or waits");
+    // The routine's time comes: ADK-Rust's runs, nothing of Bills does.
+    let finance_pids: Vec<String> = api
+        .processes()
+        .await
+        .into_iter()
+        .filter(|process| process["run"]["target"] == "finance")
+        .filter_map(|process| process["meta"]["pid"].as_str().map(str::to_string))
+        .collect();
+    let control = eventually("ADK-Rust's routine at that time", || async {
+        api.processes().await.into_iter().find(|process| {
+            process["meta"]["pid"] == routines[1].as_str()
+                && matches!(process["run"]["state"].as_str(), Some("completed" | "failed"))
+        })
+    })
+    .await;
+    assert!(Utc::now() >= due, "{control}");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let processes = api.processes().await;
+    let ran: Vec<&Value> = processes
+        .iter()
+        .filter(|process| process["run"]["target"] == "finance")
+        .filter(|process| {
+            !finance_pids.iter().any(|pid| process["meta"]["pid"] == pid.as_str())
+                || matches!(
+                    process["run"]["state"].as_str(),
+                    Some("queued" | "waiting" | "running")
+                )
+        })
+        .collect();
+    assert!(ran.is_empty(), "nothing of Bills runs or waits at the routine's time: {ran:?}");
+    let routine = processes.iter().find(|process| process["meta"]["pid"] == routines[0].as_str());
+    assert!(
+        routine.is_none_or(|process| process["run"]["state"] != "completed"),
+        "Bills's routine never ran: {routine:?}"
+    );
     let (status, spawned) = api
         .post(
             "/api/kernel/processes",
@@ -591,6 +773,27 @@ async fn hire_a_helper_on(store: Option<String>) {
         order.iter().map(|action| actions.iter().position(|seen| seen == action)).collect();
     assert!(positions.iter().all(Option::is_some), "{actions:?}");
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{actions:?}");
+    // Each change a person or an agent made names the surface it came from (spec 3.3 §12
+    // step 7, §11).
+    let lines = api.agent_lines().await;
+    for action in ["proposed", "created", "changed", "removing", "removed"] {
+        let action = format!("kernel.agent.{action}");
+        let unnamed: Vec<&Value> = lines
+            .iter()
+            .filter(|line| {
+                line["action"] == action.as_str()
+                    && line["surface"].as_str().is_none_or(str::is_empty)
+            })
+            .collect();
+        assert!(unnamed.is_empty(), "{action} without its surface: {unnamed:?}");
+    }
+    let surface_of = |action: &str| {
+        lines.iter().find(|line| line["action"] == action).map(|line| line["surface"].clone())
+    };
+    assert_eq!(surface_of("kernel.agent.created"), Some(json!("web")));
+    assert_eq!(surface_of("kernel.agent.changed"), Some(json!("web")));
+    assert_eq!(surface_of("kernel.agent.removing"), Some(json!("terminal")));
+    assert_eq!(surface_of("kernel.agent.removed"), Some(json!("terminal")));
     // `adk-rust audit verify` passes over the export, which names what changed and what ended.
     #[cfg(feature = "audit-sql")]
     {

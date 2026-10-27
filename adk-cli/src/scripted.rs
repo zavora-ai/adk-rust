@@ -29,8 +29,10 @@ struct Call {
 
 /// The model `--model-script` describes: a JSON array of replies, inline or in a file.
 ///
-/// Every reply reports a nominal 20 tokens of usage at no cost, as a provider does, so
-/// token budgets such as the `ultracode` router's can be held to it.
+/// Every reply reports a nominal 20 tokens of usage, as a provider does, so token budgets
+/// such as the `ultracode` router's can be held to it. A reply costs nothing unless it names
+/// its price in USD, `{"text": "Done.", "cost": 0.0125}`, which the kernel's spending then
+/// counts (spec 3.3 §12 phase 2).
 pub fn model(script: &str) -> Result<Arc<dyn Llm>> {
     let json = if script.trim_start().starts_with('[') {
         script.to_string()
@@ -38,9 +40,9 @@ pub fn model(script: &str) -> Result<Arc<dyn Llm>> {
         std::fs::read_to_string(script)
             .with_context(|| format!("failed to read the model script {script}"))?
     };
-    let replies: Vec<Reply> = serde_json::from_str(&json).context(
-        "--model-script must be a JSON array of {\"text\"}, {\"call\"} or {\"calls\"} replies",
-    )?;
+    let shape = "--model-script must be a JSON array of {\"text\"}, {\"call\"} or {\"calls\"} \
+                 replies, each with an optional \"cost\" in USD";
+    let steps: Vec<serde_json::Map<String, Value>> = serde_json::from_str(&json).context(shape)?;
     let usage = adk_core::UsageMetadata {
         prompt_token_count: 10,
         candidates_token_count: 10,
@@ -48,16 +50,24 @@ pub fn model(script: &str) -> Result<Arc<dyn Llm>> {
         cost: Some(0.0),
         ..adk_core::UsageMetadata::default()
     };
-    let script = replies.into_iter().map(|reply| {
-        match reply {
+    let mut script = Vec::with_capacity(steps.len());
+    for mut step in steps {
+        let cost = match step.remove("cost") {
+            None => 0.0,
+            Some(cost) => cost.as_f64().filter(|cost| *cost >= 0.0).context(shape)?,
+        };
+        let reply: Reply = serde_json::from_value(Value::Object(step)).context(shape)?;
+        let response = match reply {
             Reply::Text(text) => ScriptedResponse::text(text),
             Reply::Call(call) => ScriptedResponse::function_call(call.name, call.args),
             Reply::Calls(calls) => ScriptedResponse::function_calls(
                 calls.into_iter().map(|call| (call.name, call.args)),
             ),
-        }
-        .with_usage(usage.clone())
-    });
+        };
+        script.push(
+            response.with_usage(adk_core::UsageMetadata { cost: Some(cost), ..usage.clone() }),
+        );
+    }
     Ok(Arc::new(ScriptedLlm::new("scripted", script)))
 }
 
@@ -116,5 +126,20 @@ mod tests {
         assert_eq!(replies[1].parts.len(), 2);
         assert_eq!(replies[2].parts[0].text(), Some("Recorded."));
         assert!(super::model(r#"[{"speak": "x"}]"#).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_reply_reports_the_cost_it_names() {
+        let model = model(r#"[{"text": "Paid.", "cost": 0.0125}, {"text": "Free."}]"#).unwrap();
+        let mut costs = Vec::new();
+        for _ in 0..2 {
+            let mut stream =
+                model.generate_content(LlmRequest::new("scripted", vec![]), false).await.unwrap();
+            let response = stream.next().await.unwrap().unwrap();
+            costs.push(response.usage_metadata.and_then(|usage| usage.cost));
+        }
+        assert_eq!(costs, [Some(0.0125), Some(0.0)]);
+        assert!(super::model(r#"[{"text": "x", "cost": "a lot"}]"#).is_err());
+        assert!(super::model(r#"[{"text": "x", "cost": -1}]"#).is_err());
     }
 }

@@ -278,7 +278,8 @@ pub struct AgentOptions {
     /// Answer model calls from a JSON script instead of a provider (end-to-end tests).
     ///
     /// A JSON array, inline or in the named file, of `{"text": "..."}`,
-    /// `{"call": {"name": "...", "args": {...}}}` and `{"calls": [...]}` replies.
+    /// `{"call": {"name": "...", "args": {...}}}` and `{"calls": [...]}` replies, each with an
+    /// optional `"cost"` in USD.
     #[cfg(feature = "scripted-model")]
     #[arg(long, global = true, hide = true)]
     pub model_script: Option<String>,

@@ -156,7 +156,7 @@ Each change publishes `KernelEvent::Agent { id, change, reason }` (`EventKind::A
 
 | Record | Fields |
 |---|---|
-| `kernel.agent.proposed` | `id`, `digest`, `risk`, `money`, `area`, `suggestingAgent`, `session`, `run`, `unattended` |
+| `kernel.agent.proposed` | `id`, `digest`, `risk`, `money`, `area`, `suggestingAgent`, `session`, `run`, `unattended`, and `surface` and `how` `agent`: the suggesting agent acted, not a person |
 | `kernel.agent.created` | `id`, `version`, `digest`, `risk`, `money`, `origin`, `approvalId` or `replaces`, and the caller |
 | `kernel.agent.changed` | `id`, `version`, `fields`, `from`, `to`, `risk`, `widens`, and the caller |
 | `kernel.agent.paused`, `kernel.agent.resumed` | `id`, and the caller |
