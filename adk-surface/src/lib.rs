@@ -29,6 +29,7 @@
 //! | `mobile` | The phone: the web home installed on a phone, Web Push from the person's own kernel, pairing QR codes and "Confirm it's you", `mobile::router` (spec 3.3 §5.4); implies `web` | Beta |
 //! | `voice` | Voice and video: spoken "allow once" and "deny" through the engine with a cancel window, the camera and the screen as input while their switches are on; with `web`, the voice view's socket (`voice::router`, `voice::socket_routes`) (spec 3.3 §5.6) | Beta |
 //! | `website` | The website's views on the web home (spec 3.5 §8.2): the web editor, onboarding, the charter cards, the site view and the weekly review over `adk-website`'s desk, `web::website::router`; implies `web` | Experimental |
+//! | `verb-ui` | Screen actions people and agents share (spec 3.3 §2 item 7, §6.1): snoozing something in Coming up from the home, the terminal, voice and an agent, always through the governed path, `verbs::VerbRegistry`; with `web`, `web::verbs::router` | Experimental |
 //!
 //! ## Example
 //!
@@ -74,6 +75,8 @@ pub mod rules;
 mod source;
 #[cfg(feature = "tui")]
 pub mod tui;
+#[cfg(feature = "verb-ui")]
+pub mod verbs;
 #[cfg(any(feature = "voice", feature = "web"))]
 pub mod voice;
 #[cfg(feature = "web")]

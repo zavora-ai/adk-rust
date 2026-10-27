@@ -9,10 +9,12 @@ cd "$ROOT"
 if [[ "${1:-}" == "--write" ]]; then
   ADK_SURFACE_WRITE_API=1 cargo test -p adk-surface --features web --test api_contract --quiet
   ADK_SURFACE_WRITE_API=1 cargo test -p adk-surface --features website --test website_api_contract --quiet
+  ADK_SURFACE_WRITE_API=1 cargo test -p adk-surface --features web,verb-ui --test verbs_api_contract --quiet
   echo "wrote adk-surface/web/src/generated"
   exit 0
 fi
 
 cargo test -p adk-surface --features web --test api_contract --quiet
 cargo test -p adk-surface --features website --test website_api_contract --quiet
+cargo test -p adk-surface --features web,verb-ui --test verbs_api_contract --quiet
 git diff --exit-code -- adk-surface/web/src/generated

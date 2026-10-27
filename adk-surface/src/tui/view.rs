@@ -16,7 +16,7 @@ use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
 use super::app::{App, BoxView, DecidedLine, Input, OpenCard, Tone, View, named_decisions};
-use super::commands::{BUILT_IN, Completion};
+use super::commands::{BUILT_IN, Completion, ON_YOUR_SCREENS};
 use super::markdown::{markdown, wrap, wrap_spans};
 use super::safe::{safe_line, safe_lines};
 use super::theme::Theme;
@@ -1092,8 +1092,21 @@ impl Renderer {
         lines.push(Line::default());
         lines.push(Line::from(Span::styled("Commands", t.heading())));
         let own = BUILT_IN.iter().map(|(name, what)| ((*name).to_string(), (*what).to_string()));
+        let screens = app.commands.screens();
         for (name, what) in own.chain(app.commands.added()) {
+            if screens.iter().any(|(screen, ..)| *screen == name) {
+                continue;
+            }
             lines.extend(row(format!("/{}", safe_line(&name)), safe_line(&what)));
+        }
+        // Screen actions under their own heading (spec 3.3 §2 item 7).
+        if !screens.is_empty() {
+            lines.push(Line::default());
+            lines.push(Line::from(Span::styled(ON_YOUR_SCREENS, t.heading())));
+            for (name, usage, what, more) in screens {
+                lines.extend(row(format!("/{} {usage}", safe_line(&name)), safe_line(&what)));
+                lines.extend(row(String::new(), more));
+            }
         }
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(

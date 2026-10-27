@@ -101,6 +101,8 @@ struct Hub {
     poll: Duration,
     #[cfg(feature = "web")]
     tickets: Tickets,
+    #[cfg(feature = "verb-ui")]
+    verbs: Option<crate::verbs::VerbGate>,
 }
 
 /// Builds a [`VoiceHub`].
@@ -112,6 +114,8 @@ pub struct VoiceHubBuilder {
     agent: Option<String>,
     instruction: Option<String>,
     poll: Duration,
+    #[cfg(feature = "verb-ui")]
+    verbs: Option<crate::verbs::VerbGate>,
 }
 
 impl std::fmt::Debug for VoiceHubBuilder {
@@ -167,6 +171,15 @@ impl VoiceHubBuilder {
         self
     }
 
+    /// Lets the person take screen actions by voice through `gate`: "snooze news digest",
+    /// after the engine's cancel window (spec 3.3 §5.6, feature `verb-ui`).
+    #[cfg(feature = "verb-ui")]
+    #[must_use]
+    pub fn verbs(mut self, gate: crate::verbs::VerbGate) -> Self {
+        self.verbs = Some(gate);
+        self
+    }
+
     /// The hub.
     pub fn build(self) -> VoiceHub {
         let agent = self
@@ -183,6 +196,8 @@ impl VoiceHubBuilder {
                 poll: self.poll,
                 #[cfg(feature = "web")]
                 tickets: Tickets::default(),
+                #[cfg(feature = "verb-ui")]
+                verbs: self.verbs,
             }),
         }
     }
@@ -252,6 +267,8 @@ impl VoiceHub {
             agent: None,
             instruction: None,
             poll: DEFAULT_POLL_INTERVAL,
+            #[cfg(feature = "verb-ui")]
+            verbs: None,
         }
     }
 
@@ -464,6 +481,8 @@ impl VoiceHub {
             visual: VisualInputs::new(offered.frames),
             poll: hub.poll,
             own_only,
+            #[cfg(feature = "verb-ui")]
+            verbs: hub.verbs.clone(),
         }))
     }
 

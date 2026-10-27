@@ -34,6 +34,9 @@ use crate::voice::{
 // The website's document (spec 3.5 §8.2): its own, so this one is the same in every `web` build.
 #[cfg(feature = "website")]
 pub(super) mod website;
+// The screen actions' document (spec 3.3 §2 item 7): its own, for the same reason.
+#[cfg(feature = "verb-ui")]
+pub(super) mod verbs;
 
 fn generator(contract: Contract) -> SchemaGenerator {
     SchemaSettings::draft2020_12()

@@ -725,6 +725,12 @@ impl SurfaceEngine {
         &self.inner.granted
     }
 
+    /// How long a spoken answer, or a spoken screen action, can be cancelled (spec 3.3 §5.6).
+    #[cfg(feature = "verb-ui")]
+    pub(crate) fn voice_cancel_window(&self) -> Duration {
+        self.inner.voice_window
+    }
+
     /// `detail` with what the home grants every agent it runs: only an agent that runs, added
     /// or paused, is granted anything (spec 3.3 §5.7).
     fn with_granted(&self, mut detail: AgentDetail) -> AgentDetail {

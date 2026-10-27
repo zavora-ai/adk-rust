@@ -48,6 +48,11 @@ website = ["web", "dep:adk-website", "dep:base64"]
 # Gemini Live and the OpenAI Realtime API, for the live voice test and the `voice_home`
 # example only: a host builds its own provider models.
 voice-live = ["voice", "adk-realtime/gemini", "adk-realtime/openai"]
+# Screen actions people and agents share (spec 3.3 §2 item 7, §5.6, §6.1 `verb-ui`;
+# Experimental): snoozing something in Coming up from the home, the terminal, voice and an
+# agent, always through the governed path. It adds no dependency; its web, terminal and voice
+# parts compile with `web`, `tui` and `voice`.
+verb-ui = []
 
 [dependencies]
 adk-core.workspace = true
@@ -171,6 +176,12 @@ required-features = ["website"]
 [[example]]
 name = "voice_home"
 required-features = ["web", "voice-live"]
+
+# The web home over a scripted kernel with something in Coming up to snooze and an agent that
+# asks to, which `web/e2e/verbs.spec.ts` opens (spec 3.3 §12 "One verb, three origins").
+[[example]]
+name = "scripted_verbs"
+required-features = ["web", "verb-ui"]
 
 [package.metadata.docs.rs]
 all-features = true

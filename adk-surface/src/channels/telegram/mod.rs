@@ -264,6 +264,7 @@ pub struct TelegramAdapterBuilder {
     approvals: Option<Arc<dyn ApprovalService>>,
     answers: Option<Arc<dyn AnswerLog>>,
     audit: Option<AuditTrail>,
+    card_hints: Vec<Arc<dyn crate::hints::CardHints>>,
 }
 
 impl fmt::Debug for TelegramAdapterBuilder {
@@ -330,6 +331,31 @@ impl TelegramAdapterBuilder {
         self
     }
 
+    /// Heads a card with the chat heading a feature's [`CardHints`](crate::CardHints) give its
+    /// decision — "Snooze something in Coming up" — in the order added, as the engine heads a
+    /// chat card (spec 3.3 §7.1). Needs [`approvals`](Self::approvals): a hint reads the
+    /// decision. Give the hints the engine was built with.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    /// use adk_surface::channels::TelegramAdapter;
+    ///
+    /// # fn example(approvals: Arc<dyn adk_core::ApprovalService>, hints: Arc<dyn adk_surface::CardHints>) {
+    /// let telegram = TelegramAdapter::builder("123456789:AA-example")
+    ///     .approvals(approvals)
+    ///     .card_hints(hints)
+    ///     .build();
+    /// # let _ = telegram;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn card_hints(mut self, hints: Arc<dyn crate::hints::CardHints>) -> Self {
+        self.card_hints.push(hints);
+        self
+    }
+
     /// The adapter.
     ///
     /// # Errors
@@ -346,6 +372,7 @@ impl TelegramAdapterBuilder {
                 approvals: self.approvals,
                 answers: self.answers,
                 audit: self.audit,
+                card_hints: self.card_hints,
             }),
         })
     }
@@ -398,6 +425,7 @@ struct Inner {
     approvals: Option<Arc<dyn ApprovalService>>,
     answers: Option<Arc<dyn AnswerLog>>,
     audit: Option<AuditTrail>,
+    card_hints: Vec<Arc<dyn crate::hints::CardHints>>,
 }
 
 impl fmt::Debug for TelegramAdapter {
@@ -420,6 +448,7 @@ impl TelegramAdapter {
             approvals: None,
             answers: None,
             audit: None,
+            card_hints: Vec::new(),
         }
     }
 
@@ -806,7 +835,16 @@ impl ChannelSink for TelegramAdapter {
             }),
             None => None,
         };
-        let heading = wire::heading(card, request.as_ref());
+        let mut heading = wire::heading(card, request.as_ref());
+        // A feature's chat heading, as the engine heads a chat card (spec 3.3 §7.1).
+        if let Some(request) = request.as_ref().filter(|request| request.id == card.decision) {
+            for hints in &self.inner.card_hints {
+                if let Some(chat) = hints.hint(request).await.and_then(|hint| hint.chat_heading) {
+                    heading.title = chat;
+                    break;
+                }
+            }
+        }
         self.send(thread, wire::card(card, &heading, self.inner.offset), None).await
     }
 

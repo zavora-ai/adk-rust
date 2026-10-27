@@ -48,6 +48,8 @@ mod home;
 mod openapi;
 pub(crate) mod phone;
 mod take_over;
+#[cfg(feature = "verb-ui")]
+pub mod verbs;
 mod vocabulary;
 #[cfg(feature = "website")]
 pub mod website;

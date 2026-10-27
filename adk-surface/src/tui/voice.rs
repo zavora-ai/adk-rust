@@ -348,6 +348,16 @@ async fn apply(line: &mut VoiceLine, update: VoiceUpdate, engine: &SurfaceEngine
         VoiceUpdate::Ended => line.ended = true,
         VoiceUpdate::Error { message, .. } => line.problem = Some(message),
         VoiceUpdate::BargeIn => {}
+        // A spoken screen action (spec 3.3 §5.6): saying "cancel" withdraws it.
+        VoiceUpdate::PendingAction { text, heading, .. } => {
+            line.outcome = Some(format!("{heading} · {text} — say cancel to cancel"));
+        }
+        VoiceUpdate::ActionOutcome { text, heading, .. } => {
+            line.outcome = Some(match heading {
+                Some(heading) => format!("{heading} · {text}"),
+                None => text,
+            });
+        }
     }
 }
 

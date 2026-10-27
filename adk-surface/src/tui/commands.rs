@@ -96,6 +96,21 @@ pub(crate) const BUILT_IN: &[(&str, &str)] = &[
     ("exit", "Leave; a kernel's agents carry on"),
 ];
 
+/// The heading `/help` lists the screen actions under (spec 3.3 §2 item 7).
+pub(crate) const ON_YOUR_SCREENS: &str = "On your screens";
+
+/// The screen actions an embedder may add, by name, with how to use each and a second line:
+/// `/help` lists them under [`ON_YOUR_SCREENS`] (spec 3.3 §5.2).
+const SCREEN_ACTIONS: &[(&str, &str, &str)] =
+    &[("snooze", "<title> [tomorrow]", "an hour later, or the same time tomorrow")];
+
+/// `/name args` when `text` is a screen action typed as a message, such as `/snooze News digest`.
+pub(crate) fn screen_action(text: &str) -> Option<(&str, &str)> {
+    let typed = text.trim().strip_prefix('/')?;
+    let (name, args) = typed.split_once(char::is_whitespace).unwrap_or((typed, ""));
+    SCREEN_ACTIONS.iter().any(|(screen, _, _)| *screen == name).then(|| (name, args.trim()))
+}
+
 /// The commands the terminal offers: its own, then the embedder's.
 #[derive(Clone, Default)]
 pub(crate) struct Commands {
@@ -140,6 +155,24 @@ impl Commands {
         self.added
             .iter()
             .map(|command| (command.name().to_string(), command.description().to_string()))
+            .collect()
+    }
+
+    /// The added commands that are screen actions, for `/help`'s "On your screens": each one's
+    /// name, how to use it, its description and a second line.
+    pub(crate) fn screens(&self) -> Vec<(String, String, String, String)> {
+        self.added
+            .iter()
+            .filter_map(|command| {
+                let (_, usage, more) =
+                    SCREEN_ACTIONS.iter().find(|(name, _, _)| *name == command.name())?;
+                Some((
+                    command.name().to_string(),
+                    (*usage).to_string(),
+                    command.description().to_string(),
+                    (*more).to_string(),
+                ))
+            })
             .collect()
     }
 

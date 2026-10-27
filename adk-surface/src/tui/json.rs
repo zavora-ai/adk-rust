@@ -376,6 +376,27 @@ pub(crate) async fn run<W: Write + Send>(
             told.insert(card.id.clone());
         }
     }
+    // A screen action typed as the message runs as the terminal's caller and ends the run with
+    // one `verb` line (spec 3.3 §2 item 7): `{"type":"verb","verb":"snooze","outcome":"done"}`.
+    if let Some(text) = &message
+        && let Some((name, args)) = super::commands::screen_action(text)
+        && let Some(command) = surface.commands.find(name)
+    {
+        let context = super::CommandContext::new(session.clone());
+        let how = caller.origin.kind();
+        let (end, value) = match command.run(args, &context).await {
+            Ok(said) => (
+                End::done(),
+                json!({ "type": "verb", "verb": name, "outcome": "done", "how": how, "text": said }),
+            ),
+            Err(error) => (
+                End::error(error.message.clone()),
+                json!({ "type": "verb", "verb": name, "outcome": "refused", "how": how, "text": error.message }),
+            ),
+        };
+        line(&mut out, &value)?;
+        return end_line(&mut out, &end, &session);
+    }
     if let Some(text) = message {
         let command = Command::Send { session_id: session.clone(), text };
         match engine.execute(caller, command).await {

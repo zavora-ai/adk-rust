@@ -17,6 +17,11 @@
 //! approving: Deny stays on the tray and in voice for every decision, since saying no is
 //! always safe, and only chat, where a high-risk decision never resolves (S-I6), loses it. A
 //! call shown truncated cannot be approved until it was expanded (§7.1).
+//!
+//! A change on the person's screens (feature `verb-ui`, spec 3.3 §2 item 7) follows the same
+//! table: an agent's request is an ordinary decision, low risk, whose card never offers
+//! "always", and a person takes a screen action from the web home, the phone, a terminal or by
+//! voice, never from chat or the tray. No screen action answers a decision.
 
 use adk_core::ApprovalAction;
 use schemars::JsonSchema;

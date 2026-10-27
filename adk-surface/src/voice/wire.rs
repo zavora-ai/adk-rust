@@ -136,6 +136,12 @@ pub enum VoiceClientMessage {
     PlaybackEnded,
     /// End the conversation: a spoken answer in its cancel window is cancelled.
     End,
+    /// **Cancel** on a spoken screen action in its cancel window (spec 3.3 §5.6).
+    #[serde(rename_all = "camelCase")]
+    CancelAction {
+        /// The action, as [`VoiceUpdate::PendingAction`] named it.
+        action_id: String,
+    },
 }
 
 /// A text frame the server sends down the voice socket: transient voice state only
@@ -191,6 +197,34 @@ pub enum VoiceUpdate {
         cancel_until: DateTime<Utc>,
         /// "Allowing once in 5 seconds".
         text: String,
+    },
+    /// A spoken screen action runs at `cancelUntil` unless cancelled (spec 3.3 §5.6): "Snoozing
+    /// in 5 s", under the heading "Move News digest to 19:00".
+    #[serde(rename_all = "camelCase")]
+    PendingAction {
+        /// The action, for [`VoiceClientMessage::CancelAction`].
+        action_id: String,
+        /// When it runs.
+        cancel_until: DateTime<Utc>,
+        /// "Snoozing in 5 s".
+        text: String,
+        /// What it will do, in the kernel's words: "Move News digest to 19:00".
+        heading: String,
+    },
+    /// A spoken screen action ended, or was not taken: done, cancelled, refused, or words
+    /// that match several things (spec 3.3 §5.6).
+    #[serde(rename_all = "camelCase")]
+    ActionOutcome {
+        /// The action, when one was pending.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action_id: Option<String>,
+        /// It ran.
+        done: bool,
+        /// What happened, in plain words: "Cancelled · nothing changed".
+        text: String,
+        /// What it did or would have done: "Moved News digest to 19:00".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        heading: Option<String>,
     },
     /// A spoken answer ended: read the card again for how.
     #[serde(rename_all = "camelCase")]

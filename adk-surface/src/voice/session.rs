@@ -1,7 +1,7 @@
 //! One voice conversation (spec 3.3 §5.6): the realtime session of the harness, the prompted
 //! decision, spoken answers through the engine, and the camera and screen gate.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -118,6 +118,9 @@ pub(crate) struct Conversation {
     /// A spoken answer applies only to the conversation's own decisions: the terminal's
     /// thread shows those, and no other, in full (spec 3.3 §7.1).
     pub(crate) own_only: bool,
+    /// The person's screen actions, said aloud: "snooze news digest" (spec 3.3 §5.6).
+    #[cfg(feature = "verb-ui")]
+    pub(crate) verbs: Option<crate::verbs::VerbGate>,
 }
 
 /// Opens the link and runs the conversation on its own task.
@@ -145,6 +148,9 @@ type Settled = Pin<
             > + Send,
     >,
 >;
+
+/// A spoken screen action waiting out its cancel window, then run: its id and how it ended.
+type Acting = Pin<Box<dyn Future<Output = (String, VoiceUpdate)> + Send>>;
 
 struct State {
     engine: SurfaceEngine,
@@ -186,6 +192,12 @@ struct State {
     /// Tells the provider pump a client action may have made the provider speak again.
     poke: Arc<Notify>,
     closing: Arc<AtomicBool>,
+    /// Spoken screen actions in their cancel window, by id.
+    actions: HashMap<String, tokio::task::AbortHandle>,
+    /// The same actions, ending.
+    acting: FuturesUnordered<Acting>,
+    #[cfg(feature = "verb-ui")]
+    verbs: Option<crate::verbs::VerbGate>,
 }
 
 async fn run(
@@ -206,6 +218,8 @@ async fn run(
         visual,
         poll,
         own_only,
+        #[cfg(feature = "verb-ui")]
+        verbs,
     } = conversation;
     let closing = Arc::new(AtomicBool::new(false));
     let poke = Arc::new(Notify::new());
@@ -241,6 +255,10 @@ async fn run(
         resume_again: false,
         poke,
         closing,
+        actions: HashMap::new(),
+        acting: FuturesUnordered::new(),
+        #[cfg(feature = "verb-ui")]
+        verbs,
     };
     // While every agent is stopped no conversation runs (spec 3.3 S-I10).
     if state.engine.source().stopped().await.unwrap_or(false) {
@@ -296,6 +314,10 @@ async fn run(
             () = wake.notified() => state.resume(),
             Some((id, settled)) = state.settled.next(), if !state.settled.is_empty() => {
                 state.on_settled(id, settled).await;
+            }
+            Some((id, update)) = state.acting.next(), if !state.acting.is_empty() => {
+                state.actions.remove(&id);
+                state.send(update).await;
             }
             () = &mut changed => {
                 changed = changes();
@@ -444,6 +466,11 @@ impl State {
                 }
                 // Only the first message of a socket is a hello; a later one is ignored.
                 VoiceClientMessage::Hello { .. } => {}
+                VoiceClientMessage::CancelAction { action_id } => {
+                    if let Some(action) = self.actions.remove(&action_id) {
+                        action.abort();
+                    }
+                }
             },
         }
         Flow::Continue
@@ -527,7 +554,13 @@ impl State {
     }
 
     async fn on_utterance(&mut self, transcript: &str, utterance: Utterance) {
-        let Some(said) = spoken::parse(transcript, !self.pending.is_empty()) else {
+        let pending = !self.pending.is_empty() || !self.actions.is_empty();
+        let Some(said) = spoken::parse(transcript, pending) else {
+            // Not one of the engine's answers: perhaps a screen action, never from the model's
+            // own audio (spec 3.3 §5.6).
+            if !utterance.echo {
+                self.spoken_action(transcript).await;
+            }
             return;
         };
         // The model's own words, played back into the microphone, never answer.
@@ -552,6 +585,7 @@ impl State {
             Spoken::Cancel => {
                 let speaker = self.speaker.clone();
                 self.cancel_pending(&speaker).await;
+                self.cancel_actions();
             }
             Spoken::AllowOnce | Spoken::Deny => {
                 let answer =
@@ -638,6 +672,7 @@ impl State {
         }
         let viewer = self.viewer.clone();
         self.cancel_pending(&viewer).await;
+        self.cancel_actions();
         // The cancelled answers report through their aborted windows.
         while !self.settled.is_empty() {
             match tokio::time::timeout(Duration::from_secs(1), self.settled.next()).await {
@@ -647,6 +682,117 @@ impl State {
         }
         self.send(VoiceUpdate::Ended).await;
     }
+
+    /// Cancels every spoken screen action of this conversation in its cancel window.
+    fn cancel_actions(&mut self) {
+        for (_, action) in self.actions.drain() {
+            action.abort();
+        }
+    }
+
+    /// Reads `transcript` as a screen action on the person's Coming up and, for one, waits out
+    /// the engine's cancel window before taking it (spec 3.3 §5.6, owner question 26).
+    #[cfg(feature = "verb-ui")]
+    async fn spoken_action(&mut self, transcript: &str) {
+        use crate::verbs::spoken::{SpokenAction, parse};
+        use crate::verbs::{ObjectRef, VerbIntent, problem_line, words as verb_words};
+
+        let Some(gate) = self.verbs.clone() else {
+            return;
+        };
+        let Ok(items) = gate.coming_up(&self.speaker).await else {
+            return;
+        };
+        let (item, title, tomorrow) = match parse(transcript, &items) {
+            None => return,
+            Some(SpokenAction::Ambiguous { said, matches }) => {
+                let text = format!(
+                    "{} — say the full name or use the screen",
+                    verb_words::things_match(matches.len(), &said)
+                );
+                self.send(VoiceUpdate::ActionOutcome {
+                    action_id: None,
+                    done: false,
+                    text,
+                    heading: None,
+                })
+                .await;
+                return;
+            }
+            Some(SpokenAction::Snooze { item, title, tomorrow }) => (item, title, tomorrow),
+        };
+        let Some(found) = items.iter().find(|found| found.id == item) else {
+            return;
+        };
+        let choice = found.choices.iter().find(|choice| choice.tomorrow == tomorrow);
+        let Some(choice) = choice.filter(|_| found.why_not.is_none()) else {
+            let why = found.why_not.clone().unwrap_or_else(|| verb_words::NOT_ONE_TIME.to_string());
+            let text = verb_words::cant_snooze(&why);
+            self.send(VoiceUpdate::ActionOutcome {
+                action_id: None,
+                done: false,
+                text,
+                heading: None,
+            })
+            .await;
+            return;
+        };
+        let heading = verb_words::move_to(&title, &choice.at_text);
+        let done = verb_words::moved_to(&title, &choice.at_text);
+        let said_done = format!("You snoozed {title} by voice");
+        let window = gate.voice_cancel_window();
+        let id = format!("act-{}", uuid::Uuid::new_v4());
+        let cancel_until = chrono::Utc::now()
+            + chrono::Duration::from_std(window).unwrap_or_else(|_| chrono::Duration::seconds(5));
+        let intent = VerbIntent::new("snooze", serde_json::json!({ "to": choice.to }))
+            .on(ObjectRef::coming_up(&item));
+        let speaker = self.speaker.clone();
+        let said = transcript.to_string();
+        let (task_id, task_heading) = (id.clone(), heading.clone());
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep(window).await;
+            match gate.call_spoken(&speaker, intent, &said).await {
+                Ok(_) => VoiceUpdate::ActionOutcome {
+                    action_id: Some(task_id),
+                    done: true,
+                    text: said_done,
+                    heading: Some(done),
+                },
+                Err(error) => VoiceUpdate::ActionOutcome {
+                    action_id: Some(task_id),
+                    done: false,
+                    text: problem_line(&error),
+                    heading: Some(task_heading),
+                },
+            }
+        });
+        self.actions.insert(id.clone(), handle.abort_handle());
+        let cancelled = VoiceUpdate::ActionOutcome {
+            action_id: Some(id.clone()),
+            done: false,
+            text: verb_words::CANCELLED_NOTHING_CHANGED.to_string(),
+            heading: Some(heading.clone()),
+        };
+        let ending = id.clone();
+        self.acting.push(Box::pin(async move {
+            match handle.await {
+                Ok(update) => (ending, update),
+                Err(_) => (ending, cancelled),
+            }
+        }));
+        let seconds = window.as_millis().div_ceil(1000) as u64;
+        self.send(VoiceUpdate::PendingAction {
+            action_id: id,
+            cancel_until,
+            text: verb_words::snoozing_in(seconds),
+            heading,
+        })
+        .await;
+    }
+
+    /// Without screen actions, no words take one.
+    #[cfg(not(feature = "verb-ui"))]
+    async fn spoken_action(&mut self, _transcript: &str) {}
 
     /// Resumes the conversation's held calls that have a decision, on their own task and one
     /// at a time: a resumed call runs its tool, which can take long.
