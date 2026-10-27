@@ -582,6 +582,15 @@ impl Agent for LoopAgent {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        // A call a person asked for needs an agent that holds it for their decision itself
+        // (spec 3.3 §7.4 rule 5).
+        if let Some(refused) = crate::requested_call::refused_by_root(
+            ctx.as_ref(),
+            &self.name,
+            crate::requested_call::RUNS_OTHER_AGENTS,
+        ) {
+            return Ok(refused);
+        }
         let sub_agents = self.sub_agents.clone();
         let max_iterations = self.max_iterations;
         let before_callbacks = self.before_callbacks.clone();

@@ -1756,12 +1756,14 @@ pub struct RunConfig {
     ///
     /// The run's root `LlmAgent` takes it once, after resuming held calls: it refuses a tool
     /// outside its own toolset, a `kernel_*` tool or a tool that draws, checks the arguments
-    /// against the tool's parameters, and authorizes the call as
-    /// [`GovernedCall::requested`](crate::GovernedCall::requested), so an earlier approval or
-    /// the confirmation handler never answers it. The call is held as the agent, or refused,
-    /// and the run ends without a model call. A run that is not authenticated, or whose user
-    /// is not the person who asked, has it refused; an agent that cannot hold a call, such as
-    /// `CodeActAgent`, refuses it.
+    /// against the tool's parameters, runs the before-tool stages a model's call passes, and
+    /// authorizes the call as [`GovernedCall::requested`](crate::GovernedCall::requested), so
+    /// an earlier approval or the confirmation handler never answers it. The call is held as
+    /// the agent, or refused, and the run ends without a model call. A run that is not
+    /// authenticated, or whose user is not the person who asked, has it refused. A root that
+    /// cannot hold a call refuses it before anything else runs: `CodeActAgent`, the workflow
+    /// agents, teams and `GraphAgent` do; another [`Agent`](crate::Agent) answers it with
+    /// [`RequestedCall::refusal_events`](crate::RequestedCall::refusal_events).
     pub requested_call: Option<crate::RequestedCall>,
 }
 

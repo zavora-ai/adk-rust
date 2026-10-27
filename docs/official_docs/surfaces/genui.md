@@ -196,8 +196,10 @@ inside that agent's own runtime:
 
 The agent authorizes the call under its own policy, standing rules, acting context and
 approval store, as `GovernedCall::requested`, and the run ends without a model call. The
-model reads the call as the person's request and its answer as the person's line, never as a
-call it made itself. See
+model reads the call through a runtime notice of what the person did, never as a call it made
+itself and never as the person's own words: the arguments hold constants the agent drew, so
+they and the call's answer arrive inside `<untrusted-content>` blocks, and nothing is written
+in the person's name for long-term memory to quote. See
 [Calls a Person Asks For](../security/tool-authorization.md#calls-a-person-asks-for).
 
 | Situation | What happens |

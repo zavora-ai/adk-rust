@@ -1,32 +1,27 @@
 //! A call a person asked for through something the agent drew (spec 3.3 §7.4 rule 5).
 //!
-//! The run that carries a [`RequestedCall`] writes what the person asked for in their words,
-//! then the call as the agent's own, then holds it for the person's decision or refuses it;
-//! either way the run ends before any model call. The model reads the call as the person's
-//! ([`for_model`]): never as a call it made.
-//! A later run resumes the held call as it resumes any other.
+//! The run that carries a [`RequestedCall`] writes the runtime's notice of what the person
+//! did, then the call as the agent's own, then holds it for the person's decision or refuses
+//! it; either way the run ends before any model call. The call goes through the tool path a
+//! model's call takes, before-tool stages included, and is authorized as
+//! [`GovernedCall::requested`](adk_core::GovernedCall::requested). The model reads the call
+//! through the notice and the answer as delimited data ([`for_model`]): never as a call it
+//! made, and never as the person's own words. A later run resumes the held call as it
+//! resumes any other.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use adk_core::{
-    Content, Event, FunctionResponseData, GovernedCall, InvocationContext, Part, RequestedCall,
-    RequestedViaKind, Result, Tool, ToolAuthorization, ToolGate, authorize_tool_call,
+    Content, Event, EventStream, InvocationContext, Part, RequestedCall, Tool,
+    ToolConfirmationRequest,
 };
-
-use crate::guardrails::{GuardrailScreen, ToolGuardrailSet};
+use serde_json::Value;
 
 /// Whether the session already carries `call`: a run that resumes its hold, or a woken run
 /// that starts from the same input, never takes it twice.
 pub(crate) fn taken(ctx: &dyn InvocationContext, call: &RequestedCall) -> bool {
-    ctx.session().conversation_history().iter().flat_map(|content| &content.parts).any(|part| {
-        match part {
-            Part::FunctionCall { id, .. } | Part::FunctionResponse { id, .. } => {
-                id.as_deref() == Some(call.function_call_id.as_str())
-            }
-            _ => false,
-        }
-    })
+    call.taken_in(&ctx.session().conversation_history())
 }
 
 /// Why `ctx`'s run may not carry `call` at all, before its tool is looked up.
@@ -66,73 +61,93 @@ fn invalid_arguments(tool: &dyn Tool, args: &serde_json::Value) -> Option<String
         .then(|| format!("its arguments do not fit the tool: {}", violations.join("; ")))
 }
 
-/// The events of `call` taken by `agent_name`: the call, its answer, and for a held call
-/// its confirmation request.
-fn call_events(
+/// Why the agent whose tools are `tools` refuses `call` before the tool path, or `None` when
+/// the call goes on to it.
+pub(crate) fn refusal(
+    ctx: &dyn InvocationContext,
+    tools: &HashMap<String, Arc<dyn Tool>>,
+    call: &RequestedCall,
+) -> Option<String> {
+    if let Some(reason) = refused_run(ctx, call) {
+        return Some(reason);
+    }
+    let Some(tool) = tools.get(&call.tool_name) else {
+        return Some(format!("this agent has no tool named '{}'", call.tool_name));
+    };
+    invalid_arguments(tool.as_ref(), &call.args)
+}
+
+/// The events that refuse `call` for `reason`, answered as not run.
+pub(crate) fn refusal_events(
     ctx: &dyn InvocationContext,
     agent_name: &str,
     call: &RequestedCall,
-    response: serde_json::Value,
+    reason: &str,
 ) -> Vec<Event> {
-    let event = |content: Content| {
-        let mut event = Event::new(ctx.invocation_id());
-        event.author = agent_name.to_string();
-        event.branch = ctx.branch().to_string();
-        event.llm_response.content = Some(content);
-        call.mark(&mut event);
-        event
-    };
-    let issued = event(Content {
-        role: "model".to_string(),
-        parts: vec![Part::FunctionCall {
-            name: call.tool_name.clone(),
-            args: call.args.clone(),
-            id: Some(call.function_call_id.clone()),
-            thought_signature: None,
-        }],
-    });
-    let answered = event(Content {
-        role: "function".to_string(),
-        parts: vec![Part::FunctionResponse {
-            function_response: FunctionResponseData::new(call.tool_name.clone(), response),
-            id: Some(call.function_call_id.clone()),
-            annotations: None,
-        }],
-    });
-    vec![asked(ctx, call), issued, answered]
+    tracing::info!(
+        tool.name = %call.tool_name,
+        agent.name = %agent_name,
+        "requested call refused"
+    );
+    call.refusal_events(ctx.invocation_id(), ctx.branch(), agent_name, reason)
 }
 
-/// What the person asked for, in their words, before the call.
-fn asked(ctx: &dyn InvocationContext, call: &RequestedCall) -> Event {
-    let what = match call.via.kind {
-        RequestedViaKind::Form => format!(
-            "I pressed the `{}` button on the form `{}` you drew (version {}).",
-            call.via.action_id, call.via.surface_id, call.via.version
-        ),
-        _ => format!(
-            "I used the app `{}` you showed (version {}, action `{}`).",
-            call.via.surface_id, call.via.version, call.via.action_id
-        ),
-    };
-    let mut event = Event::new(ctx.invocation_id());
-    event.author = "user".to_string();
-    event.llm_response.content = Some(Content {
-        role: "user".to_string(),
-        parts: vec![Part::Text {
-            text: format!(
-                "{what} It asks to run {} with {}; it runs only once I decide.",
-                call.tool_name, call.args
-            ),
-        }],
-    });
-    call.mark(&mut event);
-    event
+/// The events written before `call` goes through the tool path as `agent_name`'s: the notice
+/// and the call. The tool path writes the answer, and a held call's confirmation follows it.
+pub(crate) fn asked_events(
+    ctx: &dyn InvocationContext,
+    agent_name: &str,
+    call: &RequestedCall,
+) -> Vec<Event> {
+    let mut events = call.events(ctx.invocation_id(), ctx.branch(), agent_name, Value::Null);
+    events.truncate(2);
+    events
+}
+
+/// The marked confirmation event of `call`, held as `agent_name` with `request`.
+pub(crate) fn held_event(
+    ctx: &dyn InvocationContext,
+    agent_name: &str,
+    call: &RequestedCall,
+    request: ToolConfirmationRequest,
+) -> Event {
+    tracing::info!(
+        tool.name = %call.tool_name,
+        agent.name = %agent_name,
+        "requested call held for the person's decision"
+    );
+    let mut held = crate::llm_agent::confirmation_event(ctx.invocation_id(), agent_name, request);
+    held.branch = ctx.branch().to_string();
+    call.mark(&mut held);
+    held
+}
+
+/// Why a workflow or team that starts a run refuses its requested call.
+pub(crate) const RUNS_OTHER_AGENTS: &str =
+    "this agent runs other agents and cannot hold a call for a person's decision";
+
+/// The stream that refuses the run's requested call when `agent_name`, an agent that cannot
+/// hold a call for a person's decision, starts the run: a workflow, a team or a script
+/// answers it as not run, before any sub-agent or model runs. `None` when the run carries no
+/// call for it.
+pub(crate) fn refused_by_root(
+    ctx: &dyn InvocationContext,
+    agent_name: &str,
+    reason: &str,
+) -> Option<EventStream> {
+    let call = ctx.run_config().requested_call.as_ref()?;
+    if ctx.agent_name() != agent_name || taken(ctx, call) {
+        return None;
+    }
+    let events = refusal_events(ctx, agent_name, call, reason);
+    Some(Box::pin(futures::stream::iter(events.into_iter().map(Ok))))
 }
 
 /// `contents` as the model reads them: a requested call leaves the model's turns, and its
-/// answer is the person's line after what they asked for. A model that reads a call it did
-/// not make as its own disowns it, and a provider that pairs a call with its result by ID
-/// never receives one it did not issue.
+/// answer is a runtime notice after the notice of what the person did, with the tool's
+/// output delimited as data. A model that reads a call it did not make as its own disowns
+/// it, a provider that pairs a call with its result by ID never receives one it did not
+/// issue, and a tool's output never reads as the person's instruction.
 pub(crate) fn for_model(contents: Vec<Content>) -> Vec<Content> {
     let mut out: Vec<Content> = Vec::with_capacity(contents.len());
     for mut content in contents {
@@ -144,8 +159,14 @@ pub(crate) fn for_model(contents: Vec<Content>) -> Vec<Content> {
             {
                 said.push(Part::Text {
                     text: format!(
-                        "The {} call I asked for answered: {}",
-                        function_response.name, function_response.response
+                        "{}The {} call the person asked for answered:\n{}",
+                        adk_core::history::SYSTEM_NOTICE_PREFIX,
+                        function_response.name,
+                        adk_core::untrusted_block(
+                            "tool",
+                            Some(&function_response.name),
+                            &function_response.response.to_string()
+                        )
                     ),
                 });
                 false
@@ -163,95 +184,4 @@ pub(crate) fn for_model(contents: Vec<Content>) -> Vec<Content> {
         }
     }
     out
-}
-
-/// The events that refuse `call` with `error`, the answer the model reads.
-fn refused(
-    ctx: &dyn InvocationContext,
-    agent_name: &str,
-    call: &RequestedCall,
-    error: String,
-) -> Vec<Event> {
-    tracing::info!(
-        tool.name = %call.tool_name,
-        agent.name = %agent_name,
-        "requested call refused"
-    );
-    call_events(ctx, agent_name, call, serde_json::json!({ "error": error }))
-}
-
-/// The events that refuse `call` for `reason`, answered as not run.
-pub(crate) fn refusal_events(
-    ctx: &dyn InvocationContext,
-    agent_name: &str,
-    call: &RequestedCall,
-    reason: &str,
-) -> Vec<Event> {
-    refused(ctx, agent_name, call, format!("Tool '{}' was not run: {reason}", call.tool_name))
-}
-
-/// Takes `call` for `agent_name`, whose tools are `tools`: the events that hold it for the
-/// person's decision, or refuse it.
-///
-/// # Errors
-///
-/// Returns the governed path's error: the kill switch, or an approval store, approval
-/// service or audit trail that fails.
-pub(crate) async fn take(
-    ctx: &Arc<dyn InvocationContext>,
-    agent_name: &str,
-    tools: &HashMap<String, Arc<dyn Tool>>,
-    guardrails: &ToolGuardrailSet,
-    call: &RequestedCall,
-) -> Result<Vec<Event>> {
-    if let Some(reason) = refused_run(ctx.as_ref(), call) {
-        return Ok(refusal_events(ctx.as_ref(), agent_name, call, &reason));
-    }
-    let Some(tool) = tools.get(&call.tool_name) else {
-        let reason = format!("this agent has no tool named '{}'", call.tool_name);
-        return Ok(refusal_events(ctx.as_ref(), agent_name, call, &reason));
-    };
-    if let Some(reason) = invalid_arguments(tool.as_ref(), &call.args) {
-        return Ok(refusal_events(ctx.as_ref(), agent_name, call, &reason));
-    }
-    let screen = GuardrailScreen(guardrails);
-    let mut gate = ToolGate::for_context(ctx.as_ref());
-    if !guardrails.is_empty() {
-        gate = gate.with_screen(&screen);
-    }
-    let governed =
-        GovernedCall::for_tool(tool.as_ref(), call.function_call_id.clone(), call.args.clone())
-            .requested(true);
-    match authorize_tool_call(&gate, governed).await? {
-        ToolAuthorization::Pending { request, reason } => {
-            tracing::info!(
-                tool.name = %call.tool_name,
-                agent.name = %agent_name,
-                "requested call held for the person's decision"
-            );
-            let mut events = call_events(
-                ctx.as_ref(),
-                agent_name,
-                call,
-                adk_core::confirmation_pending_response(reason),
-            );
-            let mut held =
-                crate::llm_agent::confirmation_event(ctx.invocation_id(), agent_name, request);
-            held.branch = ctx.branch().to_string();
-            call.mark(&mut held);
-            events.push(held);
-            Ok(events)
-        }
-        ToolAuthorization::Refuse { reason, .. } => {
-            Ok(refused(ctx.as_ref(), agent_name, call, reason))
-        }
-        // Authorized for a call with no decision would break the primitive's rule, so it is
-        // refused rather than run.
-        ToolAuthorization::Execute { .. } => Ok(refusal_events(
-            ctx.as_ref(),
-            agent_name,
-            call,
-            "it was not held for the person's decision",
-        )),
-    }
 }

@@ -2567,6 +2567,13 @@ impl ToolExecutor<'_> {
     async fn execute(&self, call: PendingToolCall) -> Result<ToolExecutionResult> {
         let screened_call =
             (!self.tool_guardrails.is_empty()).then(|| (call.name.clone(), call.args.clone()));
+        // The run's call a person asked for: its answer carries the mark, as its call does.
+        let requested = self
+            .ctx
+            .run_config()
+            .requested_call
+            .as_ref()
+            .filter(|requested| requested.function_call_id == call.function_call_id);
         let mut result = self.execute_inner(call).await?;
         // Tool guardrails see the result the model is about to be sent, after every after-tool
         // stage. A held call's pending response is not a result.
@@ -2601,6 +2608,9 @@ impl ToolExecutor<'_> {
         warnings.record_on(&mut event);
         event.actions = result.actions.clone();
         event.llm_response.content = Some(result.content.clone());
+        if let Some(requested) = requested {
+            requested.mark(&mut event);
+        }
         // Runner commits each result while other calls are still awaiting approval.
         let _ = self.progress_tx.send(event).await;
         Ok(result)
@@ -2866,11 +2876,11 @@ impl ToolExecutor<'_> {
             // for. A request naming another tool belongs to a delegate the tool runs, whose
             // own governed path binds it.
             if let Some(held) = resumes.filter(|held| held.tool_name == name) {
-                // A call a person asked for runs only on their decision, whatever the policy
-                // allows by now (spec 3.3 §7.4 rule 5).
-                let requested = adk_core::RequestedCall::is_requested_id(&function_call_id);
-                call = call.resuming(held).requested(requested);
+                call = call.resuming(held);
             }
+            // A call a person asked for is held for them however the agent is configured,
+            // and runs only on their decision when it resumes (spec 3.3 §7.4 rule 5).
+            call = call.requested(adk_core::RequestedCall::is_requested_id(&function_call_id));
             match authorize_tool_call(&gate, call).await {
                 Ok(ToolAuthorization::Execute { args, confirmation }) => {
                     final_args = args;
@@ -3646,6 +3656,9 @@ impl Agent for LlmAgent {
             // decision applies whether or not the model would issue the call again. It
             // runs the whole tool path, where the governed path finds the decision.
             let mut resumed_calls = Vec::<PendingToolCall>::new();
+            // The run ends once its held calls and a person's call are dealt with: a resumed
+            // call ended the turn, or one was held again.
+            let mut ends_here = false;
             {
                 let gate = ToolGate::for_context(ctx.as_ref());
                 for held in ctx.session().held_tool_calls(&agent_name, ctx.branch()) {
@@ -3783,8 +3796,10 @@ impl Agent for LlmAgent {
                                  empty message to answer it, or resume held calls with an \
                                  empty message before sending a new one",
                             ));
+                            return;
                         }
-                        return;
+                        ends_here = true;
+                        break;
                     }
                     held_again.extend(result.pending);
                     // Each result takes the place of its call's pending response, matched by
@@ -3794,70 +3809,130 @@ impl Agent for LlmAgent {
                         result.content,
                     );
                 }
-                if !held_again.is_empty() {
+                if !ends_here && !held_again.is_empty() {
                     for request in held_again {
                         yield Ok(confirmation_event(&invocation_id, &agent_name, request));
                     }
-                    // A call a person asked for in this run waits for them too.
-                    if starts_run
-                        && let Some(requested) = ctx.run_config().requested_call.as_ref()
-                        && !crate::requested_call::taken(ctx.as_ref(), requested)
-                    {
-                        let taken = crate::requested_call::take(
-                            &ctx,
-                            &agent_name,
-                            &tool_map,
-                            tool_guardrails.as_ref(),
-                            requested,
-                        )
-                        .await;
-                        match taken {
-                            Ok(events) => {
-                                for event in events {
-                                    yield Ok(event);
-                                }
-                            }
-                            Err(error) => yield Err(error),
-                        }
-                    }
-                    return;
+                    ends_here = true;
                 }
 
-                let refreshed_tools = match tool_setup.resolve(&ctx).await {
-                    Ok(tools) => tools,
-                    Err(error) => {
-                        yield Err(error);
-                        return;
-                    }
-                };
-                tool_map = refreshed_tools.map;
-                tool_declarations = refreshed_tools.declarations;
-                valid_transfer_targets = refreshed_tools.transfer_targets;
+                if !ends_here {
+                    let refreshed_tools = match tool_setup.resolve(&ctx).await {
+                        Ok(tools) => tools,
+                        Err(error) => {
+                            yield Err(error);
+                            return;
+                        }
+                    };
+                    tool_map = refreshed_tools.map;
+                    tool_declarations = refreshed_tools.declarations;
+                    valid_transfer_targets = refreshed_tools.transfer_targets;
+                }
             }
 
             // ===== A CALL A PERSON ASKED FOR =====
             // Held for the person's decision as this agent, or refused, before any model
-            // call; the run ends either way (spec 3.3 §7.4 rule 5).
+            // call; the run ends either way (spec 3.3 §7.4 rule 5). It takes the tool path
+            // a model's call takes, so a before-tool plugin, hook or callback and the circuit
+            // breaker see it before it is authorized as requested.
             if starts_run
                 && let Some(requested) = ctx.run_config().requested_call.as_ref()
                 && !crate::requested_call::taken(ctx.as_ref(), requested)
             {
-                let taken = crate::requested_call::take(
-                    &ctx,
-                    &agent_name,
-                    &tool_map,
-                    tool_guardrails.as_ref(),
-                    requested,
-                )
-                .await;
-                match taken {
-                    Ok(events) => {
-                        for event in events {
-                            yield Ok(event);
+                if let Some(reason) =
+                    crate::requested_call::refusal(ctx.as_ref(), &tool_map, requested)
+                {
+                    for event in crate::requested_call::refusal_events(
+                        ctx.as_ref(),
+                        &agent_name,
+                        requested,
+                        &reason,
+                    ) {
+                        yield Ok(event);
+                    }
+                    return;
+                }
+                for event in crate::requested_call::asked_events(ctx.as_ref(), &agent_name, requested) {
+                    yield Ok(event);
+                }
+                let cb_mutex = std::sync::Mutex::new(circuit_breaker_state.take());
+                let concurrency_manager =
+                    adk_core::ToolConcurrencyManager::new(&ctx.run_config().tool_concurrency);
+                let (progress_tx, mut progress_rx) =
+                    tokio::sync::mpsc::channel::<Event>(TOOL_PROGRESS_CAPACITY);
+                let progress_overflow = ProgressOverflow::default();
+                let executor = ToolExecutor {
+                    ctx: ctx.clone(),
+                    agent_name: &agent_name,
+                    tool_map: &tool_map,
+                    tool_retry_budgets: &tool_retry_budgets,
+                    default_retry_budget: &default_retry_budget,
+                    output_guardrails: output_guardrails.as_ref(),
+                    before_tool_callbacks: &before_tool_callbacks,
+                    after_tool_callbacks: &after_tool_callbacks,
+                    after_tool_callbacks_full: &after_tool_callbacks_full,
+                    on_tool_error_callbacks: &on_tool_error_callbacks,
+                    hook_callbacks: &hook_callbacks,
+                    tool_confirmation_policy: &tool_confirmation_policy,
+                    tool_guardrails: tool_guardrails.as_ref(),
+                    cb_mutex: &cb_mutex,
+                    invocation_id: &invocation_id,
+                    concurrency_manager: &concurrency_manager,
+                    progress_tx,
+                    progress_overflow: progress_overflow.clone(),
+                    tool_timeout,
+                    expose_tool_error_messages,
+                    approval_failed: tokio::sync::watch::channel(false).0,
+                    #[cfg(feature = "enhanced-plugins")]
+                    enhanced_plugin_manager: &enhanced_plugin_manager,
+                };
+                let call = PendingToolCall {
+                    index: 0,
+                    name: requested.tool_name.clone(),
+                    args: requested.args.clone(),
+                    id: Some(requested.function_call_id.clone()),
+                    function_call_id: requested.function_call_id.clone(),
+                    resumes: None,
+                };
+                let results = {
+                    let dispatch = executor.dispatch(ToolDispatchMode::Sequential, vec![call]);
+                    tokio::pin!(dispatch);
+                    let results = loop {
+                        tokio::select! {
+                            biased;
+                            Some(progress_event) = progress_rx.recv() => {
+                                yield Ok(progress_event);
+                            }
+                            done = &mut dispatch => break done,
+                        }
+                    };
+                    while let Ok(progress_event) = progress_rx.try_recv() {
+                        yield Ok(progress_event);
+                    }
+                    let markers = std::mem::take(
+                        &mut *progress_overflow.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+                    );
+                    for marker in markers {
+                        yield Ok(marker);
+                    }
+                    results
+                };
+                match results {
+                    Ok(results) => {
+                        for request in results.into_iter().filter_map(|result| result.pending) {
+                            yield Ok(crate::requested_call::held_event(
+                                ctx.as_ref(),
+                                &agent_name,
+                                requested,
+                                request,
+                            ));
                         }
                     }
                     Err(error) => yield Err(error),
                 }
+                return;
+            }
+            if ends_here {
                 return;
             }
 

@@ -138,3 +138,60 @@ async fn just_look_refuses_a_requested_call() {
     assert!(f.model.requests().is_empty(), "no model call");
     assert!(!f.path("c.txt").exists());
 }
+
+/// Spec 3.3 §7.4 rule 5: a looser mode never answers a call a person asked for, so it keeps
+/// waiting for them when the mode loosens, and their Allow once still runs it.
+#[tokio::test]
+async fn loosening_the_mode_keeps_a_requested_call_waiting() {
+    let f = fixture(vec![done(), done()], |b| b).await;
+    let call = requested_write("d.txt", "from the form");
+    let events =
+        collect(f.harness.send_requested(&f.user, &f.session, "", call, alice()).await.unwrap())
+            .await;
+    let held = confirmation_requests(&events);
+    assert_eq!(held.len(), 1, "the call waits for the person");
+
+    f.harness.set_mode(&f.user, &f.session, HarnessMode::Auto).await.unwrap();
+
+    let pending = f.harness.pending_approvals(&f.user, &f.session).await.unwrap();
+    assert_eq!(pending.len(), 1, "a looser mode does not cancel it");
+    assert_eq!(pending[0].fingerprint, held[0].fingerprint());
+    f.harness
+        .decide(&f.user, &f.session, &held[0].fingerprint(), HarnessDecision::Approve)
+        .await
+        .unwrap();
+    let events = collect(f.harness.resume_as(&f.user, &f.session, alice()).await.unwrap()).await;
+    assert_eq!(outcome(&response_of(&events, "write_file")), Outcome::Executed);
+    assert_eq!(std::fs::read_to_string(f.path("d.txt")).unwrap(), "from the form");
+}
+
+/// Spec 3.3 §7.4 rule 5: no confirmation handler answers a call a person asked for, so one
+/// whose decision a run took before the call began is held for the person again, on a
+/// harness with an approval prompt too.
+#[tokio::test]
+async fn a_stranded_requested_call_waits_again_with_a_prompt_installed() {
+    let prompter = common::ScriptedPrompter::new();
+    let f = fixture(vec![done(), done()], |b| b.prompter(prompter.clone())).await;
+    let call = requested_write("e.txt", "from the form");
+    let events =
+        collect(f.harness.send_requested(&f.user, &f.session, "", call, alice()).await.unwrap())
+            .await;
+    let held = confirmation_requests(&events);
+    assert_eq!(held.len(), 1, "the call waits for the person");
+    let fingerprint = held[0].fingerprint();
+
+    // A run took the person's yes, and the process stopped before the call began.
+    let store = f.harness.agent().runtime().approval_store().clone();
+    let scope = ApprovalScope::new(common::APP, "alice", f.session.to_string());
+    store.decide(&scope, &fingerprint, ToolApproval::approve()).await.unwrap();
+    assert!(store.take_approval(&scope, &fingerprint).await.unwrap().is_some());
+    assert!(f.harness.pending_approvals(&f.user, &f.session).await.unwrap().is_empty());
+
+    collect(f.harness.resume_as(&f.user, &f.session, alice()).await.unwrap()).await;
+
+    let pending = f.harness.pending_approvals(&f.user, &f.session).await.unwrap();
+    assert_eq!(pending.len(), 1, "the person can decide again");
+    assert_eq!(pending[0].fingerprint, fingerprint);
+    assert_eq!(prompter.count(), 0, "the prompt never answers it");
+    assert!(!f.path("e.txt").exists(), "nothing ran");
+}

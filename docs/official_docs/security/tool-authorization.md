@@ -433,11 +433,12 @@ from (`via`). A run carries it as `RunConfig::requested_call`; only an authentic
 | Step | What happens |
 |------|--------------|
 | Before the first model call | The run's root `LlmAgent` takes the call, finds the tool in its own toolset and checks the arguments against the tool's parameters |
+| Before-tool stages | The stages a model's call passes: enhanced plugins (which may rewrite the arguments), the runner's hooks and `BeforeToolCallback`, and the circuit breaker. One that answers the call answers it as not run, with no hold |
 | Authorization | `authorize_tool_call` with `GovernedCall::requested`: the kill switch, the `ToolPolicy` and the tool guardrails as for any call, then a hold |
-| Held | The person's line — "I pressed the `send` button on the form `invoice-10` you drew (version 1). It asks to run send_invoice with {...}; it runs only once I decide." — then the call as the agent's own under an ID starting `adk-call-requested-` (`REQUESTED_CALL_ID_PREFIX`), each marked `adk.requested` with `requestedBy` and `via` (`RequestedCall::mark`); the call is submitted to the approval service and audited as `ApprovalRequired` with `policy_ref` `requested_call`; the run ends with no model call |
+| Held | The runtime's notice — "[System notice] The person pressed the `send` button on the form `invoice-10` you drew (version 1). It asks to run send_invoice; …" with the arguments inside an `<untrusted-content source="form">` block (`RequestedCall::notice`), never a message in the person's name — then the call as the agent's own under an ID starting `adk-call-requested-` (`REQUESTED_CALL_ID_PREFIX`), each marked `adk.requested` with `requestedBy` and `via` (`RequestedCall::mark`); the call is submitted to the approval service and audited as `ApprovalRequired`, with the policy's own `policy_ref` when the policy asks for approval and `requested_call` when it would have allowed the call; the run ends with no model call |
 | Refused | The policy's or guardrail's refusal is written as the call's response; the run ends with no model call |
 | Resumed | At the start of a later run, like any held call; it runs once, on a person's decision |
-| Read by the model | Never as a call the model made: the call leaves the model's turns, and its answer is the person's line — "The send_invoice call I asked for answered: {...}" — so no provider receives a function call it did not issue |
+| Read by the model | Never as a call the model made, and never as the person's words: the call leaves the model's turns, and its answer is a runtime notice with the tool's output inside an `<untrusted-content source="tool">` block, so no provider receives a function call it did not issue |
 
 The press is the request, never the approval. A requested call is held whatever would answer
 an ordinary call:
@@ -452,8 +453,11 @@ an ordinary call:
 | A `ToolPolicy` that denies the tool when it resumes | Refuses it: `Tool 'send_invoice' denied by policy: ...` |
 
 A requested call never names a kernel tool (`kernel_*`) or a tool that draws
-(`DRAW_TOOL_NAMES`); `RequestedCall::refused_tool` says why. `CodeActAgent` refuses requested
-calls.
+(`DRAW_TOOL_NAMES`); `RequestedCall::refused_tool` says why. A root that cannot hold a call
+refuses it before anything else runs: `CodeActAgent`, the workflow agents, teams and
+`GraphAgent`. A custom `Agent` answers it with `RequestedCall::refusal_events`. Every requested
+call's ID starts with `adk-call-requested-`, which finds them in the audit trail whatever
+`policy_ref` held them.
 
 A host asks for one through the agent that drew the form, so it is held in that agent's own
 runtime, with its policy, standing rules, acting context and approval store:

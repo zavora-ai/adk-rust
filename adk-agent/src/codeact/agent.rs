@@ -2180,23 +2180,17 @@ impl Agent for CodeActAgent {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> adk_core::Result<EventStream> {
-        let starts_run = ctx.agent_name() == self.name();
-        // Under a workflow or team parent, the agent still acts as itself.
-        let ctx = crate::acting_agent_context::ActingAgentContext::scope(ctx, self.name());
         // A call a person asked for needs an agent that can hold it for their decision, which
         // a script cannot (spec 3.3 §7.4 rule 5, wave 4 decision 13).
-        if starts_run
-            && let Some(requested) = ctx.run_config().requested_call.as_ref()
-            && !crate::requested_call::taken(ctx.as_ref(), requested)
-        {
-            let events = crate::requested_call::refusal_events(
-                ctx.as_ref(),
-                self.name(),
-                requested,
-                "this agent runs code and cannot hold a call for a person's decision",
-            );
-            return Ok(Box::pin(futures::stream::iter(events.into_iter().map(Ok))));
+        if let Some(refused) = crate::requested_call::refused_by_root(
+            ctx.as_ref(),
+            self.name(),
+            "this agent runs code and cannot hold a call for a person's decision",
+        ) {
+            return Ok(refused);
         }
+        // Under a workflow or team parent, the agent still acts as itself.
+        let ctx = crate::acting_agent_context::ActingAgentContext::scope(ctx, self.name());
         // Input guardrails run first; a block aborts the run, a transform
         // (e.g. PII redaction) rewrites the user content downstream.
         let ctx = self.apply_input_guardrails(ctx).await?;

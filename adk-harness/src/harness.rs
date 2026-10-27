@@ -567,7 +567,11 @@ impl Harness {
                             annotations: None,
                         });
                     }
-                    None if runtime.confirmation_handler().is_none() => {
+                    // No handler answers a call a person asked for, so it waits again too
+                    // (spec 3.3 §7.4 rule 5).
+                    None if runtime.confirmation_handler().is_none()
+                        || RequestedCall::is_requested_id(call_id) =>
+                    {
                         tracing::warn!(
                             tool.name = %call.name,
                             function_call.id = %call_id,
@@ -617,7 +621,9 @@ impl Harness {
     /// Only outside a run. A loosening first answers every held call in the session with a
     /// "cancelled by mode change" response and removes its pending entry and any decision
     /// for it, so no call a person has not seen under the looser mode runs on the next
-    /// resume or on a later identical call (spec 3.1 §9.2 I14).
+    /// resume or on a later identical call (spec 3.1 §9.2 I14). A call a person asked for
+    /// through a drawn form or an app keeps waiting: no mode answers it (spec 3.3 §7.4
+    /// rule 5).
     ///
     /// # Errors
     ///
@@ -653,7 +659,12 @@ impl Harness {
                 }
             }
             for (author, branch) in holders {
-                let held = held_tool_calls(&events, &author, &branch);
+                // A call a person asked for waits for them in every mode, so a looser mode
+                // never runs it unseen (spec 3.3 §7.4 rule 5).
+                let held: Vec<_> = held_tool_calls(&events, &author, &branch)
+                    .into_iter()
+                    .filter(|call| !call.id.as_deref().is_some_and(RequestedCall::is_requested_id))
+                    .collect();
                 if held.is_empty() {
                     continue;
                 }
