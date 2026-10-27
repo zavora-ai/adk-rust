@@ -1408,6 +1408,9 @@ where
             active_tasks: self.active_tasks.clone(),
             mrtr_handler: self.mrtr_handler.clone(),
             resource_subscriptions: self.resource_subscriptions.clone(),
+            // A re-issued call finishes one an app was already shown for, or not.
+            #[cfg(feature = "mcp-apps")]
+            ui: None,
         })
     }
 
@@ -1603,6 +1606,67 @@ where
                 }
             }
         }
+    }
+
+    /// The apps this server's tools show (spec 3.3 §6.1 `genui-apps`): each tool's
+    /// `_meta.ui`, including the tools only an app may call, which
+    /// [`tools`](Toolset::tools) leaves out.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// for binding in toolset.ui_bindings().await? {
+    ///     println!("{} shows {} (model: {})", binding.tool, binding.resource_uri, binding.visibility.model);
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` when the server cannot be reached or its listing exceeds the
+    /// [discovery limits](Self::with_discovery_limits).
+    #[cfg(feature = "mcp-apps")]
+    pub async fn ui_bindings(&self) -> Result<Vec<super::apps::McpUiBinding>> {
+        let connection = self.client.open_connection(&self.name).await?;
+        let listed = tokio::time::timeout(
+            self.discovery_limits.timeout,
+            list_tools(connection.peer(), self.discovery_limits.max_pages),
+        )
+        .await
+        .map_err(|_| ListError::Timeout {
+            method: "tools/list",
+            timeout: self.discovery_limits.timeout,
+        })
+        .and_then(|listed| listed)
+        .map_err(|error| {
+            AdkError::tool(format!("Failed to list MCP tools from '{}': {error}", self.name))
+        })?;
+        Ok(listed.iter().filter_map(super::apps::McpUiBinding::of_tool).collect())
+    }
+
+    /// Reads the app at `uri`, a `ui://` resource, with what its `_meta.ui` declares
+    /// (spec 3.3 §6.1 `genui-apps`). A host still checks it before it shows it.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let app = toolset.read_app("ui://weather/app").await?;
+    /// assert_eq!(app.mime_type, adk_tool::mcp::MCP_APP_MIME_TYPE);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` when `uri` is not a `ui://` URI, the resource cannot be read,
+    /// or it is not an MCP App's HTML.
+    #[cfg(feature = "mcp-apps")]
+    pub async fn read_app(&self, uri: &str) -> Result<super::apps::McpAppResource> {
+        if !uri.starts_with("ui://") {
+            return Err(AdkError::tool(format!(
+                "'{}' is not an MCP App resource: apps are ui:// resources",
+                escape_for_display(uri)
+            )));
+        }
+        let contents = self.read_resource(uri).await?;
+        super::apps::McpAppResource::from_contents(uri, &contents)
     }
 
     /// Return the prompt templates published by the connected MCP server.
@@ -1864,6 +1928,18 @@ where
                 );
                 continue;
             }
+            // A tool only an app may call is never the model's (spec 3.3 §6.1 `genui-apps`).
+            #[cfg(feature = "mcp-apps")]
+            let ui = super::apps::McpUiBinding::of_tool(&mcp_tool);
+            #[cfg(feature = "mcp-apps")]
+            if ui.as_ref().is_some_and(|ui| !ui.visibility.model) {
+                debug!(
+                    toolset.name = %self.name,
+                    tool.name = %logged_name,
+                    "leaving out an MCP tool only its app may call"
+                );
+                continue;
+            }
             // The first definition of a name wins, whatever happens to it below.
             if !seen.insert(tool_name.clone()) {
                 warn!(
@@ -1947,6 +2023,8 @@ where
                 active_tasks: self.active_tasks.clone(),
                 mrtr_handler: self.mrtr_handler.clone(),
                 resource_subscriptions: self.resource_subscriptions.clone(),
+                #[cfg(feature = "mcp-apps")]
+                ui,
             };
 
             tools.push(Arc::new(adk_tool) as Arc<dyn Tool>);
@@ -2191,6 +2269,9 @@ where
     resource_subscriptions: Arc<RwLock<BTreeSet<String>>>,
     /// Policy bridge used to fulfil MRTR input without keeping server state.
     mrtr_handler: Option<super::elicitation::AdkClientHandler>,
+    /// The app the tool shows, from its `_meta.ui` (spec 3.3 §6.1 `genui-apps`).
+    #[cfg(feature = "mcp-apps")]
+    ui: Option<super::apps::McpUiBinding>,
 }
 
 impl<S> McpTool<S>
@@ -2766,7 +2847,26 @@ where
             .elicitation_scopes
             .enter(super::elicitation::ElicitationScope::for_call(ctx.as_ref()));
         let call_id = Some(ctx.function_call_id().to_string()).filter(|id| !id.is_empty());
-        self.execute_value(args, call_id).await
+        #[cfg(feature = "mcp-apps")]
+        let record =
+            self.ui.as_ref().zip(call_id.clone()).map(|(ui, call_id)| super::apps::McpAppRecord {
+                server: self.toolset_name().to_string(),
+                tool: self.name.clone(),
+                resource_uri: ui.resource_uri.clone(),
+                call_id,
+            });
+        let value = self.execute_value(args, call_id).await?;
+        // The call that shows an app says so in its own event, so a host shows the app only
+        // for a call this tool made (spec 3.3 §6.1 `genui-apps`).
+        #[cfg(feature = "mcp-apps")]
+        if let Some(record) = record
+            && value.get("error").is_none()
+        {
+            let mut actions = ctx.actions();
+            actions.state_delta.insert(super::apps::MCP_APP_STATE_KEY.to_string(), json!(record));
+            ctx.set_actions(actions);
+        }
+        Ok(value)
     }
 }
 

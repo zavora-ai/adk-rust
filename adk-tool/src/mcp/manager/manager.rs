@@ -261,6 +261,11 @@ impl Launcher {
             .unwrap_or_else(|| Arc::new(AutoDeclineElicitationHandler));
 
         let mut adk_handler = AdkClientHandler::new(handler);
+        // Servers may give their tools apps, which a host shows sandboxed (spec 3.3 §6.1).
+        #[cfg(feature = "mcp-apps")]
+        {
+            adk_handler = adk_handler.with_apps();
+        }
         if config.task_config.enable_tasks {
             adk_handler = adk_handler.with_tasks();
         }
@@ -893,6 +898,37 @@ impl McpServerManager {
         uri: &str,
     ) -> adk_core::Result<Vec<ResourceContents>> {
         self.running_toolset(id).await?.read_resource(uri).await
+    }
+
+    /// The apps one running managed server's tools show, including the tools only an app may
+    /// call (spec 3.3 §6.1 `genui-apps`; see [`McpToolset::ui_bindings`](crate::mcp::McpToolset::ui_bindings)).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` when the server is unknown or not running, or cannot list its
+    /// tools.
+    #[cfg(feature = "mcp-apps")]
+    pub async fn server_ui_bindings(
+        &self,
+        id: &str,
+    ) -> adk_core::Result<Vec<crate::mcp::McpUiBinding>> {
+        self.running_toolset(id).await?.ui_bindings().await
+    }
+
+    /// Reads the app at `uri` from one running managed server (spec 3.3 §6.1 `genui-apps`; see
+    /// [`McpToolset::read_app`](crate::mcp::McpToolset::read_app)).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` when the server is unknown or not running, or the resource is
+    /// not an MCP App.
+    #[cfg(feature = "mcp-apps")]
+    pub async fn read_server_app(
+        &self,
+        id: &str,
+        uri: &str,
+    ) -> adk_core::Result<crate::mcp::McpAppResource> {
+        self.running_toolset(id).await?.read_app(uri).await
     }
 
     /// Subscribe to updates for one resource on a running managed server.
