@@ -386,7 +386,16 @@ impl RsyncHost {
 
     /// A file under the root; `None` when missing.
     async fn read(&self, root: &str, path: &str) -> Result<Option<Bytes>> {
-        let output = self.script(READ, &[root, path], None).await?;
+        let mut output = self.script(READ, &[root, path], None).await?;
+        // A path through `current` while a publish renames it can fail once with EINVAL on
+        // APFS (macOS) though the rename is atomic; the next lookup sees one release or the
+        // other.
+        for _ in 0..2 {
+            if matches!(output.status.code(), Some(0 | 3)) {
+                break;
+            }
+            output = self.script(READ, &[root, path], None).await?;
+        }
         match output.status.code() {
             Some(0) => Ok(Some(Bytes::from(output.stdout))),
             Some(3) => Ok(None),
