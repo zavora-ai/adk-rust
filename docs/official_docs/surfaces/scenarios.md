@@ -129,12 +129,13 @@ approved call: the 4200 charge once and the 5000 charge once.
 
 An agent draws a form, a person sends it, and the call waits for them however the agent is
 configured (spec 3.3 §12 "Governed form", §7.4 rule 5). It runs as tests over the real
-kernel, durable worker, approval service, session store and audit trail on SQLite, with a
-scripted model driving the harness agent Finance in "Ask first".
+kernel, durable worker, approval service, session store and audit trail on SQLite, and on
+PostgreSQL by hand, with a scripted model driving the harness agent Finance in "Ask first".
 
 | Run | Command |
 |---|---|
 | The scenario, the projection and the terminal over the control plane | `cargo nextest run -p adk-surface --features genui,web,tui --test genui_scenario_tests --test genui_projection_tests` |
+| PostgreSQL, by hand, on an empty database | `createdb genui_form`, then `DATABASE_URL=postgres://postgres:postgres@localhost:5432/genui_form cargo nextest run -p adk-surface --features genui,web,tui --test genui_scenario_tests --run-ignored only -E 'test(/on_postgres/)'`, then `dropdb genui_form` |
 | Another area's and an added agent's forms | `cargo nextest run -p adk-cli --features genui,scripted-model --test genui_up` |
 | The web home, light and dark | `npx playwright test --project genui --project genui-states`, from `adk-surface/web` |
 | Live, `claude-sonnet-5-5`: the model draws the form, and its next turn reads the call as the person's | `cargo test -p adk-surface --features genui,web --test genui_scenario_tests -- --ignored --nocapture` |

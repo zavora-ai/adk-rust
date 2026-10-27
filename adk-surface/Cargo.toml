@@ -140,8 +140,9 @@ url = { version = "2", optional = true }
 # Internal dev-deps are path-only (no version) so cargo strips them from the published
 # manifest.
 adk-devtools = { path = "../adk-devtools" }
-# The kernel's chat channel contract suite, run against the Telegram adapter.
-adk-kernel = { path = "../adk-kernel", features = ["channels", "conformance"] }
+# The kernel's chat channel contract suite, run against the Telegram adapter, and its
+# PostgreSQL process store for the governed form's shared-store leg.
+adk-kernel = { path = "../adk-kernel", features = ["channels", "conformance", "postgres"] }
 # The kernel-hosted harness of the scenario tests.
 adk-harness = { path = "../adk-harness", features = ["kernel"] }
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic", "openai", "gemini"] }
