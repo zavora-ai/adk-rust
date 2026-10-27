@@ -4,7 +4,8 @@
 //! the call runs once, and the card reads "You said yes by voice".
 //!
 //! The binary runs as a process with a scripted model on SQLite (`harness.db`). The
-//! PostgreSQL and Redis variants are `#[ignore]`d and need `DATABASE_URL` or `REDIS_URL`:
+//! PostgreSQL and Redis variants are `#[ignore]`d and need `DATABASE_URL` or `REDIS_URL`; the
+//! PostgreSQL one runs in a database of its own and in `scripts/test-postgres.sh`:
 //!
 //! ```sh
 //! DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
@@ -237,8 +238,28 @@ async fn a_spoken_allow_once_on_sqlite() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs DATABASE_URL: a PostgreSQL server"]
 async fn a_spoken_allow_once_on_postgres() {
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL names a PostgreSQL server");
+    let server = std::env::var("DATABASE_URL").expect("DATABASE_URL names a PostgreSQL server");
+    let admin = sqlx::PgPool::connect(&server).await.unwrap();
+    let nanos =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    // A name of digits and underscores only, so it needs no quoting.
+    let database = format!("voice_up_{nanos}");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let (base, query) = server.split_once('?').unwrap_or((&server, ""));
+    let host = base.find("://").map_or(0, |at| at + 3);
+    let root = base[host..].find('/').map_or(base, |at| &base[..host + at]);
+    let url = match query {
+        "" => format!("{root}/{database}"),
+        query => format!("{root}/{database}?{query}"),
+    };
     a_spoken_allow_once_runs_the_call_once(Some(&url)).await;
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP DATABASE IF EXISTS {database} WITH (FORCE)")))
+        .execute(&admin)
+        .await
+        .unwrap();
 }
 
 #[cfg(feature = "redis")]

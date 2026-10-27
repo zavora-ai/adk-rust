@@ -231,6 +231,10 @@ tempfile = "3"
 zip = { workspace = true }
 base64 = "0.22"
 sha2 = "0.10"
+# The software passkey "Speak, glance, stop" confirms with in the web home (spec 3.3 §12 phase 5).
+p256 = { version = "0.13.2", default-features = false, features = ["ecdsa", "std"] }
+base64ct = { version = "1.8", features = ["alloc"] }
+getrandom = "0.3"
 
 [target.'cfg(unix)'.dev-dependencies]
 # openpty for the console end-to-end tests, which drive the binary in a pseudo-terminal

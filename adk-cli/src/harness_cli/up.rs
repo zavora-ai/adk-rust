@@ -30,6 +30,7 @@ use crate::ResolvedModel;
 use crate::cli::UpArgs;
 
 mod commands;
+mod held;
 #[cfg(feature = "mobile")]
 mod phone;
 #[cfg(feature = "channels")]
@@ -205,9 +206,12 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     let routing = adk_surface::verbs::VerbRouter::catalogue(APP_NAME, routing);
     #[cfg(feature = "verb-ui")]
     let verb_approvals = approval_store.clone();
+    // Every held call on the kernel's bus, so the tray re-reads on it (spec 3.3 §12 phase 5).
+    let held = held::HeldDoorbell::default();
     let service = StoreApprovalService::new(approval_store)
         .with_router(routing)
-        .with_run_store(run_store.clone());
+        .with_run_store(run_store.clone())
+        .with_notifier(Arc::new(held.clone()));
     #[cfg(feature = "channels")]
     let service = match &chat {
         Some(chat) => service.with_notifier(chat.doorbell()),
@@ -620,6 +624,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         }
     }
     let kernel = kernel.build()?;
+    held.attach(&kernel);
     // The inbox decides through the harness's approval service, which wakes the kernel's
     // approval sleepers; the service the builder was given would not.
     let decisions = primary
