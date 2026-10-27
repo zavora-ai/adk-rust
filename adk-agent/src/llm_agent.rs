@@ -1845,6 +1845,8 @@ struct AgentToolContext {
     /// The key of the held call this context resumes, shared by every run that resumes
     /// it; `None` for a call made in this invocation (spec 3.1 §7.12).
     idempotency_key: Option<String>,
+    /// The names of the calling agent's tools, recorded by the dispatcher.
+    agent_tools: Option<Vec<String>>,
     actions: Mutex<EventActions>,
     progress_tx: Option<tokio::sync::mpsc::Sender<Event>>,
     /// Where a marker goes when the progress queue is full.
@@ -1885,6 +1887,7 @@ impl AgentToolContext {
             function_call_id,
             tool_name: None,
             idempotency_key: None,
+            agent_tools: None,
             actions: Mutex::new(EventActions::default()),
             progress_tx: None,
             progress_overflow: ProgressOverflow::default(),
@@ -1904,6 +1907,12 @@ impl AgentToolContext {
     /// Keys the call by `key` instead of this invocation and its call ID.
     fn with_idempotency_key(mut self, key: Option<String>) -> Self {
         self.idempotency_key = key;
+        self
+    }
+
+    /// Record the names of the calling agent's tools.
+    fn with_agent_tools(mut self, tools: impl IntoIterator<Item = String>) -> Self {
+        self.agent_tools = Some(tools.into_iter().collect());
         self
     }
 
@@ -2085,6 +2094,10 @@ impl CallbackContext for AgentToolContext {
 impl ToolContext for AgentToolContext {
     fn function_call_id(&self) -> &str {
         &self.function_call_id
+    }
+
+    fn agent_tool_names(&self) -> Option<Vec<String>> {
+        self.agent_tools.clone()
     }
 
     /// A resumed held call keeps the key it was first dispatched under, so a payment or
@@ -2956,6 +2969,7 @@ impl ToolExecutor<'_> {
                     Arc::new(
                         AgentToolContext::new(self.ctx.clone(), function_call_id.clone())
                             .with_tool_name(tool.name())
+                            .with_agent_tools(self.tool_map.keys().cloned())
                             .with_idempotency_key(resumed_ledger_key.clone())
                             .with_progress(
                                 self.progress_tx.clone(),

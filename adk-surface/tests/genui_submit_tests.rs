@@ -90,6 +90,29 @@ impl Source for Sending {
     }
 }
 
+/// `send_invoice`, which the drawn forms ask for; a send asks the person first, so it never
+/// runs here.
+struct SendInvoice;
+
+#[async_trait::async_trait]
+impl adk_core::Tool for SendInvoice {
+    fn name(&self) -> &str {
+        "send_invoice"
+    }
+
+    fn description(&self) -> &str {
+        "Sends an invoice."
+    }
+
+    async fn execute(
+        &self,
+        _ctx: Arc<dyn adk_core::ToolContext>,
+        _args: Value,
+    ) -> adk_core::Result<Value> {
+        panic!("send_invoice never runs here");
+    }
+}
+
 struct Home {
     engine: SurfaceEngine,
     source: Arc<Sending>,
@@ -129,6 +152,7 @@ async fn home() -> Home {
         })
         .without_compaction()
         .toolset(Arc::new(DrawToolset::forms()))
+        .tool(Arc::new(SendInvoice))
         .build()
         .unwrap();
     let agent = Arc::new(agent);
@@ -247,7 +271,7 @@ async fn the_record_of_a_send_holds_no_typed_value() {
     let written = serde_json::to_string(&records[0].ext).unwrap();
     assert!(!written.contains("ana@example.com"), "{written}");
     assert!(records[0].ext.get("argsDigest").and_then(Value::as_str).is_some(), "{written}");
-    assert!(records[0].ext.get("fingerprint").is_none(), "{written}");
+    assert!(!records[0].ext.contains_key("fingerprint"), "{written}");
 }
 
 /// "You pressed Send on a form" belongs to the send's own call: a later call of the same

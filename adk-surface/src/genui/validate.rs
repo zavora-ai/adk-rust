@@ -330,13 +330,21 @@ impl Validator {
 
     /// Accepts actions bound to `tools` only: the drawing agent's own tools. Without it, an
     /// action may name any tool but the kernel's and the drawing tools, and the agent
-    /// refuses a tool it does not have when the person sends.
+    /// refuses a tool it does not have when the person sends. Given twice, an action may
+    /// name only a tool both give. The render tools also take the drawing agent's tools from
+    /// its runtime when it gives them ([`ToolContext::agent_tool_names`]).
+    ///
+    /// [`ToolContext::agent_tool_names`]: adk_core::ToolContext::agent_tool_names
     #[must_use]
     pub fn with_bindable_tools(
         mut self,
         tools: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
-        self.bindable = Some(tools.into_iter().map(Into::into).collect());
+        let tools: BTreeSet<String> = tools.into_iter().map(Into::into).collect();
+        self.bindable = Some(match self.bindable.take() {
+            Some(earlier) => earlier.intersection(&tools).cloned().collect(),
+            None => tools,
+        });
         self
     }
 

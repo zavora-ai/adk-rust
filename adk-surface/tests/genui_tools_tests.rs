@@ -20,6 +20,29 @@ use adk_surface::genui::{
 use futures::StreamExt;
 use serde_json::{Value, json};
 
+/// `send_invoice`, which the drawn forms ask for; a send asks the person first, so it never
+/// runs here.
+struct SendInvoice;
+
+#[async_trait::async_trait]
+impl adk_core::Tool for SendInvoice {
+    fn name(&self) -> &str {
+        "send_invoice"
+    }
+
+    fn description(&self) -> &str {
+        "Sends an invoice."
+    }
+
+    async fn execute(
+        &self,
+        _ctx: Arc<dyn adk_core::ToolContext>,
+        _args: Value,
+    ) -> adk_core::Result<Value> {
+        panic!("send_invoice never runs here");
+    }
+}
+
 /// A harness agent `finance` with the render tools, in Ask first, over `sessions`.
 async fn harness(
     script: Vec<ScriptedResponse>,
@@ -36,6 +59,7 @@ async fn harness(
         })
         .without_compaction()
         .toolset(Arc::new(DrawToolset::forms()))
+        .tool(Arc::new(SendInvoice))
         .build()
         .unwrap();
     let agent = Arc::new(agent);
@@ -315,4 +339,28 @@ async fn side_by_side_drawings_each_keep_their_stored_version() {
         .collect();
     versions.sort();
     assert_eq!(versions, vec![("invoice-10".to_string(), 2), ("status".to_string(), 2)]);
+}
+
+/// A form's action names one of the drawing agent's own tools, so "Sending runs …" under its
+/// button is true from the start; one bound to a tool the agent lacks is refused when drawn.
+#[tokio::test]
+async fn a_form_bound_to_a_tool_the_agent_lacks_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let mut form = invoice_form();
+    form["actions"][0]["tool"] = json!("transfer_funds");
+    let script =
+        vec![ScriptedResponse::function_call("render_form", form), ScriptedResponse::text("done")];
+    let harness = harness(script, sessions, &dir).await;
+
+    let drawn = drawings(&send(&harness, "Draw the transfer form").await);
+
+    let (_, response, record) = &drawn[0];
+    assert_eq!(record, &None, "a refused drawing is never recorded");
+    let error = response["error"].as_str().unwrap_or_default();
+    assert!(
+        error
+            .contains("action 'send' runs 'transfer_funds', which is not one of the agent's tools"),
+        "{error}"
+    );
 }

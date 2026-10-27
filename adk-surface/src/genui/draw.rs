@@ -855,7 +855,12 @@ impl DrawTool {
 
     /// Checks `draft` and records it as the next version of its surface.
     fn draw(&self, ctx: &dyn ToolContext, draft: SurfaceDraft) -> Result<Value> {
-        let validator = &self.shared.validator;
+        // An action names one of the drawing agent's own tools, so "Sending runs …" under its
+        // button is true from the start (spec 3.3 §7.4 rule 5).
+        let own_tools = ctx
+            .agent_tool_names()
+            .map(|tools| self.shared.validator.clone().with_bindable_tools(tools));
+        let validator = own_tools.as_ref().unwrap_or(&self.shared.validator);
         if let Err(refusal) = validator.validate(&draft) {
             tracing::info!(
                 surface.id = %draft.surface_id,

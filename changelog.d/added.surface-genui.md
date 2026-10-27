@@ -3,10 +3,12 @@
   `patch_surface`, `delete_surface`) that draw A2UI v0.9.1 surfaces on the `forms` 1.0
   catalog in a person's thread. Every drawing is checked on the server on the strings a
   person reads (`Validator`): no decision's words or approval controls, no secret fields, no
-  links, catalog components and declared actions only; a refused drawing is a tool error for
+  links, catalog components and declared actions only, each bound to one of the drawing
+  agent's own tools (`ToolContext::agent_tool_names`); a refused drawing is a tool error for
   the agent and a plain notice in the thread. Only a render tool's result, proven by the
   `adk.surface.drawn` state record, is drawn. A form's **Send** (`Command::SubmitDrawn`)
-  checks the version seen, the action and each value, records `surface.drawn.submitted`, and
+  checks the version seen, the action and each value, waits for the thread's running turn,
+  records `surface.drawn.submitted` with digests and never the values, and
   asks the drawing agent for the call (`Source::request_call`), which it holds for the person
   in its own kernel target; the card starts "You pressed Send on a form Finance drew" and
   never offers **Always allow**. The web home renders drawings and the developer panel's

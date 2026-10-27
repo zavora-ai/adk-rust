@@ -93,7 +93,9 @@ run side by side, so they need no approval in any mode.
 | `delete_surface` | Removes a surface from the thread |
 
 A form's action names one of the agent's own tools and its arguments, each a constant or a
-field's value:
+field's value. The render tools check the name against the tools the drawing agent's runtime
+gives them (`ToolContext::agent_tool_names`, which `LlmAgent` fills), so a form bound to a tool
+the agent lacks is refused when it is drawn, never after the person sends it:
 
 ```json
 {
