@@ -200,6 +200,10 @@ mobile = ["surface", "harness", "adk-surface/mobile"]
 # the root and delegated keys, and migrates a 1.x `business.toml`. Opt-in: migration links
 # hickory, image comparison and X.509 parsing.
 website = ["harness", "persist", "surface", "adk-surface?/website", "dep:adk-website", "dep:adk-site", "dep:adk-awp", "dep:awp-types", "dep:adk-auth", "adk-auth/web-bot-auth", "adk-session/sqlite", "audit", "dep:base64", "dep:zeroize", "dep:url", "dep:uuid", "dep:chrono"]
+# Screen actions people and agents share (spec 3.3 §2 item 7; Experimental): `up` gives every
+# agent it hosts the `verb_*` tools, which always ask first, serves `/api/surface/verbs`, and
+# adds `/snooze` to the terminal attached to it. No dependency beyond `surface`.
+verb-ui = ["surface", "adk-surface/verb-ui"]
 
 # Standard error to terminal.log while the full screen is up (spec 3.3 §5.2, S-I9)
 [target.'cfg(unix)'.dependencies]

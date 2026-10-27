@@ -453,6 +453,27 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
     if let Some(target) = target {
         line = line.with_target(target);
     }
+    // A screen action (spec 3.3 §2 item 7): the action as its tool, the item's title as what
+    // it acted on, and for an agent's, where the person said yes.
+    if record.action == "surface.verb" {
+        if let Some(verb) = text(record.ext.get("verb")) {
+            line = line.with_tool(verb);
+        }
+        if let Some(title) = text(record.ext.get("title")) {
+            line = line.with_target(title);
+        }
+        if let Some(answered) = record.ext.get("answered") {
+            line = line.with_decision("approved");
+            if let Some(surface) = text(answered.get("surface")) {
+                line = line.with_surface(surface);
+            }
+            if let Some(origin) = answered.get("origin")
+                && let Some(how) = text(origin.get("kind"))
+            {
+                line = line.with_how(how, text(origin.get("channel")).as_deref());
+            }
+        }
+    }
     line
 }
 
@@ -933,5 +954,76 @@ mod tests {
             SignedRecordBook::new(logs, "kernel-test".into(), other).check().await.unwrap();
         assert!(!untrusted.valid, "a log signed by another key does not verify");
         assert!(untrusted.problem.is_some());
+    }
+
+    /// A screen action reads as the action, the item's title and where it was taken; an
+    /// agent's, as the agent's request and where the person said yes (spec 3.3 §2 item 7,
+    /// §11).
+    #[cfg(feature = "audit")]
+    #[tokio::test]
+    async fn a_record_line_says_what_a_screen_action_did() {
+        use adk_auth::signed_audit::{AuditLog, AuditSigner as _, Ed25519Signer, NoteVerifier};
+        use adk_core::audit_log::{
+            AuditActor, AuditLogStore, AuditRecordDraft, AuditRecordKind, InMemoryAuditLogStore,
+        };
+        use adk_core::principal::SubjectRef;
+        use adk_core::{ActingContext, SubjectKind};
+        use adk_kernel::control::{RecordBook, RecordLine};
+        use serde_json::json;
+
+        let logs: Arc<dyn AuditLogStore> = Arc::new(InMemoryAuditLogStore::new());
+        let signer = Ed25519Signer::generate("kernel-test").unwrap();
+        let verifier: NoteVerifier = signer.verifier_key().parse().unwrap();
+        let log =
+            AuditLog::builder(logs.clone(), "kernel-test", Arc::new(signer)).open().await.unwrap();
+        let verb = |actor: AuditActor| {
+            AuditRecordDraft::new(AuditRecordKind::Other("surface".into()), "surface.verb")
+                .actor(actor)
+                .ext("verb", json!("snooze"))
+                .ext("target", json!("agenda:news-digest"))
+                .ext("title", json!("News digest"))
+                .ext("outcome", json!("done"))
+        };
+        log.append(
+            verb(AuditActor::subject(SubjectRef::human("ana")))
+                .ext("surface", json!("voice"))
+                .ext("origin", json!({ "kind": "voice" })),
+        )
+        .await
+        .unwrap();
+        let finance = ActingContext::derived("adk-rust", "finance", "ana", SubjectKind::Human);
+        log.append(
+            verb(AuditActor::new(&finance, "inv-1"))
+                .ext("origin", json!({ "kind": "agent", "agent": "finance" }))
+                .ext("approvalId", json!("apr_1"))
+                .ext("answered", json!({ "surface": "phone", "origin": { "kind": "touch" }, "answer": "allowOnce" })),
+        )
+        .await
+        .unwrap();
+        let book = SignedRecordBook::new(logs, "kernel-test".into(), verifier);
+        let lines = book.recent(2).await.unwrap();
+        let (agent, person) = (&lines[0], &lines[1]);
+        assert_eq!(
+            person,
+            &RecordLine::new(person.seq, person.at, "surface.verb")
+                .with_subject("ana")
+                .with_tool("snooze")
+                .with_outcome("done")
+                .with_surface("voice")
+                .with_how("voice", None)
+                .with_target("News digest")
+        );
+        assert_eq!(
+            agent,
+            &RecordLine::new(agent.seq, agent.at, "surface.verb")
+                .with_subject("ana")
+                .with_agent("urn:adk:agent:adk-rust/finance")
+                .with_tool("snooze")
+                .with_outcome("done")
+                .with_target("News digest")
+                .with_decision("approved")
+                .with_surface("phone")
+                .with_how("touch", None)
+        );
     }
 }

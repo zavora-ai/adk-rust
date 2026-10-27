@@ -169,6 +169,10 @@ struct AgentExtras {
     session_stamp: Option<String>,
     /// The agent a person added that this harness is built for (spec 3.3 §5.7, §10 L1).
     added: Option<agents::Added>,
+    /// The screen actions of the area the harness works in, each change held for a person
+    /// (spec 3.3 §2 item 7).
+    #[cfg(feature = "verb-ui")]
+    verbs: Option<(adk_surface::verbs::VerbRegistry, adk_kernel::PartitionId)>,
 }
 
 /// Installs the process's tracing subscriber once, so a `warn!` or `error!` from the
@@ -672,6 +676,16 @@ impl Setup {
         }
         if let Some(added) = &extras.added {
             builder = added.lower(builder);
+        }
+        // Every hosted agent may ask to change things on the person's screens: the tools,
+        // their classes, and the operator-layer policy that holds each change whatever the
+        // mode or standing rules (spec 3.3 §2 item 7, owner questions 22 and 25).
+        #[cfg(feature = "verb-ui")]
+        if let Some((registry, area)) = &extras.verbs {
+            builder = builder
+                .toolset(Arc::new(registry.toolset(area.clone())))
+                .tool_classes(Arc::new(registry.classes()))
+                .add_operator_policy(Arc::new(registry.policy(area.clone())));
         }
         // Servers the workspace declares in `.mcp.json` start once the workspace is trusted
         // (spec 3.1 §7.21, I3).

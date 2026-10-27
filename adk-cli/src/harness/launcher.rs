@@ -146,6 +146,9 @@ pub struct HarnessLauncher {
     webhook_ingress: Option<adk_server::webhooks::WebhookIngress>,
     #[cfg(all(feature = "voice", feature = "surface"))]
     voice: Vec<crate::surface::VoiceOffer>,
+    /// Screen actions on the served home (spec 3.3 §2 item 7).
+    #[cfg(feature = "verb-ui")]
+    verbs: Option<adk_surface::verbs::VerbRegistry>,
 }
 
 impl std::fmt::Debug for HarnessLauncher {
@@ -215,6 +218,8 @@ impl HarnessLauncher {
             webhook_ingress: None,
             #[cfg(all(feature = "voice", feature = "surface"))]
             voice: Vec::new(),
+            #[cfg(feature = "verb-ui")]
+            verbs: None,
         }
     }
 
@@ -462,6 +467,16 @@ impl HarnessLauncher {
     #[cfg(feature = "mobile")]
     pub fn with_phone(mut self, setup: super::PhoneSetup) -> Self {
         self.phone = Some(setup);
+        self
+    }
+
+    /// Serves `registry`'s screen actions on the home (spec 3.3 §2 item 7): their routes under
+    /// `/api/surface/verbs`, the cards of an agent's requests, "On this home it can also:" on
+    /// every agent, and spoken actions in the voice view. Give the agents the registry's tools
+    /// when building them.
+    #[cfg(feature = "verb-ui")]
+    pub fn with_verbs(mut self, registry: adk_surface::verbs::VerbRegistry) -> Self {
+        self.verbs = Some(registry);
         self
     }
 
@@ -856,6 +871,9 @@ impl HarnessLauncher {
         // (spec 3.3 §5.6): its hub's routes, the ticket under /api and the socket at the root.
         #[cfg(all(feature = "voice", feature = "surface"))]
         let mut voice_routes = None;
+        // Screen actions' routes, over the home's own engine (spec 3.3 §2 item 7).
+        #[cfg(feature = "verb-ui")]
+        let mut verb_routes = None;
         #[cfg(feature = "surface")]
         let (surface, sessions, take_over) = {
             let app = self.resolved_app_name();
@@ -881,12 +899,35 @@ impl HarnessLauncher {
             )?;
             #[cfg(feature = "voice")]
             let (source, live) = crate::surface::voice_source(source, &voice_harness, &self.voice);
+            #[cfg(feature = "verb-ui")]
+            let verbs = self.verbs.clone();
+            #[cfg(feature = "verb-ui")]
+            let hinted = verbs.clone();
             let engine = crate::surface::harness_engine(
                 &app,
                 source,
                 self.surface_records.clone(),
                 cfg!(feature = "mobile") && self.has_phone(),
+                |engine| {
+                    // An agent's request reads as the kernel's words on every surface, and
+                    // every agent lists what it may ask (spec 3.3 §5.7, §7.1).
+                    #[cfg(feature = "verb-ui")]
+                    let engine = match &hinted {
+                        Some(registry) => {
+                            engine.card_hints(Arc::new(registry.hints())).grant(registry.grant())
+                        }
+                        None => engine,
+                    };
+                    engine
+                },
             );
+            #[cfg(feature = "verb-ui")]
+            let verb_gate =
+                verbs.map(|registry| adk_surface::verbs::VerbGate::new(registry, engine.clone()));
+            #[cfg(feature = "verb-ui")]
+            if let Some(gate) = &verb_gate {
+                verb_routes = Some(adk_surface::web::verbs::router(gate.clone()));
+            }
             #[cfg(feature = "voice")]
             if let Some(live) = live {
                 let hub = crate::surface::voice_hub(
@@ -894,6 +935,15 @@ impl HarnessLauncher {
                     voice_harness,
                     live,
                     self.voice.clone(),
+                    |hub| {
+                        // "Snooze news digest" by voice (spec 3.3 §5.6).
+                        #[cfg(feature = "verb-ui")]
+                        let hub = match &verb_gate {
+                            Some(gate) => hub.verbs(gate.clone()),
+                            None => hub,
+                        };
+                        hub
+                    },
                 );
                 voice_routes = Some((
                     adk_surface::voice::router(hub.clone()),
@@ -966,6 +1016,10 @@ impl HarnessLauncher {
             #[cfg(feature = "voice")]
             if let Some((api, socket)) = voice_routes {
                 launcher = launcher.with_api_routes(api).with_root_routes(socket);
+            }
+            #[cfg(feature = "verb-ui")]
+            if let Some(routes) = verb_routes {
+                launcher = launcher.with_api_routes(routes);
             }
             launcher = launcher.with_session_service(sessions).with_surface(surface);
         }

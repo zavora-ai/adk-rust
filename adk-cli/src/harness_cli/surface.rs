@@ -235,6 +235,17 @@ async fn run_with(
                 source = source.with_daily_limit(limit);
             }
             let (commands, notices, operator) = kernel_commands(&source_client).await;
+            // A terminal paired from another machine cannot snooze: it says to use the home
+            // (spec 3.3 §5.2, owner question 27).
+            #[cfg(feature = "verb-ui")]
+            let commands = match operator {
+                true => commands,
+                false => {
+                    let remote: Arc<dyn TerminalCommand> =
+                        Arc::new(adk_surface::verbs::SnoozeCommand::remote());
+                    commands.into_iter().chain([remote]).collect()
+                }
+            };
             let trail = source.audit_trail();
             let mut engine = SurfaceEngine::builder(Arc::new(source))
                 .agent_name(APP_NAME, APP_NAME)

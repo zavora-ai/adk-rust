@@ -34,12 +34,14 @@ pub(crate) fn harness_source(
     Ok(Arc::new(source.build()?))
 }
 
-/// The engine over a served harness's `source` (spec 3.3 §6).
+/// The engine over a served harness's `source` (spec 3.3 §6), with what a feature adds to its
+/// builder — card hints, granted uses (spec 3.3 §5.7, §7.1).
 pub(crate) fn harness_engine(
     app_name: &str,
     source: Arc<dyn Source>,
     records: Option<SurfaceRecords>,
     phone: bool,
+    extend: impl FnOnce(adk_surface::SurfaceEngineBuilder) -> adk_surface::SurfaceEngineBuilder,
 ) -> SurfaceEngine {
     // Decisions also wait in the terminal: `adk-rust approvals`, `attach`. Stop all and Resume
     // all freeze and unfreeze every run the server makes, as the kernel's own freeze route
@@ -55,7 +57,7 @@ pub(crate) fn harness_engine(
     if let Some(records) = records {
         engine = engine.audit(records.trail).answers(records.answers);
     }
-    engine.build()
+    extend(engine).build()
 }
 
 /// A realtime model the served harness talks on (spec 3.3 §5.6).
@@ -87,16 +89,18 @@ pub(crate) fn voice_source(
     (Arc::new(voice), Some(live))
 }
 
-/// The hub of the served harness's voice conversations, on `offers`, the first by default.
+/// The hub of the served harness's voice conversations, on `offers`, the first by default, with
+/// what a feature adds to its builder: screen actions said aloud (spec 3.3 §5.6).
 #[cfg(feature = "voice")]
 pub(crate) fn voice_hub(
     engine: SurfaceEngine,
     harness: Arc<adk_harness::Harness>,
     live: adk_surface::voice::LiveVoice,
     offers: Vec<VoiceOffer>,
+    extend: impl FnOnce(adk_surface::voice::VoiceHubBuilder) -> adk_surface::voice::VoiceHubBuilder,
 ) -> adk_surface::voice::VoiceHub {
     let mut hub =
-        adk_surface::voice::VoiceHub::builder(engine, harness, live).agent_name("ADK-Rust");
+        extend(adk_surface::voice::VoiceHub::builder(engine, harness, live).agent_name("ADK-Rust"));
     for offer in offers {
         let id = offer.info.id.clone();
         hub = hub.model(offer.info, offer.model, offer.frames);

@@ -16,7 +16,14 @@ pub(super) struct HarnessCommandHost {
     commands: HarnessCommands,
     #[cfg(feature = "surface")]
     rules: Option<rules::Rules>,
+    /// `/snooze`, as the person at the attached terminal (spec 3.3 §5.2, §2 item 7).
+    #[cfg(feature = "verb-ui")]
+    verbs: Option<adk_surface::verbs::VerbGate>,
 }
+
+/// The screen action the attached terminal takes as a command (spec 3.3 §5.2).
+#[cfg(feature = "verb-ui")]
+const SNOOZE: &str = "snooze";
 
 impl HarnessCommandHost {
     /// The commands of `commands`; "Always allow" through `rules` when the web home's engine
@@ -26,7 +33,18 @@ impl HarnessCommandHost {
             commands,
             #[cfg(feature = "surface")]
             rules: None,
+            #[cfg(feature = "verb-ui")]
+            verbs: None,
         }
+    }
+
+    /// `/snooze <title> [tomorrow]` through `gate` (spec 3.3 §5.2, owner question 27): the
+    /// terminal attached to this kernel snoozes as the person it admitted, typing, in up's
+    /// process.
+    #[cfg(feature = "verb-ui")]
+    pub(super) fn with_verbs(mut self, gate: adk_surface::verbs::VerbGate) -> Self {
+        self.verbs = Some(gate);
+        self
     }
 
     /// "Always allow" as the harness makes it in process: the rule `source` prepares for a
@@ -45,17 +63,33 @@ fn kernel_error(error: AdkError) -> KernelError {
 #[async_trait::async_trait]
 impl CommandHost for HarnessCommandHost {
     fn commands(&self) -> Vec<CommandInfo> {
-        HarnessCommands::list()
+        let listed = HarnessCommands::list()
             .into_iter()
-            .map(|(name, description)| CommandInfo::new(name, description))
-            .collect()
+            .map(|(name, description)| CommandInfo::new(name, description));
+        #[cfg(feature = "verb-ui")]
+        let listed = listed.chain(
+            self.verbs
+                .is_some()
+                .then(|| CommandInfo::new(SNOOZE, adk_surface::verbs::words::SNOOZE_SOMETHING)),
+        );
+        listed.collect()
     }
 
     fn changes(&self, name: &str, args: &str) -> bool {
+        #[cfg(feature = "verb-ui")]
+        if name == SNOOZE && self.verbs.is_some() {
+            return true;
+        }
         HarnessCommands::changes(name, args)
     }
 
     async fn tightens(&self, call: &CommandCall) -> adk_kernel::Result<bool> {
+        // Snoozing only delays work, so it runs while everything is stopped (owner question
+        // 23).
+        #[cfg(feature = "verb-ui")]
+        if call.name == SNOOZE && self.verbs.is_some() {
+            return Ok(true);
+        }
         self.commands
             .tightens(&call.name, &call.args, &call.user, &call.session)
             .await
@@ -67,6 +101,12 @@ impl CommandHost for HarnessCommandHost {
     }
 
     async fn run(&self, call: &CommandCall) -> adk_kernel::Result<String> {
+        #[cfg(feature = "verb-ui")]
+        if call.name == SNOOZE
+            && let Some(gate) = &self.verbs
+        {
+            return snooze(gate, call).await;
+        }
         let reach = Some(call.reach.clone());
         match self.commands.run(&call.name, &call.args, &call.user, &call.session, reach).await {
             Ok(Some(text)) => Ok(text),
@@ -85,6 +125,13 @@ impl CommandHost for HarnessCommandHost {
         &self,
         request: &ApprovalRequest,
     ) -> adk_kernel::Result<Option<String>> {
+        // A screen action or a workflow's governed node asks every time: no standing rule is
+        // offered for it (spec 3.3 §7.2, owner question 22).
+        if request.origin.as_ref().is_some_and(|origin| {
+            origin.source.starts_with("verbs:") || origin.source.starts_with("graph:")
+        }) {
+            return Ok(None);
+        }
         match &self.rules {
             Some(rules) => Ok(rules.offer(request).await),
             None => Ok(None),
@@ -110,6 +157,31 @@ impl CommandHost for HarnessCommandHost {
             None => Err(no_rules()),
         }
     }
+}
+
+/// `/snooze` for the person the kernel admitted, on the terminal: typed, and on the kernel's
+/// own machine when it came over its socket or pipe (spec 3.3 §5.2). A refusal is the
+/// command's error, in the terminal's words.
+#[cfg(feature = "verb-ui")]
+async fn snooze(
+    gate: &adk_surface::verbs::VerbGate,
+    call: &CommandCall,
+) -> adk_kernel::Result<String> {
+    use adk_surface::{Caller, Origin, SurfaceKind};
+    let mut caller = Caller::human(call.user.clone(), SurfaceKind::Terminal, Origin::Keyboard)
+        .with_groups([adk_cli::harness::OPERATOR_SCOPE]);
+    if call.reach.transport != adk_kernel::control::ControlTransport::Http {
+        caller = caller.with_paired_local();
+    }
+    if let Some(device) = &call.reach.device {
+        caller = caller.with_device(device.clone());
+    }
+    adk_surface::verbs::snooze_text(gate, &caller, &call.args).await.map_err(|error| {
+        let line = adk_surface::verbs::problem_line(&error);
+        let mut error = AdkError::from(error);
+        error.message = line;
+        kernel_error(error)
+    })
 }
 
 #[cfg(feature = "surface")]

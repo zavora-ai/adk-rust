@@ -37,6 +37,8 @@ pub(super) struct Chat {
     home: Option<String>,
     doorbell: Arc<ChannelDoorbell>,
     bindings: Arc<dyn ChannelBindingStore>,
+    /// A feature's chat headings, as the home's engine has them (spec 3.3 §7.1).
+    card_hints: Vec<Arc<dyn adk_surface::CardHints>>,
 }
 
 impl Chat {
@@ -66,7 +68,15 @@ impl Chat {
             home,
             doorbell: Arc::new(ChannelDoorbell::new()),
             bindings: bindings(setup, store).await?,
+            card_hints: Vec::new(),
         }))
+    }
+
+    /// Heads cards with `hints`' chat headings, as the home's engine does (spec 3.3 §7.1).
+    #[cfg(feature = "verb-ui")]
+    pub(super) fn with_card_hints(mut self, hints: Arc<dyn adk_surface::CardHints>) -> Self {
+        self.card_hints.push(hints);
+        self
     }
 
     /// The doorbell to register on the approval service.
@@ -102,6 +112,9 @@ impl Chat {
         bind: SocketAddr,
     ) -> Result<()> {
         let mut adapter = adapter(&self.token, self.api_base.as_deref()).approvals(approvals);
+        for hints in self.card_hints {
+            adapter = adapter.card_hints(hints);
+        }
         if let Some((trail, answers)) = records {
             adapter = adapter.audit(trail).answer_log(answers);
         }
@@ -385,6 +398,7 @@ mod tests {
             home: None,
             doorbell: Arc::new(ChannelDoorbell::new()),
             bindings: paired().await,
+            card_hints: Vec::new(),
         };
         let host: Arc<dyn ChannelHost> = Arc::new(Host { approvals: approvals.clone() });
         let bind = "127.0.0.1:8080".parse().unwrap();
@@ -452,6 +466,7 @@ mod tests {
             home: None,
             doorbell,
             bindings: paired().await,
+            card_hints: Vec::new(),
         };
         let host: Arc<dyn ChannelHost> = Arc::new(Host { approvals: approvals.clone() });
         let bind = "127.0.0.1:8080".parse().unwrap();

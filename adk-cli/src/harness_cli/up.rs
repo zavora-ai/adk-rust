@@ -184,6 +184,12 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     // approve, as `serve` routes them.
     let routing =
         ApprovalPolicy::new([ApproverSelector::group(OPERATOR_SCOPE)]).allow_self_approval();
+    // An agent's screen action reads as the kernel's words, low risk, Allow once · Edit · Deny
+    // (spec 3.3 §2 item 7); every other call goes to the operator as before.
+    #[cfg(feature = "verb-ui")]
+    let routing = adk_surface::verbs::VerbRouter::catalogue(APP_NAME, routing);
+    #[cfg(feature = "verb-ui")]
+    let verb_approvals = approval_store.clone();
     let service = StoreApprovalService::new(approval_store)
         .with_router(routing)
         .with_run_store(run_store.clone());
@@ -225,6 +231,23 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     };
     let record = audit.as_ref().map(|(_, _, record)| record.clone());
     let audit = audit.map(|(recorder, _, _)| recorder);
+    // Screen actions (spec 3.3 §2 item 7): the kernel's agenda through a handle bound when the
+    // kernel is built, for every agent `up` hosts and for the person on every surface.
+    #[cfg(feature = "verb-ui")]
+    let verb_agenda = adk_kernel::AgendaHandle::new();
+    #[cfg(feature = "verb-ui")]
+    let verbs = {
+        let processes = adk_kernel::ProcessTable::new(run_store.clone(), stores.processes.clone());
+        let agenda = adk_surface::verbs::KernelAgenda::new(verb_agenda.clone(), processes);
+        let mut registry = adk_surface::verbs::VerbRegistry::builder(APP_NAME, Arc::new(agenda))
+            .approval_store(verb_approvals)
+            .governance(governance.clone())
+            .sessions(setup.sessions());
+        if let Some((trail, answers)) = &surface_records {
+            registry = registry.audit(trail.clone()).answers(answers.clone());
+        }
+        registry.build()?
+    };
     if let Some(recorder) = &audit {
         governance.attach_audit(AuditTrail::new(recorder.clone()));
     }
@@ -277,6 +300,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                     agents: Some(agents_handle.clone()),
                     session_stamp: Some(adk_harness::PRIMARY_AGENT_STAMP.to_string()),
                     added: None,
+                    #[cfg(feature = "verb-ui")]
+                    verbs: Some((verbs.clone(), adk_kernel::PartitionId::default())),
                 },
             )?);
             vec![host(&setup, agent, None, &governance, &run_store)?]
@@ -290,6 +315,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                 memory_with_inbox: true,
                 drivers: Some(drivers.clone()),
                 area_modes: Some((stores.control.clone(), partition.id.clone(), auto_refused)),
+                #[cfg(feature = "verb-ui")]
+                verbs: Some((verbs.clone(), partition.id.clone())),
                 partition: Some((partition, table.clone(), coordinator)),
                 #[cfg(feature = "tui")]
                 local_console: false,
@@ -315,6 +342,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         let governance = governance.clone();
         let run_store = run_store.clone();
         let scripted = setup.model_id == "scripted";
+        #[cfg(feature = "verb-ui")]
+        let verbs = verbs.clone();
         let build: agents::BuildAgent = Arc::new(move |record: adk_kernel::agents::AgentRecord| {
             let setup = composed.clone();
             let beside = beside.clone();
@@ -325,6 +354,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             let table = table.clone();
             let governance = governance.clone();
             let run_store = run_store.clone();
+            #[cfg(feature = "verb-ui")]
+            let verbs = verbs.clone();
             Box::pin(async move {
                 let model = agents::model_of(&record, scripted).await?;
                 let partition = match &table {
@@ -358,6 +389,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                             _ => None,
                         },
                         area_modes: Some((control, record.area.clone(), auto_refused)),
+                        #[cfg(feature = "verb-ui")]
+                        verbs: Some((verbs, record.area.clone())),
                         added: Some(added),
                         ..AgentExtras::default()
                     },
@@ -461,6 +494,20 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             .agents(agents_handle.clone())
             .build()?,
     );
+    // `/snooze` for the terminal attached to this kernel, as its person, in this process (spec
+    // 3.3 §5.2, owner question 27).
+    #[cfg(feature = "verb-ui")]
+    let host = {
+        let source = adk_surface::LocalSource::builder(APP_NAME)
+            .harness(primary.harness.clone())
+            .sessions(setup.sessions())
+            .build()?;
+        let mut engine = adk_surface::SurfaceEngine::builder(Arc::new(source));
+        if let Some((trail, answers)) = &surface_records {
+            engine = engine.audit(trail.clone()).answers(answers.clone());
+        }
+        host.with_verbs(adk_surface::verbs::VerbGate::new(verbs.clone(), engine.build()))
+    };
     control = control.with_commands(Arc::new(host));
     // The run store reads the system clock too, so leases, `not_before` and wake times agree.
     let config = settings.apply(
@@ -523,6 +570,10 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         .drivers(drivers)
         .ledger(Ledger::new(stores.ledger, key))
         .observation_phraser(phraser);
+    #[cfg(feature = "verb-ui")]
+    {
+        kernel = kernel.agenda_handle(verb_agenda.clone());
+    }
     // Each tick distils this workspace's sessions of its own partition, and the kernel's own,
     // which name no workspace; an unpartitioned kernel's tick skips every partition's
     // (spec 3.2 §7.5, K-I15).
@@ -561,6 +612,10 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         (Some(chat), Some(phone)) => Some(chat.linking_to(phone.home_link())),
         (chat, _) => chat,
     };
+    // An agent's screen action is headed "Snooze something in Coming up" in chat too (spec
+    // 3.3 §7.1).
+    #[cfg(all(feature = "channels", feature = "verb-ui"))]
+    let chat = chat.map(|chat| chat.with_card_hints(Arc::new(verbs.hints())));
     #[cfg(feature = "channels")]
     if let Some(chat) = chat {
         let host: Arc<dyn adk_kernel::channels::ChannelHost> = Arc::new(kernel.clone());
@@ -614,6 +669,10 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     #[cfg(feature = "surface")]
     if let Some((trail, answers)) = surface_records {
         launcher = launcher.with_surface_records(trail, answers);
+    }
+    #[cfg(feature = "verb-ui")]
+    {
+        launcher = launcher.with_verbs(verbs);
     }
     #[cfg(feature = "mobile")]
     if let Some(phone) = phone {
