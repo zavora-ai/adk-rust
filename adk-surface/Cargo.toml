@@ -63,6 +63,10 @@ workflow = ["dep:adk-graph", "adk-graph/time-travel", "adk-harness/web"]
 # catalog, the validator that keeps approval controls and secrets out of drawings, and the
 # render tools agents draw with (`genui::DrawToolset`).
 genui = ["dep:jsonschema", "dep:sha2", "dep:regex"]
+# Apps from MCP servers in a thread (spec 3.3 §6.1 `genui-apps`, wave 4 decision 16): an MCP
+# server's `_meta.ui` app shown sandboxed on a second origin, whose tool calls a person decides
+# and which can never approve anything. Pulls in rmcp through `adk-tool/mcp-apps`.
+genui-apps = ["genui", "web", "adk-harness/mcp", "adk-tool/mcp-apps"]
 
 [dependencies]
 adk-core.workspace = true
@@ -79,6 +83,11 @@ adk-realtime = { workspace = true, optional = true }
 adk-website = { workspace = true, optional = true }
 # Graph agents' checkpoints, records and forks (`workflow`).
 adk-graph = { workspace = true, optional = true }
+# The AG-UI extension point agent-drawn surfaces plug into (`genui`, spec 3.3 §10 S2); already
+# in the tree through adk-kernel.
+adk-server.workspace = true
+# MCP Apps: each tool's `_meta.ui` and its `ui://` resources (`genui-apps`).
+adk-tool = { workspace = true, optional = true }
 async-trait.workspace = true
 axum = { version = "0.8", optional = true }
 # Camera and screen frames go to the realtime provider base64-encoded (`voice`).

@@ -1,10 +1,28 @@
 //! This home's claims (spec 3.3 §6.1 `genui`): A2UI v0.9.1 on the `forms` 1.0 catalog, with
-//! no approval controls in anything drawn. AG-UI and MCP Apps come with `genui-apps`.
+//! no approval controls in anything drawn; drawings over AG-UI; and, with `genui-apps`, a
+//! governed MCP Apps host.
 
 use super::capabilities_wire::{
     CatalogView, Claim, ClaimScope, ClaimStatus, GenuiCapabilities, ProtocolClaims,
 };
 use super::catalog::Catalog;
+
+/// What this home claims of MCP Apps: a governed host with `genui-apps`, nothing yet without.
+fn mcp_apps() -> Vec<Claim> {
+    use ClaimScope::{Client, Host, Security};
+    use ClaimStatus::Planned;
+    #[cfg(feature = "genui-apps")]
+    let (version, sandbox, governed) =
+        (ClaimStatus::Supported, ClaimStatus::HostOwned, ClaimStatus::Supported);
+    #[cfg(not(feature = "genui-apps"))]
+    let (version, sandbox, governed) = (Planned, Planned, Planned);
+    vec![
+        claim("version_2026_01_26", "Version 2026-01-26", version, Host),
+        claim("sandbox_and_csp", "Sandbox and CSP", sandbox, Host),
+        claim("app_tool_calls_governed", "App tool calls governed", governed, Security),
+        claim("fullscreen", "Fullscreen and picture-in-picture", Planned, Client),
+    ]
+}
 
 /// The upstream basic catalog's components `forms` 1.0 leaves out.
 const LEFT_OUT: &[&str] = &["Image", "Icon", "Modal", "Video", "AudioPlayer"];
@@ -29,8 +47,8 @@ fn claim(id: &str, label: &str, status: ClaimStatus, scope: ClaimScope) -> Claim
 /// assert_eq!(claims.catalogs[0].label, "forms 1.0");
 /// ```
 pub fn capabilities() -> GenuiCapabilities {
-    use ClaimScope::{Client, Host, Runtime, Security, Transport};
-    use ClaimStatus::{Candidate, Planned, Supported};
+    use ClaimScope::{Runtime, Security, Transport};
+    use ClaimStatus::{Candidate, Supported};
     let forms = Catalog::forms();
     let mut components: Vec<String> = forms.components().map(str::to_string).collect();
     components.sort();
@@ -55,25 +73,16 @@ pub fn capabilities() -> GenuiCapabilities {
                 id: "ag_ui".into(),
                 name: "AG-UI".into(),
                 claims: vec![
-                    claim("a2ui_surface_activity", "a2ui-surface activity", Planned, Transport),
+                    claim("a2ui_surface_activity", "a2ui-surface activity", Supported, Transport),
                     claim(
                         "drawn_submit_interrupts",
                         "Interrupts for a drawn submit",
-                        Planned,
+                        Supported,
                         Transport,
                     ),
                 ],
             },
-            ProtocolClaims {
-                id: "mcp_apps".into(),
-                name: "MCP Apps".into(),
-                claims: vec![
-                    claim("version_2026_01_26", "Version 2026-01-26", Planned, Host),
-                    claim("sandbox_and_csp", "Sandbox and CSP", Planned, Host),
-                    claim("app_tool_calls_governed", "App tool calls governed", Planned, Security),
-                    claim("fullscreen", "Fullscreen and picture-in-picture", Planned, Client),
-                ],
-            },
+            ProtocolClaims { id: "mcp_apps".into(), name: "MCP Apps".into(), claims: mcp_apps() },
         ],
         catalogs: vec![CatalogView {
             id: forms.id().to_string(),

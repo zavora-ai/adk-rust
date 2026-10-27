@@ -1,0 +1,142 @@
+{
+  "activityType": "a2ui-surface",
+  "content": {
+    "a2ui_operations": [
+      {
+        "createSurface": {
+          "catalogId": "https://adk-rust.com/a2ui/catalogs/forms/1.0/catalog.json",
+          "surfaceId": "invoice-10"
+        },
+        "version": "v0.9.1"
+      },
+      {
+        "updateComponents": {
+          "components": [
+            {
+              "child": "body",
+              "component": "Card",
+              "id": "root"
+            },
+            {
+              "component": "Text",
+              "id": "title",
+              "text": "Invoice INV-10",
+              "variant": "h3"
+            },
+            {
+              "checks": [
+                {
+                  "condition": {
+                    "args": {
+                      "value": {
+                        "path": "/to"
+                      }
+                    },
+                    "call": "required"
+                  },
+                  "message": "Fill this in"
+                },
+                {
+                  "condition": {
+                    "args": {
+                      "value": {
+                        "path": "/to"
+                      }
+                    },
+                    "call": "email"
+                  },
+                  "message": "Enter an email address"
+                }
+              ],
+              "component": "TextField",
+              "id": "field-to",
+              "label": "To",
+              "value": {
+                "path": "/to"
+              },
+              "variant": "shortText"
+            },
+            {
+              "component": "TextField",
+              "id": "field-amount",
+              "label": "Amount",
+              "value": {
+                "path": "/amount"
+              },
+              "variant": "number"
+            },
+            {
+              "component": "Text",
+              "id": "action-send-label",
+              "text": "Send"
+            },
+            {
+              "action": {
+                "event": {
+                  "name": "send"
+                }
+              },
+              "child": "action-send-label",
+              "component": "Button",
+              "id": "action-send",
+              "variant": "primary"
+            },
+            {
+              "children": [
+                "action-send"
+              ],
+              "component": "Row",
+              "id": "actions"
+            },
+            {
+              "children": [
+                "title",
+                "field-to",
+                "field-amount",
+                "actions"
+              ],
+              "component": "Column",
+              "id": "body"
+            }
+          ],
+          "surfaceId": "invoice-10"
+        },
+        "version": "v0.9.1"
+      },
+      {
+        "updateDataModel": {
+          "surfaceId": "invoice-10",
+          "value": {
+            "amount": 4200,
+            "to": ""
+          }
+        },
+        "version": "v0.9.1"
+      }
+    ],
+    "actions": [
+      {
+        "args": {
+          "amount": {
+            "path": "/amount"
+          },
+          "invoice": "INV-10",
+          "to": {
+            "path": "/to"
+          }
+        },
+        "id": "send",
+        "label": "Send",
+        "tool": "send_invoice"
+      }
+    ],
+    "catalogId": "https://adk-rust.com/a2ui/catalogs/forms/1.0/catalog.json",
+    "kind": "form",
+    "surfaceId": "invoice-10",
+    "title": "Invoice INV-10",
+    "version": 1
+  },
+  "messageId": "a2ui-invoice-10",
+  "replace": true,
+  "type": "ACTIVITY_SNAPSHOT"
+}

@@ -8,6 +8,7 @@
 //! | `Validator` | Rule 5: the catalog, no secrets, no links, declared actions only, and no decision's words in any string a person reads, resolved on the server | `genui` |
 //! | `DrawToolset` | `render_form`, `render_card`, `render_table`, `render_screen`, `patch_surface`, `delete_surface` | `genui` |
 //! | `capabilities` | What this home claims of A2UI, AG-UI and MCP Apps, for the developer panel | `genui` |
+//! | `GenuiAgUi` | Drawings as AG-UI `a2ui-surface` activities, and a form's send forwarded by an AG-UI client, on adk-server's AG-UI runtime | `genui` |
 //! | The thread items ([`DrawnSurface`], [`RefusedDrawing`], [`DrawnSent`]) and [`form_states`] | What every surface shows of a drawing, and of a form sent | every build |
 //!
 //! A form's Send never runs a tool: [`Command::SubmitDrawn`](crate::Command::SubmitDrawn)
@@ -22,6 +23,8 @@
 
 #[cfg(feature = "genui")]
 mod a2ui;
+#[cfg(feature = "genui")]
+mod ag_ui;
 #[cfg(feature = "genui")]
 mod capabilities;
 mod capabilities_wire;
@@ -47,6 +50,8 @@ pub use a2ui::{
     DataModel, DeleteSurface, DynamicString, FunctionCall, UpdateComponents, UpdateDataModel,
     decode_jsonl, encode_jsonl, stable_id,
 };
+#[cfg(feature = "genui")]
+pub use ag_ui::{A2UI_ACTION_PROP, GenuiAgUi};
 #[cfg(feature = "genui")]
 pub use capabilities::capabilities;
 pub use capabilities_wire::{
