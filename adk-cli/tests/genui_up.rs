@@ -246,11 +246,11 @@ async fn added_agents_and_areas_hold_their_forms_in_their_own_targets() {
         response.json::<Value>().await.ok()
     })
     .await;
-    assert_eq!(
-        detail["granted"],
-        json!([{ "id": "genui", "text": "Show forms and tables in your threads — sending asks you first" }]),
-        "{detail}"
-    );
+    // Other features add their own lines, `verb-ui` its screen actions: the drawing line is
+    // there once, whatever else is.
+    let drawing = json!({ "id": "genui", "text": "Show forms and tables in your threads — sending asks you first" });
+    let granted = detail["granted"].as_array().cloned().unwrap_or_default();
+    assert_eq!(granted.iter().filter(|line| **line == drawing).count(), 1, "{detail}");
 
     // Bookkeeper draws in its own thread; the Home area draws in one of its own.
     api.command(json!({ "type": "newThread", "agent": "bookkeeper", "sessionId": "bk-1", "text": "Draw the note" }))
