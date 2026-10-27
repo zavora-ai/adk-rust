@@ -89,6 +89,10 @@ suite "adk-kernel" -p adk-kernel --features postgres,redis,channels,charter --te
 
 suite "adk-auth" -p adk-auth --features postgres-audit --test audit_postgres_tests
 
+# Spec 3.3 §12 phase 3 "Correct me, then check" on `adk-rust up --store postgres://…`.
+suite "adk-cli correct me, then check" -p adk-cli --features scripted-model,audit-sql,postgres \
+    --test correct_me_then_check
+
 suite "adk-rag" -p adk-rag --features pgvector --test vector_store_contract_pgvector
 
 suite "adk-managed" -p adk-managed --test durable_round_trip_tests -E 'test(/_on_postgres$/)'
