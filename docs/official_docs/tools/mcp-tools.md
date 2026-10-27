@@ -273,6 +273,44 @@ consequential request.
 
 See `examples/mcp_elicitation` for a complete server and interactive client.
 
+## MCP Apps
+
+A server may give a tool an interactive app (MCP Apps 2026-01-26): the tool's
+`_meta.ui.resourceUri` names a `ui://` resource whose HTML a host shows. The
+`mcp-apps` feature reads it on the client side:
+
+```toml
+adk-tool = { version = "3.0.0", features = ["mcp", "mcp-apps"] }
+```
+
+| Part | What it does |
+|---|---|
+| `AdkClientHandler::with_apps` | Declares the `io.modelcontextprotocol/ui` extension with `text/html;profile=mcp-app` in the handshake; `McpServerManager` declares it for every managed server |
+| `McpToolset::ui_bindings` | Each tool's `McpUiBinding`: the resource it shows and its visibility (`model`, `app`), app-only tools included |
+| `McpToolset::tools` | Leaves out tools only an app may call (`visibility: ["app"]`): a model never sees them |
+| `McpToolset::read_app` | The `McpAppResource`: its HTML, the sites its `_meta.ui.csp` declares, the device permissions it asks for, and whether it prefers a border |
+| `MCP_APP_STATE_KEY` (`adk.mcp.app`) | The `McpAppRecord` a tool with an app writes when its call succeeds, so a host shows an app only for a call the server's own tool made |
+
+```rust,ignore
+use std::sync::Arc;
+
+use adk_tool::mcp::{AdkClientHandler, AutoDeclineElicitationHandler, McpToolset};
+use rmcp::ServiceExt;
+
+let handler = AdkClientHandler::new(Arc::new(AutoDeclineElicitationHandler)).with_apps();
+let toolset = McpToolset::new(handler.serve(transport).await?).with_name("weather");
+for binding in toolset.ui_bindings().await? {
+    let app = toolset.read_app(&binding.resource_uri).await?;
+    println!("{} shows {} ({} bytes)", binding.tool, app.uri, app.html.len());
+}
+```
+
+`adk-tool` only reads apps; showing one is the host's job. `adk-surface`'s
+`genui-apps` feature is a governed host: it frames an app sandboxed on its own
+origin, refuses apps that reach this computer or show a decision's words, and
+holds a tool call an app asks for until a person decides. See
+[Agent-Drawn UI](../surfaces/genui.md#apps-from-mcp-servers).
+
 ## Long-running MCP tasks
 
 Under the SEP-2663 tasks extension the server decides, per call, whether to
@@ -370,6 +408,7 @@ configured grace period and before it cancels the session. `Toolset::close`, whi
 | Resource subscriptions | subscribe/unsubscribe methods | Notifications require an appropriate client handler |
 | Elicitation | `ElicitationHandler` | Form and URL modes |
 | Tasks | `AdkClientHandler::with_tasks`, `McpTaskConfig` | Server-decided tool-call tasks: polling, input rounds, cancellation |
+| Apps (`io.modelcontextprotocol/ui`) | `AdkClientHandler::with_apps`, `ui_bindings`, `read_app` | `mcp-apps` feature; app-only tools hidden from the model |
 | Local stdio | `TokioChildProcess` | Direct or manager-owned |
 | Streamable HTTP | `McpHttpClientBuilder` | Timeouts, headers, auth injection, session recovery |
 | Dynamic local registry | `McpServerManager` | Add/update/enable/disable/remove/save/monitor/restart |

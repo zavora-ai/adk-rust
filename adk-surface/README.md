@@ -31,6 +31,7 @@ with `default-features = false` to leave it out.
 | `verb-ui` | Experimental: screen actions people and agents share — Snooze in Coming up from the home, the terminal, voice and an agent, always through the governed path; an agent's request waits for the person every time (spec 3.3 §2 item 7) | `verbs::VerbRegistry`, `verbs::VerbGate`, `web::verbs::router` |
 | `workflow` | Beta: the workflow observer — a graph agent's runs, steps and forks, card hints and a money route for its governed nodes, the fork command; with `web`, the developer panel's Runs tab and its routes under `/api/surface/workflow` (spec 3.3 §12) | `workflow::Workflows`, `web::workflow::router` |
 | `genui` | Agent-drawn UI: forms, cards, tables and screens an agent draws in a thread (A2UI v0.9.1 on the `forms` 1.0 catalog), checked so they never contain approval controls; a form's Send asks the drawing agent for the call, held for the person (spec 3.3 §6.1, §7.4 rule 5) | `genui::DrawToolset`, `genui::Validator`, `web::genui::router` |
+| `genui-apps` | Apps from MCP servers in a thread, implies `genui` and `web`: framed sandboxed on their own origin, blocked when they show a decision's words or reach this computer, and their tool calls held for the person; also the React package `@zavora-ai/adk-surface-react` in `react/` (spec 3.3 §6.1) | `genui::McpAppsHost`, `web::genui::apps_router`, `web::genui::refuse_apps_origin` |
 
 ## Sources
 
@@ -128,6 +129,7 @@ under "On this home it can also:" (§5.7).
 | `/surface/phone/**`, `POST /surface/decisions/{id}/confirm[/options]` | The phone's push subscription, passkeys, pairing QR code and device list, and "Confirm it's you" (`mobile::router`, feature `mobile`) |
 | `/surface/website/**`, `GET /api/surface/website/setup` and `POST …/setup/claim` (root) | The website's views and the setup code (`web::website::router`, `setup_router`, feature `website`, [The Website's Views](../docs/official_docs/surfaces/website.md)) |
 | `GET /surface/genui/capabilities`, `GET /surface/genui/sessions/{session}/forms` | What the home claims of A2UI, AG-UI and MCP Apps, and each sent form's state (`web::genui::router`, feature `genui`, [Agent-Drawn UI](../docs/official_docs/surfaces/genui.md)) |
+| `GET /surface/genui/sessions/{session}/apps/{call}`, `POST …/requests`, `POST …/message` | An app from an MCP server: framed, blocked or not shown here, what it asks the home, and the message it suggested once the person sends it (`web::genui::apps_router`, feature `genui-apps`) |
 
 Every route checks the caller against the session owner (S-I8). The OpenAPI document and the
 TypeScript types in `web/src/generated/` are generated from the Rust types;
@@ -168,6 +170,7 @@ See [The Web Home](../docs/official_docs/surfaces/web-home.md).
 | `mobile` | The phone: its routes, Web Push from the person's own kernel and "Confirm it's you" (`adk_surface::mobile`); implies `web` and links OpenSSL through webauthn-rs | Beta |
 | `voice` | Voice and video (`adk_surface::voice`): the voice view with `web`, the voice line with `tui`; `voice-live` adds Gemini Live and the OpenAI Realtime API for the live test and the `voice_home` example | Beta |
 | `genui` | Agent-drawn UI (`adk_surface::genui`): the render tools, the validator, the routes with `web`, the box and fill-in pane with `tui` | Beta |
+| `genui-apps` | Apps from MCP servers (`adk_surface::genui::McpAppsHost`), with `adk-harness/mcp` and `adk-tool/mcp-apps` | Beta |
 
 The desktop tray is a separate, unpublished app in `desktop/`, not a feature. The workflow
 observer arrives as a further feature (spec 3.3 §6.1, §12). See

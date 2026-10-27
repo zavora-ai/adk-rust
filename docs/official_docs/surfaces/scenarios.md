@@ -152,6 +152,28 @@ repository's `.env` or the file `ADK_ENV_FILE` names; `GENUI_LIVE_MODEL` picks a
 | A form drawn in the Home area and one drawn by the added agent Bookkeeper are each held and run in their own target; none is answered "not run" | The process table and each agent's workspace |
 | `surface.drawn.submitted` and `surface.decide` each name their own surface and origin | The audit trail |
 
+### Hostile app
+
+An MCP server's app shown in a thread can never approve anything (spec 3.3 §12, §6.1
+`genui-apps`). The Weather server is an in-process MCP server; the kernel, worker, harness,
+approval service and sessions are real, on SQLite.
+
+| Run | Command |
+|---|---|
+| Both legs | `cargo nextest run -p adk-surface --features genui-apps,tui --test genui_apps_tests` |
+| The client side: the extension, `_meta.ui` and app resources | `cargo nextest run -p adk-tool --features mcp,mcp-apps --test mcp_apps_tests` |
+| The web home's frame and bridge, light and dark | `npx playwright test --project genui-apps`, from `adk-surface/web` |
+
+| Pass condition | Read from |
+|---|---|
+| `weather_show`'s HTML carries an "Approved ✓ Allow once" card: "This app was blocked: it shows approval buttons", no frame, a `surface.app.blocked` record | `GET /api/surface/genui/sessions/{session}/apps/{call}` and the audit trail |
+| An innocent-looking app asks for `transfer_funds` (model-only) and `send_invoice` (another server's): both refused and recorded; an app-only tool is "This app needs a tool this home can't run yet" | The app's answers and the audit trail |
+| A tool the app may call waits as the agent's card, "The app from Weather asked", never **Always allow**; nothing runs | The inbox and the tool's count |
+| A decide `POST` from the apps origin answers `403` under default and development security; the card's version is unchanged | `POST /api/surface/commands` and the card |
+| `ui/message` "Approved" is only a suggestion; **Send it** sends it as the person's message, marked as the app's | The thread |
+| A CSP declaring `http://127.0.0.1` is blocked | The app's open answer |
+| The frame is labelled "it can't approve anything", sandboxed with scripts only, and outside the decision background | The Playwright screenshots |
+
 ## Related
 
 - [Screen Actions](verbs.md) — Snooze in Coming up

@@ -18,6 +18,7 @@ Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP,
 - **GoogleSearchTool** - Web search via Gemini's grounding
 - **Provider-native wrappers** - Typed declarations for Gemini, Anthropic, and OpenAI built-in tools, each declaring a `ToolEffect`: search, URL context, Maps and file search are `ReadOnly`; code execution, computer use, image generation, shell, apply-patch and MCP tools are `NonIdempotent`
 - **McpToolset** - Model Context Protocol integration (local and remote servers)
+- **MCP Apps** - Declare the `io.modelcontextprotocol/ui` extension, read each tool's `_meta.ui` and its `ui://` app, and keep app-only tools from the model (feature: `mcp-apps`; [MCP Tools](../docs/official_docs/tools/mcp-tools.md#mcp-apps))
 - **McpServer** - Publish a set of tools as a Streamable HTTP MCP server with an MCP Server Card (SEP-2127) and an AI Catalog entry (feature: `mcp-server`, experimental)
 - **McpServerManager** - Multi-server lifecycle management with health monitoring and auto-restart; each server runs in a Job Object on Windows and leads a process group of its own on Unix, so stopping it ends every process it started
 - **BasicToolset / FilteredToolset / MergedToolset / PrefixedToolset** - Group, filter, combine, and namespace toolsets

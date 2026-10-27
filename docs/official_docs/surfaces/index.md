@@ -263,6 +263,7 @@ the server's auth middleware authenticates every request.
 | `GET /surface/openapi.json` | The OpenAPI 3.1 document |
 | `GET /surface/genui/capabilities` | What the home claims of A2UI, AG-UI and MCP Apps, and the catalogs it renders; with `genui`, mounted by `adk_surface::web::genui::router` |
 | `GET /surface/genui/sessions/{session}/forms` | Each drawn form sent in the session and where its call is; with `genui` |
+| `GET /surface/genui/sessions/{session}/apps/{call}`, `POST …/requests`, `POST …/message` | An app from an MCP server: framed, blocked or not shown here; what it asks the home; the message it suggested, once the person sends it; with `genui-apps`, mounted by `adk_surface::web::genui::apps_router` |
 
 `adk_surface::web::take_over_router(engine, take_over)` adds `POST
 /surface/decisions/{id}/take-over` (`{"version", "secret"}` → the outcome) beside a harness that

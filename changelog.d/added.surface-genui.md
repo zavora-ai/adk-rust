@@ -15,3 +15,18 @@
   `drawn.refused`. `adk-cli`'s `genui` feature gives every harness `adk-rust serve` and `up`
   host the render tools (spec 3.3 §6.1, §7.4 rule 5). See
   `docs/official_docs/surfaces/genui.md`.
+- **Apps from MCP servers and drawings over AG-UI** (`adk-surface`, `adk-cli`): the
+  `genui-apps` feature shows an MCP server's app in a thread under "App from Weather · it
+  can't approve anything" (`McpAppsHost`): framed sandboxed on its own origin under a CSP
+  built from what it declares, blocked when it reaches this computer or the home, loads
+  undeclared sites, or shows a decision's words, and refused on the surface API whatever
+  `SecurityConfig` admits (`refuse_apps_origin`). An app's `tools/call` is held as the agent
+  whose call showed it, for the person ("The app from Weather asked", never **Always
+  allow**); model-only, app-only and other servers' tools are refused; `ui/message` waits for
+  **Send it** and is sent marked as the app's; `ui/open-link` waits for **Open**. `GenuiAgUi`
+  sends drawings as AG-UI `a2ui-surface` activities, drops echoed ones that fail the
+  validator, and holds a form sent through `forwardedProps.a2uiAction`. `adk-cli`'s
+  `genui-apps` feature serves apps on `adk-rust serve` and `up` from a second loopback
+  listener, or `--apps-origin`. The renderer is published as `@zavora-ai/adk-surface-react`
+  (`adk-surface/react`) (spec 3.3 §6.1, decision 11). See
+  `docs/official_docs/surfaces/genui.md`.

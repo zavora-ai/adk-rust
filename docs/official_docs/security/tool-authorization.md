@@ -424,7 +424,8 @@ call is surfaced once per run.
 ### Calls a Person Asks For
 
 A person asks an agent for a call through something the agent drew — a form's **Send** in
-[Agent-Drawn UI](../surfaces/genui.md). The call is an `adk_core::RequestedCall`: the tool,
+[Agent-Drawn UI](../surfaces/genui.md) — or through an app an MCP server's tool showed, whose
+`tools/call` is held as a requested call `via` the app ([Apps from MCP servers](../surfaces/genui.md#apps-from-mcp-servers)). The call is an `adk_core::RequestedCall`: the tool,
 its arguments, the person (`requested_by`) and the drawn surface, version and action it came
 from (`via`). A run carries it as `RunConfig::requested_call`; only an authenticated run may
 (spec 3.3 §7.4 rule 5).
@@ -461,7 +462,8 @@ runtime, with its policy, standing rules, acting context and approval store:
 |------|------|
 | A harness | `Harness::send_requested(user, session, text, call, context)` |
 | A durable worker | A run whose input is `{"text": ..., "requestedCall": {...}}`, created with `NewRun::with_authenticated_user` |
-| `adk-surface` | `Source::request_call`, which `SurfaceEngine` calls for the `submitDrawn` command |
+| `adk-surface` | `Source::request_call`, which `SurfaceEngine` calls for the `submitDrawn` command and for an app's `tools/call` |
+| `adk-server`'s AG-UI runtime | An `AgUiExtension` that answers a run's `forwardedProps` action, such as `GenuiAgUi` for `a2uiAction` |
 
 ```rust,ignore
 use adk_core::{RequestContext, RequestedCall, RequestedVia, SubjectRef};

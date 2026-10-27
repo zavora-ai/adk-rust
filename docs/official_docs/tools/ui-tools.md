@@ -60,7 +60,11 @@ A run request selects a profile with the `x-adk-ui-protocol` header or its `uiPr
 `ui_protocol` field; an unknown profile is rejected with `400 Bad Request` naming the
 supported ones. `GET /api/ui/capabilities` returns each profile's versions, implementation
 tier, features, and limitations, and the `/api/ui/initialize`, `/api/ui/message`, and
-`/api/ui/notifications/*` routes serve MCP Apps hosts.
+`/api/ui/notifications/*` routes serve MCP Apps hosts. An `AgUiExtension` set with
+`ServerBuilder::with_ag_ui_extension` adds to protocol-native AG-UI runs; `adk-surface`'s
+`GenuiAgUi` sends drawings as `a2ui-surface` activities and holds a form sent through
+`forwardedProps.a2uiAction` ([Over AG-UI](../surfaces/genui.md#over-ag-ui)). `adk-surface`'s
+`genui-apps` feature is a governed MCP Apps host ([Apps from MCP servers](../surfaces/genui.md#apps-from-mcp-servers)).
 
 ## AG-UI decisions
 
