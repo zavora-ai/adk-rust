@@ -7,7 +7,7 @@ Input/output validation and content safety using `adk-guardrail`.
 Guardrails validate and transform agent inputs and outputs to ensure safety, compliance, and quality. Input guardrails screen a user message before it is saved or reaches a model, output guardrails screen everything a model turn shows the client and the session — the final response and any text written beside a tool call — and tool guardrails screen a tool call's arguments and its result. They can:
 
 - Block harmful or off-topic content
-- Redact PII (emails, phones, SSNs, credit cards)
+- Redact PII (emails, phones, SSNs, card numbers, and optionally IP addresses)
 - Enforce JSON schema on outputs
 - Limit content length
 - Redact or withhold a tool's result before the model sees it
@@ -61,13 +61,16 @@ Automatically detect and redact personally identifiable information:
 ```rust
 use adk_guardrail::{PiiRedactor, PiiType};
 
-// Default: emails, phones, SSNs, credit cards
+// Default: emails, phones, SSNs, card numbers — not IP addresses
 let redactor = PiiRedactor::new();
 
-// Or select specific types
+// Or select specific types; name `PiiType::IpAddress` to redact IP addresses
 let redactor = PiiRedactor::with_types(&[
     PiiType::Email,
     PiiType::Phone,
+    PiiType::Ssn,
+    PiiType::CreditCard,
+    PiiType::IpAddress,
 ]);
 
 // Direct redaction
@@ -78,13 +81,16 @@ let (redacted, found_types) = redactor.redact("Email: test@example.com");
 
 **Supported PII Types:**
 
-| Type | Pattern | Redaction |
-|------|---------|-----------|
-| `Email` | `user@domain.com` | `[EMAIL REDACTED]` |
-| `Phone` | `555-123-4567` | `[PHONE REDACTED]` |
-| `Ssn` | `123-45-6789` | `[SSN REDACTED]` |
-| `CreditCard` | `4111-1111-1111-1111` | `[CREDIT CARD REDACTED]` |
-| `IpAddress` | `192.168.1.1` | `[IP REDACTED]` |
+| Type | Matches | Redaction | In `new()` |
+|------|---------|-----------|------------|
+| `Email` | `user@domain.com`; the top-level domain is letters only, so `user@domain.com\|ref` keeps `\|ref` | `[EMAIL REDACTED]` | Yes |
+| `Phone` | `555-123-4567` | `[PHONE REDACTED]` | Yes |
+| `Ssn` | `123-45-6789` | `[SSN REDACTED]` | Yes |
+| `CreditCard` | A 13–19 digit card number that passes the Luhn check, as one run of digits or grouped 4-4-4-4 (`4111-1111-1111-1111`), 4-6-5 (`3782 822463 10005`), or 4-4-4-4-3 (`6205 5000 0000 0000 004`) | `[CREDIT CARD REDACTED]` | Yes |
+| `IpAddress` | `192.168.1.1` | `[IP REDACTED]` | No |
+
+A number that fails the Luhn check, such as a 16-digit order number, is not a card number and
+passes unchanged.
 
 ## Content Filtering
 

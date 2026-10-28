@@ -10,7 +10,7 @@ Guardrails framework for ADK agents - input/output validation, content filtering
 
 `adk-guardrail` provides safety and validation for AI agents in the [ADK-Rust](https://github.com/zavora-ai/adk-rust) framework:
 
-- **PiiRedactor** - Detect and redact PII (Email, Phone, SSN, Credit Card, IP Address)
+- **PiiRedactor** - Detect and redact PII (Email, Phone, SSN, Luhn-checked card numbers, and IP Address when enabled)
 - **ContentFilter** - Block harmful content, off-topic responses, max length
 - **SchemaValidator** - Validate JSON output against schemas
 - **GuardrailSet** / **GuardrailExecutor** - Compose content guardrails and enforce them
@@ -159,8 +159,26 @@ Detects and redacts personally identifiable information:
 - `Email` → `[EMAIL REDACTED]`
 - `Phone` → `[PHONE REDACTED]`
 - `Ssn` → `[SSN REDACTED]`
-- `CreditCard` → `[CREDIT CARD REDACTED]`
+- `CreditCard` → `[CREDIT CARD REDACTED]` — a 13–19 digit card number that passes the Luhn
+  check, as one run of digits or grouped 4-4-4-4, 4-6-5 (American Express), or 4-4-4-4-3; a
+  number that fails the check, such as an order number, passes unchanged
 - `IpAddress` → `[IP REDACTED]`
+
+`PiiRedactor::new()` redacts every type except `IpAddress`. To redact IP addresses as well, name
+the types with `with_types`:
+
+```rust
+use adk_guardrail::{PiiRedactor, PiiType};
+
+let redactor = PiiRedactor::with_types(&[
+    PiiType::Email,
+    PiiType::Phone,
+    PiiType::Ssn,
+    PiiType::CreditCard,
+    PiiType::IpAddress,
+]);
+assert_eq!(redactor.redact("Host 192.168.1.1").0, "Host [IP REDACTED]");
+```
 
 ### ContentFilter
 

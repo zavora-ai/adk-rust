@@ -17,6 +17,7 @@
 //! cargo run --manifest-path examples/guardrail_coverage/Cargo.toml -- --scenario preamble_blocked
 //! ```
 
+mod pii_cards;
 mod realtime_ws;
 mod scripted;
 mod setup;
@@ -72,6 +73,9 @@ const SCENARIOS: &[&str] = &[
     "realtime_runner_error_redacted",
     "live_openai_preamble",
     "live_openai_realtime",
+    "pii_cards_local",
+    "pii_ip_default",
+    "live_anthropic_pii_cards",
 ];
 
 enum Verdict {
@@ -804,6 +808,9 @@ async fn run_scenario(name: &str) -> anyhow::Result<Verdict> {
         "realtime_runner_error_redacted" => realtime_runner_error_redacted().await,
         "live_openai_preamble" => live_openai_preamble().await,
         "live_openai_realtime" => live_openai_realtime().await,
+        "pii_cards_local" => pii_cards::pii_cards_local().await,
+        "pii_ip_default" => pii_cards::pii_ip_default().await,
+        "live_anthropic_pii_cards" => pii_cards::live_anthropic_pii_cards().await,
         other => anyhow::bail!("unknown scenario `{other}`; known: {}", SCENARIOS.join(", ")),
     }
 }

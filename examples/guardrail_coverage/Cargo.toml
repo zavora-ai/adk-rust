@@ -11,7 +11,7 @@ description = "Output guardrails screen text a model writes beside a tool call, 
 adk-agent = { path = "../../adk-agent", features = ["guardrails"] }
 adk-core = { path = "../../adk-core", features = ["rustls"] }
 adk-guardrail = { path = "../../adk-guardrail" }
-adk-model = { path = "../../adk-model", default-features = false, features = ["openai"] }
+adk-model = { path = "../../adk-model", default-features = false, features = ["anthropic", "openai"] }
 adk-realtime = { path = "../../adk-realtime", features = ["openai"] }
 adk-runner = { path = "../../adk-runner" }
 adk-session = { path = "../../adk-session" }
