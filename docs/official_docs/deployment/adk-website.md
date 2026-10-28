@@ -135,8 +135,8 @@ the handoff threshold, the publish delay and the amount thresholds, defaults inc
 
 ### The owner's channel
 
-`channel::OwnerChannel` is what a chat adapter hands the photos of a paired person's message
-to: it runs them through the back office's media intake into the Steward's draft, drafts each
+`channel::OwnerChannel` is what a served site's chat route hands the photos of a paired
+person's message to ([Chat on a served site](#chat-on-a-served-site)): it runs them through the back office's media intake into the Steward's draft, drafts each
 alt text from its caption, and asks the owner on the thread to confirm. `yes` confirms them
 all; `2: text` rewrites the second; the confirmation reaches the item once it is scheduled or
 published. Photos that arrive after the Steward scheduled the draft join the scheduled item,
@@ -260,6 +260,7 @@ configuration files into `SiteOptions` with `deploy::config::configure`; secrets
 | `wallet.json` | `SiteOptions::wallet`: the owner's `WalletPolicy` and the providers that bill the owner's own accounts, each a `provider_billing:{provider}` rail whose charges are recorded in `data/wallet/{provider}/charges.jsonl` and reconciled against the `invoice.jsonl` the owner exports there; payments are kept in `data/wallet.db`. The wallet holds no funds of its own here |
 | `data/claims/{domain}.json` | `SiteOptions::probe`, proven with the system's resolver |
 | `repository.json` | Read by `RunningSite::open`: the content repository's branch, source, signed hooks and authorised committers ([Publishing from Git](website-repository.md)) |
+| `channels.json` | Read by `deploy::config::chat` for `adk-rust website new`, which builds the adapters into `SiteOptions::chat` ([Chat on a served site](#chat-on-a-served-site)) |
 
 ```json
 {
@@ -273,6 +274,42 @@ configuration files into `SiteOptions` with `deploy::config::configure`; secrets
 
 An agency's sites share one set of options, so `adk-website agency` reads none of these
 files.
+
+### Chat on a served site
+
+With `SiteOptions::chat`, the served site runs one channel gateway on its kernel over the
+chat platforms the host hands it (spec 3.5 §10 X12). `adk-website` cannot build the adapters,
+which are `adk-surface`'s, so `adk-rust website new` builds them from the project's
+`channels.json` (`website_cli`), each secret `env:VAR` or `file:PATH`:
+
+```json
+{
+  "whatsapp": {
+    "phoneNumberId": "106540352242922",
+    "accessToken": "env:WHATSAPP_ACCESS_TOKEN",
+    "appSecret": "env:WHATSAPP_APP_SECRET",
+    "verifyToken": "env:WHATSAPP_VERIFY_TOKEN",
+    "template": { "name": "decision_waiting", "language": "en_US" }
+  },
+  "telegram": { "token": "env:TELEGRAM_BOT_TOKEN" },
+  "slack": { "appToken": "env:SLACK_APP_TOKEN", "botToken": "env:SLACK_BOT_TOKEN" },
+  "discord": { "token": "env:DISCORD_BOT_TOKEN" },
+  "matrix": { "homeserver": "https://matrix.example.org", "accessToken": "env:MATRIX_ACCESS_TOKEN" }
+}
+```
+
+The gateway's route (`deploy::chat::SiteChat`) tells two kinds of sender apart:
+
+| Sender | What happens |
+|---|---|
+| An account paired to the owner or staff | A turn of the Steward as that person, in a session whose entry point is the paired device, so its drafts enter through it (A-I24); decision cards ring the account. Photos the message carried — WhatsApp and Telegram download them — wait for the draft the turn makes, or join the person's newest draft when no turn runs, through `channel::OwnerChannel`, which asks for their alt text in the thread; `yes` or `2: text` answers it and starts no turn |
+| Anyone else | The Inbox reads the message as a visitor's, and answers in the thread; without an Inbox the site files an `inbound_message` signal. No pairing code, no turn, and no media kept |
+| Anyone else typing `/pair` (Slack's and Discord's `/pair` command) | The gateway's pairing code, which the owner accepts with `adk-rust pair accept` against the site's kernel |
+
+Pairings are kept in `data/kernel.db` (`KernelStores::channel_bindings`), unless
+`SiteOptions::channel_bindings` names another store. The site's edge serves WhatsApp's
+webhook at `/channels/whatsapp` (`deploy::chat::WHATSAPP_PATH`): give WhatsApp the edge's
+public URL with that path and the verify token. An agency runs no chat gateway.
 
 | Store | Survives a restart |
 |-------|--------------------|

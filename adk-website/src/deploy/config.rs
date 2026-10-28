@@ -7,6 +7,7 @@
 //! | `email.json` | [`SiteOptions::email`] | The site's mailbox over IMAP and SMTP ([`EmailConfig`]): the Inbox reads it, nurture and the outbox send from it |
 //! | `upkeep.json` | [`SiteOptions::advisories`], [`SiteOptions::certificate`] | The edge's `Cargo.lock` with a RustSec advisory database checkout, and whether the origin's certificate is read ([`UpkeepConfig`]) |
 //! | `wallet.json` | [`SiteOptions::wallet`] | The owner's wallet policy and the providers that bill the owner's own accounts ([`WalletConfig`]) |
+//! | `channels.json` | Read by [`chat`] for a host that builds the adapters into [`SiteOptions::chat`] | The chat platforms the site talks on ([`ChannelsConfig`]): Telegram, WhatsApp, Slack, Discord and Matrix (spec 3.5 §10 X12) |
 //! | `data/claims/{domain}.json` | [`SiteOptions::probe`] | The owner's domain claim, which `adk-rust site migrate` keeps; the Guardian proves it again with the system's resolver on every probe |
 //!
 //! Secrets are `env:VAR` or `file:PATH`, a path relative to the project, never the secret
@@ -427,4 +428,199 @@ pub async fn configure(paths: &ProjectPaths, options: &mut SiteOptions) -> Resul
         set.push("the Guardian's probe of the claimed domain".to_string());
     }
     Ok(set)
+}
+
+/// One secret: `env:VAR` or `file:PATH`, never the secret itself (A-I19).
+type SecretRef = String;
+
+/// The chat platforms a served site talks on, from `channels.json` (spec 3.5 §10 X12). Every
+/// platform is optional; secrets are references.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_website::deploy::config::ChannelsConfig;
+///
+/// let config: ChannelsConfig = serde_json::from_value(serde_json::json!({
+///     "whatsapp": {
+///         "phoneNumberId": "1001",
+///         "accessToken": "env:WHATSAPP_ACCESS_TOKEN",
+///         "appSecret": "env:WHATSAPP_APP_SECRET",
+///         "verifyToken": "env:WHATSAPP_VERIFY_TOKEN"
+///     },
+///     "telegram": { "token": "env:TELEGRAM_BOT_TOKEN" }
+/// })).unwrap();
+/// assert!(config.whatsapp.is_some() && config.slack.is_none());
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelsConfig {
+    /// A Telegram bot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telegram: Option<TelegramChannel>,
+    /// A WhatsApp Business number on the Cloud API.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whatsapp: Option<WhatsAppChannel>,
+    /// A Slack app in Socket Mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slack: Option<SlackChannel>,
+    /// A Discord bot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discord: Option<DiscordChannel>,
+    /// A Matrix account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matrix: Option<MatrixChannel>,
+}
+
+/// A Telegram bot in `channels.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TelegramChannel {
+    /// The bot token's reference.
+    pub token: SecretRef,
+}
+
+/// A WhatsApp Business number in `channels.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WhatsAppChannel {
+    /// The business phone number's id, from the app's WhatsApp settings.
+    pub phone_number_id: String,
+    /// The access token's reference.
+    pub access_token: SecretRef,
+    /// The app secret's reference, which signs every webhook body.
+    pub app_secret: SecretRef,
+    /// The webhook's verify token's reference.
+    pub verify_token: SecretRef,
+    /// An approved template with no variables, sent outside the 24-hour window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<WhatsAppTemplate>,
+}
+
+/// An approved WhatsApp template.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WhatsAppTemplate {
+    /// Its name.
+    pub name: String,
+    /// Its language, such as `en_US`.
+    pub language: String,
+}
+
+/// A Slack app in `channels.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SlackChannel {
+    /// The app-level token's reference (`connections:write`).
+    pub app_token: SecretRef,
+    /// The bot token's reference.
+    pub bot_token: SecretRef,
+}
+
+/// A Discord bot in `channels.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DiscordChannel {
+    /// The bot token's reference.
+    pub token: SecretRef,
+}
+
+/// A Matrix account in `channels.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MatrixChannel {
+    /// The homeserver's address.
+    pub homeserver: String,
+    /// The access token's reference.
+    pub access_token: SecretRef,
+}
+
+/// The chat platforms of `channels.json` with their secrets read (spec 3.5 §10 X12), for a
+/// host that builds the adapters. Its `Debug` shows no secret.
+#[derive(Clone, Default)]
+pub struct ChatConfig {
+    /// Telegram's bot token.
+    pub telegram: Option<adk_core::CredentialSecret>,
+    /// WhatsApp's number id, access token, app secret, verify token and template.
+    pub whatsapp: Option<WhatsAppSecrets>,
+    /// Slack's app-level and bot tokens.
+    pub slack: Option<(adk_core::CredentialSecret, adk_core::CredentialSecret)>,
+    /// Discord's bot token.
+    pub discord: Option<adk_core::CredentialSecret>,
+    /// Matrix's homeserver and access token.
+    pub matrix: Option<(String, adk_core::CredentialSecret)>,
+}
+
+/// WhatsApp's settings with their secrets read.
+#[derive(Clone, Debug)]
+pub struct WhatsAppSecrets {
+    /// The business phone number's id.
+    pub phone_number_id: String,
+    /// The access token.
+    pub access_token: adk_core::CredentialSecret,
+    /// The app secret.
+    pub app_secret: adk_core::CredentialSecret,
+    /// The verify token.
+    pub verify_token: adk_core::CredentialSecret,
+    /// The approved template, as name and language.
+    pub template: Option<(String, String)>,
+}
+
+impl std::fmt::Debug for ChatConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChatConfig").field("platforms", &self.platforms()).finish_non_exhaustive()
+    }
+}
+
+impl ChatConfig {
+    /// The platforms set, as people read them.
+    pub fn platforms(&self) -> Vec<&'static str> {
+        [
+            ("Telegram", self.telegram.is_some()),
+            ("WhatsApp", self.whatsapp.is_some()),
+            ("Slack", self.slack.is_some()),
+            ("Discord", self.discord.is_some()),
+            ("Matrix", self.matrix.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(name, set)| set.then_some(name))
+        .collect()
+    }
+}
+
+/// The chat platforms of the project's `channels.json`, their secrets read from the
+/// environment or the project's files (spec 3.5 §10 X12, A-I19); `None` without the file.
+///
+/// # Errors
+///
+/// A file that does not parse, or a secret that cannot be read.
+pub fn chat(paths: &ProjectPaths) -> Result<Option<ChatConfig>> {
+    const FILE: &str = "channels.json";
+    let Some(channels) = read_json::<ChannelsConfig>(&paths.root().join(FILE))? else {
+        return Ok(None);
+    };
+    let secret = |source: &str| secret_in(paths, FILE, source);
+    let whatsapp = match &channels.whatsapp {
+        Some(w) => Some(WhatsAppSecrets {
+            phone_number_id: w.phone_number_id.clone(),
+            access_token: secret(&w.access_token)?,
+            app_secret: secret(&w.app_secret)?,
+            verify_token: secret(&w.verify_token)?,
+            template: w.template.as_ref().map(|t| (t.name.clone(), t.language.clone())),
+        }),
+        None => None,
+    };
+    Ok(Some(ChatConfig {
+        telegram: channels.telegram.as_ref().map(|t| secret(&t.token)).transpose()?,
+        whatsapp,
+        slack: match &channels.slack {
+            Some(s) => Some((secret(&s.app_token)?, secret(&s.bot_token)?)),
+            None => None,
+        },
+        discord: channels.discord.as_ref().map(|d| secret(&d.token)).transpose()?,
+        matrix: match &channels.matrix {
+            Some(m) => Some((m.homeserver.clone(), secret(&m.access_token)?)),
+            None => None,
+        },
+    }))
 }

@@ -24,6 +24,7 @@
 
 pub mod agency;
 pub mod back_office;
+pub mod chat;
 pub mod checks;
 pub mod config;
 pub mod kernel;

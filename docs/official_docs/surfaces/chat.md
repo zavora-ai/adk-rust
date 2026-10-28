@@ -356,6 +356,26 @@ async fn whatsapp(
 > (spec 3.3 §13 decision 10), and a webhook needs a public address. A host with a tunnel or a
 > reverse proxy mounts `WhatsAppWebhook::router()` itself, on the kernel the gateway runs on.
 
+### Photos
+
+The WhatsApp and Telegram adapters download the images a message carried — JPEG, PNG, WebP
+and GIF, at most 10 MiB each, with the platform's token — into
+`ChannelInbound::attachments`; a photo's caption is the message's words. The gateway never
+puts attachments in a turn's input, and a paired account's message with no words, a photo
+alone, starts no turn (`InboundOutcome::Empty`): a host that takes photos does so with an
+`InboundRoute`, as a served site does. The Slack, Discord and Matrix adapters hand over text
+only.
+
+### On a served site
+
+A website served by `adk-website` runs one gateway over the platforms of its project's
+`channels.json`, built by `adk-rust website new`, with a route of its own: a paired account's
+message is a turn of the Steward, a stranger's goes to the site's Inbox and never gets a
+pairing code or starts a turn, and only `/pair` — Slack's and Discord's `/pair` command too —
+gets a stranger a code. The site's public edge serves WhatsApp's webhook at
+`/channels/whatsapp`. See
+[Chat on a served site](../deployment/adk-website.md#chat-on-a-served-site).
+
 ### With `adk-rust up`
 
 `adk-rust up` starts Slack, Discord and Matrix as it starts Telegram, each only when its

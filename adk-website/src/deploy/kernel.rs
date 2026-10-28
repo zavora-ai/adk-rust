@@ -59,6 +59,9 @@ pub struct KernelStores {
     /// The owner's standing rules: a promotion grants them, and the back office's harnesses
     /// read them at every call (spec 3.5 §7.11, A-I13).
     pub rules: Arc<adk_harness::SqliteStandingRuleStore>,
+    /// The chat accounts paired to the owner and staff, and the pairing requests that wait
+    /// (spec 3.5 §10 X12).
+    pub channel_bindings: Arc<adk_kernel::channels::SqliteChannelBindingStore>,
 }
 
 impl std::fmt::Debug for KernelStores {
@@ -75,6 +78,20 @@ impl KernelStores {
     ///
     /// A database that does not open or migrate.
     pub async fn open(url: &str, owner: &str) -> Result<Self> {
+        Self::open_with(url, owner, Vec::new()).await
+    }
+
+    /// Opens the stores as [`open`](Self::open) does, the approval service ringing
+    /// `notifiers`, such as the doorbell of the site's chat gateway (spec 3.5 §10 X12).
+    ///
+    /// # Errors
+    ///
+    /// A database that does not open or migrate.
+    pub async fn open_with(
+        url: &str,
+        owner: &str,
+        notifiers: Vec<Arc<dyn adk_core::ApprovalNotifier>>,
+    ) -> Result<Self> {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(8)
             .connect(url)
@@ -84,10 +101,12 @@ impl KernelStores {
         runs.migrate().await?;
         let approval_store = Arc::new(SqliteApprovalStore::from_pool(pool.clone()));
         approval_store.migrate().await?;
-        let approvals: Arc<dyn ApprovalService> = Arc::new(
-            StoreApprovalService::new(approval_store)
-                .with_router(ApprovalPolicy::new([ApproverSelector::human(owner)])),
-        );
+        let mut service = StoreApprovalService::new(approval_store)
+            .with_router(ApprovalPolicy::new([ApproverSelector::human(owner)]));
+        for notifier in notifiers {
+            service = service.with_notifier(notifier);
+        }
+        let approvals: Arc<dyn ApprovalService> = Arc::new(service);
         let agenda = Arc::new(SqliteAgendaStore::new(pool.clone()));
         agenda.migrate().await.map_err(store)?;
         let partition_store = Arc::new(SqlitePartitionStore::new(pool.clone()));
@@ -108,6 +127,9 @@ impl KernelStores {
         spend.migrate().await?;
         let watermarks = Arc::new(SqliteCronWatermarkStore::new(pool.clone()));
         watermarks.migrate().await.map_err(store)?;
+        let channel_bindings =
+            Arc::new(adk_kernel::channels::SqliteChannelBindingStore::new(pool.clone()));
+        channel_bindings.migrate().await.map_err(store)?;
         let rules = Arc::new(adk_harness::SqliteStandingRuleStore::new(pool));
         rules.migrate().await?;
         Ok(Self {
@@ -124,6 +146,7 @@ impl KernelStores {
             spend,
             watermarks,
             rules,
+            channel_bindings,
         })
     }
 }

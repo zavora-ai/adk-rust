@@ -28,6 +28,10 @@ use serde_json::json;
 
 use crate::site_cli::{confirm, person};
 
+// The site's chat platforms (spec 3.5 §10 X12).
+#[cfg(feature = "channels")]
+mod chat;
+
 /// `adk-rust website` subcommands (spec 3.5 §8.1).
 #[derive(clap::Subcommand, Debug, Clone)]
 pub enum WebsiteCommands {
@@ -279,6 +283,13 @@ async fn new(args: NewArgs) -> Result<()> {
                 .await?
         {
             println!("Configured {line}.");
+        }
+        // The chat platforms of `channels.json`: strangers reach the Inbox, paired accounts
+        // the Steward (spec 3.5 §10 X12).
+        #[cfg(feature = "channels")]
+        if let Some(config) = adk_website::deploy::config::chat(&ProjectPaths::new(&dir))? {
+            println!("Configured chat on {}.", config.platforms().join(", "));
+            options.site.chat = Some(Arc::new(chat::Adapters::build(&config)?));
         }
         (adk_website::deploy::serve(options).await?, dir.clone())
     };

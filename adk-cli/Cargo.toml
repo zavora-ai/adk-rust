@@ -194,6 +194,8 @@ channels = ["harness", "surface", "adk-surface/channels", "adk-kernel?/channels"
 # set (SLACK_APP_TOKEN and SLACK_BOT_TOKEN; DISCORD_BOT_TOKEN; MATRIX_HOMESERVER and
 # MATRIX_ACCESS_TOKEN). None needs an inbound port; WhatsApp's webhook does, so `up` has none.
 slack = ["channels", "adk-surface/slack"]
+# A served site's WhatsApp webhook, on its public edge (`adk-rust website`; spec 3.5 §10 X12).
+whatsapp = ["channels", "adk-surface/whatsapp"]
 discord = ["channels", "adk-surface/discord"]
 matrix = ["channels", "adk-surface/matrix"]
 # The phone (spec 3.3 §5.4): `adk-rust up --home-url https://… --auth-token …` serves the
@@ -213,7 +215,7 @@ genui-apps = ["genui", "adk-surface/genui-apps"]
 # content repository; `adk-rust awp …` verifies a domain, runs the conformance kit, manages
 # the root and delegated keys, and migrates a 1.x `business.toml`. Opt-in: migration links
 # hickory, image comparison and X.509 parsing.
-website = ["harness", "persist", "surface", "adk-surface?/website", "dep:adk-website", "dep:adk-site", "dep:adk-awp", "dep:awp-types", "dep:adk-auth", "adk-auth/web-bot-auth", "adk-session/sqlite", "audit", "dep:base64", "dep:zeroize", "dep:url", "dep:uuid", "dep:chrono"]
+website = ["harness", "persist", "surface", "whatsapp", "adk-surface?/website", "dep:adk-website", "dep:adk-site", "dep:adk-awp", "dep:awp-types", "dep:adk-auth", "adk-auth/web-bot-auth", "adk-session/sqlite", "audit", "dep:base64", "dep:zeroize", "dep:url", "dep:uuid", "dep:chrono"]
 # Screen actions people and agents share (spec 3.3 §2 item 7; Experimental): `up` gives every
 # agent it hosts the `verb_*` tools, which always ask first, serves `/api/surface/verbs`, and
 # adds `/snooze` to the terminal attached to it. No dependency beyond `surface`.

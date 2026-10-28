@@ -121,6 +121,12 @@ pub struct SiteOptions {
     /// does not read it (spec 3.5 A-I24); without them the Inbox reads every chat message
     /// handed to it.
     pub channel_bindings: Option<Arc<dyn adk_kernel::channels::ChannelBindingStore>>,
+    /// The chat platforms the site talks on (spec 3.5 §10 X12): a served site runs a channel
+    /// gateway over them — a paired account's messages are turns of the Steward, a
+    /// stranger's go to the Inbox — and its edge serves their routes, such as WhatsApp's
+    /// webhook. Pairings are kept in [`channel_bindings`](Self::channel_bindings), else in
+    /// the kernel's store.
+    pub chat: Option<Arc<dyn super::chat::ChatAdapters>>,
 }
 
 /// What the Guardian's probe of a served site needs beyond the project (spec 3.5 §7.20,
@@ -615,7 +621,12 @@ impl RunningSite {
             repliers.push(outbox.clone());
         }
         let mut chats = std::collections::BTreeSet::new();
-        for (sink, _) in &options.channels {
+        // The site's own chat platforms too (spec 3.5 §10 X12), so the Inbox answers a
+        // stranger in their thread.
+        let platforms = options.chat.iter().flat_map(|chat| chat.sinks());
+        let sinks: Vec<Arc<dyn ChannelSink>> =
+            options.channels.iter().map(|(sink, _)| sink.clone()).chain(platforms).collect();
+        for sink in &sinks {
             if chats.insert(sink.channel().to_string()) {
                 repliers.push(Arc::new(crate::inbox::ChannelReplier::new(
                     sink.clone(),

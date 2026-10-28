@@ -91,6 +91,7 @@ pub struct Served {
     pub stores: KernelStores,
     kernel: Kernel,
     edge_task: JoinHandle<()>,
+    chat: Option<adk_kernel::channels::ChannelGateway>,
 }
 
 impl std::fmt::Debug for Served {
@@ -109,6 +110,12 @@ impl Served {
         &self.kernel
     }
 
+    /// The site's chat gateway, when [`SiteOptions::chat`](super::SiteOptions::chat) is set
+    /// (spec 3.5 §10 X12): every chat platform's messages pass through it.
+    pub fn chat(&self) -> Option<&adk_kernel::channels::ChannelGateway> {
+        self.chat.as_ref()
+    }
+
     /// Stops the edge, the sites' background work and the kernel with its control plane.
     ///
     /// # Errors
@@ -116,6 +123,9 @@ impl Served {
     /// The kernel's error on shutdown.
     pub async fn shutdown(mut self) -> Result<()> {
         self.edge_task.abort();
+        if let Some(chat) = &self.chat {
+            chat.stop();
+        }
         drop(std::mem::take(&mut self.sites));
         self.kernel.stop().await.map_err(config)
     }
@@ -136,8 +146,14 @@ async fn start(
     mut sites: Vec<RunningSite>,
     options: &ServeOptions,
     app: axum::Router,
+    doorbell: Option<Arc<adk_kernel::channels::ChannelDoorbell>>,
 ) -> Result<Served> {
     let pairing = Pairing::new(stores.devices.clone());
+    // `adk-rust pair accept` pairs a chat account that asked with `/pair` (spec 3.5 §10 X12).
+    let pairing = match &options.site.channel_bindings {
+        Some(bindings) => pairing.with_channel_bindings(bindings.clone()),
+        None => pairing,
+    };
     let paired = !pairing.devices().await.map_err(config)?.is_empty();
     let setup_code = if paired {
         None
@@ -243,6 +259,20 @@ async fn start(
     for site in &mut sites {
         site.start(idle);
     }
+    // The site's chat: its gateway on the kernel, and the adapters' routes on the edge.
+    let (mut app, mut chat) = (app, None);
+    if let (Some(adapters), [site]) = (&options.site.chat, sites.as_slice()) {
+        let bindings: Arc<dyn adk_kernel::channels::ChannelBindingStore> =
+            match &options.site.channel_bindings {
+                Some(bindings) => bindings.clone(),
+                None => stores.channel_bindings.clone(),
+            };
+        let (gateway, routes) =
+            super::chat::start(adapters, &kernel, site, bindings, doorbell, sessions.clone())
+                .await?;
+        app = app.merge(routes);
+        chat = Some(gateway);
+    }
     let listener = tokio::net::TcpListener::bind(options.edge).await.map_err(config)?;
     let edge_addr = listener.local_addr().map_err(config)?;
     // The peer address keys anonymous callers' rate limits and conversations (spec 3.5 §7.3).
@@ -253,7 +283,7 @@ async fn start(
         }
     });
     tracing::info!(edge = %edge_addr, kernel = %kernel_addr, sites = sites.len(), "serving");
-    Ok(Served { edge_addr, kernel_addr, setup_code, sites, stores, kernel, edge_task })
+    Ok(Served { edge_addr, kernel_addr, setup_code, sites, stores, kernel, edge_task, chat })
 }
 
 /// Serves the site at `options.dir` (spec 3.5 §7.17, §7.22): issues the setup code into the
@@ -264,15 +294,28 @@ async fn start(
 ///
 /// A project that does not load, a store that does not open, or a listener that does not
 /// bind.
-pub async fn serve(options: ServeOptions) -> Result<Served> {
+pub async fn serve(mut options: ServeOptions) -> Result<Served> {
     let paths = ProjectPaths::new(&options.dir);
     std::fs::create_dir_all(paths.data()).map_err(config)?;
-    let stores = KernelStores::open(&paths.database("kernel"), &options.site.owner).await?;
+    // The site's chat gateway hears each decision the approval service takes (spec 3.5 §10
+    // X12).
+    let doorbell =
+        options.site.chat.is_some().then(|| Arc::new(adk_kernel::channels::ChannelDoorbell::new()));
+    let notifiers = doorbell.iter().map(|bell| bell.clone() as Arc<dyn adk_core::ApprovalNotifier>);
+    let stores = KernelStores::open_with(
+        &paths.database("kernel"),
+        &options.site.owner,
+        notifiers.collect(),
+    )
+    .await?;
+    if options.site.chat.is_some() && options.site.channel_bindings.is_none() {
+        options.site.channel_bindings = Some(stores.channel_bindings.clone());
+    }
     let site = RunningSite::open(paths.clone(), &stores, &options.site).await?;
     site.partitions.install(&stores.partitions, adk_core::audit_log::AuditActor::default()).await?;
     let app = site.router.clone();
     let name = site.site.name.clone();
-    start(&name, paths.data().join("kernel"), stores, vec![site], &options, app).await
+    start(&name, paths.data().join("kernel"), stores, vec![site], &options, app, doorbell).await
 }
 
 /// An agency's file: the sites it runs, each a project directory relative to the file
@@ -320,5 +363,10 @@ pub async fn serve_agency(file: &Path, options: ServeOptions) -> Result<Served> 
         sites.push(site);
     }
     let app = AgencyRouter::new(edges).router();
-    start("agency", agency_paths.data().join("kernel"), stores, sites, &options, app).await
+    if options.site.chat.is_some() {
+        tracing::warn!(
+            "an agency's sites run no chat gateway: serve each site on its own for chat"
+        );
+    }
+    start("agency", agency_paths.data().join("kernel"), stores, sites, &options, app, None).await
 }

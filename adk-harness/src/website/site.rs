@@ -20,8 +20,8 @@ use adk_site::host::SiteHost;
 use adk_site::log::{CHECKPOINT_PATH, SiteLog};
 use adk_site::media::MediaPipeline;
 use adk_site::pipeline::{
-    Announcer, ApprovalDecision, ApprovalGate, ApprovalRequest, ChangeTagSink, Draft, Preview,
-    PublishingPipeline,
+    Announcer, ApprovalDecision, ApprovalGate, ApprovalRequest, ChangeTagSink, Draft, EntryPoint,
+    Preview, PublishingPipeline,
 };
 use adk_site::release::PreviousRelease;
 use async_trait::async_trait;
@@ -695,6 +695,35 @@ impl SiteRuntime {
     /// The release approval gate, where people record their approvals under a chain.
     pub fn approvals(&self) -> &Arc<SiteApprovals> {
         &self.approvals
+    }
+
+    /// The newest content draft that entered through `entry`, with its id and its items
+    /// (spec 3.5 §7.8.2 "Entry points", §5 S18): the draft a paired person's turn made, which
+    /// the photos their message carried join. `None` when that entry has no draft waiting.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_site::pipeline::EntryPoint;
+    ///
+    /// # async fn example(runtime: &adk_harness::website::SiteRuntime) {
+    /// let device = EntryPoint::PairedDevice { device: "ch-5c1e09a2d4b7f3e".into() };
+    /// if let Some((draft, items)) = runtime.newest_draft_from(&device).await {
+    ///     println!("{draft} drafts {}", items[0].id.0);
+    /// }
+    /// # }
+    /// ```
+    pub async fn newest_draft_from(
+        &self,
+        entry: &EntryPoint,
+    ) -> Option<(String, Vec<awp_types::ContentItem>)> {
+        let number = |id: &str| id.rsplit('-').next().and_then(|n| n.parse::<u64>().ok());
+        let drafts = self.drafts.lock().await;
+        drafts
+            .iter()
+            .filter(|(_, record)| record.draft.change.entry == *entry)
+            .max_by_key(|(id, _)| number(id))
+            .map(|(id, record)| (id.clone(), record.draft.change.items.clone()))
     }
 
     /// Whether the site has been launched: a production release is logged or served

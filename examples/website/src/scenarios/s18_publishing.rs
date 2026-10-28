@@ -22,7 +22,8 @@ use adk_core::{Clock, ManualClock};
 use adk_harness::HarnessMode;
 use adk_harness::website::{AuthoringRoute, AuthoringRouter};
 use adk_kernel::channels::{
-    ChannelBinding, ChannelBindingStore, ChannelInbound, InMemoryChannelBindingStore,
+    ChannelAttachment, ChannelBinding, ChannelBindingStore, ChannelInbound, InMemoryChannel,
+    InMemoryChannelBindingStore, InboundRoute,
 };
 use adk_kernel::charter::{RoleApproval, SignalFilter, SignalStore};
 use adk_model::ScriptedResponse;
@@ -53,6 +54,16 @@ const SHOP: &str = "juniper.example";
 const NEWS: &str = "nakuru-today.example";
 const OWNER_PHONE: &str = "+254700000001";
 const PRODUCT: &str = "products/seeded-rye/en";
+
+/// Signals filed nowhere: S18's chat route meets no stranger.
+struct NoSignals;
+
+#[async_trait::async_trait]
+impl adk_server::awp::SignalEmitter for NoSignals {
+    async fn emit(&self, _signal: awp_types::Signal) -> adk_core::Result<()> {
+        Ok(())
+    }
+}
 
 /// A small PNG photo, `n` its colour.
 fn photo(n: u8) -> String {
@@ -296,6 +307,35 @@ pub async fn run(mode: Mode) -> Result<Checks> {
         .await?;
     let session =
         steward.open_session(&owner, Some(&adk_core::SessionId::new(&session_id)?)).await?;
+    // The served site's chat route over the WhatsApp thread (spec 3.5 §10 X12): the owner's
+    // text is a turn of the Steward, and the three photos WhatsApp delivers as image messages
+    // — the adapter downloads each into its inbound value — wait for the draft that turn makes.
+    let whatsapp = Arc::new(InMemoryChannel::new("whatsapp"));
+    let binding = bindings
+        .get_binding(&ChannelBinding::id_for("whatsapp", OWNER_PHONE))
+        .await?
+        .ok_or_else(|| anyhow!("the owner's number is paired"))?;
+    let route = adk_website::deploy::chat::SiteChat::new(
+        shop.runtime.clone(),
+        None,
+        Arc::new(NoSignals),
+        "urn:adk:agent:juniper/inbox",
+        bindings.clone(),
+        vec![whatsapp.clone()],
+    );
+    let text = ChannelInbound::text("whatsapp", OWNER_PHONE, "wa-1", "m-1", message);
+    let to_turn = !route.take(&text, Some(&binding)).await?;
+    route.turn_started("wa-1");
+    let mut waited = 0;
+    for n in 0..3u8 {
+        let bytes = base64::engine::general_purpose::STANDARD.decode(photo(n)).unwrap_or_default();
+        let caption = if n == 0 { "Seeded rye loaf on the counter" } else { "" };
+        let file = ChannelAttachment::new("image/png", format!("seeded-rye-{n}.png"), bytes);
+        let image =
+            ChannelInbound::text("whatsapp", OWNER_PHONE, "wa-1", format!("m-p{n}"), caption)
+                .with_attachments([file]);
+        waited += usize::from(route.take(&image, Some(&binding)).await?);
+    }
     let first = collect(steward.send(&owner, &session, message).await?).await?;
     let draft = response(&first, "content_draft", 0)
         .and_then(|r| r["draft"].as_str().map(str::to_string))
@@ -303,36 +343,26 @@ pub async fn run(mode: Mode) -> Result<Checks> {
     if draft.is_empty() {
         println!("      the draft did not come back: {:?}", responses(&first));
     }
-    // The WhatsApp adapter hands the message's photos to the product's owner channel, which
-    // runs them through the back office's media intake into the Steward's draft (A-I24), and
-    // asks the owner on the thread to confirm their descriptions.
-    let channel = adk_website::channel::OwnerChannel::new(
-        shop.runtime.clone(),
-        AuthoringRouter::new(bindings.clone()),
-    )?;
-    let inbound = ChannelInbound::text("whatsapp", OWNER_PHONE, "wa-1", "m-1", message);
-    let photos: Vec<adk_website::channel::ChannelPhoto> = (0..3u8)
-        .map(|n| adk_website::channel::ChannelPhoto {
-            name: format!("seeded-rye-{n}.png"),
-            bytes: base64::engine::general_purpose::STANDARD
-                .decode(photo(n))
-                .unwrap_or_default()
-                .into(),
-            caption: (n == 0).then(|| "Seeded rye loaf on the counter".to_string()),
-        })
-        .collect();
-    let attached =
-        channel.attach(&inbound, &draft, &ContentId(PRODUCT.into()), "Seeded rye", photos).await;
-    let attached = match attached {
-        Ok(attached) => attached,
-        Err(error) => {
-            println!("      the photos were not attached: {error}");
-            adk_website::channel::Attached { photos: Vec::new(), reply: String::new() }
-        }
-    };
+    // The turn finished: the photos join its draft through the back office's media intake
+    // (A-I24), and the thread asks the owner to confirm their descriptions.
+    let attached = route.turn_finished("wa-1").await;
+    let reply = whatsapp
+        .messages("wa-1")
+        .into_iter()
+        .find(|text| text.starts_with("Added"))
+        .unwrap_or_default();
     if mode.is_live() {
-        println!("      the channel replies: {}", attached.reply);
+        println!("      the channel replies: {reply}");
     }
+    let channel =
+        route.owner_channel().ok_or_else(|| anyhow!("the back office has a media intake"))?;
+    checks.check(
+        "the WhatsApp photos wait for the turn's draft and join it",
+        to_turn && waited == 3 && attached == 3 && reply.contains("Seeded rye"),
+        format!(
+            "the text a turn: {to_turn}; {waited} photos waited; {attached} attached; the thread: {reply:?}"
+        ),
+    );
     model.push(call("site_publish", json!({ "draft": draft })));
     model.push(ScriptedResponse::text("Scheduled for 09:00."));
     let second =
@@ -344,10 +374,10 @@ pub async fn run(mode: Mode) -> Result<Checks> {
     let before = shop.host.fetch("/products/seeded-rye/").await?.is_none();
     checks.check(
         "the product with three photos waits for 09:00",
-        attached.photos.len() == 3 && before,
+        attached == 3 && before,
         format!(
-            "{} photos attached from the WhatsApp message; not served at 07:30; the publish {:?}",
-            attached.photos.len(),
+            "{} photos attached from the WhatsApp messages; not served at 07:30; the publish {:?}",
+            attached,
             response(&second, "site_publish", 0)
         ),
     );
@@ -361,9 +391,10 @@ pub async fn run(mode: Mode) -> Result<Checks> {
         "m-2",
         "2: Seeded rye, sliced on a board",
     );
-    let changed = channel.reply(&change).await?;
+    // The answers reach the owner channel through the route, and start no turn.
+    let changed = route.take(&change, Some(&binding)).await?.then_some(());
     let yes = ChannelInbound::text("whatsapp", OWNER_PHONE, "wa-1", "m-3", "Yes");
-    let confirmed = channel.reply(&yes).await?;
+    let confirmed = route.take(&yes, Some(&binding)).await?.then_some(());
     channel.settle().await?;
     let stored = shop.store.get(&ContentId(PRODUCT.into())).await?;
     let alt_ok = stored.as_ref().is_some_and(|item| {
