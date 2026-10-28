@@ -301,7 +301,7 @@ fn build() -> Result<OpenAIClient, adk_core::AdkError> {
 
 `OpenAICompatible` with an `OpenAICompatibleConfig` preset (`fireworks`, `together`,
 `mistral`, `perplexity`, `cerebras`, `sambanova`, `xai`, `minimax`, `gemini`,
-`orcarouter`, and others) sets the base URL and provider name. Structured output needs
+`orcarouter`, `cheaper_inference`, and others) sets the base URL and provider name. Structured output needs
 support on the server.
 
 #### Reasoning History
@@ -376,6 +376,26 @@ fn build() -> anyhow::Result<OpenAICompatible> {
 ```bash
 # Chat, tool calling, and a second vendor on the same client (requires ORCAROUTER_API_KEY).
 cargo run --manifest-path examples/orcarouter/Cargo.toml
+```
+
+#### Cheaper Inference
+
+`OpenAICompatibleConfig::cheaper_inference` targets `https://api.cheaperinference.com/v1`.
+Model IDs are bare (`gpt-5.4-mini`, `claude-sonnet-5`), so changing the model string switches
+the upstream vendor:
+
+```rust
+use adk_model::{OpenAICompatible, OpenAICompatibleConfig};
+
+fn build() -> anyhow::Result<OpenAICompatible> {
+    let api_key = std::env::var("CHEAPER_INFERENCE_API_KEY")?;
+    Ok(OpenAICompatible::new(OpenAICompatibleConfig::cheaper_inference(api_key, "gpt-5.4-mini"))?)
+}
+```
+
+```bash
+# Chat, tool calling, and a second vendor on the same client (requires CHEAPER_INFERENCE_API_KEY).
+cargo run --manifest-path examples/cheaper_inference/Cargo.toml
 ```
 
 ### Models
