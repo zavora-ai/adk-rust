@@ -12,6 +12,7 @@ use adk_core::{
     SingleAgentLoader,
 };
 use adk_model::{ScriptedLlm, ScriptedResponse};
+use adk_server::auth_bridge::{RequestContextError, RequestContextExtractor};
 use adk_server::{ServerBuilder, ServerConfig};
 use adk_session::{InMemorySessionService, SessionService};
 use async_trait::async_trait;
@@ -99,6 +100,23 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Logs {
 }
 
 /// Posts `body` to `uri` and returns the status, the `x-request-id`, and the body text.
+/// Admits every request as an administrator, so the freeze and unfreeze reach the store.
+struct AdminExtractor;
+
+#[async_trait]
+impl RequestContextExtractor for AdminExtractor {
+    async fn extract(
+        &self,
+        _parts: &axum::http::request::Parts,
+    ) -> Result<adk_core::RequestContext, RequestContextError> {
+        Ok(adk_core::RequestContext {
+            user_id: "operator".to_string(),
+            scopes: vec![adk_server::ADMIN_SCOPE.to_string()],
+            metadata: Default::default(),
+        })
+    }
+}
+
 async fn post(app: &Router, uri: &str, body: Value) -> (StatusCode, String, String) {
     let request = Request::builder()
         .method("POST")
@@ -310,7 +328,8 @@ async fn a_store_message_stays_out_of_the_governance_503() {
         let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
         let config = ServerConfig::new(Arc::new(SingleAgentLoader::new(Arc::new(agent))), sessions)
             .with_governance(control)
-            .with_error_details(expose_details);
+            .with_error_details(expose_details)
+            .with_request_context(Arc::new(AdminExtractor));
         let app = ServerBuilder::new(config).enable_governance_endpoints().build();
 
         for (uri, body) in [
