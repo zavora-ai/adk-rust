@@ -384,6 +384,10 @@ the caller's identity from each request. With one configured:
   user. Without an extractor a job's runs act for the user `cron`.
 - Session and artifact routes whose path names another user's `user_id` answer `403`.
   `POST /api/sessions` creates the session for the authenticated user.
+- `GET /api/debug/trace/{event_id}` is mounted only when `SecurityConfig::expose_admin_debug`
+  is set (`SecurityConfig::development()` sets it). It returns a span, prompt and response
+  attributes included, only to the user named by the span's `adk.user_id`; any other caller
+  gets `403`. Only the span's event ID is matched, so a session ID answers `404`.
 
 `GET /api/health` and routes mounted with `ServerBuilder::add_root_routes` (such as the web
 home's page at `/ui/`) are not authenticated; `/api/apps` and `/api/ui/*` are. See

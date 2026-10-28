@@ -39,6 +39,9 @@ What an ADK-Rust server exposes, and what its A2A clients accept. Every scenario
 | `E10 anonymous-freeze-refused` | local | A freeze without credentials answers `401`, from a server with a `RequestContextExtractor` and from one without |
 | `F1 hostile-card-refused` | scripted | A card naming another server as its endpoint is refused and that server receives nothing |
 | `F2 hostile-card-refused-v1` | scripted | The same for a v1 card's JSON-RPC interface |
+| `F3 debug-trace-owner-reads` | live | `claude-sonnet-5-5` runs a turn as `alice`, and `GET /api/debug/trace/{event_id}` returns her span to her |
+| `F4 debug-trace-event-id-cross-user-refused` | live | The same span requested by `bob` by its event ID answers `403` |
+| `F5 debug-trace-session-id-cross-user-refused` | live | `bob` naming her session ID in place of an event ID gets no span |
 | `G1 provider-text-withheld-run` | live | A `claude-sonnet-5-5` agent with an invalid API key meets a real Anthropic `401`; `POST /api/run` answers `401` with `Authentication failed`, code `model.anthropic.api_error`, category `unauthorized`, and none of Anthropic's text, and the server logs the full error under the response's `x-request-id` |
 | `G2 provider-text-withheld-sse` | live | The `/api/run_sse` error event reads `model.unauthorized: Authentication failed`, and the full error is logged under its `x-request-id` |
 | `G3 provider-text-withheld-ag-ui` | live | The protocol-native AG-UI `RUN_ERROR` reads `model.unauthorized: Authentication failed` and carries the code |

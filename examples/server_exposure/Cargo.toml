@@ -16,6 +16,7 @@ adk-model = { path = "../../adk-model", default-features = false, features = ["o
 adk-runner = { path = "../../adk-runner" }
 adk-server = { path = "../../adk-server", features = ["a2a-v1"] }
 adk-session = { path = "../../adk-session" }
+adk-telemetry = { path = "../../adk-telemetry" }
 anyhow = "1.0"
 async-trait = "0.1"
 axum = "0.8"

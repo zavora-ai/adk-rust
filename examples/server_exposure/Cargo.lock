@@ -3334,6 +3334,7 @@ dependencies = [
  "adk-runner",
  "adk-server",
  "adk-session",
+ "adk-telemetry",
  "anyhow",
  "async-trait",
  "axum",

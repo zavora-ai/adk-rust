@@ -493,7 +493,7 @@ Session errors map to their status: `404` not found, `409` already exists, `400`
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/debug/trace/{event_id}` | GET | Trace by event ID; mounted without an auth bridge, or with `expose_admin_debug` |
+| `/api/debug/trace/{event_id}` | GET | The span recorded for an event ID; mounted without an auth bridge, or with `expose_admin_debug`, and returned to an authenticated caller only for their own span (`403` otherwise) |
 | `/api/debug/trace/session/{session_id}` | GET | All spans for a session |
 | `/api/debug/graph/{app_name}/{user_id}/{session_id}/{event_id}` | GET | Graph visualization |
 | `/api/apps/{app_name}/users/{user_id}/sessions/{session_id}/events/{event_id}` | GET | Event data |
