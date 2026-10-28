@@ -10,6 +10,14 @@ Created by **Meta Muse Wonder**.
 
 ![The inventor wall: Muse invents eight concepts on its own, each with its own render](screenshots/01-inventor-wall.png)
 
+## Watch the walkthrough
+
+[![Ideate with Meta: a 68-second walkthrough](media/walkthrough-poster.png)](media/ideate-with-meta-walkthrough.mp4)
+
+A 68-second walkthrough (MP4, 2.2 MB, no audio): Meta Muse in ADK-Rust — agents,
+multimodal input with strict JSON, Responses, images, and voice transcription —
+then this example end to end.
+
 ## Try it in 60 seconds
 
 ```bash
