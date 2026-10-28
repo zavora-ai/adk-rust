@@ -12,6 +12,9 @@
 //! ```
 //!
 //! `--dry-run` drives the same graph with a scripted model (no key, no spend).
+//! `--web` serves a functional UI on `--addr` (default `127.0.0.1:8470`).
+
+mod web;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -62,8 +65,8 @@ fn card_schema() -> Value {
                 "title": {"type": "string"},
                 "pitch": {"type": "string"},
                 "mechanism": {"type": "string"},
-                "novelty": {"type": "number"},
-                "feasibility": {"type": "number"},
+                "novelty": {"type": "number", "description": "Score from 0.0 (derivative) to 1.0 (groundbreaking)"},
+                "feasibility": {"type": "number", "description": "Score from 0.0 (impractical) to 1.0 (buildable today)"},
                 "unit_cost_usd": {"type": "number"},
                 "risks": {"type": "array", "items": {"type": "string"}},
                 "next_step": {"type": "string"}
@@ -87,7 +90,9 @@ fn cost_tool(calls: Arc<AtomicUsize>) -> Arc<dyn Tool> {
                 // Deterministic pseudo-BOM: pricier for longer names, cheaper at scale.
                 let base = 25.0 + (idea.len() % 40) as f64;
                 let unit = base * (1000.0 / units).powf(0.15);
-                Ok(json!({"idea": idea, "units": units, "unit_cost_usd": (unit * 100.0).round() / 100.0}))
+                Ok(
+                    json!({"idea": idea, "units": units, "unit_cost_usd": (unit * 100.0).round() / 100.0}),
+                )
             }
         },
     ))
@@ -97,7 +102,10 @@ fn config(effort: Effort) -> GenerateContentConfig {
     GenerateContentConfig { effort: Some(effort), ..Default::default() }
 }
 
-fn pipeline(model: Arc<dyn adk_core::Llm>, cost_calls: Arc<AtomicUsize>) -> anyhow::Result<Arc<dyn Agent>> {
+fn pipeline(
+    model: Arc<dyn adk_core::Llm>,
+    cost_calls: Arc<AtomicUsize>,
+) -> anyhow::Result<Arc<dyn Agent>> {
     let intake = LlmAgentBuilder::new("intake")
         .description("Normalizes an inventor brief")
         .instruction("Rewrite the user's brief into 3-5 crisp bullet constraints (problem, user, must-haves). If a sketch image is attached, fold its visible geometry and annotations into the bullets. Output only the bullets.")
@@ -149,7 +157,9 @@ fn scripted_model() -> Arc<dyn adk_core::Llm> {
     Arc::new(ScriptedLlm::new(
         "muse-spark-1.3-scripted",
         [
-            ScriptedResponse::text("- problem: power on trails\n- user: hikers\n- must: light, cheap"),
+            ScriptedResponse::text(
+                "- problem: power on trails\n- user: hikers\n- must: light, cheap",
+            ),
             ScriptedResponse::text("Idea A: solar wing pack. Idea B: canopy pack."),
             ScriptedResponse::text("Idea C: solar sunshade. Idea D: reflective charger."),
             ScriptedResponse::text("Idea E: clip-on solar brick. Idea F: panel hat."),
@@ -167,6 +177,8 @@ struct Args {
     sketch: Option<String>,
     audio: Option<String>,
     dry_run: bool,
+    web: bool,
+    addr: String,
 }
 
 fn parse_args() -> anyhow::Result<Args> {
@@ -174,6 +186,8 @@ fn parse_args() -> anyhow::Result<Args> {
     let mut sketch = None;
     let mut audio = None;
     let mut dry_run = false;
+    let mut web = false;
+    let mut addr = "127.0.0.1:8470".to_string();
     let mut iter = std::env::args().skip(1);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -181,15 +195,88 @@ fn parse_args() -> anyhow::Result<Args> {
             "--sketch" => sketch = iter.next(),
             "--audio" => audio = iter.next(),
             "--dry-run" => dry_run = true,
-            other => anyhow::bail!("unknown argument {other}; use --brief/--sketch/--audio/--dry-run"),
+            "--web" => web = true,
+            "--addr" => {
+                addr = iter.next().ok_or_else(|| anyhow::anyhow!("--addr needs a value"))?
+            }
+            other => anyhow::bail!(
+                "unknown argument {other}; use --brief/--sketch/--audio/--dry-run/--web/--addr"
+            ),
         }
     }
     Ok(Args {
-        brief: brief.ok_or_else(|| anyhow::anyhow!("--brief is required"))?,
+        brief: if web {
+            brief.unwrap_or_default()
+        } else {
+            brief.ok_or_else(|| anyhow::anyhow!("--brief is required (or pass --web)"))?
+        },
         sketch,
         audio,
         dry_run,
+        web,
+        addr,
     })
+}
+
+/// Run the ideation pipeline once, reporting stage lines as they arrive.
+///
+/// Returns the parsed cards and the number of costing-tool calls.
+async fn run_pipeline(
+    model: Arc<dyn adk_core::Llm>,
+    parts: Vec<Part>,
+    cost_calls: Arc<AtomicUsize>,
+    mut on_line: impl FnMut(String),
+) -> anyhow::Result<(Vec<IdeaCard>, usize)> {
+    let agent = pipeline(model, cost_calls.clone())?;
+    let sessions = Arc::new(InMemorySessionService::new());
+    let session = sessions
+        .create(CreateRequest {
+            app_name: APP.to_string(),
+            user_id: USER.to_string(),
+            session_id: Some(SESSION.to_string()),
+            state: Default::default(),
+        })
+        .await?;
+    let runner = Runner::builder().app_name(APP).agent(agent).session_service(sessions).build()?;
+    let mut events = runner
+        .run(
+            UserId::new(USER)?,
+            SessionId::new(session.id().to_string())?,
+            Content { role: "user".to_string(), parts },
+        )
+        .await?;
+
+    let mut final_text = String::new();
+    while let Some(event) = events.next().await {
+        let event = event?;
+        if let Some(content) = &event.llm_response.content {
+            for part in &content.parts {
+                match part {
+                    Part::Text { text } if !text.is_empty() => {
+                        on_line(format!("[{}] {text}", event.author));
+                        final_text = text.clone();
+                    }
+                    Part::FunctionCall { name, args, .. } => {
+                        on_line(format!("[{}] calls {name}({args})", event.author));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let json_text = final_text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    let cards: Vec<IdeaCard> = serde_json::from_str(json_text)
+        .map_err(|e| anyhow::anyhow!("convergence output is not an IdeaCard array: {e}"))?;
+    anyhow::ensure!(cards.len() >= 3, "expected at least 3 idea cards");
+    let calls = cost_calls.load(Ordering::SeqCst);
+    anyhow::ensure!(calls >= 1, "expected estimate_cost to be called");
+    Ok((cards, calls))
 }
 
 fn api_key() -> anyhow::Result<String> {
@@ -205,6 +292,14 @@ async fn main() -> anyhow::Result<()> {
         .init();
     dotenvy::dotenv().ok();
     let args = parse_args()?;
+
+    if args.web {
+        let key = api_key().ok();
+        if key.is_none() {
+            println!("No META_API_KEY found: the UI still serves, but only dry runs will work.");
+        }
+        return web::serve(&args.addr, key).await;
+    }
 
     println!("=== Ideate with Meta (Muse Spark) ===");
     let (model, images, asr): (
@@ -227,9 +322,8 @@ async fn main() -> anyhow::Result<()> {
     let mut brief_text = args.brief.clone();
     if let (Some(audio_path), Some(asr)) = (&args.audio, &asr) {
         let wav = std::fs::read(audio_path)?;
-        let transcript = asr
-            .transcribe(wav, "memo.wav", "audio/wav", TranscribeOptions::default())
-            .await?;
+        let transcript =
+            asr.transcribe(wav, "memo.wav", "audio/wav", TranscribeOptions::default()).await?;
         println!("[voice memo transcript] {}", transcript.text);
         brief_text = format!("Voice memo: {}\n\nBrief: {}", transcript.text, brief_text);
     }
@@ -247,60 +341,18 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let cost_calls = Arc::new(AtomicUsize::new(0));
-    let agent = pipeline(model, cost_calls.clone())?;
-
-    let sessions = Arc::new(InMemorySessionService::new());
-    let session = sessions
-        .create(CreateRequest {
-            app_name: APP.to_string(),
-            user_id: USER.to_string(),
-            session_id: Some(SESSION.to_string()),
-            state: Default::default(),
-        })
-        .await?;
-    let runner = Runner::builder().app_name(APP).agent(agent).session_service(sessions).build()?;
-
     println!("Brief: {}\n", args.brief);
-    let mut events = runner
-        .run(
-            UserId::new(USER)?,
-            SessionId::new(session.id().to_string())?,
-            Content { role: "user".to_string(), parts },
-        )
-        .await?;
-
-    let mut final_text = String::new();
-    while let Some(event) = events.next().await {
-        let event = event?;
-        if let Some(content) = &event.llm_response.content {
-            for part in &content.parts {
-                match part {
-                    Part::Text { text } if !text.is_empty() => {
-                        println!("[{}] {text}", event.author);
-                        final_text = text.clone();
-                    }
-                    Part::FunctionCall { name, args, .. } => {
-                        println!("[{}] calls {name}({args})", event.author);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    let json_text = final_text
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
-    let cards: Vec<IdeaCard> = serde_json::from_str(json_text)
-        .map_err(|e| anyhow::anyhow!("convergence output is not an IdeaCard array: {e}"))?;
+    let (cards, _) =
+        run_pipeline(model, parts, cost_calls.clone(), |line| println!("{line}")).await?;
     println!("\n--- Idea cards ({}) ---", cards.len());
     for card in &cards {
         println!(
             "• {} — {} (novelty {:.1}, feasibility {:.1}, ${:.2}) next: {}",
-            card.title, card.pitch, card.novelty, card.feasibility, card.unit_cost_usd,
+            card.title,
+            card.pitch,
+            card.novelty,
+            card.feasibility,
+            card.unit_cost_usd,
             card.next_step
         );
         if !card.mechanism.is_empty() {
@@ -339,7 +391,11 @@ async fn main() -> anyhow::Result<()> {
         println!("\n[render] skipped (dry run)");
     }
 
-    println!("\nPASS: Ideate with Meta completed ({} cards, {} cost calls).", cards.len(), cost_calls.load(Ordering::SeqCst));
+    println!(
+        "\nPASS: Ideate with Meta completed ({} cards, {} cost calls).",
+        cards.len(),
+        cost_calls.load(Ordering::SeqCst)
+    );
     Ok(())
 }
 

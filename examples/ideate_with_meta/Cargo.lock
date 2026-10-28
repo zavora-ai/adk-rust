@@ -927,6 +927,7 @@ dependencies = [
  "adk-session",
  "adk-tool",
  "anyhow",
+ "base64 0.22.1",
  "dotenvy",
  "futures",
  "serde",
