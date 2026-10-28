@@ -24,6 +24,7 @@ with `default-features = false` to leave it out.
 | Rules | What each surface may decide (§7.2) and the rules on every surface (§7.4), enforced by the engine | `rules` |
 | `web` | The web home: its HTTP API under `/api/surface`, its OpenAPI document and generated TypeScript types, and the page itself at `/ui/` — Threads, Today and Memory & rules, in light and dark (spec 3.3 §5.1) | `web::router`, `web::home` |
 | `channels` | Chat: the Telegram adapter over the kernel's channel contract — cards with Allow once and Deny, never the call's arguments, pairing, "stop all" (spec 3.3 §5.3) | `channels::TelegramAdapter` |
+| `whatsapp`, `slack`, `discord`, `matrix` | Experimental chat adapters on the same contract (spec 3.5 §10 X12): WhatsApp's signed Cloud API webhook, Slack's Socket Mode, Discord's Gateway, Matrix's `/sync` with reactions as answers | `channels::WhatsAppAdapter`, `SlackAdapter`, `DiscordAdapter`, `MatrixAdapter` |
 | `mobile` | The phone: the web home installed on a phone, woken by Web Push from the person's own kernel with a wake-up that says nothing, and "Confirm it's you" with a passkey on the phone or the computer before a high-risk approval (spec 3.3 §5.4, §8.2). Links OpenSSL through webauthn-rs | `mobile::Phone`, `mobile::router` |
 | Desktop tray | Experimental and not a feature: an unpublished Tauri 2 app in `desktop/` whose windows load the web home and its tray panel at `/ui/tray`, with the decisions badge on a tray icon (spec 3.3 §5.5) | `desktop/README.md` |
 | `voice` | Voice and video: spoken "allow once" and "deny" through the engine with a cancel window, a transcript digest on record and never the recording; the camera and the screen while their switches are on; with `web`, the voice view at `/ui/voice` and its socket; with `tui`, the terminal's voice line (spec 3.3 §5.6) | `voice::VoiceHub`, `voice::router`, `SurfaceEngine::decide_spoken` |
@@ -167,6 +168,10 @@ See [The Web Home](../docs/official_docs/surfaces/web-home.md).
 | `web` | The web home: its page and HTTP API | Beta |
 | `tui` | The terminal: full screen, inline and JSON lines (`adk_surface::tui`), decisions answered by key; the `adk-rust` binary's `tui` feature | Beta |
 | `channels` | Chat: the Telegram adapter (`adk_surface::channels`), over the kernel's channel contract, by long polling | Beta |
+| `whatsapp` | WhatsApp (`channels::WhatsAppAdapter`): the official Cloud API, a webhook the host mounts on a public HTTPS address, its body's HMAC-SHA256 signature checked first; implies `channels` | Experimental |
+| `slack` | Slack (`channels::SlackAdapter`): Socket Mode, no inbound port; implies `channels` | Experimental |
+| `discord` | Discord (`channels::DiscordAdapter`): the Gateway with heartbeat and resume, no inbound port; implies `channels` | Experimental |
+| `matrix` | Matrix (`channels::MatrixAdapter`): `/sync` long polling, reactions as answers, unencrypted direct chats only; implies `channels` | Experimental |
 | `mobile` | The phone: its routes, Web Push from the person's own kernel and "Confirm it's you" (`adk_surface::mobile`); implies `web` and links OpenSSL through webauthn-rs | Beta |
 | `voice` | Voice and video (`adk_surface::voice`): the voice view with `web`, the voice line with `tui`; `voice-live` adds Gemini Live and the OpenAI Realtime API for the live test and the `voice_home` example | Beta |
 | `workflow` | The workflow observer (`adk_surface::workflow`): a graph agent's runs, steps and forks; the Runs tab and its routes with `web` | Beta |
@@ -211,6 +216,14 @@ link's payload (S-I6). `answer_log` and `audit` record each answer for the engin
 other surface says "You said yes in Telegram". See
 [chat](../docs/official_docs/surfaces/chat.md). `adk-rust up` starts it when
 `TELEGRAM_BOT_TOKEN` is set.
+
+`WhatsAppAdapter`, `SlackAdapter`, `DiscordAdapter` and `MatrixAdapter` (features `whatsapp`,
+`slack`, `discord`, `matrix`; Experimental) keep the same rules on their platforms, each with
+its own transport, escaping and answers: reply buttons, Block Kit buttons, button components,
+and Matrix reactions. `adk-rust up` starts Slack, Discord and Matrix when their variables are
+set; WhatsApp's webhook needs a public address, so the host mounts
+`WhatsAppWebhook::router()`. See
+[chat](../docs/official_docs/surfaces/chat.md#whatsapp-slack-discord-and-matrix).
 
 ## License
 

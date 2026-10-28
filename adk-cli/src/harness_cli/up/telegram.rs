@@ -224,7 +224,10 @@ fn adapter(token: &str, api_base: Option<&str>) -> adk_surface::channels::Telegr
 
 /// Paired chat accounts in the `--store` backend, on `harness.db`, or in memory with
 /// `--ephemeral`, as the kernel's paired devices are.
-async fn bindings(setup: &Setup, store: Option<&str>) -> Result<Arc<dyn ChannelBindingStore>> {
+pub(super) async fn bindings(
+    setup: &Setup,
+    store: Option<&str>,
+) -> Result<Arc<dyn ChannelBindingStore>> {
     if let Some(url) = store {
         return shared_bindings(url).await;
     }

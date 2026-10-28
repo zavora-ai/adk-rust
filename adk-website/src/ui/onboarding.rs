@@ -691,6 +691,9 @@ fn channel_options() -> Vec<(String, String)> {
         ("sms", "Text message"),
         ("whatsapp", "WhatsApp"),
         ("telegram", "Telegram"),
+        ("slack", "Slack"),
+        ("discord", "Discord"),
+        ("matrix", "Matrix"),
         ("email", "Email"),
     ]
     .into_iter()
@@ -2175,6 +2178,19 @@ fn finding_words(kind: adk_site::migrate::detect::FindingKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Spec 3.5 §10 X12: the alarms form offers every chat platform an adapter reaches, each a
+    /// channel the charter names.
+    #[test]
+    fn alarms_offer_every_chat_platform() {
+        let options = channel_options();
+        for (id, label) in [("slack", "Slack"), ("discord", "Discord"), ("matrix", "Matrix")] {
+            assert!(options.contains(&(id.to_string(), label.to_string())), "{id}");
+        }
+        for (id, _) in &options {
+            assert!(!matches!(Channel::from(id.as_str()), Channel::Other(_)), "{id}");
+        }
+    }
 
     #[test]
     fn discovered_keys_read_as_words() {

@@ -104,7 +104,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
 
 [features]
-default = ["gemini", "openai", "anthropic", "ollama", "audit", "persist", "harness", "encrypted", "memory-local", "surface", "channels", "tui"]
+default = ["gemini", "openai", "anthropic", "ollama", "audit", "persist", "harness", "encrypted", "memory-local", "surface", "channels", "tui", "slack", "discord", "matrix"]
 gemini = ["adk-model/gemini"]
 openai = ["adk-model/openai"]
 anthropic = ["adk-model/anthropic"]
@@ -190,6 +190,12 @@ tui = ["harness", "surface", "adk-surface/tui", "dep:libc"]
 # Chat (spec 3.3 §5.3): `adk-rust up` starts the Telegram adapter when TELEGRAM_BOT_TOKEN is
 # set, and pairs its accounts beside the kernel's devices. No dependency beyond `surface`.
 channels = ["harness", "surface", "adk-surface/channels", "adk-kernel?/channels"]
+# Slack, Discord and Matrix (spec 3.5 §10 X12): `adk-rust up` starts each when its variables are
+# set (SLACK_APP_TOKEN and SLACK_BOT_TOKEN; DISCORD_BOT_TOKEN; MATRIX_HOMESERVER and
+# MATRIX_ACCESS_TOKEN). None needs an inbound port; WhatsApp's webhook does, so `up` has none.
+slack = ["channels", "adk-surface/slack"]
+discord = ["channels", "adk-surface/discord"]
+matrix = ["channels", "adk-surface/matrix"]
 # The phone (spec 3.3 §5.4): `adk-rust up --home-url https://… --auth-token …` serves the
 # home as an installable app with Web Push from the kernel and "Confirm it's you". Opt-in:
 # its passkey checks link the system's OpenSSL (webauthn-rs).

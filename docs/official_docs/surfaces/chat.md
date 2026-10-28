@@ -4,7 +4,9 @@ A chat thread is the doorbell and the conversation (spec 3.3 §5.3): the person 
 their agents, gets a card when a decision waits, says yes once or no, and stops everything.
 The `channels` feature of `adk-surface` ships the Telegram adapter. It moves messages
 between a Telegram bot and the kernel's [channel gateway](../kernel/pairing.md#chat-channels),
-which applies every rule: pairing, what a card carries, what chat may decide, stopping.
+which applies every rule: pairing, what a card carries, what chat may decide, stopping. The
+`whatsapp`, `slack`, `discord` and `matrix` features add adapters for those platforms
+([WhatsApp, Slack, Discord and Matrix](#whatsapp-slack-discord-and-matrix)).
 
 > **Note:** chat is Beta. `adk-rust up` starts the adapter when `TELEGRAM_BOT_TOKEN` is set
 > ([With `adk-rust up`](#with-adk-rust-up)); a program that hosts its own kernel starts it as
@@ -202,6 +204,182 @@ The bot token never appears in an error, a log line or a `Debug` output.
 > and the kernel's `WebhookIngress` checks Standard Webhooks signatures and starts runs
 > directly, which would skip the gateway's pairing.
 
+## WhatsApp, Slack, Discord and Matrix
+
+Four more adapters sit beside Telegram's (spec 3.5 §10 X12), one feature each, so a
+Telegram-only build stays lean. Each is a `ChannelSink` for the gateway and keeps the rules
+the adapter keeps on Telegram: only a pressed answer decides (S-I4); a card offers its own
+answers and no others, none at high risk or for money; "stop all" and the platform's `/stop`
+reach the gateway; every string from a model, a tool or a person is escaped for the
+platform's markup (S-I9); the characters a chat app shows as nothing are dropped from typed
+text (S-I6); a paired account's messages are handed over first, and nothing sent to a
+stranger waits out a rate limit. The cards read as Telegram's do, in the same words.
+
+| Feature | Adapter | Channel | In | Out | Answers |
+|---|---|---|---|---|---|
+| `whatsapp` | `WhatsAppAdapter` | `whatsapp` | A webhook the host mounts on a public HTTPS address | Graph API `/{phone-number-id}/messages` | Interactive reply buttons: at most three, titles of twenty characters at most |
+| `slack` | `SlackAdapter` | `slack` | Socket Mode: a WebSocket the adapter opens, every envelope acknowledged | Web API `chat.postMessage`, `chat.update`, Block Kit | Buttons (`block_actions`) |
+| `discord` | `DiscordAdapter` | `discord` | The Gateway: a WebSocket the adapter opens, with heartbeat, resume and reconnect | REST create message with button components | Buttons (`INTERACTION_CREATE`), each answered through its interaction callback |
+| `matrix` | `MatrixAdapter` | `matrix` | `/sync` long polling with the `since` token | `m.room.message` with `body` and an HTML `formatted_body` | Reactions: the card lists its answers as reaction keys |
+
+```toml
+[dependencies]
+adk-surface = { version = "3.0.0", features = ["slack", "discord", "matrix", "whatsapp"] }
+```
+
+Each feature implies `channels`. Every adapter is built like Telegram's — `approvals`,
+`answer_log`, `audit`, `card_hints` and `utc_offset` on its builder — and started with
+`start(gateway)`, which returns a `ChannelConnection` (`SlackConnection`, `DiscordConnection`,
+`MatrixSync`) to stop or join. A refused token ends it with the platform's `Unauthorized`
+error. No token appears in an error, a log line or a `Debug` output.
+
+### Slack
+
+1. Create a Slack app with Socket Mode on. Give it an app-level token with
+   `connections:write` (`SLACK_APP_TOKEN`, `xapp-…`), and a bot token with `chat:write` and
+   `im:history` (`SLACK_BOT_TOKEN`, `xoxb-…`).
+2. Under **Event Subscriptions**, subscribe the bot to `message.im`; turn **Interactivity**
+   on; under **App Home**, let people send messages to the app. To offer `/stop`, declare it
+   as a slash command; Socket Mode delivers it without a request URL.
+
+| What | How it reaches Slack |
+|---|---|
+| A card | Block Kit: the heading as a header block, every other line as `plain_text`, which Slack never reads as markup; the answers as buttons whose values carry the decision and version; "Open in home" as a link button. The answer buttons are removed once the card is answered (`chat.update`) |
+| An agent's reply | `text` with `&`, `<` and `>` escaped and `mrkdwn` off, in messages of at most 3000 characters |
+| What is read | Messages in a direct message with the app (`channel_type: im`), button presses and `/stop` from a direct message. Channels, bots, edits and files are ignored |
+| A `disconnect` envelope, a closed or quiet socket | A new socket is opened with `apps.connections.open`; Slack delivers again what was not acknowledged |
+| `429` | `Retry-After` is waited out, up to 30 seconds, twice; never for a stranger |
+
+### Discord
+
+1. Create an application in the Discord Developer Portal, add a bot and copy its token
+   (`DISCORD_BOT_TOKEN`). The adapter asks only for the `DIRECT_MESSAGES` intent, whose
+   content needs no privileged intent.
+2. Install the app for yourself, or share a server with the bot, so it can receive your
+   direct messages. The adapter declares `/stop` as the bot's application command when it
+   connects.
+
+| What | How it reaches Discord |
+|---|---|
+| A card | Content with Discord's markdown escaped, the heading in bold, the answers as buttons whose custom ids carry the decision and version, "Open in home" as a link button, `allowed_mentions: {"parse": []}` and embeds suppressed. An answered card loses its answer buttons |
+| A press | Answered through the interaction callback at once (`DEFERRED_UPDATE_MESSAGE`); the confirmation replies to the card |
+| `/stop` | Answered with a deferred reply, which the stop notice becomes |
+| An agent's reply | Every character that formats, links, quotes, lists or mentions escaped with a backslash, and no mention pings anyone |
+| What is read | `MESSAGE_CREATE` in a direct message and `INTERACTION_CREATE`. Servers, bots, edits and system messages are ignored |
+| Reconnect (op 7), a missed heartbeat acknowledgement, a failed socket | Connects again to `resume_gateway_url` and resumes the session with its last sequence number |
+| Invalid session (op 9) | Resumes when Discord says it can; otherwise identifies anew |
+| Close 4004, or 4010–4014 | Ends the connection: `DiscordError::Unauthorized`, or `DiscordError::Gateway` for disallowed intents |
+| `429` | `retry_after` is waited out, up to 30 seconds, twice; never for a stranger |
+
+### Matrix
+
+1. Create an account for the agents on a homeserver and log it in for an access token
+   (`MATRIX_HOMESERVER`, `MATRIX_ACCESS_TOKEN`).
+2. Start a direct chat with that account **with encryption off**. The adapter joins a room
+   it is invited to as a direct chat (`is_direct`), and no other.
+
+Matrix has no buttons. A card lists its answers as reaction keys — "To answer, react 👍
+Allow once · 👎 Deny" — and the adapter puts its own reaction with each key on the card, so
+the person has only to tap. Only an `m.reaction` annotation on that card, from the account
+paired from that room, with one of the keys the card offers, answers it. A reaction from
+another account, with another key, or on a message the adapter did not send decides nothing,
+and nothing is said in the room. The card names its decision in a field of its own content,
+so a card the adapter no longer remembers is read back from the homeserver after a restart.
+
+| What | How it reaches Matrix |
+|---|---|
+| A card or a notice | `m.room.message` with a plain `body` and a `formatted_body` whose every string is HTML-escaped; a notice about a card replies to it |
+| An agent's reply | A plain `body` and no `formatted_body`, so nothing in it is read as markup |
+| What is read | Text messages and reactions in joined direct chats. Edits, notices, the account's own events and rooms of more than two members are ignored; so is everything sent before the adapter started |
+| An encrypted room | Told once to use an unencrypted direct chat; nothing in it reaches an agent |
+| `429` (`M_LIMIT_EXCEEDED`) | `retry_after_ms` is waited out, up to 30 seconds, twice; never for a stranger |
+
+### WhatsApp
+
+The adapter uses the official WhatsApp Business Cloud API only. WhatsApp reaches it through a
+webhook, so it needs a public HTTPS address.
+
+1. In a Meta app with the WhatsApp product, note the business phone number's id
+   (`WHATSAPP_PHONE_NUMBER_ID`), a system user's access token with
+   `whatsapp_business_messaging` (`WHATSAPP_ACCESS_TOKEN`), and the app secret
+   (`WHATSAPP_APP_SECRET`). Choose a verify token (`WHATSAPP_VERIFY_TOKEN`).
+2. Mount the webhook's router at a path on the public address, such as
+   `/channels/whatsapp`, and give WhatsApp that URL and the verify token. Subscribe it to the
+   `messages` field.
+3. Optionally, have a template approved with no variables, such as "You have a decision
+   waiting. Reply to see it.", and name it with `template(name, language)`.
+
+```rust,ignore
+use std::sync::Arc;
+
+use adk_kernel::Kernel;
+use adk_kernel::channels::{ChannelDoorbell, ChannelGateway, InMemoryChannelBindingStore};
+use adk_surface::channels::{WhatsAppAdapter, WhatsAppWebhook};
+
+async fn whatsapp(
+    kernel: Kernel,
+    doorbell: Arc<ChannelDoorbell>,             // the notifier of the kernel's approval service
+    bindings: Arc<InMemoryChannelBindingStore>, // the store the control plane's pairing uses
+) -> Result<(axum::Router, WhatsAppWebhook), Box<dyn std::error::Error>> {
+    let whatsapp = WhatsAppAdapter::builder(
+        std::env::var("WHATSAPP_PHONE_NUMBER_ID")?,
+        std::env::var("WHATSAPP_ACCESS_TOKEN")?,
+    )
+    .app_secret(std::env::var("WHATSAPP_APP_SECRET")?)
+    .verify_token(std::env::var("WHATSAPP_VERIFY_TOKEN")?)
+    .template("decision_waiting", "en_US")
+    .build()?;
+    let gateway = ChannelGateway::builder(Arc::new(kernel), bindings)
+        .sink(Arc::new(whatsapp.clone()))
+        .home_url("https://home.example/ui/")
+        .doorbell(doorbell)
+        .build();
+    gateway.start().await?;
+    let webhook = whatsapp.start(gateway);
+    // Served on the public address; dropping `webhook` stops the handing over.
+    let router = axum::Router::new().nest("/channels/whatsapp", webhook.router());
+    Ok((router, webhook))
+}
+```
+
+| What | What the adapter does |
+|---|---|
+| `GET` with `hub.mode=subscribe` | Answers `hub.challenge` when `hub.verify_token` matches, compared in constant time; otherwise `403` |
+| `POST` | Refused with `401` before it is read unless `X-Hub-Signature-256` is the HMAC-SHA256 of the raw body with the app secret, compared in constant time; then answered `200` and handed over |
+| A message delivered again | Acknowledged and not taken again: its `wamid` was seen |
+| A card | An interactive message: the chat screen's lines, a reply button for each answer the card offers, "Open in home" as its address |
+| An agent's reply | Text with `*`, `_`, `~` and `` ` `` between zero-width spaces, and a quote or list marker at a line's start after one, so nothing formats; WhatsApp has no escape character |
+| Outside the 24-hour customer-service window | Nothing is sent: the send fails with `WhatsAppError::OutsideWindow`, so the gateway knows, and the approved template, when set, is sent once in its place until the person writes again. After a restart the adapter has not seen anyone write, so WhatsApp decides (error `131047`), with the same result |
+| A throughput limit | Tried again after 1 and 2 seconds; never for a stranger |
+
+> **Note:** `adk-rust up` does not mount the WhatsApp webhook. Its home stays on loopback
+> (spec 3.3 §13 decision 10), and a webhook needs a public address. A host with a tunnel or a
+> reverse proxy mounts `WhatsAppWebhook::router()` itself, on the kernel the gateway runs on.
+
+### With `adk-rust up`
+
+`adk-rust up` starts Slack, Discord and Matrix as it starts Telegram, each only when its
+variables are set; without them nothing of it is built, started or logged. None needs an
+inbound port, so the home keeps its loopback bind.
+
+| Variables | Starts |
+|---|---|
+| `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN` (`SLACK_API_BASE` for another address) | Slack |
+| `DISCORD_BOT_TOKEN` (`DISCORD_API_BASE` for another address) | Discord |
+| `MATRIX_HOMESERVER` and `MATRIX_ACCESS_TOKEN` | Matrix |
+
+```bash
+SLACK_APP_TOKEN=xapp-… SLACK_BOT_TOKEN=xoxb-… DISCORD_BOT_TOKEN=… adk-rust up
+```
+
+The banner says `chat  Slack, Discord` and where cards link to: the phone's home when `up`
+serves one, otherwise the bind address. Accounts write to the bot, get a pairing code, and are
+paired with `adk-rust pair accept <code>` in the store Telegram's accounts are in; they are
+listed by `adk-rust pair list` and in the home under **Where you can say yes from**. One of a
+pair of variables without the other stops `up` with an error, and `--mode auto` needs
+`--sandbox`, as with Telegram. The features are `adk-cli`'s `slack`, `discord` and `matrix`,
+on by default.
+
 ## Testing an adapter
 
 The adapter passes the kernel's `channel_contract_tests!` against a fake Bot API on
@@ -210,8 +388,17 @@ what the person types and presses goes through the adapter's own reading of Tele
 updates. `adk-surface/tests/telegram_tests.rs` runs the scenario end to end on a
 kernel-hosted harness with a scripted model.
 
+The other four pass the same suite against fakes of their platforms in
+`adk-surface/tests/fake_<platform>/` — HTTP for all four, and a WebSocket for Slack's Socket
+Mode and Discord's Gateway — in `<platform>_contract.rs`, and `<platform>_tests.rs` covers
+what each keeps: strangers, answers given twice, typed text, escaping, `/stop`, rate limits,
+reconnects, and each platform's own rules (WhatsApp's signatures, handshake, window and button
+limits; Slack's acknowledgements; Matrix's reactions and encrypted rooms). A live test per
+platform is `#[ignore]`d and reads its variables from the environment.
+
 ```bash
 cargo nextest run -p adk-surface --features channels
+cargo nextest run -p adk-surface --features whatsapp,slack,discord,matrix
 ```
 
 ## Related

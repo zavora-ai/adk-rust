@@ -35,6 +35,15 @@ mod held;
 mod phone;
 #[cfg(feature = "channels")]
 mod telegram;
+// Slack, Discord and Matrix (spec 3.5 §10 X12).
+#[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+mod chats;
+#[cfg(feature = "discord")]
+mod discord;
+#[cfg(feature = "matrix")]
+mod matrix;
+#[cfg(feature = "slack")]
+mod slack;
 mod webhooks;
 
 /// Where `up` listens over HTTP when neither `--bind` nor `[kernel] bind` says.
@@ -196,6 +205,14 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     // The Telegram chat thread, only when `TELEGRAM_BOT_TOKEN` is set (spec 3.3 §5.3).
     #[cfg(feature = "channels")]
     let chat = telegram::Chat::from_env(&setup, store.as_deref()).await?;
+    // Slack, Discord and Matrix, each only when its variables are set (spec 3.5 §10 X12).
+    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+    let chats = chats::Chats::from_env(
+        &setup,
+        store.as_deref(),
+        chat.as_ref().map(telegram::Chat::bindings),
+    )
+    .await?;
     // The person running the kernel is the operator: their own run's calls are theirs to
     // approve, as `serve` routes them.
     let routing =
@@ -215,6 +232,11 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     #[cfg(feature = "channels")]
     let service = match &chat {
         Some(chat) => service.with_notifier(chat.doorbell()),
+        None => service,
+    };
+    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+    let service = match &chats {
+        Some(chats) => service.with_notifier(chats.doorbell()),
         None => service,
     };
     // The phone's doorbell beside the chat's: a wake-up when a decision waits.
@@ -245,6 +267,11 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     // given while the process runs (spec 3.3 §8.1).
     #[cfg(feature = "channels")]
     let surface_records = match &chat {
+        Some(_) if surface_records.is_none() => Some(telegram::answers_in_memory()),
+        _ => surface_records,
+    };
+    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+    let surface_records = match &chats {
         Some(_) if surface_records.is_none() => Some(telegram::answers_in_memory()),
         _ => surface_records,
     };
@@ -474,6 +501,11 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         Some(chat) => pairing.with_channel_bindings(chat.bindings()),
         None => pairing,
     };
+    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+    let pairing = match &chats {
+        Some(chats) if chat.is_none() => pairing.with_channel_bindings(chats.bindings()),
+        _ => pairing,
+    };
     // The routes the home's Today and "Agent Memory and Rules" read and change (spec 3.3 §10
     // K3–K5): settings and cursors beside the kernel's other stores, the mode each area's
     // harness started in, its facts through the harness, the record through the signed log.
@@ -647,6 +679,24 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     if let Some(chat) = chat {
         let host: Arc<dyn adk_kernel::channels::ChannelHost> = Arc::new(kernel.clone());
         chat.start(host, decisions.clone(), surface_records.clone(), bind).await?;
+    }
+    #[cfg(all(
+        any(feature = "slack", feature = "discord", feature = "matrix"),
+        feature = "mobile"
+    ))]
+    let chats = match (chats, &phone) {
+        (Some(chats), Some(phone)) => Some(chats.linking_to(phone.home_link())),
+        (chats, _) => chats,
+    };
+    #[cfg(all(
+        any(feature = "slack", feature = "discord", feature = "matrix"),
+        feature = "verb-ui"
+    ))]
+    let chats = chats.map(|chats| chats.with_card_hints(Arc::new(verbs.hints())));
+    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+    if let Some(chats) = chats {
+        let host: Arc<dyn adk_kernel::channels::ChannelHost> = Arc::new(kernel.clone());
+        chats.start(host, decisions.clone(), surface_records.clone(), bind).await?;
     }
 
     // `/api/runs` submissions land on the interactive queue, where the kernel's worker

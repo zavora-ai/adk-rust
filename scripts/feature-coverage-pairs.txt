@@ -163,6 +163,9 @@
 # Chat (spec 3.3 §5.3): the Telegram adapter, the kernel's channel contract suite against it
 # and the scripted scenario on a kernel-hosted harness, over a fake Bot API.
 2 adk-surface channels doc
+# WhatsApp, Slack, Discord and Matrix (spec 3.5 §10 X12): the contract suite and each adapter's
+# behaviour tests over fakes of the four platforms, with their WebSockets.
+2 adk-surface whatsapp,slack,discord,matrix doc
 # The phone (spec 3.3 §5.4): Web Push, the phone's routes and "Confirm it's you", whose
 # webauthn-rs verifier links OpenSSL.
 2 adk-surface mobile doc

@@ -191,8 +191,8 @@ answers `400` naming it, and one without chat channels lists no chat accounts an
 ## Chat channels
 
 With the `channels` feature, the kernel's channel contract turns a chat thread into a
-doorbell and a conversation; a platform adapter (Telegram first, in `adk-surface`) moves
-the messages. The kernel applies every rule; the adapter renders and escapes what the kernel
+doorbell and a conversation; a platform adapter (Telegram, WhatsApp, Slack, Discord and
+Matrix, in `adk-surface`) moves the messages. The kernel applies every rule; the adapter renders and escapes what the kernel
 sends (S-I9).
 
 ```toml
