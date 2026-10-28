@@ -23,12 +23,19 @@
 //! |---|---|---|
 //! | Telegram | [`TelegramAdapter`] | Bot API long polling (`getUpdates`): no inbound port, so the home stays on loopback (§13 decision 10) |
 
+#[cfg(feature = "discord")]
+mod discord;
 #[cfg(any(feature = "whatsapp", feature = "slack", feature = "discord", feature = "matrix"))]
 mod shared;
 #[cfg(feature = "slack")]
 mod slack;
 mod telegram;
 
+#[cfg(feature = "discord")]
+pub use discord::{
+    DISCORD, DISCORD_CHANNEL, DiscordAdapter, DiscordAdapterBuilder, DiscordConnection,
+    DiscordError,
+};
 #[cfg(any(feature = "whatsapp", feature = "slack", feature = "discord", feature = "matrix"))]
 pub use shared::ChannelConnection;
 #[cfg(feature = "slack")]
