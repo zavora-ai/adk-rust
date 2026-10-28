@@ -25,6 +25,8 @@
 
 #[cfg(feature = "discord")]
 mod discord;
+#[cfg(feature = "matrix")]
+mod matrix;
 #[cfg(any(feature = "whatsapp", feature = "slack", feature = "discord", feature = "matrix"))]
 mod shared;
 #[cfg(feature = "slack")]
@@ -35,6 +37,10 @@ mod telegram;
 pub use discord::{
     DISCORD, DISCORD_CHANNEL, DiscordAdapter, DiscordAdapterBuilder, DiscordConnection,
     DiscordError,
+};
+#[cfg(feature = "matrix")]
+pub use matrix::{
+    MATRIX, MATRIX_CHANNEL, MatrixAdapter, MatrixAdapterBuilder, MatrixError, MatrixSync,
 };
 #[cfg(any(feature = "whatsapp", feature = "slack", feature = "discord", feature = "matrix"))]
 pub use shared::ChannelConnection;
