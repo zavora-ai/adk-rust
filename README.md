@@ -151,7 +151,7 @@ adk-rust = "3.0.0"                                        # Gemini, agents, runn
 | `minimal` (default) | Gemini provider, agents, runner, sessions | Fast starter agents |
 | `standard` | minimal + OpenAI, Anthropic, tools, memory, telemetry, server, auth, graph, eval, guardrail, plugins, artifacts, skills, computer use | Serving an agent over HTTP |
 | `enterprise` | standard + realtime, browser, RAG, payments, AWP | Voice, retrieval and payments |
-| `full` | enterprise + audio, code execution, sandbox, code tools, the harness, and the functional, node-cache, delta, and time-travel graph capabilities | Everything that needs no external infrastructure |
+| `full` | enterprise + audio, code execution, sandbox, code tools, the harness and its kernel, the AWP website, and the functional, node-cache, delta, and time-travel graph capabilities | Everything that needs no external infrastructure |
 
 A tier is a starting point, not a ceiling. Add any single capability on top of one
 without moving to the next tier, so `features = ["minimal", "audio"]` gives you the
@@ -357,6 +357,8 @@ checks an agent definition without building. `cargo adk templates` and
 | `adk-runner` | Agent execution runtime | Event streaming, session persistence, transfer enforcement, plugins, run budgets, spend and action ledgers, durable cancellation, `Runner::close` |
 | `adk-server` | Production API servers | REST and SSE, A2A, loopback-first security defaults, durable background runs and cron, webhook wake-ups, approvals, governance endpoints, and Gemini Enterprise Agent Engine runtime dispatch |
 | `adk-harness` | Governed harness agent (Beta) | `HarnessAgent` over `LlmAgent`: modes, standing approvals, host or OS-sandboxed `bash`, todos, `AGENTS.md`, skills, team members, plan graphs, durable goals |
+| `adk-kernel` | Agent kernel (Beta) | Resident supervisor with a process table, wake sources (cron, file, webhook, queue, approval), an event bus, freeze across replicas, and a control plane; process stores on SQLite, PostgreSQL, and Redis |
+| `adk-surface` | Agent surfaces (Beta) | `SurfaceEngine` turns sessions, decisions, and activity into plain words for every surface; the web home and its HTTP API (`web`), agent-drawn forms and tables (`genui`), and the workflow observer |
 | `adk-cli` | Run and inspect agents from a terminal | `adk-rust` binary: interactive REPL, web server, coding agent (`code`/`goal`/`ultracode`), skills, graph checkpoint inspection, signed audit log verification; embeddable `Launcher` |
 | `adk-realtime` | Real-time voice & multimodal agents | OpenAI Realtime + Gemini Live, bidirectional audio, video frames, VAD, affective dialogue, server-side tools via `IntegratedRealtimeRunner` |
 | `adk-graph` | Graph-based workflows | LangGraph-style orchestration, state reducers, checkpointing (memory, SQLite, delta), durable resume, human-in-the-loop interrupts, subgraphs, `with_goto` routing, per-node retry and timeouts, time travel |

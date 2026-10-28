@@ -157,7 +157,7 @@ changed; [Testing](#testing) says when to run the full workspace suite.
 ### CI cost tiers
 
 CI is organized into cost tiers so per-PR feedback stays fast while full coverage
-is preserved (see the `ci-pipeline-restructure` spec). No coverage is dropped —
+is preserved. No coverage is dropped —
 expensive axes move to a later tier.
 
 - **PR tier** (`ci.yml` + `semver.yml`, on pull requests) — the merge-blocking
@@ -295,10 +295,9 @@ adk-acp/           Agent Client Protocol: ACP agents as tools, and ADK agents se
 ### Excluded from workspace
 
 ```
-adk-studio/      Visual agent builder — extracted to standalone repo.
+adk-studio/      Retired in favour of adk-surface's workflow observer
+                 (docs/official_docs/surfaces/workflow.md).
                  Repo: https://github.com/zavora-ai/adk-studio
-                 Local dev: ../adk-studio/ with path deps back to this workspace.
-                 Build: cargo check --manifest-path ../adk-studio/Cargo.toml
 
 adk-ui/          Retired, for ADK-Rust 2 only (spec 3.3 decision 11): agent-drawn UI is
                  adk-surface's `genui` feature. Do not add code to it or depend on it.
@@ -557,7 +556,6 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
 3. Re-export from `adk-model/src/lib.rs` behind the feature
 4. Implement `schema_adapter()` if the provider has specific schema requirements
 5. Add example in [adk-playground](https://github.com/zavora-ai/adk-playground) or as a standalone crate in `examples/`
-6. Update `adk-studio` codegen if the provider should be available in Studio (separate repo: `../adk-studio/`)
 
 ### New tool
 
@@ -574,6 +572,7 @@ Pattern for a new example crate:
 ```
 examples/my_example/
 ├── Cargo.toml          # [workspace] key, path deps to workspace crates
+├── Cargo.lock          # committed; the examples gate checks with --locked
 ├── src/main.rs         # Entry point with dotenvy, tracing, banner
 ├── README.md           # Documentation
 └── .env.example        # Required env vars
