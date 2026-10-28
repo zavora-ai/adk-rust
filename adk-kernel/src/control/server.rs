@@ -57,6 +57,8 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 /// ```
 pub struct ControlPlane {
     socket: Option<PathBuf>,
+    /// The directory of its own a socket too long for the home sits in (spec 3.3 G18).
+    socket_dir: Option<PathBuf>,
     pipe: Option<String>,
     http: Option<SocketAddr>,
     tasks: Vec<JoinHandle<()>>,
@@ -95,6 +97,7 @@ impl ControlPlane {
         config.validate()?;
         let mut plane = Self {
             socket: None,
+            socket_dir: None,
             pipe: None,
             http: None,
             tasks: Vec::new(),
@@ -107,9 +110,15 @@ impl ControlPlane {
             plane.pipe = Some(name);
         }
         #[cfg(not(windows))]
-        if let Some(path) = config.socket_path(home) {
+        if let (Some(socket), Some(path)) = (&config.socket, config.socket_path(home)) {
+            let configured = home.join(socket);
             // A failure drops `plane`, which stops whatever already listens.
-            plane.tasks.push(serve_socket(&path, api.clone(), plane.stop.clone()).await?);
+            plane
+                .tasks
+                .push(serve_socket(&path, &configured, api.clone(), plane.stop.clone()).await?);
+            if path != configured {
+                plane.socket_dir = path.parent().map(Path::to_path_buf);
+            }
             plane.socket = Some(path);
         }
         if let Some(addr) = config.http {
@@ -174,6 +183,12 @@ impl Drop for ControlPlane {
             && let Err(error) = remove_socket(&path)
         {
             tracing::warn!(error = %error, socket.path = %path.display(), "could not remove the kernel socket");
+        }
+        // Kept when anything besides the socket is in it.
+        if let Some(dir) = self.socket_dir.take()
+            && let Err(error) = std::fs::remove_dir(&dir)
+        {
+            tracing::debug!(error = %error, socket.dir = %dir.display(), "kept the kernel socket directory");
         }
     }
 }
@@ -268,19 +283,41 @@ pub(crate) fn socket_subject(peer: Option<u32>, owner: u32, user: &str) -> Resul
 }
 
 /// Serves `api` on a socket at `path`, created owner-only, admitting peers of its owner's
-/// uid as the OS user.
+/// uid as the OS user. `configured` is the path under the kernel home; a `path` other than it
+/// stands in for one too long for a socket, in a directory of its own (spec 3.3 G18).
 #[cfg(unix)]
-async fn serve_socket(path: &Path, api: Router, stop: CancellationToken) -> Result<JoinHandle<()>> {
+async fn serve_socket(
+    path: &Path,
+    configured: &Path,
+    api: Router,
+    stop: CancellationToken,
+) -> Result<JoinHandle<()>> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
+    if !super::socket::fits(path) {
+        return Err(KernelError::ControlPlane {
+            reason: format!(
+                "the kernel socket path {} is {} bytes and its short stand-in {} is {} bytes, \
+                 both over the {max}-byte limit of a Unix socket path on this system; start the \
+                 kernel with a shorter --home (or socket name), so the socket path in the home \
+                 is at most {max} bytes",
+                configured.display(),
+                configured.as_os_str().len(),
+                path.display(),
+                path.as_os_str().len(),
+                max = super::socket::MAX_LEN,
+            ),
+        });
+    }
+    match path.parent() {
+        Some(dir) if path != configured => super::socket::prepare_dir(dir)?,
+        Some(dir) => tokio::fs::create_dir_all(dir).await?,
+        None => {}
+    }
     prepare_socket_path(path).await?;
     let listener =
         tokio::net::UnixListener::bind(path).map_err(|error| KernelError::ControlPlane {
-            reason: format!(
-                "could not listen on {}: {error}; a socket path is limited to about 100 bytes, \
-                 so choose a shorter kernel home if it is longer",
-                path.display()
-            ),
+            reason: format!("could not listen on {}: {error}", path.display()),
         })?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     // The kernel created the socket, so its owner is the uid the kernel runs as.
@@ -318,9 +355,6 @@ async fn serve_socket(path: &Path, api: Router, stop: CancellationToken) -> Resu
 async fn prepare_socket_path(path: &Path) -> Result<()> {
     use std::os::unix::fs::FileTypeExt;
 
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
     let metadata = match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -360,6 +394,7 @@ async fn prepare_socket_path(path: &Path) -> Result<()> {
 #[cfg(not(any(unix, windows)))]
 async fn serve_socket(
     path: &Path,
+    _configured: &Path,
     _api: Router,
     _stop: CancellationToken,
 ) -> Result<JoinHandle<()>> {

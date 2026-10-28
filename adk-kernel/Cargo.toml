@@ -120,6 +120,11 @@ tracing.workspace = true
 url = { version = "2.5", optional = true }
 uuid.workspace = true
 
+# The socket address limit, the user's temp directory and uid, for a socket too long for its
+# kernel home (spec 3.3 G18).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # The named pipe's owner-only security descriptor and its client check (spec 3.2 §10 W2,
 # W4), and the Windows service's account and logon right (W3).
 [target.'cfg(windows)'.dependencies]
