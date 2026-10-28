@@ -18,6 +18,7 @@ pub(crate) const OUTSIDE_WINDOW: i64 = 131047;
 /// The Cloud API of one business phone number.
 pub(crate) struct GraphApi {
     client: reqwest::Client,
+    base: String,
     endpoint: String,
     token: String,
 }
@@ -44,6 +45,7 @@ impl GraphApi {
         Ok(Self {
             client,
             endpoint: format!("{base}/{phone_number_id}/messages"),
+            base,
             token: token.to_string(),
         })
     }
@@ -104,6 +106,33 @@ impl GraphApi {
             }
             code => WhatsAppError::Refused { code, message },
         })
+    }
+
+    /// Downloads the media `id` a message carried, an image within the limits (spec 3.5 §10
+    /// X12): its address from the Graph API, then its bytes, both with the token.
+    pub(crate) async fn download(
+        &self,
+        id: &str,
+        declared: Option<&str>,
+    ) -> Option<adk_kernel::channels::ChannelAttachment> {
+        use crate::channels::media;
+        if id.is_empty()
+            || !id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        {
+            return None;
+        }
+        let found = self.client.get(format!("{}/{id}", self.base)).bearer_auth(&self.token);
+        let found: Value = found.timeout(REQUEST_TIMEOUT).send().await.ok()?.json().await.ok()?;
+        if found["file_size"].as_u64().is_some_and(|size| size > media::MAX_BYTES as u64) {
+            return None;
+        }
+        let url = found["url"].as_str()?;
+        // The type the Graph API reports for the file wins over the webhook's.
+        let declared = found["mime_type"].as_str().or(declared);
+        let request = self.client.get(url).bearer_auth(&self.token);
+        let (media_type, bytes) = media::download(request, declared).await?;
+        let name = media::name(id, &media_type);
+        Some(adk_kernel::channels::ChannelAttachment::new(media_type, name, bytes))
     }
 
     fn redact(&self, text: &str) -> String {

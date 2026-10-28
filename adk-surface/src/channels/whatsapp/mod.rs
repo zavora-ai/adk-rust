@@ -376,7 +376,15 @@ impl WhatsAppWebhook {
 /// What the webhook's handlers share.
 struct Hook {
     adapter: WhatsAppAdapter,
-    sender: mpsc::UnboundedSender<Update<String>>,
+    sender: mpsc::UnboundedSender<Update<Carried>>,
+}
+
+/// What a message carries beyond its inbound value.
+pub(crate) struct Carried {
+    /// The card a pressed button was on.
+    card: Option<String>,
+    /// The image it carried: its media id and declared type.
+    media: Option<(String, Option<String>)>,
 }
 
 /// Compares `a` and `b` in time that does not depend on where they differ.
@@ -482,7 +490,7 @@ impl WhatsAppAdapter {
     fn take_payload(
         &self,
         payload: &Value,
-        sender: &mpsc::UnboundedSender<Update<String>>,
+        sender: &mpsc::UnboundedSender<Update<Carried>>,
     ) -> bool {
         let now = Utc::now().timestamp();
         for received in wire::parse(payload, &self.inner.phone_number_id) {
@@ -499,7 +507,12 @@ impl WhatsAppAdapter {
                 state.nudged.remove(&received.thread);
             }
             if received.inbound.is_some()
-                && sender.send(Update { inbound: received.inbound, press: received.card }).is_err()
+                && sender
+                    .send(Update {
+                        inbound: received.inbound,
+                        press: Some(Carried { card: received.card, media: received.media }),
+                    })
+                    .is_err()
             {
                 return false;
             }
@@ -589,8 +602,8 @@ async fn receive(State(hook): State<Arc<Hook>>, headers: HeaderMap, body: Bytes)
 
 #[async_trait]
 impl Taker for WhatsAppAdapter {
-    /// The card a pressed button was on.
-    type Press = String;
+    /// The card a pressed button was on, and the image a message carried.
+    type Press = Carried;
 
     fn channel_name(&self) -> &'static str {
         WHATSAPP_CHANNEL
@@ -599,24 +612,33 @@ impl Taker for WhatsAppAdapter {
     async fn take(
         &self,
         gateway: &ChannelGateway,
-        update: &Update<String>,
+        update: &Update<Carried>,
         paired: bool,
     ) -> adk_kernel::Result<()> {
-        let Some(inbound) = update.inbound.clone() else { return Ok(()) };
+        let Some(mut inbound) = update.inbound.clone() else { return Ok(()) };
+        let carried = update.press.as_ref();
+        // The image's bytes, for a host that takes them (spec 3.5 §10 X12).
+        if let Some((id, declared)) = carried.and_then(|carried| carried.media.as_ref())
+            && let Some(attachment) = self.inner.api.download(id, declared.as_deref()).await
+        {
+            inbound = inbound.with_attachments([attachment]);
+        }
         let card = match &inbound.body {
-            InboundBody::Answer { decision, .. } => {
-                Some(PressedCard { card: update.press.clone(), decision: decision.clone() })
-            }
+            InboundBody::Answer { decision, .. } => Some(PressedCard {
+                card: carried.and_then(|carried| carried.card.clone()),
+                decision: decision.clone(),
+            }),
             _ => None,
         };
         let handling = Handling::of(WHATSAPP_CHANNEL, gateway, &inbound, paired, card);
         HANDLING.scope(handling, gateway.receive(inbound)).await.map(drop)
     }
 
-    async fn not_taken(&self, update: &Update<String>) {
+    async fn not_taken(&self, update: &Update<Carried>) {
         let Some(inbound) = &update.inbound else { return };
-        let (text, reply_to) = match &update.press {
-            Some(card) => (ANSWER_NOT_TAKEN, Some(card.as_str())),
+        let card = update.press.as_ref().and_then(|carried| carried.card.as_deref());
+        let (text, reply_to) = match card {
+            Some(card) => (ANSWER_NOT_TAKEN, Some(card)),
             None => (MESSAGE_NOT_TAKEN, Some(inbound.message_id.as_str())),
         };
         let body = wire::text(&inbound.thread, text, reply_to);

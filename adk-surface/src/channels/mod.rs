@@ -31,6 +31,7 @@
 mod discord;
 #[cfg(feature = "matrix")]
 mod matrix;
+mod media;
 #[cfg(any(feature = "whatsapp", feature = "slack", feature = "discord", feature = "matrix"))]
 mod shared;
 #[cfg(feature = "slack")]

@@ -14,7 +14,10 @@ use std::time::Duration;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::{Json, Router, routing::post};
+use axum::{
+    Json, Router,
+    routing::{get, post},
+};
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
@@ -80,7 +83,10 @@ impl FakeTelegram {
             blocked: Mutex::default(),
             send_delay: Mutex::new(Duration::ZERO),
         });
-        let app = Router::new().route("/{bot}/{method}", post(call)).with_state(shared.clone());
+        let app = Router::new()
+            .route("/{bot}/{method}", post(call))
+            .route("/file/{bot}/{*path}", get(file))
+            .with_state(shared.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -201,6 +207,34 @@ impl FakeTelegram {
         }))
     }
 
+    /// An update of `user` sending a photo with `caption` in their private chat `chat`.
+    pub fn photo_update(
+        &self,
+        user: impl Into<Value>,
+        chat: impl Into<Value>,
+        caption: Option<&str>,
+    ) -> Value {
+        let (user, chat) = (user.into(), chat.into());
+        let message_id = self.shared.next_message.fetch_add(1, Ordering::SeqCst);
+        let mut update = json!({
+            "update_id": self.next_update_id(),
+            "message": {
+                "message_id": message_id,
+                "from": { "id": user, "is_bot": false, "first_name": "Ana" },
+                "chat": { "id": chat, "type": "private" },
+                "date": 1_761_300_000,
+                "photo": [
+                    { "file_id": "small-1", "file_unique_id": "s", "width": 90, "height": 60, "file_size": 900 },
+                    { "file_id": "large-1", "file_unique_id": "l", "width": 1280, "height": 960, "file_size": 70 },
+                ],
+            },
+        });
+        if let Some(caption) = caption {
+            update["message"]["caption"] = json!(caption);
+        }
+        update
+    }
+
     /// Delivers `update` through `getUpdates`.
     pub fn deliver(&self, update: Value) {
         self.shared.updates.lock().unwrap_or_else(PoisonError::into_inner).push_back(update);
@@ -265,6 +299,10 @@ async fn call(
         if let Some((_, status, refused)) = refusal {
             return (status, Json(refused)).into_response();
         }
+        if method == "getFile" {
+            let file = json!({ "file_id": body["file_id"], "file_path": format!("photos/{}.png", body["file_id"].as_str().unwrap_or("x")) });
+            return Json(json!({ "ok": true, "result": file })).into_response();
+        }
         let result = match message_id {
             Some(id) => json!({
                 "message_id": id,
@@ -297,4 +335,23 @@ async fn call(
         }
         let _ = tokio::time::timeout_at(deadline, arrived).await;
     }
+}
+
+/// A 1×1 PNG, the photo every file is.
+pub const PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64, 0x60, 0xf8, 0x5f,
+    0x0f, 0x00, 0x02, 0x87, 0x01, 0x80, 0xeb, 0x47, 0xba, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+async fn file(
+    State(shared): State<Arc<Shared>>,
+    Path((bot, _path)): Path<(String, String)>,
+) -> Response {
+    if bot != format!("bot{}", shared.token) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    ([("content-type", "image/png")], PNG.to_vec()).into_response()
 }

@@ -14,7 +14,7 @@ use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
@@ -25,6 +25,14 @@ pub const PHONE_NUMBER_ID: &str = "1001";
 pub const TOKEN: &str = "EAAG-fake-access-token-for-tests";
 pub const APP_SECRET: &str = "fake-app-secret";
 pub const VERIFY_TOKEN: &str = "fake-verify-token";
+/// A 1×1 PNG, the photo every media id serves.
+pub const PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64, 0x60, 0xf8, 0x5f,
+    0x0f, 0x00, 0x02, 0x87, 0x01, 0x80, 0xeb, 0x47, 0xba, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
 
 /// One message the adapter sent.
 #[derive(Debug, Clone)]
@@ -40,6 +48,9 @@ struct Shared {
     refusals: Mutex<VecDeque<(StatusCode, Value)>>,
     refused_to: Mutex<Vec<(String, Value)>>,
     next_id: AtomicU64,
+    url: Mutex<String>,
+    /// Media ids whose lookup reports this type and size instead of a small PNG.
+    media: Mutex<Vec<(String, String, u64)>>,
 }
 
 /// The fake Graph API, served until it is dropped.
@@ -89,9 +100,12 @@ impl FakeWhatsApp {
         let shared = Arc::new(Shared::default());
         let app = Router::new()
             .route("/v23.0/{phone}/messages", post(messages))
+            .route("/v23.0/{media}", get(media))
+            .route("/media/{media}", get(media_bytes))
             .with_state(shared.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        *shared.url.lock().unwrap() = format!("http://{addr}");
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         Self { shared, addr, server, next_message: AtomicU64::new(1) }
     }
@@ -148,6 +162,20 @@ impl FakeWhatsApp {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push((to.to_string(), json!({ "error": error })));
+    }
+
+    /// Reports `media` as of `media_type` and `size` bytes when the adapter looks it up.
+    pub fn media_as(&self, media: &str, media_type: &str, size: u64) {
+        self.shared.media.lock().unwrap().push((media.to_string(), media_type.to_string(), size));
+    }
+
+    /// `from` sending the image `media` with `caption`.
+    pub fn image(&self, from: &str, thread: &str, media: &str, caption: &str) -> Value {
+        let message = json!({
+            "from": from, "id": self.message_id(), "timestamp": chrono::Utc::now().timestamp().to_string(),
+            "type": "image", "image": { "id": media, "mime_type": "image/png", "sha256": "x", "caption": caption },
+        });
+        Self::payload(thread, message)
     }
 
     fn message_id(&self) -> String {
@@ -225,4 +253,31 @@ async fn messages(
         return (status, Json(error)).into_response();
     }
     Json(json!({ "messaging_product": "whatsapp", "contacts": [{ "input": body["to"], "wa_id": body["to"] }], "messages": [{ "id": id }] })).into_response()
+}
+
+async fn media(
+    State(shared): State<Arc<Shared>>,
+    Path(media): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if headers.get("authorization").and_then(|value| value.to_str().ok())
+        != Some(&format!("Bearer {TOKEN}"))
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let reported = shared.media.lock().unwrap().iter().find(|(id, ..)| *id == media).cloned();
+    let (media_type, size) = reported
+        .map_or(("image/png".to_string(), PNG.len() as u64), |(_, kind, size)| (kind, size));
+    let url = format!("{}/media/{media}", shared.url.lock().unwrap());
+    Json(json!({ "url": url, "mime_type": media_type, "file_size": size, "id": media }))
+        .into_response()
+}
+
+async fn media_bytes(Path(_media): Path<String>, headers: HeaderMap) -> Response {
+    if headers.get("authorization").and_then(|value| value.to_str().ok())
+        != Some(&format!("Bearer {TOKEN}"))
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    ([("content-type", "image/png")], PNG.to_vec()).into_response()
 }

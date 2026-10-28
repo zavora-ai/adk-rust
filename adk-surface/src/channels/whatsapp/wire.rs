@@ -38,6 +38,8 @@ pub(crate) struct Received {
     pub(crate) inbound: Option<ChannelInbound>,
     /// The card a pressed button was on.
     pub(crate) card: Option<String>,
+    /// The image the message carried: its media id and declared type (spec 3.5 §10 X12).
+    pub(crate) media: Option<(String, Option<String>)>,
 }
 
 fn text_of(value: &Value) -> &str {
@@ -79,6 +81,11 @@ pub(crate) fn parse(payload: &Value, phone_number_id: &str) -> Vec<Received> {
             let thread = if thread.is_empty() { from } else { thread };
             let name = contact.and_then(|contact| contact["profile"]["name"].as_str());
             let (inbound, card) = read(message, from, thread, id);
+            let media = (message["type"] == "image")
+                .then(|| message["image"]["id"].as_str().map(str::to_string))
+                .flatten()
+                .map(|media| (media, message["image"]["mime_type"].as_str().map(str::to_string)))
+                .filter(|_| inbound.is_some());
             let inbound = match (inbound, name.filter(|name| !name.is_empty())) {
                 (Some(inbound), Some(name)) => Some(inbound.with_display_name(name)),
                 (inbound, _) => inbound,
@@ -89,6 +96,7 @@ pub(crate) fn parse(payload: &Value, phone_number_id: &str) -> Vec<Received> {
                 at: text_of(&message["timestamp"]).parse().ok(),
                 inbound,
                 card,
+                media,
             });
         }
     }
@@ -107,6 +115,11 @@ fn read(
             let inbound = clean_inbound(text_of(&message["text"]["body"]))
                 .map(|text| ChannelInbound::text(WHATSAPP_CHANNEL, from, thread, id, text));
             (inbound, None)
+        }
+        // An image's caption is its words; an image alone has none (spec 3.5 §10 X12).
+        Some("image") if message["image"]["id"].is_string() => {
+            let text = clean_inbound(text_of(&message["image"]["caption"])).unwrap_or_default();
+            (Some(ChannelInbound::text(WHATSAPP_CHANNEL, from, thread, id, text)), None)
         }
         Some("interactive") if message["interactive"]["type"] == "button_reply" => {
             let reply = &message["interactive"]["button_reply"];
@@ -303,8 +316,7 @@ mod tests {
             }
         );
         assert_eq!(received[0].card.as_deref(), Some("wamid.card"));
-        // Typed words never answer; another number's messages are not read; media opens the
-        // window and reaches no agent.
+        // Typed words never answer; another number's messages are not read.
         let typed = json!({ "from": "254700000001", "id": "wamid.3", "type": "text", "text": { "body": "y:4:apr_1" } });
         assert!(matches!(
             parse(&payload(typed.clone()), "1001")[0].inbound.as_ref().unwrap().body,
@@ -313,7 +325,17 @@ mod tests {
         assert!(parse(&payload(typed), "2002").is_empty());
         let image = json!({ "from": "254700000001", "id": "wamid.4", "type": "image", "image": { "id": "m1" } });
         let received = parse(&payload(image), "1001");
-        assert!(received[0].inbound.is_none());
+        // An image alone has no words; its media id rides along for the download.
+        assert_eq!(
+            received[0].inbound.as_ref().unwrap().body,
+            InboundBody::Text { text: String::new() }
+        );
+        assert_eq!(received[0].media, Some(("m1".to_string(), None)));
+        let video = json!({ "from": "254700000001", "id": "wamid.5", "type": "video", "video": { "id": "v1" } });
+        assert!(
+            parse(&payload(video), "1001")[0].inbound.is_none(),
+            "media other than images reaches no agent"
+        );
         assert!(parse(&json!({ "object": "page" }), "1001").is_empty());
     }
 

@@ -310,6 +310,72 @@ async fn a_throughput_limit_is_waited_out_only_for_a_paired_person() {
     assert_eq!(w.api.sent_to(STRANGER).len(), 1, "not waited out");
 }
 
+/// Captures every inbound value the gateway is given, and leaves each to it.
+#[derive(Default)]
+struct Capture(std::sync::Mutex<Vec<adk_kernel::channels::ChannelInbound>>);
+
+#[async_trait::async_trait]
+impl adk_kernel::channels::InboundRoute for Capture {
+    async fn take(
+        &self,
+        inbound: &adk_kernel::channels::ChannelInbound,
+        _binding: Option<&adk_kernel::channels::ChannelBinding>,
+    ) -> adk_kernel::Result<bool> {
+        self.0.lock().unwrap().push(inbound.clone());
+        Ok(false)
+    }
+}
+
+/// Spec 3.5 §10 X12, S18: an image's bytes are downloaded with the token and ride with the
+/// message, its caption the words; a type the site does not take, or a file over the limit,
+/// is not downloaded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_images_bytes_ride_with_its_message() {
+    let api = FakeWhatsApp::start().await;
+    let adapter = adapter(&api);
+    let host = Arc::new(ContractHost::new());
+    let bindings = Arc::new(InMemoryChannelBindingStore::new());
+    pair(&bindings, "whatsapp", ANA, ANA, "ana").await;
+    let capture = Arc::new(Capture::default());
+    let gateway = adk_kernel::channels::ChannelGateway::builder(host.clone(), bindings)
+        .sink(Arc::new(adapter.clone()))
+        .route(capture.clone())
+        .build();
+    gateway.start().await.unwrap();
+    let webhook = adapter.start(gateway);
+    api.media_as("media-svg", "image/svg+xml", 120);
+    api.media_as("media-huge", "image/png", 64 * 1024 * 1024);
+    for (media, caption) in
+        [("media-1", "Seeded rye on the counter"), ("media-svg", "a drawing"), ("media-huge", "")]
+    {
+        let payload = api.image(ANA, ANA, media, caption);
+        let body = serde_json::to_vec(&payload).unwrap();
+        let signed = signature(APP_SECRET, &body);
+        assert_eq!(post_to(&webhook.router(), body, Some(signed)).await, StatusCode::OK);
+    }
+    let taken = eventually("three messages", || async {
+        let taken = capture.0.lock().unwrap().clone();
+        (taken.len() == 3).then_some(taken)
+    })
+    .await;
+    assert_eq!(
+        taken[0].body,
+        adk_kernel::channels::InboundBody::Text { text: "Seeded rye on the counter".into() }
+    );
+    assert_eq!(taken[0].attachments.len(), 1);
+    assert_eq!(taken[0].attachments[0].media_type, "image/png");
+    assert_eq!(taken[0].attachments[0].bytes, fake_whatsapp::PNG);
+    assert!(taken[1].attachments.is_empty(), "an SVG is not taken");
+    assert!(taken[2].attachments.is_empty(), "a file over the limit is not taken");
+    // Each captioned message is a turn; the photo alone is not.
+    eventually("the captioned messages' turns", || async {
+        (host.turns().len() == 2).then_some(())
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(host.turns().len(), 2);
+}
+
 /// A live WhatsApp Business number (`WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_ACCESS_TOKEN`,
 /// `WHATSAPP_TEST_TO`): the token is accepted; the message is sent, or refused only because
 /// the person has not written within 24 hours.

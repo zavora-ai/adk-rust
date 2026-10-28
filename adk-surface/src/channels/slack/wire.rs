@@ -103,14 +103,19 @@ fn pressed(payload: &Value) -> Parsed {
 }
 
 /// `/stop` typed in the direct message with the app: "Stop all" (S-I10).
+/// `/pair` there asks for a pairing code, as typing it does elsewhere (spec 3.5 §10 X12).
 fn command(payload: &Value) -> Option<ChannelInbound> {
-    let stop = payload["command"] == "/stop" && payload["channel_name"] == "directmessage";
+    let direct = payload["channel_name"] == "directmessage";
     let (user, channel) = (text_of(&payload["user_id"]), text_of(&payload["channel_id"]));
-    if !stop || user.is_empty() || channel.is_empty() {
+    if !direct || user.is_empty() || channel.is_empty() {
         return None;
     }
-    let trigger = text_of(&payload["trigger_id"]);
-    Some(ChannelInbound::stop_all(SLACK_CHANNEL, user, channel, format!("cmd-{trigger}")))
+    let id = format!("cmd-{}", text_of(&payload["trigger_id"]));
+    match payload["command"].as_str() {
+        Some("/stop") => Some(ChannelInbound::stop_all(SLACK_CHANNEL, user, channel, id)),
+        Some("/pair") => Some(ChannelInbound::text(SLACK_CHANNEL, user, channel, id, "/pair")),
+        _ => None,
+    }
 }
 
 /// Slack's own escapes in a message's text, read back as the person typed them.
@@ -325,6 +330,9 @@ mod tests {
             "channel_id": "D1", "trigger_id": "t1",
         }});
         assert_eq!(parse(&stop).inbound.unwrap().body, InboundBody::StopAll);
+        let mut pair = stop.clone();
+        pair["payload"]["command"] = json!("/pair");
+        assert_eq!(parse(&pair).inbound.unwrap().body, InboundBody::Text { text: "/pair".into() });
         let mut public = stop.clone();
         public["payload"]["channel_name"] = json!("general");
         assert!(parse(&public).inbound.is_none());

@@ -19,6 +19,8 @@ const MAX_LABEL_CHARS: usize = 80;
 const MAX_REPLY_CHARS: usize = 1000;
 /// The application command that stops everything.
 pub(crate) const STOP_COMMAND: &str = "stop";
+/// The application command that asks for a pairing code (spec 3.5 §10 X12).
+pub(crate) const PAIR_COMMAND: &str = "pair";
 
 /// An interaction Discord waits to have answered within three seconds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,10 +124,16 @@ fn interaction(d: &Value) -> Parsed {
     }
     let message_id = format!("int-{id}");
     let (inbound, press) = if command {
-        if d["data"]["name"] != STOP_COMMAND {
-            return answered;
-        }
-        (ChannelInbound::stop_all(DISCORD_CHANNEL, account, channel, message_id), None)
+        let inbound = match d["data"]["name"].as_str() {
+            Some(STOP_COMMAND) => {
+                ChannelInbound::stop_all(DISCORD_CHANNEL, account, channel, message_id)
+            }
+            Some(PAIR_COMMAND) => {
+                ChannelInbound::text(DISCORD_CHANNEL, account, channel, message_id, "/pair")
+            }
+            _ => return answered,
+        };
+        (inbound, None)
     } else {
         let Some((answer, version, decision)) =
             d["data"]["custom_id"].as_str().and_then(parse_callback)
@@ -271,13 +279,22 @@ pub(crate) fn answered(press: &Press) -> Value {
 
 /// `/stop` as an application command the bot declares, usable in its direct messages.
 pub(crate) fn commands() -> Value {
-    json!([{
-        "name": STOP_COMMAND,
-        "description": crate::words::STOP_ALL,
-        "type": 1,
-        "contexts": [1],
-        "integration_types": [0, 1],
-    }])
+    json!([
+        {
+            "name": STOP_COMMAND,
+            "description": crate::words::STOP_ALL,
+            "type": 1,
+            "contexts": [1],
+            "integration_types": [0, 1],
+        },
+        {
+            "name": PAIR_COMMAND,
+            "description": "Ask to pair this account",
+            "type": 1,
+            "contexts": [1],
+            "integration_types": [0, 1],
+        },
+    ])
 }
 
 #[cfg(test)]
@@ -345,6 +362,8 @@ mod tests {
         let parsed = parse(&stop);
         assert_eq!(parsed.inbound.unwrap().body, InboundBody::StopAll);
         assert!(parsed.interaction.unwrap().command);
+        stop["d"]["data"] = json!({ "name": "pair" });
+        assert_eq!(parse(&stop).inbound.unwrap().body, InboundBody::Text { text: "/pair".into() });
         let mut guild = press("y:2:apr_1");
         guild["d"]["guild_id"] = json!("g1");
         assert!(parse(&guild).inbound.is_none());

@@ -42,6 +42,19 @@ struct Message {
     chat: Chat,
     #[serde(default)]
     text: Option<String>,
+    /// A photo's caption, which is the message's words (spec 3.5 §10 X12).
+    #[serde(default)]
+    caption: Option<String>,
+    /// A photo, in the sizes Telegram keeps, smallest first.
+    #[serde(default)]
+    photo: Vec<PhotoSize>,
+}
+
+#[derive(Deserialize)]
+struct PhotoSize {
+    file_id: String,
+    #[serde(default)]
+    file_size: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -104,6 +117,8 @@ pub(crate) struct Press {
 pub(crate) struct Parsed {
     pub(crate) inbound: Option<ChannelInbound>,
     pub(crate) press: Option<Press>,
+    /// The file id of the message's photo, its largest size within the download limit.
+    pub(crate) photo: Option<String>,
 }
 
 /// Reads one update (S-I6). A new text message in a private chat from a person becomes a
@@ -115,13 +130,22 @@ pub(crate) fn parse(update: &Value) -> Parsed {
         return Parsed::default();
     };
     if let Some(message) = update.message {
-        return Parsed { inbound: typed(message), press: None };
+        let photo = message
+            .photo
+            .iter()
+            .rfind(|size| {
+                size.file_size.is_none_or(|bytes| bytes <= crate::channels::media::MAX_BYTES as u64)
+            })
+            .map(|size| size.file_id.clone());
+        let inbound = typed(message);
+        let photo = photo.filter(|_| inbound.is_some());
+        return Parsed { inbound, press: None, photo };
     }
     if let Some(query) = update.callback_query {
         let card =
             query.message.as_ref().map(|message| (message.chat.id.clone(), message.message_id));
         let inbound = pressed(&query);
-        return Parsed { inbound, press: Some(Press { callback_id: query.id, card }) };
+        return Parsed { inbound, press: Some(Press { callback_id: query.id, card }), photo: None };
     }
     Parsed::default()
 }
@@ -131,7 +155,13 @@ fn typed(message: Message) -> Option<ChannelInbound> {
     if message.chat.kind != "private" || from.id.is_empty() || message.chat.id.is_empty() {
         return None;
     }
-    let text = clean_inbound(message.text.as_deref()?)?;
+    // A photo's caption is its words; a photo alone has none (spec 3.5 §10 X12).
+    let words = message.text.as_deref().or(message.caption.as_deref());
+    let text = match words.and_then(clean_inbound) {
+        Some(text) => text,
+        None if !message.photo.is_empty() => String::new(),
+        None => return None,
+    };
     let inbound = ChannelInbound::text(
         TELEGRAM_CHANNEL,
         from.id.clone(),

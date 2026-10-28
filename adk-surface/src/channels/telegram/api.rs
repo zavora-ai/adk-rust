@@ -20,6 +20,8 @@ pub(crate) struct BotApi {
     client: reqwest::Client,
     /// `{base}/bot{token}/`: never logged or shown.
     endpoint: String,
+    /// `{base}/file/bot{token}/`, where a file is downloaded: never logged or shown.
+    files: String,
     token: String,
 }
 
@@ -64,7 +66,12 @@ impl BotApi {
         let client = reqwest::Client::builder().build().map_err(|error| {
             format!("the Telegram HTTP client could not be built: {}", error.without_url())
         })?;
-        Ok(Self { client, endpoint: format!("{base}/bot{token}/"), token: token.to_string() })
+        Ok(Self {
+            client,
+            endpoint: format!("{base}/bot{token}/"),
+            files: format!("{base}/file/bot{token}/"),
+            token: token.to_string(),
+        })
     }
 
     /// Calls `method` with `body`, waiting out a short rate limit, and returns its `result`.
@@ -142,6 +149,31 @@ impl BotApi {
             },
             _ => TelegramError::Refused { method: method.to_string(), code, description },
         })
+    }
+
+    /// Downloads the file `file_id`, an image within the limits (spec 3.5 §10 X12); `None`
+    /// for anything else, or a file that could not be read.
+    pub(crate) async fn download(
+        &self,
+        file_id: &str,
+    ) -> Option<adk_kernel::channels::ChannelAttachment> {
+        let body = serde_json::json!({ "file_id": file_id });
+        let file = self.call("getFile", &body, Duration::from_secs(30)).await.ok()?;
+        let path = file.get("file_path")?.as_str()?;
+        if path.contains("..") {
+            return None;
+        }
+        let declared = match path.rsplit('.').next()?.to_ascii_lowercase().as_str() {
+            "jpg" | "jpeg" => "image/jpeg",
+            "png" => "image/png",
+            "webp" => "image/webp",
+            "gif" => "image/gif",
+            _ => return None,
+        };
+        let request = self.client.get(format!("{}{path}", self.files));
+        let (media_type, bytes) = crate::channels::media::download(request, Some(declared)).await?;
+        let name = crate::channels::media::name(file_id, &media_type);
+        Some(adk_kernel::channels::ChannelAttachment::new(media_type, name, bytes))
     }
 
     fn redact(&self, text: &str) -> String {

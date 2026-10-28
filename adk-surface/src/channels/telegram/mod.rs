@@ -631,13 +631,19 @@ impl TelegramAdapter {
         parsed: &Parsed,
         paired: bool,
     ) -> adk_kernel::Result<()> {
-        let Some(inbound) = parsed.inbound.clone() else {
+        let Some(mut inbound) = parsed.inbound.clone() else {
             // A press that answers nothing, such as forged data, is only acknowledged.
             if let Some(press) = &parsed.press {
                 self.acknowledge(press).await;
             }
             return Ok(());
         };
+        // A photo's bytes, for a host that takes them (spec 3.5 §10 X12).
+        if let Some(photo) = &parsed.photo
+            && let Some(attachment) = self.inner.api.download(photo).await
+        {
+            inbound = inbound.with_attachments([attachment]);
+        }
         let press = parsed.press.as_ref();
         let card = match (&inbound.body, press) {
             (InboundBody::Answer { decision, .. }, Some(press)) => Some(PressedCard {
