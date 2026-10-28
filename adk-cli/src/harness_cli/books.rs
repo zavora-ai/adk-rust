@@ -464,7 +464,7 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
     if let Some(target) = target {
         line = line.with_target(target);
     }
-    // The item an answer's call acted on, as the person knows it (spec 3.3 §8).
+    // The item a screen action, or an answer to one, acted on, as the person knows it (§8).
     if let Some(title) = text(record.ext.get("title")) {
         line = line.with_title(title);
     }
@@ -1099,6 +1099,7 @@ mod tests {
                 .with_surface("voice")
                 .with_how("voice", None)
                 .with_target("News digest")
+                .with_title("News digest")
         );
         assert_eq!(
             agent,
@@ -1108,6 +1109,7 @@ mod tests {
                 .with_tool("snooze")
                 .with_outcome("done")
                 .with_target("News digest")
+                .with_title("News digest")
                 .with_decision("approved")
                 .with_surface("phone")
                 .with_how("touch", None)
