@@ -431,9 +431,9 @@ async fn caldav_json_configures_the_served_calendar() {
 ///
 /// ```sh
 /// pipx install radicale
-/// radicale --server-hosts 127.0.0.1:5232 --auth-type none --rights-type none \
+/// radicale --server-hosts 127.0.0.1:5232 --auth-type none --rights-type owner_only \
 ///   --storage-filesystem-folder /tmp/radicale &
-/// ADK_WEBSITE_CALDAV_HOME=http://127.0.0.1:5232/juniper/ \
+/// ADK_WEBSITE_CALDAV_HOME=http://127.0.0.1:5232/juniper/ ADK_WEBSITE_CALDAV_USER=juniper \
 ///   cargo nextest run -p adk-website --test caldav --run-ignored only live_caldav
 /// ```
 ///

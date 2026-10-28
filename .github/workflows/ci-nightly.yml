@@ -521,6 +521,7 @@ jobs:
       ADK_SITE_RSYNC_PORT: "2222"
       ADK_SITE_RSYNC_ROOT: /config/site
       ADK_WEBSITE_CALDAV_HOME: http://127.0.0.1:5232/juniper/
+      ADK_WEBSITE_CALDAV_USER: juniper
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -580,23 +581,24 @@ jobs:
           echo "ADK_SITE_RSYNC_KNOWN_HOSTS<<EOF"; ssh-keyscan -p 2222 127.0.0.1 2>/dev/null; echo "EOF"
         } >> "$GITHUB_ENV"
 
+    - name: Run the host suites against MinIO, Azurite and the SSH server
+      run: >-
+        cargo nextest run -p adk-site --features host-s3,host-azure,host-rsync
+        --run-ignored only --no-fail-fast
+        -E 'test(s3_compatible_store) | test(azure_storage) | test(rsync_over_ssh)'
+
     - name: Start Radicale
       if: ${{ !cancelled() }}
       timeout-minutes: 5
       run: |
         pipx install 'radicale==3.8.3'
         mkdir -p "$RUNNER_TEMP/radicale"
-        nohup radicale --server-hosts 127.0.0.1:5232 --auth-type none --rights-type none \
+        # Any name signs in (`--auth-type none`); each user owns its own collections.
+        nohup radicale --server-hosts 127.0.0.1:5232 --auth-type none --rights-type owner_only \
           --storage-filesystem-folder "$RUNNER_TEMP/radicale" > "$RUNNER_TEMP/radicale.log" 2>&1 &
         for _ in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:5232/ && exit 0; sleep 1; done
         cat "$RUNNER_TEMP/radicale.log"
         exit 1
-
-    - name: Run the host suites against MinIO, Azurite and the SSH server
-      run: >-
-        cargo nextest run -p adk-site --features host-s3,host-azure,host-rsync
-        --run-ignored only --no-fail-fast
-        -E 'test(s3_compatible_store) | test(azure_storage) | test(rsync_over_ssh)'
 
     - name: Run the CalDAV calendar driver against Radicale
       if: ${{ !cancelled() }}
