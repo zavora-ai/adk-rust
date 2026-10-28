@@ -918,6 +918,210 @@ pub fn agent_change(kind: &str, name: &str, place: &str) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Agent-drawn UI (spec 3.3 §6.1 `genui`, §7.4 rule 5)
+// ---------------------------------------------------------------------------
+
+/// A drawn form edited and not yet sent.
+pub const NOT_SENT_YET: &str = "Not sent yet";
+/// A drawn form's button while its send is on the way.
+pub const SENDING: &str = "Sending…";
+/// A drawn form sent and denied.
+pub const SENT_YOU_SAID_NO: &str = "Sent · you said no";
+/// A drawn form sent, allowed, and its call failed.
+pub const SENT_FAILED: &str = "Sent · failed";
+/// A drawn form sent at a version the agent had changed since (`surface.drawn_changed`).
+pub const FORM_CHANGED_SEND_AGAIN: &str =
+    "Couldn't send: this form changed — check it and send again";
+/// Under a drawn form's buttons in the terminal and in the scrollback.
+pub const SENDING_ASKS_YOU_FIRST: &str = "Sending asks you first";
+/// What the home lets every agent on it do with `genui`, under "On this home it can also:"
+/// (spec 3.3 §5.7, wave 4 decision 14).
+pub const SHOW_FORMS_AND_TABLES: &str =
+    "Show forms and tables in your threads — sending asks you first";
+/// A drawn form sent by voice, from chat or by an agent: only a person at a screen sends one.
+pub const SEND_FORMS_FROM_A_SCREEN: &str =
+    "A form an agent drew is sent from a screen, by the person who filled it in";
+/// A drawn form sent while its thread's agent is working or input waits for it.
+pub const SEND_FORM_WHEN_FREE: &str =
+    "Couldn't send: your agent is still working in this thread — send it when it's done";
+/// A drawn form sent again before its first send reached the agent.
+pub const FORM_BEING_SENT: &str = "Couldn't send: this form is being sent already";
+
+/// Over a drawing: "Drawn by Finance · 10:02".
+pub fn drawn_by(agent: &str, hh_mm: &str) -> String {
+    format!("Drawn by {agent} · {hh_mm}")
+}
+
+/// Under a drawn form's button: "Sending runs send_invoice and asks you first".
+pub fn sending_runs(tool: &str) -> String {
+    format!("Sending runs {tool} and asks you first")
+}
+
+/// A drawing refused because it looks like a decision.
+pub fn looked_like_a_decision(agent: &str) -> String {
+    format!("{agent} tried to show something that looks like a decision. It wasn't shown.")
+}
+
+/// A drawing refused because the home's catalog cannot show it.
+pub fn cant_show_here(agent: &str) -> String {
+    format!("{agent} tried to show something this home can't show.")
+}
+
+/// A drawing refused because it asks for a password or another secret.
+pub fn asked_for_a_password(agent: &str) -> String {
+    format!("{agent} asked for a password in a form. Use Take over for passwords.")
+}
+
+/// A drawn form sent, before its call is held: "Sent at 10:03".
+pub fn sent_at(hh_mm: &str) -> String {
+    format!("Sent at {hh_mm}")
+}
+
+/// A drawn form sent and waiting: "Sent at 10:03 · waiting for you".
+pub fn sent_waiting(hh_mm: &str) -> String {
+    format!("Sent at {hh_mm} · waiting for you")
+}
+
+/// A drawn form sent, allowed and run: "Sent · done at 10:04".
+pub fn sent_done(hh_mm: &str) -> String {
+    format!("Sent · done at {hh_mm}")
+}
+
+/// A drawn form whose call the drawing agent's rules refuse: "Finance can't use send_invoice
+/// here".
+pub fn cant_use_here(agent: &str, tool: &str) -> String {
+    format!("{agent} can't use {tool} here")
+}
+
+/// A drawn form's call allowed, then refused when it resumed because a rule changed.
+pub fn cant_use_any_more(agent: &str, tool: &str) -> String {
+    format!("Not run: {agent} can't use {tool} any more")
+}
+
+/// Over the newer version of a drawn form: "Finance changed this form at 10:05".
+pub fn changed_this_form(agent: &str, hh_mm: &str) -> String {
+    format!("{agent} changed this form at {hh_mm}")
+}
+
+/// Over the newer version of a drawn card or table: "Finance changed this at 10:05".
+pub fn changed_this(agent: &str, hh_mm: &str) -> String {
+    format!("{agent} changed this at {hh_mm}")
+}
+
+/// Where a drawing an agent removed was: "Finance removed this at 10:06".
+pub fn removed_this(agent: &str, hh_mm: &str) -> String {
+    format!("{agent} removed this at {hh_mm}")
+}
+
+/// A collapsed older version of a drawing: "Earlier version · 10:02".
+pub fn earlier_version(hh_mm: &str) -> String {
+    format!("Earlier version · {hh_mm}")
+}
+
+/// Under a long drawn table cut short: "Show all 42".
+pub fn show_all(count: usize) -> String {
+    format!("Show all {count}")
+}
+
+/// The first step of a decision a drawn form asked for (spec 3.3 §7.1, wave 4 decision 12):
+/// "You pressed Send on a form Finance drew · 10:03".
+pub fn pressed_send_on_form(agent: &str, hh_mm: &str) -> String {
+    format!("You pressed Send on a form {agent} drew · {hh_mm}")
+}
+
+/// The detail line of a decision a drawn form asked for: "From a form Finance drew".
+pub fn from_a_form(agent: &str) -> String {
+    format!("From a form {agent} drew")
+}
+
+// ---------------------------------------------------------------------------
+// Apps from MCP servers (spec 3.3 §6.1 `genui-apps`)
+// ---------------------------------------------------------------------------
+
+/// An app being fetched and checked before it is framed.
+pub const OPENING_THE_APP: &str = "Opening the app…";
+/// Where an app is not shown: the phone, a remote terminal, or a home without an apps origin.
+pub const OPEN_THE_HOME_TO_SEE_THIS_APP: &str = "Open the home on this computer to see this app";
+/// An app whose HTML shows a decision's words.
+pub const APP_BLOCKED_APPROVAL_BUTTONS: &str = "This app was blocked: it shows approval buttons";
+/// An app that loads or connects to a site it did not declare.
+pub const APP_BLOCKED_UNDECLARED_SITES: &str =
+    "This app was blocked: it asks for sites it didn't declare";
+/// An app that asks to reach this computer, its network or the home.
+pub const APP_BLOCKED_THIS_COMPUTER: &str = "This app was blocked: it asks to reach this computer";
+/// An app whose resource is not an MCP App's HTML.
+pub const APP_BLOCKED_NOT_AN_APP: &str = "This app was blocked: it isn't an app this home can show";
+/// An app whose server did not answer.
+pub const APP_CANT_BE_OPENED: &str = "This app can't be opened right now";
+/// An app asked for a tool only an app may call (wave 4 decision 15).
+pub const APP_NEEDS_A_TOOL: &str = "This app needs a tool this home can't run yet";
+/// Sends what an app suggested, as the person's message.
+pub const SEND_IT: &str = "Send it";
+/// Under what an app suggests sending.
+pub const MARKED_AS_SUGGESTED_BY_THE_APP: &str = "It will be marked as suggested by the app";
+/// Opens a link an app asked to open.
+pub const OPEN: &str = "Open";
+/// What an app's tool call answers the app once it is held: it ran nothing.
+pub const APP_CALL_WAITS_FOR_YOU: &str = "Sent to the person. It runs only once they decide.";
+/// What an app's tool call answers the app when the agent has not yet held or refused it.
+pub const APP_CALL_SENT: &str = "Sent. It runs only if the person allows it.";
+/// What an app's tool call answers the app when its server did not list its tools.
+pub const APP_SERVER_DIDNT_ANSWER: &str = "The app's server didn't answer. Try again in a moment.";
+
+/// Over an app in a thread: "App from Weather · it can't approve anything".
+pub fn app_from(app: &str) -> String {
+    format!("App from {app} · it can't approve anything")
+}
+
+/// An app in the terminal: "app from Weather · open it in the home".
+pub fn app_in_the_terminal(app: &str) -> String {
+    format!("app from {app} · open it in the home")
+}
+
+/// An app asked for a tool it may not use: "The app tried to use transfer_funds. Apps can't
+/// use it."
+pub fn app_cant_use(tool: &str) -> String {
+    format!("The app tried to use {tool}. Apps can't use it.")
+}
+
+/// An app suggests a message: "The app wants to send: “Remind me to take an umbrella”".
+pub fn app_wants_to_send(message: &str) -> String {
+    format!("The app wants to send: “{message}”")
+}
+
+/// An app asks to open a link: "Open example.com?"
+pub fn open_site(host: &str) -> String {
+    format!("Open {host}?")
+}
+
+/// An app that already has `count` calls waiting asks for another: "The app already asked for 3
+/// things. Answer those first."
+pub fn app_asked_enough(count: usize) -> String {
+    format!("The app already asked for {count} things. Answer those first.")
+}
+
+/// The thread's line for a call an app asked for: "The app asked · 10:06".
+pub fn app_asked_at(hh_mm: &str) -> String {
+    format!("The app asked · {hh_mm}")
+}
+
+/// The first step of a decision an app asked for: "The app from Weather asked · 10:06".
+pub fn app_asked(app: &str, hh_mm: &str) -> String {
+    format!("The app from {app} asked · {hh_mm}")
+}
+
+/// The detail line of a decision an app asked for: "From the Weather app in this thread".
+pub fn from_the_app(app: &str) -> String {
+    format!("From the {app} app in this thread")
+}
+
+/// The label of a message an app suggested and the person sent: "Suggested by the Weather
+/// app".
+pub fn suggested_by_the_app(app: &str) -> String {
+    format!("Suggested by the {app} app")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1013,6 +1217,8 @@ mod tests {
         CHANGED_WHILE_YOU_SPOKE,
         VOICE_CANT_APPROVE_THIS,
         STOPPING_NEEDS_THE_OPERATOR,
+        APP_CALL_SENT,
+        APP_SERVER_DIDNT_ANSWER,
     ];
 
     #[test]

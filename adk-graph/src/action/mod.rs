@@ -243,6 +243,11 @@ impl ActionNodeExecutor {
     }
 
     /// Applies the skip condition, the timeout and the error handling around `run`.
+    ///
+    /// A governed node's call runs once (spec 3.3 §12): its error handling neither retries
+    /// it nor swallows or replaces its failure, so the action ledger records what happened,
+    /// and its timeout is a [`GraphError::NodeTimedOut`], an outcome the bracket keeps
+    /// unknown because the call may have taken effect.
     async fn run_guarded<F, Fut>(&self, ctx: &NodeContext, run: F) -> Result<NodeOutput>
     where
         F: Fn() -> Fut,
@@ -257,6 +262,16 @@ impl ActionNodeExecutor {
         // 2. Apply timeout
         let timeout_ms = self.config.standard().execution.timeout;
         let timeout_duration = std::time::Duration::from_millis(timeout_ms);
+
+        if ctx.governed_call() {
+            return match tokio::time::timeout(timeout_duration, run()).await {
+                Ok(result) => result,
+                Err(_) => Err(GraphError::NodeTimedOut {
+                    node: self.config.standard().id.clone(),
+                    elapsed: timeout_duration,
+                }),
+            };
+        }
 
         match tokio::time::timeout(timeout_duration, self.execute_with_error_handling(run)).await {
             Ok(result) => result,
@@ -379,6 +394,21 @@ impl Node for ActionNodeExecutor {
         }
     }
 
+    /// `false` when the node's condition is false, so a governed node asks for no decision;
+    /// an error when an HTTP node's request cannot be built (spec 3.3 §12).
+    fn will_act(&self, ctx: &NodeContext) -> Result<bool> {
+        if self.should_skip(ctx) {
+            return Ok(false);
+        }
+        match (&self.config, ctx) {
+            #[cfg(feature = "action-http")]
+            (ActionNodeConfig::Http(config), ctx) => {
+                http::buildable(config, &ctx.state, &self.http_policy).map(|()| true)
+            }
+            _ => Ok(true),
+        }
+    }
+
     /// The HTTP node's call with its credentials as digests (spec 3.3 §12); `None` for
     /// other action nodes, whose call is bound to the state they read.
     fn call_args(&self, ctx: &NodeContext) -> Option<Value> {
@@ -402,7 +432,13 @@ impl Node for ActionNodeExecutor {
             #[cfg(feature = "action-http")]
             (ActionNodeConfig::Http(config), ctx, args) => {
                 self.run_guarded(ctx, || {
-                    http::run_call(config, &ctx.state, &self.http_policy, &args)
+                    http::run_call(
+                        config,
+                        &ctx.state,
+                        &self.http_policy,
+                        &args,
+                        ctx.governed_call(),
+                    )
                 })
                 .await
             }

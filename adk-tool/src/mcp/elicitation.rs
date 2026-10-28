@@ -213,8 +213,8 @@ impl ElicitationScope {
     }
 }
 
-/// The scopes a connection's elicitations resolve against, mirroring
-/// [`SamplingScopes`](crate::sampling::SamplingScopes) (spec 3.1 §10 T1).
+/// The scopes a connection's elicitations resolve against, mirroring `SamplingScopes`
+/// (`mcp-sampling`; spec 3.1 §10 T1).
 ///
 /// A toolset [`enter`](Self::enter)s the scope of each tool call it makes; a request that
 /// arrives while none is in flight resolves to the [fallback](Self::set_fallback).
@@ -337,6 +337,9 @@ pub struct AdkClientHandler {
     handler: Arc<dyn ElicitationHandler>,
     resource_notification_handler: Option<Arc<dyn ResourceNotificationHandler>>,
     tasks: bool,
+    /// Declares the MCP Apps extension (spec 3.3 §6.1 `genui-apps`).
+    #[cfg(feature = "mcp-apps")]
+    apps: bool,
     /// `notifications/tools/list_changed` received on this connection; a
     /// toolset compares it against its cached `tools/list` result.
     tool_list_changes: Arc<AtomicU64>,
@@ -356,6 +359,8 @@ impl AdkClientHandler {
             handler,
             resource_notification_handler: None,
             tasks: false,
+            #[cfg(feature = "mcp-apps")]
+            apps: false,
             tool_list_changes: Arc::new(AtomicU64::new(0)),
             elicitation_scopes: Arc::default(),
             #[cfg(feature = "mcp-sampling")]
@@ -404,6 +409,30 @@ impl AdkClientHandler {
     /// configures a path no server will ever take.
     pub fn with_tasks(mut self) -> Self {
         self.tasks = true;
+        self
+    }
+
+    /// Declares the MCP Apps extension, [`MCP_APPS_EXTENSION_ID`](super::MCP_APPS_EXTENSION_ID)
+    /// with the MIME type [`MCP_APP_MIME_TYPE`](super::MCP_APP_MIME_TYPE), during the handshake
+    /// (spec 3.3 §6.1 `genui-apps`), so a server may give its tools apps a host shows.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_tool::mcp::{AdkClientHandler, AutoDeclineElicitationHandler, MCP_APPS_EXTENSION_ID};
+    /// use rmcp::handler::client::ClientHandler;
+    /// use std::sync::Arc;
+    ///
+    /// let handler = AdkClientHandler::new(Arc::new(AutoDeclineElicitationHandler)).with_apps();
+    /// let extensions = handler.get_info().capabilities.extensions.unwrap();
+    /// assert_eq!(
+    ///     extensions[MCP_APPS_EXTENSION_ID]["mimeTypes"],
+    ///     serde_json::json!(["text/html;profile=mcp-app"])
+    /// );
+    /// ```
+    #[cfg(feature = "mcp-apps")]
+    pub fn with_apps(mut self) -> Self {
+        self.apps = true;
         self
     }
 
@@ -591,6 +620,15 @@ impl rmcp::handler::client::ClientHandler for AdkClientHandler {
                 .extensions
                 .get_or_insert_with(rmcp::model::ExtensionCapabilities::new)
                 .insert(rmcp::model::TASKS_EXTENSION_ID.to_string(), Default::default());
+        }
+        #[cfg(feature = "mcp-apps")]
+        if self.apps {
+            let mut apps = rmcp::model::JsonObject::new();
+            apps.insert("mimeTypes".to_string(), serde_json::json!([super::MCP_APP_MIME_TYPE]));
+            info.capabilities
+                .extensions
+                .get_or_insert_with(rmcp::model::ExtensionCapabilities::new)
+                .insert(super::MCP_APPS_EXTENSION_ID.to_string(), apps);
         }
 
         info

@@ -261,6 +261,11 @@ impl Launcher {
             .unwrap_or_else(|| Arc::new(AutoDeclineElicitationHandler));
 
         let mut adk_handler = AdkClientHandler::new(handler);
+        // Servers may give their tools apps, which a host shows sandboxed (spec 3.3 §6.1).
+        #[cfg(feature = "mcp-apps")]
+        {
+            adk_handler = adk_handler.with_apps();
+        }
         if config.task_config.enable_tasks {
             adk_handler = adk_handler.with_tasks();
         }
@@ -893,6 +898,85 @@ impl McpServerManager {
         uri: &str,
     ) -> adk_core::Result<Vec<ResourceContents>> {
         self.running_toolset(id).await?.read_resource(uri).await
+    }
+
+    /// The apps one running managed server's tools show, including the tools only an app may
+    /// call (spec 3.3 §6.1 `genui-apps`; see [`McpToolset::ui_bindings`](crate::mcp::McpToolset::ui_bindings)).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` when the server is unknown or not running, or cannot list its
+    /// tools.
+    #[cfg(feature = "mcp-apps")]
+    pub async fn server_ui_bindings(
+        &self,
+        id: &str,
+    ) -> adk_core::Result<Vec<crate::mcp::McpUiBinding>> {
+        self.running_toolset(id).await?.ui_bindings().await
+    }
+
+    /// Who may call each tool one running managed server publishes (spec 3.3 §6.1
+    /// `genui-apps`; see [`McpToolset::tool_visibility`](crate::mcp::McpToolset::tool_visibility)).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` when the server is unknown or not running, or cannot list its
+    /// tools.
+    #[cfg(feature = "mcp-apps")]
+    pub async fn server_tool_visibility(
+        &self,
+        id: &str,
+    ) -> adk_core::Result<Vec<(String, crate::mcp::McpUiVisibility)>> {
+        self.running_toolset(id).await?.tool_visibility().await
+    }
+
+    /// The name this manager's [`tools`](adk_core::Toolset::tools) give server `id`'s tool
+    /// `tool`: `tool` itself, `{id}__{tool}` when another running server publishes the same
+    /// name, or `None` when the tool is not among them — left out, renamed past the length
+    /// limit, or its name taken by another server's tool (spec 3.3 §6.1 `genui-apps`). A host
+    /// asks for an app's tool call by this name, so it never reaches another server's tool.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // `weather` and `forecast` both publish `weather_show`; only `weather` publishes `set_rain_alert`.
+    /// assert_eq!(manager.agent_tool_name("weather", "weather_show").await?.as_deref(), Some("weather__weather_show"));
+    /// assert_eq!(manager.agent_tool_name("weather", "set_rain_alert").await?.as_deref(), Some("set_rain_alert"));
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` when the server is unknown or not running.
+    #[cfg(feature = "mcp-apps")]
+    pub async fn agent_tool_name(&self, id: &str, tool: &str) -> adk_core::Result<Option<String>> {
+        self.running_toolset(id).await?;
+        let listing: Arc<dyn adk_core::ReadonlyContext> =
+            Arc::new(crate::SimpleToolContext::new(self.name.clone()));
+        let origin = format!("mcp:{id}");
+        let prefixed = format!("{id}__{tool}");
+        let tools = adk_core::Toolset::tools(self, listing).await?;
+        Ok(tools
+            .iter()
+            .find(|known| {
+                known.origin() == origin && (known.name() == tool || known.name() == prefixed)
+            })
+            .map(|known| known.name().to_string()))
+    }
+
+    /// Reads the app at `uri` from one running managed server (spec 3.3 §6.1 `genui-apps`; see
+    /// [`McpToolset::read_app`](crate::mcp::McpToolset::read_app)).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` when the server is unknown or not running, or the resource is
+    /// not an MCP App.
+    #[cfg(feature = "mcp-apps")]
+    pub async fn read_server_app(
+        &self,
+        id: &str,
+        uri: &str,
+    ) -> adk_core::Result<crate::mcp::McpAppResource> {
+        self.running_toolset(id).await?.read_app(uri).await
     }
 
     /// Subscribe to updates for one resource on a running managed server.

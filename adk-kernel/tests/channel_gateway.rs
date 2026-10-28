@@ -817,3 +817,45 @@ async fn a_stranger_who_cannot_be_answered_keeps_one_request() {
         .await
         .expect("the code it was sent pairs it");
 }
+
+/// A paired account answers only its own person's decisions (spec 3.3 S-I8): an answer naming
+/// another person's decision, from a card forged out of one of its own, reads as no decision
+/// at all, and that decision still waits.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chat_never_answers_another_persons_decision() {
+    let host = Host::new(None);
+    let bindings: Arc<dyn ChannelBindingStore> = Arc::new(InMemoryChannelBindingStore::new());
+    let (gateway, chat) = paired(host.clone(), bindings, |builder| builder).await;
+    let own = host.ask("send_email", ApprovalRisk::Low, operators()).await;
+    gateway.ring(&own).await.unwrap();
+    let card = chat.last_card("t-ana").expect("the person's own card");
+
+    let call = ToolConfirmationRequest::new("send_email", json!({ "to": "bo@example.com" }));
+    let theirs = host
+        .approvals
+        .submit(
+            ApprovalRequest::new(
+                "decision-bo",
+                ApprovalScope::new("adk-rust", "bo", "session-bo"),
+                &call,
+                operators(),
+            )
+            .with_risk(ApprovalRisk::Low),
+        )
+        .await
+        .unwrap();
+    let mut forged = card.clone();
+    forged.decision = theirs.id.clone();
+    forged.version = theirs.version;
+    for answer in [ChannelAnswer::AllowOnce, ChannelAnswer::Deny] {
+        let inbound = ChannelInbound::answer(CHANNEL, "ana-chat", "t-ana", "m-bo", &forged, answer);
+        assert_eq!(
+            gateway.receive(inbound).await.unwrap(),
+            InboundOutcome::DecisionRefused { decision: theirs.id.clone() },
+            "{answer:?}"
+        );
+    }
+    let still = host.approvals.get(&theirs.id).await.unwrap().unwrap();
+    assert_eq!((still.state, still.version), (ApprovalState::Pending, theirs.version));
+    assert_eq!(cards_for(&chat, "t-ana", &theirs.id), 0, "no card of bo's reached ana");
+}

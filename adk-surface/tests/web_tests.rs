@@ -87,6 +87,25 @@ async fn call(
     (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
 }
 
+/// As [`call`], from the web home's own page: a browser's same-origin request.
+async fn call_from_home(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let mut request =
+        Request::builder().method(method).uri(uri).header("sec-fetch-site", "same-origin");
+    if body.is_some() {
+        request = request.header("content-type", "application/json");
+    }
+    let body = body.map_or_else(Body::empty, |body| Body::from(body.to_string()));
+    let response = app.clone().oneshot(request.body(body).unwrap()).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
 /// A held call of `s1` whose inbox entry shows `shown` to approvers.
 async fn hold(service: &Arc<dyn ApprovalService>, id: &str, args: Value, shown: Value) {
     let call = ToolConfirmationRequest::new("pay", args);
@@ -430,7 +449,8 @@ async fn only_the_operator_stops_or_resumes_every_run_of_a_mounted_home() {
     assert!(control.is_frozen(), "another user lifted no freeze");
 
     let (status, outcome) =
-        call(&operator, "POST", "/api/surface/commands", Some(command("resumeAll"))).await;
+        call_from_home(&operator, "POST", "/api/surface/commands", Some(command("resumeAll")))
+            .await;
     assert_eq!((status, outcome["type"].clone()), (StatusCode::OK, json!("resumed")), "{outcome}");
     assert!(!control.is_frozen());
 }

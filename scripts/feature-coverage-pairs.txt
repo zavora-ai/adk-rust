@@ -178,13 +178,33 @@
 # setup code, the API contract with its generated types, and the doctests.
 2 adk-surface website doc
 # Screen actions (spec 3.3 §2 item 7): the registry, the policy, the gate and snooze; with
-# `web`, the routes, the API contract and the scenario; with `tui`, `/snooze`; with `voice`,
-# a spoken snooze; and `adk-rust up` hosting them on SQLite with a scripted model.
+# every surface, the routes, the API contract, `/snooze`, a spoken snooze, the Telegram card
+# and the "One verb, three origins" scenario, whose tests need `web`, `tui` and `voice`
+# together; the terminal and voice parts alone; and `adk-rust up` hosting them on SQLite with a
+# scripted model.
 2 adk-surface verb-ui doc
-2 adk-surface web,verb-ui
+2 adk-surface web,tui,voice,channels,verb-ui
 2 adk-surface tui,verb-ui
 2 adk-surface voice,verb-ui
 2 adk-cli verb-ui,scripted-model
+# The workflow observer (spec 3.3 §12): runs, steps and forks of graph agents, card hints for
+# governed nodes, the fork command, and with `web` the Runs tab's routes, its API contract and
+# the "Approve, rewind, fork" scenario.
+2 adk-surface workflow doc
+2 adk-surface web,workflow
+# Agent-drawn UI (spec 3.3 §6.1, §7.4 rule 5): the render tools, the validator and the
+# projection with their doctests; the routes and the governed-form scenario with `web`; the
+# box and fill-in pane with `tui`; and `adk-rust up` holding forms in their own targets.
+2 adk-surface genui doc
+2 adk-surface web,genui
+2 adk-surface tui,genui
+2 adk-cli genui,scripted-model
+# Apps from MCP servers (spec 3.3 §6.1 `genui-apps`): the host, its routes and the hostile app
+# legs, with the doctests.
+2 adk-surface genui-apps doc
+# `adk-rust serve` and `up` hosting apps: the sandbox listener, the home's origins and the
+# apps-origin refusal wrapped around the served router.
+2 adk-cli genui-apps,scripted-model
 # `adk-rust` as the terminal surface in a pseudo-terminal: full screen, inline, JSON, a
 # kernel on its socket and a paired one over HTTP (spec 3.3 §5.2, §10 K2).
 2 adk-cli tui,scripted-model
@@ -234,6 +254,9 @@
 4 adk-tool mcp-sampling
 # The MCP server (spec 3.5 §7.9); its round-trip tests also need the HTTP client.
 4 adk-tool mcp-server,http-transport doc
+# MCP Apps on the client (spec 3.3 §6.1 `genui-apps`): the ui extension, `_meta.ui` and app
+# resources against an in-process server.
+4 adk-tool mcp,mcp-apps
 4 adk-agent codeact
 # Guardrails are not in adk-agent's default features, so `tool_guardrail_tests` ran in no
 # required check.

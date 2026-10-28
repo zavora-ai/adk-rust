@@ -19,7 +19,7 @@
 //! | `POST /kernel/processes/{pid}/{kill,nice,suspend,resume}` | [`ProcessTable`](crate::ProcessTable) actions |
 //! | `GET /kernel/events` | the event bus as server-sent events, from a cursor ([`api::EventsQuery`]) |
 //! | `POST /kernel/attach/{session}` | a surface attaches to a session: transcript cursor, pending holds, process |
-//! | `POST /kernel/freeze`, `POST /kernel/unfreeze` | [`Kernel::freeze`] and [`Kernel::unfreeze`] |
+//! | `POST /kernel/freeze`, `POST /kernel/unfreeze` | [`Kernel::freeze`] and [`Kernel::unfreeze`]; `unfreeze` only on the socket or pipe, a paired local terminal ([`RESUME_NOT_HERE_CODE`] over HTTP, spec 3.3 S-I10) |
 //! | `GET /kernel/agenda` | the agenda ([`api::AgendaQuery`]) |
 //! | `POST /kernel/agenda/{id}/{approve,reject,schedule}` | [`Agenda`](crate::Agenda) actions as the caller ([`api::RejectRequest`], [`api::ScheduleRequest`]) |
 //! | `GET /kernel/drivers`, `POST /kernel/drivers/{id}/{mount,unmount,restart,reapprove}` (feature `drivers`) | the mounted drivers; a mount shown, then approved with `confirm` (`api::MountDriverRequest`, spec 3.2 §7.7) |
@@ -40,7 +40,8 @@
 //! are the existing server routes, unchanged; `POST /api/admin/freeze` delegates to
 //! [`Kernel::freeze`] through the kernel's `FreezeDelegate` (§10 S4). The socket serves the
 //! approvals inbox beside the kernel routes when the kernel has an approval service, so a
-//! held call is decided over the socket as over HTTP.
+//! held call is decided over the socket as over HTTP; [`decide_guard`] answers each decision
+//! under spec 3.3 §7.2 for the surface the transport is.
 //!
 //! # Authentication and audit
 //!
@@ -122,6 +123,7 @@ pub mod api;
 mod away;
 mod client;
 mod commands;
+mod decide;
 mod memory;
 mod pairing;
 #[cfg(windows)]
@@ -134,6 +136,7 @@ mod store;
 #[cfg(test)]
 mod tests;
 
+pub use crate::error::{DECIDE_NOT_HERE_CODE, RESUME_NOT_HERE_CODE};
 pub use client::ControlClient;
 pub use commands::{
     AlwaysAllowResponse, CommandCall, CommandHost, CommandInfo, CommandReach, CommandsResponse,
@@ -615,6 +618,32 @@ pub fn claim_router(kernel: Kernel) -> Router {
 /// ```
 pub fn guard_devices(kernel: &Kernel, app: Router) -> Router {
     pairing::guard(Arc::new(kernel.clone()), app)
+}
+
+/// `kernel`'s check of every decision on `POST /api/approvals/{id}/decide` (spec 3.3 §7.2,
+/// §11 S-I11, S-I13): the answer is checked under §7.2 for the surface the server
+/// established — the kernel's socket or pipe as a paired local terminal, a paired device by
+/// its kind, an operator credential over HTTP as `api` — and refused with
+/// [`DECIDE_NOT_HERE_CODE`] where that surface may not give it; never by a surface a client
+/// declares. An admitted decision is recorded before it reaches the inbox, and a suggested
+/// agent it answers is added or ended at once as that surface. The kernel's own control plane
+/// installs it; a server that serves the kernel's inbox installs it with
+/// `ApprovalEndpoints::with_decide_guard`.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use adk_server::approvals::ApprovalEndpoints;
+///
+/// # fn example(kernel: adk_kernel::Kernel, service: std::sync::Arc<dyn adk_core::ApprovalService>, builder: adk_server::ServerBuilder) {
+/// let endpoints =
+///     ApprovalEndpoints::new(service).with_decide_guard(adk_kernel::control::decide_guard(&kernel));
+/// let builder = builder.with_approval_endpoints(endpoints);
+/// # let _ = builder;
+/// # }
+/// ```
+pub fn decide_guard(kernel: &Kernel) -> Arc<dyn adk_server::approvals::DecideGuard> {
+    Arc::new(decide::KernelDecideGuard::new(Arc::new(kernel.clone())))
 }
 
 impl IntoResponse for KernelError {

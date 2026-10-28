@@ -235,6 +235,9 @@ async fn run_with(
                 source = source.with_daily_limit(limit);
             }
             let (commands, notices, operator) = kernel_commands(&source_client).await;
+            // The kernel hosts screen actions when it offers `/snooze` to its operator.
+            #[cfg(feature = "verb-ui")]
+            let hosts_verbs = commands.iter().any(|command| command.name() == "snooze");
             // A terminal paired from another machine cannot snooze: it says to use the home
             // (spec 3.3 §5.2, owner question 27).
             #[cfg(feature = "verb-ui")]
@@ -247,9 +250,22 @@ async fn run_with(
                 }
             };
             let trail = source.audit_trail();
-            let mut engine = SurfaceEngine::builder(Arc::new(source))
+            let source = Arc::new(source);
+            let mut engine = SurfaceEngine::builder(source.clone())
                 .agent_name(APP_NAME, APP_NAME)
                 .answers(answers);
+            // An agent's screen action reads here as on up's own surfaces, and the agents it
+            // runs list what they may ask (spec 3.3 §5.7, §7.1).
+            #[cfg(feature = "verb-ui")]
+            {
+                let drawn = adk_surface::verbs::VerbRegistry::catalogue(APP_NAME)
+                    .agent_name(APP_NAME, APP_NAME)
+                    .build()?;
+                engine = engine.card_hints(Arc::new(drawn.hints().reading(source.clone())));
+                if hosts_verbs {
+                    engine = engine.grant(drawn.grant());
+                }
+            }
             // Every answer and stop, with the surface and how it was given, on the kernel's
             // signed log (spec 3.3 §11); a paired device's answers the kernel records itself.
             if operator {

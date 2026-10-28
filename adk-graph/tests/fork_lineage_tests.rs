@@ -230,6 +230,19 @@ async fn unknown_paused_terminal_and_foreign_checkpoints_are_refused() {
         ]
     );
     assert!(terminal.to_string().contains("nothing runs after the last step"));
+    assert_eq!(
+        paused.to_string(),
+        format!(
+            "fork.paused: checkpoint '{}' is a pause, where a node waits mid-step; fork from \
+             the completed checkpoint of its step",
+            pause.checkpoint_id
+        )
+    );
+    assert_eq!(
+        ForkError::UnknownKey { key: "amount".to_string() }.to_string(),
+        "fork.unknown_key: 'amount' is not a key of this checkpoint; without the graph's \
+         channels only existing keys can be edited"
+    );
     assert!(checkpointer.list("t2").await.unwrap().is_empty());
 }
 

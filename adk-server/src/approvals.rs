@@ -25,6 +25,12 @@
 //! needs. A resolution authorizes only
 //! the call the request describes: the fingerprint names its acting agent and its tool's
 //! [`ToolOrigin`](adk_core::ToolOrigin), shown on the request.
+//!
+//! A host that knows more about a decision than its approval policy — which surface may give
+//! which answer (spec 3.3 §7.2) — installs a [`DecideGuard`] with
+//! [`ApprovalEndpoints::with_decide_guard`]: it checks every decision on
+//! `POST /api/approvals/{id}/decide` before the service records it, refusing with its own
+//! problem document, and hears of each one the service recorded.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,8 +41,9 @@ use adk_core::{
     ApprovalNotifier, ApprovalRequest, ApprovalService, ApprovalState, DelegationScope,
     DelegationWindow, ErrorCategory, ErrorComponent, InboxQuery, RequestContext,
 };
+use async_trait::async_trait;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{Extensions, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Extension, Json, Router};
@@ -46,6 +53,73 @@ use serde_json::Value;
 
 /// Maps an authenticated request to the approver it acts as: a subject and its groups.
 pub type ApproverIdentity = Arc<dyn Fn(&RequestContext) -> (SubjectRef, Vec<String>) + Send + Sync>;
+
+/// One decision on `POST /api/approvals/{id}/decide`, as a [`DecideGuard`] sees it: who
+/// sends it, how the request reached the server, the request it answers and the answer.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct DecideCall<'a> {
+    /// The authenticated caller.
+    pub caller: &'a RequestContext,
+    /// The HTTP request's extensions, where a host's own middleware leaves what it
+    /// established about the request, such as the transport it came on.
+    pub extensions: &'a Extensions,
+    /// The request being answered, as it is before the answer.
+    pub request: &'a ApprovalRequest,
+    /// The answer.
+    pub action: ApprovalAction,
+}
+
+/// A host's check of every decision the approval endpoints receive (spec 3.3 §7.2, §11): it
+/// runs after the caller is authenticated and before the service records the decision, and
+/// hears of each decision the service recorded.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_core::{
+///     AdkError, ApprovalAction, ErrorCategory, ErrorComponent, InMemoryApprovalStore,
+///     StoreApprovalService,
+/// };
+/// use adk_server::approvals::{ApprovalEndpoints, DecideCall, DecideGuard, approvals_router};
+///
+/// struct NoEdits;
+///
+/// #[async_trait::async_trait]
+/// impl DecideGuard for NoEdits {
+///     async fn check(&self, call: &DecideCall<'_>) -> Result<(), AdkError> {
+///         match call.action {
+///             ApprovalAction::Edit => Err(AdkError::new(
+///                 ErrorComponent::Server,
+///                 ErrorCategory::Forbidden,
+///                 "example.no_edits",
+///                 "edit it in the home",
+///             )),
+///             _ => Ok(()),
+///         }
+///     }
+/// }
+///
+/// let service = Arc::new(StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new())));
+/// let router = approvals_router(ApprovalEndpoints::new(service).with_decide_guard(Arc::new(NoEdits)));
+/// # let _ = router;
+/// ```
+#[async_trait]
+pub trait DecideGuard: Send + Sync {
+    /// Refuses `call` with the error the caller gets, or admits it.
+    ///
+    /// # Errors
+    ///
+    /// The refusal, answered as a problem document with its status.
+    async fn check(&self, call: &DecideCall<'_>) -> Result<(), AdkError>;
+
+    /// Hears that the service recorded `call` and answered `decided`. Nothing it does
+    /// changes the response.
+    async fn decided(&self, call: &DecideCall<'_>, decided: &ApprovalRequest) {
+        let _ = (call, decided);
+    }
+}
 
 /// State for the approval endpoints.
 ///
@@ -64,6 +138,7 @@ pub type ApproverIdentity = Arc<dyn Fn(&RequestContext) -> (SubjectRef, Vec<Stri
 pub struct ApprovalEndpoints {
     service: Arc<dyn ApprovalService>,
     identity: ApproverIdentity,
+    guard: Option<Arc<dyn DecideGuard>>,
 }
 
 impl ApprovalEndpoints {
@@ -75,7 +150,22 @@ impl ApprovalEndpoints {
             identity: Arc::new(|caller: &RequestContext| {
                 (SubjectRef::human(caller.user_id.clone()), caller.scopes.clone())
             }),
+            guard: None,
         }
+    }
+
+    /// Checks every decision with `guard` before the service records it (spec 3.3 §7.2).
+    #[must_use]
+    pub fn with_decide_guard(mut self, guard: Arc<dyn DecideGuard>) -> Self {
+        self.guard = Some(guard);
+        self
+    }
+
+    /// The approval service the endpoints serve, which
+    /// [`ServerBuilder::with_approval_endpoints`](crate::ServerBuilder::with_approval_endpoints)
+    /// also hands its runtime routes (spec 3.3 §7.2).
+    pub fn service(&self) -> &Arc<dyn ApprovalService> {
+        &self.service
     }
 
     /// Maps callers to approvers with `identity`.
@@ -353,12 +443,35 @@ pub struct DecideBody {
 async fn decide(
     State(endpoints): State<ApprovalEndpoints>,
     Extension(caller): Extension<Option<RequestContext>>,
+    extensions: Extensions,
     Path(id): Path<String>,
     Json(body): Json<DecideBody>,
 ) -> Response {
+    let context = caller.clone();
     let (subject, groups) = match endpoints.caller(caller) {
         Ok(caller) => caller,
         Err(response) => return response,
+    };
+    // The host's check sees the request as it is now; a request the caller may not see is
+    // answered as the service answers it.
+    let guarded = match (&endpoints.guard, &context) {
+        (Some(guard), Some(context)) => match endpoints.service.get(&id).await {
+            Ok(Some(request)) => {
+                let call = DecideCall {
+                    caller: context,
+                    extensions: &extensions,
+                    request: &request,
+                    action: body.action,
+                };
+                if let Err(error) = guard.check(&call).await {
+                    return problem(&error);
+                }
+                Some((guard.clone(), request))
+            }
+            Ok(None) => None,
+            Err(error) => return problem(&error),
+        },
+        _ => None,
     };
     let mut decision = match body.action {
         ApprovalAction::Approve => ApprovalDecision::approve(subject),
@@ -385,7 +498,18 @@ async fn decide(
         decision = decision.via(via);
     }
     match endpoints.service.decide(&id, body.expected_version, decision).await {
-        Ok(request) => Json(view(&request)).into_response(),
+        Ok(decided) => {
+            if let (Some((guard, request)), Some(context)) = (&guarded, &context) {
+                let call = DecideCall {
+                    caller: context,
+                    extensions: &extensions,
+                    request,
+                    action: body.action,
+                };
+                guard.decided(&call, &decided).await;
+            }
+            Json(view(&decided)).into_response()
+        }
         Err(error) => problem(&error),
     }
 }

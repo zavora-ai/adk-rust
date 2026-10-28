@@ -154,7 +154,9 @@ describe("the record", () => {
         line({ surface: "web", how: "pointer" }),
         line({ surface: "voice", how: "voice" }),
         line({ agent: "urn:adk:agent:home/finance", decision: "approved", surface: "phone", how: "touch" }),
+        line({ agent: "urn:adk:agent:home/finance", decision: "approved", surface: "chat", how: "chat", channel: "Telegram" }),
         line({ agent: "urn:adk:agent:home/finance", outcome: "refused" }),
+        line({ agent: "urn:adk:agent:home/finance", outcome: "refused", target: "agenda:agenda-01JBX" }),
         line({
           action: "surface.decide",
           tool: "verb_snooze",
@@ -170,7 +172,9 @@ describe("the record", () => {
       "You snoozed News digest in the home app.",
       "You snoozed News digest by voice.",
       "Finance asked to snooze News digest; you said yes on your phone.",
-      "Finance asked to snooze News digest; it had moved, so nothing changed.",
+      "Finance asked to snooze News digest; you said yes in Telegram.",
+      "Finance asked to snooze News digest; it couldn't be done, so nothing changed.",
+      "Finance asked to snooze something in Coming up; it couldn't be done, so nothing changed.",
       "Finance asked to snooze something in Coming up; you said no. Nothing changed.",
       undefined,
     ]);
@@ -233,6 +237,53 @@ describe("a spoken snooze", () => {
     );
     expect(await screen.findByText("Two things match “digest” — say the full name or use the screen")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+  });
+
+  it("keeps each pending snooze and its Cancel until its own outcome", async () => {
+    const devices = await connected();
+    const pending = (actionId: string, heading: string) =>
+      devices.say({
+        type: "pendingAction",
+        actionId,
+        cancelUntil: new Date(Date.now() + 5_000).toISOString(),
+        text: "Snoozing in 5 s",
+        heading,
+      });
+    act(() => pending("act-1", "Move News digest to 19:00"));
+    await screen.findByRole("heading", { name: "Move News digest to 19:00" });
+    const cancels = () => screen.getAllByRole("button", { name: "Cancel" }).length;
+    const one = cancels();
+    // Words that match two things change nothing, and the pending snooze stays cancellable.
+    act(() =>
+      devices.say({ type: "actionOutcome", done: false, text: "Two things match “digest” — say the full name or use the screen" }),
+    );
+    expect(await screen.findByText("Two things match “digest” — say the full name or use the screen")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Move News digest to 19:00" })).toBeTruthy();
+    expect(cancels()).toBe(one);
+    // A second snooze, then the first one's outcome: the second keeps its Cancel.
+    act(() => pending("act-2", "Move Water plants to 20:00"));
+    await screen.findByRole("heading", { name: "Move Water plants to 20:00" });
+    expect(cancels()).toBe(one + 1);
+    act(() =>
+      devices.say({ type: "actionOutcome", actionId: "act-1", done: true, text: "You snoozed News digest by voice", heading: "Moved News digest to 19:00" }),
+    );
+    expect(await screen.findByRole("heading", { name: "Moved News digest to 19:00" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Move Water plants to 20:00" })).toBeTruthy();
+    expect(cancels()).toBe(one);
+  });
+
+  it("shows a title's reordering characters as escapes (S-I9)", async () => {
+    const devices = await connected();
+    act(() =>
+      devices.say({
+        type: "pendingAction",
+        actionId: "act-1",
+        cancelUntil: new Date(Date.now() + 5_000).toISOString(),
+        text: "Snoozing in 5 s",
+        heading: "Move News ‮digest to 19:00",
+      }),
+    );
+    expect(await screen.findByRole("heading", { name: "Move News \\u{202e}digest to 19:00" })).toBeTruthy();
   });
 
   it("keeps the old note where the home takes no screen actions", async () => {

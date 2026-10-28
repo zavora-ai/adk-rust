@@ -193,7 +193,7 @@ struct State {
     poke: Arc<Notify>,
     closing: Arc<AtomicBool>,
     /// Spoken screen actions in their cancel window, by id.
-    actions: HashMap<String, tokio::task::AbortHandle>,
+    actions: HashMap<String, WindowedAction>,
     /// The same actions, ending.
     acting: FuturesUnordered<Acting>,
     #[cfg(feature = "verb-ui")]
@@ -399,6 +399,29 @@ enum Flow {
     Break,
 }
 
+/// A spoken screen action waiting out its cancel window (spec 3.3 §5.6).
+// Only `verb-ui` takes spoken screen actions; without it the map stays empty.
+#[cfg_attr(not(feature = "verb-ui"), allow(dead_code))]
+struct WindowedAction {
+    /// The task that takes it.
+    task: tokio::task::AbortHandle,
+    /// Claimed by whichever comes first: a cancel, or the task once the window ended. A task
+    /// that claimed it is taking the action and runs to its end, so a late cancel never
+    /// leaves it half done.
+    claimed: Arc<AtomicBool>,
+}
+
+impl WindowedAction {
+    /// Withdraws the action unless it is already being taken; returns whether it was.
+    fn cancel(&self) -> bool {
+        if self.claimed.swap(true, Ordering::SeqCst) {
+            return false;
+        }
+        self.task.abort();
+        true
+    }
+}
+
 impl Flow {
     fn is_break(&self) -> bool {
         matches!(self, Self::Break)
@@ -467,8 +490,9 @@ impl State {
                 // Only the first message of a socket is a hello; a later one is ignored.
                 VoiceClientMessage::Hello { .. } => {}
                 VoiceClientMessage::CancelAction { action_id } => {
-                    if let Some(action) = self.actions.remove(&action_id) {
-                        action.abort();
+                    // Too late once it is being taken: its outcome follows.
+                    if self.actions.get(&action_id).is_some_and(WindowedAction::cancel) {
+                        self.actions.remove(&action_id);
                     }
                 }
             },
@@ -683,11 +707,10 @@ impl State {
         self.send(VoiceUpdate::Ended).await;
     }
 
-    /// Cancels every spoken screen action of this conversation in its cancel window.
+    /// Cancels every spoken screen action of this conversation in its cancel window; one
+    /// already being taken runs to its end.
     fn cancel_actions(&mut self) {
-        for (_, action) in self.actions.drain() {
-            action.abort();
-        }
+        self.actions.retain(|_, action| !action.cancel());
     }
 
     /// Reads `transcript` as a screen action on the person's Coming up and, for one, waits out
@@ -700,6 +723,10 @@ impl State {
         let Some(gate) = self.verbs.clone() else {
             return;
         };
+        // An ordinary sentence reads no agenda, inside the conversation's loop.
+        if !crate::verbs::spoken::may_be_action(transcript) {
+            return;
+        }
         let Ok(items) = gate.coming_up(&self.speaker).await else {
             return;
         };
@@ -726,7 +753,13 @@ impl State {
         };
         let choice = found.choices.iter().find(|choice| choice.tomorrow == tomorrow);
         let Some(choice) = choice.filter(|_| found.why_not.is_none()) else {
-            let why = found.why_not.clone().unwrap_or_else(|| verb_words::NOT_ONE_TIME.to_string());
+            // The choice is gone when the item ends before it, as `/snooze` says.
+            let why = found.why_not.clone().unwrap_or_else(|| match found.ends {
+                Some(ends) => verb_words::ends_at(
+                    &gate.registry().scope(self.speaker.user_id(), None).time_text(ends),
+                ),
+                None => verb_words::NOT_ONE_TIME.to_string(),
+            });
             let text = verb_words::cant_snooze(&why);
             self.send(VoiceUpdate::ActionOutcome {
                 action_id: None,
@@ -749,8 +782,21 @@ impl State {
         let speaker = self.speaker.clone();
         let said = transcript.to_string();
         let (task_id, task_heading) = (id.clone(), heading.clone());
+        let cancelled = VoiceUpdate::ActionOutcome {
+            action_id: Some(id.clone()),
+            done: false,
+            text: verb_words::CANCELLED_NOTHING_CHANGED.to_string(),
+            heading: Some(heading.clone()),
+        };
+        let claimed = Arc::new(AtomicBool::new(false));
+        let mine = Arc::clone(&claimed);
+        let withdrawn = cancelled.clone();
         let handle = tokio::spawn(async move {
             tokio::time::sleep(window).await;
+            // A cancel that claimed it first withdrew it; from here on it is taken.
+            if mine.swap(true, Ordering::SeqCst) {
+                return withdrawn;
+            }
             match gate.call_spoken(&speaker, intent, &said).await {
                 Ok(_) => VoiceUpdate::ActionOutcome {
                     action_id: Some(task_id),
@@ -766,13 +812,7 @@ impl State {
                 },
             }
         });
-        self.actions.insert(id.clone(), handle.abort_handle());
-        let cancelled = VoiceUpdate::ActionOutcome {
-            action_id: Some(id.clone()),
-            done: false,
-            text: verb_words::CANCELLED_NOTHING_CHANGED.to_string(),
-            heading: Some(heading.clone()),
-        };
+        self.actions.insert(id.clone(), WindowedAction { task: handle.abort_handle(), claimed });
         let ending = id.clone();
         self.acting.push(Box::pin(async move {
             match handle.await {

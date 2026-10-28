@@ -18,6 +18,16 @@
 //!    decision makes it claimable, and the claim resumes the same session so the held call
 //!    executes with its decision.
 //!
+//! # Calls a person asked for
+//!
+//! An agent run's input `{"text": ..., "requestedCall": RequestedCall}` carries a call a
+//! person asked for through something the agent drew (spec 3.3 §7.4 rule 5). On a run an
+//! authenticated caller enqueued, the start of the run sets [`RunConfig::requested_call`],
+//! and the agent holds the call for the person's decision, so the run parks as above; on any
+//! other run the call is ignored. A woken run continues as any parked run does.
+//!
+//! [`RunConfig::requested_call`]: adk_core::RunConfig::requested_call
+//!
 //! # Fencing a stalled worker
 //!
 //! A worker that stalls (a long pause, a partition) can wake after its lease expired and
@@ -189,10 +199,10 @@ use adk_core::audit_log::{
 use adk_core::history::SYSTEM_NOTICE_PREFIX;
 use adk_core::{
     ActingConfig, AdkError, AgentId, AgentPrincipal, BeforeModelResult, CallbackContext,
-    ClaimedRun, Content, DurableRunStore, ErrorCategory, ErrorComponent, GOVERNANCE_FROZEN_CODE,
-    GOVERNANCE_STALE_CODE, GovernanceControl, InvocationHooks, LlmRequest, LlmResponse,
-    PRINCIPAL_NOT_ALLOWED_CODE, Part, RunCheckpointRef, RunFilter, RunOutcome, RunRecord, RunState,
-    SessionId, UserId,
+    ClaimedRun, Clock, Content, DurableRunStore, ErrorCategory, ErrorComponent,
+    GOVERNANCE_FROZEN_CODE, GOVERNANCE_STALE_CODE, GovernanceControl, InvocationHooks, LlmRequest,
+    LlmResponse, PRINCIPAL_NOT_ALLOWED_CODE, Part, RequestedCall, RunCheckpointRef, RunFilter,
+    RunOutcome, RunRecord, RunState, SessionId, SystemClock, UserId,
     run_store::{RUN_NOT_FOUND_CODE, RUN_STALE_EPOCH_CODE},
 };
 use adk_runner::Runner;
@@ -264,7 +274,8 @@ pub struct DurableWorkerConfig {
     pub max_concurrent_runs: usize,
     /// Fails an attempt that runs longer than this; `None` never times out.
     pub run_timeout: Option<Duration>,
-    /// Finished runs older than this are pruned by the worker loop; `None` keeps them.
+    /// Finished runs older than this on the worker's clock
+    /// ([`DurableWorker::with_clock`]) are pruned by the worker loop; `None` keeps them.
     /// Defaults to 24 hours.
     pub retain_finished: Option<Duration>,
     /// How long an agent run parked on a held tool call waits for a decision; `None`
@@ -495,6 +506,9 @@ pub struct DurableWorker {
     governance: Option<GovernanceControl>,
     audit: Option<AuditTrail>,
     config: DurableWorkerConfig,
+    /// The time compared with the run store's timestamps, which the store stamps on its own
+    /// clock.
+    clock: Arc<dyn Clock>,
     /// Makes every in-flight attempt heartbeat now, so a cancel requested in this
     /// process is seen without waiting a heartbeat interval.
     heartbeat_now: Arc<Notify>,
@@ -565,6 +579,7 @@ impl DurableWorker {
             governance: None,
             audit: None,
             config: DurableWorkerConfig::default(),
+            clock: Arc::new(SystemClock),
             heartbeat_now: Arc::new(Notify::new()),
             hooks: Vec::new(),
             suspensions: Arc::default(),
@@ -636,6 +651,32 @@ impl DurableWorker {
     /// Sets the configuration.
     pub fn with_config(mut self, config: DurableWorkerConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    /// Sets the clock the worker reads, which defaults to `SystemClock`.
+    ///
+    /// Give it the run store's clock (`InMemoryRunStore::with_clock`,
+    /// `SqliteRunStore::with_clock`): the worker compares that clock's time with the
+    /// timestamps the store writes, to prune finished runs past
+    /// [`retain_finished`](DurableWorkerConfig::retain_finished), to time its idle waits on
+    /// `not_before`, and to set and expire the deadlines of the runs it parks. On another
+    /// clock, a store whose time trails the wall clock by more than `retain_finished` loses
+    /// runs that finished within the window.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::{Clock, InMemoryRunStore, ManualClock};
+    /// use adk_server::background::DurableWorker;
+    ///
+    /// let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(chrono::Utc::now()));
+    /// let runs = Arc::new(InMemoryRunStore::new().with_clock(Arc::clone(&clock)));
+    /// let worker = DurableWorker::new(runs).with_clock(clock);
+    /// ```
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
         self
     }
 
@@ -799,7 +840,7 @@ impl DurableWorker {
                 return poll;
             }
         };
-        let now = chrono::Utc::now();
+        let now = self.clock.now();
         let earliest = pending.iter().filter_map(|run| run.not_before).filter(|at| *at > now).min();
         match earliest {
             Some(at) => {
@@ -830,7 +871,7 @@ impl DurableWorker {
                 last_prune = Some(Instant::now());
                 let cutoff = chrono::Duration::from_std(retain)
                     .ok()
-                    .and_then(|retain| chrono::Utc::now().checked_sub_signed(retain));
+                    .and_then(|retain| worker.clock.now().checked_sub_signed(retain));
                 if let Some(cutoff) = cutoff {
                     match worker.runs.prune(cutoff).await {
                         Ok(0) => {}
@@ -1063,7 +1104,7 @@ impl DurableWorker {
     ) -> Option<RunRecord> {
         let poll = chrono::Duration::from_std(self.config.poll_interval)
             .unwrap_or_else(|_| chrono::Duration::milliseconds(500));
-        let until = chrono::Utc::now() + poll;
+        let until = self.clock.now() + poll;
         match self.runs.wait(&record.run_id, epoch, Some(until)).await {
             Ok(()) => {
                 tracing::info!(parent: span, wait.until = %until, "target expected but not built yet; the run was handed back unstarted");
@@ -1438,7 +1479,15 @@ impl DurableWorker {
                 return Ok(Ok(Attempt::Done(agent_result(&text, &session_id, None))));
             }
             Ok(Prepared::Continue) => Content::new("user").with_text(""),
-            Ok(Prepared::Start) => input_content(&record.input),
+            Ok(Prepared::Start) => {
+                // The agent takes a call a person asked for once, so a woken run that starts
+                // from the same input never holds it again (spec 3.3 §7.4 rule 5).
+                match requested_call(&record.input, record.authenticated) {
+                    Ok(call) => config.requested_call = call,
+                    Err(error) => return Ok(Err(Failure { error, retryable: false })),
+                }
+                input_content(&record.input)
+            }
             Err(error) => return Ok(Err(error.into())),
         };
 
@@ -1590,7 +1639,7 @@ impl DurableWorker {
         if held.is_empty() {
             return Ok(Ok(Attempt::Done(agent_result(&text, &session_id, Some(&invocation_id)))));
         }
-        let now = chrono::Utc::now();
+        let now = self.clock.now();
         let previous = match &record.checkpoint {
             Some(RunCheckpointRef::AwaitingApproval { fingerprints, expires_at, .. })
                 if fingerprints.iter().any(|fingerprint| held.contains(fingerprint)) =>
@@ -2101,7 +2150,8 @@ fn agent_result(text: &str, session_id: &str, invocation_id: Option<&str>) -> Va
 }
 
 /// The user turn an agent run starts from: a string, `{"text": ...}`, or
-/// `{"content": Content}`; any other value is sent as its JSON text.
+/// `{"content": Content}`; any other value is sent as its JSON text, except a
+/// `{"requestedCall": ...}` without text, which starts from an empty turn.
 pub(crate) fn input_content(input: &Value) -> Content {
     match input {
         Value::String(text) => Content::new("user").with_text(text),
@@ -2114,11 +2164,36 @@ pub(crate) fn input_content(input: &Value) -> Content {
             }
             match map.get("text").and_then(Value::as_str) {
                 Some(text) => Content::new("user").with_text(text),
+                None if map.contains_key(REQUESTED_CALL_INPUT_KEY) => {
+                    Content::new("user").with_text("")
+                }
                 None => Content::new("user").with_text(input.to_string()),
             }
         }
         other => Content::new("user").with_text(other.to_string()),
     }
+}
+
+/// The run input key of a call a person asked for through something an agent drew.
+const REQUESTED_CALL_INPUT_KEY: &str = "requestedCall";
+
+/// The call a person asked for that an agent run's `input` carries beside its text
+/// (`{"text": ..., "requestedCall": RequestedCall}`), honoured only on a run an
+/// authenticated caller enqueued (spec 3.3 §7.4 rule 5, wave 4 decision 13).
+fn requested_call(input: &Value, authenticated: bool) -> Result<Option<RequestedCall>, String> {
+    let Some(raw) = input.get(REQUESTED_CALL_INPUT_KEY) else {
+        return Ok(None);
+    };
+    if !authenticated {
+        tracing::warn!("ignored a requested call on a run no authenticated caller enqueued");
+        return Ok(None);
+    }
+    serde_json::from_value(raw.clone()).map(Some).map_err(|error| {
+        format!(
+            "the run's {REQUESTED_CALL_INPUT_KEY} is not a requested call: {error}. Enqueue it \
+             as an adk_core::RequestedCall"
+        )
+    })
 }
 
 /// The workflow state a run's input becomes: an object's fields, or `{"input": value}`.

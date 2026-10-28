@@ -504,6 +504,11 @@ impl Projector {
                     "*" => "every day".to_string(),
                     // Another day where the person lives: the days would read wrong.
                     _ if local.date_naive() != at.date_naive() => return written(),
+                    // Six and seven fields number the days as the `cron` crate does (1 is
+                    // Sunday); only five follow Unix cron (`adk_core::schedule`).
+                    other if all.len() != 5 && other.bytes().any(|b| b.is_ascii_digit()) => {
+                        return written();
+                    }
                     "1-5" | "MON-FRI" => "every weekday".to_string(),
                     other => match WEEKDAYS.iter().find(|(number, name, _)| {
                         *number == other || name.eq_ignore_ascii_case(other)
@@ -589,6 +594,8 @@ impl Projector {
     ) -> Vec<ThreadItem> {
         let mut items = Vec::new();
         let from_person = event.author == "user";
+        // A call a person asked for through a drawn form (spec 3.3 §7.4 rule 5).
+        let requested = crate::genui::requested_via(event);
         if let Some(content) = &event.llm_response.content {
             let mut text = String::new();
             for part in &content.parts {
@@ -596,6 +603,9 @@ impl Projector {
                     Part::Text { text: chunk } if !event.llm_response.partial => {
                         text.push_str(chunk);
                     }
+                    // The person's own call: its DrawnSent item shows it, not the agent's work.
+                    Part::FunctionCall { id, .. }
+                        if requested.is_some() && crate::genui::is_requested(id.as_ref()) => {}
                     Part::FunctionCall { name, args, id, .. } => {
                         items.push(ThreadItem::Activity {
                             tool: name.clone(),
@@ -606,13 +616,59 @@ impl Projector {
                     // A held call's placeholder answer: its Decision item shows it.
                     Part::FunctionResponse { function_response, .. }
                         if adk_core::is_confirmation_pending(&function_response.response) => {}
+                    // A call a person asked for that the agent's rules refused before holding it.
+                    Part::FunctionResponse { function_response, id: Some(id), .. }
+                        if requested.is_some() && crate::genui::is_requested(Some(id)) =>
+                    {
+                        if let Some(via) = &requested {
+                            items.push(crate::genui::sent(
+                                via,
+                                &function_response.name,
+                                id,
+                                event,
+                                &self.hh_mm(event.timestamp),
+                                Some(&self.agent(&event.author).display_name),
+                                None,
+                            ));
+                        }
+                    }
                     Part::FunctionResponse { function_response, id, .. } => {
+                        // A drawing, or a refused one, when the event proves a render tool
+                        // made it (spec 3.3 §7.4 rule 5).
+                        #[cfg(feature = "genui")]
+                        {
+                            if let Some(item) = crate::genui::project(
+                                self,
+                                event,
+                                &function_response.name,
+                                &function_response.response,
+                                id.as_ref(),
+                            ) {
+                                items.push(item);
+                                continue;
+                            }
+                        }
                         let ok = !response_failed(&function_response.response);
+                        let text = if !ok
+                            && crate::genui::is_requested(id.as_ref())
+                            && crate::genui::refused_on_resume(
+                                &function_response.name,
+                                &function_response.response,
+                            ) {
+                            words::cant_use_any_more(
+                                &self.agent(&event.author).display_name,
+                                &function_response.name,
+                            )
+                        } else if ok {
+                            words::DONE.to_string()
+                        } else {
+                            words::FAILED.to_string()
+                        };
                         items.push(ThreadItem::Result {
                             tool: function_response.name.clone(),
                             call_id: id.clone(),
                             ok,
-                            text: if ok { words::DONE } else { words::FAILED }.to_string(),
+                            text,
                         });
                     }
                     _ => {}
@@ -620,13 +676,17 @@ impl Projector {
             }
             let text = text.trim();
             // The event that holds a call carries the runtime's own notice, not the agent's
-            // words: its Decision item says it plainly (§8).
-            if !text.is_empty() && event.actions.tool_confirmation.is_none() {
+            // words: its Decision item says it plainly (§8). A requested call's line is for
+            // the model; its DrawnSent item says it to the person.
+            if !text.is_empty() && event.actions.tool_confirmation.is_none() && requested.is_none()
+            {
                 let message = if from_person {
                     ThreadItem::Message {
                         from: Speaker::You,
                         author: "You".to_string(),
-                        text: text.to_string(),
+                        // An app's suggestion the person sent reads as its words and label.
+                        text: crate::genui::suggested_message(text)
+                            .unwrap_or_else(|| text.to_string()),
                     }
                 } else {
                     ThreadItem::Message {
@@ -649,6 +709,17 @@ impl Projector {
                 None if ran => words::DECIDED,
                 None => words::WAITING_FOR_AN_ANSWER,
             };
+            if let (Some(via), Some(call_id)) = (&requested, &held.function_call_id) {
+                items.push(crate::genui::sent(
+                    via,
+                    &held.tool_name,
+                    call_id,
+                    event,
+                    &self.hh_mm(event.timestamp),
+                    None,
+                    link.map(|link| link.id.clone()),
+                ));
+            }
             items.push(ThreadItem::Decision {
                 decision_id: link.map(|link| link.id.clone()),
                 tool: held.tool_name.clone(),
@@ -1279,6 +1350,24 @@ mod tests {
                 item("Read the overnight mail", agent.clone()).with_when(cron("0 0 4 * * MON-FRI")),
                 "Read the overnight mail",
                 "Finance suggests this. Once you say yes, it runs every weekday at 07:00.",
+            ),
+            // Five fields number the days as Unix cron does, so 1-5 is Monday to Friday and
+            // 0 is Sunday; six number them as the `cron` crate does, where 1-5 starts on
+            // Sunday, so its numbers are not read.
+            (
+                item("Send the standup", agent.clone()).with_when(cron("0 6 * * 1-5")),
+                "Send the standup",
+                "Finance suggests this. Once you say yes, it runs every weekday at 09:00.",
+            ),
+            (
+                item("Plan the week", agent.clone()).with_when(cron("0 6 * * 0")),
+                "Plan the week",
+                "Finance suggests this. Once you say yes, it runs every Sunday at 09:00.",
+            ),
+            (
+                item("Sum the week", agent.clone()).with_when(cron("0 0 6 * * 1-5")),
+                "Sum the week",
+                "Finance suggests this. Once you say yes, it runs on the schedule 0 0 6 * * 1-5.",
             ),
             (
                 item("Book the dentist", agent.clone())

@@ -64,7 +64,7 @@ All routes are under `/api`, on both transports. `adk-rust up` merges them into 
 | `POST /kernel/processes/{pid}/resume` | Wake a suspended or sleeping process | Yes | `resume` |
 | `GET /kernel/events?after=` | The event bus as server-sent events from a cursor; `Last-Event-ID` wins over `after` | — | — |
 | `POST /kernel/attach/{session}` | Transcript since a cursor, held calls, the process running the session | — | `attach` |
-| `POST /kernel/freeze`, `POST /kernel/unfreeze` | `Kernel::freeze` and `Kernel::unfreeze`; the answer reports `parkedRuns` | Yes | `freeze`, `unfreeze` |
+| `POST /kernel/freeze`, `POST /kernel/unfreeze` | `Kernel::freeze` and `Kernel::unfreeze`; the answer reports `parkedRuns`. `unfreeze` answers only on the socket and the pipe, the kernel's own terminal: over HTTP it is `403 kernel.resume.not_here`, and the web home resumes in the kernel's process (spec 3.3 S-I10) | Yes | `freeze`, `unfreeze` |
 | `GET /kernel/drivers` | The mounted [drivers](drivers.md) with their state | — | — |
 | `POST /kernel/drivers/{id}/mount` | `{"manifest": "<toml>"}` answers what the mount approves; with `"confirm": true` mounts it as the caller | Yes | `drivers.mount` |
 | `POST /kernel/drivers/{id}/{unmount,restart,reapprove}` | Unmount, restart, re-approve as the caller | Yes | `drivers.unmount`, `drivers.restart`, `drivers.reapprove` |
@@ -87,12 +87,33 @@ All routes are under `/api`, on both transports. `adk-rust up` merges them into 
 | `GET /kernel/rules/always-allow/{id}`, `POST /kernel/rules/always-allow/{id}/{prepare,grant}` | What "Always allow" makes for the caller's waiting decision; make it while the decision waits; grant it once the decision's last answer is the caller's own "Allow once" (`409` before, after an edit or someone else's yes). Never for a high-risk call: not offered (`404`), and `prepare` answers `403` | Yes, no device | `rules.always_allow` |
 | `GET /kernel/sessions/{session}/mode` | The mode of the caller's session, `{"mode": "ask"}`, as the harness names it (`read_only`, `plan`, `ask`, `auto`); `404` when the host keeps no modes | Yes, no device | — |
 | `POST /kernel/surface/records` | One record of a surface engine attached to the kernel, such as the terminal's answers with the surface and how they were given (`SurfaceRecord`: `kind`, `action`, `decision`, `ext`), written on the kernel's signed log with the caller as its actor and the transport it came over; only `surface.*` actions, an answer only to the caller's own decision (`404` otherwise) | Yes, no device | The record itself |
-| `/approvals…` | The approvals inbox, unchanged; the socket and the pipe serve it too | Per inbox rules | Inbox records |
+| `/approvals…` | The approvals inbox; the socket and the pipe serve it too. A decision is answered under the caller's surface (see [Deciding on the approvals route](#deciding-on-the-approvals-route)) | Per inbox rules | `approvals.decide` |
 
 On HTTP the server's own routes stay beside them: `/api/runs` (submissions land on the
 `interactive` queue), `/api/admin/freeze` (delegates to `Kernel::freeze` and reports
 `parkedRuns`), `/api/admin/governance` (`runningRuns: "park"`), `/api/rules` and the session
 routes.
+
+### Deciding on the approvals route
+
+`POST /api/approvals/{id}/decide` on a kernel answers each decision under spec 3.3 §7.2 for
+the surface the server established, never one the client declares
+(`adk_kernel::control::decide_guard`; `adk-rust up` installs it on its server too):
+
+| Caller | Surface | Allow once, Edit | High risk | Add a suggested agent |
+|---|---|---|---|---|
+| The socket or the pipe | `terminal`, the kernel's own | Yes | Yes | Yes |
+| A device paired as a phone | `phone` | Yes | No | Low and medium risk |
+| A device paired as a remote terminal | `terminal` | Yes | No | Low and medium risk |
+| A device paired as a tray | `tray` | Allow once only | No | No |
+| An operator credential over HTTP | `api` | Yes | No | Low and medium risk |
+
+Deny stays open to every caller. A refused answer is `403 surface.decide.not_here`: a
+high-risk call is approved with "Confirm it's you" in the home or on the kernel's own
+terminal. An admitted decision is recorded as `approvals.decide` with its `surface`, `how` and
+`transport` before it reaches the inbox, and one whose record cannot be written is refused. A
+suggested agent approved or refused here is added or ended at once, its
+`kernel.agent.created` naming that surface.
 
 ### Starting a process
 

@@ -111,6 +111,11 @@ impl Settler {
                 ThreadItem::Message { from: Speaker::Agent, .. } => self.reply = true,
                 ThreadItem::Activity { .. } | ThreadItem::Result { .. } => self.reply = false,
                 ThreadItem::Message { from: Speaker::You, .. } | ThreadItem::Decision { .. } => {}
+                // A drawing is a tool's result, never the agent's reply (spec 3.3 §7.4 rule 5).
+                ThreadItem::Drawn { .. }
+                | ThreadItem::DrawnRefused { .. }
+                | ThreadItem::DrawnSent { .. }
+                | ThreadItem::App { .. } => self.reply = false,
             }
         }
     }
@@ -432,6 +437,12 @@ pub(crate) async fn run<W: Write + Send>(
                         FeedFrame::Reset { .. } => last = 0,
                     }
                     frame_line(&mut out, &frame)?;
+                    // `drawn`, `drawn.submitted` and `drawn.refused` (spec 3.3 §5.2).
+                    if let FeedFrame::Entry { entry } = &frame {
+                        for drawn in super::drawn::json_lines(&session, entry) {
+                            line(&mut out, &drawn)?;
+                        }
+                    }
                 }
                 // A new session exists once its turn starts.
                 Some(Err(SurfaceError::NotFound { .. })) | None => {
@@ -455,7 +466,11 @@ pub(crate) async fn run<W: Write + Send>(
                     // What the feed has not shown yet, so the lines are complete.
                     if let Ok(thread) = engine.thread(caller, &session).await {
                         for entry in thread.into_iter().filter(|entry| entry.seq > last) {
+                            let drawn = super::drawn::json_lines(&session, &entry);
                             frame_line(&mut out, &FeedFrame::Entry { entry })?;
+                            for drawn in drawn {
+                                line(&mut out, &drawn)?;
+                            }
                         }
                     }
                     if let Ok(open) = engine.decisions(caller).await {

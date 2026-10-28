@@ -651,6 +651,7 @@ dependencies = [
  "adk-harness",
  "adk-kernel",
  "adk-runner",
+ "adk-server",
  "adk-session",
  "async-trait",
  "axum",

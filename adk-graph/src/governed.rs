@@ -10,6 +10,8 @@
 //! |-------|-------|---------|
 //! | 0 | Gate: the parent invocation, or the `RunConfig` of [`CompiledGraph::invoke_with_run_config`] | Without one the node is not run ([`GovernedError::NotRun`]) |
 //! | 1 | Kill switch | Frozen: refused before anything is touched ([`GovernedError::Frozen`]) |
+//! | 1a | [`Node::will_act`] | A node that does nothing here completes with no writes and no decision; one that cannot act fails without asking anyone |
+//! | 1b | An action ledger and a checkpointer | Without either the node is not run ([`GovernedError::Unavailable`]): its call could not be kept to once |
 //! | 2 | Action-ledger lookup | A completed call is answered from its record and the effect log; a failed one fails again; one begun without an outcome fails closed |
 //! | 3 | [`adk_core::authorize_tool_call`] | Pending: the node pauses and the call waits in the inbox. Refused: not run. Execute: begin, run, complete, append to the effect log |
 //!
@@ -27,6 +29,11 @@
 //! anyone again; a call that changed while it waited, or that a record answers, has its
 //! waiting decision withdrawn. A governed node inside a subgraph keys its record by the
 //! parent's lineage.
+//!
+//! A call that may have reached its destination without an outcome coming back — a timeout,
+//! or an HTTP node's answer it could not accept — keeps its record begun, so a later
+//! dispatch fails closed with `graph.outcome_unknown`. An action node sends a governed call
+//! once: its error handling neither retries it nor hides its failure.
 //!
 //! The effect log thread `{lineage root}:effects` holds each executed call's writes. Only
 //! this bracket writes it; forks never do, and checkpoint retention never prunes it, so
@@ -203,7 +210,8 @@ pub enum GovernedError {
         /// The governed node.
         node: String,
     },
-    /// The action ledger, the approval gate or the effect log could not be read or written.
+    /// The action ledger, the approval gate or the effect log could not be read or written,
+    /// or the run has no action ledger or the graph no checkpointer to keep the call to once.
     #[error("graph.unavailable: governed node '{node}' was not run: {detail}")]
     Unavailable {
         /// The governed node.
@@ -321,6 +329,7 @@ pub const EFFECT_METADATA_KEY: &str = "adk.graph.effect";
 ///     node: "pay".to_string(),
 ///     writes: [("charge".to_string(), serde_json::json!({ "id": "ch_1" }))].into(),
 ///     goto: None,
+///     goto_parent: None,
 ///     thread: "t1".to_string(),
 ///     checkpoint: "c2".to_string(),
 ///     at: chrono::Utc::now(),
@@ -340,6 +349,10 @@ pub struct EffectRecord {
     /// The successors the node named in place of its edges, if it named any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goto: Option<Vec<String>>,
+    /// The nodes of the graph holding a subgraph that the node handed control to, if it
+    /// named any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goto_parent: Option<Vec<String>>,
     /// The thread the call ran on.
     pub thread: String,
     /// The checkpoint that records the step the call ran in.
@@ -497,11 +510,27 @@ impl CompiledGraph {
     pub(crate) fn is_governed(&self, node: &str) -> bool {
         self.governed_nodes.contains_key(node)
     }
+
+    /// Fails when a name governed is not a node of this graph: the node meant would run
+    /// ungoverned.
+    pub(crate) fn check_governed_nodes(&self) -> Result<()> {
+        let mut unknown: Vec<&String> =
+            self.governed_nodes.keys().filter(|name| !self.nodes.contains_key(*name)).collect();
+        unknown.sort();
+        match unknown.first() {
+            Some(name) => Err(GraphError::InvalidGraph(format!(
+                "governed node '{name}' is not a node of this graph, so the node it names \
+                 would run ungoverned. Govern a node by the name it was added under"
+            ))),
+            None => Ok(()),
+        }
+    }
 }
 
 /// Runs one dispatch of a governed node through the bracket described in the
 /// [module documentation](self).
 pub(crate) async fn dispatch(dispatch: GovernedDispatch, ctx: &NodeContext) -> GovernedRun {
+    debug_assert!(ctx.governed_call(), "a governed node's context is marked as its call");
     let node = dispatch.node_name.clone();
     let parent = ctx.config.parent_context.clone();
     let explicit = ctx.run_config();
@@ -541,6 +570,59 @@ pub(crate) async fn dispatch(dispatch: GovernedDispatch, ctx: &NodeContext) -> G
         return GovernedRun::failed(GovernedError::Frozen { node, reason: frozen.message }, None);
     }
 
+    // A node that does nothing here, or cannot act, asks no one about a call that would
+    // not run.
+    match dispatch.node.will_act(ctx) {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::debug!(node = %node, "governed node does nothing here; no decision");
+            if let Some(held) = dispatch.held.as_ref() {
+                withdraw(&gate, held, &node).await;
+            }
+            return GovernedRun {
+                output: Ok(NodeOutput::new()),
+                status: NodeStatus::Done,
+                effect_key: None,
+                held: None,
+            };
+        }
+        Err(error) => {
+            if let Some(held) = dispatch.held.as_ref() {
+                withdraw(&gate, held, &node).await;
+            }
+            return GovernedRun {
+                output: Err(error),
+                status: NodeStatus::Failed,
+                effect_key: None,
+                held: None,
+            };
+        }
+    }
+
+    // The call is kept to once by the action ledger and the lineage's checkpoints.
+    let Some(ledger) = run_config.action_ledger.clone() else {
+        return GovernedRun::failed(
+            GovernedError::Unavailable {
+                node,
+                detail: "the run has no action ledger, so its call could not be kept to once. \
+                         Set RunConfig::action_ledger"
+                    .to_string(),
+            },
+            None,
+        );
+    };
+    if dispatch.checkpointer.is_none() {
+        return GovernedRun::failed(
+            GovernedError::Unavailable {
+                node,
+                detail: "the graph has no checkpointer, so its call could not be kept to once \
+                         in its lineage. Add one with with_checkpointer"
+                    .to_string(),
+            },
+            None,
+        );
+    }
+
     let call_args = dispatch.node.call_args(ctx).unwrap_or_else(|| state_args(&ctx.state));
     let base_key = format!(
         "graph/{}/{}/{node}/{}/{}",
@@ -552,31 +634,25 @@ pub(crate) async fn dispatch(dispatch: GovernedDispatch, ctx: &NodeContext) -> G
 
     // 2. The action ledger, before the governed path: a call that already happened is
     // answered from its record and creates no decision.
-    let ledger = run_config.action_ledger.clone();
-    let key = match &ledger {
-        Some(ledger) => {
-            let answered = match lookup(ledger.as_ref(), &node, &base_key).await {
-                Lookup::Free(key) => Ok(key),
-                Lookup::Done(key) => Err(replay(&dispatch, key).await),
-                Lookup::Failed(run) => Err(*run),
-            };
-            match answered {
-                Ok(key) => key,
-                Err(run) => {
-                    // The record answers the call, so a decision it waited for is moot. A
-                    // ledger that could not be read answers nothing.
-                    let unread = matches!(
-                        &run.output,
-                        Err(error) if GovernedError::code_of(error) == Some("graph.unavailable")
-                    );
-                    if let Some(held) = dispatch.held.as_ref().filter(|_| !unread) {
-                        withdraw(&gate, held, &node).await;
-                    }
-                    return run;
-                }
+    let answered = match lookup(ledger.as_ref(), &node, &base_key).await {
+        Lookup::Free(key) => Ok(key),
+        Lookup::Done(key) => Err(replay(&dispatch, key).await),
+        Lookup::Failed(run) => Err(*run),
+    };
+    let key = match answered {
+        Ok(key) => key,
+        Err(run) => {
+            // The record answers the call, so a decision it waited for is moot. A ledger
+            // that could not be read answers nothing.
+            let unread = matches!(
+                &run.output,
+                Err(error) if GovernedError::code_of(error) == Some("graph.unavailable")
+            );
+            if let Some(held) = dispatch.held.as_ref().filter(|_| !unread) {
+                withdraw(&gate, held, &node).await;
             }
+            return run;
         }
-        None => base_key,
     };
 
     // A node resuming its own pause waits for that call's decision, as `LlmAgent` does: it
@@ -663,38 +739,33 @@ pub(crate) async fn dispatch(dispatch: GovernedDispatch, ctx: &NodeContext) -> G
     let edited = (args != call_args).then_some(args);
 
     // Begin, run, complete.
-    let begun = match &ledger {
-        Some(ledger) => {
-            let record = ActionRecord::new(
-                key.clone(),
-                node.clone(),
-                edited.as_ref().unwrap_or(&call_args),
-                dispatch.effect,
+    let record = ActionRecord::new(
+        key.clone(),
+        node.clone(),
+        edited.as_ref().unwrap_or(&call_args),
+        dispatch.effect,
+    );
+    let begun = match ledger.begin(&record).await {
+        Ok(()) => Some(ledger.as_ref()),
+        Err(error) if error.code == "tool.action_ledger.duplicate_key" => {
+            // Another run began this call between the lookup and now.
+            return GovernedRun::failed(
+                GovernedError::OutcomeUnknown { node, key: key.clone() },
+                Some(key),
             );
-            match ledger.begin(&record).await {
-                Ok(()) => Some(ledger.as_ref()),
-                Err(error) if error.code == "tool.action_ledger.duplicate_key" => {
-                    // Another run began this call between the lookup and now.
-                    return GovernedRun::failed(
-                        GovernedError::OutcomeUnknown { node, key: key.clone() },
-                        Some(key),
-                    );
-                }
-                Err(error) => {
-                    return GovernedRun::failed(
-                        GovernedError::Unavailable {
-                            node,
-                            detail: format!(
-                                "the action ledger could not record the call: {}",
-                                error.redacted()
-                            ),
-                        },
-                        Some(key),
-                    );
-                }
-            }
         }
-        None => None,
+        Err(error) => {
+            return GovernedRun::failed(
+                GovernedError::Unavailable {
+                    node,
+                    detail: format!(
+                        "the action ledger could not record the call: {}",
+                        error.redacted()
+                    ),
+                },
+                Some(key),
+            );
+        }
     };
     // A freeze can land between the decision and the call.
     if let Err(frozen) = run_config.check_governance() {
@@ -745,6 +816,7 @@ pub(crate) async fn dispatch(dispatch: GovernedDispatch, ctx: &NodeContext) -> G
                     node: node.clone(),
                     writes,
                     goto: output.goto.clone(),
+                    goto_parent: output.goto_parent.clone(),
                     thread: dispatch.thread_id.clone(),
                     checkpoint: dispatch.checkpoint_id.clone(),
                     at: crate::record::now(),
@@ -786,10 +858,13 @@ pub(crate) async fn dispatch(dispatch: GovernedDispatch, ctx: &NodeContext) -> G
             complete(begun, &node, &key, ActionOutcome::Failed { error: note }).await;
             GovernedRun::failed(GovernedError::EditUnsupported { node }, Some(key))
         }
-        Err(error @ GraphError::NodeTimedOut { .. }) => {
+        Err(error)
+            if matches!(error, GraphError::NodeTimedOut { .. })
+                || GovernedError::code_of(&error) == Some("graph.outcome_unknown") =>
+        {
             // The call may have taken effect, so its record stays begun: a replay fails
             // closed with outcome_unknown.
-            tracing::warn!(node = %node, "governed node timed out; its outcome is unknown");
+            tracing::warn!(node = %node, "governed node's outcome is unknown");
             GovernedRun {
                 output: Err(error),
                 status: NodeStatus::Failed,
@@ -897,6 +972,7 @@ async fn replay(dispatch: &GovernedDispatch, key: String) -> GovernedRun {
     tracing::info!(node = %node, effect.key = %key, "governed call answered from its record");
     let mut output = NodeOutput::new().with_updates(effect.writes.into_iter().collect());
     output.goto = effect.goto;
+    output.goto_parent = effect.goto_parent;
     GovernedRun {
         output: Ok(output),
         status: NodeStatus::Recorded,
@@ -946,8 +1022,28 @@ async fn run_with_timeout(
     }
 }
 
-/// The call of a node that does not describe one: the whole state it reads.
+/// The call of a node that does not describe one: the whole state it reads, less the
+/// session id a [`GraphAgent`](crate::agent::GraphAgent) writes on every turn, so a fork in a
+/// new session binds the same call.
 fn state_args(state: &State) -> Value {
-    let sorted: BTreeMap<&String, &Value> = state.iter().collect();
+    let sorted: BTreeMap<&String, &Value> =
+        state.iter().filter(|(key, _)| key.as_str() != SESSION_ID_KEY).collect();
     serde_json::to_value(sorted).unwrap_or(Value::Null)
+}
+
+/// The state key a graph agent's default input mapper writes the session id under.
+const SESSION_ID_KEY: &str = "session_id";
+
+#[cfg(feature = "action-http")]
+/// The failure of a governed call that was sent and whose outcome did not come back
+/// (spec 3.3 §12): its record stays begun, so it is never run again.
+pub(crate) fn sent_without_outcome(node: &str, detail: &str) -> GraphError {
+    GraphError::NodeExecutionFailed {
+        node: node.to_string(),
+        message: format!(
+            "graph.outcome_unknown: governed node '{node}' sent its call and {detail}, so it may \
+             have taken effect. It is not run again; check the effect, then fork with changed \
+             state to make a new call"
+        ),
+    }
 }

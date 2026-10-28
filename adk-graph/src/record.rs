@@ -309,6 +309,36 @@ impl Checkpoint {
         self.cleared_interrupt.is_some()
             || self.metadata.contains_key(crate::executor::PAUSED_NODES_METADATA_KEY)
     }
+
+    /// How far the step labels of this checkpoint's thread run ahead of
+    /// [`Checkpoint::step`].
+    ///
+    /// A run that stops at an `interrupt_after` gate saves its finished step without
+    /// advancing `step`, so the step that resumes it takes the next label rather than the
+    /// gated step's. A step that paused before its nodes finished, or failed, keeps its
+    /// label when it runs again.
+    pub(crate) fn label_offset(&self) -> usize {
+        match self.step_records().ok().and_then(|mut steps| steps.pop()) {
+            Some(last) => {
+                let again = last.kind == StepKind::Failed
+                    || (last.kind == StepKind::Paused
+                        && last.nodes.iter().any(|node| node.status == NodeStatus::Paused));
+                last.step.saturating_sub(self.step + usize::from(again))
+            }
+            // A fork's first checkpoint carries no steps; its lineage names the label.
+            None => self
+                .lineage()
+                .ok()
+                .flatten()
+                .map_or(0, |lineage| lineage.parent_step.saturating_sub(self.step)),
+        }
+    }
+
+    /// The label of the step this checkpoint completed, as its records name it.
+    #[cfg(feature = "time-travel")]
+    pub(crate) fn step_label(&self) -> usize {
+        self.step + self.label_offset()
+    }
 }
 
 /// Reads one record key, `None` when the checkpoint does not carry it.

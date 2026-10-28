@@ -6,6 +6,10 @@ Non-LLM programmatic nodes for deterministic workflow operations in [ADK Studio]
 > [zavora-ai/adk-studio](https://github.com/zavora-ai/adk-studio) and built on the ADK-Rust 1.0
 > crates.
 
+> **Note:** ADK Studio is retired in favour of the [workflow observer](../surfaces/workflow.md),
+> which watches graph agents' runs, steps and forks on the web home's Runs tab (spec 3.3 §13
+> decision 12). This page describes the last Studio release.
+
 ## Overview
 
 Action nodes are visually distinct from LLM agent nodes — they use unique colors and icons to make workflows easy to scan. Each node type handles a specific category of operation, from HTTP requests to database queries to conditional branching.

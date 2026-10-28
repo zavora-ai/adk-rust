@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind};
 use adk_core::{
-    AdkError, ApprovalRequestQuery, ApprovalScope, ApprovalState, ReadonlyContext, Tool,
-    ToolContext, ToolEffect, Toolset,
+    AdkError, ApprovalRequest, ApprovalRequestQuery, ApprovalScope, ApprovalState, ReadonlyContext,
+    Tool, ToolConfirmationRequest, ToolContext, ToolEffect, Toolset,
 };
 use adk_harness::{OriginClasses, ToolKind, driver_tool_kind};
 use adk_kernel::PartitionId;
@@ -138,15 +138,22 @@ impl VerbTool {
                 draft
             }
             Err(error) => {
-                draft.ext("outcome", json!("refused")).ext("code", json!(error.code())).ext(
-                    "target",
-                    json!(
-                        args.get("item").and_then(Value::as_str).map(|id| format!("agenda:{id}"))
-                    ),
-                )
+                let item = args.get("item").and_then(Value::as_str);
+                let mut draft = draft
+                    .ext("outcome", json!("refused"))
+                    .ext("code", json!(error.code()))
+                    .ext("target", json!(item.map(|id| format!("agenda:{id}"))));
+                // The item's title, so the record names it as the person knows it (§8).
+                let scope = self.registry.scope(ctx.user_id(), self.area.clone());
+                if let Some(id) = item
+                    && let Ok(found) = scope.item(id).await
+                {
+                    draft = draft.ext("title", json!(found.title));
+                }
+                draft
             }
         };
-        if let Some((approval, answered)) = self.answered(ctx).await {
+        if let Some((approval, answered)) = self.answered(ctx, args).await {
             draft = draft.ext("approvalId", json!(approval));
             if let Some(answered) = answered {
                 draft = draft.ext("answered", answered);
@@ -157,26 +164,47 @@ impl VerbTool {
         }
     }
 
-    /// The decision that let this call run, and where the person gave it, when the registry
-    /// reads the inbox: the newest approved request of this session for this tool by this
-    /// agent.
-    async fn answered(&self, ctx: &dyn ToolContext) -> Option<(String, Option<Value>)> {
+    /// The decision that let this call with `args` run, and where the person gave it, when
+    /// the registry reads the inbox: the approved request of this session for this very call —
+    /// its fingerprint, or the arguments the person's Edit gave it — the newest if several.
+    async fn answered(
+        &self,
+        ctx: &dyn ToolContext,
+        args: &Value,
+    ) -> Option<(String, Option<Value>)> {
         let registry = self.registry.inner();
         let store = registry.approvals.as_ref()?;
         let scope = ApprovalScope::new(&registry.app, ctx.user_id(), ctx.session_id());
+        let acting = ctx.acting_context();
+        let fingerprint = ToolConfirmationRequest::for_tool(self, args.clone())
+            .with_acting_context(acting.clone())
+            .fingerprint();
+        let this_call = |request: &ApprovalRequest| {
+            request.tool_name == self.tool_name
+                && request.origin.as_ref().is_some_and(|origin| origin.source == self.origin)
+                && request.acting.as_ref().is_some_and(|by| by.agent.id == acting.agent.id)
+                && (request.fingerprint == fingerprint
+                    || request
+                        .decisions
+                        .last()
+                        .and_then(|decision| decision.edited_args.as_ref())
+                        .is_some_and(|edited| edited == args))
+        };
         let query = ApprovalRequestQuery::default()
             .with_session(&scope)
             .with_states([ApprovalState::Approved]);
-        let acting = ctx.acting_context();
-        let requests = store.list_requests(&query).await.ok()?;
-        let request = requests
-            .into_iter()
-            .filter(|request| {
-                request.tool_name == self.tool_name
-                    && request.origin.as_ref().is_some_and(|origin| origin.source == self.origin)
-                    && request.acting.as_ref().is_some_and(|by| by.agent.id == acting.agent.id)
-            })
-            .max_by_key(|request| request.resolved_at)?;
+        let mut found: Option<ApprovalRequest> = None;
+        super::policy::every_request(store.as_ref(), query, |request| {
+            if this_call(request)
+                && found.as_ref().is_none_or(|newest| request.resolved_at > newest.resolved_at)
+            {
+                found = Some(request.clone());
+            }
+            false
+        })
+        .await
+        .ok()?;
+        let request = found?;
         let answered = match &registry.answers {
             Some(answers) => answers.find(&request.id).await.ok().flatten().map(|record| {
                 json!({

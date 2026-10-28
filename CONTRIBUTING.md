@@ -307,7 +307,8 @@ step.
 ```
 adk-studio/        Visual agent builder — extracted to standalone repo.
                    Repo: https://github.com/zavora-ai/adk-studio
-adk-ui/            Dynamic UI generation — extracted to standalone repo.
+adk-ui/            Retired, for ADK-Rust 2 only: agent-drawn UI is adk-surface's
+                   `genui` feature (docs/official_docs/surfaces/genui.md).
                    Repo: https://github.com/zavora-ai/adk-ui
 ```
 

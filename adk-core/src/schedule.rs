@@ -37,6 +37,18 @@
 //! instant. Evaluating cron specs needs the `cron` feature of `adk-core`; without it
 //! they fail with `schedule.cron_unavailable`.
 //!
+//! The day-of-week field counts days by the number of fields:
+//!
+//! | Expression | Sunday | Monday to Saturday | `1-5` fires |
+//! |------------|--------|--------------------|-------------|
+//! | Five fields | `0` or `7` | `1` to `6` | Monday to Friday |
+//! | Six or seven fields | `1` | `2` to `7` | Sunday to Thursday |
+//!
+//! Five fields follow Unix cron; six and seven keep the `cron` crate's numbering. Day
+//! names (`Mon-Fri`, `SAT,SUN`) mean the same days in both. A five-field day-of-week
+//! field takes `*`, `?`, days, ranges, lists and steps (`*/2`, `1-5/2`). A day fires only
+//! when it matches both the day-of-month and the day-of-week field.
+//!
 //! # Backend primitives
 //!
 //! | Operation | SQL | Redis | MongoDB | Neo4j, Firestore |
@@ -79,7 +91,9 @@ pub const DEFAULT_MISFIRE_GRACE: Duration = Duration::from_secs(60);
 pub enum ScheduleSpec {
     /// A cron expression evaluated in an IANA time zone such as `UTC` or `America/New_York`.
     Cron {
-        /// The cron expression (five, six, or seven fields).
+        /// The cron expression (five, six, or seven fields). Five fields count the days of
+        /// the week as Unix cron does (0 and 7 are Sunday); six and seven as the `cron`
+        /// crate does (1 is Sunday). See the [module documentation](crate::schedule).
         expr: String,
         /// The IANA time zone name.
         timezone: String,
@@ -362,10 +376,19 @@ mod cron {
     use crate::Result;
 
     fn parse(expr: &str, timezone: &str) -> Result<(::cron::Schedule, Tz)> {
-        let expanded = if expr.split_whitespace().count() == 5 {
-            format!("0 {expr}")
-        } else {
-            expr.to_string()
+        let fields: Vec<&str> = expr.split_whitespace().collect();
+        let expanded = match fields.as_slice() {
+            // The crate counts 1 as Sunday, so a five-field weekday reaches it as day names.
+            [minute, hour, day, month, weekday] => {
+                let weekday = unix_weekdays(weekday).map_err(|reason| {
+                    invalid_schedule_error(&format!(
+                        "cron expression '{expr}' does not parse: the day of the week \
+                         '{weekday}' {reason}"
+                    ))
+                })?;
+                format!("0 {minute} {hour} {day} {month} {weekday}")
+            }
+            _ => expr.to_string(),
         };
         let schedule = ::cron::Schedule::from_str(&expanded).map_err(|error| {
             invalid_schedule_error(&format!("cron expression '{expr}' does not parse: {error}"))
@@ -376,6 +399,62 @@ mod cron {
             ))
         })?;
         Ok((schedule, tz))
+    }
+
+    /// The day names a five-field day-of-week `field` selects under Unix numbering — 0 and 7
+    /// are Sunday, 1 to 6 Monday to Saturday — as a list the `cron` crate reads; `*` and `?`
+    /// unchanged. `Err` says why the field does not parse.
+    fn unix_weekdays(field: &str) -> std::result::Result<String, String> {
+        const NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        if field == "*" || field == "?" {
+            return Ok(field.to_string());
+        }
+        let day = |text: &str| -> std::result::Result<usize, String> {
+            if let Ok(number) = text.parse::<usize>() {
+                return match number {
+                    0..=7 => Ok(number),
+                    _ => Err(format!("names day {number}; days are 0 to 7, 0 and 7 Sunday")),
+                };
+            }
+            match text.to_ascii_lowercase().as_str() {
+                "sun" | "sunday" => Ok(0),
+                "mon" | "monday" => Ok(1),
+                "tue" | "tues" | "tuesday" => Ok(2),
+                "wed" | "wednesday" => Ok(3),
+                "thu" | "thurs" | "thursday" => Ok(4),
+                "fri" | "friday" => Ok(5),
+                "sat" | "saturday" => Ok(6),
+                _ => Err(format!("holds '{text}', which is neither a day number nor a day name")),
+            }
+        };
+        let mut selected = [false; 7];
+        for part in field.split(',') {
+            let (base, step) = match part.split_once('/') {
+                Some((base, step)) => match step.parse::<usize>() {
+                    Ok(step) if step > 0 => (base, Some(step)),
+                    _ => return Err(format!("has the step '{step}'; a step is 1 or more")),
+                },
+                None => (part, None),
+            };
+            // A day with a step runs to the end of the week, as `*` spans all of it.
+            let (start, end) = match (base, base.split_once('-')) {
+                ("*" | "?", _) => (0, 7),
+                (_, Some((start, end))) => (day(start)?, day(end)?),
+                (_, None) => {
+                    let start = day(base)?;
+                    (start, if step.is_some() { 7 } else { start })
+                }
+            };
+            if start > end {
+                return Err(format!("has the range '{base}', which runs backwards"));
+            }
+            for value in (start..=end).step_by(step.unwrap_or(1)) {
+                selected[value % 7] = true;
+            }
+        }
+        let names: Vec<&str> =
+            NAMES.iter().zip(selected).filter_map(|(name, on)| on.then_some(*name)).collect();
+        Ok(names.join(","))
     }
 
     /// The later instant of a local time repeated by a fall-back change is skipped, so
@@ -738,6 +817,102 @@ mod tests {
             let six = cron("0 */15 * * * *", "UTC");
             assert_eq!(five.next_after(at(15, 9, 1)).unwrap(), Some(at(15, 9, 15)));
             assert_eq!(six.next_after(at(15, 9, 1)).unwrap(), Some(at(15, 9, 15)));
+        }
+
+        /// The next `count` fire times after `from`.
+        fn fires(spec: &ScheduleSpec, from: DateTime<Utc>, count: usize) -> Vec<DateTime<Utc>> {
+            let mut cursor = from;
+            let mut all = Vec::with_capacity(count);
+            while all.len() < count {
+                cursor = spec.next_after(cursor).unwrap().unwrap();
+                all.push(cursor);
+            }
+            all
+        }
+
+        // October 2026: the 18th and 25th are Sundays, the 24th and 31st Saturdays.
+        #[test]
+        fn five_fields_count_weekdays_as_unix_cron_does() {
+            let weekdays = cron("0 9 * * 1-5", "UTC");
+            assert_eq!(
+                fires(&weekdays, at(18, 12, 0), 6),
+                vec![
+                    at(19, 9, 0),
+                    at(20, 9, 0),
+                    at(21, 9, 0),
+                    at(22, 9, 0),
+                    at(23, 9, 0),
+                    at(26, 9, 0)
+                ],
+                "Monday to Friday, never Saturday or Sunday"
+            );
+            assert_eq!(weekdays.next_after(at(24, 10, 0)).unwrap(), Some(at(26, 9, 0)));
+            assert_eq!(fires(&cron("0 9 * * Mon-Fri", "UTC"), at(18, 12, 0), 6), {
+                fires(&weekdays, at(18, 12, 0), 6)
+            });
+        }
+
+        #[test]
+        fn zero_and_seven_are_sunday_and_six_is_saturday() {
+            for sunday in ["0", "7", "Sun", "0,7"] {
+                let spec = cron(&format!("0 9 * * {sunday}"), "UTC");
+                assert_eq!(
+                    fires(&spec, at(23, 10, 0), 2),
+                    vec![at(25, 9, 0), Utc.with_ymd_and_hms(2026, 11, 1, 9, 0, 0).unwrap()],
+                    "{sunday}"
+                );
+            }
+            let saturday = cron("0 9 * * 6", "UTC");
+            assert_eq!(fires(&saturday, at(23, 10, 0), 2), vec![at(24, 9, 0), at(31, 9, 0)]);
+            let weekend = cron("30 7 * * 6,0", "UTC");
+            assert_eq!(
+                fires(&weekend, at(23, 10, 0), 3),
+                vec![at(24, 7, 30), at(25, 7, 30), at(31, 7, 30)]
+            );
+            // A range may end on 7.
+            let friday_to_sunday = cron("0 9 * * 5-7", "UTC");
+            assert_eq!(
+                fires(&friday_to_sunday, at(22, 10, 0), 4),
+                vec![at(23, 9, 0), at(24, 9, 0), at(25, 9, 0), at(30, 9, 0)]
+            );
+        }
+
+        #[test]
+        fn five_field_weekday_steps() {
+            // Monday, Wednesday and Friday.
+            let odd = cron("0 9 * * 1-5/2", "UTC");
+            assert_eq!(
+                fires(&odd, at(25, 10, 0), 3),
+                vec![at(26, 9, 0), at(28, 9, 0), at(30, 9, 0)]
+            );
+            // Sunday, Wednesday and Saturday.
+            let every_third = cron("0 9 * * */3", "UTC");
+            assert_eq!(
+                fires(&every_third, at(24, 10, 0), 3),
+                vec![at(25, 9, 0), at(28, 9, 0), at(31, 9, 0)]
+            );
+        }
+
+        #[test]
+        fn six_and_seven_fields_keep_the_crates_numbering() {
+            // 1 is Sunday, so 1-5 is Sunday to Thursday.
+            let six = cron("0 0 9 * * 1-5", "UTC");
+            assert_eq!(
+                fires(&six, at(23, 10, 0), 5),
+                vec![at(25, 9, 0), at(26, 9, 0), at(27, 9, 0), at(28, 9, 0), at(29, 9, 0)]
+            );
+            let seven = cron("0 0 9 * * 7 2026", "UTC");
+            assert_eq!(seven.next_after(at(23, 10, 0)).unwrap(), Some(at(24, 9, 0)));
+        }
+
+        #[test]
+        fn bad_five_field_weekdays_are_refused() {
+            for field in ["8", "5-1", "5L", "*/0", "MON#2", "1,", "Fri-Sun"] {
+                let error =
+                    cron(&format!("0 9 * * {field}"), "UTC").next_after(at(15, 0, 0)).unwrap_err();
+                assert_eq!(error.code, INVALID_SCHEDULE_CODE, "{field}");
+                assert!(error.message.contains("day of the week"), "{field}: {}", error.message);
+            }
         }
 
         #[test]

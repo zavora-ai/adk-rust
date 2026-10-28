@@ -69,6 +69,9 @@ suite "adk-harness" -p adk-harness --features memory,postgres,redis \
     --test fact_conformance_tests \
     --test shared_store_postgres_tests
 
+# Spec 3.3 §12 phase 4, "Work stays at work": a kernel hosting two areas' harnesses.
+suite "adk-harness areas" -p adk-harness --features kernel,memory,postgres --test work_stays_at_work
+
 suite "adk-graph" -p adk-graph --features postgres --test checkpointer_conformance_postgres
 
 # The feature set matches the kernel's Redis step of CI's postgres job, so both reuse one build.

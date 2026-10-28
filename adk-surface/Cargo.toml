@@ -53,6 +53,20 @@ voice-live = ["voice", "adk-realtime/gemini", "adk-realtime/openai"]
 # agent, always through the governed path. It adds no dependency; its web, terminal and voice
 # parts compile with `web`, `tui` and `voice`.
 verb-ui = []
+# The workflow observer (spec 3.3 §6.1 `workflow`, §12 developer track): a graph agent's runs,
+# steps and forks from its checkpoints, card hints for its governed nodes and the fork command;
+# with `web`, its routes under `/api/surface/workflow`. adk-graph with time-travel, which
+# adk-harness's default `graph` feature already compiles; adk-harness `web` for the secret
+# redaction every shown value passes.
+workflow = ["dep:adk-graph", "adk-graph/time-travel", "adk-harness/web"]
+# Agent-drawn UI (spec 3.3 §6.1, §7.4 rule 5): the A2UI v0.9.1 model, the embedded `forms` 1.0
+# catalog, the validator that keeps approval controls and secrets out of drawings, and the
+# render tools agents draw with (`genui::DrawToolset`).
+genui = ["dep:jsonschema", "dep:sha2", "dep:regex"]
+# Apps from MCP servers in a thread (spec 3.3 §6.1 `genui-apps`, wave 4 decision 16): an MCP
+# server's `_meta.ui` app shown sandboxed on a second origin, whose tool calls a person decides
+# and which can never approve anything. Pulls in rmcp through `adk-tool/mcp-apps`.
+genui-apps = ["genui", "web", "adk-harness/mcp", "adk-tool/mcp-apps"]
 
 [dependencies]
 adk-core.workspace = true
@@ -67,6 +81,13 @@ adk-harness = { workspace = true, features = ["kernel"] }
 adk-realtime = { workspace = true, optional = true }
 # The website's desk: its views and the decisions people make on them (`website`).
 adk-website = { workspace = true, optional = true }
+# Graph agents' checkpoints, records and forks (`workflow`).
+adk-graph = { workspace = true, optional = true }
+# The AG-UI extension point agent-drawn surfaces plug into (`genui`, spec 3.3 §10 S2); already
+# in the tree through adk-kernel.
+adk-server.workspace = true
+# MCP Apps: each tool's `_meta.ui` and its `ui://` resources (`genui-apps`).
+adk-tool = { workspace = true, optional = true }
 async-trait.workspace = true
 axum = { version = "0.8", optional = true }
 # Camera and screen frames go to the realtime provider base64-encoded (`voice`).
@@ -74,6 +95,8 @@ base64 = { version = "0.22", optional = true }
 chrono.workspace = true
 crossterm = { version = "0.29", optional = true, features = ["event-stream"] }
 futures.workspace = true
+# Drawn surfaces checked against the embedded A2UI catalog (`genui`).
+jsonschema = { workspace = true, optional = true }
 # The approvals inbox in full over the kernel's Unix socket (`ControlSource`).
 http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "http1"] }
@@ -81,6 +104,8 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 mime_guess = { version = "2.0.5", optional = true }
 # The approvals inbox in full over the kernel's HTTP control plane (`ControlSource`).
 reqwest.workspace = true
+# A drawn field's `regex` check, evaluated again when the form is sent (`genui`).
+regex = { workspace = true, optional = true }
 # Agent messages as Markdown, code blocks highlighted (spec 3.3 §6.1 `tui`).
 pulldown-cmark = { version = "0.13", optional = true, default-features = false }
 ratatui = { version = "0.30", optional = true, default-features = false, features = ["crossterm"] }
@@ -115,19 +140,25 @@ url = { version = "2", optional = true }
 # Internal dev-deps are path-only (no version) so cargo strips them from the published
 # manifest.
 adk-devtools = { path = "../adk-devtools" }
-# The kernel's chat channel contract suite, run against the Telegram adapter.
-adk-kernel = { path = "../adk-kernel", features = ["channels", "conformance"] }
+# The kernel's chat channel contract suite, run against the Telegram adapter, and its
+# PostgreSQL process store for the governed form's shared-store leg.
+adk-kernel = { path = "../adk-kernel", features = ["channels", "conformance", "postgres"] }
 # The kernel-hosted harness of the scenario tests.
 adk-harness = { path = "../adk-harness", features = ["kernel"] }
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic", "openai", "gemini"] }
 # The provider-free realtime model the voice tests and `scripted_voice_home` script.
 adk-realtime = { path = "../adk-realtime", features = ["scripted"] }
 adk-server = { path = "../adk-server", features = ["approvals"] }
-adk-session = { path = "../adk-session" }
+adk-session = { path = "../adk-session", features = ["sqlite", "postgres"] }
 # The website's scripted site: its pipeline, wallet and wire types (feature `website`).
 adk-site = { path = "../adk-site" }
 adk-payments = { path = "../adk-payments" }
 awp-types = { path = "../awp-types" }
+# The invoice-run workflow of `scripted_workflow` and the workflow tests: a governed HTTP
+# node, its draft agent and the SQLite checkpointer (feature `workflow`).
+adk-action = { path = "../adk-action" }
+adk-agent = { path = "../adk-agent" }
+adk-graph = { path = "../adk-graph", features = ["time-travel", "action-http", "sqlite", "postgres"] }
 # The fake Telegram Bot API the chat adapter's tests run against.
 axum = "0.8"
 dotenvy = "0.15"
@@ -138,6 +169,8 @@ tokio = { workspace = true, features = ["full", "test-util"] }
 tower = { version = "0.4", features = ["util"] }
 # Parses what the terminal surface writes, as a terminal would (spec 3.3 WP-E).
 vt100 = "0.16"
+# The in-process MCP server whose app the hostile-app tests show (`genui-apps`).
+rmcp = { version = "3.1", features = ["client", "server", "elicitation"] }
 # The phone's passkey tests rebuild a ceremony around a recorded browser's challenge.
 webauthn-rs = { version = "=0.5.5", default-features = false, features = ["danger-allow-state-serialisation"] }
 # The voice view's socket, opened as a browser would (spec 3.3 §5.6).
@@ -182,6 +215,16 @@ required-features = ["web", "voice-live"]
 [[example]]
 name = "scripted_verbs"
 required-features = ["web", "verb-ui"]
+# The invoice-run workflow on the web home's Runs tab (spec 3.3 §12 developer track), which
+# `web/e2e/workflow.spec.ts` opens; `--live` drafts on whichever provider key is set.
+[[example]]
+name = "scripted_workflow"
+required-features = ["web", "workflow"]
+# Agent-drawn UI over a scripted kernel: Finance draws the invoice form, which
+# `web/e2e/genui.spec.ts` sends and allows once (spec 3.3 §6.1 `genui`, §12).
+[[example]]
+name = "scripted_genui"
+required-features = ["web", "genui"]
 
 [package.metadata.docs.rs]
 all-features = true

@@ -512,6 +512,15 @@ pub mod voice {
     /// A voice conversation with a harness marked for voice, whose spoken actions reach the
     /// home's agenda through its registry.
     pub async fn hub(home: &Home, script: Vec<ScriptedStep>) -> VoiceHub {
+        hub_with(home, script, home.registry.clone()).await
+    }
+
+    /// [`hub`], with its spoken actions taken through `registry`.
+    pub async fn hub_with(
+        home: &Home,
+        script: Vec<ScriptedStep>,
+        registry: adk_surface::verbs::VerbRegistry,
+    ) -> VoiceHub {
         let agent = Arc::new(
             HarnessAgent::builder("chief_of_staff")
                 .model(Arc::new(ScriptedLlm::new("scripted", Vec::<ScriptedResponse>::new())))
@@ -551,7 +560,7 @@ pub mod voice {
             .poll_interval(Duration::from_millis(20))
             .voice_cancel_window(WINDOW)
             .build();
-        let gate = adk_surface::verbs::VerbGate::new(home.registry.clone(), engine.clone());
+        let gate = adk_surface::verbs::VerbGate::new(registry, engine.clone());
         let model =
             ScriptedRealtimeModel::new(script).with_idle_timeout(Duration::from_millis(100));
         VoiceHub::builder(engine, harness, live)

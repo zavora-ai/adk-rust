@@ -27,6 +27,7 @@ import type { VerbsClient } from "./verbs/client";
 import type { WebsiteClient } from "./website/client";
 import { websiteLabels } from "./website/labels";
 import { Website } from "./website/Website";
+import type { WorkflowClient } from "./workflow/client";
 
 /** Where this tab keeps the session each agent's thread follows. */
 const FOLLOWED_KEY = "adk.home.followed";
@@ -43,6 +44,7 @@ export function App({
   initialSection,
   website,
   verbs,
+  workflow,
 }: {
   client: HomeClient;
   seams?: Seams;
@@ -52,6 +54,8 @@ export function App({
   website?: WebsiteClient;
   /** Screen actions, where the server takes them (spec 3.3 §2 item 7). */
   verbs?: VerbsClient;
+  /** The workflow observer's Runs tab, where the server serves it (spec 3.3 §12). */
+  workflow?: WorkflowClient;
 }) {
   const [section, setSection] = useState<Section>(() => initialSection ?? sectionOf(window.location.pathname));
   const [theme, setTheme] = useState<Theme>(storedTheme);
@@ -88,6 +92,8 @@ export function App({
   const site = usePoll(async () => (website ? ((await website.home()) ?? null) : null), 60_000);
   // Whether the server takes screen actions, and what Coming up may be snoozed to (spec 3.3 §2 item 7).
   const screens = usePoll(async () => (verbs ? ((await verbs.list()) ?? null) : null), 10_000);
+  // Whether the server observes graph runs: the developer panel's Runs tab shows only then.
+  const graphs = usePoll(async () => (workflow ? ((await workflow.graphs()) ?? null) : null), 60_000);
   // Whether the roster ends with New agent, and the primary agent a description goes to.
   const roster = usePoll(async () => (client.agentsWithPrimary ? await client.agentsWithPrimary() : undefined), 10_000);
   const agentsSeam = useMemo(() => client.agentsSeam?.(), [client]);
@@ -343,7 +349,13 @@ export function App({
             screens={screens.value?.verbs}
           />
         )}
-        {section === "developer" && <Developer client={client} sessionId={session} />}
+        {section === "developer" && (
+          <Developer
+            client={client}
+            sessionId={session}
+            workflow={workflow && graphs.value ? { client: workflow, graphs: graphs.value } : undefined}
+          />
+        )}
         {section === "website" && website && <Website client={website} onThreads={() => navigate("threads")} />}
         {section === "agents" && agentsSeam && agentsPlace && (
           <AgentsScreen

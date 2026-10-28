@@ -24,7 +24,7 @@ use serde_json::Value;
 use super::safe::safe_line;
 use super::theme::Theme;
 use crate::agents::words as agent_words;
-use crate::model::AgentRow;
+use crate::model::{AgentRow, Mode};
 
 /// The command the view runs.
 pub(crate) const AGENT_COMMAND: &str = "agent";
@@ -174,8 +174,8 @@ pub(crate) struct AgentsPane {
     /// The terminal has no kernel: what `/agent` answered.
     pub no_kernel: Option<String>,
     /// What the home lets every agent on it do, from the engine's grants: an agent's settings
-    /// list it under "On this home it can also:" (spec 3.3 §5.7).
-    pub granted: Vec<String>,
+    /// list each use its mode allows under "On this home it can also:" (spec 3.3 §5.7).
+    pub granted: Vec<crate::agents::GrantedUse>,
 }
 
 impl Default for AgentsPane {
@@ -871,9 +871,28 @@ pub(crate) fn lines(pane: &AgentsPane, theme: &Theme, width: usize) -> Vec<Line<
             lines.push(Line::default());
             match &form.preview {
                 Some(preview) => {
-                    // An agent that runs has what the home grants it; one not yet added, not yet.
-                    let granted = if form.editing.is_some() { &pane.granted[..] } else { &[] };
-                    push_preview(&mut lines, preview, granted, t, width);
+                    // An agent that runs has what the home grants it in the mode the form holds;
+                    // one not yet added, not yet.
+                    let mode =
+                        form.fields.iter().find(|field| field.flag == "asks").and_then(|field| {
+                            match field.value.as_str() {
+                                "just-look" => Some(Mode::JustLook),
+                                "suggest" => Some(Mode::Suggest),
+                                "ask-first" => Some(Mode::AskFirst),
+                                "go-ahead" => Some(Mode::GoAhead),
+                                _ => None,
+                            }
+                        });
+                    let granted: Vec<String> = match form.editing {
+                        Some(_) => pane
+                            .granted
+                            .iter()
+                            .filter(|granted| mode.is_none_or(|mode| granted.holds_in(mode)))
+                            .map(|granted| granted.text.clone())
+                            .collect(),
+                        None => Vec::new(),
+                    };
+                    push_preview(&mut lines, preview, &granted, t, width);
                     let confirm = match &form.editing {
                         Some(_) => agent_words::SAVE_CHANGES.to_string(),
                         None => agent_words::add_named(&safe_line(&form.name())),
@@ -1124,13 +1143,22 @@ mod tests {
                 .collect()
         };
         let granted = [
-            "Show forms and tables in your threads — sending asks you first".to_string(),
-            "Ask to change things on your screens — always asks you first".to_string(),
+            crate::agents::GrantedUse::new(
+                "genui",
+                "Show forms and tables in your threads — sending asks you first",
+            ),
+            crate::agents::GrantedUse::new(
+                "verb-ui",
+                "Ask to change things on your screens — always asks you first",
+            )
+            .only_in([Mode::AskFirst, Mode::GoAhead]),
+            // Finance asks first: what only an agent that looks may do is not listed.
+            crate::agents::GrantedUse::new("look", "Only look").only_in([Mode::JustLook]),
         ];
         let block = [
             "  On this home it can also:".to_string(),
-            format!("    • {}", granted[0]),
-            format!("    • {}", granted[1]),
+            format!("    • {}", granted[0].text),
+            format!("    • {}", granted[1].text),
         ];
 
         let mut pane = AgentsPane { granted: granted.to_vec(), ..AgentsPane::default() };
@@ -1145,6 +1173,7 @@ mod tests {
         let at = shown.iter().position(|line| line.contains("It can read files in Invoices."));
         let at = at.expect("the preview is shown") + 1;
         assert_eq!(shown[at..at + 3], block);
+        assert!(!shown.iter().any(|line| line.contains("Only look")), "not in Ask first");
 
         let mut none = AgentsPane::default();
         none.sent(1, Purpose::List);

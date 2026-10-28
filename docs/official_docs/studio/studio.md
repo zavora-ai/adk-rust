@@ -2,6 +2,10 @@
 
 Visual development environment for building AI agents with drag-and-drop.
 
+> **Note:** ADK Studio is retired in favour of the [workflow observer](../surfaces/workflow.md),
+> which watches graph agents' runs, steps and forks on the web home's Runs tab (spec 3.3 §13
+> decision 12). This page describes the last Studio release.
+
 ## Overview
 
 ADK Studio provides a low-code interface for designing, testing, and deploying AI agents built with ADK-Rust. Create complex multi-agent workflows visually, then compile them to production Rust code.

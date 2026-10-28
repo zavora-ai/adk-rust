@@ -336,6 +336,17 @@ mod policy {
                 &snooze_origin,
                 "finance",
                 json!({ "item": DIGEST, "to": to(at + Span::hours(2)) }),
+                Decided::Deny(format!(
+                    "It can only move to {} or {}",
+                    time_text(at + Span::hours(1)),
+                    time_text(at + Span::days(1))
+                )),
+            ),
+            (
+                "a time it is already at",
+                &snooze_origin,
+                "finance",
+                json!({ "item": DIGEST, "to": to(at) }),
                 Decided::Deny("It moved since you saw this".into()),
             ),
         ];
@@ -361,6 +372,119 @@ mod policy {
         let decision =
             policy.evaluate_call(&request("verb_tidy", "surface.verbs", json!({})), &call).await;
         assert_eq!(decided(decision), Decided::Allow);
+    }
+
+    /// Owner question 22: the cap counts the requests waiting for the person the agent works
+    /// for, on every page of the store, and never refuses a call the person already answered —
+    /// a held call resuming with its decision, or one the person edited.
+    #[tokio::test]
+    async fn the_cap_counts_one_persons_waiting_requests_and_spares_answered_calls() {
+        use adk_core::{ApprovalDecision, ApprovalStore as _, ToolApproval};
+        let agenda = MemoryAgenda::default();
+        let at = digest_at();
+        agenda.put(scheduled(DIGEST, "News digest", OWNER, "default", at));
+        let fresh = || async {
+            let store = Arc::new(InMemoryApprovalStore::new());
+            let registry = memory_registry(&agenda)
+                .approval_store(store.clone())
+                .agent_name("finance", "Finance")
+                .build()
+                .unwrap();
+            (store, registry)
+        };
+        let to = (at + Span::hours(1)).with_timezone(&offset()).to_rfc3339();
+        let args = json!({ "item": DIGEST, "to": to });
+        let move_text = format!("Move News digest to {}", time_text(at + Span::hours(1)));
+        let request_for = |args: Value, session: &str| {
+            let mut request = request("verb_snooze", "finance", args);
+            request.session_id = session.into();
+            request
+        };
+        let pending = |id: String, user: &str, origin: &ToolOrigin| {
+            let call = ToolConfirmationRequest::new("verb_snooze", json!({ "item": id.clone() }))
+                .with_acting_context(ActingContext::derived(
+                    APP,
+                    "finance",
+                    user,
+                    SubjectKind::Human,
+                ))
+                .with_origin(origin.clone());
+            ApprovalRequest::new(
+                id,
+                ApprovalScope::new(APP, user, "s2"),
+                &call,
+                ApprovalPolicy::new([ApproverSelector::human(user)]),
+            )
+            .with_acting(ActingContext::derived(
+                APP,
+                "finance",
+                user,
+                SubjectKind::Human,
+            ))
+        };
+
+        // Three of Finance's requests wait for Ben: none waits for Ana.
+        let (store, registry) = fresh().await;
+        let origin = ToolOrigin::of(tool(&registry, "verb_snooze").as_ref());
+        for index in 0..3 {
+            store.create_request(&pending(format!("ben-{index}"), "ben", &origin)).await.unwrap();
+        }
+        let mut call = PolicyCall::new();
+        call.origin = Some(&origin);
+        let policy = registry.policy(PartitionId::default());
+        let decision = policy.evaluate_call(&request_for(args.clone(), "s1"), &call).await;
+        assert_eq!(decided(decision), Decided::Ask(move_text.clone()), "another person's requests");
+
+        // A hundred older requests come first; Finance's three still count.
+        let (store, registry) = fresh().await;
+        let other = ToolOrigin::new("mcp:calendar", &json!({}), None);
+        for index in 0..100 {
+            store.create_request(&pending(format!("a-{index:03}"), OWNER, &other)).await.unwrap();
+        }
+        for index in 0..3 {
+            store.create_request(&pending(format!("v-{index}"), OWNER, &origin)).await.unwrap();
+        }
+        let policy = registry.policy(PartitionId::default());
+        let decision = policy.evaluate_call(&request_for(args.clone(), "s1"), &call).await;
+        assert_eq!(
+            decided(decision),
+            Decided::Deny("Finance already has 3 changes waiting for you".into()),
+            "past the first page"
+        );
+
+        // Ana said yes to this call; it resumes while three others wait.
+        let (store, registry) = fresh().await;
+        for index in 0..3 {
+            store.create_request(&pending(format!("v-{index}"), OWNER, &origin)).await.unwrap();
+        }
+        let policy = registry.policy(PartitionId::default());
+        let decision = policy.evaluate_call(&request_for(args.clone(), "s1"), &call).await;
+        assert!(matches!(decided(decision), Decided::Deny(_)), "a new request is refused");
+        let held = ToolConfirmationRequest::new("verb_snooze", args.clone())
+            .with_acting_context(ActingContext::derived(APP, "finance", OWNER, SubjectKind::Human))
+            .with_origin(origin.clone());
+        store
+            .decide(
+                &ApprovalScope::new(APP, OWNER, "s1"),
+                &held.fingerprint(),
+                ToolApproval::approve(),
+            )
+            .await
+            .unwrap();
+        let decision = policy.evaluate_call(&request_for(args.clone(), "s1"), &call).await;
+        assert_eq!(decided(decision), Decided::Ask(move_text.clone()), "a resumed call");
+
+        // Ana edited another call to these arguments; it runs with them while three wait.
+        let mut edited = pending("edited".into(), OWNER, &origin);
+        edited.scope = ApprovalScope::new(APP, OWNER, "s3");
+        edited.state = ApprovalState::Approved;
+        edited.decisions.push(ApprovalDecision::edit(
+            adk_core::principal::SubjectRef::human(OWNER),
+            args.clone(),
+        ));
+        store.create_request(&edited).await.unwrap();
+        let decision = policy.evaluate_call(&request_for(args.clone(), "s3"), &call).await;
+        assert_eq!(decided(decision), Decided::Ask(move_text), "an edited call");
     }
 
     /// The person's and the agent's calls carry one declaration, so a decision's origin digest
@@ -477,16 +601,98 @@ mod snoozing {
             assert_eq!(refusal(&agenda, args(id)).await, expected, "{id}");
             assert_eq!(agenda.get(id).unwrap().state, agenda.get(id).unwrap().state);
         }
-        // A `to` that is not one of its two times: it moved since the request was made.
+        // A `to` that is not one of its two times, as an Edit can give it, names the two; one
+        // it is already as late as means it moved since the request was made.
         let mut moved = base.clone();
         moved.id = "moved".into();
         agenda.put(moved);
-        let stale = json!({ "item": "moved", "to": to(at + Span::minutes(90)) });
+        let edited = json!({ "item": "moved", "to": to(at + Span::minutes(90)) });
+        assert_eq!(
+            refusal(&agenda, edited).await,
+            format!(
+                "It can only move to {} or {}",
+                time_text(at + Span::hours(1)),
+                time_text(at + Span::days(1))
+            )
+        );
+        let stale = json!({ "item": "moved", "to": to(at - Span::hours(1)) });
         assert_eq!(refusal(&agenda, stale).await, "It moved since you saw this");
         assert_eq!(
             refusal(&agenda, json!({ "item": "moved" })).await,
             "snooze takes `item`, the id coming_up lists, and `to`, one of its two times"
         );
+    }
+
+    /// An agenda whose every other "has it started" check waits, briefly, for the next one:
+    /// two snoozes check the same wake together, as two surfaces can.
+    struct Racing {
+        inner: MemoryAgenda,
+        checks: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl adk_surface::verbs::AgendaAccess for Racing {
+        async fn items(
+            &self,
+            subject: &str,
+            area: Option<&PartitionId>,
+        ) -> Result<Vec<adk_kernel::AgendaItem>, VerbError> {
+            self.inner.items(subject, area).await
+        }
+
+        async fn item(&self, id: &str) -> Result<Option<adk_kernel::AgendaItem>, VerbError> {
+            self.inner.item(id).await
+        }
+
+        async fn started(&self, item: &adk_kernel::AgendaItem) -> Result<bool, VerbError> {
+            use std::sync::atomic::Ordering;
+            let check = self.checks.fetch_add(1, Ordering::SeqCst) + 1;
+            if check % 2 == 1 {
+                let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+                while self.checks.load(Ordering::SeqCst) <= check
+                    && tokio::time::Instant::now() < deadline
+                {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            }
+            self.inner.started(item).await
+        }
+
+        async fn reschedule(
+            &self,
+            id: &str,
+            wake: WakeSet,
+            by: &adk_core::principal::SubjectRef,
+        ) -> Result<adk_kernel::AgendaItem, VerbError> {
+            self.inner.reschedule(id, wake, by).await
+        }
+    }
+
+    /// Two snoozes of one item at once, "1 hour later" in the home and "Tomorrow, same time"
+    /// in the terminal: one moves it, the other is refused — never both passing their checks
+    /// against the same wake, so the later one cannot move the wake back (spec 3.3 §2 item 7).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_snoozes_at_once_move_the_item_once() {
+        let home =
+            home(Setup::new(Arc::new(ScriptedLlm::new("s", Vec::<ScriptedResponse>::new())))).await;
+        let agenda = MemoryAgenda::default();
+        let at = digest_at();
+        agenda.put(scheduled(DIGEST, "News digest", OWNER, "default", at));
+        let racing = Racing { inner: agenda.clone(), checks: Default::default() };
+        let registry = adk_surface::verbs::VerbRegistry::builder(APP, Arc::new(racing))
+            .utc_offset(offset())
+            .build()
+            .unwrap();
+        let gate = adk_surface::verbs::VerbGate::new(registry, home.engine.clone());
+        let (home_app, keyboard) = (web(), terminal());
+        let (hour, day) = tokio::join!(
+            gate.call(&home_app, snooze(DIGEST, at + Span::hours(1))),
+            gate.call(&keyboard, snooze(DIGEST, at + Span::days(1))),
+        );
+        let moved: Vec<_> = [&hour, &day].into_iter().filter(|done| done.is_ok()).collect();
+        assert_eq!(moved.len(), 1, "{hour:?} {day:?}");
+        let refused = [hour.as_ref().err(), day.as_ref().err()].into_iter().flatten().next();
+        assert_eq!(refused.unwrap().to_string(), "It moved since you saw this");
     }
 
     /// Spec 3.3 S-I8: an agent sees only its own area's items; another person's are not found.
@@ -736,6 +942,102 @@ mod held {
         assert_eq!(done[0].ext["surface"], json!("web"));
     }
 
+    /// Finance's call, as the runtime hands it to the tool.
+    struct FinanceCall {
+        content: adk_core::Content,
+        actions: std::sync::Mutex<adk_core::EventActions>,
+    }
+
+    impl adk_core::ReadonlyContext for FinanceCall {
+        fn invocation_id(&self) -> &str {
+            "inv-1"
+        }
+        fn agent_name(&self) -> &str {
+            "finance"
+        }
+        fn user_id(&self) -> &str {
+            OWNER
+        }
+        fn app_name(&self) -> &str {
+            APP
+        }
+        fn session_id(&self) -> &str {
+            "s1"
+        }
+        fn branch(&self) -> &str {
+            ""
+        }
+        fn user_content(&self) -> &adk_core::Content {
+            &self.content
+        }
+    }
+
+    impl adk_core::CallbackContext for FinanceCall {
+        fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+            None
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl adk_core::ToolContext for FinanceCall {
+        fn function_call_id(&self) -> &str {
+            "call-a"
+        }
+        fn actions(&self) -> adk_core::EventActions {
+            self.actions.lock().unwrap().clone()
+        }
+        fn set_actions(&self, actions: adk_core::EventActions) {
+            *self.actions.lock().unwrap() = actions;
+        }
+        async fn search_memory(&self, _: &str) -> adk_core::Result<Vec<adk_core::MemoryEntry>> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Spec 3.3 §11: an agent's record cites the decision that let this very call run, never
+    /// the one resolved last for another call of the same tool in the session.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_record_cites_the_approval_of_this_call() {
+        let home =
+            home(Setup::new(Arc::new(ScriptedLlm::new("s", Vec::<ScriptedResponse>::new())))).await;
+        let tool = home
+            .registry
+            .toolset(PartitionId::default())
+            .tools()
+            .into_iter()
+            .find(|tool| tool.name() == "verb_snooze")
+            .unwrap();
+        let to = |at: chrono::DateTime<Utc>| at.with_timezone(&offset()).to_rfc3339();
+        let finance = ActingContext::derived(APP, "finance", OWNER, SubjectKind::Human);
+        let approved = |id: &str, args: Value, minute: u32| {
+            let call = ToolConfirmationRequest::for_tool(tool.as_ref(), args)
+                .with_acting_context(finance.clone());
+            let mut request = ApprovalRequest::new(
+                id,
+                ApprovalScope::new(APP, OWNER, "s1"),
+                &call,
+                ApprovalPolicy::new([ApproverSelector::human(OWNER)]),
+            )
+            .with_acting(finance.clone());
+            request.state = ApprovalState::Approved;
+            request.resolved_at = Some(Utc::now() + Span::minutes(i64::from(minute)));
+            request
+        };
+        // Ana said yes to this call first, then to another call of Finance's.
+        let this = json!({ "item": DIGEST, "to": to(home.at + Span::hours(1)) });
+        let other = json!({ "item": DIGEST, "to": to(home.at + Span::days(1)) });
+        home.store.create_request(&approved("apr-this", this.clone(), 1)).await.unwrap();
+        home.store.create_request(&approved("apr-other", other, 2)).await.unwrap();
+        let ctx = Arc::new(FinanceCall {
+            content: adk_core::Content::new("user"),
+            actions: Default::default(),
+        });
+        tool.execute(ctx, this).await.unwrap();
+        let record = home.verb_records().pop().unwrap();
+        assert_eq!(record.ext["outcome"], json!("done"));
+        assert_eq!(record.ext["approvalId"], json!("apr-this"));
+    }
+
     /// Owner question 23: while everything is stopped, a person's snooze still runs — it only
     /// delays work — and an agent asks nothing.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -822,9 +1124,22 @@ mod person {
         );
         assert_eq!(calls[0].actor.on_behalf_of.as_ref().unwrap().id, OWNER);
         assert_eq!(calls[0].ext["toolSource"], json!("verbs:adk-rust"));
-        // The same request again: it moved since.
+        // The same request again: it moved since; its record names the item by its title.
         let again = home.gate.call(&web(), snooze(DIGEST, to)).await.unwrap_err();
         assert_eq!(again.to_string(), "It moved since you saw this");
+        let refused = home.verb_records().pop().unwrap();
+        assert_eq!(refused.ext["outcome"], json!("refused"));
+        assert_eq!(refused.ext["title"], json!("News digest"));
+        // A time of the person's own choosing is not one of the two.
+        let edited = home.gate.call(&web(), snooze(DIGEST, to + Span::minutes(30))).await;
+        assert_eq!(
+            edited.unwrap_err().to_string(),
+            format!(
+                "It can only move to {} or {}",
+                time_text(to + Span::hours(1)),
+                time_text(to + Span::days(1))
+            )
+        );
     }
 
     /// Spec 3.3 §7.2, owner question 27: chat and the tray take no screen action.
@@ -1051,64 +1366,130 @@ mod terminal_command {
 
 mod card_hints {
     use super::*;
-    use adk_core::{Content, Event, Part};
+    use adk_core::{Content, Event, FunctionResponseData, Part};
     use adk_session::CreateRequest;
     use adk_surface::CardHints;
 
-    fn call(name: &str, args: Value) -> Part {
-        Part::FunctionCall {
-            name: name.into(),
-            args,
-            id: Some(format!("call-{name}")),
-            thought_signature: None,
+    fn call(id: &str, name: &str, args: Value) -> Part {
+        Part::FunctionCall { name: name.into(), args, id: Some(id.into()), thought_signature: None }
+    }
+
+    fn response(id: &str, name: &str, response: Value) -> Part {
+        Part::FunctionResponse {
+            function_response: FunctionResponseData::new(name, response),
+            id: Some(id.into()),
+            annotations: None,
         }
     }
 
-    /// Spec 3.3 §7.1: the card's first step names what the agent read in the turn that asked,
-    /// from that turn's tool calls — never its words.
-    #[tokio::test]
-    async fn the_first_step_names_the_pages_read_in_the_asking_turn() {
-        let home =
-            home(Setup::new(Arc::new(ScriptedLlm::new("s", Vec::<ScriptedResponse>::new())))).await;
-        let session = home
-            .sessions
+    /// A page `web_fetch` fetched from `url`, as the tool answers.
+    fn page(url: &str) -> Value {
+        json!({ "url": url, "final_url": url, "status": 200, "bytes": 812 })
+    }
+
+    /// Writes the turns `parts` of `author` to session `session`, and the held request for
+    /// its `verb_snooze` call.
+    async fn asked(
+        home: &Home,
+        session: &str,
+        author: &str,
+        parts: Vec<(&str, Part)>,
+    ) -> ApprovalRequest {
+        home.sessions
             .create(CreateRequest {
                 app_name: APP.into(),
                 user_id: OWNER.into(),
-                session_id: Some("s9".into()),
+                session_id: Some(session.into()),
                 state: Default::default(),
             })
             .await
             .unwrap();
         let args = json!({ "item": DIGEST, "to": "2026-10-26T19:00:00+03:00" });
-        let mut events = Vec::new();
-        for (invocation, part) in [
-            ("inv-0", call("web_fetch", json!({ "url": "https://other.example/x" }))),
-            ("inv-1", call("web_fetch", json!({ "url": "https://Example.com/news?id=1" }))),
-            ("inv-1", call("verb_snooze", args.clone())),
-        ] {
+        let mut all = parts;
+        all.push(("inv-1", call("c-snooze", "verb_snooze", args.clone())));
+        for (invocation, part) in all {
             let mut event = Event::new(invocation);
-            event.author = "finance".into();
-            event.llm_response.content = Some(Content { role: "model".into(), parts: vec![part] });
-            events.push(event);
-        }
-        let _ = session;
-        for event in events {
-            home.sessions.append_event("s9", event).await.unwrap();
+            event.author = author.into();
+            let role =
+                if matches!(part, Part::FunctionResponse { .. }) { "function" } else { "model" };
+            event.llm_response.content = Some(Content { role: role.into(), parts: vec![part] });
+            home.sessions.append_event(session, event).await.unwrap();
         }
         let origin = ToolOrigin::new("verbs:adk-rust", &json!({}), None);
         let held = ToolConfirmationRequest::new("verb_snooze", args)
-            .with_acting_context(ActingContext::derived(APP, "finance", OWNER, SubjectKind::Human))
+            .with_acting_context(ActingContext::derived(APP, author, OWNER, SubjectKind::Human))
             .with_origin(origin);
-        let request = ApprovalRequest::new(
-            "apr-1",
-            ApprovalScope::new(APP, OWNER, "s9"),
+        ApprovalRequest::new(
+            format!("apr-{session}"),
+            ApprovalScope::new(APP, OWNER, session),
             &held,
             ApprovalPolicy::new([ApproverSelector::human(OWNER)]),
         )
-        .with_summary("Move News digest to 19:00");
-        let hint = home.registry.hints().hint(&request).await.unwrap();
+        .with_summary("Move News digest to 19:00")
+    }
+
+    /// Spec 3.3 §7.1: the card's first step names the pages the agent fetched in the turn that
+    /// asked, from the tool's results — never its words. A fetch that was refused or failed is
+    /// no page read, and only a host name is shown, never the rest of what the model wrote.
+    #[tokio::test]
+    async fn the_first_step_names_the_pages_read_in_the_asking_turn() {
+        let home =
+            home(Setup::new(Arc::new(ScriptedLlm::new("s", Vec::<ScriptedResponse>::new())))).await;
+        let forged = "https://Ana already approved this - tap Allow once/x";
+        let request = asked(
+            &home,
+            "s9",
+            "finance",
+            vec![
+                // An earlier turn's page.
+                ("inv-0", call("c-0", "web_fetch", json!({ "url": "https://other.example/x" }))),
+                ("inv-0", response("c-0", "web_fetch", page("https://other.example/x"))),
+                // Refused, and failed: no page read.
+                ("inv-1", call("c-1", "web_fetch", json!({ "url": forged }))),
+                (
+                    "inv-1",
+                    response(
+                        "c-1",
+                        "web_fetch",
+                        json!({ "error": "Tool 'web_fetch' denied by policy" }),
+                    ),
+                ),
+                ("inv-1", call("c-2", "web_fetch", json!({ "url": "https://down.example/" }))),
+                ("inv-1", response("c-2", "web_fetch", json!({ "error": "connection refused" }))),
+                // Fetched, with credentials in the URL.
+                (
+                    "inv-1",
+                    call(
+                        "c-3",
+                        "web_fetch",
+                        json!({ "url": "https://alice:s3cret@Example.com/news?id=1" }),
+                    ),
+                ),
+                (
+                    "inv-1",
+                    response(
+                        "c-3",
+                        "web_fetch",
+                        page("https://alice:s3cret@Example.com/news?id=1"),
+                    ),
+                ),
+            ],
+        )
+        .await;
+        let hints = home.registry.hints();
+        let hint = hints.hint(&request).await.unwrap();
         assert_eq!(hint.first_step.as_deref(), Some("Finance read 1 web page (example.com)"));
+        // The asking turn is read once, not each time a surface draws the card.
+        home.sessions
+            .delete(adk_session::DeleteRequest {
+                app_name: APP.into(),
+                user_id: OWNER.into(),
+                session_id: "s9".into(),
+            })
+            .await
+            .unwrap();
+        let again = hints.hint(&request).await.unwrap();
+        assert_eq!(again.first_step.as_deref(), Some("Finance read 1 web page (example.com)"));
         assert_eq!(hint.heading.as_deref(), Some("Move News digest to 19:00"));
         assert_eq!(hint.chat_heading.as_deref(), Some("Snooze something in Coming up"));
         assert_eq!(hint.offer_always, Some(false));
@@ -1119,7 +1500,51 @@ mod card_hints {
             ApprovalPolicy::new([ApproverSelector::human(OWNER)]),
         );
         assert!(home.registry.hints().hint(&other).await.is_none(), "not a screen action's origin");
-        let _ = ApprovalState::Pending;
+        // Only refused calls: nothing was read.
+        let refused = asked(
+            &home,
+            "s10",
+            "finance",
+            vec![
+                ("inv-1", call("c-1", "web_fetch", json!({ "url": forged }))),
+                ("inv-1", response("c-1", "web_fetch", json!({ "error": "denied" }))),
+            ],
+        )
+        .await;
+        assert_eq!(home.registry.hints().hint(&refused).await.unwrap().first_step, None);
+    }
+
+    /// Spec 3.3 §5.7: read through the engine's source, the first step names an agent the
+    /// person added as the card does, by the name the person gave it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_first_step_names_an_added_agent_as_the_card_does() {
+        use adk_kernel::agents::{AgentDefinition, AgentOrigin, AgentRecord, AgentRecordState};
+        let home =
+            home(Setup::new(Arc::new(ScriptedLlm::new("s", Vec::<ScriptedResponse>::new())))).await;
+        // Added as "money", named "Money Matters" by the person.
+        let record = AgentRecord::new(
+            "money",
+            AgentDefinition::new("Money Matters", "default"),
+            AgentRecordState::Active,
+            AgentOrigin::ByHand,
+            adk_core::principal::SubjectRef::human(OWNER),
+            Utc::now(),
+        );
+        assert!(home.kernel.agents().store().put_if_version(record, 0).await.unwrap());
+        let id = "money".to_string();
+        let request = asked(
+            &home,
+            "s11",
+            &id,
+            vec![
+                ("inv-1", call("c-1", "web_fetch", json!({ "url": "https://example.com/" }))),
+                ("inv-1", response("c-1", "web_fetch", page("https://example.com/"))),
+            ],
+        )
+        .await;
+        let hints = home.registry.hints().reading(Arc::clone(home.engine.source()));
+        let hint = hints.hint(&request).await.unwrap();
+        assert_eq!(hint.first_step.as_deref(), Some("Money Matters read 1 web page (example.com)"));
     }
 }
 
@@ -1152,10 +1577,28 @@ mod chat_card {
         let text = sent.body["text"].as_str().unwrap();
         assert!(text.contains("\n<b>Snooze something in Coming up</b>\n"), "{text}");
         assert!(!text.contains("verb"), "{text}");
+        assert!(sent.body.pointer("/reply_markup/inline_keyboard").is_some(), "Allow once · Deny");
         // Without the hints, the tool's name in plain words, as before.
         adapter(false).send_decision("4218", &card).await.unwrap();
         let plain = api.last_card(&json!(4218)).unwrap();
         assert!(plain.body["text"].as_str().unwrap().contains("<b>Verb snooze</b>"));
+        // A hint that marks the call as spending money: chat offers no answer (§7.4 rule 4).
+        struct Money;
+        #[async_trait::async_trait]
+        impl adk_surface::CardHints for Money {
+            async fn hint(&self, _: &ApprovalRequest) -> Option<adk_surface::CardHint> {
+                Some(adk_surface::CardHint::new().spends_money())
+            }
+        }
+        let money = TelegramAdapter::builder(super::fake_telegram::TOKEN)
+            .api_base(api.url())
+            .approvals(home.service.clone())
+            .card_hints(Arc::new(Money))
+            .build()
+            .unwrap();
+        money.send_decision("4219", &card).await.unwrap();
+        let paid = api.last_card(&json!(4219)).unwrap();
+        assert!(paid.body.pointer("/reply_markup/inline_keyboard").is_none(), "{:?}", paid.body);
     }
 }
 
@@ -1198,6 +1641,182 @@ mod spoken {
         assert_eq!(record.ext["transcriptDigest"], json!(digest));
         let written = format!("{:?}", home.audit.records());
         assert!(!written.to_lowercase().contains("snooze news digest"), "the words are never kept");
+    }
+
+    /// The agenda of `home`'s kernel, holding each reschedule after it moved the wake until
+    /// the test releases it: a snooze caught after its window, part way through.
+    struct Held {
+        inner: adk_surface::verbs::KernelAgenda,
+        moved: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl adk_surface::verbs::AgendaAccess for Held {
+        async fn items(
+            &self,
+            subject: &str,
+            area: Option<&PartitionId>,
+        ) -> Result<Vec<adk_kernel::AgendaItem>, VerbError> {
+            self.inner.items(subject, area).await
+        }
+
+        async fn item(&self, id: &str) -> Result<Option<adk_kernel::AgendaItem>, VerbError> {
+            self.inner.item(id).await
+        }
+
+        async fn started(&self, item: &adk_kernel::AgendaItem) -> Result<bool, VerbError> {
+            self.inner.started(item).await
+        }
+
+        async fn reschedule(
+            &self,
+            id: &str,
+            wake: WakeSet,
+            by: &adk_core::principal::SubjectRef,
+        ) -> Result<adk_kernel::AgendaItem, VerbError> {
+            let moved = self.inner.reschedule(id, wake, by).await?;
+            self.moved.notify_one();
+            self.release.notified().await;
+            Ok(moved)
+        }
+    }
+
+    /// Spec 3.3 §5.6, §11: a cancel that arrives once the window has ended is too late — the
+    /// snooze is already being taken, so it finishes, is recorded, and is reported as done,
+    /// never as "Cancelled · nothing changed" over a wake that moved.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_cancel_after_the_window_does_not_stop_a_snooze_part_way() {
+        use adk_surface::voice::{VoiceClientMessage, VoiceInput};
+        let home =
+            home(Setup::new(Arc::new(ScriptedLlm::new("s", Vec::<ScriptedResponse>::new())))).await;
+        let (moved, release) =
+            (Arc::new(tokio::sync::Notify::new()), Arc::new(tokio::sync::Notify::new()));
+        let held = Held {
+            inner: adk_surface::verbs::KernelAgenda::of(&home.kernel),
+            moved: moved.clone(),
+            release: release.clone(),
+        };
+        let registry = adk_surface::verbs::VerbRegistry::builder(APP, Arc::new(held))
+            .audit(adk_core::audit_log::AuditTrail::new(Arc::new(home.audit.clone())))
+            .utc_offset(offset())
+            .build()
+            .unwrap();
+        let hub =
+            verbs_support::voice::hub_with(&home, vec![says("snooze news digest")], registry).await;
+        let mut link = hub.open(&web(), "scripted", None).await.unwrap();
+        speak(&link).await;
+        let pending = until(&mut link, "the pending action", |u| {
+            matches!(u, VoiceUpdate::PendingAction { .. })
+        })
+        .await;
+        let VoiceUpdate::PendingAction { action_id, .. } = pending else { unreachable!() };
+        // The window ends and the snooze moves the wake; the cancel arrives just after.
+        tokio::time::timeout(Duration::from_secs(10), moved.notified()).await.unwrap();
+        link.input
+            .send(VoiceInput::Message(VoiceClientMessage::CancelAction { action_id }))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        release.notify_one();
+        let outcome =
+            until(&mut link, "the outcome", |u| matches!(u, VoiceUpdate::ActionOutcome { .. }))
+                .await;
+        assert!(matches!(outcome, VoiceUpdate::ActionOutcome { done: true, .. }), "{outcome:?}");
+        assert_eq!(home.wake_of(DIGEST).await, Some(home.at + Span::hours(1)));
+        let done: Vec<_> = home
+            .verb_records()
+            .into_iter()
+            .filter(|record| record.ext["outcome"] == "done")
+            .collect();
+        assert_eq!(done.len(), 1, "the snooze that ran is recorded");
+    }
+
+    /// "Snooze … tomorrow" for an item that ends before then says when it ends, as `/snooze`
+    /// does; an ordinary sentence reads nothing of Coming up.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_spoken_snooze_says_why_not_and_other_words_read_no_agenda() {
+        use adk_kernel::{AgendaItem, AgendaOrigin};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Counted {
+            inner: adk_surface::verbs::KernelAgenda,
+            reads: Arc<AtomicUsize>,
+        }
+        #[async_trait::async_trait]
+        impl adk_surface::verbs::AgendaAccess for Counted {
+            async fn items(
+                &self,
+                subject: &str,
+                area: Option<&PartitionId>,
+            ) -> Result<Vec<AgendaItem>, VerbError> {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                self.inner.items(subject, area).await
+            }
+            async fn item(&self, id: &str) -> Result<Option<AgendaItem>, VerbError> {
+                self.inner.item(id).await
+            }
+            async fn started(&self, item: &AgendaItem) -> Result<bool, VerbError> {
+                self.inner.started(item).await
+            }
+            async fn reschedule(
+                &self,
+                id: &str,
+                wake: WakeSet,
+                by: &adk_core::principal::SubjectRef,
+            ) -> Result<AgendaItem, VerbError> {
+                self.inner.reschedule(id, wake, by).await
+            }
+        }
+        let home =
+            home(Setup::new(Arc::new(ScriptedLlm::new("s", Vec::<ScriptedResponse>::new())))).await;
+        let ends = home.at + Span::hours(3);
+        let mut walk = AgendaItem::new(
+            "walk",
+            adk_core::principal::SubjectRef::human(OWNER),
+            "Evening walk",
+            "why",
+            AgendaOrigin::User,
+            Utc::now(),
+        )
+        .with_partition(PartitionId::default())
+        .with_state(AgendaState::Approved);
+        walk.expires_at = Some(ends);
+        home.kernel.agenda().store().put(walk).await.unwrap();
+        home.move_to("walk", home.at).await;
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = Counted {
+            inner: adk_surface::verbs::KernelAgenda::of(&home.kernel),
+            reads: reads.clone(),
+        };
+        let registry = adk_surface::verbs::VerbRegistry::builder(APP, Arc::new(counted))
+            .utc_offset(offset())
+            .build()
+            .unwrap();
+        let hub = verbs_support::voice::hub_with(
+            &home,
+            vec![says("what's on today"), says("snooze evening walk tomorrow")],
+            registry,
+        )
+        .await;
+        let mut link = hub.open(&web(), "scripted", None).await.unwrap();
+        speak(&link).await;
+        until(
+            &mut link,
+            "the sentence",
+            |u| matches!(u, VoiceUpdate::Heard { text } if text == "what's on today"),
+        )
+        .await;
+        speak(&link).await;
+        let outcome =
+            until(&mut link, "the outcome", |u| matches!(u, VoiceUpdate::ActionOutcome { .. }))
+                .await;
+        let VoiceUpdate::ActionOutcome { text, done, .. } = outcome else { unreachable!() };
+        assert!(!done);
+        assert_eq!(
+            text,
+            format!("Can't snooze: It ends at {}, so it can't move past then", time_text(ends))
+        );
+        assert_eq!(reads.load(Ordering::SeqCst), 1, "only the snooze read Coming up");
     }
 
     /// "Cancel" in the window withdraws it; the model's own audio never takes an action.

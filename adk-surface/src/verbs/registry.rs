@@ -192,6 +192,39 @@ impl AgendaAccess for KernelAgenda {
     }
 }
 
+/// No agenda: a process that only draws the cards of another process's actions.
+struct NoAgenda;
+
+impl NoAgenda {
+    fn refused() -> VerbError {
+        VerbError::refused("Coming up isn't available here — use the home")
+    }
+}
+
+#[async_trait]
+impl AgendaAccess for NoAgenda {
+    async fn items(&self, _: &str, _: Option<&PartitionId>) -> Result<Vec<AgendaItem>, VerbError> {
+        Err(Self::refused())
+    }
+
+    async fn item(&self, _: &str) -> Result<Option<AgendaItem>, VerbError> {
+        Err(Self::refused())
+    }
+
+    async fn started(&self, _: &AgendaItem) -> Result<bool, VerbError> {
+        Err(Self::refused())
+    }
+
+    async fn reschedule(
+        &self,
+        _: &str,
+        _: WakeSet,
+        _: &SubjectRef,
+    ) -> Result<AgendaItem, VerbError> {
+        Err(Self::refused())
+    }
+}
+
 /// Runs one screen action (spec 3.3 §2 item 7).
 ///
 /// A handler gets a [`VerbScope`] and nothing else: no approval service, agent table, rules,
@@ -257,6 +290,9 @@ pub struct VerbScope {
     agenda: Arc<dyn AgendaAccess>,
     now: DateTime<Utc>,
     offset: FixedOffset,
+    /// Held from reading a wake to moving it, so two moves of this registry never both pass
+    /// their checks against the same wake.
+    moving: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl fmt::Debug for VerbScope {
@@ -350,6 +386,9 @@ impl VerbScope {
         from: DateTime<Utc>,
         to: DateTime<Utc>,
     ) -> Result<AgendaItem, VerbError> {
+        // The kernel moves the wake without comparing it with `from`: the check and the move
+        // are one step for every move this registry makes.
+        let _one_at_a_time = self.moving.lock().await;
         let item = self.item(id).await?;
         let wake = match &item.state {
             AgendaState::Scheduled { wake } => wake,
@@ -432,6 +471,7 @@ pub(crate) struct Inner {
     pub(crate) sessions: Option<Arc<dyn SessionService>>,
     pub(crate) answers: Option<Arc<dyn AnswerLog>>,
     pub(crate) names: HashMap<String, String>,
+    pub(crate) moving: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl fmt::Debug for VerbRegistry {
@@ -577,6 +617,7 @@ impl VerbRegistryBuilder {
                 sessions: self.sessions,
                 answers: self.answers,
                 names: self.names,
+                moving: Arc::new(tokio::sync::Mutex::new(())),
             }),
         })
     }
@@ -599,6 +640,25 @@ impl VerbRegistry {
             answers: None,
             names: HashMap::new(),
         }
+    }
+
+    /// A builder of the first catalogue in `app` with no agenda, for a process that draws the
+    /// cards and lists the grant of actions another process takes, such as a terminal attached
+    /// to `adk-rust up` (spec 3.3 §7.1): its [`hints`](Self::hints) and [`grant`](Self::grant)
+    /// are those of the process that hosts the actions, and every action it would run is
+    /// refused.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_surface::verbs::VerbRegistry;
+    ///
+    /// let drawn = VerbRegistry::catalogue("adk-rust").build().unwrap();
+    /// assert_eq!(drawn.origin(), "verbs:adk-rust");
+    /// let _hints = drawn.hints();
+    /// ```
+    pub fn catalogue(app: impl Into<String>) -> VerbRegistryBuilder {
+        Self::builder(app, Arc::new(NoAgenda))
     }
 
     pub(crate) fn inner(&self) -> &Inner {
@@ -647,6 +707,7 @@ impl VerbRegistry {
             agenda: Arc::clone(&self.inner.agenda),
             now: self.inner.clock.now(),
             offset: self.inner.offset,
+            moving: Arc::clone(&self.inner.moving),
         }
     }
 
@@ -695,7 +756,8 @@ impl VerbRegistry {
     }
 
     /// What a host grants every agent it gives the action tools, for
-    /// `SurfaceEngineBuilder::grant` (spec 3.3 §5.7, S-I12, S-I13).
+    /// `SurfaceEngineBuilder::grant` (spec 3.3 §5.7, S-I12, S-I13): only in Ask first and Go
+    /// ahead, as Just look and Suggest refuse every change an agent asks for.
     ///
     /// # Example
     ///
@@ -706,5 +768,6 @@ impl VerbRegistry {
     /// ```
     pub fn grant(&self) -> GrantedUse {
         GrantedUse::new(GRANT_ID, words::GRANTED)
+            .only_in([crate::model::Mode::AskFirst, crate::model::Mode::GoAhead])
     }
 }

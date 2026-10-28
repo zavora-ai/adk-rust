@@ -308,3 +308,79 @@ async fn a_request_says_whether_it_shows_the_call_s_own_arguments() {
 async fn call_route(fx: &Fixture, uri: &str) -> (StatusCode, Value) {
     call(fx, "GET", uri, Some("bo"), Value::Null).await
 }
+
+/// Refuses every edit, and notes each decision the service recorded with the caller.
+#[derive(Default)]
+struct NoEdits {
+    decided: std::sync::Mutex<Vec<(String, String, adk_core::ApprovalState)>>,
+}
+
+#[async_trait]
+impl adk_server::approvals::DecideGuard for NoEdits {
+    async fn check(
+        &self,
+        call: &adk_server::approvals::DecideCall<'_>,
+    ) -> Result<(), adk_core::AdkError> {
+        assert_eq!(
+            call.request.state,
+            adk_core::ApprovalState::Pending,
+            "the check sees it before"
+        );
+        match call.action {
+            adk_core::ApprovalAction::Edit => Err(adk_core::AdkError::new(
+                adk_core::ErrorComponent::Server,
+                adk_core::ErrorCategory::Forbidden,
+                "test.no_edits",
+                "edit it in the home",
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    async fn decided(
+        &self,
+        call: &adk_server::approvals::DecideCall<'_>,
+        decided: &ApprovalRequest,
+    ) {
+        self.decided.lock().unwrap().push((
+            call.caller.user_id.clone(),
+            decided.id.clone(),
+            decided.state,
+        ));
+    }
+}
+
+/// A host's decide guard (spec 3.3 §7.2) checks each decision after the caller is known and
+/// before the service records it: its refusal is the caller's answer and nothing is decided;
+/// a decision it admits is recorded, and the guard hears of it with the caller.
+#[tokio::test]
+async fn a_decide_guard_refuses_before_the_service_and_hears_what_it_recorded() {
+    let store = Arc::new(InMemoryApprovalStore::new());
+    let service = Arc::new(StoreApprovalService::new(store.clone()));
+    let guard = Arc::new(NoEdits::default());
+    let loader = Arc::new(SingleAgentLoader::new(Arc::new(Idle)));
+    let sessions = Arc::new(InMemorySessionService::new()) as Arc<dyn SessionService>;
+    let config = ServerConfig::new(loader, sessions).with_request_context(Arc::new(UserExtractor));
+    let endpoints = adk_server::approvals::ApprovalEndpoints::new(service.clone())
+        .with_decide_guard(guard.clone());
+    let app = ServerBuilder::new(config).with_approval_endpoints(endpoints).build();
+    let fx = Fixture { app, service, store };
+    let request = submit(&fx, 1).await;
+    let uri = format!("/api/approvals/{}/decide", request.id);
+
+    let edit = json!({ "expectedVersion": 1, "action": "edit", "editedArgs": { "amount": 1 } });
+    let (status, body) = call(&fx, "POST", &uri, Some("ana"), edit).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"]["code"], "test.no_edits");
+    let waiting = fx.service.get(&request.id).await.unwrap().unwrap();
+    assert_eq!((waiting.state, waiting.version), (adk_core::ApprovalState::Pending, 1));
+    assert!(guard.decided.lock().unwrap().is_empty());
+
+    let approve = json!({ "expectedVersion": 1, "action": "approve" });
+    let (status, body) = call(&fx, "POST", &uri, Some("ana"), approve).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        guard.decided.lock().unwrap().clone(),
+        [("ana".to_string(), request.id.clone(), adk_core::ApprovalState::Approved)]
+    );
+}

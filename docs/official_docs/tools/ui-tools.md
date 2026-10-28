@@ -1,37 +1,53 @@
 # UI Tools
 
-The `adk-ui` crate lets an agent render user interfaces through tool calls — forms, cards,
-alerts, confirmations, tables, charts, progress, layouts, modals, and toasts — that a client
-renders and answers. It is maintained in its own repository,
-[zavora-ai/adk-ui](https://github.com/zavora-ai/adk-ui), with a React renderer published as
-`@zavora-ai/adk-ui-react`.
+An agent draws forms, cards, tables and screens in a person's thread with the render tools of
+`adk-surface`'s `genui` feature (spec 3.3 §7.4 rule 5). A drawing never contains approval
+controls or a decision's words, and a form's **Send** never runs a tool: it asks the drawing
+agent for the call, which the agent holds for the person to decide on the home's own card.
+[Agent-Drawn UI](../surfaces/genui.md) covers the whole feature.
 
-![ADK UI Agent](images/adk-ui.jpg)
+![A form an agent drew in the web home](../images/surfaces/genui-form-light.png)
 
-> **Important:** `adk-ui` 2.2.0, the current release, is built on `adk-core` 2. Its tools
-> implement the ADK-Rust 2 `Tool` trait, which is a different trait from ADK-Rust 3's, so an
-> ADK-Rust 3.0 agent cannot register them. Use `adk-ui` with ADK-Rust 2 until a release built
-> on `adk-core` 3 is published; the [adk-ui README](https://github.com/zavora-ai/adk-ui#readme)
-> documents its API.
+```toml
+[dependencies]
+adk-surface = { version = "3.0.0", features = ["web", "genui"] }
+```
 
-## What adk-ui provides
+```rust,ignore
+use std::sync::Arc;
 
-The tools on the `adk-ui` main branch:
+use adk_agent::LlmAgentBuilder;
+use adk_surface::genui::DrawToolset;
 
-| Tools | Purpose |
-|-------|---------|
-| `render_form`, `render_confirm`, `render_modal` | Collect input or confirmation; the client sends the submission back to the agent |
-| `render_card`, `render_alert`, `render_toast`, `render_progress` | Show results and status |
-| `render_table`, `render_chart`, `render_layout` | Present data and dashboards |
-| `render_screen`, `render_page`, `render_kit` | Emit A2UI JSONL surfaces |
-| `render_app` | Render a multi-page application with navigation and shared state |
-| `save_surface`, `load_surface`, `list_surfaces`, `patch_surface`, `delete_surface` | Persist versioned UI surfaces |
+let agent = LlmAgentBuilder::new("finance")
+    .model(model)
+    .tool(Arc::new(send_invoice))
+    .toolset(Arc::new(DrawToolset::forms()))
+    .build()?;
+```
+
+| Tool | Purpose |
+|------|---------|
+| `render_form` | Fields and actions: each action asks for one of the agent's tools with constants and field values, and the person decides before it runs |
+| `render_card` | A title and label and value rows |
+| `render_table` | A title, column headings and rows |
+| `render_screen` | A2UI v0.9.1 components of the `forms` 1.0 catalog |
+| `patch_surface` | The next version of a surface drawn earlier |
+| `delete_surface` | Removes a surface from the thread |
+
+Every drawing is checked on the server before any surface shows it. A refused drawing is a
+tool error that tells the agent why, and the thread shows a plain notice such as "Finance
+tried to show something that looks like a decision. It wasn't shown."
+
+> **Note:** the `adk-ui` crate is retired (spec 3.3 decision 11). Its 2.2.0 release is built on
+> `adk-core` 2, so an ADK-Rust 3 agent cannot register its tools; see
+> [Moving from adk-ui](../surfaces/genui.md#moving-from-adk-ui) for each tool's replacement.
 
 ## UI protocols in adk-server
 
-The REST server in ADK-Rust 3.0 negotiates the UI protocol a client renders, without a
-dependency on `adk-ui`; the constants and capability specs live in
-`adk_server::ui_protocol`.
+The REST server in ADK-Rust 3.0 negotiates the UI protocol a client renders; the constants
+and capability specs live in `adk_server::ui_protocol`. The `adk_ui` profile is deprecated for
+new integrations, with a sunset target of 2026-12-31.
 
 | Profile | Value |
 |---------|-------|
@@ -44,7 +60,11 @@ A run request selects a profile with the `x-adk-ui-protocol` header or its `uiPr
 `ui_protocol` field; an unknown profile is rejected with `400 Bad Request` naming the
 supported ones. `GET /api/ui/capabilities` returns each profile's versions, implementation
 tier, features, and limitations, and the `/api/ui/initialize`, `/api/ui/message`, and
-`/api/ui/notifications/*` routes serve MCP Apps hosts.
+`/api/ui/notifications/*` routes serve MCP Apps hosts. An `AgUiExtension` set with
+`ServerBuilder::with_ag_ui_extension` adds to protocol-native AG-UI runs; `adk-surface`'s
+`GenuiAgUi` sends drawings as `a2ui-surface` activities and holds a form sent through
+`forwardedProps.a2uiAction` ([Over AG-UI](../surfaces/genui.md#over-ag-ui)). `adk-surface`'s
+`genui-apps` feature is a governed MCP Apps host ([Apps from MCP servers](../surfaces/genui.md#apps-from-mcp-servers)).
 
 ## AG-UI decisions
 
@@ -219,6 +239,7 @@ let app = ServerBuilder::new(config).with_approval_service(Arc::new(approvals)).
 
 ## Related
 
+- [Agent-Drawn UI](../surfaces/genui.md) — the `genui` feature end to end
 - [A2UI quickstart](../quickstart-a2ui.md)
 - [Function Tools](function-tools.md) — Creating custom tools
 

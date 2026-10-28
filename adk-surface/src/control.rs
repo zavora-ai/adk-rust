@@ -605,6 +605,25 @@ impl Source for ControlSource {
         Ok(())
     }
 
+    async fn request_call(
+        &self,
+        caller: &Caller,
+        session: &str,
+        text: &str,
+        call: adk_core::RequestedCall,
+    ) -> Result<()> {
+        // The thread's agent holds the call in its own target (spec 3.3 §7.4 rule 5): the
+        // target of the session's latest run, else this terminal's.
+        let target = self
+            .agent_of_session(caller.user_id(), session)
+            .await?
+            .unwrap_or_else(|| self.target.clone());
+        let request = SpawnRequest::new(target, json!({ "text": text, "requestedCall": call }))
+            .with_session_id(session);
+        self.client.spawn(&request).await?;
+        Ok(())
+    }
+
     async fn stop_all(&self, _caller: &Caller, reason: &str) -> Result<()> {
         self.client.freeze(Some(reason)).await?;
         Ok(())

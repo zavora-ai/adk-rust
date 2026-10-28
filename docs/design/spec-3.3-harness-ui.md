@@ -314,7 +314,8 @@ The engine owns its stream (HTTP with server-sent events for reads, REST for com
 | `channels` | Chat adapters over the kernel's `channels` contract | per adapter | Beta |
 | `voice` | Voice and video in `web` and `tui` | `adk-realtime` | Beta |
 | `genui` | Agent-drawn UI: the absorbed `adk-ui` core, A2UI renderers, AG-UI and MCP Apps adapters | — | Beta |
-| `workflow` | Graph run observer and debugger | `adk-graph` with `time-travel` | Beta |
+| `genui-apps` | Sub-feature of `genui`: the MCP Apps host, apps framed sandboxed on their own origin; implies `web` (wave 4 decision 16) | `adk-harness` `mcp`, `adk-tool` `mcp-apps` (rmcp) | Beta |
+| `workflow` | Graph run observer and debugger | `adk-graph` with `time-travel`; `adk-harness` `web` (secret redaction) | Beta |
 | `desktop` | Tauri shell and tray | `tauri` | Experimental |
 | `verb-ui` | Surfaces that declare verbs an agent can call under approval | `adk-kernel` control client | Experimental |
 

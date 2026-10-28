@@ -194,6 +194,14 @@ channels = ["harness", "surface", "adk-surface/channels", "adk-kernel?/channels"
 # home as an installable app with Web Push from the kernel and "Confirm it's you". Opt-in:
 # its passkey checks link the system's OpenSSL (webauthn-rs).
 mobile = ["surface", "harness", "adk-surface/mobile"]
+# Agent-drawn UI (spec 3.3 §6.1 `genui`, §7.4 rule 5): `serve` and `up` give every harness they
+# host the render tools, so agents draw forms and tables in the person's threads; a form's
+# Send asks the person first. Opt-in, no umbrella feature.
+genui = ["harness", "surface", "adk-surface/genui"]
+# Apps from MCP servers in a thread (spec 3.3 §6.1 `genui-apps`, wave 4 decisions 15–17):
+# `serve` and `up` frame an MCP server's `_meta.ui` app sandboxed on a second loopback
+# listener (or `--apps-origin`), whose tool calls a person decides. Opt-in, no umbrella feature.
+genui-apps = ["genui", "adk-surface/genui-apps"]
 # AWP 2.0 websites (spec 3.5 §7.1, §8.1): `adk-rust site …` drafts, schedules, corrects,
 # withdraws, reverts, builds, publishes, rolls back, migrates and freezes a site on its
 # content repository; `adk-rust awp …` verifies a domain, runs the conformance kit, manages

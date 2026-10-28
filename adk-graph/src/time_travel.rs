@@ -489,7 +489,8 @@ pub enum ForkError {
     },
     /// The checkpoint is a pause: a node of its step waits.
     #[error(
-        "fork.paused: checkpoint '{id}' is a pause, where a node waits mid-step; fork from the          completed checkpoint of its step"
+        "fork.paused: checkpoint '{id}' is a pause, where a node waits mid-step; fork from the \
+         completed checkpoint of its step"
     )]
     Paused {
         /// The id asked for.
@@ -511,7 +512,8 @@ pub enum ForkError {
     },
     /// An unchecked edit names a key the checkpoint's state does not hold.
     #[error(
-        "fork.unknown_key: '{key}' is not a key of this checkpoint; without the graph's channels          only existing keys can be edited"
+        "fork.unknown_key: '{key}' is not a key of this checkpoint; without the graph's channels \
+         only existing keys can be edited"
     )]
     UnknownKey {
         /// The edited key.
@@ -669,7 +671,7 @@ fn forked_checkpoint(
         root,
         parent: source.thread_id.clone(),
         parent_checkpoint: source.checkpoint_id.clone(),
-        parent_step: source.step,
+        parent_step: source.step_label(),
         edited: set.keys().cloned().collect(),
         checked,
     };

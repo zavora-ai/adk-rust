@@ -69,31 +69,7 @@ pub enum SpokenAction {
 /// Returns `None` for anything that is not plainly one: nothing runs from an utterance that
 /// says more, says "always", or names no title.
 pub fn parse(transcript: &str, items: &[ComingUpItem]) -> Option<SpokenAction> {
-    let words: Vec<String> = normalize(transcript)
-        .split(' ')
-        .filter(|word| !word.is_empty())
-        .map(str::to_string)
-        .collect();
-    if words.is_empty() || words.len() > MAX_WORDS || words.iter().any(|word| word == "always") {
-        return None;
-    }
-    let mut phrase: Vec<&str> =
-        words.iter().map(String::as_str).filter(|word| *word != "please").collect();
-    if phrase.first() != Some(&SNOOZE) {
-        return None;
-    }
-    phrase.remove(0);
-    let tomorrow = phrase.last() == Some(&"tomorrow");
-    if tomorrow {
-        phrase.pop();
-        if phrase.last() == Some(&"until") {
-            phrase.pop();
-        }
-    }
-    let said = phrase.join(" ");
-    if said.is_empty() {
-        return None;
-    }
+    let (said, tomorrow) = phrase(transcript)?;
     let exact: Vec<&ComingUpItem> =
         items.iter().filter(|item| normalize(&item.title) == said).collect();
     match exact.as_slice() {
@@ -118,6 +94,41 @@ pub fn parse(transcript: &str, items: &[ComingUpItem]) -> Option<SpokenAction> {
         said,
         matches: partial.iter().map(|item| item.title.clone()).collect(),
     })
+}
+
+/// Whether `transcript` can be a spoken screen action at all, read before Coming up is: so an
+/// ordinary sentence never reads the agenda.
+#[cfg(feature = "voice")]
+pub(crate) fn may_be_action(transcript: &str) -> bool {
+    phrase(transcript).is_some()
+}
+
+/// The words after the action's phrase, and whether they end with "tomorrow"; `None` for
+/// anything that is not plainly an action.
+fn phrase(transcript: &str) -> Option<(String, bool)> {
+    let words: Vec<String> = normalize(transcript)
+        .split(' ')
+        .filter(|word| !word.is_empty())
+        .map(str::to_string)
+        .collect();
+    if words.is_empty() || words.len() > MAX_WORDS || words.iter().any(|word| word == "always") {
+        return None;
+    }
+    let mut phrase: Vec<&str> =
+        words.iter().map(String::as_str).filter(|word| *word != "please").collect();
+    if phrase.first() != Some(&SNOOZE) {
+        return None;
+    }
+    phrase.remove(0);
+    let tomorrow = phrase.last() == Some(&"tomorrow");
+    if tomorrow {
+        phrase.pop();
+        if phrase.last() == Some(&"until") {
+            phrase.pop();
+        }
+    }
+    let said = phrase.join(" ");
+    (!said.is_empty()).then_some((said, tomorrow))
 }
 
 #[cfg(test)]

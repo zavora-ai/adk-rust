@@ -77,6 +77,24 @@ pub const AGENT_REFUSED_CODE: &str = "kernel.agent.refused";
 /// Error code of an agent change applied with a digest that is not its preview's (spec 3.3
 /// §5.7).
 pub const AGENT_UNCONFIRMED_CODE: &str = "kernel.agent.unconfirmed";
+/// Error code of `POST /kernel/unfreeze` refused over HTTP: resuming happens only in the web
+/// home or on a paired local terminal (spec 3.3 S-I10).
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_kernel::error::RESUME_NOT_HERE_CODE, "kernel.resume.not_here");
+/// ```
+pub const RESUME_NOT_HERE_CODE: &str = "kernel.resume.not_here";
+/// Error code of a decision on `POST /approvals/{id}/decide` that the caller's surface may not
+/// give (spec 3.3 §7.2): it is answered in the home or on the kernel's own terminal.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_kernel::error::DECIDE_NOT_HERE_CODE, "surface.decide.not_here");
+/// ```
+pub const DECIDE_NOT_HERE_CODE: &str = "surface.decide.not_here";
 
 /// Every code the kernel answers a control-plane call with: the codes a
 /// [`ControlClient`](crate::control::ControlClient) keeps, and reports any other code as
@@ -107,6 +125,8 @@ pub(crate) const CODES: &[&str] = &[
     AGENT_OUT_OF_DATE_CODE,
     AGENT_REFUSED_CODE,
     AGENT_UNCONFIRMED_CODE,
+    RESUME_NOT_HERE_CODE,
+    DECIDE_NOT_HERE_CODE,
 ];
 
 /// What went wrong in the kernel (spec 3.2 §7.1).
@@ -379,7 +399,7 @@ mod tests {
             for line in text.lines() {
                 if let Some((_, value)) = line.split_once("_CODE: &str = \"")
                     && let Some((code, _)) = value.split_once('"')
-                    && code.starts_with("kernel.")
+                    && (code.starts_with("kernel.") || code.starts_with("surface."))
                 {
                     constants.push(code.to_string());
                 }

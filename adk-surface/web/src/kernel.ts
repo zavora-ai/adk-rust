@@ -98,18 +98,20 @@ const WEEKDAYS = [
 ];
 
 /**
- * The days of the week a cron weekday field names, as the kernel reads it: its `cron` crate
- * counts 1 as Sunday and 7 as Saturday, unlike Unix cron's 0 or 7 for Sunday, so `1-5` runs
- * Sunday to Thursday and `MON-FRI` Monday to Friday. The field is `*`, a day, a range or a list
- * of them; the set holds `Date.getUTCDay()` numbers (0 is Sunday); `undefined` for a field it
- * cannot read, `0` included, which the kernel refuses.
+ * The days of the week a cron weekday field names, as the kernel reads it (`adk_core::schedule`):
+ * a five-field expression counts 0 and 7 as Sunday, as Unix cron does, so `1-5` runs Monday to
+ * Friday; with `crateNumbering`, for six or seven fields, the `cron` crate counts 1 as Sunday and
+ * 7 as Saturday, so `1-5` runs Sunday to Thursday. Names (`MON-FRI`) mean the same days in both.
+ * The field is `*`, a day, a range or a list of them; the set holds `Date.getUTCDay()` numbers
+ * (0 is Sunday); `undefined` for a field it cannot read or one the kernel refuses.
  */
-export function cronWeekdays(field: string): Set<number> | undefined {
+export function cronWeekdays(field: string, crateNumbering = false): Set<number> | undefined {
   if (field === "*" || field === "?") return new Set([0, 1, 2, 3, 4, 5, 6]);
   const day = (text: string) => {
     const named = WEEKDAYS.findIndex((names) => names.includes(text.toUpperCase()));
     if (named >= 0) return named;
-    return /^[1-7]$/.test(text) ? Number(text) - 1 : undefined;
+    if (crateNumbering) return /^[1-7]$/.test(text) ? Number(text) - 1 : undefined;
+    return /^[0-7]$/.test(text) ? Number(text) : undefined;
   };
   const days = new Set<number>();
   for (const part of field.split(",")) {
@@ -117,7 +119,7 @@ export function cronWeekdays(field: string): Set<number> | undefined {
     const start = day(from ?? "");
     const end = to === undefined ? start : day(to);
     if (start === undefined || end === undefined || extra !== undefined || end < start) return undefined;
-    for (let value = start; value <= end; value++) days.add(value);
+    for (let value = start; value <= end; value++) days.add(value % 7);
   }
   return days;
 }
@@ -142,7 +144,7 @@ export function nextFire(wake: Wake, now: Date): Date | undefined {
     const [minute, hour, day, month, weekday] = fields.length === 6 ? fields.slice(1) : fields;
     if (!/^\d+$/.test(minute ?? "") || !/^\d+$/.test(hour ?? "")) return undefined;
     if (day !== "*" || month !== "*") return undefined;
-    const days = cronWeekdays(weekday ?? "*");
+    const days = cronWeekdays(weekday ?? "*", fields.length === 6);
     if (!days || days.size === 0) return undefined;
     for (let ahead = 0; ahead <= 7; ahead++) {
       const next = new Date(

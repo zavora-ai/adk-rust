@@ -32,9 +32,12 @@ any card.
 | `snooze` | `write_local`, only delays, can be changed back | Moves one item to `to`, which must be its wake plus one hour or plus one day |
 
 Snooze refuses an item that is not scheduled, waits on something other than one time, has
-already started, or ends before `to`. A `to` that is no longer one of the item's two times —
-someone moved it since the request was made — is refused with "It moved since you saw this",
-so an approval never applies more than its card showed.
+already started, or ends before `to`. A `to` that is not one of the item's two times is refused,
+so an approval never applies more than its card showed: with "It moved since you saw this" when
+the item already wakes at `to` or later — someone moved it since the request was made — and
+otherwise with the two times it may move to, "It can only move to 19:00 or Tue 18:00", as for a
+time an **Edit** chose. Two snoozes of one item through one registry check and move its wake
+one after the other, so the later one finds it moved.
 
 A host declares more with `VerbRegistryBuilder::verb`. A name must match
 `^[a-z][a-z0-9_]{0,58}$` and never be one of `RESERVED` (`approve`, `deny`, `decide`,
@@ -47,8 +50,11 @@ all, or resume work.
 
 `VerbPolicy` holds every changing call from any agent, whatever its mode or standing rules: it
 is added to the operator layer, where the strictest decision wins. An agent may have at most
-three requests waiting ("Finance already has 3 changes waiting for you"), and a call that would
-be refused — another area's item, a stale time — is refused before any card.
+three requests waiting for the same person ("Finance already has 3 changes waiting for you");
+a call the person already answered — a held call resuming with its decision, or one an **Edit**
+changed — is never refused for the count. A call that would be refused — another area's item, a
+stale time — is refused before any card. Just look and Suggest refuse every changing call an
+agent makes, so it never asks.
 
 `VerbRouter` and `VerbHints` give the card its words:
 
@@ -58,7 +64,7 @@ be refused — another area's item, a stale time — is refused before any card.
 | Chat heading | "Snooze something in Coming up", never the arguments |
 | Risk | Low, for a change on the person's own screens |
 | Answers | Allow once · Edit · Deny on the web home, the phone and the terminal; Allow once · Deny in chat and the tray; never **Always allow** |
-| How it got here | What the agent read in the turn that asked, from that turn's tool calls: "Finance read 1 web page (example.com)" |
+| How it got here | What the agent read in the turn that asked, from that turn's tool results: "Finance read 1 web page (example.com)". A fetch that was refused or failed is not counted, only the host name of a page is shown, and the agent is named as the card names it |
 | Details | "You can change it back", and the line "Agents always ask before they change things on your screens." |
 
 ![An agent asks to snooze](../../design/images/spec-3.3/verbs-card-light.png)
@@ -110,7 +116,11 @@ let builder = server.add_api_routes(adk_surface::web::verbs::router(gate.clone()
 
 `adk-rust up`, built with `adk-cli`'s `verb-ui` feature, does all of this: every agent it hosts —
 the primary agent in each area and every agent a person adds — gets the tools for its own area,
-listed on its detail as "Ask to change things on your screens — always asks you first".
+listed in its settings as "Ask to change things on your screens — always asks you first" while
+its mode is Ask first or Go ahead (`GrantedUse::only_in`). The terminal attached to `up` draws
+the same cards: `VerbRegistry::catalogue` gives a process without the agenda the actions' hints
+and grant, and `VerbHints::reading` reads the asking turn and the agents' names through the
+engine's source.
 
 ## On each surface
 
@@ -118,7 +128,7 @@ listed on its detail as "Ask to change things on your screens — always asks yo
 |---|---|
 | Web home | Coming up: on hover or keyboard focus of an item that may move, **Snooze** opens "1 hour later" and "Tomorrow, same time". It acts only on the person's own input and says "Snoozed by you · just now" once the server answered. Memory & rules lists **On your screens** with "Agents always ask you first". The home shows none of it where the server has no screen actions |
 | Terminal | `/snooze <title> [tomorrow]`, by exact title, ignoring case; several matches are listed. The terminal attached to `adk-rust up` runs it in up's process; a terminal paired from another machine says "Snooze isn't available from a remote terminal — use the home." `/help` lists it under **On your screens**; `--output json` ends with `{"type":"verb","verb":"snooze","outcome":"done","how":"keyboard"}` |
-| Voice | "Snooze news digest": at most eight words, never "always", and exactly one title. It waits out the engine's cancel window ("Snoozing in 5 s"), where "cancel" or **Cancel** withdraws it. The model's own audio played back never takes one |
+| Voice | "Snooze news digest": at most eight words, never "always", and exactly one title. It waits out the engine's cancel window ("Snoozing in 5 s"), where "cancel" or **Cancel** withdraws it; once the window has ended it is being taken, and a late cancel changes nothing. An ordinary sentence reads nothing of Coming up. The model's own audio played back never takes one |
 | Chat, the tray | None |
 
 ![Snooze by voice](../../design/images/spec-3.3/verbs-voice-light.png)
@@ -139,11 +149,11 @@ surface-records route accepts:
 | Field | Value |
 |---|---|
 | `verb`, `effect`, `outcome` | `snooze`, `write_local`, `done` or `refused` |
-| `target`, `title` | `agenda:<id>`, the item's title |
+| `target`, `title` | `agenda:<id>`, the item's title; a record line names the item only by its title |
 | `argsDigest`, `functionCallId` | The arguments' digest, never the arguments; the call |
 | `surface`, `origin`, `device`, `presence` | Where and how a person gave it |
 | `transcriptDigest` | For voice: the SHA-256 of what was said, never the words |
-| `origin`, `approvalId`, `answered` | For an agent's: the agent, the decision that let it run, and where the person said yes |
+| `origin`, `approvalId`, `answered` | For an agent's: the agent, the decision that let this call run — by its fingerprint, or the arguments an **Edit** gave it — and where the person said yes |
 
 A person's action also has a `tool_call` record under `urn:adk:agent:<app>/surface.verbs`. "What
 your agents did" reads them as "You snoozed News digest by voice." and "Finance asked to snooze

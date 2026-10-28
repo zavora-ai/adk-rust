@@ -343,6 +343,12 @@ pub enum Commands {
         #[cfg(feature = "harness")]
         #[arg(long, value_name = "URL", conflicts_with = "ephemeral")]
         store: Option<String>,
+        /// The origin apps from MCP servers are framed on, such as
+        /// `https://apps.example.ts.net` for a remote home, proxied to the sandbox listener whose
+        /// port is printed at start (default: that loopback listener; spec 3.3 §6.1 `genui-apps`)
+        #[cfg(feature = "genui-apps")]
+        #[arg(long, value_name = "URL")]
+        apps_origin: Option<String>,
         #[cfg(feature = "harness")]
         #[command(flatten)]
         harness: adk_cli::harness::HarnessArgs,
@@ -902,6 +908,12 @@ pub struct UpArgs {
     #[cfg(feature = "mobile")]
     #[arg(long, value_name = "FILE", requires = "home_url")]
     pub push_key: Option<std::path::PathBuf>,
+    /// The origin apps from MCP servers are framed on, such as
+    /// `https://apps.example.ts.net` for a remote home, proxied to the sandbox listener whose
+    /// port is printed at start (default: that loopback listener; spec 3.3 §6.1 `genui-apps`)
+    #[cfg(feature = "genui-apps")]
+    #[arg(long, value_name = "URL")]
+    pub apps_origin: Option<String>,
     #[command(flatten)]
     pub harness: adk_cli::harness::HarnessArgs,
 }
@@ -1325,7 +1337,7 @@ pub enum AuditCommands {
 
 #[derive(Subcommand, Clone)]
 pub enum GraphCommands {
-    /// List all checkpoints for a thread
+    /// List a thread's runs, each step's node records and a fork's lineage
     Steps {
         /// Thread identifier to inspect
         thread_id: String,
@@ -1353,7 +1365,7 @@ pub enum GraphCommands {
         db: Option<String>,
     },
 
-    /// Fork execution at a step into a new thread
+    /// Fork a thread at a completed step into a new thread, with edits; the fork is not started
     Fork {
         /// Thread identifier to fork from
         thread_id: String,
@@ -1365,6 +1377,11 @@ pub enum GraphCommands {
         /// New thread identifier for the forked execution
         #[arg(long)]
         new_thread: String,
+
+        /// Overwrite a key of the checkpoint's state in the fork, as JSON: `note='"re-run"'`.
+        /// Repeatable. Not checked against the graph's channels (spec 3.3 §12)
+        #[arg(long = "set", value_name = "KEY=JSON")]
+        set: Vec<String>,
 
         /// Path to a SQLite checkpoint database
         #[arg(long)]

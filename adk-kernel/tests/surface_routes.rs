@@ -1209,8 +1209,9 @@ async fn held_call(plane: &Plane, tool: &str) -> adk_core::ApprovalRequest {
     plane.approvals.submit(request).await.unwrap()
 }
 
-/// A device's answer is recorded with the device, its name, the surface and the answer, so
-/// "What your agents did" can say where the person said yes from (spec 3.3 §11).
+/// A device's answer is recorded with the device, its name, the surface — its kind, a remote
+/// terminal for a device paired without one — how it was given and the answer, so "What your
+/// agents did" can say where the person said yes from (spec 3.3 §11).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_devices_answer_is_recorded_with_the_device_and_the_answer() {
     let plane = Plane::start(Setup::default()).await;
@@ -1222,7 +1223,8 @@ async fn a_devices_answer_is_recorded_with_the_device_and_the_answer() {
     assert_eq!(records[0]["target"], held.id);
     assert_eq!(records[0]["device"], phone_id);
     assert_eq!(records[0]["deviceName"], "phone");
-    assert_eq!(records[0]["surface"], "device");
+    assert_eq!(records[0]["surface"], "terminal");
+    assert_eq!(records[0]["how"], "keyboard");
     assert_eq!(records[0]["answer"], "approve");
 }
 

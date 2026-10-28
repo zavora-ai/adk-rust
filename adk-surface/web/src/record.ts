@@ -50,6 +50,8 @@ function screenWhere(line: KernelRecordLine): string {
       return " on your phone";
     case "tray":
       return " from the tray";
+    case "chat":
+      return line.channel ? ` in ${channelName(line.channel)}` : " in a chat";
     default:
       return "";
   }
@@ -57,20 +59,28 @@ function screenWhere(line: KernelRecordLine): string {
 
 /**
  * A screen action's sentence (spec 3.3 §2 item 7): "You snoozed News digest by voice.", and an
- * agent's request "Finance asked to snooze News digest; you said yes on your phone."
+ * agent's request "Finance asked to snooze News digest; you said yes on your phone." The record
+ * names the item by its title; a kernel id is never shown (§8). It does not say why a request
+ * was refused, so the sentence does not either.
  */
 function screenAction(line: KernelRecordLine, agents: AgentRow[]): string | undefined {
   if (line.tool !== "snooze") return undefined;
-  const what = line.target ?? "something in Coming up";
+  const what = line.target && !line.target.startsWith("agenda:") ? line.target : "something in Coming up";
   const agent = line.agent ? agentOf(line.agent, agents) : undefined;
   if (!agent) return line.outcome === "done" ? `You snoozed ${what}${screenWhere(line)}.` : undefined;
   if (line.outcome === "done") return `${agent} asked to snooze ${what}; you said yes${screenWhere(line)}.`;
-  return `${agent} asked to snooze ${what}; it had moved, so nothing changed.`;
+  return `${agent} asked to snooze ${what}; it couldn't be done, so nothing changed.`;
 }
 
 /** What a call was, by its tool, or "a call". */
 function call(line: KernelRecordLine): string {
   return line.tool ?? "a call";
+}
+
+/** The form a call came from, by its tool: `send_invoice` is "the invoice form". */
+function formOf(tool: string | undefined): string {
+  const subject = tool?.split("_").slice(1).join(" ");
+  return subject ? `the ${subject} form` : "a form";
 }
 
 /**
@@ -169,6 +179,9 @@ export function recordSentence(line: KernelRecordLine, agents: AgentRow[]): stri
       return `You resumed all agents${where(line)}.`;
     case "surface.set_mode":
       return "You changed how much your agents ask first.";
+    // A form an agent drew, sent (spec 3.3 §7.4 rule 5): "You sent the invoice form Finance drew."
+    case "surface.drawn.submitted":
+      return `You sent ${formOf(line.tool)} ${(line.agent && agentOf(line.agent, agents)) ?? "an agent"} drew${where(line)}.`;
     // A rule refuses calls when its record says `denied`, and allows them otherwise.
     case "harness.rule.created":
       return line.decision === "denied"

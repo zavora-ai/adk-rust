@@ -364,9 +364,11 @@ async fn the_home_s_stop_all_stops_the_server_s_runs() {
     assert!(events.to_string().contains("governance.frozen"), "{events}");
     assert!(!count.exists(), "nothing ran while stopped");
 
+    // Resume all is the home's from its own page, a browser's same-origin request (S-I10).
     let resume = home_command(json!({ "type": "resumeAll" }));
-    let (_, outcome) =
-        call(&served.app, request("POST", "/api/surface/commands", Some(resume), LOOPBACK)).await;
+    let mut resume = request("POST", "/api/surface/commands", Some(resume), LOOPBACK);
+    resume.headers_mut().insert("sec-fetch-site", "same-origin".parse().unwrap());
+    let (_, outcome) = call(&served.app, resume).await;
     assert_eq!(outcome["type"], "resumed", "{outcome}");
     let (status, events) =
         call(&served.app, request("POST", "/api/run", Some(run_body(Some("count"))), LOOPBACK))

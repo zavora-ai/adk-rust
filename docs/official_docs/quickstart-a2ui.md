@@ -1,111 +1,109 @@
-# A2UI Quickstart (ADK-UI)
+# A2UI Quickstart
 
-This guide shows how to emit A2UI JSONL from an ADK agent and render it with the React renderer.
-The UI tools come from `adk-ui`, which lives in its own repository,
-[zavora-ai/adk-ui](https://github.com/zavora-ai/adk-ui).
+This guide gives an agent the render tools of `adk-surface`'s `genui` feature, shows what it
+draws in the web home, and reads a drawing as A2UI v0.9.1 JSON lines. A drawing never carries
+approval controls: a form's **Send** asks the agent for the call, and the person decides on
+the home's own card. [Agent-Drawn UI](surfaces/genui.md) covers the feature in full.
 
-> **Important:** `adk-ui` 2.2.0, the current release, is built on `adk-core` 2. Its tools
-> implement the ADK-Rust 2 `Tool` trait, so an ADK-Rust 3.0 agent cannot register them:
-> `LlmAgentBuilder::tool` fails to compile with "multiple different versions of crate
-> `adk_core`". Steps 1–3 show the setup for an `adk-ui` release built on `adk-core` 3, which
-> is not yet published; until then they work only with ADK-Rust 2. Step 4, the React renderer,
-> does not depend on the Rust crates.
-
-## What works with ADK-Rust 3.0
-
-The `adk-server` REST runtime negotiates the UI protocol a client renders, without a
-dependency on `adk-ui`:
-
-- A run request selects a profile — `adk_ui` (default), `a2ui`, `ag_ui` or `mcp_apps` — with
-  the `x-adk-ui-protocol` header or its `uiProtocol` field.
-- `GET /api/ui/capabilities` reports each profile's versions, implementation tier, features and
-  limitations. The `a2ui` profile is draft-compatible with A2UI v0.9 (`createSurface`,
-  `updateComponents`, `updateDataModel` as JSONL).
-
-See [UI Tools](tools/ui-tools.md) for the profiles.
+> **Note:** the `adk-ui` crate this guide used to cover is retired (spec 3.3 decision 11). See
+> [Moving from adk-ui](surfaces/genui.md#moving-from-adk-ui).
 
 ## 1) Add dependencies
 
 ```toml
 [dependencies]
-# The `adk-core` feature makes the UI tools implement `adk_core::Tool`
-adk-ui = { git = "https://github.com/zavora-ai/adk-ui", features = ["adk-core"] }
+adk-surface = { version = "3.0.0", features = ["web", "genui"] }
 adk-agent = "3.0.0"
 adk-model = "3.0.0"
 ```
 
-React renderer:
+## 2) Give the agent the render tools
+
+```rust,ignore
+use std::sync::Arc;
+
+use adk_agent::LlmAgentBuilder;
+use adk_model::GeminiModel;
+use adk_surface::genui::DrawToolset;
+
+let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+let agent = LlmAgentBuilder::new("finance")
+    .model(model)
+    .instruction("Show the person forms and tables with the render tools when they help.")
+    .tool(Arc::new(send_invoice))
+    .toolset(Arc::new(DrawToolset::forms()))
+    .build()?;
+```
+
+`DrawToolset::forms()` adds `render_form`, `render_card`, `render_table`, `render_screen`,
+`patch_surface` and `delete_surface`, each checked against the `forms` 1.0 catalog. They are
+read-only, so they need no approval.
+
+## 3) See a drawing in the web home
+
+The `scripted_genui` example is a complete home over a kernel and a scripted model, with no
+API key:
 
 ```bash
-npm install @zavora-ai/adk-ui-react
+cargo run -p adk-surface --features web,genui --example scripted_genui -- 8805 /tmp/genui-home
 ```
 
-## 2) Enable UI tools
+1. Open `http://127.0.0.1:8805/ui/` and send Finance any message.
+2. Finance draws the invoice form, then a screen with an "Allow once" button, which is refused:
+   the thread shows "Finance tried to show something that looks like a decision. It wasn't
+   shown."
+3. Type an address and press **Send**. The form reads "Sent at 10:03 · waiting for you" and a
+   decision waits under it.
+4. Press **Allow once**. `send_invoice` runs once and appends its arguments to
+   `/tmp/genui-home/sent.txt`; the form reads "Sent · done at 10:03".
 
-```rust
-use adk_agent::LlmAgentBuilder;
-use adk_ui::UiToolset;
+`adk-rust serve` and `adk-rust up` built with `adk-cli`'s `genui` feature give every agent
+they host the render tools and serve the same home.
 
-let tools = UiToolset::all_tools();
-let mut builder = LlmAgentBuilder::new("a2ui_agent")
-    .instruction(
-        "You output A2UI via render_screen (screens), render_page (pages), and render_kit (kits).",
-    );
+## 4) Prompt → A2UI
 
-for tool in tools {
-    builder = builder.tool(tool);
-}
-
-let _agent = builder.build()?;
-```
-
-## 3) Prompt → A2UI JSONL
-
-Prompt your agent:
+Prompt the agent:
 
 ```
-Create a login screen with email, password, and a primary Sign In button.
+Prepare the October invoice for ACME
 ```
 
-The model calls `render_screen`, which returns A2UI JSONL. Each line is one message, such as
-`createSurface` followed by `updateComponents`, and the default catalog is
-`zavora.ai:adk-ui/extended@0.2.0`:
+The model calls `render_form`. The tool checks the drawing and records it in its result under
+`drawn` (`DrawnEnvelope`): the A2UI messages that draw the whole surface on the `forms` 1.0
+catalog, and the actions its buttons ask for.
 
 ```
-{"version":"v0.9.1","createSurface":{"surfaceId":"main","catalogId":"zavora.ai:adk-ui/extended@0.2.0",...}}
-{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":[{"id":"root","component":"Column",...}]}}
+{"version":"v0.9.1","createSurface":{"surfaceId":"invoice-10","catalogId":"https://adk-rust.com/a2ui/catalogs/forms/1.0/catalog.json"}}
+{"version":"v0.9.1","updateComponents":{"surfaceId":"invoice-10","components":[{"id":"root","component":"Column",...}]}}
+{"version":"v0.9.1","updateDataModel":{"surfaceId":"invoice-10","value":{"to":"","amount":4200}}}
 ```
 
-## 4) Render JSONL in React
+## 5) Read and check A2UI in Rust
 
-```tsx
-import {
-  A2uiStore,
-  A2uiSurfaceRenderer,
-  applyParsedMessages,
-  parseJsonl,
-} from "@zavora-ai/adk-ui-react";
+```rust,ignore
+use adk_surface::genui::{DrawnEnvelope, Validator, encode_jsonl};
 
-const store = new A2uiStore();
+let envelope = DrawnEnvelope::from_response(&response).expect("a render tool's result");
+println!("{}", encode_jsonl(&envelope.messages));
 
-export function App({ jsonl }: { jsonl: string }) {
-  const parsed = parseJsonl(jsonl);
-  applyParsedMessages(store, parsed);
-
-  return (
-    <A2uiSurfaceRenderer
-      store={store}
-      surfaceId="main"
-      onAction={(payload) => {
-        console.log("A2UI action:", payload);
-      }}
-    />
-  );
+let draft = envelope.draft().expect("not a removal");
+match Validator::forms().validate(&draft) {
+    Ok(surface) => println!("{} strings a person reads", surface.texts.len()),
+    Err(refusal) => println!("{}: {}", refusal.code(), refusal.message()),
 }
 ```
 
-## 5) Next steps
+`decode_jsonl` reads A2UI JSON lines back into `A2uiMessage`s.
 
-- Use `render_page` to generate multi-section pages.
-- Use `render_kit` to produce catalogs + tokens + templates.
-- See the `ui_server` and `ui_react_client` examples in the `adk-ui` repository.
+## 6) Render it in your own client
+
+`GET /api/surface/sessions/{session}/thread` returns each drawing as a `drawn` item: the
+component tree with every string resolved and checked on the server, the fields with their
+values and checks, and the actions with the tool each asks for. Render its strings as text.
+A form is sent with the `submitDrawn` command at the version shown; see
+[Sending a form](surfaces/genui.md#sending-a-form).
+
+## Next steps
+
+- [Agent-Drawn UI](surfaces/genui.md) — what a drawing may not contain, the requested call, the terminal
+- [UI Tools](tools/ui-tools.md) — the render tools and the server's UI protocol profiles

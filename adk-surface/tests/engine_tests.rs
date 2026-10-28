@@ -234,6 +234,67 @@ async fn the_second_surface_is_told_who_decided_and_never_retries() {
     assert_eq!(answers[0].actor.on_behalf_of.as_ref().unwrap().id, "ana");
 }
 
+/// A recorder that refuses every record, as a signed log that is down.
+struct Broken;
+
+#[async_trait::async_trait]
+impl adk_core::audit_log::AuditRecorder for Broken {
+    fn digest(&self, _value: &Value) -> String {
+        String::new()
+    }
+
+    async fn record(&self, _draft: AuditRecordDraft) -> adk_core::Result<()> {
+        Err(adk_core::AdkError::new(
+            adk_core::ErrorComponent::Auth,
+            adk_core::ErrorCategory::Unavailable,
+            "audit.down",
+            "the audit log is down",
+        ))
+    }
+}
+
+/// An answer is on record before it takes effect: `surface.answer` precedes the inbox's
+/// decision and its `surface.decide`, and an answer that cannot be recorded is not given
+/// (spec 3.3 §11). Fails on `origin/main`, which decides first and only logs a failed record.
+#[tokio::test]
+async fn an_answer_is_recorded_before_it_takes_effect() {
+    let home = home().await;
+    let request = hold(&home, "ana", "s1", &invoice(), ApprovalRisk::Medium).await;
+    let source = LocalSource::builder(APP)
+        .sessions(Arc::clone(&home.sessions))
+        .approvals(Arc::clone(&home.service))
+        .governance(home.governance.clone())
+        .build()
+        .unwrap();
+    let unrecorded =
+        SurfaceEngine::builder(Arc::new(source)).audit(AuditTrail::new(Arc::new(Broken))).build();
+    let error = unrecorded.execute(&web(), decide(&request, Answer::AllowOnce)).await.unwrap_err();
+    assert_eq!(error.code(), "audit.record_failed", "{error:?}");
+    let stored = home.service.get(&request.id).await.unwrap().unwrap();
+    assert_eq!(stored.state, ApprovalState::Pending, "an unrecorded answer is not given");
+
+    home.engine.execute(&web(), decide(&request, Answer::AllowOnce)).await.unwrap();
+    let actions: Vec<(String, Value)> = home
+        .audit
+        .records()
+        .into_iter()
+        .filter(|record| record.ext.get("approvalId") == Some(&json!(request.id)))
+        .map(|record| (record.action, record.ext["answer"].clone()))
+        .collect();
+    assert_eq!(
+        actions,
+        [
+            (adk_surface::SURFACE_AUDIT_ANSWER.to_string(), json!("allowOnce")),
+            (adk_surface::SURFACE_AUDIT_DECIDE.to_string(), json!("allowOnce")),
+        ]
+    );
+    let given = records(&home.audit, adk_surface::SURFACE_AUDIT_ANSWER).remove(0);
+    assert_eq!(
+        (&given.ext["surface"], &given.ext["origin"]),
+        (&json!("web"), &json!({ "kind": "pointer" }))
+    );
+}
+
 #[tokio::test]
 async fn chat_voice_and_the_tray_never_approve_high_risk() {
     let home = home().await;

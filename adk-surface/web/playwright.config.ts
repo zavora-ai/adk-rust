@@ -156,6 +156,48 @@ const surfaces: Surface[] = [
     testMatch: ["verbs.spec.ts"],
     ready: "/ui/",
   },
+  {
+    // The workflow observer (spec 3.3 §12): approve, rewind and fork the invoice-run graph,
+    // whose charge goes to a counting provider on the same server.
+    name: "workflow",
+    prefix: "WORKFLOW",
+    example: "scripted_workflow",
+    features: "web,workflow",
+    port: 8795,
+    testMatch: ["workflow.spec.ts"],
+    ready: "/ui/",
+  },
+  {
+    // Agent-drawn UI (spec 3.3 §6.1 `genui`, §12 "Governed form"): Finance draws the invoice
+    // form, the person sends it, and the call waits for them.
+    name: "genui",
+    prefix: "GENUI",
+    example: "scripted_genui",
+    features: "web,genui",
+    // 8791 to 8804 are taken.
+    port: 8805,
+    testMatch: ["genui.spec.ts"],
+    ready: "/ui/",
+  },
+  {
+    // Every state of the agent-drawn UI concepts over the web home's example, light and dark.
+    name: "genui-states",
+    prefix: "GENUI_STATES",
+    command: "bash adk-surface/web/e2e/fixture-server.sh",
+    port: 8806,
+    testMatch: ["genui-states.spec.ts"],
+    ready: "/ui/fixture.html",
+  },
+  {
+    // Apps from MCP servers (spec 3.3 §6.1 `genui-apps`): Weather's app framed sandboxed over
+    // the web home's example, every concept state, light and dark.
+    name: "genui-apps",
+    prefix: "GENUI_APPS",
+    command: "bash adk-surface/web/e2e/fixture-server.sh",
+    port: 8810,
+    testMatch: ["genui-apps.spec.ts"],
+    ready: "/ui/fixture.html",
+  },
 ];
 
 /** One second of a 440 Hz tone, 16 kHz mono PCM16, for Chromium's fake microphone. */

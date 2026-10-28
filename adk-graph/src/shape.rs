@@ -133,6 +133,40 @@ pub struct NodeShape {
     pub governed: Option<GovernedNode>,
 }
 
+/// A governed node of a graph or of a subgraph inside it, from
+/// [`CompiledGraph::governed_shapes`] (spec 3.3 §12).
+///
+/// # Example
+///
+/// ```
+/// use adk_graph::governed::GovernedNode;
+/// use adk_graph::shape::{GovernedShape, NodeKind, NodeShape};
+///
+/// let pay = GovernedShape {
+///     path: vec!["billing".to_string(), "pay".to_string()],
+///     node: NodeShape {
+///         name: "pay".to_string(),
+///         description: String::new(),
+///         kind: NodeKind::HttpCall,
+///         effect: None,
+///         interrupt_before: false,
+///         interrupt_after: false,
+///         governed: Some(GovernedNode::new().with_approval()),
+///     },
+/// };
+/// assert_eq!(pay.path.first().map(String::as_str), Some("billing"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GovernedShape {
+    /// The node names from the graph asked down to the governed node: its first entry is a
+    /// node of that graph, its last the governed node itself.
+    pub path: Vec<String>,
+    /// The governed node's shape entry in the graph that holds it, which its decision's
+    /// [`ToolOrigin`](adk_core::ToolOrigin) binds to.
+    pub node: NodeShape,
+}
+
 /// One edge of a [`GraphShape`]; `to` is [`END`] for an edge that ends a branch.
 ///
 /// # Example
@@ -259,6 +293,59 @@ impl CompiledGraph {
         entry.sort();
         entry.dedup();
         GraphShape { nodes, edges, entry }
+    }
+
+    /// Every governed node of this graph and of the subgraphs inside it, at any depth, each
+    /// with its path from this graph (spec 3.3 §12).
+    ///
+    /// A governed node inside a subgraph asks for its decision as the graph that holds the
+    /// subgraph, so a workflow observer reads the node's governance and the node of this
+    /// graph it runs under from here. Sorted by path.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use adk_graph::edge::{END, START};
+    /// use adk_graph::governed::GovernedNode;
+    /// use adk_graph::graph::StateGraph;
+    /// use adk_graph::node::NodeOutput;
+    /// use adk_graph::subgraph::SubgraphNode;
+    ///
+    /// let billing = StateGraph::with_channels(&["charge"])
+    ///     .add_node_fn("pay", |_ctx| async { Ok(NodeOutput::new()) })
+    ///     .add_edge(START, "pay")
+    ///     .add_edge("pay", END)
+    ///     .compile()?
+    ///     .with_governed_node("pay", GovernedNode::new().spending_money());
+    /// let graph = StateGraph::with_channels(&["charge"])
+    ///     .add_node(SubgraphNode::new("billing", Arc::new(billing)))
+    ///     .add_edge(START, "billing")
+    ///     .add_edge("billing", END)
+    ///     .compile()?;
+    /// let governed = graph.governed_shapes();
+    /// assert_eq!(governed[0].path, vec!["billing".to_string(), "pay".to_string()]);
+    /// assert!(governed[0].node.governed.is_some_and(|node| node.spends_money));
+    /// # Ok::<(), adk_graph::GraphError>(())
+    /// ```
+    pub fn governed_shapes(&self) -> Vec<GovernedShape> {
+        let mut names: Vec<&String> = self.nodes.keys().collect();
+        names.sort();
+        let mut found = Vec::new();
+        for name in names {
+            if self.governed_nodes.contains_key(name)
+                && let Some(node) = self.node_shape(name)
+            {
+                found.push(GovernedShape { path: vec![name.clone()], node });
+            }
+            if let Some(inner) = self.nodes.get(name).and_then(|node| node.subgraph()) {
+                for mut nested in inner.governed_shapes() {
+                    nested.path.insert(0, name.clone());
+                    found.push(nested);
+                }
+            }
+        }
+        found
     }
 
     /// The shape entry of one node, or `None` when the graph has no such node.

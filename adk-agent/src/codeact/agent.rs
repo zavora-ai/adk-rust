@@ -2180,6 +2180,15 @@ impl Agent for CodeActAgent {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> adk_core::Result<EventStream> {
+        // A call a person asked for needs an agent that can hold it for their decision, which
+        // a script cannot (spec 3.3 §7.4 rule 5, wave 4 decision 13).
+        if let Some(refused) = crate::requested_call::refused_by_root(
+            ctx.as_ref(),
+            self.name(),
+            "this agent runs code and cannot hold a call for a person's decision",
+        ) {
+            return Ok(refused);
+        }
         // Under a workflow or team parent, the agent still acts as itself.
         let ctx = crate::acting_agent_context::ActingAgentContext::scope(ctx, self.name());
         // Input guardrails run first; a block aborts the run, a transform

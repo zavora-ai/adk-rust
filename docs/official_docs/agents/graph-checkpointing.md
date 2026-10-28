@@ -109,7 +109,8 @@ than lost.
 | `Durability::Async` | In the background while the next super-step runs | At most the last completed super-step |
 | `Durability::Exit` | When the run completes, pauses, or fails | Everything since the run started |
 
-Pauses and failures are written before the run returns in every mode.
+Pauses and failures are written before the run returns in every mode: a step that fails is
+always checkpointed with its record, so an observer sees that the run failed.
 
 A super-step that runs a node declared non-idempotent first writes every earlier
 checkpoint, as `Sync` does, so a crash during the side effect cannot resume from before
@@ -165,9 +166,11 @@ and for runs any host started.
 | `adk.graph.lineage` | `Checkpoint::lineage()` | A forked thread's `Lineage`; absent on a thread that was not forked |
 
 A checkpoint written before these records existed reads as empty: no run, no steps, no
-lineage. Under `Durability::Exit` the one checkpoint a run writes holds every step of
-the run. `CompiledGraph::update_state` carries all three keys to the checkpoint it
-writes.
+lineage. Under `Durability::Exit` a checkpoint holds every step since the previous one:
+the whole run, or the steps before a non-idempotent or governed node's step, which is
+flushed first. Such a checkpoint holds the state after its last step only, so an observer
+opens and forks only that step. `CompiledGraph::update_state` carries all three keys to
+the checkpoint it writes.
 
 **Runs.** The run id is the invocation that started the thread from its entry nodes: the
 parent invocation's id when a `GraphAgent` runs under a `Runner`, otherwise a new id. A
@@ -195,7 +198,10 @@ because a sibling failed first, or a governed node with no approval gate.
 **Checkpoint ids, not step numbers.** `step` is a label: the `Checkpoint::step` of the
 completed checkpoint the step produces. A pause checkpoint has the same
 `Checkpoint::step` as the completed checkpoint before it, so address checkpoints by id.
-`Checkpoint::is_paused()` tells a pause apart: a node of its frontier waits mid-step.
+`Checkpoint::is_paused()` tells a pause apart: a node of its frontier waits mid-step. A run
+that stops at an `interrupt_after` gate records its finished step as `paused` with no node
+waiting; the step that resumes it takes the next label, so after such a gate the labels run
+ahead of `Checkpoint::step`.
 
 Node lifecycle is recorded here, durably, and is not forwarded to the runner's event
 stream.

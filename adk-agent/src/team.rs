@@ -1414,6 +1414,15 @@ impl Agent for CompiledTeam {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        // A call a person asked for needs an agent that holds it for their decision itself
+        // (spec 3.3 §7.4 rule 5).
+        if let Some(refused) = crate::requested_call::refused_by_root(
+            ctx.as_ref(),
+            &self.name,
+            crate::requested_call::RUNS_OTHER_AGENTS,
+        ) {
+            return Ok(refused);
+        }
         let root_invocation_id = ctx.orchestration_root_invocation_id().to_string();
         let lifecycle = TeamLifecycleContext {
             team: self.name.clone(),

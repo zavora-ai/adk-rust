@@ -32,7 +32,7 @@ use super::{ControlTransport, paths};
 use crate::agenda::{Agenda, AgendaItem};
 use crate::audit;
 use crate::bus::EventSubscriber;
-use crate::error::{KernelError, Result, UNAUTHORIZED_CODE};
+use crate::error::{KernelError, RESUME_NOT_HERE_CODE, Result, UNAUTHORIZED_CODE};
 use crate::kernel::{Kernel, KernelHealth};
 use crate::partition::{Partition, PartitionId, PartitionMode};
 use crate::process::{Process, ProcessKind, ProcessSpec};
@@ -653,6 +653,17 @@ async fn freeze(
 
 async fn unfreeze(State(backend): Backend, caller: Caller) -> Result<Json<FreezeResponse>> {
     caller.require_operator("unfreeze")?;
+    // Resuming happens only in the web home, whose engine resumes in the kernel's process,
+    // or on a paired local terminal, the kernel's socket or pipe (spec 3.3 S-I10).
+    if caller.transport == ControlTransport::Http {
+        return Err(KernelError::Core(AdkError::new(
+            ErrorComponent::Server,
+            ErrorCategory::Forbidden,
+            RESUME_NOT_HERE_CODE,
+            "resume all in the web home or on the kernel's own terminal: over HTTP the kernel \
+             cannot tell either from another client holding the operator credential",
+        )));
+    }
     record(backend.as_ref(), &caller, "unfreeze", None, &[]).await?;
     backend.unfreeze(caller.actor()).await?;
     let governance = backend.governance();

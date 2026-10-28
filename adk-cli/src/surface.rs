@@ -57,6 +57,14 @@ pub(crate) fn harness_engine(
     if let Some(records) = records {
         engine = engine.audit(records.trail).answers(records.answers);
     }
+    // Every agent the home runs draws forms and tables (spec 3.3 §6.1 `genui`, §5.7).
+    #[cfg(feature = "genui")]
+    {
+        engine = engine.grant(adk_surface::GrantedUse::new(
+            "genui",
+            adk_surface::words::SHOW_FORMS_AND_TABLES,
+        ));
+    }
     extend(engine).build()
 }
 

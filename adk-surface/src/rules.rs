@@ -22,6 +22,11 @@
 //! table: an agent's request is an ordinary decision, low risk, whose card never offers
 //! "always", and a person takes a screen action from the web home, the phone, a terminal or by
 //! voice, never from chat or the tray. No screen action answers a decision.
+//!
+//! Agent-drawn UI never decides (rule 5): a drawing with a decision's words or controls is
+//! refused before any surface shows it ([`genui::Validator`](crate::genui)), and a form's
+//! Send only asks for a call, which waits for the person whatever the agent's mode, standing
+//! rules or earlier approvals, on a card that never offers "Always allow".
 
 use adk_core::ApprovalAction;
 use schemars::JsonSchema;

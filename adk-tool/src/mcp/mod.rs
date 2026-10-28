@@ -1,3 +1,5 @@
+#[cfg(feature = "mcp-apps")]
+mod apps;
 mod auth;
 mod discovery;
 mod elicitation;
@@ -13,6 +15,11 @@ pub mod server;
 mod task;
 mod toolset;
 
+#[cfg(feature = "mcp-apps")]
+pub use apps::{
+    MCP_APP_MIME_TYPE, MCP_APP_STATE_KEY, MCP_APPS_EXTENSION_ID, MCP_APPS_VERSION, McpAppRecord,
+    McpAppResource, McpUiBinding, McpUiCsp, McpUiVisibility,
+};
 pub use auth::{AuthError, McpAuth, OAuth2Config};
 pub use discovery::McpDiscoveryLimits;
 pub use elicitation::{

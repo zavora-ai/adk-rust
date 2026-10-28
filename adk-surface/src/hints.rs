@@ -21,7 +21,9 @@
 //!
 //! A hint may only make a card stricter or add words. It never adds an answer, never lowers
 //! the risk and never changes it: the risk stays the inbox entry's, set when the call was
-//! held, so chat, voice and the kernel's own routes agree (spec 3.3 §7.2). `money: Some(false)`
+//! held, so chat, voice and the kernel's own routes agree (spec 3.3 §7.2). The kernel's own
+//! routes, its chat gateway among them, read no hints: a feature whose hint marks money also
+//! rates the call high through its approval router, as the workflow observer does. `money: Some(false)`
 //! and `offer_always: Some(true)` change nothing. The engine's
 //! [`heading`](crate::SurfaceEngineBuilder::heading), [`money`](crate::SurfaceEngineBuilder::money)
 //! and [`reversibility`](crate::SurfaceEngineBuilder::reversibility) stay the fallback for a

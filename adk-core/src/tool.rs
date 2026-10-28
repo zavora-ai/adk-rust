@@ -372,6 +372,13 @@ pub trait ToolContext: CallbackContext {
         None
     }
 
+    /// The names of the tools the agent making this call has, when its runtime says: a tool
+    /// that names another tool for a person to ask for, such as a drawn form's action, checks
+    /// the name against them (spec 3.3 §7.4 rule 5). `None`, the default, when it does not.
+    fn agent_tool_names(&self) -> Option<Vec<String>> {
+        None
+    }
+
     /// Returns whether the parent invocation has been cancelled.
     fn is_cancelled(&self) -> bool {
         false

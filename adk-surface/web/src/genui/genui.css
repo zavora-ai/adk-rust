@@ -1,0 +1,622 @@
+/*
+ * Agent-drawn UI (spec 3.3 §6.1 `genui`, §9): on the normal card background with the normal
+ * border, never a decision's colours, and no status pills. Light and dark come from the tokens.
+ */
+.drawn-place {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-self: stretch;
+  max-width: 560px;
+}
+
+.drawn {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 560px;
+  padding: 16px 18px 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--text);
+}
+
+.drawn-by {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.drawn-title,
+.drawn-heading {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.drawn-h1 {
+  font-size: 22px;
+}
+
+.drawn-h2 {
+  font-size: 19px;
+}
+
+.drawn-body,
+.drawn-stack,
+.drawn-column,
+.drawn-list,
+.drawn-inner-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.drawn-list[data-direction="horizontal"],
+.drawn-row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.drawn-row {
+  display: flex;
+}
+
+.drawn-row > * {
+  flex: 1 1 160px;
+}
+
+.drawn-inner-card {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.drawn-text {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.drawn-caption,
+.drawn-label {
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.drawn-pair {
+  display: grid;
+  grid-template-columns: minmax(96px, 34%) 1fr;
+  gap: 12px;
+  font-size: 15px;
+}
+
+.drawn-mono {
+  font-family: var(--mono);
+  font-size: 14px;
+}
+
+.drawn-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.drawn-field-label {
+  padding: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.drawn-input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+}
+
+textarea.drawn-input {
+  min-height: 88px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+
+.drawn-input:focus-visible,
+.drawn-check input:focus-visible,
+.drawn-range:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.drawn-input:disabled {
+  border-color: transparent;
+  background: var(--raised);
+  color: var(--text-2);
+}
+
+.drawn-input[aria-invalid="true"] {
+  border-color: var(--failed);
+}
+
+.drawn-error {
+  color: var(--failed);
+  font-size: 13px;
+}
+
+.drawn-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+}
+
+.drawn-check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--stop);
+}
+
+.drawn-choices {
+  gap: 8px;
+}
+
+.drawn-range {
+  width: 100%;
+  accent-color: var(--stop);
+}
+
+.drawn-divider {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.drawn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.drawn-send {
+  min-height: 40px;
+}
+
+.drawn-status-inline {
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.drawn-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.drawn-note {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.drawn-note code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.drawn-problem {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.drawn-status {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.drawn-table-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-x: auto;
+}
+
+.drawn-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+
+.drawn-table th {
+  padding: 0 12px 8px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.drawn-table td {
+  padding: 8px 12px 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.drawn-table th:last-child,
+.drawn-table td:last-child {
+  padding-right: 0;
+  text-align: right;
+}
+
+.drawn-show-all {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.drawn-tabs [role="tablist"] {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.drawn-tab {
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  cursor: pointer;
+}
+
+.drawn-tab-selected {
+  border-bottom-color: var(--text);
+  color: var(--text);
+}
+
+.drawn-changed {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.drawn-earlier {
+  max-width: 560px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.drawn-earlier > summary {
+  padding: 10px 14px;
+  color: var(--text-2);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.drawn-earlier > .drawn {
+  margin: 0 12px 12px;
+}
+
+.drawn-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 560px;
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.drawn-notice .icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+}
+
+/* The developer panel's Protocols section (spec 3.3 §4, §6.1). */
+.genui-protocols {
+  display: grid;
+  gap: 16px;
+}
+
+.genui-claims {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.genui-claims th {
+  padding: 6px 8px 6px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--label);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.genui-claims td {
+  padding: 8px 8px 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.genui-status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--pill-neutral-bg);
+  color: var(--pill-neutral);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.genui-status-supported {
+  background: var(--pill-decided-bg);
+  color: var(--pill-decided);
+}
+
+.genui-status-host_owned {
+  background: var(--pill-done-bg);
+  color: var(--pill-done);
+}
+
+.genui-status-partial,
+.genui-status-candidate {
+  background: var(--pill-question-bg);
+  color: var(--pill-question);
+}
+
+.genui-catalog {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.genui-components {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.genui-components li {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--raised);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.genui-refused {
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  list-style: none;
+}
+
+.genui-refused li {
+  display: grid;
+  grid-template-columns: 76px 110px 1fr;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13.5px;
+}
+
+.genui-refused li:last-child {
+  border-bottom: 0;
+}
+
+.genui-refused .drawn-mono {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+  .drawn,
+  .drawn-place,
+  .drawn-notice {
+    max-width: 100%;
+  }
+
+  .drawn-row > * {
+    flex-basis: 100%;
+  }
+
+  .drawn-send {
+    width: 100%;
+  }
+
+  .genui-refused li {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+
+.dev-protocols-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 32px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .dev-protocols-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+/*
+ * Apps from MCP servers (spec 3.3 §6.1 `genui-apps`): the same card container as a drawing,
+ * the frame inside it with a thin border, and what the app asks for in boxes of their own
+ * below it, never on a decision's background.
+ */
+.app-mark {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--raised);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.app-frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: var(--card);
+  color-scheme: normal;
+}
+
+.app-frame-border {
+  border: 1px solid var(--border);
+}
+
+.app-opening {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 120px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.app-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--text-2);
+  border-radius: 50%;
+  animation: app-spin 0.9s linear infinite;
+}
+
+@keyframes app-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-spinner {
+    animation: none;
+  }
+}
+
+.app-blocked,
+.app-elsewhere p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.app-elsewhere {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-2);
+}
+
+.app-elsewhere .app-result {
+  color: var(--text);
+  font-weight: 500;
+  white-space: pre-wrap;
+}
+
+.app-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 560px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--text);
+}
+
+.app-ask p {
+  margin: 0;
+}
+
+.app-ask-text {
+  font-size: 15px;
+}
+
+.app-ask-url {
+  color: var(--text-2);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.app-ask-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.app-ask-actions .button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: 14px;
+}
+
+/* An app's ask is not a decision: its press is ink, never the decision's rust. */
+.app-ask-actions .button-primary {
+  background: var(--stop);
+  color: var(--on-stop);
+}
+
+.app-ask-note {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+@media (max-width: 600px) {
+  .app-ask {
+    max-width: 100%;
+  }
+}

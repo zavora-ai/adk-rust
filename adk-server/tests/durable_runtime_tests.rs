@@ -585,6 +585,54 @@ async fn a_partitioned_agent_worker_fences_itself() {
     assert_eq!(responses.len(), 1, "the fenced worker appended nothing: {responses:?}");
 }
 
+// --- Retention ---
+
+/// Enqueues a run on `runs` and finishes it at the store's time.
+async fn finished_run(runs: &Arc<dyn DurableRunStore>) -> String {
+    let run_id = runs
+        .enqueue(NewRun::new("default", "app", "user", "flow", json!({})))
+        .await
+        .unwrap()
+        .record()
+        .unwrap()
+        .run_id
+        .clone();
+    let claimed = runs.claim("default", "setup", TTL).await.unwrap().unwrap();
+    runs.finish(&run_id, claimed.epoch, RunOutcome::Completed(json!("ok"))).await.unwrap();
+    run_id
+}
+
+/// Gate: the worker prunes finished runs past `retain_finished` on the clock the store
+/// stamps them with. On a store whose clock trails the wall clock by days, it prunes the
+/// run that finished 25 hours before the store's now and keeps the one that just finished.
+#[tokio::test]
+async fn the_worker_prunes_finished_runs_on_the_store_clock() {
+    let clock = Arc::new(adk_core::ManualClock::new(Utc::now() - chrono::Duration::days(3)));
+    let runs: Arc<dyn DurableRunStore> =
+        Arc::new(InMemoryRunStore::new().with_clock(clock.clone() as Arc<dyn Clock>));
+    let expired = finished_run(&runs).await;
+    clock.advance(Duration::from_secs(25 * 60 * 60));
+    let kept = finished_run(&runs).await;
+
+    let worker = DurableWorker::new(Arc::clone(&runs))
+        .with_clock(clock.clone() as Arc<dyn Clock>)
+        .with_config(worker_config("w").with_retain_finished(Some(Duration::from_secs(86_400))))
+        .spawn();
+    let store = Arc::clone(&runs);
+    let pruned = wait_for(Duration::from_secs(5), move || {
+        let (store, run_id) = (Arc::clone(&store), expired.clone());
+        Box::pin(async move { store.get(&run_id).await.unwrap().is_none().then_some(()) })
+    })
+    .await;
+    worker.shutdown().await;
+
+    assert!(pruned.is_some(), "the run finished 25 hours before the store's now is pruned");
+    assert!(
+        runs.get(&kept).await.unwrap().is_some(),
+        "the run finished at the store's now is kept, however far it trails the wall clock"
+    );
+}
+
 // --- Workflows and graphs ---
 
 #[tokio::test]

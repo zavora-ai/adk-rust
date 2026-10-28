@@ -163,7 +163,15 @@ the same fire times, and their idempotency keys enqueue nothing new.
 Cron expressions take five fields (`min hour dom month dow`) or six or seven (`sec min hour
 dom month dow [year]`) and are evaluated in an IANA time zone. A local time skipped by a
 spring-forward change does not fire; a local time repeated by a fall-back change fires once.
-Evaluating cron specs needs the `cron` feature:
+The day-of-week field counts days by the number of fields:
+
+| Expression | Sunday | Monday to Saturday | `1-5` fires |
+|------------|--------|--------------------|-------------|
+| Five fields, as Unix cron | `0` or `7` | `1` to `6` | Monday to Friday |
+| Six or seven fields, as the `cron` crate | `1` | `2` to `7` | Sunday to Thursday |
+
+Day names (`Mon-Fri`, `SAT,SUN`) mean the same days in both. Evaluating cron specs needs the
+`cron` feature:
 
 ```toml
 [dependencies]
@@ -188,6 +196,11 @@ scope's epoch (0 when it has no state); a moved epoch fails with `governance.con
 workflows through a `WorkflowExecutor`. Run one per replica; every replica claiming from the
 same store and queue shares the work.
 
+`DurableWorker::with_clock` sets the clock the worker compares with the run store's timestamps
+(`SystemClock` by default) — for pruning, idle waits, hand-back deadlines and approval expiry.
+Give it the run store's clock: on another clock, a store whose time trails the wall clock by
+more than `retain_finished` loses runs that just finished.
+
 | `DurableWorkerConfig` field | Default | Meaning |
 |-----------------------------|---------|---------|
 | `worker_id` | `worker-{uuid}` | Owner name written into every lease |
@@ -196,7 +209,7 @@ same store and queue shares the work.
 | `poll_interval` | 500 ms | Wait when nothing is claimable; the loop wakes earlier, at the earliest future `not_before` of a queued or parked run on its queue, so a delayed run or a timed wait resumes at its time (spec 3.2 §7.9, §13 Q2) |
 | `max_concurrent_runs` | 4 | Attempts executed at once |
 | `run_timeout` | `None` | Fails an attempt that runs longer (not retried) |
-| `retain_finished` | 24 h | Finished runs older than this are pruned by the claim loop |
+| `retain_finished` | 24 h | Finished runs older than this on the worker's clock are pruned by the claim loop |
 | `approval_timeout` | `None` | How long a run parked on a held tool call waits for a decision; `None` waits until woken |
 | `allowed_principals` | Empty | Agent ids beyond the worker's own and the target's derived id that a run's stored principal may name (`with_allowed_principal`); any other fails the run with `identity.principal_not_allowed` |
 | `on_governance_refusal` | `GovernanceRefusal::Park` | What a kill-switch refusal does to a run that already made a model or tool call, on a worker with a governance control: `Park` parks it at its next model-call boundary and wakes it on unfreeze, as **Kill switch** below describes; `Fail` ends the attempt with the control's error (spec 3.2 §10 S3) |

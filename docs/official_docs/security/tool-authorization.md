@@ -421,6 +421,72 @@ events receives only the last request, and the others are surfaced once it is de
 delegate's own confirmation events are not forwarded by `forward_events(true)`, so each held
 call is surfaced once per run.
 
+### Calls a Person Asks For
+
+A person asks an agent for a call through something the agent drew — a form's **Send** in
+[Agent-Drawn UI](../surfaces/genui.md) — or through an app an MCP server's tool showed, whose
+`tools/call` is held as a requested call `via` the app ([Apps from MCP servers](../surfaces/genui.md#apps-from-mcp-servers)). The call is an `adk_core::RequestedCall`: the tool,
+its arguments, the person (`requested_by`) and the drawn surface, version and action it came
+from (`via`). A run carries it as `RunConfig::requested_call`; only an authenticated run may
+(spec 3.3 §7.4 rule 5).
+
+| Step | What happens |
+|------|--------------|
+| Before the first model call | The run's root `LlmAgent` takes the call, finds the tool in its own toolset and checks the arguments against the tool's parameters |
+| Before-tool stages | The stages a model's call passes: enhanced plugins (which may rewrite the arguments), the runner's hooks and `BeforeToolCallback`, and the circuit breaker. One that answers the call answers it as not run, with no hold |
+| Authorization | `authorize_tool_call` with `GovernedCall::requested`: the kill switch, the `ToolPolicy` and the tool guardrails as for any call, then a hold |
+| Held | The runtime's notice — "[System notice] The person pressed the `send` button on the form `invoice-10` you drew (version 1). It asks to run send_invoice; …" with the arguments inside an `<untrusted-content source="form">` block (`RequestedCall::notice`), never a message in the person's name — then the call as the agent's own under an ID starting `adk-call-requested-` (`REQUESTED_CALL_ID_PREFIX`), each marked `adk.requested` with `requestedBy` and `via` (`RequestedCall::mark`); the call is submitted to the approval service and audited as `ApprovalRequired`, with the policy's own `policy_ref` when the policy asks for approval and `requested_call` when it would have allowed the call; the run ends with no model call |
+| Refused | The policy's or guardrail's refusal is written as the call's response; the run ends with no model call |
+| Resumed | At the start of a later run, like any held call; it runs once, on a person's decision |
+| Read by the model | Never as a call the model made, and never as the person's words: the call leaves the model's turns, and its answer is a runtime notice with the tool's output inside an `<untrusted-content source="tool">` block, so no provider receives a function call it did not issue |
+
+The press is the request, never the approval. A requested call is held whatever would answer
+an ordinary call:
+
+| Would answer an ordinary call | For a requested call |
+|-------------------------------|----------------------|
+| A `ToolPolicy` allow, a standing rule, the harness's Go ahead mode | Held |
+| A fingerprint approval in `RunConfig::tool_approvals` | Ignored, when held and when it resumes |
+| A `ToolConfirmationHandler` | Not asked, when held or when it resumes |
+| An `ApprovalStore` decision recorded before the person asked | Discarded when the call is held |
+| A call-ID decision, or an `ApprovalStore` decision recorded after the hold | Resumes it |
+| A `ToolPolicy` that denies the tool when it resumes | Refuses it: `Tool 'send_invoice' denied by policy: ...` |
+
+A requested call never names a kernel tool (`kernel_*`) or a tool that draws
+(`DRAW_TOOL_NAMES`); `RequestedCall::refused_tool` says why. A root that cannot hold a call
+refuses it before anything else runs: `CodeActAgent`, the workflow agents, teams and
+`GraphAgent`. A custom `Agent` answers it with `RequestedCall::refusal_events`. Every requested
+call's ID starts with `adk-call-requested-`, which finds them in the audit trail whatever
+`policy_ref` held them.
+
+A host asks for one through the agent that drew the form, so it is held in that agent's own
+runtime, with its policy, standing rules, acting context and approval store:
+
+| Host | Call |
+|------|------|
+| A harness | `Harness::send_requested(user, session, text, call, context)` |
+| A durable worker | A run whose input is `{"text": ..., "requestedCall": {...}}`, created with `NewRun::with_authenticated_user` |
+| `adk-surface` | `Source::request_call`, which `SurfaceEngine` calls for the `submitDrawn` command and for an app's `tools/call` |
+| `adk-server`'s AG-UI runtime | An `AgUiExtension` that answers a run's `forwardedProps` action, such as `GenuiAgUi` for `a2uiAction` |
+
+```rust,ignore
+use adk_core::{RequestContext, RequestedCall, RequestedVia, SubjectRef};
+use serde_json::json;
+
+let call = RequestedCall::new(
+    "send_invoice",
+    json!({ "to": "ana@example.com", "amount": 4200, "invoice": "INV-10" }),
+    SubjectRef::human("ana"),
+    RequestedVia::form("invoice-10", 1, "send"),
+);
+let context = RequestContext {
+    user_id: "ana".into(),
+    scopes: Vec::new(),
+    metadata: Default::default(),
+};
+let events = harness.send_requested(&user, &session, "", call, context).await?;
+```
+
 ### Decisions Authorize One Exact Call
 
 A decision applies to one exact call: made by the same agent, to the same tool, with the same
@@ -1144,6 +1210,8 @@ and runs at most once per call in its thread's lineage. See
 |-------|-------|---------|
 | 0 | Gate: `ToolGate::for_context` on the parent invocation, or the `RunConfig` of `invoke_with_run_config` | No gate: not run (`graph.not_run`). A governed node never falls back to running ungoverned |
 | 1 | Kill switch | Frozen: refused before the ledger is read (`graph.frozen`) |
+| 1a | `Node::will_act` | The node does nothing here, such as an action node whose condition is false: done with no writes, and no decision is created. It cannot act, such as an HTTP request that cannot be built: it fails with that error, and no decision is created |
+| 1b | An action ledger (`RunConfig::action_ledger`) and a checkpointer | Without either: not run (`graph.unavailable`), because the call could not be kept to once |
 | 2 | Action ledger lookup, under `graph/{acting agent id}/{lineage root}/{node}/{occurrence}/{json_digest(call args)}` | Completed: answered from the effect log; nothing runs and no decision is created. Failed: fails with the recorded error. Refused or denied before: no record, so step 3 asks again. Begun without an outcome: fails closed (`graph.outcome_unknown`) |
 | 3 | `authorize_tool_call` with a `GovernedCall` named after the node, `requiring_confirmation` from the node's `requires_approval`, and origin `ToolOrigin::new("graph:{agent}", <the node's shape entry>, None)`; `resuming` the held request when the node resumes its own pause | Pending: the node pauses with a `GraphToolConfirmationPause`, and the call is in the approval store and service. Refuse: not run (`graph.refused`). Execute: begin in the ledger, run, complete, append the writes to the effect log |
 
@@ -1152,10 +1220,13 @@ and runs at most once per call in its thread's lineage. See
 | Order | The ledger lookup comes before the governed path, unlike `LlmAgent`, where the ledger begins after it. A fork whose call already happened is answered from its record, so it never shows a person a decision for a call that will not run (spec 3.3 §11 S-I1) |
 | Binding | The fingerprint binds the acting agent, the node's shape entry, the node name and the call's arguments, so a decision never authorizes another graph agent's node of the same name, or a node whose declaration changed |
 | Edits | An approver's edit runs through `Node::run_call`. A node that cannot run an edited call refuses it (`graph.edit_unsupported`); the unedited call never runs after an edit |
-| Credentials | An HTTP action node shows each credential — authorization and cookie headers, and headers, query parameters and form fields with secret-looking names — as a `sha256:` digest. An approved call is sent with the current credential, and a digest that no longer matches it refuses the call unsent |
-| Outcome unknown | A call that timed out or was cut off after it began stays begun, and every later run in the lineage fails closed with `graph.outcome_unknown` |
+| Credentials | An HTTP action node shows each credential — authorization and cookie headers, an API key's header whatever its name, headers, query parameters, form fields and JSON body fields with secret-looking names, and in a raw body the values of state keys with secret-looking names — as a `sha256:` digest. An approved call is sent with the current credential, and a digest that no longer matches it refuses the call unsent. `HttpActionPolicy::credential_key` keys the digests with a host secret (HMAC-SHA256), so a weak credential such as a password cannot be guessed from the decision; keep the key stable, because the digests are part of the ledger key |
+| Sent once | An action node's error handling does not apply to a governed call: `Retry` never resends it, and `Continue` and `Fallback` never hide its failure from the ledger. Recover a governed node's failure with the graph's error handler |
+| Outcome unknown | A call that timed out — under the graph's timeout policy or the action node's own `execution.timeout` — or was cut off after it began, or an HTTP call whose answer failed validation or could not be read, stays begun, and every later run in the lineage fails closed with `graph.outcome_unknown`. Only a connection that was never made is a recorded failure |
+| Unknown names | Governing a name that is not a node of the graph fails the run (`GraphError::InvalidGraph`), and `GraphAgentBuilder::build` refuses it, so the node meant never runs ungoverned |
 | Kill switch again | A freeze that lands between the decision and the call completes the begun record as not run |
-| Waiting | A run that resumes the node's own pause before a decision exists pauses again without calling `authorize_tool_call`, as `LlmAgent` resumes a held call only once `confirmation_decision_available`; a changed call, or one a record answers, has its waiting decision withdrawn with `withdraw_held_call` |
+| Waiting | A run that resumes the node's own pause before a decision exists pauses again without calling `authorize_tool_call`, as `LlmAgent` resumes a held call only once `confirmation_decision_available`; a changed call, or one a record answers, has its waiting decision withdrawn with `withdraw_held_call`. A node that pauses itself after its call was approved holds no request, so its next run is a new call that asks again |
+| Bound to the state | A node without `Node::call_args` is bound to the whole state it reads, less the `session_id` a graph agent writes each turn, so a fork in a new session binds the same call |
 
 ## Combining Mechanisms
 

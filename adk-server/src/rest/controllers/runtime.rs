@@ -2,6 +2,7 @@ use super::ag_ui_decisions::{
     AgUiCaller, AgUiDecisions, HeldCall, RESUME_IN_PROGRESS, ResumeOutcome, ResumesInProgress,
     commit_resume, decision_event, plan_resume,
 };
+use super::ag_ui_extension::{AgUiAction, AgUiExtension};
 use crate::ServerConfig;
 use crate::auth_bridge::{RequestContextError, RequestContextExtractor};
 use crate::rest::controllers::ui::{
@@ -41,11 +42,40 @@ pub struct RuntimeController {
     config: ServerConfig,
     approval_service: Option<Arc<dyn adk_core::ApprovalService>>,
     resumes: ResumesInProgress,
+    /// What the host adds to protocol-native AG-UI runs (spec 3.3 §6.1 `genui`).
+    ag_ui_extension: Option<Arc<dyn AgUiExtension>>,
 }
 
 impl RuntimeController {
     pub fn new(config: ServerConfig) -> Self {
-        Self { config, approval_service: None, resumes: ResumesInProgress::default() }
+        Self {
+            config,
+            approval_service: None,
+            resumes: ResumesInProgress::default(),
+            ag_ui_extension: None,
+        }
+    }
+
+    /// Adds `extension` to protocol-native AG-UI runs (spec 3.3 §6.1 `genui`, §10 S2): its
+    /// events after each event's own, its say on which `activity` messages a client sends back
+    /// are kept, and the call a run's `forwardedProps` action asks for, which the run's agent
+    /// holds so the run ends with a `tool_call` interrupt. Only an authenticated run may carry
+    /// such an action. See [`AgUiExtension`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let controller = RuntimeController::new(config).with_ag_ui_extension(Arc::new(extension));
+    /// ```
+    #[must_use]
+    pub fn with_ag_ui_extension(mut self, extension: Arc<dyn AgUiExtension>) -> Self {
+        self.ag_ui_extension = Some(extension);
+        self
+    }
+
+    /// The features the AG-UI extension adds to `ag_ui`, none without one.
+    pub(crate) fn ag_ui_features(&self) -> Vec<&'static str> {
+        self.ag_ui_extension.as_ref().map(|extension| extension.features()).unwrap_or_default()
     }
 
     /// Routes the calls that protocol-native AG-UI runs hold for approval to `service`,
@@ -1307,6 +1337,8 @@ struct AgUiStream {
     messages: HashMap<(String, String), AgUiMessages>,
     /// Calls the run held for approval, one per fingerprint, in the order held.
     held: Vec<HeldCall>,
+    /// What the host adds after each event (spec 3.3 §6.1 `genui`).
+    extension: Option<Arc<dyn AgUiExtension>>,
 }
 
 impl AgUiStream {
@@ -1342,7 +1374,12 @@ impl AgUiStream {
                     .extend(endings);
             }
         }
-        let translated = translate_ag_ui_event(&delta, thread_id, run_id, &open);
+        let mut translated = translate_ag_ui_event(&delta, thread_id, run_id, &open);
+        if let Some(extension) = &self.extension
+            && !event.llm_response.partial
+        {
+            translated.extend(extension.events_for(event));
+        }
         if event.llm_response.partial {
             for item in &translated {
                 let id = item.get("messageId").and_then(Value::as_str).map(str::to_owned);
@@ -1367,6 +1404,7 @@ fn build_runtime_sse_stream<S>(
     session_id: String,
     ag_ui_input: Option<AgUiRunInput>,
     decisions: AgUiDecisions,
+    extension: Option<Arc<dyn AgUiExtension>>,
 ) -> std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>
 where
     S: Stream<Item = adk_core::Result<adk_core::Event>> + Send + 'static + Unpin,
@@ -1386,7 +1424,7 @@ where
     Box::pin(async_stream::stream! {
         let native_ag_ui = profile == UiProfile::AgUi && transport == UiTransportMode::ProtocolNative;
         let mut started = false;
-        let mut ag_ui_stream = AgUiStream::default();
+        let mut ag_ui_stream = AgUiStream { extension, ..AgUiStream::default() };
         let mut active_run_id = ag_ui_input.as_ref().and_then(|input| input.run_id.clone());
 
         while let Some(item) = event_stream.next().await {
@@ -1694,6 +1732,7 @@ pub(crate) async fn run_sse_for_request(
             session_id.clone(),
             None,
             decisions,
+            controller.ag_ui_extension.clone(),
         );
 
         Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
@@ -1726,7 +1765,15 @@ pub(crate) async fn run_sse_compat_for_request(
     let app_name = req.app_name.clone();
     let user_id = req.user_id.clone();
     let session_id = req.session_id.clone();
-    let ag_ui_input = ag_ui_input_from_request(&req);
+    let mut ag_ui_input = ag_ui_input_from_request(&req);
+    // The host's extension decides which activities a client sent back are kept: a dropped
+    // one reaches neither the stream nor the session (spec 3.3 §6.1 `genui`).
+    let extension = controller.ag_ui_extension.clone();
+    if let (Some(extension), Some(input)) = (&extension, ag_ui_input.as_mut()) {
+        input.messages.retain(|message| {
+            message.role.as_deref() != Some("activity") || extension.keeps_activity(message)
+        });
+    }
     let mcp_apps_request = mcp_apps_request_from_request(&req);
     let mcp_apps_initialize = mcp_apps_initialize_from_request(&req);
 
@@ -1829,10 +1876,78 @@ pub(crate) async fn run_sse_compat_for_request(
         }
     }
 
+    // An action in `forwardedProps` asks for a call a person decides (spec 3.3 §7.4 rule 5):
+    // the host's extension checks it against the session, and the run's agent holds it.
+    let native_ag_ui =
+        ui_profile == UiProfile::AgUi && transport == UiTransportMode::ProtocolNative;
+    let mut requested_call = None;
+    // The agent that holds the call, loaded once for the run.
+    let mut action_agent = None;
+    if native_ag_ui
+        && let Some(extension) = &extension
+        && let Some(props) = ag_ui_input.as_ref().and_then(|input| input.forwarded_props.as_ref())
+        && extension.action_in(props)
+    {
+        let Some(caller) = request_context.as_ref() else {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "an AG-UI action asks for a call a person decides, which needs an authenticated \
+                 caller; configure a RequestContextExtractor"
+                    .to_string(),
+            ));
+        };
+        if resuming {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "an AG-UI run carries either a resume or an action in forwardedProps, not both"
+                    .to_string(),
+            ));
+        }
+        let session = controller
+            .config
+            .session_service
+            .get(adk_session::GetRequest {
+                app_name: app_name.clone(),
+                user_id: effective_user_id.clone(),
+                session_id: session_id.clone(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .map_err(adk_err_to_runtime)?;
+        let events = session.events().all();
+        let requested_by = adk_core::principal::SubjectRef::human(caller.user_id.clone());
+        let agent = controller
+            .config
+            .agent_loader
+            .load_agent(&app_name)
+            .await
+            .map_err(adk_err_to_runtime)?;
+        requested_call = extension
+            .requested_call(AgUiAction {
+                app_name: &app_name,
+                agent_name: agent.name(),
+                user_id: &effective_user_id,
+                session_id: &session_id,
+                requested_by: &requested_by,
+                forwarded_props: props,
+                events: &events,
+            })
+            .await
+            .map_err(adk_err_to_runtime)?;
+        action_agent = Some(agent);
+    }
+    let submitting = requested_call.is_some();
+
     // A resume carries the client's whole history, whose last user message this session
-    // already answered, so it starts no new user turn unless one is sent as `newMessage`.
+    // already answered, so it starts no new user turn unless one is sent as `newMessage`. An
+    // action is not a new turn either: the person pressed a button.
     let content = match req.new_message.clone().or_else(|| {
-        if resuming { None } else { ag_ui_input.as_ref().and_then(new_message_from_ag_ui_input) }
+        if resuming || submitting {
+            None
+        } else {
+            ag_ui_input.as_ref().and_then(new_message_from_ag_ui_input)
+        }
     }) {
         Some(resolved_new_message) => {
             // Log part info
@@ -1850,8 +1965,9 @@ pub(crate) async fn run_sse_compat_for_request(
             // Build content from message parts (includes both text and inline_data)
             build_content_from_parts(&resolved_new_message.parts)?
         }
-        // A blank turn resumes the held calls that now have a decision.
-        None if resuming => adk_core::Content::new("user").with_text(""),
+        // A blank turn resumes the held calls that now have a decision, or holds the call a
+        // person asked for.
+        None if resuming || submitting => adk_core::Content::new("user").with_text(""),
         None => {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -1896,8 +2012,15 @@ pub(crate) async fn run_sse_compat_for_request(
     }
 
     // Load agent
-    let agent =
-        controller.config.agent_loader.load_agent(&app_name).await.map_err(adk_err_to_runtime)?;
+    let agent = match action_agent {
+        Some(agent) => agent,
+        None => controller
+            .config
+            .agent_loader
+            .load_agent(&app_name)
+            .await
+            .map_err(adk_err_to_runtime)?,
+    };
 
     // Create runner with streaming config from request
     let streaming_mode =
@@ -1906,6 +2029,9 @@ pub(crate) async fn run_sse_compat_for_request(
     let mut run_config = adk_core::RunConfig::builder().streaming_mode(streaming_mode);
     if let Some(service) = decisions.service.clone() {
         run_config = run_config.approval_service(service);
+    }
+    if let Some(call) = requested_call {
+        run_config = run_config.requested_call(call);
     }
     let mut runner_builder = adk_runner::Runner::builder()
         .app_name(app_name)
@@ -1958,6 +2084,7 @@ pub(crate) async fn run_sse_compat_for_request(
         session_id.clone(),
         ag_ui_input,
         decisions,
+        extension,
     );
     // The resume stays in progress until its run's stream ends or is dropped.
     let sse_stream: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =

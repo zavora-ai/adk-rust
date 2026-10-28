@@ -16,6 +16,7 @@ import { dayAndTime, dollars, whenAhead } from "../format";
 import type { AreaSettings, AwayPage } from "../kernel";
 import { labels } from "../labels";
 import type { Planned } from "../plan";
+import { visible } from "../safe";
 import type { VerbsResponse } from "../generated/verbs";
 import { ComingUpRow } from "../verbs/Snooze";
 import type { Snooze } from "../verbs/Snooze";
@@ -233,6 +234,7 @@ export function Threads({
             onSettled={onChanged}
             focusDecision={focusDecision}
             takeOver={takeOver}
+            session={session}
           />
           {problem && (
             <p className="decision-problem" role="alert">
@@ -282,7 +284,7 @@ export function Threads({
                 />
               ) : (
                 <li key={item.key}>
-                  <span>{item.agent ? `${item.agent} · ${item.title}` : item.title}</span>
+                  <span>{visible(item.agent ? `${item.agent} · ${item.title}` : item.title)}</span>
                   <time className="mono" dateTime={item.at.toISOString()}>
                     {whenAhead(item.at)}
                   </time>

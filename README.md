@@ -381,7 +381,7 @@ checks an agent definition without building. `cargo adk templates` and
 | `cargo-adk` | Cargo subcommand | Project templates including the harness and Agent Engine BYOC, composable addons, eval runs, benchmarks, and deployment |
 | `adk-rust` | Umbrella crate | Re-exports every crate above behind tiered feature presets — the one dependency most projects need |
 
-> **Extracted to standalone repos:** [adk-ui](https://github.com/zavora-ai/adk-ui) (dynamic UI generation), [adk-studio](https://github.com/zavora-ai/adk-studio) (visual agent builder), [adk-playground](https://github.com/zavora-ai/adk-playground) (more examples).
+> **Retired and extracted repos:** [adk-ui](https://github.com/zavora-ai/adk-ui) is retired in favour of `adk-surface`'s `genui` feature ([Agent-Drawn UI](docs/official_docs/surfaces/genui.md)), and [adk-studio](https://github.com/zavora-ai/adk-studio) is retired in favour of the workflow observer; [adk-playground](https://github.com/zavora-ai/adk-playground) holds more examples.
 
 ## Performance
 
@@ -423,8 +423,8 @@ per-platform tool matrix and the CI cost tiers.
 
 | Project | What it is |
 |---------|------------|
-| [adk-studio](https://github.com/zavora-ai/adk-studio) | Visual agent builder — canvas, code generation, live testing |
-| [adk-ui](https://github.com/zavora-ai/adk-ui) | Dynamic UI generation — components, React client, streaming |
+| [adk-studio](https://github.com/zavora-ai/adk-studio) | Visual agent builder, retired in favour of the [workflow observer](docs/official_docs/surfaces/workflow.md) (spec 3.3 §13 decision 12) |
+| [adk-ui](https://github.com/zavora-ai/adk-ui) | Retired, for ADK-Rust 2 only — agent-drawn UI is `adk-surface`'s `genui` feature |
 | [adk-playground](https://github.com/zavora-ai/adk-playground) | Working examples, and a hosted playground |
 
 ## Project

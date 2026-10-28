@@ -98,9 +98,11 @@ async fn adding_by_hand_previews_then_applies_and_hosts_at_once() {
     );
     assert_eq!(agent.created_by, SubjectRef::human(PERSON));
 
+    // The apply with another digest is refused on record (spec 3.3 §11), then the agent added.
     let records = world.agent_records();
-    assert_eq!(records.len(), 1);
-    let created = &records[0];
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].action, adk_kernel::audit::AGENT_REFUSED);
+    let created = &records[1];
     assert_eq!(created.action, adk_kernel::audit::AGENT_CREATED);
     assert_eq!(created.ext["surface"], "terminal");
     assert_eq!(created.ext["transport"], "socket");

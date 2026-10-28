@@ -483,6 +483,9 @@ impl Agents {
             }
         };
         if digest != plan.preview.digest {
+            // Refused as a digest that changed (spec 3.3 §11 `kernel.agent.refused`).
+            let reason = "a digest that changed: this is not the change that was previewed";
+            self.record_refused(Some(caller), action.id(), definition_name(&action), reason).await;
             return Err(agent_error(
                 ErrorCategory::Conflict,
                 AGENT_UNCONFIRMED_CODE,
@@ -645,7 +648,7 @@ impl Agents {
 
     async fn propose_checked(
         &self,
-        definition: AgentDefinition,
+        mut definition: AgentDefinition,
         proposer: &AgentProposer,
     ) -> Result<AgentProposal> {
         let inner = &self.inner;
@@ -656,6 +659,23 @@ impl Agents {
             return Err(refused("this kernel builds no agents of a person's own"));
         }
         definition.validate()?;
+        // A suggestion spends at most what its suggester may, which is within its area's daily
+        // limit: one that names no limit of its own is kept with the suggester's, so the card
+        // shows it (spec 3.3 S-I12).
+        if definition.daily_limit_micro_usd.is_none() {
+            let partition = self.area(&definition.area).await?;
+            let ceiling =
+                self.suggester_ceiling(&proposer.agent, &proposer.session, &partition).await?;
+            let cap = ceiling
+                .map(|ceiling| {
+                    let own = proposer.ceiling.as_ref().and_then(|own| own.daily_limit_micro_usd);
+                    ceiling.within_daily_limit(own)
+                })
+                .and_then(|ceiling| ceiling.daily_limit_micro_usd);
+            if let Some(cap) = cap {
+                definition = definition.with_daily_limit(cap);
+            }
+        }
         let records = inner.store.list().await?;
         let digest = definition.digest();
         let mine = |record: &&AgentRecord| {
@@ -684,13 +704,24 @@ impl Agents {
             )));
         }
         let (unattended, area) = self.suggesting_process(proposer).await?;
-        if let Some(area) = area
-            && area != definition.area
-        {
-            return Err(refused(format!(
-                "a suggested agent works in its suggester's area `{area}`, not `{}`",
-                definition.area
-            )));
+        match area {
+            Some(area) if area != definition.area => {
+                return Err(refused(format!(
+                    "a suggested agent works in its suggester's area `{area}`, not `{}`",
+                    definition.area
+                )));
+            }
+            Some(_) => {}
+            // A suggestion from a run the kernel does not know might come from any area, so
+            // it is refused wherever there is more than one (spec 3.3 S-I12).
+            None if self.has_areas_beside(&definition.area).await? => {
+                return Err(refused(format!(
+                    "the kernel cannot tell which area {} suggests from, so it suggests no \
+                     agent in `{}`; suggest it from a turn the kernel runs",
+                    proposer.agent, definition.area
+                )));
+            }
+            None => {}
         }
         self.check_names(&definition, &records, None, None)?;
         let partition = self.area(&definition.area).await?;
@@ -835,11 +866,33 @@ impl Agents {
         agent: &AgentId,
         session: &str,
     ) -> Result<Option<Vec<String>>> {
+        let partition = self.area(&definition.area).await?;
+        let ceiling = self.suggester_ceiling(agent, session, &partition).await?;
+        Ok(ceiling.map(|ceiling| over_ceiling(definition, &ceiling)))
+    }
+
+    /// What the suggesting `agent` may give in `session` in `area`, as its factory reports it,
+    /// its spending lowered to the area's daily limit, within which it spends (spec 3.3
+    /// S-I12); `None` when it may suggest none.
+    async fn suggester_ceiling(
+        &self,
+        agent: &AgentId,
+        session: &str,
+        area: &Partition,
+    ) -> Result<Option<AgentCeiling>> {
         let ceiling = match &self.inner.factory {
-            Some(factory) => factory.ceiling_in(agent, session, &definition.area).await?,
+            Some(factory) => factory.ceiling_in(agent, session, &area.id).await?,
             None => None,
         };
-        Ok(ceiling.map(|ceiling| over_ceiling(definition, &ceiling)))
+        Ok(ceiling.map(|ceiling| ceiling.within_daily_limit(area.quotas.daily_spend_cap)))
+    }
+
+    /// Whether the kernel has an area other than `area`: the default area counts, record or
+    /// not.
+    async fn has_areas_beside(&self, area: &PartitionId) -> Result<bool> {
+        let others = self.inner.sup.partitions.list().await?;
+        Ok(area.as_str() != PartitionId::DEFAULT
+            || others.iter().any(|partition| partition.id != *area))
     }
 
     /// Whether the suggesting run is work the person did not start at a screen: a process
@@ -1619,7 +1672,10 @@ impl Agents {
             match record.state {
                 AgentRecordState::Active | AgentRecordState::Paused => self.host(record).await,
                 AgentRecordState::Removing => {
-                    if let Err(error) = self.finish_removal(record, None).await {
+                    // The removal's own record names the person; the tick that finishes it
+                    // names itself (spec 3.3 S-I16, S-I18).
+                    let tick = AgentCaller::new(SubjectRef::service("kernel"), "kernel", "tick");
+                    if let Err(error) = self.finish_removal(record, Some(&tick)).await {
                         tracing::warn!(agent.id = %record.id, error = %error, "could not finish removing an agent; the next tick retries");
                     }
                 }

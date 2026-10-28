@@ -7,8 +7,8 @@ use adk_core::audit_log::AuditActor;
 use adk_core::principal::{SubjectKind, SubjectRef};
 use adk_core::{
     AdkError, ApprovalScope, Content, ErrorCategory, ErrorComponent, Event, EventStream,
-    FunctionResponseData, Part, PendingApproval, RequestContext, Result, RunConfig, SessionId,
-    ToolApproval, UserId, held_tool_calls,
+    FunctionResponseData, Part, PendingApproval, RequestContext, RequestedCall, Result, RunConfig,
+    SessionId, ToolApproval, UserId, held_tool_calls,
 };
 use adk_runner::Runner;
 use adk_session::{CreateRequest, GetRequest, SessionService};
@@ -393,6 +393,65 @@ impl Harness {
         self.turn(user, session, Content::new("user").with_text(text.into()), Some(context)).await
     }
 
+    /// Sends `call`, a call the person `context` authenticates asked for through something
+    /// the agent drew, such as a form's Send, with `text` as their message (spec 3.3 §7.4
+    /// rule 5, wave 4 decision 13). It serves hosts without a kernel; a kernel host sends the
+    /// call through the agent's durable runs.
+    ///
+    /// The press is the request, never the approval. The agent holds the call for the
+    /// person's decision as itself, under its own mode, standing rules, acting context and
+    /// approval store — or refuses it — and the run ends without a model call: Go ahead, a
+    /// standing rule that allows the tool, an earlier approval of the identical call and the
+    /// approval prompt all leave it waiting. [`decide`](Self::decide), then
+    /// [`resume_as`](Self::resume_as), runs it once.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_core::{RequestContext, RequestedCall, RequestedVia, SessionId, SubjectRef, UserId};
+    /// use adk_harness::Harness;
+    /// use serde_json::json;
+    ///
+    /// # async fn example(harness: Harness, user: UserId, session: SessionId) -> adk_core::Result<()> {
+    /// let context = RequestContext {
+    ///     user_id: user.to_string(),
+    ///     scopes: Vec::new(),
+    ///     metadata: Default::default(),
+    /// };
+    /// let call = RequestedCall::new(
+    ///     "send_invoice",
+    ///     json!({ "to": "ana@example.com", "amount": 4200, "invoice": "INV-10" }),
+    ///     SubjectRef::human(user.to_string()),
+    ///     RequestedVia::form("invoice-10", 1, "send"),
+    /// );
+    /// let events = harness.send_requested(&user, &session, "", call, context).await?;
+    /// # let _ = events;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// As [`send_as`](Self::send_as).
+    pub async fn send_requested(
+        &self,
+        user: &UserId,
+        session: &SessionId,
+        text: impl Into<String>,
+        call: RequestedCall,
+        context: RequestContext,
+    ) -> Result<EventStream> {
+        self.settle_stranded_calls(user, session).await?;
+        self.recover(user, session).await?;
+        let config = RunConfig {
+            request_context: Some(context),
+            requested_call: Some(call),
+            ..self.runner.run_config().clone()
+        };
+        let content = Content::new("user").with_text(text.into());
+        self.runner.run_with_config(user.clone(), session.clone(), content, Some(config)).await
+    }
+
     /// Runs an empty turn, which resumes held calls that now have a decision.
     ///
     /// A held call whose approval a run consumed but whose result that run never saved —
@@ -508,7 +567,11 @@ impl Harness {
                             annotations: None,
                         });
                     }
-                    None if runtime.confirmation_handler().is_none() => {
+                    // No handler answers a call a person asked for, so it waits again too
+                    // (spec 3.3 §7.4 rule 5).
+                    None if runtime.confirmation_handler().is_none()
+                        || RequestedCall::is_requested_id(call_id) =>
+                    {
                         tracing::warn!(
                             tool.name = %call.name,
                             function_call.id = %call_id,
@@ -558,7 +621,9 @@ impl Harness {
     /// Only outside a run. A loosening first answers every held call in the session with a
     /// "cancelled by mode change" response and removes its pending entry and any decision
     /// for it, so no call a person has not seen under the looser mode runs on the next
-    /// resume or on a later identical call (spec 3.1 §9.2 I14).
+    /// resume or on a later identical call (spec 3.1 §9.2 I14). A call a person asked for
+    /// through a drawn form or an app keeps waiting: no mode answers it (spec 3.3 §7.4
+    /// rule 5).
     ///
     /// # Errors
     ///
@@ -594,7 +659,12 @@ impl Harness {
                 }
             }
             for (author, branch) in holders {
-                let held = held_tool_calls(&events, &author, &branch);
+                // A call a person asked for waits for them in every mode, so a looser mode
+                // never runs it unseen (spec 3.3 §7.4 rule 5).
+                let held: Vec<_> = held_tool_calls(&events, &author, &branch)
+                    .into_iter()
+                    .filter(|call| !call.id.as_deref().is_some_and(RequestedCall::is_requested_id))
+                    .collect();
                 if held.is_empty() {
                     continue;
                 }

@@ -180,6 +180,7 @@ match outcome {
 | `stopAll` | Freezes every agent, from any surface (S-I10) |
 | `resumeAll` | Unfreezes, only from the web home or a paired local terminal (S-I10) |
 | `setMode` | Changes the session's mode; making agents act more on their own is a standing permission, so only the web home, the phone and the terminal may loosen it |
+| `submitDrawn` | Sends a form an agent drew (`genui`): checks the version the person saw, the declared action and each value, then asks the drawing agent for the call, which it holds for the person; nothing runs until they decide. Only a person at a screen sends one. See [Agent-Drawn UI](genui.md#sending-a-form) |
 
 > **Note:** §6 also names "steer", a message that reaches a turn while it runs. No runtime
 > under the engine takes input in the middle of a turn, so there is no steer command: a message
@@ -196,6 +197,8 @@ match outcome {
 | `surface.call_not_expanded` | A truncated call approved before it was expanded |
 | `surface.not_here` | An agent answering a decision, resuming outside the home, loosening the mode from chat or voice |
 | `surface.unsupported` | The source cannot do it |
+| `surface.drawn_changed` | A drawn form sent at a version the agent has changed since (`409`) |
+| `surface.invalid` | A malformed command, such as a drawn form's undeclared action, a value that does not fit its field, or a form sent already |
 
 ## Audit records
 
@@ -203,7 +206,10 @@ Every answer is written to the audit trail as `surface.decide` (kind `approval`)
 `approvalId`, `sessionId`, `tool`, `answer`, `outcome` (`decided`, `already_decided`,
 `changed`, `refused`, `cancelled`), `surface` and `origin`; the actor is the person.
 `surface.send`, `surface.stop_all`, `surface.resume_all` and `surface.set_mode` record the
-other commands the same way.
+other commands the same way. `surface.drawn.submitted` records a drawn form's send with
+`sessionId`, `surfaceId`, `version`, `actionId`, `tool`, `argsDigest` (the audit trail's
+digest of the call's arguments, as the call's approval records carry it), `valuesDigest`,
+`callId` and `drawnBy`, never the values.
 
 How an answer was given — "in Telegram", "on your phone" — is not part of the approval
 service's decision, so the engine keeps it in an `AnswerLog`. The default,
@@ -256,6 +262,9 @@ the server's auth middleware authenticates every request.
 | `GET /surface/briefing?since=` | "While you were away" |
 | `POST /surface/commands` | `{"surface", "origin", "command"}` → the outcome |
 | `GET /surface/openapi.json` | The OpenAPI 3.1 document |
+| `GET /surface/genui/capabilities` | What the home claims of A2UI, AG-UI and MCP Apps, and the catalogs it renders; with `genui`, mounted by `adk_surface::web::genui::router` |
+| `GET /surface/genui/sessions/{session}/forms` | Each drawn form sent in the session and where its call is; with `genui` |
+| `GET /surface/genui/sessions/{session}/apps/{call}`, `POST …/requests`, `POST …/message` | An app from an MCP server: framed, blocked or not shown here; what it asks the home; the message it suggested, once the person sends it; with `genui-apps`, mounted by `adk_surface::web::genui::apps_router` |
 
 `adk_surface::web::take_over_router(engine, take_over)` adds `POST
 /surface/decisions/{id}/take-over` (`{"version", "secret"}` → the outcome) beside a harness that
@@ -296,7 +305,9 @@ generated from the Rust types. `bash scripts/check-surface-api.sh` fails when th
 - [The Desktop Tray](desktop.md) — Experimental, a separate app: the home in a desktop window and the tray panel at `/ui/tray`
 - [Voice and Video](voice.md) — the `voice` feature: spoken answers through the engine with a cancel window, the camera and the screen while their switches are on
 - [Your Agents](agents.md) — agents a person adds by asking or by hand: the roster, New agent, settings, `/agent` and the decision that adds one
+- [Agent-Drawn UI](genui.md) — the `genui` feature: forms, cards and tables agents draw in threads, never with approval controls; a form's Send asks the drawing agent for the call, held for the person
 - [The Website's Views](website.md) — the `website` feature: a prebuilt website's onboarding, site view, weekly review and web editor at `/ui/website`
 - [Screen Actions](verbs.md) — the `verb-ui` feature, Experimental: Snooze in Coming up from every surface, and an agent's request that always waits for you
+- [The Workflow Observer](workflow.md) — the `workflow` feature: a graph agent's runs, steps and forks on the developer panel's Runs tab
 - [The Control Plane](../kernel/control-plane.md) — the kernel routes the web API sits beside
 - [Harness Modes and Approvals](../harness/modes-and-approvals.md) — held calls, standing rules, modes

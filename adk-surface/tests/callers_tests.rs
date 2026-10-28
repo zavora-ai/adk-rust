@@ -232,6 +232,37 @@ async fn a_device_never_resumes() {
     }
 }
 
+/// Resume all is the web home's only from its own page (spec 3.3 §11 S-I10): an operator
+/// client over HTTP declaring the web home, without a browser's same-origin request, may not
+/// resume, and the freeze stays; the home's page resumes. Fails on `origin/main`, which takes
+/// the declared surface and resumes.
+#[tokio::test]
+async fn an_operator_client_resumes_only_from_the_home_page() {
+    let home = home().await;
+    let web = api(&home.engine, operator());
+    let command = |kind: &str| json!({ "surface": "web", "origin": { "kind": "pointer" }, "command": { "type": kind } });
+
+    let (status, outcome) =
+        call(&web, "POST", "/api/surface/commands", Some(command("stopAll"))).await;
+    assert_eq!((status, outcome["type"].clone()), (StatusCode::OK, json!("stopped")), "{outcome}");
+    let (status, problem) =
+        call(&web, "POST", "/api/surface/commands", Some(command("resumeAll"))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["error"]["code"], "surface.not_here", "{problem}");
+    assert!(home.governance.is_frozen(), "a declared web home resumed nothing");
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/surface/commands")
+        .header("content-type", "application/json")
+        .header("sec-fetch-site", "same-origin")
+        .body(Body::from(command("resumeAll").to_string()))
+        .unwrap();
+    let response = web.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!home.governance.is_frozen(), "the home's page resumed");
+}
+
 /// A spoken answer comes from the voice surface's own transcript, so a `decide` declaring the
 /// voice surface or origin over HTTP is refused, and nothing is answered; cancelling a spoken
 /// answer stays open from any screen (spec 3.3 §5.6, §7.2). Fails on `origin/main`, which

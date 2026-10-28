@@ -61,6 +61,8 @@ pub(crate) struct Printer<W: Write> {
     printed_output: Option<u64>,
     /// The Agents view as last printed (spec 3.3 §5.7): printed again when it changes.
     printed_agents: Option<super::agents::AgentsPane>,
+    /// The fill-in pane as printed last.
+    printed_fill: Option<super::drawn::FillIn>,
     /// The voice line as last printed (spec 3.3 §5.6).
     #[cfg(feature = "voice")]
     printed_voice: super::voice::VoiceLine,
@@ -86,6 +88,7 @@ impl<W: Write> Printer<W> {
             focused: None,
             printed_output: None,
             printed_agents: None,
+            printed_fill: None,
             #[cfg(feature = "voice")]
             printed_voice: super::voice::VoiceLine::default(),
         }
@@ -214,7 +217,17 @@ impl<W: Write> Printer<W> {
                 View::Output => {}
                 // Printed once the kernel answered, below.
                 View::Agents => {}
+                // Printed each time it changes, below.
+                View::FillIn => {}
             }
+        }
+        // A drawn form's fill-in pane, each time it changes (spec 3.3 §5.2).
+        if app.view == View::FillIn
+            && let Some(fill) = &app.fill
+            && self.printed_fill.as_ref() != Some(fill)
+        {
+            self.printed_fill = Some(fill.clone());
+            lines.extend(fill.lines(&self.renderer.theme, width));
         }
         // The Agents view, each time what it shows changes (spec 3.3 §5.7): `/agents` lists
         // the agents, and changes use `/agent`.
@@ -491,8 +504,7 @@ fn start(
     session: String,
 ) -> (App, Pump, mpsc::UnboundedSender<Update>, mpsc::UnboundedReceiver<Update>) {
     let mut app = App::new(surface.engine.source().app_name(), session.clone());
-    app.agents_pane.granted =
-        surface.engine.granted().iter().map(|granted| granted.text.clone()).collect();
+    app.agents_pane.granted = surface.engine.granted().to_vec();
     app.model = surface.model.clone();
     app.place = surface.place.clone();
     app.commands = surface.commands.clone();

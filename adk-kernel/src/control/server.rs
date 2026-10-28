@@ -187,11 +187,14 @@ fn remove_socket(path: &Path) -> Result<()> {
 }
 
 /// The kernel routes under `/api`, with the approvals inbox when the backend has an
-/// approval service.
+/// approval service, its decisions checked by the kernel's decide guard.
 pub(super) fn api(backend: &Arc<dyn ControlBackend>) -> Router {
     let mut routes = routes(backend.clone());
     if let Some(service) = backend.approvals() {
-        routes = routes.merge(approvals_router(ApprovalEndpoints::new(service.clone())));
+        // Each decision is answered under spec 3.3 §7.2 for the surface this transport is.
+        let guard = Arc::new(super::decide::KernelDecideGuard::new(backend.clone()));
+        let endpoints = ApprovalEndpoints::new(service.clone()).with_decide_guard(guard);
+        routes = routes.merge(approvals_router(endpoints));
     }
     Router::new().nest(paths::API_PREFIX, routes)
 }

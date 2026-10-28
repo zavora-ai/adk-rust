@@ -419,6 +419,6 @@ export function agentsFixture(params: URLSearchParams, client: FixtureClient): R
 export function fixtureGrants(): GrantedUse[] {
   return [
     { id: "genui", text: "Show forms and tables in your threads — sending asks you first" },
-    { id: "verb-ui", text: "Ask to change things on your screens — always asks you first" },
+    { id: "verb-ui", text: "Ask to change things on your screens — always asks you first", modes: ["askFirst", "goAhead"] },
   ];
 }

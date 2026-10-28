@@ -387,6 +387,14 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
         .as_ref()
         .map(ToString::to_string)
         .or_else(|| text(record.ext.get("actingAgent")));
+    // A drawn form a person sent names the agent that drew it and the form (spec 3.3 §7.4
+    // rule 5): "You sent the invoice form Finance drew".
+    let (agent, record_target) = match record.action.as_str() {
+        "surface.drawn.submitted" => {
+            (agent.or_else(|| text(record.ext.get("drawnBy"))), text(record.ext.get("surfaceId")))
+        }
+        _ => (agent, None),
+    };
     if let Some(agent) = agent {
         line = line.with_agent(agent);
     }
@@ -449,7 +457,9 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
             }
         }
     }
-    let target = text(record.ext.get("target")).or_else(|| text(record.ext.get("approvalId")));
+    let target = text(record.ext.get("target"))
+        .or_else(|| text(record.ext.get("approvalId")))
+        .or(record_target);
     if let Some(target) = target {
         line = line.with_target(target);
     }
@@ -459,9 +469,8 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
         if let Some(verb) = text(record.ext.get("verb")) {
             line = line.with_tool(verb);
         }
-        if let Some(title) = text(record.ext.get("title")) {
-            line = line.with_target(title);
-        }
+        // The item as the person knows it, never its kernel id (spec 3.3 §8).
+        line.target = text(record.ext.get("title"));
         if let Some(answered) = record.ext.get("answered") {
             line = line.with_decision("approved");
             if let Some(surface) = text(answered.get("surface")) {
@@ -1000,9 +1009,29 @@ mod tests {
         )
         .await
         .unwrap();
+        // A refusal of an item that is gone has no title: its kernel id is never the target.
+        log.append(
+            AuditRecordDraft::new(AuditRecordKind::Other("surface".into()), "surface.verb")
+                .actor(AuditActor::new(&finance, "inv-2"))
+                .ext("verb", json!("snooze"))
+                .ext("target", json!("agenda:agenda-01JBX"))
+                .ext("outcome", json!("refused"))
+                .ext("origin", json!({ "kind": "agent", "agent": "finance" })),
+        )
+        .await
+        .unwrap();
         let book = SignedRecordBook::new(logs, "kernel-test".into(), verifier);
-        let lines = book.recent(2).await.unwrap();
-        let (agent, person) = (&lines[0], &lines[1]);
+        let lines = book.recent(3).await.unwrap();
+        let (refused, agent, person) = (&lines[0], &lines[1], &lines[2]);
+        assert_eq!(
+            refused,
+            &RecordLine::new(refused.seq, refused.at, "surface.verb")
+                .with_subject("ana")
+                .with_agent("urn:adk:agent:adk-rust/finance")
+                .with_tool("snooze")
+                .with_outcome("refused")
+                .with_how("agent", None)
+        );
         assert_eq!(
             person,
             &RecordLine::new(person.seq, person.at, "surface.verb")

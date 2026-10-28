@@ -149,6 +149,12 @@ pub struct HarnessLauncher {
     /// Screen actions on the served home (spec 3.3 §2 item 7).
     #[cfg(feature = "verb-ui")]
     verbs: Option<adk_surface::verbs::VerbRegistry>,
+    /// `--apps-origin`, when the apps origin is not the sandbox listener (spec 3.3 §6.1).
+    #[cfg(feature = "genui-apps")]
+    apps_origin: Option<String>,
+    /// The MCP Apps host, once the sandbox listener is bound (spec 3.3 §6.1 `genui-apps`).
+    #[cfg(feature = "genui-apps")]
+    apps: Option<adk_surface::genui::McpAppsHost>,
 }
 
 impl std::fmt::Debug for HarnessLauncher {
@@ -220,7 +226,56 @@ impl HarnessLauncher {
             voice: Vec::new(),
             #[cfg(feature = "verb-ui")]
             verbs: None,
+            #[cfg(feature = "genui-apps")]
+            apps_origin: None,
+            #[cfg(feature = "genui-apps")]
+            apps: None,
         }
+    }
+
+    /// Frames apps from MCP servers on `origin`, a remote home's `--apps-origin` proxied to
+    /// the sandbox listener, instead of that loopback listener's own origin (spec 3.3 §6.1
+    /// `genui-apps`, wave 4 decision 17).
+    #[cfg(feature = "genui-apps")]
+    pub fn with_apps_origin(mut self, origin: Option<String>) -> Self {
+        self.apps_origin = origin;
+        self
+    }
+
+    /// Binds the sandbox listener for apps from the harness's MCP servers and builds their
+    /// host (spec 3.3 §6.1 `genui-apps`): a second loopback listener, its port printed; the
+    /// apps origin is `--apps-origin` or that listener's. A harness without MCP servers shows
+    /// no apps and binds nothing.
+    #[cfg(feature = "genui-apps")]
+    async fn bind_apps(
+        &mut self,
+        home: SocketAddr,
+    ) -> Result<Option<(tokio::net::TcpListener, adk_surface::genui::McpAppsHost)>> {
+        let Some(mcp) = self.agent.runtime().mcp() else {
+            return Ok(None);
+        };
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .map_err(|e| AdkError::config(format!("failed to bind the apps sandbox: {e}")))?;
+        let local = listener
+            .local_addr()
+            .map_err(|e| AdkError::config(format!("the apps sandbox has no address: {e}")))?;
+        let origin = self.apps_origin.clone().unwrap_or_else(|| format!("http://{local}"));
+        let mut host = adk_surface::genui::McpAppsHost::builder()
+            .servers(mcp.manager())
+            .apps_origin(origin.clone());
+        for home in home_origins(home) {
+            host = host.home_origin(home);
+        }
+        // The address people open a remote home at frames its apps too.
+        #[cfg(feature = "mobile")]
+        if let Some(setup) = &self.phone {
+            host = host.home_origin(setup.origin());
+        }
+        let host = host.build();
+        println!("  apps from MCP servers: framed sandboxed at {origin} (listener {local})");
+        self.apps = Some(host.clone());
+        Ok(Some((listener, host)))
     }
 
     /// Records that `--no-hooks` turned hooks off, so `/hooks` says so (spec 3.1 §7.22,
@@ -841,6 +896,12 @@ impl HarnessLauncher {
     /// extractor authenticates requests.
     pub fn build_app(self) -> Result<Router> {
         let kernel = self.kernel.clone();
+        #[cfg(feature = "genui-apps")]
+        let apps_origin =
+            self.apps.as_ref().and_then(|host| host.apps_origin().map(str::to_string));
+        // Refusals from the apps origin go on the surface's trail (spec 3.3 §6.1 `genui-apps`).
+        #[cfg(feature = "genui-apps")]
+        let apps_trail = self.surface_records.as_ref().map(|records| records.trail.clone());
         // A paired device's token admits it, scoped, on every route (spec 3.3 §10 K2).
         let pairing = kernel.as_ref().and_then(|kernel| kernel.config().control.pairing.clone());
         let devices = |extractor: Arc<dyn RequestContextExtractor>| match &pairing {
@@ -902,7 +963,7 @@ impl HarnessLauncher {
             #[cfg(feature = "verb-ui")]
             let verbs = self.verbs.clone();
             #[cfg(feature = "verb-ui")]
-            let hinted = verbs.clone();
+            let hinted = verbs.clone().map(|registry| (registry, source.clone()));
             let engine = crate::surface::harness_engine(
                 &app,
                 source,
@@ -912,10 +973,10 @@ impl HarnessLauncher {
                     // An agent's request reads as the kernel's words on every surface, and
                     // every agent lists what it may ask (spec 3.3 §5.7, §7.1).
                     #[cfg(feature = "verb-ui")]
-                    let engine = match &hinted {
-                        Some(registry) => {
-                            engine.card_hints(Arc::new(registry.hints())).grant(registry.grant())
-                        }
+                    let engine = match hinted {
+                        Some((registry, source)) => engine
+                            .card_hints(Arc::new(registry.hints().reading(source)))
+                            .grant(registry.grant()),
                         None => engine,
                     };
                     engine
@@ -981,6 +1042,43 @@ impl HarnessLauncher {
                     take_over,
                 ));
             }
+            // What agents draw: the capabilities the developer panel shows and the state of
+            // each form sent (spec 3.3 §6.1 `genui`).
+            #[cfg(feature = "genui")]
+            {
+                // The Protocols tab claims what is wired here: AG-UI always, apps once hosted.
+                let wiring = adk_surface::genui::GenuiWiring {
+                    ag_ui: true,
+                    #[cfg(feature = "genui-apps")]
+                    mcp_apps: self.apps.is_some(),
+                    #[cfg(not(feature = "genui-apps"))]
+                    mcp_apps: false,
+                };
+                launcher = launcher.with_api_routes(adk_surface::web::genui::router_wired(
+                    surface.clone(),
+                    wiring,
+                ));
+                // Drawings as AG-UI activities, and forms AG-UI clients send held as requested
+                // calls (spec 3.3 §6.1 `genui`, §10 S2).
+                let mut ag_ui = adk_surface::genui::GenuiAgUi::new();
+                if let Some(records) = &self.surface_records {
+                    ag_ui = ag_ui.with_audit(records.trail.clone());
+                }
+                launcher = launcher.with_ag_ui_extension(Arc::new(ag_ui));
+            }
+            // Apps from MCP servers, framed on the apps origin, which the page alone may frame
+            // (spec 3.3 §6.1 `genui-apps`).
+            #[cfg(feature = "genui-apps")]
+            if let Some(host) = &self.apps {
+                launcher = launcher.with_api_routes(adk_surface::web::genui::apps_router(
+                    surface.clone(),
+                    host.clone(),
+                ));
+                if let Some(origin) = host.apps_origin() {
+                    launcher =
+                        launcher.with_surface_home(adk_surface::web::home_with_apps_origin(origin));
+                }
+            }
             // Paired devices answer and stop through their own routes, and a device's feed
             // ends with it (spec 3.3 §10 K2, S-I7).
             if let Some(pairing) = &pairing {
@@ -1041,6 +1139,10 @@ impl HarnessLauncher {
         launcher = launcher.with_security_config(security);
         if let Some(service) = self.approval_service {
             launcher = launcher.with_approval_service(service);
+            // A kernel answers each decision under spec 3.3 §7.2 for the caller's surface.
+            if let Some(kernel) = &kernel {
+                launcher = launcher.with_approval_guard(adk_kernel::control::decide_guard(kernel));
+            }
         }
         if let Some(state) = self.background_runs {
             launcher = launcher.with_background_runs(state);
@@ -1083,6 +1185,16 @@ impl HarnessLauncher {
             }
             _ => router,
         };
+        // Nothing an app's frame sends reaches any route, whatever the security config admits
+        // (spec 3.3 §6.1 `genui-apps`).
+        #[cfg(feature = "genui-apps")]
+        let router = match (&apps_origin, apps_trail) {
+            (Some(origin), Some(trail)) => {
+                adk_surface::web::genui::refuse_apps_origin_recorded(router, origin, trail)
+            }
+            (Some(origin), None) => adk_surface::web::genui::refuse_apps_origin(router, origin),
+            (None, _) => router,
+        };
         Ok(match loopback {
             Some(extractor) => extractor.layer(router),
             None => router,
@@ -1106,10 +1218,24 @@ impl HarnessLauncher {
         let addr = SocketAddr::new(self.bind_address, port);
         let info = self.agent.info().clone();
         let kernel = self.kernel.clone();
-        let app = self.build_app()?;
+        #[cfg_attr(not(feature = "genui-apps"), allow(unused_mut))]
+        let mut this = self;
+        #[cfg(feature = "genui-apps")]
+        let sandbox = this.bind_apps(addr).await?;
+        let app = this.build_app()?;
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| AdkError::config(format!("failed to bind {addr}: {e}")))?;
+        // The apps origin serves the checked apps' pages and nothing else; it ends with the
+        // process (spec 3.3 §6.1 `genui-apps`).
+        #[cfg(feature = "genui-apps")]
+        if let Some((sandbox, host)) = sandbox {
+            tokio::spawn(async move {
+                if let Err(error) = axum::serve(sandbox, host.sandbox_router()).await {
+                    tracing::warn!(error = %error, "the apps sandbox listener stopped");
+                }
+            });
+        }
         if let Some(kernel) = kernel {
             return serve_resident(kernel, listener, app, addr, &info).await;
         }
@@ -1125,6 +1251,26 @@ impl HarnessLauncher {
             .await
             .map_err(|e| AdkError::config(format!("server error: {e}")))
     }
+}
+
+/// The origins the home's page is opened at on this computer when the server listens on
+/// `home`: the address itself, and for loopback or every interface the names a person types
+/// (spec 3.3 §6.1 `genui-apps`). The page's own origin is added per request.
+#[cfg(feature = "genui-apps")]
+fn home_origins(home: SocketAddr) -> Vec<String> {
+    let port = home.port();
+    if home.ip().is_unspecified() {
+        return vec![
+            format!("http://127.0.0.1:{port}"),
+            format!("http://localhost:{port}"),
+            format!("http://[::1]:{port}"),
+        ];
+    }
+    let mut origins = vec![format!("http://{home}")];
+    if home.ip().is_loopback() {
+        origins.push(format!("http://localhost:{port}"));
+    }
+    origins
 }
 
 /// Where `bash` runs, or `none` when the harness offers no shell (spec 3.3 §10 H1).
@@ -1794,6 +1940,24 @@ pub(crate) fn unknown_slash_notice(line: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    /// A home on every interface is opened at loopback names, never at `0.0.0.0`, so those
+    /// are the origins that frame its apps (spec 3.3 §6.1 `genui-apps`).
+    #[cfg(feature = "genui-apps")]
+    #[test]
+    fn a_home_frames_apps_at_the_addresses_people_open_it_at() {
+        let at = |text: &str| super::home_origins(text.parse().unwrap());
+        assert_eq!(
+            at("0.0.0.0:8080"),
+            ["http://127.0.0.1:8080", "http://localhost:8080", "http://[::1]:8080"]
+        );
+        assert_eq!(
+            at("[::]:8080"),
+            ["http://127.0.0.1:8080", "http://localhost:8080", "http://[::1]:8080"]
+        );
+        assert_eq!(at("127.0.0.1:8080"), ["http://127.0.0.1:8080", "http://localhost:8080"]);
+        assert_eq!(at("192.168.1.20:8080"), ["http://192.168.1.20:8080"]);
+    }
+
     use super::unknown_slash_notice;
 
     #[test]

@@ -43,6 +43,10 @@ bigquery = ["dep:gcp-bigquery-client"]
 spanner = ["dep:google-cloud-spanner"]
 # Enable MCP sampling callback support (sampling/createMessage handling)
 mcp-sampling = ["mcp"]
+# MCP Apps on the client (spec 3.3 §6.1 `genui-apps`): declare the `io.modelcontextprotocol/ui`
+# extension, keep each tool's `_meta.ui`, leave app-only tools out of the model's tools, and
+# read `ui://` resources back for a host to show sandboxed.
+mcp-apps = ["mcp"]
 # Publish a set of adk_core::Tool as a Streamable HTTP MCP server with a Server Card
 # (spec 3.5 §7.9).
 mcp-server = [
@@ -145,6 +149,10 @@ required-features = ["mcp"]
 [[test]]
 name = "mcp_close_tests"
 required-features = ["mcp"]
+
+[[test]]
+name = "mcp_apps_tests"
+required-features = ["mcp-apps"]
 
 [[test]]
 name = "mcp_server_tests"

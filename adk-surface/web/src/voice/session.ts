@@ -31,8 +31,11 @@ export interface VoiceState {
   pending?: { id: string; cancelUntil: number; text: string };
   outcome?: { id: string; decided: boolean; text?: string };
   needsScreen: string[];
-  /** A screen action said aloud: waiting out its cancel window, or how it ended (spec 3.3 §5.6). */
-  action?: SpokenAction;
+  /**
+   * Screen actions said aloud (spec 3.3 §5.6): each still in its cancel window, then the last
+   * outcome. An outcome replaces only the action it ends, so another's Cancel stays.
+   */
+  actions: SpokenAction[];
   problem?: string;
   inputs: Record<InputSource, boolean>;
   /** What "What it can see" shows: the screen, else the camera. */
@@ -49,7 +52,7 @@ interface Live {
 }
 
 export function initialState(): VoiceState {
-  return { phase: "connecting", needsScreen: [], inputs: { mic: false, camera: false, screen: false } };
+  return { phase: "connecting", needsScreen: [], actions: [], inputs: { mic: false, camera: false, screen: false } };
 }
 
 export class VoiceSession {
@@ -140,26 +143,36 @@ export class VoiceSession {
         break;
       case "pendingAction":
         this.set({
-          action: {
-            kind: "pending",
-            actionId: update.actionId,
-            heard: this.state.heard,
-            heading: update.heading,
-            cancelUntil: update.cancelUntil,
-          },
+          actions: [
+            ...this.state.actions.filter((action) => action.kind === "pending"),
+            {
+              kind: "pending",
+              actionId: update.actionId,
+              heard: this.state.heard,
+              heading: update.heading,
+              cancelUntil: update.cancelUntil,
+            },
+          ],
         });
         break;
-      case "actionOutcome":
+      case "actionOutcome": {
+        const actionId = update.actionId ?? undefined;
+        const ended = this.state.actions.find((action) => action.kind === "pending" && action.actionId === actionId);
         this.set({
-          action: {
-            kind: "ended",
-            done: update.done,
-            heard: this.state.action?.heard ?? this.state.heard,
-            heading: update.heading ?? undefined,
-            text: update.text,
-          },
+          actions: [
+            ...this.state.actions.filter((action) => action.kind === "pending" && action !== ended),
+            {
+              kind: "ended",
+              actionId,
+              done: update.done,
+              heard: ended?.heard ?? this.state.heard,
+              heading: update.heading ?? undefined,
+              text: update.text,
+            },
+          ],
         });
         break;
+      }
       case "bargeIn":
         this.player?.flush();
         break;

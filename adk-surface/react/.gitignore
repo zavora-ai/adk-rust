@@ -1,0 +1,4 @@
+dist/
+LICENSE
+node_modules/
+*.tgz

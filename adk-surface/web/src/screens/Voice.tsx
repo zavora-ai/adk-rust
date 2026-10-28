@@ -210,9 +210,13 @@ export function Voice({
             </article>
           )}
           {state.outcome?.text && !state.pending && <p className="voice-outcome">{state.outcome.text}</p>}
-          {state.action && (
-            <VoiceAction action={state.action} onCancel={(id) => session.current?.cancelAction(id)} />
-          )}
+          {state.actions.map((action) => (
+            <VoiceAction
+              key={action.kind === "pending" ? action.actionId : `ended-${action.actionId ?? ""}`}
+              action={action}
+              onCancel={(id) => session.current?.cancelAction(id)}
+            />
+          ))}
           {!stopped &&
             onScreen.map((high) => (
               <p className="voice-screen" key={high.id}>

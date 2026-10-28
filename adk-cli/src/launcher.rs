@@ -173,6 +173,8 @@ pub struct Launcher {
     session_id: Option<String>,
     console_commands: Vec<Arc<dyn ConsoleCommand>>,
     approval_service: Option<Arc<dyn ApprovalService>>,
+    /// The check of every decision on the approval inbox (spec 3.3 §7.2).
+    approval_guard: Option<Arc<dyn adk_server::approvals::DecideGuard>>,
     background_runs: Option<BackgroundState>,
     /// Routes mounted under `/api` behind the auth middleware, such as a served harness's
     /// standing-rule routes.
@@ -195,6 +197,12 @@ pub struct Launcher {
     /// with the device (spec 3.3 §10 K2).
     #[cfg(all(feature = "surface", feature = "harness"))]
     surface_pairing: Option<adk_kernel::pairing::Pairing>,
+    /// The web home's page with `frame-src` for an apps origin (spec 3.3 §6.1 `genui-apps`).
+    #[cfg(feature = "genui-apps")]
+    surface_home: Option<Router>,
+    /// What agent-drawn UI adds to AG-UI runs (spec 3.3 §6.1 `genui`).
+    #[cfg(feature = "genui")]
+    ag_ui_extension: Option<Arc<dyn adk_server::rest::controllers::AgUiExtension>>,
     thinking_mode: ThinkingDisplayMode,
     bind_address: IpAddr,
 }
@@ -224,6 +232,7 @@ impl Launcher {
             session_id: None,
             console_commands: Vec::new(),
             approval_service: None,
+            approval_guard: None,
             background_runs: None,
             api_routes: Vec::new(),
             root_routes: Vec::new(),
@@ -235,6 +244,10 @@ impl Launcher {
             surface: None,
             #[cfg(all(feature = "surface", feature = "harness"))]
             surface_pairing: None,
+            #[cfg(feature = "genui-apps")]
+            surface_home: None,
+            #[cfg(feature = "genui")]
+            ag_ui_extension: None,
             thinking_mode: ThinkingDisplayMode::Auto,
             bind_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
         }
@@ -501,6 +514,19 @@ impl Launcher {
         self
     }
 
+    /// Checks every decision on the approval inbox with `guard` before the service records
+    /// it (spec 3.3 §7.2), as a kernel's
+    /// [`decide_guard`](adk_kernel::control::decide_guard) does for the surface each caller
+    /// is. Serve mode mounts the inbox through `ServerBuilder::with_approval_endpoints`.
+    #[cfg(feature = "harness")]
+    pub(crate) fn with_approval_guard(
+        mut self,
+        guard: Arc<dyn adk_server::approvals::DecideGuard>,
+    ) -> Self {
+        self.approval_guard = Some(guard);
+        self
+    }
+
     /// Serve background runs from `state` under `/api/runs` (spec 3.1 §8.2).
     ///
     /// Serve mode mounts them through [`ServerBuilder::with_background_runs`].
@@ -536,6 +562,24 @@ impl Launcher {
     #[cfg(all(feature = "surface", feature = "harness"))]
     pub(crate) fn with_surface(mut self, engine: adk_surface::SurfaceEngine) -> Self {
         self.surface = Some(engine);
+        self
+    }
+
+    /// Serves `page` as the web home's page in place of the plain one: the page that frames
+    /// apps from MCP servers on an apps origin (spec 3.3 §6.1 `genui-apps`).
+    #[cfg(feature = "genui-apps")]
+    pub(crate) fn with_surface_home(mut self, page: Router) -> Self {
+        self.surface_home = Some(page);
+        self
+    }
+
+    /// Adds `extension` to protocol-native AG-UI runs (spec 3.3 §6.1 `genui`).
+    #[cfg(feature = "genui")]
+    pub(crate) fn with_ag_ui_extension(
+        mut self,
+        extension: Arc<dyn adk_server::rest::controllers::AgUiExtension>,
+    ) -> Self {
+        self.ag_ui_extension = Some(extension);
         self
     }
 
@@ -862,12 +906,17 @@ impl Launcher {
         let span_exporter = self.init_telemetry();
         let a2a_base_url = self.a2a_base_url.clone();
         let approval_service = self.approval_service.clone();
+        let approval_guard = self.approval_guard.clone();
         let background_runs = self.background_runs.clone();
         let api_routes = self.api_routes.clone();
         #[cfg(all(feature = "surface", feature = "harness"))]
         let surface = self.surface.clone();
         #[cfg(all(feature = "surface", feature = "harness"))]
         let surface_pairing = self.surface_pairing.clone();
+        #[cfg(feature = "genui-apps")]
+        let surface_home = self.surface_home.clone();
+        #[cfg(feature = "genui")]
+        let ag_ui_extension = self.ag_ui_extension.clone();
         let root_routes = self.root_routes.clone();
         #[cfg(feature = "harness")]
         let kernel_governance = self.kernel_governance.clone();
@@ -893,7 +942,15 @@ impl Launcher {
                     .merge(adk_surface::web::devices_router(surface)),
                 None => adk_surface::web::router(surface),
             };
-            builder = builder.add_api_routes(routes).add_root_routes(adk_surface::web::home());
+            #[cfg(feature = "genui-apps")]
+            let page = surface_home.unwrap_or_else(adk_surface::web::home);
+            #[cfg(not(feature = "genui-apps"))]
+            let page = adk_surface::web::home();
+            builder = builder.add_api_routes(routes).add_root_routes(page);
+        }
+        #[cfg(feature = "genui")]
+        if let Some(extension) = ag_ui_extension {
+            builder = builder.with_ag_ui_extension(extension);
         }
         #[cfg(feature = "harness")]
         if let Some((_, delegate)) = kernel_governance {
@@ -909,7 +966,12 @@ impl Launcher {
                     APPROVAL_TICK_INTERVAL,
                 );
             }
-            builder = builder.with_approval_service(service);
+            builder = match approval_guard {
+                Some(guard) => builder.with_approval_endpoints(
+                    adk_server::approvals::ApprovalEndpoints::new(service).with_decide_guard(guard),
+                ),
+                None => builder.with_approval_service(service),
+            };
         }
         if let Some(state) = background_runs {
             builder = builder.with_background_runs(state);

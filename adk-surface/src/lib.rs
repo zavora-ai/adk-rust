@@ -30,6 +30,8 @@
 //! | `voice` | Voice and video: spoken "allow once" and "deny" through the engine with a cancel window, the camera and the screen as input while their switches are on; with `web`, the voice view's socket (`voice::router`, `voice::socket_routes`) (spec 3.3 §5.6) | Beta |
 //! | `website` | The website's views on the web home (spec 3.5 §8.2): the web editor, onboarding, the charter cards, the site view and the weekly review over `adk-website`'s desk, `web::website::router`; implies `web` | Experimental |
 //! | `verb-ui` | Screen actions people and agents share (spec 3.3 §2 item 7, §6.1): snoozing something in Coming up from the home, the terminal, voice and an agent, always through the governed path, `verbs::VerbRegistry`; with `web`, `web::verbs::router` | Experimental |
+//! | `workflow` | The workflow observer (spec 3.3 §12 developer track): a graph agent's runs, steps and forks, card hints for its governed nodes, `workflow::Workflows`; with `web`, the Runs tab's routes, `web::workflow::router` | Beta |
+//! | `genui` | Agent-drawn UI (spec 3.3 §6.1, §7.4 rule 5): the A2UI v0.9.1 model, the `forms` 1.0 catalog, the validator that keeps approval controls and secrets out of drawings, the render tools agents draw with (`genui::DrawToolset`), drawings in the thread and a drawn form's Send, which asks the person first (`Command::SubmitDrawn`), and with `web` the capabilities route (`web::genui::router`) | Beta |
 //!
 //! ## Example
 //!
@@ -63,6 +65,7 @@ pub mod channels;
 mod control;
 mod engine;
 pub mod error;
+pub mod genui;
 mod hints;
 mod inbox;
 mod local;
@@ -82,6 +85,8 @@ pub mod voice;
 #[cfg(feature = "web")]
 pub mod web;
 pub mod words;
+#[cfg(feature = "workflow")]
+pub mod workflow;
 
 pub use agents::GrantedUse;
 pub use agents::{
@@ -94,6 +99,8 @@ pub use answers::{
     SURFACE_AUDIT_DECIDE,
 };
 pub use control::ControlSource;
+pub use engine::SURFACE_AUDIT_ANSWER;
+pub use engine::SURFACE_AUDIT_DRAWN_SUBMITTED;
 pub use engine::{
     Command, CommandOutcome, DEFAULT_POLL_INTERVAL, FeedFrame, SURFACE_AUDIT_RESUME_ALL,
     SURFACE_AUDIT_SEND, SURFACE_AUDIT_SET_MODE, SURFACE_AUDIT_STOP_ALL, SurfaceEngine,

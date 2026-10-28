@@ -585,18 +585,26 @@ describe("routines on some days of the week", () => {
     expect(cronWeekdays("*/2")).toBeUndefined();
   });
 
-  it("reads numbered weekdays as the kernel's cron crate does: 1 is Sunday, 7 Saturday", () => {
-    // `adk-rust wake --cron "0 9 * * 1-5"` runs Sunday to Thursday on the kernel, so on
-    // Saturday 24 October its next run is Sunday, and on Friday it does not run.
-    const numbered = { cron: { expr: "0 0 9 * * 1-5" } };
-    expect(nextFire(numbered, new Date(Date.UTC(2026, 9, 24, 10, 0)))?.toISOString()).toBe("2026-10-25T09:00:00.000Z");
-    expect(nextFire(numbered, new Date(Date.UTC(2026, 9, 23, 8, 0)))?.toISOString()).toBe("2026-10-25T09:00:00.000Z");
-    expect([...cronWeekdays("1-5")!].sort()).toEqual([0, 1, 2, 3, 4]);
-    expect([...cronWeekdays("5-7")!].sort()).toEqual([4, 5, 6]);
-    expect([...cronWeekdays("2,Fri,saturday")!].sort()).toEqual([1, 5, 6]);
+  it("reads numbered weekdays as the kernel does: Unix numbering in five fields, the crate's in six", () => {
+    // `adk-rust wake --cron "0 9 * * 1-5"` runs Monday to Friday, so on Saturday 24 October its
+    // next run is Monday, and on Friday morning it is Friday's.
+    const five = { cron: { expr: "0 9 * * 1-5" } };
+    expect(nextFire(five, new Date(Date.UTC(2026, 9, 24, 10, 0)))?.toISOString()).toBe("2026-10-26T09:00:00.000Z");
+    expect(nextFire(five, new Date(Date.UTC(2026, 9, 23, 8, 0)))?.toISOString()).toBe("2026-10-23T09:00:00.000Z");
+    expect([...cronWeekdays("1-5")!].sort()).toEqual([1, 2, 3, 4, 5]);
+    expect([...cronWeekdays("0")!]).toEqual([0]);
+    expect([...cronWeekdays("7")!]).toEqual([0]);
+    expect([...cronWeekdays("5-7")!].sort()).toEqual([0, 5, 6]);
+    expect([...cronWeekdays("2,Fri,saturday")!].sort()).toEqual([2, 5, 6]);
+    expect(cronWeekdays("8")).toBeUndefined();
+    // Six fields count 1 as Sunday, as the kernel's `cron` crate does: 1-5 is Sunday to Thursday.
+    const six = { cron: { expr: "0 0 9 * * 1-5" } };
+    expect(nextFire(six, new Date(Date.UTC(2026, 9, 24, 10, 0)))?.toISOString()).toBe("2026-10-25T09:00:00.000Z");
+    expect(nextFire(six, new Date(Date.UTC(2026, 9, 23, 8, 0)))?.toISOString()).toBe("2026-10-25T09:00:00.000Z");
+    expect([...cronWeekdays("1-5", true)!].sort()).toEqual([0, 1, 2, 3, 4]);
+    expect([...cronWeekdays("5-7", true)!].sort()).toEqual([4, 5, 6]);
     // The crate refuses 0, so a field naming it never fires.
-    expect(cronWeekdays("0")).toBeUndefined();
-    expect(cronWeekdays("0-4")).toBeUndefined();
+    expect(cronWeekdays("0", true)).toBeUndefined();
   });
 });
 

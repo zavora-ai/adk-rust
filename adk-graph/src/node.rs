@@ -232,6 +232,8 @@ pub struct NodeContext {
     run_config: Option<adk_core::RunConfig>,
     /// The answer to this node's own pause, in the step that resumes it.
     resume_value: Option<Value>,
+    /// Whether the node runs through the governed bracket, which sends its call once.
+    governed: bool,
 }
 
 impl NodeContext {
@@ -246,7 +248,19 @@ impl NodeContext {
             parent_schema: None,
             run_config: None,
             resume_value: None,
+            governed: false,
         }
+    }
+
+    /// Whether this execution is a governed node's call, which runs once: an action node
+    /// neither retries it nor hides its failure (spec 3.3 §12).
+    pub(crate) fn governed_call(&self) -> bool {
+        self.governed
+    }
+
+    /// Marks this execution as a governed node's call.
+    pub(crate) fn set_governed_call(&mut self) {
+        self.governed = true;
     }
 
     /// The answer to this node's pause, when this execution resumes it.
@@ -598,6 +612,58 @@ pub trait Node: Send + Sync {
     /// }
     /// ```
     fn call_args(&self, _ctx: &NodeContext) -> Option<Value> {
+        None
+    }
+
+    /// Whether this node acts in `ctx`, asked before a governed node's call is authorized
+    /// (spec 3.3 §12, §7.4).
+    ///
+    /// `Ok(false)` means the node does nothing here, such as an action node whose condition
+    /// is false: a governed node then completes with no writes, and no decision is created
+    /// for a call that would not run. An error means the node cannot act, such as an HTTP
+    /// node whose request cannot be built: a governed node then fails with that error
+    /// without asking anyone. The default is `Ok(true)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the node cannot act in `ctx`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::node::{Node, NodeContext, NodeOutput};
+    ///
+    /// struct Refund;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Node for Refund {
+    ///     fn name(&self) -> &str {
+    ///         "refund"
+    ///     }
+    ///     fn will_act(&self, ctx: &NodeContext) -> adk_graph::Result<bool> {
+    ///         Ok(ctx.get("refund_due").and_then(|due| due.as_bool()).unwrap_or(false))
+    ///     }
+    ///     async fn execute(&self, _ctx: &NodeContext) -> adk_graph::Result<NodeOutput> {
+    ///         Ok(NodeOutput::new())
+    ///     }
+    /// }
+    /// ```
+    fn will_act(&self, _ctx: &NodeContext) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// The graph this node runs, when it is a subgraph, so a workflow observer finds the
+    /// governed nodes inside it (spec 3.3 §12). The default is `None`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::node::{FunctionNode, Node, NodeOutput};
+    ///
+    /// let node = FunctionNode::new("receipt", |_ctx| async { Ok(NodeOutput::new()) });
+    /// assert!(node.subgraph().is_none());
+    /// ```
+    fn subgraph(&self) -> Option<&crate::graph::CompiledGraph> {
         None
     }
 

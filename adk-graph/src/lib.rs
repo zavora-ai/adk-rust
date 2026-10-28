@@ -150,7 +150,7 @@ pub use graph::{CompiledGraph, StateGraph};
 pub use interrupt::{GraphToolConfirmationPause, Interrupt, interrupt, interrupt_with_data};
 pub use node::{AgentNode, ExecutionConfig, FunctionNode, Node, NodeContext, NodeOutput};
 pub use record::{Lineage, NodeRecord, NodeStatus, RunRecord, StepKind, StepRecord};
-pub use shape::{EdgeShape, GraphShape, NodeKind, NodeShape};
+pub use shape::{EdgeShape, GovernedShape, GraphShape, NodeKind, NodeShape};
 pub use state::{
     Channel, Checkpoint, PendingWrite, Reducer, State, StateSchema, StateSchemaBuilder,
 };

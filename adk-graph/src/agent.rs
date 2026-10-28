@@ -238,6 +238,20 @@ impl Agent for GraphAgent {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> adk_core::Result<EventStream> {
+        // A call a person asked for needs an agent that holds it for their decision itself,
+        // so a graph that starts the run refuses it before any node runs (spec 3.3 §7.4 rule 5).
+        if let Some(call) = ctx.run_config().requested_call.as_ref()
+            && ctx.agent_name() == self.name()
+            && !call.taken_in(&ctx.session().conversation_history())
+        {
+            let events = call.refusal_events(
+                ctx.invocation_id(),
+                ctx.branch(),
+                self.name(),
+                "this agent runs a graph and cannot hold a call for a person's decision",
+            );
+            return Ok(Box::pin(futures::stream::iter(events.into_iter().map(Ok))));
+        }
         // Call before callback
         if let Some(callback) = &self.before_callback {
             callback(ctx.clone()).await?;
@@ -996,6 +1010,7 @@ impl GraphAgentBuilder {
         compiled.timeout_policies = self.timeout_policies;
         compiled.default_timeout = self.default_timeout;
         compiled.governed_nodes = self.governed_nodes;
+        compiled.check_governed_nodes()?;
 
         #[cfg(feature = "node-cache")]
         {

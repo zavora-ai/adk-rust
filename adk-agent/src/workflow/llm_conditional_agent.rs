@@ -266,6 +266,15 @@ impl Agent for LlmConditionalAgent {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        // A call a person asked for needs an agent that holds it for their decision itself
+        // (spec 3.3 §7.4 rule 5).
+        if let Some(refused) = crate::requested_call::refused_by_root(
+            ctx.as_ref(),
+            &self.name,
+            crate::requested_call::RUNS_OTHER_AGENTS,
+        ) {
+            return Ok(refused);
+        }
         let run_ctx = super::skill_context::with_skill_injected_context(
             ctx,
             self.skills_index.as_ref(),
