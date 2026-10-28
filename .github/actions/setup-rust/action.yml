@@ -45,6 +45,18 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    # 0. Hosted Linux runners start with about 14 GB free, and the larger
+    #    feature-coverage shards fill it ("No space left on device", truncated
+    #    ort-sys extraction). The preinstalled .NET, Android, GHC and CodeQL
+    #    toolchains are unused by Rust jobs and hold about 25 GB.
+    - name: Free runner disk
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        df -h /
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+        df -h /
+
     # 1. Install the toolchain + components. Because this action is pinned by
     #    SHA (not by a toolchain tag), the version is passed via the input.
     - name: Install Rust toolchain
