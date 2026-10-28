@@ -38,6 +38,7 @@ pub(crate) async fn edit_json(console: &ConsoleIo, args: &Value) -> Edited {
 /// Lets the person edit the document `current`: in `$VISUAL`/`$EDITOR` on a real terminal,
 /// otherwise as one typed line. `Ok(None)` when nothing changed or the editor failed (the
 /// failure is printed); `Err(())` when the person pressed Ctrl-C.
+#[cfg(feature = "harness")]
 pub(crate) async fn edit_text(
     console: &ConsoleIo,
     current: &str,
