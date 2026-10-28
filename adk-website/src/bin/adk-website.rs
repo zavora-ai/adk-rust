@@ -5,7 +5,7 @@
 //! | `adk-website new <dir> [--kind <kind>] [--name <name>] [--domain <domain>] [--language <tag>]... [--theme <theme>] [--currency <code>]` | Scaffolds the site project: content, theme, charter draft, data, holding page |
 //! | `adk-website kinds` | Lists the site kinds, the agents each runs and its capabilities |
 //! | `adk-website plan [nothing \| site <url> \| presence <url>...]` | Prints the nine-stage onboarding plan for a starting point |
-//! | `adk-website start <dir> [--edge <addr>] [--kernel <addr>] [--edge-url <url>] [--owner <name>]` | Serves the site: the kernel's control plane and the agent edge with the content; the setup code is in the logs |
+//! | `adk-website start <dir> [--edge <addr>] [--kernel <addr>] [--edge-url <url>] [--owner <name>]` | Serves the site: the kernel's control plane and the agent edge with the content, with the email, upkeep sources, wallet and Guardian's probe its configuration files set (`adk_website::deploy::config`); the setup code is in the logs |
 //! | `adk-website agency <file> [--edge <addr>] [--kernel <addr>] [--owner <name>]` | Serves every site an agency file lists from one harness, each isolated (A-I22) |
 //! | `adk-website deploy <dir> --shape <shape> [--hosting <minor>] [--domain-cost <minor>] [--price <in>/<out>]` | Writes a deployment shape's files into the project and prints its commands and monthly cost |
 
@@ -15,7 +15,7 @@ use std::process::ExitCode;
 
 use adk_harness::website::SiteRef;
 use adk_website::deploy::{
-    ProjectRef, ServeOptions, Served, Shape, serve, serve_agency, write_plan,
+    ProjectPaths, ProjectRef, ServeOptions, Served, Shape, serve, serve_agency, write_plan,
 };
 use adk_website::kinds::template;
 use adk_website::onboarding::cost::{CostInputs, ModelPrice};
@@ -168,7 +168,14 @@ fn serve_options(dir: PathBuf, args: &[String]) -> Result<ServeOptions, String> 
 
 async fn start(args: &[String]) -> Result<(), String> {
     let dir = PathBuf::from(args.first().ok_or("start needs a site directory")?);
-    let options = serve_options(dir, &args[1..])?;
+    let mut options = serve_options(dir.clone(), &args[1..])?;
+    // The site's email, upkeep sources, wallet and probe from its configuration files.
+    let set = adk_website::deploy::config::configure(&ProjectPaths::new(&dir), &mut options.site)
+        .await
+        .map_err(|e| e.to_string())?;
+    for line in set {
+        eprintln!("Configured {line}.");
+    }
     run_until_stopped(serve(options).await.map_err(|e| e.to_string())?).await
 }
 

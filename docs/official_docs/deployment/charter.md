@@ -37,6 +37,9 @@ conforming runtime. The public part is published; the rest stays in the charter 
 | `reporting` | `Reporting` | Review cadence, the channels per urgency, quiet hours |
 | `public` | `PublicTerms` | Usage terms, policies, consent scopes and contact: the published part |
 | `priceRule` | `PriceRule` | Price changes that act without the owner (default within 10%) |
+| `handoffThreshold` | integer 0–100, optional | The lead score at which a lead goes to the owner |
+| `publishDelayHours` | integer, optional | How long a page the site drafts on its own waits before it can go live |
+| `amountThresholds` | capability → minor units, optional | The amount above which a call of the capability waits for the owner |
 | `signed` | `OwnerSignature` | The decision, the owner, the signed note and the time; absent on a draft |
 
 ## An example
@@ -230,6 +233,31 @@ offers a promotion. The harness compiles each level into policy
 | `redLines` | `kind` (`claim`, `topic` or `action`) and `text`; a launch gate given them (`LaunchGate::with_red_lines`) refuses an item that states one |
 | `priceRule` | `autoWithinPct`: a price change within it acts within budget; a larger one is held for the owner, and an open quote keeps its price until it expires (A-I25) |
 
+## The owner's settings
+
+Three optional members hold the owner's settings. A charter without them is valid, and the
+runtime applies its own default for each one it lacks; `adk-website` shows all three on the
+charter card "When the site asks you", defaults included, and the owner changes them there.
+
+| Member | `adk-website` reads it in | Default when absent |
+|--------|---------------------------|---------------------|
+| `handoffThreshold` | `leads::Leads::current_scorer`: a lead at this score is handed to the owner, once | 70 |
+| `publishDelayHours` | `publish_delay::PublishDelay::current_delay`: a page `freshness`, `seo` or `aeo` drafts must be scheduled at least this far ahead | `SiteOptions::publish_delay`, else 24 |
+| `amountThresholds` | The edge's declarations: a call of the capability above the amount answers `202` and waits for the owner (`ApprovalHint::AboveAmount`) | `approvals.json`, else none |
+
+The handoff threshold and the publish delay follow the charter in force at once. The amount
+thresholds change what the capability manifest publishes, so a committed change applies when
+the site next starts. A threshold names an amounted capability (`place_order`, `pay_order`,
+`book`, `book_appointment`, `donate`).
+
+```json
+{
+  "handoffThreshold": 60,
+  "publishDelayHours": 48,
+  "amountThresholds": { "place_order": 20000, "book": 15000 }
+}
+```
+
 ## Reporting
 
 `review` sets the review cadence. `routes` maps each urgency to the owner's channels — `web`,
@@ -267,6 +295,7 @@ and `quietHours` gives a start, an end and an IANA time zone.
 | `EmptyApprovalChain`, `DuplicateApprovalChain` | A chain names roles, and each action class has at most one |
 | `UnsatisfiableApprovalChain` | Enough distinct people hold the chain's roles |
 | `DuplicateKpi`, `UnknownKpi` | KPI ids are unique, and goals name only defined KPIs |
+| `HandoffThresholdOutOfRange` | A handoff threshold is a lead score from 0 to 100 |
 
 ```rust
 use awp_types::{Charter, CharterViolation};

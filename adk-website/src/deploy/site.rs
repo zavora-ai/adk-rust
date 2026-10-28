@@ -55,6 +55,7 @@ use crate::edge::{SiteEdge, SiteEdgeParts, consent_config, site_router, stream_r
 use crate::experiments::{
     ExperimentGenerator, ExperimentRunner, FileExperimentStore, RepublishOnStop,
 };
+use crate::incident::{GuardianProbe, IncidentPath};
 use crate::kinds::{KindTemplate, template};
 use crate::leads::{LeadScorer, Leads, SqliteLeadRecords};
 use crate::measurement::{
@@ -112,6 +113,60 @@ pub struct SiteOptions {
     /// The owner's wallet the Finance agent pays running costs from (spec 3.5 §7.14); no
     /// wallet tools without it.
     pub wallet: Option<adk_payments::wallet::Wallet>,
+    /// The Guardian's probe (spec 3.5 §7.20, §7.8 "Probes", A-I9): the resolver that proves
+    /// the owner's domain claim again on every run; no probe without it.
+    pub probe: Option<ProbeOptions>,
+    /// The kernel's chat pairings: a paired account's message is the owner's, so the Inbox
+    /// does not read it (spec 3.5 A-I24); without them the Inbox reads every chat message
+    /// handed to it.
+    pub channel_bindings: Option<Arc<dyn adk_kernel::channels::ChannelBindingStore>>,
+}
+
+/// What the Guardian's probe of a served site needs beyond the project (spec 3.5 §7.20,
+/// §7.8 "Probes", A-I9): the resolver that proves the owner's domain claim again on every
+/// run, and the claim, the client and what to probe when the defaults do not fit.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_site::migrate::claim::StaticDnsResolver;
+/// use adk_website::deploy::ProbeOptions;
+///
+/// let options = ProbeOptions::new(Arc::new(StaticDnsResolver::new()));
+/// assert!(options.claim.is_none(), "the project's own claim file by default");
+/// ```
+#[derive(Clone)]
+pub struct ProbeOptions {
+    /// The resolver the claim is proven with on every run.
+    pub resolver: Arc<dyn adk_site::migrate::claim::DnsResolver>,
+    /// The owner's claim of the site's domain; when not set, the project's
+    /// `data/claims/{domain}.json`, which `adk-rust site migrate` keeps. A claim on another
+    /// domain is not used.
+    pub claim: Option<adk_site::migrate::claim::DomainClaim>,
+    /// The client that reads the public origin; when not set, a client that reaches only
+    /// the site's origin.
+    pub http: Option<Arc<adk_site::migrate::http::HttpClient>>,
+    /// What to probe; the site's domain and origin with the prober's defaults when not set.
+    pub config: Option<adk_site::migrate::probe::ProbeConfig>,
+}
+
+impl ProbeOptions {
+    /// A probe proving the claim with `resolver`, with every other part from the project.
+    pub fn new(resolver: Arc<dyn adk_site::migrate::claim::DnsResolver>) -> Self {
+        Self { resolver, claim: None, http: None, config: None }
+    }
+
+    /// A probe proving the claim with the system's resolver.
+    pub fn system() -> Self {
+        Self::new(Arc::new(adk_site::migrate::claim::SystemDnsResolver))
+    }
+}
+
+impl std::fmt::Debug for ProbeOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProbeOptions").field("claim", &self.claim).finish_non_exhaustive()
+    }
 }
 
 /// The site's email (spec 3.5 §7.13): the driver, the address it sends from, and the
@@ -150,6 +205,102 @@ fn identity(paths: &ProjectPaths) -> (uuid::Uuid, SiteKind, Option<Charter>) {
             || (uuid::Uuid::new_v4(), SiteKind::Business, None),
             |charter| (charter.site_id, charter.kind, Some(charter)),
         )
+}
+
+/// What [`guardian`] builds the Guardian's probe from.
+struct GuardianParts<'a> {
+    probe: &'a ProbeOptions,
+    paths: &'a ProjectPaths,
+    domain: &'a str,
+    site: &'a SiteRef,
+    host: Arc<DirectoryHost>,
+    release_key: adk_auth::signed_audit::NoteVerifier,
+    audit: (Arc<dyn adk_core::audit_log::AuditRecorder>, &'a str),
+    incidents: Arc<IncidentPath>,
+}
+
+/// The Guardian's probe of the served site (spec 3.5 §7.20, A-I9): the owner's claim on the
+/// site's domain — [`ProbeOptions::claim`], else the project's claim file — proven again with
+/// the resolver on every run; `None`, with a warning, when the site has no claim.
+fn guardian(parts: GuardianParts<'_>) -> Result<Option<Arc<GuardianProbe>>> {
+    use adk_site::migrate::claim::DomainClaim;
+    let GuardianParts { probe, paths, domain, site, host, release_key, audit, incidents } = parts;
+    let file = paths.data().join("claims").join(format!("{domain}.json"));
+    let claim = match probe.claim.clone() {
+        Some(claim) => Some(claim),
+        None => match std::fs::read(&file) {
+            Ok(bytes) => Some(
+                serde_json::from_slice::<DomainClaim>(&bytes)
+                    .map_err(|e| config(format!("{}: not a domain claim: {e}", file.display())))?,
+            ),
+            Err(_) => None,
+        },
+    }
+    .filter(|claim| claim.domain.eq_ignore_ascii_case(domain));
+    let Some(claim) = claim else {
+        tracing::warn!(
+            site.domain = domain,
+            "the Guardian does not probe: the site has no domain claim; `adk-rust site migrate` makes one in data/claims/"
+        );
+        return Ok(None);
+    };
+    let origin = Url::parse(&site.origin).map_err(config)?;
+    let http = match &probe.http {
+        Some(http) => http.clone(),
+        None => {
+            let only =
+                std::collections::BTreeSet::from([adk_site::migrate::http::origin_of(&origin)]);
+            Arc::new(
+                adk_site::migrate::http::HttpClient::builder()
+                    .egress(adk_site::migrate::http::EgressScope::Only(only))
+                    .build()
+                    .map_err(config)?,
+            )
+        }
+    };
+    let config = probe
+        .config
+        .clone()
+        .unwrap_or_else(|| adk_site::migrate::probe::ProbeConfig::new(domain, origin));
+    let (recorder, owner) = audit;
+    let acting = adk_core::ActingContext::derived(
+        &site.name,
+        AgentRole::Guardian.as_str(),
+        owner,
+        adk_core::SubjectKind::Service,
+    );
+    Ok(Some(Arc::new(GuardianProbe {
+        claim,
+        resolver: probe.resolver.clone(),
+        host,
+        http,
+        trusted: vec![release_key],
+        config,
+        audit: Some((recorder, acting)),
+        incidents,
+    })))
+}
+
+/// The owner's amount thresholds (spec 3.5 §7.4, §7.6): the `amountThresholds` of the charter
+/// in force, else of the drafted one, else `approvals.json`. They are applied to the edge's
+/// declarations, which the capability manifest publishes, so a committed change takes effect
+/// when the site next starts.
+fn amount_thresholds(
+    committed: Option<&Charter>,
+    drafted: Option<&Charter>,
+    paths: &ProjectPaths,
+) -> Result<crate::packs::ApprovalThresholds> {
+    match committed.or(drafted).filter(|charter| !charter.amount_thresholds.is_empty()) {
+        Some(charter) => {
+            let thresholds = charter.amount_thresholds.iter().fold(
+                crate::packs::ApprovalThresholds::new(),
+                |thresholds, (capability, amount)| thresholds.above(capability.clone(), *amount),
+            );
+            thresholds.validate()?;
+            Ok(thresholds)
+        }
+        None => project::approval_thresholds(paths),
+    }
 }
 
 /// A key file's id for a key made now: `{name}-{year}-{month}`.
@@ -220,6 +371,15 @@ pub struct RunningSite {
     pub quotes: Arc<ReviewQuotes>,
     /// The site's email outbox, when the site has email (spec 3.5 §7.13).
     pub outbox: Option<Arc<adk_drivers::email::EmailOutbox>>,
+    /// The incident path over the edge's status, the alarms and the ladder (spec 3.5 §7.20).
+    pub incidents: Arc<IncidentPath>,
+    /// The Inbox, when the site has a model and its kind runs one (spec 3.5 §7.19): it reads
+    /// the site's email while the site serves, and the chat messages of unpaired accounts
+    /// handed to it.
+    pub inbox: Option<Arc<crate::inbox::SiteInbox>>,
+    /// The Guardian's probe, when the site has [`SiteOptions::probe`] and a domain claim; the
+    /// kernel runs it every five minutes (spec 3.5 §7.20).
+    pub guardian: Option<Arc<GuardianProbe>>,
     pub(crate) reporting: Reporting,
     pub(crate) publish_delay: chrono::Duration,
     pub(crate) wallet: Option<adk_payments::wallet::Wallet>,
@@ -299,6 +459,10 @@ impl RunningSite {
         let audit = adk_session::SqliteAuditLogStore::new(&paths.database("site-log")).await?;
         audit.migrate().await?;
         let signer = Ed25519ReleaseSigner::from_seed(&domain, release.seed()).map_err(config)?;
+        let release_key: adk_auth::signed_audit::NoteVerifier = {
+            use adk_site::signer::ReleaseSigner as _;
+            signer.verifier_key().parse().map_err(|e| config(format!("release key: {e:?}")))?
+        };
         let log = Arc::new(
             SiteLog::open(Arc::new(audit), &domain, Arc::new(signer)).await.map_err(config)?,
         );
@@ -380,12 +544,16 @@ impl RunningSite {
         let edge_stores = SqliteEdgeStores::new(pool.clone()).with_site(site.name.clone());
         edge_stores.migrate().await.map_err(config)?;
         let served_stores = edge_stores.edge_stores();
-        let leads = Arc::new(Leads::new(
-            served_stores.leads.clone(),
-            records.clone(),
-            served_stores.consent.clone(),
-            LeadScorer::default(),
-        ));
+        let leads = Arc::new(
+            Leads::new(
+                served_stores.leads.clone(),
+                records.clone(),
+                served_stores.consent.clone(),
+                LeadScorer::default(),
+            )
+            .with_charters(charters.clone(), site.id),
+        );
+        let reply_template = options.reply_template.clone().unwrap_or_else(|| "reply".into());
         let outbox = options.email.as_ref().map(|email| {
             let disclosure = adk_drivers::Disclosure::new(&project.config.name)
                 .or_else(|_| adk_drivers::Disclosure::new(&domain))
@@ -395,7 +563,11 @@ impl RunningSite {
                 email.from.clone(),
                 disclosure,
             )
-            .consent(leads.clone());
+            .consent(leads.clone())
+            // The Inbox answers an email's thread with the reply template's body (§7.19).
+            .templates(
+                adk_drivers::ReplyTemplates::new().template(reply_template.clone(), "{body}"),
+            );
             if let Some((lookup, policy)) = &email.domain_auth {
                 builder = builder.domain_auth(lookup.clone(), policy.clone());
             }
@@ -432,11 +604,24 @@ impl RunningSite {
             None => project::payment_links(&paths)?
                 .map(|links| Arc::new(PaymentLinks::new(links)) as Arc<dyn PaymentDesk>),
         };
-        let threads = (!options.repliers.is_empty()).then(|| {
-            Arc::new(InboxThreads::new(
-                Arc::new(ReplyInThread::new(options.repliers.clone())),
-                options.reply_template.clone().unwrap_or_else(|| "reply".into()),
-            )) as Arc<dyn adk_server::awp::ThreadSink>
+        // In-thread replies go back through the channel a message came in on: the inbox
+        // drivers, the site's email, and the chat channels the owner's sinks serve (§7.19).
+        let mut repliers: Vec<Arc<dyn ThreadReplier>> = options.repliers.clone();
+        if let Some(outbox) = &outbox {
+            repliers.push(outbox.clone());
+        }
+        let mut chats = std::collections::BTreeSet::new();
+        for (sink, _) in &options.channels {
+            if chats.insert(sink.channel().to_string()) {
+                repliers.push(Arc::new(crate::inbox::ChannelReplier::new(
+                    sink.clone(),
+                    reply_template.clone(),
+                )));
+            }
+        }
+        let threads = (!repliers.is_empty()).then(|| {
+            Arc::new(InboxThreads::new(Arc::new(ReplyInThread::new(repliers)), reply_template))
+                as Arc<dyn adk_server::awp::ThreadSink>
         });
         let signals = partitions
             .signal_sink(stores.signals.clone(), stores.agenda.clone())
@@ -450,6 +635,7 @@ impl RunningSite {
             .store(Arc::new(edge_stores.clone()));
         // The installed packs verify again on every start; one that does not is not loaded.
         let packs = crate::packs::installed::PackDir::new(paths.root()).load()?;
+        let public_tools = Arc::new(std::sync::OnceLock::new());
         let edge = SiteEdge::build_with_packs(
             SiteEdgeParts {
                 template: template.clone(),
@@ -464,7 +650,11 @@ impl RunningSite {
                 contacts: records,
                 calendar,
                 payments,
-                thresholds: project::approval_thresholds(&paths)?,
+                thresholds: amount_thresholds(
+                    charters.current(site.id).await.map_err(config)?.map(|v| v.charter).as_ref(),
+                    drafted.as_ref(),
+                    &paths,
+                )?,
                 approvals: Some(stores.approvals.clone()),
                 tiers: Some(tiers),
                 consent: Some(consent_config(&template, policy, subject_key)),
@@ -478,19 +668,70 @@ impl RunningSite {
                 beacon: None,
                 limits: Some(limits),
                 public_agent: options.model.clone().map(|model| {
-                    crate::edge::concierge(
+                    let concierge = crate::edge::concierge(
                         &crate::team::SiteTeam::new(site.clone(), &template),
                         &partitions,
                         stores.partitions.clone(),
                         model,
                         paths.data().join("agents/concierge"),
-                    )
+                    );
+                    // The Inbox runs over the same public tools the edge gives the Concierge.
+                    let captured = public_tools.clone();
+                    Box::new(move |tools: &adk_server::awp::PublicTools| {
+                        let _ = captured.set(tools.clone());
+                        concierge(tools)
+                    }) as crate::edge::PublicAgentFactory
                 }),
             },
             commerce,
             &packs,
         )?;
         announcer.set(edge.announcer());
+        let team = crate::team::SiteTeam::new(site.clone(), &template);
+        let inbox = match (&options.model, public_tools.get()) {
+            (Some(model), Some(tools)) if team.runs(AgentRole::Inbox) => {
+                // The Inbox's jobs' playbooks are in its workspace, as every agent's are.
+                crate::playbooks::install(AgentRole::Inbox, &paths.data().join("agents/inbox"))
+                    .await?;
+                let mut inbox = crate::inbox::SiteInbox::new(crate::inbox::InboxParts {
+                    team,
+                    partitions: partitions.clone(),
+                    table: stores.partitions.clone(),
+                    model: model.clone(),
+                    tools: tools.clone(),
+                    workspace: paths.data().join("agents/inbox"),
+                    signals: edge_signals.clone(),
+                    audit: Some(trail.clone()),
+                })?;
+                if let Some(bindings) = &options.channel_bindings {
+                    inbox = inbox.with_bindings(bindings.clone());
+                }
+                Some(Arc::new(inbox))
+            }
+            _ => None,
+        };
+        let incidents = Arc::new(
+            IncidentPath::new(
+                runtime.clone(),
+                ladder.clone(),
+                alarms.clone(),
+                Arc::new(edge.status()),
+            )
+            .with_audit(trail.clone()),
+        );
+        let guardian = match &options.probe {
+            Some(probe) => guardian(GuardianParts {
+                probe,
+                paths: &paths,
+                domain: &domain,
+                site: &site,
+                host: host.clone(),
+                release_key,
+                audit: (recorder.clone(), options.owner.as_str()),
+                incidents: incidents.clone(),
+            })?,
+            None => None,
+        };
 
         let lane = Arc::new(StreamLane::new(Arc::new(ReceiptEntrySigner::new(receipt_signer))));
         let updates = Arc::new(
@@ -575,7 +816,8 @@ impl RunningSite {
                 .with_audit(trail.clone())
                 .with_alarms(alarms.clone())
                 .with_experiments(experiments.clone())
-                .with_updates(updates.clone()),
+                .with_updates(updates.clone())
+                .with_incidents(incidents.clone()),
         );
         let cron = options.experiments_cron.clone().unwrap_or_else(|| "0 30 3 * * *".into());
         let triggers = vec![experiments.trigger(&site.name, &cron)];
@@ -604,6 +846,9 @@ impl RunningSite {
             leads,
             quotes,
             outbox,
+            incidents,
+            inbox,
+            guardian,
             reporting,
             wallet: options.wallet.clone(),
             signals: edge_signals,
@@ -657,6 +902,32 @@ impl RunningSite {
                 tokio::time::sleep(idle).await;
             }
         }));
+        // The Inbox reads the site's email while the site serves; the cursor survives a
+        // restart, so no message is read twice (spec 3.5 §7.19).
+        if let (Some(inbox), Some(outbox)) = (self.inbox.clone(), self.outbox.clone()) {
+            let file = self.paths.data().join("inbox").join("email.cursor");
+            self.tasks.push(tokio::spawn(async move {
+                let mut cursor = std::fs::read_to_string(&file).ok().map(|c| c.trim().to_string());
+                loop {
+                    match inbox.read_email(&outbox, cursor.as_deref(), 20).await {
+                        Ok(next) if next != cursor => {
+                            if let Some(next) = &next
+                                && let Err(error) = file
+                                    .parent()
+                                    .map_or(Ok(()), std::fs::create_dir_all)
+                                    .and_then(|()| std::fs::write(&file, next))
+                            {
+                                tracing::warn!(error = %error, "the Inbox's email cursor was not kept");
+                            }
+                            cursor = next;
+                        }
+                        Ok(_) => {}
+                        Err(error) => tracing::warn!(error = %error, "the Inbox could not read the site's email"),
+                    }
+                    tokio::time::sleep(idle).await;
+                }
+            }));
+        }
         let _resolver = self.edge.edge.spawn_resolver(Duration::from_secs(5));
         // Deliveries a stopped process left in `data/edge.db` resume once their lease passes.
         let _deliveries = self.edge.edge.spawn_delivery_resumer(Duration::from_secs(30));

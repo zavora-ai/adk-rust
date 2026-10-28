@@ -361,6 +361,9 @@ impl KindTemplate {
                 },
             },
             price_rule: PriceRule::default(),
+            handoff_threshold: None,
+            publish_delay_hours: None,
+            amount_thresholds: Default::default(),
             signed: None,
         }
     }

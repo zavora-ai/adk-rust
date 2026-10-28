@@ -222,3 +222,84 @@ async fn the_contact_book_survives_a_restart_and_erasure_reaches_it() {
     assert_eq!(records.erase(&[receipt]).await.unwrap(), 1);
     assert!(records.by_email("ana@example.com").await.unwrap().is_empty());
 }
+
+/// The charter in force sets the handoff threshold (spec 3.5 §5 S8, §7.6): the captured lead
+/// scores 60, short of the default 70 and past the owner's 50.
+#[tokio::test]
+async fn the_charters_handoff_threshold_decides_when_a_lead_is_ready() {
+    use adk_core::principal::SubjectRef;
+    use adk_kernel::charter::{CharterStore, CommitDecision, InMemoryCharterStore, RoleApproval};
+
+    let f = fixture().await;
+    let site = Uuid::new_v4();
+    let charters = Arc::new(InMemoryCharterStore::new());
+    let leads = Leads::new(
+        Arc::new(InMemoryLeadStore::default()),
+        f.leads.records().clone(),
+        f.receipts.clone(),
+        LeadScorer::default(),
+    )
+    .with_charters(charters.clone(), site);
+    assert_eq!(leads.current_scorer().await.threshold(), 70.0, "no charter: the default");
+
+    let kind = adk_website::kinds::template(awp_types::SiteKind::Business);
+    let team = adk_website::team::SiteTeam::new(
+        adk_harness::website::SiteRef::new(site, "juniper", "https://juniper.example"),
+        &kind,
+    );
+    let inputs = adk_website::kinds::CharterInputs::new(
+        site,
+        "Juniper Bakery",
+        "amina",
+        "Bread.",
+        vec!["en".parse().unwrap()],
+        "KES",
+    );
+    let mut charter = kind.draft_charter(&team, &inputs);
+    let commit = |charter: awp_types::Charter, id: &str| {
+        let decision = CommitDecision::new(id, Utc::now()).with_approval(RoleApproval::new(
+            awp_types::Role::Owner,
+            SubjectRef::human("amina"),
+            Utc::now(),
+        ));
+        let charters = charters.clone();
+        async move { charters.commit(charter, decision).await.unwrap() }
+    };
+    commit(charter.clone(), "dec-1").await;
+    assert_eq!(leads.current_scorer().await.threshold(), 70.0, "a charter without one");
+
+    charter.handoff_threshold = Some(50);
+    commit(charter, "dec-2").await;
+    assert_eq!(leads.current_scorer().await.threshold(), 50.0);
+    let store = Arc::new(InMemoryLeadStore::default());
+    let lead = Lead {
+        id: LeadRef("lead-2".into()),
+        captured_at: Utc::now(),
+        source: Channel::Http,
+        contact_ref: ContactRef("contact:wanjiru".into()),
+        consent: f
+            .leads
+            .records()
+            .by_email(VISITOR)
+            .await
+            .unwrap()
+            .into_iter()
+            .flat_map(|contact| contact.consent)
+            .map(ConsentReceiptRef)
+            .collect(),
+        answers: [(
+            "message".to_string(),
+            Bounded::truncated("A wedding cake. Date: 14 February 2027. Guests: 120.", 2000),
+        )]
+        .into_iter()
+        .collect(),
+        thread_ref: None,
+        score: None,
+    };
+    store.insert(lead.clone()).await.unwrap();
+    let leads =
+        Leads::new(store, f.leads.records().clone(), f.receipts.clone(), LeadScorer::default())
+            .with_charters(charters.clone(), site);
+    let score = leads.rescore(&lead.id).await.unwrap();
+    assert_eq!((score.value, score.threshold, score.ready), (60.0, 50.0, true));
+}

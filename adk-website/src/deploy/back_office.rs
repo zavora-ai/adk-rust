@@ -106,7 +106,8 @@ impl RunningSite {
         };
         let growth = crate::experiments::experiment_tools(self.experiments.clone());
         let guardian = vec![self.edge.read_only_tool()];
-        let delay = crate::publish_delay::PublishDelay::new(self.publish_delay, compiler);
+        let delay = crate::publish_delay::PublishDelay::new(self.publish_delay, compiler)
+            .with_charters(stores.charters.clone());
         let delay: Arc<dyn adk_core::ToolPolicy> = Arc::new(delay);
         let approvals = stores.approvals.clone();
         let configure = move |role: AgentRole, builder: adk_harness::HarnessAgentBuilder| {

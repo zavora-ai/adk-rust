@@ -10,7 +10,8 @@
 //! durable in `data/kernel.db` ([`KernelStores`]). The setup code is issued while no device
 //! is paired, so a restarted site does not offer a second one.
 //!
-//! The kernel runs each site's processes (spec 3.5 §7.20): the weekly digest when the owner
+//! The kernel runs each site's processes (spec 3.5 §7.20): the Guardian's probe when the site
+//! has a domain claim ([`ProbeOptions`](super::ProbeOptions)), the weekly digest when the owner
 //! has a channel, the hosting job's upkeep check when the site has an advisory or certificate
 //! source, and — with a model — the back office ([`super::back_office`]): the Steward leading
 //! the team, and each agent's jobs on their signals and schedules, under the owner's
@@ -187,6 +188,12 @@ async fn start(
         if let Some(target) = site.digest_target(&options.site) {
             site_workflows = site_workflows.digest(site.site.id, target);
             runs.push(SiteProcessKind::Digest);
+        }
+        // The Guardian's probe every five minutes, when the site has a domain claim (spec
+        // 3.5 §7.20, A-I9).
+        if let Some(probe) = &site.guardian {
+            site_workflows = site_workflows.probe(site.site.id, probe.clone());
+            runs.push(SiteProcessKind::Probe);
         }
         if let Some(check) = site.upkeep(&stores, &options.site) {
             site_workflows = site_workflows.watch(site.site.id, check);

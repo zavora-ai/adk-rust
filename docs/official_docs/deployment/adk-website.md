@@ -117,7 +117,7 @@ A-I16).
 | Consent | The charter's public terms and the edge ask for `contact` and, where the kind nurtures its leads, `nurture`; an enquiry carries every receipt the visitor granted (`AWP-Consent` lists them) |
 | `leads::SqliteLeadRecords` | The contact book beside the edge's leads in `data/edge.db`: who wrote, with which receipts, how much nurture they received, which leads were handed off; erasure reaches it |
 | `leads::Leads` | The email outbox's `ConsentCheck` from the edge's receipts, so a revocation stops the next send; scores and the one handoff per lead |
-| `leads::LeadScorer` | 20 for `contact`, 10 for `nurture`, 15 per qualifying answer (when, how many, budget), 5 per nurture step up to three; a lead at 70 is ready for the owner |
+| `leads::LeadScorer` | 20 for `contact`, 10 for `nurture`, 15 per qualifying answer (when, how many, budget), 5 per nurture step up to three; a lead at the charter's `handoffThreshold` (70 when it sets none) is ready for the owner |
 | `leads::nurture_tools` | The outbox's sequence and newsletter sends, refused inside the owner's quiet hours, each send returning the recipient's lead scores |
 
 ### Upkeep and the publish delay
@@ -127,9 +127,11 @@ the edge's `Cargo.lock` against an `AdvisorySource` — `AdvisoryDatabase` over 
 of the RustSec advisory database — and the certificate from a `CertificateSource`, and files
 each upgrade or renewal once as a decision card for the owner, with a P2 alarm (P1 for a
 certificate within three days). `publish_delay::PublishDelay` keeps a page the site drafts on
-its own under `freshness`, `seo` or `aeo` off the site for 24 hours by default: the draft
-must be scheduled at least that far ahead, and it goes live at that time once the owner has
-approved it.
+its own under `freshness`, `seo` or `aeo` off the site for the charter's `publishDelayHours`
+(24 by default): the draft must be scheduled at least that far ahead, and it goes live at
+that time once the owner has approved it. The charter card "When the site asks you" shows
+the handoff threshold, the publish delay and the amount thresholds, defaults included
+([The charter](charter.md#the-owners-settings)).
 
 ### The owner's channel
 
@@ -240,10 +242,35 @@ many sites from one harness:
 | Updates | `UpdateEngine` over the runtime's pipeline, the edge's live store and a stream lane signed by the receipt key; feeds from `feeds.json`; `UpdateDriver` ticks it when due and journals to `data/updates/`; held deliveries and items become approval requests (decision cards) and survive a restart in `data/updates/held.json`; `GET /awp/v2/stream` serves `stream_since` |
 | Experiments | `ExperimentGenerator` around the built-in generator; `ExperimentRunner` with `BeaconKpi`, the job pauses, the ladder, the alarms and `RepublishOnStop`; its trigger fires through the kernel's watermarked cron source for the expression |
 | Measurement | `MeteredActionLedger` and `EdgeMeter` on the edge, `MeteredSpendLedger` for agents' spend, and the tracker's sources |
-| Channels | Inbox threads with `SiteOptions::repliers`; the calendar from `caldav.json` (the owner's CalDAV calendar, `edge::caldav::CalDavCalendar`) or `calendar.json`, payment links from `payments.json`, or `SiteOptions` (`Ap2Desk`, `TokenDesk` or `PaymentRails` as `SiteOptions::payments`); refused without them; the owner's amount thresholds from `approvals.json` ([Writing capability packs](capability-packs.md#bookings)) |
-| Public agent | With `SiteOptions::model`, `edge::concierge` mounts the Concierge through `AwpEdge::public_agent`: the website preset in the public partition over the edge's own tools — the declared capabilities (a declared `search_site` among them), `reply_in_thread` and the edge's `emit_signal` — so the edge's public policy admits every call |
+| Channels | In-thread replies through the channel a message came in on: `SiteOptions::repliers`, the site's email outbox, and the chat channels of the owner's sinks (`inbox::ChannelReplier`); the calendar from `caldav.json` (the owner's CalDAV calendar, `edge::caldav::CalDavCalendar`) or `calendar.json`, payment links from `payments.json`, or `SiteOptions` (`Ap2Desk`, `TokenDesk` or `PaymentRails` as `SiteOptions::payments`); refused without them; the owner's amount thresholds from the charter's `amountThresholds`, else `approvals.json` ([Writing capability packs](capability-packs.md#bookings)) |
+| Public agents | With `SiteOptions::model`, `edge::concierge` mounts the Concierge through `AwpEdge::public_agent`: the website preset in the public partition over the edge's own tools — the declared capabilities (a declared `search_site` among them), `reply_in_thread` and the edge's `emit_signal` — so the edge's public policy admits every call. Where the kind runs one, `inbox::SiteInbox` is the Inbox over the same tools and policy: it reads the site's email while the site serves (the cursor kept in `data/inbox/email.cursor`), and `SiteInbox::receive_inbound` reads a chat message a `ChannelSink` adapter received from an account no person paired — a paired account's message, by `SiteOptions::channel_bindings`, is the owner's (A-I24). Each reply answers the message's own thread; a flagged or refused message the Inbox filed no signal for gets the site's `inbound_message` signal, with none of its text (A-I3) |
 | Back office | With `SiteOptions::model`, the kernel hosts the back office (`deploy::back_office`): the Steward's target runs the team, every agent its jobs' processes on their signals and schedules, under the owner's standing rules in `data/kernel.db` — what `adk-rust website jobs promote` grants takes effect while the site serves — with held calls in the owner's approval inbox; the edge's signals wake them, and the kernel defers each proactive run inside the charter's quiet hours (an agency's kernel holds none). Revenue gets the nurture sends (`SiteOptions::email`) and the handoff, Growth the experiment tools, Guardian `edge_read_only`, Finance the wallet (`SiteOptions::wallet`); agent sessions are kept in `data/kernel/sessions.db` |
 | Upkeep | With `SiteOptions::advisories` or `SiteOptions::certificate`, the daily `site.watch` runs `UpkeepCheck` |
+| Guardian | With `SiteOptions::probe` and the owner's domain claim — `ProbeOptions::claim`, else `data/claims/{domain}.json`, which `adk-rust site migrate` keeps — `site.probe` runs `incident::GuardianProbe` every five minutes: the claim is proven again by DNS, the host and the origin are read against the signed releases, and drift opens an incident on `RunningSite::incidents` (status `incident`, the edge read-only, one P1 alarm, a rollback plan the owner approves) |
+
+The `adk-website` binary's `start` and `adk-rust website new` read the project's
+configuration files into `SiteOptions` with `deploy::config::configure`; secrets are
+`env:VAR` or `file:PATH`, never the secret itself (A-I19):
+
+| File | Sets |
+|------|------|
+| `email.json` | `SiteOptions::email`: an IMAP and SMTP account (`adk_drivers::email::ImapSmtpEmail`), the address it sends from, and the sender policy bulk sends wait for |
+| `upkeep.json` | `SiteOptions::advisories` (the edge's `Cargo.lock` against a RustSec advisory database checkout) and `SiteOptions::certificate` (the origin's certificate) |
+| `wallet.json` | `SiteOptions::wallet`: the owner's `WalletPolicy` and the providers that bill the owner's own accounts, each a `provider_billing:{provider}` rail whose charges are recorded in `data/wallet/{provider}/charges.jsonl` and reconciled against the `invoice.jsonl` the owner exports there; payments are kept in `data/wallet.db`. The wallet holds no funds of its own here |
+| `data/claims/{domain}.json` | `SiteOptions::probe`, proven with the system's resolver |
+
+```json
+{
+  "imap": { "host": "imap.mail.example", "port": 993, "security": "tls" },
+  "smtp": { "host": "smtp.mail.example", "port": 587, "security": "starttls" },
+  "username": "hello@juniper.example",
+  "password": "env:JUNIPER_MAIL_PASSWORD",
+  "senderPolicy": { "dkimSelector": "mail", "spfMechanism": "include:_spf.mail.example" }
+}
+```
+
+An agency's sites share one set of options, so `adk-website agency` reads none of these
+files.
 
 | Store | Survives a restart |
 |-------|--------------------|

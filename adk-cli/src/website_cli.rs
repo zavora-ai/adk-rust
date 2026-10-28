@@ -3,7 +3,7 @@
 //!
 //! | Command | Library |
 //! |---|---|
-//! | `website new [dir] [--agency]` | `adk_website::onboarding::scaffold`, then `adk_website::deploy::serve` (or `serve_agency`), and the website views of `adk-surface` over a `WebsiteDesk` on a loopback home |
+//! | `website new [dir] [--agency]` | `adk_website::onboarding::scaffold`, `adk_website::deploy::config::configure` (the email, upkeep sources, wallet and probe in the project's configuration files), then `adk_website::deploy::serve` (or `serve_agency`), and the website views of `adk-surface` over a `WebsiteDesk` on a loopback home |
 //! | `website status` | `KernelStores` and the site log in the project's `data/` |
 //! | `website review` | `RunningSite::review`: the weekly review, composed from the stores |
 //! | `website charter` | The charter store: the charter in force and its history |
@@ -272,6 +272,14 @@ async fn new(args: NewArgs) -> Result<()> {
         (adk_website::deploy::serve_agency(&file, options).await?, site_dir)
     } else {
         ensure_project(&args, &dir).await?;
+        // The site's email, upkeep sources, wallet and probe from its configuration files
+        // (spec 3.5 §7.17).
+        for line in
+            adk_website::deploy::config::configure(&ProjectPaths::new(&dir), &mut options.site)
+                .await?
+        {
+            println!("Configured {line}.");
+        }
         (adk_website::deploy::serve(options).await?, dir.clone())
     };
     let site = served
@@ -794,6 +802,7 @@ mod home {
         .signals(stores.signals.clone(), site.partitions.back_office().id.clone())
         .updates(site.updates.clone())
         .alarms(site.alarms.clone())
+        .incidents(site.incidents.clone())
         .tracker(site.tracker().clone())
         // The home's review view composes from the same stores as the weekly digest.
         .composer(site.review.as_ref().clone())

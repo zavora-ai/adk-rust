@@ -30,13 +30,14 @@ is for each kind of site.
 | `packs` | Capability declarations: contact, quote, booking, order, search, components; packs as signed, installable bundles of declarations, handler configuration, playbooks and driver manifests, verified against the site's trust list (`bundle`, `trust`, `builtin`, `installed`) | §7.16, §7.4, §7.23 |
 | `edge` | The site on `adk-server`'s agent edge: the packs' handlers, the adapters to the back office and the pipeline, the read-only step, the public router with the release behind the edge | §7.9, §7.10, §7.16, A-I11 |
 | `contract` | The site's keys and signed documents: the contract, the key set with its delegations, the public terms, the `_awp-root` record | §7.2, §7.3, §7.7 |
-| `deploy` | The four deployment shapes, `serve` for one site and `serve_agency` for many, agency isolation at the kernel and the edge; with a model, the back office hosted on the kernel under the owner's standing rules | §7.22, §7.17, §7.19, A-I22 |
+| `deploy` | The four deployment shapes, `serve` for one site and `serve_agency` for many, agency isolation at the kernel and the edge; with a model, the back office hosted on the kernel under the owner's standing rules; the Guardian's probe over the owner's domain claim; `config::configure` reads `email.json`, `upkeep.json`, `wallet.json` and the claim into `SiteOptions` | §7.22, §7.17, §7.19, §7.20, A-I22 |
 | `playbooks` | A skill file for every job, installed into each agent's workspace | §7.16, §7.15 |
 | `incident` | Drift, incident status, rollback to the last good release by standing rule or proposal, a person's exit | §7.20, A-I11 |
+| `inbox` | The Inbox: the site's email and the chat messages of unpaired accounts, answered in their own thread; a flagged message becomes a typed signal | §7.19, §7.10, X12, A-I24 |
 | `alarms` | P1, P2 and P3 routing to the owner's channels; the lead handoff card | §7.21 |
-| `leads` | Lead scores and the handoff threshold, consent for nurture from the edge's receipts, the durable contact book, nurture sends outside quiet hours | §7.20, S8 |
+| `leads` | Lead scores and the charter's handoff threshold, consent for nurture from the edge's receipts, the durable contact book, nurture sends outside quiet hours | §7.20, S8 |
 | `upkeep` | Upgrade proposals for advisories against the edge's lockfile, certificate renewal proposals | §7.20, S10 |
-| `publish_delay` | The delay a page the site drafts on its own waits before it can go live | §7.20, S10 |
+| `publish_delay` | The charter's delay a page the site drafts on its own waits before it can go live | §7.20, S10 |
 | `channel` | The owner's chat channel: a paired person's photos into the Steward's draft, alt text confirmed from the thread | §7.8.2, S18, A-I24 |
 | `quotes` | The reviews discovery found, the owner's approvals to quote them, and the launch gate's check | §7.18, S2 |
 | `review` | The weekly review, summarised in plain words on the owner's channel | §7.21 |

@@ -8,6 +8,8 @@
 //! otherwise, saying the earliest time. Approving the draft then schedules it; the pipeline
 //! publishes it when that time comes, so it waits out the delay and the approval both.
 //! A draft that names no job is delayed when any job of its agent that covers the tool is.
+//! With [`PublishDelay::with_charters`], the charter in force sets the delay
+//! (`publishDelayHours`, spec 3.5 §7.6), and the configured delay applies when it sets none.
 
 use std::sync::Arc;
 
@@ -49,6 +51,7 @@ pub struct PublishDelay {
     delay: Duration,
     jobs: Vec<String>,
     compiler: LadderCompiler,
+    charters: Option<Arc<dyn adk_kernel::charter::CharterStore>>,
     clock: Arc<dyn Clock>,
 }
 
@@ -68,8 +71,17 @@ impl PublishDelay {
             delay,
             jobs: DELAYED_JOBS.iter().map(|job| (*job).to_string()).collect(),
             compiler,
+            charters: None,
             clock: Arc::new(SystemClock),
         }
+    }
+
+    /// Reads the delay from the site's charter in force in `charters` (spec 3.5 §5 S10,
+    /// §7.6): its `publishDelayHours`, else the delay given to [`new`](Self::new).
+    #[must_use]
+    pub fn with_charters(mut self, charters: Arc<dyn adk_kernel::charter::CharterStore>) -> Self {
+        self.charters = Some(charters);
+        self
     }
 
     /// Delays the drafts of `jobs` instead.
@@ -86,9 +98,24 @@ impl PublishDelay {
         self
     }
 
-    /// The delay.
+    /// The delay given to [`new`](Self::new), which applies when the charter sets none.
     pub fn delay(&self) -> Duration {
         self.delay
+    }
+
+    /// The delay in force now: the charter's `publishDelayHours` when the charter in force
+    /// sets it, else [`delay`](Self::delay).
+    pub async fn current_delay(&self) -> Duration {
+        let Some(charters) = &self.charters else { return self.delay };
+        match charters.current(self.compiler.site().id).await {
+            Ok(current) => current
+                .and_then(|version| version.charter.publish_delay_hours)
+                .map_or(self.delay, |hours| Duration::hours(i64::from(hours))),
+            Err(error) => {
+                tracing::warn!(error = %error, "the charter's publish delay could not be read; the default applies");
+                self.delay
+            }
+        }
     }
 
     /// Whether `request` drafts for a delayed job.
@@ -110,7 +137,8 @@ impl ToolPolicy for PublishDelay {
         if !DRAFTING.contains(&request.tool_name.as_str()) || !self.delayed(request) {
             return PolicyDecision::Allow;
         }
-        let earliest = self.clock.now() + self.delay;
+        let delay = self.current_delay().await;
+        let earliest = self.clock.now() + delay;
         let scheduled = request
             .args
             .pointer("/schedule/publishAt")
@@ -124,7 +152,7 @@ impl ToolPolicy for PublishDelay {
                 "a page this job drafts on its own waits out the site's publish delay of {} \
                  hours before it can go live, as well as the owner's approval: draft it with \
                  schedule.publishAt {} or later",
-                self.delay.num_hours(),
+                delay.num_hours(),
                 earliest.format("%Y-%m-%dT%H:%M:%SZ")
             )),
         }
@@ -181,5 +209,50 @@ mod tests {
         assert_eq!(policy.evaluate(&request("steward", unnamed)).await, PolicyDecision::Allow);
         let onboarding = page(json!({ "job": "onboarding" }));
         assert_eq!(policy.evaluate(&request("steward", onboarding)).await, PolicyDecision::Allow);
+    }
+
+    /// The charter in force sets the delay (spec 3.5 §5 S10, §7.6); the configured one applies
+    /// while it sets none.
+    #[tokio::test]
+    async fn the_charters_publish_delay_replaces_the_default() {
+        use adk_core::principal::SubjectRef;
+        use adk_kernel::charter::{
+            CharterStore, CommitDecision, InMemoryCharterStore, RoleApproval,
+        };
+
+        let now = Utc::now();
+        let charters = Arc::new(InMemoryCharterStore::new());
+        let policy =
+            delay(Arc::new(adk_core::ManualClock::new(now))).with_charters(charters.clone());
+        assert_eq!(policy.current_delay().await, Duration::hours(24));
+
+        let site = SiteRef::new(uuid::Uuid::nil(), "bakery", "https://bakery.example");
+        let kind = crate::kinds::template(awp_types::SiteKind::Business);
+        let team = crate::team::SiteTeam::new(site, &kind);
+        let inputs = crate::kinds::CharterInputs::new(
+            uuid::Uuid::nil(),
+            "Juniper Bakery",
+            "amina",
+            "Bread.",
+            vec!["en".parse().unwrap()],
+            "KES",
+        );
+        let mut charter = kind.draft_charter(&team, &inputs);
+        charter.publish_delay_hours = Some(48);
+        let decision = CommitDecision::new("dec-1", now).with_approval(RoleApproval::new(
+            awp_types::Role::Owner,
+            SubjectRef::human("amina"),
+            now,
+        ));
+        charters.commit(charter, decision).await.unwrap();
+        assert_eq!(policy.current_delay().await, Duration::hours(48));
+
+        let day = (now + Duration::hours(24)).to_rfc3339();
+        let args = json!({ "kind": "page", "slug": "faq", "language": "en", "job": "freshness", "schedule": { "publishAt": day } });
+        let decided = policy.evaluate(&request("growth", args)).await;
+        assert!(
+            matches!(&decided, PolicyDecision::Deny { reason, .. } if reason.contains("48 hours")),
+            "{decided:?}"
+        );
     }
 }

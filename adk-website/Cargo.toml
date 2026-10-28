@@ -39,8 +39,9 @@ adk-eval = { workspace = true, features = ["experiments"] }
 # The website runtime: preset, toolsets, partitions, ladder, onboarding machinery (WP I).
 adk-harness = { workspace = true, features = ["website", "sqlite"] }
 adk-kernel = { workspace = true, features = ["charter", "channels"] }
-# The wallet, and the AP2 merchant side the site takes payments with (spec 3.5 §7.5, §7.14).
-adk-payments = { workspace = true, features = ["wallet", "ap2"] }
+# The wallet, and the AP2 merchant side the site takes payments with (spec 3.5 §7.5, §7.14);
+# a served site keeps its wallet's payments in `data/wallet.db`.
+adk-payments = { workspace = true, features = ["wallet", "ap2", "sqlite"] }
 # The AP2 desk's in-memory evidence journal, for tests and sandboxes.
 adk-artifact.workspace = true
 # `WorkflowExecutor` for the site's deterministic jobs (spec 3.5 §7.20); the agent edge and
@@ -58,6 +59,8 @@ awp-types.workspace = true
 async-trait.workspace = true
 axum = "0.8"
 chrono.workspace = true
+# The Inbox reads its turn's events (spec 3.5 §7.19).
+futures.workspace = true
 # Quiet hours in the owner's IANA time zone (spec 3.5 §7.21).
 chrono-tz = "0.10"
 # Delegated key files (private JWKs) and secrets made on first start (spec 3.5 D-11).

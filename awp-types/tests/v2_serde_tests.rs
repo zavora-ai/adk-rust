@@ -1051,6 +1051,37 @@ fn approval_chains_need_distinct_principals() {
     assert!(!publish.is_satisfied_by(&flexible, &["user:a", "urn:adk:agent:x/steward"]));
 }
 
+/// The owner's settings are optional charter members: a charter without them reads and
+/// writes as before, and with them they travel in camelCase (spec 3.5 §5 S8, S10, §7.4).
+#[test]
+fn the_owners_settings_are_optional_members() {
+    let charter = charter();
+    assert_eq!(
+        (charter.handoff_threshold, charter.publish_delay_hours, charter.amount_thresholds.len()),
+        (None, None, 0)
+    );
+    let json = round_trip(&charter);
+    for member in ["handoffThreshold", "publishDelayHours", "amountThresholds"] {
+        assert!(json.get(member).is_none(), "{member} is left out when not set");
+    }
+
+    let mut set = charter.clone();
+    set.handoff_threshold = Some(60);
+    set.publish_delay_hours = Some(48);
+    set.amount_thresholds = BTreeMap::from([("place_order".to_owned(), 20_000)]);
+    let json = round_trip(&set);
+    assert_eq!(json["handoffThreshold"], 60);
+    assert_eq!(json["publishDelayHours"], 48);
+    assert_eq!(json["amountThresholds"], json!({ "place_order": 20_000 }));
+    assert_eq!(set.validate(), Ok(()));
+
+    set.handoff_threshold = Some(101);
+    assert_eq!(
+        set.validate().unwrap_err().violations,
+        vec![CharterViolation::HandoffThresholdOutOfRange { threshold: 101 }]
+    );
+}
+
 #[test]
 fn charter_rejects_empty_and_duplicate_chains_and_bad_kpi_references() {
     let mut charter = charter();
