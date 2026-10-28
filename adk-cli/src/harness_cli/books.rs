@@ -464,6 +464,10 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
     if let Some(target) = target {
         line = line.with_target(target);
     }
+    // The item an answer's call acted on, as the person knows it (spec 3.3 §8).
+    if let Some(title) = text(record.ext.get("title")) {
+        line = line.with_title(title);
+    }
     // A screen action (spec 3.3 §2 item 7): the action as its tool, the item's title as what
     // it acted on, and for an agent's, where the person said yes.
     if record.action == "surface.verb" {
@@ -898,6 +902,59 @@ mod tests {
         assert_eq!(
             (rule.tool.as_deref(), rule.decision.as_deref()),
             (Some("web_fetch"), Some("denied"))
+        );
+    }
+
+    /// A denied screen action's answer names its item as the person knows it, and keeps the
+    /// decision's id as what it acted on (spec 3.3 §8, §11).
+    #[cfg(feature = "audit")]
+    #[tokio::test]
+    async fn a_denied_screen_actions_line_names_its_item() {
+        use adk_auth::signed_audit::{AuditLog, AuditSigner as _, Ed25519Signer, NoteVerifier};
+        use adk_core::audit_log::{
+            AuditActor, AuditDecision, AuditLogStore, AuditRecordDraft, AuditRecordKind,
+            InMemoryAuditLogStore,
+        };
+        use adk_kernel::control::RecordBook;
+        use serde_json::json;
+
+        let logs: Arc<dyn AuditLogStore> = Arc::new(InMemoryAuditLogStore::new());
+        let signer = Ed25519Signer::generate("kernel-test").unwrap();
+        let verifier: NoteVerifier = signer.verifier_key().parse().unwrap();
+        let log =
+            AuditLog::builder(logs.clone(), "kernel-test", Arc::new(signer)).open().await.unwrap();
+        // The engine's record of a denial in the home (`audit_decide`).
+        log.append(
+            AuditRecordDraft::new(AuditRecordKind::Approval, "surface.decide")
+                .actor(AuditActor::subject(SubjectRef::human("ana")))
+                .decision(AuditDecision::Rejected)
+                .ext("surface", json!("web"))
+                .ext("origin", json!({ "kind": "pointer" }))
+                .ext("approvalId", json!("apr_1"))
+                .ext("tool", json!("verb_snooze"))
+                .ext("answer", json!("deny"))
+                .ext("outcome", json!("decided"))
+                .ext("actingAgent", json!("urn:adk:agent:adk-rust/finance"))
+                .ext("title", json!("News digest"))
+                .ext("summary", json!("Move News digest to 19:00")),
+        )
+        .await
+        .unwrap();
+        let book = SignedRecordBook::new(logs, "kernel-test".into(), verifier);
+        let line = book.recent(1).await.unwrap().remove(0);
+        let at = line.at;
+        assert_eq!(
+            line,
+            adk_kernel::control::RecordLine::new(0, at, "surface.decide")
+                .with_subject("ana")
+                .with_agent("urn:adk:agent:adk-rust/finance")
+                .with_tool("verb_snooze")
+                .with_decision("rejected")
+                .with_outcome("decided")
+                .with_surface("web")
+                .with_how("pointer", None)
+                .with_target("apr_1")
+                .with_title("News digest")
         );
     }
 

@@ -163,11 +163,13 @@ function kernelSentence(line: KernelRecordLine, agents: AgentRow[]): string | un
 export function recordSentence(line: KernelRecordLine, agents: AgentRow[]): string | undefined {
   switch (line.action) {
     case "surface.decide":
-      // An agent's screen action: its own record says the yes; a no changed nothing.
+      // An agent's screen action: its own record says the yes; a no changed nothing, and names
+      // the item as the card did (an answer recorded before it did names none).
       if (line.tool === "verb_snooze" && line.outcome === "decided") {
         const agent = line.agent ? agentOf(line.agent, agents) : undefined;
+        const what = line.title ?? "something in Coming up";
         return line.decision === "rejected"
-          ? `${agent ?? "Your agent"} asked to snooze something in Coming up; you said no. Nothing changed.`
+          ? `${agent ?? "Your agent"} asked to snooze ${what}; you said no. Nothing changed.`
           : undefined;
       }
       return line.outcome === "decided" ? answer(line, agents) : undefined;

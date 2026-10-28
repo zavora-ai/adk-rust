@@ -32,6 +32,13 @@
 //! A hint reads only the inbox entry it is given and the provider's own kernel-side data,
 //! never text an agent wrote (§7.1: every surface draws a decision from the inbox entry, never
 //! from agent output).
+//!
+//! A feature can also name what its call acts on, as the person knows it ([`CardHints::names`]):
+//! the record of an answer then carries that name and the card's summary, so "What your agents
+//! did" says "Finance asked to snooze News digest; you said no" whichever answer was given
+//! (spec 3.3 §8, §11).
+
+use std::sync::Arc;
 
 use adk_core::ApprovalRequest;
 use async_trait::async_trait;
@@ -204,6 +211,27 @@ impl CardHint {
 pub trait CardHints: Send + Sync {
     /// The hint for `request`, or `None` when it is not this feature's.
     async fn hint(&self, request: &ApprovalRequest) -> Option<CardHint>;
+
+    /// What `request`'s call acts on, as the person knows it — "News digest" — which the
+    /// record of an answer to it names beside the card's summary (spec 3.3 §8, §11). `None`,
+    /// the default, for a call that names nothing a person knows or that is not this
+    /// feature's.
+    async fn names(&self, _request: &ApprovalRequest) -> Option<String> {
+        None
+    }
+}
+
+/// What `request`'s call acts on, as the first of `hints` that names it says (spec 3.3 §8).
+pub(crate) async fn named(
+    hints: &[Arc<dyn CardHints>],
+    request: &ApprovalRequest,
+) -> Option<String> {
+    for hints in hints {
+        if let Some(name) = hints.names(request).await {
+            return Some(name);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
