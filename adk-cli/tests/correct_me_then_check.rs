@@ -1,7 +1,12 @@
 //! Spec 3.3 §12 phase 3 "Correct me, then check" (§5.1 "Agent Memory and Rules", §8, §10 K5)
 //! as one run of `adk-rust up` with a scripted model: on SQLite (`harness.db`, in CI) and on
-//! PostgreSQL (`--store`, `correct_me_then_check_on_postgres`, `#[ignore]`d, run by
-//! `scripts/test-postgres.sh`).
+//! PostgreSQL (`--store`, `correct_me_then_check_on_postgres`, `#[ignore]`d and run by hand):
+//!
+//! ```bash
+//! DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
+//!   cargo nextest run -p adk-cli --features scripted-model,audit-sql,postgres --run-ignored only \
+//!   --test correct_me_then_check
+//! ```
 //!
 //! | Step | What happens | What holds |
 //! |---|---|---|

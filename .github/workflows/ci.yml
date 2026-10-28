@@ -340,13 +340,6 @@ jobs:
       with:
         tool: cargo-nextest
 
-    # libdbus for adk-cli's keyring dependency: the adk-cli scenario suites build the binary.
-    - name: Install system dependencies
-      timeout-minutes: 10
-      uses: ./.github/actions/apt-install
-      with:
-        packages: libdbus-1-dev
-
     - name: Start a TLS PostgreSQL server
       timeout-minutes: 5
       run: bash scripts/postgres-tls-server.sh "$RUNNER_TEMP/pg-tls" 5433

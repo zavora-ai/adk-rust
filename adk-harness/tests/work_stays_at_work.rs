@@ -1,6 +1,6 @@
 //! Spec 3.3 §12 phase 4, "Work stays at work", as one run of a kernel hosting two areas'
 //! harnesses on a scripted model and a `ManualClock`, on SQLite (CI) and on PostgreSQL
-//! (`work_stays_at_work_on_postgres`, `#[ignore]`; `scripts/test-postgres.sh` runs it):
+//! (`work_stays_at_work_on_postgres`, `#[ignore]` and run by hand):
 //!
 //! ```bash
 //! DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
