@@ -18,12 +18,15 @@
 //! OpenAI.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
     Router,
     extract::Query,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    http::header,
+    middleware,
     response::{Html, IntoResponse},
     routing::get,
 };
@@ -31,7 +34,7 @@ use base64::Engine;
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
 
 use adk_realtime::config::{RealtimeConfig, ToolDefinition, VadConfig};
@@ -89,17 +92,25 @@ impl Provider {
     }
 }
 
-/// Run the Axum web server.
-pub async fn run_server(port: u16) -> anyhow::Result<()> {
-    let app = Router::new()
+/// Serve the UI and the WebSocket bridge on `listener`.
+pub async fn run_server(listener: tokio::net::TcpListener) -> anyhow::Result<()> {
+    let addr = listener.local_addr()?;
+    info!(%addr, "listening");
+    axum::serve(listener, app(addr)).await?;
+    Ok(())
+}
+
+/// The router served from `bound`: requests from other origins are refused, and CORS grants
+/// the server's own origin only.
+fn app(bound: SocketAddr) -> Router {
+    let own_origin = AllowOrigin::predicate(move |origin, request| {
+        crate::origin::origin_allowed(Some(origin), request.headers.get(header::HOST), bound)
+    });
+    Router::new()
         .route("/", get(serve_index))
         .route("/ws", get(ws_handler))
-        .layer(CorsLayer::permissive());
-
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
-    info!("listening on 0.0.0.0:{port}");
-    axum::serve(listener, app).await?;
-    Ok(())
+        .layer(CorsLayer::new().allow_origin(own_origin))
+        .layer(middleware::from_fn_with_state(bound, crate::origin::require_own_origin))
 }
 
 async fn serve_index() -> impl IntoResponse {
@@ -473,4 +484,41 @@ pub async fn run_probe(provider: &str) -> anyhow::Result<()> {
         "no agent output received"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Send `request_line` with `Origin: origin` and return the response status code. A `/ws`
+    /// request carries a WebSocket upgrade.
+    async fn status(addr: SocketAddr, request_line: &str, origin: &str) -> String {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let extra = if request_line.ends_with("/ws") {
+            "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        } else {
+            "Connection: close\r\nContent-Length: 0\r\n"
+        };
+        let request =
+            format!("{request_line} HTTP/1.1\r\nHost: {addr}\r\nOrigin: {origin}\r\n{extra}\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut status = [0u8; 12];
+        stream.read_exact(&mut status).await.unwrap();
+        String::from_utf8_lossy(&status[9..]).into_owned()
+    }
+
+    #[tokio::test]
+    async fn requests_from_other_origins_are_refused() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = app(addr);
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let own = format!("http://localhost:{}", addr.port());
+        assert_eq!(status(addr, "GET /ws", "http://evil.example").await, "403");
+        assert_eq!(status(addr, "GET /", "http://evil.example").await, "403");
+        assert_eq!(status(addr, "GET /", &own).await, "200");
+    }
 }

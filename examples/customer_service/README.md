@@ -29,7 +29,7 @@ themed UI.
 └─────────────┬───────────────────────────────▲───────────┘
               │ /ws?provider=openai|gemini      │
 ┌─────────────▼───────────────────────────────┴───────────┐
-│  Axum server (localhost:3066)                            │
+│  Axum server (127.0.0.1:3066)                            │
 │   IntegratedRealtimeRunner                               │
 │   ├─ OpenAI gpt-realtime  OR  Gemini Live (native A/V)   │
 │   ├─ send_audio / send_video_frame                       │
@@ -59,7 +59,7 @@ Camera frames are sent via the realtime crate's `send_video_frame`:
 
 ```bash
 cargo run --manifest-path examples/customer_service/Cargo.toml
-# → open http://localhost:3066
+# → open http://127.0.0.1:3066
 
 # Headless smoke test (no browser): asks for a refund by text, checks the path.
 cargo run --manifest-path examples/customer_service/Cargo.toml -- probe openai
@@ -75,6 +75,8 @@ Then **Connect**, press **Start mic** and/or **Start camera**, and try:
 
 ## Environment variables
 
+`.env.example` lists them; `.env` is read from the directory you run in or any parent.
+
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `OPENAI_API_KEY` | For OpenAI | OpenAI API key |
@@ -83,6 +85,23 @@ Then **Connect**, press **Start mic** and/or **Start camera**, and try:
 | `GEMINI_REALTIME_MODEL` | No | Default `models/gemini-3.1-flash-live-preview` (or a native-audio model when `CS_AFFECTIVE=1`) |
 | `CS_AFFECTIVE` | No | `1` to enable Gemini native affective dialogue (uses a native-audio model; trades some tool-calling reliability) |
 | `PORT` | No | Server port (default `3066`) |
+| `BIND_HOST` | No | Address to listen on (default `127.0.0.1`). `0.0.0.0` listens on every interface and logs a warning. |
+
+## Network exposure
+
+The server has no authentication, and every session it opens spends the provider keys it holds.
+It listens on loopback unless `BIND_HOST` names another address, and prints the address it bound.
+Before setting `BIND_HOST=0.0.0.0`, put authentication in front of the server.
+
+A request whose `Origin` is not this server's page gets `403 Forbidden`, the `/ws` upgrade
+included: browsers apply no CORS to WebSockets, so without the check any site you visit could
+open a session on your keys. The page's origin is `http://` and the bound address, where any
+loopback address and `localhost` count as one host; on `BIND_HOST=0.0.0.0` it is the IP address
+the browser connected to, so open the page by IP address. A request without `Origin` (a
+non-browser client such as `websocat`) is accepted, since such a client could send any `Origin`
+it liked. The check lives in `src/origin.rs`.
+
+CORS grants only the origin the same check accepts, so no other site can read its responses.
 
 ## Feature flags
 

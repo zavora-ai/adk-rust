@@ -15,12 +15,14 @@
 //! cargo run --manifest-path examples/realtime_voice/Cargo.toml -- web
 //! ```
 //!
-//! Then open http://localhost:3033 in your browser.
+//! Then open http://127.0.0.1:3033 in your browser. The server listens on `127.0.0.1`
+//! unless `BIND_HOST` names another address, and answers only requests from its own page.
 
+mod origin;
 mod server;
 mod tools;
 
-use tracing::info;
+use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -49,19 +51,32 @@ async fn main() -> anyhow::Result<()> {
         }
         _ => {
             let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(3033);
-
-            info!("starting Mindfulness with Mia on http://localhost:{port}");
+            // Loopback unless BIND_HOST widens it: the server has no authentication, every
+            // session spends the provider keys it holds, and `/api/memory` reads and resets the
+            // user's memory graph.
+            let host = std::env::var("BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+            let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
+            let addr = listener.local_addr()?;
+            if !addr.ip().is_loopback() {
+                warn!(
+                    %addr,
+                    "listening beyond loopback without authentication: anyone who can reach \
+                     this address can start sessions on your API keys and read or reset memory"
+                );
+            }
+            let url = format!("http://{addr}");
+            info!("starting Mindfulness with Mia on {url}");
             println!();
             println!("╔══════════════════════════════════════════════════════════════╗");
             println!("║     Mindfulness with Mia — Realtime Voice UI                ║");
             println!("║                                                            ║");
-            println!("║     Open: http://localhost:{port:<5}                            ║");
+            println!("║     Open: {url:<49}║");
             println!("║                                                            ║");
             println!("║     Provider: Set OPENAI_API_KEY or GOOGLE_API_KEY          ║");
             println!("╚══════════════════════════════════════════════════════════════╝");
             println!();
 
-            server::run_server(port).await?;
+            server::run_server(listener).await?;
         }
     }
 

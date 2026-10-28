@@ -23,6 +23,7 @@
 //! one-shot (`read_file`/`grep`/`glob`) — surfaces its output generically,
 //! because results are first-class events, not a bash-only side channel.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use adk_agent::LlmAgentBuilder;
@@ -36,6 +37,7 @@ use axum::{
     Router,
     extract::State,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    middleware,
     response::{Html, IntoResponse},
     routing::get,
 };
@@ -65,12 +67,35 @@ struct AppState {
     sessions: Arc<dyn SessionService>,
 }
 
-/// Run the web server on `port`.
+/// Run the web server on `port`, listening on `BIND_HOST` (default `127.0.0.1`).
 pub async fn run_server(port: u16) -> anyhow::Result<()> {
     let api_key = std::env::var("GOOGLE_API_KEY")
         .map_err(|_| anyhow::anyhow!("GOOGLE_API_KEY is not set"))?;
+    let model: Arc<dyn Llm> = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
 
-    let model: Arc<dyn Llm> = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
+    // Loopback unless BIND_HOST widens it: the agent runs shell commands and the server has
+    // no authentication.
+    let host = std::env::var("BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
+    let bound = listener.local_addr()?;
+    if !bound.ip().is_loopback() {
+        warn!(
+            %bound,
+            "listening beyond loopback without authentication: anyone who can reach this \
+             address can run shell commands through the agent"
+        );
+    }
+
+    let app = app(model, bound)?;
+    info!("listening on http://{bound}");
+    println!("\n  ▶ open http://{bound} in your browser\n");
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+/// Build the agent and the router that serves it from `bound`, refusing requests from other
+/// origins.
+fn app(model: Arc<dyn Llm>, bound: SocketAddr) -> anyhow::Result<Router> {
     let workspace = Workspace::new(std::env::current_dir()?).allow_bash(true);
     // A deliberate mix of streaming and one-shot tools. `bash` streams via
     // emit_progress; the others return a single result. The UI renders all of
@@ -97,17 +122,12 @@ pub async fn run_server(port: u16) -> anyhow::Result<()> {
 
     let state = AppState { runner, sessions };
 
-    let app = Router::new()
+    Ok(Router::new()
         .route("/", get(serve_index))
         .route("/ws", get(ws_handler))
         .layer(CorsLayer::permissive())
-        .with_state(state);
-
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
-    info!("listening on http://localhost:{port}");
-    println!("\n  ▶ open http://localhost:{port} in your browser\n");
-    axum::serve(listener, app).await?;
-    Ok(())
+        .layer(middleware::from_fn_with_state(bound, crate::origin::require_own_origin))
+        .with_state(state))
 }
 
 /// Serve the embedded single-page UI.
@@ -264,4 +284,40 @@ async fn send(
     payload: serde_json::Value,
 ) -> Result<(), axum::Error> {
     sender.send(Message::Text(payload.to_string().into())).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Send a WebSocket handshake to `/ws` and return the response status code.
+    async fn handshake(addr: SocketAddr, origin: Option<&str>) -> String {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let origin = origin.map(|origin| format!("Origin: {origin}\r\n")).unwrap_or_default();
+        let request = format!(
+            "GET /ws HTTP/1.1\r\nHost: {addr}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
+             Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{origin}\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut status = [0u8; 12];
+        stream.read_exact(&mut status).await.unwrap();
+        String::from_utf8_lossy(&status[9..]).into_owned()
+    }
+
+    #[tokio::test]
+    async fn ws_refuses_cross_origin_handshakes() {
+        // The model is never called: these requests stop at the handshake.
+        let model: Arc<dyn Llm> = Arc::new(GeminiModel::new("unused", "gemini-3.7-flash").unwrap());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = app(model, addr).unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let port = addr.port();
+        assert_eq!(handshake(addr, Some("http://evil.example")).await, "403");
+        assert_eq!(handshake(addr, Some(&format!("http://localhost:{port}"))).await, "101");
+        assert_eq!(handshake(addr, Some(&format!("http://127.0.0.1:{port}"))).await, "101");
+        assert_eq!(handshake(addr, None).await, "101");
+    }
 }

@@ -42,7 +42,7 @@ correctly even across multiple tool calls in one turn.
 ## Run
 
 ```bash
-# Web UI (default) — open http://localhost:3000
+# Web UI (default) — open http://127.0.0.1:3000
 cargo run --manifest-path examples/streaming_bash/Cargo.toml
 
 # Console demo
@@ -53,10 +53,35 @@ Set `PORT` to change the web port (e.g. `PORT=3717 cargo run ...`).
 
 ## Configuration
 
+`.env.example` lists these; `.env` is read from the directory you run in or any parent.
+
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GOOGLE_API_KEY` | yes | Gemini API key (model: `gemini-2.5-flash`). |
+| `GOOGLE_API_KEY` | yes | Gemini API key (model: `gemini-3.7-flash`). |
 | `PORT` | no | Web server port (default `3000`). |
+| `BIND_HOST` | no | Address to listen on (default `127.0.0.1`). `0.0.0.0` listens on every interface and logs a warning. |
+
+## Network exposure
+
+The agent runs shell commands in the directory you start it from, and the server has no
+authentication. Two guards limit who can drive it:
+
+| Guard | Effect |
+|-------|--------|
+| Loopback bind | The server listens on `127.0.0.1` unless `BIND_HOST` names another address, and prints the address it bound. With `BIND_HOST=0.0.0.0`, anyone who can reach the port can run commands as you. |
+| `Origin` check | A request whose `Origin` is not this server's page gets `403 Forbidden`, the `/ws` upgrade included. Browsers apply no CORS to WebSockets, so without it any site you visit could open the socket. |
+
+The page's origin is `http://` and the bound address, where any loopback address and
+`localhost` count as one host. On `BIND_HOST=0.0.0.0` it is the IP address the browser
+connected to, so open the page by IP address rather than by host name; host names other than
+`localhost` are refused, which also stops DNS rebinding.
+
+A request without an `Origin` header is accepted. Browsers send `Origin` on every WebSocket
+handshake, so such an upgrade comes from a non-browser client such as `websocat`, which could
+send any `Origin` it liked; the bind address is what limits those clients. The check lives in
+`src/origin.rs`.
+
+CORS stays permissive: the server's only plain HTTP route is the static page.
 
 ## Try
 
