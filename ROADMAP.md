@@ -238,6 +238,32 @@ Items spec 3.1 lists after its delivery phases ([§12](docs/design/spec-3.1-harn
 | A fetched PDF reaches the model as a text stub | Deliver it as an inline document part through the multimodal read path | spec 3.1 §7.20, §10 D6 |
 | A symlink swapped in between the harness's protected-path decision and the tool's own open is followed when it points inside the workspace | Decide and open on the same descriptor, so the decision covers the file that is opened | spec 3.1 §10 D4 |
 
+### Agent surfaces follow-ups
+
+Items spec 3.3 ([Agent surfaces](docs/design/spec-3.3-harness-ui.md)) defers past its sign-off. None of them changes what a person sees in a home today.
+
+| Gap | Fix | Origin |
+|-----|-----|--------|
+| Resume all recognises the web home by the browser's `Sec-Fetch-Site` header, which a client holding the operator token can also send | A home-session cookie issued at sign-in | spec 3.3 §11 S-I10, #1197 |
+| Four waits still end on their own: `RunConfig::deny_on_confirmation_timeout` (opt-in), MCP elicitations at their timeout, and take-over requests and agenda follow-ups that expire | Each waits for a person while a store exists | spec 3.3 §11 S-I3 |
+| The in-process terminal keeps no signed audit log | Open the kernel home's signed log in process, as `adk-rust up` does | spec 3.3 §11 |
+| Chat summaries hide an argument's value only where it appears word for word | Hide transformed values too, or show only kernel text in chat | spec 3.3 §5.3, §11 |
+| A chat message starts a new turn; it does not wake a sleeping process | The channel wake, with spec 3.2 phase 5 (`adk-kernel/src/wake.rs`) | spec 3.3 §10 K1 |
+| The §5.1 concept screen still reads "You confirmed this" | Redraw it with "You said this" | spec 3.3 §5.1, §8.1, #1198 |
+| The terminal prints workflow runs as text (`adk-rust graph steps`) | A full-screen runs pane | spec 3.3 §5.2 |
+| `adk-rust up` does not show the harness's plan graphs in the workflow observer | Mount the observer for plan graphs in `up` | spec 3.3 §6.1 |
+| The UI-protocol bridge (`ui_protocol.rs`, `ui_types.rs`, `/api/ui`) stays in `adk-server` | Remove it with the `adk_ui` profile after its 2026-12-31 sunset | spec 3.3 §10 S1 |
+| Outside agents cannot ask for screen actions over MCP (`/api/surface/verbs/mcp`) | Ship the endpoint once each agent has its own token, with rate limits | spec 3.3 §6.1 |
+| Chat channels and paired remote terminals cannot use screen actions | A scope for them that does not need operator access | spec 3.3 §7.2 |
+| The person's line before a requested call can carry values the model chose | Check that the line never reads as words the person said | spec 3.3 §11, #1187 |
+| The phone shows the decision card but no thread, so drawn forms and apps are absent there | A thread view on the phone | spec 3.3 §5.4, #1187, #1190 |
+| MCP Apps come only from the primary agent's MCP servers | Apps from added agents' and other areas' servers | #1190 |
+| The `@zavora-ai/adk-surface-react` type declarations include web home types, because `ApiError` lives in the home's `client.ts` | Move `ApiError` out and trim the declarations | #1190 |
+| An app may declare a wildcard site over a shared domain such as `*.github.io` | Refuse wildcards over public suffixes, from the public suffix list | #1192 |
+| The developer panel shows a graph node's HTTP call as JSON arguments | Show it as a request: method, URL and body | #1185 |
+| The phone's decide screen omits the card's detail line, such as "From the invoice-run workflow" | Show the detail line and a link to Runs | spec 3.3 §5.4, #1185 |
+| Credential digests in run records are unkeyed unless a host calls `HttpActionPolicy::credential_key` | Key them in `scripted_workflow` and the kernel's hosts | #1193 |
+
 ### Build, CI and supply chain
 
 | Gap | Fix | Origin |
