@@ -132,7 +132,7 @@ adk-session = { path = "../adk-session", features = ["sqlite", "postgres"] }
 async-stream.workspace = true
 tracing-subscriber = "0.3"
 uuid = { version = "1.23", features = ["v4"] }
-async-trait = "0.1"
+async-trait.workspace = true
 chrono = "0.4"
 hyper = "1.8.1"
 http-body-util = "0.1.3"

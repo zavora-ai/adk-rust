@@ -23,7 +23,7 @@ adk-core = { workspace = true }
 adk-telemetry = { workspace = true }
 
 # Async runtime
-async-trait = "0.1"
+async-trait = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync", "macros"] }
 futures = { workspace = true }
 async-stream = "0.3"

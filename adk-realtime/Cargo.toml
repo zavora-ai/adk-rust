@@ -92,7 +92,7 @@ webrtc-sys = { workspace = true, optional = true }
 str0m = { version = "0.17", optional = true }
 audiopus = { version = "0.3.0-rc.0", optional = true }
 reqwest = { workspace = true, optional = true }
-rustls = { version = "0.23.37", features = ["aws-lc-rs"] }
+rustls = { workspace = true }
 secrecy = "0.10.3"
 url = "2.5"
 parking_lot = "0.12.5"
