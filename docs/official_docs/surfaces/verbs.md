@@ -166,6 +166,12 @@ the card's `summary` ("Move News digest to 19:00"), which `VerbHints` name throu
 you said no. Nothing changed." A terminal attached to a kernel reads no agenda, so there the
 title comes from the card's summary.
 
+"What your agents did" never shows a screen action's tool name. It tells the governed path's
+`tool_call` records of a screen action by their publisher (`toolSource: "verbs:<app>"`) and
+leaves them out, since the action's own records say what happened; the one it words is an
+agent's request refused before anyone answered it (`policyRef` other than `confirmation`): "Finance
+asked to snooze something in Coming up; it couldn't be done, so nothing changed."
+
 ## Try it
 
 ```bash

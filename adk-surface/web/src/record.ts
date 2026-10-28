@@ -72,6 +72,21 @@ function screenAction(line: KernelRecordLine, agents: AgentRow[]): string | unde
   return `${agent} asked to snooze ${what}; it couldn't be done, so nothing changed.`;
 }
 
+/** The agent a person's own screen actions run under: `urn:adk:agent:<app>/surface.verbs`. */
+const VERBS_AGENT = "/surface.verbs";
+
+/**
+ * The governed path's record of a call to a screen action, told by its publisher (spec 3.3
+ * §2 item 7, §7.1, §8). The action's own records say what happened, by the item's title — "You
+ * snoozed News digest", a person's yes or no to an agent's request — so this one adds a line
+ * only for an agent's request refused before anyone answered it, and never names the tool.
+ */
+function screenCall(line: KernelRecordLine, agents: AgentRow[]): string | undefined {
+  const refused = line.decision === "denied" && line.policyRef !== "confirmation";
+  if (!refused || line.tool !== "verb_snooze" || !line.agent || line.agent.endsWith(VERBS_AGENT)) return undefined;
+  return `${agentOf(line.agent, agents) ?? "Your agent"} asked to snooze something in Coming up; it couldn't be done, so nothing changed.`;
+}
+
 /** What a call was, by its tool, or "a call". */
 function call(line: KernelRecordLine): string {
   return line.tool ?? "a call";
@@ -203,6 +218,7 @@ export function recordSentence(line: KernelRecordLine, agents: AgentRow[]): stri
   if (line.action.startsWith("kernel.")) return kernelSentence(line, agents);
   // A tool call: its action is the tool, and it names the agent that made it.
   if (line.tool !== undefined && line.action === line.tool && line.agent) {
+    if (line.toolSource?.startsWith("verbs:")) return screenCall(line, agents);
     const agent = agentOf(line.agent, agents) ?? "Your agents";
     if (line.decision === "denied") return `${agent} was not allowed to use ${line.tool}.`;
     if (line.outcome === "failed") return `${agent} tried ${line.tool}, and it failed.`;

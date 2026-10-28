@@ -468,6 +468,11 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
     if let Some(title) = text(record.ext.get("title")) {
         line = line.with_title(title);
     }
+    // A call's publisher and what decided it, so a surface words a screen action's call by
+    // its own records, never by the tool's name (§7.1, §8).
+    if let Some(source) = text(record.ext.get("toolSource")) {
+        line = line.with_call(source, record.policy_ref.as_deref());
+    }
     // A screen action (spec 3.3 §2 item 7): the action as its tool, the item's title as what
     // it acted on, and for an agent's, where the person said yes.
     if record.action == "surface.verb" {
@@ -955,6 +960,61 @@ mod tests {
                 .with_how("pointer", None)
                 .with_target("apr_1")
                 .with_title("News digest")
+        );
+    }
+
+    /// The governed path's record of a call names the tool's publisher and what decided it, so
+    /// a person's no to a screen action is told from a refusal no one was asked about (spec
+    /// 3.3 §7.1, §11).
+    #[cfg(feature = "audit")]
+    #[tokio::test]
+    async fn a_calls_line_names_its_publisher_and_what_decided_it() {
+        use adk_auth::signed_audit::{AuditLog, AuditSigner as _, Ed25519Signer, NoteVerifier};
+        use adk_core::audit_log::{
+            AuditActor, AuditDecision, AuditLogStore, AuditRecordDraft, AuditRecordKind,
+            AuditRecordOutcome, InMemoryAuditLogStore,
+        };
+        use adk_core::principal::SubjectKind;
+        use adk_core::{ActingContext, ToolOrigin};
+        use adk_kernel::control::{RecordBook, RecordLine};
+        use serde_json::json;
+
+        let logs: Arc<dyn AuditLogStore> = Arc::new(InMemoryAuditLogStore::new());
+        let signer = Ed25519Signer::generate("kernel-test").unwrap();
+        let verifier: NoteVerifier = signer.verifier_key().parse().unwrap();
+        let log =
+            AuditLog::builder(logs.clone(), "kernel-test", Arc::new(signer)).open().await.unwrap();
+        let finance = ActingContext::derived("adk-rust", "finance", "ana", SubjectKind::Human);
+        let origin = ToolOrigin::new("verbs:adk-rust", &json!({ "name": "verb_snooze" }), None);
+        // The governed path's record of a call refused by `policy_ref` (`AuditedCall::decision`).
+        let refused = |policy_ref: &str| {
+            AuditRecordDraft::new(AuditRecordKind::ToolCall, "verb_snooze")
+                .actor(AuditActor::new(&finance, "inv-1"))
+                .decision(AuditDecision::Denied)
+                .outcome(AuditRecordOutcome::NotRun)
+                .policy_ref(policy_ref)
+                .ext("toolSource", json!(origin.source))
+                .ext("declarationDigest", json!(origin.declaration_digest))
+        };
+        log.append(refused("confirmation")).await.unwrap();
+        log.append(refused("tool_policy:adk-surface/verbs")).await.unwrap();
+        let book = SignedRecordBook::new(logs, "kernel-test".into(), verifier);
+        let lines = book.recent(2).await.unwrap();
+        let line = |seq: u64, at, policy_ref: &str| {
+            RecordLine::new(seq, at, "verb_snooze")
+                .with_subject("ana")
+                .with_agent("urn:adk:agent:adk-rust/finance")
+                .with_tool("verb_snooze")
+                .with_decision("denied")
+                .with_outcome("not_run")
+                .with_call("verbs:adk-rust", Some(policy_ref))
+        };
+        assert_eq!(
+            lines,
+            [
+                line(1, lines[0].at, "tool_policy:adk-surface/verbs"),
+                line(0, lines[1].at, "confirmation")
+            ]
         );
     }
 

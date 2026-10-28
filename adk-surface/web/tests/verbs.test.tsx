@@ -191,6 +191,45 @@ describe("the record", () => {
     ]);
     expect(recentLines([line({ surface: "voice", how: "voice" })], rows)).toHaveLength(1);
   });
+
+  it("never names a screen action's tool, and says a person's no once", () => {
+    // The governed path's record of a call: the action is the tool's name.
+    const call = (rest: Partial<KernelRecordLine>): KernelRecordLine =>
+      line({ action: "verb_snooze", tool: "verb_snooze", target: undefined, outcome: undefined, toolSource: "verbs:home", ...rest });
+    const finance = "urn:adk:agent:home/finance";
+    const denied = line({
+      seq: 2,
+      action: "surface.decide",
+      tool: "verb_snooze",
+      agent: finance,
+      decision: "rejected",
+      outcome: "decided",
+      target: "apr_1",
+      title: "News digest",
+    });
+    const refusedAfterNo = call({ seq: 3, agent: finance, decision: "denied", outcome: "not_run", policyRef: "confirmation" });
+    expect(recentLines([refusedAfterNo, denied], rows).map((each) => each.text)).toEqual([
+      "Finance asked to snooze News digest; you said no. Nothing changed.",
+    ]);
+    expect(
+      [
+        call({ agent: finance, decision: "denied", outcome: "not_run", policyRef: "tool_policy:adk-surface/verbs" }),
+        call({ agent: finance, decision: "allowed", policyRef: "confirmation" }),
+        call({ agent: finance, action: "verb_coming_up", tool: "verb_coming_up", decision: "allowed" }),
+        call({ agent: "urn:adk:agent:home/surface.verbs", decision: "allowed" }),
+        call({ agent: "urn:adk:agent:home/surface.verbs", decision: "denied", policyRef: "governance" }),
+        // Another publisher's tool of the same name is not a screen action.
+        call({ agent: finance, decision: "denied", toolSource: "mcp:calendar" }),
+      ].map((each) => recordSentence(each, rows)),
+    ).toEqual([
+      "Finance asked to snooze something in Coming up; it couldn't be done, so nothing changed.",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "Finance was not allowed to use verb_snooze.",
+    ]);
+  });
 });
 
 describe("a spoken snooze", () => {
