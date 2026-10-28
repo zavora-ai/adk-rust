@@ -204,7 +204,7 @@ pub(crate) fn is_hidden(c: char) -> bool {
 /// zero-width characters, the word joiner and the byte order mark, variation selectors, and
 /// the tag block, which a model reads back as ASCII: text the person never saw would
 /// otherwise reach the agent as theirs. An emoji sequence loses its joiners, not its emoji.
-fn is_invisible(c: char) -> bool {
+pub(crate) fn is_invisible(c: char) -> bool {
     is_hidden(c)
         || matches!(
             c,

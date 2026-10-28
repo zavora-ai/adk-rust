@@ -1,7 +1,7 @@
 //! The Telegram adapter (spec 3.3 §5.3; §13 decisions 1–3).
 
 mod api;
-mod wire;
+pub(super) mod wire;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;

@@ -31,6 +31,14 @@ tui = ["dep:ratatui", "dep:crossterm", "dep:syntect", "dep:pulldown-cmark", "dep
 # contract, reading the Bot API by long polling. It talks to Telegram with `reqwest`, which
 # the engine already uses.
 channels = ["adk-kernel/channels"]
+# The WhatsApp, Slack, Discord and Matrix adapters (spec 3.5 §10 X12), one feature each so a
+# Telegram-only build stays lean. WhatsApp is a webhook the host mounts, its body signed with
+# HMAC-SHA256; Slack (Socket Mode) and Discord (the Gateway) are WebSockets over
+# tokio-tungstenite; Matrix is `/sync` long polling over `reqwest`.
+whatsapp = ["channels", "dep:axum", "dep:hmac", "dep:sha2"]
+slack = ["channels", "dep:tokio-tungstenite", "adk-core/rustls"]
+discord = ["channels", "dep:tokio-tungstenite", "adk-core/rustls"]
+matrix = ["channels"]
 # The phone (spec 3.3 §5.4, §6.1): the web home installed on a phone, its routes, Web Push
 # from the person's own kernel (aes128gcm, the VAPID key signed here with p256), pairing QR
 # codes and "Confirm it's you" (passkeys checked by webauthn-rs, which links the system's
@@ -132,6 +140,10 @@ qrcode = { version = "=0.14.1", optional = true, default-features = false, featu
 base64ct = { version = "1.8", optional = true, features = ["alloc"] }
 sha2 = { workspace = true, optional = true }
 getrandom = { version = "0.3", optional = true }
+# The WhatsApp webhook's `X-Hub-Signature-256` (`whatsapp`).
+hmac = { version = "0.12", optional = true }
+# Slack's Socket Mode and Discord's Gateway (`slack`, `discord`).
+tokio-tungstenite = { version = "0.29", optional = true, features = ["rustls-tls-native-roots", "connect"] }
 # "Confirm it's you" (`mobile`): passkey registration and assertions. Its core links OpenSSL.
 webauthn-rs = { version = "=0.5.5", optional = true, default-features = false }
 url = { version = "2", optional = true }
