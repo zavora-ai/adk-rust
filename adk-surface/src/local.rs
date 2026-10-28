@@ -148,7 +148,8 @@ impl LocalSourceBuilder {
         self
     }
 
-    /// The daily spending limit in micro-USD, over the kernel's daily spend cap.
+    /// The daily spending limit in micro-USD, over the one in force in the kernel's area of
+    /// this source's turns.
     #[must_use]
     pub fn daily_limit(mut self, micro_usd: u64) -> Self {
         self.daily_limit = Some(micro_usd);
@@ -923,13 +924,24 @@ impl Source for LocalSource {
         Ok(())
     }
 
+    // The area this source's turns run in, the primary agent's: with several areas, its spend
+    // today against its own limit in force (spec 3.3 §10 K3, §13 Q7).
     async fn spend(&self, user: &str) -> Result<Option<SpendToday>> {
-        let Some((kernel, _)) = &self.kernel else {
+        let Some((kernel, target)) = &self.kernel else {
             return Ok(self.daily_limit.map(|limit| SpendToday { spent: 0, limit: Some(limit) }));
         };
-        let spent =
-            self.processes(user).await?.iter().map(|process| process.view.spend_today).sum();
-        let limit = self.daily_limit.or(kernel.config().quotas.daily_spend_cap);
+        let area = kernel.partition_of_target(target).cloned().unwrap_or_default();
+        let spent = self
+            .processes(user)
+            .await?
+            .iter()
+            .filter(|process| process.meta.partition == area)
+            .map(|process| process.view.spend_today)
+            .sum();
+        let limit = match self.daily_limit {
+            Some(limit) => Some(limit),
+            None => kernel.area_settings(&area).await?.daily_spending_limit,
+        };
         Ok(Some(SpendToday { spent, limit }))
     }
 

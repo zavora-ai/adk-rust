@@ -54,6 +54,7 @@ rather than falling back to the start values.
   "areas": [
     {
       "partition": "default",
+      "primary": true,
       "quietTime": [{ "start": "23:00", "end": "06:00" }],
       "dailySpendingLimit": 5000000,
       "spentToday": 1840000,
@@ -66,6 +67,12 @@ rather than falling back to the start values.
   ]
 }
 ```
+
+`primary` marks the area the primary agent works in: the partition the kernel's own target
+(`KernelConfig::app_name`) is bound to — under `adk-rust up`, the coordinator's partition, or
+the first one — else `default`. The turns a terminal or the home sends run there, so both show
+that area's spend today against its daily spending limit. In process, `Kernel::area_settings`
+reads one area as `GET /kernel/settings/{partition}` answers it.
 
 Changes live in the control plane's `ControlStore` (`ControlPlaneConfig::with_control_store`),
 which `adk-rust up` keeps beside its other stores, so they survive a restart:
