@@ -341,12 +341,7 @@ async fn a_fact_planted_through_tool_output_stays_assumed() {
 
 /// What a fact is, without its ids and times.
 fn shape(fact: &MemoryFact) -> (FactStatus, FactSource, Option<String>, String) {
-    (
-        fact.status.clone(),
-        fact.provenance.source.clone(),
-        fact.provenance.quote.clone(),
-        fact.text.clone(),
-    )
+    (fact.status.clone(), fact.provenance.source, fact.provenance.quote.clone(), fact.text.clone())
 }
 
 /// A preference the person states outright is kept as their own words, "You said this"
@@ -401,7 +396,7 @@ async fn a_preference_the_person_states_is_kept_as_their_words() {
     let fixed =
         harness.correct_fact(&alice(), &said.id, "Use pnpm in every project").await.unwrap();
     assert_eq!(
-        (fixed.status.clone(), fixed.provenance.source.clone()),
+        (fixed.status.clone(), fixed.provenance.source),
         (FactStatus::Known, FactSource::UserConfirmed)
     );
     assert_eq!(
