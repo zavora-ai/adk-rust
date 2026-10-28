@@ -195,6 +195,10 @@ async fn start(
             site_workflows = site_workflows.probe(site.site.id, probe.clone());
             runs.push(SiteProcessKind::Probe);
         }
+        // A push to the content repository is a run of the site's own (spec 3.5 §7.8.2).
+        if let Some(entry) = &site.repository {
+            site_workflows = site_workflows.repository(site.site.id, entry.clone());
+        }
         if let Some(check) = site.upkeep(&stores, &options.site) {
             site_workflows = site_workflows.watch(site.site.id, check);
             runs.push(SiteProcessKind::Watch);

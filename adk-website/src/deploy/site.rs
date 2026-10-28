@@ -12,6 +12,7 @@
 //! | Review | `ReviewComposer` with the alarms, the experiments and the updates |
 //! | Leads | The contact book and nurture counts in `data/edge.db` ([`SqliteLeadRecords`]), scored against the kind's threshold; the email outbox, when configured, reading consent from the edge's receipts |
 //! | Upkeep | [`UpkeepCheck`] over the edge's lockfile and the certificate, when configured |
+//! | Repository | [`RepositoryEntry`](crate::repository::RepositoryEntry) from `repository.json`: its signed hooks on the edge, each push a kernel run, its decision cards in the kernel's approvals (spec 3.5 §7.8.2) |
 //! | Durable state | In `data/edge.db`: the back office's drafts and requests (`SqliteSiteDraftStore`), quotes, orders and the bookings of `calendar.json`'s slots ([`SqliteCommerceStore`], [`StoredCalendar`]), the owner's open, deferred and waiting alarms ([`SqliteAlarmStore`]), and the edge's rate-limit windows |
 //! | Packs | The built-in capability packs and those installed in `packs/`, verified against `packs/trust.json` ([`PackDir::load`](crate::packs::installed::PackDir::load)): their capabilities on the edge, their playbooks in the agents' workspaces (spec 3.5 §7.23) |
 //! | Audit trail | `data/audit.jsonl` (`adk-core`'s `FileAuditRecorder`): the pipeline's, the edge's, the update engine's, the alarms', the review's, the experiments', the ladder's, the tracker's and the signals' records (spec 3.5 §9.3) |
@@ -380,6 +381,9 @@ pub struct RunningSite {
     /// The Guardian's probe, when the site has [`SiteOptions::probe`] and a domain claim; the
     /// kernel runs it every five minutes (spec 3.5 §7.20).
     pub guardian: Option<Arc<GuardianProbe>>,
+    /// Files and git as an entry point, when the project has a `repository.json`: its hooks
+    /// on the edge at `/hooks/{name}` (spec 3.5 §7.8.2).
+    pub repository: Option<Arc<crate::repository::RepositoryEntry>>,
     pub(crate) reporting: Reporting,
     pub(crate) publish_delay: chrono::Duration,
     pub(crate) wallet: Option<adk_payments::wallet::Wallet>,
@@ -821,8 +825,23 @@ impl RunningSite {
         );
         let cron = options.experiments_cron.clone().unwrap_or_else(|| "0 30 3 * * *".into());
         let triggers = vec![experiments.trigger(&site.name, &cron)];
-        let router = site_router(&edge.edge, host, &project.config.name)
+        let repository = crate::repository::RepositoryEntry::open(
+            &paths,
+            crate::repository::RepositoryParts {
+                site: site.clone(),
+                owner: options.owner.clone(),
+                runtime: runtime.clone(),
+                approvals: stores.approvals.clone(),
+                signals: edge_signals.clone(),
+                source: None,
+            },
+        )?
+        .map(Arc::new);
+        let mut router = site_router(&edge.edge, host, &project.config.name)
             .merge(stream_router(updates.clone()));
+        if let Some(entry) = &repository {
+            router = router.merge(entry.router(stores.runs.clone()));
+        }
         verify_edge.set(Arc::new(adk_awp::verify::fetch::RouterFetcher::new(router.clone())));
         Ok(Self {
             tracker: tracker(aeo.is_some()),
@@ -849,6 +868,7 @@ impl RunningSite {
             incidents,
             inbox,
             guardian,
+            repository,
             reporting,
             wallet: options.wallet.clone(),
             signals: edge_signals,
@@ -927,6 +947,9 @@ impl RunningSite {
                     tokio::time::sleep(idle).await;
                 }
             }));
+        }
+        if let Some(entry) = self.repository.clone() {
+            self.tasks.push(entry.spawn(idle));
         }
         let _resolver = self.edge.edge.spawn_resolver(Duration::from_secs(5));
         // Deliveries a stopped process left in `data/edge.db` resume once their lease passes.

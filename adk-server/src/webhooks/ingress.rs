@@ -6,7 +6,7 @@
 //! | Step | Refusal | Status |
 //! |------|---------|--------|
 //! | Look up the hook by name | Unknown hook | `404` |
-//! | Verify the signature and timestamp | Missing, malformed, expired, or mismatched | `401` (reason logged, never returned) |
+//! | Verify the signature and timestamp, or the hook's [forge signature](super::forge) | Missing, malformed, expired, or mismatched | `401` (reason logged, never returned) |
 //! | Check the kill switch | Frozen, or a replicated control that is stale | `503` with `Retry-After` |
 //! | Check the hook's pending-run cap | `max_pending` unfinished runs from this hook | `429` with `Retry-After` |
 //! | Parse the body and render the mapping | Not JSON, or a template that renders an empty key | `422` |
@@ -93,7 +93,7 @@ type HookMapper = Arc<dyn Fn(&HookDelivery<'_>) -> adk_core::Result<NewRun> + Se
 #[derive(Clone)]
 pub struct WebhookHook {
     name: String,
-    verifier: WebhookVerifier,
+    verifier: HookAuth,
     queue: String,
     app_name: String,
     target: String,
@@ -118,12 +118,50 @@ impl std::fmt::Debug for WebhookHook {
     }
 }
 
+/// How a hook authenticates its deliveries.
+#[derive(Clone)]
+enum HookAuth {
+    Standard(WebhookVerifier),
+    Forge(super::forge::ForgeSignature),
+}
+
 impl WebhookHook {
+    /// Creates a hook served at `/hooks/{name}` that authenticates its deliveries with a
+    /// forge's push signature instead of Standard Webhooks (spec 3.5 §7.8.2 "Files and
+    /// git"); otherwise as [`new`](Self::new).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_server::webhooks::{ForgeSecret, ForgeSignature, WebhookHook};
+    ///
+    /// let secret = ForgeSecret::new("a shared secret").unwrap();
+    /// let hook = WebhookHook::forge("github", ForgeSignature::GitHub(secret), "site", "website.repository.push");
+    /// assert_eq!(hook.name(), "github");
+    /// ```
+    pub fn forge(
+        name: impl Into<String>,
+        signature: super::forge::ForgeSignature,
+        app_name: impl Into<String>,
+        target: impl Into<String>,
+    ) -> Self {
+        Self::with_auth(name, HookAuth::Forge(signature), app_name, target)
+    }
+
     /// Creates a hook served at `/hooks/{name}` that enqueues runs of `target` in
     /// `app_name` on the `default` queue, as user `webhook:{name}`, with the body as input.
     pub fn new(
         name: impl Into<String>,
         verifier: WebhookVerifier,
+        app_name: impl Into<String>,
+        target: impl Into<String>,
+    ) -> Self {
+        Self::with_auth(name, HookAuth::Standard(verifier), app_name, target)
+    }
+
+    fn with_auth(
+        name: impl Into<String>,
+        verifier: HookAuth,
         app_name: impl Into<String>,
         target: impl Into<String>,
     ) -> Self {
@@ -443,9 +481,14 @@ async fn receive(
     let Some(hook) = ingress.hooks.get(&name) else {
         return (StatusCode::NOT_FOUND, Json(json!({"error": "hook.not_found"}))).into_response();
     };
-    let parsed =
-        WebhookHeaders::from_lookup(|name| headers.get(name).and_then(|v| v.to_str().ok()));
-    let verified = match parsed.and_then(|parsed| hook.verifier.verify(&parsed, &body)) {
+    let lookup = |name: &'static str| headers.get(name).and_then(|v| v.to_str().ok());
+    let verified = match &hook.verifier {
+        HookAuth::Standard(verifier) => {
+            WebhookHeaders::from_lookup(lookup).and_then(|parsed| verifier.verify(&parsed, &body))
+        }
+        HookAuth::Forge(forge) => forge.verify(lookup, &body),
+    };
+    let verified = match verified {
         Ok(verified) => verified,
         Err(error) => {
             tracing::warn!(hook.name = %name, error.code = error.code(), error = %error, "webhook rejected");

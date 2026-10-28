@@ -24,6 +24,7 @@
 //! | [`leads`] | Lead scores and the handoff threshold, consent for nurture, the durable contact book, nurture sends inside quiet hours | §7.20, §7.21, S8, A-I8 |
 //! | [`alarms`] | P1, P2 and P3 routing to the owner's channels | §7.21 |
 //! | [`channel`] | The owner's chat channel: photos into the Steward's draft, alt text confirmed from the thread | §7.8.2, S18, A-I24 |
+//! | [`repository`] | Files and git as an entry point: a signed push from an authorised committer proposes a release | §7.8.2, A-I24 |
 //! | [`publish_delay`] | The delay a page the site drafts on its own waits before it can go live | §7.20, S10 |
 //! | [`quotes`] | The reviews discovery found, the owner's approvals to quote them, and the launch gate's check over them | §7.18, S2 |
 //! | [`review`] | The weekly review | §7.21 |
@@ -77,6 +78,7 @@ pub mod packs;
 pub mod playbooks;
 pub mod publish_delay;
 pub mod quotes;
+pub mod repository;
 pub mod review;
 pub mod team;
 pub mod themes;

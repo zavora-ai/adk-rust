@@ -196,25 +196,8 @@ impl FsContentStore {
                     .to_string_lossy()
                     .replace('\\', "/");
                 let origin = format!("{CONTENT_DIR}/{relative}");
-                let mut parts: Vec<&str> = relative.split('/').collect();
-                let file = parts.pop().unwrap_or_default();
-                let invalid = |message: &str| SiteError::InvalidContent {
-                    path: origin.clone(),
-                    message: message.into(),
-                };
-                if parts.len() < 2 {
-                    return Err(invalid("items live at content/<kind>/<slug>/<language>.md"));
-                }
-                let kind = kind_from_directory(parts[0])
-                    .ok_or_else(|| invalid("unknown kind directory"))?;
-                let slug = parts[1..].join("/");
-                let language: LanguageTag = file
-                    .trim_end_matches(".md")
-                    .parse()
-                    .map_err(|_| invalid("the file name must be a language tag, such as en.md"))?;
                 let text = std::fs::read_to_string(&path).map_err(|e| SiteError::io(&path, e))?;
-                let id = ContentId(format!("{}/{slug}/{language}", parts[0]));
-                let item = parse_item(&origin, &text, ItemDefaults { id, kind, slug, language })?;
+                let item = parse_content_file(&origin, &text)?;
                 found.push((origin, item));
             }
         }
@@ -231,6 +214,52 @@ impl FsContentStore {
             .await
             .map_err(|e| SiteError::Pipeline(format!("content store task failed: {e}")))?
     }
+}
+
+/// Reads the content file at `path`, relative to the repository root, as [`FsContentStore`]
+/// reads its own: `content/<kind>/<slug>/<language>.md`, front matter and a Markdown body
+/// (spec 3.5 §7.8.2 "Content model", "Files and git").
+///
+/// # Example
+///
+/// ```rust
+/// use adk_site::content::parse_content_file;
+/// use awp_types::ContentKind;
+///
+/// let item = parse_content_file("content/pages/hours/en.md", "---\ntitle: Hours\n---\nOpen daily.\n")?;
+/// assert_eq!((item.id.0.as_str(), item.kind), ("pages/hours/en", ContentKind::Page));
+/// assert!(parse_content_file("media/logo.png", "").is_err());
+/// # Ok::<(), adk_site::SiteError>(())
+/// ```
+///
+/// # Errors
+///
+/// [`SiteError::InvalidContent`] for a path outside that layout, an unknown kind directory, a
+/// file name that is not a language tag, or front matter that does not parse.
+pub fn parse_content_file(path: &str, text: &str) -> Result<ContentItem> {
+    let invalid = |message: &str| SiteError::InvalidContent {
+        path: path.to_string(),
+        message: message.into(),
+    };
+    let relative = path
+        .strip_prefix(CONTENT_DIR)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .filter(|rest| rest.ends_with(".md"))
+        .ok_or_else(|| invalid("items live at content/<kind>/<slug>/<language>.md"))?;
+    let mut parts: Vec<&str> = relative.split('/').collect();
+    let file = parts.pop().unwrap_or_default();
+    if parts.len() < 2 || parts.iter().any(|part| part.is_empty() || *part == "." || *part == "..")
+    {
+        return Err(invalid("items live at content/<kind>/<slug>/<language>.md"));
+    }
+    let kind = kind_from_directory(parts[0]).ok_or_else(|| invalid("unknown kind directory"))?;
+    let slug = parts[1..].join("/");
+    let language: LanguageTag = file
+        .trim_end_matches(".md")
+        .parse()
+        .map_err(|_| invalid("the file name must be a language tag, such as en.md"))?;
+    let id = ContentId(format!("{}/{slug}/{language}", parts[0]));
+    parse_item(path, text, ItemDefaults { id, kind, slug, language })
 }
 
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {

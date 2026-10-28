@@ -1,0 +1,7 @@
+{
+  "request": "GET https://raw.githubusercontent.com/juniper/site/{commit}/content/pages/opening-hours/en.md",
+  "commit": "9f2c4e1b7a3d5c6e8f0a1b2c3d4e5f6a7b8c9d0e",
+  "status": "200",
+  "contentType": "text/plain; charset=utf-8",
+  "body": "opening-hours.en.md"
+}

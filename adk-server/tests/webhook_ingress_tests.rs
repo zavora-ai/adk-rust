@@ -479,3 +479,67 @@ async fn webhook_and_queue_runs_act_for_a_service() {
             .all(|acting| acting.agent == AgentPrincipal::derived("triage", "triage_agent"))
     );
 }
+
+/// A forge's push signature authenticates a hook instead of Standard Webhooks (spec 3.5
+/// §7.8.2): GitHub's `X-Hub-Signature-256` and GitLab's `X-Gitlab-Token`, each run keyed by
+/// the forge's delivery id, so a redelivery is taken once.
+#[tokio::test]
+async fn forge_signed_hooks_enqueue_one_run_per_delivery() {
+    use adk_server::webhooks::{ForgeSecret, ForgeSignature};
+    use hmac::Mac;
+
+    let store = Arc::new(InMemoryRunStore::new());
+    let ingress = WebhookIngress::new(store.clone())
+        .with_hook(WebhookHook::forge(
+            "github",
+            ForgeSignature::GitHub(ForgeSecret::new("hub secret").unwrap()),
+            "site",
+            "website.repository.push",
+        ))
+        .with_hook(WebhookHook::forge(
+            "gitlab",
+            ForgeSignature::GitLab(ForgeSecret::new("lab token").unwrap()),
+            "site",
+            "website.repository.push",
+        ));
+    let app = adk_server::webhooks::webhook_ingress_router(ingress);
+    let body = serde_json::to_vec(&json!({"ref": "refs/heads/main"})).unwrap();
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(b"hub secret").unwrap();
+    mac.update(&body);
+    let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
+    let github = |signature: &str, delivery: &str| {
+        Request::post("/hooks/github")
+            .header("x-hub-signature-256", signature)
+            .header("x-github-delivery", delivery)
+            .body(Body::from(body.clone()))
+            .unwrap()
+    };
+
+    let (status, first, _) = send(&app, github(&signature, "gh-1")).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{first}");
+    let (status, again, _) = send(&app, github(&signature, "gh-1")).await;
+    assert_eq!(
+        (status, &again["runId"], &again["duplicate"]),
+        (StatusCode::OK, &first["runId"], &json!(true))
+    );
+    let record = store.get(first["runId"].as_str().unwrap()).await.unwrap().unwrap();
+    assert_eq!(record.idempotency_key.as_deref(), Some("hook:github:gh-1"));
+    let forged = format!("sha256={}", "0".repeat(64));
+    assert_eq!(send(&app, github(&forged, "gh-2")).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(send(&app, github("sha1=abc", "gh-3")).await.0, StatusCode::UNAUTHORIZED);
+
+    let gitlab = |token: &str| {
+        Request::post("/hooks/gitlab")
+            .header("x-gitlab-token", token)
+            .header("x-gitlab-event-uuid", "gl-1")
+            .body(Body::from(body.clone()))
+            .unwrap()
+    };
+    assert_eq!(send(&app, gitlab("lab token")).await.0, StatusCode::ACCEPTED);
+    assert_eq!(send(&app, gitlab("lab tokens")).await.0, StatusCode::UNAUTHORIZED);
+    // A Standard Webhooks signature does not open a forge's hook.
+    let signer = WebhookSigner::new(secret("hub secret"));
+    let standard = signed_request("/hooks/github", &signer, "msg_1", &json!({"ref": "x"}));
+    assert_eq!(send(&app, standard).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(store.list(RunFilter::default()).await.unwrap().len(), 2);
+}

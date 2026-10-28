@@ -1,6 +1,7 @@
 //! The site's model-free jobs as kernel runs (spec 3.5 §7.20, §7.11, §7.21): the Guardian's
 //! probe ([`PROBE_WORKFLOW`]), the hosting job's upkeep check ([`WATCH_WORKFLOW`]) and the
-//! weekly review's composition ([`DIGEST_WORKFLOW`]).
+//! weekly review's composition ([`DIGEST_WORKFLOW`]), and a push to the content repository
+//! ([`REPOSITORY_WORKFLOW`]).
 //! Register [`SiteWorkflows`] with `KernelBuilder::workflows` and each process's trigger from
 //! [`crate::jobs::processes`]; the other site processes run their job's agent.
 
@@ -17,6 +18,7 @@ use uuid::Uuid;
 
 use crate::incident::GuardianProbe;
 pub use crate::jobs::{DIGEST_WORKFLOW, PROBE_WORKFLOW, WATCH_WORKFLOW};
+pub use crate::repository::REPOSITORY_WORKFLOW;
 use crate::review::{ReviewComposer, ReviewInputs};
 
 /// Where a site's weekly review goes.
@@ -36,6 +38,7 @@ pub struct SiteWorkflows {
     probes: BTreeMap<Uuid, Arc<GuardianProbe>>,
     watches: BTreeMap<Uuid, Arc<crate::upkeep::UpkeepCheck>>,
     digests: BTreeMap<Uuid, DigestTarget>,
+    repositories: BTreeMap<Uuid, Arc<crate::repository::RepositoryEntry>>,
 }
 
 impl SiteWorkflows {
@@ -58,6 +61,17 @@ impl SiteWorkflows {
         self
     }
 
+    /// Takes `site`'s pushes to its content repository (spec 3.5 §7.8.2).
+    #[must_use]
+    pub fn repository(
+        mut self,
+        site: Uuid,
+        entry: Arc<crate::repository::RepositoryEntry>,
+    ) -> Self {
+        self.repositories.insert(site, entry);
+        self
+    }
+
     /// Sends `site`'s weekly review to `target`.
     #[must_use]
     pub fn digest(mut self, site: Uuid, target: DigestTarget) -> Self {
@@ -69,7 +83,10 @@ impl SiteWorkflows {
 #[async_trait]
 impl WorkflowExecutor for SiteWorkflows {
     fn has_workflow(&self, workflow_id: &str) -> bool {
-        matches!(workflow_id, PROBE_WORKFLOW | WATCH_WORKFLOW | DIGEST_WORKFLOW)
+        matches!(
+            workflow_id,
+            PROBE_WORKFLOW | WATCH_WORKFLOW | DIGEST_WORKFLOW | REPOSITORY_WORKFLOW
+        )
     }
 
     async fn execute(
@@ -127,6 +144,12 @@ impl WorkflowExecutor for SiteWorkflows {
                             .await
                             .map_err(|e| e.to_string())?;
                         Ok(json!({ "summary": review.summary(), "document": document }))
+                    }
+                    REPOSITORY_WORKFLOW => {
+                        let entry = self.repositories.get(&site).ok_or_else(|| {
+                            format!("no content repository is configured for site {site}")
+                        })?;
+                        entry.execute(&input).await.map_err(|e| e.to_string())
                     }
                     other => Err(format!("{other} is not a website workflow")),
                 }

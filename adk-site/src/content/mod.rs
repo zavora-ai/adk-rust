@@ -36,7 +36,10 @@ pub use history::{
     ContentHistory, FileContentHistory, HistoryEntry, HistoryMeta, InMemoryContentHistory,
     content_history_conformance,
 };
-pub use store::{ContentStore, FsContentStore, InMemoryContentStore, content_store_conformance};
+pub use store::{
+    ContentStore, FsContentStore, InMemoryContentStore, content_store_conformance,
+    parse_content_file,
+};
 
 /// The directory content items live under.
 pub const CONTENT_DIR: &str = "content";

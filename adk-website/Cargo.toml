@@ -45,8 +45,9 @@ adk-payments = { workspace = true, features = ["wallet", "ap2", "sqlite"] }
 # The AP2 desk's in-memory evidence journal, for tests and sandboxes.
 adk-artifact.workspace = true
 # `WorkflowExecutor` for the site's deterministic jobs (spec 3.5 §7.20); the agent edge and
-# its SQLite stores (spec 3.5 §7.9), whose beacon counts experiments and KPIs read (§7.12).
-adk-server = { workspace = true, features = ["background", "awp", "awp-sqlite"] }
+# its SQLite stores (spec 3.5 §7.9), whose beacon counts experiments and KPIs read (§7.12);
+# the webhook ingress a content repository's pushes arrive through (§7.8.2).
+adk-server = { workspace = true, features = ["background", "awp", "awp-sqlite", "webhook-ingress"] }
 # The back office's runners, which the served kernel hosts (spec 3.5 §7.19, §7.22).
 adk-runner.workspace = true
 # The context the owner's channel runs the back office's media intake in (spec 3.5 S18).
@@ -101,7 +102,11 @@ adk-model = { path = "../adk-model", default-features = false, features = ["anth
 adk-skill = { path = "../adk-skill" }
 dotenvy = "0.15"
 futures.workspace = true
+# GitHub's push signature in the content repository's tests (spec 3.5 §7.8.2).
+hex.workspace = true
+hmac = "0.12"
 proptest = "1.5"
+sha2.workspace = true
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }
 
