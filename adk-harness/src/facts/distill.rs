@@ -219,9 +219,9 @@ impl FactsRuntime {
                 }
                 let text = content.parts.iter().filter_map(Part::text).collect::<Vec<_>>();
                 let text = text.join("\n");
-                (!text.trim().is_empty() && !text.starts_with(PLAN_STEP_FRAME)).then(|| {
-                    UserMessage { text, at: event.timestamp, invocation_id: event.invocation_id }
-                })
+                (!text.trim().is_empty() && !text.starts_with(PLAN_STEP_FRAME)).then_some(
+                    UserMessage { text, at: event.timestamp, invocation_id: event.invocation_id },
+                )
             })
             .collect()
     }
