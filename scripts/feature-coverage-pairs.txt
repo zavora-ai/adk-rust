@@ -129,6 +129,9 @@
 2 adk-cli gemini no-default
 # adk-cli with no provider at all: every `--provider` reports that it is not compiled.
 2 adk-cli - no-default
+# Every `--provider` client: OpenRouter, OpenCode, Bedrock and Azure AI build only behind
+# their features (#1219).
+2 adk-cli all-providers
 # The kernel's shared process stores for replicas (spec 3.2 §13 Q8), and the chat channel
 # binding store on both (spec 3.3 §10 K1); the live-server conformance suites run in the
 # postgres job.

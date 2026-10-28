@@ -22,7 +22,7 @@ Every client implements the `adk_core::Llm` trait, so agents and runners accept 
 | Meta Muse | `muse::MuseClient` | `muse` | `muse-spark-1.3` |
 | Ollama (local) | `ollama::OllamaModel` | `ollama` | `qwen3.5` |
 | OpenRouter | `openrouter::OpenRouterClient` | `openrouter` | `qwen/qwen3.7-max` |
-| OpenCode Go and Zen | `opencode::OpenCodeClient` | `opencode` | none |
+| OpenCode Go and Zen | `opencode::OpenCodeClient` | `opencode` | `deepseek-v4.1-flash` |
 | Amazon Bedrock | `bedrock::BedrockClient` | `bedrock` | account- and region-specific |
 | Azure AI Inference | `azure_ai::AzureAIClient` | `azure-ai` | endpoint-specific |
 | Test doubles | `ScriptedLlm`, `MockLlm` | always available | none |
@@ -31,6 +31,43 @@ The catalog default is what `adk_model::catalog::recommended_model(provider)` re
 catalog also records lifecycle: `catalog::validate_model_selection` rejects model IDs known to
 be retired, such as `gemini-2.0-flash` or `deepseek-chat`, and accepts unknown IDs so new,
 private, and fine-tuned models stay usable.
+
+### Provider identifiers
+
+`ModelProvider` is the canonical list of these providers: one variant for each provider with
+its own client, with the identifier CLIs and configs use, the feature that compiles its client,
+its key variable, and its default model. `adk-rust --provider` takes the same identifiers.
+
+| Identifier | Variant | Feature | Key variable | `default_model()` |
+|------------|---------|---------|--------------|-------------------|
+| `gemini` | `Gemini` | `gemini` | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | `gemini-3.7-flash` |
+| `openai` | `Openai` | `openai` | `OPENAI_API_KEY` | `gpt-5.6-terra` |
+| `anthropic` | `Anthropic` | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5` |
+| `deepseek` | `Deepseek` | `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-flash` |
+| `groq` | `Groq` | `groq` | `GROQ_API_KEY` | `openai/gpt-oss-120b` |
+| `ollama` | `Ollama` | `ollama` | none | `qwen3.5` |
+| `muse` | `Muse` | `muse` | `META_API_KEY` or `MODEL_API_KEY` | `muse-spark-1.3` |
+| `openrouter` | `Openrouter` | `openrouter` | `OPENROUTER_API_KEY` | `qwen/qwen3.7-max` |
+| `opencode` | `Opencode` (Zen) | `opencode` | `OPENCODE_API_KEY` | `deepseek-v4.1-flash` |
+| `opencode-go` | `OpencodeGo` (Go) | `opencode` | `OPENCODE_API_KEY` | `deepseek-v4.1-flash` |
+| `bedrock` | `Bedrock` | `bedrock` | `AWS_BEARER_TOKEN_BEDROCK`, optional; else the AWS credential chain | `None` |
+| `azure-ai` | `AzureAi` | `azure-ai` | `AZURE_AI_API_KEY` | `None` |
+
+The OpenAI-compatible presets (`xai`, `fireworks`, `together`, ...) run on `OpenAICompatible`
+and are not variants. `ModelProvider::ALL` covers every feature in `all-providers`, which a
+unit test checks against `Cargo.toml`.
+
+```rust
+use adk_model::ModelProvider;
+
+fn main() -> Result<(), String> {
+    let provider: ModelProvider = "opencode-go".parse()?;
+    assert_eq!(provider.feature(), "opencode");
+    assert_eq!(provider.env_var(), "OPENCODE_API_KEY");
+    assert_eq!(ModelProvider::AzureAi.default_model(), None);
+    Ok(())
+}
+```
 
 ## Installation
 

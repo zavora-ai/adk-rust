@@ -91,7 +91,22 @@ pub(crate) fn realtime_model(
                 input_rate: Some(24_000),
             })
         }
-        _ => bail!(
+        Some(
+            Provider::Model(
+                ModelProvider::Anthropic
+                | ModelProvider::Deepseek
+                | ModelProvider::Groq
+                | ModelProvider::Ollama
+                | ModelProvider::Muse
+                | ModelProvider::Openrouter
+                | ModelProvider::Opencode
+                | ModelProvider::OpencodeGo
+                | ModelProvider::Bedrock
+                | ModelProvider::AzureAi,
+            )
+            | Provider::MistralRs,
+        )
+        | None => bail!(
             "--voice runs on a realtime provider: pass --provider gemini (Gemini Live) or \
              --provider openai (the OpenAI Realtime API); {} has no realtime API",
             model.id

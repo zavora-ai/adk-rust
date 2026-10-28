@@ -38,7 +38,13 @@ pub(super) fn choose(provider: Option<Provider>, explicit: Option<EmbedderArg>) 
                 ModelProvider::Anthropic
                 | ModelProvider::Deepseek
                 | ModelProvider::Groq
-                | ModelProvider::Ollama,
+                | ModelProvider::Ollama
+                | ModelProvider::Muse
+                | ModelProvider::Openrouter
+                | ModelProvider::Opencode
+                | ModelProvider::OpencodeGo
+                | ModelProvider::Bedrock
+                | ModelProvider::AzureAi,
             )
             | Provider::MistralRs,
         ) => EmbedderArg::Local,
@@ -138,6 +144,12 @@ mod tests {
             (Provider::Model(ModelProvider::Deepseek), EmbedderArg::Local),
             (Provider::Model(ModelProvider::Groq), EmbedderArg::Local),
             (Provider::Model(ModelProvider::Ollama), EmbedderArg::Local),
+            (Provider::Model(ModelProvider::Muse), EmbedderArg::Local),
+            (Provider::Model(ModelProvider::Openrouter), EmbedderArg::Local),
+            (Provider::Model(ModelProvider::Opencode), EmbedderArg::Local),
+            (Provider::Model(ModelProvider::OpencodeGo), EmbedderArg::Local),
+            (Provider::Model(ModelProvider::Bedrock), EmbedderArg::Local),
+            (Provider::Model(ModelProvider::AzureAi), EmbedderArg::Local),
             (Provider::MistralRs, EmbedderArg::Local),
         ];
         for (provider, expected) in cases {

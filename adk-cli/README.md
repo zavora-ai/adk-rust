@@ -70,7 +70,7 @@ See [The harness in your terminal](../docs/official_docs/harness/cli.md),
 | `persist` | yes | Sessions, held calls, durable runs, modes and standing rules in SQLite at `adk-rust/harness.db` (through `adk-session`'s and `adk-harness`'s `sqlite`) |
 | `surface` | yes | The web home of `adk-surface` at `/ui/` on `serve` and `up`, over the harness (spec 3.3 §5.1, §10 S1), with `harness` |
 | `harness` | yes | The harness: `adk-rust` REPL, `code`, `goal`, `ultracode` and `serve` on `adk-harness`, `sessions`, `rules`, `approvals`, and the `adk_cli::harness` module; the agent kernel's `up`, `attach`, `ps`, `top`, `kill`, `suspend`, `resume`, `freeze`, `unfreeze`, `events`, `proc` and `partitions` on `adk-kernel`, with its daily baselines (`proc-baselines`) |
-| `deepseek`, `groq`, `ollama` | no | The other providers |
+| `deepseek`, `groq`, `ollama`, `muse`, `openrouter`, `opencode`, `bedrock`, `azure-ai` | no | The other providers; `opencode` compiles `--provider opencode` (Zen) and `--provider opencode-go` |
 | `all-providers` | no | Every provider |
 | `audit-sql` | no | `adk-rust audit export` from SQLite or PostgreSQL audit stores |
 | `graph-sqlite` | no | The SQLite checkpointer for `adk-rust graph` |
@@ -88,14 +88,27 @@ See [The harness in your terminal](../docs/official_docs/harness/cli.md),
 
 ## Supported Providers
 
-| Provider | Flag | Default Model | Env Var |
-|----------|------|---------------|---------|
-| Gemini | `--provider gemini` | `gemini-3.7-flash` | `GOOGLE_API_KEY` / `GEMINI_API_KEY` |
-| OpenAI | `--provider openai` | `gpt-5.6-terra` | `OPENAI_API_KEY` |
-| Anthropic | `--provider anthropic` | `claude-sonnet-5` | `ANTHROPIC_API_KEY` |
-| DeepSeek | `--provider deepseek` | `deepseek-flash` | `DEEPSEEK_API_KEY` |
-| Groq | `--provider groq` | `openai/gpt-oss-120b` | `GROQ_API_KEY` |
-| Ollama | `--provider ollama` | `qwen3.5` | _(none, local)_ |
+Every provider `adk_model::ModelProvider` names, and mistral.rs:
+
+| Provider | Flag | Feature | Default Model | Env Var |
+|----------|------|---------|---------------|---------|
+| Gemini | `--provider gemini` | `gemini` | `gemini-3.7-flash` | `GOOGLE_API_KEY` / `GEMINI_API_KEY` |
+| OpenAI | `--provider openai` | `openai` | `gpt-5.6-terra` | `OPENAI_API_KEY` |
+| Anthropic | `--provider anthropic` | `anthropic` | `claude-sonnet-5` | `ANTHROPIC_API_KEY` |
+| DeepSeek | `--provider deepseek` | `deepseek` | `deepseek-flash` | `DEEPSEEK_API_KEY` |
+| Groq | `--provider groq` | `groq` | `openai/gpt-oss-120b` | `GROQ_API_KEY` |
+| Ollama | `--provider ollama` | `ollama` | `qwen3.5` | _(none, local)_ |
+| Meta Muse | `--provider muse` | `muse` | `muse-spark-1.3` | `META_API_KEY` / `MODEL_API_KEY` |
+| OpenRouter | `--provider openrouter` | `openrouter` | `qwen/qwen3.7-max` | `OPENROUTER_API_KEY` |
+| OpenCode Zen | `--provider opencode` | `opencode` | `deepseek-v4.1-flash` | `OPENCODE_API_KEY` |
+| OpenCode Go | `--provider opencode-go` | `opencode` | `deepseek-v4.1-flash` | `OPENCODE_API_KEY` |
+| Amazon Bedrock | `--provider bedrock` | `bedrock` | _(none: `--model` required)_ | `AWS_BEARER_TOKEN_BEDROCK`, optional; else the AWS credential chain. Region from `AWS_REGION` or `AWS_DEFAULT_REGION`, else `us-east-1` |
+| Azure AI Inference | `--provider azure-ai` | `azure-ai` | _(none: `--model` required)_ | `AZURE_AI_API_KEY`, with the endpoint URL in `AZURE_AI_ENDPOINT` |
+| mistral.rs | `--provider mistralrs` | `mistralrs` | _(none: `--model` required)_ | _(none, local)_ |
+
+The OpenAI-compatible presets (xAI, Fireworks AI, Together AI, ...) are not providers here.
+OpenCode routes each model to the API its endpoint table names, so `--model` must be a model
+that service lists; the CLI sends one `x-opencode-session` per process.
 
 ## First-Run Setup
 
@@ -103,7 +116,8 @@ If no provider is configured, every agent command (`chat`, `serve`, `code`, `goa
 `ultracode`) launches an interactive setup:
 
 1. Choose a provider from the menu, which lists only the providers compiled into this build
-2. Enter your API key (skipped for Ollama)
+2. Enter the model for a provider without a default, and your API key (skipped for Ollama,
+   Bedrock and mistral.rs)
 3. Provider and model are saved to `adk-rust/config.json` in the platform config directory (`~/.config` on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` on Windows)
 4. API keys are stored in your OS credential store (Keychain, Credential Manager, Secret Service)
 
@@ -113,7 +127,7 @@ take priority over environment variables, secure credential storage, and saved c
 Setup prompts only on a terminal. Without one, a command with no configured provider, or
 with a provider that has no key, fails with the flags and environment variables to set. A
 saved or `--provider` choice that this build does not compile in fails with the
-`cargo install adk-cli --features <provider>` hint.
+`cargo install adk-cli --features <feature>` hint, naming the provider's feature.
 
 ## Binary Commands
 

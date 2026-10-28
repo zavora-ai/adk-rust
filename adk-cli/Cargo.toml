@@ -111,11 +111,19 @@ anthropic = ["adk-model/anthropic"]
 deepseek = ["adk-model/deepseek"]
 groq = ["adk-model/groq"]
 ollama = ["adk-model/ollama"]
+muse = ["adk-model/muse"]
+openrouter = ["adk-model/openrouter"]
+# `--provider opencode` (Zen) and `--provider opencode-go` (Go)
+opencode = ["adk-model/opencode"]
+# `--provider bedrock`: a Bedrock API key, else the AWS credential chain
+bedrock = ["adk-model/bedrock"]
+# `--provider azure-ai`: the deployment at AZURE_AI_ENDPOINT
+azure-ai = ["adk-model/azure-ai"]
 # `--provider mistralrs --model <hf id or .gguf path>`: mistral.rs in process (spec 3.1
 # §8.1). Opt-in: mistral.rs 0.8 with its model loaders is a heavy build; GPU through
 # adk-mistralrs's `cuda` or `metal`.
 mistralrs = ["dep:adk-mistralrs"]
-all-providers = ["gemini", "openai", "anthropic", "deepseek", "groq", "ollama"]
+all-providers = ["gemini", "openai", "anthropic", "deepseek", "groq", "ollama", "muse", "openrouter", "opencode", "bedrock", "azure-ai"]
 # `adk-rust deploy agent-engine`: deploy a BYOC container as a Gemini
 # Enterprise Agent Platform engine (host-side tooling)
 gcp-deploy = ["adk-deploy/gcp"]

@@ -47,6 +47,8 @@ pub const MUSE_DEFAULT: &str = "muse-spark-1.3";
 pub const OLLAMA_DEFAULT: &str = "qwen3.5";
 /// Recommended OpenRouter model. Callers should use model discovery for user-facing pickers.
 pub const OPENROUTER_DEFAULT: &str = "qwen/qwen3.7-max";
+/// Recommended OpenCode model, routed on both Zen (`opencode`) and Go (`opencode-go`).
+pub const OPENCODE_DEFAULT: &str = "deepseek-v4.1-flash";
 /// Recommended Fireworks balanced model.
 pub const FIREWORKS_DEFAULT: &str = "accounts/fireworks/models/kimi-k2p6";
 /// Recommended Together AI balanced model.
@@ -208,6 +210,8 @@ pub const KNOWN_PROVIDERS: &[&str] = &[
     "groq",
     "ollama",
     "openrouter",
+    "opencode",
+    "opencode-go",
     "fireworks",
     "together",
     "mistral",
@@ -273,6 +277,8 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
     ModelCatalogEntry::active("muse", "muse-spark-1.2-contributor", ModelRole::Economy),
     ModelCatalogEntry::default("ollama", OLLAMA_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::default("openrouter", OPENROUTER_DEFAULT, ModelRole::Balanced),
+    ModelCatalogEntry::default("opencode", OPENCODE_DEFAULT, ModelRole::Balanced),
+    ModelCatalogEntry::default("opencode-go", OPENCODE_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::default("fireworks", FIREWORKS_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::active(
         "fireworks",
@@ -474,6 +480,7 @@ pub fn recommended_model(provider: &str) -> Option<&'static str> {
         "muse" => Some(MUSE_DEFAULT),
         "ollama" => Some(OLLAMA_DEFAULT),
         "openrouter" => Some(OPENROUTER_DEFAULT),
+        "opencode" | "opencode-go" => Some(OPENCODE_DEFAULT),
         "fireworks" => Some(FIREWORKS_DEFAULT),
         "together" => Some(TOGETHER_DEFAULT),
         "mistral" => Some(MISTRAL_DEFAULT),

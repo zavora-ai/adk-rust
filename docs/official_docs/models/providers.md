@@ -18,11 +18,46 @@ the `adk_core::Llm` trait, so an agent takes any of them without other changes.
 | Azure OpenAI | `AzureOpenAIClient` | `openai` | — | Deployment-scoped |
 | Azure AI Inference | `AzureAIClient` | `azure-ai` | — | Deployment-scoped |
 | Amazon Bedrock | `BedrockClient` | `bedrock` | — | Deployment-scoped |
-| OpenCode Go and Zen | `OpenCodeClient` ([details](./opencode.md)) | `opencode` | `OPENCODE_API_KEY` | Per service |
+| OpenCode Go and Zen | `OpenCodeClient` ([details](./opencode.md)) | `opencode` | `OPENCODE_API_KEY` | `deepseek-v4.1-flash` |
 
 The catalog defaults are the constants in `adk_model::catalog` (`GEMINI_DEFAULT`,
 `OPENAI_DEFAULT`, ...); `catalog::recommended_model(provider)` returns them. For local models,
 see [Ollama](./ollama.md) and [mistral.rs](./mistralrs.md).
+
+### Provider identifiers
+
+`adk_model::ModelProvider` names each provider with its own client, with the identifier CLIs
+and configs use. `adk-rust --provider` takes the same identifiers.
+
+| Identifier | Variant | `feature()` | `env_var()` | `default_model()` |
+|------------|---------|-------------|-------------|-------------------|
+| `gemini` | `Gemini` | `gemini` | `GOOGLE_API_KEY` (`alt_env_var()`: `GEMINI_API_KEY`) | `Some("gemini-3.7-flash")` |
+| `openai` | `Openai` | `openai` | `OPENAI_API_KEY` | `Some("gpt-5.6-terra")` |
+| `anthropic` | `Anthropic` | `anthropic` | `ANTHROPIC_API_KEY` | `Some("claude-sonnet-5")` |
+| `deepseek` | `Deepseek` | `deepseek` | `DEEPSEEK_API_KEY` | `Some("deepseek-flash")` |
+| `groq` | `Groq` | `groq` | `GROQ_API_KEY` | `Some("openai/gpt-oss-120b")` |
+| `ollama` | `Ollama` | `ollama` | empty, no key | `Some("qwen3.5")` |
+| `muse` | `Muse` | `muse` | `META_API_KEY` (`alt_env_var()`: `MODEL_API_KEY`) | `Some("muse-spark-1.3")` |
+| `openrouter` | `Openrouter` | `openrouter` | `OPENROUTER_API_KEY` | `Some("qwen/qwen3.7-max")` |
+| `opencode` | `Opencode` (Zen) | `opencode` | `OPENCODE_API_KEY` | `Some("deepseek-v4.1-flash")` |
+| `opencode-go` | `OpencodeGo` (Go) | `opencode` | `OPENCODE_API_KEY` | `Some("deepseek-v4.1-flash")` |
+| `bedrock` | `Bedrock` | `bedrock` | `AWS_BEARER_TOKEN_BEDROCK`; `requires_key()` is false, since the AWS credential chain applies without it | `None` |
+| `azure-ai` | `AzureAi` | `azure-ai` | `AZURE_AI_API_KEY` | `None` |
+
+`ModelProvider::ALL` covers every feature `all-providers` enables. The OpenAI-compatible presets
+and Azure OpenAI run on the `openai` feature's clients and are not variants.
+
+```rust
+use adk_model::ModelProvider;
+
+fn main() -> Result<(), String> {
+    let provider: ModelProvider = "bedrock".parse()?;
+    assert_eq!(provider.feature(), "bedrock");
+    assert_eq!(provider.default_model(), None);
+    assert!(!provider.requires_key());
+    Ok(())
+}
+```
 
 ## Installation
 
