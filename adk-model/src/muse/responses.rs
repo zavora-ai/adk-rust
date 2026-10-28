@@ -162,7 +162,23 @@ impl ResponseObject {
 
     /// Normalized usage, when present.
     pub fn usage_metadata(&self) -> Option<adk_core::UsageMetadata> {
-        self.usage.as_ref().and_then(crate::usage_json::chat_completions)
+        use crate::usage_json::count;
+
+        // Responses counts `input_tokens`/`output_tokens`, not Chat Completions'
+        // `prompt_tokens`/`completion_tokens`.
+        let usage = self.usage.as_ref().filter(|usage| usage.is_object())?;
+        let input = count(usage, "/input_tokens").unwrap_or_default();
+        let output = count(usage, "/output_tokens").unwrap_or_default();
+        Some(adk_core::UsageMetadata {
+            prompt_token_count: input,
+            candidates_token_count: output,
+            total_token_count: count(usage, "/total_tokens")
+                .unwrap_or_else(|| input.saturating_add(output)),
+            cache_read_input_token_count: count(usage, "/input_tokens_details/cached_tokens"),
+            thinking_token_count: count(usage, "/output_tokens_details/reasoning_tokens"),
+            provider_usage: Some(usage.clone()),
+            ..Default::default()
+        })
     }
 
     /// Whether the generation finished successfully.
@@ -357,11 +373,28 @@ mod tests {
                 {"type": "message", "content": [{"type": "output_text", "text": "Memo plan ready."}]},
                 {"type": "function_call", "call_id": "call-1", "name": "analyze_document", "arguments": "{\"id\":\"D1\"}"},
             ],
-            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            "usage": {
+                "input_tokens": 10,
+                "input_tokens_details": {"cached_tokens": 4},
+                "output_tokens": 5,
+                "output_tokens_details": {"reasoning_tokens": 3},
+                "total_tokens": 15,
+            },
         }))
         .unwrap();
         assert!(response.is_completed());
         assert_eq!(response.text(), "Memo plan ready.");
+        let usage = response.usage_metadata().unwrap();
+        assert_eq!(
+            (
+                usage.prompt_token_count,
+                usage.candidates_token_count,
+                usage.total_token_count,
+                usage.cache_read_input_token_count,
+                usage.thinking_token_count,
+            ),
+            (10, 5, 15, Some(4), Some(3))
+        );
         let calls = response.function_calls();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "analyze_document");

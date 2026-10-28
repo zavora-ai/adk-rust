@@ -132,6 +132,12 @@ async fn responses_chain_two_turns() {
         .await
         .unwrap();
     assert!(first.is_completed(), "first turn: {:?}", first.status);
+    let usage = first.usage_metadata().expect("a completed response reports usage");
+    assert!(
+        usage.prompt_token_count > 0 && usage.candidates_token_count > 0,
+        "Responses usage read as zero: {:?}",
+        usage.provider_usage
+    );
     let second = client
         .create(
             ResponseRequest::text("muse-spark-1.3", "What was the codeword? One word.")
