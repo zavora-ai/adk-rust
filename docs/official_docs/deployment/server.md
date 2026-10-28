@@ -223,7 +223,8 @@ POST /api/run_sse
 
 A tool call arrives as a part `{"name", "args", "id"}` in a model event, and its result as a part
 `{"functionResponse": {"name", "response"}, "id"}` in an event whose content role is `function`. A run that fails after the
-stream starts ends with an event that carries `error_code` and `error_message`.
+stream starts ends with an event that carries `error_code` and `error_message`; see
+[Error details](#error-details) for what `error_message` holds.
 
 > **Note:** A streamed response arrives as partial events (`"partial": true`) followed by a
 > terminal event with the same `id`. When that terminal event carries
@@ -564,8 +565,8 @@ let app = ServerBuilder::new(config).enable_governance_endpoints().build();
 
 | Route | Effect |
 |-------|--------|
-| `POST /api/admin/freeze` | Body `{"reason": "..."}`. Freezes the control and answers `{"frozen", "reason", "mirrored", "stale", "runningRuns", "parkedRuns", "cancelledRuns"}` |
-| `POST /api/admin/unfreeze` | Lifts the freeze; a `FreezeDelegate` also resumes what the freeze parked |
+| `POST /api/admin/freeze` | Body `{"reason": "..."}`. Freezes the control and answers `{"frozen", "reason", "mirrored", "stale", "runningRuns", "parkedRuns", "cancelledRuns"}`; `503` with `error` added when the shared store cannot be written, this replica frozen regardless |
+| `POST /api/admin/unfreeze` | Lifts the freeze; a `FreezeDelegate` also resumes what the freeze parked. `503` with `error` added when the shared store cannot be written, the freeze kept |
 | `GET /api/admin/governance` | Returns `{"frozen", "reason", "mirrored", "stale", "runningRuns"}`; `reason` only while frozen; `runningRuns` is `park` when a `FreezeDelegate` is registered (`ServerBuilder::with_freeze_delegate`, as a kernel does) and `cancel` otherwise |
 
 While the control is frozen:
@@ -625,6 +626,68 @@ category:
 `requestId`, `retryAfter` (milliseconds), and `upstreamStatusCode` are `null` when not
 available. Session and artifact routes answer with the status code and an empty body. The host
 and origin checks answer `403` with `{"error": "...", "hint": "..."}`.
+
+### Error Details
+
+`SecurityConfig::expose_error_details` decides whose messages reach the client. It is off by
+default and in `SecurityConfig::production`; then a response carries an error's own message
+only when the server wrote it about the request, which takes all three of:
+
+| Condition | Values |
+|-----------|--------|
+| The category rejects the request | `invalid_input`, `unauthorized`, `forbidden`, `not_found`, `unsupported`, `conflict`, `resource_exhausted` |
+| The component handles the request inside the server | `server`, `auth`, `session`, `agent`, `guardrail` |
+| Nothing upstream wrote it | no `upstreamStatusCode` and no provider on the error |
+
+So an unknown app, a missing session, or a frozen kill switch keeps its message. A model provider's response, a tool's service, and a store or driver failure do not:
+their message can name hosts, tables, accounts, or request content, and is replaced by the
+generic message for the error's category.
+
+| Category | Generic message |
+|----------|-----------------|
+| `invalid_input` | `The request is invalid` |
+| `unauthorized` | `Authentication failed` |
+| `forbidden` | `The request is not permitted` |
+| `not_found` | `The requested resource was not found` |
+| `rate_limited` | `Too many requests; retry later` |
+| `timeout` | `The operation timed out` |
+| `unavailable` | `A service the server depends on is unavailable; retry later` |
+| `cancelled` | `The operation was cancelled` |
+| `internal` | `Internal server error` |
+| `unsupported` | `The operation is not supported` |
+| `resource_exhausted` | `A resource budget is used up` |
+| `conflict` | `The request conflicts with the current state` |
+
+The rule applies to every error response the run and governance endpoints write:
+
+| Response | Field |
+|----------|-------|
+| Problem JSON from `POST /api/run`, `/api/run_sse`, and `/api/run/{app}/{user}/{session}` | `error.message`; `code`, `component`, `category`, `requestId`, `retryAfter`, and `upstreamStatusCode` are kept |
+| The error event that ends an SSE run stream | `error_message`, as `{component}.{category}: {message}`, beside `error_code` |
+| The AG-UI `RUN_ERROR` of a `protocol_native` run | `message`, as `{component}.{category}: {message}`, beside `code` |
+| `503` from `POST /api/admin/freeze` and `/api/admin/unfreeze` | `error`, as `{component}.{category}: {message}` |
+
+A model provider that rejects the API key answers `POST /api/run` with `401` and:
+
+```json
+{
+  "error": {
+    "code": "model.anthropic.api_error",
+    "message": "Authentication failed",
+    "component": "model",
+    "category": "unauthorized",
+    "requestId": "req_011CXk...",
+    "retryAfter": null,
+    "upstreamStatusCode": 401
+  }
+}
+```
+
+The full error is logged with `tracing` as `error details withheld from the response`, at
+`error` for a `5xx` status and `warn` otherwise, inside the request's `http.request` span. That
+span's `request.id` is the `x-request-id` the response carries, so a client's report finds the
+log line. `ServerConfig::with_error_details(true)` or `SecurityConfig::development()` sends
+every message as it is; enable it for development only.
 
 ## Host, Origin, and Bind Defaults
 

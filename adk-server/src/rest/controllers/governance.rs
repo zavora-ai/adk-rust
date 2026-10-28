@@ -15,7 +15,8 @@
 //! ([`GovernanceControl::attach_audit`]), both changes are recorded with the calling
 //! user as the actor. A freeze takes effect even when its record fails, and answers
 //! `503`; an unfreeze that cannot be recorded under `AuditFailureMode::Block` is refused
-//! with `503` and execution stays frozen.
+//! with `503` and execution stays frozen. The `503` status's `error` follows
+//! [`SecurityConfig::expose_error_details`](crate::SecurityConfig::expose_error_details).
 
 use std::sync::Arc;
 
@@ -30,6 +31,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
+
+use super::error_details;
 
 /// What a freeze does with the runs that were running (spec 3.2 §10 S4), as
 /// `GET /api/admin/governance` reports it in `runningRuns`.
@@ -134,6 +137,7 @@ pub struct GovernanceController {
     control: GovernanceControl,
     run_stores: Vec<Arc<dyn DurableRunStore>>,
     delegate: Option<Arc<dyn FreezeDelegate>>,
+    expose_error_details: bool,
 }
 
 impl std::fmt::Debug for GovernanceController {
@@ -142,6 +146,7 @@ impl std::fmt::Debug for GovernanceController {
             .field("control", &self.control)
             .field("run_stores", &self.run_stores.len())
             .field("delegate", &self.delegate.is_some())
+            .field("expose_error_details", &self.expose_error_details)
             .finish()
     }
 }
@@ -149,7 +154,26 @@ impl std::fmt::Debug for GovernanceController {
 impl GovernanceController {
     /// Endpoints over `control`.
     pub fn new(control: GovernanceControl) -> Self {
-        Self { control, run_stores: Vec::new(), delegate: None }
+        Self { control, run_stores: Vec::new(), delegate: None, expose_error_details: false }
+    }
+
+    /// Whether a `503`'s `error` carries the store's or the delegate's own message (default:
+    /// `false`); see [`SecurityConfig::expose_error_details`](crate::SecurityConfig::expose_error_details).
+    /// `ServerBuilder::enable_governance_endpoints` sets it from the server's
+    /// [`SecurityConfig`](crate::SecurityConfig).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::GovernanceControl;
+    /// use adk_server::GovernanceController;
+    ///
+    /// let controller = GovernanceController::new(GovernanceControl::new()).with_error_details(true);
+    /// ```
+    #[must_use]
+    pub fn with_error_details(mut self, expose: bool) -> Self {
+        self.expose_error_details = expose;
+        self
     }
 
     /// A freeze also requests cancellation of every running run in `store`, unless a
@@ -267,7 +291,10 @@ pub struct GovernanceStatus {
     /// Running durable runs asked to cancel by this freeze.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cancelled_runs: Option<usize>,
-    /// Why the shared store could not be written.
+    /// Why the shared store could not be written, as `{component}.{category}: {message}`. The
+    /// message is the generic one for its category unless
+    /// [`SecurityConfig::expose_error_details`](crate::SecurityConfig::expose_error_details) is
+    /// set or the server wrote it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -329,7 +356,7 @@ pub async fn freeze(
     match written {
         Ok(()) => Json(status).into_response(),
         Err(error) => {
-            status.error = Some(error.to_string());
+            status.error = Some(error_details::display(&error, controller.expose_error_details));
             (StatusCode::SERVICE_UNAVAILABLE, Json(status)).into_response()
         }
     }
@@ -356,7 +383,7 @@ pub async fn unfreeze(
         Ok(()) => Json(controller.status()).into_response(),
         Err(error) => {
             let mut status = controller.status();
-            status.error = Some(error.to_string());
+            status.error = Some(error_details::display(&error, controller.expose_error_details));
             (StatusCode::SERVICE_UNAVAILABLE, Json(status)).into_response()
         }
     }

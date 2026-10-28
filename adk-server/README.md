@@ -575,7 +575,7 @@ The server applies these layers to every route:
 | Agent run timeout | 15 minutes for `/api/run`, `/api/run/{app}/{user}/{session}`, `/api/run_sse`, `/a2a`, and `/a2a/stream` (`run_timeout`, `ServerConfig::with_run_timeout`; `DEFAULT_RUN_TIMEOUT`) |
 | Response headers | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection: 1; mode=block` |
 | Request ID | `x-request-id` |
-| Error details | A2A internal errors read `Internal server error` (`expose_error_details: false`); REST errors carry their code, category, and message |
+| Error details | With `expose_error_details: false`, A2A internal errors read `Internal server error`, and run-endpoint Problem JSON, SSE error events, AG-UI `RUN_ERROR`, and governance `503`s replace a provider's, tool's, or store's message with a generic one for its category; code, category, and request ID are kept, and the full error is logged with the `x-request-id` |
 | User authorization | Session, artifact, and debug endpoints enforce the authenticated user when an auth bridge is configured |
 
 ## Changes in 3.0

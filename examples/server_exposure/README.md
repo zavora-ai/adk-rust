@@ -7,8 +7,8 @@ What an ADK-Rust server exposes, and what its A2A clients accept. Every scenario
 
 | Kind | Meaning |
 |------|---------|
-| `live` | Calls Gemini or OpenAI |
-| `scripted` | Points the real `OpenAIClient` at a local Chat Completions upstream, or a real A2A client at a local peer, for faults a live API never produces |
+| `live` | Calls Gemini, OpenAI, or Anthropic |
+| `scripted` | Points the real `OpenAIClient` at a local Chat Completions upstream, a real A2A client at a local peer, or the server at a governance store whose database is down, for faults a live API never produces |
 | `local` | Exercises the server alone; no model call |
 
 ## Scenarios
@@ -34,9 +34,16 @@ What an ADK-Rust server exposes, and what its A2A clients accept. Every scenario
 | `E5 a2a-stream-live` | live | `gemini-3.5-flash-lite` behind a real A2A server streams multi-byte text to `RemoteA2aAgent` intact and without error |
 | `F1 hostile-card-refused` | scripted | A card naming another server as its endpoint is refused and that server receives nothing |
 | `F2 hostile-card-refused-v1` | scripted | The same for a v1 card's JSON-RPC interface |
+| `G1 provider-text-withheld-run` | live | A `claude-sonnet-5-5` agent with an invalid API key meets a real Anthropic `401`; `POST /api/run` answers `401` with `Authentication failed`, code `model.anthropic.api_error`, category `unauthorized`, and none of Anthropic's text, and the server logs the full error under the response's `x-request-id` |
+| `G2 provider-text-withheld-sse` | live | The `/api/run_sse` error event reads `model.unauthorized: Authentication failed`, and the full error is logged under its `x-request-id` |
+| `G3 provider-text-withheld-ag-ui` | live | The protocol-native AG-UI `RUN_ERROR` reads `model.unauthorized: Authentication failed` and carries the code |
+| `G4 provider-text-exposed` | live | With `expose_error_details`, all three carry Anthropic's message |
+| `G5 store-text-withheld-503` | scripted | Over a governance store whose database is down, the freeze and unfreeze `503` `error` reads `session.unavailable: A service the server depends on is unavailable; retry later`; with `expose_error_details` it carries the driver text |
+| `G6 request-messages-kept` | local | A missing session, an unknown app, and a frozen kill switch keep the messages the server wrote |
+| `G7 happy-path-unaffected` | live | A `claude-sonnet-5-5` turn with the real key answers `200` with text and no error |
 
 A1 and A2 report `SKIP` when the host has no non-loopback address; live scenarios report `SKIP`
-without their key.
+without their key. G1–G4 send a deliberately invalid Anthropic key and need no account.
 
 ## Running
 

@@ -1034,7 +1034,8 @@ impl ServerBuilder {
         }
 
         if self.governance_endpoints {
-            let controller = controllers::GovernanceController::new(config.governance.clone());
+            let controller = controllers::GovernanceController::new(config.governance.clone())
+                .with_error_details(config.security.expose_error_details);
             #[cfg(feature = "background")]
             let controller = background_run_stores
                 .iter()

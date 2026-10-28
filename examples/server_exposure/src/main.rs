@@ -13,7 +13,9 @@
 //! | D | Model thinking never reaches an A2A peer |
 //! | E | A truncated A2A stream is an error, and a split multi-byte character stays intact |
 //! | F | An agent card whose RPC endpoint names another host is refused |
+//! | G | An error response carries a provider's or a store's message only with `expose_error_details` |
 
+mod error_details;
 mod peers;
 mod scripted;
 
@@ -1129,6 +1131,7 @@ async fn main() -> ExitCode {
     group_d(&keys, &model, &mut out).await;
     group_e(&keys, &mut out).await;
     group_f(&mut out).await;
+    error_details::group_g(&mut out).await;
 
     println!("\n| Scenario | Kind | Result | Detail |");
     println!("|----------|------|--------|--------|");
