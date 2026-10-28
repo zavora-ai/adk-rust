@@ -383,7 +383,9 @@ fn durable(
 | `POST /runs` with an `idempotencyKey` | Never returned; the key is scoped to the caller, so another user's identical key creates its own run |
 | `POST /runs` with a `concurrencyKey` | Never rejects, queues behind, or interrupts it; the key is scoped to the caller |
 
-Runs the scheduler and webhook hooks enqueue belong to their service user (`cron`, or the hook's user). Without an extractor there is no caller to check: every client reads, lists, cancels, and wakes every run, keys are shared, and the server logs a warning once.
+Runs the scheduler and webhook hooks enqueue belong to their service user (`cron`, or the hook's user).
+
+**Open mode.** Without an extractor no caller is authenticated, and the routes run in open mode, meant for local development: every client reads, lists, cancels, and wakes every run and cron job; a run belongs to the request's `userId` (`anonymous` when absent); an `idempotencyKey` is scoped to that user, so two users' identical keys create two runs; and a `concurrencyKey` is shared by every client. `ServerBuilder::build` logs a warning naming the routes when it mounts them in open mode, and so does building a standalone router. In production, configure `ServerConfig::with_request_context` and mount the routes through `ServerBuilder` (see [Server API](../docs/official_docs/deployment/server.md#background-runs-in-open-mode)).
 
 A cron job is a schedule whose id is its name, evaluated in `timezone` (IANA, default `UTC`), with a `missedFirePolicy` for occurrences missed while the scheduler was behind. Creating a job with an existing name returns `409`.
 

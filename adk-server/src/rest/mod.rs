@@ -651,7 +651,9 @@ impl ServerBuilder {
     /// `RequestContextExtractor` is configured, every request must authenticate, and an
     /// authenticated run belongs to the caller's user id: the caller lists, reads, cancels,
     /// and wakes only their own runs, another owner's run answers `404`, and the caller's
-    /// idempotency and concurrency keys are scoped to the caller. Mounting
+    /// idempotency and concurrency keys are scoped to the caller. Without one the routes run
+    /// in [open mode](crate::background#open-mode), and [`build`](Self::build) logs a warning
+    /// that says so. Mounting
     /// [`background_runs_router_with_state`](crate::background::background_runs_router_with_state)
     /// yourself skips that layer.
     ///
@@ -675,7 +677,10 @@ impl ServerBuilder {
     /// Serves `POST /api/cron`, `GET /api/cron`, and `GET`/`PATCH`/`DELETE
     /// /api/cron/{job_id}` from `state`. The scheduler is not started here — call
     /// [`start_cron_scheduler`](crate::background::start_cron_scheduler) with a
-    /// clone of the same state on every replica; each fire time is enqueued once.
+    /// clone of the same state on every replica; each fire time is enqueued once. Without a
+    /// `RequestContextExtractor` the routes run in
+    /// [open mode](crate::background#open-mode), and [`build`](Self::build) logs a warning
+    /// that says so.
     ///
     /// # Example
     ///
@@ -1063,18 +1068,28 @@ impl ServerBuilder {
 
         // Background runs and cron jobs submit and schedule work, so they carry the
         // same authentication as every other mutation surface.
+        // Without an extractor they run in open mode, announced here rather than per request.
+        #[cfg(feature = "background")]
+        if config.request_context_extractor.is_none() {
+            let routes = match (&self.background_state, &self.cron_state) {
+                (Some(_), Some(_)) => Some("/api/runs, /api/cron"),
+                (Some(_), None) => Some("/api/runs"),
+                (None, Some(_)) => Some("/api/cron"),
+                (None, None) => None,
+            };
+            if let Some(routes) = routes {
+                crate::background::warn_open_mode(routes);
+            }
+        }
         #[cfg(feature = "background")]
         if let Some(state) = self.background_state {
-            api_router = api_router.merge(
-                crate::background::background_runs_router_with_state(state)
-                    .layer(auth_layer.clone()),
-            );
+            api_router =
+                api_router.merge(crate::background::runs_routes(state).layer(auth_layer.clone()));
         }
         #[cfg(feature = "background")]
         if let Some(state) = self.cron_state {
-            api_router = api_router.merge(
-                crate::background::cron_jobs_router_with_state(state).layer(auth_layer.clone()),
-            );
+            api_router = api_router
+                .merge(crate::background::cron::cron_routes(state).layer(auth_layer.clone()));
         }
 
         // Add shutdown endpoint if enabled

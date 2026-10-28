@@ -345,9 +345,10 @@ The embedded worker starts when the router is built inside a Tokio runtime. Disa
 `with_run_store`.
 
 > **Important:** `background_runs_router` and `background_runs_router_with_state` carry no
-> authentication. Anyone who reaches a standalone mount can submit and cancel runs. Mount
-> them behind your own authentication layer, or let `ServerBuilder` mount them under `/api`
-> behind the server's auth middleware:
+> authentication. Anyone who reaches a standalone mount can submit and cancel runs, and the
+> routes run in [open mode](../deployment/server.md#background-runs-in-open-mode), which
+> building the router logs as a warning. Mount them behind your own authentication layer, or
+> let `ServerBuilder` mount them under `/api` behind the server's auth middleware:
 >
 > ```rust
 > use adk_server::ServerBuilder;
@@ -366,7 +367,8 @@ The embedded worker starts when the router is built inside a Tokio runtime. Disa
 | `input` | Workflow state for a workflow; a string, `{"text": ...}`, or `{"content": ...}` for an agent |
 | `maxRetries` | Retries after the first attempt; `maxAttempts` is this plus one |
 | `sessionId` | The session an agent run continues; defaults to `run-{runId}` |
-| `idempotencyKey` | An existing key returns the existing run with **200** and `"existing": true` |
+| `userId` | The user the run belongs to in open mode; defaults to `anonymous`. An authenticated caller's run is always their own |
+| `idempotencyKey` | An existing key of the same user returns the existing run with **200** and `"existing": true`; the key is scoped to the run's user |
 | `concurrencyKey`, `onConflict` | Double texting: `reject` returns **409** with `blockingRunId`, `enqueue` queues behind, `interrupt` cancels the unfinished runs |
 | `notBefore` | The run is not claimed before this time |
 
@@ -443,8 +445,10 @@ start_cron_scheduler(cron_state);
 ```
 
 > **Important:** `cron_jobs_router` and `cron_jobs_router_with_state` carry no
-> authentication. Anyone who reaches a standalone mount can schedule recurring work. Mount
-> them behind your own authentication layer, or use
+> authentication. Anyone who reaches a standalone mount can schedule recurring work, and the
+> routes run in [open mode](../deployment/server.md#background-runs-in-open-mode), which
+> building the router logs as a warning. Mount them behind your own authentication layer, or
+> use
 > `ServerBuilder::with_cron_jobs(cron_state)`, which serves `/api/cron` behind the server's
 > auth middleware. The builder does not start the scheduler — call `start_cron_scheduler`
 > with a clone of the same state.

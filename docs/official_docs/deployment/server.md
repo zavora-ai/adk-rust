@@ -393,6 +393,42 @@ the caller's identity from each request. With one configured:
 home's page at `/ui/`) are not authenticated; `/api/apps` and `/api/ui/*` are. See
 [Access control](../security/access-control.md) for extractors built on `adk-auth`.
 
+### Background runs in open mode
+
+Without an extractor, `/api/runs` and `/api/cron` run in open mode, meant for local
+development:
+
+| Aspect | Open mode |
+|--------|-----------|
+| Caller | None is authenticated |
+| A run's user | The request's `userId`, or `anonymous` when it names none |
+| Visibility | Every client lists, reads, cancels (`DELETE /api/runs/{id}`), and wakes (`POST /api/runs/{id}/wake`) every run, and reads, pauses, and deletes every cron job |
+| `idempotencyKey` | Scoped to the run's user: two users' identical keys create two runs, and requests naming no user share `anonymous`'s keys |
+| `concurrencyKey` | Shared by every client |
+| Cron jobs | A job's name is its id, and its runs act for the user `cron` |
+
+A `userId` in the request is a claim, not an identity: open-mode key scoping keeps clients'
+retries apart but authorizes nothing. An open-mode key never matches an authenticated
+caller's key or a cron firing's key.
+
+`ServerBuilder::build` logs a warning when it mounts the routes in open mode, before the first
+request, naming them in `server.routes`:
+
+```text
+WARN adk_server::background: background routes mounted in open mode: no caller is authenticated, so every client can list, read, cancel, and wake every run and cron job, and a run acts for whatever userId its request names; outside local development, mount them with ServerBuilder on a ServerConfig with a RequestContextExtractor (ServerConfig::with_request_context) server.routes="/api/runs, /api/cron"
+```
+
+The standalone routers (`background_runs_router_with_state`, `cron_jobs_router_with_state`)
+always run in open mode and log the same warning when built.
+
+For production:
+
+1. Configure `ServerConfig::with_request_context(extractor)`, so every request to `/api/runs`
+   and `/api/cron` authenticates and each run, job, and key belongs to its caller.
+2. Mount the routes with `ServerBuilder::with_background_runs` and
+   `ServerBuilder::with_cron_jobs`, not the standalone routers.
+3. Treat the open-mode warning in a deployment's startup log as a misconfiguration.
+
 ## The web home
 
 `adk-server` serves no page of its own. The web home — Threads, Today and Memory & rules, with

@@ -31,17 +31,42 @@
 //! caller: `GET /runs` lists only the caller's runs, and `GET`, `DELETE`, and
 //! `POST .../wake` on another owner's run answer `404`. The caller's `idempotencyKey` and
 //! `concurrencyKey` are scoped to the caller, so one user's key never returns, rejects, or
-//! interrupts another user's run. Without an extractor there is no caller to check, every
-//! run is visible to every client, and the server logs a warning once.
+//! interrupts another user's run.
+//!
+//! ## Open mode
+//!
+//! Without an extractor — a server with no `RequestContextExtractor`, or a standalone router
+//! — the routes run in open mode, meant for local development:
+//!
+//! | Aspect | Open mode |
+//! |--------|-----------|
+//! | Caller | None is authenticated |
+//! | A run's user | The `userId` its request names, or `anonymous` when it names none |
+//! | Visibility | Every client lists, reads, cancels, and wakes every run and cron job |
+//! | `idempotencyKey` | Scoped to the run's user: two users' identical keys create two runs, and requests naming no user share `anonymous`'s keys |
+//! | `concurrencyKey` | Shared by every client |
+//! | Cron jobs | A job's name is its id, and its runs act for the user `cron` |
+//!
+//! A `userId` in the request is a claim, not an identity, so open-mode key scoping keeps
+//! clients' retries apart but authorizes nothing. An open-mode key never matches an
+//! authenticated caller's key or the server's own `schedule:` and `hook:` keys. The server
+//! logs a warning when the routes mount in open mode.
+//!
+//! ## Production
+//!
+//! Outside local development, serve these routes only through
+//! [`ServerBuilder::with_background_runs`](crate::ServerBuilder::with_background_runs) and
+//! [`ServerBuilder::with_cron_jobs`](crate::ServerBuilder::with_cron_jobs) on a
+//! [`ServerConfig`](crate::ServerConfig) with
+//! [`with_request_context`](crate::ServerConfig::with_request_context), which mount them
+//! under `/api` behind the server's auth middleware and scope runs, jobs, and keys to the
+//! authenticated caller.
 //!
 //! ## Usage
 //!
-//! > **Important:** these routers carry no authentication of their own. Prefer
-//! > [`ServerBuilder::with_background_runs`](crate::ServerBuilder::with_background_runs)
-//! > and [`ServerBuilder::with_cron_jobs`](crate::ServerBuilder::with_cron_jobs), which
-//! > mount them under `/api` behind the server's auth middleware. A standalone mount
-//! > must sit behind an authentication layer, or anyone who reaches it can submit,
-//! > schedule, and cancel work.
+//! > **Important:** these routers carry no authentication of their own. A standalone mount
+//! > runs in open mode and must sit behind an authentication layer, or anyone who reaches it
+//! > can submit, schedule, and cancel work.
 //!
 //! ```rust,ignore
 //! use std::sync::Arc;
@@ -175,11 +200,13 @@ pub struct SubmitRunRequest {
     /// The session an agent run continues; defaults to `run-{runId}`.
     #[serde(default)]
     pub session_id: Option<String>,
-    /// The user the run belongs to, when the request is not authenticated.
+    /// The user the run belongs to in open mode; `anonymous` when absent. Ignored with an
+    /// authenticated caller, whose run is always their own.
     #[serde(default)]
     pub user_id: Option<String>,
-    /// Enqueueing an existing key returns the existing run. With an authenticated caller
-    /// the key is the caller's own, so only the caller's runs match it.
+    /// Enqueueing an existing key returns the existing run. The key is scoped to the run's
+    /// user — the authenticated caller, or in open mode the request's `userId` — so only that
+    /// user's runs match it.
     #[serde(default)]
     pub idempotency_key: Option<String>,
     /// Runs sharing a key run one at a time. With an authenticated caller the key is the
@@ -743,25 +770,28 @@ fn store_error(error: &AdkError) -> Response {
     problem(status, error.to_string())
 }
 
-/// The authenticated caller's user id, or `None` when the server authenticates no one.
+/// The authenticated caller's user id, or `None` in open mode.
 ///
 /// The auth middleware inserts `Option<RequestContext>`: `Some` when a
 /// `RequestContextExtractor` authenticated the request, `None` when none is configured. A
 /// router mounted without the middleware has no extension at all. Owner checks need an
-/// authenticated caller (spec 3.1 §8.2), so the other two cases log a warning once.
+/// authenticated caller (spec 3.1 §8.2); the open-mode warning is logged when the routes
+/// mount ([`warn_open_mode`]), not here.
 fn run_owner(caller: Option<Extension<Option<RequestContext>>>) -> Option<String> {
-    static UNAUTHENTICATED: std::sync::Once = std::sync::Once::new();
-    let owner = caller.and_then(|Extension(caller)| caller).map(|caller| caller.user_id);
-    if owner.is_none() {
-        UNAUTHENTICATED.call_once(|| {
-            tracing::warn!(
-                "background runs are served without an authenticated caller, so every client \
-                 can read, cancel, and wake every run; configure a RequestContextExtractor \
-                 (ServerConfig::with_request_context) to scope runs to their owner"
-            );
-        });
-    }
-    owner
+    caller.and_then(|Extension(caller)| caller).map(|caller| caller.user_id)
+}
+
+/// Logs that `routes` mount in open mode: no caller is authenticated, so every client
+/// reaches every run and cron job.
+pub(crate) fn warn_open_mode(routes: &str) {
+    tracing::warn!(
+        server.routes = routes,
+        "background routes mounted in open mode: no caller is authenticated, so every client \
+         can list, read, cancel, and wake every run and cron job, and a run acts for whatever \
+         userId its request names; outside local development, mount them with \
+         ServerBuilder on a ServerConfig with a RequestContextExtractor \
+         (ServerConfig::with_request_context)"
+    );
 }
 
 /// The run `run_id` when `owner` may see it: any run without an authenticated caller, only
@@ -795,17 +825,17 @@ async fn submit_run(
     }
     let app_name = state.app_name_for(&target);
     let owner = run_owner(caller);
-    // The length prefix keeps ("a:b", "c") and ("a", "b:c") apart, and the leading digit
-    // keeps caller keys apart from the server's own `cron:` and `hook:` keys. An empty key
-    // stays empty so validation still refuses it.
-    let scoped = |key: String| match &owner {
-        Some(owner) if !key.is_empty() => format!("{}:{owner}:{key}", owner.len()),
-        _ => key,
-    };
     let user_id = owner.clone().or(request.user_id).unwrap_or_else(|| "anonymous".to_string());
+    // The length prefix keeps ("a:b", "c") and ("a", "b:c") apart, and the leading digit
+    // keeps caller keys apart from the server's own `schedule:` and `hook:` keys. An empty
+    // key stays empty so validation still refuses it.
+    let scoped = |user: &str, key: String| {
+        if key.is_empty() { key } else { format!("{}:{user}:{key}", user.len()) }
+    };
 
-    let mut run = NewRun::new(state.worker.queue.clone(), app_name, user_id, target, request.input)
-        .with_max_attempts(request.max_retries.unwrap_or(0).saturating_add(1));
+    let mut run =
+        NewRun::new(state.worker.queue.clone(), app_name, user_id.clone(), target, request.input)
+            .with_max_attempts(request.max_retries.unwrap_or(0).saturating_add(1));
     // The worker runs it as the identity the server authenticated (spec 3.1 §9.2 I6).
     if owner.is_some() {
         run = run.with_authenticated_user();
@@ -814,10 +844,21 @@ async fn submit_run(
         run = run.with_session_id(session_id);
     }
     if let Some(key) = request.idempotency_key {
-        run = run.with_idempotency_key(scoped(key));
+        let key = match &owner {
+            Some(owner) => scoped(owner, key),
+            None if key.is_empty() => key,
+            // A user the request only names gets `open:` keys, so it never shares the keys
+            // of an authenticated caller with the same id.
+            None => format!("open:{}", scoped(&user_id, key)),
+        };
+        run = run.with_idempotency_key(key);
     }
     if let Some(key) = request.concurrency_key {
-        run = run.with_concurrency_key(scoped(key), request.on_conflict.unwrap_or_default());
+        let key = match &owner {
+            Some(owner) => scoped(owner, key),
+            None => key,
+        };
+        run = run.with_concurrency_key(key, request.on_conflict.unwrap_or_default());
     }
     if let Some(at) = request.not_before {
         run = run.with_not_before(at);
@@ -982,11 +1023,19 @@ pub fn background_runs_router() -> Router {
 ///
 /// Mounts `POST /runs`, `GET /runs`, `GET /runs/{run_id}`, `DELETE /runs/{run_id}`, and
 /// `POST /runs/{run_id}/wake`,
-/// and starts the embedded worker when a Tokio runtime is running.
+/// and starts the embedded worker when a Tokio runtime is running. The routes run in
+/// [open mode](self#open-mode), and building the router logs a warning that says so.
 ///
 /// > **Important:** the router carries no authentication; see
 /// > [`background_runs_router`].
 pub fn background_runs_router_with_state(state: BackgroundState) -> Router {
+    warn_open_mode("/runs");
+    runs_routes(state)
+}
+
+/// The run routes without the open-mode warning, for [`ServerBuilder`](crate::ServerBuilder),
+/// which knows whether it authenticates callers.
+pub(crate) fn runs_routes(state: BackgroundState) -> Router {
     state.ensure_worker_started();
     Router::new()
         .route("/runs", post(submit_run).get(list_runs))

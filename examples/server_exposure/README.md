@@ -49,6 +49,10 @@ What an ADK-Rust server exposes, and what its A2A clients accept. Every scenario
 | `G5 store-text-withheld-503` | scripted | Over a governance store whose database is down, the freeze and unfreeze `503` `error` reads `session.unavailable: A service the server depends on is unavailable; retry later`; with `expose_error_details` it carries the driver text |
 | `G6 request-messages-kept` | local | A missing session, an unknown app, and a frozen kill switch keep the messages the server wrote |
 | `G7 happy-path-unaffected` | live | A `claude-sonnet-5-5` turn with the real key answers `200` with text and no error |
+| `I1 open-mode-warned-at-mount` | local | Building a server with background and cron routes and no `RequestContextExtractor` logs one warning naming `/api/runs` and `/api/cron` before any request; an authenticated build logs none; each standalone router logs one |
+| `I2 open-mode-key-per-user-live` | live | Two users' background runs of a `claude-sonnet-5-5` agent with the same `idempotencyKey` are two runs, each answering its own prompt, and a user's retry returns their run |
+| `I3 open-mode-keys-kept-apart` | local | An open-mode client using a cron firing's key does not absorb the firing, and an open-mode `userId: alice` does not match authenticated alice's key |
+| `I4 open-mode-delete-and-wake` | local | In open mode an unidentified client wakes and cancels another user's run |
 
 A1 and A2 report `SKIP` when the host has no non-loopback address; live scenarios report `SKIP`
 without their key. G1–G4 send a deliberately invalid Anthropic key and need no account.
