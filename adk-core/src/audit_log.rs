@@ -1213,10 +1213,13 @@ impl FileAuditRecorder {
         use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 
         let path = &self.path;
+        // Not `append`: a Windows append handle cannot `set_len`, which the repair below
+        // needs. The lock keeps the write at the end as appending would.
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .read(true)
-            .append(true)
+            .write(true)
+            .truncate(false)
             .open(path)
             .map_err(|error| file_audit_error(path, "open", error))?;
         file.lock().map_err(|error| file_audit_error(path, "lock", error))?;
@@ -1260,7 +1263,8 @@ impl FileAuditRecorder {
         let mut line = serde_json::to_vec(&record)
             .map_err(|error| file_audit_error(path, "encode a record for", error))?;
         line.push(b'\n');
-        file.write_all(&line)
+        file.seek(SeekFrom::Start(state.len))
+            .and_then(|_| file.write_all(&line))
             .and_then(|()| file.sync_data())
             .map_err(|error| file_audit_error(path, "append to", error))?;
         state.len += line.len() as u64;

@@ -847,7 +847,9 @@ mod tests {
             id: Some(id.into()),
             annotations: None,
         };
-        let root = Path::new("/work");
+        // Absolute in the platform's own form: `/work` has no drive on Windows.
+        let root = Path::new(if cfg!(windows) { r"C:\work" } else { "/work" });
+        let edited = root.join("src").join("c.rs").to_string_lossy().into_owned();
         let events = vec![
             event(
                 "i1",
@@ -855,7 +857,7 @@ mod tests {
                 vec![
                     call("c1", "write_file", json!({"path": "./a.txt", "content": "x"})),
                     call("c2", "bash", json!({"command": "echo b > b.txt"})),
-                    call("c3", "edit_file", json!({"path": "/work/src/c.rs"})),
+                    call("c3", "edit_file", json!({"path": edited})),
                     call("c4", "write_file", json!({"path": "denied.txt"})),
                 ],
             ),

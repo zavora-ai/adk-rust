@@ -51,6 +51,13 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 filter = "package(adk-cli) and binary(correct_me_then_check)"
 slow-timeout = { period = "60s", terminate-after = 5 }
 
+# The away property test restarts a kernel over its SQLite file in each of its cases, and
+# S19's scaled run publishes four hours of updates to a 600-product site; a macOS runner
+# takes 45–75 s for each, a Windows runner longer.
+[[profile.default.overrides]]
+filter = "(package(adk-kernel) and binary(away_property_tests)) or (package(adk-site) and test(=s19_scaled))"
+slow-timeout = { period = "60s", terminate-after = 4 }
+
 # The durability gates on one server share its stores (schedules are global to a
 # store), so they run one at a time per backend; different backends run in parallel.
 # Each gate starts several processes and waits out leases and staleness limits.

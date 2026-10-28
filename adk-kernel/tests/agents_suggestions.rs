@@ -279,27 +279,31 @@ async fn the_ceiling_is_checked_when_made_and_again_when_approved() {
     })
     .await;
     assert_eq!(refused.version, 2);
-    let session = world
-        .sessions
-        .get(GetRequest {
-            app_name: APP.into(),
-            user_id: PERSON.into(),
-            session_id: SESSION.into(),
-            num_recent_events: None,
-            after: None,
-        })
-        .await
-        .unwrap();
-    let notice = session
-        .events()
-        .all()
-        .into_iter()
-        .filter_map(|event| event.llm_response.content.clone())
-        .filter_map(|content| {
-            content.parts.first().and_then(|part| part.text().map(str::to_string))
-        })
-        .next_back()
-        .unwrap();
+    // The notice follows the refused record, so it can land a moment after it.
+    let notice = eventually("the notice in the suggesting thread", || async {
+        let session = world
+            .sessions
+            .get(GetRequest {
+                app_name: APP.into(),
+                user_id: PERSON.into(),
+                session_id: SESSION.into(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .unwrap();
+        session
+            .events()
+            .all()
+            .into_iter()
+            .filter_map(|event| event.llm_response.content.clone())
+            .filter_map(|content| {
+                content.parts.first().and_then(|part| part.text().map(str::to_string))
+            })
+            .next_back()
+            .filter(|text| text.contains("wasn't added"))
+    })
+    .await;
     assert!(
         notice.contains(
             "Finance wasn't added: the agent that suggested it can no longer give it any site"

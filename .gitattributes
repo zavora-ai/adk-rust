@@ -1,0 +1,3 @@
+# Text files check out with LF everywhere: vectors, golden builds, generated API files and
+# the specs tests read are compared byte for byte, and Windows checkouts default to CRLF.
+* text=auto eol=lf

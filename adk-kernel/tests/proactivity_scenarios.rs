@@ -6,7 +6,7 @@
 
 mod common;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -483,22 +483,35 @@ async fn a_consolidation_item_runs_only_after_a_person_approves_it_in_auto() {
 }
 
 /// The admitted processes of the default partition running now: `Running`, not a
-/// `kernel.wake` run, and not on their way to park.
-async fn admitted(world: &World) -> usize {
-    let mut count = 0;
-    for run in world.runs.list(RunFilter::default().states([RunState::Running])).await.unwrap() {
-        if run.target == adk_kernel::KERNEL_WAKE_TARGET {
-            continue;
-        }
-        let meta = world.processes.get(&run.run_id).await.unwrap();
+/// `kernel.wake` run, and not on their way to park. A run counts only once the kernel has
+/// announced its claim, which it does after admission, so a run whose admission is still
+/// being decided — the message before it preempts — is not counted; and only when it is
+/// running both before and after the processes are read, so one that finished meanwhile
+/// is not counted beside the run that took its slot back.
+async fn admitted(world: &World, claimed: &Mutex<BTreeSet<String>>) -> usize {
+    let claimed = claimed.lock().unwrap().clone();
+    let running = || async {
+        world
+            .runs
+            .list(RunFilter::default().states([RunState::Running]))
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|run| run.target != adk_kernel::KERNEL_WAKE_TARGET)
+            .map(|run| run.run_id)
+            .collect::<BTreeSet<_>>()
+    };
+    let mut admitted = BTreeSet::new();
+    for pid in running().await {
+        let meta = world.processes.get(&pid).await.unwrap();
         let parking = meta.as_ref().is_some_and(|meta| {
             meta.wake.is_some() || meta.suspend_requested || meta.suspended_by.is_some()
         });
         if !parking {
-            count += 1;
+            admitted.insert(pid);
         }
     }
-    count
+    admitted.intersection(&running().await).filter(|pid| claimed.contains(*pid)).count()
 }
 
 /// K8: three background runs at the partition's quota of three; a typed message's run
@@ -529,6 +542,17 @@ async fn k8_a_human_message_preempts_background_work_and_quotas_hold() {
         None,
         Arc::new(HeldStep(Arc::clone(&held))),
     );
+    let claimed = Arc::new(Mutex::new(BTreeSet::new()));
+    let claims = {
+        let (mut events, claimed) = (kernel.events(), Arc::clone(&claimed));
+        tokio::spawn(async move {
+            while let Some(record) = events.recv().await {
+                if let KernelEvent::Process { pid, to: RunState::Running, .. } = record.event {
+                    claimed.lock().unwrap().insert(pid);
+                }
+            }
+        })
+    };
     kernel.start().await.unwrap();
 
     // Samples the admitted processes every 5 ms for the whole scenario.
@@ -536,11 +560,12 @@ async fn k8_a_human_message_preempts_background_work_and_quotas_hold() {
     let sampling = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let sampler = {
         let (runs, processes) = (Arc::clone(&world.runs), Arc::clone(&world.processes));
-        let (peak, sampling) = (Arc::clone(&peak), Arc::clone(&sampling));
+        let (peak, sampling, claimed) =
+            (Arc::clone(&peak), Arc::clone(&sampling), Arc::clone(&claimed));
         tokio::spawn(async move {
             let probe = World { runs, processes, ..World::answer() };
             while sampling.load(Ordering::SeqCst) {
-                peak.fetch_max(admitted(&probe).await, Ordering::SeqCst);
+                peak.fetch_max(admitted(&probe, &claimed).await, Ordering::SeqCst);
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
@@ -597,6 +622,7 @@ async fn k8_a_human_message_preempts_background_work_and_quotas_hold() {
     }
     sampling.store(false, Ordering::SeqCst);
     sampler.await.unwrap();
+    claims.abort();
 
     assert!(
         peak.load(Ordering::SeqCst) <= 3,
