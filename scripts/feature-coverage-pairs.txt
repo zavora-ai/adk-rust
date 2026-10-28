@@ -93,6 +93,8 @@
 2 adk-durability-gates sqlite
 # Approval inbox endpoints and the signed approval webhook notifier.
 2 adk-server approvals
+# The local agent registry: its authentication and card-ownership tests need the feature.
+2 adk-server agent-registry
 # Agent Engine dispatch surface; its wire-fixture and dispatch tests need the feature.
 2 adk-server agent-engine
 2 adk-server vertex-remote-engine
