@@ -13,6 +13,7 @@ fn hmac_algorithms_are_refused_for_jwks_validation() {
     // `JwtValidator` is not `Debug`, so match rather than `expect_err`.
     let Err(error) = JwtValidator::builder()
         .issuer("https://issuer.example.com")
+        .audience("https://api.example.com")
         .jwks_uri("https://issuer.example.com/.well-known/jwks.json")
         .algorithm(jsonwebtoken::Algorithm::HS256)
         .build()
@@ -28,6 +29,7 @@ fn hmac_algorithms_are_refused_for_jwks_validation() {
 fn asymmetric_algorithms_remain_accepted() {
     let accepted = JwtValidator::builder()
         .issuer("https://issuer.example.com")
+        .audience("https://api.example.com")
         .jwks_uri("https://issuer.example.com/.well-known/jwks.json")
         .algorithm(jsonwebtoken::Algorithm::RS256)
         .algorithm(jsonwebtoken::Algorithm::ES256)

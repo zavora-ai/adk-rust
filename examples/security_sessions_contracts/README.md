@@ -28,6 +28,8 @@ file found replace shell exports.
 | `sso_audit_failure_refuses_access` | `SsoAccessControl` with a `JwtValidator` over the local JWKS, once with `InMemoryAuditSink` and once with a sink whose store is down | A recorded grant is returned; an unrecorded grant is refused; a denial stays `AccessDenied` |
 | `artifact_errors_are_typed` | A tool loading `quarterly-report.pdf` (absent) and `../../etc/passwd` through `ctx.artifacts()`, on `InMemoryArtifactService` and `FileArtifactService` | `NotFound` (`artifact.not_found`, `is_not_found()`) and `InvalidInput` (`artifact.invalid_name`), never `artifact.legacy` |
 | `session_identifier_errors_are_typed` | `create` with an empty user ID, `get` with a NUL session ID, and `list` with a 513-byte app name on the in-memory, encrypted, SQLite, and Redis services, and `Runner::run_str` with an empty user ID | `session.invalid_identifier` (`Session`, `InvalidInput`) everywhere |
+| `jwt_validator_requires_iss_and_aud` | `JwtValidator` over a local ES256 JWKS, pinned to an audience, built with no audience, and built with `without_audience()`; tokens with no `aud`, no `iss`, and a foreign `aud` | The pinned validator accepts only the valid token; `build()` without an audience fails; `without_audience()` accepts only a token with `iss` and no `aud` |
+| `live_jwt_claims_server_run` | A `claude-sonnet-5-5` `LlmAgent` (`ANTHROPIC_API_KEY`) served by `adk-server` behind `JwtRequestContextExtractor`; one `POST /api/run` per token | The valid token gets 200 and the model's reply in a session owned by the token's subject; the no-`aud`, no-`iss`, foreign-`aud`, and missing tokens get 401 and no run |
 
 ## Results
 

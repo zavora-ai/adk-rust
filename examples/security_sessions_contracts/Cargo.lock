@@ -24,6 +24,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-anthropic"
+version = "3.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures",
+ "hex",
+ "hmac 0.12.1",
+ "httpdate",
+ "regex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "time",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "adk-artifact"
 version = "3.0.0"
 dependencies = [
@@ -39,6 +60,7 @@ version = "3.0.0"
 dependencies = [
  "adk-core",
  "async-trait",
+ "axum",
  "base64 0.22.1",
  "chrono",
  "dashmap",
@@ -62,6 +84,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "http",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -103,6 +126,7 @@ dependencies = [
 name = "adk-model"
 version = "3.0.0"
 dependencies = [
+ "adk-anthropic",
  "adk-core",
  "adk-telemetry",
  "anyhow",
@@ -119,7 +143,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tower",
+ "tower 0.5.3",
  "tracing",
 ]
 
@@ -171,6 +195,38 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "adk-server"
+version = "3.0.0"
+dependencies = [
+ "adk-agent",
+ "adk-artifact",
+ "adk-core",
+ "adk-runner",
+ "adk-session",
+ "adk-skill",
+ "adk-telemetry",
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "futures",
+ "mime_guess",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tower 0.4.13",
+ "tower-http",
  "tracing",
  "uuid",
 ]
@@ -331,7 +387,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
- "tower",
+ "tower 0.5.3",
  "tracing",
  "url",
 ]
@@ -432,6 +488,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core",
+ "axum-macros",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -452,7 +509,7 @@ dependencies = [
  "serde_urlencoded",
  "sync_wrapper",
  "tokio",
- "tower",
+ "tower 0.5.3",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -475,6 +532,17 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "axum-macros"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7aa268c23bfbbd2c4363b9cd302a4f504fb2a9dfe7e3451d66f35dd392e20aca"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -829,6 +897,9 @@ name = "deranged"
 version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
+dependencies = [
+ "serde_core",
+]
 
 [[package]]
 name = "derive_builder"
@@ -2043,6 +2114,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "pin-project"
+version = "1.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2466b2336ed02bcdca6b294417127b90ec92038d1d5c4fbeac971a922e0e0924"
+dependencies = [
+ "pin-project-internal",
+]
+
+[[package]]
+name = "pin-project-internal"
+version = "1.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c96395f0a926bc13b1c17622aaddda1ecb55d49c8f1bf9777e4d877800a43f8b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2383,7 +2474,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-util",
- "tower",
+ "tower 0.5.3",
  "tower-http",
  "tower-service",
  "url",
@@ -2425,7 +2516,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-util",
- "tower",
+ "tower 0.5.3",
  "tower-http",
  "tower-service",
  "url",
@@ -2658,6 +2749,7 @@ dependencies = [
  "adk-model",
  "adk-payments",
  "adk-runner",
+ "adk-server",
  "adk-session",
  "anyhow",
  "async-trait",
@@ -2668,6 +2760,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "jsonwebtoken",
+ "reqwest 0.12.28",
  "serde_json",
  "tempfile",
  "tokio",
@@ -3308,6 +3401,21 @@ dependencies = [
 
 [[package]]
 name = "tower"
+version = "0.4.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8fa9be0de6cf49e536ce1851f987bd21a43b771b09473c3549a6c853db37c1c"
+dependencies = [
+ "futures-core",
+ "futures-util",
+ "pin-project",
+ "pin-project-lite",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "tower"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebe5ef63511595f1344e2d5cfa636d973292adc0eec1f0ad45fae9f0851ab1d4"
@@ -3334,10 +3442,13 @@ dependencies = [
  "futures-util",
  "http",
  "http-body",
+ "http-body-util",
  "pin-project-lite",
- "tower",
+ "tokio",
+ "tower 0.5.3",
  "tower-layer",
  "tower-service",
+ "tracing",
  "url",
 ]
 

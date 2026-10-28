@@ -14,6 +14,7 @@
 //! ```
 
 mod issuer;
+mod jwt_claims;
 mod merchant;
 mod scripted;
 
@@ -639,6 +640,8 @@ const SCENARIOS: &[&str] = &[
     "sso_audit_failure_refuses_access",
     "artifact_errors_are_typed",
     "session_identifier_errors_are_typed",
+    "jwt_validator_requires_iss_and_aud",
+    "live_jwt_claims_server_run",
 ];
 
 async fn run_scenario(name: &str) -> anyhow::Result<Verdict> {
@@ -650,6 +653,10 @@ async fn run_scenario(name: &str) -> anyhow::Result<Verdict> {
         "sso_audit_failure_refuses_access" => sso_audit_failure_refuses_access().await,
         "artifact_errors_are_typed" => artifact_errors_are_typed().await,
         "session_identifier_errors_are_typed" => session_identifier_errors_are_typed().await,
+        "jwt_validator_requires_iss_and_aud" => {
+            jwt_claims::jwt_validator_requires_iss_and_aud().await
+        }
+        "live_jwt_claims_server_run" => jwt_claims::live_jwt_claims_server_run().await,
         other => anyhow::bail!("unknown scenario {other}; known: {}", SCENARIOS.join(", ")),
     }
 }

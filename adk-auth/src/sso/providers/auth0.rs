@@ -1,5 +1,6 @@
 //! Auth0 provider.
 
+use super::super::validator::REQUIRED_CLAIMS;
 use super::super::{JwksCache, TokenClaims, TokenError, TokenValidator};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -56,6 +57,7 @@ impl TokenValidator for Auth0Provider {
         let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256);
         validation.set_issuer(&[&self.issuer]);
         validation.set_audience(&[&self.audience]);
+        validation.set_required_spec_claims(&REQUIRED_CLAIMS);
         validation.validate_exp = true;
         validation.validate_nbf = true;
 
@@ -74,5 +76,27 @@ impl TokenValidator for Auth0Provider {
 impl Auth0Provider {
     pub fn new(domain: impl Into<String>, audience: impl Into<String>) -> Self {
         Self { domain: domain.into(), audience: audience.into(), issuer: String::new() }
+    }
+}
+
+#[cfg(all(test, feature = "sso"))]
+mod tests {
+    use super::Auth0Provider;
+    use crate::sso::JwksCache;
+    use crate::sso::test_issuer::{TestIssuer, assert_requires_iss_and_aud};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn tokens_need_the_iss_and_aud_claims() {
+        let issuer = TestIssuer::start().await;
+        let mut provider = Auth0Provider::new("tenant.auth0.com", "https://api.example.com");
+        provider.jwks_cache = Arc::new(JwksCache::new(issuer.jwks_uri()));
+
+        assert_requires_iss_and_aud(
+            &provider,
+            "https://tenant.auth0.com/",
+            "https://api.example.com",
+        )
+        .await;
     }
 }

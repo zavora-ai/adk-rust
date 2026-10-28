@@ -1,5 +1,6 @@
 //! Azure AD provider.
 
+use super::super::validator::REQUIRED_CLAIMS;
 use super::super::{JwksCache, TokenClaims, TokenError, TokenValidator};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -117,6 +118,9 @@ impl TokenValidator for AzureADProvider {
         }
         // If common/multi-tenant, issuer is not set so not validated
         validation.set_audience(&[&self.client_id]);
+        // `common` checks no issuer value, but every Entra ID token carries `iss`, so the
+        // claim is required on that path too.
+        validation.set_required_spec_claims(&REQUIRED_CLAIMS);
         validation.validate_exp = true;
         validation.validate_nbf = true;
 
@@ -148,7 +152,33 @@ impl AzureADProvider {
 #[cfg(all(test, feature = "sso"))]
 mod tests {
     use super::AzureADProvider;
-    use crate::sso::TokenClaims;
+    use crate::sso::test_issuer::{TestIssuer, assert_requires_iss_and_aud, token};
+    use crate::sso::{JwksCache, TokenClaims, TokenValidator};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn single_tenant_tokens_need_the_iss_and_aud_claims() {
+        let issuer = TestIssuer::start().await;
+        let mut provider = AzureADProvider::new("tenant-1", "client-id");
+        provider.jwks_cache = Arc::new(JwksCache::new(issuer.jwks_uri()));
+
+        let tenant_issuer = "https://login.microsoftonline.com/tenant-1/v2.0";
+        assert_requires_iss_and_aud(&provider, tenant_issuer, "client-id").await;
+    }
+
+    /// `common` still checks no issuer value, so any tenant's token is accepted, but the token
+    /// must carry an `iss` claim.
+    #[tokio::test]
+    async fn multi_tenant_tokens_need_an_iss_claim_of_any_value() {
+        let issuer = TestIssuer::start().await;
+        let mut provider = AzureADProvider::multi_tenant("client-id");
+        provider.jwks_cache = Arc::new(JwksCache::new(issuer.jwks_uri()));
+
+        let other_tenant = "https://login.microsoftonline.com/tenant-9/v2.0";
+        assert_requires_iss_and_aud(&provider, other_tenant, "client-id").await;
+        let any_issuer = token(Some("https://elsewhere.example"), Some("client-id"));
+        assert!(provider.validate(&any_issuer).await.is_ok(), "common checks no issuer value");
+    }
 
     #[test]
     fn test_multi_tenant_allowlist_rejects_unapproved_tenants() {

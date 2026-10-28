@@ -10,11 +10,12 @@ description = "Escalated payments resumed from the approval store, SSO decisions
 [dependencies]
 adk-agent = { path = "../../adk-agent" }
 adk-artifact = { path = "../../adk-artifact" }
-adk-auth = { path = "../../adk-auth", features = ["sso"] }
+adk-auth = { path = "../../adk-auth", features = ["sso", "auth-bridge"] }
 adk-core = { path = "../../adk-core" }
-adk-model = { path = "../../adk-model", default-features = false, features = ["openai"] }
+adk-model = { path = "../../adk-model", default-features = false, features = ["openai", "anthropic"] }
 adk-payments = { path = "../../adk-payments" }
 adk-runner = { path = "../../adk-runner" }
+adk-server = { path = "../../adk-server" }
 adk-session = { path = "../../adk-session", features = ["sqlite", "redis", "encrypted-session"] }
 anyhow = "1.0"
 async-trait = "0.1"
@@ -25,6 +26,7 @@ chrono = "0.4"
 dotenvy = "0.15"
 futures = "0.3"
 jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 serde_json = "1.0"
 tempfile = "3"
 tokio = { version = "1.40", features = ["full"] }

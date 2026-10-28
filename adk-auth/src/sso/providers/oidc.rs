@@ -1,5 +1,6 @@
 //! Generic OIDC provider.
 
+use super::super::validator::REQUIRED_CLAIMS;
 use super::super::{JwksCache, TokenClaims, TokenError, TokenValidator};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -86,6 +87,7 @@ impl TokenValidator for OidcProvider {
         );
         validation.set_issuer(&[&self.issuer]);
         validation.set_audience(&[&self.client_id]);
+        validation.set_required_spec_claims(&REQUIRED_CLAIMS);
         validation.validate_exp = true;
         validation.validate_nbf = true;
 
@@ -145,8 +147,18 @@ impl OidcProvider {
 
 #[cfg(all(test, feature = "sso"))]
 mod tests {
-    use super::ensure_discovery_issuer;
+    use super::{OidcProvider, ensure_discovery_issuer};
     use crate::sso::TokenError;
+    use crate::sso::test_issuer::{TestIssuer, assert_requires_iss_and_aud};
+
+    #[tokio::test]
+    async fn tokens_need_the_iss_and_aud_claims() {
+        let issuer = TestIssuer::start().await;
+        let provider =
+            OidcProvider::new("https://issuer.example.com", "client-id", issuer.jwks_uri());
+
+        assert_requires_iss_and_aud(&provider, "https://issuer.example.com", "client-id").await;
+    }
 
     #[test]
     fn test_discovery_issuer_must_match_requested_issuer() {

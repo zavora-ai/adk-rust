@@ -216,9 +216,11 @@ The `ClaimsMapper` builder controls which JWT claim becomes the `user_id`:
 | Okta | `OktaProvider::new(domain, client_id)` or `::with_auth_server(domain, server_id, client_id)` |
 | Auth0 | `Auth0Provider::new(domain, audience)` |
 | Generic OIDC | `OidcProvider::from_discovery(issuer, client_id).await` or `::new(issuer, client_id, jwks_uri)` |
-| Custom JWT | `JwtValidator::builder().issuer(iss).jwks_uri(uri).audience(aud).build()?` |
+| Custom JWT | `JwtValidator::builder().issuer(iss).audience(aud).jwks_uri(uri).build()?` |
 
-`AzureADProvider::multi_tenant()` accepts tokens from any tenant targeting the configured audience unless you restrict it with `with_allowed_tenants(...)`.
+Every validator requires the `exp`, `iss`, and `aud` claims: a token without one fails with `TokenError::MissingClaim`. `JwtValidatorBuilder::build` fails without an audience; for an issuer whose tokens carry no `aud` claim, `without_audience()` opts out, and the validator then refuses any token that carries an audience and still requires `iss`.
+
+`AzureADProvider::multi_tenant()` accepts tokens from any tenant targeting the configured audience unless you restrict it with `with_allowed_tenants(...)`. It requires the `iss` claim but does not check its value.
 
 `OidcProvider::from_discovery()` rejects discovery documents whose `issuer` does not match the requested issuer URL.
 
@@ -400,6 +402,7 @@ cargo run --example auth_google --features sso  # Google Identity
 - `OidcProvider::from_discovery()` rejects discovery documents whose `issuer` does not match the requested issuer URL.
 - Token revocation and blacklist checks are not built in. If you need immediate revocation, enforce it in a custom `TokenValidator` or request extractor.
 - `JwtValidator` rejects symmetric algorithms (HS256/HS384/HS512) and EdDSA — only RSA and EC algorithms are supported with JWKS-based validation.
+- Every validator refuses a token without an `iss` or `aud` claim. `JwtValidatorBuilder::without_audience()` is the only way to accept tokens that name no audience; pin an audience whenever the issuer sets one.
 
 ## SQLx compatibility
 

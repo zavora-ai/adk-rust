@@ -70,6 +70,7 @@ impl From<jsonwebtoken::errors::Error> for TokenError {
             ErrorKind::ExpiredSignature => TokenError::Expired,
             ErrorKind::ImmatureSignature => TokenError::NotYetValid,
             ErrorKind::InvalidSignature => TokenError::InvalidSignature,
+            ErrorKind::MissingRequiredClaim(claim) => TokenError::MissingClaim(claim.clone()),
             ErrorKind::InvalidAudience | ErrorKind::InvalidIssuer => {
                 TokenError::ValidationError(err.to_string())
             }
