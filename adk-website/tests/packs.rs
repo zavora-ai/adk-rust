@@ -247,10 +247,12 @@ async fn the_vectors_are_the_generated_ones() {
             std::fs::write(&path, &bytes).unwrap();
             continue;
         }
-        let shipped = String::from_utf8(fixture(&name)).unwrap().replace("\r\n", "\n");
+        // Compared as JSON values: key order follows serde_json's `preserve_order`, which
+        // other workspace crates turn on, and the digest and proof are over JCS anyway.
+        let shipped: Value = serde_json::from_slice(&fixture(&name)).unwrap();
+        let generated: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(
-            shipped,
-            String::from_utf8(bytes).unwrap(),
+            shipped, generated,
             "{name} is not the generated vector: run with ADK_WEBSITE_PACKS_RECORD=1"
         );
     }

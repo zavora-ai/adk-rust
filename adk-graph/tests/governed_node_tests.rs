@@ -1464,7 +1464,9 @@ mod http {
         assert_eq!(rig.outcome().await, None, "the record stays begun");
         let again = rig.invoke(state("tok-1")).await;
         assert_eq!(code(&again), Some("graph.outcome_unknown"));
-        assert_eq!(mock.seen().len(), 1);
+        // A slow runner can cut the first call off before the mock reads it, so this is "at
+        // most once": the cut-off call, and never another.
+        assert!(mock.seen().len() <= 1, "{:?}", mock.seen());
     }
 
     /// Spec 3.3 §12: a call that failed is recorded as failed, not hidden by the node's

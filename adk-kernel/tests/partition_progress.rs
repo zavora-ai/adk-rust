@@ -178,11 +178,14 @@ async fn each_partition_reads_its_own_progress_source() {
         assert!(wakes.contains("home") && wakes.contains("ops"), "{rows:?}");
         assert!(!wakes.contains("work"), "work's run did not finish: {rows:?}");
         // Only the kernel's own work is `default`'s: its maintenance processes, the
-        // processes routing wakes, and the wake of its own finished run.
+        // processes routing wakes, and the wake of its own finished run. The main source
+        // answers for those processes too, so one still running when its cost rose spends
+        // under the kernel process's identity.
         assert!(
-            rows.iter()
-                .filter(|row| row.partition.as_str() == "default")
-                .all(|row| row.agent == "kernel"),
+            rows.iter().filter(|row| row.partition.as_str() == "default").all(|row| {
+                row.agent == "kernel"
+                    || (row.kind == "spend" && row.agent.ends_with("/kernel.proc"))
+            }),
             "{rows:?}"
         );
     }

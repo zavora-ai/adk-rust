@@ -183,12 +183,15 @@ tower = { version = "0.4", features = ["util"] }
 vt100 = "0.16"
 # The in-process MCP server whose app the hostile-app tests show (`genui-apps`).
 rmcp = { version = "3.1", features = ["client", "server", "elicitation"] }
-# The phone's passkey tests rebuild a ceremony around a recorded browser's challenge.
-webauthn-rs = { version = "=0.5.5", default-features = false, features = ["danger-allow-state-serialisation"] }
 # The voice view's socket, opened as a browser would (spec 3.3 §5.6).
 tokio-tungstenite = "0.29"
 # What the live voice test's provider says, with `RUST_LOG`.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# The phone's passkey tests rebuild a ceremony around a recorded browser's challenge.
+# Not on Windows: webauthn-rs links OpenSSL, which a Windows workspace build has no other use for.
+[target.'cfg(not(windows))'.dev-dependencies]
+webauthn-rs = { version = "=0.5.5", default-features = false, features = ["danger-allow-state-serialisation"] }
 
 # The web home over a scripted kernel, which the end-to-end test in `web/e2e` opens.
 [[example]]
