@@ -919,7 +919,13 @@ pub struct PendingApproval {
 /// decision. Taking consumes it, so one approval authorizes one execution.
 ///
 /// Stores key entries by the fingerprint string and need no knowledge of what it
-/// contains.
+/// contains. The governed path takes decisions only under fingerprints that name the
+/// acting agent ([`ToolConfirmationRequest::fingerprint_agent`]); a decision recorded under
+/// one that names none is kept for whoever reads it, such as an
+/// [`ApprovalService`](crate::ApprovalService) request that is not a tool call, but never
+/// authorizes a governed call. To approve a call ahead of the run that makes it, record the
+/// decision under the fingerprint of [`ToolConfirmationRequest::for_tool`] with the agent's
+/// [`with_acting_context`](ToolConfirmationRequest::with_acting_context).
 ///
 /// # Example
 ///
@@ -3365,16 +3371,13 @@ pub fn supersede_pending_responses(
 /// use serde_json::json;
 ///
 /// # futures::executor::block_on(async {
-/// let request = ToolConfirmationRequest {
-///     tool_name: "pay".into(),
-///     function_call_id: Some("call-1".into()),
-///     args: json!({ "amount": 5 }),
-///     acting: None,
-///     origin: None,
-/// };
+/// let scope = ApprovalScope::new("app", "u", "s");
+/// let request = ToolConfirmationRequest::new("pay", json!({ "amount": 5 }))
+///     .with_function_call_id("call-1")
+///     .with_acting_context(RunConfig::default().acting_context_for("app", "agent", "u"));
 /// let config =
 ///     RunConfig::builder().tool_approval(request.fingerprint(), ToolApproval::approve()).build();
-/// let gate = ToolGate::new(&config, "agent", "inv-2", ApprovalScope::new("app", "u", "s"));
+/// let gate = ToolGate::new(&config, "agent", "inv-2", scope);
 /// assert!(confirmation_decision_available(&gate, &request).await?);
 /// # Ok::<(), adk_core::AdkError>(())
 /// # }).unwrap();
@@ -5348,6 +5351,87 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// Every request the governed path holds names the gate's acting agent, so its
+    /// fingerprint does too (#1210).
+    #[tokio::test]
+    async fn every_held_request_names_the_acting_agent() {
+        let config = RunConfig::default();
+        let derived = ToolGate::new(&config, "intern", "inv", ApprovalScope::new("app", "u", "s"));
+        let configured =
+            ToolGate::new(&config, "intern", "inv", ApprovalScope::new("app", "u", "s"))
+                .with_acting_context(acting("treasurer"));
+        for (gate, agent_id) in
+            [(&derived, "urn:adk:agent:app/intern"), (&configured, "urn:adk:agent:app/treasurer")]
+        {
+            for call in [
+                GovernedCall::new("pay", "c1", json!({ "amount": 40 }))
+                    .requiring_confirmation(true),
+                GovernedCall::new("pay", "c2", json!({ "amount": 40 })).requested(true),
+            ] {
+                let ToolAuthorization::Pending { request, .. } =
+                    authorize_tool_call(gate, call).await.unwrap()
+                else {
+                    panic!("the call waits for a decision");
+                };
+                assert_eq!(request.acting.as_ref().map(|a| a.agent.id.as_str()), Some(agent_id));
+                assert_eq!(
+                    ToolConfirmationRequest::fingerprint_agent(&request.fingerprint()),
+                    Some(agent_id)
+                );
+            }
+        }
+    }
+
+    /// A decision recorded under a fingerprint that names no acting agent, by any path that
+    /// accepts one, never authorizes a governed call (#1210).
+    #[tokio::test]
+    async fn a_decision_naming_no_agent_never_authorizes_a_governed_call() {
+        let args = json!({ "amount": 40 });
+        let anonymous = ToolConfirmationRequest::new("pay", args.clone());
+        assert_eq!(ToolConfirmationRequest::fingerprint_agent(&anonymous.fingerprint()), None);
+        let call = || GovernedCall::new("pay", "c1", args.clone()).requiring_confirmation(true);
+        let scope = || ApprovalScope::new("app", "user", "session");
+
+        // The builder refuses it.
+        let refused =
+            RunConfig::builder().tool_approval(anonymous.fingerprint(), ToolApproval::approve());
+        assert!(refused.build().tool_approvals.is_empty(), "the builder refuses it");
+
+        // Set on the field, it matches nothing.
+        let mut config = RunConfig::default();
+        config.tool_approvals.insert(anonymous.fingerprint(), ToolApproval::approve());
+        assert!(matches!(
+            authorize_tool_call(&gate(&config), call()).await.unwrap(),
+            ToolAuthorization::Pending { .. }
+        ));
+
+        // A call-ID decision bound to it is ignored.
+        let bound = RunConfig::builder()
+            .tool_confirmation_decisions(HashMap::from([(
+                "c1".to_string(),
+                ToolConfirmationDecision::Approve,
+            )]))
+            .tool_confirmation_fingerprints(HashMap::from([(
+                "c1".to_string(),
+                anonymous.fingerprint(),
+            )]))
+            .build();
+        assert!(matches!(
+            authorize_tool_call(&gate(&bound), call()).await.unwrap(),
+            ToolAuthorization::Pending { .. }
+        ));
+
+        // A store keeps it for whoever reads it, and the governed path never takes it.
+        let store = Arc::new(InMemoryApprovalStore::new());
+        store.decide(&scope(), &anonymous.fingerprint(), ToolApproval::approve()).await.unwrap();
+        let stored = RunConfig::builder().approval_store(store.clone()).build();
+        assert!(matches!(
+            authorize_tool_call(&gate(&stored), call()).await.unwrap(),
+            ToolAuthorization::Pending { .. }
+        ));
+        assert!(store.has_decision(&scope(), &anonymous.fingerprint()).await.unwrap());
     }
 
     #[tokio::test]

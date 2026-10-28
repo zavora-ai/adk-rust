@@ -90,7 +90,7 @@ The governed path asks a policy through `ToolPolicy::evaluate_call`, which recei
 
 | Field | Value |
 |-------|-------|
-| `origin` | The called tool's `ToolOrigin`: `source` (`static` for a tool attached to the agent, `mcp:<toolset>` for one an MCP server publishes, `builtin` for a provider-executed tool declared without a `Tool` of its own) and `declaration_digest`, the SHA-256 of its declaration and annotations. `None` when the call was evaluated without its tool |
+| `origin` | The called tool's `ToolOrigin`: `source` (`static` for a tool attached to the agent, `mcp:<toolset>` for one an MCP server publishes, `builtin` for a provider-executed tool declared without a `Tool` of its own, `graph:<agent>` for a governed graph node, `realtime` for a native handler registered on a `RealtimeRunner`) and `declaration_digest`, the SHA-256 of its declaration and annotations. `None` when the call was evaluated without its tool |
 | `function_call_id` | The model's ID for the call. `None` for a [built-in tool](#built-in-tools), which is decided before any call exists |
 
 The default `evaluate_call` returns `evaluate(request)`, so a policy that implements only
@@ -496,8 +496,8 @@ narrows what the decision authorizes:
 | Part | Source | A different value means |
 |------|--------|-------------------------|
 | Acting agent | `ToolConfirmationRequest::acting` — the agent's `AgentId`, `urn:adk:agent:{app}/{agent}` unless configured | Another agent's call with the same tool name and arguments is not authorized; agents sharing a session never share approvals |
-| Tool origin | `ToolOrigin::source`, from `Tool::origin()` — `static` for a tool attached to the agent, `mcp:{toolset name}` for an MCP tool | A tool of the same name another MCP server or toolset publishes is not authorized |
-| Declaration digest | `ToolOrigin::declaration_digest` — SHA-256 of the tool's declaration and annotations | A tool redefined after the approval (new description, parameters, or annotations) is not authorized |
+| Tool origin | `ToolOrigin::source`, from `Tool::origin()` — `static` for a tool attached to the agent, `mcp:{toolset name}` for an MCP tool; `realtime` for a native handler on a `RealtimeRunner` (`ToolDefinition::handler_origin`) | A tool of the same name another MCP server or toolset publishes is not authorized, and neither is a native handler of a `Tool`'s name |
+| Declaration digest | `ToolOrigin::declaration_digest` — SHA-256 of the tool's declaration and annotations; for a native handler, of its `ToolDefinition` | A tool redefined after the approval (new description, parameters, or annotations) is not authorized |
 | Tool name and arguments | `tool_call_fingerprint(tool_name, args)`, canonical over key order | A call with other arguments needs its own decision |
 
 Keying by tool name would make one approval authorize every call of that tool, so an
@@ -536,6 +536,17 @@ fn preapprove(transfer: &dyn Tool) -> RunConfig {
 An unknown fingerprint or call ID means "no decision", which leaves the call
 awaiting confirmation. An expired approval is ignored. The failure direction is
 always toward asking again rather than executing.
+
+The governed path records the acting agent on every request it holds — `LlmAgent`,
+`CodeActAgent`, governed graph nodes, and the realtime runners alike — so every fingerprint it
+looks a decision up under names that agent. A fingerprint built without one
+(`ToolConfirmationRequest::fingerprint_agent` returns `None`) matches no governed call:
+
+| Where it is recorded | What happens |
+|----------------------|--------------|
+| `RunConfigBuilder::tool_approval` | Refused: the approval is not recorded, and `tracing::warn!` reports it |
+| `RunConfigBuilder::tool_confirmation_fingerprints` | Kept, so the call-ID decision it binds is never applied; `tracing::warn!` names the call ID |
+| `ApprovalStore::decide`, `ApprovalService` | Kept, since the store and the service also hold decisions that are not tool calls, but never taken by a governed call |
 
 ### Approval Store
 

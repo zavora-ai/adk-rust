@@ -12,6 +12,7 @@
 //! cargo run --manifest-path examples/approval_scoping/Cargo.toml -- --scenario mcp_resume_stays_on_its_server
 //! ```
 
+mod acting;
 mod bank;
 mod scripted;
 
@@ -808,6 +809,9 @@ const SCENARIOS: &[&str] = &[
     "mcp_redefined_tool_needs_new_approval",
     "mcp_resume_on_same_server_runs_once",
     "live_store_approval_stays_with_its_agent",
+    "live_claude_approval_stays_with_its_agent",
+    "live_claude_approval_naming_no_agent_is_refused",
+    "realtime_handler_approval_follows_its_definition",
 ];
 
 async fn run_scenario(name: &str) -> anyhow::Result<Verdict> {
@@ -824,6 +828,15 @@ async fn run_scenario(name: &str) -> anyhow::Result<Verdict> {
         "mcp_resume_on_same_server_runs_once" => mcp_resume_on_same_server_runs_once().await,
         "live_store_approval_stays_with_its_agent" => {
             live_store_approval_stays_with_its_agent().await
+        }
+        "live_claude_approval_stays_with_its_agent" => {
+            acting::live_claude_approval_stays_with_its_agent().await
+        }
+        "live_claude_approval_naming_no_agent_is_refused" => {
+            acting::live_claude_approval_naming_no_agent_is_refused().await
+        }
+        "realtime_handler_approval_follows_its_definition" => {
+            acting::realtime_handler_approval_follows_its_definition().await
         }
         other => anyhow::bail!("unknown scenario {other}; known: {}", SCENARIOS.join(", ")),
     }

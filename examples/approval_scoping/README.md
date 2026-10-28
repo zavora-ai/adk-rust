@@ -7,7 +7,9 @@ executions each approval authorizes.
 
 A scripted OpenAI-compatible server on 127.0.0.1 plays the model where two agents must issue the
 same call with the same arguments, or where a provider reuses call IDs. The live scenario runs the
-same two-agent flow against OpenAI when `OPENAI_API_KEY` is set.
+same two-agent flow against OpenAI when `OPENAI_API_KEY` is set, and the `live_claude_*` scenarios
+serve `LlmAgent`s on Anthropic `claude-sonnet-5-5` when `ANTHROPIC_API_KEY` is set. The realtime
+scenario drives a `RealtimeRunner` native handler through its governed dispatch locally.
 
 ## Run
 
@@ -32,6 +34,9 @@ file found replace shell exports.
 | `mcp_redefined_tool_needs_new_approval` | `wire` held on `bank_a`; approved; `bank_a` then redefines `wire` with a wider description and a new parameter | The redefined tool receives no call; the held call is answered as not run |
 | `mcp_resume_on_same_server_runs_once` | `wire` held on `bank_a`; approved; nothing changes | `bank_a` receives the call once |
 | `live_store_approval_stays_with_its_agent` | The two-agent flow against `gpt-5.6-terra` (`OPENAI_MODEL` overrides) | As `store_approval_stays_with_its_agent` and `approved_call_runs_once`; skipped when the model does not make the calls |
+| `live_claude_approval_stays_with_its_agent` | Agents `treasurer` and `intern` on `claude-sonnet-5-5` (`ANTHROPIC_MODEL` overrides), each with an identically declared `transfer` requiring confirmation, in two sessions; the treasurer's held call approved run-wide; the intern makes the identical call under that config | The intern's transfer does not run; the treasurer's held call runs once; skipped without `ANTHROPIC_API_KEY` or when the calls differ |
+| `live_claude_approval_naming_no_agent_is_refused` | The treasurer's held call on `claude-sonnet-5-5`; an approval built from it without its acting agent, passed to `RunConfigBuilder::tool_approval`, bound to a call-ID decision with `tool_confirmation_fingerprints`, and decided in the SQLite approval store | `tool_approval` refuses it (not recorded); the call stays held under the other two; the store keeps its decision untaken; an approval naming the agent then runs the call once |
+| `realtime_handler_approval_follows_its_definition` | A `RealtimeRunner` native handler `refund` held for approval and approved in the store; the handler re-registered with a wider description, and by another agent | The held call carries origin source `realtime`; neither the redefined handler nor the other agent's call runs; the approved handler runs once |
 
 ## Results
 

@@ -4917,6 +4917,28 @@ mod tests {
         assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("after"));
     }
 
+    /// The request a held call carries names the acting agent, so its fingerprint does too
+    /// (#1210).
+    #[tokio::test]
+    async fn a_held_call_names_the_acting_agent() {
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+            Planned::call("echo", json!({"msg": "x"}), 7),
+            Planned::Complete(json!({"type": "final_result", "value": "after"})),
+        ]]));
+        let mut input = base_inputs(FakeLlm::new("noop"), rt, user("go"));
+        input.tools = vec![echo_tool()];
+        input.policy = ToolConfirmationPolicy::Always;
+        let held = collect(input).await;
+        let request = held.last().unwrap().actions.tool_confirmation.clone().expect("held");
+
+        let agent = "urn:adk:agent:app/code-agent";
+        assert_eq!(request.acting.as_ref().map(|acting| acting.agent.id.as_str()), Some(agent));
+        assert_eq!(
+            adk_core::ToolConfirmationRequest::fingerprint_agent(&request.fingerprint()),
+            Some(agent)
+        );
+    }
+
     #[tokio::test]
     async fn a_frozen_run_stops_before_the_model_call() {
         let model = FakeLlm::new("noop");

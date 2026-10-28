@@ -2224,6 +2224,32 @@ mod tool_safety_tests {
         assert_eq!(executions.load(Ordering::SeqCst), 1);
     }
 
+    /// The request a held call carries names the acting agent, so its fingerprint does too
+    /// (#1210).
+    #[tokio::test]
+    async fn a_held_call_names_the_acting_agent() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let tool = counting(&executions);
+        let config = RunConfig::builder()
+            .tool_policy(Arc::new(
+                adk_core::DeclarativePolicy::builder()
+                    .require_approval("counting", "needs a person")
+                    .build(),
+            ))
+            .build();
+        let outcome = dispatch_with(config, &tool, "{}", vec![], vec![]).await.unwrap();
+        let held = outcome.held.expect("held without a decision");
+        assert_eq!(
+            held.acting.as_ref().map(|acting| acting.agent.id.as_str()),
+            Some("urn:adk:agent:app/agent")
+        );
+        assert_eq!(
+            adk_core::ToolConfirmationRequest::fingerprint_agent(&held.fingerprint()),
+            Some("urn:adk:agent:app/agent")
+        );
+        assert_eq!(held.origin, Some(adk_core::ToolOrigin::of(tool.as_ref())));
+    }
+
     /// ROADMAP "No content guardrails on the model's own text or transcript events".
     #[cfg(feature = "guardrails")]
     #[tokio::test]

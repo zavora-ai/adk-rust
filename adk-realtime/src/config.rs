@@ -153,6 +153,46 @@ impl ToolDefinition {
         self.parameters = Some(schema);
         self
     }
+
+    /// The [`ToolOrigin`](adk_core::ToolOrigin) of governed calls to the native handler a
+    /// [`RealtimeRunner`](crate::RealtimeRunner) registers under this definition:
+    /// [`REALTIME_HANDLER_ORIGIN`](crate::runner::REALTIME_HANDLER_ORIGIN) and a digest of
+    /// the name, description, and parameters.
+    ///
+    /// The origin is part of a held call's
+    /// [fingerprint](adk_core::ToolConfirmationRequest::fingerprint), so build a pre-approval
+    /// for a handler's call with it.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{RunConfig, ToolApproval, ToolConfirmationRequest};
+    /// use adk_realtime::config::ToolDefinition;
+    /// use adk_realtime::runner::REALTIME_HANDLER_ORIGIN;
+    /// use serde_json::json;
+    ///
+    /// let refund = ToolDefinition::new("refund").with_description("Refunds an order");
+    /// assert_eq!(refund.handler_origin().source, REALTIME_HANDLER_ORIGIN);
+    /// let reworded = refund.clone().with_description("Refunds any order");
+    /// assert_ne!(refund.handler_origin(), reworded.handler_origin());
+    ///
+    /// // A runner whose `agent_name` is "voice", in app "shop", acts as this agent.
+    /// let acting = RunConfig::default().acting_context_for("shop", "voice", "alice");
+    /// let key = ToolConfirmationRequest::new("refund", json!({ "order": "A-1" }))
+    ///     .with_origin(refund.handler_origin())
+    ///     .with_acting_context(acting)
+    ///     .fingerprint();
+    /// let config = RunConfig::builder().tool_approval(key, ToolApproval::approve()).build();
+    /// assert_eq!(config.tool_approvals.len(), 1);
+    /// ```
+    pub fn handler_origin(&self) -> adk_core::ToolOrigin {
+        let declaration = serde_json::json!({
+            "name": self.name,
+            "description": self.description,
+            "parameters": self.parameters,
+        });
+        adk_core::ToolOrigin::new(crate::runner::REALTIME_HANDLER_ORIGIN, &declaration, None)
+    }
 }
 
 /// Configuration for a realtime session.

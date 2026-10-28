@@ -237,6 +237,29 @@ fn build(model: BoxedModel) -> adk_realtime::Result<RealtimeRunner> {
 | The result screen withholds the result | `{"status": "result_withheld", "error": "tool '<name>' ran, but its result was withheld: <reason>; ..."}` |
 | The kill switch is frozen | Nothing — the session ends with a `governance.frozen` error |
 
+A held call's request names the runner's acting agent (`urn:adk:agent:{app}/{agent_name}`
+unless the run configures a principal) and the tool's origin. An ADK tool carries its own
+`Tool::origin()`; a native handler carries `REALTIME_HANDLER_ORIGIN` (`realtime`) and a digest
+of its `ToolDefinition`, so an approval of a handler's call never authorizes a `Tool` of the
+same name and stops applying when the handler's description or parameters change. Build a
+pre-approval for a handler's call with `ToolDefinition::handler_origin`:
+
+```rust
+use adk_core::{RunConfig, ToolApproval, ToolConfirmationRequest};
+use adk_realtime::config::ToolDefinition;
+use serde_json::json;
+
+/// Approves `refund` of order A-1 for the runner whose `agent_name` is "voice" in app "shop".
+fn preapprove(refund: &ToolDefinition) -> RunConfig {
+    let acting = RunConfig::default().acting_context_for("shop", "voice", "alice");
+    let key = ToolConfirmationRequest::new(refund.name.clone(), json!({ "order": "A-1" }))
+        .with_origin(refund.handler_origin())
+        .with_acting_context(acting)
+        .fingerprint();
+    RunConfig::builder().tool_approval(key, ToolApproval::approve()).build()
+}
+```
+
 An error message can quote credentials, internal hosts, or upstream bodies, and the provider
 can speak it to the user and the session stores it, so by default it reaches neither.
 `expose_tool_error_messages(true)` on `RealtimeAgentBuilder`, `RealtimeRunnerBuilder`, or

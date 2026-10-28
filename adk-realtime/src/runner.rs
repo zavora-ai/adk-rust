@@ -23,6 +23,15 @@ pub const DEFAULT_REALTIME_TOOL_TIMEOUT: std::time::Duration = std::time::Durati
 /// authors its held-call events with it, where [`adk_core::held_tool_calls`] finds them.
 pub const DEFAULT_REALTIME_AGENT_NAME: &str = "realtime";
 
+/// [`ToolOrigin::source`](adk_core::ToolOrigin::source) of a native handler registered on a
+/// [`RealtimeRunner`] with [`RealtimeRunnerBuilder::tool`].
+///
+/// A governed call to the handler carries this source and a digest of the handler's
+/// [`ToolDefinition`] ([`ToolDefinition::handler_origin`]), so an approval of the call never
+/// authorizes a [`Tool`](adk_core::Tool) of the same name and stops applying when the
+/// handler's description or parameters change.
+pub const REALTIME_HANDLER_ORIGIN: &str = "realtime";
+
 /// Parses a provider's tool-call arguments.
 ///
 /// Empty arguments are an empty object. Anything that is not a JSON object is refused,
@@ -1348,21 +1357,20 @@ impl RealtimeRunner {
 
     /// Execute a tool call and optionally send the response.
     async fn execute_tool_call(&self, call_id: &str, name: &str, arguments: &str) -> Result<()> {
-        let handler = self.tools.get(name).map(|(_, h)| h.clone());
+        let handler = self.tools.get(name).map(|(definition, h)| (definition, h.clone()));
 
         let result = match (handler, parse_tool_arguments(arguments)) {
             (None, _) => serde_json::json!({ "error": format!("Unknown tool: {name}") }),
             (Some(_), Err(reason)) => {
                 serde_json::json!({ "error": format!("Tool '{name}' was not run: {reason}") })
             }
-            (Some(handler), Ok(args)) => {
+            (Some((definition, handler)), Ok(args)) => {
                 let screened_args = self.tool_result_screen.as_ref().map(|_| args.clone());
                 // Native handlers declare no read-only flag, so the policy treats them as
                 // having side effects.
-                let result = match self
-                    .authorize_tool_call(adk_core::GovernedCall::new(name, call_id, args))
-                    .await?
-                {
+                let mut call = adk_core::GovernedCall::new(name, call_id, args);
+                call.origin = Some(definition.handler_origin());
+                let result = match self.authorize_tool_call(call).await? {
                     adk_core::ToolAuthorization::Execute { args, .. } => {
                         let call = ToolCall {
                             call_id: call_id.to_string(),
@@ -1894,6 +1902,103 @@ mod runner_tests {
         let error = runner.dispatch_tool_call("c2", "pay", "{}").await.unwrap_err();
         assert!(error.to_string().contains("frozen"), "{error}");
         assert_eq!(executions.load(Ordering::SeqCst), 0);
+    }
+
+    /// A native handler's held call names the runner's agent and the `realtime` origin of
+    /// the handler's definition, so an approval of it never covers the handler once
+    /// redefined, nor another agent's identical call (#1210).
+    #[tokio::test]
+    async fn a_native_handlers_held_call_names_its_agent_and_handler_origin() {
+        use adk_core::ApprovalStore;
+        let counts = Arc::new(Counts::default());
+        let executions = Arc::new(AtomicUsize::new(0));
+        let store = Arc::new(adk_core::InMemoryApprovalStore::new());
+        let scope = adk_core::ApprovalScope::new("voice", "user", "session");
+        let config = adk_core::RunConfig::builder()
+            .tool_policy(Arc::new(
+                adk_core::DeclarativePolicy::builder()
+                    .require_approval("pay", "payments need a person")
+                    .build(),
+            ))
+            .approval_store(store.clone())
+            .build();
+        let runner = |definition: ToolDefinition, agent: &str| {
+            let executions = Arc::clone(&executions);
+            RealtimeRunner::builder()
+                .model(Arc::new(MockModel) as BoxedModel)
+                .agent_name(agent)
+                .tool_fn(definition, move |_call| {
+                    executions.fetch_add(1, Ordering::SeqCst);
+                    Ok(serde_json::json!({ "paid": true }))
+                })
+                .tool_governance(config.clone(), scope.clone())
+                .build()
+                .unwrap()
+        };
+        let install = |runner: RealtimeRunner| {
+            let counts = Arc::clone(&counts);
+            async move {
+                *runner.session.write().await =
+                    Some(Arc::new(RecordingSession { counts }) as Arc<dyn RealtimeSession>);
+                runner
+            }
+        };
+        let pay = tool_def("pay").with_description("Pays an invoice");
+        let reworded_pay = pay.clone().with_description("Pays anyone");
+        let voice = install(runner(pay.clone(), "voice")).await;
+
+        voice.dispatch_tool_call("c1", "pay", "{}").await.unwrap();
+        let pending = store.pending(&scope).await.unwrap();
+        let [held] = pending.as_slice() else { panic!("one held call: {pending:?}") };
+        assert_eq!(held.request.origin, Some(pay.handler_origin()));
+        assert_eq!(held.request.origin.as_ref().unwrap().source, REALTIME_HANDLER_ORIGIN);
+        assert_eq!(
+            held.request.acting.as_ref().map(|acting| acting.agent.id.as_str()),
+            Some("urn:adk:agent:voice/voice")
+        );
+        assert_eq!(
+            adk_core::ToolConfirmationRequest::fingerprint_agent(&held.fingerprint),
+            Some("urn:adk:agent:voice/voice")
+        );
+
+        // Redefined, the handler is not the one approved.
+        store.decide(&scope, &held.fingerprint, adk_core::ToolApproval::approve()).await.unwrap();
+        let reworded = install(runner(reworded_pay.clone(), "voice")).await;
+        reworded.dispatch_tool_call("c2", "pay", "{}").await.unwrap();
+        assert_eq!(executions.load(Ordering::SeqCst), 0, "a redefined handler needs approval");
+
+        // Another agent's identical call is not the one approved.
+        let intern = install(runner(pay.clone(), "intern")).await;
+        intern.dispatch_tool_call("c3", "pay", "{}").await.unwrap();
+        assert_eq!(executions.load(Ordering::SeqCst), 0, "another agent needs its own approval");
+
+        // The handler as approved, by the agent it was approved for, runs once.
+        voice.dispatch_tool_call("c4", "pay", "{}").await.unwrap();
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
+        let mut waiting: Vec<_> = store
+            .pending(&scope)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|entry| {
+                let agent =
+                    adk_core::ToolConfirmationRequest::fingerprint_agent(&entry.fingerprint)
+                        .map(str::to_string);
+                (agent, entry.request.origin)
+            })
+            .collect();
+        waiting.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            waiting,
+            [
+                (Some("urn:adk:agent:voice/intern".to_string()), Some(pay.handler_origin())),
+                (
+                    Some("urn:adk:agent:voice/voice".to_string()),
+                    Some(reworded_pay.handler_origin())
+                ),
+            ],
+            "each unapproved call waits on its own"
+        );
     }
 
     #[tokio::test]

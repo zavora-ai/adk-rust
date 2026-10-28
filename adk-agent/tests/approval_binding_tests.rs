@@ -366,6 +366,48 @@ async fn a_fingerprint_built_before_any_run_approves_only_its_agents_calls() {
     assert_eq!(intern_tool.executions(), 0, "another agent's call is not authorized");
 }
 
+/// Every call an `LlmAgent` holds names its acting agent — derived, or the principal the run
+/// configures — so its fingerprint does too, and an approval built without an agent is
+/// refused rather than kept where it can never apply (#1210).
+#[tokio::test]
+async fn every_held_call_names_its_agent_and_an_approval_naming_none_is_refused() {
+    let spiffe = "spiffe://bank.test/agent/ops";
+    let configured = RunConfig::builder()
+        .agent_principal("ops", AgentPrincipal::new(adk_core::AgentId::new(spiffe).unwrap()))
+        .build();
+    for (config, agent) in
+        [(RunConfig::default(), "urn:adk:agent:governed/ops"), (configured, spiffe)]
+    {
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let mut config = config;
+        config.approval_store = Some(store.clone());
+        let tool = Transfer::new("static");
+        let ops = LlmAgentBuilder::new("ops")
+            .model(ScriptedModel::new(vec![call("transfer", amount(), "c-1")]))
+            .tool(tool.clone() as Arc<dyn Tool>)
+            .require_tool_confirmation("transfer")
+            .build()
+            .unwrap();
+        let harness = harness(Arc::new(ops), config).await;
+
+        let [request] = held(&harness.run("pay", None).await).try_into().expect("one hold");
+        assert_eq!(agent_id(&request), agent);
+        assert_eq!(ToolConfirmationRequest::fingerprint_agent(&request.fingerprint()), Some(agent));
+        let pending = store.pending(&scope()).await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            ToolConfirmationRequest::fingerprint_agent(&pending[0].fingerprint),
+            Some(agent)
+        );
+        assert_eq!(tool.executions(), 0);
+    }
+
+    let tool = Transfer::new("static");
+    let anonymous = ToolConfirmationRequest::for_tool(tool.as_ref(), amount()).fingerprint();
+    let refused = RunConfig::builder().tool_approval(anonymous, ToolApproval::approve()).build();
+    assert!(refused.tool_approvals.is_empty(), "an approval naming no agent is refused");
+}
+
 // --- Tool binding ---
 
 /// One agent over a switchable toolset; run 1 holds `transfer` on the primary tool and the
