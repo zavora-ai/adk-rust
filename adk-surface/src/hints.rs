@@ -221,7 +221,9 @@ pub trait CardHints: Send + Sync {
     }
 }
 
-/// What `request`'s call acts on, as the first of `hints` that names it says (spec 3.3 §8).
+/// What `request`'s call acts on, as the first of `hints` that names it says, or for a decision
+/// the kernel itself asks, what it is about: the agent to add, the agenda item, the driver
+/// (spec 3.3 §8).
 pub(crate) async fn named(
     hints: &[Arc<dyn CardHints>],
     request: &ApprovalRequest,
@@ -231,7 +233,7 @@ pub(crate) async fn named(
             return Some(name);
         }
     }
-    None
+    crate::project::kernel_name(request)
 }
 
 #[cfg(test)]

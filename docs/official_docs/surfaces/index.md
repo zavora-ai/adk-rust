@@ -209,7 +209,10 @@ match outcome {
 Every answer is written to the audit trail as `surface.decide` (kind `approval`) with
 `approvalId`, `sessionId`, `tool`, `answer`, `outcome` (`decided`, `already_decided`,
 `changed`, `refused`, `cancelled`), `surface` and `origin`; the actor is the person. When a card
-hint names what the call acts on, the record also carries that `title` and the card's `summary`.
+hint names what the call acts on, or the decision is one the kernel itself asks — the agent a
+suggestion adds, an agenda item, a driver to start — the record also carries that `title` and
+the card's `summary`, so "What your agents did" reads "You said yes to adding Finance" and never
+the kernel's tool name.
 `surface.send`, `surface.stop_all`, `surface.resume_all` and `surface.set_mode` record the
 other commands the same way. `surface.drawn.submitted` records a drawn form's send with
 `sessionId`, `surfaceId`, `version`, `actionId`, `tool`, `argsDigest` (the audit trail's

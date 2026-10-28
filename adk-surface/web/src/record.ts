@@ -87,9 +87,29 @@ function screenCall(line: KernelRecordLine, agents: AgentRow[]): string | undefi
   return `${agentOf(line.agent, agents) ?? "Your agent"} asked to snooze something in Coming up; it couldn't be done, so nothing changed.`;
 }
 
-/** What a call was, by its tool, or "a call". */
+/**
+ * A decision the kernel itself asks, in plain words, by what it is about — never its tool,
+ * `kernel:agent.create` (spec 3.3 §8): "adding Finance", "News digest", "starting email for
+ * your agents"; a record that names nothing says what kind of decision it was.
+ */
+function kernelDecision(line: KernelRecordLine): string | undefined {
+  if (!line.tool?.startsWith("kernel:")) return undefined;
+  const name = line.title;
+  switch (line.tool) {
+    case "kernel:agent.create":
+      return `adding ${name ?? "an agent"}`;
+    case "kernel:agenda":
+      return name ?? "a suggestion";
+    case "kernel:driver.mount":
+      return `starting ${name ?? "a service"} for your agents`;
+    default:
+      return name ?? "a request from ADK-Rust";
+  }
+}
+
+/** What a call was, by its tool, or "a call"; a kernel decision in plain words. */
 function call(line: KernelRecordLine): string {
-  return line.tool ?? "a call";
+  return kernelDecision(line) ?? line.tool ?? "a call";
 }
 
 /** The form a call came from, by its tool: `send_invoice` is "the invoice form". */
@@ -103,6 +123,19 @@ function formOf(tool: string | undefined): string {
  * record names the agent, and where: "You let Finance use send_email, from Telegram."
  */
 function answer(line: KernelRecordLine, agents: AgentRow[]): string | undefined {
+  // A decision the kernel asks is the person's own, whoever suggested it.
+  const kernel = kernelDecision(line);
+  if (kernel !== undefined) {
+    switch (line.decision) {
+      case "approved":
+      case "edited":
+        return `You said yes to ${kernel}${where(line)}.`;
+      case "rejected":
+        return `You said no to ${kernel}${where(line)}.`;
+      default:
+        return undefined;
+    }
+  }
   const agent = line.agent ? agentOf(line.agent, agents) : undefined;
   switch (line.decision) {
     case "approved":
@@ -219,6 +252,8 @@ export function recordSentence(line: KernelRecordLine, agents: AgentRow[]): stri
   // A tool call: its action is the tool, and it names the agent that made it.
   if (line.tool !== undefined && line.action === line.tool && line.agent) {
     if (line.toolSource?.startsWith("verbs:")) return screenCall(line, agents);
+    // The kernel's own decisions are not an agent's calls; their answers are on record.
+    if (line.tool.startsWith("kernel:")) return undefined;
     const agent = agentOf(line.agent, agents) ?? "Your agents";
     if (line.decision === "denied") return `${agent} was not allowed to use ${line.tool}.`;
     if (line.outcome === "failed") return `${agent} tried ${line.tool}, and it failed.`;

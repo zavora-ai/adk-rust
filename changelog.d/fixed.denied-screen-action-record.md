@@ -7,3 +7,5 @@
   A denied screen action shows that one line: the governed path's own record of the call is
   told by its publisher (`RecordLine::tool_source`, `policy_ref`) and never shown by the
   tool's name, such as "Finance was not allowed to use verb_snooze".
+  Answers to the kernel's own decisions read in plain words too: "You said yes to adding
+  Finance", "You said yes to News digest", never `kernel:agent.create` or `kernel:agenda`.

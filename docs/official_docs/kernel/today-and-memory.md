@@ -148,7 +148,7 @@ first, as structured fields (`action`, `kernelAction` for the kernel's own recor
 it decided — `tool`, `decision` — for a standing rule's record, `allowed` or `denied` — `outcome`,
 `how`, `channel` — a paired device's name for its answers — `surface`, `target`, `title` —
 the item it acted on as the person knows it, such as "News digest" for an answer to an agent's
-screen action — and, for a call, `toolSource`, its tool's publisher, and `policyRef`, what decided
+screen action or "Finance" for a suggested agent — and, for a call, `toolSource`, its tool's publisher, and `policyRef`, what decided
 it, `confirmation` for a person's answer) a surface words as "You let Finance use send_email, from
 Telegram". `GET /kernel/record/check` verifies the whole log against its signed checkpoints:
 
