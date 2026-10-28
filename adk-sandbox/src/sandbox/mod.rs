@@ -85,10 +85,12 @@ pub struct AllowedPath {
 ///
 /// Declares intent for per-domain network filtering. **No enforcer can apply
 /// it:** Seatbelt network filters accept only `*` or `localhost` as the host,
-/// and bubblewrap and the Windows restricted token have no domain-level control. Network access
-/// is binary everywhere (all or nothing via `allow_network`), and rules present
-/// with `allow_network = false` block all network access and log a
-/// `tracing::warn`.
+/// and bubblewrap and the Windows restricted token have no domain-level control.
+/// Under Seatbelt and bubblewrap network access is all or nothing via
+/// `allow_network`, and rules present with `allow_network = false` block all
+/// network access and log a `tracing::warn`. The Windows restricted token does not
+/// restrict the network at all: the network stays open, and the first policy in the
+/// process with rules logs a `tracing::warn`.
 ///
 /// # Example
 ///
@@ -118,21 +120,31 @@ pub struct NetworkRule {
 ///
 /// Network access has two levels of control:
 ///
-/// 1. **Binary** (`allow_network`): When `true`, all network access is allowed.
-///    When `false`, all network is blocked. Works on all platforms.
+/// 1. **Binary** (`allow_network`): `true` allows all network access. `false`
+///    asks for all network access to be blocked.
 ///
 /// 2. **Domain allowlist** (`network_rules`): recorded for callers and
-///    future enforcers, but **not enforced on any platform**. Non-empty
-///    `network_rules` with `allow_network = false` block all network access —
-///    the rules are ignored with a `tracing::warn`. This fails closed.
+///    future enforcers, but **not enforced on any platform**.
+///
+/// What each enforcer does with them:
+///
+/// | Enforcer | `allow_network = false` | `network_rules` |
+/// |----------|-------------------------|-----------------|
+/// | Seatbelt (macOS) | All network access blocked | Ignored with a `tracing::warn` when `allow_network` is `false`; all network access stays blocked (fails closed) |
+/// | bubblewrap (Linux) | All network access blocked (`--unshare-net`) | Ignored with a `tracing::warn` when `allow_network` is `false`; all network access stays blocked (fails closed) |
+/// | Restricted token (Windows) | **Not enforced** — the process keeps full network access; logs a `tracing::warn` once per process | **Not enforced** — logs a `tracing::warn` once per process; the process keeps full network access |
+///
+/// The Windows restricted token has no per-process network filter, so a policy that
+/// must keep a process off the network is enforced only by Seatbelt and bubblewrap.
 ///
 /// # Example
 ///
 /// ```rust
 /// use adk_sandbox::sandbox::SandboxPolicyBuilder;
 ///
-/// // Records the intended domains; all network stays blocked because no
-/// // enforcer can filter by domain.
+/// // Records the intended domains. No enforcer filters by domain: Seatbelt and
+/// // bubblewrap block all network access, and the Windows restricted token
+/// // leaves it open.
 /// let policy = SandboxPolicyBuilder::new()
 ///     .allow_read("/usr/lib")
 ///     .allow_domain("api.openai.com", &[443])
@@ -140,8 +152,8 @@ pub struct NetworkRule {
 ///     .env("PATH", "/usr/bin")
 ///     .build();
 ///
-/// assert!(!policy.allow_network); // full network is denied
-/// assert_eq!(policy.network_rules.len(), 2); // but 2 domains are allowed
+/// assert!(!policy.allow_network); // full network access is not requested
+/// assert_eq!(policy.network_rules.len(), 2); // 2 domains recorded, none enforced
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -156,10 +168,15 @@ pub struct SandboxPolicy {
     /// For the same path, `ReadWrite` wins.
     pub allowed_paths: Vec<AllowedPath>,
     /// Whether the process may access the network (all domains/ports).
+    ///
+    /// `false` blocks all network access under Seatbelt and bubblewrap. The Windows
+    /// restricted-token enforcer does not enforce it: the process keeps full network
+    /// access and the enforcer logs a `tracing::warn` once per process.
     pub allow_network: bool,
     /// Per-domain network allowlist. Not enforced on any platform: with
-    /// `allow_network = false` these rules are ignored and all network access
-    /// is blocked.
+    /// `allow_network = false`, Seatbelt and bubblewrap ignore these rules and block
+    /// all network access, and the Windows restricted-token enforcer leaves the network
+    /// open and logs a `tracing::warn` once per process.
     #[serde(default)]
     pub network_rules: Vec<NetworkRule>,
     /// Whether the process may create child processes.
@@ -264,7 +281,9 @@ impl SandboxPolicyBuilder {
     /// **Platform support:** not enforced on any platform. Seatbelt network
     /// filters accept only `*` or `localhost` as the host, and bubblewrap and the
     /// Windows restricted token have no domain-level control. If any rules are present but
-    /// `allow_network` is false, all network access is blocked.
+    /// `allow_network` is false, Seatbelt and bubblewrap block all network access; the
+    /// Windows restricted token leaves the network open and logs a `tracing::warn` once per
+    /// process.
     ///
     /// # Example
     ///

@@ -42,7 +42,7 @@
 //! | The MSYS2 or Cygwin namespace of any other installation | **Not protected** — a command that starts such an installation's program by its path while none of the user's runs creates that namespace at Low integrity, and a program of it the user starts before the command ends shares it |
 //! | Descendant processes | Killed with the call's Job Object |
 //! | Inherited handles | `spawn_contained`'s three standard handles only, never inheritable in this process, so no process another thread starts can take one; `run_confined` inherits none |
-//! | Network | **Not enforced** — Windows offers no per-process network filter without AppContainer |
+//! | Network | **Not enforced** — Windows offers no per-process network filter without AppContainer; the first policy in the process with `allow_network = false` or with `network_rules` logs a `tracing::warn`, once per process, and every command keeps full network access |
 //! | Labels and grants | Persist on the granted paths after the call: `RESTRICTED`'s entry, and a Low label on each read-write path, so any Low-integrity process of the machine may write there |
 
 use std::ffi::{OsStr, OsString};
@@ -107,6 +107,10 @@ impl WindowsEnforcer {
     /// call timed out. On a timeout the job is terminated and [`ConfinedOutcome::timed_out`]
     /// is `true`.
     ///
+    /// The network is not restricted: the command keeps full network access. The first call
+    /// in the process whose policy has `allow_network = false` or `network_rules` logs a
+    /// `tracing::warn` with that policy's fields; later calls log nothing.
+    ///
     /// # Errors
     ///
     /// Returns [`SandboxError::EnforcerUnavailable`] off Windows, [`SandboxError::PolicyViolation`]
@@ -152,7 +156,7 @@ impl WindowsEnforcer {
     /// system directory, which never runs and ends once the child exists, as its parent and
     /// inherits the three handles from it, so its parent process id is that of an exited
     /// process (spec 3.2 §10 W5).
-    /// The environment is built as for `run_confined`. `program` should be a full
+    /// The environment and the network are as for `run_confined`. `program` should be a full
     /// path: a bare name is searched for as `CreateProcessAsUserW` does, from the directory
     /// of this process and its working directory before the system directories and `PATH`.
     ///
@@ -231,9 +235,10 @@ impl WindowsEnforcer {
             let system = std::env::var_os("SystemRoot")
                 .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
                 .join("System32");
+            // The probe asks for no network restriction, so it logs no network warning.
             let outcome = self
                 .run_confined(
-                    &super::SandboxPolicyBuilder::new().build(),
+                    &super::SandboxPolicyBuilder::new().allow_network().build(),
                     system.join("cmd.exe").as_os_str(),
                     &[OsString::from("/d"), OsString::from("/c"), OsString::from("exit 0")],
                     &system,
@@ -1438,6 +1443,10 @@ mod imp {
         }
     }
 
+    /// Logs, for the first policy of this process that asks to restrict the network, that the
+    /// token does not.
+    static NETWORK_WARNING: std::sync::Once = std::sync::Once::new();
+
     /// A process the restricted token runs, in its job and resumed.
     struct Launched {
         job: JobObject,
@@ -1461,6 +1470,19 @@ mod imp {
         cwd: &Path,
         stdio: Option<&ChildStdio>,
     ) -> Result<Launched, SandboxError> {
+        // The token has no network filter, so the command keeps full network access whatever
+        // the policy asks for. Once per process, since `allow_network` defaults to `false` and
+        // a shell would otherwise warn on every command.
+        if !policy.allow_network || !policy.network_rules.is_empty() {
+            NETWORK_WARNING.call_once(|| {
+                tracing::warn!(
+                    allow_network = policy.allow_network,
+                    rules_count = policy.network_rules.len(),
+                    "the restricted-token enforcer does not enforce allow_network = false or \
+                     network_rules; confined processes keep full network access"
+                );
+            });
+        }
         let process_token = open_process_token()?;
         let user = token_user(process_token.0)?;
         let groups = token_groups(process_token.0)?;
@@ -1737,6 +1759,103 @@ mod imp {
             std::fs::File::from(output_read).read_to_string(&mut out).expect("stdout");
             std::fs::File::from(error_read).read_to_string(&mut err).expect("stderr");
             assert_eq!((out.trim(), err.trim()), ("out", "err"));
+        }
+
+        /// The restricted token has no network filter, so a confined command keeps full
+        /// network access, and the first policy of the process that asks for less says so.
+        mod network {
+            use std::sync::{Arc, Mutex};
+
+            use tracing::field::{Field, Visit};
+            use tracing::span::{Attributes, Id, Record};
+            use tracing::{Event, Level, Metadata, Subscriber};
+
+            use super::*;
+            use crate::sandbox::SandboxPolicyBuilder;
+            use crate::sandbox::windows::WindowsEnforcer;
+
+            /// The network warnings logged on this thread while it is the default subscriber:
+            /// each one's fields other than its message, as `name=value`.
+            #[derive(Clone, Default)]
+            struct NetworkWarnings(Arc<Mutex<Vec<Vec<String>>>>);
+
+            struct Fields<'a>(&'a mut String, &'a mut Vec<String>);
+
+            impl Visit for Fields<'_> {
+                fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                    match field.name() {
+                        "message" => *self.0 = format!("{value:?}"),
+                        name => self.1.push(format!("{name}={value:?}")),
+                    }
+                }
+            }
+
+            impl Subscriber for NetworkWarnings {
+                fn enabled(&self, _: &Metadata<'_>) -> bool {
+                    true
+                }
+
+                fn new_span(&self, _: &Attributes<'_>) -> Id {
+                    Id::from_u64(1)
+                }
+
+                fn record(&self, _: &Id, _: &Record<'_>) {}
+
+                fn record_follows_from(&self, _: &Id, _: &Id) {}
+
+                fn event(&self, event: &Event<'_>) {
+                    let (mut message, mut fields) = (String::new(), Vec::new());
+                    event.record(&mut Fields(&mut message, &mut fields));
+                    if *event.metadata().level() == Level::WARN
+                        && message.contains("network access")
+                    {
+                        self.0.lock().expect("the warnings").push(fields);
+                    }
+                }
+
+                fn enter(&self, _: &Id) {}
+
+                fn exit(&self, _: &Id) {}
+            }
+
+            /// Runs `cmd.exe /d /c exit 0` from the system directory under `policy`, and
+            /// returns the fields of each network warning it logged.
+            fn network_warnings(policy: &SandboxPolicy) -> Vec<Vec<String>> {
+                let warnings = NetworkWarnings::default();
+                let system =
+                    PathBuf::from(OsString::from_wide(&system_directory().expect("system")));
+                let outcome = tracing::subscriber::with_default(warnings.clone(), || {
+                    WindowsEnforcer::new().run_confined(
+                        policy,
+                        system.join("cmd.exe").as_os_str(),
+                        &[OsString::from("/d"), OsString::from("/c"), OsString::from("exit 0")],
+                        &system,
+                        Some(Duration::from_secs(60)),
+                    )
+                })
+                .expect("the confined command runs");
+                assert_eq!(outcome, ConfinedOutcome { exit_code: Some(0), timed_out: false });
+                std::mem::take(&mut *warnings.0.lock().expect("the warnings"))
+            }
+
+            /// The warning is logged once per process, so the cases run in order in one test:
+            /// it is the only test of this library that starts a confined process, and the
+            /// first assertion fails if another one logged the warning first.
+            #[test]
+            fn the_first_policy_that_restricts_the_network_warns_once() {
+                assert!(
+                    !NETWORK_WARNING.is_completed(),
+                    "another test in this process logged the network warning first"
+                );
+                let open = SandboxPolicyBuilder::new().allow_network().build();
+                let rules = SandboxPolicyBuilder::new().allow_domain("example.com", &[443]).build();
+                let denied = SandboxPolicyBuilder::new().build();
+
+                let logged: Vec<_> = [&open, &rules, &denied].map(network_warnings).into();
+
+                let first = vec!["allow_network=false".to_string(), "rules_count=1".to_string()];
+                assert_eq!(logged, vec![vec![], vec![first], vec![]]);
+            }
         }
     }
 }
