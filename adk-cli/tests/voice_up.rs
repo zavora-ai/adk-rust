@@ -5,7 +5,7 @@
 //!
 //! The binary runs as a process with a scripted model on SQLite (`harness.db`). The
 //! PostgreSQL and Redis variants are `#[ignore]`d and need `DATABASE_URL` or `REDIS_URL`; the
-//! PostgreSQL one runs in a database of its own and in `scripts/test-postgres.sh`:
+//! PostgreSQL one runs in a database of its own:
 //!
 //! ```sh
 //! DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \

@@ -7,22 +7,19 @@ what left the machine, never from what a model wrote.
 
 | Phase | Scenario | SQLite | PostgreSQL |
 |---|---|---|---|
-| 1. Decisions reach you | **Approve it tomorrow**, **A stranger writes** | [`examples/surface_approve_tomorrow`](../../../examples/surface_approve_tomorrow/) | `--store postgres`; `scripts/test-postgres.sh` |
-| 2. While you were away | **The morning after** | [`examples/surface_morning_after`](../../../examples/surface_morning_after/) | `--store postgres`; `scripts/test-postgres.sh` |
-| 3. Memory and rules | **Correct me, then check** | In parts: `adk-harness/tests/consolidation_tests.rs`, and `adk-surface/web/e2e/memory.spec.ts` on `adk-rust up` | — |
-| 4. Areas and roster | **Work stays at work** | `adk-harness/tests/work_stays_at_work.rs` | `work_stays_at_work_on_postgres`; `scripts/test-postgres.sh` |
-| 4. Areas and roster | **Hire a helper** | `adk-cli/tests/hire_a_helper.rs` | `hire_a_helper_on_postgres`; `scripts/test-postgres.sh` |
-| 5. Presence and voice | **Speak, glance, stop** | `adk-cli/tests/speak_glance_stop.rs` | `speak_glance_stop_on_postgres`; `scripts/test-postgres.sh` |
-| Developer track | **Approve, rewind, fork** | `adk-surface/tests/workflow_scenario_tests.rs`, and `scripted_workflow` in the browser | `approve_rewind_fork_on_postgres`; `scripts/test-postgres.sh` |
-| Developer track | **Governed form**, **Hostile app** | `adk-surface/tests/genui_scenario_tests.rs`, `genui_apps_tests.rs` | `a_drawn_form_is_sent_held_and_runs_once_on_postgres`; `scripts/test-postgres.sh` |
-| Experimental | **One verb, three origins** | `adk-surface/tests/verbs_scenario_tests.rs`; on `adk-rust up`, `adk-cli/tests/verbs_added_agent.rs` | `one_verb_three_origins_on_up_on_postgres`; `scripts/test-postgres.sh` |
+| 1. Decisions reach you | **Approve it tomorrow**, **A stranger writes** | [`examples/surface_approve_tomorrow`](../../../examples/surface_approve_tomorrow/) | `--store postgres` |
+| 2. While you were away | **The morning after** | [`examples/surface_morning_after`](../../../examples/surface_morning_after/) | `--store postgres` |
+| 3. Memory and rules | **Correct me, then check** | `adk-cli/tests/correct_me_then_check.rs` | `correct_me_then_check_on_postgres` |
+| 4. Areas and roster | **Work stays at work** | `adk-harness/tests/work_stays_at_work.rs` | `work_stays_at_work_on_postgres` |
+| 4. Areas and roster | **Hire a helper** | `adk-cli/tests/hire_a_helper.rs` | `hire_a_helper_on_postgres` |
+| 5. Presence and voice | **Speak, glance, stop** | `adk-cli/tests/speak_glance_stop.rs` | `speak_glance_stop_on_postgres` |
+| Developer track | **Approve, rewind, fork** | `adk-surface/tests/workflow_scenario_tests.rs`, and `scripted_workflow` in the browser | `approve_rewind_fork_on_postgres` |
+| Developer track | **Governed form**, **Hostile app** | `adk-surface/tests/genui_scenario_tests.rs`, `genui_apps_tests.rs` | `a_drawn_form_is_sent_held_and_runs_once_on_postgres` |
+| Experimental | **One verb, three origins** | `adk-surface/tests/verbs_scenario_tests.rs`; on `adk-rust up`, `adk-cli/tests/verbs_added_agent.rs` | `one_verb_three_origins_on_up_on_postgres` |
 
-`scripts/test-postgres.sh` runs every PostgreSQL leg against the server `DATABASE_URL` names,
-and CI's `postgres` job runs the script:
-
-```bash
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres scripts/test-postgres.sh
-```
+The PostgreSQL legs are `#[ignore]`d and run by hand against the server `DATABASE_URL` names,
+each in a database of its own. Each section below, or the test's module docs, gives its
+command.
 
 ## Running the examples
 
@@ -184,7 +181,7 @@ The graph agent `invoice-run` drafts an invoice with a model step, charges it wi
 HTTP POST that asks first and spends money, and files a receipt. The charge goes to a loopback
 provider that counts every charge it receives. The scenario runs in-process on memory and on
 SQLite, where the runner, the engine and the routes are rebuilt over the same files halfway
-through; the PostgreSQL leg runs in `scripts/test-postgres.sh`.
+through; the PostgreSQL leg runs by hand.
 
 | Run | Command |
 |---|---|
@@ -210,13 +207,13 @@ approved call: the 4200 charge once and the 5000 charge once.
 An agent draws a form, a person sends it, and the call waits for them however the agent is
 configured (spec 3.3 §12 "Governed form", §7.4 rule 5). It runs as tests over the real
 kernel, durable worker, approval service, session store and audit trail on SQLite, and on
-PostgreSQL in `scripts/test-postgres.sh`, with a scripted model driving the harness agent
+PostgreSQL by hand, with a scripted model driving the harness agent
 Finance in "Ask first".
 
 | Run | Command |
 |---|---|
 | The scenario, the projection and the terminal over the control plane | `cargo nextest run -p adk-surface --features genui,web,tui --test genui_scenario_tests --test genui_projection_tests` |
-| PostgreSQL, on an empty database (`scripts/test-postgres.sh` makes one) | `createdb genui_form`, then `DATABASE_URL=postgres://postgres:postgres@localhost:5432/genui_form cargo nextest run -p adk-surface --features genui,web,tui --test genui_scenario_tests --run-ignored only -E 'test(/on_postgres/)'`, then `dropdb genui_form` |
+| PostgreSQL, on an empty database | `createdb genui_form`, then `DATABASE_URL=postgres://postgres:postgres@localhost:5432/genui_form cargo nextest run -p adk-surface --features genui,web,tui --test genui_scenario_tests --run-ignored only -E 'test(/on_postgres/)'`, then `dropdb genui_form` |
 | Another area's and an added agent's forms | `cargo nextest run -p adk-cli --features genui,scripted-model --test genui_up` |
 | The web home, light and dark | `npx playwright test --project genui --project genui-states`, from `adk-surface/web` |
 | Live, `claude-sonnet-5-5`: the model draws the form, and its next turn reads the call as the person's | `cargo test -p adk-surface --features genui,web --test genui_scenario_tests -- --ignored --nocapture` |

@@ -8,7 +8,7 @@
 //! cargo nextest run -p adk-cli --features verb-ui,scripted-model --test verbs_added_agent
 //! ```
 //!
-//! The PostgreSQL leg runs by hand (owner question 31) and in `scripts/test-postgres.sh`:
+//! The PostgreSQL leg runs by hand (owner question 31):
 //!
 //! ```sh
 //! DATABASE_URL=postgres://… cargo nextest run -p adk-cli \
