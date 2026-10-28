@@ -14,6 +14,21 @@ use std::time::{Duration, Instant};
 
 pub const TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Every chat variable `adk-rust up` reads: one set in the developer's shell would start
+/// that chat, or refuse to start `up` when its pair is half set.
+pub const CHAT_VARS: &[&str] = &[
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_API_BASE",
+    "TELEGRAM_HOME_URL",
+    "SLACK_APP_TOKEN",
+    "SLACK_BOT_TOKEN",
+    "SLACK_API_BASE",
+    "DISCORD_BOT_TOKEN",
+    "DISCORD_API_BASE",
+    "MATRIX_HOMESERVER",
+    "MATRIX_ACCESS_TOKEN",
+];
+
 /// `args` for the REPL: with `tui`, a plain `adk-rust` opens the terminal surface, so the
 /// REPL is chosen with `--ui repl` (spec 3.3 §5.2).
 pub fn repl<'a>(args: &[&'a str]) -> Vec<&'a str> {
@@ -25,7 +40,8 @@ pub fn repl<'a>(args: &[&'a str]) -> Vec<&'a str> {
     all
 }
 
-/// Points `command` at a private home and config directory, with logging off.
+/// Points `command` at a private home and config directory, with logging off and no chat
+/// started; a test sets the chat variables it needs after this.
 pub fn isolate(command: &mut Command, home: &Path) {
     command
         .env("HOME", home)
@@ -37,6 +53,9 @@ pub fn isolate(command: &mut Command, home: &Path) {
         // `e` falls back to one typed line instead of starting an editor.
         .env_remove("VISUAL")
         .env_remove("EDITOR");
+    for var in CHAT_VARS {
+        command.env_remove(var);
+    }
 }
 
 /// Runs the binary to completion without a terminal: stdin is closed.

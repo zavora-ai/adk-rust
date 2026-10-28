@@ -47,15 +47,20 @@ use clap::Parser;
 use cli::{AgentOptions, ChatArgs, Cli, Commands, Provider, ThinkingMode};
 use std::sync::Arc;
 
-/// The stack the commands run on. Debug builds of the argument parser and the command
-/// futures outgrow the 1 MiB Windows gives a process's main thread and the service
-/// dispatcher's thread, so every platform runs them with the 8 MiB Linux and macOS give
-/// their main thread.
+/// The stack the commands and the runtime's workers run on. Debug builds of the argument
+/// parser and the command futures outgrow the 1 MiB Windows gives a process's main thread
+/// and the service dispatcher's thread, and debug builds of `up`'s request handlers outgrow
+/// the 2 MiB a runtime worker gets by default, so every platform runs them with the 8 MiB
+/// Linux and macOS give their main thread.
 const COMMAND_STACK: usize = 8 * 1024 * 1024;
 
 fn main() -> Result<()> {
     on_command_stack("main", || {
-        tokio::runtime::Builder::new_multi_thread().enable_all().build()?.block_on(run())
+        tokio::runtime::Builder::new_multi_thread()
+            .thread_stack_size(COMMAND_STACK)
+            .enable_all()
+            .build()?
+            .block_on(run())
     })?
 }
 

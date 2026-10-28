@@ -495,7 +495,9 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
-    /// The running kernel's processes, each with its age, spend, calls and goal progress
+    /// The running kernel's processes
+    ///
+    /// Each row shows the process's age, spend, calls and goal progress.
     #[cfg(feature = "harness")]
     Ps {
         /// Only processes in this partition
@@ -572,7 +574,9 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
-    /// The kernel's event bus: process changes, wakes, holds, decisions, governance
+    /// The kernel's event bus
+    ///
+    /// It carries process changes, wakes, holds, decisions and governance.
     #[cfg(feature = "harness")]
     Events {
         /// Keep streaming new events until Ctrl-C
