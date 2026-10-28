@@ -255,6 +255,9 @@ pub fn migrate_config(ctx: &BusinessContext, site_id: Uuid) -> ConfigMigration {
         reporting: Reporting { review: Cadence::Weekly, routes: Vec::new(), quiet_hours: None },
         public: PublicTerms { usage: None, policies: Vec::new(), consent_scopes, contact },
         price_rule: PriceRule::default(),
+        handoff_threshold: None,
+        publish_delay_hours: None,
+        amount_thresholds: Default::default(),
         signed: None,
     };
 

@@ -389,6 +389,7 @@ fn charter() -> impl Strategy<Value = Charter> {
         (vec(pillar, 0..3), vec(goal, 0..3), vec(kpi(), 0..4), vec(guardrail(), 0..3)),
         (vec(authority, 0..3), budget, voice, vec(red_line, 0..3)),
         (reporting(), public_terms(), price_rule, signed),
+        (option::of(0u8..=100), option::of(0u32..10_000), btree_map(ident(), any::<u64>(), 0..3)),
     )
         .prop_map(
             |(
@@ -396,6 +397,7 @@ fn charter() -> impl Strategy<Value = Charter> {
                 (strategy, goals, kpis, guardrails),
                 (authority, budget, voice, red_lines),
                 (reporting, public, price_rule, signed),
+                (handoff_threshold, publish_delay_hours, amount_thresholds),
             )| Charter {
                 version,
                 site_id,
@@ -413,6 +415,9 @@ fn charter() -> impl Strategy<Value = Charter> {
                 reporting,
                 public,
                 price_rule,
+                handoff_threshold,
+                publish_delay_hours,
+                amount_thresholds,
                 signed,
             },
         )

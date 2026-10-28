@@ -26,6 +26,10 @@ const AGENT_PRINCIPAL_PREFIX: &str = "urn:adk:agent:";
 /// listed on `validate`.
 ///
 /// `priceRule` is the charter's price rule that §7.8.2 refers to.
+/// `handoffThreshold`, `publishDelayHours` and `amountThresholds` are the owner's settings for
+/// handing leads over (§5 S8), the wait of the site's own pages (§5 S10) and the amounts above
+/// which calls wait for the owner (§7.4); each is optional, and a runtime applies its own default
+/// when one is absent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +73,19 @@ pub struct Charter {
     /// Price changes that act within budget; larger ones are held (§7.8.2, A-I25).
     #[serde(default)]
     pub price_rule: PriceRule,
+    /// The lead score, 0 to 100, at which a lead is handed to the owner (spec 3.5 §5 S8);
+    /// the runtime's default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json-schema", schemars(range(max = 100)))]
+    pub handoff_threshold: Option<u8>,
+    /// How long a page the site drafts on its own waits before it can go live, in hours
+    /// (spec 3.5 §5 S10); the runtime's default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publish_delay_hours: Option<u32>,
+    /// Per capability, the amount in minor units of the budget's currency above which a call
+    /// waits for the owner (spec 3.5 §7.4 `above_amount`, S9).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub amount_thresholds: BTreeMap<String, u64>,
     /// The owner's signature on this version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signed: Option<OwnerSignature>,
@@ -85,6 +102,7 @@ impl Charter {
     /// | Every approval chain names at least one role, and distinct principals holding its roles can satisfy it | §7.6, A-I23 |
     /// | One approval chain per action class | §7.6 |
     /// | KPI ids are unique, and every goal names existing KPIs | §7.6 |
+    /// | A handoff threshold is a lead score from 0 to 100 | §5 S8 |
     ///
     /// # Errors
     ///
@@ -160,6 +178,10 @@ impl Charter {
             }
         }
 
+        if let Some(threshold) = self.handoff_threshold.filter(|threshold| *threshold > 100) {
+            violations.push(CharterViolation::HandoffThresholdOutOfRange { threshold });
+        }
+
         if violations.is_empty() { Ok(()) } else { Err(CharterError { violations }) }
     }
 
@@ -229,6 +251,12 @@ pub enum CharterViolation {
         goal: String,
         /// The missing KPI id.
         kpi: String,
+    },
+    /// The handoff threshold is not a lead score from 0 to 100 (spec 3.5 §5 S8).
+    #[error("handoff threshold {threshold} is not a lead score; use 0 to 100")]
+    HandoffThresholdOutOfRange {
+        /// The threshold.
+        threshold: u8,
     },
 }
 

@@ -242,7 +242,7 @@ async fn onboarding_runs_from_an_online_presence_to_a_signed_release() {
 
     // 5: one card per section; no target without a baseline; read before signing.
     let charter = &drafted["view"]["charter"];
-    assert_eq!(charter["sections"].as_array().unwrap().len(), 10);
+    assert_eq!(charter["sections"].as_array().unwrap().len(), 11);
     let goals =
         charter["sections"].as_array().unwrap().iter().find(|s| s["id"] == "goals").unwrap();
     assert!(
@@ -262,6 +262,7 @@ async fn onboarding_runs_from_an_online_presence_to_a_signed_release() {
         "goals",
         "guardrails",
         "authority",
+        "thresholds",
         "budget",
         "voice",
         "never",
@@ -343,6 +344,7 @@ async fn a_public_body_launches_and_publishes_only_with_two_people() {
         "goals",
         "guardrails",
         "authority",
+        "thresholds",
         "budget",
         "voice",
         "never",

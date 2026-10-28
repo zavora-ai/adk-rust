@@ -689,3 +689,118 @@ async fn a_served_site_keeps_commerce_drafts_alarms_windows_and_its_audit_trail(
         assert!(actions.contains(&action), "{action} in {actions:?}");
     }
 }
+
+/// Waits for a kernel run of `target` that `matches`, until it ends.
+async fn finished_run(
+    served: &Served,
+    target: &str,
+    matches: impl Fn(&adk_core::RunRecord) -> bool,
+) -> adk_core::RunRecord {
+    for _ in 0..160 {
+        let runs = served.stores.runs.list(RunFilter::default()).await.unwrap();
+        if let Some(run) = runs
+            .into_iter()
+            .find(|run| run.target == target && matches(run) && run.state.is_terminal())
+        {
+            return run;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let all = served.stores.runs.list(RunFilter::default()).await.unwrap();
+    panic!("no finished {target} run: {all:#?}");
+}
+
+/// A free loopback port, so the site's public origin can be mapped to its edge before it
+/// binds.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+}
+
+/// The served site hosts the Guardian's probe (spec 3.5 §7.20, §5 S5, A-I9): the kernel runs
+/// the probe workflow, which proves the owner's claim from the project's claim file again,
+/// finds a file on the host that no signed release explains, opens an incident, puts the edge
+/// in read-only mode and raises one P1 alarm.
+#[tokio::test]
+async fn the_served_site_hosts_the_guardians_probe() {
+    use adk_site::migrate::claim::{DomainClaim, RecordKind, StaticDnsResolver};
+    use adk_site::migrate::http::{EgressScope, HttpClient};
+    use adk_site::migrate::probe::ProbeConfig;
+    use adk_website::deploy::ProbeOptions;
+    use adk_website::workflows::PROBE_WORKFLOW;
+
+    let dir = project(SiteKind::Business).await;
+    owner_signs(dir.path()).await;
+    // The owner's claim as `adk-rust site migrate` keeps it, and the TXT record that proves it.
+    let claim = DomainClaim::new(DOMAIN, chrono::Utc::now()).unwrap();
+    let claims = ProjectPaths::new(dir.path()).data().join("claims");
+    std::fs::create_dir_all(&claims).unwrap();
+    std::fs::write(claims.join(format!("{DOMAIN}.json")), serde_json::to_vec(&claim).unwrap())
+        .unwrap();
+    let dns = Arc::new(StaticDnsResolver::new());
+    let (name, value) = claim.dns_record();
+    dns.set(&name, RecordKind::Txt, [value]).await;
+    // The public origin is this edge.
+    let port = free_port();
+    let edge = format!("http://127.0.0.1:{port}");
+    let public = url::Url::parse(&format!("https://{DOMAIN}")).unwrap();
+    let client = HttpClient::builder()
+        .egress(EgressScope::Only([edge.clone()].into()))
+        .map_origin(&public, url::Url::parse(&edge).unwrap())
+        .min_interval(Duration::ZERO)
+        .build()
+        .unwrap();
+    let mut config = ProbeConfig::new(DOMAIN, public);
+    config.sample = 1_000;
+    config.seed = Some(5);
+    let mut probe = ProbeOptions::new(dns);
+    probe.http = Some(Arc::new(client));
+    probe.config = Some(config);
+    let served = start(dir.path(), |options| {
+        options.edge = format!("127.0.0.1:{port}").parse().unwrap();
+        options.site.probe = Some(probe);
+    })
+    .await;
+    assert!(served.sites[0].guardian.is_some(), "the claim file gives the Guardian its probe");
+    let charter = commit(&served, dir.path()).await;
+    assert!(matches!(launch(&served, &charter, vec![]).await, PipelineOutcome::Published(_)));
+
+    let site = served.sites[0].site.clone();
+    let probe_run = |n: u32| {
+        adk_core::NewRun::new(
+            adk_kernel::charter::SiteProcessKind::Probe.queue().as_str(),
+            site.name.clone(),
+            format!("site:{}", site.name),
+            PROBE_WORKFLOW,
+            json!({ "site": site.id, "n": n }),
+        )
+    };
+    served.stores.runs.enqueue(probe_run(1)).await.unwrap();
+    let healthy = finished_run(&served, PROBE_WORKFLOW, |run| run.input["n"] == 1).await;
+    assert_eq!(healthy.state, RunState::Completed, "{healthy:#?}");
+    let output = healthy.result.clone().unwrap_or_default();
+    assert_eq!(output["report"]["drift"], json!([]), "{output}");
+    assert!(output["report"]["filesChecked"].as_u64().unwrap() > 0, "{output}");
+    assert!(output["requests"].as_u64().unwrap() > 0, "the run read the origin: {output}");
+
+    // Someone replaces the home page on the host.
+    let served_page = ProjectPaths::new(dir.path()).host_dir().join("releases/1/index.html");
+    let replacement = served_page.with_extension("tmp");
+    std::fs::write(&replacement, b"<html><body>defaced</body></html>").unwrap();
+    std::fs::rename(&replacement, &served_page).unwrap();
+    served.stores.runs.enqueue(probe_run(2)).await.unwrap();
+    let found = finished_run(&served, PROBE_WORKFLOW, |run| run.input["n"] == 2).await;
+    assert_eq!(found.state, RunState::Completed, "{found:#?}");
+    let output = found.result.clone().unwrap_or_default();
+    assert!(!output["report"]["drift"].as_array().unwrap().is_empty(), "{output}");
+    assert_eq!(output["incident"]["rollback"]["toRelease"], 1, "{output}");
+    let (status, body) = http(served.edge_addr, "GET", "/awp/v2/status", None).await;
+    assert_eq!(status, 200);
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["state"], "read_only", "{body}");
+    let open = served.sites[0].alarms.open().await;
+    assert_eq!(
+        open.iter().map(|alarm| alarm.urgency).collect::<Vec<_>>(),
+        [awp_types::Urgency::P1]
+    );
+    assert!(served.sites[0].incidents.open_incident().await.is_some());
+    served.shutdown().await.unwrap();
+}

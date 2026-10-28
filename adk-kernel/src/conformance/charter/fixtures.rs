@@ -49,6 +49,9 @@ pub fn charter(site: Uuid, owners: &[&str]) -> Charter {
         reporting: Reporting { review: Cadence::Weekly, routes: Vec::new(), quiet_hours: None },
         public: Default::default(),
         price_rule: Default::default(),
+        handoff_threshold: None,
+        publish_delay_hours: None,
+        amount_thresholds: Default::default(),
         signed: None,
     }
 }

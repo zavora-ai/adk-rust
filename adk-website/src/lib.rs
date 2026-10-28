@@ -20,6 +20,7 @@
 //! | [`packs`] | Capability declarations: contact, quote, booking, order, search, components | §7.16, §7.4 |
 //! | [`playbooks`] | A skill file for every job | §7.16, §7.15 |
 //! | [`incident`] | Drift, incident status, rollback by standing rule or proposal, the person's exit | §7.20, A-I11 |
+//! | [`inbox`] | The Inbox: the site's email and the chat messages of unpaired accounts, answered in their own thread | §7.19, §7.10, X12, A-I24 |
 //! | [`leads`] | Lead scores and the handoff threshold, consent for nurture, the durable contact book, nurture sends inside quiet hours | §7.20, §7.21, S8, A-I8 |
 //! | [`alarms`] | P1, P2 and P3 routing to the owner's channels | §7.21 |
 //! | [`channel`] | The owner's chat channel: photos into the Steward's draft, alt text confirmed from the thread | §7.8.2, S18, A-I24 |
@@ -64,6 +65,7 @@ pub mod contract;
 pub mod deploy;
 pub mod edge;
 pub mod experiments;
+pub mod inbox;
 pub mod incident;
 pub mod jobs;
 pub mod kinds;

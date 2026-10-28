@@ -47,11 +47,12 @@ impl WebsiteDesk {
 }
 
 /// The sections of a charter, in the order the cards show them.
-pub const SECTIONS: [&str; 10] = [
+pub const SECTIONS: [&str; 11] = [
     "purpose",
     "goals",
     "guardrails",
     "authority",
+    "thresholds",
     "budget",
     "voice",
     "never",
@@ -319,6 +320,7 @@ pub(crate) fn cards(
             .into(),
     );
     out.push(authority);
+    out.push(thresholds_card(charter, card("thresholds", "When the site asks you", "When a lead comes to you, how long the site's own pages wait, and the amounts that wait for your yes", Vec::new())));
 
     let mut budget = card(
         "budget",
@@ -527,6 +529,124 @@ pub(crate) fn cards(
     out
 }
 
+/// The amounted capabilities `charter`'s kind declares, which an amount threshold can hold
+/// (spec 3.5 §7.4).
+fn amounted(charter: &Charter) -> Vec<&'static str> {
+    crate::kinds::template(charter.kind)
+        .capabilities
+        .into_iter()
+        .filter(|name| crate::packs::AMOUNTED.contains(name))
+        .collect()
+}
+
+/// A capability's name in plain words: `place_order` is "Place order".
+fn capability_words(name: &str) -> String {
+    let words = name.replace('_', " ");
+    let mut chars = words.chars();
+    chars.next().map_or_else(String::new, |first| first.to_uppercase().chain(chars).collect())
+}
+
+/// The owner's settings as a card (spec 3.5 §5 S8, S10, §7.4, §7.6): the charter's
+/// `handoffThreshold`, `publishDelayHours` and `amountThresholds`, or the site's defaults.
+fn thresholds_card(charter: &Charter, mut card: SectionCard) -> SectionCard {
+    let currency = &charter.budget.currency;
+    let exponent = words::minor_exponent(currency);
+    let default = crate::leads::DEFAULT_HANDOFF_THRESHOLD;
+    card.lines.push(Line::new(
+        "A lead comes to you",
+        match charter.handoff_threshold {
+            Some(threshold) => format!("When it scores {threshold} of 100"),
+            None => format!("When it scores {} of 100, the site's default", words::number(default)),
+        },
+    ));
+    card.lines.push(Line::new(
+        "Pages the site writes on its own",
+        match charter.publish_delay_hours {
+            Some(hours) => format!("Wait {hours} hours before they can go live"),
+            None => format!(
+                "Wait {} hours before they can go live, the site's default",
+                crate::publish_delay::DEFAULT_PUBLISH_DELAY_HOURS
+            ),
+        },
+    ));
+    let capabilities = amounted(charter);
+    for name in &capabilities {
+        let value = match charter.amount_thresholds.get(*name) {
+            Some(amount) => format!("Above {} waits for you", money(*amount, currency)),
+            None => "Not set: the site's defaults apply".to_string(),
+        };
+        card.lines.push(Line::new(capability_words(name), value));
+    }
+    card.note = Some(
+        "A setting left empty keeps the site's default. Amount limits change what the site \
+         publishes to agents, so they apply when the site next starts."
+            .into(),
+    );
+    let mut fields = vec![
+        FieldSpec::new("handoff", "Hand a lead to you at this score (0 to 100)", FieldKind::Number)
+            .value(charter.handoff_threshold.map(|t| t.to_string()).unwrap_or_default()),
+        FieldSpec::new("publishDelay", "Hours the site's own pages wait", FieldKind::Number)
+            .value(charter.publish_delay_hours.map(|h| h.to_string()).unwrap_or_default()),
+    ];
+    for name in capabilities {
+        let value = charter.amount_thresholds.get(name).map_or_else(String::new, |amount| {
+            format!("{:.*}", exponent.max(0) as usize, *amount as f64 / 10f64.powi(exponent))
+        });
+        fields.push(
+            FieldSpec::new(
+                &format!("above_{name}"),
+                &format!("{} above ({currency}) waits for you", capability_words(name)),
+                FieldKind::Number,
+            )
+            .value(value),
+        );
+    }
+    card.fields = fields;
+    card
+}
+
+/// Applies the `thresholds` card's `values` to `charter`; an empty field clears its setting.
+fn apply_thresholds(charter: &mut Charter, values: &FormValues) -> Result<()> {
+    charter.handoff_threshold = match optional(values, "handoff") {
+        None => None,
+        Some(text) => Some(
+            text.trim()
+                .parse::<u8>()
+                .ok()
+                .filter(|threshold| *threshold <= 100)
+                .ok_or_else(|| invalid("website.charter.handoff", "the score is 0 to 100"))?,
+        ),
+    };
+    charter.publish_delay_hours = match optional(values, "publishDelay") {
+        None => None,
+        Some(text) => Some(text.trim().parse::<u32>().map_err(|_| {
+            invalid("website.charter.publish_delay", "the wait is a whole number of hours")
+        })?),
+    };
+    let exponent = words::minor_exponent(&charter.budget.currency);
+    for name in amounted(charter) {
+        match optional(values, &format!("above_{name}")) {
+            None => {
+                charter.amount_thresholds.remove(name);
+            }
+            Some(text) => {
+                let amount: f64 = text.replace(',', "").trim().parse().map_err(|_| {
+                    invalid(
+                        "website.charter.amount",
+                        format!("{} is an amount such as 250.00", capability_words(name)),
+                    )
+                })?;
+                if !(0.0..=1e12).contains(&amount) {
+                    return Err(invalid("website.charter.amount", "an amount is zero or more"));
+                }
+                let minor = (amount * 10f64.powi(exponent)).round() as u64;
+                charter.amount_thresholds.insert(name.to_string(), minor);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn category_id(category: SpendCategory) -> &'static str {
     match category {
         SpendCategory::Hosting => "hosting",
@@ -635,6 +755,7 @@ pub(crate) fn apply_edit(charter: &mut Charter, section: &str, values: &FormValu
             }
         }
         "public" => charter.public.contact.email = optional(values, "email").map(str::to_string),
+        "thresholds" => apply_thresholds(charter, values)?,
         "goals" | "guardrails" | "authority" => {
             return Err(invalid(
                 "website.charter.fixed",
@@ -966,6 +1087,60 @@ mod tests {
             ("role".to_string(), "publisher".to_string()),
         ]);
         assert!(apply_edit(&mut charter, "people", &agent).is_err(), "no agent holds a role");
+    }
+
+    /// The owner's settings show on their card, defaults included, and an edit sets them as
+    /// charter members (spec 3.5 §5 S8, S10, §7.4, §7.6).
+    #[test]
+    fn the_thresholds_card_shows_and_sets_the_owners_settings() {
+        let mut charter = draft(SiteKind::Ecommerce);
+        let card = |charter: &Charter| {
+            cards(charter, &BTreeSet::new(), None)
+                .into_iter()
+                .find(|card| card.id == "thresholds")
+                .unwrap()
+        };
+        let line = |card: &SectionCard, label: &str| {
+            card.lines.iter().find(|line| line.label == label).unwrap().value.clone()
+        };
+        let before = card(&charter);
+        assert_eq!(
+            line(&before, "A lead comes to you"),
+            "When it scores 70 of 100, the site's default"
+        );
+        assert!(line(&before, "Pages the site writes on its own").contains("24 hours"));
+        assert_eq!(line(&before, "Place order"), "Not set: the site's defaults apply");
+        assert!(before.fields.iter().any(|field| field.id == "above_place_order"));
+
+        let values = FormValues::from([
+            ("handoff".to_string(), "60".to_string()),
+            ("publishDelay".to_string(), "48".to_string()),
+            ("above_place_order".to_string(), "200.00".to_string()),
+        ]);
+        apply_edit(&mut charter, "thresholds", &values).unwrap();
+        assert_eq!((charter.handoff_threshold, charter.publish_delay_hours), (Some(60), Some(48)));
+        assert_eq!(charter.amount_thresholds.get("place_order"), Some(&20_000));
+        assert!(charter.validate().is_ok());
+        let after = card(&charter);
+        assert_eq!(line(&after, "A lead comes to you"), "When it scores 60 of 100");
+        assert_eq!(
+            line(&after, "Pages the site writes on its own"),
+            "Wait 48 hours before they can go live"
+        );
+        assert_eq!(line(&after, "Place order"), "Above KES 200.00 waits for you");
+
+        let too_high = FormValues::from([("handoff".to_string(), "120".to_string())]);
+        assert!(apply_edit(&mut charter, "thresholds", &too_high).is_err());
+        apply_edit(&mut charter, "thresholds", &FormValues::new()).unwrap();
+        assert_eq!(
+            (
+                charter.handoff_threshold,
+                charter.publish_delay_hours,
+                charter.amount_thresholds.len()
+            ),
+            (None, None, 0),
+            "an empty field keeps the site's default"
+        );
     }
 
     #[test]

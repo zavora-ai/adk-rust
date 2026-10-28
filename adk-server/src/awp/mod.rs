@@ -117,8 +117,9 @@ pub use executor::{GovernedExecutor, KeySources};
 pub use limits::{EdgeLimits, InMemoryRateLimitStore, RateLimitStore, RateWindow};
 pub use policy::{CapabilityPolicy, PublicPartitionPolicy};
 pub use public::{
-    ConversationScreen, InjectionScreen, PublicTools, RecordingSignals, RecordingThreadSink,
-    ReplyPolicy, SignalEmitter, SiteHit, SiteSearch, StaticSiteIndex, ThreadSink,
+    ConversationScreen, InjectionScreen, META_BINDING, META_LIMIT_KEY, META_THREAD, PublicTools,
+    RecordingSignals, RecordingThreadSink, ReplyPolicy, SignalEmitter, SiteHit, SiteSearch,
+    StaticSiteIndex, ThreadSink,
 };
 pub use tiers::{EdgeCaller, EdgeTiers, WebBotAuthTrustAssigner};
 

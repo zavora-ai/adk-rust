@@ -93,8 +93,14 @@ impl WorkflowExecutor for SiteWorkflows {
                             .probes
                             .get(&site)
                             .ok_or_else(|| format!("no probe is registered for site {site}"))?;
-                        let outcome = probe.run().await.map_err(|e| e.to_string())?;
-                        serde_json::to_value(outcome).map_err(|e| e.to_string())
+                        let outcome = probe.run().await;
+                        // The probe runs every five minutes for as long as the site serves;
+                        // each run reads its own requests so they do not accumulate.
+                        let requests = probe.http.take_connections();
+                        let mut value = serde_json::to_value(outcome.map_err(|e| e.to_string())?)
+                            .map_err(|e| e.to_string())?;
+                        value["requests"] = json!(requests.len());
+                        Ok(value)
                     }
                     WATCH_WORKFLOW => {
                         let check = self.watches.get(&site).ok_or_else(|| {

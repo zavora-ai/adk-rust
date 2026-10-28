@@ -892,8 +892,17 @@
   },
   "$id": "https://agenticwebprotocol.com/schemas/2.0/charter.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "A site's charter (spec 3.5 §7.6).\n\nThe public part, `PublicTerms`, is published at `/.well-known/awp/charter.json` and its\ndigest appears in the contract; the rest stays in the charter store. A version takes\neffect only when an owner's decision commits it, and only when it satisfies the rules\nlisted on `validate`.\n\n`priceRule` is the charter's price rule that §7.8.2 refers to.",
+  "description": "A site's charter (spec 3.5 §7.6).\n\nThe public part, `PublicTerms`, is published at `/.well-known/awp/charter.json` and its\ndigest appears in the contract; the rest stays in the charter store. A version takes\neffect only when an owner's decision commits it, and only when it satisfies the rules\nlisted on `validate`.\n\n`priceRule` is the charter's price rule that §7.8.2 refers to.\n`handoffThreshold`, `publishDelayHours` and `amountThresholds` are the owner's settings for\nhanding leads over (§5 S8), the wait of the site's own pages (§5 S10) and the amounts above\nwhich calls wait for the owner (§7.4); each is optional, and a runtime applies its own default\nwhen one is absent.",
   "properties": {
+    "amountThresholds": {
+      "additionalProperties": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "description": "Per capability, the amount in minor units of the budget's currency above which a call\nwaits for the owner (spec 3.5 §7.4 `above_amount`, S9).",
+      "type": "object"
+    },
     "authority": {
       "default": [],
       "description": "Per-job autonomy and limits.",
@@ -926,6 +935,16 @@
       },
       "type": "array"
     },
+    "handoffThreshold": {
+      "description": "The lead score, 0 to 100, at which a lead is handed to the owner (spec 3.5 §5 S8);\nthe runtime's default when absent.",
+      "format": "uint8",
+      "maximum": 100,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "kind": {
       "$ref": "#/$defs/SiteKind",
       "description": "The kind of site; selects the charter template."
@@ -952,6 +971,15 @@
     "public": {
       "$ref": "#/$defs/PublicTerms",
       "description": "The published part."
+    },
+    "publishDelayHours": {
+      "description": "How long a page the site drafts on its own waits before it can go live, in hours\n(spec 3.5 §5 S10); the runtime's default when absent.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
     },
     "redLines": {
       "default": [],

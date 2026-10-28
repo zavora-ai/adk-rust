@@ -373,6 +373,13 @@ impl HttpClient {
         self.state.lock().map(|s| s.records.clone()).unwrap_or_default()
     }
 
+    /// Every request sent or refused since the last call, in order, leaving none kept: a
+    /// long-running caller, such as the Guardian's probe every five minutes (spec 3.5 §7.20),
+    /// reads them per run so they do not accumulate.
+    pub fn take_connections(&self) -> Vec<ConnectionRecord> {
+        self.state.lock().map(|mut s| std::mem::take(&mut s.records)).unwrap_or_default()
+    }
+
     /// The requests sent to anything other than a loopback address.
     pub fn outbound_connections(&self) -> Vec<ConnectionRecord> {
         self.connections().into_iter().filter(|r| r.allowed && !r.loopback).collect()

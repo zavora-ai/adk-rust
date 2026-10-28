@@ -397,6 +397,7 @@ pub struct Leads {
     records: Arc<dyn LeadRecords>,
     receipts: Arc<dyn ConsentReceiptStore>,
     scorer: LeadScorer,
+    charters: Option<(Arc<dyn adk_kernel::charter::CharterStore>, Uuid)>,
     clock: Arc<dyn Clock>,
 }
 
@@ -415,7 +416,19 @@ impl Leads {
         receipts: Arc<dyn ConsentReceiptStore>,
         scorer: LeadScorer,
     ) -> Self {
-        Self { leads, records, receipts, scorer, clock: Arc::new(SystemClock) }
+        Self { leads, records, receipts, scorer, charters: None, clock: Arc::new(SystemClock) }
+    }
+
+    /// Reads the handoff threshold from `site`'s charter in force in `charters` (spec 3.5
+    /// §5 S8, §7.6): its `handoffThreshold`, else the scorer's.
+    #[must_use]
+    pub fn with_charters(
+        mut self,
+        charters: Arc<dyn adk_kernel::charter::CharterStore>,
+        site: Uuid,
+    ) -> Self {
+        self.charters = Some((charters, site));
+        self
     }
 
     /// The clock consent and handoffs are read at.
@@ -425,9 +438,24 @@ impl Leads {
         self
     }
 
-    /// The scorer.
+    /// The scorer used when the charter in force sets no handoff threshold.
     pub fn scorer(&self) -> LeadScorer {
         self.scorer
+    }
+
+    /// The scorer in force now: the charter's `handoffThreshold` when the charter in force
+    /// sets one (spec 3.5 §5 S8), else [`scorer`](Self::scorer).
+    pub async fn current_scorer(&self) -> LeadScorer {
+        let Some((charters, site)) = &self.charters else { return self.scorer };
+        match charters.current(*site).await {
+            Ok(current) => current
+                .and_then(|version| version.charter.handoff_threshold)
+                .map_or(self.scorer, |threshold| LeadScorer::new(f64::from(threshold))),
+            Err(error) => {
+                tracing::warn!(error = %error, "the charter's handoff threshold could not be read; the default applies");
+                self.scorer
+            }
+        }
     }
 
     /// The contact records.
@@ -468,7 +496,7 @@ impl Leads {
         let receipts: Vec<Uuid> = lead.consent.iter().map(|r| r.0).collect();
         let scopes = self.live_scopes(&receipts).await?;
         let nurtured = self.records.nurtured(&lead.contact_ref).await?;
-        let score = self.scorer.score(&lead, &scopes, nurtured);
+        let score = self.current_scorer().await.score(&lead, &scopes, nurtured);
         self.leads.set_score(id, score.value).await.map_err(store_error)?;
         Ok(score)
     }

@@ -313,7 +313,7 @@ pub async fn previous_release(host: &dyn SiteHost, size: u64) -> Result<Option<P
     Ok(Some(PreviousRelease { manifest: latest, digest, files, last_snapshot: snapshot }))
 }
 
-fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {
+pub(crate) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     match std::fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|e| io(path, e)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -387,21 +387,29 @@ pub struct CalDavConfig {
     pub time_zone: Option<String>,
 }
 
-/// A secret from `env:VAR` or `file:PATH`, a relative path read from the project root.
-fn secret_reference(paths: &ProjectPaths, source: &str) -> Result<adk_core::CredentialSecret> {
+/// A secret from `env:VAR` or `file:PATH`, a relative path read from the project root;
+/// `file` names the configuration file for the error.
+pub(crate) fn secret_in(
+    paths: &ProjectPaths,
+    file: &str,
+    source: &str,
+) -> Result<adk_core::CredentialSecret> {
     let text = if let Some(var) = source.strip_prefix("env:") {
-        std::env::var(var).map_err(|_| {
-            AdkError::config(format!("caldav.json: the environment holds no `{var}`"))
-        })?
-    } else if let Some(file) = source.strip_prefix("file:") {
-        let file = paths.root().join(file);
-        std::fs::read_to_string(&file).map_err(|e| io(&file, e))?
+        std::env::var(var)
+            .map_err(|_| AdkError::config(format!("{file}: the environment holds no `{var}`")))?
+    } else if let Some(path) = source.strip_prefix("file:") {
+        let path = paths.root().join(path);
+        std::fs::read_to_string(&path).map_err(|e| io(&path, e))?
     } else {
-        return Err(AdkError::config(
-            "caldav.json: write each secret as `env:VAR` or `file:PATH`, never in the file itself",
-        ));
+        return Err(AdkError::config(format!(
+            "{file}: write each secret as `env:VAR` or `file:PATH`, never in the file itself"
+        )));
     };
     Ok(adk_core::CredentialSecret::new(text.trim()))
+}
+
+fn secret_reference(paths: &ProjectPaths, source: &str) -> Result<adk_core::CredentialSecret> {
+    secret_in(paths, "caldav.json", source)
 }
 
 /// The owner's CalDAV calendar from `caldav.json`; `None` without the file.

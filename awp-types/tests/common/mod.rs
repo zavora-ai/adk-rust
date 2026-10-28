@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// Object keys whose children are data (paths, question ids, field names, categories), not
 /// field names; their values are still checked.
-const DATA_KEYED: &[&str] = &["files", "answers", "fieldBounds", "caps"];
+const DATA_KEYED: &[&str] = &["files", "answers", "fieldBounds", "caps", "amountThresholds"];
 
 /// Object keys holding free-form JSON that is not checked at all.
 const OPAQUE: &[&str] = &["fields", "resource", "inputSchema", "outputSchema", "jsonLd", "result"];
