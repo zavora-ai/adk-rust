@@ -321,7 +321,7 @@ docs/official_docs/    Comprehensive documentation site content
 
 `gemini` is the default. All others are opt-in:
 
-- `gemini` (default), `openai`, `anthropic`, `deepseek`, `ollama`, `groq`
+- `gemini` (default), `openai`, `anthropic`, `deepseek`, `ollama`, `groq`, `muse`
 - `gemini-vertex` — Gemini via Vertex AI (Studio + Vertex backends)
 - `gemini-interactions` — Gemini Interactions API (Beta); re-exports `adk_model::gemini::interactions` AND provides the runtime transport toggle on `GeminiModel` (`use_interactions_api`) that drives the standard `LlmAgent`/`Runner`/tool loop through the Interactions endpoint (allowlist, stateful continuity, `bypass_multi_tools_limit`)
 - `openrouter` — OpenRouter native chat, responses, routing, discovery, and credits APIs

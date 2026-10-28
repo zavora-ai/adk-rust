@@ -41,6 +41,8 @@ pub const ANTHROPIC_LEGACY_MAX_TOKENS: u32 = 4_096;
 pub const DEEPSEEK_DEFAULT: &str = "deepseek-flash";
 /// Recommended Groq production model.
 pub const GROQ_DEFAULT: &str = "openai/gpt-oss-120b";
+/// Recommended Meta Muse model for general agent workloads.
+pub const MUSE_DEFAULT: &str = "muse-spark-1.3";
 /// Suggested local Ollama model. The model must already be installed locally.
 pub const OLLAMA_DEFAULT: &str = "qwen3.5";
 /// Recommended OpenRouter model. Callers should use model discovery for user-facing pickers.
@@ -264,6 +266,11 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
     ModelCatalogEntry::active("deepseek", "deepseek-v4-pro", ModelRole::Flagship),
     ModelCatalogEntry::default("groq", GROQ_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::active("groq", "openai/gpt-oss-20b", ModelRole::Economy),
+    ModelCatalogEntry::default("muse", MUSE_DEFAULT, ModelRole::Balanced),
+    ModelCatalogEntry::active("muse", "muse-spark-1.2", ModelRole::Balanced),
+    ModelCatalogEntry::active("muse", "muse-spark-1.1", ModelRole::Balanced),
+    ModelCatalogEntry::active("muse", "muse-spark-1.3-contributor", ModelRole::Economy),
+    ModelCatalogEntry::active("muse", "muse-spark-1.2-contributor", ModelRole::Economy),
     ModelCatalogEntry::default("ollama", OLLAMA_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::default("openrouter", OPENROUTER_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::default("fireworks", FIREWORKS_DEFAULT, ModelRole::Balanced),
@@ -464,6 +471,7 @@ pub fn recommended_model(provider: &str) -> Option<&'static str> {
         "anthropic" => Some(ANTHROPIC_DEFAULT),
         "deepseek" => Some(DEEPSEEK_DEFAULT),
         "groq" => Some(GROQ_DEFAULT),
+        "muse" => Some(MUSE_DEFAULT),
         "ollama" => Some(OLLAMA_DEFAULT),
         "openrouter" => Some(OPENROUTER_DEFAULT),
         "fireworks" => Some(FIREWORKS_DEFAULT),

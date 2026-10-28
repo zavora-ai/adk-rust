@@ -26,6 +26,7 @@ pub(crate) fn incomplete(provider: &str, code: &'static str, unfinished: &str) -
 #[cfg(any(
     feature = "openai",
     feature = "groq",
+    feature = "muse",
     feature = "ollama",
     feature = "deepseek",
     feature = "azure-ai"
@@ -53,6 +54,7 @@ pub(crate) fn interrupted(provider: &str, code: &'static str, error: &reqwest::E
 #[cfg(any(
     feature = "openai",
     feature = "groq",
+    feature = "muse",
     feature = "ollama",
     feature = "deepseek",
     feature = "azure-ai"
@@ -192,7 +194,7 @@ mod tests {
         assert_eq!(error.message, "groq stream ended before the response finished");
     }
 
-    #[cfg(any(feature = "openai", feature = "groq", feature = "ollama"))]
+    #[cfg(any(feature = "openai", feature = "groq", feature = "muse", feature = "ollama"))]
     #[test]
     fn undecodable_never_quotes_the_chunk() {
         let parse = serde_json::from_str::<Value>(r#"{"secret": "canary"#).unwrap_err();

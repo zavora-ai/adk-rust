@@ -15,6 +15,7 @@
 //! | `AnthropicClient` | Anthropic Claude | `anthropic` |
 //! | `DeepSeekClient` | DeepSeek | `deepseek` |
 //! | `GroqClient` | Groq | `groq` |
+//! | `MuseClient` | Meta Muse Spark | `muse` |
 //! | `OllamaModel` | Ollama (local) | `ollama` |
 //! | `OpenRouterClient` | OpenRouter, with its native chat, responses, routing, discovery, and credits APIs | `openrouter` |
 //! | `OpenCodeClient` | OpenCode Go and Zen | `opencode` |
@@ -126,6 +127,7 @@ pub mod deepseek;
     feature = "deepseek",
     feature = "gemini",
     feature = "groq",
+    feature = "muse",
     feature = "ollama",
     feature = "openai",
     feature = "openrouter"
@@ -139,6 +141,7 @@ pub mod gemini;
     feature = "anthropic",
     feature = "bedrock",
     feature = "groq",
+    feature = "muse",
     feature = "deepseek",
     feature = "azure-ai",
     feature = "gemini-interactions",
@@ -152,6 +155,8 @@ pub mod groq;
 pub mod http_timeouts;
 /// Mock LLM for testing without real API calls.
 pub mod mock;
+#[cfg(feature = "muse")]
+pub mod muse;
 #[cfg(feature = "ollama")]
 pub mod ollama;
 #[cfg(feature = "openai")]
@@ -178,6 +183,7 @@ pub mod scripted;
     feature = "deepseek",
     feature = "azure-ai",
     feature = "groq",
+    feature = "muse",
     feature = "ollama"
 ))]
 mod sse;
@@ -186,6 +192,7 @@ mod sse;
     feature = "deepseek",
     feature = "azure-ai",
     feature = "groq",
+    feature = "muse",
     feature = "ollama",
     feature = "openrouter"
 ))]
@@ -195,6 +202,7 @@ mod stream_error;
     feature = "anthropic",
     feature = "deepseek",
     feature = "groq",
+    feature = "muse",
     feature = "bedrock",
     feature = "azure-ai",
     feature = "openrouter"
@@ -206,12 +214,19 @@ pub mod tool_call_parser;
     feature = "ollama",
     feature = "deepseek",
     feature = "groq",
+    feature = "muse",
     feature = "bedrock",
     feature = "azure-ai",
     feature = "openrouter"
 ))]
 pub(crate) mod tool_result;
-#[cfg(any(feature = "openai", feature = "ollama", feature = "deepseek", feature = "groq"))]
+#[cfg(any(
+    feature = "openai",
+    feature = "ollama",
+    feature = "deepseek",
+    feature = "groq",
+    feature = "muse"
+))]
 pub(crate) mod usage_json;
 pub mod usage_tracking;
 
@@ -229,6 +244,8 @@ pub use gemini::GeminiModel;
 pub use groq::{GroqClient, GroqConfig};
 pub use http_timeouts::HttpTimeouts;
 pub use mock::MockLlm;
+#[cfg(feature = "muse")]
+pub use muse::{MuseClient, MuseConfig};
 #[cfg(feature = "ollama")]
 pub use ollama::{OllamaConfig, OllamaModel};
 #[cfg(feature = "openai")]

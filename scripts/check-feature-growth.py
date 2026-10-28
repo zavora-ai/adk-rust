@@ -93,6 +93,7 @@ ALIASES: dict[str, tuple[str, str, str]] = {
     "azure-ai": ("keep", "distinct client, shares the reqwest stack", "azure-ai"),
     "deepseek": ("keep", "distinct client, shares the reqwest stack", "deepseek"),
     "groq": ("keep", "distinct client, shares the reqwest stack", "groq"),
+    "muse": ("keep", "distinct client, shares the reqwest stack", "muse"),
     "openrouter": ("keep", "distinct client with routing and credits APIs", "openrouter"),
     # --- Adjacent surfaces reached through one crate. ------------------------
     "default": ("canonical", "Cargo's implicit entry point; resolves to minimal", "minimal"),

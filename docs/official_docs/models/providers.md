@@ -12,6 +12,7 @@ the `adk_core::Llm` trait, so an agent takes any of them without other changes.
 | Anthropic | `AnthropicClient` ([details](./anthropic.md)) | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5` |
 | DeepSeek | `DeepSeekClient` | `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-flash` |
 | Groq | `GroqClient` | `groq` | `GROQ_API_KEY` | `openai/gpt-oss-120b` |
+| Meta Muse | `MuseClient` | `muse` | `META_API_KEY` | `muse-spark-1.3` |
 | OpenRouter | `OpenRouterClient` | `openrouter` | `OPENROUTER_API_KEY` | `qwen/qwen3.7-max` |
 | OpenAI-compatible endpoints | `OpenAICompatible` with a preset | `openai` | Per endpoint | Per preset |
 | Azure OpenAI | `AzureOpenAIClient` | `openai` | — | Deployment-scoped |
@@ -30,7 +31,7 @@ tier includes Gemini; add the feature of each other provider you use:
 
 ```toml
 [dependencies]
-adk-rust = { version = "3.0.0", features = ["openai", "anthropic", "deepseek", "groq", "openrouter"] }
+adk-rust = { version = "3.0.0", features = ["openai", "anthropic", "deepseek", "groq", "muse", "openrouter"] }
 anyhow = "1"
 dotenvy = "0.15"
 tokio = { version = "1", features = ["full"] }
@@ -42,7 +43,7 @@ To depend on the clients alone, use `adk-model` with the same feature names:
 [dependencies]
 adk-model = { version = "3.0.0", features = ["openai", "anthropic"] }
 # Every provider at once: gemini, openai, anthropic, deepseek, ollama, groq,
-# openrouter, opencode, bedrock and azure-ai.
+# muse, openrouter, opencode, bedrock and azure-ai.
 # adk-model = { version = "3.0.0", features = ["all-providers"] }
 ```
 
@@ -54,6 +55,7 @@ export OPENAI_API_KEY="your-key"      # OpenAI
 export ANTHROPIC_API_KEY="your-key"   # Anthropic
 export DEEPSEEK_API_KEY="your-key"    # DeepSeek
 export GROQ_API_KEY="your-key"        # Groq
+export META_API_KEY="your-key"        # Meta Muse (or MODEL_API_KEY)
 export OPENROUTER_API_KEY="your-key"  # OpenRouter
 ```
 
@@ -563,6 +565,56 @@ async fn main() -> anyhow::Result<()> {
 | `openai/gpt-oss-120b` (default) | `GroqConfig::gpt_oss_120b(key)` |
 | `openai/gpt-oss-20b` (faster, lower cost) | `GroqConfig::gpt_oss_20b(key)` |
 | Any model Groq serves | `GroqConfig::new(key, model)` |
+
+---
+
+## Meta Muse
+
+`MuseClient` calls the Meta Model API (`https://api.meta.ai/v1`) Chat Completions
+endpoint, which is drop-in OpenAI-compatible. The key is read from `META_API_KEY`
+(Meta also documents `MODEL_API_KEY`).
+
+### Complete Example
+
+```rust
+use adk_rust::Launcher;
+use adk_rust::prelude::*;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+
+    let api_key = std::env::var("META_API_KEY")?;
+    let model = MuseClient::new(MuseConfig::spark_1_3(&api_key))?;
+
+    let agent = LlmAgentBuilder::new("muse_assistant")
+        .description("Muse-powered assistant")
+        .instruction("You are a helpful assistant. Be concise.")
+        .model(Arc::new(model))
+        .build()?;
+
+    Launcher::new(Arc::new(agent)).run().await?;
+    Ok(())
+}
+```
+
+### Models
+
+| Model | Config |
+|-------|--------|
+| `muse-spark-1.3` (default, recommended for new work) | `MuseConfig::spark_1_3(key)` |
+| `muse-spark-1.2` (previous version) | `MuseConfig::spark_1_2(key)` |
+| `muse-spark-1.1` (original version) | `MuseConfig::spark_1_1(key)` |
+| Any model the API serves | `MuseConfig::new(key, model)` |
+
+The `-contributor` checkpoints (`muse-spark-1.3-contributor`,
+`muse-spark-1.2-contributor`) work through `MuseConfig::new`. Contributor pricing
+is discounted in exchange for permission to train on request content, so no preset
+selects one. Rate limits are 3,000 requests and 4,000,000 tokens per minute per team.
+Spark reasoning counts toward `max_tokens`, so the client raises smaller output caps
+to 1,024 (`MUSE_MIN_MAX_TOKENS`) instead of returning empty `length` responses, and
+maps `GenerateContentConfig::effort` to the API's `reasoning_effort`.
 
 ---
 

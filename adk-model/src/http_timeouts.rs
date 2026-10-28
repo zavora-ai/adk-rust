@@ -58,6 +58,7 @@ impl Default for HttpTimeouts {
     feature = "openai",
     feature = "gemini",
     feature = "groq",
+    feature = "muse",
     feature = "deepseek",
     feature = "azure-ai",
     feature = "ollama",
@@ -76,6 +77,7 @@ impl HttpTimeouts {
     feature = "openai",
     feature = "gemini",
     feature = "groq",
+    feature = "muse",
     feature = "deepseek",
     feature = "azure-ai",
     feature = "openrouter"

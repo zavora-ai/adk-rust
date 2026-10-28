@@ -19,6 +19,7 @@ Every client implements the `adk_core::Llm` trait, so agents and runners accept 
 | Anthropic Claude | `anthropic::AnthropicClient` | `anthropic` | `claude-sonnet-5` |
 | DeepSeek | `deepseek::DeepSeekClient` | `deepseek` | `deepseek-flash` |
 | Groq | `groq::GroqClient` | `groq` | `openai/gpt-oss-120b` |
+| Meta Muse | `muse::MuseClient` | `muse` | `muse-spark-1.3` |
 | Ollama (local) | `ollama::OllamaModel` | `ollama` | `qwen3.5` |
 | OpenRouter | `openrouter::OpenRouterClient` | `openrouter` | `qwen/qwen3.7-max` |
 | OpenCode Go and Zen | `opencode::OpenCodeClient` | `opencode` | none |
