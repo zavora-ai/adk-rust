@@ -158,6 +158,20 @@ exactly `{{/pointer}}` becomes the pointed value; placeholders inside a longer s
 text. In the user, session, and concurrency-key templates a missing field refuses the delivery
 with `422`, so unrelated deliveries never share a key.
 
+### Forge signatures
+
+A repository host that cannot sign Standard Webhooks authenticates a hook with its own push
+signature: build the hook with `WebhookHook::forge(name, signature, app_name, target)`.
+
+| `ForgeSignature` | Checks | The run's `webhook-id` |
+|------------------|--------|------------------------|
+| `GitHub(ForgeSecret)` | `X-Hub-Signature-256`: HMAC-SHA256 of the raw body, in constant time | `X-GitHub-Delivery` |
+| `GitLab(ForgeSecret)` | `X-Gitlab-Token` equal to the secret token, in constant time | `X-Gitlab-Event-UUID`, else `Idempotency-Key` |
+
+Neither forge signs a timestamp: a redelivery under the same id returns the existing run, and
+a consumer deduplicates by what the delivery carries, as `adk-website`'s content repository
+does by commit ([Publishing from Git](../deployment/website-repository.md)).
+
 ## Queue wake-ups
 
 A `QueueSource` is a pull-based, at-least-once message source: `pull` leases a batch, and each

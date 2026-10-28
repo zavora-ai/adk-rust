@@ -41,7 +41,7 @@ No feature is enabled by default.
 | `a2a-v1` | The `a2a::v1` module (A2A v1.0.0 JSON-RPC and REST handlers, v1 client) and `A2aServer` |
 | `a2a-interceptors` | Built-in A2A interceptors (auth, rate limit, audit) |
 | `background` | Durable background runs (`/api/runs`), cron jobs (`/api/cron`), `DurableWorker`, and `DurableScheduler` |
-| `webhook-ingress` | `ServerBuilder::with_webhook_ingress`: signed `POST /hooks/{name}` deliveries that enqueue durable runs |
+| `webhook-ingress` | `ServerBuilder::with_webhook_ingress`: signed `POST /hooks/{name}` deliveries that enqueue durable runs, with Standard Webhooks or a forge's push signature (`WebhookHook::forge`: GitHub, GitLab) |
 | `approvals` | `ServerBuilder::with_approval_service`: the `/api/approvals` inbox, `spawn_approval_ticker`, and `WebhookApprovalNotifier` |
 | `openai-webhooks` | `OpenAIWebhookHandler` for OpenAI background-task completion events |
 | `yaml-agent` | `AgentConfigLoader` and `HotReloadWatcher` for YAML agent definitions |

@@ -246,6 +246,7 @@ many sites from one harness:
 | Public agents | With `SiteOptions::model`, `edge::concierge` mounts the Concierge through `AwpEdge::public_agent`: the website preset in the public partition over the edge's own tools — the declared capabilities (a declared `search_site` among them), `reply_in_thread` and the edge's `emit_signal` — so the edge's public policy admits every call. Where the kind runs one, `inbox::SiteInbox` is the Inbox over the same tools and policy: it reads the site's email while the site serves (the cursor kept in `data/inbox/email.cursor`), and `SiteInbox::receive_inbound` reads a chat message a `ChannelSink` adapter received from an account no person paired — a paired account's message, by `SiteOptions::channel_bindings`, is the owner's (A-I24). Each reply answers the message's own thread; a flagged or refused message the Inbox filed no signal for gets the site's `inbound_message` signal, with none of its text (A-I3) |
 | Back office | With `SiteOptions::model`, the kernel hosts the back office (`deploy::back_office`): the Steward's target runs the team, every agent its jobs' processes on their signals and schedules, under the owner's standing rules in `data/kernel.db` — what `adk-rust website jobs promote` grants takes effect while the site serves — with held calls in the owner's approval inbox; the edge's signals wake them, and the kernel defers each proactive run inside the charter's quiet hours (an agency's kernel holds none). Revenue gets the nurture sends (`SiteOptions::email`) and the handoff, Growth the experiment tools, Guardian `edge_read_only`, Finance the wallet (`SiteOptions::wallet`); agent sessions are kept in `data/kernel/sessions.db` |
 | Upkeep | With `SiteOptions::advisories` or `SiteOptions::certificate`, the daily `site.watch` runs `UpkeepCheck` |
+| Repository | With a `repository.json`, `repository::RepositoryEntry` serves the content repository's signed hooks at `/hooks/{name}` on the edge: a push from an authorised committer becomes a kernel run that reads the changed content files at the commit and proposes a release on the owner's decision card; anyone else's push files one signal ([Publishing from Git](website-repository.md)) |
 | Guardian | With `SiteOptions::probe` and the owner's domain claim — `ProbeOptions::claim`, else `data/claims/{domain}.json`, which `adk-rust site migrate` keeps — `site.probe` runs `incident::GuardianProbe` every five minutes: the claim is proven again by DNS, the host and the origin are read against the signed releases, and drift opens an incident on `RunningSite::incidents` (status `incident`, the edge read-only, one P1 alarm, a rollback plan the owner approves) |
 
 The `adk-website` binary's `start` and `adk-rust website new` read the project's
@@ -258,6 +259,7 @@ configuration files into `SiteOptions` with `deploy::config::configure`; secrets
 | `upkeep.json` | `SiteOptions::advisories` (the edge's `Cargo.lock` against a RustSec advisory database checkout) and `SiteOptions::certificate` (the origin's certificate) |
 | `wallet.json` | `SiteOptions::wallet`: the owner's `WalletPolicy` and the providers that bill the owner's own accounts, each a `provider_billing:{provider}` rail whose charges are recorded in `data/wallet/{provider}/charges.jsonl` and reconciled against the `invoice.jsonl` the owner exports there; payments are kept in `data/wallet.db`. The wallet holds no funds of its own here |
 | `data/claims/{domain}.json` | `SiteOptions::probe`, proven with the system's resolver |
+| `repository.json` | Read by `RunningSite::open`: the content repository's branch, source, signed hooks and authorised committers ([Publishing from Git](website-repository.md)) |
 
 ```json
 {
@@ -288,6 +290,7 @@ files.
 | Quotes, orders and the bookings of `calendar.json`'s slots | `edge::commerce::SqliteCommerceStore` in `data/edge.db`, with `edge::commerce::StoredCalendar`; `SiteEdge::build_with_commerce` takes the store |
 | The back office's drafts, charter drafts, charter signing and promotion requests | `adk_harness::website::SqliteSiteDraftStore` in `data/edge.db`, read back by `SiteRuntime::restore_drafts`; a preview and the votes on it are made again |
 | The owner's open, deferred and waiting alarms | `alarms::SqliteAlarmStore` in `data/edge.db` (`AlarmRouter::with_store`) |
+| Pushes the content repository's hooks delivered, and what became of each | `data/repository/pushes.json` |
 | The audit trail | `data/audit.jsonl`, through `adk_core::audit_log::FileAuditRecorder`: the pipeline's, the edge's, the update engine's, the alarms', the review's, the experiments', the ladder's, the tracker's and the signals' records |
 
 ## Audit records
