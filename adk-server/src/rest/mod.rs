@@ -760,9 +760,14 @@ impl ServerBuilder {
     /// | `POST /api/admin/unfreeze` | Lifts the freeze; a delegate also resumes what the freeze parked |
     /// | `GET /api/admin/governance` | Reports `{"frozen", "reason", "mirrored", "stale", "runningRuns"}`, where `runningRuns` is `park` under a delegate and `cancel` otherwise |
     ///
-    /// The endpoints carry the same authentication as every other mutation surface. Without
-    /// a `RequestContextExtractor` they are open to anyone who reaches the server, so enable
-    /// them only behind an authenticating layer.
+    /// The endpoints sit behind the auth middleware, and the freeze and the unfreeze admit
+    /// only an administrator: a caller whose
+    /// [`RequestContext::scopes`](adk_core::RequestContext::scopes) include
+    /// [`SecurityConfig::admin_scope`](crate::SecurityConfig::admin_scope) (`"admin"` by
+    /// default). An authenticated caller without it is refused with `403`
+    /// (`governance.forbidden`). Without a `RequestContextExtractor` no request has a caller,
+    /// so both are refused with `401` (`governance.unauthenticated`); the status stays
+    /// readable.
     ///
     /// # Example
     ///
@@ -778,7 +783,8 @@ impl ServerBuilder {
     /// S4), so `POST /api/admin/freeze` parks the running runs the delegate supervises
     /// instead of cancelling the background run stores' runs, and `POST /api/admin/unfreeze`
     /// resumes them. A kernel registers itself here. Implies
-    /// [`enable_governance_endpoints`](Self::enable_governance_endpoints).
+    /// [`enable_governance_endpoints`](Self::enable_governance_endpoints), so the delegate is
+    /// reached only by an administrator's request.
     ///
     /// # Example
     ///
@@ -1035,7 +1041,8 @@ impl ServerBuilder {
 
         if self.governance_endpoints {
             let controller = controllers::GovernanceController::new(config.governance.clone())
-                .with_error_details(config.security.expose_error_details);
+                .with_error_details(config.security.expose_error_details)
+                .with_admin_scope(config.security.admin_scope.clone());
             #[cfg(feature = "background")]
             let controller = background_run_stores
                 .iter()

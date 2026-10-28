@@ -565,9 +565,9 @@ let app = ServerBuilder::new(config).enable_governance_endpoints().build();
 
 | Route | Effect |
 |-------|--------|
-| `POST /api/admin/freeze` | Body `{"reason": "..."}`. Freezes the control and answers `{"frozen", "reason", "mirrored", "stale", "runningRuns", "parkedRuns", "cancelledRuns"}`; `503` with `error` added when the shared store cannot be written, this replica frozen regardless |
-| `POST /api/admin/unfreeze` | Lifts the freeze; a `FreezeDelegate` also resumes what the freeze parked. `503` with `error` added when the shared store cannot be written, the freeze kept |
-| `GET /api/admin/governance` | Returns `{"frozen", "reason", "mirrored", "stale", "runningRuns"}`; `reason` only while frozen; `runningRuns` is `park` when a `FreezeDelegate` is registered (`ServerBuilder::with_freeze_delegate`, as a kernel does) and `cancel` otherwise |
+| `POST /api/admin/freeze` | Administrators only. Body `{"reason": "..."}`. Freezes the control and answers `{"frozen", "reason", "mirrored", "stale", "runningRuns", "parkedRuns", "cancelledRuns"}`; `503` with `error` added when the shared store cannot be written, this replica frozen regardless |
+| `POST /api/admin/unfreeze` | Administrators only. Lifts the freeze; a `FreezeDelegate` also resumes what the freeze parked. `503` with `error` added when the shared store cannot be written, the freeze kept |
+| `GET /api/admin/governance` | Any caller the auth middleware admits. Returns `{"frozen", "reason", "mirrored", "stale", "runningRuns"}`; `reason` only while frozen; `runningRuns` is `park` when a `FreezeDelegate` is registered (`ServerBuilder::with_freeze_delegate`, as a kernel does) and `cancel` otherwise |
 
 While the control is frozen:
 
@@ -585,9 +585,30 @@ A control built with `GovernanceControl::mirrored` shares the freeze across repl
 `GovernanceStateStore`; `mirrored` and `stale` report its state. See
 [Durable runtime](../core/durable-runtime.md).
 
-> **Important:** the endpoints sit behind the auth middleware. Without a
-> `RequestContextExtractor` anyone who reaches the server can call them, so enable them only
-> behind an authenticating layer.
+An administrator is a caller whose `RequestContext::scopes` include
+`SecurityConfig::admin_scope`, `"admin"` (`ADMIN_SCOPE`) by default. The freeze and the unfreeze
+refuse everyone else and leave the control, and any `FreezeDelegate`, untouched:
+
+| Caller | Freeze or unfreeze | Code |
+|--------|--------------------|------|
+| Authenticated, with the admin scope | `200` | — |
+| Authenticated, without the admin scope | `403` | `governance.forbidden` |
+| None: the server has no `RequestContextExtractor` | `401` | `governance.unauthenticated` |
+| Missing or rejected credentials, with an extractor | `401`, from the auth middleware | — |
+
+Grant the scope from your extractor, and name another one when your identity provider already
+has an administrator role:
+
+```rust
+use adk_server::{SecurityConfig, ServerConfig};
+
+let config = ServerConfig::new(agent_loader, session_service)
+    .with_request_context(extractor)
+    .with_security(SecurityConfig { admin_scope: "ops-admin".to_string(), ..SecurityConfig::default() });
+```
+
+`adk-rust up` mounts the endpoints, and the operator it admits — a loopback peer, or the holder
+of `--auth-token` — carries the `admin` scope beside `operator`.
 
 ## Error Handling
 

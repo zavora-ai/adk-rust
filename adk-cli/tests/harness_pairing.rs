@@ -238,3 +238,35 @@ async fn a_decide_device_answers_an_everyday_decision_on_the_resident_app() {
     let (status, body) = call(&app, decide("high", high.version)).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 }
+
+/// The operator a loopback bind admits is an administrator of the server's kill switch:
+/// `POST /api/admin/freeze` parks through the kernel and `POST /api/admin/unfreeze` lifts the
+/// freeze. A paired device, which carries the groups of the operator who paired it, and a
+/// remote peer without credentials are refused, and the kill switch stays as it was.
+#[tokio::test]
+async fn the_loopback_operator_freezes_and_unfreezes_through_the_admin_routes() {
+    let (app, _workspace) = app();
+    let token = pair(&app, json!(["read", "decide", "stop"])).await;
+    let freeze = |peer, token| {
+        request("POST", "/api/admin/freeze", Some(json!({ "reason": "drill" })), peer, token)
+    };
+
+    assert_eq!(call(&app, freeze(LOOPBACK, Some(&token))).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(&app, freeze(REMOTE, None)).await.0, StatusCode::UNAUTHORIZED);
+    let governance = || request("GET", "/api/admin/governance", None, LOOPBACK, None);
+    let (status, body) = call(&app, governance()).await;
+    assert_eq!((status, body["frozen"].clone()), (StatusCode::OK, json!(false)));
+
+    let (status, body) = call(&app, freeze(LOOPBACK, None)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        (body["frozen"].clone(), body["reason"].clone(), body["runningRuns"].clone()),
+        (json!(true), json!("drill"), json!("park"))
+    );
+    let unfreeze = |peer, token| request("POST", "/api/admin/unfreeze", None, peer, token);
+    assert_eq!(call(&app, unfreeze(LOOPBACK, Some(&token))).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(&app, governance()).await.1["frozen"], json!(true));
+
+    let (status, body) = call(&app, unfreeze(LOOPBACK, None)).await;
+    assert_eq!((status, body["frozen"].clone()), (StatusCode::OK, json!(false)), "{body}");
+}

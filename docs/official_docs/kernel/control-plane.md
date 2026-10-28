@@ -91,7 +91,8 @@ All routes are under `/api`, on both transports. `adk-rust up` merges them into 
 
 On HTTP the server's own routes stay beside them: `/api/runs` (submissions land on the
 `interactive` queue), `/api/admin/freeze` (delegates to `Kernel::freeze` and reports
-`parkedRuns`), `/api/admin/governance` (`runningRuns: "park"`), `/api/rules` and the session
+`parkedRuns`; administrators only, which the loopback operator and the `--auth-token` holder
+are), `/api/admin/governance` (`runningRuns: "park"`), `/api/rules` and the session
 routes.
 
 ### Deciding on the approvals route

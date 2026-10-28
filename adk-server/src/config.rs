@@ -87,7 +87,28 @@ pub struct SecurityConfig {
     pub expose_error_details: bool,
     /// Whether to expose admin-only debug endpoints when auth is configured.
     pub expose_admin_debug: bool,
+    /// The scope that makes an authenticated caller an administrator (default:
+    /// [`ADMIN_SCOPE`], `"admin"`).
+    ///
+    /// `POST /api/admin/freeze` and `POST /api/admin/unfreeze`, mounted by
+    /// [`ServerBuilder::enable_governance_endpoints`](crate::ServerBuilder::enable_governance_endpoints),
+    /// admit only a caller whose [`RequestContext::scopes`](adk_core::RequestContext::scopes)
+    /// include it: a caller without it is refused with `403`, and a request with no caller —
+    /// a server without a `RequestContextExtractor` — with `401`.
+    pub admin_scope: String,
 }
+
+/// The default [`SecurityConfig::admin_scope`]: the scope that makes a caller an
+/// administrator of the governance endpoints.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_server::{ADMIN_SCOPE, SecurityConfig};
+///
+/// assert_eq!(SecurityConfig::default().admin_scope, ADMIN_SCOPE);
+/// ```
+pub const ADMIN_SCOPE: &str = "admin";
 
 /// The [`SecurityConfig::run_timeout`] of every preset: 15 minutes, long enough for an agent
 /// turn with several model and tool calls.
@@ -103,6 +124,7 @@ impl Default for SecurityConfig {
             run_timeout: DEFAULT_RUN_TIMEOUT,
             expose_error_details: false,
             expose_admin_debug: false,
+            admin_scope: ADMIN_SCOPE.to_string(),
         }
     }
 }
@@ -130,6 +152,7 @@ impl SecurityConfig {
             run_timeout: DEFAULT_RUN_TIMEOUT,
             expose_error_details: true,
             expose_admin_debug: true,
+            admin_scope: ADMIN_SCOPE.to_string(),
         }
     }
 
@@ -143,6 +166,7 @@ impl SecurityConfig {
             run_timeout: DEFAULT_RUN_TIMEOUT,
             expose_error_details: false,
             expose_admin_debug: false,
+            admin_scope: ADMIN_SCOPE.to_string(),
         }
     }
 

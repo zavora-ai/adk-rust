@@ -11,11 +11,12 @@
 //! | B | A cross-origin request, or one with a DNS-rebinding `Host`, is refused |
 //! | C | A held or long-running tool call leaves the A2A task `input-required` |
 //! | D | Model thinking never reaches an A2A peer |
-//! | E | A truncated A2A stream is an error, and a split multi-byte character stays intact |
+//! | E | A truncated A2A stream is an error, and a split multi-byte character stays intact; only an administrator freezes or unfreezes the kill switch |
 //! | F | An agent card whose RPC endpoint names another host is refused |
 //! | G | An error response carries a provider's or a store's message only with `expose_error_details` |
 
 mod error_details;
+mod governance_admin;
 mod peers;
 mod scripted;
 
@@ -1130,6 +1131,7 @@ async fn main() -> ExitCode {
     group_c(&keys, &model, &mut out).await;
     group_d(&keys, &model, &mut out).await;
     group_e(&keys, &mut out).await;
+    governance_admin::group_e_governance_admin(&mut out).await;
     group_f(&mut out).await;
     error_details::group_g(&mut out).await;
 

@@ -105,7 +105,7 @@ pub use a2a::{A2aServer, A2aServerApp, A2aServerBuilder};
 pub use auth_bridge::{
     AuthenticatedCaller, RequestContext, RequestContextError, RequestContextExtractor,
 };
-pub use config::{DEFAULT_RUN_TIMEOUT, SecurityConfig, ServerConfig};
+pub use config::{ADMIN_SCOPE, DEFAULT_RUN_TIMEOUT, SecurityConfig, ServerConfig};
 pub use rest::{
     A2aController, A2aTaskRetention, FreezeDelegate, FreezeReport, GovernanceController,
     GovernanceStatus, RunningRuns, RuntimeController, ServerBuilder, SessionController,

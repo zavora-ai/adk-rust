@@ -556,8 +556,8 @@ read, `check` fails closed with `governance.stale` (`ErrorCategory::Unavailable`
 check, as under a freeze (`governance.frozen`, `GOVERNANCE_FROZEN_CODE`). A local `freeze` on a
 mirrored control holds until a local `unfreeze`; the store never lifts it.
 
-The server's `POST /api/admin/freeze` and `POST /api/admin/unfreeze` call `freeze_recorded`
-and `unfreeze_recorded`, so a mirrored `ServerConfig::governance` reaches every replica. A
+The server's `POST /api/admin/freeze` and `POST /api/admin/unfreeze`, which admit only callers
+with `SecurityConfig::admin_scope`, call `freeze_recorded` and `unfreeze_recorded`, so a mirrored `ServerConfig::governance` reaches every replica. A
 freeze also requests cancellation of every running run in the background run stores mounted on
 the builder — a terminate, not a pause — unless a `FreezeDelegate` registered with
 `ServerBuilder::with_freeze_delegate` handles the freeze (spec 3.2 §10 S4), as a kernel does,

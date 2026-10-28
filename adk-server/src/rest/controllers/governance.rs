@@ -11,6 +11,13 @@
 //! - `GET /api/admin/governance` — reports the current state, including what a freeze does
 //!   with running runs (`runningRuns`: `park` under a delegate, `cancel` otherwise).
 //!
+//! A freeze or an unfreeze needs an administrator: a caller whose scopes include the admin
+//! scope ([`SecurityConfig::admin_scope`](crate::SecurityConfig::admin_scope), `"admin"` by
+//! default). A request with no caller — a server without a `RequestContextExtractor` — is
+//! refused with `401` (`governance.unauthenticated`), and an authenticated caller without the
+//! scope with `403` (`governance.forbidden`); either leaves the control as it was. The status
+//! is open to every caller the auth middleware admits.
+//!
 //! When the control has an audit trail attached
 //! ([`GovernanceControl::attach_audit`]), both changes are recorded with the calling
 //! user as the actor. A freeze takes effect even when its record fails, and answers
@@ -22,7 +29,10 @@ use std::sync::Arc;
 
 use adk_core::audit_log::AuditActor;
 use adk_core::principal::SubjectRef;
-use adk_core::{DurableRunStore, GovernanceControl, RequestContext, RunFilter, RunState};
+use adk_core::{
+    AdkError, DurableRunStore, ErrorCategory, ErrorComponent, GovernanceControl, RequestContext,
+    RunFilter, RunState,
+};
 use async_trait::async_trait;
 use axum::{
     Extension, Json,
@@ -138,6 +148,7 @@ pub struct GovernanceController {
     run_stores: Vec<Arc<dyn DurableRunStore>>,
     delegate: Option<Arc<dyn FreezeDelegate>>,
     expose_error_details: bool,
+    admin_scope: String,
 }
 
 impl std::fmt::Debug for GovernanceController {
@@ -147,14 +158,22 @@ impl std::fmt::Debug for GovernanceController {
             .field("run_stores", &self.run_stores.len())
             .field("delegate", &self.delegate.is_some())
             .field("expose_error_details", &self.expose_error_details)
+            .field("admin_scope", &self.admin_scope)
             .finish()
     }
 }
 
 impl GovernanceController {
-    /// Endpoints over `control`.
+    /// Endpoints over `control`, whose freeze and unfreeze admit callers with the
+    /// [`ADMIN_SCOPE`](crate::ADMIN_SCOPE).
     pub fn new(control: GovernanceControl) -> Self {
-        Self { control, run_stores: Vec::new(), delegate: None, expose_error_details: false }
+        Self {
+            control,
+            run_stores: Vec::new(),
+            delegate: None,
+            expose_error_details: false,
+            admin_scope: crate::ADMIN_SCOPE.to_string(),
+        }
     }
 
     /// Whether a `503`'s `error` carries the store's or the delegate's own message (default:
@@ -173,6 +192,24 @@ impl GovernanceController {
     #[must_use]
     pub fn with_error_details(mut self, expose: bool) -> Self {
         self.expose_error_details = expose;
+        self
+    }
+
+    /// Admits to the freeze and the unfreeze only callers whose scopes include `scope`.
+    /// [`ServerBuilder`](crate::ServerBuilder) sets the server's
+    /// [`SecurityConfig::admin_scope`](crate::SecurityConfig::admin_scope).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::GovernanceControl;
+    /// use adk_server::GovernanceController;
+    ///
+    /// let controller = GovernanceController::new(GovernanceControl::new()).with_admin_scope("ops");
+    /// # let _ = controller;
+    /// ```
+    pub fn with_admin_scope(mut self, scope: impl Into<String>) -> Self {
+        self.admin_scope = scope.into();
         self
     }
 
@@ -301,14 +338,57 @@ pub struct GovernanceStatus {
 
 /// The audit actor for an administrator's request: the authenticated user, who is also
 /// the issuer written to the shared store.
-fn admin_actor(caller: Option<&RequestContext>) -> AuditActor {
+fn admin_actor(caller: &RequestContext) -> AuditActor {
     AuditActor {
-        on_behalf_of: caller.map(|caller| SubjectRef::human(caller.user_id.clone())),
+        on_behalf_of: Some(SubjectRef::human(caller.user_id.clone())),
         ..AuditActor::default()
     }
 }
 
+/// The caller of a freeze or an unfreeze when they are an administrator; otherwise the
+/// refusal: `401` without a caller, `403` without the admin scope.
+fn administrator(
+    controller: &GovernanceController,
+    caller: Option<RequestContext>,
+    action: &str,
+) -> Result<RequestContext, Response> {
+    let scope = &controller.admin_scope;
+    let refusal = |category, code, message: String| {
+        let error = AdkError::new(ErrorComponent::Server, category, code, message);
+        let status = StatusCode::from_u16(error.http_status_code())
+            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        (status, Json(error.to_problem_json())).into_response()
+    };
+    let Some(caller) = caller else {
+        tracing::warn!(governance.action = action, "governance change refused: no caller");
+        return Err(refusal(
+            ErrorCategory::Unauthorized,
+            "governance.unauthenticated",
+            format!(
+                "{action} needs an authenticated administrator; configure a \
+                 RequestContextExtractor that grants the `{scope}` scope"
+            ),
+        ));
+    };
+    if !caller.scopes.iter().any(|granted| granted == scope) {
+        tracing::warn!(
+            caller.user_id = %caller.user_id,
+            governance.action = action,
+            "governance change refused: the caller is not an administrator"
+        );
+        return Err(refusal(
+            ErrorCategory::Forbidden,
+            "governance.forbidden",
+            format!("{} may not {action}: it needs the `{scope}` scope", caller.user_id),
+        ));
+    }
+    Ok(caller)
+}
+
 /// `POST /api/admin/freeze`
+///
+/// Responds `401` without a caller and `403` to a caller without the admin scope, and
+/// leaves the control as it was.
 ///
 /// Responds `503` with the status when the shared store could not be written; this
 /// replica is frozen regardless.
@@ -317,13 +397,17 @@ pub async fn freeze(
     Extension(caller): Extension<Option<RequestContext>>,
     Json(request): Json<FreezeRequest>,
 ) -> Response {
+    let caller = match administrator(&controller, caller, "freeze") {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
     let reason = request.reason.unwrap_or_else(|| "frozen by an administrator".to_string());
     tracing::warn!(
-        caller.user_id = caller.as_ref().map(|c| c.user_id.as_str()).unwrap_or("anonymous"),
+        caller.user_id = %caller.user_id,
         governance.reason = %reason,
         "governance freeze requested"
     );
-    let actor = admin_actor(caller.as_ref());
+    let actor = admin_actor(&caller);
     let mut status = controller.status();
     let written = match &controller.delegate {
         Some(delegate) => match delegate.freeze(&reason, actor).await {
@@ -364,17 +448,21 @@ pub async fn freeze(
 
 /// `POST /api/admin/unfreeze`
 ///
+/// Responds `401` without a caller and `403` to a caller without the admin scope, and
+/// leaves the freeze in force.
+///
 /// Responds `503` with the status when the shared store could not be written; the
 /// freeze then stays in force.
 pub async fn unfreeze(
     State(controller): State<GovernanceController>,
     Extension(caller): Extension<Option<RequestContext>>,
 ) -> Response {
-    tracing::warn!(
-        caller.user_id = caller.as_ref().map(|c| c.user_id.as_str()).unwrap_or("anonymous"),
-        "governance unfreeze requested"
-    );
-    let actor = admin_actor(caller.as_ref());
+    let caller = match administrator(&controller, caller, "unfreeze") {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    tracing::warn!(caller.user_id = %caller.user_id, "governance unfreeze requested");
+    let actor = admin_actor(&caller);
     let lifted = match &controller.delegate {
         Some(delegate) => delegate.unfreeze(actor).await,
         None => controller.control.unfreeze_recorded(actor).await,

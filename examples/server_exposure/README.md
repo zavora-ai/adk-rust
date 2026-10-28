@@ -32,6 +32,11 @@ What an ADK-Rust server exposes, and what its A2A clients accept. Every scenario
 | `E1` / `E3 split-char-intact` | scripted | A `ü` split across two reads arrives intact (pre-v1 / v1) |
 | `E2` / `E4 truncated-stream-error` | scripted | A stream that stops before a final status ends in an error (pre-v1 / v1) |
 | `E5 a2a-stream-live` | live | `gemini-3.5-flash-lite` behind a real A2A server streams multi-byte text to `RemoteA2aAgent` intact and without error |
+| `E6 member-freeze-refused` | live | `POST /api/admin/freeze` from an authenticated caller without the `admin` scope answers `403`, and `claude-sonnet-5-5` still answers that caller's next run |
+| `E7 admin-freeze-stops-next-run` | live | An administrator's freeze answers `200`, and the agent's next run is refused with `governance.frozen` |
+| `E8 member-unfreeze-refused` | live | `POST /api/admin/unfreeze` from the same non-admin caller answers `403`, and the freeze stays in force |
+| `E9 admin-unfreeze-restores-run` | live | The administrator's unfreeze answers `200`, and `claude-sonnet-5-5` answers the next run |
+| `E10 anonymous-freeze-refused` | local | A freeze without credentials answers `401`, from a server with a `RequestContextExtractor` and from one without |
 | `F1 hostile-card-refused` | scripted | A card naming another server as its endpoint is refused and that server receives nothing |
 | `F2 hostile-card-refused-v1` | scripted | The same for a v1 card's JSON-RPC interface |
 | `G1 provider-text-withheld-run` | live | A `claude-sonnet-5-5` agent with an invalid API key meets a real Anthropic `401`; `POST /api/run` answers `401` with `Authentication failed`, code `model.anthropic.api_error`, category `unauthorized`, and none of Anthropic's text, and the server logs the full error under the response's `x-request-id` |

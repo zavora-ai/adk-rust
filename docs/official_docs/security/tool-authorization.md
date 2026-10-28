@@ -1343,7 +1343,8 @@ The error is `ErrorCategory::Forbidden` and not retryable, so a caller's retry l
 spin against a frozen runner.
 
 `adk-server` shares one control across every runner it builds (`ServerConfig::governance`) and
-exposes `POST /api/admin/freeze` and `POST /api/admin/unfreeze` through
+exposes `POST /api/admin/freeze` and `POST /api/admin/unfreeze` to administrators — callers with
+`SecurityConfig::admin_scope`, `"admin"` by default — through
 `ServerBuilder::enable_governance_endpoints`; freezing also pauses background-run and cron
 scheduling, and a durable run the switch refuses after it made a call parks at its next
 model-call boundary — the refused calls of its batch answered `not run` — and resumes on

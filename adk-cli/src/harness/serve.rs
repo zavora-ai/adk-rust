@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use adk_core::RequestContext;
-use adk_server::{RequestContextError, RequestContextExtractor};
+use adk_server::{ADMIN_SCOPE, RequestContextError, RequestContextExtractor};
 use async_trait::async_trait;
 use axum::Router;
 use axum::body::Body;
@@ -26,16 +26,20 @@ pub const OPERATOR_SCOPE: &str = "operator";
 /// per-process secret that a client cannot forge.
 const LOOPBACK_HEADER: &str = "x-adk-loopback-peer";
 
+/// The operator also holds the server's default admin scope, so the governance endpoints'
+/// freeze and unfreeze admit them as they admit the web home's **Stop all**.
 fn operator(user_id: &str) -> RequestContext {
     RequestContext {
         user_id: user_id.to_string(),
-        scopes: vec![OPERATOR_SCOPE.to_string()],
+        scopes: vec![OPERATOR_SCOPE.to_string(), ADMIN_SCOPE.to_string()],
         metadata: HashMap::new(),
     }
 }
 
 /// Admits requests from loopback peers as the operator: `RequestContext { user_id, scopes:
-/// ["operator"] }` (spec 3.1 §8.2).
+/// ["operator", "admin"] }` (spec 3.1 §8.2). The [`ADMIN_SCOPE`] makes the operator an
+/// administrator of `POST /api/admin/freeze` and `POST /api/admin/unfreeze` under the
+/// default [`SecurityConfig::admin_scope`](adk_server::SecurityConfig::admin_scope).
 ///
 /// It reads the peer address from `ConnectInfo<SocketAddr>`, so serve the router with
 /// `into_make_service_with_connect_info::<SocketAddr>()`, and apply [`layer`](Self::layer)
@@ -57,7 +61,8 @@ fn operator(user_id: &str) -> RequestContext {
 /// request.extensions_mut().insert(ConnectInfo("127.0.0.1:50000".parse::<SocketAddr>().unwrap()));
 /// let (parts, _) = request.into_parts();
 /// let context = extractor.extract(&parts).await.unwrap();
-/// assert_eq!((context.user_id.as_str(), context.scopes.as_slice()), ("ana", &["operator".to_string()][..]));
+/// assert_eq!(context.user_id, "ana");
+/// assert_eq!(context.scopes, ["operator", "admin"]);
 /// # });
 /// ```
 #[derive(Clone)]
@@ -128,8 +133,8 @@ impl RequestContextExtractor for LoopbackOperatorExtractor {
     }
 }
 
-/// Admits requests carrying `Authorization: Bearer <token>` as the operator (spec 3.1
-/// §8.2).
+/// Admits requests carrying `Authorization: Bearer <token>` as the operator, with the
+/// `operator` and `admin` scopes (spec 3.1 §8.2).
 ///
 /// The token comes from `--auth-token` or `ADK_SERVE_TOKEN` and is compared in constant
 /// time. A served harness on a non-loopback address requires it.
@@ -219,7 +224,7 @@ mod tests {
         for peer in ["127.0.0.1:1", "[::1]:1"] {
             let context = extractor.extract(&parts(Some(peer), &[])).await.unwrap();
             assert_eq!(context.user_id, "ana");
-            assert_eq!(context.scopes, vec![OPERATOR_SCOPE.to_string()]);
+            assert_eq!(context.scopes, [OPERATOR_SCOPE, ADMIN_SCOPE]);
         }
         for request in [parts(Some("10.0.0.7:1"), &[]), parts(None, &[])] {
             assert!(matches!(
@@ -257,5 +262,6 @@ mod tests {
         let context =
             extractor.extract(&parts(None, &[("authorization", "Bearer right")])).await.unwrap();
         assert_eq!(context.user_id, "ana");
+        assert_eq!(context.scopes, [OPERATOR_SCOPE, ADMIN_SCOPE]);
     }
 }
