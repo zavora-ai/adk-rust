@@ -429,6 +429,47 @@ For production:
    `ServerBuilder::with_cron_jobs`, not the standalone routers.
 3. Treat the open-mode warning in a deployment's startup log as a misconfiguration.
 
+## Agent registry
+
+The `agent-registry` feature adds `adk_server::registry::registry_router(store, extractor)`, a
+catalog of agent cards that `ServerBuilder` does not mount. Every request authenticates
+through `extractor`, which can be the one given to `ServerConfig::with_request_context`, so
+the router needs no other authentication layer:
+
+```rust,no_run
+use std::sync::Arc;
+
+use adk_server::RequestContextExtractor;
+use adk_server::registry::{InMemoryAgentRegistryStore, registry_router};
+use axum::Router;
+
+fn registry_service(extractor: Arc<dyn RequestContextExtractor>) -> Router {
+    let store = Arc::new(InMemoryAgentRegistryStore::new());
+    Router::new().nest("/api", registry_router(store, extractor))
+}
+```
+
+A card belongs to the caller who registered it, recorded as its `owner`:
+
+| Route | Who | Answers |
+|-------|-----|---------|
+| `POST /api/agents` | Any authenticated caller | `201`, the caller owns the card; `409` when the name is registered, by anyone |
+| `GET /api/agents`, `GET /api/agents/{name}` | Any authenticated caller | `200` with any owner's cards; `404` |
+| `PUT /api/agents/{name}` | The card's owner | `200` with the stored card, which keeps `createdAt` and gets a new `updatedAt`; `403` for anyone else; `404` |
+| `DELETE /api/agents/{name}` | The card's owner | `204`; `403` for anyone else; `404` |
+
+- A request the extractor refuses answers `401` (`MissingAuth`, `InvalidToken`, or an empty
+  `user_id`) or `500` (`ExtractionFailed`).
+- The routes set `owner` from the caller's `user_id` and ignore an `owner` in the body.
+- A card without an owner — stored before cards had owners, or inserted through the
+  `AgentRegistryStore` directly — stays readable and answers `403` to `PUT` and `DELETE`;
+  remove or replace it through the store.
+- An `AgentRegistryStore` implements `replace_owned` and `delete_owned` with the owner check
+  and the write in one atomic step.
+
+`examples/agent_registry` runs the routes in process, and group `H` of
+`examples/server_exposure` serves a registry beside a live agent.
+
 ## The web home
 
 `adk-server` serves no page of its own. The web home — Threads, Today and Memory & rules, with

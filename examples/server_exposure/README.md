@@ -49,6 +49,14 @@ What an ADK-Rust server exposes, and what its A2A clients accept. Every scenario
 | `G5 store-text-withheld-503` | scripted | Over a governance store whose database is down, the freeze and unfreeze `503` `error` reads `session.unavailable: A service the server depends on is unavailable; retry later`; with `expose_error_details` it carries the driver text |
 | `G6 request-messages-kept` | local | A missing session, an unknown app, and a frozen kill switch keep the messages the server wrote |
 | `G7 happy-path-unaffected` | live | A `claude-sonnet-5-5` turn with the real key answers `200` with text and no error |
+| `H1 registry-owner-registers-and-runs` | live | Alice registers a card for a `claude-sonnet-5-5` `LlmAgent` in the agent registry, Bob finds it by tag, and Alice runs the agent at the card's endpoint |
+| `H2 registry-dummy-token-refused` | local | A token the `RequestContextExtractor` rejects gets `401` on every registry route and Alice's card is unchanged |
+| `H3 registry-other-user-cannot-update` | local | Bob cannot change Alice's card with `PUT`, or by deleting it and registering his own |
+| `H4 registry-other-user-cannot-delete` | local | Bob's `DELETE` of Alice's card is refused and the card stays |
+| `H5 registry-owner-updates` | local | A card Alice registers with another `owner` in its body is hers, registering its name again is `409`, and her `PUT` stores the new version with its `createdAt` kept and an `updatedAt` |
+| `H6 registry-owner-deletes` | local | Alice's `DELETE` of her card removes it; `GET`, `PUT`, and `DELETE` then answer `404` |
+| `H7 registry-refused-identities` | local | A context with an empty user ID gets `401` and an extraction failure `500`; neither registers a card |
+| `H8 registry-card-without-owner-read-only` | local | A card stored without an owner is readable, and `PUT`, `DELETE`, and `POST` of its name by Alice or Bob answer `403`, `403`, and `409` |
 | `I1 open-mode-warned-at-mount` | local | Building a server with background and cron routes and no `RequestContextExtractor` logs one warning naming `/api/runs` and `/api/cron` before any request; an authenticated build logs none; each standalone router logs one |
 | `I2 open-mode-key-per-user-live` | live | Two users' background runs of a `claude-sonnet-5-5` agent with the same `idempotencyKey` are two runs, each answering its own prompt, and a user's retry returns their run |
 | `I3 open-mode-keys-kept-apart` | local | An open-mode client using a cron firing's key does not absorb the firing, and an open-mode `userId: alice` does not match authenticated alice's key |

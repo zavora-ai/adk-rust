@@ -14,7 +14,7 @@ adk-cli = { path = "../../adk-cli", default-features = false, features = ["gemin
 adk-core = { path = "../../adk-core" }
 adk-model = { path = "../../adk-model", default-features = false, features = ["openai", "gemini", "anthropic"] }
 adk-runner = { path = "../../adk-runner" }
-adk-server = { path = "../../adk-server", features = ["a2a-v1", "background"] }
+adk-server = { path = "../../adk-server", features = ["a2a-v1", "agent-registry", "background"] }
 adk-session = { path = "../../adk-session" }
 adk-telemetry = { path = "../../adk-telemetry" }
 anyhow = "1.0"

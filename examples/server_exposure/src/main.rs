@@ -14,6 +14,7 @@
 //! | E | A truncated A2A stream is an error, and a split multi-byte character stays intact; only an administrator freezes or unfreezes the kill switch |
 //! | F | An agent card whose RPC endpoint names another host is refused; a debug trace is returned to its owner only |
 //! | G | An error response carries a provider's or a store's message only with `expose_error_details` |
+//! | H | The agent registry authenticates every request; only a card's owner changes it |
 //! | I | Background runs in open mode warn at mount, and keep each user's idempotency keys apart |
 
 mod background;
@@ -21,6 +22,7 @@ mod debug_traces;
 mod error_details;
 mod governance_admin;
 mod peers;
+mod registry;
 mod scripted;
 
 use std::net::{IpAddr, SocketAddr};
@@ -1138,6 +1140,7 @@ async fn main() -> ExitCode {
     group_f(&mut out).await;
     debug_traces::group_f_debug_traces(&mut out).await;
     error_details::group_g(&mut out).await;
+    registry::group_h(&mut out).await;
     background::group_i(&model, &mut out).await;
 
     println!("\n| Scenario | Kind | Result | Detail |");

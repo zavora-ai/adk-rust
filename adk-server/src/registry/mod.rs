@@ -14,5 +14,5 @@ pub mod store;
 pub mod types;
 
 pub use routes::registry_router;
-pub use store::{AgentFilter, AgentRegistryStore, InMemoryAgentRegistryStore};
+pub use store::{AgentFilter, AgentRegistryStore, InMemoryAgentRegistryStore, OwnerWrite};
 pub use types::AgentCard;

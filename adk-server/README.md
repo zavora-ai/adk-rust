@@ -45,7 +45,7 @@ No feature is enabled by default.
 | `approvals` | `ServerBuilder::with_approval_service`: the `/api/approvals` inbox, `spawn_approval_ticker`, and `WebhookApprovalNotifier` |
 | `openai-webhooks` | `OpenAIWebhookHandler` for OpenAI background-task completion events |
 | `yaml-agent` | `AgentConfigLoader` and `HotReloadWatcher` for YAML agent definitions |
-| `agent-registry` | The agent registry REST API |
+| `agent-registry` | The agent registry REST API, `registry::registry_router(store, extractor)`: every request authenticates through a `RequestContextExtractor`, and only a card's owner updates or deletes it |
 | `agent-engine` | The Gemini Enterprise Agent Platform (ReasoningEngine) dispatch surface and `serve_agent_engine` |
 | `vertex-remote-engine` | `RemoteReasoningEngineAgent`: deployed Agent Engine agents as sub-agents (implies `agent-engine`) |
 | `awp` | `ServerBuilder::awp(AwpEdge)`: the AWP 2.0 agent edge — trust tiers from verified credentials, capabilities over A2A, MCP and HTTP through one governed path, held and exactly-once calls, the public partition's conversation endpoints, event subscriptions, consent receipts and the beacon (implies `a2a-v1`) |

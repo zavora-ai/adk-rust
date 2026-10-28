@@ -8,7 +8,7 @@ The Agent Registry is the Govern pillar of the Gemini Enterprise Agent Platform:
 | Register self-hosted agents, MCP servers, and endpoints from the CLI | `vertex-agent-registry` | `adk-cli` |
 | Invoke a registered Agent Engine as a sub-agent (`RemoteReasoningEngineAgent`) | `vertex-remote-engine` | `adk-server` |
 
-> **Note:** these features are unrelated to the local YAML `agent-registry` feature on `adk-server`, and the Agent Registry (agents/MCP servers/endpoints) is a different platform service from the Skill Registry (SKILL.md packages — see `docs/official_docs/skills/skill-registry.md`).
+> **Note:** these features are unrelated to the local agent registry REST API, the `agent-registry` feature on `adk-server` (see [Server API](server.md#agent-registry)), and the Agent Registry (agents/MCP servers/endpoints) is a different platform service from the Skill Registry (SKILL.md packages — see `docs/official_docs/skills/skill-registry.md`).
 
 ## Automatic vs. manual registration
 
