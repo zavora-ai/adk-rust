@@ -6,7 +6,7 @@
 //! | `a` (`http`, `https`, `mailto`, `tel` or a path), `img`, `em`, `strong`, `code`, `del`, `br` | Markdown inline syntax |
 //! | `iframe` from a listed host | A link to the embedded page; the built-in renderer escapes raw HTML |
 //! | `div`, `span`, `section`, `figure` and other containers | Their content |
-//! | `script`, `style`, `object`, `embed`, `applet`, unlisted `iframe`, forms and their controls | Dropped with their content, recorded |
+//! | `script`, `style`, `noscript`, `noembed`, `object`, `embed`, `applet`, unlisted `iframe`, forms and their controls | Dropped with their content, recorded; an element's raw text never becomes page text |
 //! | Elements hidden by a style (`display:none`, off-screen, zero size) or the `hidden` attribute | Dropped with their content, recorded |
 //! | Inline handlers (`on*`), `style`, `class` and every other attribute | Dropped, handlers recorded |
 //!
@@ -56,7 +56,7 @@ pub const ALLOWED_ELEMENTS: &[&str] = &[
 const DROPPED: &[&str] = &[
     "script", "style", "noscript", "template", "object", "embed", "applet", "form", "input",
     "button", "select", "textarea", "option", "svg", "math", "canvas", "head", "meta", "link",
-    "base", "frame", "frameset", "title", "dialog", "portal",
+    "base", "frame", "frameset", "title", "dialog", "portal", "noembed", "noframes",
 ];
 
 /// Iframe hosts kept by default: privacy-enhanced video and map embeds.
@@ -258,6 +258,15 @@ struct Converter<'a, 'm> {
     out: Sanitised,
 }
 
+/// Ends a run of inline content as a paragraph block.
+fn flush(inline: &mut String, blocks: &mut Vec<String>) {
+    let text = inline.trim().to_string();
+    if !text.is_empty() {
+        blocks.push(escape_line_starts(&text));
+    }
+    inline.clear();
+}
+
 fn excerpt(node: NodeRef<'_, Node>) -> String {
     let mut text = String::new();
     for descendant in node.descendants() {
@@ -392,10 +401,18 @@ impl Converter<'_, '_> {
                 Node::Text(t) => text.push_str(t),
                 Node::Element(element) => {
                     let name = element.name().to_ascii_lowercase();
-                    if !self.dropped(&name, element, child) {
-                        self.check_handlers(element);
-                        text.push_str(&self.raw_text(child));
+                    if self.dropped(&name, element, child) {
+                        continue;
                     }
+                    self.check_handlers(element);
+                    // Code holds no embed: an iframe there is dropped with its raw text.
+                    if name == "iframe" {
+                        if self.iframe(element, child).is_some() {
+                            self.record("iframe", DropReason::Other, child);
+                        }
+                        continue;
+                    }
+                    text.push_str(&self.raw_text(child));
                 }
                 _ => {}
             }
@@ -408,104 +425,109 @@ impl Converter<'_, '_> {
     fn blocks(&mut self, node: NodeRef<'_, Node>) -> Vec<String> {
         let mut blocks = Vec::new();
         let mut inline = String::new();
-        let flush = |inline: &mut String, blocks: &mut Vec<String>| {
-            let text = inline.trim().to_string();
-            if !text.is_empty() {
-                blocks.push(escape_line_starts(&text));
-            }
-            inline.clear();
-        };
         for child in node.children() {
-            match child.value() {
-                Node::Text(text) => inline.push_str(&escape(&collapse_ws(text))),
-                Node::Element(element) => {
-                    let name = element.name().to_ascii_lowercase();
-                    if self.dropped(&name, element, child) {
-                        continue;
-                    }
-                    self.check_handlers(element);
-                    match name.as_str() {
-                        "p" | "address" | "figcaption" | "summary" | "dt" | "dd" | "caption" => {
-                            flush(&mut inline, &mut blocks);
-                            let text = self.inline_children(child);
-                            let text = text.trim();
-                            if !text.is_empty() {
-                                blocks.push(escape_line_starts(text));
-                            }
-                        }
-                        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-                            flush(&mut inline, &mut blocks);
-                            let level: usize = name[1..].parse().unwrap_or(2);
-                            let text = self.inline_children(child).replace('\n', " ");
-                            let text = text.trim();
-                            if !text.is_empty() {
-                                blocks.push(format!("{} {text}", "#".repeat(level)));
-                            }
-                        }
-                        "ul" | "ol" => {
-                            flush(&mut inline, &mut blocks);
-                            let list = self.list(child, name == "ol");
-                            if !list.is_empty() {
-                                blocks.push(list);
-                            }
-                        }
-                        "blockquote" => {
-                            flush(&mut inline, &mut blocks);
-                            let inner = self.blocks(child).join("\n\n");
-                            if !inner.trim().is_empty() {
-                                blocks.push(
-                                    inner
-                                        .lines()
-                                        .map(|l| {
-                                            if l.is_empty() { ">".into() } else { format!("> {l}") }
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join("\n"),
-                                );
-                            }
-                        }
-                        "pre" => {
-                            flush(&mut inline, &mut blocks);
-                            let code = self.raw_text(child);
-                            if !code.trim().is_empty() {
-                                let longest = longest_run(&code, '`').max(2);
-                                let fence = "`".repeat(longest + 1);
-                                blocks.push(format!(
-                                    "{fence}\n{}\n{fence}",
-                                    code.trim_end_matches('\n')
-                                ));
-                            }
-                        }
-                        "hr" => {
-                            flush(&mut inline, &mut blocks);
-                            blocks.push("---".into());
-                        }
-                        "table" => {
-                            flush(&mut inline, &mut blocks);
-                            if let Some(table) = self.table(child) {
-                                blocks.push(table);
-                            }
-                        }
-                        "iframe" => {
-                            flush(&mut inline, &mut blocks);
-                            if let Some(link) = self.iframe(element, child) {
-                                blocks.push(link);
-                            }
-                        }
-                        "div" | "section" | "article" | "main" | "header" | "footer" | "aside"
-                        | "nav" | "figure" | "details" | "dl" | "center" | "body" | "html"
-                        | "hgroup" | "picture" => {
-                            flush(&mut inline, &mut blocks);
-                            blocks.extend(self.blocks(child));
-                        }
-                        _ => inline.push_str(&self.inline_element(&name, element, child)),
-                    }
-                }
-                _ => {}
-            }
+            self.block_child(child, &mut inline, &mut blocks);
         }
         flush(&mut inline, &mut blocks);
         blocks
+    }
+
+    /// Converts one node in block context: a block element flushes `inline` and adds its
+    /// blocks, inline content joins `inline`, and a dropped element leaves nothing — the raw
+    /// text of a `script` or `iframe` included.
+    fn block_child(
+        &mut self,
+        child: NodeRef<'_, Node>,
+        inline: &mut String,
+        blocks: &mut Vec<String>,
+    ) {
+        match child.value() {
+            Node::Text(text) => inline.push_str(&escape(&collapse_ws(text))),
+            Node::Element(element) => {
+                let name = element.name().to_ascii_lowercase();
+                if self.dropped(&name, element, child) {
+                    return;
+                }
+                self.check_handlers(element);
+                match name.as_str() {
+                    "p" | "address" | "figcaption" | "summary" | "dt" | "dd" | "caption" => {
+                        flush(inline, blocks);
+                        let text = self.inline_children(child);
+                        let text = text.trim();
+                        if !text.is_empty() {
+                            blocks.push(escape_line_starts(text));
+                        }
+                    }
+                    "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                        flush(inline, blocks);
+                        let level: usize = name[1..].parse().unwrap_or(2);
+                        let text = self.inline_children(child).replace('\n', " ");
+                        let text = text.trim();
+                        if !text.is_empty() {
+                            blocks.push(format!("{} {text}", "#".repeat(level)));
+                        }
+                    }
+                    "ul" | "ol" => {
+                        flush(inline, blocks);
+                        let list = self.list(child, name == "ol");
+                        if !list.is_empty() {
+                            blocks.push(list);
+                        }
+                    }
+                    "blockquote" => {
+                        flush(inline, blocks);
+                        let inner = self.blocks(child).join("\n\n");
+                        if !inner.trim().is_empty() {
+                            blocks.push(
+                                inner
+                                    .lines()
+                                    .map(
+                                        |l| {
+                                            if l.is_empty() { ">".into() } else { format!("> {l}") }
+                                        },
+                                    )
+                                    .collect::<Vec<_>>()
+                                    .join("\n"),
+                            );
+                        }
+                    }
+                    "pre" => {
+                        flush(inline, blocks);
+                        let code = self.raw_text(child);
+                        if !code.trim().is_empty() {
+                            let longest = longest_run(&code, '`').max(2);
+                            let fence = "`".repeat(longest + 1);
+                            blocks
+                                .push(format!("{fence}\n{}\n{fence}", code.trim_end_matches('\n')));
+                        }
+                    }
+                    "hr" => {
+                        flush(inline, blocks);
+                        blocks.push("---".into());
+                    }
+                    "table" => {
+                        flush(inline, blocks);
+                        if let Some(table) = self.table(child) {
+                            blocks.push(table);
+                        }
+                    }
+                    "iframe" => {
+                        flush(inline, blocks);
+                        if let Some(link) = self.iframe(element, child) {
+                            blocks.push(link);
+                        }
+                    }
+                    "div" | "section" | "article" | "main" | "header" | "footer" | "aside"
+                    | "nav" | "figure" | "details" | "dl" | "center" | "body" | "html"
+                    | "hgroup" | "picture" => {
+                        flush(inline, blocks);
+                        blocks.extend(self.blocks(child));
+                    }
+                    _ => inline.push_str(&self.inline_element(&name, element, child)),
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Whether an element is dropped with its content; records why.
@@ -565,13 +587,17 @@ impl Converter<'_, '_> {
         for child in node.children() {
             let Node::Element(element) = child.value() else { continue };
             let name = element.name().to_ascii_lowercase();
-            if self.dropped(&name, element, child) {
-                continue;
-            }
-            self.check_handlers(element);
+            let body = if name == "li" {
+                if self.dropped(&name, element, child) {
+                    continue;
+                }
+                self.check_handlers(element);
+                self.blocks(child)
+            } else {
+                self.blocks_of_one(child)
+            };
             let marker = if ordered { format!("{number}. ") } else { "- ".into() };
             let indent = " ".repeat(marker.len());
-            let body = if name == "li" { self.blocks(child) } else { self.blocks_of_one(child) };
             let body = body.join("\n\n");
             let body = body.trim();
             if body.is_empty() {
@@ -597,9 +623,14 @@ impl Converter<'_, '_> {
         lines.join("\n")
     }
 
-    /// Converts a single non-`li` element found inside a list as a block.
+    /// Converts a single non-`li` element found inside a list as a block: the element itself,
+    /// so an `iframe` or `script` there is dropped or linked as it is anywhere else.
     fn blocks_of_one(&mut self, node: NodeRef<'_, Node>) -> Vec<String> {
-        self.blocks(node)
+        let mut blocks = Vec::new();
+        let mut inline = String::new();
+        self.block_child(node, &mut inline, &mut blocks);
+        flush(&mut inline, &mut blocks);
+        blocks
     }
 
     fn table(&mut self, node: NodeRef<'_, Node>) -> Option<String> {

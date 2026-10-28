@@ -181,3 +181,39 @@ proptest! {
         prop_assert_eq!(collapse(&shown), collapse(&decoded));
     }
 }
+
+/// The cases `sanitised_markdown_stays_inside_the_allowlist` found: an element among a list's
+/// own children was converted by its children, and code read an `<iframe>`'s content, so its
+/// raw text — a script as written — came out as page text. Every raw-text element a list, a
+/// code block or a page holds is dropped with its content, and a listed `<iframe>` in a list
+/// is still a link.
+#[test]
+fn raw_text_elements_in_lists_leave_nothing_behind() {
+    let page = Url::parse("https://solar.test/posts/a/").unwrap();
+    for input in [
+        format!("<ul ><iframe ><script>var m = '{MARKER}';</script></iframe></ul>"),
+        format!("<ol><iframe src=\"https://evil.test/f\">{MARKER}</iframe><li>kept</li></ol>"),
+        format!("<ul><script>var m = '{MARKER}';</script><li>kept</li></ul>"),
+        format!("<ul><style>.m::after{{content:'{MARKER}'}}</style><li>kept</li></ul>"),
+        format!("<ul><noscript>{MARKER}</noscript><li>kept</li></ul>"),
+        format!("<ul><li>kept</li><noembed>{MARKER}</noembed></ul>"),
+        format!("<p>kept</p><noframes>{MARKER}</noframes>"),
+        format!("<ul><li>kept<iframe><script>{MARKER}</script></iframe></li></ul>"),
+        format!("<pre ><iframe ><script>var m = '{MARKER}';</script></iframe></pre>"),
+        format!(
+            "<p>kept <code>a<iframe src=\"https://www.youtube-nocookie.com/embed/abc\">{MARKER}</iframe></code></p>"
+        ),
+    ] {
+        for sanitised in [
+            Sanitiser::new().sanitise(&input, Some(&page)),
+            Sanitiser::new().sanitise(&input, None),
+        ] {
+            check(&sanitised.markdown).unwrap_or_else(|e| panic!("{input}: {e}"));
+            assert!(!sanitised.dropped.is_empty(), "{input}: the drop is recorded");
+        }
+    }
+    let listed = "<ul><iframe src=\"https://www.youtube-nocookie.com/embed/abc\" title=\"Tour\">\
+                  <script>x</script></iframe></ul>";
+    let markdown = Sanitiser::new().sanitise(listed, None).markdown;
+    assert_eq!(markdown.trim(), "- [Tour](https://www.youtube-nocookie.com/embed/abc)");
+}
