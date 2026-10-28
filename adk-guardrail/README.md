@@ -128,7 +128,7 @@ fn tool_guardrails() -> Result<ToolGuardrailSet, Box<dyn std::error::Error>> {
 }
 ```
 
-Pass the set to `LlmAgentBuilder::tool_guardrails`, or to a realtime runtime as its tool-result screen. Tool guardrails run in order and revisions compose; the first denial stops evaluation and is reported to the model as the tool's result. `PathAllowList` denies a call that omits a configured path argument (`allow_missing()` permits it), and applies to every tool unless `on_tools` names them.
+Pass the set to `LlmAgentBuilder::tool_guardrails`, or to a realtime runtime as its tool-result screen. Tool guardrails run in order and revisions compose; the first denial stops evaluation and is reported to the model as the tool's result. `PathAllowList` checks every key it names at any depth of the arguments — nested objects and arrays included — and denies the call if any occurrence holds a value other than a path, or a path outside the allowed roots. It denies a call with no path under a configured name (`allow_missing()` permits it), and applies to every tool unless `on_tools` names them. It is a preflight check: a tool that opens files where another process can write must still open them relative to a trusted directory handle, as the `adk-devtools` file tools do, to close the time-of-check/time-of-use race.
 
 ## Guardrail Results
 
@@ -223,6 +223,7 @@ fn validator() -> adk_guardrail::Result<SchemaValidator> {
 |--------|-----------|
 | A block is an `AdkError` with `ErrorComponent::Guardrail`, `ErrorCategory::InvalidInput`, and code `guardrail.input_blocked` / `guardrail.output_blocked` | Match the codes instead of `agent.legacy`; `GuardrailError` gains `Blocked { phase, failures }` |
 | `PathAllowList` denies a call that omits a configured path argument | `allow_missing()` restores the old behaviour |
+| `PathAllowList` checks the keys it names at any depth, not only at the top level | Scope it with `on_tools` when a key of the same name holds something other than a path |
 | `ContentFilter::new` and `ContentFilter::blocked_keywords` return `Result` | Handle `GuardrailError::Regex` |
 | `ToolGuardrail::validate_result`, `ResultTextGuardrail`, and `validate_preamble` are new; `validate_call` defaults to allowing | — |
 | `Low` findings pass and are recorded as warnings | — |

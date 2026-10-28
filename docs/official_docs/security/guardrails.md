@@ -405,10 +405,56 @@ guardrails in order: revisions compose, and the first denial or withholding stop
 | Built-in | Denies |
 |----------|--------|
 | `DeniedArgumentPattern::new(name, regex, severity)?` | A call whose serialized arguments match `regex` |
-| `PathAllowList::new(name, arg_names, allowed_roots)` | A call whose path argument is not absolute, contains `..`, or resolves (symlinks included) outside every allowed root; also a call that omits one of `arg_names`, unless `allow_missing()` is set. Severity `Critical` unless `with_severity` changes it |
+| `PathAllowList::new(name, arg_names, allowed_roots)` | A call in which any key named in `arg_names`, at any depth, holds a path that is not absolute, contains `..`, or resolves (symlinks included) outside every allowed root, or holds a value that is not a path; also a call with no path under one of `arg_names`, unless `allow_missing()` is set. Severity `Critical` unless `with_severity` changes it |
 
 Without `on_tools`, a `PathAllowList` applies to every tool, so a tool that takes no path
 argument is denied too; a tool not named in `on_tools` is not checked at all.
+
+#### Where `PathAllowList` looks
+
+`PathAllowList` checks every key named in `arg_names` wherever it appears in the arguments, so a
+permitted path in one place does not vouch for another elsewhere. A denial names the occurrence
+by JSON pointer, such as `/source/path`.
+
+| Arguments, with `arg_names` = `["path"]` | Checked |
+|------------------------------------------|---------|
+| `{"path": "/srv/a.txt"}` | `/path` |
+| `{"source": {"path": "/srv/a.txt"}}` | `/source/path` |
+| `{"files": [{"path": "/srv/a.txt"}, {"path": "/srv/b.txt"}]}` | `/files/0/path` and `/files/1/path` |
+| `{"path": ["/srv/a.txt", "/srv/b.txt"]}` | `/path/0` and `/path/1` |
+
+| Value under a named key | Result |
+|-------------------------|--------|
+| A path string | Checked against the allowed roots |
+| An array of path strings | Each element checked; an empty array holds no path |
+| A number, a boolean, `null`, an object, or an array holding one of them | Denied: it cannot be checked |
+
+A call counts as omitting a name when no path is found under it at any depth. Every key of a
+configured name is checked as a path, including one that holds something else, such as a URL
+path in an HTTP tool, so scope the guardrail with `on_tools` to the tools that take filesystem
+paths. A path inside a string value — embedded JSON, a command line — is not examined;
+`DeniedArgumentPattern` matches the serialized arguments.
+
+#### Time of check and time of use
+
+`PathAllowList` is a preflight check. It resolves a path when the call is screened, and the tool
+opens the path afterwards. A process that replaces a component of the path in between — a
+directory swapped for a symlink — redirects the open after the check passed, outside the allowed
+root. The guardrail never opens files, so it cannot close that window.
+
+A tool that opens files across a trust boundary — in a directory another process, a shell tool,
+or another agent can write — must open each path relative to a trusted directory handle and
+refuse symlinks swapped in after the check. The `adk-devtools` file tools do this (see
+[Dev Tools](../coding-agent/devtools.md#the-workspace)):
+
+| Platform | Open beneath the root |
+|----------|-----------------------|
+| Linux | `openat2` with `RESOLVE_BENEATH \| RESOLVE_NO_SYMLINKS` |
+| Other Unix, or Linux without `openat2` | One component at a time with `O_NOFOLLOW`, relative to the parent's descriptor |
+| Windows | `FILE_FLAG_OPEN_REPARSE_POINT`, refusing a symlink or junction handle and any handle whose final path is not the checked target beneath the root |
+
+Use `PathAllowList` to refuse calls early and tell the model why; use a secure open in the tool to
+enforce the boundary.
 
 ```rust
 use adk_guardrail::{DeniedArgumentPattern, PathAllowList, Severity, ToolGuardrailSet};

@@ -11,6 +11,7 @@
 //! ([`ToolGuardrail::validate_result`]) and can deliver, rewrite, or withhold it before the model
 //! and the session see it.
 
+use std::collections::VecDeque;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -599,23 +600,41 @@ impl ToolGuardrail for DeniedArgumentPattern {
 
 /// Denies a call whose path-valued arguments fall outside a set of allowed roots.
 ///
-/// Requires every named argument to be present and to be an absolute path contained by one of the
-/// allowed roots. A call that omits one is denied, because the guardrail cannot vouch for a path it
-/// was not shown; [`allow_missing`](Self::allow_missing) permits calls without it. Without
-/// [`on_tools`](Self::on_tools) the guardrail applies to every tool, so a tool that takes no path
-/// is denied too — scope it to the tools that take paths. Containment is compared by path component and after resolving the
-/// allowed root and every existing candidate component, so string-prefix, dangling-symlink, and
-/// resolved-symlink escapes are refused. Any path containing a `..` component is denied outright.
+/// Checks every key named in `arg_names` at any depth of the arguments: at the top level, in a
+/// nested object, and in an object held in an array. The call is denied when any occurrence is not
+/// an absolute path contained by one of the allowed roots, so a permitted path in one place does
+/// not vouch for another elsewhere.
 ///
-/// This is a preflight policy check, not a replacement for opening filesystem paths relative to a
-/// trusted directory handle. A hostile process able to replace path components between validation
-/// and tool execution can create a time-of-check/time-of-use race; filesystem tools operating
-/// across such a trust boundary must still use platform secure-open primitives.
+/// The value under a named key must be a path string or an array of path strings. Any other value
+/// — a number, a boolean, `null`, an object, or an array holding one of them — is denied, because
+/// it cannot be checked; an empty array holds no path. Every key of a configured name is checked
+/// as a path, including one that holds something else, such as a URL path, so scope the guardrail
+/// to the tools that take filesystem paths. A path inside a string value, such as embedded JSON or
+/// a command line, is not examined; [`DeniedArgumentPattern`] matches the serialized arguments.
+///
+/// A call in which no path is found under one of the names, at any depth, is denied, because the
+/// guardrail cannot vouch for a path it was not shown; [`allow_missing`](Self::allow_missing)
+/// permits such calls. Without [`on_tools`](Self::on_tools) the guardrail applies to every tool, so
+/// a tool that takes no path is denied too — scope it to the tools that take paths. Containment is
+/// compared by path component and after resolving the allowed root and every existing candidate
+/// component, so string-prefix, dangling-symlink, and resolved-symlink escapes are refused. Any
+/// path containing a `..` component is denied outright.
+///
+/// # Time of check and time of use
+///
+/// This is a preflight check: it resolves the path when the call is screened, and the tool opens
+/// it afterwards. A process that replaces a path component in between — a directory swapped for a
+/// symlink — redirects the open outside the root after the check passed. A tool that opens files
+/// where another process can write must open each path relative to a trusted directory handle and
+/// refuse symlinks, as the `adk-devtools` file tools do: `openat2` with `RESOLVE_BENEATH` on Linux,
+/// an `O_NOFOLLOW` walk from the root's descriptor on other Unix systems, and a check of the opened
+/// handle's final path on Windows.
 ///
 /// # Example
 ///
 /// ```rust
-/// use adk_guardrail::PathAllowList;
+/// use adk_guardrail::{PathAllowList, ToolGuardrail};
+/// use serde_json::json;
 ///
 /// let guardrail = PathAllowList::new(
 ///     "launch-agents-only",
@@ -623,6 +642,11 @@ impl ToolGuardrail for DeniedArgumentPattern {
 ///     ["/Users/me/Library/LaunchAgents"],
 /// )
 /// .on_tools(["plist_write", "plist_read"]);
+///
+/// // A `path` nested under another key is checked like a top-level one.
+/// let nested = json!({ "options": { "path": "/etc/hosts" } });
+/// let decision = futures::executor::block_on(guardrail.validate_call("plist_read", &nested));
+/// assert!(!decision.is_allowed());
 /// ```
 pub struct PathAllowList {
     name: String,
@@ -634,7 +658,8 @@ pub struct PathAllowList {
 }
 
 impl PathAllowList {
-    /// Creates a guardrail confining `arg_names` to `allowed_roots`.
+    /// Creates a guardrail confining every key named in `arg_names`, at any depth of a call's
+    /// arguments, to `allowed_roots`.
     pub fn new<A, S, R, P>(name: impl Into<String>, arg_names: A, allowed_roots: R) -> Self
     where
         A: IntoIterator<Item = S>,
@@ -671,10 +696,10 @@ impl PathAllowList {
         self
     }
 
-    /// Permits a call that omits a configured path argument.
+    /// Permits a call in which no path is found under a configured name, at any depth.
     ///
     /// By default such a call is denied. Use this when the guardrail names arguments that only
-    /// some of its tools take, such as `source` and `destination` beside `path`; every argument
+    /// some of its tools take, such as `source` and `destination` beside `path`; every occurrence
     /// that is present is still checked.
     ///
     /// # Example
@@ -762,43 +787,85 @@ impl ToolGuardrail for PathAllowList {
     }
 
     async fn validate_call(&self, tool_name: &str, args: &Value) -> ToolGuardrailResult {
-        for arg_name in &self.arg_names {
-            let Some(value) = args.get(arg_name) else {
-                if self.allow_missing {
-                    continue;
+        let deny = |reason: String| ToolGuardrailResult::deny(reason, self.severity);
+        // How many paths were checked under each configured name.
+        let mut found = vec![0_usize; self.arg_names.len()];
+        // Breadth first, so a top-level argument is reported before a nested one; a queue rather
+        // than recursion, so deeply nested arguments cannot exhaust the stack. Each entry carries
+        // its JSON pointer for the denial reason.
+        let mut pending = VecDeque::from([(String::new(), args)]);
+
+        while let Some((pointer, value)) = pending.pop_front() {
+            match value {
+                Value::Object(map) => {
+                    for (key, child) in map {
+                        let at = format!("{pointer}/{}", key.replace('~', "~0").replace('/', "~1"));
+                        let Some(index) = self.arg_names.iter().position(|name| name == key) else {
+                            pending.push_back((at, child));
+                            continue;
+                        };
+                        let candidates: Vec<(String, &Value)> = match child {
+                            Value::Array(items) => items
+                                .iter()
+                                .enumerate()
+                                .map(|(position, item)| (format!("{at}/{position}"), item))
+                                .collect(),
+                            Value::Null
+                            | Value::Bool(_)
+                            | Value::Number(_)
+                            | Value::String(_)
+                            | Value::Object(_) => vec![(at, child)],
+                        };
+                        for (at, candidate) in candidates {
+                            let kind = match candidate {
+                                Value::String(path) => {
+                                    if !self.is_permitted(path) {
+                                        let roots: Vec<_> = self
+                                            .allowed_roots
+                                            .iter()
+                                            .map(|root| root.display().to_string())
+                                            .collect();
+                                        return deny(format!(
+                                            "argument `{key}` of `{tool_name}` at `{at}` is \
+                                             {path:?}, which is not an absolute path inside an \
+                                             allowed root ({})",
+                                            roots.join(", ")
+                                        ));
+                                    }
+                                    found[index] += 1;
+                                    continue;
+                                }
+                                Value::Array(_) => "an array".to_string(),
+                                Value::Object(_) => "an object".to_string(),
+                                Value::Null | Value::Bool(_) | Value::Number(_) => {
+                                    candidate.to_string()
+                                }
+                            };
+                            return deny(format!(
+                                "argument `{key}` of `{tool_name}` at `{at}` must be a path string \
+                                 or an array of path strings, got {kind}"
+                            ));
+                        }
+                    }
                 }
-                return ToolGuardrailResult::deny(
-                    format!(
-                        "argument `{arg_name}` of `{tool_name}` is missing, so its path cannot be \
-                         checked; configure the guardrail with allow_missing() to permit calls \
-                         without it"
-                    ),
-                    self.severity,
-                );
-            };
-
-            let Some(candidate) = value.as_str() else {
-                return ToolGuardrailResult::deny(
-                    format!(
-                        "argument `{arg_name}` of `{tool_name}` must be a path string, got \
-                         {value}"
-                    ),
-                    self.severity,
-                );
-            };
-
-            if !self.is_permitted(candidate) {
-                let roots: Vec<_> =
-                    self.allowed_roots.iter().map(|r| r.display().to_string()).collect();
-                return ToolGuardrailResult::deny(
-                    format!(
-                        "argument `{arg_name}` of `{tool_name}` is {candidate:?}, which is not an \
-                         absolute path inside an allowed root ({})",
-                        roots.join(", ")
-                    ),
-                    self.severity,
-                );
+                Value::Array(items) => {
+                    for (position, item) in items.iter().enumerate() {
+                        pending.push_back((format!("{pointer}/{position}"), item));
+                    }
+                }
+                Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
             }
+        }
+
+        if !self.allow_missing
+            && let Some((arg_name, _)) =
+                self.arg_names.iter().zip(&found).find(|(_, count)| **count == 0)
+        {
+            return deny(format!(
+                "argument `{arg_name}` of `{tool_name}` holds no path at any depth, so it cannot \
+                 be checked; configure the guardrail with allow_missing() to permit calls without \
+                 it"
+            ));
         }
 
         ToolGuardrailResult::Allow
@@ -1146,6 +1213,126 @@ mod tests {
                 .await
                 .is_allowed()
         );
+    }
+
+    #[tokio::test]
+    async fn a_nested_path_outside_the_roots_is_denied() {
+        let root = tempfile::tempdir().expect("allowed root");
+        let inside = root.path().join("notes.txt");
+        let strict = PathAllowList::new("root", ["path"], [root.path()]);
+        let lenient = PathAllowList::new("root", ["path"], [root.path()]).allow_missing();
+
+        for args in [
+            json!({ "config": { "path": "/etc/shadow" } }),
+            json!({ "request": { "target": { "path": "/etc/shadow" } } }),
+        ] {
+            assert!(!strict.validate_call("read", &args).await.is_allowed(), "should deny {args}");
+            assert!(!lenient.validate_call("read", &args).await.is_allowed(), "should deny {args}");
+        }
+        let beside_a_permitted_one = json!({ "path": inside, "backup": { "path": "/etc/shadow" } });
+        assert!(
+            !strict.validate_call("read", &beside_a_permitted_one).await.is_allowed(),
+            "a permitted top-level path must not vouch for a nested one"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_array_held_path_outside_the_roots_is_denied() {
+        let root = tempfile::tempdir().expect("allowed root");
+        let inside = root.path().join("notes.txt");
+        let guardrail = PathAllowList::new("root", ["path"], [root.path()]).allow_missing();
+
+        for args in [
+            json!({ "files": [{ "path": inside }, { "path": "/etc/shadow" }] }),
+            json!({ "batches": [[{ "path": "/etc/shadow" }]] }),
+            json!({ "path": [inside, "/etc/shadow"] }),
+        ] {
+            assert!(
+                !guardrail.validate_call("read", &args).await.is_allowed(),
+                "should deny {args}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_nested_path_inside_the_roots_is_permitted() {
+        let root = tempfile::tempdir().expect("allowed root");
+        let first = root.path().join("a.txt");
+        let second = root.path().join("b.txt");
+        // Without allow_missing: a path found at any depth satisfies the presence check.
+        let guardrail = PathAllowList::new("root", ["path"], [root.path()]);
+
+        for args in [
+            json!({ "source": { "path": first } }),
+            json!({ "files": [{ "path": first }, { "path": second }] }),
+            json!({ "path": [first, second] }),
+            json!({ "path": first, "backup": { "path": second } }),
+        ] {
+            assert!(
+                guardrail.validate_call("read", &args).await.is_allowed(),
+                "should allow {args}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_value_under_the_name_that_is_not_a_path_is_denied_at_any_depth() {
+        let root = tempfile::tempdir().expect("allowed root");
+        let inside = root.path().join("a.txt");
+        let guardrail = PathAllowList::new("root", ["path"], [root.path()]).allow_missing();
+
+        for args in [
+            json!({ "config": { "path": 42 } }),
+            json!({ "config": { "path": null } }),
+            json!({ "config": { "path": { "dir": inside } } }),
+            json!({ "items": [{ "path": true }] }),
+            json!({ "path": [inside, 7] }),
+            json!({ "path": [[inside]] }),
+        ] {
+            assert!(
+                !guardrail.validate_call("read", &args).await.is_allowed(),
+                "a value that is not a path string cannot be checked: {args}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_empty_path_array_holds_no_path() {
+        let root = tempfile::tempdir().expect("allowed root");
+        let args = json!({ "options": { "path": [] } });
+
+        assert!(
+            !PathAllowList::new("root", ["path"], [root.path()])
+                .validate_call("read", &args)
+                .await
+                .is_allowed(),
+            "an empty array shows no path, so it is denied as missing"
+        );
+        assert!(
+            PathAllowList::new("root", ["path"], [root.path()])
+                .allow_missing()
+                .validate_call("read", &args)
+                .await
+                .is_allowed()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_denial_names_where_the_path_was_found() {
+        let root = tempfile::tempdir().expect("allowed root");
+        let guardrail = PathAllowList::new("root", ["path"], [root.path()]).allow_missing();
+
+        let decision =
+            guardrail.validate_call("read", &json!({ "a/b": [{ "path": "/etc/shadow" }] })).await;
+
+        match decision {
+            ToolGuardrailResult::Deny { reason, severity } => {
+                assert_eq!(severity, Severity::Critical);
+                assert!(reason.contains("at `/a~1b/0/path`"), "got {reason}");
+                assert!(reason.contains("not an absolute path inside an allowed root"), "{reason}");
+            }
+            other => panic!("expected Deny, got {other:?}"),
+        }
     }
 
     #[tokio::test]
