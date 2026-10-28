@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Implemented on `main` @ `7a498b3b9` except the items under [Remaining work](#remaining-work); [Implementation status](#implementation-status) records each item and [Deviations from this spec](#deviations-from-this-spec) every place the build differs from the text below |
+| **Status** | Implemented on `main` @ `61e65676f` except the items under [Remaining work](#remaining-work); [Implementation status](#implementation-status) records each item and [Deviations from this spec](#deviations-from-this-spec) every place the build differs from the text below |
 | **Companion** | [`awp-2.0-overview.md`](awp-2.0-overview.md): the product story for owners and developers |
 | **Builds on** | [`spec-3.1-harness-agent.md`](spec-3.1-harness-agent.md) (modes, standing rules, the governed path, governed fetch, packs, long-term facts, teams), [`spec-3.2-agent-kernel.md`](spec-3.2-agent-kernel.md) (agenda, wakes, partitions and crossings, drivers and effect classes, quiet hours, `adk-rust up`), [`spec-3.3-harness-ui.md`](spec-3.3-harness-ui.md) (the decision contract, park on timeout, diff before write, pairing, chat channels, the web home), [`spec-3.4-self-improving-harness.md`](spec-3.4-self-improving-harness.md) (the learning loop the site's playbooks reuse) |
 | **Layers** | **Protocol:** AWP 2.0, implemented by `awp-types` and `adk-awp`. **Runtime:** the ADK-Rust harness. **Product:** `adk-website`, a multi-agent proactive website shipped as a workspace crate |
@@ -17,8 +17,10 @@
 
 ## Implementation status
 
-On `origin/main` @ `7a498b3b9` (2026-10-26), after the wave-gate fixes (W1–W5: #1165, #1168,
-#1169, #1171, #1172, #1173). A row names the pull requests that delivered it.
+On `origin/main` @ `61e65676f` (2026-10-28), after the wave-gate fixes (W1–W5: #1165, #1168,
+#1169, #1171, #1172, #1173), the final round (#1181, #1182, #1183, #1188, #1200) and the
+verification pass (#1189 and the pull request that brings this section up to date). A row names
+the pull requests that delivered it.
 [Deviations from this spec](#deviations-from-this-spec) lists every place `main` differs from
 the text below, and [Remaining work](#remaining-work) lists what is not done; every item there
 is open on `main`. No scenario reports a runtime gap.
@@ -32,15 +34,15 @@ design label.
 | 0 | X9 | Done | Spec 3.2's implementation status already records `adk-kernel` |
 | 0 | X13 | Done | The protocol repository (`zavora-ai/agenticwebprotocol`, branch `awp-2.0`, private) marks the v1.0 draft and the v0.4 document superseded; no workspace file names `awp.dev` except this spec and the overview, which describe the problem |
 | 1 | AWP 2.0 wire types ([§7.2](#72-the-site-contract)–[§7.8.3](#783-constantly-updated-sites), [§7.10](#710-partitions-and-signals)) | Done | #1083: `awp_types::v2`, re-exported at the crate root; JSON Schemas in `awp-types/schemas/2.0/` (`json-schema`) |
-| 1 | AWP 2.0 normative text, schemas, examples, test vectors | Done, unpublished | The protocol repository's `awp-2.0` branch: `spec/awp-2.0.md`, the schemas vendored from `awp-types`, examples, the Web Bot Auth and signing vectors, `make validate`. The text has no public home yet ([§13](#13-open-questions) Q1) |
+| 1 | AWP 2.0 normative text, schemas, examples, test vectors | Done, unpublished | The protocol repository's `awp-2.0` branch: `spec/awp-2.0.md`, the schemas vendored from `awp-types`, examples, the Web Bot Auth and signing vectors, `make validate`, which passes at `e79d12c` (the charter members of #1200); adk-awp's 35 example fixtures and 19 signing vectors and adk-auth's 9 Web Bot Auth vectors equal the repository's files byte for byte (2026-10-28). The text has no public home yet ([§13](#13-open-questions) Q1) |
 | 1 | Version negotiation, the `awp-v1` feature, the v2 routes, `CapabilityTool`, edge store traits ([§7.1](#71-layout-and-features), [§7.2](#72-the-site-contract), [§7.4](#74-capabilities-bindings-and-machine-views)) | Done | #1110 |
 | 1 | Signing: JWS over JCS, keys, delegations, revocations, the DNS root, signed Agent Cards, the log's tiles and checkpoint, `StaticBundle` ([§7.2](#72-the-site-contract), [§7.7](#77-releases-site-log-and-verification), D-11) | Done | #1121 (`signing`) |
 | 1 | `awp verify` and the conformance kit ([§7.7](#77-releases-site-log-and-verification)) | Done | #1121 (`verify`): `Verifier`, `conformance::run`, 19 signing vectors; `adk-rust awp verify` and `awp conformance` (#1144) |
 | 1 | Charter format ([§7.6](#76-the-charter-format)) | Done | #1083: `Charter::validate`; the owner's settings `handoffThreshold`, `publishDelayHours` and `amountThresholds` as optional members, shown on the charter cards and read by `adk-website` with its defaults as fallback (#1200) |
 | 1 | Site pipeline: content model, built-in generator, launch gate, releases, site log, `DirectoryHost`, publishing, media ([§7.7](#77-releases-site-log-and-verification), [§7.8](#78-site-pipeline-adk-site), [§7.8.1](#781-the-launch-gate), [§7.8.2](#782-publishing)) | Done | #1108; the full tier runs `awp verify` against the preview (`gate::PreviewVerification`, `Verifier::verify_preview`), in a served site's gate too (#1181) |
-| 1 | Sources, sanitiser, feature mapping, freeze, parity, probes, archive ([§7.8](#78-site-pipeline-adk-site)) | Done | #1125, behind `adk-site`'s `migrate`; `adk-rust site build` runs the parity check after `site migrate` (#1182) |
-| 1 | Hosts ([§7.8](#78-site-pipeline-adk-site) "Hosts", [§7.8.3](#783-constantly-updated-sites)) | Done | `DirectoryHost` (#1108; `PrefixPointer` since #1133) and the seven `host-*` adapters (#1134); `RsyncHost` keeps a read-only copy per release, and the nightly `site-hosts` job runs the host suites against MinIO, Azurite and an SSH server (#1182) |
-| 1 | External generators ([§7.8](#78-site-pipeline-adk-site) "Generator") | Done | #1143: `gen-zola`, `gen-hugo`, `gen-astro`, `gen-build-awesome`; on Windows under the restricted token by opt-in, and the nightly `site-generators` job runs the real generators under bubblewrap and the restricted token (#1182) |
+| 1 | Sources, sanitiser, feature mapping, freeze, parity, probes, archive ([§7.8](#78-site-pipeline-adk-site)) | Done | #1125, behind `adk-site`'s `migrate`; `adk-rust site build` runs the parity check after `site migrate` (#1182); the hidden-link detector reads a style rule only by its context-free selector and reports hidden links to other sites, so a current WordPress theme's menus, skip links and cart link raise no finding (#1189) |
+| 1 | Hosts ([§7.8](#78-site-pipeline-adk-site) "Hosts", [§7.8.3](#783-constantly-updated-sites)) | Done | `DirectoryHost` (#1108; `PrefixPointer` since #1133) and the seven `host-*` adapters (#1134); `RsyncHost` keeps a read-only copy per release, and the nightly `site-hosts` job runs the host suites against MinIO, Azurite and an SSH server (#1182); a read through `current` that APFS fails once with `EINVAL` during a switch is retried (#1189); Azurite starts with `--skipApiVersionCheck`, since the Azure CLI sends a newer API version than it knows, and Radicale with `owner_only` rights; on 2026-10-28 the job passed: S3 on MinIO, Azure Blob on Azurite, rsync over SSH and the CalDAV driver on Radicale |
+| 1 | External generators ([§7.8](#78-site-pipeline-adk-site) "Generator") | Done | #1143: `gen-zola`, `gen-hugo`, `gen-astro`, `gen-build-awesome`; on Windows under the restricted token by opt-in, and the nightly `site-generators` job runs the real generators under bubblewrap and the restricted token (#1182); Astro on Windows links the toolchain's `node_modules` with symbolic links, which Windows creates in Developer Mode or as an administrator; on 2026-10-28 the job passed on Linux and Windows, every generator building the fixture site twice |
 | 1 | Charter store ([§7.11](#711-charter-store-kpi-tracker-and-earned-autonomy)) | Done | #1107: in-memory, SQLite, PostgreSQL, Redis |
 | 1 | `Preset::Website`, site toolsets, onboarding machinery ([§7.1](#71-layout-and-features), [§7.18](#718-onboarding-and-self-building), X10) | Done | #1127 (`adk-harness` `website`) |
 | 1 | `adk-website`: kinds, team, onboarding, themes, packs, playbooks, jobs, incidents, alarms, review ([§7.16](#716-adk-website)–[§7.21](#721-reviews-reports-and-escalation)) | Done | #1141; the back office compiles as one `TeamSpec` led by the Steward and runs governed (#1165, #1173) |
@@ -51,7 +53,7 @@ design label.
 | 1 | `adk-rust website …` ([§8.1](#81-adk-cli)) | Done | #1159: `website new [dir] [--agency]` scaffolds, serves the kernel, the edge and the owner's views on a loopback home, and prints the setup code; `status`, `review`, `charter`, `jobs promote\|demote`. The `adk-website` binary keeps `new`, `kinds`, `plan`, `start`, `agency` and `deploy` (#1141, #1145) |
 | 1 | `cargo-adk` `website` template, umbrella `website` ([§8.2](#82-server-kernel-surfaces-and-templates)) | Done | #1147; the edge signs with the delegated key files (#1173) |
 | 1 | Documentation ([§8.2](#82-server-kernel-surfaces-and-templates)), X14 | Done | #1160: "AWP 2.0", "Spin up an AWP website", "Move a WordPress site to AWP", "The charter", "Writing capability packs", the AWP 1.x migration guide, the publish tiers; the `STABILITY.md` rows came with #1108, #1118 and #1141 |
-| 2 | Web Bot Auth ([§7.3](#73-identity-and-trust-tiers)) | Done | Signer, verifier, key directory (#1081, `adk-auth` `web-bot-auth`); tiers on the edge (#1132); signed crawls and `awp verify` requests, and `web_fetch` by opt-in (#1127) |
+| 2 | Web Bot Auth ([§7.3](#73-identity-and-trust-tiers)) | Done | Signer, verifier, key directory (#1081, `adk-auth` `web-bot-auth`); tiers on the edge (#1132); signed crawls and `awp verify` requests, and `web_fetch` by opt-in (#1127); the protocol repository's nine Web Bot Auth vectors in `adk-auth/tests/fixtures/web-bot-auth/`, each reaching its verdict and held to the protocol's `SHA256SUMS` (#1189) |
 | 2 | MCP server ([§7.9](#79-agent-edge-mcp-server-and-stores)) | Done | #1082 (`adk-tool` `mcp-server`) |
 | 2 | Agent edge: tiers, bindings, held and exactly-once calls, the public partition ([§7.3](#73-identity-and-trust-tiers), [§7.4](#74-capabilities-bindings-and-machine-views), [§7.9](#79-agent-edge-mcp-server-and-stores), [§7.10](#710-partitions-and-signals)) | Done | #1132; the edge files its own signal for a refused or flagged conversation (#1169) |
 | 2 | Events, status, consent, the beacon, durable edge stores ([§7.5](#75-events-status-consent-and-commerce), [§7.9](#79-agent-edge-mcp-server-and-stores), [§7.12](#712-measurement-and-experiments)) | Done | #1139: `awp-sqlite`, `awp-postgres`, `awp-redis`; `LeadStore::delete` and erasure, audit records for discovery fetches (#1169); the event log, catalogue pages, consent references, pending deliveries and beacon counts in those stores, and a public read API for the events (#1171) |
@@ -60,7 +62,7 @@ design label.
 | 2 | Volatile lane and price rules ([§7.8.2](#782-publishing), [§7.8.3](#783-constantly-updated-sites)) | Done | Lanes and `PriceRule` (#1133); the edge's live store (#1150) |
 | 2 | Concierge and Agent desk, leads and handoff | Done | The Concierge on the edge (#1150); forms keep leads and file `lead_captured` signals (#1145); lead scores and the handoff threshold, the `nurture` consent scope, nurture with consent from the edge's receipts outside quiet hours, one handoff card per lead, the durable contact book (#1173) |
 | 3 | Batching, delta releases, feed bounds, host limits, tiered checks, per-item revert ([§7.8.3](#783-constantly-updated-sites)) | Done | #1133 |
-| 3 | Streams, the S19 soak ([§7.8.3](#783-constantly-updated-sites), [§11](#11-testing-and-live-verification)) | Partial | Streams and the scaled S19 run in the PR tier (#1140); no nightly soak has completed 24 simulated hours |
+| 3 | Streams, the S19 soak ([§7.8.3](#783-constantly-updated-sites), [§11](#11-testing-and-live-verification)) | Partial | Streams and the scaled S19 run in the PR tier (#1140); folds keep the five-minute cadence from the stream's opening, the drift both nightly soaks failed on with 69 folds, and the full day passes at 2,000 products (`ADK_SITE_S19_PRODUCTS`, #1189); no nightly soak has completed 50,000 products over 24 simulated hours |
 | 3 | KPI tracker and autonomy ladder ([§7.11](#711-charter-store-kpi-tracker-and-earned-autonomy)) | Done | Records, tracker and ladder (#1107); compiled to harness policy (#1127); promotions survive a restart and grant their standing rules (#1165), which the served back office reads (#1173) |
 | 3 | Measurement and experiments ([§7.12](#712-measurement-and-experiments)) | Done | `ExperimentAnalyzer` (#1112, `adk-eval` `experiments`); the site's experiments and measurement sources (#1146); the Growth agent's experiment tools (#1165); verified agent discovery counted (#1169) |
 | 3 | Drivers ([§7.13](#713-drivers)) | Done | #1118: `adk-drivers` with DNS, registrar, email, analytics, search console, social and advertising contracts and manifests |
@@ -73,16 +75,16 @@ design label.
 | — | Observability ([§7.24](#724-observability)) | Done | Spans and metrics in `adk-website`'s `observability` (#1141); the `awp.request` and `awp.capability.call` spans from the edge (#1132); every release in `adk-site`'s `site.release` span and every signal the edge files in a `kernel.signal` span, the names `adk-website`'s `spans::SITE_RELEASE` and `KERNEL_SIGNAL` (#1183) |
 | — | Durable state and audit records ([§7.9](#79-agent-edge-mcp-server-and-stores), [§9.3](#93-audit-records)) | Done | #1183: `adk-core`'s `FileAuditRecorder`; the pipeline's `site.content.*` and `site.release.*`, the edge's `awp.payment.*` and `adk-rust awp keys`' `awp.keys.*` records; a served site keeps its audit trail in `data/audit.jsonl` and, in `data/edge.db`, its quotes, orders, bookings, the back office's drafts (`SiteDraftStore`), the owner's open, deferred and waiting alarms (`AlarmStore`) and the edge's rate-limit windows (`RateLimitStore`, also on PostgreSQL and Redis) |
 | — | Capability packs as signed bundles ([§7.23](#723-for-developers)) | Done | #1188: `adk-website`'s `packs::bundle` (the bundle, its content digest and the publisher's JWS, verification and the format's rules), `packs::trust`, `packs::installed` (`PackSet`, `PackDir`: install, upgrade, remove) and `adk-rust site packs list\|install\|remove\|trust\|sign`; the six built-in packs ship as signed bundles in `adk-website/packs/`; a served site verifies its installed packs on every start, serves their capabilities and writes their playbooks into its agents' workspaces; conformance vectors in `adk-website/tests/fixtures/packs/` |
-| — | Scenarios and fixtures ([§5](#5-headline-capabilities-and-demonstration-scenarios), [§11](#11-testing-and-live-verification)) | Done | #1158: S1–S19 in `examples/website`, the recorded WordPress site, the presence fixture, the `website-scenarios` PR job and the nightly `website-wordpress` and `website-soak` jobs; every scenario passes scripted with no known gap, and the live set passes on `claude-sonnet-5-5` (#1165–#1173, #1175) |
+| — | Scenarios and fixtures ([§5](#5-headline-capabilities-and-demonstration-scenarios), [§11](#11-testing-and-live-verification)) | Done | #1158: S1–S19 in `examples/website`, the recorded WordPress site, the presence fixture, the `website-scenarios` PR job and the nightly `website-wordpress` and `website-soak` jobs; every scenario passes scripted with no known gap, and the live set passes on `claude-sonnet-5-5` (#1165–#1173, #1175; again on 2026-10-28); the WordPress fixture holds what the recordings hold, and the `website-wordpress` job passes on the clean site and the infected overlay (#1189) |
 
 ### Scenarios
 
-Scripted runs on `main` @ `7a498b3b9` with #1175's fixes (2026-10-26); live runs on
-`claude-sonnet-5-5` in the same pass. No scenario has a `known` gap left: every check passes.
+Scripted runs on `main` @ `61e65676f` (2026-10-28); live runs on `claude-sonnet-5-5` in the
+same pass. No scenario has a `known` gap left: every check passes.
 
 | # | Scripted | Live | Pull requests |
 |---|---|---|---|
-| S1 | PASS 21/21 | PASS 19/19 | #1141, #1145, #1150, #1158, #1181: the launch gate's `awp verify` against the preview of release 2 |
+| S1 | PASS 21/21 | PASS 20/20 | #1141, #1145, #1150, #1158, #1181: the launch gate's `awp verify` against the preview of release 2 |
 | S2 | PASS 11/11 | PASS 11/11 | #1125, #1141, #1158, #1168 |
 | S3 | PASS 15/15 | No agent turn | #1125, #1158, #1168 |
 | S4 | PASS 10/10 | No agent turn | #1125, #1158, #1173: the signature check covers the freeze's own crawl, since #1168's cloaking scan reads pages unsigned on purpose |
@@ -99,14 +101,16 @@ Scripted runs on `main` @ `7a498b3b9` with #1175's fixes (2026-10-26); live runs
 | S15 | PASS 8/8 | No agent turn | #1145, #1158 |
 | S16 | PASS 8/8 | No agent turn | #1141, #1158 |
 | S17 | PASS 7/7 | No agent turn | #1125, #1141, #1158 |
-| S18 | PASS 10/10 | PASS 10/10: the model scheduled the draft before the photos arrived, and they joined the scheduled item | #1108, #1127, #1134, #1158, #1168, #1173, #1175 |
+| S18 | PASS 10/10 | PASS 10/10 | #1108, #1127, #1134, #1158, #1168, #1173, #1175 |
 | S19 | PASS 11/11, scaled: 600 products over four hours | No agent turn | #1133, #1140, #1158 |
 
 S10 reports one note, not a failed check: the scenario runs its agents directly, so the
 charter's quiet hours and the jobs' run budgets bind them only by construction (the runs are
 at 10:00 UTC); a served site's kernel defers each proactive run inside the quiet hours and
-bounds it by its run budget. No live run used `gemini-3.7-flash` (`--provider gemini` is
-supported). The WordPress compose fixture runs only in the nightly `website-wordpress` job.
+bounds it by its run budget. The live set on `gemini-3.7-flash` (`--provider gemini`) did not
+complete on 2026-10-28: the model answered 503 under load and then the key's free-tier quota
+(20 requests a day) refused every call. The WordPress compose fixture runs in the nightly
+`website-wordpress` job.
 
 ## Deviations from this spec
 
@@ -240,6 +244,7 @@ leaves open.
 | [§7.19](#719-the-team) | The Inbox wakes on email and social webhooks | A served site's `inbox::SiteInbox` reads the email inbox through the outbox every idle interval, its cursor in `data/inbox/email.cursor`; a chat message from a channel the kernel has reaches it through `SiteInbox::receive_inbound`, a paired account's message going to the owner (`SiteOptions::channel_bindings`); its sessions are kept in memory, and the signals its `emit_signal` files carry the edge's public emitter | IMAP has no webhook; the served site runs no channel gateway of its own | #1200 |
 | [§7.20](#720-jobs) | The Guardian's probes every five minutes | `site.probe` runs `GuardianProbe` as a kernel workflow when the site has a domain claim (`ProbeOptions`, else `data/claims/{domain}.json`); an incident sets the status, the edge read-only and one P1 alarm and plans the rollback, which runs when the owner approves it (`IncidentPath::approve_rollback`): the served kernel does not wake the Guardian agent on the incident | A-I9 needs a proven domain; A-I11 lets the owner's decision roll back | #1200 |
 | [§7.14](#714-wallet-and-money), [§7.17](#717-spinning-it-up) | The wallet set up at onboarding | `deploy::config` reads `wallet.json`: the owner's `WalletPolicy` and the providers that bill the owner's accounts, each a `provider_billing` rail over `FileBillingAccount` (charges in `data/wallet/{provider}/charges.jsonl`, the owner's exported invoice in `invoice.jsonl`); the wallet holds no stored value, and its payments are in `data/wallet.db`. An agency's sites read no configuration files | No provider's API is in the workspace (framework neutrality); an agency's sites share one `SiteOptions` | #1200 |
+| [§7.8](#78-site-pipeline-adk-site) "Sanitiser", S3 | Hidden-link spam is found with evidence | A `<style>` rule hides an element only by a selector naming it alone (a tag, classes and an id), outside `@media`, `@supports` and `@container`, when no rule shows that class or id again; hidden links are reported when they lead to another site | A current WordPress site hides its menus, skip link and cart link by design, while injected link spam points away from the site | #1189 |
 
 ## Remaining work
 
@@ -248,9 +253,8 @@ leaves open.
 | Files and git as an entry point | [§7.8.2](#782-publishing) | Deferred (owner, 2026-10-27): no signed webhook from an authorised committer proposes a release |
 | Learning | [§7.15](#715-learning) | Deferred (owner, 2026-10-27): revision proposals are the `playbook-learning` job's playbook at Propose; no code turns outcomes into proposals |
 | Channel adapters | [§10](#10-changes-outside-the-feature) X12 | Deferred (owner, 2026-10-27): WhatsApp, Slack, Discord and Matrix are not on `ChannelSink`; the Inbox reads the channels the kernel has (Telegram) and the site's email |
-| Nightly host and generator runs | [§7.8](#78-site-pipeline-adk-site), [§11](#11-testing-and-live-verification) | The nightly `site-hosts` and `site-generators` jobs (#1182) have not completed a run on `main`: the host suites against MinIO, Azurite and an SSH server, the CalDAV driver against Radicale, and the real generators under bubblewrap and the Windows restricted token. Recorded generator outputs are re-recorded by hand (`ADK_SITE_GEN_RECORD=1`) when the fixture site, the renderer or a starter template changes |
-| S19 full day | [§11](#11-testing-and-live-verification) | Neither nightly soak (`site-soak`, `website-soak`) has completed 50,000 products over 24 simulated hours |
-| Live runs | [§11](#11-testing-and-live-verification) | No live run on `gemini-3.7-flash`; the WordPress compose fixture runs only in the nightly job |
+| S19 full day | [§11](#11-testing-and-live-verification) | Neither nightly soak (`site-soak`, `website-soak`) has completed 50,000 products over 24 simulated hours; both failed on the fold drift #1189 fixed |
+| Live runs | [§11](#11-testing-and-live-verification) | No live run on `gemini-3.7-flash` has completed: on 2026-10-28 the model answered 503 under load and the repository's key is on the free tier (20 requests a day) |
 | Protocol home | [§13](#13-open-questions) Q1 | The AWP 2.0 text, the well-known URI and `application/awp+json` await a published home and IANA registration |
 
 ## 1. Summary
