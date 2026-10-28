@@ -1546,7 +1546,10 @@ pub mod prelude {
     pub use crate::model::groq::{GroqClient, GroqConfig};
 
     #[cfg(feature = "muse")]
-    pub use crate::model::muse::{MuseClient, MuseConfig};
+    pub use crate::model::muse::{
+        MuseAsrClient, MuseClient, MuseConfig, MuseFilesClient, MuseImagesClient,
+        MuseResponsesClient,
+    };
 
     #[cfg(feature = "ollama")]
     pub use crate::model::ollama::{OllamaConfig, OllamaModel};

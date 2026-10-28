@@ -1054,6 +1054,10 @@ fn standard_catalog() -> PricingCatalog {
         cached(Meta, "muse-spark-1.1", 1.25, 4.25, 0.15),
         cached(Meta, "muse-spark-1.3-contributor", 0.10, 0.20, 0.002),
         cached(Meta, "muse-spark-1.2-contributor", 0.10, 0.20, 0.002),
+        cached(Meta, "muse-wonder-1.0", 4.00, 20.00, 0.20),
+        // muse-image-1.0 ($0.01/image), muse-voice-transcribe-1.0 ($0.18/hour), and
+        // sam-3.1 ($2.50/1k images) bill per unit, not per token, so they carry no
+        // token rates here.
         // ── xAI ──
         // Source: https://docs.x.ai/docs/models, retrieved 2026-10-11. Aliases are the ones
         // the page lists for each model; `-latest` and dated suffixes resolve automatically.

@@ -10,6 +10,43 @@ use async_stream::try_stream;
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
+use serde_json::Value;
+
+/// Strict structured-output format for Muse, named after the model (Meta JSON
+/// Schema mode guarantees schema-conformant JSON). Mirrors the OpenAI pattern.
+fn response_format_for(model: &str, schema: &Value) -> convert::ResponseFormat {
+    /// Strict mode requires `additionalProperties: false` on every object schema.
+    fn close_objects(value: &mut Value) {
+        match value {
+            Value::Object(object) => {
+                if object.get("type").and_then(Value::as_str) == Some("object") {
+                    object
+                        .entry("additionalProperties".to_string())
+                        .or_insert(serde_json::json!(false));
+                }
+                for child in object.values_mut() {
+                    close_objects(child);
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(close_objects),
+            _ => {}
+        }
+    }
+    let mut schema = schema.clone();
+    close_objects(&mut schema);
+    let mut name: String = model
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .take(64)
+        .collect();
+    if name.is_empty() {
+        name.push_str("response");
+    }
+    convert::ResponseFormat {
+        format_type: "json_schema".to_string(),
+        json_schema: convert::JsonSchema { name, schema, strict: true },
+    }
+}
 
 /// Stream that ended, or whose connection failed, before the response finished.
 const INCOMPLETE_STREAM: &str = "model.muse.incomplete_stream";
@@ -145,6 +182,10 @@ impl MuseClient {
             .map(|cap| cap.max(super::config::MUSE_MIN_MAX_TOKENS));
         let reasoning_effort =
             config.and_then(|c| c.effort).map(|level| level.as_str().to_string());
+        let options = config.and_then(|c| c.extensions.get("muse"));
+        let response_format = config
+            .and_then(|c| c.response_schema.as_ref())
+            .map(|schema| response_format_for(&self.config.model, schema));
 
         Ok(ChatCompletionRequest {
             model: self.config.model.clone(),
@@ -159,6 +200,19 @@ impl MuseClient {
             frequency_penalty: config.and_then(|c| c.frequency_penalty),
             presence_penalty: config.and_then(|c| c.presence_penalty),
             reasoning_effort,
+            response_format,
+            tool_choice: options.and_then(|options| options.get("tool_choice").cloned()),
+            parallel_tool_calls: options
+                .and_then(|options| options.get("parallel_tool_calls"))
+                .and_then(Value::as_bool),
+            prompt_cache_key: options
+                .and_then(|options| options.get("prompt_cache_key"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            prompt_cache_retention: options
+                .and_then(|options| options.get("prompt_cache_retention"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
         })
     }
 }
@@ -564,6 +618,47 @@ mod tests {
         let no_effort = client.build_request(&request(Default::default()), false).unwrap();
         assert_eq!(no_effort.reasoning_effort, None);
         assert_eq!(no_effort.max_tokens, None);
+    }
+
+    #[test]
+    fn response_schema_and_options_are_sent() {
+        let client = MuseClient::new(MuseConfig::new("test-key", "muse-spark-1.3")).unwrap();
+        let mut config = GenerateContentConfig {
+            max_output_tokens: Some(256),
+            response_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "card": {"type": "object", "properties": {"x": {"type": "string"}}},
+                },
+                "required": ["title"],
+            })),
+            ..Default::default()
+        };
+        config.extensions.insert(
+            "muse".to_string(),
+            serde_json::json!({
+                "prompt_cache_key": "ideate",
+                "prompt_cache_retention": "24h",
+                "tool_choice": "required",
+                "parallel_tool_calls": false,
+            }),
+        );
+        let built = client.build_request(&request(config), false).unwrap();
+        let wire = serde_json::to_value(built).unwrap();
+        assert_eq!(wire["response_format"]["type"], "json_schema");
+        assert_eq!(wire["response_format"]["json_schema"]["strict"], true);
+        assert_eq!(wire["response_format"]["json_schema"]["schema"]["additionalProperties"], false);
+        assert_eq!(
+            wire["response_format"]["json_schema"]["schema"]["properties"]["card"]["additionalProperties"],
+            false
+        );
+        assert_eq!(wire["prompt_cache_key"], "ideate");
+        assert_eq!(wire["prompt_cache_retention"], "24h");
+        assert_eq!(wire["tool_choice"], "required");
+        assert_eq!(wire["parallel_tool_calls"], false);
+        assert_eq!(wire["max_completion_tokens"], 1024);
+        assert!(wire.get("max_tokens").is_none());
     }
 
     #[test]

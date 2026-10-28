@@ -18,6 +18,13 @@
 //! - **Streaming**: Real-time streaming responses
 //! - **Long Context**: 1,048,576-token context window across the Spark line
 //!
+//! # Beyond chat
+//!
+//! [`MuseResponsesClient`] drives the stateful Responses API (reasoning carried
+//! across turns, stored responses, background runs). [`MuseImagesClient`],
+//! [`MuseFilesClient`], and [`MuseAsrClient`] cover `muse-image-1.0` generation
+//! and edits, the Files API, and `muse-voice-transcribe-1.0` transcription.
+//!
 //! # Example
 //!
 //! ```rust,ignore
@@ -34,9 +41,19 @@
 //! ))?;
 //! ```
 
+mod asr;
 mod client;
 mod config;
 mod convert;
+mod files;
+mod images;
+mod responses;
 
+pub use asr::{MUSE_VOICE_MODEL, MuseAsrClient, TranscribeOptions, Transcript, TranscriptSegment};
 pub use client::MuseClient;
 pub use config::{MUSE_API_BASE, MuseConfig};
+pub use files::{FileObject, MuseFilesClient};
+pub use images::{ImageData, ImageOptions, ImagesResponse, MUSE_IMAGE_MODEL, MuseImagesClient};
+pub use responses::{
+    FunctionCallItem, MuseResponsesClient, ResponseItem, ResponseObject, ResponseRequest,
+};

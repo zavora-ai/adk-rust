@@ -651,6 +651,20 @@ Spark reasoning counts toward `max_tokens`, so the client raises smaller output 
 to 1,024 (`MUSE_MIN_MAX_TOKENS`) instead of returning empty `length` responses, and
 maps `GenerateContentConfig::effort` to the API's `reasoning_effort`.
 
+### Beyond Chat Completions
+
+| Client | Endpoint | Covers |
+|--------|----------|--------|
+| `MuseClient` | `/chat/completions` | Native image/audio/video/file parts, strict `response_format` from `response_schema`, `prompt_cache_key`/`tool_choice` via `extensions["muse"]` |
+| `MuseResponsesClient` | `/responses` (+get/delete/cancel/input_tokens) | Stateful turns: `previous_response_id`, `store`, `background` — the only cross-turn reasoning carrier |
+| `MuseImagesClient` | `/images/generations`, `/images/edits` | `muse-image-1.0` ($0.01/image) |
+| `MuseFilesClient` | `/files` CRUD + content | Uploads to 1GiB, referenced by `input_file` parts |
+| `MuseAsrClient` | `/asr/transcribe` | `muse-voice-transcribe-1.0` ($0.18/hour, diarization) |
+
+`muse-wonder-1.0` (preview flagship, $4/$20/$0.20 cached per 1M) works through
+`MuseConfig::wonder`. `sam-3.1` is catalogued for Responses-based segmentation;
+there is no dedicated SAM client yet.
+
 ---
 
 ## OpenRouter

@@ -83,6 +83,11 @@ impl MuseConfig {
         Self::new(api_key, "muse-spark-1.1")
     }
 
+    /// Create a config for `muse-wonder-1.0`, the flagship (preview) model.
+    pub fn wonder(api_key: impl Into<String>) -> Self {
+        Self::new(api_key, "muse-wonder-1.0")
+    }
+
     /// Set max tokens for output.
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = Some(max_tokens);

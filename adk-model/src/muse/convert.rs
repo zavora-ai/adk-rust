@@ -7,11 +7,106 @@ use adk_core::{Content, FinishReason, LlmResponse, Part, UsageMetadata};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Muse chat message content: plain text, or a native multimodal part array.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MessageContent {
+    /// Plain text (the common case; keeps the wire shape a string).
+    Text(String),
+    /// Native multimodal parts (image, audio, video, file alongside text).
+    Parts(Vec<ContentPart>),
+}
+
+impl MessageContent {
+    /// All text carried by this content, joined across parts.
+    pub fn text(&self) -> Option<String> {
+        match self {
+            Self::Text(text) => Some(text.clone()),
+            Self::Parts(parts) => {
+                let texts: Vec<&str> = parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        ContentPart::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                if texts.is_empty() { None } else { Some(texts.join("\n")) }
+            }
+        }
+    }
+}
+
+/// One native content part (Chat Completions shapes).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    /// Plain text.
+    Text {
+        /// The text.
+        text: String,
+    },
+    /// Image by URL or base64 data URL.
+    ImageUrl {
+        /// The image reference.
+        image_url: ImageUrl,
+    },
+    /// Inline audio bytes (MP3 or WAV) as base64.
+    InputAudio {
+        /// The audio reference.
+        input_audio: InputAudio,
+    },
+    /// Video by URL.
+    VideoUrl {
+        /// The video reference.
+        video_url: VideoUrl,
+    },
+    /// File by URL or inline data (for example PDF).
+    File {
+        /// The file reference.
+        file: FileRef,
+    },
+}
+
+/// `image_url` part body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageUrl {
+    /// Public URL or `data:<mime>;base64,..` URL.
+    pub url: String,
+}
+
+/// `input_audio` part body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputAudio {
+    /// Base64-encoded audio bytes.
+    pub data: String,
+    /// Audio format (`mp3` or `wav`).
+    pub format: String,
+}
+
+/// `video_url` part body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoUrl {
+    /// Public URL of the video.
+    pub url: String,
+}
+
+/// `file` part body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileRef {
+    /// File name the API reports to the model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    /// File URL or base64 data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_data: Option<String>,
+}
+
 /// Muse chat message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
-    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<MessageContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,6 +147,27 @@ pub struct FunctionDef {
     pub parameters: Value,
 }
 
+/// Structured-output format (`response_format`).
+#[derive(Debug, Clone, Serialize)]
+pub struct ResponseFormat {
+    /// Always `json_schema`.
+    #[serde(rename = "type")]
+    pub format_type: String,
+    /// The schema body.
+    pub json_schema: JsonSchema,
+}
+
+/// JSON-schema body of a `response_format`.
+#[derive(Debug, Clone, Serialize)]
+pub struct JsonSchema {
+    /// Schema name (the API accepts letters, digits, and underscores).
+    pub name: String,
+    /// The JSON Schema.
+    pub schema: Value,
+    /// Strict conformance.
+    pub strict: bool,
+}
+
 /// Muse chat completion request.
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatCompletionRequest {
@@ -61,7 +177,9 @@ pub struct ChatCompletionRequest {
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Canonical output cap (`max_tokens` is an accepted alias; `max_output_tokens`
+    /// is rejected by the API).
+    #[serde(rename = "max_completion_tokens", skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
@@ -80,6 +198,21 @@ pub struct ChatCompletionRequest {
     /// Reasoning effort the API accepts OpenAI-style (`low`, `medium`, `high`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// Structured output format.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<ResponseFormat>,
+    /// Tool choice (`auto`, `none`, `required`, or a function object).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<Value>,
+    /// Whether tools may be called in parallel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
+    /// Prompt-cache routing key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
+    /// Prompt-cache retention hint (`in_memory` or `24h`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_retention: Option<String>,
 }
 
 /// Muse chat completion response.
@@ -161,7 +294,9 @@ pub fn content_to_messages(content: &Content) -> Vec<Message> {
             .into_iter()
             .map(|(id, response)| Message {
                 role: "tool".to_string(),
-                content: Some(crate::tool_result::serialize_tool_result(&response.response)),
+                content: Some(MessageContent::Text(crate::tool_result::serialize_tool_result(
+                    &response.response,
+                ))),
                 name: None,
                 tool_calls: None,
                 tool_call_id: id.map(str::to_string),
@@ -174,6 +309,11 @@ pub fn content_to_messages(content: &Content) -> Vec<Message> {
 }
 
 /// Convert ADK Content to a Muse Message.
+///
+/// Text stays a plain string when it is all a content carries, so plain-text turns
+/// keep the simplest wire shape. Images, audio, video, and files become native
+/// multimodal parts; anything with no native shape degrades to a text attachment,
+/// matching how the API rejects what it cannot read.
 pub fn content_to_message(content: &Content) -> Message {
     let role = match content.role.as_str() {
         "model" | "assistant" => "assistant",
@@ -183,14 +323,18 @@ pub fn content_to_message(content: &Content) -> Message {
         other => other,
     };
 
-    let mut text_parts = Vec::new();
+    let mut parts: Vec<ContentPart> = Vec::new();
     let mut tool_calls = Vec::new();
     let mut tool_call_id = None;
 
+    let push_text = |parts: &mut Vec<ContentPart>, text: String| {
+        parts.push(ContentPart::Text { text });
+    };
+
     for part in &content.parts {
         match part {
-            Part::Text { text } => text_parts.push(text.clone()),
-            Part::Thinking { thinking, .. } => text_parts.push(thinking.clone()),
+            Part::Text { text } => push_text(&mut parts, text.clone()),
+            Part::Thinking { thinking, .. } => push_text(&mut parts, thinking.clone()),
             Part::FunctionCall { name, args, id, .. } => {
                 tool_calls.push(ToolCall {
                     id: id.clone().unwrap_or_else(|| format!("call_{}", tool_calls.len())),
@@ -203,37 +347,113 @@ pub fn content_to_message(content: &Content) -> Message {
             }
             Part::FunctionResponse { function_response, id, .. } => {
                 tool_call_id = id.clone();
-                text_parts
-                    .push(crate::tool_result::serialize_tool_result(&function_response.response));
+                push_text(
+                    &mut parts,
+                    crate::tool_result::serialize_tool_result(&function_response.response),
+                );
             }
             Part::InlineData { mime_type, data, .. } => {
-                text_parts.push(attachment::inline_attachment_to_text(mime_type, data));
+                if let Some(native) = inline_part(mime_type, data) {
+                    parts.push(native);
+                } else {
+                    push_text(&mut parts, attachment::inline_attachment_to_text(mime_type, data));
+                }
             }
             Part::FileData { mime_type, file_uri, .. } => {
-                text_parts.push(attachment::file_attachment_to_text(mime_type, file_uri));
+                if let Some(native) = file_part(mime_type, file_uri) {
+                    parts.push(native);
+                } else {
+                    push_text(&mut parts, attachment::file_attachment_to_text(mime_type, file_uri));
+                }
             }
             // Server-side tool parts are Gemini-specific; skip for Muse
             Part::ServerToolCall { .. } | Part::ServerToolResponse { .. } => {}
-            // Embedded resources: text → text; blob → inline-bytes text representation.
+            // Embedded resources: text → text; blob → native part when possible.
             Part::EmbeddedResource { resource } => match resource {
-                adk_core::EmbeddedResource::Text(text) => text_parts.push(text.text.clone()),
+                adk_core::EmbeddedResource::Text(text) => push_text(&mut parts, text.text.clone()),
                 adk_core::EmbeddedResource::Blob(blob) => {
                     let mime_type = blob.mime_type.as_deref().unwrap_or("application/octet-stream");
-                    text_parts.push(attachment::inline_attachment_to_text(mime_type, &blob.data));
+                    if let Some(native) = inline_part(mime_type, &blob.data) {
+                        parts.push(native);
+                    } else {
+                        push_text(
+                            &mut parts,
+                            attachment::inline_attachment_to_text(mime_type, &blob.data),
+                        );
+                    }
                 }
             },
         }
     }
 
-    let content_str = if text_parts.is_empty() { None } else { Some(text_parts.join("\n")) };
+    let content = merge_content(parts);
 
     Message {
         role: role.to_string(),
-        content: content_str,
+        content,
         name: None,
         tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
         tool_call_id,
     }
+}
+
+/// Merge converted parts into the wire content: text-only collapses to a string.
+fn merge_content(parts: Vec<ContentPart>) -> Option<MessageContent> {
+    if parts.is_empty() {
+        return None;
+    }
+    if parts.iter().all(|part| matches!(part, ContentPart::Text { .. })) {
+        let text = parts
+            .into_iter()
+            .filter_map(|part| match part {
+                ContentPart::Text { text } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Some(MessageContent::Text(text));
+    }
+    Some(MessageContent::Parts(parts))
+}
+
+/// Native part for inline bytes, when the MIME type has one.
+fn inline_part(mime_type: &str, data: &[u8]) -> Option<ContentPart> {
+    if mime_type.starts_with("image/") {
+        return Some(ContentPart::ImageUrl {
+            image_url: ImageUrl {
+                url: format!("data:{mime_type};base64,{}", attachment::encode_base64(data)),
+            },
+        });
+    }
+    if let Some(format) = match mime_type {
+        "audio/mpeg" | "audio/mp3" => Some("mp3"),
+        "audio/wav" | "audio/x-wav" => Some("wav"),
+        _ => None,
+    } {
+        return Some(ContentPart::InputAudio {
+            input_audio: InputAudio {
+                data: attachment::encode_base64(data),
+                format: format.into(),
+            },
+        });
+    }
+    None
+}
+
+/// Native part for a file URI, when the MIME type has one.
+fn file_part(mime_type: &str, file_uri: &str) -> Option<ContentPart> {
+    if mime_type.starts_with("image/") {
+        return Some(ContentPart::ImageUrl { image_url: ImageUrl { url: file_uri.to_string() } });
+    }
+    if mime_type.starts_with("video/") {
+        return Some(ContentPart::VideoUrl { video_url: VideoUrl { url: file_uri.to_string() } });
+    }
+    Some(ContentPart::File {
+        file: FileRef {
+            filename: file_uri.rsplit('/').next().map(str::to_string),
+            file_data: Some(file_uri.to_string()),
+        },
+    })
 }
 
 /// Convert ADK tools to Muse tools.
@@ -276,10 +496,10 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
         if let Some(msg) = &choice.message {
             let mut parts = Vec::new();
 
-            if let Some(text) = &msg.content
+            if let Some(text) = msg.content.as_ref().and_then(MessageContent::text)
                 && !text.is_empty()
             {
-                parts.push(Part::Text { text: text.clone() });
+                parts.push(Part::Text { text });
             }
 
             if let Some(tool_calls) = &msg.tool_calls {
@@ -389,21 +609,62 @@ mod tests {
             parts: vec![Part::inline_data("application/octet-stream", vec![0xCA, 0xFE])],
         };
         let message = content_to_message(&content);
-        let payload = message.content.unwrap_or_default();
+        let payload = message.content.and_then(|content| content.text()).unwrap_or_default();
         assert!(payload.contains("application/octet-stream"));
         assert!(payload.contains("encoding=\"base64\""));
     }
 
     #[test]
-    fn content_to_message_keeps_file_attachment_payload() {
+    fn inline_image_becomes_a_native_image_part() {
         let content = Content {
             role: "user".to_string(),
-            parts: vec![Part::file_data("application/pdf", "https://example.com/report.pdf")],
+            parts: vec![
+                Part::Text { text: "what is this?".to_string() },
+                Part::inline_data("image/png", vec![1, 2, 3]),
+            ],
         };
         let message = content_to_message(&content);
-        let payload = message.content.unwrap_or_default();
-        assert!(payload.contains("application/pdf"));
-        assert!(payload.contains("https://example.com/report.pdf"));
+        let wire = serde_json::to_value(&message).unwrap();
+        assert_eq!(wire["content"][0]["type"], "text");
+        assert_eq!(wire["content"][1]["type"], "image_url");
+        assert!(
+            wire["content"][1]["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+    }
+
+    #[test]
+    fn inline_audio_becomes_an_input_audio_part() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![Part::inline_data("audio/mpeg", vec![1, 2])],
+        };
+        let message = content_to_message(&content);
+        let wire = serde_json::to_value(&message).unwrap();
+        assert_eq!(wire["content"][0]["type"], "input_audio");
+        assert_eq!(wire["content"][0]["input_audio"]["format"], "mp3");
+    }
+
+    #[test]
+    fn pdf_file_data_becomes_a_file_part() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![Part::file_data("application/pdf", "https://example.com/spec.pdf")],
+        };
+        let message = content_to_message(&content);
+        let wire = serde_json::to_value(&message).unwrap();
+        assert_eq!(wire["content"][0]["type"], "file");
+        assert_eq!(wire["content"][0]["file"]["file_data"], "https://example.com/spec.pdf");
+    }
+
+    #[test]
+    fn text_only_content_stays_a_plain_string() {
+        let content = Content::new("user").with_text("hello");
+        let message = content_to_message(&content);
+        let wire = serde_json::to_value(&message).unwrap();
+        assert_eq!(wire["content"], serde_json::json!("hello"));
     }
 
     #[test]
