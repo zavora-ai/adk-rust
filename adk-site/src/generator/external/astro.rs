@@ -136,11 +136,49 @@ pub(super) fn link_toolchain(project: &Path, toolchain: Option<&Path>) -> Result
         }
         #[cfg(unix)]
         std::os::unix::fs::symlink(entry.path(), &link).map_err(|e| SiteError::io(&link, e))?;
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            let linked = if entry.path().is_dir() {
+                std::os::windows::fs::symlink_dir(entry.path(), &link)
+            } else {
+                std::os::windows::fs::symlink_file(entry.path(), &link)
+            };
+            linked.map_err(|e| SiteError::Generator {
+                generator: "astro".into(),
+                message: format!(
+                    "cannot link {}: {e}; Windows creates symbolic links in Developer Mode or as an administrator",
+                    link.display()
+                ),
+            })?;
+        }
+        #[cfg(not(any(unix, windows)))]
         return Err(SiteError::Generator {
             generator: "astro".into(),
-            message: "Astro builds need a Unix host for the sandbox".into(),
+            message: "Astro builds link node_modules, which needs symbolic links".into(),
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::link_toolchain;
+
+    /// The project's `node_modules` reaches every package of the toolchain, on Unix and on
+    /// Windows, and leaves the toolchain's caches out (spec 3.5 §7.8 "Generator").
+    #[test]
+    fn the_project_links_the_toolchains_packages() {
+        let (toolchain, project) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::create_dir_all(toolchain.path().join("astro/dist")).unwrap();
+        std::fs::write(toolchain.path().join("astro/package.json"), "{}").unwrap();
+        std::fs::create_dir_all(toolchain.path().join(".vite")).unwrap();
+        std::fs::write(toolchain.path().join(".modules.yaml"), "x").unwrap();
+        link_toolchain(project.path(), Some(toolchain.path())).unwrap();
+        let modules = project.path().join("node_modules");
+        assert_eq!(std::fs::read(modules.join("astro/package.json")).unwrap(), b"{}");
+        assert_eq!(std::fs::read(modules.join(".modules.yaml")).unwrap(), b"x");
+        assert!(!modules.join(".vite").exists(), "the toolchain's caches stay out");
+        link_toolchain(project.path(), Some(toolchain.path())).unwrap();
+        assert!(link_toolchain(project.path(), None).is_err());
+    }
 }

@@ -501,18 +501,14 @@ jobs:
   # ── adk-site: host adapters against real servers (spec 3.5 §7.8 "Hosts", §11) ──
   # The `#[ignore]`d host conformance suites against MinIO (S3), Azurite (Azure Blob) and an
   # OpenSSH server with rsync, and adk-website's CalDAV calendar driver against Radicale.
-  # Azurite is a service container. MinIO needs its `server` command and the SSH server a key
-  # this job makes, neither of which a service container can take, so both start with
+  # MinIO needs its `server` command, Azurite `--skipApiVersionCheck` and the SSH server a key
+  # this job makes, none of which a service container can take, so all three start with
   # `docker run`; Radicale runs from PyPI. MinIO's own images are no longer published, so the
   # community `pgsty/minio` build of the same server is used.
   site-hosts:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'site-hosts' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    services:
-      azurite:
-        image: mcr.microsoft.com/azure-storage/azurite:3.35.0
-        ports: ["10000:10000"]
     env:
       ADK_SITE_S3_ENDPOINT: http://127.0.0.1:9000
       ADK_SITE_S3_BUCKET: adk-site
@@ -549,9 +545,15 @@ jobs:
         curl -sf -X PUT --user adk:adk-site-secret --aws-sigv4 aws:amz:us-east-1:s3 \
           http://127.0.0.1:9000/adk-site
 
-    - name: Make the Azurite containers
+    # The Azure CLI sends a newer storage API version than Azurite knows, so Azurite skips
+    # the check; the host adapter itself sends 2021-12-02.
+    - name: Start Azurite and make its containers
       timeout-minutes: 5
       run: |
+        docker run -d --name azurite -p 127.0.0.1:10000:10000 \
+          mcr.microsoft.com/azure-storage/azurite:3.35.0 \
+          azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --skipApiVersionCheck
+        for _ in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:10000/ && break; sleep 1; done
         connection="DefaultEndpointsProtocol=http;AccountName=$ADK_SITE_AZURE_ACCOUNT;AccountKey=$ADK_SITE_AZURE_KEY;BlobEndpoint=$ADK_SITE_AZURE_ENDPOINT;"
         for container in site site-releases; do
           az storage container create --name "$container" --connection-string "$connection" --output none
@@ -579,6 +581,7 @@ jobs:
         } >> "$GITHUB_ENV"
 
     - name: Start Radicale
+      if: ${{ !cancelled() }}
       timeout-minutes: 5
       run: |
         pipx install 'radicale==3.8.3'
@@ -604,7 +607,7 @@ jobs:
     - name: Stop the servers
       if: always()
       run: |
-        docker rm -f minio sshd || true
+        docker rm -f minio azurite sshd || true
         pkill -f 'radicale --server-hosts' || true
 
   # ── adk-site: the real generators (spec 3.5 §7.8 "Generator", §11) ──

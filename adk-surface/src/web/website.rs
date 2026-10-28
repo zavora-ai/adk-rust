@@ -44,8 +44,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{Context, problem, unauthenticated};
 
-/// The route paths: [`ROOT`] and its children as root routes, the rest relative to `/api`
-/// (spec 3.5 §8.2).
+/// The route paths: [`ROOT`](paths::ROOT) and its children as root routes, the rest relative
+/// to `/api` (spec 3.5 §8.2).
 pub mod paths {
     /// `GET`: the setup screen (root route).
     pub const SETUP: &str = "/api/surface/website/setup";
