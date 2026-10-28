@@ -21,6 +21,8 @@
 //! | Stop all from anywhere; resume only at home (S-I10) | "stop all" freezes the kernel and answers [`StopNotice`]; "resume" is refused with [`ChannelNotice::ResumeRefused`] |
 //! | Nothing notifies during quiet time | A card for a decision asked during quiet time is delivered when quiet time ends, if it still waits: the quiet time of the decision's area in force, a change made while the kernel runs included ([`ChannelHost::quiet_ends`]) |
 //! | Every waiting decision reaches the thread | Every minute the gateway rings the decisions still waiting, so a card that could not be sent is sent again, and one held on another replica is sent too |
+//! | A host may decide first (spec 3.5 §10 X12) | An [`InboundRoute`] set with [`ChannelGatewayBuilder::route`] sees each message, with the account's pairing, before the gateway: a message it takes gets no pairing code and starts no turn ([`InboundOutcome::Routed`]). A served site sends strangers to its Inbox this way |
+//! | Files ride with a message | [`ChannelInbound::attachments`], downloaded by the adapter; never in a turn's input. A paired account's message with no words starts no turn ([`InboundOutcome::Empty`]) |
 //!
 //! Every answer, pairing request, notification, stop and refusal writes a `kernel.channel`
 //! audit record with `surface: chat`, the channel and the account, before it acts.
@@ -140,6 +142,10 @@ pub struct ChannelInbound {
     pub message_id: String,
     /// What the person sent.
     pub body: InboundBody,
+    /// The files the message carried, such as photos, as the adapter downloaded them (spec
+    /// 3.5 §5 S18, §10 X12); a turn's input never carries them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<ChannelAttachment>,
 }
 
 impl ChannelInbound {
@@ -157,6 +163,7 @@ impl ChannelInbound {
             thread: thread.into(),
             message_id: message_id.into(),
             body,
+            attachments: Vec::new(),
         }
     }
 
@@ -201,6 +208,96 @@ impl ChannelInbound {
         self.display_name = Some(name.into());
         self
     }
+
+    /// Sets the files the message carried (spec 3.5 §10 X12).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_kernel::channels::{ChannelAttachment, ChannelInbound};
+    ///
+    /// let photo = ChannelAttachment::new("image/png", "rye-1.png", vec![0x89, b'P', b'N', b'G']);
+    /// let inbound = ChannelInbound::text("whatsapp", "254700000001", "254700000001", "wamid.1", "")
+    ///     .with_attachments([photo]);
+    /// assert_eq!(inbound.attachments[0].media_type, "image/png");
+    /// ```
+    #[must_use]
+    pub fn with_attachments(
+        mut self,
+        attachments: impl IntoIterator<Item = ChannelAttachment>,
+    ) -> Self {
+        self.attachments = attachments.into_iter().collect();
+        self
+    }
+}
+
+/// A file an inbound chat message carried, as its adapter downloaded it, bounded in size and
+/// type (spec 3.5 §5 S18, §10 X12): untrusted input, which only a paired account's message
+/// may bring into the site, through the media pipeline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct ChannelAttachment {
+    /// The media type the platform gave, such as `image/jpeg`.
+    pub media_type: String,
+    /// A file name for it.
+    pub name: String,
+    /// What the person wrote under it, when the platform keeps a caption per file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    /// Its bytes; never serialized.
+    #[serde(skip)]
+    pub bytes: Vec<u8>,
+}
+
+impl ChannelAttachment {
+    /// A file of `media_type` named `name`.
+    pub fn new(media_type: impl Into<String>, name: impl Into<String>, bytes: Vec<u8>) -> Self {
+        Self { media_type: media_type.into(), name: name.into(), caption: None, bytes }
+    }
+
+    /// Sets its caption.
+    #[must_use]
+    pub fn with_caption(mut self, caption: impl Into<String>) -> Self {
+        self.caption = Some(caption.into());
+        self
+    }
+}
+
+/// What a host decides about an inbound message before the gateway does (spec 3.5 §10 X12,
+/// §7.19, A-I24): a served site sends a stranger's message to its Inbox, where it never gets
+/// a pairing code or starts a turn, and takes a paired person's photos into its media
+/// pipeline. Set it with [`ChannelGatewayBuilder::route`].
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::channels::{ChannelBinding, ChannelInbound, InboundRoute};
+/// use async_trait::async_trait;
+///
+/// /// Strangers are read elsewhere; everyone else goes through the gateway.
+/// struct Strangers;
+///
+/// #[async_trait]
+/// impl InboundRoute for Strangers {
+///     async fn take(&self, inbound: &ChannelInbound, binding: Option<&ChannelBinding>) -> adk_kernel::Result<bool> {
+///         Ok(binding.is_none())
+///     }
+/// }
+/// ```
+#[async_trait]
+pub trait InboundRoute: Send + Sync {
+    /// Takes `inbound`, from the account whose active pairing is `binding`, or leaves it to
+    /// the gateway: `true` when it took it and the gateway does nothing more with it.
+    ///
+    /// # Errors
+    ///
+    /// The route's error, which the gateway returns.
+    async fn take(
+        &self,
+        inbound: &ChannelInbound,
+        binding: Option<&ChannelBinding>,
+    ) -> Result<bool>;
 }
 
 /// What a person sent from a chat thread (spec 3.3 §10 K1).
@@ -1229,6 +1326,10 @@ pub enum InboundOutcome {
         /// The decision.
         decision: String,
     },
+    /// The gateway's [`InboundRoute`] took the message (spec 3.5 §10 X12).
+    Routed,
+    /// A paired account's message with no text, such as a photo alone, which starts no turn.
+    Empty,
 }
 
 /// The channel, account and thread a turn came from, in its run's input.

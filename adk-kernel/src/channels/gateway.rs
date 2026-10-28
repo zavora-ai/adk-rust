@@ -21,8 +21,8 @@ use tokio::task::JoinHandle;
 
 use super::{
     ChannelAnswer, ChannelBinding, ChannelBindingStore, ChannelHost, ChannelInbound, ChannelNotice,
-    ChannelPairingRequest, ChannelSink, DecisionCard, InboundBody, InboundOutcome, StopNotice,
-    TAKE_OVER_TOOL, TurnOrigin, card_summary, chat_may_decide, thread_session,
+    ChannelPairingRequest, ChannelSink, DecisionCard, InboundBody, InboundOutcome, InboundRoute,
+    StopNotice, TAKE_OVER_TOOL, TurnOrigin, card_summary, chat_may_decide, thread_session,
 };
 use crate::audit;
 use crate::error::{KernelError, Result};
@@ -123,6 +123,7 @@ pub struct ChannelGatewayBuilder {
     doorbell: Option<Arc<ChannelDoorbell>>,
     money_tools: Vec<String>,
     resweep: Duration,
+    route: Option<Arc<dyn InboundRoute>>,
 }
 
 impl fmt::Debug for ChannelGatewayBuilder {
@@ -205,6 +206,24 @@ impl ChannelGatewayBuilder {
         self
     }
 
+    /// Lets `route` decide each inbound message before the gateway does (spec 3.5 §10 X12):
+    /// a message it takes gets no pairing code, starts no turn and answers nothing
+    /// ([`InboundOutcome::Routed`]). Without one, the gateway decides every message.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # fn example(builder: adk_kernel::channels::ChannelGatewayBuilder, route: std::sync::Arc<dyn adk_kernel::channels::InboundRoute>) {
+    /// let builder = builder.route(route);
+    /// # let _ = builder;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn route(mut self, route: Arc<dyn InboundRoute>) -> Self {
+        self.route = Some(route);
+        self
+    }
+
     /// The gateway.
     pub fn build(self) -> ChannelGateway {
         ChannelGateway {
@@ -219,6 +238,7 @@ impl ChannelGatewayBuilder {
                 doorbell: self.doorbell,
                 money_tools: self.money_tools,
                 resweep: self.resweep,
+                route: self.route,
                 lifecycle: Mutex::new(Lifecycle::default()),
                 held: Mutex::new(Vec::new()),
                 carded: Mutex::new(Carded::default()),
@@ -269,6 +289,7 @@ struct Inner {
     doorbell: Option<Arc<ChannelDoorbell>>,
     money_tools: Vec<String>,
     resweep: Duration,
+    route: Option<Arc<dyn InboundRoute>>,
     /// The tasks [`ChannelGateway::start`] runs, and whether it runs.
     lifecycle: Mutex<Lifecycle>,
     /// The cards held through quiet time.
@@ -387,6 +408,7 @@ impl ChannelGateway {
             doorbell: None,
             money_tools: vec!["payments_*".to_string()],
             resweep: DEFAULT_RESWEEP,
+            route: None,
         }
     }
 
@@ -515,10 +537,17 @@ impl ChannelGateway {
         let sink = self.sink(&inbound.channel)?;
         let id = ChannelBinding::id_for(&inbound.channel, &inbound.account);
         let binding = self.inner.bindings.get_binding(&id).await?.filter(ChannelBinding::is_active);
+        if let Some(route) = &self.inner.route
+            && route.take(&inbound, binding.as_ref()).await?
+        {
+            return Ok(InboundOutcome::Routed);
+        }
         let Some(binding) = binding else {
             return self.unpaired(sink.as_ref(), &inbound).await;
         };
         match &inbound.body {
+            // A photo alone, say, which a route did not take, starts no turn.
+            InboundBody::Text { text } if text.trim().is_empty() => Ok(InboundOutcome::Empty),
             InboundBody::Text { text } => match control_word(text) {
                 Some(Control::Stop) => self.stop_all(sink.as_ref(), &binding, &inbound).await,
                 Some(Control::Resume) => {
