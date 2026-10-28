@@ -182,7 +182,8 @@ pub enum ToolKind {
     Delegate,
     /// `memory_write`, `memory_delete`.
     MemoryWrite,
-    /// `memory_remember`: assumed long-term facts only (spec 3.1 §7.15.2).
+    /// `memory_remember`: long-term facts, assumed unless the person's own words verify them
+    /// (spec 3.1 §7.15.2, spec 3.3 §8.1).
     MemoryPropose,
     /// `web_fetch`, `web_search`: whether the URL's host is in the allowlist
     /// (spec 3.1 §7.20).
