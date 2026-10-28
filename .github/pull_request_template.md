@@ -14,10 +14,10 @@ Summary of the approach taken.
 
 ### Quality Gates (all required)
 
-- [ ] `devenv shell fmt` — code is formatted (Edition 2024)
-- [ ] `devenv shell clippy` — zero warnings (-D warnings)
-- [ ] `devenv shell test` — all non-ignored tests pass
-- [ ] `devenv shell check` — fast workspace compilation check
+- [ ] `devenv shell ws-fmt` — code is formatted (Edition 2024)
+- [ ] `devenv shell ws-clippy` — zero warnings (-D warnings)
+- [ ] `devenv shell ws-test` — all non-ignored tests pass
+- [ ] `devenv shell ws-check` — fast workspace compilation check
 
 ### Code Quality
 

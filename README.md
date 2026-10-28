@@ -155,8 +155,8 @@ adk-rust = "3.0.0"                                        # Gemini, agents, runn
 
 A tier is a starting point, not a ceiling. Add any single capability on top of one
 without moving to the next tier, so `features = ["minimal", "audio"]` gives you the
-minimal build plus audio. [AGENTS.md](AGENTS.md#adk-rust-umbrella) lists every feature you can add
-this way.
+minimal build plus audio. [`adk-rust/Cargo.toml`](adk-rust/Cargo.toml) lists every feature you
+can add this way.
 
 ## One agent, end to end
 

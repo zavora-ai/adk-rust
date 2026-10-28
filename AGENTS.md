@@ -120,14 +120,7 @@ rustup. Four further constraints:
 
 ### Verifying a fresh setup
 
-Start with the three gates:
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo nextest run --workspace
-```
-
+Start with the three [quality gates](#quality-gates), the full workspace suite included.
 A default `--workspace` build compiles no feature-gated module and no umbrella
 tier above `minimal`, so those need their own pass:
 
@@ -150,13 +143,16 @@ the workspace is broken.
 
 ## Quality gates
 
-Run all three before every commit. CI enforces them — save yourself the round-trip:
+The PR tier runs all three on every pull request:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace
 ```
+
+Before every commit, run the first two and `cargo nextest run -p <crate>` for each crate you
+changed; [Testing](#testing) says when to run the full workspace suite.
 
 ### CI cost tiers
 
@@ -218,14 +214,14 @@ every `ci.yml` dependency succeeds or was skipped by the change scope. See CONTR
 
 ### AI Agent Workflow (`devenv`)
 
-Use these shorthand scripts instead of raw `cargo` to ensure `sccache` wrap and workspace coverage:
+Inside `devenv shell`, these scripts run the same commands with `sccache`:
 
-| Action | Command | Description |
+| Action | Command | Runs |
 | :--- | :--- | :--- |
-| **Check** | `devenv shell check` | Fast workspace compilation check. |
-| **Test** | `devenv shell test` | Run all non-ignored tests (nextest). |
-| **Lint** | `devenv shell clippy` | Clippy with `-D warnings` (zero tolerance). |
-| **Format** | `devenv shell fmt` | Enforce Rust Edition 2024 style. |
+| **Check** | `devenv shell ws-check` | `cargo check --workspace` |
+| **Test** | `devenv shell ws-test` | `cargo nextest run --workspace` — the full suite |
+| **Lint** | `devenv shell ws-clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
+| **Format** | `devenv shell ws-fmt` | `cargo fmt --all` |
 
 Run `cargo fmt --all` automatically after finishing Rust code changes; do not ask for approval.
 
@@ -237,245 +233,63 @@ Crate names are prefixed with `adk-`. The Rust module name uses underscores (`ad
 
 ### Core crates (publishable to crates.io)
 
+One line per crate — the crate's README holds the detail.
+
 ```
-adk-core/        Core traits and types: Agent, Tool, Llm, Session, Event, Content, State,
-                 SchemaAdapter, SchemaCache, SharedState, ToolExecutionStrategy, RequestContext.
-                 AdkError envelope. Governed tool path (authorize_tool_call, ToolPolicy,
-                 GovernanceControl kill switch, approvals and ApprovalService), agent identity
-                 (ActingContext), RunBudget, SpendLedger, ActionLedger, audit records, and the
-                 durable runtime contracts (LeaseStore, DurableRunStore, ScheduleStore,
-                 GovernanceStateStore) with in-memory implementations and conformance suites.
-adk-agent/       Agent implementations: LlmAgent, CustomAgent, SequentialAgent, ParallelAgent,
-                 LoopAgent, ConditionalAgent, LlmConditionalAgent, portable TeamSpec teams,
-                 CodeActAgent (`codeact`), CodingAgent (`coding`), AmbientAgent (`ambient`).
-                 Parallel tool dispatch, SharedState coordination, skill shims.
-adk-model/       LLM provider facade: Gemini, OpenAI (Chat + Responses), Anthropic, DeepSeek (V4),
-                 Groq, Ollama, Bedrock, Azure AI, OpenRouter (native). Text-based tool call
-                 parser (7 model formats). Provider-aware schema normalization.
-                 (feature-gated)
-adk-gemini/      Dedicated Gemini client with GeminiBackend trait (Studio + Vertex AI),
-                 ThinkingConfig validation, built-in tool support (Search, Code Execution,
-                 Maps, File Search, Computer Use). Interactions API (Beta, `interactions`
-                 feature): stateful step-timeline client with server-side history,
-                 streaming step events, and lifecycle (get/delete/cancel). The runtime
-                 transport lives in adk-model (`gemini-interactions`): a `GeminiModel`
-                 toggle that drives the standard LlmAgent/Runner through this endpoint.
-adk-gcp/         Shared Google Cloud REST plumbing for Vertex AI backends: ADC credential
-                 caching (GcpHttpClient), bounded HTTP transport, LRO polling (LroPoller),
-                 resource-name parsing (VertexResourceName), consumer-branded errors
-                 (GcpErrorContext). Wave 3 consolidation target for the ADC/LRO pattern.
-adk-anthropic/   Dedicated Anthropic API client: streaming, adaptive thinking, prompt caching,
-                 citations, context management, fast mode, vision, PDF processing, pricing.
-                 Claude 5 and 5.5 identifiers through `Model` constructors (`claude_sonnet_5`,
-                 `claude_opus_5_5`, `claude_sonnet_5_5`, `claude_haiku_5_5`, `claude_fable_5_1`,
-                 ...) and the Claude 4.x family through `KnownModel`.
-                 Managed Agents API (`managed-agents` feature): agents, environments, sessions,
-                 SSE streaming, custom tools, vaults, memory stores, dreams, webhooks,
-                 multiagent orchestration, file mounting, self-hosted environments.
-                 Files API (`files` feature): upload, download, list, get, delete.
-adk-tool/        Tool system: FunctionTool, StatefulTool, SimpleToolContext, MCP integration
-                 (rmcp 3.1), McpServerManager (lifecycle, health, auto-restart), MCP Resource
-                 API, MCP Elicitation, Google Search, built-in tool wrappers (Gemini/OpenAI/
-                 Anthropic), Slack/BigQuery/Spanner toolsets. MCP server (`mcp-server`, spec
-                 3.5 §7.9): a set of `adk_core::Tool`s over Streamable HTTP with an SEP-2127
-                 Server Card at `{endpoint}/server-card`, `tools/list` filtered per caller
-adk-runner/      Agent execution runtime with event streaming, RunnerConfigBuilder (typestate),
-                 Runner::interrupt() API, Runner::run_str(), per-session cancellation tokens,
-                 transfer enforcement, plugin hooks for every agent, run budgets, spend and
-                 action ledgers, durable cancellation and recovery, Runner::close().
-adk-server/      HTTP server (Axum) and A2A v1.0.0 (Agent-to-Agent) protocol, ServerBuilder
-                 API, ShutdownHandle, YAML agent config, agent registry, auth bridge.
-                 Loopback-first defaults: unlisted hosts and cross-origin requests get 403
-                 (SecurityConfig::allowed_hosts / allowed_origins). Governance endpoints.
-                 Background Runs and Cron Scheduling (`background` feature): durable runs on a
-                 DurableRunStore with a fenced DurableWorker and DurableScheduler, REST
-                 endpoints (POST/GET/DELETE /runs, POST /runs/{id}/wake), cron job management
-                 (POST/GET/PATCH/DELETE /cron), concurrency policies (skip/allow/queue).
-                 Webhook wake-ups (`webhook-ingress`), approval inbox (`approvals`).
-                 The AWP 2.0 agent edge (`awp`, spec 3.5 §7.9): ServerBuilder::awp(AwpEdge),
-                 trust tiers from Web Bot Auth, OAuth, mTLS and API keys, capabilities over
-                 A2A, MCP and HTTP through one governed path, held and exactly-once calls,
-                 the public partition, events, consent, status, the beacon; durable edge
-                 stores (`awp-sqlite`, `awp-postgres`, `awp-redis`).
-adk-session/     Session management: SQLite, PostgreSQL, Redis, MongoDB, Firestore, Neo4j,
-                 Vertex AI backends. Encrypted sessions (AES-256-GCM) with key rotation.
-                 Identity-scoped rewind. Durable stores on every backend: spend ledger,
-                 action ledger, approval store, audit log store, and the lease, run,
-                 schedule, and governance state stores.
-adk-artifact/    Binary artifact storage for agents: in-memory, file, and GCS (`gcs`) backends
-                 with immutable versions
-adk-memory/      Semantic memory and RAG search: InMemory, SQLite, PostgreSQL, Redis, MongoDB,
-                 Neo4j, Vertex AI Memory Bank backends, and the SQLite knowledge graph
-                 (`graph-memory`). Project-scoped memory isolation.
-adk-graph/       Graph-based workflow orchestration with checkpoints, durable resume,
-                 HITL interrupts, ActionNodeExecutor, WorkflowSchema interchange.
-                 Functional API (`functional` feature): write workflows as async functions
-                 with #[entrypoint]/#[task] macros, automatic checkpointing, typed state
-                 reducers (ReducedValue, UntrackedValue, MessagesValue), state schema
-                 validation, interrupt/resume, and loop iteration checkpoint keying.
-adk-realtime/    Real-time bidirectional audio/video streaming (OpenAI, Gemini Live, Vertex AI Live,
-                 LiveKit, WebRTC), mid-session context mutation, interruption detection,
-                 video avatar providers (HeyGen, D-ID)
-adk-browser/     Browser automation tools via WebDriver
-adk-computer-use/ Governed orchestration layer for the computer-use-mcp desktop-automation server:
-                 deterministic reference graph (parallel observation, digest-bound approval
-                 interrupts, single-executor mutation, verification), camelCase wire contracts,
-                 scope authorization, cancellation bridge, and tamper-evident evaluation
-                 receipts. Performs no actuation itself.
-adk-eval/        Evaluation framework: trajectory, semantic, rubric, LLM-judge, user personas,
-                 prompt optimizer, structured judge (typed verdicts), embedding similarity,
-                 cost/latency tracking, trace analysis (loop/redundancy detection), regression
-                 baselines, JUnit XML CI output, human annotation workflows (JSONL), A/B agent
-                 comparison (Wilcoxon), auto-generated test cases, multi-turn conversation
-                 metrics. Feature-gated: embedding, ci-helpers, statistics. Web experiments
-                 (`experiments`, spec 3.5 §7.12): ExperimentAnalyzer, sequential tests for
-                 proportions and means with guardrail monitoring, and a Bayesian option.
-adk-telemetry/   OpenTelemetry 0.32 integration for agent observability: logging, OTLP export
-                 (`otlp`), bounded in-process span retention, SQLite (`sqlite`) and Google
-                 Cloud (`gcp`) export, GenAI semantic conventions
-adk-guardrail/   Input/output guardrails: validation, content filtering, PII redaction, tool
-                 call and tool result guardrails (ResultTextGuardrail), structured block errors
-adk-auth/        Authentication: API keys, JWT, OAuth2, OIDC, SSO, cloud secret providers
-                 (AWS Secrets Manager, Azure Key Vault, GCP Secret Manager), RBAC and scope
-                 guards, audit sinks, signed Merkle-tree audit log (`signed-audit`),
-                 credential brokers (SecretCredentialBroker, TokenExchangeBroker). Web Bot
-                 Auth (`web-bot-auth`, spec 3.5 §7.3): RFC 9421 HTTP Message Signatures with
-                 Ed25519, HttpSignatureSigner, HttpSignatureVerifier, key directory fetch and
-                 cache.
-adk-plugin/      Plugin system for agent lifecycle hooks — EnhancedPlugin trait with tool/model
-                 interception, priority-based pipeline, PluginContext shared state
-adk-retry-reflect/ Retry & Reflect plugin — intercepts tool failures, injects reflection prompts,
-                 exponential backoff, circuit-breaker patterns
-adk-skill/       Skill discovery, parsing, and convention-based agent capabilities
-adk-cli/         Command-line launcher: the `adk-rust` binary (REPL, web server, coding agent,
-                 skills, graph checkpoints, audit verification, deploy commands) and the
-                 embeddable Launcher. `website` (spec 3.5 §8.1): `adk-rust website` (new,
-                 which serves the site with the owner's views on a loopback home; status,
-                 review, charter, jobs), `adk-rust site` (build, publish, rollback, log,
-                 content, schedule, correct, withdraw, revert, batches, feeds, migrate,
-                 freeze) and `adk-rust awp` (verify, conformance, keys rotate and delegate,
-                 migrate-config). `adk-rust up` mounts a WebhookIngress for webhook wakes
-                 (spec 3.5 §10 X11).
-adk-rust-macros/ Procedural macros (#[tool] attribute with read_only, idempotent,
-                 concurrency_safe, long_running, lenient_args; #[entrypoint]/#[task] for the
-                 adk-graph functional API)
-adk-code/        Code execution (experimental). Vertex AI Agent Engine sandbox client
-                 (`vertex-sandbox` feature): sandboxEnvironments lifecycle, synchronous
-                 :execute chunk protocol, per-session SandboxCodeExecutor (adk-python
-                 parity), VertexSandboxTool
-adk-codeact-monty/ Python CodeRuntime for the CodeActAgent, backed by the Pydantic Monty
-                 interpreter (via adk-code's embedded-python kernel, which pins the
-                 monty crates once). Sandboxed OS access (mounts, environ, clock),
-                 suspend/resume snapshots. EXPERIMENTAL.
-adk-devtools/    Developer tools for coding agents — inner-loop file/search/edit tools
-                 (read_file, write_file, edit_file, glob, grep, ...) scoped to a sandboxed workspace
-adk-harness/     Governed harness agent (spec 3.1): HarnessAgent over LlmAgent with modes
-                 (read-only, plan, ask, auto) and standing approvals as one ToolPolicy,
-                 interactive approval prompts, host or OS-sandboxed bash with a shell
-                 ledger, session todos, AGENTS.md instructions with workspace trust,
-                 progressive skills, team members (local, ACP, A2A), the plan graph and
-                 durable goals, spend and loop guard, RBAC and shell credentials, working
-                 notes and long-term facts with provenance (FactStore, FactIndex, recall,
-                 distillation), `.adk/harness.toml` (HarnessConfig), and the `coding`
-                 preset. Umbrella feature `harness`; `kernel` feature hosts it in adk-kernel
-                 (Harness::kernel, goal stall parking). `website` (spec 3.5 §7.1): the
-                 website preset, the back-office and public toolsets, SitePartitions, the
-                 autonomy ladder compiled to policy, authoring routes, outbound Web Bot Auth
-                 and onboarding machinery. Beta.
-adk-kernel/      Agent kernel (spec 3.2): Kernel supervisor with a DurableWorker per QueueClass
-                 (interactive, background, maintenance) and the DurableScheduler, ProcessTable
-                 (ps, spawn, kill, nice, suspend, resume, live ProcessView with spend),
-                 WakeSet sleepers with no lease woken through keyed `kernel.wake` runs (cron,
-                 file, webhook, queue, approval, run-finished, time), standing Triggers,
-                 EventBus, freeze that parks across replicas, control plane on a Unix socket
-                 and loopback HTTP with ControlClient. ProcessStore on in-memory, SQLite,
-                 PostgreSQL, Redis. `charter` (spec 3.5 §7.10, §7.11): CharterStore, KpiStore
-                 and the KPI tracker, guardrail job pauses, the AutonomyLadder, typed signals
-                 through SignalSink, site process kinds; in-memory, SQLite, PostgreSQL and
-                 Redis backends. Beta.
-adk-surface/     Agent surfaces (spec 3.3): SurfaceEngine over a LocalSource (kernel, harness,
-                 runner) or a ControlSource (control plane), a per-session feed numbered by
-                 session-store position, decision cards and status in the plain words of §8,
-                 commands with subject and Origin on the audit record, the §7.2 rules.
-                 `web`: the API under /api/surface with OpenAPI and generated TypeScript.
-                 `genui`: agent-drawn forms, cards, tables and screens (A2UI v0.9.1, the
-                 forms 1.0 catalog, rule 5); a form's Send asks the drawing agent for a
-                 RequestedCall, held for the person.
-                 `website` (spec 3.5 §8.2, Experimental): a prebuilt website's setup code,
-                 onboarding, charter, site view, weekly review and web editor. Beta.
-adk-site/        Site pipeline of an AWP 2.0 website (spec 3.5 §7.7, §7.8): content as files,
-                 the built-in generator with Markdown and machine-view twins, the launch gate,
-                 signed releases and the site log, DirectoryHost, the publishing pipeline,
-                 media, lanes, streams and the UpdateEngine for constantly updated sites.
-                 `migrate`: sources, detectors, quarantine, sanitiser, freeze, parity, probes,
-                 archive. `host-*`: S3, GCS, Azure, Cloudflare, Netlify, GitHub Pages, rsync.
-                 `gen-*`: Zola, Hugo, Astro, Build Awesome in a sandbox. EXPERIMENTAL.
-adk-drivers/     Service drivers of an AWP website (spec 3.5 §7.13): DNS and registrar, email,
-                 analytics and search console, social and advertising, each a contract, a
-                 kernel driver manifest, a conformance suite and reference adapters
-                 (RFC 2136, RDAP, IMAP and SMTP, Plausible, search console, Mastodon);
-                 DriverCapPolicy. EXPERIMENTAL.
-adk-website/     The AWP website product (spec 3.5 Part C): site kinds, the team of eight
-                 agents, onboarding, themes, capability packs, playbooks, jobs, incidents,
-                 alarms, the weekly review, experiments, measurement sources, the agent edge,
-                 the contract and deployment shapes; the `adk-website` binary. EXPERIMENTAL.
-adk-bench/       Benchmarking framework: framework-level runtime performance with real LLM APIs
-                 and cross-framework (Python ADK) comparison
-adk-sandbox/     Sandboxed execution environments — process/WASM backends, OS-level sandbox profiles
-                 (Seatbelt on macOS, bubblewrap on Linux, a restricted-token tier on Windows)
-adk-audio/       Audio processing, STT/TTS providers, Deepgram streaming, desktop audio
-                 (capture/playback/VAD), ONNX models (Whisper, Moonshine, Kokoro, Chatterbox)
-adk-rag/         Retrieval-augmented generation pipelines
-adk-action/      Action node definitions (14 node types), StandardProperties, variable
-                 interpolation — shared types for adk-graph ActionNodeExecutor
-adk-enterprise/  Enterprise client SDK — lightweight HTTP/SSE client for the ADK-Rust Enterprise
-                 Managed Agent Service. Zero adk-* runtime dependencies. Agents, sessions,
-                 streaming, vaults, memory. Self-hosted support. EXPERIMENTAL.
-adk-managed/     Managed agent runtime — provider-neutral agent execution engine.
-                 ManagedAgentRuntime trait, DefaultManagedAgentRuntime, declarative
-                 ManagedAgentDef, supervised session loop, event replay. Every turn runs
-                 under a DurableRunStore run; a turn waiting on a custom tool result or a
-                 tool confirmation parks its run until a store-enforced expiry, and the
-                 answer (ApprovalStore, or the approval service) wakes it on any runtime
-                 instance over the same ManagedStores. Session state survives process loss
-                 with a durable ManagedStateStore (SessionServiceStateStore over any session
-                 backend, FileManagedStateStore). DefaultModelResolver builds Gemini, OpenAI,
-                 Anthropic, Ollama, and OpenAI-compatible models under provider features.
-                 ScriptedLlm test double, golden fixture tests.
-                 Feature-gated: `managed-runtime` on umbrella crate. EXPERIMENTAL.
-adk-deploy/      Deployment utilities
-adk-payments/    Payment integration: ACP commerce, AP2 alpha mandates, multi-actor flows.
-                 Owner-funded wallet (`wallet`, spec 3.5 §7.14): category mandates, caps
-                 checked before execution, holds, rails, anomaly pauses, reconciliation;
-                 durable WalletStore backends (`sqlite`, `postgres`, `redis`).
-cargo-adk/       Cargo subcommand for project scaffolding, builds, eval runs, benchmarks, and
-                 deployment; the `website` template (spec 3.5 §7.17)
-adk-mistralrs/   Local LLM inference via mistral.rs 0.8 (Gemma 4, Qwen 3.5, Voxtral, Llama 4,
-                 GPT-OSS; mistral.rs 0.8.1 has 46 model loaders). GPU features (`cuda`,
-                 `metal`) are opt-in.
-adk-rust/        Umbrella crate re-exporting all of the above with tiered feature presets
+adk-core/          Core traits and types, `AdkError`, the governed tool path, identity, durable contracts
+adk-agent/         LlmAgent, workflow agents, teams, CodeActAgent (`codeact`), CodingAgent, AmbientAgent
+adk-model/         LLM providers: Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama, Bedrock, Azure, OpenRouter
+adk-gemini/        Gemini client: Studio and Vertex backends, built-in tools, Interactions API (`interactions`)
+adk-gcp/           Google Cloud REST plumbing: ADC credentials, bounded HTTP transport, LRO polling
+adk-anthropic/     Anthropic client: streaming, thinking, prompt caching, Managed Agents and Files APIs
+adk-tool/          FunctionTool, MCP client and server, built-in tool wrappers, Slack/BigQuery/Spanner
+adk-runner/        Execution runtime: event streaming, budgets, ledgers, cancellation and recovery
+adk-server/        Axum server, A2A v1.0.0, background runs and cron (`background`), AWP edge (`awp`)
+adk-session/       Sessions on SQLite, PostgreSQL, Redis, MongoDB, Firestore, Neo4j, Vertex; durable stores
+adk-artifact/      Versioned binary artifacts: in-memory, file, GCS (`gcs`)
+adk-memory/        Semantic memory and search on seven backends, SQLite knowledge graph (`graph-memory`)
+adk-graph/         Graph workflows: checkpoints, durable resume, interrupts, action nodes, functional API
+adk-realtime/      Realtime audio/video: OpenAI, Gemini Live, Vertex Live, LiveKit, WebRTC, avatars
+adk-browser/       Browser automation tools over WebDriver
+adk-computer-use/  Governed graph, auth and wire contracts for computer-use-mcp; performs no actuation
+adk-eval/          Evaluation: trajectory, rubric, LLM judge, personas, baselines, experiments
+adk-telemetry/     OpenTelemetry 0.32: OTLP, SQLite and GCP export, GenAI semantic conventions
+adk-guardrail/     Input, output, tool-call and tool-result guardrails, PII redaction
+adk-auth/          API keys, JWT, OAuth2/OIDC/SSO, secret providers, RBAC, signed audit, Web Bot Auth
+adk-plugin/        EnhancedPlugin lifecycle hooks with tool and model interception
+adk-retry-reflect/ Retry & Reflect plugin: reflection prompts, backoff, circuit breaking on tool failure
+adk-skill/         AgentSkills parsing, index and injection; Vertex Skill Registry client
+adk-cli/           The `adk-rust` binary (REPL, server, harness, website, site, awp) and `Launcher`
+adk-rust-macros/   `#[tool]`, and `#[entrypoint]`/`#[task]` for the graph functional API
+adk-code/          Code execution substrate: executors, sandbox policy, Vertex sandbox (`vertex-sandbox`)
+adk-codeact-monty/ Python `CodeRuntime` for CodeActAgent on the Monty interpreter
+adk-devtools/      Coding-agent file, search and edit tools scoped to a sandboxed workspace
+adk-harness/       Governed harness agent: modes, standing approvals, shell, goals, memory, presets
+adk-kernel/        Agent kernel: supervisor, process table, wake sources, event bus, control plane
+adk-surface/       Agent surfaces: SurfaceEngine, web API (`web`), agent-drawn UI (`genui`)
+adk-site/          AWP website pipeline: content, generator, launch gate, signed releases, hosts
+adk-drivers/       Website service drivers (DNS, email, analytics, social) with conformance suites
+adk-website/       The prebuilt AWP website product and the `adk-website` binary
+adk-bench/         Runtime benchmarks with real LLM APIs and a Python ADK comparison
+adk-sandbox/       Process/WASM sandboxes; Seatbelt, bubblewrap and Windows restricted-token enforcers
+adk-audio/         STT/TTS providers, desktop audio, ONNX models (Whisper, Kokoro, ...)
+adk-rag/           Retrieval-augmented generation pipelines and vector store backends
+adk-action/        Action node types and variable interpolation for adk-graph
+adk-enterprise/    HTTP/SSE client for the ADK-Rust Enterprise Managed Agent Service
+adk-managed/       Provider-neutral managed agent runtime with durable, parked turns
+adk-deploy/        Deployment manifests, bundling, and the Agent Engine client (`gcp`)
+adk-payments/      Agentic commerce (ACP, AP2) and the owner-funded wallet (`wallet`)
+cargo-adk/         `cargo adk`: project templates, builds, eval runs, deployment
+adk-mistralrs/     In-process local inference via mistral.rs 0.8; GPU features opt-in
+adk-rust/          Umbrella crate: re-exports everything behind tiered features
 ```
 
 ### Protocol crates
 
 ```
-awp-types/       Agentic Web Protocol types. AWP 2.0 (spec 3.5 §7.2–§7.10): SiteContract,
-                 KeySet, TrustTier, CapabilityV2 and the manifest, MachineView, HeldCall,
-                 SiteStatus, EventEnvelope, ConsentReceipt, Receipt, ReleaseManifest,
-                 LogEntry, StreamEntry, Charter, Signal; JSON Schemas (`json-schema`). The
-                 AWP 1.x types: TrustLevel, BusinessContext, PaymentIntent. Zero adk-*
-                 dependencies.
-adk-awp/         AWP implementation (Axum 0.8). AWP 2.0: the /awp/v2/ routes, AWP-Version
-                 list negotiation, TierAssigner, CapabilityTool and CapabilityRegistry, edge
-                 store traits with a conformance suite, business.toml migration; `signing`
-                 (JWS over JCS, keys and delegations, the DNS root anchor, signed Agent
-                 Cards, the site log's tiles and checkpoint, StaticBundle); `verify` (the
-                 Verifier, the conformance kit, test vectors). The AWP 1.x routes and
-                 AwpState behind the default `awp-v1` feature, beside the 1.x consent,
-                 event and health services.
-adk-acp/         Agent Client Protocol — connect to external ACP agents (Claude Code, Codex,
-                 Kiro CLI) as tools. AcpAgentTool, AcpToolset, AcpServer (expose ADK agents
-                 as ACP-compatible), StdioTransport for IDE connections.
+awp-types/         AWP 1.x and 2.0 protocol types and JSON Schemas; no adk-* dependencies
+adk-awp/           AWP implementation: /awp/v2/ routes, `signing`, `verify`, the 1.x routes (`awp-v1`)
+adk-acp/           Agent Client Protocol: ACP agents as tools, and ADK agents served over ACP
 ```
 
 ### Excluded from workspace
@@ -496,8 +310,8 @@ adk-ui/          Retired, for ADK-Rust 2 only (spec 3.3 decision 11): agent-draw
 ### Examples and docs
 
 ```
-examples/              148 standalone example crates (each with own Cargo.toml) covering all major
-                       features. More examples live in the adk-playground repo.
+examples/              Standalone example crates, each with its own Cargo.toml and outside the
+                       workspace. More examples live in the adk-playground repo.
 docs/official_docs/    Comprehensive documentation site content
 ```
 
@@ -549,70 +363,16 @@ All opt-in, no defaults:
 
 Four tiered presets control which crates are compiled:
 
-- `minimal` **(default)** — agents, models, gemini, runner, sessions. Fastest possible build for a single Gemini-powered agent.
-- `standard` — minimal + openai, anthropic, anthropic-client, tools, memory, telemetry, skills, graph, auth, server, eval, guardrail, plugin, artifacts, computer-use. Production deployment with server and auth.
-- `enterprise` — standard + realtime, browser, rag, payments, awp. Full-featured production.
-- `full` — enterprise + audio, code, sandbox, code-tools, graph-functional, graph-node-cache, graph-delta, graph-time-travel, harness, website. Everything that needs no external infrastructure.
+- `minimal` **(default)** — agents, models, gemini, runner, sessions.
+- `standard` — minimal + openai, anthropic, anthropic-client, tools, memory, telemetry, skills, graph, auth, server, eval, guardrail, plugin, artifacts, computer-use.
+- `enterprise` — standard + realtime, browser, rag, payments, awp.
+- `full` — enterprise + audio, code, sandbox, code-tools, graph-functional, graph-node-cache, graph-delta, graph-time-travel, harness, harness-kernel, website. Everything that needs no external infrastructure.
 
-Domain add-ons are composable with any tier: `features = ["minimal", "audio"]`.
-
-Platform meta-features (composable with any tier):
-- `gemini-agent-platform` — every Gemini Enterprise Agent Platform (Vertex/EAP) integration except realtime transports: `gemini-vertex`, `vertex-session`, `gcp-secrets`, `gcs-artifacts`, `gcp-telemetry`, `agent-engine`, `vertex-memory`, `example-store`, `vertex-sandbox`, `vertex-eval`, `vertex-rag`, `agent-retrieval`, `vertex-agent-registry`, `vertex-skill-registry`, `vertex-remote-engine` (grows as later integrations land). The right default for ReasoningEngine BYOC deployments. Deploy-time tooling is host-side and excluded.
-- `gemini-agent-platform-full` — `gemini-agent-platform` + `vertex-live` (Vertex AI Live API, pulls in the adk-realtime stack)
-
-Website feature (spec 3.5 §7.1, D-14):
-- `website` — `adk_rust::website` (adk-website) and `adk_rust::site` (adk-site), with the AWP edge on the server (`adk-server/awp`), AWP signing and the harness kernel; with `cli`, `adk-rust website`, `adk-rust site` and `adk-rust awp`. In `full`. Hosts, generators and backends stay features of `adk-site` and `adk-kernel` (recorded in `docs/feature-surface.md`)
-
-Harness features (spec 3.1 §8.4):
-- `harness` — `adk_rust::harness` (all of `adk-harness`) and `HarnessAgent`, `HarnessAgentBuilder`, `HarnessMode` in the prelude; with `cli` it also re-exports `HarnessLauncher`, `ConsolePrompter` and `ConsoleIo`. In `full`
-- `harness-browser`, `harness-computer-use`, `harness-payments`, `harness-voice`, `harness-managed` — the packs, forwarded to `adk-harness`; the builder refuses them until they land
-
-Graph capability features (forwarded to `adk-graph`, which has no default features):
-- `graph-functional` — the functional API (`#[entrypoint]`/`#[task]`), in `full`
-- `graph-node-cache` — node result caching with content keys, in `full`
-- `graph-delta` — delta checkpoints, in `full`
-- `graph-time-travel` — step, fork and state history, in `full`
-- `graph-sqlite` — the SQLite checkpointer; needs a database, so not in `full`
-- `graph-redis-cache` — Redis-backed node cache; needs a server, so not in `full`
-- `graph-postgres`, `graph-redis`, `graph-mongodb`, `graph-neo4j`, `graph-firestore` — shared-database checkpointers; need a server, so not in `full`
-
-Production backend features (require external infrastructure, NOT included in `full`):
-- `postgres-session`, `redis-session`, `mongodb-session`, `firestore-session`, `neo4j-session`,
-  `vertex-session`
-- `sqlite-memory`, `database-memory`, `redis-memory`, `mongodb-memory`, `neo4j-memory`,
-  `vertex-memory`
-- `auth-bridge`
-- `managed-runtime` — Managed agent runtime (adk-managed): durable sessions and parked tool calls, event streaming, provider parity; the `gemini`, `openai`, `anthropic` and `ollama` features also let its `DefaultModelResolver` build those providers
-
-Specialist opt-in features:
-- `yaml-agent`, `agent-registry` — YAML agent config and registry REST API
-- `gcp-deploy` — Agent Engine (ReasoningEngine) BYOC deployment client (adk-deploy): create/poll/get/delete; host-side tooling, deliberately excluded from `gemini-agent-platform`. The same name on adk-cli enables `adk-rust deploy agent-engine`
-- `agent-engine` — Agent Engine runtime contract (adk-server): class-method dispatch endpoints and the turnkey `serve_agent_engine` entrypoint for Gemini Enterprise Agent Platform BYOC containers
-- `example-store` — Vertex AI Example Store client (adk-tool): v1beta1 data-plane upsert/search/fetch against a pre-provisioned store, plus `ExampleStoreProvider` for dynamic few-shot retrieval via a `BeforeModelCallback`
-- `vertex-sandbox` — Vertex AI Agent Engine managed code-execution sandbox (adk-code): v1beta1 sandboxEnvironments lifecycle (create/get/list/delete with LRO polling), synchronous `:execute` chunk protocol, `SandboxCodeExecutor` with per-session lazy create/recreate (adk-python parity), and `VertexSandboxTool` for LLM agents; part of `gemini-agent-platform`
-- `vertex-eval` — Gen AI Evaluation Service bridge (adk-eval): evaluateInstances submission and a service-backed judge
-- `vertex-rag` — Vertex AI RAG Engine retrieval (adk-rag): read-only corpus discovery, retrieveContexts client, and `VertexAiRagRetrievalTool`
-- `agent-retrieval` — Agent Retrieval / Vector Search 2.0 (adk-rag): managed `VectorStore` backend with hybrid RRF search extras
-- `vertex-agent-registry` — Agent Registry (adk-tool): registration for custom deployments, search/discovery client, and `AgentSearchTool` (unrelated to the local YAML `agent-registry` feature)
-- `vertex-skill-registry` — Skill Registry read side (adk-skill): get/list/semantic-search clients and hardened skill-payload extraction
-- `vertex-remote-engine` — remote ReasoningEngine invocation (adk-server): `RemoteReasoningEngineAgent` sub-agents over `:streamQuery?alt=sse`, URN resolution via Agent Registry
-- `gemini-interactions` — Gemini Interactions API (Beta): wire client surface (server-side history, step timeline) plus the runtime transport on `GeminiModel` (`use_interactions_api`) driving the standard `LlmAgent`/`Runner`
-- `mcp`, `mcp-http`, `mcp-sampling` — MCP transport and sampling support
-- `code-tools` — Code execution tools over the adk-code substrate (`CodeTool`, `PythonCodeTool`, `JavaScriptCodeTool`, `MontyPythonCodeTool`; forwarded to adk-tool; included in `full`)
-- `code-embedded-js` — Embedded JavaScript execution via boa_engine — the `JavaScriptCodeTool` live path (forwarded to adk-tool and adk-code)
-- `code-embedded-python` — In-process Python execution via the Monty interpreter (`MontyPythonCodeTool`, forwarded to adk-tool and adk-code)
-- `code-docker` — Docker SDK-based persistent container execution (forwarded to adk-tool and adk-code)
-- `codeact` — CodeAct agents: the model acts by writing code (forwarded to adk-agent)
-- `codeact-monty` — Python `CodeRuntime` for the CodeActAgent via the Monty interpreter (adk-codeact-monty; implies `codeact`)
-- `slack`, `bigquery`, `spanner` — Native toolsets
-- `action`, `action-http`, `action-trigger`, `action-db`, `action-code`, `action-email`, `action-rss`, `action-full` — Action node executors. Implemented: trigger, set, transform, switch, loop, merge, wait, file (confined to allowed roots), Rust code, HTTP and notification (`action-http`), RSS (`action-rss`), all three under the executor's host/scheme `HttpActionPolicy`. `action-db`, `action-email`, and `action-code` compile placeholders only: database, email, and JavaScript/TypeScript code nodes are not implemented and are rejected when the graph compiles
-- `video-avatar` — HeyGen/D-ID avatar providers
-- `acp` — Agent Client Protocol integration
-- `openrouter` — OpenRouter native APIs
-- `opencode` — OpenCode Go and Zen per-model routing (`OpenCodeClient`)
-- Audio ONNX models: `whisper-onnx`, `distil-whisper`, `moonshine`, `kokoro`, `chatterbox`, `qwen3-tts`
-
-Individual features (`agents`, `models`, `tools`, `sessions`, `server`, `graph`, `realtime`, `eval`, `browser`, `auth`, `guardrail`, `plugin`, `telemetry`, `cli`, `skills`, `artifacts`, `memory`, `code`, `sandbox`, `audio`, `awp`, `acp`, `rag`, `payments`, etc.) can be selected independently.
+Every other feature composes with any tier (`features = ["minimal", "audio"]`).
+`adk-rust/Cargo.toml` lists each one with what it forwards to; production backends
+(`postgres-session`, `graph-postgres`, ...) need external infrastructure and are in no tier.
+A new feature must change what links or carry a recorded decision — see
+[docs/feature-surface.md](docs/feature-surface.md).
 
 ## Rust conventions
 
@@ -723,150 +483,27 @@ Use `adk_core::AdkError` (not `adk_core::Error`) when returning errors from agen
 
 ## Tool authorization
 
-Five mechanisms for controlling tool execution, composable in any combination:
+Five mechanisms control tool execution and compose in any combination:
 
-1. **`ToolPolicy`** — run-wide allow / deny / require-approval decision per call, set with
-   `Runner::builder().tool_policy(...)` or `RunConfig::tool_policy`. `DeclarativePolicy` matches
-   rules in order on a tool-name glob, the tool's declared `ToolEffect`, and JSON-pointer argument
-   predicates (`equals`, `in_set`, `at_most`, `starts_with`, `domain_in`), and the acting agent
-   (`for_agent` glob on its `AgentId`, `for_tenant`, `for_class`); a tool no rule permits is
-   **denied by default**.
+| Mechanism | Set with | Decides |
+|-----------|----------|---------|
+| `ToolPolicy` | `Runner::builder().tool_policy(..)`, `RunConfig::tool_policy` | Allow, deny, or require approval per call; `DeclarativePolicy` denies any tool no rule permits |
+| `ToolConfirmationPolicy` | `.require_tool_confirmation(name)` on the agent builder | Human approval — a `ToolConfirmationHandler` in the run, or a held call a later run resumes |
+| `BeforeToolCallback` | `.before_tool_callback(..)` | Skips a call by returning content |
+| `adk-auth` RBAC | `ProtectedTool`, `ScopeGuard` wrappers | Role and scope checks inside `execute()`, as a tool error |
+| Graph interrupts | `adk-graph` | Checkpointed pauses for multi-step approval workflows |
 
-```rust
-let policy = DeclarativePolicy::builder()
-    .allow_read_only()
-    .rule(PolicyRule::allow("transfer").when(ArgPredicate::at_most("/amount", 100.0)))
-    .require_approval("transfer", "transfers over 100 need approval")
-    .build();
-let runner = Runner::builder()
-    .app_name("ops")
-    .agent(agent)
-    .session_service(sessions)
-    .tool_policy(Arc::new(policy))
-    .build()?;
-```
+`GovernanceControl` is the kill switch over all of them: `runner.governance().freeze(reason)`,
+or `POST /api/admin/freeze` on `adk-server`. A confirmation decision binds to the call's
+fingerprint — acting agent, tool origin, tool name, and canonical arguments — not its call ID.
 
-2. **`ToolConfirmationPolicy`** — built-in HITL. A `ToolConfirmationHandler` decides each call
-   inside the run (bounded by `RunConfig::tool_confirmation_timeout`; when it expires the call
-   waits in the run's approval store, or is denied without one or under
-   `RunConfig::deny_on_confirmation_timeout`);
-   without one the agent holds the call, emits a `ToolConfirmationRequest` event, and ends the run.
-
-```rust
-let agent = LlmAgentBuilder::new("assistant")
-    .model(model)
-    .tool(Arc::new(delete_tool))
-    .require_tool_confirmation("delete_file")  // per-tool
-    // .require_tool_confirmation_for_all()     // or all tools
-    .build()?;
-```
-
-A decision binds to the call's fingerprint (`ToolConfirmationRequest::fingerprint()`: the acting
-agent's `AgentId`, the tool's `ToolOrigin` — its publisher from `Tool::origin()` and a digest of
-its declaration — the tool name, and the canonical arguments), not its call ID, so it authorizes
-the same agent's same call re-issued by the next run and never another agent's call, a tool of the
-same name another MCP server publishes, or a tool redefined since. Pass it as
-`RunConfig::tool_approvals` (valid for the run, optional expiry) or record it in an
-`ApprovalStore` (`RunConfig::approval_store`; consumed by the call it authorizes); build one ahead
-of any run with `ToolConfirmationRequest::for_tool(tool, args).with_acting_context(..)`. Decisions
-keyed by call ID (`RunConfig::tool_confirmation_decisions`) apply to the call they name; bind each
-to the request's fingerprint with `RunConfig::tool_confirmation_fingerprints`. MCP tools report
-`mcp:{toolset name}` as their origin, and tool wrappers forward `Tool::origin()`.
-
-3. **`BeforeToolCallback`** — programmatic gate. Return `Ok(Some(content))` to skip, `Ok(None)` to allow. `LlmAgent` answers the skipped call with that content: text becomes the call's `{"error": "<text>"}` function response.
-
-```rust
-.before_tool_callback(Box::new(|ctx| {
-    Box::pin(async move {
-        if ctx.tool_name().unwrap_or("") == "admin_action" {
-            return Ok(Some(Content::new("tool").with_text("denied")));
-        }
-        Ok(None)
-    })
-}))
-```
-
-4. **`adk-auth` RBAC** — role-based access control with `ProtectedTool` wrapper and audit logging.
-
-5. **Graph interrupts** (`adk-graph`) — checkpoint-based pauses with durable state for complex approval workflows.
-
-`GovernanceControl` is the org kill switch: `runner.governance().freeze(reason)` fails new runs at
-their start and stops running ones before their next model call or tool call. `adk-server` shares
-one through `ServerConfig::governance` and exposes `POST /api/admin/freeze` / `unfreeze`
-(`ServerBuilder::enable_governance_endpoints`), which also pause background and cron scheduling.
-`RealtimeAgent`, `RealtimeRunner`, and `IntegratedRealtimeRunner` dispatch through the same
-governed path.
-
-A held call resumes deterministically: at the start of each run, before its first model call,
-`LlmAgent` finds its held calls (`adk_core::held_tool_calls`) and dispatches each one that has a
-decision (`adk_core::confirmation_decision_available`) under its original call ID through the
-order below, as `GovernedCall::resuming(request)`. Its response, authored by the agent that held
-the call (also under a workflow parent), supersedes the call's `confirmation_pending_response` in
-the projected history; a call without a decision stays held. A held call whose agent or tool
-origin no longer matches is answered as not run and its stored decision is spent. A resumed call
-that ends the turn (`escalate`, `skip_summarization`) in a run that brought a user message fails
-the run with `agent.resume_ended_turn`; the message is saved and answered by the next run.
-A held call survives what happens while it waits: session, intra-invocation and context
-compaction stop before the earliest held call (`adk_core::held_call_compaction_limit`); a
-workflow agent stops when a sub-agent holds a call and the next run resumes at that sub-agent
-(`EventActions::workflow_positions`, `Session::workflow_resume_positions`), so finished
-sub-agents, loop iterations and routing are not repeated; a call a provider sent without an ID
-gets a generated `adk-call-` ID before it is saved (stripped from model requests), so same-name
-calls keep their own arguments; and its tool-call budget reservation is returned while it is
-held, so it counts once.
-`CodeActAgent` resumes from its checkpoint.
-
-Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`) and `CodeActAgent`:
-
-1. Run budget (`RunConfig::budget`) — the model turn's whole tool batch is reserved before any
-   call starts (`CodeActAgent`: each call); a refused batch is answered `not run` and the run
-   ends with `ResourceExhausted`.
-2. Enhanced plugins (`before_tool_call`) — may rewrite the arguments.
-3. Run-wide `InvocationHooks` (the runner's `PluginManager`), then `BeforeToolCallback`.
-4. Circuit breaker.
-5. The governed path, `adk_core::authorize_tool_call`, on the final arguments: kill switch →
-   resume binding (a resumed held call's agent and tool origin) → `ToolPolicy` →
-   `ToolGuardrailSet` (a rewrite is checked against the policy again) → confirmation (call-ID
-   decision, fingerprint approval, `ApprovalStore`, handler, or hold).
-6. Action ledger begin (`NonIdempotent` tools, `RunConfig::action_ledger`) — a recorded call is
-   answered from its record without executing (`CodeActAgent` raises the answer into the
-   script). Shared helper: `adk-agent/src/tool_ledger.rs`. Then the kill switch again: a call
-   frozen during the ledger write never starts; it is answered `not run`
-   (`adk_core::not_run_text`) and its begun record is completed `Failed` with that text, so a
-   replay answers `already_failed` and recovery audits it `NotRun`. No retry starts after a
-   freeze either.
-7. `execute()` under the tool's timeout — `adk-auth` wrappers (`ProtectedTool`, `ScopeGuard`)
-   check RBAC and scopes here, so a denial is a tool error (`tool.permission_denied`, category
-   `Forbidden`, naming the missing scope or permission to the model). Only `ReadOnly` and `Idempotent`
-   tools are retried (retryable error or timeout, with backoff).
-8. Action ledger complete — a `NonIdempotent` call that timed out or panicked stays begun and is
-   answered `outcome_unknown`.
-9. `on_tool_error` (hooks, then callbacks) when the tool failed.
-10. `AfterToolCallback` (hooks, then callbacks), `AfterToolCallbackFull`, then enhanced plugins
-    (`after_tool_call`).
-11. Tool guardrails' `ToolGuardrail::validate_result` (`LlmAgent`) on the result the model is
-    about to be sent — a withheld result is answered `result_withheld` — then, for a result that
-    ends the turn, the output guardrails. `RealtimeAgent`, `RealtimeRunner`, and
-    `IntegratedRealtimeRunner` run a `ToolResultScreen` (`tool_result_screen`) at the same point.
-
-A hook or callback that returns a value short-circuits the remaining callbacks of its kind.
-
-Every run has an acting agent (`ActingContext`, `ReadonlyContext::acting_context()`), resolved
-for the agent that is executing — root, transfer target, or workflow/team sub-agent — from
-`RunConfig::acting` (`ActingConfig::principals` by agent name), the runner's
-`identity_source(...)` (root: `principal_for` or `current`; others: `principal_for`), else
-`urn:adk:agent:{app}/{agent}`. The subject is always the session's user as
-`ActingConfig::subject_kind` (`Human` by default, `Service` for scheduler, webhook, and queue
-runs); a run asking to act for anyone else fails with `identity.subject_mismatch` unless the
-runner's `subject_delegation(...)` policy allows it. `ActingContext` carries no invocation id —
-the execution identity's is the only one. `ToolPolicyRequest::acting`,
-`ToolConfirmationRequest::acting`, `SpendKey::agent`, and `adk_auth::AuditEvent::agent_id` carry
-it; `AgentTool` delegation appends the caller to the delegate's `delegation_chain`. Context
-wrappers must forward `acting_context()`. `DurableWorker` honours a run's stored principal only
-for agent ids in `DurableWorkerConfig::allowed_principals`. See
-`docs/official_docs/security/agent-identity.md`.
-
-See `docs/official_docs/security/tool-authorization.md` for full documentation with CLI and web server examples.
+`adk_core::authorize_tool_call` is the one governed path. `LlmAgent`
+(`adk-agent/src/llm_agent.rs`), `CodeActAgent`, and the realtime runners dispatch through it, and
+`adk-agent/src/tool_ledger.rs` is the shared action-ledger step. A change to the tool path keeps
+both agents in step and updates `docs/official_docs/security/tool-authorization.md`, whose
+"Combining Mechanisms" and "Resuming a Held Call" sections are the reference for evaluation order,
+held calls, and resume. Every run carries an acting agent (`ActingContext`) — see
+`docs/official_docs/security/agent-identity.md`; context wrappers must forward `acting_context()`.
 
 ## Logging
 
@@ -897,14 +534,17 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
 - Doc examples: Cargo snippets, feature names, and package/example references in `README.md` and `docs/official_docs/` are validated against `cargo metadata` by `scripts/check-doc-examples.sh`.
 - When writing tests, prefer comparing equality of entire objects over fields one by one.
 - Tests that require API keys or external services should be `#[ignore]`.
-- Run the test for the specific crate you changed first (`cargo test -p adk-<crate>`), then run the full workspace if you changed shared crates like `adk-core`.
-- Crate-specific or individual tests can be run without asking the user, but ask before running the full workspace test suite.
+- Run the tests of each crate you changed (`cargo nextest run -p adk-<crate>`) without asking.
+- Ask before running the full workspace suite, even after changing a shared crate such as `adk-core`;
+  the PR tier runs `nextest --workspace` on every pull request.
 
 ## Documentation
 
 - When making a change that adds or changes an API, ensure that `docs/official_docs/` is up to date.
 - Documented examples (Cargo snippets, feature names, and package/example references in `README.md` and `docs/official_docs/`) are validated in CI by `scripts/check-doc-examples.sh` against `cargo metadata`. The PR tier compiles the standalone example workspaces and cargo-adk templates, so if you change a public API, keep those in sync.
 - Update the crate's `README.md` if capabilities changed.
+- Keep `AGENTS.md` under 60 KB — agent harnesses truncate larger instruction files. Detail about a
+  crate belongs in its README, and about a feature in `adk-rust/Cargo.toml`.
 - Add a changelog fragment under `changelog.d/` for user-facing changes (`<section>.<slug>.md`,
   see `changelog.d/README.md`). `CHANGELOG.md` itself changes only in release commits.
 
@@ -939,21 +579,6 @@ examples/my_example/
 └── .env.example        # Required env vars
 ```
 
-## Commit messages
-
-Use conventional commits:
-
-```
-feat(gemini): add Vertex AI streaming backend
-fix(realtime): correct audio delta byte handling
-docs: update CONTRIBUTING.md
-refactor(ui): extract validation into per-type trait impls
-test(eval): add trajectory property tests
-```
-
-Subject line only, unless the change is not self-evident from the subject. See
-[Writing style](#writing-style) for body, register, and issue-reference rules.
-
 ## Writing style
 
 This guideline governs every text artefact an agent commits or posts: commit messages, code
@@ -986,7 +611,15 @@ The house register:
 ### Commit messages
 
 - Conventional-commit subject, imperative, under ~70 characters:
-  `fix(rag): upgrade lancedb to 0.31, unbreak and cover the backend`.
+  `fix(rag): upgrade lancedb to 0.31, unbreak and cover the backend`. More examples:
+
+  ```
+  feat(gemini): add Vertex AI streaming backend
+  fix(realtime): correct audio delta byte handling
+  docs: update CONTRIBUTING.md
+  test(eval): add trajectory property tests
+  ```
+
 - Body only when the change is not self-evident from the subject. When present, keep it short and
   factual, prefer bullets over paragraphs, and state what changed and why in as few lines as
   possible.
@@ -1047,7 +680,7 @@ pub async fn swap_adapter(&self, adapter_name: &str) -> Result<()> { ... }
 - **Branch naming**: Use `prefix/short-description`. Allowed prefixes: `feat/`, `fix/`, `docs/`, `refactor/`, `test/`, `chore/`.
 - **Reference**: Include `Fixes #123` or similar in the PR description.
 - **Scope**: Keep PRs focused — one logical change per PR. Don't mix unrelated changes.
-- **Local gates before pushing**: Run `fmt`, `clippy`, `test`, and `check` via `devenv shell`. These are local shorthand, not CI job names — `check` has no CI job at all. `scripts/validate-pr.sh` runs the PR tier scoped to the branch's changes (see CONTRIBUTING.md, "Validating a Branch Locally").
+- **Local gates before pushing**: the [quality gates](#quality-gates). `scripts/validate-pr.sh` runs the PR tier scoped to the branch's changes (see CONTRIBUTING.md, "Validating a Branch Locally").
 - **CI gates that block merge**: `pr-gate` (all `ci.yml` PR-tier jobs) and `semver`; see [CI cost tiers](#ci-cost-tiers). CONTRIBUTING.md ("Branch Protection — Required Status Checks") is authoritative.
 
 ### PR Checklist requirements
@@ -1078,35 +711,10 @@ Always verify builds during publish — never use `--no-verify`. Verification en
 
 ### Publish order
 
-Crates must be published in dependency order. `cargo xtask publish` (via
-`./publish.sh`) computes the order from the workspace graph, so this list is
-documentation rather than configuration — `scripts/check-publish-order.sh` is the
-gate that keeps it satisfiable. The current 13 tiers over 49 publishable crates:
-
-```
-Tier 1: adk-anthropic, adk-core, adk-enterprise, adk-rust-macros, adk-telemetry,
-        awp-types
-Tier 2: adk-action, adk-auth, adk-browser, adk-gcp, adk-gemini, adk-guardrail,
-        adk-mistralrs, adk-plugin, adk-sandbox
-Tier 3: adk-artifact, adk-awp, adk-code, adk-deploy, adk-devtools, adk-graph,
-        adk-memory, adk-model, adk-rag, adk-retry-reflect, adk-session, adk-skill
-Tier 4: adk-payments, adk-realtime, adk-runner, adk-site, adk-tool
-Tier 5: adk-acp, adk-agent, adk-audio, adk-eval
-Tier 6: adk-bench, adk-codeact-monty, adk-computer-use, adk-managed, adk-server
-Tier 7: adk-kernel, cargo-adk
-Tier 8: adk-drivers
-Tier 9: adk-harness
-Tier 10: adk-website
-Tier 11: adk-surface
-Tier 12: adk-cli
-Tier 13: adk-rust (umbrella — always last)
-```
-
-`adk-auth` no longer depends on `adk-server` (its `auth-bridge` takes `RequestContextExtractor`
-from `adk-core`), and `adk-server`'s `awp` feature depends on `adk-auth`, `adk-awp` and
-`adk-tool`. `adk-site` depends on `adk-auth` (`signed-audit`) and, for its generators,
-`adk-sandbox`; `adk-harness`'s `website` feature on `adk-site`, `adk-drivers` and `adk-awp`;
-`adk-website` on `adk-harness` and `adk-server`; `adk-surface`'s `website` on `adk-website`.
+Crates publish in dependency order, which `cargo xtask publish` (via `./publish.sh`) computes from
+`cargo metadata` at run time; `cargo xtask publish --resume --dry-run` prints it.
+`scripts/check-publish-order.sh` is the gate that keeps it satisfiable, and `adk-rust` always
+publishes last.
 
 > **Note:** internal **dev**-dependencies are declared path-only (no version) so
 > they do not constrain this order. Adding a versioned internal dev-dependency can
@@ -1116,14 +724,13 @@ from `adk-core`), and `adk-server`'s `awp` feature depends on `adk-auth`, `adk-a
 
 1. Ensure all quality gates pass and the version is bumped in `[workspace.package]` and all `[workspace.dependencies]` entries.
 2. Tag the release: `git tag v<version> && git push origin v<version>`.
-4. Publish one crate at a time with verification:
+3. Publish one crate at a time with verification:
 
 ```bash
 cargo publish -p <crate-name>
 ```
 
-5. Cargo waits for crates.io indexing automatically after upload. If a dependent crate fails with "failed to select a version", wait a minute and retry.
-6. `adk-mistralrs` is now publishable (mistralrs on crates.io). Include it in the publish order after Tier 2.
+4. Cargo waits for crates.io indexing automatically after upload. If a dependent crate fails with "failed to select a version", wait a minute and retry.
 
 ### Version checklist
 
@@ -1137,45 +744,3 @@ cargo publish -p <crate-name>
 
 - `adk-gemini/AGENTS.md` — Gemini client tracing conventions and instrumentation patterns
 - `STABILITY.md` — Crate stability tiers (Stable/Beta/Experimental), deprecation policy, 1.0 milestone
-
-## Convenience APIs (0.5.0+)
-
-- `adk_rust::provider_from_env()` — auto-detect LLM provider from `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_API_KEY`
-- `adk_rust::run(instructions, input)` — single-function agent invocation with auto provider detection
-- `Runner::builder()` — typestate builder enforcing required fields at compile time
-- `Runner::run_str()` — convenience accepting `&str` for user/session IDs
-- `Runner::interrupt(session_id)` — cancel a running agent mid-execution
-- Prompt caching is enabled by default for Anthropic and Bedrock. Gemini explicit caching activates when `cache_capable` is set on the runner.
-- Pricing modules: `adk_gemini::pricing`, `adk_model::openai::pricing`, `adk_anthropic::pricing`
-- `EncryptedSession<S>` in `adk-session` (behind `encrypted-session` feature) — AES-256-GCM encryption with key rotation
-- `InterruptionDetection` enum in `adk-realtime` — `Manual` (default) or `Automatic` VAD-based interruption
-- `ToolSearchConfig` in `adk-anthropic` — regex-based tool filtering for the Anthropic provider
-- MCP Resource API: `McpToolset::list_resources()`, `list_resource_templates()`, `read_resource(uri)`
-- MCP Elicitation: `McpToolset::with_elicitation_handler()` for form/URL-based elicitation
-- `McpServerManager` — lifecycle management for multiple MCP server processes with auto-restart
-- Graph durable resume: `PregelExecutor` resumes from last checkpoint on startup
-- `ServerBuilder` — register custom Axum controllers alongside built-in routes
-- `ToolExecutionStrategy` — `Sequential`, `Parallel`, or `Auto` dispatch for tool calls
-- `StatefulTool<S>` — generic wrapper for stateful tool closures
-- `SimpleToolContext` — lightweight context for non-agent callers (testing, MCP servers)
-- `SchemaAdapter` trait — provider-aware schema normalization (Gemini, OpenAI strict/non-strict, Anthropic, Generic)
-- `parse_text_tool_calls()` — detect tool calls in text from 7 model formats (Qwen, Llama, Mistral, DeepSeek, Gemma 4, etc.)
-- `SharedState` — thread-safe key-value store for parallel agent coordination
-- Project-scoped memory: `MemoryService::add_session_to_project()`, `search_in_project()`
-
-## adk-studio (separate repo)
-
-`adk-studio` has been extracted to a standalone repository at `../adk-studio/` (or `https://github.com/zavora-ai/adk-studio`). It depends on ADK crates via local path references for development.
-
-```bash
-# Build the studio
-cargo check --manifest-path ../adk-studio/Cargo.toml
-
-# Frontend (Vite + React + TypeScript + ReactFlow)
-cd ../adk-studio/ui
-pnpm install          # install deps
-pnpm run dev          # dev server
-pnpm run build        # production build (tsc + vite)
-pnpm run lint         # eslint
-pnpm run test         # vitest (single run)
-```
