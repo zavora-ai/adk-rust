@@ -32,6 +32,8 @@ mod shared;
 #[cfg(feature = "slack")]
 mod slack;
 mod telegram;
+#[cfg(feature = "whatsapp")]
+mod whatsapp;
 
 #[cfg(feature = "discord")]
 pub use discord::{
@@ -51,4 +53,9 @@ pub use slack::{
 pub use telegram::{
     TELEGRAM, TELEGRAM_CHANNEL, TelegramAdapter, TelegramAdapterBuilder, TelegramError,
     TelegramPolling,
+};
+#[cfg(feature = "whatsapp")]
+pub use whatsapp::{
+    WHATSAPP, WHATSAPP_CHANNEL, WhatsAppAdapter, WhatsAppAdapterBuilder, WhatsAppError,
+    WhatsAppWebhook,
 };
