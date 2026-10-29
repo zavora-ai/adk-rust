@@ -404,6 +404,7 @@ struct MixedDispatchState {
     unsafe_started: AtomicUsize,
     unsafe_max_active: AtomicUsize,
     unsafe_started_while_safe_active: AtomicBool,
+    start_order: Mutex<Vec<String>>,
 }
 
 struct MixedDispatchTool {
@@ -430,7 +431,12 @@ impl Tool for MixedDispatchTool {
         self.concurrency_safe
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        self.state
+            .start_order
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(ctx.function_call_id().to_string());
         if self.concurrency_safe {
             self.state.safe_started.fetch_add(1, Ordering::SeqCst);
             let active = self.state.safe_active.fetch_add(1, Ordering::SeqCst) + 1;
@@ -758,7 +764,7 @@ async fn test_auto_parallelizes_read_only_concurrency_safe_tool() {
 }
 
 #[tokio::test]
-async fn test_auto_runs_safe_subset_before_sequential_unsafe_subset() {
+async fn test_auto_overlaps_adjacent_safe_calls_in_model_order() {
     let model = Arc::new(RecordingModel::new(vec![
         RecordingModel::function_calls(vec![
             Part::FunctionCall {
@@ -818,6 +824,13 @@ async fn test_auto_runs_safe_subset_before_sequential_unsafe_subset() {
     assert_eq!(state.unsafe_started.load(Ordering::SeqCst), 2);
     assert_eq!(state.unsafe_max_active.load(Ordering::SeqCst), 1);
     assert!(!state.unsafe_started_while_safe_active.load(Ordering::SeqCst));
+    // The model's order holds across the unsafe calls: a read listed after a write must see it.
+    let start_order = state.start_order.lock().unwrap_or_else(|error| error.into_inner()).clone();
+    assert_eq!(start_order.first().map(String::as_str), Some("unsafe-a"));
+    let mut overlapped = start_order[1..3].to_vec();
+    overlapped.sort();
+    assert_eq!(overlapped, ["safe-a", "safe-b"]);
+    assert_eq!(start_order.last().map(String::as_str), Some("unsafe-b"));
 }
 
 #[tokio::test]

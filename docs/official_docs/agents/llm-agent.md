@@ -763,7 +763,7 @@ let agent = LlmAgentBuilder::new("fast_agent")
             .with_read_only(true)
             .with_concurrency_safe(true),
     ))
-    .tool(Arc::new(save_tool)) // runs after the concurrent safe subset
+    .tool(Arc::new(save_tool)) // runs alone, in the model's order
     .build()?;
 ```
 
@@ -771,7 +771,7 @@ Three strategies are available:
 
 - `Sequential` (default) — tools execute one at a time in LLM order
 - `Parallel` — all tools execute concurrently; this explicit override bypasses safety metadata, so the caller owns safety
-- `Auto` — calls whose tools are both read-only and concurrency-safe run concurrently first; all remaining calls then run sequentially
+- `Auto` — tools execute in LLM order; only a run of adjacent calls whose tools are both read-only and concurrency-safe overlaps, and every other call runs alone in its place
 
 Results are always returned in the original LLM order regardless of strategy. Failed tools produce a JSON error response without aborting the batch.
 
