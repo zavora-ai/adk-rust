@@ -942,6 +942,52 @@ mod held {
         assert_eq!(done[0].ext["surface"], json!("web"));
     }
 
+    /// A denial is on record with the item it named, as the change's own record names it:
+    /// the item's title and the card's summary, from the home and from a terminal attached to
+    /// the kernel, which reads no agenda (spec 3.3 §8, §11).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_denial_is_recorded_with_the_item_it_named() {
+        use adk_surface::CardHints as _;
+
+        let at = digest_at();
+        let home = home(Setup::new(finance(at))).await;
+        let request = ask(&home).await;
+        home.engine
+            .execute(
+                &web(),
+                Command::Decide {
+                    decision_id: request.id.clone(),
+                    version: request.version,
+                    answer: Answer::Deny,
+                    edited_args: None,
+                    reason: None,
+                    expanded: true,
+                },
+            )
+            .await
+            .unwrap();
+        let denied: Vec<_> = home
+            .audit
+            .records()
+            .into_iter()
+            .filter(|record| record.action == "surface.decide")
+            .collect();
+        assert_eq!(denied.len(), 1, "{denied:?}");
+        assert_eq!(denied[0].decision, Some(AuditDecision::Rejected));
+        assert_eq!(denied[0].ext["tool"], json!("verb_snooze"));
+        assert_eq!(denied[0].ext["title"], json!("News digest"));
+        assert_eq!(denied[0].ext["summary"], json!(request.summary));
+        // A terminal attached to the kernel hints with the catalogue alone: the summary names it.
+        let attached =
+            adk_surface::verbs::VerbRegistry::catalogue("adk-rust").build().unwrap().hints();
+        assert_eq!(attached.names(&request).await.as_deref(), Some("News digest"));
+        // A call another feature published names nothing here.
+        let mut other = request.clone();
+        other.origin =
+            Some(ToolOrigin::new("mcp:calendar", &json!({ "name": "verb_snooze" }), None));
+        assert_eq!(home.registry.hints().names(&other).await, None);
+    }
+
     /// Finance's call, as the runtime hands it to the tool.
     struct FinanceCall {
         content: adk_core::Content,

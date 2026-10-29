@@ -153,8 +153,11 @@ through the harness, which updates recall, its index and its own audit records.
 first, as structured fields (`action`, `kernelAction` for the kernel's own records such as
 `approvals.decide` or `settings.mode`, `subject`, `agent` — for an answer, the agent whose call
 it decided — `tool`, `decision` — for a standing rule's record, `allowed` or `denied` — `outcome`,
-`how`, `channel` — a paired device's name for its answers — `surface` and `target`) a surface
-words as "You let Finance use send_email, from Telegram". `GET /kernel/record/check` verifies the whole log against its signed checkpoints:
+`how`, `channel` — a paired device's name for its answers — `surface`, `target`, `title` —
+the item it acted on as the person knows it, such as "News digest" for an answer to an agent's
+screen action or "Finance" for a suggested agent — and, for a call, `toolSource`, its tool's publisher, and `policyRef`, what decided
+it, `confirmation` for a person's answer) a surface words as "You let Finance use send_email, from
+Telegram". `GET /kernel/record/check` verifies the whole log against its signed checkpoints:
 
 | Field | Meaning |
 |---|---|

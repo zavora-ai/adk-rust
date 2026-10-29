@@ -60,6 +60,13 @@ pub fn move_to(title: &str, when: &str) -> String {
     format!("Move {title} to {when}")
 }
 
+/// The title in a heading [`move_to`] wrote: "News digest" of "Move News digest to 19:00".
+/// The time is "19:00" or "Tue 19:00", so the last " to " ends the title.
+pub(crate) fn title_of_move(heading: &str) -> Option<&str> {
+    let (title, _when) = heading.strip_prefix("Move ")?.rsplit_once(" to ")?;
+    (!title.is_empty()).then_some(title)
+}
+
 /// "Moved News digest to 19:00".
 pub fn moved_to(title: &str, when: &str) -> String {
     format!("Moved {title} to {when}")
@@ -118,4 +125,21 @@ pub fn snoozing_in(seconds: u64) -> String {
 /// "Heard “snooze news digest”".
 pub fn heard(said: &str) -> String {
     format!("Heard “{said}”")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A heading's title reads back as it was written, " to " in a title included.
+    #[test]
+    fn the_title_of_a_move_reads_back() {
+        for (title, when) in
+            [("News digest", "19:00"), ("Drive to work", "Tue 07:30"), ("to do", "08:00")]
+        {
+            assert_eq!(title_of_move(&move_to(title, when)), Some(title));
+        }
+        assert_eq!(title_of_move("Snooze something in Coming up"), None);
+        assert_eq!(title_of_move("Move  to 19:00"), None);
+    }
 }
