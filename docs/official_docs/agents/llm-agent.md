@@ -637,6 +637,7 @@ Intercept agent behavior. See [Callbacks](../callbacks/callbacks.md) for every c
 | `output_key(key)` | Saves response to state |
 | `include_contents(mode)` | History visibility |
 | `max_iterations(n)` | Maximum LLM round-trips (default: 100) |
+| `retain_prepared_history(bool)` | Continue the turn from contents a `before_model` callback changed (default: `false`; see [Callbacks](../callbacks/callbacks.md#model-callbacks)) |
 | `tool_timeout(Duration)` | Per-call tool timeout (default: 5 minutes) |
 | `require_tool_confirmation(name)` | Holds calls to the tool for approval (see [Tool Authorization](../security/tool-authorization.md)) |
 | `tool_execution_strategy(strategy)` | Tool dispatch mode: `Sequential`, `Parallel`, or `Auto` |

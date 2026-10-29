@@ -1022,3 +1022,75 @@ mod sandbox_conflict_tests {
         assert!(result.is_ok());
     }
 }
+
+/// Replaces the history with one summary on the first request and passes later ones through.
+fn compact_once() -> adk_core::BeforeModelCallback {
+    let compacted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    Box::new(move |_ctx, mut request: LlmRequest| {
+        let compacted = compacted.clone();
+        Box::pin(async move {
+            if !compacted.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                request.contents = vec![Content::new("user").with_text("summary of earlier work")];
+            }
+            Ok(adk_core::BeforeModelResult::Continue(request))
+        })
+    })
+}
+
+async fn second_request_texts(retain: bool) -> Vec<String> {
+    use futures::StreamExt;
+
+    let model =
+        ScriptedLlm::new(vec![vec![function_call("lookup", "call_1", serde_json::json!({}))]]);
+    let requests = model.requests.clone();
+    let agent = LlmAgentBuilder::new("compacting")
+        .model(Arc::new(model))
+        .tool(Arc::new(FunctionTool::new(
+            "lookup",
+            "Looks something up",
+            |_ctx: Arc<dyn ToolContext>, _args: Value| async move {
+                Ok(serde_json::json!({ "rows": 3 }))
+            },
+        )))
+        .before_model_callback(compact_once())
+        .retain_prepared_history(retain)
+        .build()
+        .unwrap();
+
+    let ctx = Arc::new(TestContext::with_history(
+        "count the rows",
+        vec![
+            Content::new("user").with_text("an old question"),
+            Content::new("model").with_text("an old answer"),
+            Content::new("user").with_text("count the rows"),
+        ],
+    ));
+    let mut stream = agent.run(ctx).await.unwrap();
+    while let Some(event) = stream.next().await {
+        event.unwrap();
+    }
+
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    requests[1].contents.iter().filter_map(text_of).map(str::to_string).collect()
+}
+
+#[tokio::test]
+async fn test_retained_history_carries_a_callbacks_compaction_into_later_requests() {
+    let texts = second_request_texts(true).await;
+    assert_eq!(texts, vec!["summary of earlier work".to_string()]);
+}
+
+#[tokio::test]
+async fn test_without_retention_a_callbacks_compaction_changes_one_request() {
+    let texts = second_request_texts(false).await;
+    assert!(texts.contains(&"an old question".to_string()));
+    assert!(!texts.contains(&"summary of earlier work".to_string()));
+}
+
+fn text_of(content: &Content) -> Option<&str> {
+    content.parts.iter().find_map(|part| match part {
+        Part::Text { text } => Some(text.as_str()),
+        _ => None,
+    })
+}
