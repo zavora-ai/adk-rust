@@ -199,7 +199,9 @@ quiet time can be turned off and the limit removed. The page reads the area agai
 a change, so "Was 22:00–07:00. Now 23:00–06:00." shows the values the kernel records as the
 change's `from` and `to`. Only the person changes them: the kernel refuses a caller without the
 `operator` scope and every paired device's token, and the page shows its answer. With one
-area, the header's status line follows its settings in force.
+area, the header's status line follows its settings in force; with several, its spend today and
+daily spending limit are those of the area the primary agent works in, which
+`GET /kernel/settings` marks `primary` (spec 3.3 §13 Q7).
 
 Quiet time reads and saves on the clock of the device the page is open on. A window saved
 from the home carries that device's IANA time zone (`timeZone`) and its offset now

@@ -35,7 +35,7 @@ Every control command takes the same three options:
 | Option | Reaches |
 |---|---|
 | (none) | The socket at `<config dir>/adk-rust/kernel.sock`, or on Windows the named pipe of that home |
-| `--home DIR` | The socket, or the named pipe, of the kernel started with `up --home DIR` |
+| `--home DIR` | The socket, or the named pipe, of the kernel started with `up --home DIR`; a socket path too long for `DIR` is found where the kernel put it ([the socket path](control-plane.md#the-socket-path)) |
 | `--server URL [--token T]` | A kernel's HTTP control plane; the token defaults to `$ADK_SERVE_TOKEN` |
 
 The socket and the pipe admit only the OS user that runs the kernel. Without a kernel the

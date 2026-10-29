@@ -622,3 +622,140 @@ async fn always_allow_is_asked_again_after_the_kernel_could_not_answer() {
     assert_eq!(offer.label, "Always allow for this folder");
     s.kernel.stop().await.unwrap();
 }
+
+/// A kernel whose areas are the partition records `areas` (id and daily spending limit), or
+/// only `default` with `cap` as its limit, the primary agent's target bound to `primary`, and
+/// one process of the owner per entry of `spent` (area and spend today); its control plane on
+/// loopback HTTP, and the web home's source in its process.
+async fn spent_in_areas(
+    areas: &[(&str, u64)],
+    primary: Option<&str>,
+    cap: Option<u64>,
+    spent: &[(&str, u64)],
+) -> (adk_kernel::Kernel, adk_kernel::control::ControlPlane, adk_surface::LocalSource) {
+    use adk_kernel::{
+        InMemoryProcessStore, KernelConfig, Partition, PartitionId, ProcessKind, ProcessSpec,
+        ProcessStore, QueueClass, Quotas, SpendDelta,
+    };
+
+    let sessions: Arc<dyn adk_session::SessionService> =
+        Arc::new(adk_session::InMemorySessionService::new());
+    let processes = Arc::new(InMemoryProcessStore::new());
+    let mut config = KernelConfig::default().with_app_name(APP).with_control(
+        ControlPlaneConfig::default().without_socket().with_http("127.0.0.1:0".parse().unwrap()),
+    );
+    if let Some(cap) = cap {
+        config = config.with_quotas(Quotas::new().with_daily_spend_cap(cap));
+    }
+    let mut builder = adk_kernel::Kernel::builder()
+        .config(config)
+        .run_store(Arc::new(adk_core::InMemoryRunStore::new()))
+        .process_store(processes.clone() as Arc<dyn ProcessStore>)
+        .session_service(sessions.clone());
+    if let Some(area) = primary {
+        let agent = adk_agent::LlmAgentBuilder::new("primary")
+            .model(Arc::new(ScriptedLlm::new("idle", Vec::<ScriptedResponse>::new())))
+            .build()
+            .unwrap();
+        let runner = adk_runner::Runner::builder()
+            .app_name(APP)
+            .agent(Arc::new(agent))
+            .session_service(sessions.clone())
+            .build()
+            .unwrap();
+        builder = builder.partition_agent(area, APP, Arc::new(runner));
+    }
+    let kernel = builder.build().unwrap();
+    let by = adk_core::audit_log::AuditActor::subject(adk_core::SubjectRef::human(OWNER));
+    for (id, limit) in areas {
+        let record =
+            Partition::new(*id, *id).with_quotas(Quotas::new().with_daily_spend_cap(*limit));
+        kernel.partitions().put(record, by.clone()).await.unwrap();
+    }
+    let today = chrono::Utc::now().date_naive();
+    for (index, (area, amount)) in spent.iter().enumerate() {
+        let target = if Some(*area) == primary || primary.is_none() {
+            APP.to_string()
+        } else {
+            format!("{APP}@{area}")
+        };
+        let run = adk_core::NewRun::new(
+            QueueClass::Interactive.as_str(),
+            APP,
+            OWNER,
+            target,
+            json!({ "text": format!("turn {index}") }),
+        );
+        let spec = ProcessSpec::new(ProcessKind::Interactive).with_partition(*area);
+        let pid = kernel.processes().spawn(run, spec).await.unwrap().meta.pid;
+        processes
+            .add_spend(&pid, &PartitionId::new(*area), today, SpendDelta::new(*amount))
+            .await
+            .unwrap();
+    }
+    let plane = adk_kernel::control::ControlPlane::start(&kernel).await.unwrap();
+    let local = adk_surface::LocalSource::builder(APP)
+        .sessions(sessions)
+        .kernel(kernel.clone(), APP)
+        .build()
+        .unwrap();
+    (kernel, plane, local)
+}
+
+/// Spend today and the daily spending limit `source` shows, as micro-USD.
+async fn shown(source: &dyn Source) -> (u64, Option<u64>) {
+    let spend = source.spend(OWNER).await.unwrap().expect("a kernel reports spend");
+    (spend.spent, spend.limit)
+}
+
+/// Two areas, the primary agent working in `work` (spec 3.3 §10 K3, §13 Q7): the terminal on
+/// the kernel and the web home in its process both show work's spend today against work's
+/// daily spending limit — neither every area's spend added up, nor the default area's limit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn with_two_areas_the_surfaces_show_the_primary_agents_area() {
+    let (kernel, plane, home) = spent_in_areas(
+        &[("errands", 5_000_000), ("work", 2_000_000)],
+        Some("work"),
+        None,
+        &[("errands", 700_000), ("work", 300_000), ("work", 150_000)],
+    )
+    .await;
+    let terminal = ControlSource::new(
+        ControlClient::http(format!("http://{}", plane.http_addr().unwrap())),
+        APP,
+        APP,
+    );
+    let work = (450_000, Some(2_000_000));
+    assert_eq!((shown(&terminal).await, shown(&home).await), (work, work), "(terminal, web home)");
+
+    // A limit the person changes while the kernel runs is the one both show.
+    ControlClient::http(format!("http://{}", plane.http_addr().unwrap()))
+        .set_spending_limit("work", Some(1_000_000))
+        .await
+        .unwrap();
+    let work = (450_000, Some(1_000_000));
+    assert_eq!((shown(&terminal).await, shown(&home).await), (work, work), "(terminal, web home)");
+    plane.shutdown().await.unwrap();
+    drop(kernel);
+}
+
+/// One area: both surfaces show every process's spend today against the kernel's daily
+/// spending limit, as before areas were marked (spec 3.3 §13 Q7).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn with_one_area_the_surfaces_show_it_as_before() {
+    let (kernel, plane, home) =
+        spent_in_areas(&[], None, Some(5_000_000), &[("default", 300_000), ("default", 700_000)])
+            .await;
+    let terminal = ControlSource::new(
+        ControlClient::http(format!("http://{}", plane.http_addr().unwrap())),
+        APP,
+        APP,
+    );
+    let all = (1_000_000, Some(5_000_000));
+    assert_eq!((shown(&terminal).await, shown(&home).await), (all, all), "(terminal, web home)");
+    // A limit set on the source holds over the kernel's.
+    let capped = terminal.with_daily_limit(2_500_000);
+    assert_eq!(shown(&capped).await, (1_000_000, Some(2_500_000)));
+    plane.shutdown().await.unwrap();
+    drop(kernel);
+}

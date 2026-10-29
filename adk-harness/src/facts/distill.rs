@@ -176,7 +176,56 @@ pub(crate) fn parse_candidates(answer: &str) -> Vec<FactCandidate> {
     items.into_iter().filter_map(|item| serde_json::from_value(item).ok()).collect()
 }
 
+/// How the harness frames a plan step it hands the agent as a user turn
+/// (`plan_graph::StepNode::instruction`): the step's words are the plan's, not the person's.
+const PLAN_STEP_FRAME: &str = "[plan step ";
+
 impl FactsRuntime {
+    /// The person's own messages in `session`, which a `memory_remember` quote is checked
+    /// against (spec 3.3 §8.1, spec 3.1 §9.2 I41): the user turns the runner saved, never a
+    /// tool's result, another agent's words or a plan step the harness hands the agent.
+    /// Empty when the harness reads no sessions or the session cannot be read, so the fact
+    /// stays a guess.
+    pub(crate) async fn person_messages(
+        &self,
+        app: &str,
+        user: &str,
+        session: &str,
+    ) -> Vec<UserMessage> {
+        let Some(attached) = self.attached.get() else {
+            return Vec::new();
+        };
+        let request = GetRequest {
+            app_name: app.to_string(),
+            user_id: user.to_string(),
+            session_id: session.to_string(),
+            num_recent_events: None,
+            after: None,
+        };
+        let events = match attached.sessions.get(request).await {
+            Ok(session) => session.events().all(),
+            Err(error) => {
+                tracing::warn!(error = %error, session.id = %session, "could not read the session a quote is checked against");
+                return Vec::new();
+            }
+        };
+        events
+            .into_iter()
+            .filter(|event| event.author == "user" && !event.llm_response.partial)
+            .filter_map(|event| {
+                let content = event.llm_response.content.as_ref()?;
+                if content.parts.iter().any(|part| matches!(part, Part::FunctionResponse { .. })) {
+                    return None;
+                }
+                let text = content.parts.iter().filter_map(Part::text).collect::<Vec<_>>();
+                let text = text.join("\n");
+                (!text.trim().is_empty() && !text.starts_with(PLAN_STEP_FRAME)).then_some(
+                    UserMessage { text, at: event.timestamp, invocation_id: event.invocation_id },
+                )
+            })
+            .collect()
+    }
+
     /// Lets distillation read sessions through `sessions`, under `governance`.
     pub(crate) fn attach(
         &self,

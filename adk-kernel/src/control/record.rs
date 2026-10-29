@@ -90,6 +90,19 @@ pub struct RecordLine {
     /// What it acted on: a process, a fact, an area.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// The item it acted on, as the person knows it — "News digest" — where the record names
+    /// one, such as the answer to an agent's screen action (spec 3.3 §8, §11).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Who publishes the tool, for a call: `verbs:adk-rust` for a screen action, so a surface
+    /// tells a feature's calls apart by their publisher, never by the tool's name (spec 3.3
+    /// §7.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_source: Option<String>,
+    /// What decided a call: `confirmation` for a person's answer, `tool_policy:<name>`,
+    /// `governance`, `guardrail` (spec 3.3 §11).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_ref: Option<String>,
 }
 
 impl RecordLine {
@@ -109,6 +122,9 @@ impl RecordLine {
             channel: None,
             surface: None,
             target: None,
+            title: None,
+            tool_source: None,
+            policy_ref: None,
         }
     }
 
@@ -181,6 +197,47 @@ impl RecordLine {
     #[must_use]
     pub fn with_target(mut self, target: impl Into<String>) -> Self {
         self.target = Some(target.into());
+        self
+    }
+
+    /// Sets the item it acted on, as the person knows it (spec 3.3 §8).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_kernel::control::RecordLine;
+    ///
+    /// let denied = RecordLine::new(7, chrono::Utc::now(), "surface.decide")
+    ///     .with_tool("verb_snooze")
+    ///     .with_decision("rejected")
+    ///     .with_title("News digest");
+    /// assert_eq!(serde_json::to_value(&denied).unwrap()["title"], "News digest");
+    /// ```
+    #[must_use]
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Sets who publishes the called tool, and what decided the call (spec 3.3 §7.1, §11).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_kernel::control::RecordLine;
+    ///
+    /// let refused = RecordLine::new(8, chrono::Utc::now(), "verb_snooze")
+    ///     .with_tool("verb_snooze")
+    ///     .with_decision("denied")
+    ///     .with_call("verbs:adk-rust", Some("confirmation"));
+    /// let wire = serde_json::to_value(&refused).unwrap();
+    /// assert_eq!(wire["toolSource"], "verbs:adk-rust");
+    /// assert_eq!(wire["policyRef"], "confirmation");
+    /// ```
+    #[must_use]
+    pub fn with_call(mut self, tool_source: impl Into<String>, policy_ref: Option<&str>) -> Self {
+        self.tool_source = Some(tool_source.into());
+        self.policy_ref = policy_ref.map(str::to_string);
         self
     }
 }

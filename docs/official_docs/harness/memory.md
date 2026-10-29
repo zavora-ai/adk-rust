@@ -6,7 +6,7 @@ by default; both tiers are off in the library until a builder method turns them 
 | Tier | Holds | Written by | Read by |
 |---|---|---|---|
 | [Working notes](#working-notes) | Markdown topic files the agent keeps deliberately, readable and editable by a person | `memory_write`, with a one-time approval each | `memory_read`; the index in the instruction |
-| [Long-term facts](#long-term-facts) | Short facts with provenance: preferences, project facts, procedures, outcomes, decisions, corrections | `memory_remember` (assumed only), session distillation, the user's quoted words, a person | Recall into each user turn; `memory_search` |
+| [Long-term facts](#long-term-facts) | Short facts with provenance: preferences, project facts, procedures, outcomes, decisions, corrections | `memory_remember` (assumed, or known when it carries the user's quoted words), session distillation, the user's quoted words, a person | Recall into each user turn; `memory_search` |
 
 ```toml
 [dependencies]
@@ -109,14 +109,17 @@ the user stated from one the agent inferred:
 
 | Status | Means | Reached by |
 |---|---|---|
-| `known` | The user said it, or a person confirmed it | A quote found verbatim (whitespace normalised, at least two words, sharing a word with the fact) in one of the user's own messages in the session; `Harness::accept_fact`, `/memory accept`, `adk-rust memory accept`; `Harness::correct_fact` |
-| `assumed` | The agent inferred it, or read it in a tool's output | `memory_remember`; a distilled fact without a verified quote; an import; a fact a [consolidation](#consolidation) distilled or merged |
+| `known` | The user said it, or a person confirmed it | A quote found verbatim (whitespace normalised, at least two words, sharing a word with the fact) in one of the user's own messages in the session, from `memory_remember` or distillation; `Harness::accept_fact`, `/memory accept`, `adk-rust memory accept`; `Harness::correct_fact` |
+| `assumed` | The agent inferred it, or read it in a tool's output | `memory_remember` without a verified quote; a distilled fact without a verified quote; an import; a fact a [consolidation](#consolidation) distilled or merged |
 | `superseded` | A newer fact replaced it | A fact naming it in `supersedes`, a very similar fact of the same kind (`supersede_score`), a correction; a consolidation collapsing a near-duplicate assumed fact or merging it |
 | `forgotten` | A person forgot it, the scope was full, or it expired | `Harness::forget_fact`, `/memory forget`, `adk-rust memory forget`; eviction of the least-used assumed fact; a consolidation expiring an unused, low-confidence assumed fact |
 
 Model output, tool output, files and other agents produce `assumed` facts at most: a tool
-result that says "the user wants X" is not the user's own message. An assumed fact never
-replaces a known one. Superseded and forgotten facts stay in the store as history
+result that says "the user wants X" is not the user's own message. `memory_remember` checks
+its `quote` against the session as the session store holds it: the user turns the runner
+saved, without tool results, other agents' turns or the plan steps the harness hands the
+agent. A quote found nowhere else keeps the fact `assumed`, and the tool's answer says so.
+An assumed fact never replaces a known one. Superseded and forgotten facts stay in the store as history
 (`valid_to`), and the same text comes back only from the user's own words said after it
 ended.
 
@@ -182,7 +185,7 @@ demand.
 
 | Path | Writes | Gate |
 |---|---|---|
-| `memory_remember { text, kind, supersedes? }` | `assumed`, source `agent_inferred`, confidence 0.5 | Class `MemoryPropose`: denied in ReadOnly and Plan, allowed without asking in Ask and Auto, because it writes only labelled assumptions |
+| `memory_remember { text, kind, quote?, supersedes? }` | `assumed`, source `agent_inferred`, confidence 0.5; `known`, source `user_stated`, when `quote` is found in one of the user's own messages in the session — the home shows it as **You said this** | Class `MemoryPropose`: denied in ReadOnly and Plan, allowed without asking in Ask and Auto, because it writes only labelled facts — assumptions, or the user's own verified words |
 | Session distillation | `known` when the quote verifies, `assumed` otherwise | A governed run on the distiller model with no tools and structured output, bounded by the harness's `RunBudget` (two model calls when none is set), when a session has been idle for `distill_idle`, every `distill_every` turns, and on `Harness::close`; never for a session in ReadOnly or Plan |
 | Catch-up at start (`adk_cli::harness::distill_unsaved_sessions`) | `assumed` | The `adk-rust` REPL and terminal in process, as they start: the five most recent of the user's sessions in the workspace whose cursor (`Harness::distilled_sessions`) stops short of their last event, through `Harness::distill_sessions` with each session's own distillation budget; a session active within `distill_idle` waits for a later start ([The adk-rust CLI](cli.md#long-term-memory)) |
 | A person | `known`, source `user_confirmed` | `Harness::accept_fact`, `Harness::correct_fact` |

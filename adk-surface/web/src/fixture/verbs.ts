@@ -189,6 +189,8 @@ function verbLines(): KernelRecordLine[] {
       outcome: "decided",
       surface: "web",
       how: "pointer",
+      target: "apr_905",
+      title: "Water plants",
     },
     line(904, 10, 9, { agent: "urn:adk:agent:home/finance", decision: "approved", surface: "phone", how: "touch" }),
     line(903, 10, 7, { surface: "voice", how: "voice" }),

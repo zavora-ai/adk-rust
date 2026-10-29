@@ -405,6 +405,137 @@ async fn a_stale_socket_is_replaced_and_reads_as_no_kernel() {
     assert_eq!(std::fs::read_to_string(&socket).unwrap(), "keep");
 }
 
+/// The longest path a Unix socket address holds here, its NUL aside.
+#[cfg(unix)]
+const SOCKET_MAX: usize =
+    if cfg!(any(target_os = "linux", target_os = "android")) { 107 } else { 103 };
+
+/// A kernel home under `base` whose `kernel.sock` overflows a socket address everywhere.
+#[cfg(unix)]
+fn long_home(base: &std::path::Path) -> std::path::PathBuf {
+    let home = base.join("a-kernel-home-whose-path-is-too-long-for-a-unix-socket/".repeat(2));
+    std::fs::create_dir_all(&home).unwrap();
+    assert!(home.join(ControlPlaneConfig::DEFAULT_SOCKET).as_os_str().len() > SOCKET_MAX + 1);
+    home
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_home_too_long_for_a_socket_serves_a_short_one_its_clients_find() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let fake = Fake::new();
+    let pid = fake.spawn(&os_user(), "s-1", RunState::Running).await;
+    let base = tempfile::tempdir().unwrap();
+    let home = long_home(base.path());
+    let plane =
+        ControlPlane::serve(fake.clone(), &ControlPlaneConfig::default(), &home).await.unwrap();
+    let socket = plane.socket_path().expect("a socket is served").to_path_buf();
+    assert!(socket.as_os_str().len() <= SOCKET_MAX, "{}", socket.display());
+    assert_eq!(ControlPlaneConfig::default().socket_path(&home), Some(socket.clone()));
+    let dir = socket.parent().unwrap();
+    let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(name.starts_with("adk-rust-"), "{name}");
+    let (dir_meta, socket_meta) =
+        (std::fs::symlink_metadata(dir).unwrap(), std::fs::metadata(&socket).unwrap());
+    assert_eq!(
+        (
+            dir_meta.is_dir(),
+            dir_meta.permissions().mode() & 0o777,
+            dir_meta.uid(),
+            socket_meta.permissions().mode() & 0o777,
+        ),
+        (true, 0o700, socket_meta.uid(), 0o600),
+        "the socket and its own directory are the user's alone"
+    );
+
+    // Clients derive the same socket from the home, and from a short spelling of it through a
+    // symlink, so the tag comes from the canonical home.
+    let link = base.path().join("home");
+    std::os::unix::fs::symlink(&home, &link).unwrap();
+    for spelling in [&home, &link] {
+        let client =
+            ControlClient::connect_local(spelling).await.unwrap().expect("a kernel answers");
+        assert_eq!(client.endpoint(), format!("unix:{}", socket.display()));
+    }
+    let client = ControlClient::connect_local(&link).await.unwrap().unwrap();
+    let killed = client.kill(&pid, Some("runaway")).await.unwrap();
+    assert_eq!(killed.run.state, RunState::Cancelled);
+    let records = fake.control_records();
+    assert_eq!(
+        (transport_of(&records[0]), &records[0].ext["subject"]),
+        ("socket", &json!({ "kind": "human", "id": os_user() })),
+        "the short socket admits the OS user, as the one in the home does"
+    );
+
+    plane.shutdown().await.unwrap();
+    assert!(!dir.exists(), "shutdown removes the socket and its directory");
+    assert!(ControlClient::connect_local(&home).await.unwrap().is_none());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_short_socket_directory_that_is_not_the_users_alone_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fake = Fake::new();
+    let base = tempfile::tempdir().unwrap();
+    let home = long_home(base.path());
+    let socket = ControlPlaneConfig::default().socket_path(&home).unwrap();
+    assert!(socket.as_os_str().len() <= SOCKET_MAX, "{}", socket.display());
+    let dir = socket.parent().unwrap();
+    let elsewhere = base.path().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+
+    // A symlink in its place, even to a directory of the user's, and a directory others may
+    // write in: the kernel serves neither and no client connects through either.
+    std::os::unix::fs::symlink(&elsewhere, dir).unwrap();
+    let served = ControlPlane::serve(fake.clone(), &ControlPlaneConfig::default(), &home).await;
+    let reached = ControlClient::connect_local(&home).await;
+    std::fs::remove_file(dir).unwrap();
+    for error in [served.unwrap_err(), reached.unwrap_err()] {
+        let text = error.to_string();
+        assert!(
+            text.contains("is a symlink") && text.contains(&dir.display().to_string()),
+            "{text}"
+        );
+    }
+    assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none(), "nothing is made there");
+
+    std::fs::create_dir(dir).unwrap();
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let served = ControlPlane::serve(fake, &ControlPlaneConfig::default(), &home).await;
+    let reached = ControlClient::connect_local(&home).await;
+    std::fs::remove_dir(dir).unwrap();
+    for error in [served.unwrap_err(), reached.unwrap_err()] {
+        let text = error.to_string();
+        assert!(
+            text.contains("other users") && text.contains(&dir.display().to_string()),
+            "{text}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_socket_too_long_even_in_the_temp_directory_is_a_complete_error() {
+    let home = tempfile::tempdir().unwrap();
+    let name = format!("{}.sock", "s".repeat(SOCKET_MAX));
+    let config = ControlPlaneConfig::default().with_socket(&name);
+    let error = ControlPlane::serve(Fake::new(), &config, home.path()).await.unwrap_err();
+    let text = error.to_string();
+    let short = config.socket_path(home.path()).unwrap();
+    for part in [
+        home.path().join(&name).display().to_string(),
+        short.display().to_string(),
+        format!("{SOCKET_MAX} bytes"),
+        "--home".to_string(),
+    ] {
+        assert!(text.contains(&part), "{part:?} is missing from: {text}");
+    }
+    assert!(!short.parent().unwrap().exists(), "no directory is left behind");
+}
+
 #[cfg(unix)]
 #[test]
 fn the_socket_refuses_a_peer_of_another_uid() {

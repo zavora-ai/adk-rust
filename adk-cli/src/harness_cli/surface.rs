@@ -14,7 +14,6 @@ use adk_core::{ApprovalPolicy, ApprovalService, ApproverSelector, StoreApprovalS
 use adk_harness::{
     ApprovalPrompt, ApprovalPrompter, Harness, HarnessMode, PromptAnswer, ToolKind, TrustDecision,
 };
-use adk_kernel::control::api::AreaView;
 use adk_kernel::control::{CommandInfo, ControlClient};
 use adk_session::{CreateRequest, GetRequest, SessionService};
 use adk_surface::tui::{
@@ -223,16 +222,11 @@ async fn run_with(
             // in Telegram reads "You said yes in Telegram" here too (spec 3.3 §12 phase 1).
             let answers = Arc::new(adk_surface::RecordAnswerLog::new(client.clone()));
             let source_client = client.clone();
+            // The source reads the primary agent's area's spend and daily spending limit from
+            // the kernel, so `--output json` can end with 4 (spec 3.3 §10 K3, §13 Q7).
             let mut source = ControlSource::new(client, APP_NAME, APP_NAME);
             if let Some(token) = token {
                 source = source.with_bearer_token(token);
-            }
-            // The daily spending limit in force, as the kernel reports it, so `--output json`
-            // can end with 4 (spec 3.3 §10 K3, §13 Q7).
-            if let Ok(areas) = source_client.settings().await
-                && let Some(limit) = area_limit(&areas)
-            {
-                source = source.with_daily_limit(limit);
             }
             let (commands, notices, operator) = kernel_commands(&source_client).await;
             // The kernel hosts screen actions when it offers `/snooze` to its operator.
@@ -426,20 +420,6 @@ fn terminal_caller(user: String, local: bool) -> Caller {
     let caller =
         Caller::human(user, SurfaceKind::Terminal, Origin::Keyboard).with_groups([OPERATOR_SCOPE]);
     if local { caller.with_paired_local() } else { caller }
-}
-
-/// The daily spending limit in force for the terminal's turns: the default area's, or the
-/// only area's; none when the kernel has several and none is the default.
-fn area_limit(areas: &[AreaView]) -> Option<u64> {
-    let only = match areas {
-        [only] => Some(only),
-        _ => None,
-    };
-    areas
-        .iter()
-        .find(|area| area.partition.as_str() == adk_kernel::PartitionId::DEFAULT)
-        .or(only)?
-        .daily_spending_limit
 }
 
 /// Standard error goes to `terminal.log` while the full screen or the inline UI is up, so
@@ -884,29 +864,6 @@ mod tests {
     fn the_paired_terminals_notice_is_one_sentence() {
         assert!(!PAIRED_TERMINAL.contains("  "), "{PAIRED_TERMINAL}");
         assert!(PAIRED_TERMINAL.ends_with("this paired terminal has the terminal's own."));
-    }
-
-    /// `--output json` ends with 4 against the daily spending limit in force, as the kernel
-    /// reports it (spec 3.3 §10 K3): the default area's, or the only area's.
-    #[test]
-    fn the_daily_limit_is_the_one_the_kernel_reports() {
-        let area = |name: &str, limit: Option<u64>| -> AreaView {
-            serde_json::from_value(serde_json::json!({
-                "partition": name,
-                "dailySpendingLimit": limit,
-                "spentToday": 0,
-            }))
-            .unwrap()
-        };
-        assert_eq!(area_limit(&[area("default", Some(10_000_000))]), Some(10_000_000));
-        assert_eq!(
-            area_limit(&[area("billing", Some(1)), area("default", Some(2_500_000))]),
-            Some(2_500_000)
-        );
-        assert_eq!(area_limit(&[area("billing", Some(1))]), Some(1));
-        assert_eq!(area_limit(&[area("billing", Some(1)), area("home", Some(2))]), None);
-        assert_eq!(area_limit(&[area("default", None)]), None);
-        assert_eq!(area_limit(&[]), None);
     }
 
     /// `/session` binds a session to the workspace as the start does: a session recorded for

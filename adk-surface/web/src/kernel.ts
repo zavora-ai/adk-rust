@@ -437,6 +437,12 @@ export interface KernelRecordLine {
   /** The surface it was given on: `web`, `tray`, `phone`, `terminal`, `voice`, `chat`, `device`. */
   surface?: string;
   target?: string;
+  /** The item it acted on, as the person knows it: "News digest" (spec 3.3 §8). */
+  title?: string;
+  /** Who publishes the tool, for a call: `verbs:adk-rust` for a screen action (spec 3.3 §7.1). */
+  toolSource?: string;
+  /** What decided a call: `confirmation` for a person's answer, `tool_policy:<name>`, `governance`. */
+  policyRef?: string;
 }
 
 /** `GET /kernel/record/check` (`RecordCheck`): the check `adk-rust audit verify` makes. */

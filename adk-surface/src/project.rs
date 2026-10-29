@@ -1102,6 +1102,23 @@ pub(crate) fn chat_heading(request: &ApprovalRequest) -> String {
     humanize(request.tool_name.strip_prefix(KERNEL_TOOL_PREFIX).unwrap_or(&request.tool_name))
 }
 
+/// What a decision the kernel itself asks is about, as the person knows it — the agent a
+/// suggestion adds, the agenda item's title, the driver a mount starts — for the record of an
+/// answer to it, which never names the kernel's tool (spec 3.3 §8, §11).
+pub(crate) fn kernel_name(request: &ApprovalRequest) -> Option<String> {
+    let operation = request.tool_name.strip_prefix(KERNEL_TOOL_PREFIX)?;
+    let name = if request.tool_name == adk_kernel::agents::AGENT_CREATE_TOOL_NAME {
+        request.args_redacted.get("displayName").and_then(Value::as_str).map(str::to_string)
+    } else if request.tool_name == AGENDA_TOOL_NAME {
+        agenda_item(request).map(|item| item.title)
+    } else if operation == DRIVER_MOUNT_OPERATION {
+        request.args_redacted.get("id").and_then(Value::as_str).map(str::to_string)
+    } else {
+        None
+    };
+    name.map(|name| name.trim().to_string()).filter(|name| !name.is_empty())
+}
+
 /// The prefix of the inbox tools of decisions the kernel itself asks, not an agent's call:
 /// `kernel:agenda`, `kernel:driver.mount`.
 const KERNEL_TOOL_PREFIX: &str = "kernel:";
@@ -1429,6 +1446,24 @@ mod tests {
         let unreadable = request(AGENDA_TOOL_NAME, json!({ "planHash": "sha256:00" }));
         assert_eq!(heading(&unreadable), "Suggestion");
         assert_eq!(chat_heading(&unreadable), "Suggestion");
+    }
+
+    /// The record of an answer names a kernel decision by what it is about, never by the
+    /// kernel's tool (spec 3.3 §8, §11).
+    #[test]
+    fn a_kernel_decision_is_named_by_what_it_is_about() {
+        let added = request(
+            adk_kernel::agents::AGENT_CREATE_TOOL_NAME,
+            json!({ "name": "finance", "displayName": "Finance" }),
+        );
+        let mount = request("kernel:driver.mount", json!({ "id": "email" }));
+        let unreadable = request(AGENDA_TOOL_NAME, json!({ "planHash": "sha256:00" }));
+        let other = request("kernel:quota.raise", json!({ "partition": "default" }));
+        let call = request("write_file", json!({ "path": "notes.md" }));
+        assert_eq!(
+            [&added, &mount, &unreadable, &other, &call].map(kernel_name),
+            [Some("Finance".to_string()), Some("email".to_string()), None, None, None]
+        );
     }
 
     #[test]

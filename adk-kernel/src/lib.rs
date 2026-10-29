@@ -216,7 +216,8 @@ pub use watermark::{CronWatermarkStore, SourceWatermark};
 
 /// A short, stable tag of `path`: sixteen hex digits of the SHA-256 of its absolute form,
 /// lowercased on Windows, whose paths ignore case. It names a kernel home's pipe and service
-/// (spec 3.2 §10 W2, §7.12), so a client and the kernel derive the same name from one home.
+/// (spec 3.2 §10 W2, §7.12), and the directory of a socket too long for its home (spec 3.3
+/// G18), so a client and the kernel derive the same name from one home.
 pub(crate) fn path_tag(path: &std::path::Path) -> String {
     use sha2::Digest as _;
 

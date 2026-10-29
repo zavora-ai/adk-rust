@@ -11,7 +11,7 @@
 //! | [`FactStore`] | the system of record: [`InMemoryFactStore`], [`FileFactStore`], `SqliteFactStore` (feature `sqlite`), `PostgresFactStore` (feature `postgres`) |
 //! | [`FactIndex`] | finds candidates: [`LocalFactIndex`] (embedded or lexical), [`MemoryServiceIndex`] over any `adk_memory::MemoryService` |
 //! | recall | a `<memory-facts>` block in the untrusted section on the first model call of each user turn |
-//! | writing | `memory_remember` (assumed only), session distillation, verified quotes, human promotion |
+//! | writing | `memory_remember` (assumed, or known from the person's quoted words), session distillation, verified quotes, human promotion |
 //! | consolidation | the spec 3.2 tick: distillation of missed sessions with quote promotion off, two passes, the loss cap, [`undo_consolidation`] |
 
 mod consolidate;

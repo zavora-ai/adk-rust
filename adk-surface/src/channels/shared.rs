@@ -742,8 +742,12 @@ impl Kit {
             (Some(_), Some(approvals)) => approvals.get(decision).await.ok().flatten(),
             _ => None,
         };
+        let title = match &request {
+            Some(request) => crate::hints::named(&self.card_hints, request).await,
+            None => None,
+        };
         if let Some(trail) = &self.audit
-            && let Err(error) = trail.record(answer_record(&record, request.as_ref())).await
+            && let Err(error) = trail.record(answer_record(&record, request.as_ref(), title)).await
         {
             tracing::warn!(channel.name = channel, error = %error, "a chat answer's audit record could not be written");
         }
@@ -752,7 +756,11 @@ impl Kit {
 
 /// The `surface.decide` record of an answer given in chat, as the engine writes its own
 /// answers' (spec 3.3 §11).
-fn answer_record(record: &AnswerRecord, request: Option<&ApprovalRequest>) -> AuditRecordDraft {
+fn answer_record(
+    record: &AnswerRecord,
+    request: Option<&ApprovalRequest>,
+    title: Option<String>,
+) -> AuditRecordDraft {
     let decision = match record.answer {
         Answer::Deny => AuditDecision::Rejected,
         Answer::AllowOnce | Answer::AlwaysAllow | Answer::Edit => AuditDecision::Approved,
@@ -769,6 +777,10 @@ fn answer_record(record: &AnswerRecord, request: Option<&ApprovalRequest>) -> Au
         draft = draft.ext("tool", json!(request.tool_name));
         if let Some(acting) = &request.acting {
             draft = draft.ext("actingAgent", json!(acting.agent.id.to_string()));
+        }
+        // What the call acts on, as the engine's own record names it (§8).
+        if let Some(title) = title {
+            draft = draft.ext("title", json!(title)).ext("summary", json!(request.summary));
         }
     }
     draft
@@ -930,6 +942,37 @@ mod tests {
         let words = card_words(&high, &heading(&high, None), utc());
         assert!(buttons(&high).is_empty());
         assert!(words.text().contains(words::NEEDS_A_SCREEN), "{}", words.text());
+    }
+
+    /// A chat answer is on record with the item its call acts on and the card's summary, as
+    /// the engine records its own answers (spec 3.3 §8, §11).
+    #[test]
+    fn a_chat_answer_names_the_item_a_hint_names() {
+        let call = ToolConfirmationRequest::new("verb_snooze", json!({ "item": "news-digest" }));
+        let request = ApprovalRequest::new(
+            "apr_1",
+            ApprovalScope::new("adk-rust", "ana", "s1"),
+            &call,
+            ApprovalPolicy::new([ApproverSelector::group("operator")]),
+        )
+        .with_summary("Move News digest to 19:00");
+        let given = AnswerRecord {
+            approval_id: "apr_1".into(),
+            by: SubjectRef::human("ana"),
+            via: Via {
+                surface: SurfaceKind::Chat,
+                origin: Origin::Chat { channel: "Slack".into() },
+            },
+            answer: Answer::Deny,
+            at: Utc::now(),
+        };
+        let named = answer_record(&given, Some(&request), Some("News digest".into()));
+        assert_eq!(
+            (named.ext.get("title"), named.ext.get("summary")),
+            (Some(&json!("News digest")), Some(&json!("Move News digest to 19:00")))
+        );
+        let unnamed = answer_record(&given, Some(&request), None);
+        assert_eq!((unnamed.ext.get("title"), unnamed.ext.get("summary")), (None, None));
     }
 
     #[test]

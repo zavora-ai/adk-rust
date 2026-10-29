@@ -329,6 +329,54 @@ describe("What your agents did", () => {
     ]);
   });
 
+  it("names no kernel tool and no screen action's tool, only what each was about (spec 3.3 §8)", () => {
+    const rows: AgentRow[] = [{ agent: agents.finance, status: "working", statusText: "Working", sessionId: "s-finance" }];
+    const finance = "urn:adk:agent:home/finance";
+    const line = (rest: Partial<KernelRecordLine>): KernelRecordLine => ({
+      seq: 1,
+      at: new Date().toISOString(),
+      action: "surface.decide",
+      outcome: "decided",
+      surface: "web",
+      how: "pointer",
+      target: "apr_1",
+      ...rest,
+    });
+    const said = [
+      line({ tool: "kernel:agent.create", decision: "approved", title: "Finance" }),
+      line({ tool: "kernel:agent.create", decision: "rejected", title: "Finance", agent: "urn:adk:agent:home/home" }),
+      line({ tool: "kernel:agent.create", decision: "approved" }),
+      line({ tool: "kernel:agenda", decision: "approved", title: "News digest" }),
+      line({ tool: "kernel:agenda", decision: "edited", title: "Check the news every 5 minutes", surface: "phone", how: "touch" }),
+      line({ tool: "kernel:agenda", decision: "rejected" }),
+      line({ tool: "kernel:driver.mount", decision: "approved", title: "email" }),
+      line({ tool: "kernel:quota.raise", decision: "rejected" }),
+      line({ action: "harness.rule.created", tool: "kernel:agenda", outcome: undefined, decision: "allowed" }),
+      line({ action: "kernel:agenda", tool: "kernel:agenda", agent: finance, outcome: "succeeded", decision: "allowed" }),
+      line({ tool: "verb_snooze", agent: finance, decision: "rejected", title: "News digest" }),
+      line({ tool: "verb_snooze", agent: finance, decision: "rejected" }),
+      line({ action: "verb_snooze", tool: "verb_snooze", agent: finance, decision: "denied", outcome: "not_run", toolSource: "verbs:home", policyRef: "confirmation" }),
+      line({ action: "verb_coming_up", tool: "verb_coming_up", agent: finance, decision: "allowed", outcome: undefined, toolSource: "verbs:home" }),
+    ].map((each) => recordSentence(each, rows));
+    expect(said).toEqual([
+      "You said yes to adding Finance, in the home.",
+      "You said no to adding Finance, in the home.",
+      "You said yes to adding an agent, in the home.",
+      "You said yes to News digest, in the home.",
+      "You said yes to Check the news every 5 minutes, from your phone.",
+      "You said no to a suggestion, in the home.",
+      "You said yes to starting email for your agents, in the home.",
+      "You said no to a request from ADK-Rust, in the home.",
+      "You allowed a suggestion without asking.",
+      undefined,
+      "Finance asked to snooze News digest; you said no. Nothing changed.",
+      "Finance asked to snooze something in Coming up; you said no. Nothing changed.",
+      undefined,
+      undefined,
+    ]);
+    for (const sentence of said) expect(sentence ?? "").not.toMatch(/kernel:|verb_/);
+  });
+
   it("says when something on record was changed or deleted, with what the check found", async () => {
     const seams = fixtureSeams();
     seams.record = {

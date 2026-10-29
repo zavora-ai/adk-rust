@@ -2368,6 +2368,11 @@ impl SurfaceEngine {
         if let Some(acting) = &request.acting {
             draft = draft.ext("actingAgent", json!(acting.agent.id.to_string()));
         }
+        // What the call acts on, as a feature names it, so a denial names its item as the
+        // change's own record does: "Finance asked to snooze News digest" (§8, §11).
+        if let Some(title) = crate::hints::named(&self.inner.card_hints, request).await {
+            draft = draft.ext("title", json!(title)).ext("summary", json!(request.summary));
+        }
         if let Some(code) = code {
             draft = draft.ext("code", json!(code));
         }
