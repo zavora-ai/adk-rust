@@ -1,2 +1,3 @@
-# The golden build is compared byte for byte: never convert its line endings.
-golden/** -text
+# Fixtures compared byte for byte, and a site whose build is: never convert line endings, so
+# a Windows checkout reads what Linux does.
+* -text
