@@ -279,6 +279,31 @@ async fn a_refused_token_or_disallowed_intents_end_the_connection() {
     assert!(matches!(error, DiscordError::Gateway { code: 4014, .. }), "{error:?}");
 }
 
+/// Spec 3.5 §10 X12: a paired person's image attachments ride with their message, downloaded
+/// from the CDN without the bot token; a type not taken is left out, and a stranger's
+/// attachments are never downloaded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paired_persons_attachments_ride_with_the_message() {
+    let api = FakeDiscord::start().await;
+    let adapter = DiscordAdapter::builder(TOKEN).api_base(api.url()).build().unwrap();
+    let (host, capture, gateway) =
+        chat_support::capturing(Arc::new(adapter.clone()), "discord", ANA, ANA_DM).await;
+    let _connection = adapter.start(gateway);
+    eventually("the identify", || async { (!api.sent_op(2).is_empty()).then_some(()) }).await;
+    api.send_files(ANA, ANA_DM, "", &[("rye.png", "image/png"), ("menu.pdf", "application/pdf")]);
+    api.send_files(STRANGER, STRANGER_DM, "look", &[("x.png", "image/png")]);
+    let taken = chat_support::captured(&capture, 2).await;
+    let ana = taken.iter().find(|inbound| inbound.account == ANA).unwrap();
+    assert_eq!(ana.body, adk_kernel::channels::InboundBody::Text { text: String::new() });
+    assert_eq!(ana.attachments.len(), 1, "the PDF is not taken");
+    assert_eq!(ana.attachments[0].bytes, fake_discord::PNG);
+    let stranger = taken.iter().find(|inbound| inbound.account == STRANGER).unwrap();
+    assert!(stranger.attachments.is_empty());
+    assert_eq!(api.downloads(), [String::new()], "Ana's photo alone, without the bot token");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(host.turns().is_empty(), "a photo alone starts no turn");
+}
+
 /// A live Discord bot (`DISCORD_BOT_TOKEN`): it identifies on the Gateway and stays connected.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs DISCORD_BOT_TOKEN"]

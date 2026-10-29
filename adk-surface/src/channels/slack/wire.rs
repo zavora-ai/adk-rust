@@ -7,6 +7,7 @@ use chrono::FixedOffset;
 use serde_json::{Value, json};
 
 use super::SLACK_CHANNEL;
+use crate::channels::media::FileRef;
 use crate::channels::shared::{
     Heading, Piece, Words, buttons, card_words, chunks, clean_inbound, parse_callback, truncate,
 };
@@ -36,6 +37,8 @@ pub(crate) struct Press {
 pub(crate) struct Parsed {
     pub(crate) inbound: Option<ChannelInbound>,
     pub(crate) press: Option<Press>,
+    /// The files a message shared (spec 3.5 §10 X12).
+    pub(crate) files: Vec<FileRef>,
 }
 
 /// Reads one Socket Mode envelope (S-I6). A new message in a direct message with the app, from
@@ -45,9 +48,14 @@ pub(crate) struct Parsed {
 pub(crate) fn parse(envelope: &Value) -> Parsed {
     let payload = &envelope["payload"];
     match envelope["type"].as_str() {
-        Some("events_api") => Parsed { inbound: typed(&payload["event"]), press: None },
+        Some("events_api") => match typed(&payload["event"]) {
+            Some((inbound, files)) => Parsed { inbound: Some(inbound), press: None, files },
+            None => Parsed::default(),
+        },
         Some("interactive") if payload["type"] == "block_actions" => pressed(payload),
-        Some("slash_commands") => Parsed { inbound: command(payload), press: None },
+        Some("slash_commands") => {
+            Parsed { inbound: command(payload), press: None, files: Vec::new() }
+        }
         _ => Parsed::default(),
     }
 }
@@ -56,10 +64,12 @@ fn text_of(value: &Value) -> &str {
     value.as_str().unwrap_or_default()
 }
 
-fn typed(event: &Value) -> Option<ChannelInbound> {
+fn typed(event: &Value) -> Option<(ChannelInbound, Vec<FileRef>)> {
     let direct = event["type"] == "message" && event["channel_type"] == "im";
-    // Edits, joins, files and the app's own messages carry a subtype or a bot id.
-    if !direct || event.get("subtype").is_some() || event.get("bot_id").is_some() {
+    // Edits, joins and the app's own messages carry a subtype or a bot id; a message that
+    // shares files is `file_share`.
+    let subtype = event.get("subtype").map(|subtype| subtype == "file_share");
+    if !direct || subtype == Some(false) || event.get("bot_id").is_some() {
         return None;
     }
     let (user, channel, ts) =
@@ -67,8 +77,27 @@ fn typed(event: &Value) -> Option<ChannelInbound> {
     if user.is_empty() || channel.is_empty() || ts.is_empty() {
         return None;
     }
-    let text = clean_inbound(&unescape(text_of(&event["text"])))?;
-    Some(ChannelInbound::text(SLACK_CHANNEL, user, channel, ts, text))
+    let files: Vec<FileRef> = event["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|file| {
+            let url =
+                file["url_private_download"].as_str().or_else(|| file["url_private"].as_str())?;
+            Some(FileRef {
+                url: url.to_string(),
+                media_type: file["mimetype"].as_str().map(str::to_string),
+                name: text_of(&file["name"]).to_string(),
+                size: file["size"].as_u64(),
+            })
+        })
+        .collect();
+    let text = match clean_inbound(&unescape(text_of(&event["text"]))) {
+        Some(text) => text,
+        None if !files.is_empty() => String::new(),
+        None => return None,
+    };
+    Some((ChannelInbound::text(SLACK_CHANNEL, user, channel, ts, text), files))
 }
 
 /// A pressed answer: only a button's value answers a decision, never typed text (S-I4).
@@ -91,7 +120,7 @@ fn pressed(payload: &Value) -> Parsed {
         .and_then(|action| parse_callback(action["value"].as_str()?));
     let Some((answer, version, decision)) = answer else {
         // The home link and foreign buttons answer nothing.
-        return Parsed { inbound: None, press: None };
+        return Parsed::default();
     };
     if user.is_empty() || channel.is_empty() {
         return Parsed::default();
@@ -99,7 +128,7 @@ fn pressed(payload: &Value) -> Parsed {
     let at = action.map_or("", |action| text_of(&action["action_ts"]));
     let mut inbound = ChannelInbound::text(SLACK_CHANNEL, user, channel, format!("act-{at}"), "");
     inbound.body = InboundBody::Answer { decision, version, answer };
-    Parsed { inbound: Some(inbound), press: Some(press) }
+    Parsed { inbound: Some(inbound), press: Some(press), files: Vec::new() }
 }
 
 /// `/stop` typed in the direct message with the app: "Stop all" (S-I10).

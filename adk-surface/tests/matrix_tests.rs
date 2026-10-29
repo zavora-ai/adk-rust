@@ -324,6 +324,47 @@ async fn a_refused_token_ends_the_polling() {
     assert_eq!(error, MatrixError::Unauthorized);
 }
 
+/// Spec 3.5 §10 X12: a paired person's `m.image` rides with the message, downloaded through
+/// the authenticated media endpoint, or the legacy one on a homeserver without it; its
+/// caption is the words; a stranger's images are never downloaded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paired_persons_images_ride_with_the_message() {
+    for legacy in [false, true] {
+        let homeserver = FakeMatrix::start().await;
+        if legacy {
+            homeserver.legacy_media_only();
+        }
+        let adapter = adapter(&homeserver);
+        let (_host, capture, gateway) =
+            chat_support::capturing(Arc::new(adapter.clone()), "matrix", ANA, ANA_DM).await;
+        let _sync = adapter.start(gateway);
+        eventually("the adapter reading", || async { homeserver.reading().then_some(()) }).await;
+        let photo = homeserver.image_event(
+            ANA,
+            "mxc://fake.example/abc123",
+            "image/png",
+            Some("Seeded rye"),
+        );
+        let svg = homeserver.image_event(ANA, "mxc://fake.example/svg1", "image/svg+xml", None);
+        homeserver.deliver(ANA_DM, vec![photo, svg]);
+        let theirs = homeserver.image_event(STRANGER, "mxc://fake.example/x1", "image/png", None);
+        homeserver.deliver(STRANGER_DM, vec![theirs]);
+        let taken = chat_support::captured(&capture, 3).await;
+        let ana: Vec<_> = taken.iter().filter(|inbound| inbound.account == ANA).collect();
+        assert_eq!(
+            ana[0].body,
+            adk_kernel::channels::InboundBody::Text { text: "Seeded rye".into() }
+        );
+        assert_eq!(ana[0].attachments.len(), 1);
+        assert_eq!(ana[0].attachments[0].bytes, fake_matrix::PNG);
+        assert!(ana[1].attachments.is_empty(), "an SVG is not taken");
+        let stranger = taken.iter().find(|inbound| inbound.account == STRANGER).unwrap();
+        assert!(stranger.attachments.is_empty());
+        let endpoint = if legacy { "legacy" } else { "v1" };
+        assert_eq!(homeserver.downloads(), [endpoint], "Ana's photo alone");
+    }
+}
+
 /// A live homeserver (`MATRIX_HOMESERVER`, `MATRIX_ACCESS_TOKEN`): the account is known and
 /// `/sync` keeps running.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

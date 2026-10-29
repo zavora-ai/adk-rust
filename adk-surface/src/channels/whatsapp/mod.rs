@@ -617,8 +617,10 @@ impl Taker for WhatsAppAdapter {
     ) -> adk_kernel::Result<()> {
         let Some(mut inbound) = update.inbound.clone() else { return Ok(()) };
         let carried = update.press.as_ref();
-        // The image's bytes, for a host that takes them (spec 3.5 §10 X12).
-        if let Some((id, declared)) = carried.and_then(|carried| carried.media.as_ref())
+        // A paired account's image, for a host that takes it; a stranger's is never
+        // downloaded (spec 3.5 §10 X12).
+        if paired
+            && let Some((id, declared)) = carried.and_then(|carried| carried.media.as_ref())
             && let Some(attachment) = self.inner.api.download(id, declared.as_deref()).await
         {
             inbound = inbound.with_attachments([attachment]);

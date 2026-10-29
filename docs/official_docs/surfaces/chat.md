@@ -358,13 +358,24 @@ async fn whatsapp(
 
 ### Photos
 
-The WhatsApp and Telegram adapters download the images a message carried — JPEG, PNG, WebP
-and GIF, at most 10 MiB each, with the platform's token — into
-`ChannelInbound::attachments`; a photo's caption is the message's words. The gateway never
-puts attachments in a turn's input, and a paired account's message with no words, a photo
-alone, starts no turn (`InboundOutcome::Empty`): a host that takes photos does so with an
-`InboundRoute`, as a served site does. The Slack, Discord and Matrix adapters hand over text
-only.
+Every adapter downloads the images a paired account's message carried into
+`ChannelInbound::attachments` — JPEG, PNG, WebP and GIF, at most 10 MiB each and ten a
+message, the size checked while streaming — and never a stranger's. A photo's caption is the
+message's words.
+
+| Platform | Images | Downloaded from |
+|---|---|---|
+| WhatsApp | `image` messages | The Graph API's media address, with the access token |
+| Telegram | `photo`, its largest size within the limit | `getFile`, then the Bot API's file address |
+| Slack | `files` of a `file_share` message | `url_private_download` on `files.slack.com`, with the bot token; the app needs `files:read` |
+| Discord | `attachments` of a message, by `content_type` | Discord's CDN (`cdn.discordapp.com`, `media.discordapp.net`), without the bot token |
+| Matrix | `m.image` events; the body is the caption when a `filename` is given | The `mxc://` URI through `/_matrix/client/v1/media/download`, with the access token, else the legacy `/_matrix/media/v3/download` |
+
+A file whose declared type or size the limits rule out is not downloaded, and a token goes to
+its platform's own file host only. The gateway never puts attachments in a turn's input, and a
+paired account's message with no words, a photo alone, starts no turn
+(`InboundOutcome::Empty`): a host that takes photos does so with an `InboundRoute`, as a served
+site does.
 
 ### On a served site
 

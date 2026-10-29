@@ -11,6 +11,7 @@ use chrono::FixedOffset;
 use serde_json::{Map, Value, json};
 
 use super::MATRIX_CHANNEL;
+use crate::channels::media::FileRef;
 use crate::channels::shared::{
     Heading, Piece, Words, buttons, card_words, chunks, clean_inbound, truncate,
 };
@@ -64,8 +65,9 @@ pub(crate) fn typed(room: &str, event: &Value, me: Option<&str>) -> Option<Chann
     let content = &event["content"];
     let sender = text_of(&event["sender"]);
     let id = text_of(&event["event_id"]);
+    let image = content["msgtype"] == "m.image";
     if event["type"] != "m.room.message"
-        || content["msgtype"] != "m.text"
+        || (content["msgtype"] != "m.text" && !image)
         || content["m.relates_to"]["rel_type"] == "m.replace"
         || content.get("m.new_content").is_some()
         || sender.is_empty()
@@ -85,8 +87,31 @@ pub(crate) fn typed(room: &str, event: &Value, me: Option<&str>) -> Option<Chann
             .sum();
         body = body[quoted..].trim_start_matches('\n');
     }
+    if image {
+        // An image's body is its caption only when a separate file name is given.
+        let caption = content["filename"].as_str().filter(|name| *name != body).map(|_| body);
+        let text = caption.and_then(clean_inbound).unwrap_or_default();
+        return Some(ChannelInbound::text(MATRIX_CHANNEL, sender, room, id, text));
+    }
     let text = clean_inbound(body)?;
     Some(ChannelInbound::text(MATRIX_CHANNEL, sender, room, id, text))
+}
+
+/// The image an `m.image` event names, by its `mxc://` URI (spec 3.5 §10 X12).
+pub(crate) fn image(event: &Value) -> Option<FileRef> {
+    let content = &event["content"];
+    if event["type"] != "m.room.message" || content["msgtype"] != "m.image" {
+        return None;
+    }
+    let url = content["url"].as_str().filter(|url| url.starts_with("mxc://"))?;
+    let name =
+        content["filename"].as_str().or_else(|| content["body"].as_str()).unwrap_or_default();
+    Some(FileRef {
+        url: url.to_string(),
+        media_type: content["info"]["mimetype"].as_str().map(str::to_string),
+        name: name.to_string(),
+        size: content["info"]["size"].as_u64(),
+    })
 }
 
 /// The card event and key a reaction annotates, when it is one.

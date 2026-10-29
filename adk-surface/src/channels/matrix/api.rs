@@ -129,6 +129,42 @@ impl MatrixApi {
         })
     }
 
+    /// Downloads `file`, an `mxc://` image, through the authenticated media endpoint
+    /// (`/_matrix/client/v1/media/download`), falling back to the legacy one
+    /// (`/_matrix/media/v3/download`) when the homeserver gives nothing there; with the access
+    /// token, to this homeserver only.
+    pub(crate) async fn download(
+        &self,
+        file: crate::channels::media::FileRef,
+    ) -> Option<(String, Vec<u8>)> {
+        let (server, id) = file.url.strip_prefix("mxc://")?.split_once('/')?;
+        let server_ok = !server.is_empty()
+            && server.bytes().all(|b| {
+                b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':' | b'[' | b']')
+            });
+        let id_ok = !id.is_empty()
+            && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'));
+        if !server_ok || !id_ok {
+            return None;
+        }
+        let endpoints: [&[&str]; 2] = [
+            &["_matrix", "client", "v1", "media", "download"],
+            &["_matrix", "media", "v3", "download"],
+        ];
+        for endpoint in endpoints {
+            let mut url = self.base.clone();
+            if let Ok(mut path) = url.path_segments_mut() {
+                path.pop_if_empty().extend(endpoint).extend([server, id]);
+            }
+            let request = self.client.get(url).bearer_auth(&self.token);
+            let found = crate::channels::media::download(request, file.media_type.as_deref()).await;
+            if found.is_some() {
+                return found;
+            }
+        }
+        None
+    }
+
     fn redact(&self, text: &str) -> String {
         text.replace(&self.token, "[token]")
     }

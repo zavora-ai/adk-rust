@@ -302,7 +302,7 @@ The gateway's route (`deploy::chat::SiteChat`) tells two kinds of sender apart:
 
 | Sender | What happens |
 |---|---|
-| An account paired to the owner or staff | A turn of the Steward as that person, in a session whose entry point is the paired device, so its drafts enter through it (A-I24); decision cards ring the account. Photos the message carried — WhatsApp and Telegram download them — wait for the draft the turn makes, or join the person's newest draft when no turn runs, through `channel::OwnerChannel`, which asks for their alt text in the thread; `yes` or `2: text` answers it and starts no turn |
+| An account paired to the owner or staff | A turn of the Steward as that person, in a session whose entry point is the paired device, so its drafts enter through it (A-I24); decision cards ring the account. Photos the message carried — every adapter downloads them — wait for the draft the turn makes, or join the person's newest draft when no turn runs, through `channel::OwnerChannel`, which asks for their alt text in the thread; `yes` or `2: text` answers it and starts no turn |
 | Anyone else | The Inbox reads the message as a visitor's, and answers in the thread; without an Inbox the site files an `inbound_message` signal. No pairing code, no turn, and no media kept |
 | Anyone else typing `/pair` (Slack's and Discord's `/pair` command) | The gateway's pairing code, which the owner accepts with `adk-rust pair accept` against the site's kernel |
 

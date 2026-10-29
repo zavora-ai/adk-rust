@@ -273,6 +273,7 @@ enum Ended {
 pub(crate) struct Event {
     press: Option<Press>,
     interaction: Option<Interaction>,
+    files: Vec<crate::channels::media::FileRef>,
 }
 
 tokio::task_local! {
@@ -523,7 +524,8 @@ impl DiscordAdapter {
             }
         }
         if parsed.inbound.is_some() {
-            let event = Event { press: parsed.press, interaction: parsed.interaction };
+            let event =
+                Event { press: parsed.press, interaction: parsed.interaction, files: parsed.files };
             let _ = sender.send(Update { inbound: parsed.inbound, press: Some(event) });
         }
     }
@@ -605,8 +607,17 @@ impl Taker for DiscordAdapter {
         update: &Update<Event>,
         paired: bool,
     ) -> adk_kernel::Result<()> {
-        let Some(inbound) = update.inbound.clone() else { return Ok(()) };
+        let Some(mut inbound) = update.inbound.clone() else { return Ok(()) };
         let event = update.press.as_ref();
+        // A paired account's images, for a host that takes them; a stranger's are never
+        // downloaded (spec 3.5 §10 X12).
+        let files = event.map_or(&[][..], |event| event.files.as_slice());
+        if paired && !files.is_empty() {
+            let api = &self.inner.api;
+            let attachments =
+                crate::channels::media::fetch_all(files, |file| api.download(file)).await;
+            inbound = inbound.with_attachments(attachments);
+        }
         let press = event.and_then(|event| event.press.as_ref());
         let card = match (&inbound.body, press) {
             (InboundBody::Answer { decision, .. }, Some(press)) => Some(PressedCard {
