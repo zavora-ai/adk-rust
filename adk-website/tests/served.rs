@@ -459,8 +459,14 @@ async fn the_experiments_look_runs_on_its_trigger() {
 /// addresses, IPv4 and IPv6, stand for two visitors.
 #[tokio::test]
 async fn anonymous_callers_are_limited_by_their_own_address() {
-    if std::net::TcpListener::bind("[::]:0").is_err() {
-        eprintln!("no IPv6 on this host; the check needs two loopback addresses");
+    // One edge listener reached from 127.0.0.1 and ::1: an IPv6 socket that takes IPv4 too,
+    // which Linux and macOS give `[::]` and Windows does not.
+    let dual_stack = std::net::TcpListener::bind("[::]:0").is_ok_and(|listener| {
+        let port = listener.local_addr().unwrap().port();
+        std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+    });
+    if !dual_stack {
+        eprintln!("no dual-stack listener on this host; the check needs two loopback addresses");
         return;
     }
     let dir = project(SiteKind::Business).await;

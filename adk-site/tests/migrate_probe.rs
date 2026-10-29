@@ -98,7 +98,14 @@ async fn site() -> Site {
     let mut fixture = Fixture::new().await;
     let release = fixture.release(&files("about v1"), Vec::new(), false).await;
     host.publish(&release, HostTarget::Production).await.unwrap();
-    let origin = StaticServer::serve(&root.path().join("current")).await.unwrap();
+    // A static file server follows the `current` link, which DirectoryHost makes on Unix;
+    // elsewhere it serves the directory the pointer names.
+    let served = if cfg!(unix) {
+        root.path().join("current")
+    } else {
+        host.inner.serving_dir(HostTarget::Production).unwrap().unwrap()
+    };
+    let origin = StaticServer::serve(&served).await.unwrap();
     Site { root, fixture, origin, host }
 }
 

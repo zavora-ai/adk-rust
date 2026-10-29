@@ -1,0 +1,2 @@
+# The golden build is compared byte for byte: never convert its line endings.
+golden/** -text
