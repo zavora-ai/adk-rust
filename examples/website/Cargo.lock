@@ -718,6 +718,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "similar",
  "sqlx",
  "thiserror",
  "tokio",

@@ -28,6 +28,7 @@
 //! | [`publish_delay`] | The delay a page the site drafts on its own waits before it can go live | §7.20, S10 |
 //! | [`quotes`] | The reviews discovery found, the owner's approvals to quote them, and the launch gate's check over them | §7.18, S2 |
 //! | [`review`] | The weekly review | §7.21 |
+//! | [`learning`] | Outcomes into playbook revision proposals, decided by the owner; versioned playbooks | §7.15, A-I13 |
 //! | [`upkeep`] | Upgrade proposals for advisories against the edge's lockfile, certificate renewal proposals | §7.20, S10 |
 //! | [`wallet`] | The wallet as a KPI source and the site's commerce outcomes | §7.14 |
 //! | [`experiments`] | Charter KPIs and guardrails as experiments, variants as static files, daily looks, pauses on a breach, the review's evidence | §7.12, A-I15 |
@@ -71,6 +72,7 @@ pub mod incident;
 pub mod jobs;
 pub mod kinds;
 pub mod leads;
+pub mod learning;
 pub mod measurement;
 pub mod observability;
 pub mod onboarding;
