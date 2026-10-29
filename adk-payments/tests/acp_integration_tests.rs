@@ -303,7 +303,12 @@ async fn acp_human_present_flow_updates_journal_memory_and_evidence_end_to_end()
     let memory_text = harness.memory_text(&checkout_session_id).await;
     assert!(!memory_text.is_empty());
     assert!(!memory_text.contains("4242424242424242"));
-    assert!(!memory_text.contains("223"));
+    // The CVC never stands as a value of its own; the session id and other words may hold
+    // its digits by chance.
+    assert!(
+        !memory_text.split(|c: char| !c.is_ascii_alphanumeric()).any(|word| word == "223"),
+        "{memory_text}"
+    );
     assert!(memory_text.contains(&checkout_session_id));
 
     let raw_evidence = record
