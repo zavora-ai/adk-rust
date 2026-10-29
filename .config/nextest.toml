@@ -39,6 +39,12 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 filter = "binary(process_store_sqlite)"
 slow-timeout = { period = "60s", terminate-after = 4 }
 
+# S19's scaled run simulates four hours of feeds and an hour of live blog against
+# DirectoryHost: about 55 s on a macOS runner and over 90 s on a Windows one.
+[[profile.default.overrides]]
+filter = "package(adk-site) and binary(s19_constant_updates)"
+slow-timeout = { period = "60s", terminate-after = 4 }
+
 # "Hire a helper" waits out the kernel's one-minute audit checkpoint before it verifies the
 # record with `adk-rust audit verify`.
 [[profile.default.overrides]]

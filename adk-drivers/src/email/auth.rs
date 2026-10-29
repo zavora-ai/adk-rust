@@ -90,10 +90,14 @@ impl TxtLookup for StaticTxt {
 }
 
 /// TXT records through the system's resolver (feature `system-dns`).
+///
+/// The system's resolver configuration is read at the first lookup, and again after a lookup
+/// that could not read it, so a site configures its email whatever the system's DNS settings
+/// are at that moment.
 #[cfg(feature = "system-dns")]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SystemTxtLookup {
-    resolver: hickory_resolver::TokioResolver,
+    resolver: Arc<tokio::sync::OnceCell<hickory_resolver::TokioResolver>>,
 }
 
 #[cfg(feature = "system-dns")]
@@ -102,14 +106,10 @@ impl SystemTxtLookup {
     ///
     /// # Errors
     ///
-    /// Returns [`DriverError::Unavailable`](crate::DriverError::Unavailable) when the system's resolver configuration
-    /// cannot be read.
+    /// None: the configuration is read at the first lookup, which returns
+    /// [`DriverError::Unavailable`](crate::DriverError::Unavailable) when it cannot be read.
     pub fn new() -> Result<Self> {
-        let resolver = hickory_resolver::TokioResolver::builder_tokio()
-            .map_err(|error| crate::DriverError::unavailable("dns", error))?
-            .build()
-            .map_err(|error| crate::DriverError::unavailable("dns", error))?;
-        Ok(Self { resolver })
+        Ok(Self::default())
     }
 }
 
@@ -117,7 +117,16 @@ impl SystemTxtLookup {
 #[async_trait]
 impl TxtLookup for SystemTxtLookup {
     async fn txt(&self, name: &str) -> Result<Vec<String>> {
-        match self.resolver.txt_lookup(name).await {
+        let resolver = self
+            .resolver
+            .get_or_try_init(|| async {
+                hickory_resolver::TokioResolver::builder_tokio()
+                    .map_err(|error| crate::DriverError::unavailable("dns", error))?
+                    .build()
+                    .map_err(|error| crate::DriverError::unavailable("dns", error))
+            })
+            .await?;
+        match resolver.txt_lookup(name).await {
             Ok(lookup) => Ok(lookup
                 .answers()
                 .iter()
