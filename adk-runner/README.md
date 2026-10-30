@@ -120,6 +120,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `request_context` | Auth middleware context |
 | `cancellation_token` | Cooperative cancellation of every run |
 
+`Runner::with_session_event_refresh(true)` reloads the run's view of the session from the session service after each event it persists, so later agents in the run see what the service stored rather than the runner's own copy. See [Refreshing the Session View](../docs/official_docs/core/runner.md#refreshing-the-session-view).
+
 `action_ledger`, `approval_store`, and `spend_ledger` accept any backend implementing the `adk-core` traits — in-memory, or SQLite, PostgreSQL, Redis, MongoDB, Neo4j, or Firestore from `adk-session`.
 
 ## Runner vs Direct Agent Execution

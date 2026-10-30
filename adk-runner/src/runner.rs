@@ -255,6 +255,28 @@ async fn screen_unscreened_messages(
     Ok(replacements)
 }
 
+/// Replaces `session`'s events with the stored view of the session, keeping this run's
+/// screened content for the saved messages in `screened` (keyed by event ID), so a refresh
+/// never shows a model a message the input guardrails transformed or withheld.
+async fn refresh_session_view(
+    service: &dyn SessionService,
+    identity: &adk_core::AdkIdentity,
+    session: &crate::context::MutableSession,
+    screened: &std::collections::HashMap<String, Option<Content>>,
+) -> Result<()> {
+    let stored = service.get_for_identity(identity).await?;
+    let mut events = stored.events().all();
+    if !screened.is_empty() {
+        for event in &mut events {
+            if let Some(content) = screened.get(&event.id) {
+                event.llm_response.content = content.clone();
+            }
+        }
+    }
+    session.replace_events(events);
+    Ok(())
+}
+
 /// Deregisters a run when its event stream is dropped.
 ///
 /// Removal is by run ID, so a finishing run can never deregister a different run
@@ -571,6 +593,8 @@ pub struct Runner {
     context_compaction: Option<Arc<crate::compaction::CompactionConfig>>,
     /// Hold taken before each model call when the run config carries a spend ledger.
     llm_spend_estimate: crate::spend::LlmSpendEstimate,
+    /// Whether the session view is reloaded from the service after each persisted event.
+    refresh_session_events: bool,
     /// Per-session cancellation tokens for the interrupt API.
     /// Each `run()` call registers a token here; `interrupt()` cancels it.
     active_runs: ActiveRuns,
@@ -673,6 +697,7 @@ impl Runner {
             #[cfg(feature = "context-compaction")]
             context_compaction: config.context_compaction.map(Arc::new),
             llm_spend_estimate: crate::spend::LlmSpendEstimate::default(),
+            refresh_session_events: false,
             active_runs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             next_run_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             tool_policy: config.tool_policy,
@@ -733,6 +758,52 @@ impl Runner {
             source: self.identity_source.clone(),
             delegation: self.subject_delegation.clone(),
         }
+    }
+
+    /// Reloads the run's view of the session from the session service after each event the
+    /// runner persists.
+    ///
+    /// By default the runner keeps its own in-memory copy of the session's events for the
+    /// rest of a run, appending each event as the agent yields it. A session service that
+    /// derives what the model should see from what it stores (redacting, merging, projecting
+    /// per identity, compacting durably) is then bypassed until the next run. With this
+    /// enabled, after the user's message and after every non-partial event is appended, the
+    /// runner reads the session back with [`SessionService::get_for_identity`] and uses the
+    /// stored events as its view, so later agents in the same run (a workflow's next
+    /// sub-agent, a transfer target) see the service's view.
+    ///
+    /// - Every event, partial streaming chunks included, still reaches the caller's stream.
+    ///   Partial chunks are not added to the run's view; the final event replaces them.
+    /// - A failed read ends the run with the service's error, as a failed append does,
+    ///   instead of continuing on a view that may be stale.
+    /// - Saved messages this run screened with input guardrails keep their screened content.
+    /// - Runner-side compaction that rewrites only the in-memory view (intra-invocation and
+    ///   context compaction) is replaced by the stored view at the next refresh, so pair this
+    ///   option with a service that returns the view it wants the model to see.
+    ///
+    /// The service must return the complete session for the identity. Each refresh is one
+    /// extra read per persisted event. Default: `false`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Agent, Result};
+    /// use adk_runner::Runner;
+    /// use adk_session::InMemorySessionService;
+    /// use std::sync::Arc;
+    ///
+    /// fn runner(agent: Arc<dyn Agent>) -> Result<Runner> {
+    ///     Ok(Runner::builder()
+    ///         .app_name("app")
+    ///         .agent(agent)
+    ///         .session_service(Arc::new(InMemorySessionService::new()))
+    ///         .build()?
+    ///         .with_session_event_refresh(true))
+    /// }
+    /// ```
+    pub fn with_session_event_refresh(mut self, enabled: bool) -> Self {
+        self.refresh_session_events = enabled;
+        self
     }
 
     /// Sets what a call to an unpriced model commits in the run's
@@ -899,6 +970,7 @@ impl Runner {
         let app_name = self.app_name.clone();
         let typed_app_name = AppName::try_from(app_name.clone())?;
         let session_service = self.session_service.clone();
+        let refresh_session_events = self.refresh_session_events;
         let root_agent = self.root_agent.clone();
         #[cfg(feature = "artifacts")]
         let artifact_service = self.artifact_service.clone();
@@ -1075,6 +1147,20 @@ impl Runner {
                     return;
                 }
             };
+
+            // A refreshed view keeps this run's screened content for those messages.
+            let screened_by_id: std::collections::HashMap<String, Option<Content>> =
+                if refresh_session_events {
+                    let events = session.events();
+                    unscreened
+                        .iter()
+                        .filter_map(|(index, content)| {
+                            events.at(*index).map(|event| (event.id.clone(), content.clone()))
+                        })
+                        .collect()
+                } else {
+                    std::collections::HashMap::new()
+                };
 
             // Find which agent should handle this request
             let agent_to_run = Self::find_agent_to_run(&root_agent, session.as_ref());
@@ -1343,6 +1429,18 @@ impl Runner {
                     event: user_event,
                 })
                 .await {
+                yield Err(e);
+                return;
+            }
+            if refresh_session_events
+                && let Err(e) = refresh_session_view(
+                    session_service.as_ref(),
+                    &identity,
+                    ctx.mutable_session(),
+                    &screened_by_id,
+                )
+                .await
+            {
                 yield Err(e);
                 return;
             }
@@ -1657,8 +1755,11 @@ impl Runner {
                             ctx.mutable_session().apply_state_delta(&event.actions.state_delta);
                         }
 
-                        // Also add the event to the mutable session's event list
-                        ctx.mutable_session().append_event(event.clone());
+                        // Also add the event to the mutable session's event list. A refreshed
+                        // view takes the final event from the store instead of partial chunks.
+                        if !refresh_session_events || !event.llm_response.partial {
+                            ctx.mutable_session().append_event(event.clone());
+                        }
 
                         // Append event to session service (persistent storage)
                         // Skip partial streaming chunks — only persist the final
@@ -1676,6 +1777,19 @@ impl Runner {
                                 yield Err(e);
                                 return;
                             }
+                        if refresh_session_events
+                            && !event.llm_response.partial
+                            && let Err(e) = refresh_session_view(
+                                session_service.as_ref(),
+                                &identity,
+                                ctx.mutable_session(),
+                                &screened_by_id,
+                            )
+                            .await
+                        {
+                            yield Err(e);
+                            return;
+                        }
                         yield Ok(event);
                         if let Err(exceeded) = budget_check {
                             yield Err(exceeded.into());
@@ -1924,7 +2038,9 @@ impl Runner {
                             }
 
                             // Add to mutable session
-                            transfer_ctx.mutable_session().append_event(event.clone());
+                            if !refresh_session_events || !event.llm_response.partial {
+                                transfer_ctx.mutable_session().append_event(event.clone());
+                            }
 
                             if !event.llm_response.partial
                                 && let Err(e) = session_service
@@ -1936,6 +2052,19 @@ impl Runner {
                                     yield Err(e);
                                     return;
                                 }
+                            if refresh_session_events
+                                && !event.llm_response.partial
+                                && let Err(e) = refresh_session_view(
+                                    session_service.as_ref(),
+                                    &identity,
+                                    transfer_ctx.mutable_session(),
+                                    &screened_by_id,
+                                )
+                                .await
+                            {
+                                yield Err(e);
+                                return;
+                            }
                             yield Ok(event);
                             if let Err(exceeded) = budget_check {
                                 yield Err(exceeded.into());
