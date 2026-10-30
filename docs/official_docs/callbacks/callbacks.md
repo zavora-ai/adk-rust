@@ -168,6 +168,14 @@ error's component, category, and code but not its message, except for a rejectio
 | `Ok(BeforeModelResult::Skip(response))` | Skip model call, use this response instead |
 | `Err(e)` | Abort execution with error |
 
+A modified request changes that model call only: the agent builds the next request of the turn
+from its own history again. A callback that owns history preparation, such as one that compacts
+long histories, can set `LlmAgentBuilder::retain_prepared_history(true)`. When the callbacks
+return contents that differ from the ones they received, the agent then continues the turn from
+the returned contents, so the work is not repeated on every request. The retained contents are
+the request as the model receives it, including anything a toolset adds to each request, so use
+it only when the callback prepares the complete history.
+
 **AfterModelCallback** uses `Option<LlmResponse>`:
 
 | Return Value | Effect |

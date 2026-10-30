@@ -275,6 +275,11 @@ fn build_final_llm_event(
     event
 }
 
+/// Whether two content lists carry the same roles and parts in the same order.
+fn same_contents(a: &[Content], b: &[Content]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.role == b.role && a.parts == b.parts)
+}
+
 /// The event that ends a run on a call held for confirmation.
 pub(crate) fn confirmation_event(
     invocation_id: &str,
@@ -329,6 +334,8 @@ pub struct LlmAgent {
     generate_content_config: Option<adk_core::GenerateContentConfig>,
     /// Maximum number of LLM round-trips before stopping
     max_iterations: u32,
+    /// Whether contents a before-model callback changed become the conversation history.
+    retain_prepared_history: bool,
     /// Timeout for individual tool executions
     tool_timeout: std::time::Duration,
     /// Whether tool and callback error messages reach the model.
@@ -962,6 +969,7 @@ pub struct LlmAgentBuilder {
     output_key: Option<String>,
     generate_content_config: Option<adk_core::GenerateContentConfig>,
     max_iterations: u32,
+    retain_prepared_history: bool,
     tool_timeout: std::time::Duration,
     expose_tool_error_messages: bool,
     before_callbacks: Vec<BeforeAgentCallback>,
@@ -1016,6 +1024,7 @@ impl LlmAgentBuilder {
             output_key: None,
             generate_content_config: None,
             max_iterations: DEFAULT_MAX_ITERATIONS,
+            retain_prepared_history: false,
             tool_timeout: DEFAULT_TOOL_TIMEOUT,
             expose_tool_error_messages: false,
             before_callbacks: Vec::new(),
@@ -1258,6 +1267,49 @@ impl LlmAgentBuilder {
         self.generate_content_config
             .get_or_insert(adk_core::GenerateContentConfig::default())
             .max_output_tokens = Some(max_tokens);
+        self
+    }
+
+    /// Keep the contents a before-model callback prepared as the agent's conversation
+    /// history.
+    ///
+    /// By default a [`BeforeModelCallback`] changes one request only: the next model request
+    /// is built again from the agent's own history, so a callback that compacts or rewrites
+    /// the history has to repeat its work on every request of the turn. With this enabled,
+    /// when the before-model callbacks return contents that differ from the ones they
+    /// received, the agent continues the turn from the returned contents, and later steps
+    /// append to them. A request the callbacks leave unchanged, or one they answer with
+    /// [`BeforeModelResult::Skip`], keeps the history as it was.
+    ///
+    /// The retained contents are the request as the model receives it. Enable this only when
+    /// a callback owns complete history preparation: anything a toolset adds to every request
+    /// through `Toolset::process_llm_request` is retained with it and added again to the next
+    /// request, and call IDs the agent generated for a provider that sent none have already
+    /// been removed. Default: `false`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_agent::LlmAgentBuilder;
+    /// use adk_core::{BeforeModelResult, LlmRequest};
+    ///
+    /// // Keep the system contents and the last 20 turns. With retention on, the cut
+    /// // carries over to the rest of the turn instead of being redone per request.
+    /// let builder = LlmAgentBuilder::new("assistant")
+    ///     .before_model_callback(Box::new(|_ctx, mut request: LlmRequest| {
+    ///         Box::pin(async move {
+    ///             let (system, turns): (Vec<_>, Vec<_>) =
+    ///                 request.contents.into_iter().partition(|c| c.role == "system");
+    ///             let keep = turns.len().saturating_sub(20);
+    ///             request.contents = system.into_iter().chain(turns.into_iter().skip(keep)).collect();
+    ///             Ok(BeforeModelResult::Continue(request))
+    ///         })
+    ///     }))
+    ///     .retain_prepared_history(true);
+    /// # let _ = builder;
+    /// ```
+    pub fn retain_prepared_history(mut self, enabled: bool) -> Self {
+        self.retain_prepared_history = enabled;
         self
     }
 
@@ -1754,6 +1806,7 @@ impl LlmAgentBuilder {
             output_key: self.output_key,
             generate_content_config: self.generate_content_config,
             max_iterations: self.max_iterations,
+            retain_prepared_history: self.retain_prepared_history,
             tool_timeout: self.tool_timeout,
             expose_tool_error_messages: self.expose_tool_error_messages,
             before_callbacks: Arc::new(self.before_callbacks),
@@ -3585,6 +3638,7 @@ impl Agent for LlmAgent {
         let output_max_retries = self.output_max_retries;
         let generate_content_config = self.generate_content_config.clone();
         let max_iterations = self.max_iterations;
+        let retain_prepared_history = self.retain_prepared_history;
         let tool_timeout = self.tool_timeout;
         let expose_tool_error_messages = self.expose_tool_error_messages;
         // Clone Arc references (cheap)
@@ -4033,6 +4087,9 @@ impl Agent for LlmAgent {
                 // These can modify the request or skip the model call by returning a response
                 let mut current_request = request;
                 let mut model_response_override = model_response_override_from_plugin;
+                let contents_before_callbacks = (retain_prepared_history
+                    && model_response_override.is_none())
+                .then(|| current_request.contents.clone());
                 if model_response_override.is_none() {
                     for callback in
                         hook_callbacks.before_model.iter().chain(before_model_callbacks.iter())
@@ -4054,6 +4111,14 @@ impl Agent for LlmAgent {
                             }
                         }
                     }
+                }
+                // A callback that owns history preparation hands the rest of the turn the
+                // contents it prepared, so its work is not repeated on every request.
+                if model_response_override.is_none()
+                    && let Some(before) = contents_before_callbacks
+                    && !same_contents(&before, &current_request.contents)
+                {
+                    conversation_history = current_request.contents.clone();
                 }
                 let mut request = current_request;
                 // Governed after every request rewrite, so a callback cannot re-attach a
