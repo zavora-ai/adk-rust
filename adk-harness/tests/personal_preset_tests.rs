@@ -3,7 +3,7 @@
 
 #![cfg(all(feature = "runner", feature = "memory", feature = "sandbox"))]
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 

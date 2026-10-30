@@ -6,13 +6,14 @@
 //! the workspace's `.env`:
 //!
 //! ```text
-//! cargo nextest run -p adk-harness --features website --test website_live_tests --run-ignored all
+//! cargo nextest run -p adk-harness --features website --run-ignored all --test integration \
+//!   -E 'test(/^website_live_tests::/)'
 //! ```
 
 #![cfg(feature = "website")]
 
-mod common;
-mod website_common;
+use crate::common;
+use crate::website_common;
 
 use std::path::PathBuf;
 use std::sync::Arc;

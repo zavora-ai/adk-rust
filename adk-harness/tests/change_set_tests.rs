@@ -4,7 +4,7 @@
 
 #![cfg(feature = "runner")]
 
-mod common;
+use crate::common;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};

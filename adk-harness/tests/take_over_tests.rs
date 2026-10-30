@@ -4,7 +4,7 @@
 
 #![cfg(all(feature = "sqlite", feature = "runner", feature = "auth"))]
 
-mod common;
+use crate::common;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};

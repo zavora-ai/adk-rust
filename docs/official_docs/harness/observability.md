@@ -108,7 +108,7 @@ Metrics per case are `passed`, `trajectory` (`ToolTrajectoryScorer`) and `effici
 | Live models, nightly | `examples/harness_eval` (`--live openai`, `anthropic`, `gemini`) in the `harness-eval-live` job | `examples/harness_eval/baseline.live.<provider>.json`, on `passed` |
 
 ```bash
-cargo run --manifest-path examples/harness_eval/Cargo.toml                       # scripted
-cargo run --manifest-path examples/harness_eval/Cargo.toml -- --live anthropic   # live
-ADK_HARNESS_SAVE_BASELINE=1 cargo test -p adk-harness --test eval_suite           # refresh
+cargo run --manifest-path examples/harness_eval/Cargo.toml                            # scripted
+cargo run --manifest-path examples/harness_eval/Cargo.toml -- --live anthropic        # live
+ADK_HARNESS_SAVE_BASELINE=1 cargo test -p adk-harness --test integration eval_suite:: # refresh
 ```

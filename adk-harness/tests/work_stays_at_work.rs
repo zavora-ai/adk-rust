@@ -5,7 +5,7 @@
 //! ```bash
 //! DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
 //!   cargo nextest run -p adk-harness --features kernel,memory,postgres --run-ignored only \
-//!   --test work_stays_at_work
+//!   --test integration -E 'test(/^work_stays_at_work::/)'
 //! ```
 //!
 //! | When (UTC) | What happens | What holds |
@@ -24,7 +24,7 @@
 
 #![cfg(all(feature = "kernel", feature = "memory"))]
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;

@@ -10,7 +10,7 @@
 //! ```bash
 //! DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
 //!   cargo nextest run -p adk-harness --features postgres --run-ignored only \
-//!   --test fact_conformance_tests
+//!   --test integration -E 'test(/^fact_conformance_tests::/)'
 //! ```
 
 #![cfg(feature = "memory")]

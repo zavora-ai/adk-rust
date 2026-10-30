@@ -7,7 +7,7 @@
 
 #![cfg(feature = "browser")]
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 

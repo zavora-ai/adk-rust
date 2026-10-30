@@ -341,7 +341,7 @@ jobs:
         cargo nextest run --profile ci -p adk-harness
         --features memory,postgres,redis
         --run-ignored only --no-fail-fast
-        --test shared_store_redis_tests
+        --test integration -E 'test(/^shared_store_redis_tests::/)'
 
     # The feature set matches the adk-payments suite of scripts/test-postgres.sh, so the
     # build is reused.
@@ -654,7 +654,7 @@ jobs:
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         cargo test -p adk-sandbox --features sandbox-windows --test windows_enforcer_tests
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        cargo test -p adk-harness --test shell_sandbox_windows_tests
+        cargo test -p adk-harness --test integration 'shell_sandbox_windows_tests::'
 
     # External site generators run on Windows under the restricted token (spec 3.5 §7.8,
     # spec 3.2 §10 W5). Only this job compiles that path; the nightly `site-generators` job runs

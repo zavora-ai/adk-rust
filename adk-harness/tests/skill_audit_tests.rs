@@ -2,7 +2,7 @@
 
 #![cfg(all(feature = "runner", feature = "skills"))]
 
-mod common;
+use crate::common;
 
 use adk_model::ScriptedResponse;
 use serde_json::json;

@@ -3,7 +3,7 @@
 
 #![cfg(feature = "runner")]
 
-mod common;
+use crate::common;
 
 use adk_core::{Part, SubjectKind, SubjectRef, ToolOrigin};
 use adk_harness::{

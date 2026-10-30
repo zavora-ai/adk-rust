@@ -3,7 +3,7 @@
 
 #![cfg(feature = "runner")]
 
-mod common;
+use crate::common;
 
 use adk_harness::{TodoList, TodoStatus};
 use adk_model::ScriptedResponse;
