@@ -19,7 +19,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-mod support;
+use crate::support;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct ConfirmationAgent {

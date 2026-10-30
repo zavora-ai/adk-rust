@@ -10,10 +10,10 @@
 //! ```bash
 //! REDIS_URL=redis://localhost:6379 \
 //!   cargo nextest run -p adk-graph --features sqlite,redis --run-ignored all \
-//!   --test rerun_semantics_tests
+//!   --test integration -E 'test(/^rerun_semantics_tests::/)'
 //! ```
 
-mod support;
+use crate::support;
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
