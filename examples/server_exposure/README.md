@@ -7,8 +7,8 @@ What an ADK-Rust server exposes, and what its A2A clients accept. Every scenario
 
 | Kind | Meaning |
 |------|---------|
-| `live` | Calls Gemini or OpenAI |
-| `scripted` | Points the real `OpenAIClient` at a local Chat Completions upstream, or a real A2A client at a local peer, for faults a live API never produces |
+| `live` | Calls Gemini, OpenAI, or Anthropic |
+| `scripted` | Points the real `OpenAIClient` at a local Chat Completions upstream, a real A2A client at a local peer, or the server at a governance store whose database is down, for faults a live API never produces |
 | `local` | Exercises the server alone; no model call |
 
 ## Scenarios
@@ -32,11 +32,38 @@ What an ADK-Rust server exposes, and what its A2A clients accept. Every scenario
 | `E1` / `E3 split-char-intact` | scripted | A `ü` split across two reads arrives intact (pre-v1 / v1) |
 | `E2` / `E4 truncated-stream-error` | scripted | A stream that stops before a final status ends in an error (pre-v1 / v1) |
 | `E5 a2a-stream-live` | live | `gemini-3.5-flash-lite` behind a real A2A server streams multi-byte text to `RemoteA2aAgent` intact and without error |
+| `E6 member-freeze-refused` | live | `POST /api/admin/freeze` from an authenticated caller without the `admin` scope answers `403`, and `claude-sonnet-5-5` still answers that caller's next run |
+| `E7 admin-freeze-stops-next-run` | live | An administrator's freeze answers `200`, and the agent's next run is refused with `governance.frozen` |
+| `E8 member-unfreeze-refused` | live | `POST /api/admin/unfreeze` from the same non-admin caller answers `403`, and the freeze stays in force |
+| `E9 admin-unfreeze-restores-run` | live | The administrator's unfreeze answers `200`, and `claude-sonnet-5-5` answers the next run |
+| `E10 anonymous-freeze-refused` | local | A freeze without credentials answers `401`, from a server with a `RequestContextExtractor` and from one without |
 | `F1 hostile-card-refused` | scripted | A card naming another server as its endpoint is refused and that server receives nothing |
 | `F2 hostile-card-refused-v1` | scripted | The same for a v1 card's JSON-RPC interface |
+| `F3 debug-trace-owner-reads` | live | `claude-sonnet-5-5` runs a turn as `alice`, and `GET /api/debug/trace/{event_id}` returns her span to her |
+| `F4 debug-trace-event-id-cross-user-refused` | live | The same span requested by `bob` by its event ID answers `403` |
+| `F5 debug-trace-session-id-cross-user-refused` | live | `bob` naming her session ID in place of an event ID gets no span |
+| `G1 provider-text-withheld-run` | live | A `claude-sonnet-5-5` agent with an invalid API key meets a real Anthropic `401`; `POST /api/run` answers `401` with `Authentication failed`, code `model.anthropic.api_error`, category `unauthorized`, and none of Anthropic's text, and the server logs the full error under the response's `x-request-id` |
+| `G2 provider-text-withheld-sse` | live | The `/api/run_sse` error event reads `model.unauthorized: Authentication failed`, and the full error is logged under its `x-request-id` |
+| `G3 provider-text-withheld-ag-ui` | live | The protocol-native AG-UI `RUN_ERROR` reads `model.unauthorized: Authentication failed` and carries the code |
+| `G4 provider-text-exposed` | live | With `expose_error_details`, all three carry Anthropic's message |
+| `G5 store-text-withheld-503` | scripted | Over a governance store whose database is down, the freeze and unfreeze `503` `error` reads `session.unavailable: A service the server depends on is unavailable; retry later`; with `expose_error_details` it carries the driver text |
+| `G6 request-messages-kept` | local | A missing session, an unknown app, and a frozen kill switch keep the messages the server wrote |
+| `G7 happy-path-unaffected` | live | A `claude-sonnet-5-5` turn with the real key answers `200` with text and no error |
+| `H1 registry-owner-registers-and-runs` | live | Alice registers a card for a `claude-sonnet-5-5` `LlmAgent` in the agent registry, Bob finds it by tag, and Alice runs the agent at the card's endpoint |
+| `H2 registry-dummy-token-refused` | local | A token the `RequestContextExtractor` rejects gets `401` on every registry route and Alice's card is unchanged |
+| `H3 registry-other-user-cannot-update` | local | Bob cannot change Alice's card with `PUT`, or by deleting it and registering his own |
+| `H4 registry-other-user-cannot-delete` | local | Bob's `DELETE` of Alice's card is refused and the card stays |
+| `H5 registry-owner-updates` | local | A card Alice registers with another `owner` in its body is hers, registering its name again is `409`, and her `PUT` stores the new version with its `createdAt` kept and an `updatedAt` |
+| `H6 registry-owner-deletes` | local | Alice's `DELETE` of her card removes it; `GET`, `PUT`, and `DELETE` then answer `404` |
+| `H7 registry-refused-identities` | local | A context with an empty user ID gets `401` and an extraction failure `500`; neither registers a card |
+| `H8 registry-card-without-owner-read-only` | local | A card stored without an owner is readable, and `PUT`, `DELETE`, and `POST` of its name by Alice or Bob answer `403`, `403`, and `409` |
+| `I1 open-mode-warned-at-mount` | local | Building a server with background and cron routes and no `RequestContextExtractor` logs one warning naming `/api/runs` and `/api/cron` before any request; an authenticated build logs none; each standalone router logs one |
+| `I2 open-mode-key-per-user-live` | live | Two users' background runs of a `claude-sonnet-5-5` agent with the same `idempotencyKey` are two runs, each answering its own prompt, and a user's retry returns their run |
+| `I3 open-mode-keys-kept-apart` | local | An open-mode client using a cron firing's key does not absorb the firing, and an open-mode `userId: alice` does not match authenticated alice's key |
+| `I4 open-mode-delete-and-wake` | local | In open mode an unidentified client wakes and cancels another user's run |
 
 A1 and A2 report `SKIP` when the host has no non-loopback address; live scenarios report `SKIP`
-without their key.
+without their key. G1–G4 send a deliberately invalid Anthropic key and need no account.
 
 ## Running
 

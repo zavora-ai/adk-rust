@@ -17,8 +17,10 @@ name = "a2a-quickstart"
 version = "0.1.0"
 dependencies = [
  "adk-rust",
+ "axum",
  "dotenvy",
  "tokio",
+ "tracing",
  "tracing-subscriber",
 ]
 

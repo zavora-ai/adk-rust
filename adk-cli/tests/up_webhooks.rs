@@ -110,7 +110,23 @@ async fn a_signed_webhook_wakes_a_sleeping_process_once() {
     let printed = common::text(&output);
     assert!(output.status.success(), "{printed}");
     let pid = printed.split_whitespace().next().unwrap().to_string();
-    assert!(ps_row(home.path(), &kernel, ws.path(), &pid).contains("waiting"), "asleep first");
+    // A sleeper parks at its first claim, before any model call (spec 3.2 §7.4, K-I2), so
+    // `ps` can show it queued or running for a moment first.
+    let started = Instant::now();
+    let asleep = loop {
+        let row = ps_row(home.path(), &kernel, ws.path(), &pid);
+        if row.contains("waiting") {
+            break row;
+        }
+        assert!(
+            !["completed", "failed", "cancelled"].iter().any(|state| row.contains(state)),
+            "it ran before any webhook: {row}"
+        );
+        assert!(started.elapsed() < common::TIMEOUT, "asleep first: {row}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(asleep.contains("asleep on 1 wake(s)"), "{asleep}");
+    assert_eq!(asleep.split_whitespace().nth(6), Some("0/0"), "no model call yet: {asleep}");
 
     let client = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{port}/hooks/github");

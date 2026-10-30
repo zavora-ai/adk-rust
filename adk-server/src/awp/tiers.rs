@@ -312,6 +312,7 @@ impl TierAssigner for WebBotAuthTrustAssigner {
 ///
 /// let validator = JwtValidator::builder()
 ///     .issuer("https://auth.partner.example")
+///     .audience("https://agent.example")
 ///     .jwks_uri("https://auth.partner.example/.well-known/jwks.json")
 ///     .build()?;
 /// let oauth = OAuthClientCredentials::new()

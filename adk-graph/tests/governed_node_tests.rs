@@ -239,6 +239,14 @@ async fn a_hold_records_one_decision_with_the_full_call_and_an_approval_runs_it_
     );
     let origin = pending[0].request.origin.as_ref().expect("an origin");
     assert_eq!(origin.source, "graph:graph");
+    // A standalone run acts as the standalone graph agent, and its decision key names it
+    // (#1210).
+    let agent = "urn:adk:agent:graph_app/graph";
+    assert_eq!(pending[0].request.acting.as_ref().map(|a| a.agent.id.as_str()), Some(agent));
+    assert_eq!(
+        adk_core::ToolConfirmationRequest::fingerprint_agent(&pending[0].fingerprint),
+        Some(agent)
+    );
 
     rig.decide("t1", ToolApproval::approve()).await;
     let state = rig.invoke("t1").await.unwrap();
@@ -925,6 +933,11 @@ async fn under_a_graph_agent_the_hold_names_the_agent_and_an_approval_turn_runs_
     );
     let pending = rig.store.pending(&scope).await.unwrap();
     assert_eq!(pending.len(), 1);
+    // The decision key names the agent too, so no other agent's call can take it (#1210).
+    assert_eq!(
+        adk_core::ToolConfirmationRequest::fingerprint_agent(&pending[0].fingerprint),
+        Some("urn:adk:agent:shop/invoice-run")
+    );
     rig.store.decide(&scope, &pending[0].fingerprint, ToolApproval::approve()).await.unwrap();
 
     drain(&agent, turn("invoice-run", "inv-2", rig.run_config())).await;
@@ -1451,7 +1464,9 @@ mod http {
         assert_eq!(rig.outcome().await, None, "the record stays begun");
         let again = rig.invoke(state("tok-1")).await;
         assert_eq!(code(&again), Some("graph.outcome_unknown"));
-        assert_eq!(mock.seen().len(), 1);
+        // A slow runner can cut the first call off before the mock reads it, so this is "at
+        // most once": the cut-off call, and never another.
+        assert!(mock.seen().len() <= 1, "{:?}", mock.seen());
     }
 
     /// Spec 3.3 §12: a call that failed is recorded as failed, not hidden by the node's

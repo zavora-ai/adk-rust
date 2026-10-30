@@ -261,8 +261,50 @@ let protected = scoped.protect(rbac.protect(transfer_tool));
 | Okta | `OktaProvider::new(domain, client)` | {domain}/oauth2/default |
 | Auth0 | `Auth0Provider::new(domain, audience)` | {domain}/ |
 | Generic | `OidcProvider::from_discovery(issuer, client).await` | Any OIDC provider |
+| Custom JWT | `JwtValidator::builder().issuer(iss).audience(aud).jwks_uri(uri).build()?` | Any issuer that publishes a JWKS |
 
 `AzureADProvider::multi_tenant()` accepts any tenant for the configured audience unless you explicitly restrict it with `with_allowed_tenants(...)`.
+
+### Required claims
+
+Every validator requires the `exp`, `iss`, and `aud` claims. A token without one of them fails
+with `TokenError::MissingClaim` (`auth.missing_claim`); a token that names another issuer or
+audience fails with `TokenError::ValidationError` (`auth.validation`).
+
+| Validator | `iss` must be | `aud` must name |
+|-----------|---------------|-----------------|
+| `GoogleProvider` | `https://accounts.google.com` or `accounts.google.com` | The client ID |
+| `AzureADProvider::new` | `https://login.microsoftonline.com/{tenant}/v2.0` | The client ID |
+| `AzureADProvider::multi_tenant` | Present; the value is not checked, so restrict tenants with `with_allowed_tenants(...)` | The client ID |
+| `OktaProvider` | `https://{domain}/oauth2/{server}` | The client ID |
+| `Auth0Provider` | `https://{domain}/` | The audience |
+| `OidcProvider` | The configured issuer | The client ID |
+| `JwtValidator` | The configured issuer | The configured audience |
+
+`JwtValidatorBuilder::build` fails unless the builder sets an audience. For an issuer whose
+tokens carry no `aud` claim, `without_audience()` opts out: the validator then accepts a token
+with no `aud` claim, refuses one that carries any audience, and still requires `iss`. A token
+that names no audience does not say which client it was minted for, so pin an audience
+whenever the issuer sets one.
+
+```rust
+use adk_auth::sso::{JwtValidator, TokenError};
+
+fn validators() -> Result<(JwtValidator, JwtValidator), TokenError> {
+    let pinned = JwtValidator::builder()
+        .issuer("https://issuer.example.com")
+        .audience("https://api.example.com")
+        .jwks_uri("https://issuer.example.com/.well-known/jwks.json")
+        .build()?;
+    // Only for an issuer that never puts `aud` in its tokens.
+    let unpinned = JwtValidator::builder()
+        .issuer("https://issuer.example.com")
+        .jwks_uri("https://issuer.example.com/.well-known/jwks.json")
+        .without_audience()
+        .build()?;
+    Ok((pinned, unpinned))
+}
+```
 
 OIDC discovery and every JWKS refresh give up after 10 seconds (connect timeout 5 seconds), so an identity provider that accepts the connection and never answers fails the validation instead of holding it and the JWKS refresh lock. `JwksCache::with_http_client` replaces the client.
 
@@ -636,6 +678,7 @@ match provider.validate(token).await {
     Ok(claims) => { /* token valid */ }
     Err(TokenError::Expired) => { /* token expired */ }
     Err(TokenError::InvalidSignature) => { /* signature invalid */ }
+    Err(TokenError::MissingClaim(claim)) => { /* no `exp`, `iss`, or `aud` claim */ }
     Err(TokenError::ValidationError(reason)) => { /* wrong issuer or audience, among others */ }
     Err(e) => { /* other error */ }
 }

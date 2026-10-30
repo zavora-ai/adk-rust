@@ -1308,6 +1308,8 @@ fn a_binding_verifies_only_its_own_tuple() {
 /// recorded on an `http://localhost` origin, registers and confirms through the verifier; the
 /// same assertion for another challenge, with a changed signature, or a registration for
 /// another origin is refused (spec 3.3 §8.2).
+// Rebuilding the ceremony needs webauthn-rs's state serialisation, a dev-dependency off Windows.
+#[cfg(not(windows))]
 #[test]
 fn a_recorded_chrome_passkey_registers_and_confirms() {
     use webauthn_rs::prelude::{PasskeyAuthentication, PasskeyRegistration};

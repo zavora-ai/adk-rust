@@ -7,7 +7,7 @@
 //! ## Run
 //!
 //! ```bash
-//! # Web UI (default) — open http://localhost:3000
+//! # Web UI (default) — open http://127.0.0.1:3000
 //! cargo run --manifest-path examples/streaming_bash/Cargo.toml
 //!
 //! # Console demo
@@ -15,6 +15,9 @@
 //! ```
 //!
 //! Requires: `GOOGLE_API_KEY`
+//!
+//! The web server listens on `127.0.0.1` unless `BIND_HOST` names another address, and
+//! answers only requests from its own page.
 
 use std::sync::Arc;
 
@@ -27,6 +30,7 @@ use adk_runner::Runner;
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use futures::StreamExt;
 
+mod origin;
 mod server;
 
 const APP_NAME: &str = "streaming-bash";
@@ -72,7 +76,7 @@ async fn run_cli() -> anyhow::Result<()> {
     println!("║  reads the model's reply from — no log scraping required.    ║");
     println!("╚══════════════════════════════════════════════════════════════╝\n");
 
-    let model: Arc<dyn Llm> = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
+    let model: Arc<dyn Llm> = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
     let workspace = Workspace::new(std::env::current_dir()?).allow_bash(true);
     // Bash-only: `bash` is the one DevTool that streams via emit_progress, so the
     // agent gets only it — every tool call then produces live terminal output.

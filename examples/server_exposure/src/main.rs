@@ -11,10 +11,18 @@
 //! | B | A cross-origin request, or one with a DNS-rebinding `Host`, is refused |
 //! | C | A held or long-running tool call leaves the A2A task `input-required` |
 //! | D | Model thinking never reaches an A2A peer |
-//! | E | A truncated A2A stream is an error, and a split multi-byte character stays intact |
-//! | F | An agent card whose RPC endpoint names another host is refused |
+//! | E | A truncated A2A stream is an error, and a split multi-byte character stays intact; only an administrator freezes or unfreezes the kill switch |
+//! | F | An agent card whose RPC endpoint names another host is refused; a debug trace is returned to its owner only |
+//! | G | An error response carries a provider's or a store's message only with `expose_error_details` |
+//! | H | The agent registry authenticates every request; only a card's owner changes it |
+//! | I | Background runs in open mode warn at mount, and keep each user's idempotency keys apart |
 
+mod background;
+mod debug_traces;
+mod error_details;
+mod governance_admin;
 mod peers;
+mod registry;
 mod scripted;
 
 use std::net::{IpAddr, SocketAddr};
@@ -1128,7 +1136,12 @@ async fn main() -> ExitCode {
     group_c(&keys, &model, &mut out).await;
     group_d(&keys, &model, &mut out).await;
     group_e(&keys, &mut out).await;
+    governance_admin::group_e_governance_admin(&mut out).await;
     group_f(&mut out).await;
+    debug_traces::group_f_debug_traces(&mut out).await;
+    error_details::group_g(&mut out).await;
+    registry::group_h(&mut out).await;
+    background::group_i(&model, &mut out).await;
 
     println!("\n| Scenario | Kind | Result | Detail |");
     println!("|----------|------|--------|--------|");

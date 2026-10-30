@@ -4,6 +4,7 @@ pub mod ag_ui_extension;
 pub mod apps;
 pub mod artifacts;
 pub mod debug;
+mod error_details;
 pub mod governance;
 pub mod runtime;
 pub mod session;

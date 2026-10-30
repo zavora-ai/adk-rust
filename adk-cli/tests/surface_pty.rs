@@ -70,6 +70,25 @@ fn expect_all(terminal: &Terminal, needles: &[&str]) -> vt100::Parser {
     }
 }
 
+/// Waits until the status line, the screen's top row, shows the mode `label`. A mode change
+/// shows at once as a notice ("Suggests"), but the status line reads the mode again only on
+/// its next poll and until then still shows the mode from before.
+fn expect_mode(terminal: &Terminal, label: &str) {
+    let started = Instant::now();
+    loop {
+        let parser = screen(terminal);
+        if parser.screen().rows(0, COLS).next().is_some_and(|top| top.contains(label)) {
+            return;
+        }
+        assert!(
+            started.elapsed() < TIMEOUT,
+            "timed out waiting for {label:?} on the status line:\n{}",
+            parser.screen().contents()
+        );
+        std::thread::sleep(Duration::from_millis(30));
+    }
+}
+
 /// Waits for the binary to exit; returns its code.
 fn wait_exit(terminal: Terminal) -> (Option<i32>, String) {
     terminal.wait()
@@ -1643,11 +1662,12 @@ fn the_repls_commands_and_always_allow_run_on_the_kernel() {
     command(&mut terminal, "/memory", &["Working notes:", "Long-term facts"]);
     command(&mut terminal, "/hooks", &["No hooks."]);
     // The thread has no message yet; the kernel's `/mode` sets its mode, and the status line
-    // shows the mode the kernel reports.
+    // shows the mode the kernel reports. The message waits for it: the terminal sends each
+    // command as it is typed, so a message could reach the kernel before the mode change.
     terminal.send("/mode plan\r");
-    expect_screen(&terminal, "Suggest");
+    expect_mode(&terminal, "Suggest");
     terminal.send("/mode ask\r");
-    expect_screen(&terminal, "Ask first");
+    expect_mode(&terminal, "Ask first");
 
     terminal.send("Write a\r");
     let parser = expect_all(&terminal, &["Waiting for you · Write file a.txt", "Always allow"]);
@@ -1656,7 +1676,7 @@ fn the_repls_commands_and_always_allow_run_on_the_kernel() {
     terminal.send("a");
     expect_screen(&terminal, "Wrote a.");
     assert_eq!(std::fs::read_to_string(ws.path().join("a.txt")).unwrap(), "A");
-    command(&mut terminal, "/rules", &["allow write_file"]);
+    command(&mut terminal, "/rules", &["allow file writes: anywhere in the workspace"]);
 
     // In ask mode a write waits for a key; the rule lets this one run.
     terminal.send("Write b\r");
@@ -1668,7 +1688,7 @@ fn the_repls_commands_and_always_allow_run_on_the_kernel() {
     terminal.send("\x0b");
     expect_screen(&terminal, "stopped");
     command(&mut terminal, "/web allow docs.rs", &["everything is stopped"]);
-    command(&mut terminal, "/rules", &["allow write_file"]);
+    command(&mut terminal, "/rules", &["allow file writes: anywhere in the workspace"]);
     command(&mut terminal, "/rules rm 1", &["revoked:"]);
     command(&mut terminal, "/rules", &["No standing rules."]);
     terminal.send("\x03");
@@ -1734,7 +1754,7 @@ fn live_model_always_allow_and_rules_in_the_full_screen() {
         std::thread::sleep(Duration::from_millis(100));
     }
     std::thread::sleep(Duration::from_secs(3));
-    let parser = command(&mut terminal, "/rules", &["allow write_file"]);
+    let parser = command(&mut terminal, "/rules", &["allow file writes"]);
     dump("live-rules-dark", &parser);
     terminal.send("\x03");
     assert_eq!(terminal.wait().0, Some(0));

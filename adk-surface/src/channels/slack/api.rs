@@ -150,6 +150,24 @@ impl SlackApi {
         })
     }
 
+    /// Downloads `file`, a file a message shared, with the bot token, when Slack serves it:
+    /// from `files.slack.com`, or the API address's own host (a test double). The token is
+    /// sent nowhere else.
+    pub(crate) async fn download(
+        &self,
+        file: crate::channels::media::FileRef,
+    ) -> Option<(String, Vec<u8>)> {
+        let url = reqwest::Url::parse(&file.url).ok()?;
+        let base = reqwest::Url::parse(&self.base).ok()?;
+        let slack = url.scheme() == "https" && url.host_str() == Some("files.slack.com");
+        if !slack && url.origin() != base.origin() {
+            tracing::debug!("a slack file served from another host was not downloaded");
+            return None;
+        }
+        let request = self.client.get(url).bearer_auth(&self.bot_token);
+        crate::channels::media::download(request, file.media_type.as_deref()).await
+    }
+
     fn redact(&self, text: &str) -> String {
         text.replace(&self.app_token, "[token]").replace(&self.bot_token, "[token]")
     }

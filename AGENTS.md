@@ -164,7 +164,7 @@ expensive axes move to a later tier.
   coverage: `fmt` (prerequisite gate), `clippy --workspace --all-targets -D warnings`,
   `nextest --workspace` (Linux, runs at most once), `feature-coverage` for
   feature-gated modules default builds skip (e.g. `adk-agent --features codeact`),
-  as eight shards driven by `scripts/feature-coverage-pairs.txt`, `postgres` (the
+  as eleven shards driven by `scripts/feature-coverage-pairs.txt`, `postgres` (the
   `#[ignore]`d PostgreSQL suites, pgvector and TLS included, against a
   `pgvector/pgvector:pg17` service, driven by `scripts/test-postgres.sh`),
   `docs` (`cargo doc --workspace --no-deps` plus doctests), standalone examples
@@ -320,7 +320,7 @@ docs/official_docs/    Comprehensive documentation site content
 
 `gemini` is the default. All others are opt-in:
 
-- `gemini` (default), `openai`, `anthropic`, `deepseek`, `ollama`, `groq`
+- `gemini` (default), `openai`, `anthropic`, `deepseek`, `ollama`, `groq`, `muse`
 - `gemini-vertex` — Gemini via Vertex AI (Studio + Vertex backends)
 - `gemini-interactions` — Gemini Interactions API (Beta); re-exports `adk_model::gemini::interactions` AND provides the runtime transport toggle on `GeminiModel` (`use_interactions_api`) that drives the standard `LlmAgent`/`Runner`/tool loop through the Interactions endpoint (allowlist, stateful continuity, `bypass_multi_tools_limit`)
 - `openrouter` — OpenRouter native chat, responses, routing, discovery, and credits APIs

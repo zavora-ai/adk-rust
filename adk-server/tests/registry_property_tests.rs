@@ -57,6 +57,7 @@ fn arb_agent_card_with_name(name: String) -> impl Strategy<Value = AgentCard> {
             output_modes: vec![],
             created_at: "2025-01-01T00:00:00Z".to_string(),
             updated_at: None,
+            owner: None,
         },
     )
 }

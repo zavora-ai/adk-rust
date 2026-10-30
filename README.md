@@ -10,7 +10,7 @@
 [![Sponsors](https://img.shields.io/github/sponsors/zavora-ai?logo=githubsponsors&color=EA4AAA)](https://github.com/sponsors/zavora-ai)
 
 A production-ready Rust framework for building AI agents. Model-agnostic, type-safe
-and async, across 43 publishable crates for agent orchestration.
+and async, across 49 publishable crates for agent orchestration.
 
 > **v3.0.0 release candidate — unpublished.** This major release carries breaking
 > API changes: tool calls run through one governed path, the server binds `127.0.0.1`

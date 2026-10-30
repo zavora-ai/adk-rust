@@ -653,7 +653,10 @@ impl FactStore for FileFactStore {
 /// `harness.db`.
 ///
 /// Call [`migrate`](Self::migrate) once before use. The tables are `adk_harness_facts` and
-/// `adk_harness_fact_embeddings`, distinct from every other store's tables.
+/// `adk_harness_fact_embeddings`, distinct from every other store's tables. A change that
+/// reads a fact and writes it back opens with `BEGIN IMMEDIATE`, so it waits for another
+/// writer on the file under the pool's busy timeout instead of failing with `database is
+/// locked`.
 ///
 /// # Example
 ///
@@ -669,6 +672,12 @@ pub struct SqliteFactStore {
     #[cfg(feature = "encrypted")]
     envelope: Option<crate::encrypted::StoreEnvelope>,
 }
+
+/// Opens every transaction that reads a fact and writes it back. A deferred transaction that
+/// has read cannot wait for the write lock: SQLite fails its first write at once, whatever
+/// the busy timeout.
+#[cfg(feature = "sqlite")]
+const BEGIN_WRITE: &str = "BEGIN IMMEDIATE";
 
 #[cfg(feature = "sqlite")]
 impl SqliteFactStore {
@@ -831,7 +840,7 @@ impl SqliteFactStore {
 #[async_trait]
 impl FactStore for SqliteFactStore {
     async fn put(&self, fact: MemoryFact) -> Result<MemoryFact> {
-        let mut tx = self.pool.begin().await.map_err(crate::fsutil::db_error)?;
+        let mut tx = self.pool.begin_with(BEGIN_WRITE).await.map_err(crate::fsutil::db_error)?;
         let existing: Option<(String, String)> = sqlx::query_as(
             "SELECT id, record FROM adk_harness_facts WHERE app_name = ? AND user_id = ? \
              AND project IS ? AND digest = ? AND live = 1 LIMIT 1",
@@ -889,7 +898,7 @@ impl FactStore for SqliteFactStore {
     }
 
     async fn set_status(&self, id: &str, status: FactStatus, _by: &SubjectRef) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(crate::fsutil::db_error)?;
+        let mut tx = self.pool.begin_with(BEGIN_WRITE).await.map_err(crate::fsutil::db_error)?;
         let row: Option<(String,)> =
             sqlx::query_as("SELECT record FROM adk_harness_facts WHERE id = ?")
                 .bind(id)
@@ -947,7 +956,8 @@ impl FactStore for SqliteFactStore {
 
     async fn record_recall(&self, ids: &[String], at: DateTime<Utc>) -> Result<()> {
         for id in ids {
-            let mut tx = self.pool.begin().await.map_err(crate::fsutil::db_error)?;
+            let mut tx =
+                self.pool.begin_with(BEGIN_WRITE).await.map_err(crate::fsutil::db_error)?;
             let row: Option<(String,)> =
                 sqlx::query_as("SELECT record FROM adk_harness_facts WHERE id = ?")
                     .bind(id)
@@ -1057,7 +1067,7 @@ impl FactStore for SqliteFactStore {
     }
 
     async fn restore_assumed(&self, id: &str, _by: &SubjectRef) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(crate::fsutil::db_error)?;
+        let mut tx = self.pool.begin_with(BEGIN_WRITE).await.map_err(crate::fsutil::db_error)?;
         let row: Option<(String,)> =
             sqlx::query_as("SELECT record FROM adk_harness_facts WHERE id = ?")
                 .bind(id)

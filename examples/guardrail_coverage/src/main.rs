@@ -10,13 +10,17 @@
 //!   `OpenAIRealtimeModel` pointed at a scripted WebSocket server speaking the OpenAI Realtime
 //!   event protocol, which records the `function_call_output` each tool call produced.
 //!
-//! The `live_*` scenarios run against OpenAI when `OPENAI_API_KEY` is set.
+//! The `live_openai_*` scenarios run against OpenAI when `OPENAI_API_KEY` is set, and the
+//! `live_anthropic_*` scenarios (`path_allowlist`) against Anthropic when `ANTHROPIC_API_KEY` is
+//! set.
 //!
 //! ```bash
 //! cargo run --manifest-path examples/guardrail_coverage/Cargo.toml
 //! cargo run --manifest-path examples/guardrail_coverage/Cargo.toml -- --scenario preamble_blocked
 //! ```
 
+mod path_allowlist;
+mod pii_cards;
 mod realtime_ws;
 mod scripted;
 mod setup;
@@ -72,6 +76,12 @@ const SCENARIOS: &[&str] = &[
     "realtime_runner_error_redacted",
     "live_openai_preamble",
     "live_openai_realtime",
+    "pii_cards_local",
+    "pii_ip_default",
+    "live_anthropic_pii_cards",
+    "path_allowlist_shapes",
+    "live_anthropic_nested_path",
+    "live_anthropic_array_paths",
 ];
 
 enum Verdict {
@@ -804,6 +814,12 @@ async fn run_scenario(name: &str) -> anyhow::Result<Verdict> {
         "realtime_runner_error_redacted" => realtime_runner_error_redacted().await,
         "live_openai_preamble" => live_openai_preamble().await,
         "live_openai_realtime" => live_openai_realtime().await,
+        "pii_cards_local" => pii_cards::pii_cards_local().await,
+        "pii_ip_default" => pii_cards::pii_ip_default().await,
+        "live_anthropic_pii_cards" => pii_cards::live_anthropic_pii_cards().await,
+        "path_allowlist_shapes" => path_allowlist::path_allowlist_shapes().await,
+        "live_anthropic_nested_path" => path_allowlist::live_anthropic_nested_path().await,
+        "live_anthropic_array_paths" => path_allowlist::live_anthropic_array_paths().await,
         other => anyhow::bail!("unknown scenario `{other}`; known: {}", SCENARIOS.join(", ")),
     }
 }

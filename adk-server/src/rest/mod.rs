@@ -651,7 +651,9 @@ impl ServerBuilder {
     /// `RequestContextExtractor` is configured, every request must authenticate, and an
     /// authenticated run belongs to the caller's user id: the caller lists, reads, cancels,
     /// and wakes only their own runs, another owner's run answers `404`, and the caller's
-    /// idempotency and concurrency keys are scoped to the caller. Mounting
+    /// idempotency and concurrency keys are scoped to the caller. Without one the routes run
+    /// in [open mode](crate::background#open-mode), and [`build`](Self::build) logs a warning
+    /// that says so. Mounting
     /// [`background_runs_router_with_state`](crate::background::background_runs_router_with_state)
     /// yourself skips that layer.
     ///
@@ -675,7 +677,10 @@ impl ServerBuilder {
     /// Serves `POST /api/cron`, `GET /api/cron`, and `GET`/`PATCH`/`DELETE
     /// /api/cron/{job_id}` from `state`. The scheduler is not started here — call
     /// [`start_cron_scheduler`](crate::background::start_cron_scheduler) with a
-    /// clone of the same state on every replica; each fire time is enqueued once.
+    /// clone of the same state on every replica; each fire time is enqueued once. Without a
+    /// `RequestContextExtractor` the routes run in
+    /// [open mode](crate::background#open-mode), and [`build`](Self::build) logs a warning
+    /// that says so.
     ///
     /// # Example
     ///
@@ -760,9 +765,14 @@ impl ServerBuilder {
     /// | `POST /api/admin/unfreeze` | Lifts the freeze; a delegate also resumes what the freeze parked |
     /// | `GET /api/admin/governance` | Reports `{"frozen", "reason", "mirrored", "stale", "runningRuns"}`, where `runningRuns` is `park` under a delegate and `cancel` otherwise |
     ///
-    /// The endpoints carry the same authentication as every other mutation surface. Without
-    /// a `RequestContextExtractor` they are open to anyone who reaches the server, so enable
-    /// them only behind an authenticating layer.
+    /// The endpoints sit behind the auth middleware, and the freeze and the unfreeze admit
+    /// only an administrator: a caller whose
+    /// [`RequestContext::scopes`](adk_core::RequestContext::scopes) include
+    /// [`SecurityConfig::admin_scope`](crate::SecurityConfig::admin_scope) (`"admin"` by
+    /// default). An authenticated caller without it is refused with `403`
+    /// (`governance.forbidden`). Without a `RequestContextExtractor` no request has a caller,
+    /// so both are refused with `401` (`governance.unauthenticated`); the status stays
+    /// readable.
     ///
     /// # Example
     ///
@@ -778,7 +788,8 @@ impl ServerBuilder {
     /// S4), so `POST /api/admin/freeze` parks the running runs the delegate supervises
     /// instead of cancelling the background run stores' runs, and `POST /api/admin/unfreeze`
     /// resumes them. A kernel registers itself here. Implies
-    /// [`enable_governance_endpoints`](Self::enable_governance_endpoints).
+    /// [`enable_governance_endpoints`](Self::enable_governance_endpoints), so the delegate is
+    /// reached only by an administrator's request.
     ///
     /// # Example
     ///
@@ -1034,7 +1045,9 @@ impl ServerBuilder {
         }
 
         if self.governance_endpoints {
-            let controller = controllers::GovernanceController::new(config.governance.clone());
+            let controller = controllers::GovernanceController::new(config.governance.clone())
+                .with_error_details(config.security.expose_error_details)
+                .with_admin_scope(config.security.admin_scope.clone());
             #[cfg(feature = "background")]
             let controller = background_run_stores
                 .iter()
@@ -1055,18 +1068,28 @@ impl ServerBuilder {
 
         // Background runs and cron jobs submit and schedule work, so they carry the
         // same authentication as every other mutation surface.
+        // Without an extractor they run in open mode, announced here rather than per request.
+        #[cfg(feature = "background")]
+        if config.request_context_extractor.is_none() {
+            let routes = match (&self.background_state, &self.cron_state) {
+                (Some(_), Some(_)) => Some("/api/runs, /api/cron"),
+                (Some(_), None) => Some("/api/runs"),
+                (None, Some(_)) => Some("/api/cron"),
+                (None, None) => None,
+            };
+            if let Some(routes) = routes {
+                crate::background::warn_open_mode(routes);
+            }
+        }
         #[cfg(feature = "background")]
         if let Some(state) = self.background_state {
-            api_router = api_router.merge(
-                crate::background::background_runs_router_with_state(state)
-                    .layer(auth_layer.clone()),
-            );
+            api_router =
+                api_router.merge(crate::background::runs_routes(state).layer(auth_layer.clone()));
         }
         #[cfg(feature = "background")]
         if let Some(state) = self.cron_state {
-            api_router = api_router.merge(
-                crate::background::cron_jobs_router_with_state(state).layer(auth_layer.clone()),
-            );
+            api_router = api_router
+                .merge(crate::background::cron::cron_routes(state).layer(auth_layer.clone()));
         }
 
         // Add shutdown endpoint if enabled

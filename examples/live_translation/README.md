@@ -52,7 +52,7 @@ common `XlatEvent` stream (translated audio + source/target transcripts) that
 └───────────┬─────────────────────────────────────────────▲──────────┘
             │ WebSocket /ws?provider=…&target=…            │
 ┌───────────▼─────────────────────────────────────────────┴──────────┐
-│  Axum server (localhost:3055)                                       │
+│  Axum server (127.0.0.1:3055)                                       │
 │   src/translate.rs ── WS ──▶  OpenAI /realtime/translations   OR    │
 │                                Gemini BidiGenerateContent (translate)│
 └─────────────────────────────────────────────────────────────────────┘
@@ -71,7 +71,7 @@ lives entirely server-side.
 
 ```bash
 cargo run --manifest-path examples/live_translation/Cargo.toml
-# → open http://localhost:3055, pick a target language, press “Start translating”, and speak
+# → open http://127.0.0.1:3055, pick a target language, press “Start translating”, and speak
 ```
 
 ### Headless probe (no browser/mic)
@@ -93,6 +93,8 @@ cargo run --manifest-path examples/live_translation/Cargo.toml -- probe gemini e
 
 ## Environment variables
 
+`.env.example` lists them; `.env` is read from the directory you run in or any parent.
+
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `OPENAI_API_KEY` | For OpenAI | OpenAI API key |
@@ -100,7 +102,24 @@ cargo run --manifest-path examples/live_translation/Cargo.toml -- probe gemini e
 | `OPENAI_TRANSLATE_MODEL` | No | Override (default `gpt-realtime-translate`) |
 | `GEMINI_TRANSLATE_MODEL` | No | Override (default `gemini-3.5-live-translate-preview`) |
 | `PORT` | No | Server port (default `3055`) |
+| `BIND_HOST` | No | Address to listen on (default `127.0.0.1`). `0.0.0.0` listens on every interface and logs a warning. |
 | `RUST_LOG` | No | Log level (default `info`) |
+
+## Network exposure
+
+The server has no authentication, and every session it opens spends the provider keys it holds.
+It listens on loopback unless `BIND_HOST` names another address, and prints the address it bound.
+Before setting `BIND_HOST=0.0.0.0`, put authentication in front of the server.
+
+A request whose `Origin` is not this server's page gets `403 Forbidden`, the `/ws` upgrade
+included: browsers apply no CORS to WebSockets, so without the check any site you visit could
+open a session on your keys. The page's origin is `http://` and the bound address, where any
+loopback address and `localhost` count as one host; on `BIND_HOST=0.0.0.0` it is the IP address
+the browser connected to, so open the page by IP address. A request without `Origin` (a
+non-browser client such as `websocat`) is accepted, since such a client could send any `Origin`
+it liked. The check lives in `src/origin.rs`.
+
+CORS stays permissive: the server's only plain HTTP route is the static page.
 
 ## Target languages
 

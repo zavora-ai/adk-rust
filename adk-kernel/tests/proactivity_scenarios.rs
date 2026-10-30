@@ -6,7 +6,7 @@
 
 mod common;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -483,11 +483,14 @@ async fn a_consolidation_item_runs_only_after_a_person_approves_it_in_auto() {
 }
 
 /// The admitted processes of the default partition running now: `Running`, not a
-/// `kernel.wake` run, and not on their way to park.
-async fn admitted(world: &World) -> usize {
+/// `kernel.wake` run, claimed, and not on their way to park. A run is `Running` from its claim,
+/// before admission preempts anything, so only a run whose claim the kernel published — it
+/// publishes after admission wrote the preemption it decided — counts; `claimed` is read
+/// before the stores, so they already show the preempted process parking.
+async fn admitted(world: &World, claimed: &HashSet<String>) -> usize {
     let mut count = 0;
     for run in world.runs.list(RunFilter::default().states([RunState::Running])).await.unwrap() {
-        if run.target == adk_kernel::KERNEL_WAKE_TARGET {
+        if run.target == adk_kernel::KERNEL_WAKE_TARGET || !claimed.contains(&run.run_id) {
             continue;
         }
         let meta = world.processes.get(&run.run_id).await.unwrap();
@@ -534,13 +537,31 @@ async fn k8_a_human_message_preempts_background_work_and_quotas_hold() {
     // Samples the admitted processes every 5 ms for the whole scenario.
     let peak = Arc::new(AtomicUsize::new(0));
     let sampling = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let claimed = Arc::new(Mutex::new(HashSet::<String>::new()));
+    let listener = {
+        let (mut events, claimed) = (kernel.events(), Arc::clone(&claimed));
+        tokio::spawn(async move {
+            while let Some(record) = events.recv().await {
+                if let KernelEvent::Process { pid, to, .. } = record.event {
+                    let mut claimed = claimed.lock().unwrap_or_else(|e| e.into_inner());
+                    if to == RunState::Running {
+                        claimed.insert(pid);
+                    } else {
+                        claimed.remove(&pid);
+                    }
+                }
+            }
+        })
+    };
     let sampler = {
         let (runs, processes) = (Arc::clone(&world.runs), Arc::clone(&world.processes));
-        let (peak, sampling) = (Arc::clone(&peak), Arc::clone(&sampling));
+        let (peak, sampling, claimed) =
+            (Arc::clone(&peak), Arc::clone(&sampling), Arc::clone(&claimed));
         tokio::spawn(async move {
             let probe = World { runs, processes, ..World::answer() };
             while sampling.load(Ordering::SeqCst) {
-                peak.fetch_max(admitted(&probe).await, Ordering::SeqCst);
+                let claimed = claimed.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                peak.fetch_max(admitted(&probe, &claimed).await, Ordering::SeqCst);
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
@@ -597,6 +618,7 @@ async fn k8_a_human_message_preempts_background_work_and_quotas_hold() {
     }
     sampling.store(false, Ordering::SeqCst);
     sampler.await.unwrap();
+    listener.abort();
 
     assert!(
         peak.load(Ordering::SeqCst) <= 3,

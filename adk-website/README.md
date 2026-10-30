@@ -42,10 +42,11 @@ is for each kind of site.
 | `channel` | The owner's chat channel: a paired person's photos into the Steward's draft, alt text confirmed from the thread | §7.8.2, S18, A-I24 |
 | `quotes` | The reviews discovery found, the owner's approvals to quote them, and the launch gate's check | §7.18, S2 |
 | `review` | The weekly review, summarised in plain words on the owner's channel | §7.21 |
+| `learning` | The `playbook-learning` job: decided experiments and KPIs short of the owner's targets into playbook revision proposals with a diff, evidence and expected effect, decided by the owner on a card; versioned playbooks written into the agents' workspaces | §7.15, A-I13 |
 | `wallet` | The wallet as a KPI source and the site's commerce outcomes | §7.14 |
 | `experiments` | Charter KPIs and guardrails as `adk-eval` experiments; variants as their own static files; stable assignment of an anonymous bucket; exposures and goals through the beacon; a daily look; a guardrail breach pauses the job and keeps the control; the decision and evidence in the weekly review | §7.12, A-I15 |
 | `measurement` | KPI sources that are not drivers: the beacon, host logs, the commerce, action and spend ledgers, agent search at the edge, AEO | §7.12, §7.11 |
-| `workflows` | The probe, the upkeep watch, the weekly review and a push to the content repository as kernel runs | §7.20, §7.8.2 |
+| `workflows` | The probe, the upkeep watch, the weekly review, a push to the content repository and the weekly learning run as kernel runs | §7.20, §7.8.2, §7.15 |
 | `observability` | Spans, metrics and the site view | §7.24 |
 | `ui` | `WebsiteDesk`: the setup code, onboarding, the charter cards, the site view, the weekly review and the web editor as views in plain words, and the decisions people make on them, saved across restarts with a `DeskStore`; `adk-surface`'s `website` feature serves them on the web home | §7.8.2, §7.16, §7.18, §7.21, §7.24, §8.2 |
 

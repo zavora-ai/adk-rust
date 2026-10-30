@@ -5,6 +5,7 @@
     feature = "ollama",
     feature = "deepseek",
     feature = "groq",
+    feature = "muse",
     feature = "azure-ai"
 ))]
 pub(crate) fn with_images(
@@ -63,6 +64,7 @@ pub(crate) fn with_images(
     feature = "openai",
     feature = "deepseek",
     feature = "groq",
+    feature = "muse",
     feature = "azure-ai",
     feature = "openrouter"
 ))]
@@ -78,6 +80,7 @@ pub(crate) type CallResponse<'a> = (Option<&'a str>, &'a adk_core::FunctionRespo
     feature = "openai",
     feature = "deepseek",
     feature = "groq",
+    feature = "muse",
     feature = "azure-ai",
     feature = "openrouter"
 ))]
@@ -115,6 +118,7 @@ pub(crate) fn split_function_responses(
     feature = "ollama",
     feature = "deepseek",
     feature = "groq",
+    feature = "muse",
     feature = "bedrock",
     feature = "azure-ai"
 ))]
@@ -135,6 +139,7 @@ pub(crate) fn serialize_tool_result(value: &serde_json::Value) -> String {
         feature = "ollama",
         feature = "deepseek",
         feature = "groq",
+        feature = "muse",
         feature = "azure-ai"
     )
 ))]

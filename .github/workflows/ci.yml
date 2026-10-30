@@ -219,7 +219,7 @@ jobs:
   #
   # To cover another feature-gated module, add ONE line to the pairs file.
   feature-coverage:
-    name: feature-coverage (${{ matrix.shard }}/8)
+    name: feature-coverage (${{ matrix.shard }}/11)
     needs: [fmt, scope]
     if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
@@ -227,7 +227,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -264,14 +264,14 @@ jobs:
     # adk-surface's OpenAPI document and TypeScript types are generated from its Rust types
     # (spec 3.3 §6); the committed ones must match.
     - name: Require adk-surface's generated API to match its Rust types
-      if: matrix.shard == 2
+      if: matrix.shard == 9
       run: bash scripts/check-surface-api.sh
 
     # The web home end to end (spec 3.3 §5.1): Playwright opens the page a scripted kernel
     # serves (`adk-surface/examples/scripted_home.rs`), sees a held call, allows it once and
     # sees it run once. The shard has already built adk-surface with `web`.
     - name: Setup Node.js for the web home end-to-end test
-      if: matrix.shard == 2
+      if: matrix.shard == 9
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
       with:
         node-version: '22'
@@ -279,7 +279,7 @@ jobs:
         cache-dependency-path: adk-surface/web/package-lock.json
 
     - name: Web home end to end
-      if: matrix.shard == 2
+      if: matrix.shard == 9
       working-directory: adk-surface/web
       run: |
         npm ci
@@ -287,7 +287,7 @@ jobs:
         npm run e2e
 
     - name: Keep the end-to-end report
-      if: failure() && matrix.shard == 2
+      if: failure() && matrix.shard == 9
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: web-home-e2e

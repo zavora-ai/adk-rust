@@ -100,6 +100,8 @@ pub enum PriceVendor {
     DeepSeek,
     /// Groq, which hosts open-weight models at its own prices.
     Groq,
+    /// Meta Muse Spark models served by the Meta Model API.
+    Meta,
     /// xAI Grok.
     XAi,
     /// Mistral AI.
@@ -120,6 +122,7 @@ impl PriceVendor {
             }
             Self::DeepSeek => provider == "deepseek",
             Self::Groq => provider == "groq",
+            Self::Meta => provider == "muse",
             Self::XAi => matches!(provider, "xai" | "openrouter"),
             Self::Mistral => matches!(provider, "mistral" | "openrouter"),
         }
@@ -136,6 +139,7 @@ impl PriceVendor {
             Self::Anthropic => provider == "anthropic",
             Self::DeepSeek => provider == "deepseek",
             Self::Groq => provider == "groq",
+            Self::Meta => provider == "muse",
             Self::XAi => provider == "xai",
             Self::Mistral => provider == "mistral",
         }
@@ -883,7 +887,7 @@ fn is_version_suffix(rest: &str) -> bool {
 }
 
 fn standard_catalog() -> PricingCatalog {
-    use PriceVendor::{Anthropic, DeepSeek, Google, Groq, Mistral, OpenAI, XAi};
+    use PriceVendor::{Anthropic, DeepSeek, Google, Groq, Meta, Mistral, OpenAI, XAi};
 
     let gemini = |model: &str, input: f64, output: f64, cache_read: f64| {
         ModelPrice::new(Google, model, ModelRates::new(input, output).with_cache_read(cache_read))
@@ -1041,6 +1045,19 @@ fn standard_catalog() -> PricingCatalog {
         cached(Groq, "gpt-oss-20b", 0.075, 0.30, 0.037),
         cached(Groq, "gpt-oss-safeguard-20b", 0.075, 0.30, 0.0375),
         ModelPrice::new(Groq, "qwen3.8-27b", ModelRates::new(0.80, 4.00)),
+        // ── Meta Muse ──
+        // Source: Meta Model API rate card via dev.meta.ai, retrieved 2026-10-28.
+        // Standard rates cover muse-spark-1.3/1.2/1.1; Contributor checkpoints are
+        // discounted in exchange for training consent.
+        cached(Meta, "muse-spark-1.3", 1.25, 4.25, 0.15),
+        cached(Meta, "muse-spark-1.2", 1.25, 4.25, 0.15),
+        cached(Meta, "muse-spark-1.1", 1.25, 4.25, 0.15),
+        cached(Meta, "muse-spark-1.3-contributor", 0.10, 0.20, 0.002),
+        cached(Meta, "muse-spark-1.2-contributor", 0.10, 0.20, 0.002),
+        cached(Meta, "muse-wonder-1.0", 4.00, 20.00, 0.20),
+        // muse-image-1.0 ($0.01/image), muse-voice-transcribe-1.0 ($0.18/hour), and
+        // sam-3.1 ($2.50/1k images) bill per unit, not per token, so they carry no
+        // token rates here.
         // ── xAI ──
         // Source: https://docs.x.ai/docs/models, retrieved 2026-10-11. Aliases are the ones
         // the page lists for each model; `-latest` and dated suffixes resolve automatically.

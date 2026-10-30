@@ -374,12 +374,14 @@ async fn a_feed_batch_publishes_into_the_journal_and_a_held_one_becomes_a_card()
     let outcome = site.updates.ingest("supplier", vec![record("rye-loaf", 460)]).await.unwrap();
     assert!(!outcome.held && outcome.queued == 1, "{outcome:?}");
     site.updates.drain().await.unwrap();
-    let journaled = site.driver.step().await.unwrap();
-    assert!(journaled.iter().any(|r| r.release_seq == Some(2)), "{journaled:?}");
+    // The served site's own driver steps too and may journal the batch first; a step journals
+    // under the driver's lock, so after this one the journal holds it either way.
+    site.driver.step().await.unwrap();
     let journal = adk_website::deploy::UpdateJournal::new(ProjectPaths::new(dir.path()).journal());
     let lines = journal.batches().unwrap();
     assert!(
-        lines.iter().any(|r| r.published.contains(&ContentId("products/rye-loaf".into()))),
+        lines.iter().any(|r| r.release_seq == Some(2)
+            && r.published.contains(&ContentId("products/rye-loaf".into()))),
         "{lines:?}"
     );
     let feeds: Value =
@@ -415,8 +417,9 @@ async fn a_feed_batch_publishes_into_the_journal_and_a_held_one_becomes_a_card()
         .unwrap();
     site.driver.step().await.unwrap();
     site.updates.drain().await.unwrap();
-    let released = site.driver.step().await.unwrap();
-    assert!(released.iter().any(|r| r.published.len() == 3), "{released:?}");
+    site.driver.step().await.unwrap();
+    let lines = journal.batches().unwrap();
+    assert!(lines.iter().any(|r| r.published.len() == 3), "{lines:?}");
 
     // The weekly review reports the updates (spec 3.5 §7.8.3, §7.21).
     let monday = chrono::Utc::now().date_naive() - chrono::Duration::days(7);
@@ -459,8 +462,14 @@ async fn the_experiments_look_runs_on_its_trigger() {
 /// addresses, IPv4 and IPv6, stand for two visitors.
 #[tokio::test]
 async fn anonymous_callers_are_limited_by_their_own_address() {
-    if std::net::TcpListener::bind("[::]:0").is_err() {
-        eprintln!("no IPv6 on this host; the check needs two loopback addresses");
+    // One edge listener reached from 127.0.0.1 and ::1: an IPv6 socket that takes IPv4 too,
+    // which Linux and macOS give `[::]` and Windows does not.
+    let dual_stack = std::net::TcpListener::bind("[::]:0").is_ok_and(|listener| {
+        let port = listener.local_addr().unwrap().port();
+        std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+    });
+    if !dual_stack {
+        eprintln!("no dual-stack listener on this host; the check needs two loopback addresses");
         return;
     }
     let dir = project(SiteKind::Business).await;

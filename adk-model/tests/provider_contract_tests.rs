@@ -16,6 +16,8 @@ use adk_model::deepseek::{DeepSeekClient, DeepSeekConfig};
 use adk_model::gemini::GeminiModel;
 #[cfg(feature = "groq")]
 use adk_model::groq::{GroqClient, GroqConfig};
+#[cfg(feature = "muse")]
+use adk_model::muse::{MuseClient, MuseConfig};
 #[cfg(feature = "ollama")]
 use adk_model::ollama::{OllamaConfig, OllamaModel};
 #[cfg(feature = "openai")]
@@ -446,6 +448,21 @@ fn groq_default_spec() -> ProviderSpec {
     }
 }
 
+#[cfg(feature = "muse")]
+fn muse_default_spec() -> ProviderSpec {
+    ProviderSpec {
+        name: "muse-default",
+        model_env_candidates: &["MUSE_MODEL", "MUSE_CHEAPEST_MODEL"],
+        default_model: adk_model::catalog::MUSE_DEFAULT,
+        required_envs: &["META_API_KEY"],
+        supports_tools: true,
+        build_model: |model_name| {
+            let api_key = required_env("META_API_KEY")?;
+            Ok(Box::new(MuseClient::new(MuseConfig::new(api_key, model_name))?))
+        },
+    }
+}
+
 #[cfg(feature = "ollama")]
 fn ollama_cheapest_spec() -> ProviderSpec {
     ProviderSpec {
@@ -580,6 +597,8 @@ provider_contract_tests!(anthropic_default_provider, anthropic_default_spec);
 provider_contract_tests!(deepseek_default_provider, deepseek_default_spec);
 #[cfg(feature = "groq")]
 provider_contract_tests!(groq_default_provider, groq_default_spec);
+#[cfg(feature = "muse")]
+provider_contract_tests!(muse_default_provider, muse_default_spec);
 #[cfg(feature = "ollama")]
 provider_contract_tests!(ollama_cheapest_provider, ollama_cheapest_spec);
 #[cfg(feature = "openrouter")]

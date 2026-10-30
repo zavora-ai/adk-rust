@@ -3,7 +3,7 @@
 //! A count that is `null`, missing, or not an integer is unknown, never a reason to fail the
 //! turn, and the object is kept as received in [`UsageMetadata::provider_usage`].
 
-#[cfg(any(feature = "openai", feature = "groq", feature = "deepseek"))]
+#[cfg(any(feature = "openai", feature = "groq", feature = "muse", feature = "deepseek"))]
 use adk_core::UsageMetadata;
 use serde_json::Value;
 
@@ -14,7 +14,7 @@ pub(crate) fn count(usage: &Value, pointer: &str) -> Option<i32> {
 
 /// Normalizes a Chat Completions `usage` object, the shape OpenAI and the compatible
 /// providers (Groq, DeepSeek, and the presets) report.
-#[cfg(any(feature = "openai", feature = "groq", feature = "deepseek"))]
+#[cfg(any(feature = "openai", feature = "groq", feature = "muse", feature = "deepseek"))]
 pub(crate) fn chat_completions(usage: &Value) -> Option<UsageMetadata> {
     if !usage.is_object() {
         return None;
@@ -53,7 +53,7 @@ mod tests {
         assert_eq!(count(&json!({"big": u64::MAX}), "/big"), None);
     }
 
-    #[cfg(any(feature = "openai", feature = "groq", feature = "deepseek"))]
+    #[cfg(any(feature = "openai", feature = "groq", feature = "muse", feature = "deepseek"))]
     #[test]
     fn null_chat_counts_read_as_zero_and_the_total_falls_back_to_the_sum() {
         let usage = json!({

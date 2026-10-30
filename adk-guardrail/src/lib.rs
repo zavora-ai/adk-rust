@@ -72,10 +72,11 @@
 //!
 //! Two call guardrails ship: [`DeniedArgumentPattern`] refuses calls whose serialized arguments
 //! match a regular expression, and [`PathAllowList`] confines path-valued arguments to a set of
-//! roots — comparing by path component, resolving each existing component to reject symlink
-//! escapes, and refusing any path with a `..` component or a missing path argument. It is a
-//! preflight check; filesystem tools exposed across a hostile local trust boundary still need
-//! platform secure-open primitives to eliminate time-of-check/time-of-use races.
+//! roots — checking each named key at any depth of the arguments, comparing by path component,
+//! resolving each existing component to reject symlink escapes, and refusing any path with a `..`
+//! component or a missing path argument. It is a preflight check, so a time-of-check/time-of-use
+//! race remains: a tool that opens files where another process can write must open them relative
+//! to a trusted directory handle, as the `adk-devtools` file tools do.
 //!
 //! `on_tools` limits a guardrail to the named tools, and a tool it does not name is not checked
 //! at all, so name every tool that takes a path.

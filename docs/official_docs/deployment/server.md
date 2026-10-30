@@ -223,7 +223,8 @@ POST /api/run_sse
 
 A tool call arrives as a part `{"name", "args", "id"}` in a model event, and its result as a part
 `{"functionResponse": {"name", "response"}, "id"}` in an event whose content role is `function`. A run that fails after the
-stream starts ends with an event that carries `error_code` and `error_message`.
+stream starts ends with an event that carries `error_code` and `error_message`; see
+[Error details](#error-details) for what `error_message` holds.
 
 > **Note:** A streamed response arrives as partial events (`"partial": true`) followed by a
 > terminal event with the same `id`. When that terminal event carries
@@ -383,10 +384,91 @@ the caller's identity from each request. With one configured:
   user. Without an extractor a job's runs act for the user `cron`.
 - Session and artifact routes whose path names another user's `user_id` answer `403`.
   `POST /api/sessions` creates the session for the authenticated user.
+- `GET /api/debug/trace/{event_id}` is mounted only when `SecurityConfig::expose_admin_debug`
+  is set (`SecurityConfig::development()` sets it). It returns a span, prompt and response
+  attributes included, only to the user named by the span's `adk.user_id`; any other caller
+  gets `403`. Only the span's event ID is matched, so a session ID answers `404`.
 
 `GET /api/health` and routes mounted with `ServerBuilder::add_root_routes` (such as the web
 home's page at `/ui/`) are not authenticated; `/api/apps` and `/api/ui/*` are. See
 [Access control](../security/access-control.md) for extractors built on `adk-auth`.
+
+### Background runs in open mode
+
+Without an extractor, `/api/runs` and `/api/cron` run in open mode, meant for local
+development:
+
+| Aspect | Open mode |
+|--------|-----------|
+| Caller | None is authenticated |
+| A run's user | The request's `userId`, or `anonymous` when it names none |
+| Visibility | Every client lists, reads, cancels (`DELETE /api/runs/{id}`), and wakes (`POST /api/runs/{id}/wake`) every run, and reads, pauses, and deletes every cron job |
+| `idempotencyKey` | Scoped to the run's user: two users' identical keys create two runs, and requests naming no user share `anonymous`'s keys |
+| `concurrencyKey` | Shared by every client |
+| Cron jobs | A job's name is its id, and its runs act for the user `cron` |
+
+A `userId` in the request is a claim, not an identity: open-mode key scoping keeps clients'
+retries apart but authorizes nothing. An open-mode key never matches an authenticated
+caller's key or a cron firing's key.
+
+`ServerBuilder::build` logs a warning when it mounts the routes in open mode, before the first
+request, naming them in `server.routes`:
+
+```text
+WARN adk_server::background: background routes mounted in open mode: no caller is authenticated, so every client can list, read, cancel, and wake every run and cron job, and a run acts for whatever userId its request names; outside local development, mount them with ServerBuilder on a ServerConfig with a RequestContextExtractor (ServerConfig::with_request_context) server.routes="/api/runs, /api/cron"
+```
+
+The standalone routers (`background_runs_router_with_state`, `cron_jobs_router_with_state`)
+always run in open mode and log the same warning when built.
+
+For production:
+
+1. Configure `ServerConfig::with_request_context(extractor)`, so every request to `/api/runs`
+   and `/api/cron` authenticates and each run, job, and key belongs to its caller.
+2. Mount the routes with `ServerBuilder::with_background_runs` and
+   `ServerBuilder::with_cron_jobs`, not the standalone routers.
+3. Treat the open-mode warning in a deployment's startup log as a misconfiguration.
+
+## Agent registry
+
+The `agent-registry` feature adds `adk_server::registry::registry_router(store, extractor)`, a
+catalog of agent cards that `ServerBuilder` does not mount. Every request authenticates
+through `extractor`, which can be the one given to `ServerConfig::with_request_context`, so
+the router needs no other authentication layer:
+
+```rust,no_run
+use std::sync::Arc;
+
+use adk_server::RequestContextExtractor;
+use adk_server::registry::{InMemoryAgentRegistryStore, registry_router};
+use axum::Router;
+
+fn registry_service(extractor: Arc<dyn RequestContextExtractor>) -> Router {
+    let store = Arc::new(InMemoryAgentRegistryStore::new());
+    Router::new().nest("/api", registry_router(store, extractor))
+}
+```
+
+A card belongs to the caller who registered it, recorded as its `owner`:
+
+| Route | Who | Answers |
+|-------|-----|---------|
+| `POST /api/agents` | Any authenticated caller | `201`, the caller owns the card; `409` when the name is registered, by anyone |
+| `GET /api/agents`, `GET /api/agents/{name}` | Any authenticated caller | `200` with any owner's cards; `404` |
+| `PUT /api/agents/{name}` | The card's owner | `200` with the stored card, which keeps `createdAt` and gets a new `updatedAt`; `403` for anyone else; `404` |
+| `DELETE /api/agents/{name}` | The card's owner | `204`; `403` for anyone else; `404` |
+
+- A request the extractor refuses answers `401` (`MissingAuth`, `InvalidToken`, or an empty
+  `user_id`) or `500` (`ExtractionFailed`).
+- The routes set `owner` from the caller's `user_id` and ignore an `owner` in the body.
+- A card without an owner — stored before cards had owners, or inserted through the
+  `AgentRegistryStore` directly — stays readable and answers `403` to `PUT` and `DELETE`;
+  remove or replace it through the store.
+- An `AgentRegistryStore` implements `replace_owned` and `delete_owned` with the owner check
+  and the write in one atomic step.
+
+`examples/agent_registry` runs the routes in process, and group `H` of
+`examples/server_exposure` serves a registry beside a live agent.
 
 ## The web home
 
@@ -564,9 +646,9 @@ let app = ServerBuilder::new(config).enable_governance_endpoints().build();
 
 | Route | Effect |
 |-------|--------|
-| `POST /api/admin/freeze` | Body `{"reason": "..."}`. Freezes the control and answers `{"frozen", "reason", "mirrored", "stale", "runningRuns", "parkedRuns", "cancelledRuns"}` |
-| `POST /api/admin/unfreeze` | Lifts the freeze; a `FreezeDelegate` also resumes what the freeze parked |
-| `GET /api/admin/governance` | Returns `{"frozen", "reason", "mirrored", "stale", "runningRuns"}`; `reason` only while frozen; `runningRuns` is `park` when a `FreezeDelegate` is registered (`ServerBuilder::with_freeze_delegate`, as a kernel does) and `cancel` otherwise |
+| `POST /api/admin/freeze` | Administrators only. Body `{"reason": "..."}`. Freezes the control and answers `{"frozen", "reason", "mirrored", "stale", "runningRuns", "parkedRuns", "cancelledRuns"}`; `503` with `error` added when the shared store cannot be written, this replica frozen regardless |
+| `POST /api/admin/unfreeze` | Administrators only. Lifts the freeze; a `FreezeDelegate` also resumes what the freeze parked. `503` with `error` added when the shared store cannot be written, the freeze kept |
+| `GET /api/admin/governance` | Any caller the auth middleware admits. Returns `{"frozen", "reason", "mirrored", "stale", "runningRuns"}`; `reason` only while frozen; `runningRuns` is `park` when a `FreezeDelegate` is registered (`ServerBuilder::with_freeze_delegate`, as a kernel does) and `cancel` otherwise |
 
 While the control is frozen:
 
@@ -584,9 +666,30 @@ A control built with `GovernanceControl::mirrored` shares the freeze across repl
 `GovernanceStateStore`; `mirrored` and `stale` report its state. See
 [Durable runtime](../core/durable-runtime.md).
 
-> **Important:** the endpoints sit behind the auth middleware. Without a
-> `RequestContextExtractor` anyone who reaches the server can call them, so enable them only
-> behind an authenticating layer.
+An administrator is a caller whose `RequestContext::scopes` include
+`SecurityConfig::admin_scope`, `"admin"` (`ADMIN_SCOPE`) by default. The freeze and the unfreeze
+refuse everyone else and leave the control, and any `FreezeDelegate`, untouched:
+
+| Caller | Freeze or unfreeze | Code |
+|--------|--------------------|------|
+| Authenticated, with the admin scope | `200` | — |
+| Authenticated, without the admin scope | `403` | `governance.forbidden` |
+| None: the server has no `RequestContextExtractor` | `401` | `governance.unauthenticated` |
+| Missing or rejected credentials, with an extractor | `401`, from the auth middleware | — |
+
+Grant the scope from your extractor, and name another one when your identity provider already
+has an administrator role:
+
+```rust
+use adk_server::{SecurityConfig, ServerConfig};
+
+let config = ServerConfig::new(agent_loader, session_service)
+    .with_request_context(extractor)
+    .with_security(SecurityConfig { admin_scope: "ops-admin".to_string(), ..SecurityConfig::default() });
+```
+
+`adk-rust up` mounts the endpoints, and the operator it admits — a loopback peer, or the holder
+of `--auth-token` — carries the `admin` scope beside `operator`.
 
 ## Error Handling
 
@@ -625,6 +728,68 @@ category:
 `requestId`, `retryAfter` (milliseconds), and `upstreamStatusCode` are `null` when not
 available. Session and artifact routes answer with the status code and an empty body. The host
 and origin checks answer `403` with `{"error": "...", "hint": "..."}`.
+
+### Error Details
+
+`SecurityConfig::expose_error_details` decides whose messages reach the client. It is off by
+default and in `SecurityConfig::production`; then a response carries an error's own message
+only when the server wrote it about the request, which takes all three of:
+
+| Condition | Values |
+|-----------|--------|
+| The category rejects the request | `invalid_input`, `unauthorized`, `forbidden`, `not_found`, `unsupported`, `conflict`, `resource_exhausted` |
+| The component handles the request inside the server | `server`, `auth`, `session`, `agent`, `guardrail` |
+| Nothing upstream wrote it | no `upstreamStatusCode` and no provider on the error |
+
+So an unknown app, a missing session, or a frozen kill switch keeps its message. A model provider's response, a tool's service, and a store or driver failure do not:
+their message can name hosts, tables, accounts, or request content, and is replaced by the
+generic message for the error's category.
+
+| Category | Generic message |
+|----------|-----------------|
+| `invalid_input` | `The request is invalid` |
+| `unauthorized` | `Authentication failed` |
+| `forbidden` | `The request is not permitted` |
+| `not_found` | `The requested resource was not found` |
+| `rate_limited` | `Too many requests; retry later` |
+| `timeout` | `The operation timed out` |
+| `unavailable` | `A service the server depends on is unavailable; retry later` |
+| `cancelled` | `The operation was cancelled` |
+| `internal` | `Internal server error` |
+| `unsupported` | `The operation is not supported` |
+| `resource_exhausted` | `A resource budget is used up` |
+| `conflict` | `The request conflicts with the current state` |
+
+The rule applies to every error response the run and governance endpoints write:
+
+| Response | Field |
+|----------|-------|
+| Problem JSON from `POST /api/run`, `/api/run_sse`, and `/api/run/{app}/{user}/{session}` | `error.message`; `code`, `component`, `category`, `requestId`, `retryAfter`, and `upstreamStatusCode` are kept |
+| The error event that ends an SSE run stream | `error_message`, as `{component}.{category}: {message}`, beside `error_code` |
+| The AG-UI `RUN_ERROR` of a `protocol_native` run | `message`, as `{component}.{category}: {message}`, beside `code` |
+| `503` from `POST /api/admin/freeze` and `/api/admin/unfreeze` | `error`, as `{component}.{category}: {message}` |
+
+A model provider that rejects the API key answers `POST /api/run` with `401` and:
+
+```json
+{
+  "error": {
+    "code": "model.anthropic.api_error",
+    "message": "Authentication failed",
+    "component": "model",
+    "category": "unauthorized",
+    "requestId": "req_011CXk...",
+    "retryAfter": null,
+    "upstreamStatusCode": 401
+  }
+}
+```
+
+The full error is logged with `tracing` as `error details withheld from the response`, at
+`error` for a `5xx` status and `warn` otherwise, inside the request's `http.request` span. That
+span's `request.id` is the `x-request-id` the response carries, so a client's report finds the
+log line. `ServerConfig::with_error_details(true)` or `SecurityConfig::development()` sends
+every message as it is; enable it for development only.
 
 ## Host, Origin, and Bind Defaults
 

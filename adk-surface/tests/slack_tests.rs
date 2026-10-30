@@ -244,6 +244,40 @@ async fn a_refused_token_ends_the_connection() {
     assert_eq!(error, SlackError::Unauthorized);
 }
 
+/// Spec 3.5 §10 X12: a paired person's shared images ride with their message, downloaded with
+/// the bot token; a type not taken is left out, and a stranger's files are never downloaded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paired_persons_shared_images_ride_with_the_message() {
+    let api = FakeSlack::start().await;
+    let adapter = SlackAdapter::builder(APP_TOKEN, BOT_TOKEN).api_base(api.url()).build().unwrap();
+    let (_host, capture, gateway) =
+        chat_support::capturing(Arc::new(adapter.clone()), "slack", ANA, ANA_DM).await;
+    let _connection = adapter.start(gateway);
+    eventually("the socket", || async { (api.connections() == 1).then_some(()) }).await;
+    let files = [("rye.png", "image/png"), ("menu.svg", "image/svg+xml")];
+    api.share(ANA, ANA_DM, "Seeded rye on the counter", &files);
+    api.share(STRANGER, STRANGER_DM, "", &[("x.png", "image/png")]);
+    let taken = chat_support::captured(&capture, 2).await;
+    let ana = taken.iter().find(|inbound| inbound.account == ANA).unwrap();
+    assert_eq!(
+        ana.body,
+        adk_kernel::channels::InboundBody::Text { text: "Seeded rye on the counter".into() }
+    );
+    assert_eq!(ana.attachments.len(), 1, "the SVG is not taken");
+    assert_eq!(
+        (ana.attachments[0].media_type.as_str(), ana.attachments[0].name.as_str()),
+        ("image/png", "rye.png")
+    );
+    assert_eq!(ana.attachments[0].bytes, fake_slack::PNG);
+    let stranger = taken.iter().find(|inbound| inbound.account == STRANGER).unwrap();
+    assert!(stranger.attachments.is_empty());
+    assert_eq!(
+        api.downloads(),
+        [format!("Bearer {BOT_TOKEN}")],
+        "Ana's photo alone, with the bot token"
+    );
+}
+
 /// A live Slack app (`SLACK_APP_TOKEN`, `SLACK_BOT_TOKEN`): the socket opens and stays open.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs SLACK_APP_TOKEN and SLACK_BOT_TOKEN"]

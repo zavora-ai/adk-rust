@@ -45,7 +45,7 @@ No feature is enabled by default.
 | `approvals` | `ServerBuilder::with_approval_service`: the `/api/approvals` inbox, `spawn_approval_ticker`, and `WebhookApprovalNotifier` |
 | `openai-webhooks` | `OpenAIWebhookHandler` for OpenAI background-task completion events |
 | `yaml-agent` | `AgentConfigLoader` and `HotReloadWatcher` for YAML agent definitions |
-| `agent-registry` | The agent registry REST API |
+| `agent-registry` | The agent registry REST API, `registry::registry_router(store, extractor)`: every request authenticates through a `RequestContextExtractor`, and only a card's owner updates or deletes it |
 | `agent-engine` | The Gemini Enterprise Agent Platform (ReasoningEngine) dispatch surface and `serve_agent_engine` |
 | `vertex-remote-engine` | `RemoteReasoningEngineAgent`: deployed Agent Engine agents as sub-agents (implies `agent-engine`) |
 | `awp` | `ServerBuilder::awp(AwpEdge)`: the AWP 2.0 agent edge — trust tiers from verified credentials, capabilities over A2A, MCP and HTTP through one governed path, held and exactly-once calls, the public partition's conversation endpoints, event subscriptions, consent receipts and the beacon (implies `a2a-v1`) |
@@ -233,7 +233,7 @@ async fn serve(config: ServerConfig) -> std::io::Result<()> {
 
 ### Governance Kill Switch
 
-`ServerConfig::governance` is shared by every runner the server builds. Freezing it fails new runs and stops running ones before their next model or tool call. `ServerBuilder::enable_governance_endpoints()` mounts `POST /api/admin/freeze`, `POST /api/admin/unfreeze`, and `GET /api/admin/governance` behind the auth middleware; a freeze stops scheduling and requests cancellation of running background runs — a terminate, not a pause — unless a `FreezeDelegate` (`ServerBuilder::with_freeze_delegate`), as a kernel registers, parks them instead; the responses report `parkedRuns`, `cancelledRuns` and `runningRuns` (`park` or `cancel`). A `DurableWorker` whose own control refuses a run after it made a call parks it at its next model-call boundary and wakes it on unfreeze (`DurableWorkerConfig::on_governance_refusal`). With a mirrored control (`GovernanceControl::mirrored`), freeze and unfreeze write the shared `GovernanceStateStore`, and the status reports `mirrored` and `stale`.
+`ServerConfig::governance` is shared by every runner the server builds. Freezing it fails new runs and stops running ones before their next model or tool call. `ServerBuilder::enable_governance_endpoints()` mounts `POST /api/admin/freeze`, `POST /api/admin/unfreeze`, and `GET /api/admin/governance` behind the auth middleware. The freeze and the unfreeze admit only an administrator, a caller whose scopes include `SecurityConfig::admin_scope` (`"admin"` by default): an authenticated caller without it gets `403 governance.forbidden`, and a server without a `RequestContextExtractor` answers both `401 governance.unauthenticated`. A freeze stops scheduling and requests cancellation of running background runs — a terminate, not a pause — unless a `FreezeDelegate` (`ServerBuilder::with_freeze_delegate`), as a kernel registers, parks them instead; the responses report `parkedRuns`, `cancelledRuns` and `runningRuns` (`park` or `cancel`). A `DurableWorker` whose own control refuses a run after it made a call parks it at its next model-call boundary and wakes it on unfreeze (`DurableWorkerConfig::on_governance_refusal`). With a mirrored control (`GovernanceControl::mirrored`), freeze and unfreeze write the shared `GovernanceStateStore`, and the status reports `mirrored` and `stale`.
 
 ```rust
 use adk_core::GovernanceControl;
@@ -383,7 +383,9 @@ fn durable(
 | `POST /runs` with an `idempotencyKey` | Never returned; the key is scoped to the caller, so another user's identical key creates its own run |
 | `POST /runs` with a `concurrencyKey` | Never rejects, queues behind, or interrupts it; the key is scoped to the caller |
 
-Runs the scheduler and webhook hooks enqueue belong to their service user (`cron`, or the hook's user). Without an extractor there is no caller to check: every client reads, lists, cancels, and wakes every run, keys are shared, and the server logs a warning once.
+Runs the scheduler and webhook hooks enqueue belong to their service user (`cron`, or the hook's user).
+
+**Open mode.** Without an extractor no caller is authenticated, and the routes run in open mode, meant for local development: every client reads, lists, cancels, and wakes every run and cron job; a run belongs to the request's `userId` (`anonymous` when absent); an `idempotencyKey` is scoped to that user, so two users' identical keys create two runs; and a `concurrencyKey` is shared by every client. `ServerBuilder::build` logs a warning naming the routes when it mounts them in open mode, and so does building a standalone router. In production, configure `ServerConfig::with_request_context` and mount the routes through `ServerBuilder` (see [Server API](../docs/official_docs/deployment/server.md#background-runs-in-open-mode)).
 
 A cron job is a schedule whose id is its name, evaluated in `timezone` (IANA, default `UTC`), with a `missedFirePolicy` for occurrences missed while the scheduler was behind. Creating a job with an existing name returns `409`.
 
@@ -493,7 +495,7 @@ Session errors map to their status: `404` not found, `409` already exists, `400`
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/debug/trace/{event_id}` | GET | Trace by event ID; mounted without an auth bridge, or with `expose_admin_debug` |
+| `/api/debug/trace/{event_id}` | GET | The span recorded for an event ID; mounted without an auth bridge, or with `expose_admin_debug`, and returned to an authenticated caller only for their own span (`403` otherwise) |
 | `/api/debug/trace/session/{session_id}` | GET | All spans for a session |
 | `/api/debug/graph/{app_name}/{user_id}/{session_id}/{event_id}` | GET | Graph visualization |
 | `/api/apps/{app_name}/users/{user_id}/sessions/{session_id}/events/{event_id}` | GET | Event data |
@@ -575,7 +577,7 @@ The server applies these layers to every route:
 | Agent run timeout | 15 minutes for `/api/run`, `/api/run/{app}/{user}/{session}`, `/api/run_sse`, `/a2a`, and `/a2a/stream` (`run_timeout`, `ServerConfig::with_run_timeout`; `DEFAULT_RUN_TIMEOUT`) |
 | Response headers | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection: 1; mode=block` |
 | Request ID | `x-request-id` |
-| Error details | A2A internal errors read `Internal server error` (`expose_error_details: false`); REST errors carry their code, category, and message |
+| Error details | With `expose_error_details: false`, A2A internal errors read `Internal server error`, and run-endpoint Problem JSON, SSE error events, AG-UI `RUN_ERROR`, and governance `503`s replace a provider's, tool's, or store's message with a generic one for its category; code, category, and request ID are kept, and the full error is logged with the `x-request-id` |
 | User authorization | Session, artifact, and debug endpoints enforce the authenticated user when an auth bridge is configured |
 
 ## Changes in 3.0

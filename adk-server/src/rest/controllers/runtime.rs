@@ -3,6 +3,7 @@ use super::ag_ui_decisions::{
     commit_resume, decision_event, plan_resume,
 };
 use super::ag_ui_extension::{AgUiAction, AgUiExtension};
+use super::error_details;
 use crate::ServerConfig;
 use crate::auth_bridge::{RequestContextError, RequestContextExtractor};
 use crate::rest::controllers::ui::{
@@ -364,13 +365,13 @@ type RuntimeError = (StatusCode, String);
 
 /// Convert an `AdkError` into a `RuntimeError` using the structured error envelope.
 ///
-/// Uses `AdkError::http_status_code()` for the HTTP status and
-/// `AdkError::to_problem_json()` for the response body. The problem JSON
-/// includes `retry_after_ms` when the error carries retry guidance.
-fn adk_err_to_runtime(err: adk_core::AdkError) -> RuntimeError {
+/// Uses `AdkError::http_status_code()` for the HTTP status and the error's Problem JSON for
+/// the response body, its message withheld unless `expose_details` is set or the server wrote
+/// it (see [`SecurityConfig::expose_error_details`](crate::SecurityConfig::expose_error_details)).
+fn adk_err_to_runtime(err: adk_core::AdkError, expose_details: bool) -> RuntimeError {
     let status =
         StatusCode::from_u16(err.http_status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let body = err.to_problem_json().to_string();
+    let body = error_details::problem_json(&err, expose_details).to_string();
     (status, body)
 }
 
@@ -473,10 +474,14 @@ fn serialize_runtime_event(event: &adk_core::Event, profile: UiProfile) -> Optio
     .ok()
 }
 
-fn serialize_runtime_error(error: &adk_core::AdkError, profile: UiProfile) -> Option<String> {
+fn serialize_runtime_error(
+    error: &adk_core::AdkError,
+    profile: UiProfile,
+    expose_details: bool,
+) -> Option<String> {
     let mut event = adk_core::Event::new(String::new());
     event.llm_response.error_code = Some(error.code.to_string());
-    event.llm_response.error_message = Some(error.to_string());
+    event.llm_response.error_message = Some(error_details::display(error, expose_details));
     serialize_runtime_event(&event, profile)
 }
 
@@ -815,6 +820,7 @@ async fn apply_state_delta_to_session(
     user_id: &str,
     session_id: &str,
     state_delta: HashMap<String, Value>,
+    expose_details: bool,
 ) -> Result<(), RuntimeError> {
     if state_delta.is_empty() {
         return Ok(());
@@ -847,7 +853,7 @@ async fn apply_state_delta_to_session(
     session_service
         .append_event_for_identity(adk_session::AppendEventRequest { identity, event })
         .await
-        .map_err(adk_err_to_runtime)
+        .map_err(|error| adk_err_to_runtime(error, expose_details))
 }
 
 /// Creates the session when it does not exist and applies `state_delta` to it when it does.
@@ -862,6 +868,7 @@ async fn ensure_session(
     user_id: &str,
     session_id: &str,
     state_delta: HashMap<String, Value>,
+    expose_details: bool,
 ) -> Result<(), RuntimeError> {
     let existing = session_service
         .get(adk_session::GetRequest {
@@ -880,6 +887,7 @@ async fn ensure_session(
                 user_id,
                 session_id,
                 state_delta,
+                expose_details,
             )
             .await
         }
@@ -901,13 +909,14 @@ async fn ensure_session(
                         user_id,
                         session_id,
                         state_delta,
+                        expose_details,
                     )
                     .await
                 }
-                Err(error) => Err(adk_err_to_runtime(error)),
+                Err(error) => Err(adk_err_to_runtime(error, expose_details)),
             }
         }
-        Err(error) => Err(adk_err_to_runtime(error)),
+        Err(error) => Err(adk_err_to_runtime(error, expose_details)),
     }
 }
 
@@ -1404,11 +1413,13 @@ fn build_runtime_sse_stream<S>(
     session_id: String,
     ag_ui_input: Option<AgUiRunInput>,
     decisions: AgUiDecisions,
-    extension: Option<Arc<dyn AgUiExtension>>,
+    controller: &RuntimeController,
 ) -> std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>
 where
     S: Stream<Item = adk_core::Result<adk_core::Event>> + Send + 'static + Unpin,
 {
+    let extension = controller.ag_ui_extension.clone();
+    let expose_details = controller.config.security.expose_error_details;
     let decision_updates: Vec<Value> =
         decisions.updates.iter().cloned().map(decision_event).collect();
     let selected_thread_id =
@@ -1499,9 +1510,12 @@ where
                             "type": "RUN_ERROR",
                             "threadId": selected_thread_id,
                             "runId": run_id,
-                            "message": error.to_string(),
+                            "message": error_details::display(&error, expose_details),
+                            "code": error.code,
                         }).to_string()));
-                    } else if let Some(payload) = serialize_runtime_error(&error, profile) {
+                    } else if let Some(payload) =
+                        serialize_runtime_error(&error, profile, expose_details)
+                    {
                         yield Ok(Event::default().data(payload));
                     }
                     return;
@@ -1619,6 +1633,8 @@ pub(crate) async fn run_sse_for_request(
     parts: Parts,
     Json(req): Json<RunRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, RuntimeError> {
+    let expose_details = controller.config.security.expose_error_details;
+    let problem = move |error: adk_core::AdkError| adk_err_to_runtime(error, expose_details);
     let headers = parts.headers.clone();
     let ui_profile = resolve_ui_profile(&headers, infer_run_request_protocol(&req))?;
     let transport = resolve_ui_transport(&headers, req.ui_transport.as_deref())?;
@@ -1666,15 +1682,10 @@ pub(crate) async fn run_sse_for_request(
                 after: None,
             })
             .await
-            .map_err(adk_err_to_runtime)?;
+            .map_err(problem)?;
 
         // Load agent
-        let agent = controller
-            .config
-            .agent_loader
-            .load_agent(&app_name)
-            .await
-            .map_err(adk_err_to_runtime)?;
+        let agent = controller.config.agent_loader.load_agent(&app_name).await.map_err(problem)?;
 
         // Create runner
         let mut runner_builder = adk_runner::Runner::builder()
@@ -1704,7 +1715,7 @@ pub(crate) async fn run_sse_for_request(
             runner_builder = runner_builder
                 .run_config(adk_core::RunConfig::builder().approval_service(service).build());
         }
-        let runner = runner_builder.build().map_err(adk_err_to_runtime)?;
+        let runner = runner_builder.build().map_err(problem)?;
 
         // Build content with attachments
         let content = build_content_with_attachments(&req.new_message, &req.attachments)?;
@@ -1715,14 +1726,11 @@ pub(crate) async fn run_sse_for_request(
         }
 
         // Run agent
-        let typed_user_id =
-            UserId::new(effective_user_id).map_err(|err| adk_err_to_runtime(err.into()))?;
+        let typed_user_id = UserId::new(effective_user_id).map_err(|err| problem(err.into()))?;
         let typed_session_id =
-            SessionId::new(session_id.clone()).map_err(|err| adk_err_to_runtime(err.into()))?;
-        let event_stream = runner
-            .run(typed_user_id, typed_session_id, content)
-            .await
-            .map_err(adk_err_to_runtime)?;
+            SessionId::new(session_id.clone()).map_err(|err| problem(err.into()))?;
+        let event_stream =
+            runner.run(typed_user_id, typed_session_id, content).await.map_err(problem)?;
 
         // Convert to SSE stream
         let sse_stream = build_runtime_sse_stream(
@@ -1732,7 +1740,7 @@ pub(crate) async fn run_sse_for_request(
             session_id.clone(),
             None,
             decisions,
-            controller.ag_ui_extension.clone(),
+            &controller,
         );
 
         Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
@@ -1758,6 +1766,8 @@ pub(crate) async fn run_sse_compat_for_request(
     parts: Parts,
     Json(req): Json<RunSseRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, RuntimeError> {
+    let expose_details = controller.config.security.expose_error_details;
+    let problem = move |error: adk_core::AdkError| adk_err_to_runtime(error, expose_details);
     let headers = parts.headers.clone();
     let ui_profile = resolve_ui_profile(&headers, infer_sse_request_protocol(&req))?;
     let transport = resolve_ui_transport(&headers, req.ui_transport.as_deref())?;
@@ -1914,15 +1924,10 @@ pub(crate) async fn run_sse_compat_for_request(
                 after: None,
             })
             .await
-            .map_err(adk_err_to_runtime)?;
+            .map_err(problem)?;
         let events = session.events().all();
         let requested_by = adk_core::principal::SubjectRef::human(caller.user_id.clone());
-        let agent = controller
-            .config
-            .agent_loader
-            .load_agent(&app_name)
-            .await
-            .map_err(adk_err_to_runtime)?;
+        let agent = controller.config.agent_loader.load_agent(&app_name).await.map_err(problem)?;
         requested_call = extension
             .requested_call(AgUiAction {
                 app_name: &app_name,
@@ -1934,7 +1939,7 @@ pub(crate) async fn run_sse_compat_for_request(
                 events: &events,
             })
             .await
-            .map_err(adk_err_to_runtime)?;
+            .map_err(problem)?;
         action_agent = Some(agent);
     }
     let submitting = requested_call.is_some();
@@ -1988,6 +1993,7 @@ pub(crate) async fn run_sse_compat_for_request(
         &effective_user_id,
         &session_id,
         merged_state_delta.clone(),
+        expose_details,
     )
     .await?;
 
@@ -2014,12 +2020,7 @@ pub(crate) async fn run_sse_compat_for_request(
     // Load agent
     let agent = match action_agent {
         Some(agent) => agent,
-        None => controller
-            .config
-            .agent_loader
-            .load_agent(&app_name)
-            .await
-            .map_err(adk_err_to_runtime)?,
+        None => controller.config.agent_loader.load_agent(&app_name).await.map_err(problem)?,
     };
 
     // Create runner with streaming config from request
@@ -2057,21 +2058,19 @@ pub(crate) async fn run_sse_compat_for_request(
     if let Some(request_context) = request_context {
         runner_builder = runner_builder.request_context(request_context);
     }
-    let runner = runner_builder.build().map_err(adk_err_to_runtime)?;
+    let runner = runner_builder.build().map_err(problem)?;
     // A frozen server records no answer: the run would not start.
     if resume_plan.is_some() {
-        controller.config.governance.check().map_err(adk_err_to_runtime)?;
+        controller.config.governance.check().map_err(problem)?;
     }
 
     // Run agent with full content (text + inline data)
-    let typed_user_id =
-        UserId::new(effective_user_id).map_err(|err| adk_err_to_runtime(err.into()))?;
-    let typed_session_id =
-        SessionId::new(session_id.clone()).map_err(|err| adk_err_to_runtime(err.into()))?;
+    let typed_user_id = UserId::new(effective_user_id).map_err(|err| problem(err.into()))?;
+    let typed_session_id = SessionId::new(session_id.clone()).map_err(|err| problem(err.into()))?;
     // `run` refuses a request context of another user before returning; the agent runs only
     // once the stream is read, after the answers are recorded below.
     let event_stream =
-        runner.run(typed_user_id, typed_session_id, content).await.map_err(adk_err_to_runtime)?;
+        runner.run(typed_user_id, typed_session_id, content).await.map_err(problem)?;
     if let Some((service, plan)) = resume_plan {
         decisions.updates = commit_resume(service.as_ref(), plan, decisions.audit.as_ref()).await;
     }
@@ -2084,7 +2083,7 @@ pub(crate) async fn run_sse_compat_for_request(
         session_id.clone(),
         ag_ui_input,
         decisions,
-        extension,
+        &controller,
     );
     // The resume stays in progress until its run's stream ends or is dropped.
     let sse_stream: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =
@@ -2117,6 +2116,8 @@ pub(crate) async fn run_collect_for_request(
     parts: Parts,
     Json(req): Json<RunSseRequest>,
 ) -> Result<Json<Vec<adk_core::Event>>, RuntimeError> {
+    let expose_details = controller.config.security.expose_error_details;
+    let problem = move |error: adk_core::AdkError| adk_err_to_runtime(error, expose_details);
     let app_name = req.app_name.clone();
     let user_id = req.user_id.clone();
     let session_id = req.session_id.clone();
@@ -2159,12 +2160,12 @@ pub(crate) async fn run_collect_for_request(
         &effective_user_id,
         &session_id,
         state_delta,
+        expose_details,
     )
     .await?;
 
     // Load agent
-    let agent =
-        controller.config.agent_loader.load_agent(&app_name).await.map_err(adk_err_to_runtime)?;
+    let agent = controller.config.agent_loader.load_agent(&app_name).await.map_err(problem)?;
 
     // Create runner — always non-streaming for the plain-JSON endpoint
     let mut runner_builder = adk_runner::Runner::builder()
@@ -2193,19 +2194,17 @@ pub(crate) async fn run_collect_for_request(
     if let Some(request_context) = request_context {
         runner_builder = runner_builder.request_context(request_context);
     }
-    let runner = runner_builder.build().map_err(adk_err_to_runtime)?;
+    let runner = runner_builder.build().map_err(problem)?;
 
     // Run agent to completion, collecting every event
-    let typed_user_id =
-        UserId::new(effective_user_id).map_err(|err| adk_err_to_runtime(err.into()))?;
-    let typed_session_id =
-        SessionId::new(session_id).map_err(|err| adk_err_to_runtime(err.into()))?;
+    let typed_user_id = UserId::new(effective_user_id).map_err(|err| problem(err.into()))?;
+    let typed_session_id = SessionId::new(session_id).map_err(|err| problem(err.into()))?;
     let mut event_stream =
-        runner.run(typed_user_id, typed_session_id, content).await.map_err(adk_err_to_runtime)?;
+        runner.run(typed_user_id, typed_session_id, content).await.map_err(problem)?;
 
     let mut events = Vec::new();
     while let Some(event) = event_stream.next().await {
-        events.push(event.map_err(adk_err_to_runtime)?);
+        events.push(event.map_err(problem)?);
     }
 
     info!(event_count = events.len(), "POST /run completed");
@@ -2230,7 +2229,7 @@ mod error_status_tests {
             "run_store.stale_epoch",
             "run is no longer held",
         );
-        let (status, body) = adk_err_to_runtime(error);
+        let (status, body) = adk_err_to_runtime(error, false);
         assert_eq!(status, StatusCode::CONFLICT);
         let body: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(body["error"]["category"], "conflict");

@@ -4,10 +4,12 @@
 //!
 //! ## What This Shows
 //! - Starting an in-process HTTP server hosting the Agent Registry REST API
-//! - Registering agent cards via `POST /api/agents`
+//! - Authenticating every request through a `RequestContextExtractor`
+//! - Registering agent cards via `POST /api/agents`; the caller owns the card
 //! - Listing all agents via `GET /api/agents`
 //! - Retrieving a specific agent by name via `GET /api/agents/{name}`
 //! - Filtering agents by tag via query parameters
+//! - Refusing another user's `DELETE` and letting the owner `PUT` an update
 //! - Deleting an agent and verifying removal with 404
 //!
 //! ## Prerequisites
@@ -20,8 +22,38 @@
 
 use std::sync::Arc;
 
+use adk_server::auth_bridge::{RequestContext, RequestContextError, RequestContextExtractor};
 use adk_server::registry::{AgentCard, InMemoryAgentRegistryStore, registry_router};
 use tracing_subscriber::EnvFilter;
+
+/// Maps two demo bearer tokens to users. A real deployment validates the token with its
+/// identity provider, for example through `adk-auth`'s JWT extractor.
+struct DemoTokens;
+
+#[async_trait::async_trait]
+impl RequestContextExtractor for DemoTokens {
+    async fn extract(
+        &self,
+        parts: &axum::http::request::Parts,
+    ) -> Result<RequestContext, RequestContextError> {
+        let token = parts
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .ok_or(RequestContextError::MissingAuth)?;
+        let user_id = match token {
+            "alice-token" => "alice",
+            "bob-token" => "bob",
+            _ => return Err(RequestContextError::InvalidToken("unknown token".to_string())),
+        };
+        Ok(RequestContext {
+            user_id: user_id.to_string(),
+            scopes: vec![],
+            metadata: Default::default(),
+        })
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -44,9 +76,10 @@ async fn main() -> anyhow::Result<()> {
     println!("📦 Created in-memory agent registry store\n");
 
     // --- Step 2: Build the Axum router with registry routes ---
-    // registry_router() returns a Router with CRUD endpoints for agent cards.
-    // We nest it under /api to get /api/agents and /api/agents/{name}.
-    let app = axum::Router::new().nest("/api", registry_router(store));
+    // registry_router() returns a Router with CRUD endpoints for agent cards. Every
+    // request authenticates through the extractor; a card belongs to the user who
+    // registered it. We nest it under /api to get /api/agents and /api/agents/{name}.
+    let app = axum::Router::new().nest("/api", registry_router(store, Arc::new(DemoTokens)));
 
     // --- Step 3: Start the HTTP server on a random port ---
     // Binding to 127.0.0.1:0 lets the OS assign an available port.
@@ -60,10 +93,23 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Build a reqwest client for calling the registry API.
-    // All routes require an Authorization header (any non-empty value).
+    // Alice registers the cards; Bob is another authenticated user.
     let client = reqwest::Client::new();
     let base_url = format!("http://{addr}/api");
-    let auth_header = "Bearer example-token";
+    let auth_header = "Bearer alice-token";
+    let bob_header = "Bearer bob-token";
+
+    // A token the extractor rejects gets 401 before anything else happens.
+    let resp = client
+        .get(format!("{base_url}/agents"))
+        .header("Authorization", "Bearer not-a-real-token")
+        .send()
+        .await?;
+    println!(
+        "GET /api/agents with an unknown token → {} {} (expected 401)\n",
+        resp.status().as_u16(),
+        resp.status().canonical_reason().unwrap_or("")
+    );
 
     // --- Step 4: Register two agent cards via POST /api/agents ---
     println!("── Register Agents ──────────────────────────────");
@@ -79,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
         output_modes: vec!["text".to_string()],
         created_at: "2025-01-15T10:00:00Z".to_string(),
         updated_at: None,
+        owner: None,
     };
 
     let qa_agent = AgentCard {
@@ -92,6 +139,7 @@ async fn main() -> anyhow::Result<()> {
         output_modes: vec!["text".to_string()],
         created_at: "2025-01-15T11:00:00Z".to_string(),
         updated_at: None,
+        owner: None,
     };
 
     // Register the search agent
@@ -125,13 +173,11 @@ async fn main() -> anyhow::Result<()> {
     println!("  Response: {}\n", serde_json::to_string_pretty(&body)?);
 
     // --- Step 5: List all agents via GET /api/agents ---
-    println!("── List All Agents ─────────────────────────────");
+    // Listing and reading are open to every authenticated caller, so Bob sees Alice's cards.
+    println!("── List All Agents (as Bob) ────────────────────");
 
-    let resp = client
-        .get(format!("{base_url}/agents"))
-        .header("Authorization", auth_header)
-        .send()
-        .await?;
+    let resp =
+        client.get(format!("{base_url}/agents")).header("Authorization", bob_header).send().await?;
     println!(
         "GET /api/agents → {} {}",
         resp.status().as_u16(),
@@ -141,9 +187,10 @@ async fn main() -> anyhow::Result<()> {
     println!("  Found {} agent(s):", agents.len());
     for agent in &agents {
         println!(
-            "    - {} v{}: {}",
+            "    - {} v{} (owner {}): {}",
             agent["name"].as_str().unwrap_or("?"),
             agent["version"].as_str().unwrap_or("?"),
+            agent["owner"].as_str().unwrap_or("?"),
             agent["description"].as_str().unwrap_or("(no description)")
         );
     }
@@ -181,16 +228,9 @@ async fn main() -> anyhow::Result<()> {
         resp.status().canonical_reason().unwrap_or("")
     );
     let filtered: Vec<serde_json::Value> = resp.json().await?;
-    println!(
-        "  Found {} agent(s) with tag 'search':",
-        filtered.len()
-    );
+    println!("  Found {} agent(s) with tag 'search':", filtered.len());
     for agent in &filtered {
-        println!(
-            "    - {} (tags: {:?})",
-            agent["name"].as_str().unwrap_or("?"),
-            agent["tags"]
-        );
+        println!("    - {} (tags: {:?})", agent["name"].as_str().unwrap_or("?"), agent["tags"]);
     }
     println!();
 
@@ -206,19 +246,47 @@ async fn main() -> anyhow::Result<()> {
         resp.status().canonical_reason().unwrap_or("")
     );
     let filtered: Vec<serde_json::Value> = resp.json().await?;
-    println!(
-        "  Found {} agent(s) with tag 'support':",
-        filtered.len()
-    );
+    println!("  Found {} agent(s) with tag 'support':", filtered.len());
     for agent in &filtered {
-        println!(
-            "    - {}",
-            agent["name"].as_str().unwrap_or("?")
-        );
+        println!("    - {}", agent["name"].as_str().unwrap_or("?"));
     }
     println!();
 
-    // --- Step 8: Delete an agent and verify removal ---
+    // --- Step 8: Only the owner changes a card ---
+    // Bob's DELETE of Alice's card is refused with 403; Alice's PUT replaces it.
+    println!("── Ownership ───────────────────────────────────");
+
+    let resp = client
+        .delete(format!("{base_url}/agents/search-agent"))
+        .header("Authorization", bob_header)
+        .send()
+        .await?;
+    println!(
+        "DELETE /api/agents/search-agent as Bob → {} {} (expected 403)",
+        resp.status().as_u16(),
+        resp.status().canonical_reason().unwrap_or("")
+    );
+
+    let updated_agent = AgentCard { version: "1.1.0".to_string(), ..search_agent };
+    let resp = client
+        .put(format!("{base_url}/agents/search-agent"))
+        .header("Authorization", auth_header)
+        .json(&updated_agent)
+        .send()
+        .await?;
+    println!(
+        "PUT /api/agents/search-agent as Alice → {} {}",
+        resp.status().as_u16(),
+        resp.status().canonical_reason().unwrap_or("")
+    );
+    let card: serde_json::Value = resp.json().await?;
+    println!(
+        "  Now v{}, updated at {}\n",
+        card["version"].as_str().unwrap_or("?"),
+        card["updatedAt"].as_str().unwrap_or("?")
+    );
+
+    // --- Step 9: Delete an agent and verify removal ---
     // DELETE /api/agents/{name} returns 204 No Content on success.
     // A subsequent GET should return 404 Not Found.
     println!("── Delete Agent and Verify ─────────────────────");
@@ -255,10 +323,7 @@ async fn main() -> anyhow::Result<()> {
         .send()
         .await?;
     let remaining: Vec<serde_json::Value> = resp.json().await?;
-    println!(
-        "  Remaining agents after deletion: {} (expected 1)",
-        remaining.len()
-    );
+    println!("  Remaining agents after deletion: {} (expected 1)", remaining.len());
     for agent in &remaining {
         println!(
             "    - {} v{}",

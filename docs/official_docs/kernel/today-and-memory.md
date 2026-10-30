@@ -54,6 +54,7 @@ rather than falling back to the start values.
   "areas": [
     {
       "partition": "default",
+      "primary": true,
       "quietTime": [{ "start": "23:00", "end": "06:00" }],
       "dailySpendingLimit": 5000000,
       "spentToday": 1840000,
@@ -66,6 +67,12 @@ rather than falling back to the start values.
   ]
 }
 ```
+
+`primary` marks the area the primary agent works in: the partition the kernel's own target
+(`KernelConfig::app_name`) is bound to — under `adk-rust up`, the coordinator's partition, or
+the first one — else `default`. The turns a terminal or the home sends run there, so both show
+that area's spend today against its daily spending limit. In process, `Kernel::area_settings`
+reads one area as `GET /kernel/settings/{partition}` answers it.
 
 Changes live in the control plane's `ControlStore` (`ControlPlaneConfig::with_control_store`),
 which `adk-rust up` keeps beside its other stores, so they survive a restart:
@@ -146,8 +153,11 @@ through the harness, which updates recall, its index and its own audit records.
 first, as structured fields (`action`, `kernelAction` for the kernel's own records such as
 `approvals.decide` or `settings.mode`, `subject`, `agent` — for an answer, the agent whose call
 it decided — `tool`, `decision` — for a standing rule's record, `allowed` or `denied` — `outcome`,
-`how`, `channel` — a paired device's name for its answers — `surface` and `target`) a surface
-words as "You let Finance use send_email, from Telegram". `GET /kernel/record/check` verifies the whole log against its signed checkpoints:
+`how`, `channel` — a paired device's name for its answers — `surface`, `target`, `title` —
+the item it acted on as the person knows it, such as "News digest" for an answer to an agent's
+screen action or "Finance" for a suggested agent — and, for a call, `toolSource`, its tool's publisher, and `policyRef`, what decided
+it, `confirmation` for a person's answer) a surface words as "You let Finance use send_email, from
+Telegram". `GET /kernel/record/check` verifies the whole log against its signed checkpoints:
 
 | Field | Meaning |
 |---|---|

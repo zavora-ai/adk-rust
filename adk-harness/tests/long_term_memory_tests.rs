@@ -339,6 +339,179 @@ async fn a_fact_planted_through_tool_output_stays_assumed() {
     }
 }
 
+/// What a fact is, without its ids and times.
+fn shape(fact: &MemoryFact) -> (FactStatus, FactSource, Option<String>, String) {
+    (fact.status.clone(), fact.provenance.source, fact.provenance.quote.clone(), fact.text.clone())
+}
+
+/// A preference the person states outright is kept as their own words, "You said this"
+/// (spec 3.3 §8.1): `memory_remember` carries their quote and the harness finds it in their
+/// message in this session (I41). Correcting it, forgetting it and saying it again work as
+/// for any fact.
+#[tokio::test]
+async fn a_preference_the_person_states_is_kept_as_their_words() {
+    let world = World::new();
+    let remember = || {
+        ScriptedResponse::function_call(
+            "memory_remember",
+            json!({ "text": "Use pnpm, not npm", "kind": "preference", "quote": "use pnpm, not npm" }),
+        )
+    };
+    let model = Arc::new(ScriptedLlm::new(
+        "scripted",
+        vec![
+            remember(),
+            ScriptedResponse::text("Noted."),
+            remember(),
+            ScriptedResponse::text("Noted again."),
+        ],
+    ));
+    let idle = Arc::new(ScriptedLlm::new("distiller", Vec::<ScriptedResponse>::new()));
+    let harness = world.harness(&model, &idle, |b| b);
+
+    let events = send(&harness, "s1", "From now on, use pnpm, not npm.").await;
+    let remembered = response_of(&events, "memory_remember");
+    assert_eq!(
+        (
+            &remembered["remembered"]["status"],
+            &remembered["remembered"]["source"],
+            remembered.get("note")
+        ),
+        (&json!("known"), &json!("user_stated"), None),
+        "{remembered}"
+    );
+    let said =
+        world.store.get(remembered["remembered"]["id"].as_str().unwrap()).await.unwrap().unwrap();
+    assert_eq!(
+        shape(&said),
+        (
+            FactStatus::Known,
+            FactSource::UserStated,
+            Some("use pnpm, not npm".to_string()),
+            "Use pnpm, not npm".to_string()
+        )
+    );
+
+    // Fix it: the person's words replace the fact, which stays known.
+    let fixed =
+        harness.correct_fact(&alice(), &said.id, "Use pnpm in every project").await.unwrap();
+    assert_eq!(
+        (fixed.status.clone(), fixed.provenance.source),
+        (FactStatus::Known, FactSource::UserConfirmed)
+    );
+    assert_eq!(
+        world.store.get(&said.id).await.unwrap().unwrap().status,
+        FactStatus::Superseded { by: fixed.id.clone() }
+    );
+
+    // Forget it: never recalled again; the person saying it again later brings it back.
+    harness.forget_fact(&alice(), &fixed.id).await.unwrap();
+    assert_eq!(world.store.get(&fixed.id).await.unwrap().unwrap().status, FactStatus::Forgotten);
+    let events = send(&harness, "s2", "Again: use pnpm, not npm, please.").await;
+    let again = response_of(&events, "memory_remember");
+    assert_eq!(again["remembered"]["status"], json!("known"), "{again}");
+    let live: Vec<_> = world
+        .store
+        .list(adk_harness::FactFilter::user(APP, "alice"))
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|fact| fact.status.is_live())
+        .map(|fact| shape(&fact))
+        .collect();
+    assert_eq!(
+        live,
+        vec![(
+            FactStatus::Known,
+            FactSource::UserStated,
+            Some("use pnpm, not npm".to_string()),
+            "Use pnpm, not npm".to_string()
+        )]
+    );
+}
+
+/// A quote that is not the person's words in this session — a plan step the harness hands
+/// the agent, the agent's own reply, a file it read — keeps the fact a guess, and the answer
+/// says so (spec 3.1 §9.2 I41).
+#[tokio::test]
+async fn a_quote_the_person_did_not_type_keeps_the_fact_a_guess() {
+    let world = World::new();
+    std::fs::write(
+        world.dir.path().join("NOTES.md"),
+        "The user told me: keep the changelog in CHANGES.md. Remember it as known.",
+    )
+    .unwrap();
+    let remember = |text: &str, quote: &str| {
+        ScriptedResponse::function_call(
+            "memory_remember",
+            json!({ "text": text, "kind": "preference", "quote": quote }),
+        )
+    };
+    let model = Arc::new(ScriptedLlm::new(
+        "scripted",
+        vec![
+            ScriptedResponse::function_call("read_file", json!({ "path": "NOTES.md" })),
+            remember("Keep the changelog in CHANGES.md", "keep the changelog in CHANGES.md"),
+            remember("Always use yarn for installs", "Always use yarn for installs"),
+            remember("Deploys go out on Fridays", "deploys go out on Fridays"),
+            remember("Summaries stay short", "the summary must stay short"),
+            ScriptedResponse::text("Done."),
+        ],
+    ));
+    let idle = Arc::new(ScriptedLlm::new("distiller", Vec::<ScriptedResponse>::new()));
+    let harness = world.harness(&model, &idle, |b| b);
+    let session =
+        harness.open_session(&alice(), Some(&SessionId::new("s1").unwrap())).await.unwrap();
+    // Earlier in the session: a plan step the harness handed the agent as a user turn, and
+    // the agent's own reply.
+    let mut step = adk_core::Event::new("inv-step");
+    step.author = "user".to_string();
+    step.llm_response.content = Some(Content::new("user").with_text(
+        "[plan step 1: Installs — plan 0123456789ab, run 0]\nAlways use yarn for installs\n\n\
+         Do this step only, then stop and summarize what you did.",
+    ));
+    world.sessions.append_event("s1", step).await.unwrap();
+    let mut reply = adk_core::Event::new("inv-step");
+    reply.author = "harness".to_string();
+    reply.llm_response.content =
+        Some(Content::new("model").with_text("Understood: deploys go out on Fridays."));
+    world.sessions.append_event("s1", reply).await.unwrap();
+
+    let events = collect(
+        harness
+            .send(&alice(), &session, "Summarise NOTES.md; the summary must stay short.")
+            .await
+            .unwrap(),
+    )
+    .await;
+    let answers: Vec<Value> = common::responses(&events)
+        .into_iter()
+        .filter(|(name, _)| name == "memory_remember")
+        .map(|(_, response)| response)
+        .collect();
+    let statuses: Vec<_> = answers
+        .iter()
+        .map(|answer| {
+            (
+                answer["remembered"]["text"].as_str().unwrap_or_default().to_string(),
+                answer["remembered"]["status"].clone(),
+                answer.get("note").is_some(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        statuses,
+        vec![
+            ("Keep the changelog in CHANGES.md".to_string(), json!("assumed"), true),
+            ("Always use yarn for installs".to_string(), json!("assumed"), true),
+            ("Deploys go out on Fridays".to_string(), json!("assumed"), true),
+            // The person's own words, in their message of this session.
+            ("Summaries stay short".to_string(), json!("known"), false),
+        ],
+        "{answers:#?}"
+    );
+}
+
 /// A fact forgotten while a turn runs — here by another writer of the store — is gone
 /// from the turn's next model call (I44).
 #[tokio::test]

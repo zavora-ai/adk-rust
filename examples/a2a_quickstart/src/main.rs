@@ -1,18 +1,22 @@
 use adk_rust::prelude::*;
 use adk_rust::server::A2aServer;
 use std::sync::Arc;
+use tracing::warn;
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .init();
 
-    let api_key = std::env::var("GOOGLE_API_KEY")
-        .expect("GOOGLE_API_KEY must be set in .env or environment");
+    let api_key =
+        std::env::var("GOOGLE_API_KEY").expect("GOOGLE_API_KEY must be set in .env or environment");
 
-    let model = GeminiModel::new(api_key, "gemini-2.5-flash")?;
+    let model = GeminiModel::new(api_key, "gemini-3.7-flash")?;
 
     let agent: Arc<dyn Agent> = Arc::new(
         LlmAgentBuilder::new("a2a-quickstart-agent")
@@ -22,24 +26,37 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             .build()?,
     );
 
-    let server = A2aServer::builder()
-        .agent(agent)
-        .bind_addr("0.0.0.0:8003")
-        .build()?;
+    // Loopback unless BIND_HOST widens it: the server has no authentication.
+    let host = std::env::var("BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let listener = tokio::net::TcpListener::bind((host.as_str(), 8003)).await?;
+    let addr = listener.local_addr()?;
+    if !addr.ip().is_loopback() {
+        warn!(
+            %addr,
+            "listening beyond loopback without authentication: anyone who can reach this \
+             address can call the agent"
+        );
+    }
 
-    println!("🚀 ADK-Rust A2A agent running on http://localhost:8003");
+    // The agent card advertises the address the listener bound; the listener serves the router.
+    let url = format!("http://{addr}");
+    let server = A2aServer::builder().agent(agent).agent_card_url(&url).build()?;
+
+    println!("🚀 ADK-Rust A2A agent running on {url}");
     println!();
     println!("  Endpoints:");
-    println!("    GET  http://localhost:8003/.well-known/agent-card.json  — Agent card");
-    println!("    POST http://localhost:8003/a2a                          — JSON-RPC (message/send)");
+    println!("    GET  {url}/.well-known/agent-card.json  — Agent card");
+    println!("    POST {url}/a2a                          — JSON-RPC (message/send)");
     println!();
     println!("  Test with curl:");
-    println!("    curl http://localhost:8003/.well-known/agent-card.json | jq .");
+    println!("    curl {url}/.well-known/agent-card.json | jq .");
     println!();
-    println!("    curl -X POST http://localhost:8003/a2a \\");
+    println!("    curl -X POST {url}/a2a \\");
     println!("      -H 'Content-Type: application/json' \\");
-    println!("      -d '{{\"jsonrpc\":\"2.0\",\"method\":\"message/send\",\"params\":{{\"message\":{{\"role\":\"user\",\"parts\":[{{\"kind\":\"text\",\"text\":\"Hello, what can you do?\"}}],\"messageId\":\"test-1\"}}}},\"id\":\"req-1\"}}'");
+    println!(
+        "      -d '{{\"jsonrpc\":\"2.0\",\"method\":\"message/send\",\"params\":{{\"message\":{{\"role\":\"user\",\"parts\":[{{\"kind\":\"text\",\"text\":\"Hello, what can you do?\"}}],\"messageId\":\"test-1\"}}}},\"id\":\"req-1\"}}'"
+    );
 
-    server.serve().await?;
+    axum::serve(listener, server.into_router()).await?;
     Ok(())
 }

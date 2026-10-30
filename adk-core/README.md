@@ -395,7 +395,7 @@ let request = ToolPolicyRequest::new("transfer", json!({ "amount": 500 }));
 assert!(matches!(policy.decide(&request), PolicyDecision::Deny { .. }));
 ```
 
-Build a fingerprint from the request a held call surfaced, or with `ToolConfirmationRequest::for_tool(tool, args).with_acting_context(..)`; `tool_call_fingerprint(name, args)` alone matches no call. `ToolApproval::approve()` and `ToolApproval::deny()` take `with_edited_args`, `with_message`, and an expiry.
+Build a fingerprint from the request a held call surfaced, or with `ToolConfirmationRequest::for_tool(tool, args).with_acting_context(..)`; `tool_call_fingerprint(name, args)` alone, or a request without an acting agent, matches no call, and `RunConfigBuilder::tool_approval` refuses such a fingerprint (`ToolConfirmationRequest::fingerprint_agent`). `ToolApproval::approve()` and `ToolApproval::deny()` take `with_edited_args`, `with_message`, and an expiry.
 
 Provider-executed built-in tools (Gemini Google Search, OpenAI hosted web search, Anthropic web search, and the others) never reach `authorize_tool_call`. `BuiltinToolGovernor` applies the kill switch, the tool-call budget, and the policy to them before each model request: a denied tool, or one that needs an approval that does not exist yet, is withheld from the request. The uses a provider reports are counted in `UsageMetadata::builtin_tool_uses`, against the run's tool-call budget, and in `UsageMetadata::cost`.
 

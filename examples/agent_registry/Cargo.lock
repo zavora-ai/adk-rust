@@ -159,6 +159,7 @@ dependencies = [
  "adk-core",
  "adk-server",
  "anyhow",
+ "async-trait",
  "axum",
  "dotenvy",
  "reqwest",

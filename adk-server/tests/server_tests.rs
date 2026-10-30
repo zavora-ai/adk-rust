@@ -1395,7 +1395,9 @@ async fn test_run_sse_adk_ui_emits_runtime_error_event() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let body_str = String::from_utf8(body.to_vec()).unwrap();
-    assert!(body_str.contains("provider unavailable"));
+    // The model's message is withheld under the default `expose_error_details: false`.
+    assert!(body_str.contains("model.internal: Internal server error"));
+    assert!(!body_str.contains("provider unavailable"));
     assert!(body_str.contains("error_code"));
 }
 
@@ -1435,7 +1437,8 @@ async fn test_run_sse_wrapped_profile_emits_runtime_error_event() {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let body_str = String::from_utf8(body.to_vec()).unwrap();
     assert!(body_str.contains("\"ui_protocol\":\"a2ui\""));
-    assert!(body_str.contains("provider unavailable"));
+    assert!(body_str.contains("model.internal: Internal server error"));
+    assert!(!body_str.contains("provider unavailable"));
     assert!(body_str.contains("error_code"));
 }
 

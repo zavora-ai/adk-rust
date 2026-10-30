@@ -2,6 +2,8 @@
 //!
 //! With a `RequestContextExtractor`, a caller reads, lists, cancels, and wakes only their
 //! own runs, and their idempotency and concurrency keys never reach another owner's run.
+//! Without one the routes run in open mode: every client reaches every run, an idempotency
+//! key is scoped to the user the request names, and the server warns when the routes mount.
 
 #![cfg(feature = "background")]
 
@@ -215,17 +217,22 @@ async fn a_concurrency_key_cannot_reject_or_interrupt_another_owners_run() {
     assert_eq!(body["blockingRunId"], json!(run_id(&alice)));
 }
 
+// ─── Open mode: no extractor ─────────────────────────────────────────────────
+
+/// Submits a run in open mode, naming `user` in the body when given.
+async fn submit_open(app: &Router, user: Option<&str>, extra: Value) -> (StatusCode, Value) {
+    let mut body = json!({ "target": "report", "input": {} });
+    if let Some(user) = user {
+        body["userId"] = json!(user);
+    }
+    body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    send(app, "POST", "/api/runs", None, Some(body)).await
+}
+
 #[tokio::test]
-async fn without_an_extractor_runs_keep_todays_open_behaviour() {
+async fn without_an_extractor_every_client_reads_and_lists_every_run() {
     let app = app(false);
-    let (status, created) = send(
-        &app,
-        "POST",
-        "/api/runs",
-        None,
-        Some(json!({ "target": "report", "input": {}, "userId": "alice", "idempotencyKey": "k" })),
-    )
-    .await;
+    let (status, created) = submit_open(&app, Some("alice"), json!({})).await;
     assert_eq!(status, StatusCode::CREATED);
     let id = run_id(&created);
 
@@ -234,16 +241,151 @@ async fn without_an_extractor_runs_keep_todays_open_behaviour() {
     let (status, body) = send(&app, "GET", "/api/runs", None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.as_array().unwrap().len(), 1);
+}
 
-    let (status, again) = send(
-        &app,
-        "POST",
-        "/api/runs",
-        None,
-        Some(json!({ "target": "report", "input": {}, "userId": "bob", "idempotencyKey": "k" })),
-    )
-    .await;
-    assert_eq!((status, run_id(&again)), (StatusCode::OK, id), "keys stay global, as before");
+#[tokio::test]
+async fn without_an_extractor_any_client_wakes_and_cancels_any_run() {
+    let app = app(false);
+    let (_, created) = submit_open(&app, Some("alice"), json!({})).await;
+    let run = format!("/api/runs/{}", run_id(&created));
+    let wake = format!("{run}/wake");
+
+    let (status, body) = send(&app, "POST", &wake, None, None).await;
+    assert_eq!((status, &body["status"]), (StatusCode::OK, &json!("queued")), "{body}");
+    let (status, body) = send(&app, "DELETE", &run, None, None).await;
+    assert_eq!((status, &body["status"]), (StatusCode::OK, &json!("cancelled")), "{body}");
+    let (_, body) = send(&app, "GET", &run, None, None).await;
+    assert_eq!(body["status"], "cancelled");
+
+    for (method, uri) in [("DELETE", "/api/runs/absent"), ("POST", "/api/runs/absent/wake")] {
+        let (status, body) = send(&app, method, uri, None, None).await;
+        assert_eq!(
+            (status, body),
+            (StatusCode::NOT_FOUND, json!({ "error": "run not found" })),
+            "{method} {uri}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn without_an_extractor_an_idempotency_key_is_scoped_to_the_named_user() {
+    let app = app(false);
+    let key = json!({ "idempotencyKey": "webhook:evt_1" });
+
+    let (status, alice) = submit_open(&app, Some("alice"), key.clone()).await;
+    assert_eq!((status, &alice["existing"]), (StatusCode::CREATED, &json!(false)));
+    let (status, bob) = submit_open(&app, Some("bob"), key.clone()).await;
+    assert_eq!(
+        (status, &bob["existing"]),
+        (StatusCode::CREATED, &json!(false)),
+        "bob's key is not alice's: a new run, not hers"
+    );
+    assert_ne!(run_id(&alice), run_id(&bob));
+
+    let (status, again) = submit_open(&app, Some("alice"), key.clone()).await;
+    assert_eq!((status, run_id(&again)), (StatusCode::OK, run_id(&alice)), "alice's retry");
+
+    // Requests naming no user are all `anonymous`, so they share one user's keys.
+    let (status, first) = submit_open(&app, None, key.clone()).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, second) = submit_open(&app, None, key).await;
+    assert_eq!((status, run_id(&second)), (StatusCode::OK, run_id(&first)));
+
+    let (status, _) = submit_open(&app, Some("alice"), json!({ "idempotencyKey": "" })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "an empty key is still refused");
+}
+
+#[tokio::test]
+async fn without_an_extractor_a_key_cannot_take_a_schedule_firing() {
+    let (app, background, cron) = app_with_state(false);
+    let (status, _) = send(&app, "POST", "/api/cron", None, Some(nightly())).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let schedule = cron.schedules.get("nightly").await.unwrap().expect("stored under its name");
+    let fire_at = schedule.next_fire_at.expect("a next fire time");
+
+    let firing_key = adk_core::schedule::firing_idempotency_key("nightly", fire_at);
+    let (status, _) =
+        submit_open(&app, Some("cron"), json!({ "idempotencyKey": firing_key })).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let fired = background.run_store().enqueue(schedule.run_for(fire_at)).await.unwrap();
+    assert!(
+        matches!(fired, adk_core::Enqueued::Created(_)),
+        "the firing is its own run, not the client's: {fired:?}"
+    );
+}
+
+/// Collects formatted tracing output.
+#[derive(Clone, Default)]
+struct CapturedLogs(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl CapturedLogs {
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+    }
+}
+
+impl std::io::Write for CapturedLogs {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedLogs {
+    type Writer = CapturedLogs;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+/// The open-mode warnings `work` logs, one entry per warning.
+fn open_mode_warnings(work: impl FnOnce()) -> Vec<String> {
+    let logs = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(logs.clone())
+        .with_max_level(tracing::Level::WARN)
+        .with_ansi(false)
+        .finish();
+    tracing::subscriber::with_default(subscriber, work);
+    logs.text().lines().filter(|line| line.contains("open mode")).map(str::to_string).collect()
+}
+
+#[tokio::test]
+async fn open_mode_is_announced_when_the_routes_mount_not_on_a_request() {
+    let mut open = None;
+    let warnings = open_mode_warnings(|| open = Some(app(false)));
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("WARN"), "{warnings:?}");
+    assert!(warnings[0].contains("server.routes=\"/api/runs, /api/cron\""), "{warnings:?}");
+
+    let warnings = open_mode_warnings(|| drop(app(true)));
+    assert_eq!(warnings, Vec::<String>::new(), "an extractor authenticates every caller");
+
+    let warnings = open_mode_warnings(|| {
+        let background = BackgroundState::new().with_embedded_worker(false);
+        drop(adk_server::background::background_runs_router_with_state(background.clone()));
+        drop(adk_server::background::cron_jobs_router_with_state(CronState::new(background)));
+    });
+    assert_eq!(warnings.len(), 2, "each standalone router warns: {warnings:?}");
+
+    let open = open.unwrap();
+    let logs = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt().with_writer(logs.clone()).with_ansi(false).finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    let (status, _) = submit_open(&open, Some("alice"), json!({})).await;
+    drop(guard);
+    assert_eq!(status, StatusCode::CREATED);
+    let logs = logs.text();
+    assert!(
+        !logs.contains("open mode") && !logs.contains("authenticated caller"),
+        "no warning per request: {logs}"
+    );
 }
 
 // ─── Authenticated runs and cron owners (spec 3.1 §8.2, §9.2 I6) ──────────────

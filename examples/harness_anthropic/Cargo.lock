@@ -251,6 +251,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "libc",
  "opentelemetry",
  "reqwest",
  "serde",

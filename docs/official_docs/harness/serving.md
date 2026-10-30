@@ -32,8 +32,8 @@ The server's routes need an authenticated caller; the harness mount always has o
 
 | Listening on | Caller | Identity |
 |---|---|---|
-| `127.0.0.1` / `::1` (default) | Any loopback peer | `LoopbackOperatorExtractor`: the OS user, scope `operator` |
-| Any other address | `Authorization: Bearer <token>` | `BearerTokenExtractor`: `--auth-token` or `ADK_SERVE_TOKEN`, compared in constant time |
+| `127.0.0.1` / `::1` (default) | Any loopback peer | `LoopbackOperatorExtractor`: the OS user, scopes `operator` and `admin` |
+| Any other address | `Authorization: Bearer <token>` | `BearerTokenExtractor`: `--auth-token` or `ADK_SERVE_TOKEN`, compared in constant time; the OS user, scopes `operator` and `admin` |
 
 Without a token, `serve` refuses a non-loopback `--host`. `--mode auto` beyond loopback also
 needs `--sandbox`. The served harness applies standing rules and auto mode only to runs whose

@@ -37,10 +37,35 @@ pub struct AgentFilter {
     pub version_range: Option<String>,
 }
 
+/// The outcome of a write that only a card's owner may make.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_server::registry::{AgentRegistryStore, InMemoryAgentRegistryStore, OwnerWrite};
+///
+/// # async fn demo() -> adk_core::Result<()> {
+/// let store = InMemoryAgentRegistryStore::new();
+/// assert_eq!(store.delete_owned("absent", "alice").await?, OwnerWrite::NotFound);
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnerWrite {
+    /// The card belonged to the caller and the write happened.
+    Applied,
+    /// No card has that name.
+    NotFound,
+    /// The card belongs to another user or has no owner; nothing changed.
+    NotOwner,
+}
+
 /// Async trait for agent registry storage backends.
 ///
 /// Implementations must be `Send + Sync` to support concurrent access
-/// from Axum route handlers.
+/// from Axum route handlers. A backend that persists cards stores
+/// [`AgentCard::owner`]; a card stored without one reads back with `owner: None`, which the
+/// routes treat as owned by no one.
 #[async_trait]
 pub trait AgentRegistryStore: Send + Sync {
     /// Insert a new agent card into the store.
@@ -58,10 +83,24 @@ pub trait AgentRegistryStore: Send + Sync {
     /// An empty filter returns all cards.
     async fn list(&self, filter: &AgentFilter) -> adk_core::Result<Vec<AgentCard>>;
 
-    /// Delete an agent card by name.
+    /// Delete an agent card by name, whoever owns it.
     ///
     /// Returns `true` if the agent was found and removed, `false` if it did not exist.
     async fn delete(&self, name: &str) -> adk_core::Result<bool>;
+
+    /// Replace the card named `card.name` with `card` when the stored card's owner is
+    /// `owner`.
+    ///
+    /// The owner check and the write must be one atomic step, so a card that another user
+    /// registered under the same name after the caller read it is never overwritten. A card
+    /// without an owner is never replaced.
+    async fn replace_owned(&self, card: AgentCard, owner: &str) -> adk_core::Result<OwnerWrite>;
+
+    /// Delete the card named `name` when its owner is `owner`.
+    ///
+    /// The owner check and the removal must be one atomic step, as in
+    /// [`replace_owned`](Self::replace_owned). A card without an owner is never deleted.
+    async fn delete_owned(&self, name: &str, owner: &str) -> adk_core::Result<OwnerWrite>;
 
     /// Check whether an agent with the given name and version exists.
     async fn exists(&self, name: &str, version: &str) -> adk_core::Result<bool>;
@@ -132,6 +171,30 @@ impl AgentRegistryStore for InMemoryAgentRegistryStore {
         let store = self.cards.read().await;
         Ok(store.get(name).is_some_and(|card| card.version == version))
     }
+
+    async fn replace_owned(&self, card: AgentCard, owner: &str) -> adk_core::Result<OwnerWrite> {
+        let mut store = self.cards.write().await;
+        let Some(stored) = store.get_mut(&card.name) else {
+            return Ok(OwnerWrite::NotFound);
+        };
+        if stored.owner.as_deref() != Some(owner) {
+            return Ok(OwnerWrite::NotOwner);
+        }
+        *stored = card;
+        Ok(OwnerWrite::Applied)
+    }
+
+    async fn delete_owned(&self, name: &str, owner: &str) -> adk_core::Result<OwnerWrite> {
+        let mut store = self.cards.write().await;
+        match store.get(name) {
+            None => Ok(OwnerWrite::NotFound),
+            Some(card) if card.owner.as_deref() == Some(owner) => {
+                store.remove(name);
+                Ok(OwnerWrite::Applied)
+            }
+            Some(_) => Ok(OwnerWrite::NotOwner),
+        }
+    }
 }
 
 /// Check whether an agent card matches the given filter criteria.
@@ -168,7 +231,12 @@ mod tests {
             output_modes: vec![],
             created_at: "2025-01-01T00:00:00Z".to_string(),
             updated_at: None,
+            owner: None,
         }
+    }
+
+    fn owned_card(name: &str, version: &str, owner: Option<&str>) -> AgentCard {
+        AgentCard { owner: owner.map(String::from), ..make_card(name, version, vec![]) }
     }
 
     #[tokio::test]
@@ -276,5 +344,51 @@ mod tests {
         let results = store.list(&filter).await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "search-agent");
+    }
+
+    #[tokio::test]
+    async fn test_replace_owned_only_by_owner() {
+        let store = InMemoryAgentRegistryStore::new();
+        store.insert(owned_card("agent-a", "1.0.0", Some("alice"))).await.unwrap();
+
+        let by_bob = store.replace_owned(owned_card("agent-a", "6.6.6", Some("bob")), "bob");
+        assert_eq!(by_bob.await.unwrap(), OwnerWrite::NotOwner);
+        assert_eq!(
+            store.get("agent-a").await.unwrap(),
+            Some(owned_card("agent-a", "1.0.0", Some("alice")))
+        );
+
+        let by_alice = store.replace_owned(owned_card("agent-a", "1.1.0", Some("alice")), "alice");
+        assert_eq!(by_alice.await.unwrap(), OwnerWrite::Applied);
+        assert_eq!(
+            store.get("agent-a").await.unwrap(),
+            Some(owned_card("agent-a", "1.1.0", Some("alice")))
+        );
+
+        let absent = store.replace_owned(owned_card("absent", "1.0.0", Some("alice")), "alice");
+        assert_eq!(absent.await.unwrap(), OwnerWrite::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_delete_owned_only_by_owner() {
+        let store = InMemoryAgentRegistryStore::new();
+        store.insert(owned_card("agent-a", "1.0.0", Some("alice"))).await.unwrap();
+
+        assert_eq!(store.delete_owned("agent-a", "bob").await.unwrap(), OwnerWrite::NotOwner);
+        assert!(store.get("agent-a").await.unwrap().is_some());
+        assert_eq!(store.delete_owned("agent-a", "alice").await.unwrap(), OwnerWrite::Applied);
+        assert_eq!(store.get("agent-a").await.unwrap(), None);
+        assert_eq!(store.delete_owned("agent-a", "alice").await.unwrap(), OwnerWrite::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_card_without_owner_is_changed_by_no_one() {
+        let store = InMemoryAgentRegistryStore::new();
+        store.insert(owned_card("legacy", "1.0.0", None)).await.unwrap();
+
+        let replaced = store.replace_owned(owned_card("legacy", "2.0.0", Some("alice")), "alice");
+        assert_eq!(replaced.await.unwrap(), OwnerWrite::NotOwner);
+        assert_eq!(store.delete_owned("legacy", "").await.unwrap(), OwnerWrite::NotOwner);
+        assert_eq!(store.get("legacy").await.unwrap(), Some(owned_card("legacy", "1.0.0", None)));
     }
 }

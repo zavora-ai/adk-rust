@@ -18,10 +18,11 @@ use adk_core::{
     ApprovalScope, ApprovalStore, DeclarativePolicy, EventActions, InMemoryApprovalStore, Result,
     RunConfig, Tool, ToolApproval, ToolConfirmationRequest, ToolContext, ToolEffect,
 };
-use adk_realtime::ServerEvent;
+use adk_realtime::config::ToolDefinition;
 use adk_realtime::integration::IntegratedRealtimeRunner;
-use adk_realtime::runner::DEFAULT_REALTIME_AGENT_NAME;
+use adk_realtime::runner::{DEFAULT_REALTIME_AGENT_NAME, FnToolHandler, REALTIME_HANDLER_ORIGIN};
 use adk_realtime::scripted::{self, ScriptedRealtimeModel, ScriptedReply};
+use adk_realtime::{ServerEvent, ToolCall};
 use adk_session::{CreateRequest, GetRequest, InMemorySessionService, SessionService};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -267,6 +268,68 @@ async fn concurrent_dispatch_surfaces_the_hold_while_events_keep_flowing() {
     assert_eq!(executions.load(Ordering::SeqCst), 0);
     // The provider's own events were still read after the call was dispatched.
     assert!(events.iter().any(|event| matches!(event, ServerEvent::TranscriptDelta { .. })));
+    let _ = runner.close().await;
+}
+
+/// Every hold the integrated runner records names the runner's agent: an ADK tool's with
+/// the tool's own origin, a native handler's with the `realtime` origin of its definition
+/// (#1210).
+#[tokio::test]
+async fn every_hold_names_the_runner_agent_and_the_tool_origin() {
+    let agent = format!("urn:adk:agent:{APP}/{DEFAULT_REALTIME_AGENT_NAME}");
+    let names_agent = |request: &ToolConfirmationRequest| {
+        assert_eq!(request.acting.as_ref().map(|a| a.agent.id.as_str()), Some(agent.as_str()));
+        assert_eq!(
+            ToolConfirmationRequest::fingerprint_agent(&request.fingerprint()),
+            Some(agent.as_str())
+        );
+    };
+
+    let (runner, _model, _sessions, _executions, _store) = held_bash_runner(false).await;
+    runner.send_text("what's failing in the build?").await.unwrap();
+    let (_, request) = holds(&drain(&runner).await).remove(0);
+    names_agent(&request);
+    let shell = Shell { executions: Arc::new(AtomicUsize::new(0)) };
+    assert_eq!(request.origin, Some(adk_core::ToolOrigin::of(&shell)));
+    let _ = runner.close().await;
+
+    let model = ScriptedRealtimeModel::new(vec![
+        ScriptedReply::new(vec![scripted::response_created()]).on_connect(),
+        ScriptedReply::new(scripted::calls("call-2", "refund", json!({ "order": "A-1" })))
+            .on_text(),
+        ScriptedReply::new(scripted::spoken("That needs your approval.")).on_tool_output(),
+    ])
+    .with_idle_timeout(Duration::from_millis(100));
+    let store = Arc::new(InMemoryApprovalStore::new());
+    let refund = ToolDefinition::new("refund").with_description("Refunds an order");
+    let policy = DeclarativePolicy::builder().require_approval("refund", "refunds need a person");
+    let runner = IntegratedRealtimeRunner::builder()
+        .model(Arc::new(model))
+        .identity(APP, USER, SESSION)
+        .session_service(sessions().await)
+        .tool(
+            refund.clone(),
+            FnToolHandler::new(|_call: &ToolCall| Ok(json!({ "refunded": true }))),
+        )
+        .tool_governance(
+            RunConfig::builder()
+                .tool_policy(Arc::new(policy.build()))
+                .approval_store(store.clone())
+                .build(),
+        )
+        .build()
+        .unwrap();
+    runner.connect().await.unwrap();
+    runner.send_text("refund order A-1").await.unwrap();
+    drain(&runner).await;
+    let pending = store.pending(&scope()).await.unwrap();
+    let [held] = pending.as_slice() else { panic!("the native call is held: {pending:?}") };
+    names_agent(&held.request);
+    assert_eq!(held.request.origin, Some(refund.handler_origin()));
+    assert_eq!(
+        held.request.origin.as_ref().map(|origin| origin.source.as_str()),
+        Some(REALTIME_HANDLER_ORIGIN)
+    );
     let _ = runner.close().await;
 }
 

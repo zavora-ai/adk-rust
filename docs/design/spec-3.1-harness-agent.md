@@ -404,7 +404,7 @@ pub enum ToolKind {
     ShellEscalation, // bash with unsandboxed: true
     Delegate,        // team member tools
     MemoryWrite,     // memory_write, memory_delete
-    MemoryPropose,   // memory_remember: assumed long-term facts only (§7.15.2)
+    MemoryPropose,   // memory_remember: long-term facts, assumed unless the user's quote verifies (§7.15.2)
     Web { allowlisted: bool },   // web_fetch, web_search: whether the URL's host is in the allowlist (§7.20)
     Payment,         // payments pack tools (never waivable)
     ComputerUse,     // computer_use_execute: a desktop action (never waivable, §7.24)
@@ -463,8 +463,10 @@ pub struct StandingRule {
     pub scope: RuleScope,                // User { app_name, user_id, subject_kind } | Session { .., session_id }
     pub tool: String,                    // glob
     pub origin: OriginPin,               // Exact { source, declaration_digest } | AnyDeclaration { source } (operator-only)
+                                         // | ExactEach { source, declarations } (a folder rule's tools, spec 3.3 §8.2)
     pub agent: Option<String>,           // AgentId glob
     pub predicates: Vec<RulePredicate>,  // Arg(ArgSpec) | ShellPrefix { pointer, tokens } | PathWithin { pointer, dir }
+                                         // | WritesWithin { dir } (a folder rule, spec 3.3 §8.2)
     pub decision: StandingDecision,      // Allow | Deny { reason }
     pub created_by: SubjectRef,
     pub created_at: DateTime<Utc>,
@@ -496,7 +498,7 @@ pub trait StandingRuleStore: fmt::Debug + Send + Sync {
 
 Rules are evaluated in `HarnessPolicy`, not in the confirmation handler: the policy runs on every path before a call can be held ([`governance.rs:1578-1667`](../../adk-core/src/governance.rs)), while the handler is consulted only on live surfaces (1940-1942) and server or durable runs park the call as `Pending`. This needs the policy to see the call's origin, which is core change C1 ([§10](#10-changes-outside-the-new-crate)). If C1 is rejected, the fallback is a handler re-check against `request.origin` ([`context.rs:1176`](../../adk-core/src/context.rs)) plus an `ApprovalNotifier` that auto-decides matching held requests, at the cost of a park-and-wake per call.
 
-A rule is created only by an authenticated human action: `PromptAnswer::ApproveAndRemember` on a prompt the human answered, `Harness::decide(.., HarnessDecision::ApproveAndRemember(..))`, `adk-rust rules add`, or the authenticated REST API. Suggestions offered at a prompt: for bash, `ShellPrefix` on the first one or two tokens (User scope), flagged when the command runs scripts (`cargo test`, `npm test`, `make`); for edits, `PathWithin` the root (Session scope) or the file's directory; for externals, any arguments for this tool pinned to its exact origin; for web, `Arg(DomainIn { pointer: "/url", domains: [host] })` on the exact host the call named (User scope), never a wildcard the human did not type ([§7.20](#720-external-content-under-governance-feature-web)).
+A rule is created only by an authenticated human action: `PromptAnswer::ApproveAndRemember` on a prompt the human answered, `Harness::decide(.., HarnessDecision::ApproveAndRemember(..))`, `adk-rust rules add`, or the authenticated REST API. Suggestions offered at a prompt: for bash, `ShellPrefix` on the first one or two tokens (User scope), flagged when the command runs scripts (`cargo test`, `npm test`, `make`); for edits, `PathWithin` the root (Session scope) or the file's directory; for externals, any arguments for this tool pinned to its exact origin; for web, `Arg(DomainIn { pointer: "/url", domains: [host] })` on the exact host the call named (User scope), never a wildcard the human did not type ([§7.20](#720-external-content-under-governance-feature-web)). A surface's "Always allow for this folder" (spec 3.3 §8.2) offers one rule for every file write in the file's folder instead: tool `*`, `ExactEach` over the exact declarations of `write_file`, `edit_file` and `apply_patch`, and `WritesWithin { dir }`, which holds only for a call that writes files — never a delete or a move — whose every path is within `dir` as `PathWithin` resolves it (Session scope).
 
 ```rust
 #[async_trait]
@@ -747,7 +749,7 @@ The harness remembers in two tiers. References in this section cite `origin/main
 | Tier | Holds | Written by | Read by | Store |
 |---|---|---|---|---|
 | Working notes (§7.15.1) | Topic files the agent keeps deliberately, readable and editable by a person | `memory_write`, non-waivable | `memory_read`; the index in the untrusted block | `FileMemory` |
-| Long-term facts (§7.15.2) | Distilled facts with provenance: preferences, project facts, procedures, outcomes, decisions, corrections | `memory_remember` (assumed only), session distillation, verified user quotes, human promotion | Recall into the untrusted block on each user turn; `memory_search` | `FactStore` (system of record) and `FactIndex` (recall) |
+| Long-term facts (§7.15.2) | Distilled facts with provenance: preferences, project facts, procedures, outcomes, decisions, corrections | `memory_remember` (assumed, or known from a verified user quote), session distillation, verified user quotes, human promotion | Recall into the untrusted block on each user turn; `memory_search` | `FactStore` (system of record) and `FactIndex` (recall) |
 
 #### 7.15.1 Working notes
 
@@ -818,7 +820,7 @@ The `FactStore` is the system of record and the `FactIndex` only finds candidate
 
 | Path | Writes | Gate |
 |---|---|---|
-| `memory_remember { text, kind, supersedes?: id }`, called by the model | `Assumed`, source `AgentInferred`, with confidence | Class `MemoryPropose` (§7.4): Deny in ReadOnly and Plan; Allow in Ask and Auto, because it writes only labelled, assumed facts, never instructions, files or permissions |
+| `memory_remember { text, kind, quote?, supersedes?: id }`, called by the model | `Assumed`, source `AgentInferred`, with confidence; `Known`, source `UserStated`, when `quote` verifies against the user's own messages in the session, read from the session store (the verified-quote rule below) | Class `MemoryPropose` (§7.4): Deny in ReadOnly and Plan; Allow in Ask and Auto, because it writes only labelled facts — assumed, or the user's own verified words — never instructions, files or permissions |
 | Session distillation | `Assumed`, or `Known` when the quote verifies | Runs when a session has been idle for `distill_idle` (default 10 minutes), on `Harness::close`, or every `distill_every` turns (default 20); a governed run on the distiller model (the member model by default) with no tools and structured output (`{ text, kind, source, quote?, confidence, supersedes? }`), given the session's user messages, tool outcomes and the facts already recalled; bounded by `RunBudget`; off with `distill: false` |
 | Verified quote | `Known`, source `UserStated` | A candidate whose `quote` appears verbatim (whitespace-normalised) in one of the user's own messages in the source session; text from the model, tools, files or other agents never qualifies |
 | Human promotion | `Known`, source `UserConfirmed` | `Harness::accept_fact`, `/memory accept <id>`, `adk-rust memory accept <id>` |

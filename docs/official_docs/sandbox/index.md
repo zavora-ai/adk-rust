@@ -59,7 +59,7 @@ overrides them per call.
 
 ## OS Sandbox Profiles
 
-OS-level sandbox enforcement restricts child processes at the kernel level. This goes beyond environment isolation — the OS itself blocks unauthorized filesystem access, network connections, and process spawning.
+OS-level sandbox enforcement restricts child processes at the kernel level. This goes beyond environment isolation — the OS itself blocks unauthorized filesystem access, network connections, and process spawning. The Windows restricted-token enforcer restricts neither the network nor process creation (see [Platform Differences](#platform-differences)).
 
 ### Platform Support
 
@@ -250,8 +250,8 @@ The policy defines what a sandboxed process is allowed to do:
 | Field | Default | Description |
 |-------|---------|-------------|
 | `allowed_paths` | `[]` (deny all) | Filesystem paths with read-only or read-write access |
-| `allow_network` | `false` | Whether network access is permitted |
-| `network_rules` | `[]` | Intended domains from `allow_domain`. **Not enforced on any platform**; with `allow_network = false` all network stays blocked |
+| `allow_network` | `false` | Whether network access is permitted. Seatbelt and bubblewrap block the network when `false`; the Windows restricted-token enforcer does not, and logs a warning once per process |
+| `network_rules` | `[]` | Intended domains from `allow_domain`. **Not enforced on any platform**; with `allow_network = false` Seatbelt and bubblewrap block all network access, and the Windows restricted-token enforcer leaves it open and logs a warning once per process |
 | `allow_process_spawn` | `false` | Whether creating child processes is permitted; `execve` in place is always allowed |
 | `env` | `{}` | Environment variables for the sandboxed process |
 
@@ -269,8 +269,11 @@ the profile as escaped string literals, so a directory name cannot add directive
 **Linux (bubblewrap):** Uses namespace-based whitelist — nothing exists by default, you mount only what's needed. Every command runs in a new session (`--new-session`) with no controlling terminal, so it cannot inject input into the caller's terminal with `TIOCSTI`. Without `allow_process_spawn`, a seccomp filter fails `fork`, `vfork`, and non-thread `clone` (x86-64 and AArch64; other architectures return `EnforcerFailed`). Install with `apt install bubblewrap` or `dnf install bubblewrap`.
 
 **Domain rules:** Seatbelt network filters accept only `*` or `localhost` as a host, and
-bubblewrap has no domain-level control, so `allow_domain` cannot be enforced. A policy
-with rules and `allow_network = false` blocks all network access and logs a warning.
+bubblewrap has no domain-level control, so `allow_domain` cannot be enforced. Under
+Seatbelt and bubblewrap, a policy with rules and `allow_network = false` blocks all network
+access and logs a warning. The Windows restricted-token enforcer has no network control:
+it logs a warning once per process, for the first policy with `allow_network = false` or with
+rules, and the network stays open.
 
 **Windows (restricted token):** the first Windows tier (spec 3.2 §10 W5). `WindowsEnforcer::run_confined` starts the command with `CreateProcessAsUserW` under a restricted, Low-integrity token and holds it in a Job Object; AppContainer is not used.
 
@@ -285,7 +288,7 @@ with rules and `allow_network = false` blocks all network access and logs a warn
 | The user's MSYS2 namespaces | Held for the call's life, at the caller's integrity level, by an unconfined `cat` of each installation the call can reach — the program's and those on the call's `PATH` — started before the call, so the Low token can neither write nor create them. An MSYS2 program that a program outside MSYS2 starts itself, such as a hook's `sh` that `git` starts, cannot start, and exits with `NtCreateDirectoryObject(...): 0xC0000022` |
 | Other MSYS2 or Cygwin installations | **Not isolated** — a call that starts such an installation's program by its path, while none of the user's runs, creates that installation's namespace at Low integrity, and a program of it the user starts before the call ends joins it and reads a mount table the call wrote. A job released with `kill_on_close(false)` keeps the call's holds until the caller's process exits |
 | Descendants | Killed with the call's Job Object, also on a timeout |
-| Network | **Not enforced** — Windows has no per-process network control without AppContainer |
+| Network | **Not enforced** — Windows has no per-process network control without AppContainer. The first command in the process whose policy has `allow_network = false` or `network_rules` logs a `tracing::warn` when it starts, once per process; every command keeps full network access |
 | After the call | The grants and the Low labels stay on the policy's paths, so any Low-integrity process of the machine may write the read-write paths; `icacls <path> /setintegritylevel "(OI)(CI)M" /T` and `icacls <path> /remove:g *S-1-5-12 /T` take a path back |
 
 The user is a restricting SID because the MSYS2 runtime of Git for Windows' `sh` and `bash` creates its signal pipe and its per-user shared memory with an ACL naming only the user, `Administrators` and `SYSTEM`, then opens them again: without the user among the restricting SIDs, the shell exits at start with `couldn't create signal pipe, Win32 error 5`. That widens reads from the paths the policy grants (and those granting `Everyone` or `Users`) to every path the user may read; the Low integrity level keeps writes to the read-write paths, and narrows them where a path's ACL grants `Everyone` or `Users` write access, which a Medium label still closes.

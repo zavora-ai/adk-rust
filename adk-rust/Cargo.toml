@@ -204,6 +204,7 @@ opencode = ["models", "adk-model/opencode"]
 anthropic = ["models", "adk-model/anthropic", "adk-managed?/anthropic"]
 deepseek = ["models", "adk-model/deepseek"]
 groq = ["models", "adk-model/groq"]
+muse = ["models", "adk-model/muse"]
 ollama = ["models", "adk-model/ollama", "adk-managed?/ollama"]
 # Local inference in process through mistral.rs 0.8 (spec 3.1 §8.1, §8.4); GPU through
 # adk-mistralrs's own `cuda` and `metal` features. A heavy build: not in any tier.

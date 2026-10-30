@@ -47,15 +47,20 @@ use clap::Parser;
 use cli::{AgentOptions, ChatArgs, Cli, Commands, Provider, ThinkingMode};
 use std::sync::Arc;
 
-/// The stack the commands run on. Debug builds of the argument parser and the command
-/// futures outgrow the 1 MiB Windows gives a process's main thread and the service
-/// dispatcher's thread, so every platform runs them with the 8 MiB Linux and macOS give
-/// their main thread.
+/// The stack the commands and the runtime's workers run on. Debug builds of the argument
+/// parser and the command futures outgrow the 1 MiB Windows gives a process's main thread
+/// and the service dispatcher's thread, and debug builds of `up`'s request handlers outgrow
+/// the 2 MiB a runtime worker gets by default, so every platform runs them with the 8 MiB
+/// Linux and macOS give their main thread.
 const COMMAND_STACK: usize = 8 * 1024 * 1024;
 
 fn main() -> Result<()> {
     on_command_stack("main", || {
-        tokio::runtime::Builder::new_multi_thread().enable_all().build()?.block_on(run())
+        tokio::runtime::Builder::new_multi_thread()
+            .thread_stack_size(COMMAND_STACK)
+            .enable_all()
+            .build()?
+            .block_on(run())
     })?
 }
 
@@ -565,7 +570,12 @@ async fn create_model(
         feature = "openai",
         feature = "anthropic",
         feature = "deepseek",
-        feature = "groq"
+        feature = "groq",
+        feature = "muse",
+        feature = "openrouter",
+        feature = "opencode",
+        feature = "bedrock",
+        feature = "azure-ai"
     )))]
     let _ = api_key;
     #[cfg(not(any(
@@ -575,6 +585,11 @@ async fn create_model(
         feature = "deepseek",
         feature = "groq",
         feature = "ollama",
+        feature = "muse",
+        feature = "openrouter",
+        feature = "opencode",
+        feature = "bedrock",
+        feature = "azure-ai",
         feature = "mistralrs"
     )))]
     let _ = (model, thinking_budget, plain);
@@ -653,6 +668,90 @@ async fn create_model(
         }
         #[cfg(not(feature = "ollama"))]
         Provider::Model(ModelProvider::Ollama) => Err(setup::not_compiled(provider)),
+        #[cfg(feature = "muse")]
+        Provider::Model(ModelProvider::Muse) => {
+            reject_unsupported_thinking_budget(provider, thinking_budget)?;
+            let key = api_key.ok_or_else(|| anyhow::anyhow!("Meta Muse requires an API key"))?;
+            let config = adk_model::MuseConfig::new(key, model);
+            Ok(plain(Arc::new(adk_model::MuseClient::new(config)?)))
+        }
+        #[cfg(not(feature = "muse"))]
+        Provider::Model(ModelProvider::Muse) => Err(setup::not_compiled(provider)),
+        #[cfg(feature = "openrouter")]
+        Provider::Model(ModelProvider::Openrouter) => {
+            reject_unsupported_thinking_budget(provider, thinking_budget)?;
+            let key = api_key.ok_or_else(|| anyhow::anyhow!("OpenRouter requires an API key"))?;
+            let config = adk_model::OpenRouterConfig::new(key, model);
+            Ok(plain(Arc::new(adk_model::OpenRouterClient::new(config)?)))
+        }
+        #[cfg(not(feature = "openrouter"))]
+        Provider::Model(ModelProvider::Openrouter) => Err(setup::not_compiled(provider)),
+        #[cfg(feature = "opencode")]
+        Provider::Model(variant @ (ModelProvider::Opencode | ModelProvider::OpencodeGo)) => {
+            use adk_model::OpenCodeService;
+            reject_unsupported_thinking_budget(provider, thinking_budget)?;
+            let key = api_key.ok_or_else(|| anyhow::anyhow!("OpenCode requires an API key"))?;
+            let (service, table) = if variant == ModelProvider::OpencodeGo {
+                (OpenCodeService::Go, "https://opencode.ai/docs/go/#endpoints")
+            } else {
+                (OpenCodeService::Zen, "https://opencode.ai/docs/zen/#endpoints")
+            };
+            if service.api(model).is_none() {
+                anyhow::bail!(
+                    "{} does not route model '{model}': pass --model with a model from its \
+                     endpoint table, {table}",
+                    variant.display_name()
+                );
+            }
+            // OpenCode asks for one session id per conversation; the CLI builds one client per
+            // process, so the id names the process.
+            let started = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_millis());
+            let config = adk_model::OpenCodeConfig::new(service, key, model)
+                .with_user_agent(concat!("adk-rust/", env!("CARGO_PKG_VERSION")))
+                .with_session_id(format!("adk-rust-{}-{started}", std::process::id()));
+            Ok(plain(Arc::new(adk_model::OpenCodeClient::new(config)?)))
+        }
+        #[cfg(not(feature = "opencode"))]
+        Provider::Model(ModelProvider::Opencode | ModelProvider::OpencodeGo) => {
+            Err(setup::not_compiled(provider))
+        }
+        #[cfg(feature = "bedrock")]
+        Provider::Model(ModelProvider::Bedrock) => {
+            reject_unsupported_thinking_budget(provider, thinking_budget)?;
+            let region = ["AWS_REGION", "AWS_DEFAULT_REGION"]
+                .iter()
+                .find_map(|name| std::env::var(name).ok().filter(|value| !value.trim().is_empty()))
+                .unwrap_or_else(|| "us-east-1".to_string());
+            let config = adk_model::BedrockConfig::new(region, model);
+            let client = match api_key {
+                Some(key) => adk_model::BedrockClient::new_with_api_key(config, key)?,
+                None => adk_model::BedrockClient::new(config).await?,
+            };
+            Ok(plain(Arc::new(client)))
+        }
+        #[cfg(not(feature = "bedrock"))]
+        Provider::Model(ModelProvider::Bedrock) => Err(setup::not_compiled(provider)),
+        #[cfg(feature = "azure-ai")]
+        Provider::Model(ModelProvider::AzureAi) => {
+            reject_unsupported_thinking_budget(provider, thinking_budget)?;
+            let key =
+                api_key.ok_or_else(|| anyhow::anyhow!("Azure AI Inference requires an API key"))?;
+            let endpoint = std::env::var("AZURE_AI_ENDPOINT")
+                .ok()
+                .filter(|endpoint| !endpoint.trim().is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Azure AI Inference needs its endpoint: set AZURE_AI_ENDPOINT to the \
+                         endpoint URL of the deployment"
+                    )
+                })?;
+            let config = adk_model::AzureAIConfig::new(endpoint, key, model);
+            Ok(plain(Arc::new(adk_model::AzureAIClient::new(config)?)))
+        }
+        #[cfg(not(feature = "azure-ai"))]
+        Provider::Model(ModelProvider::AzureAi) => Err(setup::not_compiled(provider)),
         // mistral.rs in process (spec 3.1 §8.1): a Hugging Face id, or a `.gguf` path.
         #[cfg(feature = "mistralrs")]
         Provider::MistralRs => {
@@ -694,6 +793,11 @@ fn openai_responses_model(model: &str) -> bool {
     feature = "deepseek",
     feature = "groq",
     feature = "ollama",
+    feature = "muse",
+    feature = "openrouter",
+    feature = "opencode",
+    feature = "bedrock",
+    feature = "azure-ai",
     feature = "mistralrs"
 ))]
 fn reject_unsupported_thinking_budget(

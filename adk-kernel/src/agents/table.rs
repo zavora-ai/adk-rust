@@ -256,6 +256,10 @@ pub(crate) struct AgentsInner {
     #[cfg(feature = "proc")]
     pub(crate) ledger: Option<crate::proc::Ledger>,
     local: Mutex<Local>,
+    /// Held while this replica finishes a removal, so the tick never finishes one beside a
+    /// person's: both would revoke the agent's rules, and the person's outcome would count
+    /// only those it reached first.
+    removing: tokio::sync::Mutex<()>,
 }
 
 /// The kernel's audited agent table (spec 3.3 §5.7, §10 K7), from
@@ -373,6 +377,7 @@ impl Agents {
                 #[cfg(feature = "proc")]
                 ledger: parts.ledger,
                 local: Mutex::default(),
+                removing: tokio::sync::Mutex::default(),
             }),
         }
     }
@@ -1352,6 +1357,8 @@ impl Agents {
         let inner = &self.inner;
         let current = plan.current.expect("a removal plans from the stored record");
         let ended = plan.preview.ended.clone().unwrap_or_default();
+        // Taken before the record reads `Removing`, which is when the tick would start on it.
+        let _removing = inner.removing.lock().await;
         self.record(
             audit::AGENT_REMOVING,
             Some(caller),
@@ -1676,6 +1683,13 @@ impl Agents {
             match record.state {
                 AgentRecordState::Active | AgentRecordState::Paused => self.host(record).await,
                 AgentRecordState::Removing => {
+                    // A removal finishing here already is left to it; the next tick retries.
+                    let Ok(_removing) = inner.removing.try_lock() else { continue };
+                    // The list may be older than a removal that finished since.
+                    let Ok(Some(now)) = inner.store.get(&record.id).await else { continue };
+                    if now.state != AgentRecordState::Removing || now.version != record.version {
+                        continue;
+                    }
                     // The removal's own record names the person; the tick that finishes it
                     // names itself (spec 3.3 S-I16, S-I18).
                     let tick = AgentCaller::new(SubjectRef::service("kernel"), "kernel", "tick");

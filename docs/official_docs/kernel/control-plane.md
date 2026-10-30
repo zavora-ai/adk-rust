@@ -12,7 +12,7 @@ the `operator` scope.
 
 | Transport | Caller | `operator` |
 |---|---|---|
-| Socket `<home>/kernel.sock` | The OS user, when the peer's uid is the socket owner's; created `0600`, any other peer is refused | Yes |
+| Socket `<home>/kernel.sock`, or a short socket when that path is too long ([below](#the-socket-path)) | The OS user, when the peer's uid is the socket owner's; created `0600`, any other peer is refused | Yes |
 | Named pipe `\\.\pipe\adk-rust-kernel-<tag>` (Windows) | The OS user, when the token the client opened the pipe with is the kernel's user; any other client is refused | Yes |
 | HTTP on loopback (`adk-rust up` default) | Loopback peers as the OS user (`LoopbackOperatorExtractor`) | Yes |
 | HTTP with `--auth-token` | `Authorization: Bearer <token>` (`BearerTokenExtractor`) | Yes |
@@ -31,6 +31,28 @@ the `operator` scope.
 | `409 kernel.spawn_rejected` | Another run holds the spawn's concurrency key and the run does not queue behind it |
 | `429 kernel.quota` | A partition quota refuses the process |
 | `422` | A body field the route does not take, such as `userId` on a spawn |
+
+### The socket path
+
+A Unix socket path holds at most 103 bytes on macOS and 107 on Linux. When `<home>/kernel.sock`
+fits, both as given and with the home's symlinks resolved, the kernel serves it there. When it
+does not, the kernel and every client — the attached terminal and the CLI commands — derive one
+short path from the resolved home instead (`ControlPlaneConfig::socket_path`, spec 3.3 G18):
+
+| Platform | Short socket path |
+|---|---|
+| macOS | `<user temp dir>/adk-rust-<tag>/kernel.sock`, the per-user directory `$TMPDIR` names (`confstr(_CS_DARWIN_USER_TEMP_DIR)`) |
+| Linux and other Unix | `$XDG_RUNTIME_DIR/adk-rust-<tag>/kernel.sock`, else under the system temp directory |
+
+The tag is sixteen hex digits of the SHA-256 of the resolved socket path, so each home has its
+own directory. The kernel creates the directory `0700`. The kernel refuses to serve, and a client
+refuses to connect, when the directory is a symlink, belongs to another user, or is open to other
+users; the error names the directory, which you remove before starting the kernel again. The
+kernel removes the socket and the directory when it stops. `adk-rust up` prints the socket it
+serves.
+
+A path too long even there fails the start with an error naming both paths and the limit; start
+the kernel with a shorter `--home`.
 
 ### The named pipe on Windows
 
@@ -91,7 +113,8 @@ All routes are under `/api`, on both transports. `adk-rust up` merges them into 
 
 On HTTP the server's own routes stay beside them: `/api/runs` (submissions land on the
 `interactive` queue), `/api/admin/freeze` (delegates to `Kernel::freeze` and reports
-`parkedRuns`), `/api/admin/governance` (`runningRuns: "park"`), `/api/rules` and the session
+`parkedRuns`; administrators only, which the loopback operator and the `--auth-token` holder
+are), `/api/admin/governance` (`runningRuns: "park"`), `/api/rules` and the session
 routes.
 
 ### Deciding on the approvals route

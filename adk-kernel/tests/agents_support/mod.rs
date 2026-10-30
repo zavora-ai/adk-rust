@@ -76,6 +76,8 @@ pub struct TestFactory {
     pub ceiling: Mutex<Option<AgentCeiling>>,
     /// Ids retired, in order.
     pub retired: Mutex<Vec<String>>,
+    /// How long the next retirement takes, as revoking rules on a busy store does.
+    pub retire_delay: Mutex<Option<Duration>>,
     pub builds: AtomicUsize,
     /// The ids of the builds closed, in order, one entry per build.
     pub closed: Arc<Mutex<Vec<String>>>,
@@ -111,6 +113,7 @@ impl TestFactory {
                     .with_web(adk_kernel::agents::WebAccess::Any),
             ))),
             retired: Mutex::default(),
+            retire_delay: Mutex::default(),
             builds: AtomicUsize::new(0),
             closed: Arc::default(),
         }
@@ -158,6 +161,10 @@ impl AgentFactory for TestFactory {
 
     async fn retired(&self, record: &AgentRecord) -> adk_kernel::Result<u64> {
         self.retired.lock().unwrap().push(record.id.clone());
+        let delay = self.retire_delay.lock().unwrap().take();
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
         Ok(2)
     }
 

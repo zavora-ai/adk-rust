@@ -1,5 +1,6 @@
 //! Okta provider.
 
+use super::super::validator::REQUIRED_CLAIMS;
 use super::super::{JwksCache, TokenClaims, TokenError, TokenValidator};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -76,6 +77,7 @@ impl TokenValidator for OktaProvider {
         let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256);
         validation.set_issuer(&[&self.issuer]);
         validation.set_audience(&[&self.client_id]);
+        validation.set_required_spec_claims(&REQUIRED_CLAIMS);
         validation.validate_exp = true;
         validation.validate_nbf = true;
 
@@ -94,5 +96,27 @@ impl TokenValidator for OktaProvider {
 impl OktaProvider {
     pub fn new(domain: impl Into<String>, client_id: impl Into<String>) -> Self {
         Self { domain: domain.into(), client_id: client_id.into(), issuer: String::new() }
+    }
+}
+
+#[cfg(all(test, feature = "sso"))]
+mod tests {
+    use super::OktaProvider;
+    use crate::sso::JwksCache;
+    use crate::sso::test_issuer::{TestIssuer, assert_requires_iss_and_aud};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn tokens_need_the_iss_and_aud_claims() {
+        let issuer = TestIssuer::start().await;
+        let mut provider = OktaProvider::new("dev-1.okta.com", "client-id");
+        provider.jwks_cache = Arc::new(JwksCache::new(issuer.jwks_uri()));
+
+        assert_requires_iss_and_aud(
+            &provider,
+            "https://dev-1.okta.com/oauth2/default",
+            "client-id",
+        )
+        .await;
     }
 }

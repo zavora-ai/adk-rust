@@ -15,13 +15,13 @@ pub(crate) fn take_line(buffer: &mut Vec<u8>) -> Result<Option<String>, AdkError
 
 /// Returns the value of a `data` field, with or without the optional space after the
 /// colon; `None` for comments and every other field.
-#[cfg(any(feature = "openai", feature = "groq"))]
+#[cfg(any(feature = "openai", feature = "groq", feature = "muse"))]
 pub(crate) fn data(line: &str) -> Option<&str> {
     let value = line.strip_prefix("data:")?;
     Some(value.strip_prefix(' ').unwrap_or(value))
 }
 
-#[cfg(all(test, any(feature = "openai", feature = "groq")))]
+#[cfg(all(test, any(feature = "openai", feature = "groq", feature = "muse")))]
 mod tests {
     use super::data;
 

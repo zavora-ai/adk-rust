@@ -36,6 +36,19 @@ The model is chosen as for every command: `--provider`, `--model` and `--api-key
 provider's environment variable, secure storage, the saved config, or first-run setup on a
 terminal.
 
+`--provider` takes every identifier of [`ModelProvider`](../models/providers.md#provider-identifiers)
+and `mistralrs`. A provider whose adk-cli feature this build leaves out is refused with the
+feature to reinstall with (`cargo install adk-cli --features <feature>`, or `all-providers`).
+
+| `--provider` | adk-cli feature | Default model | Key and endpoint |
+|---|---|---|---|
+| `gemini`, `openai`, `anthropic`, `ollama` | the same name (default) | The catalog default | `GOOGLE_API_KEY` or `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`; none for Ollama |
+| `deepseek`, `groq`, `muse`, `openrouter` | the same name | The catalog default | `DEEPSEEK_API_KEY`, `GROQ_API_KEY`, `META_API_KEY` or `MODEL_API_KEY`, `OPENROUTER_API_KEY` |
+| `opencode` (Zen), `opencode-go` (Go) | `opencode` | `deepseek-v4.1-flash`; any model the service's endpoint table lists | `OPENCODE_API_KEY` |
+| `bedrock` | `bedrock` | None: `--model` names the model or inference profile | `AWS_BEARER_TOKEN_BEDROCK`, else the AWS credential chain; region from `AWS_REGION` or `AWS_DEFAULT_REGION`, else `us-east-1` |
+| `azure-ai` | `azure-ai` | None: `--model` names the deployed model | `AZURE_AI_API_KEY`, endpoint URL in `AZURE_AI_ENDPOINT` |
+| `mistralrs` | `mistralrs` | None: `--model` names a Hugging Face id or a `.gguf` path | None |
+
 ## Shared flags
 
 The REPL, `code`, `goal`, `ultracode` and `serve` take the same harness flags.
@@ -409,7 +422,7 @@ stay on this machine, unless you choose another provider (spec 3.1 §7.32, §13 
 |---|---|
 | Ollama, mistral.rs | The local ONNX model (`BAAI/bge-small-en-v1.5`) |
 | Gemini, OpenAI | That provider's: `gemini-embedding-2`, `text-embedding-3-small` |
-| Anthropic, DeepSeek, Groq | The local ONNX model, whatever other keys are in the environment |
+| Anthropic, DeepSeek, Groq, Meta Muse, OpenRouter, OpenCode, Bedrock, Azure AI | The local ONNX model, whatever other keys are in the environment |
 | The local model unavailable | None: facts are found by shared words, never by another provider |
 | `--embedder local\|gemini\|openai\|lexical`, or `[memory] embedder` in the user config | As chosen; a second provider sees your facts only this way |
 

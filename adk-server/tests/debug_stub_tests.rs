@@ -5,7 +5,7 @@
 //! - 2.7: `get_eval_sets` returns HTTP 501 with error JSON
 //! - 2.8: `get_event` returns HTTP 404 when event not found
 //! - 3.5: `get_session_traces` behavior unchanged
-//! - 3.6: `get_trace_by_event_id` behavior unchanged
+//! - `get_trace_by_event_id` matches the event ID only and returns a span to its owner only
 //! - 3.7: `get_event` returns HTTP 200 with correct body when event exists
 
 use adk_server::{ServerConfig, create_app};
@@ -335,4 +335,107 @@ async fn test_get_event_rejects_a_session_owned_by_another_user() {
     let body = axum::body::to_bytes(as_bob.into_body(), usize::MAX).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["gcp.vertex.agent.llm_request"], "bob's prompt");
+}
+
+/// One `call_llm` span per `(span_id, event_id, user)`, all recorded for the session `shared`.
+fn exporter_with_spans(
+    spans: &[(&str, &str, Option<&str>)],
+) -> Arc<adk_telemetry::AdkSpanExporter> {
+    use adk_telemetry::SpanSink;
+
+    let exporter = Arc::new(adk_telemetry::AdkSpanExporter::new());
+    for (span_id, event_id, user) in spans {
+        let mut attributes: std::collections::HashMap<String, String> = [
+            ("span_id", *span_id),
+            ("gcp.vertex.agent.event_id", *event_id),
+            ("gcp.vertex.agent.session_id", "shared"),
+            ("gcp.vertex.agent.invocation_id", "inv-shared"),
+            ("gcp.vertex.agent.llm_request", "the owner's prompt"),
+            ("gcp.vertex.agent.llm_response", "the owner's answer"),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect();
+        if let Some(user) = user {
+            attributes.insert("adk.user_id".to_string(), (*user).to_string());
+        }
+        exporter.export_span("call_llm", attributes);
+    }
+    exporter
+}
+
+/// An app authenticating the `x-user` header, with the admin debug routes exposed.
+fn authenticated_debug_app(exporter: Arc<adk_telemetry::AdkSpanExporter>) -> axum::Router {
+    create_app(
+        base_config()
+            .with_span_exporter(exporter)
+            .with_request_context(Arc::new(HeaderExtractor))
+            .with_security(adk_server::SecurityConfig {
+                expose_admin_debug: true,
+                ..Default::default()
+            }),
+    )
+}
+
+/// Sends `GET /api/debug/trace/{id}`, as `user` when one is given.
+async fn trace_by_event_id(
+    app: &axum::Router,
+    id: &str,
+    user: Option<&str>,
+) -> (StatusCode, Option<serde_json::Value>) {
+    let mut request = Request::builder().uri(format!("/api/debug/trace/{id}"));
+    if let Some(user) = user {
+        request = request.header("x-user", user);
+    }
+    let response = app.clone().oneshot(request.body(Body::empty()).unwrap()).await.unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&body).ok())
+}
+
+/// `GET /api/debug/trace/{event_id}` returned any span to any authenticated caller.
+#[tokio::test]
+async fn test_trace_by_event_id_refuses_another_users_span() {
+    let app = authenticated_debug_app(exporter_with_spans(&[("span-bob", "evt-bob", Some("bob"))]));
+
+    let (status, _) = trace_by_event_id(&app, "evt-bob", Some("alice")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, body) = trace_by_event_id(&app, "evt-bob", Some("bob")).await;
+    assert_eq!(status, StatusCode::OK);
+    let body = body.expect("the owner gets the span's attributes");
+    assert_eq!(body["adk.user_id"], "bob");
+    assert_eq!(body["gcp.vertex.agent.llm_request"], "the owner's prompt");
+    assert_eq!(body["gcp.vertex.agent.llm_response"], "the owner's answer");
+}
+
+/// A span that records no owner belongs to no authenticated caller.
+#[tokio::test]
+async fn test_trace_by_event_id_refuses_a_span_without_an_owner() {
+    let app = authenticated_debug_app(exporter_with_spans(&[("span-anon", "evt-anon", None)]));
+
+    let (status, _) = trace_by_event_id(&app, "evt-anon", Some("alice")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// The lookup fell back to any attribute value, so a session ID, a span ID, an
+/// invocation ID, or a user ID returned a span.
+#[tokio::test]
+async fn test_trace_by_event_id_matches_the_event_id_only() {
+    let exporter = exporter_with_spans(&[("span-bob", "evt-bob", Some("bob"))]);
+    let authenticated = authenticated_debug_app(exporter.clone());
+    let open = create_app(base_config().with_span_exporter(exporter));
+
+    for id in ["shared", "span-bob", "inv-shared", "bob"] {
+        for (app, user) in
+            [(&authenticated, Some("alice")), (&authenticated, Some("bob")), (&open, None)]
+        {
+            let (status, _) = trace_by_event_id(app, id, user).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{id} as {user:?}");
+        }
+    }
+
+    let (status, body) = trace_by_event_id(&open, "evt-bob", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.expect("the span's attributes")["span_id"], "span-bob");
 }

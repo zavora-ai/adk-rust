@@ -638,8 +638,10 @@ impl TelegramAdapter {
             }
             return Ok(());
         };
-        // A photo's bytes, for a host that takes them (spec 3.5 §10 X12).
-        if let Some(photo) = &parsed.photo
+        // A paired account's photo, for a host that takes it; a stranger's is never
+        // downloaded (spec 3.5 §10 X12).
+        if paired
+            && let Some(photo) = &parsed.photo
             && let Some(attachment) = self.inner.api.download(photo).await
         {
             inbound = inbound.with_attachments([attachment]);
@@ -754,8 +756,12 @@ impl TelegramAdapter {
             (Some(_), Some(approvals)) => approvals.get(decision).await.ok().flatten(),
             _ => None,
         };
+        let title = match &request {
+            Some(request) => crate::hints::named(&self.inner.card_hints, request).await,
+            None => None,
+        };
         if let Some(trail) = &self.inner.audit
-            && let Err(error) = trail.record(answer_record(&record, request.as_ref())).await
+            && let Err(error) = trail.record(answer_record(&record, request.as_ref(), title)).await
         {
             tracing::warn!(error = %error, "a telegram answer's audit record could not be written");
         }
@@ -803,7 +809,11 @@ fn chat_id(thread: &str) -> Value {
 
 /// The `surface.decide` record of an answer given in Telegram, as the engine writes its own
 /// answers' (spec 3.3 §11).
-fn answer_record(record: &AnswerRecord, request: Option<&ApprovalRequest>) -> AuditRecordDraft {
+fn answer_record(
+    record: &AnswerRecord,
+    request: Option<&ApprovalRequest>,
+    title: Option<String>,
+) -> AuditRecordDraft {
     let decision = match record.answer {
         Answer::Deny => AuditDecision::Rejected,
         Answer::AllowOnce | Answer::AlwaysAllow | Answer::Edit => AuditDecision::Approved,
@@ -820,6 +830,10 @@ fn answer_record(record: &AnswerRecord, request: Option<&ApprovalRequest>) -> Au
         draft = draft.ext("tool", json!(request.tool_name));
         if let Some(acting) = &request.acting {
             draft = draft.ext("actingAgent", json!(acting.agent.id.to_string()));
+        }
+        // What the call acts on, as the engine's own record names it (§8).
+        if let Some(title) = title {
+            draft = draft.ext("title", json!(title)).ext("summary", json!(request.summary));
         }
     }
     draft
@@ -964,7 +978,7 @@ mod tests {
                 answer,
                 at: Utc::now(),
             };
-            let draft: AuditRecordDraft = answer_record(&given, None);
+            let draft: AuditRecordDraft = answer_record(&given, None, None);
             let record = draft.into_record("replica-1", 0, given.at, None);
             let read = answer_of(&record, "apr_1").expect("the record is an answer");
             assert_eq!(read, given);

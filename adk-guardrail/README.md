@@ -10,7 +10,7 @@ Guardrails framework for ADK agents - input/output validation, content filtering
 
 `adk-guardrail` provides safety and validation for AI agents in the [ADK-Rust](https://github.com/zavora-ai/adk-rust) framework:
 
-- **PiiRedactor** - Detect and redact PII (Email, Phone, SSN, Credit Card, IP Address)
+- **PiiRedactor** - Detect and redact PII (Email, Phone, SSN, Luhn-checked card numbers, and IP Address when enabled)
 - **ContentFilter** - Block harmful content, off-topic responses, max length
 - **SchemaValidator** - Validate JSON output against schemas
 - **GuardrailSet** / **GuardrailExecutor** - Compose content guardrails and enforce them
@@ -128,7 +128,7 @@ fn tool_guardrails() -> Result<ToolGuardrailSet, Box<dyn std::error::Error>> {
 }
 ```
 
-Pass the set to `LlmAgentBuilder::tool_guardrails`, or to a realtime runtime as its tool-result screen. Tool guardrails run in order and revisions compose; the first denial stops evaluation and is reported to the model as the tool's result. `PathAllowList` denies a call that omits a configured path argument (`allow_missing()` permits it), and applies to every tool unless `on_tools` names them.
+Pass the set to `LlmAgentBuilder::tool_guardrails`, or to a realtime runtime as its tool-result screen. Tool guardrails run in order and revisions compose; the first denial stops evaluation and is reported to the model as the tool's result. `PathAllowList` checks every key it names at any depth of the arguments — nested objects and arrays included — and denies the call if any occurrence holds a value other than a path, or a path outside the allowed roots. It denies a call with no path under a configured name (`allow_missing()` permits it), and applies to every tool unless `on_tools` names them. It is a preflight check: a tool that opens files where another process can write must still open them relative to a trusted directory handle, as the `adk-devtools` file tools do, to close the time-of-check/time-of-use race.
 
 ## Guardrail Results
 
@@ -159,8 +159,26 @@ Detects and redacts personally identifiable information:
 - `Email` → `[EMAIL REDACTED]`
 - `Phone` → `[PHONE REDACTED]`
 - `Ssn` → `[SSN REDACTED]`
-- `CreditCard` → `[CREDIT CARD REDACTED]`
+- `CreditCard` → `[CREDIT CARD REDACTED]` — a 13–19 digit card number that passes the Luhn
+  check, as one run of digits or grouped 4-4-4-4, 4-6-5 (American Express), or 4-4-4-4-3; a
+  number that fails the check, such as an order number, passes unchanged
 - `IpAddress` → `[IP REDACTED]`
+
+`PiiRedactor::new()` redacts every type except `IpAddress`. To redact IP addresses as well, name
+the types with `with_types`:
+
+```rust
+use adk_guardrail::{PiiRedactor, PiiType};
+
+let redactor = PiiRedactor::with_types(&[
+    PiiType::Email,
+    PiiType::Phone,
+    PiiType::Ssn,
+    PiiType::CreditCard,
+    PiiType::IpAddress,
+]);
+assert_eq!(redactor.redact("Host 192.168.1.1").0, "Host [IP REDACTED]");
+```
 
 ### ContentFilter
 
@@ -205,6 +223,7 @@ fn validator() -> adk_guardrail::Result<SchemaValidator> {
 |--------|-----------|
 | A block is an `AdkError` with `ErrorComponent::Guardrail`, `ErrorCategory::InvalidInput`, and code `guardrail.input_blocked` / `guardrail.output_blocked` | Match the codes instead of `agent.legacy`; `GuardrailError` gains `Blocked { phase, failures }` |
 | `PathAllowList` denies a call that omits a configured path argument | `allow_missing()` restores the old behaviour |
+| `PathAllowList` checks the keys it names at any depth, not only at the top level | Scope it with `on_tools` when a key of the same name holds something other than a path |
 | `ContentFilter::new` and `ContentFilter::blocked_keywords` return `Result` | Handle `GuardrailError::Regex` |
 | `ToolGuardrail::validate_result`, `ResultTextGuardrail`, and `validate_preamble` are new; `validate_call` defaults to allowing | — |
 | `Low` findings pass and are recorded as warnings | — |

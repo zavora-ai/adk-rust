@@ -67,6 +67,60 @@ pub(crate) async fn download(
     Some((media_type, bytes))
 }
 
+/// The most files taken from one message.
+#[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+pub(crate) const MAX_FILES: usize = 10;
+
+/// A file a message names, downloaded only when its account is paired (spec 3.5 §10 X12).
+#[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FileRef {
+    /// Where the platform serves it: an address, or Matrix's `mxc://` URI.
+    pub(crate) url: String,
+    /// The type the platform declares, if any.
+    pub(crate) media_type: Option<String>,
+    /// Its name.
+    pub(crate) name: String,
+    /// The size the platform declares, if any.
+    pub(crate) size: Option<u64>,
+}
+
+#[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+impl FileRef {
+    /// Whether the platform's own description already rules it out: a type not taken, or a
+    /// size over the limit.
+    pub(crate) fn ruled_out(&self) -> bool {
+        self.media_type.as_deref().is_some_and(|media_type| !allowed(&bare(media_type)))
+            || self.size.is_some_and(|size| size > MAX_BYTES as u64)
+    }
+}
+
+/// Downloads at most [`MAX_FILES`] of `files` with `fetch`, as attachments; a file its
+/// description rules out, of a type not taken or over the limit is left out.
+#[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+pub(crate) async fn fetch_all<F, Fut>(
+    files: &[FileRef],
+    mut fetch: F,
+) -> Vec<adk_kernel::channels::ChannelAttachment>
+where
+    F: FnMut(FileRef) -> Fut,
+    Fut: Future<Output = Option<(String, Vec<u8>)>>,
+{
+    let mut attachments = Vec::new();
+    for file in files.iter().take(MAX_FILES) {
+        if file.ruled_out() {
+            tracing::debug!("a chat file its platform describes as not taken was not downloaded");
+            continue;
+        }
+        if let Some((media_type, bytes)) = fetch(file.clone()).await {
+            let stem = file.name.rsplit_once('.').map_or(file.name.as_str(), |(stem, _)| stem);
+            let name = name(stem, &media_type);
+            attachments.push(adk_kernel::channels::ChannelAttachment::new(media_type, name, bytes));
+        }
+    }
+    attachments
+}
+
 /// A file name for a download of `media_type` numbered `n`.
 pub(crate) fn name(stem: &str, media_type: &str) -> String {
     let extension = media_type.rsplit('/').next().unwrap_or("bin").replace("jpeg", "jpg");
@@ -93,5 +147,31 @@ mod tests {
         assert_eq!(bare("Image/PNG; charset=binary"), "image/png");
         assert_eq!(name("wamid.HBgM../../etc", "image/jpeg"), "wamidHBgMetc.jpg");
         assert_eq!(name("", "image/png"), "photo.png");
+    }
+
+    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+    #[tokio::test]
+    async fn a_file_its_platform_rules_out_is_never_fetched() {
+        let file = |media_type: Option<&str>, size: Option<u64>| FileRef {
+            url: "https://files.example/a".into(),
+            media_type: media_type.map(str::to_string),
+            name: "rye.photo.png".into(),
+            size,
+        };
+        let files = [
+            file(Some("image/png"), Some(70)),
+            file(Some("image/svg+xml"), Some(70)),
+            file(Some("image/png"), Some(64 * 1024 * 1024)),
+            file(None, None),
+        ];
+        let mut asked = 0;
+        let taken = fetch_all(&files, |_| {
+            asked += 1;
+            async { Some(("image/png".to_string(), vec![1, 2, 3])) }
+        })
+        .await;
+        assert_eq!(asked, 2, "the SVG and the oversized file were never fetched");
+        assert_eq!(taken.len(), 2);
+        assert_eq!(taken[0].name, "ryephoto.png");
     }
 }

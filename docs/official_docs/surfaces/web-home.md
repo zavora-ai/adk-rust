@@ -199,7 +199,9 @@ quiet time can be turned off and the limit removed. The page reads the area agai
 a change, so "Was 22:00–07:00. Now 23:00–06:00." shows the values the kernel records as the
 change's `from` and `to`. Only the person changes them: the kernel refuses a caller without the
 `operator` scope and every paired device's token, and the page shows its answer. With one
-area, the header's status line follows its settings in force.
+area, the header's status line follows its settings in force; with several, its spend today and
+daily spending limit are those of the area the primary agent works in, which
+`GET /kernel/settings` marks `primary` (spec 3.3 §13 Q7).
 
 Quiet time reads and saves on the clock of the device the page is open on. A window saved
 from the home carries that device's IANA time zone (`timeZone`) and its offset now
@@ -215,8 +217,8 @@ Nairobi.
 | ![Changing quiet time](../images/surfaces/web-settings-light.png) | ![Changing quiet time, dark](../images/surfaces/web-settings-dark.png) |
 
 **Allowed without asking** lists the person's standing rules that allow a call, each as a
-sentence — "Your agents can use write_file within notes/." — with its end date, **Ended** once
-it has passed, or **No end date**. A rule with an end date offers **Extend**, a date in place
+sentence — "Your agents can write files within notes/, in one conversation." — with its end
+date, **Ended** once it has passed, or **No end date**. A rule with an end date offers **Extend**, a date in place
 (the day it lasts through; thirty days on by default; Esc closes it) that moves its end later
 through `POST /rules/{id}/extend` and shows "Was until 30 November. Now until 30 December.";
 **Stop allowing** revokes it, so the next call it covered waits for the person again (spec 3.3

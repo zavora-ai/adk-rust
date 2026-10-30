@@ -13,7 +13,8 @@ model prose:
   OpenAI Realtime event protocol and records each `function_call_output` it is sent. One tool
   returns an email address and an SSN; another fails with a database credential in its message.
 
-The `live_*` scenarios run against OpenAI when `OPENAI_API_KEY` is set.
+The `live_openai_*` scenarios run against OpenAI when `OPENAI_API_KEY` is set, and
+`live_anthropic_*` against Anthropic when `ANTHROPIC_API_KEY` is set.
 
 ## Scenarios
 
@@ -32,6 +33,12 @@ The `live_*` scenarios run against OpenAI when `OPENAI_API_KEY` is set.
 | `realtime_runner_error_redacted` | Scripted Realtime | A native handler's error reaches the model without the credential |
 | `live_openai_preamble` | OpenAI `gpt-5.6-terra` | Told to repeat the user's email beside its tool call, the model's text reaches neither the client nor the session with the address |
 | `live_openai_realtime` | OpenAI `gpt-realtime-2.1` | Asked to read back a record with PII, the model only ever had the redacted record, and the session holds no SSN |
+| `pii_cards_local` | None | `PiiRedactor::new()` redacts an American Express and a 19-digit test card number, contiguous and grouped 4-4-4-4-3, whole; an email beside `\|` keeps `\|ticket-7`; a 16-digit order number that fails the Luhn check is kept |
+| `pii_ip_default` | None | `PiiRedactor::new()` leaves an IP address; `with_types` naming `PiiType::IpAddress` redacts it |
+| `live_anthropic_pii_cards` | Anthropic `claude-sonnet-5-5` | Asked to echo the `pii_cards_local` text behind a `PiiRedactor` output guardrail, the agent's answer reaches the client and the session with every card number and the email redacted, `\|ticket-7` intact, and the order number kept |
+| `path_allowlist_shapes` | None (local) | `PathAllowList` on `path` checks the key at any depth: nested and array-held paths inside the root are allowed without `allow_missing()`; a path outside the root, a number, an object, or a URL path under the key is denied with its JSON pointer; an empty array holds no path; a path inside a string value is not examined |
+| `live_anthropic_nested_path` | Anthropic `claude-sonnet-5-5` | A file tool takes its path as `target.path`, under `PathAllowList` on `path` with `allow_missing()`: the nested path inside the root is read, the nested path outside it is refused with the guardrail's reason naming `/target/path`, and the tool never opens it; its text reaches neither the client nor the session |
+| `live_anthropic_array_paths` | Anthropic `claude-sonnet-5-5` | A file tool takes `documents[].path`: an array of two paths inside the root is read, and an array holding a path outside it is refused (`/documents/1/path`) without opening any of its files |
 
 ## Running
 

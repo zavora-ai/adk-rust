@@ -146,17 +146,23 @@ pub fn resolve(
     }
 
     // 2. Determine model
-    let model = cli_model.or(saved.model).unwrap_or_else(|| provider.default_model().to_string());
-    if model.is_empty() {
+    let Some(model) =
+        cli_model.or(saved.model).or_else(|| provider.default_model().map(str::to_string))
+    else {
         anyhow::bail!(
-            "{} has no default model: pass --model <Hugging Face id or .gguf path>",
-            provider.display_name()
+            "{} has no default model: pass --model <{}>",
+            provider.display_name(),
+            provider.model_hint()
         );
-    }
+    };
 
-    // 3. Determine API key
-    let api_key = if !provider.requires_key() {
+    // 3. Determine API key: Bedrock's is optional, with the AWS credential chain behind it.
+    let api_key = if provider.env_var().is_empty() {
         None
+    } else if !provider.requires_key() {
+        cli_api_key
+            .or_else(|| std::env::var(provider.env_var()).ok())
+            .filter(|key| !key.trim().is_empty())
     } else {
         let env_api_key = std::env::var(provider.env_var()).ok();
         let alt_env_api_key = provider.alt_env_var().and_then(|v| std::env::var(v).ok());
@@ -230,7 +236,7 @@ pub fn not_compiled(provider: Provider) -> anyhow::Error {
     anyhow::anyhow!(
         "{} support is not compiled into this adk-cli build. Reinstall with `--features {}` or `--features all-providers`.",
         provider.display_name(),
-        provider.as_str()
+        provider.feature()
     )
 }
 
@@ -240,7 +246,8 @@ fn interactive_setup(cli_instruction: Option<String>, terminal: bool) -> Result<
     if providers.is_empty() {
         anyhow::bail!(
             "this adk-cli build has no model provider compiled in. Reinstall with \
-             `--features gemini` (or openai, anthropic, deepseek, groq, ollama)."
+             `--features gemini` (or openai, anthropic, deepseek, groq, ollama, muse, \
+             openrouter, opencode, bedrock, azure-ai)."
         );
     }
     if !terminal {
@@ -258,8 +265,7 @@ fn interactive_setup(cli_instruction: Option<String>, terminal: bool) -> Result<
     println!("  Choose a provider:\n");
 
     for (i, p) in providers.iter().enumerate() {
-        let default =
-            if p.default_model().is_empty() { "--model required" } else { p.default_model() };
+        let default = p.default_model().unwrap_or("--model required");
         println!("    {}) {:<35} default: {}", i + 1, p.display_name(), default);
     }
     println!();
@@ -281,10 +287,9 @@ fn interactive_setup(cli_instruction: Option<String>, terminal: bool) -> Result<
         println!("  Invalid choice, try again.");
     };
 
-    let model = if provider.default_model().is_empty() {
-        prompt_model(provider)?
-    } else {
-        provider.default_model().to_string()
+    let model = match provider.default_model() {
+        Some(model) => model.to_string(),
+        None => prompt_model(provider)?,
     };
 
     let api_key =
@@ -318,7 +323,7 @@ Use {} in your environment or re-enter the key next run.\n",
 /// Prompts for the model id of a provider without a default, on a terminal.
 fn prompt_model(provider: Provider) -> Result<String> {
     println!();
-    println!("  {} needs a model: a Hugging Face id or a .gguf path.", provider.display_name());
+    println!("  {} needs a model: {}.", provider.display_name(), provider.model_hint());
     loop {
         print!("  Model: ");
         let _ = io::stdout().flush();
@@ -453,8 +458,20 @@ mod tests {
 
     #[test]
     fn a_provider_left_out_of_the_build_gets_the_reinstall_hint() {
-        let error = not_compiled(Provider::Model(adk_model::ModelProvider::Deepseek)).to_string();
-        assert!(error.contains("not compiled into this adk-cli build"), "{error}");
-        assert!(error.contains("Reinstall with `--features deepseek`"), "{error}");
+        use adk_model::ModelProvider;
+        for (provider, feature) in [
+            (Provider::Model(ModelProvider::Deepseek), "deepseek"),
+            (Provider::Model(ModelProvider::Muse), "muse"),
+            (Provider::Model(ModelProvider::Openrouter), "openrouter"),
+            (Provider::Model(ModelProvider::Opencode), "opencode"),
+            (Provider::Model(ModelProvider::OpencodeGo), "opencode"),
+            (Provider::Model(ModelProvider::Bedrock), "bedrock"),
+            (Provider::Model(ModelProvider::AzureAi), "azure-ai"),
+            (Provider::MistralRs, "mistralrs"),
+        ] {
+            let error = not_compiled(provider).to_string();
+            assert!(error.contains("not compiled into this adk-cli build"), "{error}");
+            assert!(error.contains(&format!("Reinstall with `--features {feature}`")), "{error}");
+        }
     }
 }

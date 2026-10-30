@@ -1,0 +1,24 @@
+[package]
+name = "ideate-with-meta"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "Ideate with Meta: inventor co-ideation studio on Muse Spark (multi-agent panel, structured idea cards, concept renders)"
+
+[workspace]
+
+[dependencies]
+adk-agent = { path = "../../adk-agent" }
+adk-core = { path = "../../adk-core" }
+adk-model = { path = "../../adk-model", default-features = false, features = ["muse"] }
+adk-runner = { path = "../../adk-runner" }
+adk-session = { path = "../../adk-session" }
+adk-tool = { path = "../../adk-tool" }
+anyhow = "1.0"
+base64 = "0.22"
+dotenvy = "0.15"
+futures = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.40", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

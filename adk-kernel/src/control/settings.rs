@@ -3,7 +3,7 @@
 //!
 //! | Route (under `/api`) | Caller | Does |
 //! |---|---|---|
-//! | `GET /kernel/settings` | operator, or a device with `read` | Every area's settings in force ([`SettingsResponse`]) |
+//! | `GET /kernel/settings` | operator, or a device with `read` | Every area's settings in force, the primary agent's area marked `primary` ([`SettingsResponse`]) |
 //! | `GET /kernel/settings/{partition}` | operator, or a device with `read` | One area's ([`AreaResponse`]) |
 //! | `POST /kernel/settings/{partition}/quiet-time` | the person at the kernel or the home | Sets or turns off quiet time ([`QuietTimeRequest`]) |
 //! | `POST /kernel/settings/{partition}/spending-limit` | the person at the kernel or the home | Sets or removes the daily spending limit ([`SpendingLimitRequest`]) |
@@ -64,6 +64,7 @@ type Backend = State<Arc<dyn ControlBackend>>;
 ///
 /// let wire = serde_json::json!({
 ///     "partition": "default",
+///     "primary": true,
 ///     "quietTime": [{ "start": "22:00", "end": "07:00" }],
 ///     "dailySpendingLimit": 5_000_000,
 ///     "spentToday": 1_840_000,
@@ -71,6 +72,7 @@ type Backend = State<Arc<dyn ControlBackend>>;
 /// });
 /// let area: AreaView = serde_json::from_value(wire).unwrap();
 /// assert_eq!(area.daily_spending_limit, Some(5_000_000));
+/// assert!(area.primary, "the primary agent works in this area");
 /// assert!(area.changed.is_none() && area.also_quiet.is_empty());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +81,12 @@ type Backend = State<Arc<dyn ControlBackend>>;
 pub struct AreaView {
     /// The area.
     pub partition: PartitionId,
+    /// Whether the primary agent works in this area: the partition the kernel's own target,
+    /// [`KernelConfig::app_name`](crate::KernelConfig::app_name), is bound to, else `default`.
+    /// The turns a terminal or the home sends run there, so they show this area's spend today
+    /// and daily spending limit (spec 3.3 §10 K3, §13 Q7).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub primary: bool,
     /// The person's quiet time: the window changed while the kernel runs, else those it
     /// started with. Empty is no quiet time.
     #[serde(default)]
@@ -412,8 +420,10 @@ pub(crate) async fn view(
     let sup = kernel.supervision();
     let today = sup.clock.now().date_naive();
     let scope = crate::stores::SpendScope::Partition(partition.clone());
+    let primary = kernel.partition_of_target(&kernel.config().app_name);
     Ok(AreaView {
         partition: partition.clone(),
+        primary: primary.unwrap_or(&PartitionId::default()) == partition,
         quiet_time,
         also_quiet: start.beside,
         daily_spending_limit,
@@ -421,6 +431,34 @@ pub(crate) async fn view(
         mode: mode.or(start.mode),
         changed,
     })
+}
+
+impl Kernel {
+    /// The settings in force in `partition` (spec 3.3 §10 K3), as
+    /// `GET /kernel/settings/{partition}` answers them: quiet time, the daily spending limit
+    /// with what was spent today, the mode, and whether the primary agent works there.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_kernel::{Kernel, PartitionId};
+    ///
+    /// # async fn example(kernel: &Kernel) -> adk_kernel::Result<()> {
+    /// let area = kernel.area_settings(&PartitionId::default()).await?;
+    /// let left = area.daily_spending_limit.map(|limit| limit.saturating_sub(area.spent_today));
+    /// # let _ = left;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a store error when the partition table, the control store or the spend totals
+    /// cannot be read.
+    pub async fn area_settings(&self, partition: &PartitionId) -> Result<AreaView> {
+        let store = self.config().control.control_store.clone();
+        view(self, store.as_ref(), partition).await
+    }
 }
 
 async fn list(State(backend): Backend, caller: Caller) -> Result<Json<SettingsResponse>> {

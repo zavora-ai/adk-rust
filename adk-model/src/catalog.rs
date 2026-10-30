@@ -41,10 +41,14 @@ pub const ANTHROPIC_LEGACY_MAX_TOKENS: u32 = 4_096;
 pub const DEEPSEEK_DEFAULT: &str = "deepseek-flash";
 /// Recommended Groq production model.
 pub const GROQ_DEFAULT: &str = "openai/gpt-oss-120b";
+/// Recommended Meta Muse model for general agent workloads.
+pub const MUSE_DEFAULT: &str = "muse-spark-1.3";
 /// Suggested local Ollama model. The model must already be installed locally.
 pub const OLLAMA_DEFAULT: &str = "qwen3.5";
 /// Recommended OpenRouter model. Callers should use model discovery for user-facing pickers.
 pub const OPENROUTER_DEFAULT: &str = "qwen/qwen3.7-max";
+/// Recommended OpenCode model, routed on both Zen (`opencode`) and Go (`opencode-go`).
+pub const OPENCODE_DEFAULT: &str = "deepseek-v4.1-flash";
 /// Recommended Fireworks balanced model.
 pub const FIREWORKS_DEFAULT: &str = "accounts/fireworks/models/kimi-k2p6";
 /// Recommended Together AI balanced model.
@@ -206,6 +210,8 @@ pub const KNOWN_PROVIDERS: &[&str] = &[
     "groq",
     "ollama",
     "openrouter",
+    "opencode",
+    "opencode-go",
     "fireworks",
     "together",
     "mistral",
@@ -264,8 +270,19 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
     ModelCatalogEntry::active("deepseek", "deepseek-v4-pro", ModelRole::Flagship),
     ModelCatalogEntry::default("groq", GROQ_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::active("groq", "openai/gpt-oss-20b", ModelRole::Economy),
+    ModelCatalogEntry::default("muse", MUSE_DEFAULT, ModelRole::Balanced),
+    ModelCatalogEntry::active("muse", "muse-spark-1.2", ModelRole::Balanced),
+    ModelCatalogEntry::active("muse", "muse-spark-1.1", ModelRole::Balanced),
+    ModelCatalogEntry::active("muse", "muse-spark-1.3-contributor", ModelRole::Economy),
+    ModelCatalogEntry::active("muse", "muse-spark-1.2-contributor", ModelRole::Economy),
+    ModelCatalogEntry::preview("muse", "muse-wonder-1.0", ModelRole::Flagship),
+    ModelCatalogEntry::active("muse", "muse-image-1.0", ModelRole::Image),
+    ModelCatalogEntry::active("muse", "muse-voice-transcribe-1.0", ModelRole::Transcription),
+    ModelCatalogEntry::active("muse", "sam-3.1", ModelRole::Image),
     ModelCatalogEntry::default("ollama", OLLAMA_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::default("openrouter", OPENROUTER_DEFAULT, ModelRole::Balanced),
+    ModelCatalogEntry::default("opencode", OPENCODE_DEFAULT, ModelRole::Balanced),
+    ModelCatalogEntry::default("opencode-go", OPENCODE_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::default("fireworks", FIREWORKS_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::active(
         "fireworks",
@@ -464,8 +481,10 @@ pub fn recommended_model(provider: &str) -> Option<&'static str> {
         "anthropic" => Some(ANTHROPIC_DEFAULT),
         "deepseek" => Some(DEEPSEEK_DEFAULT),
         "groq" => Some(GROQ_DEFAULT),
+        "muse" => Some(MUSE_DEFAULT),
         "ollama" => Some(OLLAMA_DEFAULT),
         "openrouter" => Some(OPENROUTER_DEFAULT),
+        "opencode" | "opencode-go" => Some(OPENCODE_DEFAULT),
         "fireworks" => Some(FIREWORKS_DEFAULT),
         "together" => Some(TOGETHER_DEFAULT),
         "mistral" => Some(MISTRAL_DEFAULT),

@@ -5,6 +5,7 @@
     feature = "anthropic",
     feature = "deepseek",
     feature = "groq",
+    feature = "muse",
     feature = "ollama",
     feature = "azure-ai"
 ))]
@@ -18,6 +19,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     feature = "anthropic",
     feature = "deepseek",
     feature = "groq",
+    feature = "muse",
     feature = "ollama",
     feature = "azure-ai"
 ))]
@@ -32,6 +34,7 @@ pub(crate) fn encode_base64(data: &[u8]) -> String {
     feature = "anthropic",
     feature = "deepseek",
     feature = "groq",
+    feature = "muse",
     feature = "ollama"
 ))]
 pub(crate) fn inline_attachment_to_text(mime_type: &str, data: &[u8]) -> String {
@@ -58,6 +61,7 @@ pub(crate) fn pdf_filename(uri: Option<&str>) -> String {
     feature = "anthropic",
     feature = "ollama",
     feature = "groq",
+    feature = "muse",
     feature = "deepseek",
     feature = "bedrock"
 ))]

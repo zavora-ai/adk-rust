@@ -85,13 +85,13 @@ The six OpenAI-compatible aliases are the clearest case. `AGENTS.md` already
 documents them as backward-compat aliases over one 1,261-line client, so the
 feature keys carry nothing but a spelling of a base URL.
 
-## The 19 that stay despite sharing dependencies
+## The 20 that stay despite sharing dependencies
 
 Shared dependency effect is not automatically a defect. These are recorded as
 `kind="keep"` with the reason, so a future reader does not "fix" them:
 
-- `azure-ai`, `deepseek`, `groq`, `openrouter` — four distinct clients over one
-  reqwest stack.
+- `azure-ai`, `deepseek`, `groq`, `muse`, `openrouter` — five distinct clients over
+  one reqwest stack.
 - `gemini-interactions` — a distinct Beta transport on the Gemini client.
 - `example-store` / `vertex-agent-registry` — distinct registries.
 - `vertex-rag` / `agent-retrieval` — RAG Engine versus managed VectorStore.

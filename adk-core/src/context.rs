@@ -1118,7 +1118,10 @@ pub const BUILTIN_TOOL_ORIGIN: &str = "builtin";
 pub struct ToolOrigin {
     /// Who publishes the tool, as [`Tool::origin`](crate::Tool::origin) reports it:
     /// [`STATIC_TOOL_ORIGIN`] for a tool attached to the agent, `mcp:{toolset}` for a tool an
-    /// MCP server publishes.
+    /// MCP server publishes. Calls that have no [`Tool`](crate::Tool) name their publisher
+    /// too: [`BUILTIN_TOOL_ORIGIN`] for a provider-executed built-in tool, `graph:{agent}`
+    /// for a governed graph node, and `realtime` for a native handler registered on an
+    /// `adk-realtime` `RealtimeRunner`.
     pub source: String,
     /// `sha256:` followed by the hex SHA-256 of the tool's declaration and annotations in
     /// canonical JSON.
@@ -1301,6 +1304,11 @@ impl ToolConfirmationRequest {
     /// tool whose declaration changed. The parts are separated by U+001F; a missing agent or
     /// origin leaves its part empty.
     ///
+    /// The governed path records the acting agent on every request it builds, so a
+    /// fingerprint without one never matches a governed call.
+    /// [`RunConfigBuilder::tool_approval`] refuses one; see
+    /// [`fingerprint_agent`](Self::fingerprint_agent).
+    ///
     /// # Example
     ///
     /// ```rust
@@ -1336,6 +1344,40 @@ impl ToolConfirmationRequest {
         out.push('\u{1f}');
         out.push_str(&call);
         out
+    }
+
+    /// The id of the acting agent `fingerprint` names, or `None` when it names none.
+    ///
+    /// `None` for the [`fingerprint`](Self::fingerprint) of a request without an acting
+    /// agent, and for a string that is no request fingerprint at all, such as a
+    /// [`tool_call_fingerprint`]. A decision keyed by such a string never authorizes a call
+    /// on the governed path, which keys every call by its acting agent.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::principal::{ActingContext, AgentPrincipal};
+    /// use adk_core::{ToolConfirmationRequest, tool_call_fingerprint};
+    /// use serde_json::json;
+    ///
+    /// let call = ToolConfirmationRequest::new("transfer", json!({ "amount": 40 }));
+    /// let owned = call
+    ///     .clone()
+    ///     .with_acting_context(ActingContext::new(AgentPrincipal::derived("ops", "treasurer")));
+    ///
+    /// assert_eq!(
+    ///     ToolConfirmationRequest::fingerprint_agent(&owned.fingerprint()),
+    ///     Some("urn:adk:agent:ops/treasurer")
+    /// );
+    /// assert_eq!(ToolConfirmationRequest::fingerprint_agent(&call.fingerprint()), None);
+    /// let bare = tool_call_fingerprint("transfer", &json!({ "amount": 40 }));
+    /// assert_eq!(ToolConfirmationRequest::fingerprint_agent(&bare), None);
+    /// ```
+    pub fn fingerprint_agent(fingerprint: &str) -> Option<&str> {
+        // Five parts: agent, origin source, declaration digest, tool name, arguments.
+        let mut parts = fingerprint.splitn(5, '\u{1f}');
+        let agent = parts.next().filter(|agent| !agent.is_empty())?;
+        (parts.count() == 4).then_some(agent)
     }
 }
 
@@ -1585,6 +1627,10 @@ pub struct RunConfig {
     /// Use this whenever a decision travels through a round trip, such as a browser or an
     /// editor, where the arguments could be changed or another agent's call could carry
     /// the replayed call ID.
+    ///
+    /// Every governed call names its acting agent, so a binding whose fingerprint names
+    /// none ([`ToolConfirmationRequest::fingerprint_agent`]) matches no call and the
+    /// decision it binds is never applied.
     pub tool_confirmation_fingerprints: HashMap<String, String>,
     /// Optional live decision source for confirmations that have no static
     /// entry in [`tool_confirmation_decisions`](Self::tool_confirmation_decisions).
@@ -1671,9 +1717,13 @@ pub struct RunConfig {
     /// A decision applies to every call in the run by the agent the fingerprint names, to
     /// a tool with the origin it names, with those canonical arguments, whatever its call
     /// ID, until it expires. Take the fingerprint from the request a held call surfaced, or
-    /// build it with [`ToolConfirmationRequest::for_tool`]. Record a decision in an
-    /// [`approval_store`](Self::approval_store) instead for one that is consumed by the call
-    /// it authorizes.
+    /// build it with [`ToolConfirmationRequest::for_tool`] and
+    /// [`with_acting_context`](ToolConfirmationRequest::with_acting_context). Record a
+    /// decision in an [`approval_store`](Self::approval_store) instead for one that is
+    /// consumed by the call it authorizes.
+    ///
+    /// A key that names no acting agent ([`ToolConfirmationRequest::fingerprint_agent`])
+    /// matches no governed call. [`RunConfigBuilder::tool_approval`] refuses one.
     pub tool_approvals: HashMap<String, crate::ToolApproval>,
     /// Where calls held for approval are recorded, and decisions taken from, between runs.
     pub approval_store: Option<Arc<dyn crate::ApprovalStore>>,
@@ -1911,12 +1961,26 @@ impl RunConfigBuilder {
         self
     }
 
-    /// Binds confirmation decisions to the arguments they were granted for.
+    /// Binds confirmation decisions to the agent, tool, and arguments they were granted for.
     ///
-    /// Keys are function call IDs and values are fingerprints from
-    /// [`tool_call_fingerprint`]. A decision whose fingerprint does not match the
-    /// actual call is ignored and the call is treated as unconfirmed.
+    /// Keys are function call IDs and values are the [`ToolConfirmationRequest::fingerprint`]
+    /// of the request each decision answers. A decision whose fingerprint does not match
+    /// the actual call is ignored and the call is treated as unconfirmed.
+    ///
+    /// A binding whose fingerprint names no acting agent
+    /// ([`ToolConfirmationRequest::fingerprint_agent`]) matches no governed call, so the
+    /// decision it binds is never applied; each one is logged with `tracing::warn!`.
     pub fn tool_confirmation_fingerprints(mut self, fingerprints: HashMap<String, String>) -> Self {
+        for (call_id, fingerprint) in &fingerprints {
+            if ToolConfirmationRequest::fingerprint_agent(fingerprint).is_none() {
+                tracing::warn!(
+                    function_call.id = %call_id,
+                    "confirmation decision bound to a fingerprint that names no acting agent; \
+                     it never applies. Bind it to the fingerprint of the request the call \
+                     surfaced"
+                );
+            }
+        }
         self.config.tool_confirmation_fingerprints = fingerprints;
         self
     }
@@ -2037,12 +2101,45 @@ impl RunConfigBuilder {
     }
 
     /// Records a decision for the call with `fingerprint`. See [`RunConfig::tool_approvals`].
+    ///
+    /// A fingerprint that names no acting agent
+    /// ([`ToolConfirmationRequest::fingerprint_agent`]) is refused: it could never authorize
+    /// a governed call, so the decision is not recorded and the refusal is logged with
+    /// `tracing::warn!`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::principal::{ActingContext, AgentPrincipal};
+    /// use adk_core::{RunConfig, ToolApproval, ToolConfirmationRequest};
+    /// use serde_json::json;
+    ///
+    /// let call = ToolConfirmationRequest::new("transfer", json!({ "amount": 40 }));
+    /// let owned = call
+    ///     .clone()
+    ///     .with_acting_context(ActingContext::new(AgentPrincipal::derived("ops", "treasurer")));
+    ///
+    /// let config = RunConfig::builder()
+    ///     .tool_approval(owned.fingerprint(), ToolApproval::approve())
+    ///     .tool_approval(call.fingerprint(), ToolApproval::approve())
+    ///     .build();
+    /// assert_eq!(config.tool_approvals.keys().collect::<Vec<_>>(), [&owned.fingerprint()]);
+    /// ```
     pub fn tool_approval(
         mut self,
         fingerprint: impl Into<String>,
         approval: crate::ToolApproval,
     ) -> Self {
-        self.config.tool_approvals.insert(fingerprint.into(), approval);
+        let fingerprint = fingerprint.into();
+        if ToolConfirmationRequest::fingerprint_agent(&fingerprint).is_none() {
+            tracing::warn!(
+                "tool approval refused: its fingerprint names no acting agent, so it could \
+                 never authorize a governed call. Build it from the request the call surfaced, \
+                 or with ToolConfirmationRequest::with_acting_context"
+            );
+            return self;
+        }
+        self.config.tool_approvals.insert(fingerprint, approval);
         self
     }
 
@@ -2266,6 +2363,26 @@ mod tests {
     #[test]
     fn test_validate_state_key_null_byte() {
         assert!(validate_state_key("foo\0bar").is_err());
+    }
+
+    #[test]
+    fn fingerprint_agent_reads_the_acting_agent_of_a_request_fingerprint() {
+        use crate::principal::{ActingContext, AgentPrincipal};
+        let args = serde_json::json!({ "amount": 40 });
+        let call = ToolConfirmationRequest::new("pay", args.clone());
+        let owned = call
+            .clone()
+            .with_acting_context(ActingContext::new(AgentPrincipal::derived("ops", "treasurer")));
+        let published =
+            owned.clone().with_origin(ToolOrigin::new("mcp:bank", &serde_json::json!({}), None));
+
+        let agent = ToolConfirmationRequest::fingerprint_agent;
+        assert_eq!(agent(&owned.fingerprint()), Some("urn:adk:agent:ops/treasurer"));
+        assert_eq!(agent(&published.fingerprint()), Some("urn:adk:agent:ops/treasurer"));
+        assert_eq!(agent(&call.fingerprint()), None);
+        assert_eq!(agent(&call.with_origin(published.origin.unwrap()).fingerprint()), None);
+        assert_eq!(agent(&tool_call_fingerprint("pay", &args)), None);
+        assert_eq!(agent(""), None);
     }
 
     #[test]

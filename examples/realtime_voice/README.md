@@ -31,7 +31,7 @@ happen server-side. The browser is a thin audio device.
 └───────────┬───────────────────────────────────────▲──────────┘
             │ WebSocket /ws                          │
 ┌───────────▼───────────────────────────────────────┴──────────┐
-│     Axum server (localhost:3033)                              │
+│     Axum server (127.0.0.1:3033)                              │
 │  ┌──────────────────────────────────────────────────────┐    │
 │  │  IntegratedRealtimeRunner                            │    │
 │  │  ├─ OpenAIRealtimeModel  (gpt-realtime, voice "marin") │    │
@@ -106,7 +106,28 @@ configures its capture/playback contexts accordingly.
 | `GEMINI_REALTIME_MODEL` | No | Gemini model ID (default: `models/gemini-3.1-flash-live-preview`, which calls tools reliably; `models/gemini-2.5-flash-native-audio-latest` for the most natural voice) |
 | `MIA_MEMORY_DB` | No | Knowledge-graph SQLite path (default: `mia_memory.db`) |
 | `PORT` | No | Server port (default: `3033`) |
+| `BIND_HOST` | No | Address to listen on (default: `127.0.0.1`). `0.0.0.0` listens on every interface and logs a warning. |
 | `RUST_LOG` | No | Log level (default: `info`) |
+
+`.env.example` lists them; `.env` is read from the directory you run in or any parent.
+
+## Network exposure
+
+The server has no authentication. Every session it opens spends the provider keys it holds, and
+`/api/memory` reads, adds to, and resets the user's memory graph. It listens on loopback unless
+`BIND_HOST` names another address, and prints the address it bound. Before setting
+`BIND_HOST=0.0.0.0`, put authentication in front of the server.
+
+A request whose `Origin` is not this server's page gets `403 Forbidden`, the `/ws` upgrade and
+`/api/memory` included: browsers apply no CORS to WebSockets, and a body-less `POST` to
+`/api/memory/reset` needs no CORS preflight, so without the check any site you visit could open
+a session on your keys or wipe the memory graph. The page's origin is `http://` and the bound
+address, where any loopback address and `localhost` count as one host; on `BIND_HOST=0.0.0.0` it
+is the IP address the browser connected to, so open the page by IP address. A request without
+`Origin` (a non-browser client such as `websocat`) is accepted, since such a client could send any
+`Origin` it liked. The check lives in `src/origin.rs`.
+
+CORS grants only the origin the same check accepts, so no other site can read `/api/memory`.
 
 > **Gemini model note:** AI Studio (API-key) uses different model names than
 > Vertex/Agent Platform. The half-cascade `gemini-3.1-flash-live-preview` is the
@@ -118,7 +139,7 @@ configures its capture/playback contexts accordingly.
 ```bash
 # Web UI
 cargo run --manifest-path examples/realtime_voice/Cargo.toml
-# → open http://localhost:3033
+# → open http://127.0.0.1:3033
 
 # Headless smoke test (no browser/mic) — connects, asks a weather question by
 # text, verifies the tool runs and audio comes back. Pick a provider:

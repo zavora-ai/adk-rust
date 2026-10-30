@@ -12,16 +12,52 @@ the `adk_core::Llm` trait, so an agent takes any of them without other changes.
 | Anthropic | `AnthropicClient` ([details](./anthropic.md)) | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5` |
 | DeepSeek | `DeepSeekClient` | `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-flash` |
 | Groq | `GroqClient` | `groq` | `GROQ_API_KEY` | `openai/gpt-oss-120b` |
+| Meta Muse | `MuseClient` | `muse` | `META_API_KEY` | `muse-spark-1.3` |
 | OpenRouter | `OpenRouterClient` | `openrouter` | `OPENROUTER_API_KEY` | `qwen/qwen3.7-max` |
 | OpenAI-compatible endpoints | `OpenAICompatible` with a preset | `openai` | Per endpoint | Per preset |
 | Azure OpenAI | `AzureOpenAIClient` | `openai` | — | Deployment-scoped |
 | Azure AI Inference | `AzureAIClient` | `azure-ai` | — | Deployment-scoped |
 | Amazon Bedrock | `BedrockClient` | `bedrock` | — | Deployment-scoped |
-| OpenCode Go and Zen | `OpenCodeClient` ([details](./opencode.md)) | `opencode` | `OPENCODE_API_KEY` | Per service |
+| OpenCode Go and Zen | `OpenCodeClient` ([details](./opencode.md)) | `opencode` | `OPENCODE_API_KEY` | `deepseek-v4.1-flash` |
 
 The catalog defaults are the constants in `adk_model::catalog` (`GEMINI_DEFAULT`,
 `OPENAI_DEFAULT`, ...); `catalog::recommended_model(provider)` returns them. For local models,
 see [Ollama](./ollama.md) and [mistral.rs](./mistralrs.md).
+
+### Provider identifiers
+
+`adk_model::ModelProvider` names each provider with its own client, with the identifier CLIs
+and configs use. `adk-rust --provider` takes the same identifiers.
+
+| Identifier | Variant | `feature()` | `env_var()` | `default_model()` |
+|------------|---------|-------------|-------------|-------------------|
+| `gemini` | `Gemini` | `gemini` | `GOOGLE_API_KEY` (`alt_env_var()`: `GEMINI_API_KEY`) | `Some("gemini-3.7-flash")` |
+| `openai` | `Openai` | `openai` | `OPENAI_API_KEY` | `Some("gpt-5.6-terra")` |
+| `anthropic` | `Anthropic` | `anthropic` | `ANTHROPIC_API_KEY` | `Some("claude-sonnet-5")` |
+| `deepseek` | `Deepseek` | `deepseek` | `DEEPSEEK_API_KEY` | `Some("deepseek-flash")` |
+| `groq` | `Groq` | `groq` | `GROQ_API_KEY` | `Some("openai/gpt-oss-120b")` |
+| `ollama` | `Ollama` | `ollama` | empty, no key | `Some("qwen3.5")` |
+| `muse` | `Muse` | `muse` | `META_API_KEY` (`alt_env_var()`: `MODEL_API_KEY`) | `Some("muse-spark-1.3")` |
+| `openrouter` | `Openrouter` | `openrouter` | `OPENROUTER_API_KEY` | `Some("qwen/qwen3.7-max")` |
+| `opencode` | `Opencode` (Zen) | `opencode` | `OPENCODE_API_KEY` | `Some("deepseek-v4.1-flash")` |
+| `opencode-go` | `OpencodeGo` (Go) | `opencode` | `OPENCODE_API_KEY` | `Some("deepseek-v4.1-flash")` |
+| `bedrock` | `Bedrock` | `bedrock` | `AWS_BEARER_TOKEN_BEDROCK`; `requires_key()` is false, since the AWS credential chain applies without it | `None` |
+| `azure-ai` | `AzureAi` | `azure-ai` | `AZURE_AI_API_KEY` | `None` |
+
+`ModelProvider::ALL` covers every feature `all-providers` enables. The OpenAI-compatible presets
+and Azure OpenAI run on the `openai` feature's clients and are not variants.
+
+```rust
+use adk_model::ModelProvider;
+
+fn main() -> Result<(), String> {
+    let provider: ModelProvider = "bedrock".parse()?;
+    assert_eq!(provider.feature(), "bedrock");
+    assert_eq!(provider.default_model(), None);
+    assert!(!provider.requires_key());
+    Ok(())
+}
+```
 
 ## Installation
 
@@ -30,7 +66,7 @@ tier includes Gemini; add the feature of each other provider you use:
 
 ```toml
 [dependencies]
-adk-rust = { version = "3.0.0", features = ["openai", "anthropic", "deepseek", "groq", "openrouter"] }
+adk-rust = { version = "3.0.0", features = ["openai", "anthropic", "deepseek", "groq", "muse", "openrouter"] }
 anyhow = "1"
 dotenvy = "0.15"
 tokio = { version = "1", features = ["full"] }
@@ -42,7 +78,7 @@ To depend on the clients alone, use `adk-model` with the same feature names:
 [dependencies]
 adk-model = { version = "3.0.0", features = ["openai", "anthropic"] }
 # Every provider at once: gemini, openai, anthropic, deepseek, ollama, groq,
-# openrouter, opencode, bedrock and azure-ai.
+# muse, openrouter, opencode, bedrock and azure-ai.
 # adk-model = { version = "3.0.0", features = ["all-providers"] }
 ```
 
@@ -54,6 +90,7 @@ export OPENAI_API_KEY="your-key"      # OpenAI
 export ANTHROPIC_API_KEY="your-key"   # Anthropic
 export DEEPSEEK_API_KEY="your-key"    # DeepSeek
 export GROQ_API_KEY="your-key"        # Groq
+export META_API_KEY="your-key"        # Meta Muse (or MODEL_API_KEY)
 export OPENROUTER_API_KEY="your-key"  # OpenRouter
 ```
 
@@ -583,6 +620,70 @@ async fn main() -> anyhow::Result<()> {
 | `openai/gpt-oss-120b` (default) | `GroqConfig::gpt_oss_120b(key)` |
 | `openai/gpt-oss-20b` (faster, lower cost) | `GroqConfig::gpt_oss_20b(key)` |
 | Any model Groq serves | `GroqConfig::new(key, model)` |
+
+---
+
+## Meta Muse
+
+`MuseClient` calls the Meta Model API (`https://api.meta.ai/v1`) Chat Completions
+endpoint, which is drop-in OpenAI-compatible. The key is read from `META_API_KEY`
+(Meta also documents `MODEL_API_KEY`).
+
+### Complete Example
+
+```rust
+use adk_rust::Launcher;
+use adk_rust::prelude::*;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+
+    let api_key = std::env::var("META_API_KEY")?;
+    let model = MuseClient::new(MuseConfig::spark_1_3(&api_key))?;
+
+    let agent = LlmAgentBuilder::new("muse_assistant")
+        .description("Muse-powered assistant")
+        .instruction("You are a helpful assistant. Be concise.")
+        .model(Arc::new(model))
+        .build()?;
+
+    Launcher::new(Arc::new(agent)).run().await?;
+    Ok(())
+}
+```
+
+### Models
+
+| Model | Config |
+|-------|--------|
+| `muse-spark-1.3` (default, recommended for new work) | `MuseConfig::spark_1_3(key)` |
+| `muse-spark-1.2` (previous version) | `MuseConfig::spark_1_2(key)` |
+| `muse-spark-1.1` (original version) | `MuseConfig::spark_1_1(key)` |
+| Any model the API serves | `MuseConfig::new(key, model)` |
+
+The `-contributor` checkpoints (`muse-spark-1.3-contributor`,
+`muse-spark-1.2-contributor`) work through `MuseConfig::new`. Contributor pricing
+is discounted in exchange for permission to train on request content, so no preset
+selects one. Rate limits are 3,000 requests and 4,000,000 tokens per minute per team.
+Spark reasoning counts toward `max_tokens`, so the client raises smaller output caps
+to 1,024 (`MUSE_MIN_MAX_TOKENS`) instead of returning empty `length` responses, and
+maps `GenerateContentConfig::effort` to the API's `reasoning_effort`.
+
+### Beyond Chat Completions
+
+| Client | Endpoint | Covers |
+|--------|----------|--------|
+| `MuseClient` | `/chat/completions` | Native image/audio/video/file parts, strict `response_format` from `response_schema`, `prompt_cache_key`/`tool_choice` via `extensions["muse"]` |
+| `MuseResponsesClient` | `/responses` (+get/delete/cancel/input_tokens) | Stateful turns: `previous_response_id`, `store`, `background` — the only cross-turn reasoning carrier |
+| `MuseImagesClient` | `/images/generations`, `/images/edits` | `muse-image-1.0` ($0.01/image) |
+| `MuseFilesClient` | `/files` CRUD + content | Uploads to 1GiB, referenced by `input_file` parts |
+| `MuseAsrClient` | `/asr/transcribe` | `muse-voice-transcribe-1.0` ($0.18/hour, diarization) |
+
+`muse-wonder-1.0` (preview flagship, $4/$20/$0.20 cached per 1M) works through
+`MuseConfig::wonder`. `sam-3.1` is catalogued for Responses-based segmentation;
+there is no dedicated SAM client yet.
 
 ---
 

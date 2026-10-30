@@ -11,11 +11,30 @@ cp .env.example .env
 
 ## Run
 
+From this directory, so `.env` is found:
+
 ```bash
-cargo run -p a2a-quickstart
+cargo run
 ```
 
-The server starts on **http://localhost:8003**.
+The server listens on **http://127.0.0.1:8003**, prints the address it bound, and advertises
+that address as the agent card `url`.
+
+## Network exposure
+
+The server has no authentication: anyone who can reach its address can call the agent and spend
+your model quota. It listens on loopback unless `BIND_HOST` names another address.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `BIND_HOST` | `127.0.0.1` | Address to listen on. `0.0.0.0` listens on every interface and logs a warning. |
+
+```bash
+BIND_HOST=0.0.0.0 cargo run
+```
+
+Before listening beyond loopback, put authentication in front of the server (see
+[Access control](../../docs/official_docs/security/access-control.md)).
 
 ## Endpoints
 
@@ -37,7 +56,7 @@ Expected response:
 {
   "name": "a2a-quickstart-agent",
   "description": "A minimal A2A-capable AI assistant built with ADK-Rust",
-  "url": "http://localhost:8003",
+  "url": "http://127.0.0.1:8003/a2a",
   "version": "1.0.0",
   "capabilities": {
     "streaming": true,

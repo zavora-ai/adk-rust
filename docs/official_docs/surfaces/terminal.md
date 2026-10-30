@@ -41,6 +41,10 @@ it (`COLORTERM=truecolor`), else the nearest of the 256 indexed colours.
 | A kernel on another machine | `--server URL`, with a device token (`--pair CODE` once, then kept), `--token`, or `$ADK_SERVE_TOKEN` | No: high-risk decisions wait for the web home or a local terminal |
 | No kernel | The harness runs in this process (also with `--ephemeral` or `--continue`) | Yes |
 
+On a kernel, the status line's spend today and daily spending limit are those of the area the
+primary agent works in, which `GET /kernel/settings` marks `primary`: the terminal's turns run
+there. With one area, that is every turn's spend against the kernel's limit.
+
 In process, the terminal keeps what the REPL keeps: long-term memory, `--yes` (held calls are
 allowed once, an unsandboxed retry only with `--allow-unsandboxed`), `--trust` (the
 workspace's instruction files and hooks load; without it an untrusted workspace says so), and
@@ -180,7 +184,7 @@ own, never one where a decision this run did not cause is waiting:
 | 0 | `done` | The turn finished |
 | 1 | `error` | The turn failed, ended without a reply (also after a tool call), or every agent is stopped |
 | 3 | `waitingForYou` | A decision waits for a person; it stays in the inbox for any surface. A message queued behind it is not sent, and the `end` line says so |
-| 4 | `budgetReached` | Today's spend reached the daily spending limit in force, as the kernel reports it (`GET /kernel/settings`: the default area's, or the only area's); the harness in process has no daily limit |
+| 4 | `budgetReached` | Today's spend reached the daily spending limit in force, as the kernel reports it (`GET /kernel/settings`: the area marked `primary`, where the primary agent works); the harness in process has no daily limit |
 
 ```bash
 adk-rust --output json --message "Write the release notes" > events.jsonl

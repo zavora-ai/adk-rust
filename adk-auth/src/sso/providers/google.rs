@@ -1,5 +1,6 @@
 //! Google provider.
 
+use super::super::validator::REQUIRED_CLAIMS;
 use super::super::{JwksCache, TokenClaims, TokenError, TokenValidator};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -45,6 +46,7 @@ impl TokenValidator for GoogleProvider {
         // Google may use either issuer
         validation.set_issuer(&["https://accounts.google.com", "accounts.google.com"]);
         validation.set_audience(&[&self.client_id]);
+        validation.set_required_spec_claims(&REQUIRED_CLAIMS);
         validation.validate_exp = true;
         validation.validate_nbf = true;
 
@@ -63,5 +65,22 @@ impl TokenValidator for GoogleProvider {
 impl GoogleProvider {
     pub fn new(client_id: impl Into<String>) -> Self {
         Self { client_id: client_id.into(), issuer: String::new() }
+    }
+}
+
+#[cfg(all(test, feature = "sso"))]
+mod tests {
+    use super::GoogleProvider;
+    use crate::sso::JwksCache;
+    use crate::sso::test_issuer::{TestIssuer, assert_requires_iss_and_aud};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn tokens_need_the_iss_and_aud_claims() {
+        let issuer = TestIssuer::start().await;
+        let mut provider = GoogleProvider::new("client-id");
+        provider.jwks_cache = Arc::new(JwksCache::new(issuer.jwks_uri()));
+
+        assert_requires_iss_and_aud(&provider, "https://accounts.google.com", "client-id").await;
     }
 }

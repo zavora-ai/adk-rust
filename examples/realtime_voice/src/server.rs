@@ -32,12 +32,15 @@
 //! message before any audio flows.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
     Json, Router,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::{Query, State},
+    http::header,
+    middleware,
     response::{Html, IntoResponse},
     routing::{get, post},
 };
@@ -45,7 +48,7 @@ use base64::Engine;
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
 
 use adk_memory::{CreateEntityInput, GraphMemoryService};
@@ -117,8 +120,8 @@ struct AppState {
     kg: Arc<GraphMemoryService>,
 }
 
-/// Run the Axum web server.
-pub async fn run_server(port: u16) -> anyhow::Result<()> {
+/// Serve the UI, the WebSocket bridge, and the memory API on `listener`.
+pub async fn run_server(listener: tokio::net::TcpListener) -> anyhow::Result<()> {
     // One process-wide, file-backed knowledge graph. Survives restarts so Mia
     // remembers Shai across sessions.
     let db = std::env::var("MIA_MEMORY_DB").unwrap_or_else(|_| "mia_memory.db".to_string());
@@ -135,20 +138,28 @@ pub async fn run_server(port: u16) -> anyhow::Result<()> {
     }
     info!(db = %db, seeded = fresh_db, "knowledge-graph memory ready");
 
-    let state = AppState { kg: Arc::new(kg) };
+    let addr = listener.local_addr()?;
+    let app = app(AppState { kg: Arc::new(kg) }, addr);
+    info!(%addr, "listening");
+    axum::serve(listener, app).await?;
+    Ok(())
+}
 
-    let app = Router::new()
+/// The router served from `bound`. Requests from other origins are refused, which keeps other
+/// sites from opening `/ws` or posting to `/api/memory/reset` (a body-less `POST` needs no CORS
+/// preflight), and CORS grants the server's own origin only, so no other site can read memory.
+fn app(state: AppState, bound: SocketAddr) -> Router {
+    let own_origin = AllowOrigin::predicate(move |origin, request| {
+        crate::origin::origin_allowed(Some(origin), request.headers.get(header::HOST), bound)
+    });
+    Router::new()
         .route("/", get(serve_index))
         .route("/ws", get(ws_handler))
         .route("/api/memory", get(get_memory).post(add_memory))
         .route("/api/memory/reset", post(reset_memory))
-        .layer(CorsLayer::permissive())
-        .with_state(state);
-
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
-    info!("listening on 0.0.0.0:{port}");
-    axum::serve(listener, app).await?;
-    Ok(())
+        .layer(CorsLayer::new().allow_origin(own_origin))
+        .layer(middleware::from_fn_with_state(bound, crate::origin::require_own_origin))
+        .with_state(state)
 }
 
 /// Seed Mia's baseline **coaching guidelines** into an empty graph. These are
@@ -642,5 +653,45 @@ fn server_event_to_client_json(event: ServerEvent) -> Option<serde_json::Value> 
             Some(json!({ "type": "error", "message": error.message }))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Send `request_line` with `Origin: origin` and return the response status code. A `/ws`
+    /// request carries a WebSocket upgrade.
+    async fn status(addr: SocketAddr, request_line: &str, origin: &str) -> String {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let extra = if request_line.ends_with("/ws") {
+            "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        } else {
+            "Connection: close\r\nContent-Length: 0\r\n"
+        };
+        let request =
+            format!("{request_line} HTTP/1.1\r\nHost: {addr}\r\nOrigin: {origin}\r\n{extra}\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut status = [0u8; 12];
+        stream.read_exact(&mut status).await.unwrap();
+        String::from_utf8_lossy(&status[9..]).into_owned()
+    }
+
+    #[tokio::test]
+    async fn requests_from_other_origins_are_refused() {
+        let kg = GraphMemoryService::new("sqlite::memory:").await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = app(AppState { kg: Arc::new(kg) }, addr);
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let own = format!("http://localhost:{}", addr.port());
+        assert_eq!(status(addr, "GET /ws", "http://evil.example").await, "403");
+        assert_eq!(status(addr, "GET /", "http://evil.example").await, "403");
+        assert_eq!(status(addr, "GET /api/memory", "http://evil.example").await, "403");
+        assert_eq!(status(addr, "POST /api/memory/reset", "http://evil.example").await, "403");
+        assert_eq!(status(addr, "GET /", &own).await, "200");
     }
 }

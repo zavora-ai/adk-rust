@@ -219,6 +219,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Site Hosts](deployment/site-hosts.md) - Publishing signed releases to S3, GCS, Azure, Cloudflare, Netlify, GitHub Pages or any server over SSH
 - [Site Generators](deployment/site-generators.md) - Building a site with Zola, Hugo, Astro or Build Awesome in a sandbox with no network
 - [The AWP Website Product](deployment/adk-website.md) - `adk-website`: site kinds, the team of eight agents, onboarding from nothing, a presence or an existing site, incidents, alarms and the weekly review
+- [Playbook Learning](deployment/website-learning.md) - Experiment decisions and KPIs short of the owner's targets propose playbook revisions; the owner accepts, edits or declines each, and accepted revisions are versioned
 - [Publishing from Git](deployment/website-repository.md) - A signed push from an authorised committer proposes a release on the owner's decision card: GitHub, GitLab or the plain signed form, a local repository or a forge's raw endpoint
 - [Website Experiments and Measurement](deployment/website-experiments.md) - Experiments on the charter's KPIs with guardrails that stop them, variants as static files, and the KPI sources that are not drivers
 - [Agent Engine](deployment/agent-engine.md) - Deploying on the Gemini Enterprise Agent Platform

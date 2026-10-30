@@ -50,7 +50,8 @@ impl Agent for CountingAgent {
     }
 }
 
-/// Accepts only the bearer token `good`.
+/// Accepts three bearer tokens: `good`, the administrator `operator` with the `admin` scope;
+/// `member`, an authenticated user without it; and `ops`, a user with the `ops` scope.
 struct TokenExtractor;
 
 #[async_trait]
@@ -59,15 +60,21 @@ impl RequestContextExtractor for TokenExtractor {
         &self,
         parts: &axum::http::request::Parts,
     ) -> Result<adk_core::RequestContext, RequestContextError> {
-        match parts.headers.get("authorization").and_then(|value| value.to_str().ok()) {
-            Some("Bearer good") => Ok(adk_core::RequestContext {
-                user_id: "operator".to_string(),
-                scopes: vec![],
-                metadata: Default::default(),
-            }),
-            Some(_) => Err(RequestContextError::InvalidToken("unknown token".to_string())),
-            None => Err(RequestContextError::MissingAuth),
-        }
+        let (user_id, scope) =
+            match parts.headers.get("authorization").and_then(|value| value.to_str().ok()) {
+                Some("Bearer good") => ("operator", "admin"),
+                Some("Bearer member") => ("member", "user"),
+                Some("Bearer ops") => ("ops-lead", "ops"),
+                Some(_) => {
+                    return Err(RequestContextError::InvalidToken("unknown token".to_string()));
+                }
+                None => return Err(RequestContextError::MissingAuth),
+            };
+        Ok(adk_core::RequestContext {
+            user_id: user_id.to_string(),
+            scopes: vec![scope.to_string()],
+            metadata: Default::default(),
+        })
     }
 }
 
@@ -103,11 +110,13 @@ struct Fixture {
 }
 
 async fn fixture() -> Fixture {
-    fixture_with(|_| None).await
+    fixture_with(|config| config, |_| None).await
 }
 
-/// A fixture whose freezes go to the delegate `delegate` builds over the server's control.
+/// A fixture whose server configuration `configure` adjusts, and whose freezes go to the
+/// delegate `delegate` builds over the server's control.
 async fn fixture_with(
+    configure: impl FnOnce(ServerConfig) -> ServerConfig,
     delegate: impl FnOnce(&GovernanceControl) -> Option<Arc<dyn FreezeDelegate>>,
 ) -> Fixture {
     let runs = Arc::new(AtomicUsize::new(0));
@@ -123,9 +132,11 @@ async fn fixture_with(
         .unwrap();
     let control = GovernanceControl::new();
     let loader = Arc::new(SingleAgentLoader::new(Arc::new(CountingAgent { runs: runs.clone() })));
-    let config = ServerConfig::new(loader, sessions as Arc<dyn SessionService>)
-        .with_request_context(Arc::new(TokenExtractor))
-        .with_governance(control.clone());
+    let config = configure(
+        ServerConfig::new(loader, sessions as Arc<dyn SessionService>)
+            .with_request_context(Arc::new(TokenExtractor))
+            .with_governance(control.clone()),
+    );
     let background = BackgroundState::new();
     let cron = CronState::new(background.clone());
     let mut builder = ServerBuilder::new(config)
@@ -164,6 +175,129 @@ async fn the_admin_endpoints_require_authentication() {
         call(&fixture.app, "POST", "/api/admin/freeze", None, json!({ "reason": "x" })).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(!fixture.control.is_frozen());
+}
+
+/// Only an administrator freezes or unfreezes: an authenticated caller without the admin scope
+/// is refused `403`, and neither the control nor the freeze delegate changes; the status stays
+/// readable to that caller.
+#[tokio::test]
+async fn a_caller_without_the_admin_scope_can_neither_freeze_nor_unfreeze() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&calls);
+    let fixture = fixture_with(
+        |config| config,
+        move |control| {
+            let delegate = ParkingDelegate { control: control.clone(), calls: recorded };
+            Some(Arc::new(delegate) as Arc<dyn FreezeDelegate>)
+        },
+    )
+    .await;
+    let code = |body: &Value| body["error"]["code"].clone();
+
+    let (status, body) = call(
+        &fixture.app,
+        "POST",
+        "/api/admin/freeze",
+        Some("member"),
+        json!({ "reason": "incident 30" }),
+    )
+    .await;
+    assert_eq!((status, code(&body)), (StatusCode::FORBIDDEN, json!("governance.forbidden")));
+    assert!(!fixture.control.is_frozen());
+    assert!(calls.lock().unwrap().is_empty(), "the delegate is not reached");
+
+    let (status, body) =
+        call(&fixture.app, "GET", "/api/admin/governance", Some("member"), json!({})).await;
+    assert_eq!(
+        (status, body),
+        (
+            StatusCode::OK,
+            json!({ "frozen": false, "mirrored": false, "stale": false, "runningRuns": "park" })
+        )
+    );
+
+    let (status, _) = call(
+        &fixture.app,
+        "POST",
+        "/api/admin/freeze",
+        Some("good"),
+        json!({ "reason": "incident 30" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) =
+        call(&fixture.app, "POST", "/api/admin/unfreeze", Some("member"), json!({})).await;
+    assert_eq!((status, code(&body)), (StatusCode::FORBIDDEN, json!("governance.forbidden")));
+    assert!(fixture.control.is_frozen(), "the freeze stays in force");
+    assert_eq!(calls.lock().unwrap().as_slice(), ["freeze:incident 30:operator"]);
+}
+
+/// Without a `RequestContextExtractor` no request has a caller: the freeze and the unfreeze are
+/// refused `401` and the control stays as it was; the status stays readable.
+#[tokio::test]
+async fn without_an_extractor_anonymous_callers_can_neither_freeze_nor_unfreeze() {
+    let fixture = fixture_with(
+        |mut config| {
+            config.request_context_extractor = None;
+            config
+        },
+        |_| None,
+    )
+    .await;
+    let code = |body: &Value| body["error"]["code"].clone();
+
+    let (status, body) =
+        call(&fixture.app, "POST", "/api/admin/freeze", None, json!({ "reason": "x" })).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::UNAUTHORIZED, json!("governance.unauthenticated"))
+    );
+    assert!(!fixture.control.is_frozen());
+
+    fixture.control.freeze("incident 31");
+    let (status, body) = call(&fixture.app, "POST", "/api/admin/unfreeze", None, json!({})).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::UNAUTHORIZED, json!("governance.unauthenticated"))
+    );
+    assert!(fixture.control.is_frozen(), "the freeze stays in force");
+
+    let (status, body) = call(&fixture.app, "GET", "/api/admin/governance", None, json!({})).await;
+    assert_eq!(
+        (status, body),
+        (
+            StatusCode::OK,
+            json!({
+                "frozen": true, "reason": "incident 31", "mirrored": false, "stale": false,
+                "runningRuns": "cancel"
+            })
+        )
+    );
+}
+
+/// `SecurityConfig::admin_scope` names the scope that makes a caller an administrator.
+#[tokio::test]
+async fn the_admin_scope_is_the_one_the_security_config_names() {
+    let fixture = fixture_with(
+        |mut config| {
+            config.security.admin_scope = "ops".to_string();
+            config
+        },
+        |_| None,
+    )
+    .await;
+
+    let (status, _) =
+        call(&fixture.app, "POST", "/api/admin/freeze", Some("good"), json!({ "reason": "x" }))
+            .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "`admin` is not the configured scope");
+    assert!(!fixture.control.is_frozen());
+
+    let (status, body) =
+        call(&fixture.app, "POST", "/api/admin/freeze", Some("ops"), json!({ "reason": "x" }))
+            .await;
+    assert_eq!((status, body["frozen"].clone()), (StatusCode::OK, json!(true)));
+    assert!(fixture.control.is_frozen());
 }
 
 #[tokio::test]
@@ -229,10 +363,13 @@ async fn freezing_stops_runs_and_pauses_scheduling_until_unfrozen() {
 async fn a_freeze_delegate_parks_instead_of_cancelling_and_the_status_says_so() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let recorded = Arc::clone(&calls);
-    let fixture = fixture_with(move |control| {
-        let delegate = ParkingDelegate { control: control.clone(), calls: recorded };
-        Some(Arc::new(delegate) as Arc<dyn FreezeDelegate>)
-    })
+    let fixture = fixture_with(
+        |config| config,
+        move |control| {
+            let delegate = ParkingDelegate { control: control.clone(), calls: recorded };
+            Some(Arc::new(delegate) as Arc<dyn FreezeDelegate>)
+        },
+    )
     .await;
 
     let (status, body) =

@@ -99,7 +99,7 @@ agent tool — and the harness refuses to run without it.
 | Snapshots and rewind | `snapshots(SnapshotConfig)`: the whole workspace snapshotted before each user turn and plan step, shell writes included, into content-addressed objects beside the store (sealed under the store key); `Harness::rewind_plan` / `rewind` / `redo_plan` restore files, transcript and plan, with conflicts, protected paths and effects not undone shown first (spec 3.1 §7.27) |
 | Goals | `Harness::start_goal` iterates until the operator's `until` command passes (`LoopAgent` or a checkpointed graph); goal state in a `GoalStore`; durable goals as `harness.goal` runs for a `DurableWorker`; ambient goals on cron, file-watch and webhook triggers |
 | Durability | A completed call never runs twice after a crash (the turn after one answers it from the action ledger), held approvals survive process loss, resumed runs follow the current mode |
-| Long-term facts | `MemoryFact`s with provenance in a `FactStore` (in-memory, file, SQLite, PostgreSQL), found by a `FactIndex` (`LocalFactIndex` by embedding or shared words, each vector tagged with its embedder's id, `MemoryServiceIndex` over any `adk-memory` backend) and recalled into a `<memory-facts>` block on each user turn; written by `memory_remember` (assumed only), by distilling a session on a cheaper model, and by a person; `Known` only from the user's own quoted words or a person's confirmation; redacted before storage; `Harness::{facts, accept_fact, forget_fact, correct_fact}` |
+| Long-term facts | `MemoryFact`s with provenance in a `FactStore` (in-memory, file, SQLite, PostgreSQL), found by a `FactIndex` (`LocalFactIndex` by embedding or shared words, each vector tagged with its embedder's id, `MemoryServiceIndex` over any `adk-memory` backend) and recalled into a `<memory-facts>` block on each user turn; written by `memory_remember` (assumed, or known when its quote is the user's own words in the session), by distilling a session on a cheaper model, and by a person; `Known` only from the user's own quoted words or a person's confirmation; redacted before storage; `Harness::{facts, accept_fact, forget_fact, correct_fact}` |
 | Fact consolidation | The spec 3.2 consolidation tick's work on facts: `Harness::consolidate_memory` distils the sessions the per-session distiller never reached (assumed only), supersedes `Assumed` near-duplicates and expires stale `Assumed` facts without a model call, merges similar `Assumed` facts with provenance, never touches a `Known` fact, stops at a loss cap, and keeps a record `Harness::undo_consolidation` reverts; `Harness::distilled_sessions` lists how far distillation read each session, so a host finds the sessions that ended undistilled, as `adk-rust` does at start |
 
 ## Mode table
@@ -114,7 +114,7 @@ agent tool — and the harness refuses to run without it.
 | Host shell (also a degraded sandbox) | Deny | Deny | Approval | Approval (Allow with `allow_host_shell_in_auto`) |
 | Unsandboxed retry | Deny | Deny | Approval, non-waivable | Approval, non-waivable |
 | Memory write (`memory_write`, `memory_delete`) | Deny | Deny | Approval, non-waivable | Approval, non-waivable |
-| Fact proposal (`memory_remember`, assumed facts only) | Deny | Deny | Allow | Allow |
+| Fact proposal (`memory_remember`: assumed, or known from a verified user quote) | Deny | Deny | Allow | Allow |
 | Web, allowlisted host | Allow | Allow | Allow | Allow |
 | Web, other host | Deny | Deny | RA | RA |
 | External tool, read-only, trusted origin | Allow | Allow | Allow | Allow |

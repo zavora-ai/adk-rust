@@ -198,18 +198,19 @@ impl Place {
             // Recall by shared words, so nothing is embedded or downloaded.
             .args(["--embedder", "lexical"])
             .current_dir(self.ws.path())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdin(Stdio::null());
         if let Some(store) = &self.store {
             command.args(["--store", store]);
         }
         common::isolate(&mut command, self.home.path());
         command.env_remove("TELEGRAM_BOT_TOKEN");
-        // What the kernel decided about each tick, for a failure to name.
+        // What the kernel decided about each tick, and every warning, for a failure to name;
+        // the server's log subscriber writes to standard output.
+        let log = std::fs::File::create(self.tick_log()).unwrap();
         command
-            .env("RUST_LOG", "adk_kernel::consolidation=debug")
-            .stderr(std::fs::File::create(self.tick_log()).unwrap());
+            .env("RUST_LOG", "warn,adk_kernel::consolidation=debug")
+            .stdout(log.try_clone().unwrap())
+            .stderr(log);
         let mut child = command.spawn().expect("adk-rust starts");
         let started = Instant::now();
         while std::net::TcpStream::connect(("127.0.0.1", self.port)).is_err() {
@@ -426,7 +427,10 @@ async fn correct_me_then_check_on(store: Option<String>) {
             .processes()
             .await
             .iter()
-            .map(|process| format!("{} {}", process["run"]["target"], process["run"]["state"]))
+            .map(|process| {
+                let run = &process["run"];
+                format!("{} {} {}", run["target"], run["state"], run["error"])
+            })
             .collect();
         let decided = std::fs::read_to_string(place.tick_log()).unwrap_or_default();
         panic!("no overnight tidy-up after {:?}; processes {ran:?}\n{decided}", started.elapsed());

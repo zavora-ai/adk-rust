@@ -303,7 +303,7 @@ let tools = drivers.toolset_for(&PartitionId::new("work"), &["email".to_string()
 
 | Platform | Control plane | Trust rule | Service form |
 |---|---|---|---|
-| macOS, Linux | Unix socket `<home>/kernel.sock`, mode `0600` | The peer's uid is the socket owner's | launchd agent, systemd user unit |
+| macOS, Linux | Unix socket `<home>/kernel.sock`, mode `0600`; when that path is too long for a socket, `adk-rust-<tag>/kernel.sock` under the user's own temp directory, in a `0700` directory the kernel and its clients check is the user's alone | The peer's uid is the socket owner's | launchd agent, systemd user unit |
 | Windows | Named pipe `\\.\pipe\adk-rust-kernel-<tag>`, the tag derived from the home | A protected DACL admits only the user the kernel runs as, who owns the pipe; the token the client opened it with must be that user's; the client refuses a pipe another account owns | Windows service under the user's account |
 
 `ControlClient::connect_local(home)` finds either. `service::ServiceDefinition::render`

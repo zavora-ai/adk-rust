@@ -132,6 +132,8 @@ mod record;
 mod routes;
 mod server;
 pub(crate) mod settings;
+#[cfg(unix)]
+mod socket;
 mod store;
 #[cfg(test)]
 mod tests;
@@ -445,9 +447,35 @@ impl ControlPlaneConfig {
             .map(|(_, reason)| reason.as_str())
     }
 
-    /// The socket's path under `home`, or `None` when no socket is served.
+    /// The socket's path for the kernel at `home`, or `None` when no socket is served.
+    ///
+    /// It is the socket under `home` when that path fits a Unix socket address (103 bytes on
+    /// macOS, 107 on Linux). When it does not, the kernel and its clients use
+    /// `adk-rust-<tag>/<socket name>` under the user's own temp directory instead, the tag
+    /// derived from the resolved home, so each derives the same path from the same home
+    /// (spec 3.3 G18). Windows serves a named pipe and keeps the path under the home.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::path::Path;
+    /// use adk_kernel::control::ControlPlaneConfig;
+    ///
+    /// let config = ControlPlaneConfig::default();
+    /// let short = config.socket_path(Path::new("/home/a/.config/adk-rust")).unwrap();
+    /// assert_eq!(short, Path::new("/home/a/.config/adk-rust/kernel.sock"));
+    /// # #[cfg(unix)]
+    /// # {
+    /// let long = Path::new("/srv").join("a-kernel-home-with-a-long-name/".repeat(4));
+    /// let socket = config.socket_path(&long).unwrap();
+    /// assert!(!socket.starts_with(&long) && socket.ends_with("kernel.sock"));
+    /// # }
+    /// ```
     pub fn socket_path(&self, home: &Path) -> Option<PathBuf> {
-        self.socket.as_ref().map(|socket| home.join(socket))
+        let path = home.join(self.socket.as_ref()?);
+        #[cfg(unix)]
+        let path = socket::place(path);
+        Some(path)
     }
 
     /// The named pipe Windows serves in place of the socket (spec 3.2 §10 W2), or `None`
@@ -468,7 +496,7 @@ impl ControlPlaneConfig {
     /// assert_eq!(config.without_socket().pipe_name(Path::new("/srv/kernel")), None);
     /// ```
     pub fn pipe_name(&self, home: &Path) -> Option<String> {
-        let socket = self.socket_path(home)?;
+        let socket = home.join(self.socket.as_ref()?);
         Some(format!(r"\\.\pipe\adk-rust-kernel-{}", crate::path_tag(&socket)))
     }
 

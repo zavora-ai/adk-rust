@@ -214,8 +214,12 @@ mod tests {
                     .unwrap();
                 continue;
             }
+            // Compared as JSON values: key order follows serde_json's `preserve_order`, which
+            // other workspace crates turn on, and the digest and proof are over JCS anyway.
+            let shipped: serde_json::Value = serde_json::from_str(pack.bundle_json()).unwrap();
+            let generated: serde_json::Value = serde_json::from_str(&generated).unwrap();
             assert_eq!(
-                pack.bundle_json().replace("\r\n", "\n"),
+                shipped,
                 generated,
                 "packs/{}.pack.json is not the generated bundle: run the test with \
                  ADK_WEBSITE_PACKS_RECORD=1, and raise BUILTIN_VERSION when its content changed",

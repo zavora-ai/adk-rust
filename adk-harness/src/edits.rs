@@ -49,10 +49,66 @@ pub(crate) fn edit_paths(tool: &str, args: &Value) -> Option<Vec<String>> {
     args.get("path").and_then(Value::as_str).map(|path| vec![path.to_string()])
 }
 
+/// The paths a call writes when all it does is write files: `/path` for `write_file` and
+/// `edit_file`, and every path of an `apply_patch` patch that only adds files or updates them
+/// in place. `None` for a patch that deletes or moves a file or does not parse, for a call
+/// that names no path, and for any other tool (spec 3.3 §8.2 "Always allow for this folder").
+pub(crate) fn written_paths(tool: &str, args: &Value) -> Option<Vec<String>> {
+    use adk_devtools::patch::PatchOp;
+
+    match tool {
+        APPLY_PATCH => {
+            let patch = adk_devtools::patch::parse_patch(args.get("patch")?.as_str()?).ok()?;
+            patch
+                .ops
+                .iter()
+                .map(|op| match op {
+                    PatchOp::Add { path, .. } | PatchOp::Update { path, move_to: None, .. } => {
+                        Some(path.clone())
+                    }
+                    // A delete, a move, and any operation this parser adds later.
+                    _ => None,
+                })
+                .collect()
+        }
+        "write_file" | "edit_file" => {
+            args.get("path").and_then(Value::as_str).map(|path| vec![path.to_string()])
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn only_a_pure_write_names_written_paths() {
+        let add = "*** Begin Patch\n*** Add File: notes/a.md\n+x\n*** Update File: notes/b.md\n\
+                   @@\n-x\n+y\n*** End Patch";
+        assert_eq!(
+            written_paths(APPLY_PATCH, &json!({ "patch": add })),
+            Some(vec!["notes/a.md".into(), "notes/b.md".into()])
+        );
+        let delete = "*** Begin Patch\n*** Add File: notes/a.md\n+x\n*** Delete File: notes/b.md\n\
+                      *** End Patch";
+        assert_eq!(written_paths(APPLY_PATCH, &json!({ "patch": delete })), None);
+        let moved = "*** Begin Patch\n*** Update File: notes/b.md\n*** Move to: notes/c.md\n@@\n\
+                     -x\n+y\n*** End Patch";
+        assert_eq!(written_paths(APPLY_PATCH, &json!({ "patch": moved })), None);
+        assert_eq!(written_paths(APPLY_PATCH, &json!({ "patch": "nonsense" })), None);
+        assert_eq!(
+            written_paths("write_file", &json!({ "path": "notes/a.md" })),
+            Some(vec!["notes/a.md".into()])
+        );
+        assert_eq!(
+            written_paths("edit_file", &json!({ "path": "notes/a.md" })),
+            Some(vec!["notes/a.md".into()])
+        );
+        assert_eq!(written_paths("edit_file", &json!({})), None);
+        assert_eq!(written_paths("delete_file", &json!({ "path": "notes/a.md" })), None);
+    }
 
     #[test]
     fn a_patch_names_every_header_path_and_other_tools_their_path() {

@@ -229,6 +229,11 @@ impl HarnessToolset {
         self.facts.as_ref()
     }
 
+    /// The origin of the tool named `name`, as a call to it records it.
+    pub(crate) fn origin_of(&self, name: &str) -> Option<ToolOrigin> {
+        self.tools.iter().find(|tool| tool.name() == name).map(|tool| ToolOrigin::of(tool.as_ref()))
+    }
+
     /// Lists the standing rules that apply to the session in every request's reminder
     /// (spec 3.1 §7.25): rules of `store` that a call of this toolset's tools can match.
     pub(crate) fn with_rules_digest(mut self, store: Arc<dyn StandingRuleStore>) -> Self {

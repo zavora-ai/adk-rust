@@ -17,6 +17,9 @@ reqwest = { version = "0.12", features = ["json"] }
 # Axum for hosting the registry server in-process
 axum = "0.8"
 
+# The demo RequestContextExtractor
+async-trait = "0.1"
+
 # Common dependencies
 tokio = { version = "1.40", features = ["full"] }
 anyhow = "1.0"

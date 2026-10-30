@@ -7,7 +7,8 @@ version bump cannot land with any of them stale. The README describes the
 workspace as an unpublished release candidate during the cycle and as released from
 the release-preparation pull request onward, and the banner and roadmap must
 describe the same state. Release mode rejects a candidate README, because the tagged
-commit is the one crates.io receives.
+commit is the one crates.io receives. The README's publishable-crate count is checked
+against the workspace members that do not set `publish = false`.
 
 `scripts/check-doc-versions.py` covers dependency snippets and feature names; it
 explicitly skips `CHANGELOG.md` and does not look at the banner or the roadmap, which
@@ -34,6 +35,7 @@ README_BANNER_PATTERN = re.compile(
     r"(release candidate\s+—\s+unpublished\.|Released!)\*\*",
     re.IGNORECASE,
 )
+README_CRATE_COUNT_PATTERN = re.compile(r"across\s+(\d+)\s+publishable\s+crates")
 README_ROADMAP_PATTERN = re.compile(
     r"\*\*v(\d+\.\d+\.\d+)\*\*\s*\((release candidate|current)\)",
     re.IGNORECASE,
@@ -53,6 +55,18 @@ def workspace_version() -> str:
     with (ROOT / "Cargo.toml").open("rb") as handle:
         manifest = tomllib.load(handle)
     return manifest["workspace"]["package"]["version"]
+
+
+def publishable_crate_count() -> int:
+    """The workspace members whose manifest does not set `publish = false`."""
+    with (ROOT / "Cargo.toml").open("rb") as handle:
+        members = tomllib.load(handle)["workspace"]["members"]
+    count = 0
+    for member in members:
+        with (ROOT / member / "Cargo.toml").open("rb") as handle:
+            if tomllib.load(handle).get("package", {}).get("publish", True) is not False:
+                count += 1
+    return count
 
 
 def repository_url() -> str:
@@ -178,6 +192,16 @@ def main() -> None:
     if banner is not None and roadmap is not None and banner[1] != roadmap[1]:
         failures.append(
             f"README.md's banner is {banner[1]}, but its roadmap is {roadmap[1]}"
+        )
+
+    stated = README_CRATE_COUNT_PATTERN.search((ROOT / "README.md").read_text())
+    publishable = publishable_crate_count()
+    if stated is None:
+        failures.append("README.md has no `across N publishable crates` statement")
+    elif int(stated.group(1)) != publishable:
+        failures.append(
+            f"README.md says {stated.group(1)} publishable crates, "
+            f"but the workspace publishes {publishable}"
         )
 
     tag = f"v{version}"

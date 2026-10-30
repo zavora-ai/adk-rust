@@ -7,8 +7,9 @@
 //! With a `RequestContextExtractor` on the server, a job belongs to the authenticated caller
 //! who created it (spec 3.1 §8.2): its runs act for that caller, and only that caller lists,
 //! reads, pauses, resumes, or deletes it — another owner's job answers `404`, and two owners
-//! may each have a job of the same name. Without an extractor every client sees every job,
-//! the job's name is its schedule id, and its runs act for the user `cron`.
+//! may each have a job of the same name. Without an extractor the routes run in
+//! [open mode](super#open-mode): every client sees every job, the job's name is its schedule
+//! id, and its runs act for the user `cron`.
 
 use std::sync::Arc;
 
@@ -25,7 +26,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{BackgroundState, DurableScheduler, WorkflowState, run_owner};
+use super::{BackgroundState, DurableScheduler, WorkflowState, run_owner, warn_open_mode};
 
 /// Checks that `expression` parses as a cron expression (five, six, or seven fields).
 ///
@@ -458,8 +459,18 @@ pub fn cron_jobs_router(background_state: BackgroundState) -> Router {
 
 /// Create the cron jobs router with a pre-configured state.
 ///
+/// The routes run in [open mode](super#open-mode), and building the router logs a warning
+/// that says so.
+///
 /// > **Important:** the router carries no authentication; see [`cron_jobs_router`].
 pub fn cron_jobs_router_with_state(state: CronState) -> Router {
+    warn_open_mode("/cron");
+    cron_routes(state)
+}
+
+/// The cron routes without the open-mode warning, for [`ServerBuilder`](crate::ServerBuilder),
+/// which knows whether it authenticates callers.
+pub(crate) fn cron_routes(state: CronState) -> Router {
     Router::new()
         .route("/cron", post(create_cron_job).get(list_cron_jobs))
         .route("/cron/{job_id}", get(get_cron_job).patch(patch_cron_job).delete(delete_cron_job))

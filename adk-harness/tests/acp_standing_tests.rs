@@ -240,7 +240,7 @@ async fn calls_the_classifier_refuses_a_rule_are_never_offered_always() {
     let held = confirmation_requests(&events).remove(0);
     assert_eq!(
         standing.offer(&scope, &held).await,
-        Some(StandingOffer::new("for this folder (write_file: within src/, this session)"))
+        Some(StandingOffer::new("for this folder (file writes: within src/, this session)"))
     );
     std::fs::write(f.path("AGENTS.md"), "instructions").unwrap();
     std::os::unix::fs::symlink(f.path("AGENTS.md"), f.path("notes.md")).unwrap();

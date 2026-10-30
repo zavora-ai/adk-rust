@@ -399,10 +399,14 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
     if let Some(agent) = agent {
         line = line.with_agent(agent);
     }
-    let tool = text(record.ext.get("tool")).or_else(|| {
-        matches!(record.kind, adk_core::audit_log::AuditRecordKind::ToolCall)
-            .then(|| record.action.clone())
-    });
+    // A folder rule's line says what the rule covers in plain words, "file writes in notes/":
+    // its own pattern matches any tool name, and its tools stay in the record's data
+    // (spec 3.3 §8.2).
+    let tool =
+        text(record.ext.get("covers")).or_else(|| text(record.ext.get("tool"))).or_else(|| {
+            matches!(record.kind, adk_core::audit_log::AuditRecordKind::ToolCall)
+                .then(|| record.action.clone())
+        });
     if let Some(tool) = tool {
         line = line.with_tool(tool);
     }
@@ -463,6 +467,15 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
         .or(record_target);
     if let Some(target) = target {
         line = line.with_target(target);
+    }
+    // The item a screen action, or an answer to one, acted on, as the person knows it (§8).
+    if let Some(title) = text(record.ext.get("title")) {
+        line = line.with_title(title);
+    }
+    // A call's publisher and what decided it, so a surface words a screen action's call by
+    // its own records, never by the tool's name (§7.1, §8).
+    if let Some(source) = text(record.ext.get("toolSource")) {
+        line = line.with_call(source, record.policy_ref.as_deref());
     }
     // A screen action (spec 3.3 §2 item 7): the action as its tool, the item's title as what
     // it acted on, and for an agent's, where the person said yes.
@@ -901,6 +914,151 @@ mod tests {
         );
     }
 
+    /// A denied screen action's answer names its item as the person knows it, and keeps the
+    /// decision's id as what it acted on (spec 3.3 §8, §11).
+    #[cfg(feature = "audit")]
+    #[tokio::test]
+    async fn a_denied_screen_actions_line_names_its_item() {
+        use adk_auth::signed_audit::{AuditLog, AuditSigner as _, Ed25519Signer, NoteVerifier};
+        use adk_core::audit_log::{
+            AuditActor, AuditDecision, AuditLogStore, AuditRecordDraft, AuditRecordKind,
+            InMemoryAuditLogStore,
+        };
+        use adk_kernel::control::RecordBook;
+        use serde_json::json;
+
+        let logs: Arc<dyn AuditLogStore> = Arc::new(InMemoryAuditLogStore::new());
+        let signer = Ed25519Signer::generate("kernel-test").unwrap();
+        let verifier: NoteVerifier = signer.verifier_key().parse().unwrap();
+        let log =
+            AuditLog::builder(logs.clone(), "kernel-test", Arc::new(signer)).open().await.unwrap();
+        // The engine's record of a denial in the home (`audit_decide`).
+        log.append(
+            AuditRecordDraft::new(AuditRecordKind::Approval, "surface.decide")
+                .actor(AuditActor::subject(SubjectRef::human("ana")))
+                .decision(AuditDecision::Rejected)
+                .ext("surface", json!("web"))
+                .ext("origin", json!({ "kind": "pointer" }))
+                .ext("approvalId", json!("apr_1"))
+                .ext("tool", json!("verb_snooze"))
+                .ext("answer", json!("deny"))
+                .ext("outcome", json!("decided"))
+                .ext("actingAgent", json!("urn:adk:agent:adk-rust/finance"))
+                .ext("title", json!("News digest"))
+                .ext("summary", json!("Move News digest to 19:00")),
+        )
+        .await
+        .unwrap();
+        let book = SignedRecordBook::new(logs, "kernel-test".into(), verifier);
+        let line = book.recent(1).await.unwrap().remove(0);
+        let at = line.at;
+        assert_eq!(
+            line,
+            adk_kernel::control::RecordLine::new(0, at, "surface.decide")
+                .with_subject("ana")
+                .with_agent("urn:adk:agent:adk-rust/finance")
+                .with_tool("verb_snooze")
+                .with_decision("rejected")
+                .with_outcome("decided")
+                .with_surface("web")
+                .with_how("pointer", None)
+                .with_target("apr_1")
+                .with_title("News digest")
+        );
+    }
+
+    /// The governed path's record of a call names the tool's publisher and what decided it, so
+    /// a person's no to a screen action is told from a refusal no one was asked about (spec
+    /// 3.3 §7.1, §11).
+    #[cfg(feature = "audit")]
+    #[tokio::test]
+    async fn a_calls_line_names_its_publisher_and_what_decided_it() {
+        use adk_auth::signed_audit::{AuditLog, AuditSigner as _, Ed25519Signer, NoteVerifier};
+        use adk_core::audit_log::{
+            AuditActor, AuditDecision, AuditLogStore, AuditRecordDraft, AuditRecordKind,
+            AuditRecordOutcome, InMemoryAuditLogStore,
+        };
+        use adk_core::principal::SubjectKind;
+        use adk_core::{ActingContext, ToolOrigin};
+        use adk_kernel::control::{RecordBook, RecordLine};
+        use serde_json::json;
+
+        let logs: Arc<dyn AuditLogStore> = Arc::new(InMemoryAuditLogStore::new());
+        let signer = Ed25519Signer::generate("kernel-test").unwrap();
+        let verifier: NoteVerifier = signer.verifier_key().parse().unwrap();
+        let log =
+            AuditLog::builder(logs.clone(), "kernel-test", Arc::new(signer)).open().await.unwrap();
+        let finance = ActingContext::derived("adk-rust", "finance", "ana", SubjectKind::Human);
+        let origin = ToolOrigin::new("verbs:adk-rust", &json!({ "name": "verb_snooze" }), None);
+        // The governed path's record of a call refused by `policy_ref` (`AuditedCall::decision`).
+        let refused = |policy_ref: &str| {
+            AuditRecordDraft::new(AuditRecordKind::ToolCall, "verb_snooze")
+                .actor(AuditActor::new(&finance, "inv-1"))
+                .decision(AuditDecision::Denied)
+                .outcome(AuditRecordOutcome::NotRun)
+                .policy_ref(policy_ref)
+                .ext("toolSource", json!(origin.source))
+                .ext("declarationDigest", json!(origin.declaration_digest))
+        };
+        log.append(refused("confirmation")).await.unwrap();
+        log.append(refused("tool_policy:adk-surface/verbs")).await.unwrap();
+        let book = SignedRecordBook::new(logs, "kernel-test".into(), verifier);
+        let lines = book.recent(2).await.unwrap();
+        let line = |seq: u64, at, policy_ref: &str| {
+            RecordLine::new(seq, at, "verb_snooze")
+                .with_subject("ana")
+                .with_agent("urn:adk:agent:adk-rust/finance")
+                .with_tool("verb_snooze")
+                .with_decision("denied")
+                .with_outcome("not_run")
+                .with_call("verbs:adk-rust", Some(policy_ref))
+        };
+        assert_eq!(
+            lines,
+            [
+                line(1, lines[0].at, "tool_policy:adk-surface/verbs"),
+                line(0, lines[1].at, "confirmation")
+            ]
+        );
+    }
+
+    /// A folder rule's line says what it covers in plain words, never the tools its record
+    /// keeps as data: "You allowed file writes in notes/ without asking." (spec 3.3 §8.2).
+    #[cfg(feature = "audit")]
+    #[tokio::test]
+    async fn a_folder_rules_line_says_what_it_covers_in_plain_words() {
+        use adk_auth::signed_audit::{AuditLog, AuditSigner as _, Ed25519Signer, NoteVerifier};
+        use adk_core::audit_log::{
+            AuditActor, AuditLogStore, AuditRecordDraft, AuditRecordKind, InMemoryAuditLogStore,
+        };
+        use adk_kernel::control::RecordBook;
+        use serde_json::json;
+
+        let logs: Arc<dyn AuditLogStore> = Arc::new(InMemoryAuditLogStore::new());
+        let signer = Ed25519Signer::generate("kernel-test").unwrap();
+        let verifier: NoteVerifier = signer.verifier_key().parse().unwrap();
+        let log =
+            AuditLog::builder(logs.clone(), "kernel-test", Arc::new(signer)).open().await.unwrap();
+        // The fields the harness records for "Always allow for this folder" in `notes/`.
+        log.append(
+            AuditRecordDraft::new(AuditRecordKind::Other("harness".into()), "harness.rule.created")
+                .actor(AuditActor::subject(SubjectRef::human("ana")))
+                .ext("tool", json!("*"))
+                .ext("tools", json!(["apply_patch", "edit_file", "write_file"]))
+                .ext("covers", json!("file writes in notes/"))
+                .ext("decision", json!({ "kind": "allow" }))
+                .ext("surface", json!("web")),
+        )
+        .await
+        .unwrap();
+        let book = SignedRecordBook::new(logs, "kernel-test".into(), verifier);
+        let lines = book.recent(1).await.unwrap();
+        assert_eq!(
+            (lines[0].tool.as_deref(), lines[0].decision.as_deref()),
+            (Some("file writes in notes/"), Some("allowed"))
+        );
+    }
+
     /// The record book answers the check `adk-rust audit verify` gives an export of the same
     /// log with the same key, and lists the newest actions first (spec 3.3 §10 K5).
     #[cfg(feature = "audit")]
@@ -1042,6 +1200,7 @@ mod tests {
                 .with_surface("voice")
                 .with_how("voice", None)
                 .with_target("News digest")
+                .with_title("News digest")
         );
         assert_eq!(
             agent,
@@ -1051,6 +1210,7 @@ mod tests {
                 .with_tool("snooze")
                 .with_outcome("done")
                 .with_target("News digest")
+                .with_title("News digest")
                 .with_decision("approved")
                 .with_surface("phone")
                 .with_how("touch", None)

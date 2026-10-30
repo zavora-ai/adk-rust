@@ -525,4 +525,23 @@ impl CardHints for VerbHints {
         }
         Some(hint)
     }
+
+    /// The item's title, from the kernel's agenda; without it — a terminal attached to the
+    /// kernel, or an item that has ended — a snooze's card summary, which the kernel wrote,
+    /// still names it (spec 3.3 §8).
+    async fn names(&self, request: &ApprovalRequest) -> Option<String> {
+        let origin = request.origin.as_ref()?;
+        if origin.source != self.registry.origin() {
+            return None;
+        }
+        let entry = self.registry.entry_for_tool(&request.tool_name)?;
+        let id = request.args_redacted.get("item").and_then(serde_json::Value::as_str)?;
+        match self.registry.scope(&request.scope.user_id, None).item(id).await {
+            Ok(item) => Some(item.title),
+            Err(_) if entry.spec.name == "snooze" => {
+                words::title_of_move(&request.summary).map(str::to_string)
+            }
+            Err(_) => None,
+        }
+    }
 }

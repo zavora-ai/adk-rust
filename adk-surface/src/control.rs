@@ -145,7 +145,8 @@ impl ControlSource {
         self
     }
 
-    /// The daily spending limit in micro-USD, which the control plane does not report.
+    /// A daily spending limit in micro-USD in place of the one the kernel reports for the
+    /// primary agent's area (`GET /kernel/settings`, spec 3.3 §10 K3).
     #[must_use]
     pub fn with_daily_limit(mut self, micro_usd: u64) -> Self {
         self.daily_limit = Some(micro_usd);
@@ -683,10 +684,38 @@ impl Source for ControlSource {
             .map(|process| process.run.target))
     }
 
+    // The primary agent's area, where this source's turns run: with several areas, its spend
+    // today against its own limit, never the default area's (spec 3.3 §10 K3, §13 Q7).
     async fn spend(&self, user: &str) -> Result<Option<SpendToday>> {
-        let spent =
-            self.processes(user).await?.iter().map(|process| process.view.spend_today).sum();
-        Ok(Some(SpendToday { spent, limit: self.daily_limit }))
+        let areas = match self.client.settings().await {
+            Ok(areas) => areas,
+            Err(error) => {
+                tracing::debug!(error = %error, "could not read the areas' settings; spend is not split by area");
+                Vec::new()
+            }
+        };
+        // A kernel that marks no area: the default area, or the only one.
+        let area = areas
+            .iter()
+            .find(|area| area.primary)
+            .or_else(|| {
+                areas
+                    .iter()
+                    .find(|area| area.partition.as_str() == adk_kernel::PartitionId::DEFAULT)
+            })
+            .or(match areas.as_slice() {
+                [only] => Some(only),
+                _ => None,
+            });
+        let spent = self
+            .processes(user)
+            .await?
+            .iter()
+            .filter(|process| area.is_none_or(|area| process.meta.partition == area.partition))
+            .map(|process| process.view.spend_today)
+            .sum();
+        let limit = self.daily_limit.or(area.and_then(|area| area.daily_spending_limit));
+        Ok(Some(SpendToday { spent, limit }))
     }
 
     async fn ledger(&self, since: DateTime<Utc>) -> Result<Vec<LedgerEntry>> {

@@ -231,8 +231,8 @@ Deny rule, into Deny — for the calls it covers.
 |---|---|
 | Owner | The subject and app it belongs to; another user never matches it |
 | Scope | Every session of the user (`RuleScope::User`) or one session |
-| Origin | The tool's publisher and declaration digest (`OriginPin::Exact`): a redeclared tool no longer matches, and the harness records `harness.rule.stale` |
-| Predicates | Argument predicates; for `bash`, `ShellPrefix`, which matches only a command of plain words with those leading tokens — never one with `;`, `&&`, pipes, redirections or substitutions |
+| Origin | The tool's publisher and declaration digest (`OriginPin::Exact`), or for a folder rule each of its tools' (`OriginPin::ExactEach`): a redeclared tool no longer matches, and the harness records `harness.rule.stale` |
+| Predicates | Argument predicates; for `bash`, `ShellPrefix`, which matches only a command of plain words with those leading tokens — never one with `;`, `&&`, pipes, redirections or substitutions; for a folder rule, `WritesWithin` |
 | Decision | `StandingDecision::Allow`, or `Deny { reason }`; a Deny rule wins over an Allow rule |
 
 Rules come from a person only: from a prompt's suggestions (`ApproveAndRemember`), from
@@ -248,6 +248,28 @@ A `PathWithin` rule covers an `apply_patch` call only when every path of the pat
 within its directory; the suggestion offered for a patch names the directory all its paths
 share (`apply_patch: within src/`).
 
+### Always allow for this folder
+
+"Always allow for this folder" on a surface or over ACP makes one rule for every file write in
+the folder the held call writes in — the workspace root for a file there — for the session
+(spec 3.3 §8.2). `HarnessAgent::folder_suggestion(request)` builds it:
+
+| Part | Value |
+|---|---|
+| Tool | `*`, narrowed by the origin pin |
+| Origin | `OriginPin::ExactEach`: `write_file`, `edit_file` and `apply_patch`, each at the declaration the harness gives it |
+| Predicate | `WritesWithin { dir }`: the call only writes files, and every path it writes lies within `dir` as `PathWithin` resolves it |
+| Label | `file writes: within notes/`, or `file writes: anywhere in the workspace` |
+| Record | `harness.rule.created` says what the rule covers in `covers` (`file writes in notes/`), which "What your agents did" shows as "You allowed file writes in notes/ without asking."; the covered tools stay in `tools` and their digests in `declarationDigests` |
+
+The set is the harness's Edit-class tools by their declared effects: `write_file` creates or
+replaces a file and `edit_file` changes one, so every call of theirs is a write;
+`apply_patch` also deletes and moves files, so it is covered only for a patch that adds files
+or updates them in place. A write outside the folder, a path with `..`, a symlink out of the
+folder, a protected path, a delete, a move, `bash` and every other tool still ask. A call no
+folder rule covers, such as a patch that deletes a file, is offered **Allow once** and
+**Deny** only.
+
 A suggestion's label states what the rule matches (`edit_file: within src/`); every surface
 shows its scope from `RuleSuggestion::scope`, once. A call a rule allows where the mode would
 ask is announced, not run silently: the policy and the handler's re-check call
@@ -261,6 +283,7 @@ store write — `rest` for the REST routes, `cli` for `adk-rust rules add` and `
 
 | Method | Effect |
 |---|---|
+| `HarnessAgent::folder_suggestion(request)` | The folder rule for a held file write, or `None` for any other call |
 | `HarnessAgent::rule_for_held_call(request, suggestion, decision, owner)` | The rule a held call's suggestion becomes, refused for a call no rule may cover or a suggestion that does not pin the call's declaration |
 | `HarnessAgent::grant_rule(rule, surface, from)` | Stores the rule after its `harness.rule.created` record |
 | `HarnessAgent::revoke_rule(app, user, id, surface)` | Revokes one of `user`'s rules after its `harness.rule.revoked` record; `None` for a rule `user` does not own |

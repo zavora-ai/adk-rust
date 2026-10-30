@@ -587,3 +587,34 @@ async fn the_local_source_reads_the_callers_session_only() {
     let ids: Vec<String> = requests.into_iter().map(|request| request.id).collect();
     assert_eq!(ids, ["apr-ana"]);
 }
+
+/// The record of an answer to a decision the kernel itself asks names what it is about and
+/// carries the card's summary, never only the kernel's tool; an agent's call names nothing
+/// more than before (spec 3.3 §8, §11).
+#[tokio::test]
+async fn an_answer_to_a_kernel_decision_is_recorded_by_what_it_is_about() {
+    let home = home().await;
+    let mount = call("kernel:driver.mount", json!({ "id": "email", "partitions": ["default"] }));
+    let mount = hold(&home, "ana", "s1", &mount, ApprovalRisk::Medium).await;
+    let email = hold(&home, "ana", "s1", &invoice(), ApprovalRisk::Medium).await;
+    for request in [&mount, &email] {
+        home.engine.execute(&web(), decide(request, Answer::Deny)).await.unwrap();
+    }
+    let named: Vec<(Value, Option<Value>, Option<Value>)> = records(&home.audit, "surface.decide")
+        .into_iter()
+        .map(|record| {
+            (
+                record.ext["tool"].clone(),
+                record.ext.get("title").cloned(),
+                record.ext.get("summary").cloned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        named,
+        [
+            (json!("kernel:driver.mount"), Some(json!("email")), Some(json!(mount.summary))),
+            (json!("send_email"), None, None),
+        ]
+    );
+}

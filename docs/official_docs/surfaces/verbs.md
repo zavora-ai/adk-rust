@@ -159,6 +159,19 @@ A person's action also has a `tool_call` record under `urn:adk:agent:<app>/surfa
 your agents did" reads them as "You snoozed News digest by voice." and "Finance asked to snooze
 News digest; you said yes on your phone."
 
+**Deny** runs nothing, so it writes no `surface.verb` record. The answer's own `surface.decide`
+record — from the home, the phone, the terminal, voice or chat — carries the item's `title` and
+the card's `summary` ("Move News digest to 19:00"), which `VerbHints` name through
+`CardHints::names`, and "What your agents did" reads it as "Finance asked to snooze News digest;
+you said no. Nothing changed." A terminal attached to a kernel reads no agenda, so there the
+title comes from the card's summary.
+
+"What your agents did" never shows a screen action's tool name. It tells the governed path's
+`tool_call` records of a screen action by their publisher (`toolSource: "verbs:<app>"`) and
+leaves them out, since the action's own records say what happened; the one it words is an
+agent's request refused before anyone answered it (`policyRef` other than `confirmation`): "Finance
+asked to snooze something in Coming up; it couldn't be done, so nothing changed."
+
 ## Try it
 
 ```bash

@@ -54,11 +54,61 @@ pub struct SecurityConfig {
     /// outlasts [`request_timeout`](Self::request_timeout), so agent runs have their own
     /// limit. A streamed run is bounded until its response starts.
     pub run_timeout: Duration,
-    /// Whether to include detailed error messages in responses (default: false for production)
+    /// Whether error responses carry every error's own message (default: `false`;
+    /// [`SecurityConfig::development`] sets it).
+    ///
+    /// Off, a response carries an error's own message only when the server wrote it about the
+    /// request. All three must hold:
+    ///
+    /// - the category rejects the request: `invalid_input`, `unauthorized`, `forbidden`,
+    ///   `not_found`, `unsupported`, `conflict`, or `resource_exhausted`;
+    /// - the component handles the request inside the server: `server`, `auth`, `session`,
+    ///   `agent`, or `guardrail`;
+    /// - the error carries no upstream status code and no provider.
+    ///
+    /// Every other message — a model provider's response, a tool's service, a store or
+    /// driver failure — is replaced by a generic message for the error's category, such as
+    /// `Internal server error` or `Authentication failed`, and the full error is logged with
+    /// `tracing` inside the request's `http.request` span, whose `request.id` is the
+    /// response's `x-request-id`. The rule applies to the run endpoints' Problem JSON (its
+    /// `code`, `component`, `category`, `requestId`, `retryAfter`, and `upstreamStatusCode`
+    /// are kept), the `error_message` of their SSE error event and the AG-UI `RUN_ERROR`
+    /// `message`, and the `error` of a `503` from `POST /api/admin/freeze` or
+    /// `/api/admin/unfreeze`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_server::SecurityConfig;
+    ///
+    /// assert!(!SecurityConfig::default().expose_error_details);
+    /// assert!(SecurityConfig::development().expose_error_details);
+    /// ```
     pub expose_error_details: bool,
     /// Whether to expose admin-only debug endpoints when auth is configured.
     pub expose_admin_debug: bool,
+    /// The scope that makes an authenticated caller an administrator (default:
+    /// [`ADMIN_SCOPE`], `"admin"`).
+    ///
+    /// `POST /api/admin/freeze` and `POST /api/admin/unfreeze`, mounted by
+    /// [`ServerBuilder::enable_governance_endpoints`](crate::ServerBuilder::enable_governance_endpoints),
+    /// admit only a caller whose [`RequestContext::scopes`](adk_core::RequestContext::scopes)
+    /// include it: a caller without it is refused with `403`, and a request with no caller —
+    /// a server without a `RequestContextExtractor` — with `401`.
+    pub admin_scope: String,
 }
+
+/// The default [`SecurityConfig::admin_scope`]: the scope that makes a caller an
+/// administrator of the governance endpoints.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_server::{ADMIN_SCOPE, SecurityConfig};
+///
+/// assert_eq!(SecurityConfig::default().admin_scope, ADMIN_SCOPE);
+/// ```
+pub const ADMIN_SCOPE: &str = "admin";
 
 /// The [`SecurityConfig::run_timeout`] of every preset: 15 minutes, long enough for an agent
 /// turn with several model and tool calls.
@@ -74,6 +124,7 @@ impl Default for SecurityConfig {
             run_timeout: DEFAULT_RUN_TIMEOUT,
             expose_error_details: false,
             expose_admin_debug: false,
+            admin_scope: ADMIN_SCOPE.to_string(),
         }
     }
 }
@@ -101,6 +152,7 @@ impl SecurityConfig {
             run_timeout: DEFAULT_RUN_TIMEOUT,
             expose_error_details: true,
             expose_admin_debug: true,
+            admin_scope: ADMIN_SCOPE.to_string(),
         }
     }
 
@@ -114,6 +166,7 @@ impl SecurityConfig {
             run_timeout: DEFAULT_RUN_TIMEOUT,
             expose_error_details: false,
             expose_admin_debug: false,
+            admin_scope: ADMIN_SCOPE.to_string(),
         }
     }
 
@@ -426,7 +479,15 @@ impl ServerConfig {
         self
     }
 
-    /// Enable detailed error messages (for development only)
+    /// Sets whether error responses carry every error's own message; see
+    /// [`SecurityConfig::expose_error_details`]. Enable it for development only: an upstream
+    /// or store message can name hosts, tables, accounts, or request content.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let config = ServerConfig::new(agent_loader, session_service).with_error_details(true);
+    /// ```
     pub fn with_error_details(mut self, expose: bool) -> Self {
         self.security.expose_error_details = expose;
         self

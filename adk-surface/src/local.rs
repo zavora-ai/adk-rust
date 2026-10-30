@@ -148,7 +148,8 @@ impl LocalSourceBuilder {
         self
     }
 
-    /// The daily spending limit in micro-USD, over the kernel's daily spend cap.
+    /// The daily spending limit in micro-USD, over the one in force in the kernel's area of
+    /// this source's turns.
     #[must_use]
     pub fn daily_limit(mut self, micro_usd: u64) -> Self {
         self.daily_limit = Some(micro_usd);
@@ -369,12 +370,17 @@ impl LocalSource {
         {
             return None;
         }
-        let suggestions = StandingRule::suggestions(&held.request);
-        let suggestion = suggestions
-            .iter()
-            .find(|suggestion| suggestion.label.contains("within"))
-            .or_else(|| suggestions.first())?
-            .clone();
+        // A file write: every file write in its folder (spec 3.3 §8.2). A file change no
+        // folder rule covers — a delete or a move — is asked about every time.
+        let suggestion = match harness.agent().folder_suggestion(&held.request) {
+            Some(folder) => folder,
+            None => StandingRule::suggestions(&held.request).into_iter().find(|suggestion| {
+                !suggestion
+                    .predicates
+                    .iter()
+                    .any(|predicate| matches!(predicate, RulePredicate::PathWithin { .. }))
+            })?,
+        };
         let label = always_allow_label(&suggestion);
         let created_by = caller.map_or_else(
             || adk_core::principal::SubjectRef::human(request.scope.user_id.clone()),
@@ -468,13 +474,20 @@ impl LocalSource {
 }
 
 /// "Always allow …" for the rule `suggestion` makes, saying all it covers: the command
-/// prefix, the folder or the whole workspace, the site, or the tool with any arguments, in
-/// every session or this one, and that commands running project scripts allow whatever they
-/// do (spec 3.3 §8.2, spec 3.1 §7.5).
+/// prefix, the file writes in the folder or the whole workspace, the site, or the tool with
+/// any arguments, in every session or this one, and that commands running project scripts
+/// allow whatever they do (spec 3.3 §8.2, spec 3.1 §7.5).
 fn always_allow_label(suggestion: &RuleSuggestion) -> String {
     let (label, covers) = match suggestion.predicates.first() {
         Some(RulePredicate::ShellPrefix { tokens, .. }) => {
             (words::ALWAYS_ALLOW_FOR_THIS_COMMAND, format!("{} …", tokens.join(" ")))
+        }
+        Some(RulePredicate::WritesWithin { dir }) if dir == "." => (
+            words::ALWAYS_ALLOW_FOR_THIS_FOLDER,
+            "file writes anywhere in the workspace".to_string(),
+        ),
+        Some(RulePredicate::WritesWithin { dir }) => {
+            (words::ALWAYS_ALLOW_FOR_THIS_FOLDER, format!("file writes anywhere in {dir}/"))
         }
         Some(RulePredicate::PathWithin { dir, .. }) if dir == "." => {
             (words::ALWAYS_ALLOW_FOR_THIS_FOLDER, "anywhere in the workspace".to_string())
@@ -923,13 +936,24 @@ impl Source for LocalSource {
         Ok(())
     }
 
+    // The area this source's turns run in, the primary agent's: with several areas, its spend
+    // today against its own limit in force (spec 3.3 §10 K3, §13 Q7).
     async fn spend(&self, user: &str) -> Result<Option<SpendToday>> {
-        let Some((kernel, _)) = &self.kernel else {
+        let Some((kernel, target)) = &self.kernel else {
             return Ok(self.daily_limit.map(|limit| SpendToday { spent: 0, limit: Some(limit) }));
         };
-        let spent =
-            self.processes(user).await?.iter().map(|process| process.view.spend_today).sum();
-        let limit = self.daily_limit.or(kernel.config().quotas.daily_spend_cap);
+        let area = kernel.partition_of_target(target).cloned().unwrap_or_default();
+        let spent = self
+            .processes(user)
+            .await?
+            .iter()
+            .filter(|process| process.meta.partition == area)
+            .map(|process| process.view.spend_today)
+            .sum();
+        let limit = match self.daily_limit {
+            Some(limit) => Some(limit),
+            None => kernel.area_settings(&area).await?.daily_spending_limit,
+        };
         Ok(Some(SpendToday { spent, limit }))
     }
 

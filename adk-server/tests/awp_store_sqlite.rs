@@ -338,6 +338,24 @@ async fn a_restarted_edge_resumes_its_deliveries_and_keeps_its_counts() {
         StatusCode::NO_CONTENT
     );
     assert_eq!(receiver.wait_for(1).await, vec![event_id.clone()], "the first attempt failed");
+    // The edge keeps the failure after the receiver answers; read the file, without claiming
+    // the delivery, until it has.
+    let pool = file.pool().await;
+    let mut kept = None;
+    for _ in 0..250 {
+        kept = sqlx::query_scalar::<_, i64>(
+            "SELECT failures FROM adk_awp_deliveries WHERE event_id = ?",
+        )
+        .bind(&event_id)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        if kept == Some(1) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(kept, Some(1), "the failed attempt is kept in the file");
 
     // The failed delivery waits an hour in the file, leased to the process that tried it.
     let log = file.stores().await;

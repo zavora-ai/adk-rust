@@ -148,7 +148,9 @@ impl ControlClient {
     /// # Errors
     ///
     /// Returns [`KernelError::ControlPlane`] when the socket or pipe exists but this user may
-    /// not use it: another account owns it, or its permissions refuse this user.
+    /// not use it: another account owns it, or its permissions refuse this user; or when the
+    /// directory of its own that a socket too long for the home sits in is a symlink, another
+    /// user's, or open to other users (spec 3.3 G18).
     pub async fn connect_local(home: &Path) -> Result<Option<Self>> {
         #[cfg(windows)]
         {
@@ -171,7 +173,7 @@ impl ControlClient {
             let Some(path) = ControlPlaneConfig::default().socket_path(home) else {
                 return Ok(None);
             };
-            connect_local_socket(path).await
+            connect_local_socket(path, &home.join(ControlPlaneConfig::DEFAULT_SOCKET)).await
         }
     }
 
@@ -1085,7 +1087,15 @@ impl ControlClient {
 }
 
 #[cfg(unix)]
-async fn connect_local_socket(path: PathBuf) -> Result<Option<ControlClient>> {
+async fn connect_local_socket(path: PathBuf, configured: &Path) -> Result<Option<ControlClient>> {
+    // A socket standing in for one too long for the home sits in a directory of its own,
+    // checked first, so no socket another user placed is reached (spec 3.3 G18).
+    if path != configured
+        && let Some(dir) = path.parent()
+        && !super::socket::check_dir(dir)?
+    {
+        return Ok(None);
+    }
     match tokio::fs::symlink_metadata(&path).await {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -1116,7 +1126,7 @@ async fn connect_local_socket(path: PathBuf) -> Result<Option<ControlClient>> {
 }
 
 #[cfg(all(not(unix), not(windows)))]
-async fn connect_local_socket(_path: PathBuf) -> Result<Option<ControlClient>> {
+async fn connect_local_socket(_path: PathBuf, _configured: &Path) -> Result<Option<ControlClient>> {
     Ok(None)
 }
 

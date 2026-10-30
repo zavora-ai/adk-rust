@@ -100,6 +100,7 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 }
 
 /// Whether this process writes read-only files anyway, as root does.
+#[cfg(unix)]
 fn writes_read_only_files() -> bool {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("probe");

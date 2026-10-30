@@ -127,7 +127,7 @@ Non-zero exit codes are **not** errors — they are returned in `ExecResult.exit
 
 ## OS Sandbox Profiles
 
-OS-level sandbox enforcement restricts child processes at the kernel level — blocking network access, confining filesystem reads and writes to the policy's paths, and controlling process spawning. This goes beyond `ProcessBackend`'s default environment isolation.
+OS-level sandbox enforcement restricts child processes at the kernel level — blocking network access, confining filesystem reads and writes to the policy's paths, and controlling process spawning. This goes beyond `ProcessBackend`'s default environment isolation. The Windows restricted-token enforcer restricts neither the network nor process creation (see [Platform Differences](#platform-differences)).
 
 Under an enforcer, `ProcessBackend` runs each execution in a fresh scratch directory that holds its source file and compiler output. The directory is the process's working directory and is granted read-write in addition to the policy's paths; nothing else from the host is added.
 
@@ -250,11 +250,11 @@ does not exist yet cannot be protected this way.
 | Strategy | Deny-default profile plus the system runtime | Whitelist (mount only what's needed) | Restricted, Low-integrity token plus ACL grants and Low labels, through `WindowsEnforcer::run_confined` and `spawn_contained` only (probed by `probe_confined`); `probe` reports the `sandboxed_command` path unavailable |
 | Reads | System runtime and policy paths; home directories, `/tmp`, and `$TMPDIR` are unreadable unless allowed | Only bound paths exist | What the user may read (the user is a restricting SID, since Git for Windows' MSYS2 runtime needs it); paths only `Administrators` may read are refused |
 | Writes | Only policy read-write paths (and `/dev/null`) | Only `--bind` paths writable | Policy read-write paths, labelled Low; paths already labelled Low, such as `AppData\LocalLow` |
-| Network | Denied unless `allow_network` | `--unshare-net` namespace | Not enforced |
+| Network | Denied unless `allow_network` | `--unshare-net` namespace | Not enforced; the first policy with `allow_network = false` or with domain rules logs a warning, once per process |
 | MSYS2 programs (Git for Windows' `sh`) | — | — | Run from a private copy of the runtime per call, apart from the user's own; the user's namespaces of the program's installation and those on `PATH` are held for the call, other installations' are not |
 | Process spawning | `process-fork` granted only with `allow_process_spawn` | seccomp filter fails `fork`, `vfork`, and non-thread `clone` (x86-64, AArch64) | Not restricted; every descendant is killed with the call's Job Object |
 | Terminal | The caller's session | Always a new session (`--new-session`) with no controlling terminal | No console is attached; standard streams are not captured |
-| Domain rules (`allow_domain`) | Not enforceable; all network blocked | Not enforceable; all network blocked | Not enforceable; network not restricted |
+| Domain rules (`allow_domain`) | Not enforceable; all network blocked | Not enforceable; all network blocked | Not enforceable; network not restricted; logs a warning once per process |
 
 The Seatbelt system runtime covers `/bin`, `/sbin`, `/usr`, `/System`, `/Library/Apple`, `/Library/Frameworks`, `/opt/homebrew`, `/private/etc` (minus `master.passwd` and `sudoers`), the dyld cache, and time zone data. File metadata (existence, size, timestamps) is readable everywhere because path resolution needs it; file contents are not. Programs installed elsewhere — a rustup toolchain, a pyenv interpreter, Xcode — need their directories passed to `allow_read`.
 

@@ -13,18 +13,21 @@ export const EXTEND_DAYS = 30;
 
 /**
  * What a rule lets agents do, from its label ("bash: cargo test …", "write_file: within src/
- * (this session)"): "Your agents can run commands that start with cargo test."
+ * (this session)", "file writes: within notes/"): "Your agents can run commands that start
+ * with cargo test." A rule of one conversation says so.
  */
 export function ruleSentence(rule: StandingRule, agents: AgentRow[]): string {
   // A glob covers more than one agent, so it reads as all of them.
   const who = (rule.agent && !/[*?]/.test(rule.agent) ? agentOf(rule.agent, agents) : undefined) ?? "Your agents";
   const [tool, ...rest] = rule.label.split(": ");
   let detail = rest.join(": ").trim();
-  const session = / \(this session\)$/.test(detail);
+  const session = / \(this session\)$/.test(detail) || !!rule.scope?.sessionId;
   detail = detail.replace(/ \(this session\)$/, "");
   const name = tool && tool === rule.tool ? tool : rule.tool;
   let what: string;
-  if (name === "bash" && detail) what = `run commands that start with ${detail.replace(/\s*…$/, "")}`;
+  // "Always allow for this folder": every file-writing tool, so no one tool's name (spec 3.3 §8.2).
+  if (tool === "file writes" && rule.tool === "*") what = `write files ${detail}`;
+  else if (name === "bash" && detail) what = `run commands that start with ${detail.replace(/\s*…$/, "")}`;
   else if (detail.startsWith("any page on ")) what = `use ${name} on any page of ${detail.slice("any page on ".length)}`;
   else if (detail.startsWith("searches restricted to ")) what = `search ${detail.slice("searches restricted to ".length)}`;
   else if (detail.startsWith("any arguments from ")) what = `use ${name} with any arguments`;

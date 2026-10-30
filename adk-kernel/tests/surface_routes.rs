@@ -250,6 +250,8 @@ struct Setup {
     #[cfg(feature = "drivers")]
     drivers: Option<adk_kernel::drivers::DriverSupervisor>,
     consolidator: Option<Arc<dyn adk_kernel::Consolidator>>,
+    /// The partition the kernel's own target, the primary agent, is bound to.
+    primary_area: Option<&'static str>,
 }
 
 impl Default for Setup {
@@ -268,6 +270,7 @@ impl Default for Setup {
             #[cfg(feature = "drivers")]
             drivers: None,
             consolidator: None,
+            primary_area: None,
         }
     }
 }
@@ -312,6 +315,9 @@ impl Plane {
             .ledger(ledger.clone());
         if setup.agent {
             builder = builder.agent(common::TARGET, world.runner(&control));
+        }
+        if let Some(area) = setup.primary_area {
+            builder = builder.partition_agent(area, common::TARGET, world.runner(&control));
         }
         #[cfg(feature = "drivers")]
         if let Some(drivers) = setup.drivers {
@@ -580,6 +586,44 @@ async fn the_settings_report_the_mode_the_area_started_in() {
     partitions.set_mode("work", PartitionMode::ReadOnly, by).await.unwrap();
     let area = plane.operator().area_settings("work").await.unwrap();
     assert_eq!(area.mode, Some(PartitionMode::Ask), "the harness runs in Ask until it restarts");
+}
+
+/// The settings mark the area the primary agent works in — the partition the kernel's own
+/// target is bound to — so the terminal and the home show that area's spend and daily
+/// spending limit, not the default area's; a kernel without partitions marks `default`
+/// (spec 3.3 §10 K3, §13 Q7).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_settings_mark_the_primary_agents_area() {
+    let marked = |raw: &serde_json::Value| -> Vec<String> {
+        let areas = raw["areas"].as_array().expect("the areas are listed");
+        areas
+            .iter()
+            .filter(|area| area["primary"] == true)
+            .map(|area| area["partition"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let read = |base: String| async move {
+        let url = format!("{base}/api/kernel/settings");
+        reqwest::get(url).await.unwrap().json::<serde_json::Value>().await.unwrap()
+    };
+
+    let single = Plane::start(Setup::default()).await;
+    let raw = read(single.base()).await;
+    assert_eq!(marked(&raw), ["default"], "{raw}");
+    single.plane.shutdown().await.unwrap();
+
+    let plane = Plane::start(Setup { primary_area: Some("work"), ..Setup::default() }).await;
+    let by = adk_core::audit_log::AuditActor::subject(SubjectRef::human("ana"));
+    for area in ["home", "work"] {
+        let record = adk_kernel::Partition::new(area, area)
+            .with_quotas(Quotas::new().with_daily_spend_cap(1_000_000));
+        plane.kernel.partitions().put(record, by.clone()).await.unwrap();
+    }
+    let raw = read(plane.base()).await;
+    assert_eq!(marked(&raw), ["work"], "the primary agent works in `work`: {raw}");
+    let one = |area: &str| format!("{}/api/kernel/settings/{area}", plane.base());
+    let work: serde_json::Value = reqwest::get(one("work")).await.unwrap().json().await.unwrap();
+    assert_eq!(work["area"]["primary"], true, "{work}");
 }
 
 /// Go ahead is refused where `adk-rust up` refuses `--mode auto` — beyond loopback without

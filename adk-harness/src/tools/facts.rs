@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::audit::HarnessAudit;
 use crate::facts::runtime::FactsRuntime;
 use crate::facts::writer::{AdmitContext, Admitted, FactCandidate};
-use crate::facts::{FactKind, MemoryFact};
+use crate::facts::{FactKind, FactStatus, MemoryFact};
 use crate::mode::HarnessMode;
 use crate::policy::has_harness_layer;
 
@@ -134,10 +134,13 @@ impl Tool for MemorySearchTool {
     }
 }
 
-/// `memory_remember`: proposes a long-term fact, always stored as `Assumed`
-/// (spec 3.1 §7.15.2; class `MemoryPropose`: denied in ReadOnly and Plan, allowed in Ask
-/// and Auto).
+/// `memory_remember`: proposes a long-term fact (spec 3.1 §7.15.2; class `MemoryPropose`:
+/// denied in ReadOnly and Plan, allowed in Ask and Auto).
 ///
+/// The fact is `Known`, source `UserStated` — "You said this" (spec 3.3 §8.1) — only when
+/// `quote` is found verbatim in one of the person's own messages in this session (spec 3.1
+/// §9.2 I41); the model's word alone, or a quote from anywhere else, stores it `Assumed`,
+/// "A guess", and the answer says so.
 /// A preference applies in every project of the user; every other kind in this project.
 /// The fact is redacted, and refused when it holds a secret or is longer than the limit;
 /// a refusal is answered `{ "error": reason }`.
@@ -148,6 +151,7 @@ impl Tool for MemorySearchTool {
 ///
 /// ```text
 /// memory_remember { "text": "The tests need `cargo test --features sqlite`", "kind": "procedure" }
+/// memory_remember { "text": "Use pnpm, not npm", "kind": "preference", "quote": "use pnpm, not npm" }
 /// ```
 pub struct MemoryRememberTool {
     facts: Arc<FactsRuntime>,
@@ -167,9 +171,10 @@ impl Tool for MemoryRememberTool {
 
     fn description(&self) -> &str {
         "Remember a fact for later sessions with this user: a preference, how this project \
-         builds or tests, what fixed a failure, a decision. It is stored as an assumption \
-         until the user confirms it. Keep it to one short, self-contained fact; never \
-         secrets."
+         builds or tests, what fixed a failure, a decision. When the user stated it outright \
+         in this conversation, copy their exact words into 'quote': the fact is then kept as \
+         the user's own words. Anything else is kept as an assumption until the user \
+         confirms it. Keep it to one short, self-contained fact; never secrets."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -178,6 +183,7 @@ impl Tool for MemoryRememberTool {
             "properties": {
                 "text": { "type": "string", "description": "One fact, at most 500 characters." },
                 "kind": { "type": "string", "enum": ["preference", "project_fact", "procedure", "outcome", "decision", "correction"] },
+                "quote": { "type": "string", "description": "The user's own words, copied verbatim from one of their messages in this conversation, when they stated the fact outright. Leave it out for anything inferred or read elsewhere." },
                 "supersedes": { "type": "string", "description": "Id of an assumed fact this one replaces." }
             },
             "required": ["text", "kind"]
@@ -220,14 +226,27 @@ impl Tool for MemoryRememberTool {
             .get("kind")
             .and_then(Value::as_str)
             .ok_or_else(|| invalid("memory_remember needs a string 'kind'"))?;
+        let quote =
+            args.get("quote").and_then(Value::as_str).filter(|quote| !quote.trim().is_empty());
         let candidate = FactCandidate {
             text: text.to_string(),
             kind: kind.to_string(),
             source: Some("agent_inferred".to_string()),
-            quote: None,
+            quote: quote.map(str::to_string),
             confidence: Some(REMEMBER_CONFIDENCE),
             supersedes: args.get("supersedes").and_then(Value::as_str).map(str::to_string),
         };
+        // The quote is checked against what the person typed in this session, read from the
+        // session store, never against anything the model passes (spec 3.1 §9.2 I41).
+        #[cfg(feature = "runner")]
+        let said = match quote {
+            Some(_) => {
+                self.facts.person_messages(ctx.app_name(), ctx.user_id(), ctx.session_id()).await
+            }
+            None => Vec::new(),
+        };
+        #[cfg(not(feature = "runner"))]
+        let said: Vec<crate::facts::writer::UserMessage> = Vec::new();
         let run_id = ctx.run_config().and_then(|config| config.durable_run_id.clone());
         let context = AdmitContext {
             app: ctx.app_name(),
@@ -235,15 +254,27 @@ impl Tool for MemoryRememberTool {
             session_id: ctx.session_id(),
             invocation_id: ctx.invocation_id(),
             run_id,
-            user_messages: &[],
+            user_messages: &said,
             audit: HarnessAudit::for_tool(ctx.as_ref()),
             tick: None,
         };
-        match self.facts.admit(&candidate, &context).await? {
-            Admitted::Stored(fact) => Ok(json!({ "remembered": describe(&fact) })),
-            Admitted::Duplicate(fact) => {
-                Ok(json!({ "remembered": describe(&fact), "alreadyKnown": true }))
+        let answer = |fact: &MemoryFact, already: bool| {
+            let mut answer = json!({ "remembered": describe(fact) });
+            if already {
+                answer["alreadyKnown"] = json!(true);
             }
+            if quote.is_some() && fact.status != FactStatus::Known {
+                answer["note"] = json!(
+                    "the quote was not found verbatim in the user's own messages in this \
+                     conversation, or shares no word with the fact, so the fact is kept as an \
+                     assumption"
+                );
+            }
+            answer
+        };
+        match self.facts.admit(&candidate, &context).await? {
+            Admitted::Stored(fact) => Ok(answer(&fact, false)),
+            Admitted::Duplicate(fact) => Ok(answer(&fact, true)),
             // The reason reaches the model, which a tool error's code alone would not carry.
             Admitted::Rejected { reason, .. } => {
                 Ok(json!({ "error": format!("the fact was not remembered: {reason}") }))

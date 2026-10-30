@@ -14,13 +14,19 @@ pub enum Provider {
 
 impl Provider {
     /// Every provider in menu order: adk-model's, then mistral.rs.
-    pub const ALL: [Provider; 7] = [
+    pub const ALL: [Provider; 13] = [
         Provider::Model(ModelProvider::Gemini),
         Provider::Model(ModelProvider::Openai),
         Provider::Model(ModelProvider::Anthropic),
         Provider::Model(ModelProvider::Deepseek),
         Provider::Model(ModelProvider::Groq),
         Provider::Model(ModelProvider::Ollama),
+        Provider::Model(ModelProvider::Muse),
+        Provider::Model(ModelProvider::Openrouter),
+        Provider::Model(ModelProvider::Opencode),
+        Provider::Model(ModelProvider::OpencodeGo),
+        Provider::Model(ModelProvider::Bedrock),
+        Provider::Model(ModelProvider::AzureAi),
         Provider::MistralRs,
     ];
 
@@ -37,11 +43,40 @@ impl Provider {
         }
     }
 
-    /// The default model; empty for mistral.rs, which needs `--model`.
-    pub const fn default_model(self) -> &'static str {
+    /// The default model; `None` for Bedrock, Azure AI and mistral.rs, which need `--model`.
+    pub const fn default_model(self) -> Option<&'static str> {
         match self {
             Self::Model(provider) => provider.default_model(),
-            Self::MistralRs => "",
+            Self::MistralRs => None,
+        }
+    }
+
+    /// What `--model` names, for the error and the prompt of a provider without a default.
+    pub const fn model_hint(self) -> &'static str {
+        match self {
+            Self::Model(ModelProvider::Bedrock) => "a Bedrock model or inference profile id",
+            Self::Model(ModelProvider::AzureAi) => "the model deployed at AZURE_AI_ENDPOINT",
+            Self::MistralRs => "a Hugging Face id or a .gguf path",
+            Self::Model(
+                ModelProvider::Gemini
+                | ModelProvider::Openai
+                | ModelProvider::Anthropic
+                | ModelProvider::Deepseek
+                | ModelProvider::Groq
+                | ModelProvider::Ollama
+                | ModelProvider::Muse
+                | ModelProvider::Openrouter
+                | ModelProvider::Opencode
+                | ModelProvider::OpencodeGo,
+            ) => "a model id",
+        }
+    }
+
+    /// The adk-cli Cargo feature that compiles the provider in.
+    pub const fn feature(self) -> &'static str {
+        match self {
+            Self::Model(provider) => provider.feature(),
+            Self::MistralRs => "mistralrs",
         }
     }
 
@@ -250,7 +285,8 @@ pub struct VoiceArgs {
 /// Model and rendering options shared by every agent command.
 #[derive(clap::Args, Debug, Clone)]
 pub struct AgentOptions {
-    /// LLM provider: gemini, openai, anthropic, deepseek, groq, ollama or mistralrs
+    /// LLM provider: gemini, openai, anthropic, deepseek, groq, ollama, muse, openrouter,
+    /// opencode (Zen), opencode-go, bedrock, azure-ai or mistralrs
     #[arg(long, global = true)]
     pub provider: Option<Provider>,
 
@@ -304,6 +340,13 @@ pub fn is_compiled(provider: Provider) -> bool {
         Provider::Model(ModelProvider::Deepseek) => cfg!(feature = "deepseek"),
         Provider::Model(ModelProvider::Groq) => cfg!(feature = "groq"),
         Provider::Model(ModelProvider::Ollama) => cfg!(feature = "ollama"),
+        Provider::Model(ModelProvider::Muse) => cfg!(feature = "muse"),
+        Provider::Model(ModelProvider::Openrouter) => cfg!(feature = "openrouter"),
+        Provider::Model(ModelProvider::Opencode | ModelProvider::OpencodeGo) => {
+            cfg!(feature = "opencode")
+        }
+        Provider::Model(ModelProvider::Bedrock) => cfg!(feature = "bedrock"),
+        Provider::Model(ModelProvider::AzureAi) => cfg!(feature = "azure-ai"),
         Provider::MistralRs => cfg!(feature = "mistralrs"),
     }
 }
@@ -495,7 +538,9 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
-    /// The running kernel's processes, each with its age, spend, calls and goal progress
+    /// The running kernel's processes
+    ///
+    /// Each row shows the process's age, spend, calls and goal progress.
     #[cfg(feature = "harness")]
     Ps {
         /// Only processes in this partition
@@ -572,7 +617,9 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
-    /// The kernel's event bus: process changes, wakes, holds, decisions, governance
+    /// The kernel's event bus
+    ///
+    /// It carries process changes, wakes, holds, decisions and governance.
     #[cfg(feature = "harness")]
     Events {
         /// Keep streaming new events until Ctrl-C
@@ -1914,6 +1961,12 @@ mod tests {
             (Provider::Model(ModelProvider::Deepseek), cfg!(feature = "deepseek")),
             (Provider::Model(ModelProvider::Groq), cfg!(feature = "groq")),
             (Provider::Model(ModelProvider::Ollama), cfg!(feature = "ollama")),
+            (Provider::Model(ModelProvider::Muse), cfg!(feature = "muse")),
+            (Provider::Model(ModelProvider::Openrouter), cfg!(feature = "openrouter")),
+            (Provider::Model(ModelProvider::Opencode), cfg!(feature = "opencode")),
+            (Provider::Model(ModelProvider::OpencodeGo), cfg!(feature = "opencode")),
+            (Provider::Model(ModelProvider::Bedrock), cfg!(feature = "bedrock")),
+            (Provider::Model(ModelProvider::AzureAi), cfg!(feature = "azure-ai")),
             (Provider::MistralRs, cfg!(feature = "mistralrs")),
         ] {
             assert_eq!(compiled.contains(&provider), enabled, "{provider}");
@@ -1921,6 +1974,33 @@ mod tests {
         let order: Vec<_> =
             Provider::all().iter().copied().filter(|p| compiled.contains(p)).collect();
         assert_eq!(compiled, order, "menu order follows ModelProvider::all");
+    }
+
+    /// `--provider` takes every provider adk-model has its own client for, whether or not
+    /// this build compiles it in, and names them all when the value is unknown (#1219).
+    #[test]
+    fn every_model_provider_parses_from_the_flag() {
+        let model_providers: Vec<_> = Provider::all()
+            .iter()
+            .filter_map(|provider| match provider {
+                Provider::Model(model) => Some(*model),
+                Provider::MistralRs => None,
+            })
+            .collect();
+        assert_eq!(model_providers, ModelProvider::all(), "the menu lists every model provider");
+        for provider in Provider::all() {
+            let parsed = parse(&["adk-rust", "--provider", provider.as_str(), "chat"]);
+            assert_eq!(parsed.options.provider, Some(*provider));
+        }
+        let error = Cli::try_parse_from(["adk-rust", "--provider", "xai", "chat"])
+            .err()
+            .expect("xai is an OpenAI-compatible preset, not a provider")
+            .to_string();
+        assert!(error.contains("unsupported provider: xai"), "{error}");
+        assert!(
+            error.contains("muse, openrouter, opencode, opencode-go, bedrock, azure-ai"),
+            "{error}"
+        );
     }
 
     #[cfg(feature = "harness")]

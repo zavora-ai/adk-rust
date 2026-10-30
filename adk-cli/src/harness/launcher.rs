@@ -89,7 +89,10 @@ pub struct TurnOutcome {
 /// - With a kernel ([`with_kernel`](Self::with_kernel)) serve mode is the resident form
 ///   (spec 3.2 §8.1): the kernel's workers execute the runs, its control plane is mounted
 ///   under `/api/kernel` and, when its configuration serves one, on its socket, and
-///   `POST /api/admin/freeze` parks running processes. [`run`](Self::run) parses
+///   `POST /api/admin/freeze` parks running processes. The freeze and
+///   `POST /api/admin/unfreeze` admit only an administrator, a caller with the server's
+///   [`SecurityConfig::admin_scope`]; the default extractors grant it to the operator.
+///   [`run`](Self::run) parses
 ///   `up [--port] [--host]` for it, with the socket at the home.
 ///
 /// # Example
@@ -391,7 +394,7 @@ impl HarnessLauncher {
 
     /// Admits served requests carrying `Authorization: Bearer <token>` as the operator: the
     /// launcher's [user](Self::with_user_id) with the [`OPERATOR_SCOPE`](super::OPERATOR_SCOPE)
-    /// (spec 3.1 §8.2). Every caller is then the operator, so the web home's turns run as them,
+    /// and the server's [`ADMIN_SCOPE`](adk_server::ADMIN_SCOPE) (spec 3.1 §8.2). Every caller is then the operator, so the web home's turns run as them,
     /// with their mode and standing rules (spec 3.3 §5.1).
     ///
     /// # Example
@@ -446,7 +449,9 @@ impl HarnessLauncher {
 
     /// Sets the server's host and origin checks and its request timeout. Without one the
     /// server uses `SecurityConfig::default()` with a 15-minute request timeout, since a
-    /// harness turn runs commands.
+    /// harness turn runs commands. The operator holds the [`ADMIN_SCOPE`](adk_server::ADMIN_SCOPE),
+    /// so a configuration naming another [`admin_scope`](SecurityConfig::admin_scope) needs an
+    /// extractor that grants it before the operator can freeze through `/api/admin`.
     pub fn with_security_config(mut self, config: SecurityConfig) -> Self {
         self.security_config = Some(config);
         self

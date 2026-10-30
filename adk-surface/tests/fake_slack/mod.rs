@@ -13,7 +13,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::{Json, Router, routing::post};
+use axum::{
+    Json, Router,
+    routing::{get, post},
+};
 use futures::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -45,6 +48,10 @@ struct Shared {
     refusals: Mutex<VecDeque<Refusal>>,
     next_ts: AtomicU64,
     next_envelope: AtomicU64,
+    /// `http://{addr}`, where files are served.
+    base: Mutex<String>,
+    /// How many files were downloaded, and with which tokens.
+    downloads: Mutex<Vec<String>>,
 }
 
 /// The fake Slack, served until it is dropped.
@@ -66,9 +73,13 @@ impl FakeSlack {
     pub async fn start() -> Self {
         let shared = Arc::new(Shared::default());
         shared.next_ts.store(1000, Ordering::SeqCst);
-        let app = Router::new().route("/api/{method}", post(web_api)).with_state(shared.clone());
+        let app = Router::new()
+            .route("/api/{method}", post(web_api))
+            .route("/files/{name}", get(file))
+            .with_state(shared.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        *shared.base.lock().unwrap() = format!("http://{addr}");
         let web = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let sockets = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         *shared.socket_url.lock().unwrap() = format!("ws://{}/link", sockets.local_addr().unwrap());
@@ -226,6 +237,28 @@ impl FakeSlack {
         }
     }
 
+    /// `user` shares `files` (name and type) with `text` in their direct message `channel`.
+    pub fn share(&self, user: &str, channel: &str, text: &str, files: &[(&str, &str)]) -> String {
+        let ts = format!("{}.000300", self.shared.next_ts.fetch_add(1, Ordering::SeqCst));
+        let mut envelope = Self::message(user, channel, text, &ts);
+        let base = self.shared.base.lock().unwrap().clone();
+        let files: Vec<Value> = files
+            .iter()
+            .map(|(name, mimetype)| {
+                json!({ "id": format!("F{name}"), "name": name, "mimetype": mimetype, "size": PNG.len(),
+                        "url_private_download": format!("{base}/files/{name}") })
+            })
+            .collect();
+        envelope["payload"]["event"]["subtype"] = json!("file_share");
+        envelope["payload"]["event"]["files"] = json!(files);
+        self.deliver(envelope)
+    }
+
+    /// The `Authorization` header of each file download.
+    pub fn downloads(&self) -> Vec<String> {
+        self.shared.downloads.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
     /// `/stop` typed by `user` in their direct message `channel`.
     pub fn stop_command(&self, user: &str, channel: &str) -> String {
         let at = self.shared.next_ts.fetch_add(1, Ordering::SeqCst);
@@ -320,4 +353,23 @@ async fn web_api(
         return response;
     }
     Json(json!({ "ok": true, "channel": body["channel"], "ts": ts })).into_response()
+}
+
+/// A 1×1 PNG, the photo every file is.
+pub const PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64, 0x60, 0xf8, 0x5f,
+    0x0f, 0x00, 0x02, 0x87, 0x01, 0x80, 0xeb, 0x47, 0xba, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+async fn file(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    let auth =
+        headers.get("authorization").and_then(|value| value.to_str().ok()).unwrap_or_default();
+    shared.downloads.lock().unwrap_or_else(PoisonError::into_inner).push(auth.to_string());
+    if auth != format!("Bearer {BOT_TOKEN}") {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    ([("content-type", "image/png")], PNG.to_vec()).into_response()
 }
