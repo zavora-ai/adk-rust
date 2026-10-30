@@ -279,7 +279,6 @@ Items spec 3.3 ([Agent surfaces](docs/design/spec-3.3-harness-ui.md)) defers pas
 | No fuzzing | `cargo-fuzz` targets for the stream decoders, the text tool-call parser, sandbox path resolution, Responses parsing, A2A decoding and the schema adapters before 3.0; an OSS-Fuzz submission after | October 2026 review |
 | The PR-tier `test` job runs out of runner disk after "Run tests" passes, so `pr-gate` fails on every pull request | Free the test build before the computer-use receipt step | #1268 |
 | `feature-coverage` shard 2 exceeds its 1 h 30 min limit on every pull request, so its adk-server, adk-cli and adk-surface pairs, adk-cli's `scripted-model` terminal tests among them, never finish in CI | Split the shard | #1250 |
-| The Desktop workflow's Linux (WebKitGTK) store gate fails on every run since the tray landed: "the kernel did not answer in 120 s" | Read the job's `kernel.log` (artifact `desktop-linux`) and fix how `adk-rust up` starts there | spec 3.3 §12, #1149 |
 | Kernel scenarios fail now and then on timing: k2 (`k2_sleep_is_free_for_an_hour`, `mongodb` pair) and k9 (`neo4j` pair) in `feature-coverage`, and k8's "the partition never ran more than three admitted processes" in `examples/harness_kernel` | Wait on kernel events instead of fixed timeouts and 20 ms sampling | spec 3.2 §5, #1249 |
 | `RUSTDOCFLAGS="-D warnings" cargo doc -p adk-harness` without `sqlite` fails: `shell/pids.rs:45` links `SqliteShellPidRegistry`, which only `sqlite` builds export | Name the type in code text rather than linking it | spec 3.1 §7.29 |
 
