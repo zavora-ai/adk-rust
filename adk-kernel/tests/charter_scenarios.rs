@@ -7,7 +7,7 @@
 
 #![cfg(feature = "charter")]
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 

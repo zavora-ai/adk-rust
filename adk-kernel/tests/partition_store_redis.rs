@@ -8,7 +8,7 @@
 //! ```bash
 //! REDIS_URL=redis://localhost:6379 \
 //!   cargo nextest run -p adk-kernel --features postgres,redis --run-ignored only \
-//!   --test partition_store_redis
+//!   --test integration -E 'test(/^partition_store_redis::/)'
 //! ```
 
 #![cfg(feature = "redis")]

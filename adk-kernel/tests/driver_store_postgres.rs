@@ -7,7 +7,7 @@
 //! ```bash
 //! DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
 //!   cargo nextest run -p adk-kernel --features postgres,redis --run-ignored only \
-//!   --test driver_store_postgres
+//!   --test integration -E 'test(/^driver_store_postgres::/)'
 //! ```
 
 #![cfg(all(feature = "drivers", feature = "postgres"))]

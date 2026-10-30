@@ -8,7 +8,7 @@
 //! ```bash
 //! DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
 //!   cargo nextest run -p adk-kernel --features postgres,redis --run-ignored only \
-//!   --test ledger_store_postgres
+//!   --test integration -E 'test(/^ledger_store_postgres::/)'
 //! ```
 
 #![cfg(all(feature = "proc", feature = "postgres"))]

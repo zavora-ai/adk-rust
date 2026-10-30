@@ -4,7 +4,7 @@
 //! kernel's socket as its own terminal — never a declared one; a suggested agent approved
 //! there is added as that surface; and `POST /api/kernel/unfreeze` resumes only on the socket.
 
-mod agents_support;
+use crate::agents_support;
 
 use std::sync::Arc;
 

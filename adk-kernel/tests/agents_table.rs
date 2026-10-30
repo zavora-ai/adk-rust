@@ -2,7 +2,7 @@
 //! hand through a preview and its digest, who may change agents, names and ids, versions,
 //! the record before the act, pausing, removing, and the `target` process filter.
 
-mod agents_support;
+use crate::agents_support;
 
 use std::sync::Arc;
 use std::time::Duration;

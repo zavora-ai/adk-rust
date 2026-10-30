@@ -3,7 +3,7 @@
 //!
 //! Each test proves one behaviour on stores in memory.
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

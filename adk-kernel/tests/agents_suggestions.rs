@@ -3,7 +3,7 @@
 //! suggester's limits then; a rejection frees its id; duplicates merge; unattended work
 //! suggests at high risk; "Change it first" replaces the suggestion.
 
-mod agents_support;
+use crate::agents_support;
 
 use std::collections::HashMap;
 
