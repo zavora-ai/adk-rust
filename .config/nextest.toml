@@ -39,6 +39,12 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 filter = "binary(process_store_sqlite)"
 slow-timeout = { period = "60s", terminate-after = 4 }
 
+# The away property test restarts a SQLite-backed kernel store in each of its cases; a Windows
+# runner needs over 90 s for the run.
+[[profile.default.overrides]]
+filter = "binary(away_property_tests)"
+slow-timeout = { period = "60s", terminate-after = 4 }
+
 # S19's scaled run simulates four hours of feeds and an hour of live blog against
 # DirectoryHost: about 55 s on a macOS runner and over 90 s on a Windows one.
 [[profile.default.overrides]]
