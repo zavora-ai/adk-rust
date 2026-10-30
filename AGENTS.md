@@ -161,8 +161,8 @@ is preserved. No coverage is dropped —
 expensive axes move to a later tier.
 
 - **PR tier** (`ci.yml` + `semver.yml`, on pull requests) — the merge-blocking
-  coverage: `fmt` (prerequisite gate), `clippy --workspace --all-targets -D warnings`,
-  `nextest --workspace` (Linux, runs at most once), `feature-coverage` for
+  coverage: `fmt`, `clippy --workspace --all-targets -D warnings`,
+  `nextest --workspace` (Linux), `feature-coverage` for
   feature-gated modules default builds skip (e.g. `adk-agent --features codeact`),
   as eleven shards driven by `scripts/feature-coverage-pairs.txt`, `postgres` (the
   `#[ignore]`d PostgreSQL suites, pgvector and TLS included, against a
@@ -170,19 +170,23 @@ expensive axes move to a later tier.
   `docs` (`cargo doc --workspace --no-deps` plus doctests), standalone examples
   (4 shards), `kernel-scenarios` (the scripted scenarios of `examples/harness_kernel`, on Linux),
   `website-scenarios` (spec 3.5's scripted scenarios of `examples/website`),
-  `templates`, a compile-only macOS build, a Windows workspace build
-  with targeted sandbox portability smokes and the kernel's crate-level scenarios
-  (`adk-kernel`'s K2–K4, K6, K8 and K9), and `semver` (stable strict against
-  the release type in `semver.yml`'s `SEMVER_RELEASE_TYPE`: `minor` fails breakage,
-  `major` during a major release candidate accepts it;
-  everything else warn-only). A `scope` job skips the Rust jobs when a change
-  touches only `docs/` or Markdown, and merge-queue builds skip `docs`, the
-  standalone examples, the kernel scenarios and the macOS/Windows builds the pull
-  request already passed.
+  `templates`, a compile-only macOS build, a Windows build with the code only
+  Windows has (the restricted-token enforcer, process trees, owner-only files, the
+  kernel's named pipe and service, the external generators' path), and `semver`
+  (stable strict against the release type in `semver.yml`'s `SEMVER_RELEASE_TYPE`:
+  `minor` fails breakage; `major`, during a major release candidate, accepts every
+  change, so the job reports without building; everything else warn-only). A `scope`
+  job skips the Rust jobs when a change touches only `docs/` or Markdown, and
+  merge-queue builds skip `docs`, the standalone examples, the kernel scenarios and
+  the macOS/Windows builds the pull request already passed. CI builds carry no debug
+  info (`CARGO_PROFILE_DEV_DEBUG=0`). Only `main` saves build caches: a push to `main`
+  runs `ci.yml`'s `clippy` and `test`, whose caches every pull request restores.
 - **Merge tier** (`ci-merge.yml`, on `push: main` and on demand) — cross-platform
-  `nextest --workspace` on macOS/Windows, the scripted scenarios of
-  `examples/harness_kernel` on macOS (`kernel-scenarios-macos`; the PR tier's macOS
-  build is compile-only), and doc-example compilation. Runs
+  `nextest --workspace` on macOS/Windows (on Windows this is where the kernel's
+  crate-level scenarios and the adk-code, adk-devtools and adk-managed suites run),
+  the scripted scenarios of `examples/harness_kernel` on macOS
+  (`kernel-scenarios-macos`), the documented-example check, and the computer-use
+  receipt (`computer-use-receipt`). Runs
   post-merge, or on a branch with `gh workflow run ci-merge.yml --ref <branch>`;
   not branch-protection-required. `sandbox-linux.yml` (on `push: main`,
   on a pull request touching the sandbox or the harness shell, and on demand) proves

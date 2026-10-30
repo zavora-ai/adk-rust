@@ -1,9 +1,12 @@
 name: CI
 
-# PR tier only. Post-merge coverage belongs to ci-merge.yml; running this full
-# workflow on main duplicated every PR job after each merge.
+# PR tier. On a push to main only `clippy` and `test` run: they save the build caches
+# every pull request restores, and check Linux after each merge. The rest of the
+# post-merge coverage is in ci-merge.yml.
 on:
   pull_request:
+    branches: [ main ]
+  push:
     branches: [ main ]
   # Required checks must also run against GitHub's synthetic merge-group ref
   # when a pull request enters the merge queue.
@@ -19,6 +22,9 @@ env:
   CARGO_INCREMENTAL: 0
   CMAKE_POLICY_VERSION_MINIMUM: "3.5"
   PROTOC: protoc
+  # No debug info: CI only needs panic locations, and the test build links about a thousand
+  # binaries, which with line tables fill the runner's disk.
+  CARGO_PROFILE_DEV_DEBUG: "0"
 
 # Cancel in-progress runs for the same branch/PR
 concurrency:
@@ -28,6 +34,7 @@ concurrency:
 jobs:
   # ── Fast gate: formatting (< 30s) ──────────────────────────────
   fmt:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -90,7 +97,7 @@ jobs:
   # adk-surface's `web` feature embeds the React app built from adk-surface/web
   # (spec 3.3 §6.1); the committed build must match its source.
   web:
-    needs: fmt
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -125,87 +132,59 @@ jobs:
           exit 1
         fi
 
-  # ── Lint: clippy (parallel with test) ──────────────────────────
+  # ── Lint: clippy ───────────────────────────────────────────────
   clippy:
-    needs: [fmt, scope]
+    needs: scope
     if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-    - name: Free disk space
-      run: |
-        sudo rm -rf /usr/local/lib/android
-        sudo rm -rf /usr/share/dotnet
-
-    - uses: cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72 # v30
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
       with:
-        nix_path: nixpkgs=channel:nixos-unstable
-    - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        components: clippy
+        cache-key: pr-linux
+        cache-shared-key: clippy
+
+    - name: Install system dependencies
+      timeout-minutes: 10
+      uses: ./.github/actions/apt-install
       with:
-        name: devenv
-    - run: nix profile install nixpkgs#devenv
+        packages: protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
 
+    - name: Clippy
+      run: cargo clippy --workspace --all-targets -- -D warnings
 
-    - name: Run clippy
-      shell: bash
-      run: CI=true devenv shell ws-clippy --message-format=json | tee clippy.json
-
-    - name: Annotate clippy warnings
-      if: always()
-      run: |
-        if [ -f clippy.json ]; then
-          ERRORS=$(grep -c '"level":"error"' clippy.json || echo 0)
-          WARNINGS=$(grep -c '"level":"warning"' clippy.json || echo 0)
-          echo "### 🔍 Clippy: ${ERRORS} errors, ${WARNINGS} warnings" >> "$GITHUB_STEP_SUMMARY"
-        fi
-
-  # ── Test: nextest (parallel with clippy) ───────────────────────
+  # ── Test: nextest ──────────────────────────────────────────────
   test:
-    needs: [fmt, scope]
+    needs: scope
     if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-    - name: Free disk space
-      run: |
-        sudo rm -rf /usr/local/lib/android
-        sudo rm -rf /usr/share/dotnet
-
-    - uses: cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72 # v30
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
       with:
-        nix_path: nixpkgs=channel:nixos-unstable
-    - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        cache-key: pr-linux
+        cache-shared-key: test
+
+    - name: Install system dependencies
+      timeout-minutes: 10
+      uses: ./.github/actions/apt-install
       with:
-        name: devenv
-    - run: nix profile install nixpkgs#devenv
+        packages: protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
 
-    - name: Run tests
-      shell: bash
-      run: CI=true devenv shell ws-test-ci 2>&1 | tee test.log
-
-    - name: Generate computer-use v8 ADK evaluation receipt
-      run: CI=true devenv shell node scripts/generate-computer-use-v8-evidence.mjs --subject-version "${COMPUTER_USE_MCP_V8_VERSION}" --output adk-computer-use-v8-evidence.json --compact
-      env:
-        COMPUTER_USE_MCP_V8_VERSION: "7.0.0"
-
-    - name: Upload computer-use v8 ADK evaluation receipt
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
       with:
-        name: adk-computer-use-v8-evidence
-        path: adk-computer-use-v8-evidence.json
-        if-no-files-found: error
+        tool: cargo-nextest
 
-    - name: Test summary
-      if: always()
-      run: |
-        if [ -f test.log ] && grep -q "tests run:" test.log; then
-          SUMMARY=$(grep "tests run:" test.log | tail -1)
-          echo "### 🧪 $SUMMARY" >> "$GITHUB_STEP_SUMMARY"
-        fi
+    - name: Test
+      run: cargo nextest run --workspace --profile ci
 
   # ── Feature coverage: feature-gated modules default CI skips ───
   # Default clippy/test builds never compile feature-gated modules (e.g.
@@ -220,8 +199,8 @@ jobs:
   # To cover another feature-gated module, add ONE line to the pairs file.
   feature-coverage:
     name: feature-coverage (${{ matrix.shard }}/11)
-    needs: [fmt, scope]
-    if: needs.scope.outputs.docs_only != 'true'
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -237,8 +216,7 @@ jobs:
       uses: ./.github/actions/setup-rust
       with:
         components: clippy
-        cache-key: feature-coverage-${{ matrix.shard }}
-        cache-save: 'false'
+        enable-cache: 'false'
 
     # protoc for lancedb's build script, libdbus for adk-cli's keyring dependency,
     # and the ALSA/udev headers for the audio and realtime pairs. cmake comes from
@@ -302,8 +280,8 @@ jobs:
   # The Redis service serves the harness's shared mode and rule stores, whose replicas
   # are the same suites' Redis leg, and the kernel's process store.
   postgres:
-    needs: [fmt, scope]
-    if: needs.scope.outputs.docs_only != 'true'
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     services:
@@ -332,8 +310,7 @@ jobs:
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
       with:
-        cache-key: postgres
-        cache-save: 'false'
+        enable-cache: 'false'
 
     - name: Install cargo-nextest
       uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
@@ -397,10 +374,10 @@ jobs:
 
   # ── Docs: documentation coverage for Stable-tier crates ──────
   docs:
-    needs: [fmt, scope]
+    needs: scope
     # Rustdoc and doctests cannot break through a merge that clippy and the tests
     # accept, so the queue build leaves them to the pull request run.
-    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group'
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -414,8 +391,8 @@ jobs:
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
       with:
-        cache-key: pr-docs
-        cache-save: 'false'
+        cache-key: pr-linux
+        cache-shared-key: clippy
 
     # adk-cli's keyring dependency links libdbus on Linux even when rustdoc is
     # only documenting the workspace's default feature sets.
@@ -430,16 +407,7 @@ jobs:
     - name: Check documentation coverage
       env:
         RUSTDOCFLAGS: "-D warnings"
-      run: |
-        echo "### 📚 Documentation Coverage" >> "$GITHUB_STEP_SUMMARY"
-        echo "" >> "$GITHUB_STEP_SUMMARY"
-        if cargo doc --workspace --no-deps; then
-          echo "✅ Workspace documentation built with no warnings" >> "$GITHUB_STEP_SUMMARY"
-        else
-          echo "❌ Workspace documentation build failed (missing or broken docs)" >> "$GITHUB_STEP_SUMMARY"
-          echo "::error::Documentation coverage check failed"
-          exit 1
-        fi
+      run: cargo doc --workspace --no-deps
 
     # Doctests: nextest cannot run them, so `ws-test` never touches a single doc
     # example. Without this step a documented snippet can stop compiling and no
@@ -456,10 +424,6 @@ jobs:
         cargo test --workspace --doc --exclude adk-rust
         cargo test -p adk-rust --features full --doc
 
-    - name: Doctest summary
-      if: always()
-      run: echo "### 🧪 doctests (workspace + adk-rust --features full) completed" >> "$GITHUB_STEP_SUMMARY"
-
   # ── Standalone examples: compile every examples/* crate ────────
   # The standalone examples are separate workspaces, so the workspace build does
   # not catch public-API breakage or stale example lockfiles. Run the four
@@ -468,8 +432,8 @@ jobs:
   # in LINTED_EXAMPLES run clippy with -D warnings instead of check.
   examples-compile:
     name: examples-compile (${{ matrix.shard }}/4)
-    needs: [fmt, scope]
-    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group'
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -483,8 +447,7 @@ jobs:
       uses: ./.github/actions/setup-rust
       with:
         components: clippy
-        cache-key: pr-examples-compile-${{ matrix.shard }}
-        cache-save: 'false'
+        enable-cache: 'false'
 
     - name: Install system dependencies
       # A stalled apt mirror once held jobs for the full six-hour limit; the action bounds and
@@ -497,11 +460,6 @@ jobs:
     - name: Compile standalone examples (shard ${{ matrix.shard }} of 4)
       run: bash scripts/check-examples-compile.sh ${{ matrix.shard }} 4
 
-    - name: Examples summary
-      if: always()
-      shell: bash
-      run: echo "### 📦 standalone example compile, shard ${{ matrix.shard }} of 4" >> "$GITHUB_STEP_SUMMARY"
-
   # ── Agent kernel: the example's scripted scenarios run ─────────
   # examples/harness_kernel holds the scripted K1 and K4–K8 scenarios, the managed form and
   # the voice surface on `ScriptedLlm` (spec 3.2 §11: the scripted scenarios run on macOS and
@@ -510,8 +468,8 @@ jobs:
   # this tier's macOS job is compile-only. K2, K3 and K9 run scripted in adk-kernel's own
   # tests, on Windows in the windows job below.
   kernel-scenarios:
-    needs: [fmt, scope]
-    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group'
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -520,8 +478,7 @@ jobs:
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
       with:
-        cache-key: pr-kernel-scenarios
-        cache-save: 'false'
+        enable-cache: 'false'
 
     - name: Install system dependencies
       # A stalled apt mirror once held jobs for the full six-hour limit; the action bounds and
@@ -533,9 +490,6 @@ jobs:
 
     - name: Run the kernel example's scripted scenarios
       timeout-minutes: 40
-      env:
-        # The build only has to run the scenarios; no debug info keeps it small and quick.
-        CARGO_PROFILE_DEV_DEBUG: "0"
       run: cargo run --locked --manifest-path examples/harness_kernel/Cargo.toml
 
   # ── adk-website: the spec 3.5 scenarios run ───────────────────
@@ -543,8 +497,8 @@ jobs:
   # against the recorded inventories (§11); examples-compile only checks the crate. The
   # WordPress-backed runs and the S19 soak are in the nightly tier (ci-nightly.yml).
   website-scenarios:
-    needs: [fmt, scope]
-    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group'
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -553,8 +507,7 @@ jobs:
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
       with:
-        cache-key: pr-website-scenarios
-        cache-save: 'false'
+        enable-cache: 'false'
 
     - name: Install system dependencies
       timeout-minutes: 10
@@ -564,8 +517,6 @@ jobs:
 
     - name: Run the website example's scripted scenarios
       timeout-minutes: 40
-      env:
-        CARGO_PROFILE_DEV_DEBUG: "0"
       run: cargo run --locked --manifest-path examples/website/Cargo.toml -- --report website-scenarios.md
 
     - name: Scenario report
@@ -575,7 +526,7 @@ jobs:
 
   # ── Scaffolds: cargo-adk generated projects compile ────────────
   templates:
-    needs: fmt
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -584,8 +535,7 @@ jobs:
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
       with:
-        cache-key: pr-templates
-        cache-save: 'false'
+        enable-cache: 'false'
 
     - name: Install system dependencies
       # A stalled apt mirror once held jobs for the full six-hour limit; the action bounds and
@@ -631,8 +581,8 @@ jobs:
   # (ci-merge.yml). setup-rust supplies the toolchain + build cache;
   # neutralize-wild is false because the wild-linker strip is Linux-only.
   macos:
-    needs: [fmt, scope]
-    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group'
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push'
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -644,7 +594,6 @@ jobs:
         neutralize-wild: 'false'
         cache-key: cross-platform-test-macos-latest
         cache-shared-key: cross-platform-test
-        cache-save: 'false'
 
     - name: Install system dependencies
       run: brew install cmake protobuf
@@ -652,19 +601,14 @@ jobs:
     - name: Build workspace
       run: cargo build --workspace
 
-    - name: Build summary
-      if: always()
-      run: echo "### 🍎 macOS compile-only build passed" >> "$GITHUB_STEP_SUMMARY"
-
-  # ── Cross-platform: Windows build + portability smoke ──────────
-  # The full nextest run stays in the merge tier (ci-merge.yml). The focused
-  # output-cap suite runs here because its process scripts are platform-specific
-  # and must fail before merge when they stop working on Windows.
+  # ── Cross-platform: Windows build + Windows-only code ──────────
+  # The pull request runs the code that exists only on Windows; the full nextest run,
+  # the kernel scenarios included, is in the merge tier (ci-merge.yml).
   windows:
-    needs: [fmt, scope]
-    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group'
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push'
     runs-on: windows-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -674,7 +618,6 @@ jobs:
         neutralize-wild: 'false'
         cache-key: cross-platform-test-windows-latest
         cache-shared-key: cross-platform-test
-        cache-save: 'false'
 
     - name: Install cmake
       uses: lukka/get-cmake@a89e43e22a96abafcd7a62db652a65ecd33052c9 # v4.4.4
@@ -695,7 +638,8 @@ jobs:
 
     # The restricted-token enforcer (spec 3.2 §10 W5) can only be exercised on Windows: its
     # confined runs, its contained processes with piped streams, and the harness shell that
-    # runs `bash` through them.
+    # runs `bash` through them. PowerShell fails a step on its last command's exit code
+    # only, so each earlier command's is checked.
     - name: Run the Windows restricted-token enforcer tests
       timeout-minutes: 25
       run: |
@@ -714,7 +658,7 @@ jobs:
 
     # The Job Objects that hold a process tree (spec 3.2 §10 W1): adk-sandbox's own, each
     # stdio server of McpServerManager's, and a kernel driver's, which unmounting ends with
-    # every process the driver started. adk-devtools' bash runs in the same jobs below.
+    # every process the driver started.
     - name: Run the Windows process-tree tests
       timeout-minutes: 20
       run: |
@@ -725,21 +669,6 @@ jobs:
         cargo test -p adk-kernel --lib -- drivers::launch::tests::the_plan_records
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         cargo test -p adk-kernel --test driver_scenarios a_drivers_process_tree
-
-    # adk-code spawns rustc from a cleared environment and adk-devtools resolves
-    # workspace paths; both carry Windows-only behaviour that the compile-only build
-    # cannot exercise and that the merge tier otherwise reports only after landing.
-    # adk-devtools' suite includes the Job Object, handle-verified open and contained-process
-    # tests (spec 3.2 §10 W1, W5, W6).
-    # adk-managed's durable round trips drive two runtime replicas over one set of
-    # SQLite files, whose rollback journals make every write slow on Windows.
-    # PowerShell fails a step on its last command's exit code only, so each earlier
-    # command's is checked.
-    - name: Run the Windows-sensitive crate tests
-      run: |
-        cargo test -p adk-code -p adk-devtools --no-fail-fast
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        cargo test -p adk-managed --test durable_round_trip_tests
 
     # The owner-only DACLs that stand in for mode 0600 (spec 3.2 §10 W4): the harness
     # store files and the CLI's session store.
@@ -761,28 +690,14 @@ jobs:
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         cargo test -p adk-cli --test kernel_service_cli
 
-    # The kernel's crate-level scenarios on real durable workers over SQLite (spec 3.2 §11:
-    # Windows runs the scenarios on this job): K2, K3 and K9 with the chaos restart, the file
-    # and webhook wakes, K4 and K8, and K6 on a real stdio driver. K1 and K5 run only in
-    # examples/harness_kernel, on Linux and macOS.
-    - name: Run the kernel scenarios
-      timeout-minutes: 15
-      run: cargo test -p adk-kernel --no-fail-fast --test kernel_scenarios --test wake_scenarios --test proactivity_scenarios --test driver_scenarios
-
-    - name: Build summary
-      if: always()
-      run: echo "### 🪟 Windows build and sandbox portability smoke passed" >> $env:GITHUB_STEP_SUMMARY
-
   # ── Stable branch-protection contract ──────────────────────────────────
-  # Shards and matrix entries remain individually visible for diagnosis, while
-  # branch protection only needs this stable aggregate context (plus `semver`).
-  # A skipped job passes the gate only when `scope` or the event skipped it:
-  # docs-only changes skip every Rust job, and merge-queue builds skip docs, the
-  # standalone-example shards, the kernel scenarios and the macOS/Windows builds,
-  # which the pull request already passed and a merge cannot break on its own.
+  # Branch protection needs only this aggregate context (plus `semver`). A skipped
+  # job passes the gate only when `scope` or the event skipped it: docs-only changes
+  # skip every Rust job, and merge-queue builds skip the jobs the pull request
+  # already passed and a merge cannot break on its own.
   pr-gate:
     name: pr-gate
-    if: always()
+    if: always() && github.event_name != 'push'
     needs:
       - scope
       - fmt

@@ -26,10 +26,11 @@ inputs:
     default: ''
   cache-save:
     description: >-
-      Save the cache after the job. Set to "false" on pull requests so their
-      merge-ref caches do not evict reusable default-branch caches.
+      Save the cache after the job. Only `main` saves by default: a pull request's
+      cache is readable by that pull request alone, and the 10 GB repository limit
+      would evict the `main` caches every pull request restores.
     required: false
-    default: 'true'
+    default: ${{ github.ref == 'refs/heads/main' }}
   enable-cache:
     description: 'Enable the persistent Rust build cache.'
     required: false
@@ -53,7 +54,6 @@ runs:
       if: runner.os == 'Linux'
       shell: bash
       run: |
-        df -h /
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
         df -h /
 

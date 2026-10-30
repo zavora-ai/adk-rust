@@ -1,20 +1,11 @@
 name: CI Merge
 
-# Merge tier (see ci-pipeline-restructure spec). Runs on push to `main` — i.e.
-# after a change lands — carrying the expensive coverage that was deliberately
-# kept off the per-PR path:
-#   • cross-platform-test — full macOS + Windows `nextest --workspace` (the PR
-#     tier compile-checks both and runs a targeted Windows sandbox smoke; the
-#     full platform test suites live here).
-#   • kernel-scenarios-macos — the scripted scenarios of examples/harness_kernel
-#     on macOS (the PR tier runs them on Linux in ci.yml `kernel-scenarios`).
-#   • doc-example compilation is triggered on this same event.
-# All Rust runner preparation goes through the shared setup-rust composite
-# action so toolchain/components/linker/cache can never drift per-workflow.
+# Merge tier: runs after a change lands on main, carrying the coverage kept off the
+# pull request path — the full macOS and Windows suites, the kernel scenarios on macOS,
+# the documented-example check and the computer-use receipt.
 #
-# `workflow_dispatch` runs the same jobs on any branch before it merges:
-# `gh workflow run ci-merge.yml --ref <branch>`. Only `main` saves build caches, so a
-# dispatched run never evicts the caches the push runs restore.
+# `gh workflow run ci-merge.yml --ref <branch>` runs the same jobs on a branch before it
+# merges. Only `main` saves build caches.
 
 on:
   push:
@@ -29,6 +20,9 @@ env:
   CARGO_INCREMENTAL: 0
   CMAKE_POLICY_VERSION_MINIMUM: "3.5"
   PROTOC: protoc
+  # Matches ci.yml: the build caches are keyed on these variables, so the pull request's
+  # macOS and Windows jobs restore what this workflow saves.
+  CARGO_PROFILE_DEV_DEBUG: "0"
 
 # Merge-tier runs are the cross-platform safety net for changes already on main;
 # they should complete rather than be superseded, so in-progress runs are not
@@ -39,12 +33,7 @@ concurrency:
 
 jobs:
   # ── Cross-platform: full macOS + Windows test suite ────────────
-  # Requirement 1.4 (full suite on Linux/macOS/Windows before release) and 2.2
-  # (cross-platform tests on merge). Linux already runs the full nextest suite on
-  # every PR (ci.yml `test`); this job adds the full macOS + Windows runs. The PR
-  # tier keeps compile builds for both platforms plus a targeted Windows sandbox
-  # smoke. setup-rust supplies the toolchain + build cache; neutralize-wild is
-  # false because the wild-linker strip is Linux-only.
+  # Linux runs the full suite on every pull request (ci.yml `test`).
   cross-platform-test:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
@@ -59,12 +48,9 @@ jobs:
       uses: ./.github/actions/setup-rust
       with:
         neutralize-wild: 'false'
-        # Keep the existing main cache prefixes, but replace the automatic job
-        # id with an explicit shared key. PR compile jobs can now restore these
-        # entries without invalidating the already-warm main caches.
+        # The pull request's macOS and Windows jobs restore this cache by the same keys.
         cache-key: cross-platform-test-${{ matrix.os }}
         cache-shared-key: cross-platform-test
-        cache-save: ${{ github.ref == 'refs/heads/main' }}
 
     - name: Install system dependencies (macOS)
       if: runner.os == 'macOS'
@@ -86,18 +72,11 @@ jobs:
         tool: cargo-nextest
 
     - name: Run tests
-      run: cargo nextest run --workspace --no-fail-fast
-
-    - name: Test summary
-      if: always()
-      shell: bash
-      run: echo "### 🧪 ${{ matrix.os }} full nextest --workspace completed" >> "$GITHUB_STEP_SUMMARY"
+      run: cargo nextest run --workspace --profile ci --no-fail-fast
 
   # ── Agent kernel: the example's scripted scenarios on macOS ────
-  # spec 3.2 §11: the scripted scenarios run on macOS and Linux CI. Linux runs them on
-  # every pull request (ci.yml `kernel-scenarios`). The PR tier's macOS job is
-  # compile-only and the example is its own workspace with its own build, so macOS runs
-  # them here, beside the macOS nextest run.
+  # spec 3.2 §11: the scripted scenarios run on macOS and Linux CI; Linux runs them on
+  # every pull request (ci.yml `kernel-scenarios`).
   kernel-scenarios-macos:
     runs-on: macos-latest
     timeout-minutes: 60
@@ -108,79 +87,57 @@ jobs:
       uses: ./.github/actions/setup-rust
       with:
         neutralize-wild: 'false'
-        cache-key: merge-kernel-scenarios-macos
-        cache-save: 'false'
+        enable-cache: 'false'
 
     - name: Run the kernel example's scripted scenarios
       timeout-minutes: 40
-      env:
-        # The build only has to run the scenarios; no debug info keeps it small and quick.
-        CARGO_PROFILE_DEV_DEBUG: "0"
       run: cargo run --locked --manifest-path examples/harness_kernel/Cargo.toml
 
-  # ── Extension point: out-of-workspace crates ───────────────────────
-  # There are currently NO out-of-workspace crates: adk-codeact-monty joined the
-  # workspace when Monty reached crates.io (0.0.19), and adk-mistralrs joined
-  # when mistralrs did. Both are covered by the PR-tier Linux
-  # `nextest --workspace` (ci.yml) and this workflow's `cross-platform-test`.
-  #
-  # If a NEW out-of-workspace crate appears (excluded from the root workspace,
-  # with its own [workspace] + toolchain), add an unconditional job here —
-  # deliberately NOT path-filtered, so a change *anywhere* that breaks it is
-  # caught per merge (Requirement 1.3):
-  #   • setup-rust with that crate's required toolchain + components,
-  #   • cache-key keyed on that crate's own Cargo.lock,
-  #   • neutralize-wild: 'true' (plain runner without the `wild` linker),
-  #   • fmt / clippy / test in the crate directory (+ build any dependent example).
-
-  # ── Doc examples: validate copy-paste-able documentation ───────
-  # Requirement 1.1 (doc-coverage / doc examples validated). Task 5.3 in the
-  # ci-pipeline-restructure spec literally reads "compile
-  # docs/official_docs_examples/*", but that directory DOES NOT EXIST in this
-  # repo (docs/ contains only design/, official_docs/, podcast/, security/).
-  # It is also ACTIVELY DISALLOWED: scripts/check-doc-examples.py flags any
-  # reference to `official_docs_examples` as an error ("references missing
-  # `official_docs_examples`; use validated repo examples instead"). Creating
-  # that directory would therefore break the repo's own doc guard.
-  #
-  # So the faithful realization of Requirement 1.1 on the merge tier is to run
-  # the repo's ACTUAL doc-example validator — scripts/check-doc-examples.sh
-  # (→ check-doc-examples.py) — which extracts Cargo dependency snippets,
-  # feature names, and package/example/bin references from README.md and
-  # docs/official_docs/**.md and validates them against `cargo metadata`. That
-  # is the same guard the PR-tier `templates` job in ci.yml already runs; adding
-  # it here gives the merge tier its own doc-example gate as the spec intends,
-  # without depending on a nonexistent directory.
-  #
-  # The validator only needs `cargo metadata` (no compilation) + python3, so it
-  # runs on a plain Linux runner via setup-rust — no nix/devenv, no wild linker,
-  # no sccache required. neutralize-wild is true because this is a plain runner.
-  #
-  # NOTE: design.md §3, AGENTS.md, and CONTRIBUTING.md have been reconciled to
-  # describe this actual guard (check-doc-examples.sh) instead of the
-  # nonexistent `docs/official_docs_examples/` directory.
+  # ── Doc examples: documented snippets match the workspace ───────
+  # Cargo snippets, feature names and package/example references in README.md and
+  # docs/official_docs/ against `cargo metadata`; nothing is compiled.
   doc-examples:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
       with:
-        cache-key: doc-examples
-        cache-save: ${{ github.ref == 'refs/heads/main' }}
-        neutralize-wild: 'true'
-
-    - name: Set up Python
-      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-      with:
-        python-version: '3.x'
+        enable-cache: 'false'
 
     - name: Validate documented examples
       run: bash scripts/check-doc-examples.sh
 
-    - name: Doc-examples summary
-      if: always()
-      shell: bash
-      run: echo "### 📄 documented example validation (check-doc-examples.sh) completed" >> "$GITHUB_STEP_SUMMARY"
+  # ── Computer-use receipt ───────────────────────────────────────
+  # The ADK evaluation receipt computer-use-mcp v8 consumes, from adk-computer-use's tests
+  # on the commit that landed.
+  computer-use-receipt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        enable-cache: 'false'
+
+    - name: Install system dependencies
+      timeout-minutes: 10
+      uses: ./.github/actions/apt-install
+      with:
+        packages: protobuf-compiler libdbus-1-dev
+
+    - name: Generate the receipt
+      run: node scripts/generate-computer-use-v8-evidence.mjs --subject-version "${COMPUTER_USE_MCP_V8_VERSION}" --output adk-computer-use-v8-evidence.json --compact
+      env:
+        COMPUTER_USE_MCP_V8_VERSION: "7.0.0"
+
+    - name: Upload the receipt
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: adk-computer-use-v8-evidence
+        path: adk-computer-use-v8-evidence.json
+        if-no-files-found: error

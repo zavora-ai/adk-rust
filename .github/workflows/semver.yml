@@ -35,18 +35,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+    # A `major` release accepts every change, so no check can fail; the job reports the
+    # required `semver` context without building.
+    - name: Major release candidate
+      if: env.SEMVER_RELEASE_TYPE == 'major'
+      run: echo "SEMVER_RELEASE_TYPE is major, which accepts every change; nothing to check."
+
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      if: env.SEMVER_RELEASE_TYPE != 'major'
       with:
         fetch-depth: 0
 
-    # Toolchain install + wild linker strip + build cache, from the shared action.
     - name: Setup Rust
+      if: env.SEMVER_RELEASE_TYPE != 'major'
       uses: ./.github/actions/setup-rust
       with:
-        cache-key: semver
-        cache-save: 'false'
+        enable-cache: 'false'
 
     - name: Install cargo-semver-checks
+      if: env.SEMVER_RELEASE_TYPE != 'major'
       uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
       with:
         tool: cargo-semver-checks
@@ -60,8 +67,8 @@ jobs:
     # version is bumped, which forced a release-candidate bump before any new API
     # could merge. The bump happens in the release preparation pull request.
     - name: Semver checks — Stable crates (strict)
+      if: env.SEMVER_RELEASE_TYPE != 'major'
       run: |
-        echo "### Stable-tier crates (fail on breakage)" >> "$GITHUB_STEP_SUMMARY"
         extra_features() {
           local entry
           for entry in $SEMVER_EXTRA_FEATURES; do
@@ -71,10 +78,8 @@ jobs:
         FAILED=0
         for crate in adk-core adk-agent adk-model adk-gemini adk-tool adk-runner adk-session adk-server adk-graph adk-memory adk-anthropic; do
           echo "Checking $crate..."
-          if cargo semver-checks check-release -p "$crate" --default-features $(extra_features "$crate") --release-type "$SEMVER_RELEASE_TYPE"; then
-            echo "✅ $crate" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "❌ $crate — BREAKING" >> "$GITHUB_STEP_SUMMARY"
+          if ! cargo semver-checks check-release -p "$crate" --default-features $(extra_features "$crate") --release-type "$SEMVER_RELEASE_TYPE"; then
+            echo "::error::$crate has a breaking change"
             FAILED=1
           fi
         done
@@ -92,8 +97,8 @@ jobs:
     # cargo-semver-checks to read. Add the first three here once 2.0.0 is on
     # crates.io.
     - name: Semver checks — Beta/Experimental (warn only)
+      if: env.SEMVER_RELEASE_TYPE != 'major'
       run: |
-        echo "### Beta/Experimental crates (warn only)" >> "$GITHUB_STEP_SUMMARY"
         extra_features() {
           local entry
           for entry in $SEMVER_EXTRA_FEATURES; do
@@ -107,9 +112,7 @@ jobs:
           adk-managed adk-enterprise adk-payments adk-rag adk-sandbox \
           adk-retry-reflect adk-mistralrs adk-bench cargo-adk; do
           echo "Checking $crate..."
-          if cargo semver-checks check-release -p "$crate" --default-features $(extra_features "$crate") --release-type "$SEMVER_RELEASE_TYPE"; then
-            echo "✅ $crate" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "⚠️ $crate — breaking (warn)" >> "$GITHUB_STEP_SUMMARY"
+          if ! cargo semver-checks check-release -p "$crate" --default-features $(extra_features "$crate") --release-type "$SEMVER_RELEASE_TYPE"; then
+            echo "::warning::$crate has a breaking change"
           fi
         done

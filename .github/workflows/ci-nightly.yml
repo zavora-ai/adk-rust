@@ -151,7 +151,7 @@ jobs:
       uses: ./.github/actions/setup-rust
       with:
         components: clippy
-        cache-key: features-${{ matrix.name }}
+        enable-cache: 'false'
         neutralize-wild: ${{ matrix.neutralize-wild }}
 
     # espeak-ng is required by adk-audio's `kokoro` backend. glib is required by
@@ -172,11 +172,6 @@ jobs:
 
     - name: Lint feature combination
       run: ${{ matrix.command }}
-
-    - name: Feature-combination summary
-      if: always()
-      shell: bash
-      run: echo "### 🧩 feature combo '${{ matrix.name }}' checked" >> "$GITHUB_STEP_SUMMARY"
 
   # ── Supply-chain: advisory + policy checks ─────────────────────
   # Requirement 2.3 (supply-chain checks on a scheduled trigger). Two tools:
@@ -199,7 +194,7 @@ jobs:
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
       with:
-        cache-key: supply-chain
+        enable-cache: 'false'
         neutralize-wild: 'true'
 
     - name: Install cargo-audit and cargo-deny
@@ -214,11 +209,6 @@ jobs:
     # Enforcing: reads the root deny.toml.
     - name: cargo deny check
       run: cargo deny check
-
-    - name: Supply-chain summary
-      if: always()
-      shell: bash
-      run: echo "### 🔐 supply-chain checks (cargo audit + cargo deny) completed" >> "$GITHUB_STEP_SUMMARY"
 
   # ── Durable stores: conformance suites on live backends ────────
   # Every SpendLedger, ActionLedger, and ApprovalStore backend in adk-session runs the
@@ -281,7 +271,7 @@ jobs:
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
       with:
-        cache-key: durable-stores
+        enable-cache: 'false'
         neutralize-wild: 'true'
 
     - name: Install cargo-nextest
@@ -388,11 +378,6 @@ jobs:
         --test checkpointer_conformance_neo4j
         --test checkpointer_conformance_firestore
 
-    - name: Durable-stores summary
-      if: always()
-      shell: bash
-      run: echo "### 🗄️ durable store conformance suites completed" >> "$GITHUB_STEP_SUMMARY"
-
   # ── S19 soak: a site that never stops changing (spec 3.5 §11) ──
   # 50,000 products fed every minute for 24 simulated hours on a warped clock against
   # `DirectoryHost`, with a corrupted delivery, a live blog, a revert and the Guardian
@@ -407,7 +392,7 @@ jobs:
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
       with:
-        cache-key: site-soak
+        enable-cache: 'false'
         neutralize-wild: 'true'
 
     - name: Install cargo-nextest
@@ -435,7 +420,7 @@ jobs:
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
       with:
-        cache-key: website-wordpress
+        enable-cache: 'false'
         neutralize-wild: 'true'
 
     - name: Install cargo-nextest
@@ -484,7 +469,7 @@ jobs:
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
       with:
-        cache-key: website-soak
+        enable-cache: 'false'
         neutralize-wild: 'true'
 
     - name: Run S19 for 24 simulated hours
@@ -528,7 +513,7 @@ jobs:
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
       with:
-        cache-key: site-hosts
+        enable-cache: 'false'
         neutralize-wild: 'true'
 
     - name: Install cargo-nextest
@@ -636,7 +621,7 @@ jobs:
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
       with:
-        cache-key: site-generators-${{ matrix.os }}
+        enable-cache: 'false'
         neutralize-wild: ${{ runner.os == 'Linux' && 'true' || 'false' }}
 
     - name: Install cargo-nextest
@@ -722,7 +707,7 @@ jobs:
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
       with:
-        cache-key: integration-tests
+        enable-cache: 'false'
         neutralize-wild: 'true'
 
     - name: Install system dependencies (Linux)
@@ -756,11 +741,6 @@ jobs:
       run: |
         echo "### ⏭️ integration tests skipped" >> "$GITHUB_STEP_SUMMARY"
         echo "No provider secrets (GOOGLE_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY) configured." >> "$GITHUB_STEP_SUMMARY"
-
-    - name: Integration-tests summary
-      if: ${{ always() && (env.GOOGLE_API_KEY != '' || env.OPENAI_API_KEY != '' || env.ANTHROPIC_API_KEY != '') }}
-      shell: bash
-      run: echo "### 🌐 ignored integration tests completed" >> "$GITHUB_STEP_SUMMARY"
 
   # ── Harness eval suite on live models (spec 3.1 §7.13) ─────────
   # `examples/harness_eval` runs fix_failing_test, plan_mode_writes_nothing and goal_until
@@ -796,7 +776,7 @@ jobs:
       if: ${{ env.PROVIDER_KEY != '' }}
       uses: ./.github/actions/setup-rust
       with:
-        cache-key: harness-eval-live
+        enable-cache: 'false'
         neutralize-wild: 'true'
 
     - name: Run the harness eval suite on ${{ matrix.provider }}

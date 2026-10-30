@@ -89,7 +89,3 @@ jobs:
           echo "::error::containers from the tests are still present"
           exit 1
         fi
-
-    - name: Summary
-      if: always()
-      run: echo "### 🐳 Container shell and DockerClient proven against a Docker daemon" >> "$GITHUB_STEP_SUMMARY"
