@@ -352,5 +352,5 @@ To run the shipped live suites locally:
 DATABASE_URL=postgres://postgres@localhost:5432/postgres \
 REDIS_URL=redis://localhost:6379 \
   cargo nextest run -p adk-graph --features postgres,redis --run-ignored only \
-  --test checkpointer_conformance_postgres --test checkpointer_conformance_redis
+  --test integration -E 'test(/^checkpointer_conformance_(postgres|redis)::/)'
 ```

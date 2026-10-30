@@ -16,7 +16,7 @@ use adk_graph::node::NodeOutput;
 use futures::StreamExt;
 use serde_json::json;
 
-mod support;
+use crate::support;
 use support::test_context;
 
 /// A dynamic interrupt's message and data reach the caller.

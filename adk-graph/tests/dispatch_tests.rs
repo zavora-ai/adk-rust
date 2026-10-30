@@ -6,7 +6,7 @@
 //! the first of several pauses in a step reached the caller. Two concurrent child
 //! invocations under one run id both ran the child.
 
-mod support;
+use crate::support;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
