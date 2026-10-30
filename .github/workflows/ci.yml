@@ -53,9 +53,10 @@ jobs:
 
   # ── Scope: what can this change affect? ───────────────────────
   # A change under docs/ or to Markdown cannot alter a Rust build, so the Rust jobs
-  # skip and `pr-gate` accepts the skip. Anything else, or any doubt (an API failure,
-  # a truncated file list), runs the full tier. Merge-queue builds compare the group
-  # head against main, so a group that only carries docs is scoped the same way.
+  # skip and `pr-gate` accepts the skip. Feature coverage runs only the shards that
+  # cover a crate the change can affect (scripts/ci-scope.py). Any doubt (an API
+  # failure, a truncated file list) runs the full tier. Merge-queue builds compare the
+  # group head against main, so a group is scoped the same way.
   scope:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -64,7 +65,11 @@ jobs:
       pull-requests: read
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
+      crates: ${{ steps.scope.outputs.crates }}
+      shards: ${{ steps.scope.outputs.shards }}
     steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
     - name: Classify the changed files
       id: scope
       shell: bash
@@ -92,6 +97,8 @@ jobs:
         fi
         echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
         printf 'docs_only=%s (%s files)\n' "$docs_only" "$(grep -c . <<<"$files" || true)"
+        # The runner's stable cargo reads the manifests; the pinned toolchain is not needed.
+        RUSTUP_TOOLCHAIN=stable python3 scripts/ci-scope.py <<<"$files" >> "$GITHUB_OUTPUT"
 
   # ── The web home: source, component tests, and embedded build ─
   # adk-surface's `web` feature embeds the React app built from adk-surface/web
@@ -188,25 +195,25 @@ jobs:
 
   # ── Feature coverage: feature-gated modules default CI skips ───
   # Default clippy/test builds never compile feature-gated modules (e.g.
-  # `adk-agent`'s `codeact`), so a regression there is invisible on the normal
-  # PR path. scripts/feature-coverage-pairs.txt names every such package/feature
-  # pair and the shard that covers it; each shard compiles and tests its pairs on
-  # one runner with one target directory, so shared dependencies build once
-  # instead of once per pair. One job per pair (48 of them) used to need 48
-  # toolchain installs and 48 apt runs and could not fit the account's
-  # concurrent-job limit alongside the rest of the tier.
+  # `adk-agent`'s `codeact`). scripts/feature-coverage-pairs.txt names every such
+  # package/feature pair and the shard that covers it. A shard lints each pair on its
+  # own and tests each crate once with its pairs' features combined, on one target
+  # directory. Only the shards and crates the change can affect run; the nightly tier
+  # runs every pair's tests on its own build.
   #
   # To cover another feature-gated module, add ONE line to the pairs file.
   feature-coverage:
     name: feature-coverage (${{ matrix.shard }}/11)
     needs: scope
-    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'push'
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'push' && needs.scope.outputs.shards != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        shard: ${{ fromJSON(needs.scope.outputs.shards) }}
+    env:
+      AFFECTED_CRATES: ${{ needs.scope.outputs.crates }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -721,11 +728,15 @@ jobs:
       env:
         JOB_RESULTS: ${{ toJSON(needs) }}
         DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
+        SHARDS: ${{ needs.scope.outputs.shards }}
         EVENT: ${{ github.event_name }}
       run: |
         skippable=""
         if [[ "$DOCS_ONLY" == "true" ]]; then
           skippable="clippy test feature-coverage postgres docs examples-compile kernel-scenarios website-scenarios macos windows"
+        fi
+        if [[ "$SHARDS" == "[]" ]]; then
+          skippable="$skippable feature-coverage"
         fi
         if [[ "$EVENT" == "merge_group" ]]; then
           skippable="$skippable docs examples-compile kernel-scenarios website-scenarios macos windows"

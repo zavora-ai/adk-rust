@@ -164,7 +164,10 @@ expensive axes move to a later tier.
   coverage: `fmt`, `clippy --workspace --all-targets -D warnings`,
   `nextest --workspace` (Linux), `feature-coverage` for
   feature-gated modules default builds skip (e.g. `adk-agent --features codeact`),
-  as eleven shards driven by `scripts/feature-coverage-pairs.txt`, `postgres` (the
+  driven by `scripts/feature-coverage-pairs.txt`: every pair linted on its own, each
+  crate's tests run once with its pairs' features combined (a `solo` pair keeps its own
+  build), and only the shards and crates the change can affect (`scripts/ci-scope.py`);
+  the nightly `feature-coverage-isolated` job tests every pair on its own build, `postgres` (the
   `#[ignore]`d PostgreSQL suites, pgvector and TLS included, against a
   `pgvector/pgvector:pg17` service, driven by `scripts/test-postgres.sh`),
   `docs` (`cargo doc --workspace --no-deps` plus doctests), standalone examples
@@ -193,7 +196,8 @@ expensive axes move to a later tier.
   bubblewrap enforcement on `ubuntu-24.04` with `ADK_SANDBOX_REQUIRE_ENFORCER=1`, under
   which the enforcement tests fail instead of skipping when the enforcer cannot start.
 - **Nightly tier** (`ci-nightly.yml`, on `schedule`) — the feature-combination
-  matrix (clippy with `-D warnings`), `cargo-audit`/`cargo-deny` supply-chain
+  matrix (clippy with `-D warnings`), every feature-coverage pair tested on its own
+  build (`feature-coverage-isolated`), `cargo-audit`/`cargo-deny` supply-chain
   checks, and `#[ignore]` integration tests gated on available secrets. Not
   branch-protection-required.
 

@@ -6,6 +6,7 @@ name: CI Nightly
 # needs credentials that are not available on ordinary runs:
 #   • feature-combinations — compile the notable feature combos that default CI
 #     (ci.yml) never builds (realtime `full`, audio ONNX backends, GPU features).
+#   • feature-coverage-isolated — every feature-coverage pair's tests on its own build.
 #   • supply-chain — `cargo audit` (enforcing) + `cargo deny` (advisory) over the
 #     workspace dependency graph.
 #   • durable-stores — the store and graph checkpointer conformance suites, the
@@ -36,7 +37,7 @@ on:
         description: The job to run; `all` runs every job
         type: choice
         default: all
-        options: [all, feature-combinations, supply-chain, durable-stores, integration-tests, harness-eval-live, site-soak, website-wordpress, website-soak, site-hosts, site-generators]
+        options: [all, feature-combinations, feature-coverage-isolated, supply-chain, durable-stores, integration-tests, harness-eval-live, site-soak, website-wordpress, website-soak, site-hosts, site-generators]
 
 permissions:
   contents: read
@@ -172,6 +173,43 @@ jobs:
 
     - name: Lint feature combination
       run: ${{ matrix.command }}
+
+  # ── Feature coverage, every pair's tests on their own build ────
+  # The PR tier tests each crate once with its pairs' features combined, and only the
+  # crates a change can affect; this runs every pair as its own build.
+  feature-coverage-isolated:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'feature-coverage-isolated' }}
+    name: feature-coverage-isolated (${{ matrix.shard }}/11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    env:
+      FEATURE_COVERAGE_TESTS: isolated
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        components: clippy
+        enable-cache: 'false'
+
+    - name: Install system dependencies
+      timeout-minutes: 10
+      uses: ./.github/actions/apt-install
+      with:
+        packages: protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      with:
+        tool: cargo-nextest
+
+    - name: Clippy and test the shard's pairs
+      run: bash scripts/check-feature-coverage.sh ${{ matrix.shard }}
 
   # ── Supply-chain: advisory + policy checks ─────────────────────
   # Requirement 2.3 (supply-chain checks on a scheduled trigger). Two tools:
