@@ -674,7 +674,9 @@ impl adk_core::Llm for PromptModel {
 /// Samples the admitted processes every 20 ms into `peak` while `sampling` holds: running,
 /// claimed — the kernel publishes a claim after admission decided it — and not on their way
 /// to park. A run is `Running` from its claim, before admission preempts or defers anything,
-/// so a run whose claim is not yet published is not counted.
+/// so a run whose claim is not yet published is not counted. The claims are read before the
+/// process table: a claim seen there was published after admission wrote the preemption it
+/// decided, so the table read that follows already shows the preempted process parking.
 pub(crate) fn admitted_sampler(
     kernel: &Kernel,
     sampling: Arc<std::sync::atomic::AtomicBool>,
@@ -700,8 +702,8 @@ pub(crate) fn admitted_sampler(
     let kernel = kernel.clone();
     tokio::spawn(async move {
         while sampling.load(Ordering::SeqCst) {
+            let claimed = claimed.lock().unwrap_or_else(|e| e.into_inner()).clone();
             if let Ok(processes) = kernel.processes().ps(ProcessFilter::default()).await {
-                let claimed = claimed.lock().unwrap_or_else(|e| e.into_inner()).clone();
                 let admitted = processes
                     .iter()
                     .filter(|process| {

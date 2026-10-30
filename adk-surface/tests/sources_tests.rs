@@ -428,7 +428,9 @@ async fn always_allow_from_a_surface_says_what_it_covers_and_is_on_record() {
     .await;
     let always = card.allowed.option(Answer::AlwaysAllow).expect("always allow is offered");
     assert!(
-        always.label.starts_with("Always allow for this folder (anywhere in the workspace, "),
+        always
+            .label
+            .starts_with("Always allow for this folder (file writes anywhere in the workspace, "),
         "{}",
         always.label
     );

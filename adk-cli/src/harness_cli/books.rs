@@ -399,10 +399,14 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
     if let Some(agent) = agent {
         line = line.with_agent(agent);
     }
-    let tool = text(record.ext.get("tool")).or_else(|| {
-        matches!(record.kind, adk_core::audit_log::AuditRecordKind::ToolCall)
-            .then(|| record.action.clone())
-    });
+    // A folder rule's line says what the rule covers in plain words, "file writes in notes/":
+    // its own pattern matches any tool name, and its tools stay in the record's data
+    // (spec 3.3 §8.2).
+    let tool =
+        text(record.ext.get("covers")).or_else(|| text(record.ext.get("tool"))).or_else(|| {
+            matches!(record.kind, adk_core::audit_log::AuditRecordKind::ToolCall)
+                .then(|| record.action.clone())
+        });
     if let Some(tool) = tool {
         line = line.with_tool(tool);
     }
@@ -1015,6 +1019,43 @@ mod tests {
                 line(1, lines[0].at, "tool_policy:adk-surface/verbs"),
                 line(0, lines[1].at, "confirmation")
             ]
+        );
+    }
+
+    /// A folder rule's line says what it covers in plain words, never the tools its record
+    /// keeps as data: "You allowed file writes in notes/ without asking." (spec 3.3 §8.2).
+    #[cfg(feature = "audit")]
+    #[tokio::test]
+    async fn a_folder_rules_line_says_what_it_covers_in_plain_words() {
+        use adk_auth::signed_audit::{AuditLog, AuditSigner as _, Ed25519Signer, NoteVerifier};
+        use adk_core::audit_log::{
+            AuditActor, AuditLogStore, AuditRecordDraft, AuditRecordKind, InMemoryAuditLogStore,
+        };
+        use adk_kernel::control::RecordBook;
+        use serde_json::json;
+
+        let logs: Arc<dyn AuditLogStore> = Arc::new(InMemoryAuditLogStore::new());
+        let signer = Ed25519Signer::generate("kernel-test").unwrap();
+        let verifier: NoteVerifier = signer.verifier_key().parse().unwrap();
+        let log =
+            AuditLog::builder(logs.clone(), "kernel-test", Arc::new(signer)).open().await.unwrap();
+        // The fields the harness records for "Always allow for this folder" in `notes/`.
+        log.append(
+            AuditRecordDraft::new(AuditRecordKind::Other("harness".into()), "harness.rule.created")
+                .actor(AuditActor::subject(SubjectRef::human("ana")))
+                .ext("tool", json!("*"))
+                .ext("tools", json!(["apply_patch", "edit_file", "write_file"]))
+                .ext("covers", json!("file writes in notes/"))
+                .ext("decision", json!({ "kind": "allow" }))
+                .ext("surface", json!("web")),
+        )
+        .await
+        .unwrap();
+        let book = SignedRecordBook::new(logs, "kernel-test".into(), verifier);
+        let lines = book.recent(1).await.unwrap();
+        assert_eq!(
+            (lines[0].tool.as_deref(), lines[0].decision.as_deref()),
+            (Some("file writes in notes/"), Some("allowed"))
         );
     }
 

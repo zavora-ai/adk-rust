@@ -554,8 +554,20 @@ mod three_origins {
         .await;
         move_back(&api, &id, at).await;
 
-        // 2. Click: Snooze → "1 hour later" in the home, which sends the time in this
-        // computer's zone, as `up` shows it.
+        // 2. Click: Snooze → "1 hour later" in the home, which sends the choice's `to` exactly
+        // as `GET /api/surface/verbs` lists it: the same instant written another way, "+00:00"
+        // for "Z", has another `argsDigest`.
+        let listed = api.get("/api/surface/verbs?surface=web").await;
+        let item = listed["comingUp"].as_array().unwrap().iter().find(|item| item["id"] == id);
+        let choice = item.unwrap()["choices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|choice| choice["tomorrow"] == false)
+            .cloned()
+            .expect("News digest may move an hour later");
+        let moves_to = choice["to"].as_str().and_then(|at| at.parse::<DateTime<Utc>>().ok());
+        assert_eq!(moves_to, Some(to), "{choice}");
         let (status, done) = api
             .post(
                 "/api/surface/verbs/call",
@@ -564,7 +576,7 @@ mod three_origins {
                     "intent": {
                         "verb": "snooze",
                         "objects": [{ "kind": "comingUp", "id": id }],
-                        "args": { "to": to.with_timezone(&chrono::Local).to_rfc3339() },
+                        "args": { "to": choice["to"] },
                     },
                 }),
             )

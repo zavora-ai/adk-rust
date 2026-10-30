@@ -217,8 +217,8 @@ Nairobi.
 | ![Changing quiet time](../images/surfaces/web-settings-light.png) | ![Changing quiet time, dark](../images/surfaces/web-settings-dark.png) |
 
 **Allowed without asking** lists the person's standing rules that allow a call, each as a
-sentence — "Your agents can use write_file within notes/." — with its end date, **Ended** once
-it has passed, or **No end date**. A rule with an end date offers **Extend**, a date in place
+sentence — "Your agents can write files within notes/, in one conversation." — with its end
+date, **Ended** once it has passed, or **No end date**. A rule with an end date offers **Extend**, a date in place
 (the day it lasts through; thirty days on by default; Esc closes it) that moves its end later
 through `POST /rules/{id}/extend` and shows "Was until 30 November. Now until 30 December.";
 **Stop allowing** revokes it, so the next call it covered waits for the person again (spec 3.3

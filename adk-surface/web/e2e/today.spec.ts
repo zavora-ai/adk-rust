@@ -81,7 +81,8 @@ test("the morning briefing and Today read the kernel's page, and only Mark as se
   expect(window).toMatchObject({
     start: "23:00",
     end: "06:00",
-    utcOffsetMinutes: await page.evaluate(() => -new Date().getTimezoneOffset()),
+    // At UTC the browser's offset reads -0, which JSON carries as 0.
+    utcOffsetMinutes: (await page.evaluate(() => -new Date().getTimezoneOffset())) || 0,
   });
   if (window.timeZone !== undefined) {
     expect(window.timeZone).toBe(await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone));

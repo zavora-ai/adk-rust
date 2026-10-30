@@ -144,6 +144,72 @@ mod store_sqlite {
         store.put_embedding(&fact.id, local.clone()).await.unwrap();
         assert_eq!(store.embeddings(&scope).await.unwrap(), vec![(fact.id, local)]);
     }
+
+    /// In `harness.db` the kernel's stores write beside the facts, as the run store's claims
+    /// under `BEGIN IMMEDIATE` do: a fact stored or changed while another connection holds the
+    /// write lock waits for it, so a consolidation tick does not fail with `database is
+    /// locked` (spec 3.3 §12 phase 3).
+    #[tokio::test]
+    async fn a_change_waits_for_another_writer_on_the_file() {
+        use std::time::Duration;
+
+        use adk_core::principal::SubjectRef;
+        use adk_harness::{
+            FactKind, FactScope, FactSource, FactStatus, FactStore, MemoryFact, Provenance,
+            SqliteFactStore,
+        };
+        use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+
+        let dir = tempfile::tempdir().unwrap();
+        let options = SqliteConnectOptions::new()
+            .filename(dir.path().join("harness.db"))
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal);
+        // One connection, opened before the lock is taken, so both changes meet the lock
+        // inside their transactions rather than while connecting.
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options.clone())
+            .await
+            .unwrap();
+        let store = SqliteFactStore::new(pool);
+        store.migrate().await.unwrap();
+        let fact = |text: &str| {
+            MemoryFact::new(
+                FactScope::new("app", "alice", None),
+                FactKind::Preference,
+                text,
+                FactStatus::Assumed,
+                Provenance::new(FactSource::AgentInferred, "s1", "inv-1"),
+            )
+        };
+        let kept = store.put(fact("Invoices go out on the last working day.")).await.unwrap();
+
+        // The other writer commits a change while both wait: a deferred transaction that read
+        // before it could not write after it.
+        let other = SqlitePoolOptions::new().connect_with(options).await.unwrap();
+        let mut held = other.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        sqlx::query("CREATE TABLE another_writer (id INTEGER)").execute(&mut *held).await.unwrap();
+        let merged = fact("Invoices go out on the last working day of the month.");
+        let put = tokio::spawn({
+            let (store, merged) = (store.clone(), merged.clone());
+            async move { store.put(merged).await }
+        });
+        let superseded = tokio::spawn({
+            let (store, id) = (store.clone(), kept.id.clone());
+            let status = FactStatus::Superseded { by: merged.id.clone() };
+            async move { store.set_status(&id, status, &SubjectRef::human("alice")).await }
+        });
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        held.commit().await.unwrap();
+
+        assert_eq!(put.await.unwrap().unwrap(), merged);
+        superseded.await.unwrap().unwrap();
+        assert_eq!(
+            store.get(&kept.id).await.unwrap().unwrap().status,
+            FactStatus::Superseded { by: merged.id }
+        );
+    }
 }
 
 /// The fact store on PostgreSQL, the shared store of `adk-rust up --store postgres://…`

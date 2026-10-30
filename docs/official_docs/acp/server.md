@@ -274,10 +274,14 @@ harness holds without a waiver, is still asked about.
 
 `adk-harness` implements `StandingPermissions` for `HarnessAgent` under its
 `acp-server` feature: the answer becomes the narrowest standing rule the
-harness suggests for the call (a command's two-token prefix, a file's folder, a
-site, or the tool from its exact publisher), bound to the tool's declaration
-and the session's person, and recorded as `harness.rule.created` with surface
-`acp`. The option says where the rule applies ("every session" for a rule over
+harness suggests for the call (a command's two-token prefix, a site, or the
+tool from its exact publisher), bound to the tool's declaration and the
+session's person, and recorded as `harness.rule.created` with surface `acp`.
+For a file write it is the folder rule, "for this folder (file writes: within
+src/, this session)": every file write in the folder by `write_file`,
+`edit_file` or an `apply_patch` that only adds or updates files, each bound to
+its declaration ([Always allow for this folder](../harness/modes-and-approvals.md#always-allow-for-this-folder));
+a delete or a move is never offered "always". The option says where the rule applies ("every session" for a rule over
 the person's sessions) and, as at the terminal prompt, "Always allow" warns that a
 rule over commands that run project scripts (`cargo test`, `npm test`, `make`)
 allows whatever those scripts do (`StandingOffer::allow_warning`). Calls no standing rule may cover — a payment, leaving plan mode, a

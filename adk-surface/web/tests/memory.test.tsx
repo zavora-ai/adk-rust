@@ -313,6 +313,11 @@ describe("Allowed without asking", () => {
     );
     expect(ruleSentence(rule("record_note", "record_note"), rows)).toBe("Your agents can use record_note.");
     expect(ruleSentence(rule("record_note", "record_note", "urn:adk:agent:home/*"), rows)).toBe("Your agents can use record_note.");
+    // "Always allow for this folder": every file write in it, for the conversation it was given in.
+    const folder = { ...rule("file writes: within notes/", "*"), scope: { sessionId: "n1" } };
+    expect(ruleSentence(folder, rows)).toBe("Your agents can write files within notes/, in one conversation.");
+    const workspace = { ...rule("file writes: anywhere in the workspace", "*"), scope: { sessionId: "n1" } };
+    expect(ruleSentence(workspace, rows)).toBe("Your agents can write files anywhere in the workspace, in one conversation.");
   });
 });
 

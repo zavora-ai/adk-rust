@@ -463,8 +463,10 @@ pub struct StandingRule {
     pub scope: RuleScope,                // User { app_name, user_id, subject_kind } | Session { .., session_id }
     pub tool: String,                    // glob
     pub origin: OriginPin,               // Exact { source, declaration_digest } | AnyDeclaration { source } (operator-only)
+                                         // | ExactEach { source, declarations } (a folder rule's tools, spec 3.3 §8.2)
     pub agent: Option<String>,           // AgentId glob
     pub predicates: Vec<RulePredicate>,  // Arg(ArgSpec) | ShellPrefix { pointer, tokens } | PathWithin { pointer, dir }
+                                         // | WritesWithin { dir } (a folder rule, spec 3.3 §8.2)
     pub decision: StandingDecision,      // Allow | Deny { reason }
     pub created_by: SubjectRef,
     pub created_at: DateTime<Utc>,
@@ -496,7 +498,7 @@ pub trait StandingRuleStore: fmt::Debug + Send + Sync {
 
 Rules are evaluated in `HarnessPolicy`, not in the confirmation handler: the policy runs on every path before a call can be held ([`governance.rs:1578-1667`](../../adk-core/src/governance.rs)), while the handler is consulted only on live surfaces (1940-1942) and server or durable runs park the call as `Pending`. This needs the policy to see the call's origin, which is core change C1 ([§10](#10-changes-outside-the-new-crate)). If C1 is rejected, the fallback is a handler re-check against `request.origin` ([`context.rs:1176`](../../adk-core/src/context.rs)) plus an `ApprovalNotifier` that auto-decides matching held requests, at the cost of a park-and-wake per call.
 
-A rule is created only by an authenticated human action: `PromptAnswer::ApproveAndRemember` on a prompt the human answered, `Harness::decide(.., HarnessDecision::ApproveAndRemember(..))`, `adk-rust rules add`, or the authenticated REST API. Suggestions offered at a prompt: for bash, `ShellPrefix` on the first one or two tokens (User scope), flagged when the command runs scripts (`cargo test`, `npm test`, `make`); for edits, `PathWithin` the root (Session scope) or the file's directory; for externals, any arguments for this tool pinned to its exact origin; for web, `Arg(DomainIn { pointer: "/url", domains: [host] })` on the exact host the call named (User scope), never a wildcard the human did not type ([§7.20](#720-external-content-under-governance-feature-web)).
+A rule is created only by an authenticated human action: `PromptAnswer::ApproveAndRemember` on a prompt the human answered, `Harness::decide(.., HarnessDecision::ApproveAndRemember(..))`, `adk-rust rules add`, or the authenticated REST API. Suggestions offered at a prompt: for bash, `ShellPrefix` on the first one or two tokens (User scope), flagged when the command runs scripts (`cargo test`, `npm test`, `make`); for edits, `PathWithin` the root (Session scope) or the file's directory; for externals, any arguments for this tool pinned to its exact origin; for web, `Arg(DomainIn { pointer: "/url", domains: [host] })` on the exact host the call named (User scope), never a wildcard the human did not type ([§7.20](#720-external-content-under-governance-feature-web)). A surface's "Always allow for this folder" (spec 3.3 §8.2) offers one rule for every file write in the file's folder instead: tool `*`, `ExactEach` over the exact declarations of `write_file`, `edit_file` and `apply_patch`, and `WritesWithin { dir }`, which holds only for a call that writes files — never a delete or a move — whose every path is within `dir` as `PathWithin` resolves it (Session scope).
 
 ```rust
 #[async_trait]

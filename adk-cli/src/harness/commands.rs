@@ -605,6 +605,7 @@ pub(crate) fn describe_rule(n: usize, rule: &StandingRule) -> String {
     let pin = match &rule.origin {
         OriginPin::Exact { source, .. } => format!("{source}, this declaration"),
         OriginPin::AnyDeclaration { source } => format!("{source}, any declaration"),
+        OriginPin::ExactEach { source, .. } => format!("{source}, each covered tool's declaration"),
     };
     let expires = rule
         .expires_at

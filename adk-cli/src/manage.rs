@@ -514,6 +514,7 @@ fn describe(n: usize, rule: &StandingRule) -> String {
             format!("{source} {}", &declaration_digest[..declaration_digest.len().min(19)])
         }
         OriginPin::AnyDeclaration { source } => format!("{source}, any declaration"),
+        OriginPin::ExactEach { source, .. } => format!("{source}, each covered tool's declaration"),
     };
     let expires = rule
         .expires_at

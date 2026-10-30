@@ -5,6 +5,7 @@
 mod agents_support;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use adk_core::audit_log::{AuditFailureMode, AuditRecordDraft, AuditRecorder, AuditTrail};
 use adk_core::principal::SubjectRef;
@@ -493,6 +494,35 @@ async fn an_interrupted_removal_is_finished_by_the_next_tick() {
     assert_eq!(tombstone.version, 3);
     assert!(world.factory.retired.lock().unwrap().contains(&"finance".to_string()));
     replica.stop().await.unwrap();
+}
+
+/// The tick leaves a removal a person is finishing to them, however long revoking its rules
+/// takes: its rules are revoked once, by the removal whose outcome counts them, and it is
+/// recorded removed once (S-I16, S-I18).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_tick_leaves_a_removal_in_progress_to_the_person() {
+    let world = World::new();
+    let kernel = world.kernel("k1");
+    kernel.start().await.unwrap();
+    let finance = add(&kernel, finance()).await;
+    // Ten ticks pass while its rules are revoked.
+    *world.factory.retire_delay.lock().unwrap() = Some(Duration::from_millis(500));
+
+    let remove = AgentAction::Remove { id: "finance".into(), expected_version: finance.version };
+    let Ok(AgentOutcome::Removed { agent, .. }) = apply(&kernel, &local(), remove).await else {
+        panic!("not removed");
+    };
+    assert_eq!((agent.state, agent.version), (AgentRecordState::Removed, 3));
+    assert_eq!(*world.factory.retired.lock().unwrap(), ["finance"]);
+    assert_eq!(
+        world.actions_about("finance"),
+        [
+            adk_kernel::audit::AGENT_CREATED,
+            adk_kernel::audit::AGENT_REMOVING,
+            adk_kernel::audit::AGENT_REMOVED
+        ]
+    );
+    kernel.stop().await.unwrap();
 }
 
 /// `ProcessFilter::target` lists one agent's processes.

@@ -11,6 +11,7 @@
 //! | Origin | `source` and `declaration_digest` equal the pin; a mismatch is a stale rule |
 //! | `ShellPrefix` | plain words only, first N tokens equal |
 //! | `PathWithin` | normalized against the root, no `..`, never a protected path; for `apply_patch`, every path of the patch |
+//! | `WritesWithin` | an Edit-class call that only writes files: every path it writes as `PathWithin` reads it; never a delete or a move (spec 3.3 §8.2) |
 //! | Eligibility | Deny beats Allow; `PlanExit`, `Payment`, `MemoryWrite` never match; `ShellEscalation` only with `/unsandboxed == true` pinned |
 //! | Bash | an Allow rule for the shell matches only through `ShellPrefix` |
 
@@ -248,6 +249,9 @@ pub fn evaluate_standing_rules(
                         Some(declaration_digest.clone())
                     }
                     super::rule::OriginPin::AnyDeclaration { .. } => None,
+                    super::rule::OriginPin::ExactEach { declarations, .. } => {
+                        declarations.get(call.tool_name).cloned()
+                    }
                 },
                 observed_source: origin.source.clone(),
                 observed_digest: origin.declaration_digest.clone(),
@@ -336,6 +340,15 @@ fn predicates_hold(rule: &StandingRule, call: &RuleCall<'_>) -> bool {
             .pointer(pointer)
             .and_then(Value::as_str)
             .is_some_and(|path| path_within(call.workspace_root, path, dir)),
+        // A folder rule covers file writes only: the shell, a delete and a move ask
+        // (spec 3.3 §8.2).
+        RulePredicate::WritesWithin { dir } => {
+            call.kind == ToolKind::Edit
+                && crate::edits::written_paths(call.tool_name, call.args).is_some_and(|paths| {
+                    !paths.is_empty()
+                        && paths.iter().all(|path| path_within(call.workspace_root, path, dir))
+                })
+        }
     })
 }
 
@@ -841,6 +854,113 @@ mod tests {
             assert!(path_within(&root, path, "."), "{path}");
         }
         assert!(is_protected_target(&root, "/etc/passwd"));
+    }
+
+    /// A folder rule over `notes`, matched against `tool` called with `args` as `kind`.
+    fn folder_rule_matches(root: &Path, tool: &str, args: &Value, kind: ToolKind) -> bool {
+        use super::super::rule::{OriginPin, RuleScope};
+        use adk_core::SubjectKind;
+        use adk_core::principal::SubjectRef;
+
+        let origin = ToolOrigin::new("static", &serde_json::json!({ "name": tool }), None);
+        let declarations = ["write_file", "edit_file", "apply_patch"]
+            .iter()
+            .map(|name| {
+                let pinned = ToolOrigin::new("static", &serde_json::json!({ "name": name }), None);
+                (name.to_string(), pinned.declaration_digest)
+            })
+            .collect();
+        let rule = StandingRule {
+            id: "folder".into(),
+            scope: RuleScope::Session {
+                app_name: "app".into(),
+                user_id: "ana".into(),
+                subject_kind: SubjectKind::Human,
+                session_id: "s1".into(),
+            },
+            tool: "*".into(),
+            origin: OriginPin::ExactEach { source: "static".into(), declarations },
+            agent: None,
+            predicates: vec![RulePredicate::WritesWithin { dir: "notes".into() }],
+            decision: StandingDecision::Allow,
+            created_by: SubjectRef::human("ana"),
+            created_at: Utc::now(),
+            expires_at: None,
+            label: "file writes: within notes/".into(),
+            source_fingerprint: None,
+        };
+        let acting = ActingContext::derived("app", "harness", "ana", SubjectKind::Human);
+        let call = RuleCall {
+            app_name: "app",
+            user_id: "ana",
+            session_id: "s1",
+            acting: Some(&acting),
+            tool_name: tool,
+            args,
+            origin: Some(&origin),
+            kind,
+            workspace_root: root,
+        };
+        evaluate_standing_rules(std::slice::from_ref(&rule), &call, Utc::now()).outcome
+            == RuleOutcome::Allow { rule_id: "folder".into() }
+    }
+
+    #[test]
+    fn a_folder_rule_covers_file_writes_in_the_folder_and_nothing_else() {
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        let patch =
+            |text: &str| json!({ "patch": format!("*** Begin Patch\n{text}\n*** End Patch") });
+
+        for (tool, args) in [
+            ("write_file", json!({ "path": "notes/new.md" })),
+            ("write_file", json!({ "path": "./notes/deep/new.md" })),
+            ("edit_file", json!({ "path": "notes/a.md" })),
+            (
+                "apply_patch",
+                patch("*** Add File: notes/a.md\n+x\n*** Update File: notes/b.md\n@@\n-x\n+y"),
+            ),
+        ] {
+            assert!(folder_rule_matches(&root, tool, &args, ToolKind::Edit), "{tool} {args}");
+        }
+        for (tool, args) in [
+            ("write_file", json!({ "path": "elsewhere.md" })),
+            ("write_file", json!({ "path": "notesx/a.md" })),
+            ("write_file", json!({ "path": "notes/../a.md" })),
+            ("write_file", json!({ "path": "/etc/passwd" })),
+            ("write_file", json!({ "path": "notes/AGENTS.md" })),
+            ("write_file", json!({ "path": "notes/.git/config" })),
+            ("apply_patch", patch("*** Delete File: notes/a.md")),
+            (
+                "apply_patch",
+                patch("*** Update File: notes/a.md\n*** Move to: notes/b.md\n@@\n-x\n+y"),
+            ),
+            ("apply_patch", patch("*** Add File: notes/a.md\n+x\n*** Add File: other/b.md\n+y")),
+        ] {
+            assert!(!folder_rule_matches(&root, tool, &args, ToolKind::Edit), "{tool} {args}");
+        }
+        // A symlink out of the folder, to a directory outside the workspace.
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(outside.path(), root.join("notes/out")).unwrap();
+            let escape = json!({ "path": "notes/out/a.md" });
+            assert!(!folder_rule_matches(&root, "write_file", &escape, ToolKind::Edit));
+        }
+        // The shell and other classes, whatever their arguments name.
+        let shell = json!({ "command": "touch notes/a.md", "path": "notes/a.md" });
+        assert!(!folder_rule_matches(
+            &root,
+            "bash",
+            &shell,
+            ToolKind::Shell(crate::Isolation::Host)
+        ));
+        let read = json!({ "path": "notes/a.md" });
+        assert!(!folder_rule_matches(&root, "read_file", &read, ToolKind::Read));
+        // A tool the rule does not pin, though it writes under the same name class.
+        assert!(!folder_rule_matches(&root, "delete_file", &read, ToolKind::Edit));
     }
 
     #[test]
