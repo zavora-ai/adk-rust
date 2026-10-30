@@ -3,7 +3,7 @@
 //! `kernel.wake` run, within two seconds; a webhook delivery wakes its sleeper, the next one
 //! falls back to the trigger, and a redelivery wakes nothing.
 
-mod wake_support;
+use crate::wake_support;
 
 use std::sync::Arc;
 use std::time::Duration;

@@ -7,7 +7,7 @@
 //! ```bash
 //! REDIS_URL=redis://localhost:6379 \
 //!   cargo nextest run -p adk-kernel --features postgres,redis --run-ignored only \
-//!   --test agenda_store_redis
+//!   --test integration -E 'test(/^agenda_store_redis::/)'
 //! ```
 
 #![cfg(feature = "redis")]

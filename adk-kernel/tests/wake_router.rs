@@ -3,7 +3,7 @@
 //! a trigger is the fallback and enqueues one service run per trigger, expiry acts, and
 //! missed file changes are reconciled.
 
-mod wake_support;
+use crate::wake_support;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

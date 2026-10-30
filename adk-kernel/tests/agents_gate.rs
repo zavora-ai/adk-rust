@@ -3,7 +3,7 @@
 //! suggested one, a by-hand change with another digest is refused on record, a removal the
 //! tick finishes names the tick, and every `kernel.agent.*` record carries its fields.
 
-mod agents_support;
+use crate::agents_support;
 
 use std::sync::Arc;
 

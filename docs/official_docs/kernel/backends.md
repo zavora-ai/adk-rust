@@ -157,13 +157,13 @@ Firestore and Neo4j suites are `#[ignore]`d and need a server:
 ```bash
 MONGODB_URL=mongodb://localhost:27017 \
   cargo nextest run -p adk-kernel --features mongodb --run-ignored only \
-  --test store_conformance_mongodb
+  --test integration -E 'test(/^store_conformance_mongodb::/)'
 
 NEO4J_URI=bolt://localhost:7687 NEO4J_PASSWORD=secret \
   cargo nextest run -p adk-kernel --features neo4j --run-ignored only \
-  --test store_conformance_neo4j
+  --test integration -E 'test(/^store_conformance_neo4j::/)'
 
 FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 \
   cargo nextest run -p adk-kernel --features firestore --run-ignored only \
-  --test store_conformance_firestore
+  --test integration -E 'test(/^store_conformance_firestore::/)'
 ```

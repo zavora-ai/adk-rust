@@ -7,7 +7,7 @@
 //! ```bash
 //! REDIS_URL=redis://localhost:6379 \
 //!   cargo nextest run -p adk-kernel --features postgres,redis --run-ignored only \
-//!   --test driver_store_redis
+//!   --test integration -E 'test(/^driver_store_redis::/)'
 //! ```
 
 #![cfg(all(feature = "drivers", feature = "redis"))]

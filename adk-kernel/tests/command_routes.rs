@@ -11,7 +11,7 @@
 //! - a surface engine attached to the kernel writes its records on the kernel's log, as the
 //!   caller and over the transport it came by.
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

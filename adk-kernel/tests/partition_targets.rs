@@ -2,7 +2,7 @@
 //! target bound to its partition, so a process of another partition cannot run it, and the
 //! kernel's partition table and audit trail are the ones the partition harnesses use.
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 

@@ -5,7 +5,7 @@
 
 #![cfg(feature = "drivers")]
 
-mod driver_support;
+use crate::driver_support;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,12 +22,6 @@ use adk_kernel::stores::InMemoryDriverStore;
 use adk_kernel::{EventSubscriber, Kernel, KernelConfig, KernelEvent, PartitionId};
 use driver_support::{RunContext, UNSANDBOXED, Workdir};
 use serde_json::{Value, json};
-
-#[tokio::test]
-#[ignore = "runs only as the stdio driver the tests start"]
-async fn stdio_driver() {
-    driver_support::serve_stdio().await;
-}
 
 /// Waits for the next `Driver` event of `id` in `state`, for at most ten seconds, and
 /// returns its reason.

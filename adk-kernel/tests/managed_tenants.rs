@@ -9,7 +9,7 @@
 
 #![cfg(feature = "managed")]
 
-mod managed_support;
+use crate::managed_support;
 
 use std::sync::Arc;
 use std::time::Duration;

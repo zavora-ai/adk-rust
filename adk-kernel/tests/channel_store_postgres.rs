@@ -7,7 +7,7 @@
 //! ```bash
 //! DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
 //!   cargo nextest run -p adk-kernel --features postgres,redis,channels --run-ignored only \
-//!   --test channel_store_postgres
+//!   --test integration -E 'test(/^channel_store_postgres::/)'
 //! ```
 
 #![cfg(all(feature = "channels", feature = "postgres"))]

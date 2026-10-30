@@ -10,7 +10,7 @@
 //! ```bash
 //! MONGODB_URL=mongodb://localhost:27017 \
 //!   cargo nextest run -p adk-kernel --features mongodb --run-ignored only \
-//!   --test store_conformance_mongodb
+//!   --test integration -E 'test(/^store_conformance_mongodb::/)'
 //! ```
 
 #![cfg(feature = "mongodb")]
