@@ -637,6 +637,7 @@ Intercept agent behavior. See [Callbacks](../callbacks/callbacks.md) for every c
 | `output_key(key)` | Saves response to state |
 | `include_contents(mode)` | History visibility |
 | `max_iterations(n)` | Maximum LLM round-trips (default: 100) |
+| `steering_source(Arc<dyn SteeringSource>)` | Adds user messages to the history while the agent runs (see [Steering a Running Agent](#steering-a-running-agent)) |
 | `tool_timeout(Duration)` | Per-call tool timeout (default: 5 minutes) |
 | `require_tool_confirmation(name)` | Holds calls to the tool for approval (see [Tool Authorization](../security/tool-authorization.md)) |
 | `tool_execution_strategy(strategy)` | Tool dispatch mode: `Sequential`, `Parallel`, or `Auto` |
@@ -666,6 +667,42 @@ let agent = LlmAgentBuilder::new("bounded_agent")
 ```
 
 The default is 100 iterations, which is sufficient for most use cases. Lower values (5-20) are recommended for simple Q&A agents, while higher values may be needed for complex multi-step reasoning tasks.
+
+### Steering a Running Agent
+
+A long tool loop can run for minutes. A `SteeringSource` lets a user correct it while it runs
+instead of waiting for the turn to end. At each safe point (after a step's tool results are in
+the history, before the next model request) the agent calls `take` and appends every returned
+`Content` to the conversation history, so the next request and its `before_model` callbacks see
+it:
+
+```rust
+use adk_agent::SteeringSource;
+use adk_core::{Content, InvocationContext, async_trait};
+use std::sync::{Arc, Mutex};
+
+#[derive(Default)]
+struct Queue(Mutex<Vec<String>>);
+
+#[async_trait]
+impl SteeringSource for Queue {
+    async fn take(&self, _ctx: Arc<dyn InvocationContext>) -> Vec<Content> {
+        let queued = std::mem::take(&mut *self.0.lock().unwrap());
+        queued.into_iter().map(|text| Content::new("user").with_text(text)).collect()
+    }
+}
+
+let queue = Arc::new(Queue::default());
+let agent = LlmAgentBuilder::new("assistant")
+    .model(Arc::new(model))
+    .tool(Arc::new(my_tool))
+    .steering_source(queue.clone())
+    .build()?;
+```
+
+The source owns its side effects, such as persisting the message to the session. It cannot fail
+the turn: when its queue is unreachable it returns an empty list and the messages wait for the
+next safe point. A turn that ends without a tool call never asks it.
 
 ---
 

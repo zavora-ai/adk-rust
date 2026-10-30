@@ -293,6 +293,44 @@ pub(crate) fn confirmation_event(
     event
 }
 
+/// Supplies user messages to an agent while it runs.
+///
+/// [`LlmAgent`] asks its source at each safe point of the tool loop: after a step's tool
+/// results are in the conversation history and before the next model request is built.
+/// Each returned [`Content`] is appended to the history in order, so the next request, its
+/// `before_model` callbacks, and every later step see it. A user can steer a running agent
+/// this way ("skip the tests, just fix the build") without waiting for the turn to end.
+///
+/// The source owns its side effects, such as persisting a message or telling the client it
+/// was delivered. It cannot fail the turn: a source that cannot reach its queue returns an
+/// empty list, and the messages wait for the next safe point.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_agent::SteeringSource;
+/// use adk_core::{Content, InvocationContext, async_trait};
+/// use std::sync::{Arc, Mutex};
+///
+/// /// Messages a client queued while the agent was busy.
+/// #[derive(Default)]
+/// struct Queue(Mutex<Vec<String>>);
+///
+/// #[async_trait]
+/// impl SteeringSource for Queue {
+///     async fn take(&self, _ctx: Arc<dyn InvocationContext>) -> Vec<Content> {
+///         let queued = std::mem::take(&mut *self.0.lock().unwrap());
+///         queued.into_iter().map(|text| Content::new("user").with_text(text)).collect()
+///     }
+/// }
+/// ```
+#[async_trait]
+pub trait SteeringSource: Send + Sync {
+    /// The queued messages, oldest first, each with role `user`. Empty is the ordinary
+    /// answer.
+    async fn take(&self, ctx: Arc<dyn InvocationContext>) -> Vec<Content>;
+}
+
 /// An LLM-powered agent that orchestrates tool calls and sub-agent delegation.
 ///
 /// `LlmAgent` is the primary agent type in ADK. It sends requests to an LLM,
@@ -350,6 +388,8 @@ pub struct LlmAgent {
     /// after this many consecutive failures within a single invocation.
     circuit_breaker_threshold: Option<u32>,
     tool_confirmation_policy: ToolConfirmationPolicy,
+    /// User messages taken at each safe point of the tool loop.
+    steering_source: Option<Arc<dyn SteeringSource>>,
     /// Per-agent tool execution strategy override. When `Some`, overrides the
     /// `RunConfig` strategy for this agent's dispatch loop.
     tool_execution_strategy: Option<ToolExecutionStrategy>,
@@ -976,6 +1016,7 @@ pub struct LlmAgentBuilder {
     tool_retry_budgets: std::collections::HashMap<String, RetryBudget>,
     circuit_breaker_threshold: Option<u32>,
     tool_confirmation_policy: ToolConfirmationPolicy,
+    steering_source: Option<Arc<dyn SteeringSource>>,
     tool_execution_strategy: Option<ToolExecutionStrategy>,
     parallelize_agent_delegations: bool,
     input_guardrails: GuardrailSet,
@@ -1030,6 +1071,7 @@ impl LlmAgentBuilder {
             tool_retry_budgets: std::collections::HashMap::new(),
             circuit_breaker_threshold: None,
             tool_confirmation_policy: ToolConfirmationPolicy::Never,
+            steering_source: None,
             tool_execution_strategy: None,
             parallelize_agent_delegations: false,
             input_guardrails: GuardrailSet::new(),
@@ -1495,6 +1537,37 @@ impl LlmAgentBuilder {
         self
     }
 
+    /// Take user messages from `source` while the agent runs.
+    ///
+    /// At each safe point of the tool loop (after a step's tool results are in the
+    /// history, before the next model request) the agent calls
+    /// [`SteeringSource::take`] and appends every message it returns to the conversation
+    /// history. Without a source, nothing changes.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_agent::{LlmAgentBuilder, SteeringSource};
+    /// use adk_core::{Content, InvocationContext, async_trait};
+    /// use std::sync::Arc;
+    ///
+    /// struct Nothing;
+    ///
+    /// #[async_trait]
+    /// impl SteeringSource for Nothing {
+    ///     async fn take(&self, _ctx: Arc<dyn InvocationContext>) -> Vec<Content> {
+    ///         Vec::new()
+    ///     }
+    /// }
+    ///
+    /// let builder = LlmAgentBuilder::new("assistant").steering_source(Arc::new(Nothing));
+    /// # let _ = builder;
+    /// ```
+    pub fn steering_source(mut self, source: Arc<dyn SteeringSource>) -> Self {
+        self.steering_source = Some(source);
+        self
+    }
+
     /// Set the tool execution strategy for this agent.
     ///
     /// When set, this overrides the `RunConfig`'s `tool_execution_strategy`
@@ -1768,6 +1841,7 @@ impl LlmAgentBuilder {
             tool_retry_budgets: self.tool_retry_budgets,
             circuit_breaker_threshold: self.circuit_breaker_threshold,
             tool_confirmation_policy: self.tool_confirmation_policy,
+            steering_source: self.steering_source,
             tool_execution_strategy: self.tool_execution_strategy,
             parallelize_agent_delegations: self.parallelize_agent_delegations,
             input_guardrails: Arc::new(self.input_guardrails),
@@ -3600,6 +3674,7 @@ impl Agent for LlmAgent {
         let tool_retry_budgets = self.tool_retry_budgets.clone();
         let circuit_breaker_threshold = self.circuit_breaker_threshold;
         let tool_confirmation_policy = self.tool_confirmation_policy.clone();
+        let steering_source = self.steering_source.clone();
         let tool_guardrails = Arc::clone(&self.tool_guardrails);
         let output_guardrails = self.output_guardrails.clone();
         let agent_tool_execution_strategy = self.tool_execution_strategy;
@@ -5017,6 +5092,20 @@ impl Agent for LlmAgent {
                     tool_map = refreshed_tools.map;
                     tool_declarations = refreshed_tools.declarations;
                     valid_transfer_targets = refreshed_tools.transfer_targets;
+
+                    // The safe point: the step's tool results are in the history and the
+                    // next request is not built yet, so a steering message lands after them.
+                    if let Some(source) = steering_source.as_ref() {
+                        let steered = source.take(ctx.clone()).await;
+                        if !steered.is_empty() {
+                            tracing::debug!(
+                                agent.name = %agent_name,
+                                messages = steered.len(),
+                                "steering messages added to the history"
+                            );
+                            conversation_history.extend(steered);
+                        }
+                    }
                 }
 
                 // If all function calls were from long-running tools, we need ONE more model call

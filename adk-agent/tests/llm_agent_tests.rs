@@ -1022,3 +1022,123 @@ mod sandbox_conflict_tests {
         assert!(result.is_ok());
     }
 }
+
+/// Hands out each queued batch once, counting how often the agent asked.
+struct QueuedSteering {
+    batches: Mutex<std::collections::VecDeque<Vec<Content>>>,
+    asked: std::sync::atomic::AtomicUsize,
+}
+
+impl QueuedSteering {
+    fn new(batches: Vec<Vec<Content>>) -> Self {
+        Self { batches: Mutex::new(batches.into()), asked: std::sync::atomic::AtomicUsize::new(0) }
+    }
+}
+
+#[async_trait]
+impl adk_agent::SteeringSource for QueuedSteering {
+    async fn take(&self, _ctx: Arc<dyn InvocationContext>) -> Vec<Content> {
+        self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.batches.lock().unwrap().pop_front().unwrap_or_default()
+    }
+}
+
+fn text_of(content: &Content) -> Option<&str> {
+    content.parts.iter().find_map(|part| match part {
+        Part::Text { text } => Some(text.as_str()),
+        _ => None,
+    })
+}
+
+#[tokio::test]
+async fn test_steering_message_reaches_the_next_request_after_the_tool_results() {
+    use futures::StreamExt;
+
+    let model = ScriptedLlm::new(vec![
+        vec![function_call("lookup", "call_1", serde_json::json!({}))],
+        vec![function_call("lookup", "call_2", serde_json::json!({}))],
+    ]);
+    let requests = model.requests.clone();
+    let steering = Arc::new(QueuedSteering::new(vec![vec![
+        Content::new("user").with_text("use the staging database instead"),
+    ]]));
+    let seen_by_callback = Arc::new(Mutex::new(Vec::new()));
+    let seen = seen_by_callback.clone();
+    let agent = LlmAgentBuilder::new("steered")
+        .model(Arc::new(model))
+        .tool(Arc::new(FunctionTool::new(
+            "lookup",
+            "Looks something up",
+            |_ctx: Arc<dyn ToolContext>, _args: Value| async move {
+                Ok(serde_json::json!({ "rows": 3 }))
+            },
+        )))
+        .before_model_callback(Box::new(move |_ctx, request: LlmRequest| {
+            let seen = seen.clone();
+            Box::pin(async move {
+                let last = request.contents.last().and_then(text_of).map(str::to_string);
+                seen.lock().unwrap().push(last);
+                Ok(adk_core::BeforeModelResult::Continue(request))
+            })
+        }))
+        .steering_source(steering.clone())
+        .build()
+        .unwrap();
+
+    let mut stream = agent.run(Arc::new(TestContext::new("count the rows"))).await.unwrap();
+    while let Some(event) = stream.next().await {
+        event.unwrap();
+    }
+
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    // The message follows the first step's tool result, in the second request only once.
+    let second = &requests[1].contents;
+    let steered_at = second
+        .iter()
+        .position(|content| text_of(content) == Some("use the staging database instead"))
+        .expect("the steering message is in the next request");
+    assert_eq!(second[steered_at].role, "user");
+    let result_at = second
+        .iter()
+        .position(|content| {
+            content.parts.iter().any(|part| matches!(part, Part::FunctionResponse { .. }))
+        })
+        .expect("the tool result is in the next request");
+    assert!(result_at < steered_at, "the message lands after the step's tool results");
+    assert_eq!(
+        requests[2]
+            .contents
+            .iter()
+            .filter(|content| text_of(content) == Some("use the staging database instead"))
+            .count(),
+        1,
+        "the message stays in the history once"
+    );
+    // A before-model callback sees it as the latest content of the request.
+    assert_eq!(
+        seen_by_callback.lock().unwrap()[1].as_deref(),
+        Some("use the staging database instead")
+    );
+    // Asked once per tool step, never before the first request.
+    assert_eq!(steering.asked.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn test_steering_source_is_not_asked_when_the_model_answers_directly() {
+    use futures::StreamExt;
+
+    let steering = Arc::new(QueuedSteering::new(vec![vec![Content::new("user").with_text("x")]]));
+    let agent = LlmAgentBuilder::new("steered")
+        .model(Arc::new(ScriptedLlm::new(Vec::new())))
+        .steering_source(steering.clone())
+        .build()
+        .unwrap();
+
+    let mut stream = agent.run(Arc::new(TestContext::new("hello"))).await.unwrap();
+    while let Some(event) = stream.next().await {
+        event.unwrap();
+    }
+
+    assert_eq!(steering.asked.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
