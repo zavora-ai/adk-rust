@@ -6,7 +6,7 @@
 # or `-` for none; flags too: `no-default` builds with `--no-default-features`, `doc` also
 # runs the doctests.
 # To cover another feature-gated module, add ONE line and pick the shard whose crates it
-# already depends on. Shards are numbered 0 to 7; `ci.yml` lists the same range.
+# already depends on. Shards are numbered 0 to 10; `ci.yml` lists the same range.
 
 # Shard 0 — adk-rag backends. lancedb pulls the whole lance/datafusion tree and is the
 # slowest pair; it stays in the PR tier because an arrow version mismatch once sat broken
@@ -84,7 +84,10 @@
 # Agent surfaces (spec 3.3 §6.1): `adk_rust::surface`, in no tier.
 1 adk-rust surface
 
-# Shard 2 — adk-server and adk-cli (adk-cli links libdbus through keyring).
+# Shards 2, 8, 9 and 10 — adk-server and adk-kernel (2), adk-cli (8; it links libdbus through
+# keyring), adk-surface with its generated-API check and the web home end to end (9), and
+# adk-cli's scripted scenarios and terminal (10); split so each finishes inside the job's
+# 90-minute limit.
 # The background run store and its persistence are behind `background`; nothing compiled
 # them when durable run records were added.
 2 adk-server background
@@ -107,31 +110,31 @@
 2 adk-server awp
 # The edge's SQLite stores and their conformance suite; PostgreSQL and Redis run in the postgres job.
 2 adk-server awp-sqlite
-2 adk-cli vertex-agent-registry
-2 adk-cli vertex-skill-registry
+8 adk-cli vertex-agent-registry
+8 adk-cli vertex-skill-registry
 # The `deploy agent-engine` subcommand: arg-parse and mock create-contract tests.
-2 adk-cli gcp-deploy
+8 adk-cli gcp-deploy
 # `audit export` from SQLite and PostgreSQL audit stores.
-2 adk-cli audit-sql
+8 adk-cli audit-sql
 # `serve --store postgres://…|redis://…` (spec 3.1 §8.2, §13 Q2).
-2 adk-cli postgres,redis
+8 adk-cli postgres,redis
 # The `chat` end-to-end tests in a pseudo-terminal: held calls, Ctrl-C, sessions; with
 # `audit-sql`, "Hire a helper" (spec 3.3 §12 phase 4) checks the kernel's record with `audit verify`.
-2 adk-cli scripted-model,audit-sql
+10 adk-cli scripted-model,audit-sql
 # `adk-rust --voice` (spec 3.1 §7.17) and `up --pack voice` (spec 3.3 §5.6) end to end on a
 # scripted realtime provider; `voice-desktop` implies `voice` and adds the microphone and the
 # speaker of the console voice and the terminal's voice mode.
-2 adk-cli voice-desktop,scripted-model
+8 adk-cli voice-desktop,scripted-model
 # `adk-rust site …` and `awp …` (spec 3.5 §8.1) on adk-site and adk-awp's verifier, with the
 # freeze test's DNS fixture.
-2 adk-cli website,scripted-model
+8 adk-cli website,scripted-model
 # adk-cli without the harness: the chat agent and the legacy `code`, `goal` and `ultracode`.
-2 adk-cli gemini no-default
+8 adk-cli gemini no-default
 # adk-cli with no provider at all: every `--provider` reports that it is not compiled.
-2 adk-cli - no-default
+8 adk-cli - no-default
 # Every `--provider` client: OpenRouter, OpenCode, Bedrock and Azure AI build only behind
 # their features (#1219).
-2 adk-cli all-providers
+8 adk-cli all-providers
 # The kernel's shared process stores for replicas (spec 3.2 §13 Q8), and the chat channel
 # binding store on both (spec 3.3 §10 K1); the live-server conformance suites run in the
 # postgres job.
@@ -152,7 +155,7 @@
 2 adk-kernel channels no-default,lib
 # The surface engine's web API (spec 3.3 §6): the router, the scenario on a kernel-hosted
 # harness, the control-plane source, and the generated-types drift test.
-2 adk-surface web doc
+9 adk-surface web doc
 # The managed form (spec 3.2 §7.13, §10 M1): `KernelDef`, `TenantKernel` and partitions on a
 # tenant's kernel, which no workspace member enables.
 2 adk-kernel managed
@@ -163,60 +166,60 @@
 2 adk-kernel charter no-default,lib
 # The terminal surface (spec 3.3 §5.2): full screen, inline and JSON lines; with `web`, the
 # scripted scenario on a kernel-hosted harness drawn by `TerminalSurface::screen`.
-2 adk-surface tui doc
-2 adk-surface web,tui
+9 adk-surface tui doc
+9 adk-surface web,tui
 # Chat (spec 3.3 §5.3): the Telegram adapter, the kernel's channel contract suite against it
 # and the scripted scenario on a kernel-hosted harness, over a fake Bot API.
-2 adk-surface channels doc
+9 adk-surface channels doc
 # WhatsApp, Slack, Discord and Matrix (spec 3.5 §10 X12): the contract suite and each adapter's
 # behaviour tests over fakes of the four platforms, with their WebSockets.
-2 adk-surface whatsapp,slack,discord,matrix doc
+9 adk-surface whatsapp,slack,discord,matrix doc
 # The phone (spec 3.3 §5.4): Web Push, the phone's routes and "Confirm it's you", whose
 # webauthn-rs verifier links OpenSSL.
-2 adk-surface mobile doc
+9 adk-surface mobile doc
 # `adk-rust up --home-url` serving the phone on SQLite with a scripted model; with `voice`,
 # "Speak, glance, stop" (spec 3.3 §12 phase 5) on the same kernel.
-2 adk-cli mobile,voice,scripted-model
+10 adk-cli mobile,voice,scripted-model
 # Voice and video (spec 3.3 §5.6): spoken answers through the engine, the voice conversation on
 # a scripted realtime model, the camera and screen gate; with `web`, the voice routes and
 # socket; with `tui`, the terminal's voice line.
-2 adk-surface voice doc
-2 adk-surface web,voice
-2 adk-surface tui,voice
+9 adk-surface voice doc
+9 adk-surface web,voice
+9 adk-surface tui,voice
 # The website's views (spec 3.5 §8.2): the desk's routes under `/api/surface/website`, the
 # setup code, the API contract with its generated types, and the doctests.
-2 adk-surface website doc
+9 adk-surface website doc
 # Screen actions (spec 3.3 §2 item 7): the registry, the policy, the gate and snooze; with
 # every surface, the routes, the API contract, `/snooze`, a spoken snooze, the Telegram card
 # and the "One verb, three origins" scenario, whose tests need `web`, `tui` and `voice`
 # together; the terminal and voice parts alone; and `adk-rust up` hosting them on SQLite with a
 # scripted model, where text, click and voice leave signed records that differ only in how.
-2 adk-surface verb-ui doc
-2 adk-surface web,tui,voice,channels,verb-ui
-2 adk-surface tui,verb-ui
-2 adk-surface voice,verb-ui
-2 adk-cli verb-ui,voice,scripted-model,audit-sql
+9 adk-surface verb-ui doc
+9 adk-surface web,tui,voice,channels,verb-ui
+9 adk-surface tui,verb-ui
+9 adk-surface voice,verb-ui
+10 adk-cli verb-ui,voice,scripted-model,audit-sql
 # The workflow observer (spec 3.3 §12): runs, steps and forks of graph agents, card hints for
 # governed nodes, the fork command, and with `web` the Runs tab's routes, its API contract and
 # the "Approve, rewind, fork" scenario.
-2 adk-surface workflow doc
-2 adk-surface web,workflow
+9 adk-surface workflow doc
+9 adk-surface web,workflow
 # Agent-drawn UI (spec 3.3 §6.1, §7.4 rule 5): the render tools, the validator and the
 # projection with their doctests; the routes and the governed-form scenario with `web`; the
 # box and fill-in pane with `tui`; and `adk-rust up` holding forms in their own targets.
-2 adk-surface genui doc
-2 adk-surface web,genui
-2 adk-surface tui,genui
-2 adk-cli genui,scripted-model
+9 adk-surface genui doc
+9 adk-surface web,genui
+9 adk-surface tui,genui
+10 adk-cli genui,scripted-model
 # Apps from MCP servers (spec 3.3 §6.1 `genui-apps`): the host, its routes and the hostile app
 # legs, with the doctests.
-2 adk-surface genui-apps doc
+9 adk-surface genui-apps doc
 # `adk-rust serve` and `up` hosting apps: the sandbox listener, the home's origins and the
 # apps-origin refusal wrapped around the served router.
-2 adk-cli genui-apps,scripted-model
+10 adk-cli genui-apps,scripted-model
 # `adk-rust` as the terminal surface in a pseudo-terminal: full screen, inline, JSON, a
 # kernel on its socket and a paired one over HTTP (spec 3.3 §5.2, §10 K2).
-2 adk-cli tui,scripted-model
+10 adk-cli tui,scripted-model
 # Service drivers (spec 3.5 §7.13): the contracts, manifests, rules and in-memory adapters
 # without a reference adapter, with their conformance suites.
 2 adk-drivers conformance no-default
