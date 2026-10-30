@@ -240,7 +240,7 @@ Items spec 3.1 lists after its delivery phases ([§12](docs/design/spec-3.1-harn
 
 ### Agent surfaces follow-ups
 
-Items spec 3.3 ([Agent surfaces](docs/design/spec-3.3-harness-ui.md)) defers past its sign-off. None of them changes what a person sees in a home today.
+Items spec 3.3 ([Agent surfaces](docs/design/spec-3.3-harness-ui.md)) defers past its sign-off on 2026-10-30.
 
 | Gap | Fix | Origin |
 |-----|-----|--------|
@@ -263,6 +263,10 @@ Items spec 3.3 ([Agent surfaces](docs/design/spec-3.3-harness-ui.md)) defers pas
 | The developer panel shows a graph node's HTTP call as JSON arguments | Show it as a request: method, URL and body | #1185 |
 | The phone's decide screen omits the card's detail line, such as "From the invoice-run workflow" | Show the detail line and a link to Runs | spec 3.3 §5.4, #1185 |
 | Credential digests in run records are unkeyed unless a host calls `HttpActionPolicy::credential_key` | Key them in `scripted_workflow` and the kernel's hosts | #1193 |
+| A fact's quote is checked against every `user`-authored turn in the session, so text the kernel starts a run with, such as a routine's prompt or a coordinator's message, can make a fact read "You said this" | Check quotes only against turns a person typed or spoke on a surface | spec 3.3 §8.1, #1246 |
+| Record lines name ordinary tools: "You let Finance use send_email" | Word a tool call by what it did, as screen actions are worded | spec 3.3 §8, #1247 |
+| The in-process REPL's `[a] always allow…` menu and `GET /api/rules/suggestions/{approvalId}` offer one-tool rules for a file write (`write_file: within notes/`), not the folder rule | Offer the folder rule there, as the kernel's surfaces and ACP do | spec 3.3 §8.2, #1250 |
+| Answers given through the kernel's `POST /api/approvals/{id}/decide` and through AG-UI do not name the item on record ("You said no to a call") | Carry the card's title on those answers | spec 3.3 §8, #1247 |
 
 ### Build, CI and supply chain
 
@@ -273,6 +277,11 @@ Items spec 3.3 ([Agent surfaces](docs/design/spec-3.3-harness-ui.md)) defers pas
 | `cargo clippy -p adk-payments --features ap2 --all-targets` fails in the ap2 test files | Fix the test-file lints | #853 |
 | `zip` 0.6.6 reaches the `livekit` build through `webrtc-sys-build`, under a reviewed exception | Remove the exception once `webrtc-sys-build` moves to zip 9 | #864 |
 | No fuzzing | `cargo-fuzz` targets for the stream decoders, the text tool-call parser, sandbox path resolution, Responses parsing, A2A decoding and the schema adapters before 3.0; an OSS-Fuzz submission after | October 2026 review |
+| The PR-tier `test` job runs out of runner disk after "Run tests" passes, so `pr-gate` fails on every pull request | Free the test build before the computer-use receipt step | #1268 |
+| `feature-coverage` shard 2 exceeds its 1 h 30 min limit on every pull request, so its adk-server, adk-cli and adk-surface pairs, adk-cli's `scripted-model` terminal tests among them, never finish in CI | Split the shard | #1250 |
+| The Desktop workflow's Linux (WebKitGTK) store gate fails on every run since the tray landed: "the kernel did not answer in 120 s" | Read the job's `kernel.log` (artifact `desktop-linux`) and fix how `adk-rust up` starts there | spec 3.3 §12, #1149 |
+| Kernel scenarios fail now and then on timing: k2 (`k2_sleep_is_free_for_an_hour`, `mongodb` pair) and k9 (`neo4j` pair) in `feature-coverage`, and k8's "the partition never ran more than three admitted processes" in `examples/harness_kernel` | Wait on kernel events instead of fixed timeouts and 20 ms sampling | spec 3.2 §5, #1249 |
+| `RUSTDOCFLAGS="-D warnings" cargo doc -p adk-harness` without `sqlite` fails: `shell/pids.rs:45` links `SqliteShellPidRegistry`, which only `sqlite` builds export | Name the type in code text rather than linking it | spec 3.1 §7.29 |
 
 ---
 
