@@ -272,6 +272,42 @@ fn the_identity_is_authenticated_only_with_a_request_context() {
 }
 
 #[test]
+fn run_request_metadata_reaches_tools_without_authenticating() {
+    let config = adk_core::RunConfig::builder()
+        .request_metadata("thread", "chat-7")
+        .request_metadata("tier", "public")
+        .build();
+    let anonymous =
+        make_ctx("app", "visitor", "sess", "inv", "agent", "").with_run_config(config.clone());
+    assert!(!anonymous.is_authenticated(), "request metadata authenticates no one");
+    assert_eq!(anonymous.user_id(), "visitor");
+    assert!(anonymous.user_scopes().is_empty());
+    assert_eq!(
+        anonymous.request_metadata(),
+        HashMap::from([
+            ("thread".to_string(), serde_json::json!("chat-7")),
+            ("tier".to_string(), serde_json::json!("public")),
+        ])
+    );
+
+    // An authenticated request context's metadata wins on a shared key.
+    let authenticated = make_ctx("app", "alice", "sess", "inv", "agent", "")
+        .with_run_config(config)
+        .with_request_context(RequestContext {
+            user_id: "alice".to_string(),
+            scopes: vec![],
+            metadata: HashMap::from([("tier".to_string(), "verified".to_string())]),
+        });
+    assert_eq!(
+        authenticated.request_metadata(),
+        HashMap::from([
+            ("thread".to_string(), serde_json::json!("chat-7")),
+            ("tier".to_string(), serde_json::json!("verified")),
+        ])
+    );
+}
+
+#[test]
 fn without_request_context_user_id_is_original() {
     let ctx = make_ctx("app", "original-user", "sess", "inv", "agent", "");
 

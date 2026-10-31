@@ -6,7 +6,7 @@
 //! ```bash
 //! REDIS_URL=redis://localhost:6379 \
 //!   cargo nextest run -p adk-kernel --features postgres,redis,channels --run-ignored only \
-//!   --test channel_store_redis
+//!   --test integration -E 'test(/^channel_store_redis::/)'
 //! ```
 
 #![cfg(all(feature = "channels", feature = "redis"))]

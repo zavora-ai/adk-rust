@@ -8,12 +8,12 @@
 //! ```bash
 //! DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
 //!   cargo nextest run -p adk-kernel --features postgres,redis,channels --run-ignored only \
-//!   --test agents_store_postgres
+//!   --test integration -E 'test(/^agents_store_postgres::/)'
 //! ```
 
 #![cfg(feature = "postgres")]
 
-mod agents_support;
+use crate::agents_support;
 
 use std::str::FromStr;
 use std::sync::Arc;

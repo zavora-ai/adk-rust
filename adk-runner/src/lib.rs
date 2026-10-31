@@ -56,6 +56,7 @@
 //! - Transfer restrictions enforced on every transfer
 //! - Run budgets, the spend ledger, tool policy, the kill switch, and audit records
 //! - Plugin hooks for every model and tool call (with the `plugins` feature)
+//! - Steering a running agent with [`Runner::steer`], screened like the run's own message
 #![allow(clippy::result_large_err)]
 #![deny(missing_docs)]
 
@@ -90,6 +91,9 @@ pub use intra_compaction::IntraInvocationCompactor;
 
 // Re-export secret service trait for convenience
 pub use adk_core::SecretService;
+
+// Re-export the steering receipt types `Runner::steer` returns
+pub use adk_core::{SteerOutcome, SteerReceipt};
 
 // Re-export cache types for convenience
 pub use adk_core::{CacheCapable, ContextCacheConfig};

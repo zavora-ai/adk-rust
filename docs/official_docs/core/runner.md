@@ -262,6 +262,7 @@ that stream is dropped — including when it is dropped without ever being polle
 |--------|-------|
 | `interrupt(session_id)` | Cancels **every** in-flight run for that session ID, across apps and users |
 | `interrupt_identity(app_name, user_id, session_id)` | Cancels runs for one exact identity |
+| `steer(identity, content)` | Sends a message to the most recently started run of one exact identity; see [Steering a Running Agent](#steering-a-running-agent) |
 | `active_runs()` | The identity of every in-flight run; a repeated identity means concurrent runs |
 | `active_session_ids()` | Deduplicated session IDs of in-flight runs |
 
@@ -289,6 +290,77 @@ plugin events, and compaction events — is written through
 `(app_name, user_id, session_id)` triple. A `SessionService` whose natural key is
 composite can therefore bind each event to its tenant, and can reject or ignore
 the raw-session-ID `append_event` path entirely.
+
+## Steering a Running Agent
+
+`steer(identity, content)` sends a user message to the run in flight for one exact identity,
+which takes it at its next safe point instead of after the turn ends. Each run owns its queue,
+so a message never reaches another user's or another session's run.
+
+1. **Validation.** The message has role `user` and carries only text and attachments (inline
+   data, file data, embedded resources), with some non-blank text or an attachment. A `system`
+   or `model` message, a function call or response, and a blank message are refused.
+2. **Screening.** The plugins' `on_user_message` callbacks, then every agent's input guardrails
+   (`Agent::screen_user_input`), screen it exactly as they screen the run's own message. A block
+   returns the guardrail's error to the caller; a transform is what gets queued.
+3. **Queueing.** The screened message joins the queue of the most recently started run of the
+   identity, and `steer` returns a `SteerReceipt` with its `steer_id()` and `sequence()`.
+4. **Delivery.** At a safe point — after a tool step's results are in the agent's history and
+   before its next model request — `LlmAgent` and `CodeActAgent` yield each queued message as a
+   user-authored event. The runner saves it like any other event, so the client stream, plugins'
+   `on_event`, the session, later agents of the run and later turns all see it. See
+   [LlmAgent: Steering a Running Agent](../agents/llm-agent.md#steering-a-running-agent) for
+   where the agent takes it.
+
+`SteerReceipt::outcome()` resolves once the message has a fate:
+
+| Outcome | When | What to do |
+|---------|------|------------|
+| `SteerOutcome::Delivered { event_id }` | The runner saved the message's event as `event_id` | Nothing; the agent's next model request carries it |
+| `SteerOutcome::Returned(content)` | The run ended before a safe point took it: it answered directly, failed, was frozen or interrupted, reached `max_iterations`, held a call for approval, or its stream was dropped | Send `content`, the message as sent, as the session's next message; the runner screens it then |
+
+No message is dropped: one taken by an agent is saved before the next model call, and every
+other is returned. A receipt whose run was dropped without closing its queue resolves to an
+`agent.steer.outcome_lost` error instead of waiting forever.
+
+| Error code | Category | When |
+|------------|----------|------|
+| `agent.steer.invalid_message` | `InvalidInput` | The message is not a user message with text or attachments |
+| `agent.steer.no_active_run` | `NotFound` | No run is in flight for the identity, or it ended before the message was queued |
+| `agent.steer.run_not_ready` | `Unavailable` | Plugins are configured and the run has not built its context yet, or has finished |
+| `guardrail.input_blocked` | `InvalidInput` | An input guardrail blocks the message |
+
+The saved event has `author` `"user"`, the screened content, `EventActions::input_screened` when
+a guardrail screened it, and `EventActions::steering`:
+
+```json
+{ "steering": { "steerId": "steer-5c0e…", "sequence": 1, "sender": "alice" } }
+```
+
+`sequence` counts the run's steering messages from 1, and `sender` is the identity's user. The
+event joins the run it reached: an agent never stands the run's message in for it, and
+[context compaction](#context-compaction) does not count it as an invocation.
+
+```rust
+use adk_core::{AdkIdentity, AppName, Content, SessionId, SteerOutcome, UserId};
+use adk_runner::Runner;
+
+async fn redirect(runner: &Runner) -> adk_core::Result<Option<Content>> {
+    let identity = AdkIdentity::new(
+        AppName::try_from("my-app")?,
+        UserId::try_from("user-1")?,
+        SessionId::try_from("session-1")?,
+    );
+    let receipt = runner
+        .steer(&identity, Content::new("user").with_text("use the staging database instead"))
+        .await?;
+    Ok(match receipt.outcome().await? {
+        SteerOutcome::Delivered { .. } => None,
+        // The caller sends it as the session's next message.
+        SteerOutcome::Returned(message) => Some(message),
+    })
+}
+```
 
 ## Execution Flow
 

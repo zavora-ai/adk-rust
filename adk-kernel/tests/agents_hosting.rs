@@ -4,7 +4,7 @@
 //! routes progress by target, holds an agent's unattended work past its daily limit, starts
 //! nothing while frozen, and never hands an agenda follow-up to an added agent.
 
-mod agents_support;
+use crate::agents_support;
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;

@@ -1607,7 +1607,7 @@
         "type": "object"
       },
       "Command": {
-        "description": "A command from a surface (spec 3.3 §6). Every command runs as an authenticated\n`Caller`, whose subject, surface and `Origin` reach its audit record.\n\n§6 also names \"steer\", a message that reaches a turn while it runs. No runtime under the\nengine takes input in the middle of a turn, so there is no steer command: a message sent\nduring a turn is the session's next message (`Send`), and\n`StopAll` stops a turn that has gone wrong.",
+        "description": "A command from a surface (spec 3.3 §6). Every command runs as an authenticated\n`Caller`, whose subject, surface and `Origin` reach its audit record.\n\n§6 also names \"steer\", a message that reaches a turn while it runs. The runtime takes one\nthrough `Runner::steer`, but the engine has no steer command yet: a message sent during a\nturn is the session's next message (`Send`), and\n`StopAll` stops a turn that has gone wrong.",
         "oneOf": [
           {
             "description": "Answers a decision at the version the surface saw (S-I2).",

@@ -1083,6 +1083,102 @@ async fn anonymous_message_ids_never_return_another_visitors_task() {
     assert_ne!(task(&other), task(&first), "another visitor never receives it");
 }
 
+/// What a public run saw of its caller.
+#[derive(Debug, Clone, PartialEq)]
+struct Seen {
+    user: String,
+    authenticated: bool,
+    metadata: std::collections::HashMap<String, Value>,
+}
+
+/// A public agent that records each run's identity, then lets `inner` answer.
+struct IdentityProbe {
+    inner: Arc<dyn Agent>,
+    seen: Arc<std::sync::Mutex<Vec<Seen>>>,
+}
+
+#[async_trait]
+impl Agent for IdentityProbe {
+    fn name(&self) -> &str {
+        "concierge"
+    }
+
+    fn description(&self) -> &str {
+        "Records who each run is for"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(
+        &self,
+        ctx: Arc<dyn adk_core::InvocationContext>,
+    ) -> Result<adk_core::EventStream> {
+        self.seen.lock().unwrap().push(Seen {
+            user: ctx.user_id().to_owned(),
+            authenticated: ctx.is_authenticated(),
+            metadata: ctx.request_metadata(),
+        });
+        self.inner.run(ctx).await
+    }
+}
+
+/// A visitor with no verified credential converses unauthenticated, as a keyed id its address
+/// cannot be recovered from, with the conversation's metadata intact; a verified caller
+/// converses authenticated as its requester id.
+#[tokio::test]
+async fn a_visitor_converses_unauthenticated_under_a_keyed_id() {
+    use sha2::Digest as _;
+
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let model = Arc::new(ScriptedLlm::new(
+        "scripted",
+        (0..4).map(|_| ScriptedResponse::text("We are open Monday to Friday.")),
+    ));
+    let probe_seen = Arc::clone(&seen);
+    let site = site(Options {
+        agent: Some(Box::new(move |tools: &PublicTools| {
+            let inner = concierge(model, Vec::new())(tools);
+            Arc::new(IdentityProbe { inner, seen: probe_seen }) as Arc<dyn Agent>
+        })),
+        ..Options::default()
+    })
+    .await;
+    let from = |address: &str, id: &str| {
+        let mut request = post("/awp/v2/a2a", &a2a_message(id, "When are you open?"));
+        let peer: std::net::SocketAddr = address.parse().unwrap();
+        request.extensions_mut().insert(axum::extract::ConnectInfo(peer));
+        request
+    };
+    for (address, id) in [("203.0.113.7:40000", "v-1"), ("203.0.113.7:40001", "v-2")] {
+        let (_, _, reply) = site.send(from(address, id)).await;
+        assert_eq!(reply["result"]["task"]["status"]["state"], "TASK_STATE_COMPLETED", "{reply}");
+    }
+    site.send(from("198.51.100.9:40000", "v-3")).await;
+    site.send(site.signed(post("/awp/v2/a2a", &a2a_message("v-4", "When are you open?")))).await;
+
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 4, "{seen:?}");
+    let visitor = &seen[0];
+    assert!(!visitor.authenticated, "a visitor is not an authenticated user");
+    assert!(visitor.user.starts_with("public-"), "{}", visitor.user);
+    let unkeyed = hex::encode(&sha2::Sha256::digest(b"ip:203.0.113.7")[..8]);
+    assert!(!visitor.user.contains(&unkeyed), "the id is keyed, not a plain digest of the address");
+    assert_eq!(visitor.metadata["awp.tier"], "public");
+    assert_eq!(visitor.metadata["awp.binding"], "a2a");
+    assert!(visitor.metadata["awp.thread"].as_str().unwrap().starts_with("a2a-"));
+    assert!(!visitor.metadata.contains_key("awp.requester"));
+    assert_eq!(seen[1].user, visitor.user, "one address keeps its visitor id");
+    assert_ne!(seen[2].user, visitor.user, "another address is another visitor");
+    assert!(!seen[2].authenticated);
+
+    let verified = &seen[3];
+    assert_eq!(verified.user, site.buyer_id.as_str());
+    assert!(verified.authenticated, "a verified credential authenticates its requester");
+    assert_eq!(verified.metadata["awp.requester"], site.buyer_id.as_str());
+}
+
 /// A stateless MCP endpoint has no session, so a JSON-RPC id is no idempotency key: a
 /// `non_idempotent` call needs the `_meta` key (AWP 2.0 §7.7, C8).
 #[tokio::test]

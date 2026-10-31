@@ -8,8 +8,8 @@
 
 #![cfg(feature = "managed")]
 
-mod driver_support;
-mod managed_support;
+use crate::driver_support;
+use crate::managed_support;
 
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
@@ -35,12 +35,6 @@ use adk_managed::{
 use adk_session::{InMemorySessionService, SessionService};
 use driver_support::{RunContext, Workdir};
 use managed_support::*;
-
-#[tokio::test]
-#[ignore = "runs only as the stdio driver the tests start"]
-async fn stdio_driver() {
-    driver_support::serve_stdio().await;
-}
 
 /// Builds each partition's agent on the step model, and keeps the host it was given.
 #[derive(Default)]

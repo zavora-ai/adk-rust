@@ -5,7 +5,7 @@
 //! whatever text arrived first. Retry policies never fired and the nodes after it
 //! ran on a missing answer.
 
-mod support;
+use crate::support;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

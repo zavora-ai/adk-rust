@@ -6,7 +6,7 @@
 //! ```bash
 //! REDIS_URL=redis://localhost:6379 \
 //!   cargo nextest run -p adk-graph --features redis --run-ignored only \
-//!   --test checkpointer_conformance_redis
+//!   --test integration -E 'test(/^checkpointer_conformance_redis::/)'
 //! ```
 
 #![cfg(feature = "redis")]

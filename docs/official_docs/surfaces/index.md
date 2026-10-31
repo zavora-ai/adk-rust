@@ -186,10 +186,10 @@ match outcome {
 | `setMode` | Changes the session's mode; making agents act more on their own is a standing permission, so only the web home, the phone and the terminal may loosen it |
 | `submitDrawn` | Sends a form an agent drew (`genui`): checks the version the person saw, the declared action and each value, then asks the drawing agent for the call, which it holds for the person; nothing runs until they decide. Only a person at a screen sends one. See [Agent-Drawn UI](genui.md#sending-a-form) |
 
-> **Note:** §6 also names "steer", a message that reaches a turn while it runs. No runtime
-> under the engine takes input in the middle of a turn, so there is no steer command: a message
-> sent during a turn is queued as the session's next message, and **Stop all** stops a turn that
-> has gone wrong.
+> **Note:** §6 also names "steer", a message that reaches a turn while it runs. The runtime
+> takes one through [`Runner::steer`](../core/runner.md#steering-a-running-agent), but surfaces
+> have no steer command yet: a message sent during a turn is queued as the session's next
+> message, and **Stop all** stops a turn that has gone wrong.
 
 ### Error codes
 

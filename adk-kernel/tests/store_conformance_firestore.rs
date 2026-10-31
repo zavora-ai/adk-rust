@@ -12,7 +12,7 @@
 //! gcloud emulators firestore start --host-port=127.0.0.1:8080 &
 //! FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 \
 //!   cargo nextest run -p adk-kernel --features firestore --run-ignored only \
-//!   --test store_conformance_firestore
+//!   --test integration -E 'test(/^store_conformance_firestore::/)'
 //! ```
 //!
 //! `FIRESTORE_PROJECT_ID` names the emulator project (default `adk-conformance`).
