@@ -96,7 +96,9 @@ impl SttProvider for MlxSttProvider {
     ) -> AudioResult<Pin<Box<dyn Stream<Item = AudioResult<Transcript>> + Send>>> {
         Err(AudioError::Stt {
             provider: "MLX".into(),
-            message: "streaming transcription not yet implemented".into(),
+            message: "streaming transcription not yet implemented; call `transcribe` with the \
+                      buffered audio"
+                .into(),
         })
     }
 }
