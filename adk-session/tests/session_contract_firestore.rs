@@ -64,3 +64,20 @@ async fn firestore_delete_all_sessions_erases_the_user_tier() {
     )
     .await;
 }
+
+/// Opens the backend for the subject data store suite; every call is a new client.
+struct Backend;
+
+#[adk_core::async_trait]
+impl common::subject_data::OpenSessions for Backend {
+    async fn service(&self) -> std::sync::Arc<dyn adk_session::SessionService> {
+        std::sync::Arc::new(service().await)
+    }
+}
+
+mod subject_data {
+    adk_core::subject_data_store_conformance_tests!(
+        #[ignore = "requires the Firestore emulator at FIRESTORE_EMULATOR_HOST"]
+        harness = crate::common::subject_data::SessionData(super::Backend),
+    );
+}

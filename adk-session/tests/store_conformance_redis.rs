@@ -191,3 +191,39 @@ mod audit_log {
         harness = super::Redis,
     }
 }
+
+#[async_trait]
+impl adk_core::conformance::SubjectRegistryHarness for Redis {
+    async fn open(&self, clock: Arc<dyn Clock>) -> Arc<dyn adk_core::subject::SubjectRegistry> {
+        let registry = adk_session::RedisSubjectRegistry::new(&redis_url())
+            .await
+            .expect("connect to redis")
+            .with_clock(clock);
+        registry.migrate().await.expect("subject registry migrates");
+        Arc::new(registry)
+    }
+}
+
+mod subject_registry {
+    adk_core::subject_registry_conformance_tests!(
+        #[ignore = "requires a Redis server at REDIS_URL"]
+        harness = super::Redis,
+    );
+}
+
+#[async_trait]
+impl adk_core::conformance::ConsentStoreHarness for Redis {
+    async fn open(&self) -> Arc<dyn adk_core::subject::ConsentStore> {
+        let store =
+            adk_session::RedisConsentStore::new(&redis_url()).await.expect("connect to redis");
+        store.migrate().await.expect("consent store migrates");
+        Arc::new(store)
+    }
+}
+
+mod consent_store {
+    adk_core::consent_store_conformance_tests!(
+        #[ignore = "requires a Redis server at REDIS_URL"]
+        harness = super::Redis,
+    );
+}

@@ -8,8 +8,10 @@
 //! | [`erase_covers_linked_ids`] | Erasing a subject erases the data of the visitor ids linked to it |
 //! | [`erase_stays_in_its_applications`] | Erasing a subject in one application leaves its data in another |
 //!
-//! The harness writes through the store's own API and counts what its read paths return,
-//! so the suite checks the store, not the adapter's view of it. An adapter whose
+//! Identifiers are plain ASCII, since file and object-store backends refuse path
+//! separators in application and user ids. The harness writes through the store's own API
+//! and counts what its read paths return, so the suite checks the store, not the adapter's
+//! view of it. An adapter whose
 //! [`StoreSupport`](crate::subject::StoreSupport) is `Eventual` runs the suite against a
 //! backend where deletion is immediate, or marks it `#[ignore]` for a live service.
 
@@ -18,7 +20,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::unique_unicode;
 use crate::principal::SubjectRef;
 use crate::subject::{SubjectDataStore, SubjectScope};
 
@@ -73,12 +74,18 @@ fn is_empty(value: &Value) -> bool {
     }
 }
 
+/// An identifier every store family accepts as a path segment: file and object-store
+/// backends refuse `/`, `:` (on Windows), and `..` in application and user ids.
+fn plain(prefix: &str) -> String {
+    format!("conformance-{prefix}-{}", uuid::Uuid::new_v4().simple())
+}
+
 fn app() -> String {
-    unique_unicode("app")
+    plain("app")
 }
 
 fn person() -> SubjectRef {
-    SubjectRef::human(unique_unicode("person"))
+    SubjectRef::human(plain("person"))
 }
 
 /// The export of a seeded subject holds data, and that of a subject never seeded is
@@ -129,7 +136,7 @@ pub async fn erase_is_idempotent<H: SubjectDataStoreHarness + ?Sized>(harness: &
 pub async fn erase_covers_linked_ids<H: SubjectDataStoreHarness + ?Sized>(harness: &H) {
     let store = harness.open().await;
     let (app, alice) = (app(), person());
-    let visitor = SubjectRef::visitor(unique_unicode("visitor"));
+    let visitor = SubjectRef::visitor(plain("visitor"));
     harness.seed(&app, &alice.id).await;
     harness.seed(&app, &visitor.id).await;
 

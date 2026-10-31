@@ -12,7 +12,9 @@
 //!   `VertexAiSessionService` - database backends, each behind its feature
 //! - `EncryptedSession` - AES-256-GCM encryption over any backend (`encrypted-session` feature)
 //! - Durable stores for every backend: spend ledgers, action ledgers, approval stores, audit log
-//!   stores, and the lease, run, schedule, and governance state stores of the durable runtime
+//!   stores, the lease, run, schedule, and governance state stores of the durable runtime, and
+//!   the subject registries and consent stores of [`adk_core::subject`]
+//! - [`SessionSubjectData`] - A subject's sessions, exported and erased through any backend
 //! - [`Session`] - Conversation session with state and events
 //! - [`State`] - Key-value state with typed prefixes
 //! - [`SessionService`] - Trait for custom session backends
@@ -86,11 +88,18 @@ pub mod session;
 pub mod state;
 /// Shared utilities for extracting and merging state deltas across backends.
 pub mod state_utils;
+/// The session family's adapter for subject export and erasure.
+pub mod subject;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+/// SQL-backed subject registries and consent stores.
+pub mod subject_sql;
 
 #[cfg(any(feature = "redis", feature = "mongodb", feature = "neo4j", feature = "firestore"))]
 mod durable_common;
 #[cfg(any(feature = "mongodb", feature = "neo4j", feature = "firestore"))]
 mod durable_transitions;
+#[cfg(any(feature = "redis", feature = "mongodb", feature = "neo4j", feature = "firestore"))]
+mod subject_common;
 
 #[cfg(feature = "encrypted-session")]
 /// AES-256-GCM encrypted session wrapper with key rotation.
@@ -167,6 +176,18 @@ pub mod sqlite;
 #[cfg(feature = "sqlite")]
 /// SQLite-backed action ledger for non-idempotent tool calls.
 pub mod sqlite_action_ledger;
+#[cfg(feature = "firestore")]
+/// Firestore-backed subject registry and consent store.
+pub mod subject_firestore;
+#[cfg(feature = "mongodb")]
+/// MongoDB-backed subject registry and consent store.
+pub mod subject_mongodb;
+#[cfg(feature = "neo4j")]
+/// Neo4j-backed subject registry and consent store.
+pub mod subject_neo4j;
+#[cfg(feature = "redis")]
+/// Redis-backed subject registry and consent store.
+pub mod subject_redis;
 #[cfg(feature = "vertex-session")]
 /// Vertex AI Session API backend.
 pub mod vertex;
@@ -179,6 +200,19 @@ pub use service::{
 pub use session::{KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER, Session};
 pub use state::{ReadonlyState, State};
 pub use state_utils::{extract_state_deltas, merge_states};
+pub use subject::SessionSubjectData;
+#[cfg(feature = "firestore")]
+pub use subject_firestore::{FirestoreConsentStore, FirestoreSubjectRegistry};
+#[cfg(feature = "mongodb")]
+pub use subject_mongodb::{MongoConsentStore, MongoSubjectRegistry};
+#[cfg(feature = "neo4j")]
+pub use subject_neo4j::{Neo4jConsentStore, Neo4jSubjectRegistry};
+#[cfg(feature = "redis")]
+pub use subject_redis::{RedisConsentStore, RedisSubjectRegistry};
+#[cfg(feature = "postgres")]
+pub use subject_sql::{PostgresConsentStore, PostgresSubjectRegistry};
+#[cfg(feature = "sqlite")]
+pub use subject_sql::{SqliteConsentStore, SqliteSubjectRegistry};
 
 #[cfg(feature = "postgres")]
 pub use approval::PostgresApprovalStore;
