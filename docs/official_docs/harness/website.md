@@ -15,7 +15,7 @@ adk-harness = { version = "3.0.0", features = ["website"] }
 | Preset | `Preset::Website`, `WEBSITE_SYSTEM_PROMPT` | §7.1, §10 X10 |
 | Tool catalogue | `CATALOG`, `ToolSpec`, `WebsiteClasses` | §7.10, §7.11, §7.13 |
 | Site runtime | `SiteRuntime`, `SiteApprovals`, `FactClaimCheck` | §7.8, §7.8.2, A-I18, A-I23 |
-| Durable drafts | `SiteDraftStore`, `InMemorySiteDraftStore`, `SqliteSiteDraftStore` (feature `sqlite`), `DraftKind` | §7.8.2, §7.6, §7.11 |
+| Durable drafts | `SiteDraftStore`, `StoredRecord`, `InMemorySiteDraftStore`, `SqliteSiteDraftStore` (feature `sqlite`), `DraftKind`, `site_draft_store_conformance_tests!` | §7.8.2, §7.6, §7.11 |
 | Back office | `back_office_tools`, `WebsitePolicy` | §7.8.2, §7.10, A-I13, A-I21 |
 | Public partition | `SearchSiteTool`, `EmitSignalTool`, `PublicPolicy`, `screen_bounded` | §7.10, A-I2, A-I3 |
 | Partitions | `SitePartitions`, `PublicKit`, `ServedPublicTools`, `BackOfficeKit`, `website_public`, `website_public_served`, `website_back_office` | §7.9, §7.10, §7.19, A-I22 |
@@ -98,9 +98,22 @@ the draft once every required signer has signed. Every DNS change is held by `ad
 `DriverCapPolicy`.
 
 `SiteRuntimeBuilder::drafts` keeps the content drafts, charter drafts, and charter signing and
-promotion requests in a `SiteDraftStore`, and `SiteRuntime::restore_drafts` reads them back
-after a restart; new draft ids follow the restored ones. A preview and the votes on it are not
-kept: a preview's digest names the build it staged, so it is made again. With
+promotion requests in a `SiteDraftStore` (an `InMemorySiteDraftStore` by default). The store is
+the source of truth: the runtime reads it at every call, so a restarted runtime, or a second
+replica over the same store, sees the same drafts.
+
+| Operation | What the store guarantees |
+|---|---|
+| `create` | Allocates the id, such as `draft-7`, from a per-site, per-kind counter that never hands a number out twice, even across replicas |
+| `replace` | Writes only at the version read; of two runtimes editing one draft, the later one gets `website.drafts.conflict` and repeats its edit |
+| `list` | The site's records of one kind, in creation order |
+
+`site_publish` claims the draft's version before it completes the release, so of two runtimes
+releasing one draft, one publishes it. `SiteRuntime::restore_drafts` counts what the store
+holds and checks each record reads back. Every backend passes
+`site_draft_store_conformance_tests!`, which covers two handles on one database and a restart.
+A preview and the votes on it are not kept: a preview's digest names the build it staged, so
+it is made again. With
 `SiteRuntimeBuilder::audit`, the runtime's pipeline writes the `site.content.*` and
 `site.release.*` records beside the runtime's own.
 
