@@ -178,8 +178,8 @@ CLI and the running site share one log, host and journal:
 | `approvals.json` | The owner's amount thresholds, such as `{"place_order": 20000}`; optional |
 | `data/site-log.db`, `data/host/`, `data/history/` | The site log, the `DirectoryHost`, every saved version |
 | `data/keys/` | `release.jwk`, `card.jwk` (and `receipt.jwk`) as private JWKs, made on first start, owner-only; never the root |
-| `data/kernel.db`, `data/edge.db` | The kernel's stores (charters, KPIs, ladder, signals, agenda, approvals, devices, runs) and the edge's, with the quotes, orders, bookings, rate-limit windows, the back office's drafts and the owner's alarms |
-| `data/audit.jsonl` | The audit trail (`adk-core`'s `FileAuditRecorder`): the pipeline's, the edge's, payments', the update engine's, the alarms', the review's and the signals' records, and `adk-rust awp keys`' |
+| `data/kernel.db`, `data/edge.db` | The kernel's stores (charters, KPIs, ladder, signals, agenda, approvals, devices, runs, the process table, schedules) and the edge's, with the quotes, orders, bookings, rate-limit windows, the back office's drafts and the owner's alarms |
+| `data/audit.jsonl` | The audit trail (`adk-core`'s `FileAuditRecorder`): the pipeline's, the edge's, payments', the update engine's, the alarms', the review's and the signals' records, the kernel's, and `adk-rust awp keys`' |
 | `data/updates/` | `batches.jsonl` and `feeds.json`, read by `adk-rust site batches` and `site feeds` |
 
 The owner signs at a terminal: `adk-rust awp keys rotate` makes the root and the key set,

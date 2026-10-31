@@ -1,11 +1,14 @@
 //! The served kernel's durable stores (spec 3.5 §7.17, §7.22): one SQLite database,
 //! `data/kernel.db`, so a restart keeps the charters, the jobs on the ladder, the KPIs, the
-//! signals and the agenda, the approvals and the owner's paired devices, and the runs —
-//! weekly reviews among them.
+//! signals and the agenda, the approvals and the owner's paired devices, the runs — weekly
+//! reviews among them — and the process table, so a process asleep on a wake set, quiet
+//! hours or a spent budget still wakes after a restart.
 //!
 //! | Store | SQLite |
 //! |---|---|
 //! | Runs | `adk_session::SqliteRunStore` |
+//! | Processes: wake sets, admission deferrals, suspensions and daily spend totals | `adk_kernel::SqliteProcessStore` |
+//! | Schedules the kernel's scheduler fires | `adk_session::SqliteScheduleStore` |
 //! | Approvals | `adk_session::SqliteApprovalStore`, through `StoreApprovalService` |
 //! | Action and spend ledgers | `adk_session::SqliteActionLedger`, `SqliteSpendLedger` |
 //! | Agenda, partitions, cron watermarks | `adk_kernel::SqliteAgendaStore`, `SqlitePartitionStore`, `SqliteCronWatermarkStore` |
@@ -22,8 +25,13 @@ use adk_kernel::charter::{
     SqliteAutonomyStore, SqliteCharterStore, SqliteKpiStore, SqliteSignalStore,
 };
 use adk_kernel::pairing::SqliteDeviceStore;
-use adk_kernel::{Partitions, SqliteAgendaStore, SqliteCronWatermarkStore, SqlitePartitionStore};
-use adk_session::{SqliteActionLedger, SqliteApprovalStore, SqliteRunStore, SqliteSpendLedger};
+use adk_kernel::{
+    Partitions, SqliteAgendaStore, SqliteCronWatermarkStore, SqlitePartitionStore,
+    SqliteProcessStore,
+};
+use adk_session::{
+    SqliteActionLedger, SqliteApprovalStore, SqliteRunStore, SqliteScheduleStore, SqliteSpendLedger,
+};
 
 fn store(error: impl std::fmt::Display) -> AdkError {
     AdkError::config(format!("the kernel's stores could not open: {error}"))
@@ -34,6 +42,11 @@ fn store(error: impl std::fmt::Display) -> AdkError {
 pub struct KernelStores {
     /// Runs, weekly reviews among them.
     pub runs: Arc<SqliteRunStore>,
+    /// The process table: each process's wake set, admission deferral, suspension and daily
+    /// spend totals, which the wake router finds sleepers through.
+    pub processes: Arc<SqliteProcessStore>,
+    /// The schedules the kernel's scheduler fires.
+    pub schedules: Arc<SqliteScheduleStore>,
     /// Approvals: held calls and the owner's decision cards.
     pub approvals: Arc<dyn ApprovalService>,
     /// The agenda signals land on.
@@ -99,6 +112,10 @@ impl KernelStores {
             .map_err(store)?;
         let runs = Arc::new(SqliteRunStore::from_pool(pool.clone()));
         runs.migrate().await?;
+        let processes = Arc::new(SqliteProcessStore::new(pool.clone()));
+        processes.migrate().await.map_err(store)?;
+        let schedules = Arc::new(SqliteScheduleStore::from_pool(pool.clone()));
+        schedules.migrate().await?;
         let approval_store = Arc::new(SqliteApprovalStore::from_pool(pool.clone()));
         approval_store.migrate().await?;
         let mut service = StoreApprovalService::new(approval_store)
@@ -134,6 +151,8 @@ impl KernelStores {
         rules.migrate().await?;
         Ok(Self {
             runs,
+            processes,
+            schedules,
             approvals,
             agenda,
             partitions: Partitions::new(partition_store),
