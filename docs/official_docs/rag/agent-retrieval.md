@@ -43,7 +43,7 @@ Chunk text and metadata are stored **in** the Data Object alongside the vector �
 | `with_existing_collections_only(true)` | `create_collection` validates the collection exists instead of creating it — for deployments that pre-provision with platform tooling |
 | `with_endpoint(...)` | Custom API origin (loopback HTTP allowed for tests) |
 
-Collection names are sanitized into RFC 1035 labels (lowercased; invalid characters become hyphens), so `my_docs` becomes collection ID `my-docs`. Distinct names that sanitize identically collide — choose names that differ in more than case or punctuation.
+Collection IDs are RFC 1035 labels. A collection name uses ASCII lowercase letters, digits, and underscores, starts with a letter (unless a collection prefix is set), ends with a letter or digit, and fits 63 characters with the prefix; each underscore becomes a hyphen, so `my_docs` is collection ID `my-docs`. Any other name — `my-docs`, `Docs`, `docs v2` — returns `RagError::VectorStoreError` instead of being rewritten, so two names never share a collection. A collection prefix uses ASCII lowercase letters, digits, and hyphens and starts with a letter.
 
 ## Beyond the trait
 
@@ -68,7 +68,7 @@ let results = store
 
 ## Testing
 
-The backend passes the shared `VectorStore` contract and property suite that all adk-rag backends run, so it is behaviorally interchangeable with the other stores. The `#[ignore]` live test creates and deletes its own uniquely-named collection (data-plane, like the pgvector and Qdrant live tests):
+The backend passes the shared `VectorStore` contract and property suite against an in-process mock of the `vectorsearch.googleapis.com` surface, so it is behaviorally interchangeable with the other stores. The `#[ignore]` live test creates and deletes its own uniquely named collection, as the pgvector and Qdrant contract suites do on their servers:
 
 ```bash
 GOOGLE_CLOUD_PROJECT=my-project GOOGLE_CLOUD_LOCATION=us-central1 \

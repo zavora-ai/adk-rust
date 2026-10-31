@@ -20,6 +20,8 @@
 # sqlx-backed backend: a second sqlx major entering the graph through pgvector went unnoticed.
 0 adk-rag pgvector
 0 adk-rag vertex-rag
+# Qdrant's point-ID mapping; its service-backed suite runs in CI's postgres job.
+0 adk-rag qdrant
 0 adk-rag agent-retrieval
 # The in-process ONNX embedder downloads the onnxruntime binary at build time (R1).
 0 adk-rag onnx

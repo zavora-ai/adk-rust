@@ -139,3 +139,44 @@ async fn test_metadata_preserved() {
     assert_eq!(results[0].chunk.metadata.get("custom_key").unwrap(), "custom_value");
     assert_eq!(results[0].chunk.metadata.get("source").unwrap(), "test");
 }
+
+#[tokio::test]
+async fn collection_names_that_would_need_rewriting_are_refused() {
+    let store = SurrealVectorStore::in_memory().await.unwrap();
+    let chunk = make_chunk("c1", "text", vec![1.0, 0.0, 0.0], "doc1");
+    for name in ["docs-v1", "docs v1", "docs.v1", "naïve", ""] {
+        let expected = format!(
+            "Vector store error (surrealdb): invalid collection name `{name}`: use one or more \
+             ASCII letters, digits, or underscores"
+        );
+        let errors = [
+            store.create_collection(name, 3).await.err(),
+            store.upsert(name, std::slice::from_ref(&chunk)).await.err(),
+            store.search(name, &[1.0, 0.0, 0.0], 1).await.err(),
+            store.delete(name, &["c1"]).await.err(),
+            store.delete_collection(name).await.err(),
+        ];
+        assert_eq!(
+            errors.map(|error| error.map(|error| error.to_string())),
+            [(); 5].map(|()| Some(expected.clone())),
+            "collection name {name:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn keywords_leading_digits_and_case_are_distinct_valid_names() {
+    let store = SurrealVectorStore::in_memory().await.unwrap();
+    let names = ["select", "table", "9lives", "Docs", "docs"];
+    for (i, name) in names.iter().enumerate() {
+        store.create_collection(name, 3).await.unwrap();
+        let chunk = make_chunk(&format!("row_{i}"), name, vec![1.0, 0.0, 0.0], "doc1");
+        store.upsert(name, &[chunk]).await.unwrap();
+    }
+    for (i, name) in names.iter().enumerate() {
+        let results = store.search(name, &[1.0, 0.0, 0.0], 10).await.unwrap();
+        let ids: Vec<&str> = results.iter().map(|result| result.chunk.id.as_str()).collect();
+        assert_eq!(ids, [format!("row_{i}")], "collection {name:?}");
+        store.delete_collection(name).await.unwrap();
+    }
+}

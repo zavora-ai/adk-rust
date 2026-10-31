@@ -28,7 +28,7 @@ fn chunk(id: &str, text: &str, embedding: Vec<f32>) -> Chunk {
 async fn agent_retrieval_live_round_trip() -> Result<(), RagError> {
     let config = AgentRetrievalConfig::from_env()?;
     let store = AgentRetrievalStore::new_with_adc(config)?;
-    let collection = format!("adk-live-{}", std::process::id());
+    let collection = format!("adk_live_{}", std::process::id());
 
     store.create_collection(&collection, 4).await?;
     let result = async {

@@ -291,6 +291,10 @@ fn main() -> adk_rag::Result<()> {
 }
 ```
 
+Qdrant accepts only unsigned integers and UUIDs as point IDs, so each chunk is stored under the
+UUID v5 of its chunk ID and the chunk ID is kept in the point's `chunk_id` payload field. Search
+returns the original chunk ID, and `delete` maps IDs the same way.
+
 ### LanceDB
 
 Embedded vector database with no server required. Data persists to disk.
@@ -365,11 +369,21 @@ async fn main() -> adk_rag::Result<()> {
 
 `SurrealVectorStore::remote(url)` connects to a SurrealDB server.
 
+Each collection is stored in the table of the same name. A collection name must be one or more
+ASCII letters, digits, or underscores; any other name returns `RagError::VectorStoreError`
+instead of being rewritten, so two distinct names never share a table. Table names are case
+sensitive and quoted in queries, so `Docs`, `docs`, and SurrealQL keywords such as `select` are
+distinct, valid names.
+
 ### Agent Retrieval
 
 Google's managed vector database on the Gemini Enterprise Agent Platform (formerly Vector Search
 2.0). The store keeps chunk text and metadata in each Data Object, takes embeddings from the
-pipeline, and maps collection names to RFC 1035 collection IDs.
+pipeline, and maps collection names to RFC 1035 collection IDs. A collection name uses ASCII
+lowercase letters, digits, and underscores, starts with a letter (unless a collection prefix is
+set), ends with a letter or digit, and fits 63 characters with the prefix; each underscore becomes
+a hyphen, so `my_docs` is the collection `my-docs`. Any other name returns
+`RagError::VectorStoreError` instead of being rewritten.
 
 ```toml
 adk-rag = { version = "3.0.0", features = ["agent-retrieval"] }

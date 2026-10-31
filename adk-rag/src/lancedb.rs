@@ -70,6 +70,22 @@ impl LanceDBVectorStore {
         RagError::VectorStoreError { backend: "lancedb".to_string(), message }
     }
 
+    /// Checks a collection name against LanceDB's table-name rule before any call.
+    ///
+    /// lancedb 0.31 panics instead of erroring when it creates or opens a table whose
+    /// name breaks the rule.
+    fn table_name(name: &str) -> Result<&str> {
+        if name.is_empty()
+            || !name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+        {
+            return Err(Self::store_error(format!(
+                "invalid collection name `{name}`: use one or more ASCII letters, digits, \
+                 underscores, hyphens, or periods"
+            )));
+        }
+        Ok(name)
+    }
+
     /// Builds the `id IN (...)` predicate that selects rows by chunk id.
     ///
     /// Ids become typed string literals in a DataFusion expression rather than
@@ -99,6 +115,7 @@ impl LanceDBVectorStore {
 #[async_trait]
 impl VectorStore for LanceDBVectorStore {
     async fn create_collection(&self, name: &str, dimensions: usize) -> Result<()> {
+        let name = Self::table_name(name)?;
         let tables = self.connection.table_names().execute().await.map_err(Self::map_err)?;
         if tables.iter().any(|t| t == name) {
             debug!(collection = name, "lancedb table already exists, skipping creation");
@@ -113,7 +130,7 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn delete_collection(&self, name: &str) -> Result<()> {
-        self.connection.drop_table(name, &[]).await.map_err(Self::map_err)?;
+        self.connection.drop_table(Self::table_name(name)?, &[]).await.map_err(Self::map_err)?;
         debug!(collection = name, "deleted lancedb table");
         Ok(())
     }
@@ -136,8 +153,12 @@ impl VectorStore for LanceDBVectorStore {
             .map(|(_, chunk)| chunk)
             .collect();
 
-        let table =
-            self.connection.open_table(collection).execute().await.map_err(Self::map_err)?;
+        let table = self
+            .connection
+            .open_table(Self::table_name(collection)?)
+            .execute()
+            .await
+            .map_err(Self::map_err)?;
         let table_schema = table.schema().await.map_err(Self::map_err)?;
         let dimensions = match table_schema.field_with_name("vector").map(Field::data_type) {
             Ok(DataType::FixedSizeList(_, size)) => *size as usize,
@@ -202,8 +223,12 @@ impl VectorStore for LanceDBVectorStore {
             return Ok(());
         }
 
-        let table =
-            self.connection.open_table(collection).execute().await.map_err(Self::map_err)?;
+        let table = self
+            .connection
+            .open_table(Self::table_name(collection)?)
+            .execute()
+            .await
+            .map_err(Self::map_err)?;
         table.delete(&Self::id_predicate(ids)).await.map_err(Self::map_err)?;
 
         debug!(collection, count = ids.len(), "deleted chunks from lancedb");
@@ -216,8 +241,12 @@ impl VectorStore for LanceDBVectorStore {
         embedding: &[f32],
         top_k: usize,
     ) -> Result<Vec<SearchResult>> {
-        let table =
-            self.connection.open_table(collection).execute().await.map_err(Self::map_err)?;
+        let table = self
+            .connection
+            .open_table(Self::table_name(collection)?)
+            .execute()
+            .await
+            .map_err(Self::map_err)?;
 
         let stream = table
             .query()

@@ -310,3 +310,27 @@ async fn test_lancedb_upsert_rejects_mismatched_dimensions() {
     // Nothing from the rejected batches was written.
     assert!(store.search("docs", &[1.0, 0.0, 0.0, 0.0], 10).await.unwrap().is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_lancedb_invalid_collection_names_are_errors_not_panics() {
+    let (_dir, store) = store().await;
+    let one = plain("c1", "text", vec![1.0, 0.0, 0.0, 0.0]);
+    for name in ["docs v1", "docs/v1", "naïve", ""] {
+        let expected = format!(
+            "Vector store error (lancedb): invalid collection name `{name}`: use one or more \
+             ASCII letters, digits, underscores, hyphens, or periods"
+        );
+        let errors = [
+            store.create_collection(name, DIM).await.err(),
+            store.upsert(name, std::slice::from_ref(&one)).await.err(),
+            store.search(name, &[1.0, 0.0, 0.0, 0.0], 1).await.err(),
+            store.delete(name, &["c1"]).await.err(),
+            store.delete_collection(name).await.err(),
+        ];
+        assert_eq!(
+            errors.map(|error| error.map(|error| error.to_string())),
+            [(); 5].map(|()| Some(expected.clone())),
+            "collection name {name:?}"
+        );
+    }
+}

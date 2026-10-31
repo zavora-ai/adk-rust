@@ -25,10 +25,11 @@
 //! index/endpoint infrastructure model fits the [`VectorStore`] trait
 //! poorly, and Google positions Agent Retrieval as its successor.
 //!
-//! Collection IDs must be RFC 1035 labels, so trait-level collection names
-//! are sanitized deterministically (lowercased, invalid characters become
-//! hyphens). Distinct names that sanitize identically collide; choose
-//! names that differ in more than case or punctuation.
+//! Collection IDs must be RFC 1035 labels. Trait-level collection names use
+//! ASCII lowercase letters, digits, and underscores, and each underscore
+//! becomes a hyphen in the collection ID (`my_docs` is `my-docs`). Any other
+//! name fails with [`RagError::VectorStoreError`] rather than being rewritten,
+//! so two names never share a collection.
 //!
 //! Beyond the trait, [`AgentRetrievalStore::hybrid_search`] exposes
 //! semantic + text search fused with reciprocal rank fusion for callers
@@ -126,8 +127,12 @@ impl AgentRetrievalConfig {
         Ok(Self::new(read(ENV_GOOGLE_CLOUD_PROJECT)?, read(ENV_GOOGLE_CLOUD_LOCATION)?))
     }
 
-    /// Prefixes every sanitized collection ID, isolating this store's
-    /// collections from others in the same project.
+    /// Prefixes every collection ID, isolating this store's collections from
+    /// others in the same project.
+    ///
+    /// The prefix uses ASCII lowercase letters, digits, and hyphens and starts
+    /// with a letter, such as `rag-`; with any other prefix every operation
+    /// fails with [`RagError::VectorStoreError`].
     #[must_use]
     pub fn with_collection_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.collection_prefix = Some(prefix.into());
@@ -227,14 +232,46 @@ impl AgentRetrievalStore {
     }
 
     /// The full resource name for a trait-level collection name.
-    fn collection_resource(&self, name: &str) -> String {
-        format!("{}/collections/{}", self.parent(), self.collection_id(name))
+    fn collection_resource(&self, name: &str) -> Result<String> {
+        Ok(format!("{}/collections/{}", self.parent(), self.collection_id(name)?))
     }
 
-    /// Sanitizes a trait-level collection name into an RFC 1035 label.
-    fn collection_id(&self, name: &str) -> String {
-        let raw = format!("{}{name}", self.collection_prefix.as_deref().unwrap_or(""));
-        sanitize_collection_id(&raw)
+    /// Maps a trait-level collection name to its collection ID, rejecting names
+    /// that would need rewriting.
+    ///
+    /// Names use ASCII lowercase letters, digits, and underscores, IDs use
+    /// lowercase letters, digits, and hyphens, and each underscore becomes a
+    /// hyphen, so the mapping is one-to-one.
+    fn collection_id(&self, name: &str) -> Result<String> {
+        let invalid = |message: String| RagError::VectorStoreError {
+            backend: "agent_retrieval".to_string(),
+            message,
+        };
+        let prefix = self.collection_prefix.as_deref().unwrap_or("");
+        if !prefix.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            || prefix.starts_with(|c: char| !c.is_ascii_lowercase())
+        {
+            return Err(invalid(format!(
+                "invalid collection prefix `{prefix}`: use ASCII lowercase letters, digits, or \
+                 hyphens, starting with a letter"
+            )));
+        }
+        let id = format!("{prefix}{}", name.replace('_', "-"));
+        if name.is_empty()
+            || !name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+            || id.len() > 63
+            || !id.starts_with(|c: char| c.is_ascii_lowercase())
+            || id.ends_with('-')
+        {
+            let max = 63_usize.saturating_sub(prefix.len());
+            let first = if prefix.is_empty() { ", starting with a letter" } else { "" };
+            return Err(invalid(format!(
+                "invalid collection name `{name}`: use 1 to {max} ASCII lowercase letters, \
+                 digits, or underscores{first}, ending with a letter or digit; each underscore \
+                 becomes a hyphen in the Agent Retrieval collection ID"
+            )));
+        }
+        Ok(id)
     }
 
     async fn wait_for_operation(&self, operation: Value, kind: &str) -> Result<Option<Value>> {
@@ -256,12 +293,12 @@ impl AgentRetrievalStore {
         self.client.send_value_allow_not_found(request).await.map_err(store_error)
     }
 
-    fn data_object_name(&self, collection: &str, id: &str) -> String {
-        format!("{}/dataObjects/{id}", self.collection_resource(collection))
+    fn data_object_name(&self, collection: &str, id: &str) -> Result<String> {
+        Ok(format!("{}/dataObjects/{id}", self.collection_resource(collection)?))
     }
 
     async fn create_objects_batch(&self, collection: &str, chunks: &[Chunk]) -> Result<()> {
-        let parent = self.collection_resource(collection);
+        let parent = self.collection_resource(collection)?;
         let requests: Vec<Value> = chunks
             .iter()
             .map(|chunk| {
@@ -285,7 +322,7 @@ impl AgentRetrievalStore {
     /// Last-write-wins upsert for one object: create, then patch on
     /// `ALREADY_EXISTS`.
     async fn upsert_object(&self, collection: &str, chunk: &Chunk) -> Result<()> {
-        let parent = self.collection_resource(collection);
+        let parent = self.collection_resource(collection)?;
         let request = self
             .client
             .request(Method::POST, &format!("{parent}/dataObjects"))
@@ -296,7 +333,7 @@ impl AgentRetrievalStore {
         match self.client.send_value(request).await {
             Ok(_) => Ok(()),
             Err(error) if error.details.upstream_status_code == Some(409) => {
-                let name = self.data_object_name(collection, &chunk.id);
+                let name = self.data_object_name(collection, &chunk.id)?;
                 let request = self
                     .client
                     .request(Method::PATCH, &name)
@@ -311,9 +348,9 @@ impl AgentRetrievalStore {
     }
 
     async fn delete_objects_batch(&self, collection: &str, ids: &[&str]) -> Result<()> {
-        let parent = self.collection_resource(collection);
+        let parent = self.collection_resource(collection)?;
         let requests: Vec<Value> =
-            ids.iter().map(|id| json!({ "name": self.data_object_name(collection, id) })).collect();
+            ids.iter().map(|id| json!({ "name": format!("{parent}/dataObjects/{id}") })).collect();
         let request = self
             .client
             .request(Method::POST, &format!("{parent}/dataObjects:batchDelete"))
@@ -343,7 +380,7 @@ impl AgentRetrievalStore {
         top_k: usize,
         weights: (f64, f64),
     ) -> Result<Vec<SearchResult>> {
-        let parent = self.collection_resource(collection);
+        let parent = self.collection_resource(collection)?;
         let body = json!({
             "searches": [
                 { "vectorSearch": {
@@ -385,7 +422,7 @@ impl AgentRetrievalStore {
 #[async_trait]
 impl VectorStore for AgentRetrievalStore {
     async fn create_collection(&self, name: &str, dimensions: usize) -> Result<()> {
-        let resource = self.collection_resource(name);
+        let resource = self.collection_resource(name)?;
         if self.existing_collections_only {
             return match self.get_collection(&resource).await? {
                 Some(_) => Ok(()),
@@ -405,7 +442,7 @@ impl VectorStore for AgentRetrievalStore {
             .request(Method::POST, &format!("{}/collections", self.parent()))
             .await
             .map_err(store_error)?
-            .query(&[("collectionId", self.collection_id(name).as_str())])
+            .query(&[("collectionId", self.collection_id(name)?.as_str())])
             .json(&body);
         // The trait requires idempotent creation; ALREADY_EXISTS preserves
         // the existing collection and its rows.
@@ -419,7 +456,7 @@ impl VectorStore for AgentRetrievalStore {
     }
 
     async fn delete_collection(&self, name: &str) -> Result<()> {
-        let resource = self.collection_resource(name);
+        let resource = self.collection_resource(name)?;
         let request = self.client.request(Method::DELETE, &resource).await.map_err(store_error)?;
         // Idempotent: deleting a missing collection is a no-op.
         let Some(operation) =
@@ -454,7 +491,7 @@ impl VectorStore for AgentRetrievalStore {
             // fall back to per-object deletes that ignore NOT_FOUND.
             if self.delete_objects_batch(collection, batch).await.is_err() {
                 for id in batch {
-                    let name = self.data_object_name(collection, id);
+                    let name = self.data_object_name(collection, id)?;
                     let request =
                         self.client.request(Method::DELETE, &name).await.map_err(store_error)?;
                     self.client.send_value_allow_not_found(request).await.map_err(store_error)?;
@@ -470,7 +507,7 @@ impl VectorStore for AgentRetrievalStore {
         embedding: &[f32],
         top_k: usize,
     ) -> Result<Vec<SearchResult>> {
-        let parent = self.collection_resource(collection);
+        let parent = self.collection_resource(collection)?;
         let body = json!({
             "vectorSearch": {
                 "searchField": VECTOR_FIELD,
@@ -493,27 +530,6 @@ impl VectorStore for AgentRetrievalStore {
             })?;
         response.results.into_iter().map(search_result_from_wire).collect()
     }
-}
-
-/// Sanitizes a name into an RFC 1035 label (lowercase letter first, then
-/// lowercase letters, digits, and hyphens, at most 63 characters).
-fn sanitize_collection_id(name: &str) -> String {
-    let mut id: String = name
-        .chars()
-        .map(|c| match c {
-            'a'..='z' | '0'..='9' | '-' => c,
-            'A'..='Z' => c.to_ascii_lowercase(),
-            _ => '-',
-        })
-        .collect();
-    if !id.starts_with(|c: char| c.is_ascii_lowercase()) {
-        id = format!("c-{id}");
-    }
-    id.truncate(63);
-    while id.ends_with('-') {
-        id.pop();
-    }
-    if id.is_empty() { "c".to_string() } else { id }
 }
 
 fn output_fields() -> Value {
@@ -627,21 +643,13 @@ fn search_result_from_wire(wire: WireSearchResult) -> Result<SearchResult> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn collection_ids_are_rfc1035_labels() {
-        assert_eq!(sanitize_collection_id("contract_search"), "contract-search");
-        assert_eq!(sanitize_collection_id("Docs V2"), "docs-v2");
-        assert_eq!(sanitize_collection_id("9lives"), "c-9lives");
-        assert_eq!(sanitize_collection_id("trailing-"), "trailing");
-        assert_eq!(sanitize_collection_id(""), "c");
-        let long = sanitize_collection_id(&"x".repeat(100));
-        assert_eq!(long.len(), 63);
-    }
-
-    #[tokio::test]
-    async fn prefix_applies_before_sanitization() {
-        let store = AgentRetrievalStore::with_client(
-            AgentRetrievalConfig::new("p", "l").with_collection_prefix("Rag_"),
+    fn store_with(prefix: Option<&str>) -> AgentRetrievalStore {
+        let mut config = AgentRetrievalConfig::new("p", "l");
+        if let Some(prefix) = prefix {
+            config = config.with_collection_prefix(prefix);
+        }
+        AgentRetrievalStore::with_client(
+            config,
             GcpHttpClient::builder(gcp_error_context(), "https://vectorsearch.googleapis.com")
                 .api_version(API_VERSION)
                 .credentials(
@@ -649,11 +657,59 @@ mod tests {
                 )
                 .build()
                 .expect("build client"),
-        );
+        )
+    }
+
+    // The client's token cache needs a runtime.
+    #[tokio::test]
+    async fn underscores_become_hyphens_one_to_one() {
+        let store = store_with(None);
+        let ids: Vec<String> = ["contract_search", "docs", "a1_b2", "x"]
+            .iter()
+            .map(|name| store.collection_id(name).expect("valid name"))
+            .collect();
+        assert_eq!(ids, ["contract-search", "docs", "a1-b2", "x"]);
         assert_eq!(
-            store.collection_resource("Docs"),
-            "projects/p/locations/l/collections/rag-docs",
+            store_with(Some("rag-")).collection_resource("my_docs").expect("valid name"),
+            "projects/p/locations/l/collections/rag-my-docs",
         );
+        // With a prefix, the name need not start with a letter.
+        assert_eq!(store_with(Some("rag-")).collection_id("9lives").expect("valid"), "rag-9lives");
+    }
+
+    #[tokio::test]
+    async fn names_that_would_need_rewriting_are_refused() {
+        let store = store_with(None);
+        let long = "x".repeat(64);
+        for name in ["contract-search", "Docs", "docs v2", "9lives", "trailing_", "", &long] {
+            assert_eq!(
+                store.collection_id(name).map_err(|error| error.to_string()),
+                Err(format!(
+                    "Vector store error (agent_retrieval): invalid collection name `{name}`: use 1 \
+                     to 63 ASCII lowercase letters, digits, or underscores, starting with a \
+                     letter, ending with a letter or digit; each underscore becomes a hyphen in \
+                     the Agent Retrieval collection ID"
+                )),
+            );
+        }
+        assert_eq!(
+            store.collection_id(&"x".repeat(63)).map(|id| id.len()).map_err(|e| e.to_string()),
+            Ok(63),
+            "63 characters is the longest ID",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_prefix_that_would_need_rewriting_is_refused() {
+        for prefix in ["Rag_", "rag_", "9rag-"] {
+            assert_eq!(
+                store_with(Some(prefix)).collection_id("docs").map_err(|error| error.to_string()),
+                Err(format!(
+                    "Vector store error (agent_retrieval): invalid collection prefix `{prefix}`: \
+                     use ASCII lowercase letters, digits, or hyphens, starting with a letter"
+                )),
+            );
+        }
     }
 
     #[test]
