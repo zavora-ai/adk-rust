@@ -304,3 +304,40 @@ async fn a_request_stored_without_a_session_lists_by_session_after_migrate() {
     let query = ApprovalRequestQuery::default().with_session(&request.scope);
     assert_eq!(store.list_requests(&query).await.expect("list"), [request]);
 }
+
+#[async_trait]
+impl adk_core::conformance::SubjectRegistryHarness for Mongo {
+    async fn open(&self, clock: Arc<dyn Clock>) -> Arc<dyn adk_core::subject::SubjectRegistry> {
+        let registry = adk_session::MongoSubjectRegistry::new(&url(), DATABASE)
+            .await
+            .expect("connect to mongodb")
+            .with_clock(clock);
+        registry.migrate().await.expect("subject registry migrates");
+        Arc::new(registry)
+    }
+}
+
+mod subject_registry {
+    adk_core::subject_registry_conformance_tests!(
+        #[ignore = "requires a MongoDB server at MONGODB_URL"]
+        harness = super::Mongo,
+    );
+}
+
+#[async_trait]
+impl adk_core::conformance::ConsentStoreHarness for Mongo {
+    async fn open(&self) -> Arc<dyn adk_core::subject::ConsentStore> {
+        let store = adk_session::MongoConsentStore::new(&url(), DATABASE)
+            .await
+            .expect("connect to mongodb");
+        store.migrate().await.expect("consent store migrates");
+        Arc::new(store)
+    }
+}
+
+mod consent_store {
+    adk_core::consent_store_conformance_tests!(
+        #[ignore = "requires a MongoDB server at MONGODB_URL"]
+        harness = super::Mongo,
+    );
+}

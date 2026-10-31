@@ -281,3 +281,36 @@ async fn a_request_stored_without_a_session_lists_by_session_after_migrate() {
     let query = ApprovalRequestQuery::default().with_session(&request.scope);
     assert_eq!(store.list_requests(&query).await.expect("list"), [request]);
 }
+
+#[async_trait]
+impl adk_core::conformance::SubjectRegistryHarness for Neo4j {
+    async fn open(&self, clock: Arc<dyn Clock>) -> Arc<dyn adk_core::subject::SubjectRegistry> {
+        let registry =
+            adk_session::Neo4jSubjectRegistry::from_graph(graph().await).with_clock(clock);
+        registry.migrate().await.expect("subject registry migrates");
+        Arc::new(registry)
+    }
+}
+
+mod subject_registry {
+    adk_core::subject_registry_conformance_tests!(
+        #[ignore = "requires a Neo4j server at NEO4J_URI"]
+        harness = super::Neo4j,
+    );
+}
+
+#[async_trait]
+impl adk_core::conformance::ConsentStoreHarness for Neo4j {
+    async fn open(&self) -> Arc<dyn adk_core::subject::ConsentStore> {
+        let store = adk_session::Neo4jConsentStore::from_graph(graph().await);
+        store.migrate().await.expect("consent store migrates");
+        Arc::new(store)
+    }
+}
+
+mod consent_store {
+    adk_core::consent_store_conformance_tests!(
+        #[ignore = "requires a Neo4j server at NEO4J_URI"]
+        harness = super::Neo4j,
+    );
+}

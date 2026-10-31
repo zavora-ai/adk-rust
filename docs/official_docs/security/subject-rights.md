@@ -190,6 +190,27 @@ where it is; moving it under the account is a separate, later step.
 
 The link is audited under both subjects' pseudonyms.
 
+## Backends
+
+The registry and the consent store run on every session backend (`adk-session`):
+
+| Backend | Feature | Subject registry | Consent store |
+|---------|---------|------------------|---------------|
+| In-memory (`adk-core`) | — | `InMemorySubjectRegistry` | `InMemoryConsentStore` |
+| SQLite | `sqlite` | `SqliteSubjectRegistry` | `SqliteConsentStore` |
+| PostgreSQL | `postgres` | `PostgresSubjectRegistry` | `PostgresConsentStore` |
+| Redis | `redis` | `RedisSubjectRegistry` | `RedisConsentStore` |
+| MongoDB | `mongodb` | `MongoSubjectRegistry` | `MongoConsentStore` |
+| Neo4j | `neo4j` | `Neo4jSubjectRegistry` | `Neo4jConsentStore` |
+| Firestore | `firestore` | `FirestoreSubjectRegistry` | `FirestoreConsentStore` |
+
+| Store family | Adapter | Crate | Erases |
+|--------------|---------|-------|--------|
+| Sessions | `SessionSubjectData` | `adk-session` | Every session, its events, and the `user:` tier through `delete_all_sessions`, on any `SessionService` |
+
+`SessionSubjectData::with_support(StoreSupport::Eventual { within })` declares a session
+service whose deletes complete asynchronously, such as Vertex AI's.
+
 ## Writing an adapter
 
 A store family implements `SubjectDataStore` once and proves it with the shared suite:
