@@ -24,7 +24,7 @@
 //! | `create` | Fails with `session.already_exists` (`Conflict`) when the ID is taken in the app |
 //! | `get`, `append_event_for_identity` | Fails with `session.not_found` |
 //! | `delete` | No-op, identical to deleting a missing session |
-//! | `list`, `delete_all_sessions` | Only the caller's own sessions are returned or removed |
+//! | `list`, `delete_all_sessions` | Only the caller's own sessions are returned or removed; `delete_all_sessions` then deletes the user's state document |
 //!
 //! A new session never inherits events: `create` removes any events left under its path.
 //! App names, user IDs, and session IDs are document IDs, so they must not contain `/`.

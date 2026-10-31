@@ -80,6 +80,8 @@ async fn main() -> adk_core::Result<()> {
 
 `get` and `list` read the `app:` and `user:` tiers at call time, so a value written through one session reaches the app's or user's other sessions.
 
+`delete_all_sessions(app, user)` erases the user's sessions in the app, their events, and the user's `user:` tier, on every backend; the `app:` tier and other users' data stay. Vertex AI keeps `user:` keys in each session and erases them with the sessions.
+
 ## Feature Flags
 
 | Feature | Backend | Description |
@@ -271,7 +273,7 @@ match the request:
 | `create` | Fails with `session.already_exists` (`Conflict`) when the ID is taken in the app |
 | `get`, `append_event_for_identity` | Fails with `session.not_found` |
 | `delete` | No-op, identical to deleting a missing session |
-| `list`, `delete_all_sessions` | Only the caller's own sessions are returned or removed |
+| `list`, `delete_all_sessions` | Only the caller's own sessions are returned or removed; `delete_all_sessions` then deletes the user's state document |
 
 App state lives at `{root}/{app_name}/app_state/current` and user state at
 `{root}/{app_name}/users/{user_id}/state/current`. App names, user IDs, and session
@@ -464,6 +466,7 @@ async fn undo_last_turn(service: &InMemorySessionService) -> adk_core::Result<()
 | Appending to a missing session fails with `session.not_found` | Match the typed error |
 | Every method on every backend validates identifiers | — |
 | `get` and `list` read the current `app:` and `user:` tiers | — |
+| `delete_all_sessions` also erases the user's `user:` tier; Vertex AI implements it; the default returns `session.delete_all.unsupported` | Keep a value that must outlive the user's sessions in `app:` state or outside the session store |
 | Concurrent appends keep every state delta; equal timestamps keep append order | — |
 | SQL backends use SQLx 0.9; `sqlx` and `pgvector` are no longer implicit features | Depend on SQLx 0.9 when sharing a pool; enable `sqlite` or `postgres` |
 | `sql_schema_version` and `schema_version()` return read failures as errors | — |
