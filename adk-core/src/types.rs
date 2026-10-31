@@ -332,7 +332,7 @@ impl FunctionResponseData {
 }
 
 /// A message in a conversation, consisting of a role and content parts.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Content {
     /// The role of this content's author (e.g., "user", "model", "function").
     pub role: String,

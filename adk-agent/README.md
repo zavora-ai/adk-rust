@@ -184,6 +184,10 @@ The function response for a failed tool call names the error's component, catego
 
 A toolset whose `tools()` call fails is skipped for that turn with a `warn` log; `strict_toolsets(true)` fails the turn instead. A final model turn with no answer — no parts, only thinking, or only whitespace — fails the run with `model.empty_response`.
 
+### Steering
+
+`LlmAgent` and `CodeActAgent` take the messages `Runner::steer` queues on their run at a safe point: after a tool step's results are in the history and before the next model request. Each message is yielded as a user-authored event marked with `EventActions::steering`, which the runner saves, and joins the history the next request carries; a turn that ends with a direct answer takes none. Workflow members and transfer targets share the run's queue, and `ParallelAgent` branches take none. See [Steering a Running Agent](../docs/official_docs/agents/llm-agent.md#steering-a-running-agent).
+
 ### Generation Config
 
 ```rust

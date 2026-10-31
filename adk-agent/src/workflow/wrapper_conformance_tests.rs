@@ -103,6 +103,7 @@ struct SentinelContext {
     config: RunConfig,
     session: SentinelSession,
     shared: Arc<SharedState>,
+    inbox: adk_core::SteeringInbox,
 }
 
 impl SentinelContext {
@@ -116,8 +117,30 @@ impl SentinelContext {
             config: RunConfig::default(),
             session: SentinelSession { state: SentinelState },
             shared,
+            inbox: sentinel_inbox(),
         }
     }
+}
+
+/// An inbox holding one steering message, so a forwarded inbox is told from a new one.
+fn sentinel_inbox() -> adk_core::SteeringInbox {
+    let inbox = adk_core::SteeringInbox::new();
+    let message = Content::new("user").with_text("sentinel steering");
+    let _receipt = inbox
+        .push(message.clone(), message, "sentinel-user", false)
+        .expect("the sentinel inbox is open");
+    inbox
+}
+
+/// Assert that `wrapped` forwards the sentinel's steering inbox.
+fn assert_steering_forwarded(label: &str, wrapped: &Arc<dyn InvocationContext>) {
+    let inbox =
+        wrapped.steering_inbox().unwrap_or_else(|| panic!("{label}: steering inbox was dropped"));
+    assert_eq!(
+        inbox.drain().len(),
+        1,
+        "{label}: steering inbox was replaced rather than forwarded"
+    );
 }
 
 /// A `SharedState` carrying the sentinel key.
@@ -216,6 +239,9 @@ impl InvocationContext for SentinelContext {
     }
     fn request_metadata(&self) -> HashMap<String, serde_json::Value> {
         HashMap::from([(SENTINEL_METADATA_KEY.to_string(), serde_json::json!(1))])
+    }
+    fn steering_inbox(&self) -> Option<adk_core::SteeringInbox> {
+        Some(self.inbox.clone())
     }
     async fn get_secret(&self, name: &str) -> Result<Option<String>> {
         Ok(if name == SENTINEL_SECRET_NAME {
@@ -316,6 +342,7 @@ async fn shared_state_context_preserves_capabilities() {
     );
     assert!(wrapped.artifacts().is_some(), "SharedStateContext: artifacts were dropped");
     assert!(wrapped.memory().is_some(), "SharedStateContext: memory was dropped");
+    assert_steering_forwarded("SharedStateContext", &wrapped);
 }
 
 #[tokio::test]
@@ -324,6 +351,7 @@ async fn branch_context_preserves_capabilities() {
         Arc::new(BranchContext::new(sentinel().await, "sentinel-branch.child".to_string()));
     assert_capabilities_preserved("BranchContext", wrapped.clone()).await;
     assert_eq!(wrapped.branch(), "sentinel-branch.child", "BranchContext must override branch");
+    assert!(wrapped.steering_inbox().is_none(), "a parallel branch takes no steering");
 }
 
 #[tokio::test]
@@ -335,6 +363,7 @@ async fn skill_context_preserves_capabilities() {
     let wrapped =
         super::skill_context::with_user_content_override(sentinel().await, overridden.clone());
     assert_capabilities_preserved("UserContentOverrideContext", wrapped.clone()).await;
+    assert_steering_forwarded("UserContentOverrideContext", &wrapped);
     assert_eq!(
         wrapped.user_content().parts.len(),
         overridden.parts.len(),
@@ -345,6 +374,7 @@ async fn skill_context_preserves_capabilities() {
 #[tokio::test]
 async fn loop_history_context_preserves_capabilities() {
     let wrapped = super::loop_agent::history_tracking_context_for_test(sentinel().await);
+    assert_steering_forwarded("HistoryTrackingContext", &wrapped);
     assert_capabilities_preserved("HistoryTrackingContext", wrapped).await;
 }
 
@@ -360,6 +390,7 @@ async fn composed_wrappers_preserve_capabilities() {
 
     assert_capabilities_preserved("BranchContext(SharedStateContext)", outer.clone()).await;
     assert_eq!(outer.branch(), "sentinel-branch.parallel.a");
+    assert!(outer.steering_inbox().is_none(), "a parallel branch takes no steering");
 }
 
 /// An `Event` carries no capabilities, but this pins the sentinel itself: if the
@@ -375,6 +406,7 @@ async fn sentinel_reports_non_default_capabilities() {
     assert!(ctx.shared_state().is_some());
     assert!(ctx.artifacts().is_some());
     assert!(ctx.memory().is_some());
+    assert!(ctx.steering_inbox().is_some());
     let _ = Event::new("sentinel-invocation");
 }
 
@@ -399,6 +431,7 @@ async fn acting_agent_context_preserves_capabilities_and_names_its_agent() {
     assert!(wrapped.shared_state().is_some(), "ActingAgentContext: shared state was dropped");
     assert!(wrapped.artifacts().is_some(), "ActingAgentContext: artifacts were dropped");
     assert!(wrapped.memory().is_some(), "ActingAgentContext: memory was dropped");
+    assert_steering_forwarded("ActingAgentContext", &wrapped);
     assert_eq!(wrapped.agent_name(), parent.agent_name(), "the execution identity is unchanged");
 
     // The subject and chain are the parent's; the principal is the sub-agent's own.

@@ -165,6 +165,10 @@ impl InvocationContext for UserContentOverrideContext {
         self.parent.requires_tool_confirmation(tool_name)
     }
 
+    fn steering_inbox(&self) -> Option<adk_core::SteeringInbox> {
+        self.parent.steering_inbox()
+    }
+
     async fn get_secret(&self, name: &str) -> Result<Option<String>> {
         self.parent.get_secret(name).await
     }
