@@ -116,6 +116,10 @@ fn sandbox_error_to_json(err: &SandboxError) -> Value {
             "status": "error",
             "stderr": format!("enforcer '{enforcer}' unavailable: {message}"),
         }),
+        SandboxError::Unenforceable { .. } => json!({
+            "status": "error",
+            "stderr": err.to_string(),
+        }),
         SandboxError::PolicyViolation(msg) => json!({
             "status": "error",
             "stderr": format!("policy violation: {msg}"),

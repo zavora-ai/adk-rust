@@ -55,6 +55,7 @@ impl CommandLauncher for Confined {
         let system = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
         Some(
             WindowsEnforcer::new()
+                .acknowledge_open_network()
                 .spawn_contained(
                     &policy,
                     system.join("System32").join("cmd.exe").as_os_str(),

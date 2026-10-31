@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use proptest::prelude::*;
 
 use adk_sandbox::sandbox::macos::MacOsEnforcer;
-use adk_sandbox::sandbox::{AccessMode, AllowedPath, SandboxPolicy};
+use adk_sandbox::sandbox::{AccessMode, AllowedPath, NetworkAccess, ProxyEndpoint, SandboxPolicy};
 
 // ---------------------------------------------------------------------------
 // Generators
@@ -30,18 +30,25 @@ fn arb_allowed_path() -> impl Strategy<Value = AllowedPath> {
         .prop_map(|(path, mode)| AllowedPath { path: PathBuf::from(path), mode })
 }
 
+fn arb_network() -> impl Strategy<Value = NetworkAccess> {
+    prop_oneof![
+        Just(NetworkAccess::Denied),
+        Just(NetworkAccess::Open),
+        (1u16..).prop_map(|port| NetworkAccess::Proxied { endpoint: ProxyEndpoint { port } }),
+    ]
+}
+
 fn arb_sandbox_policy() -> impl Strategy<Value = SandboxPolicy> {
     (
         proptest::collection::vec(arb_allowed_path(), 0..10),
-        any::<bool>(),
+        arb_network(),
         any::<bool>(),
         proptest::collection::vec(("[A-Z_]{1,8}", "[a-zA-Z0-9]{0,16}"), 0..5),
     )
         .prop_map(|(paths, network, spawn, env_pairs)| SandboxPolicy {
             allowed_paths: paths,
-            allow_network: network,
+            network,
             allow_process_spawn: spawn,
-            network_rules: Vec::new(),
             env: env_pairs.into_iter().collect(),
         })
 }
@@ -108,9 +115,8 @@ fn arb_nested_policy() -> impl Strategy<Value = SandboxPolicy> {
     )
     .prop_map(|allowed_paths| SandboxPolicy {
         allowed_paths,
-        allow_network: false,
+        network: NetworkAccess::Denied,
         allow_process_spawn: true,
-        network_rules: Vec::new(),
         env: Default::default(),
     })
 }
@@ -159,7 +165,8 @@ proptest! {
     ///
     /// *For any* valid `SandboxPolicy`, the generated Seatbelt profile SHALL:
     /// - Contain `(version 1)` and `(deny default)`, and never `(allow default)`
-    /// - Contain `(allow network*)` iff `allow_network` is true
+    /// - Contain `(allow network*)` iff the network is `Open`, and a `network-outbound` grant
+    ///   to `localhost:<port>` iff it is `Proxied`
     /// - Contain `(allow process-fork)` iff `allow_process_spawn` is true
     /// - Have one `(allow file-read* (subpath "..."))` per read-only path
     /// - Have one `(allow file-read* file-write* (subpath "..."))` per read-write path
@@ -179,7 +186,16 @@ proptest! {
             "(allow default) overrides the deny-default base:\n{profile}"
         );
 
-        prop_assert_eq!(profile.contains("(allow network*)"), policy.allow_network);
+        prop_assert_eq!(profile.contains("(allow network*)"), policy.network == NetworkAccess::Open);
+        let outbound = profile.contains("(allow network-outbound");
+        match policy.network {
+            NetworkAccess::Proxied { endpoint } => {
+                let grant = format!("(allow network-outbound (remote ip \"localhost:{}\"))", endpoint.port);
+                prop_assert!(profile.contains(&grant), "missing {grant}:\n{profile}");
+                prop_assert_eq!(profile.matches("network").count(), 1, "one network rule:\n{}", profile);
+            }
+            NetworkAccess::Denied | NetworkAccess::Open => prop_assert!(!outbound),
+        }
         prop_assert_eq!(profile.contains("(allow process-fork)"), policy.allow_process_spawn);
 
         let read_only_count = policy

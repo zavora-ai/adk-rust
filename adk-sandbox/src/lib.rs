@@ -80,8 +80,8 @@ pub mod process_tree;
 pub use backend::{BackendCapabilities, EnforcedLimits, SandboxBackend};
 pub use error::SandboxError;
 pub use sandbox::{
-    AccessMode, AllowedPath, NetworkRule, SandboxEnforcer, SandboxPolicy, SandboxPolicyBuilder,
-    WrappedCommand, get_enforcer,
+    AccessMode, AllowedPath, NetworkAccess, NetworkSupport, ProxyEndpoint, SandboxEnforcer,
+    SandboxPolicy, SandboxPolicyBuilder, WrappedCommand, get_enforcer,
 };
 pub use tool::SandboxTool;
 pub use types::{ExecRequest, ExecResult, Language};

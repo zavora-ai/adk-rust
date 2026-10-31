@@ -646,7 +646,8 @@ impl ExternalGenerator {
                  `ExternalGenerator::with_restricted_token`, or build on Linux or macOS",
             ));
         }
-        let enforcer = WindowsEnforcer::new();
+        // `with_restricted_token` is the caller's acceptance that the network stays open.
+        let enforcer = WindowsEnforcer::new().acknowledge_open_network();
         enforcer.probe_confined().map_err(|e| {
             generator_error(
                 self.kind,
@@ -951,6 +952,10 @@ impl adk_sandbox::SandboxEnforcer for SystemRoot {
 
     fn probe(&self) -> std::result::Result<(), adk_sandbox::SandboxError> {
         self.inner.probe()
+    }
+
+    fn network_support(&self) -> adk_sandbox::NetworkSupport {
+        self.inner.network_support()
     }
 
     fn wrap_command(

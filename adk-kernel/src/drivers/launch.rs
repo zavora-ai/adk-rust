@@ -10,7 +10,8 @@ use std::sync::Arc;
 use adk_core::{ActingContext, AdkError, CredentialBroker};
 use adk_sandbox::SandboxError;
 use adk_sandbox::sandbox::{
-    AccessMode, AllowedPath, SandboxEnforcer, SandboxPolicy, SandboxPolicyBuilder, WrappedCommand,
+    AccessMode, AllowedPath, NetworkSupport, SandboxEnforcer, SandboxPolicy, SandboxPolicyBuilder,
+    WrappedCommand,
 };
 use adk_tool::mcp::McpServerConfig;
 
@@ -562,6 +563,10 @@ impl SandboxEnforcer for SystemRoot {
         self.inner.probe()
     }
 
+    fn network_support(&self) -> NetworkSupport {
+        self.inner.network_support()
+    }
+
     fn wrap_command(
         &self,
         program: &OsStr,
@@ -778,6 +783,10 @@ mod tests {
         fn probe(&self) -> std::result::Result<(), SandboxError> {
             Ok(())
         }
+        fn network_support(&self) -> NetworkSupport {
+            NetworkSupport { denied: true, proxied: false }
+        }
+
         fn wrap_command(
             &self,
             program: &OsStr,

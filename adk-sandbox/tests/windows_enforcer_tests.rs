@@ -20,6 +20,7 @@ use adk_sandbox::sandbox::windows::{ConfinedOutcome, WindowsEnforcer};
 fn run_for(workspace: &Path, script: &str, timeout: Duration) -> ConfinedOutcome {
     let policy = SandboxPolicyBuilder::new().allow_read_write(workspace).build();
     WindowsEnforcer::new()
+        .acknowledge_open_network()
         .run_confined(
             &policy,
             "cmd.exe".as_ref(),
@@ -144,6 +145,7 @@ async fn git_bash_starts_under_the_token_and_writes_only_the_workspace() {
     let escaped = outside.join("escaped.txt").display().to_string().replace('\\', "/");
     let script = format!("echo inside > inside.txt; echo out > '{escaped}'; echo ran");
     let mut child = WindowsEnforcer::new()
+        .acknowledge_open_network()
         .spawn_contained(
             &policy,
             bash.as_os_str(),
@@ -211,6 +213,7 @@ fn contained(
 ) -> (i32, String, String) {
     let args: Vec<OsString> = args.iter().map(OsString::from).collect();
     let mut child = WindowsEnforcer::new()
+        .acknowledge_open_network()
         .spawn_contained(policy, program.as_os_str(), &args, cwd)
         .expect("the contained program starts");
     drop(child.stdin.take());
@@ -472,6 +475,7 @@ fn spawn(workspace: &Path, script: &str) -> ContainedChild {
     let policy = SandboxPolicyBuilder::new().allow_read_write(workspace).build();
     let system = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
     WindowsEnforcer::new()
+        .acknowledge_open_network()
         .spawn_contained(
             &policy,
             system.join("System32").join("cmd.exe").as_os_str(),

@@ -338,3 +338,32 @@ async fn a_compiled_rust_binary_runs_under_the_deny_default_profile() {
     assert_eq!(result.exit_code, 0, "{result:?}");
     assert_eq!(result.stdout.trim(), "hello from seatbelt");
 }
+
+/// Under `Denied` and `Proxied`, Seatbelt refuses a Unix-domain socket connection too, so a
+/// daemon's socket in a granted directory is no way out.
+#[tokio::test]
+async fn unix_sockets_are_refused_unless_the_network_is_open() {
+    if !seatbelt_available() {
+        return;
+    }
+    let (_guard, directory) = canonical_tempdir();
+    let socket = directory.join("daemon.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket).expect("bind a unix socket");
+    // curl exits 7 when it cannot connect and 28 when the listener, which never answers,
+    // accepted the connection.
+    let script = format!(
+        "curl -s -o /dev/null --max-time 2 --unix-socket {} http://local/; echo $?",
+        shell_quote(&socket)
+    );
+    let endpoint = adk_sandbox::sandbox::ProxyEndpoint { port: 9 };
+    let base = || SandboxPolicyBuilder::new().allow_read(&directory).allow_process_spawn();
+
+    for (policy, exit) in [
+        (base().build(), "7"),
+        (base().proxied(endpoint).build(), "7"),
+        (base().allow_network().build(), "28"),
+    ] {
+        let result = run_sandboxed(policy.clone(), &script, &[]).await;
+        assert_eq!(result.stdout.trim(), exit, "{}: {result:?}", policy.network);
+    }
+}

@@ -21,8 +21,8 @@
 //! | `file-read*` | The system runtime (`/bin`, `/sbin`, `/usr`, `/System`, `/Library/Apple`, `/Library/Frameworks`, `/opt/homebrew`, `/private/etc` minus credential files, the dyld cache, time zone data), random devices, and the policy's allowed paths |
 //! | `file-read-metadata` | Every path — resolving a path needs `stat` and `readlink` on each ancestor, so existence, size, and timestamps are visible everywhere; contents are not |
 //! | `file-write*` | `/dev/null`, `/dev/zero`, `/dev/dtracehelper`, and the policy's read-write paths, less any read-only entry inside them |
-//! | `network*` | Only with `allow_network`; `network_rules` are not enforceable and fail closed |
-//! | `mach-lookup` | User and group lookup, temp-dir resolution, notifications, logging, and preferences; DNS, trust evaluation, and network configuration only with `allow_network` |
+//! | `network*` | `Open`: all; `Proxied`: only `network-outbound` to `localhost:<port>` of the egress proxy; `Denied`: none, Unix-domain sockets included |
+//! | `mach-lookup` | User and group lookup, temp-dir resolution, notifications, logging, and preferences; DNS, trust evaluation, and network configuration only with `Open` network access |
 //! | `sysctl-read`, `user-preference-read`, `signal` within the sandbox | Always |
 //!
 //! Home directories, `/tmp`, `/private/var/folders`, and the rest of the host are not
@@ -63,7 +63,10 @@
 use std::ffi::{OsStr, OsString};
 
 use super::layering::Layering;
-use super::{AccessMode, AllowedPath, SandboxEnforcer, SandboxPolicy, WrappedCommand};
+use super::{
+    AccessMode, AllowedPath, NetworkAccess, NetworkSupport, SandboxEnforcer, SandboxPolicy,
+    WrappedCommand,
+};
 use crate::error::SandboxError;
 
 /// macOS Seatbelt sandbox enforcer.
@@ -132,8 +135,7 @@ impl MacOsEnforcer {
     pub fn generate_profile(policy: &SandboxPolicy) -> String {
         Self::generate_profile_from_paths(
             &policy.allowed_paths,
-            policy.allow_network,
-            &policy.network_rules,
+            &policy.network,
             policy.allow_process_spawn,
         )
     }
@@ -141,8 +143,7 @@ impl MacOsEnforcer {
     /// Internal: generates profile from pre-canonicalized paths.
     fn generate_profile_from_paths(
         paths: &[AllowedPath],
-        allow_network: bool,
-        network_rules: &[super::NetworkRule],
+        network: &NetworkAccess,
         allow_process_spawn: bool,
     ) -> String {
         let mut profile = String::with_capacity(2048);
@@ -195,23 +196,26 @@ impl MacOsEnforcer {
              (ipc-posix-name-prefix \"apple.cfprefs.\"))\n",
         );
 
-        if allow_network {
-            profile.push_str("(allow network*)\n");
-            push_global_names(&mut profile, NETWORK_MACH_SERVICES);
-            push_path_rule(
-                &mut profile,
-                "allow file-read*",
-                "literal",
-                &["/private/var/run/resolv.conf"],
-            );
-        } else if !network_rules.is_empty() {
-            // Seatbelt network filters accept only `*` or `localhost` as the host, so a
-            // per-domain allowlist cannot be expressed. Denying all network fails closed.
-            tracing::warn!(
-                rules_count = network_rules.len(),
-                "seatbelt cannot filter network access by domain; \
-                 network_rules are ignored and all network access is blocked"
-            );
+        match network {
+            NetworkAccess::Open => {
+                profile.push_str("(allow network*)\n");
+                push_global_names(&mut profile, NETWORK_MACH_SERVICES);
+                push_path_rule(
+                    &mut profile,
+                    "allow file-read*",
+                    "literal",
+                    &["/private/var/run/resolv.conf"],
+                );
+            }
+            // Seatbelt network filters accept only `*` or `localhost` as the host, so the
+            // proxy's loopback port is the one destination; it resolves names itself.
+            NetworkAccess::Proxied { endpoint } => {
+                profile.push_str(&format!(
+                    "(allow network-outbound (remote ip \"localhost:{}\"))\n",
+                    endpoint.port
+                ));
+            }
+            NetworkAccess::Denied => {}
         }
 
         // Shallowest first, so the last matching rule is the most specific entry's. A
@@ -344,10 +348,14 @@ impl SandboxEnforcer for MacOsEnforcer {
         "seatbelt"
     }
 
+    fn network_support(&self) -> NetworkSupport {
+        NetworkSupport { denied: true, proxied: true }
+    }
+
     fn probe(&self) -> Result<(), SandboxError> {
         // Run a no-op under the most restrictive profile this enforcer generates, so a
         // macOS release that rejects any of its directives fails here rather than at run time.
-        let profile = Self::generate_profile_from_paths(&[], false, &[], false);
+        let profile = Self::generate_profile_from_paths(&[], &NetworkAccess::Denied, false);
         let result = std::process::Command::new("sandbox-exec")
             .arg("-p")
             .arg(&profile)
@@ -385,6 +393,7 @@ impl SandboxEnforcer for MacOsEnforcer {
         args: &[OsString],
         policy: &SandboxPolicy,
     ) -> Result<WrappedCommand, SandboxError> {
+        self.network_support().check(self.name(), &policy.network)?;
         // 1. Canonicalize all paths in the policy. Seatbelt matches the resolved path, so
         //    `/tmp` must be granted as `/private/tmp`.
         let canonicalized_paths = canonicalize_paths(&policy.allowed_paths)?;
@@ -400,8 +409,7 @@ impl SandboxEnforcer for MacOsEnforcer {
         // 2. Generate the Seatbelt profile from canonicalized paths
         let profile = Self::generate_profile_from_paths(
             &canonicalized_paths,
-            policy.allow_network,
-            &policy.network_rules,
+            &policy.network,
             policy.allow_process_spawn,
         );
 
@@ -700,32 +708,22 @@ mod tests {
         assert_eq!(enforcer.name(), "seatbelt");
     }
 
-    /// Seatbelt rejects hostnames in network filters (`host must be * or localhost`), so the
-    /// rules previously produced a profile `sandbox-exec` refused to parse. They now fail
-    /// closed to no network at all.
+    /// Seatbelt accepts only `*` or `localhost` as a network filter host, so `Proxied` grants
+    /// exactly one outbound destination, the proxy's loopback port, and nothing else.
     #[test]
-    fn test_generate_profile_domain_rules_fail_closed() {
-        let policy = SandboxPolicyBuilder::new()
-            .allow_domain("api.openai.com", &[443])
-            .allow_domain("huggingface.co", &[443, 80])
-            .allow_domain("example.com", &[])
-            .build();
+    fn test_generate_profile_proxied_grants_only_the_proxy_port() {
+        let endpoint = super::super::ProxyEndpoint { port: 47811 };
+        let policy = SandboxPolicyBuilder::new().proxied(endpoint).build();
         let profile = MacOsEnforcer::generate_profile(&policy);
 
-        assert!(!profile.contains("network"), "domain rules must not grant network:\n{profile}");
-        assert!(!profile.contains("api.openai.com"));
-        assert!(!profile.contains("example"));
+        assert!(profile.contains("(allow network-outbound (remote ip \"localhost:47811\"))\n"));
+        assert_eq!(profile.matches("network").count(), 1, "one network rule:\n{profile}");
+        assert!(!profile.contains("com.apple.dnssd.service"), "no DNS service:\n{profile}");
     }
 
     #[test]
-    fn test_generate_profile_full_network_overrides_rules() {
-        let policy = SandboxPolicyBuilder::new()
-            .allow_network()
-            .allow_domain("api.openai.com", &[443])
-            .build();
-        let profile = MacOsEnforcer::generate_profile(&policy);
-
-        assert!(profile.contains("(allow network*)"));
-        assert!(!profile.contains("api.openai.com"));
+    fn test_network_support_covers_every_mode() {
+        let support = MacOsEnforcer::new().network_support();
+        assert_eq!(support, NetworkSupport { denied: true, proxied: true });
     }
 }

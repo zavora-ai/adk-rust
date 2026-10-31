@@ -252,7 +252,7 @@ impl SandboxBackend for ProcessBackend {
 
     fn capabilities(&self) -> BackendCapabilities {
         let has_enforcer = self.enforcer.is_some();
-        let denies_network = self.policy.as_ref().is_some_and(|p| !p.allow_network);
+        let denies_network = self.policy.as_ref().is_some_and(|p| p.network.restricts());
 
         BackendCapabilities {
             supported_languages: vec![
@@ -558,6 +558,10 @@ impl ProcessBackend {
         }
         for (k, v) in &request.env {
             cmd.env(k, v);
+        }
+        // Last, so neither the policy nor the request routes around the egress proxy.
+        if let Some(policy) = &self.policy {
+            cmd.envs(policy.network.proxy_env());
         }
         cmd.kill_on_drop(true);
 

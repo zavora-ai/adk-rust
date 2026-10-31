@@ -13,7 +13,8 @@
 //!
 //! - `--die-with-parent` — kill child when parent exits
 //! - `--unshare-pid` — isolate process ID namespace
-//! - `--unshare-net` — isolate network namespace (no network access)
+//! - `--unshare-net` — unless the network is `Open`: an empty network namespace, so no IP
+//!   traffic and no abstract Unix sockets leave the sandbox
 //! - `--ro-bind <src> <dest>` — read-only filesystem bind mount
 //! - `--bind <src> <dest>` — read-write filesystem bind mount
 //! - `--new-session` — always: a new session with no controlling terminal, so the child
@@ -28,6 +29,23 @@
 //! above such an entry is also bound onto itself, which makes it a mount point the kernel
 //! refuses to rename or remove, so the entry cannot be carried away from its path and the
 //! path recreated writable.
+//!
+//! ## Network
+//!
+//! `Denied` network access is `--unshare-net`: an empty network namespace, so no IP traffic and
+//! no abstract Unix sockets. A Unix-domain socket on the filesystem is reached through its
+//! path, not the network namespace, and a read-only bind does not refuse `connect`, so under
+//! `Denied` the enforcer also keeps the host's shared socket directories out:
+//!
+//! | Policy | Effect |
+//! |--------|--------|
+//! | A grant of `/run`, or of a path under it, that holds a socket or cannot be fully listed | Refused with [`SandboxError::Unenforceable`] |
+//! | A grant of `/tmp`, `/var/tmp` or `/dev/shm` itself | Refused the same way; a directory below them can be granted |
+//! | A grant above them, such as `/` | Each is covered with an empty, read-only `tmpfs` before deeper grants are mounted, hiding the sockets of Docker, D-Bus, systemd, tmux, X11 and SSH agents |
+//!
+//! A socket elsewhere under a granted path, such as in a home directory, stays reachable;
+//! grant directories that hold none. `Proxied` is not enforced yet and is refused with
+//! [`SandboxError::Unenforceable`].
 //!
 //! ## Process Spawning
 //!
@@ -45,8 +63,15 @@ use std::ffi::{OsStr, OsString};
 
 use super::layering::Layering;
 use super::seccomp;
-use super::{AccessMode, AllowedPath, SandboxEnforcer, SandboxPolicy, WrappedCommand};
+use super::{
+    AccessMode, AllowedPath, NetworkAccess, NetworkSupport, SandboxEnforcer, SandboxPolicy,
+    WrappedCommand,
+};
 use crate::error::SandboxError;
+
+/// Directories where host daemons and sessions keep Unix sockets. Under a restrictive network
+/// a grant of one of them is refused, and a grant above one covers it with an empty `tmpfs`.
+const SOCKET_DIRECTORIES: &[&str] = &["/run", "/tmp", "/var/tmp", "/dev/shm"];
 
 /// File descriptor bubblewrap reads the process-creation seccomp program from.
 ///
@@ -122,7 +147,7 @@ impl LinuxEnforcer {
     pub fn generate_args(policy: &SandboxPolicy) -> Vec<String> {
         Self::generate_args_from_paths(
             &policy.allowed_paths,
-            policy.allow_network,
+            &policy.network,
             policy.allow_process_spawn,
         )
     }
@@ -130,7 +155,7 @@ impl LinuxEnforcer {
     /// Internal: generates args from pre-canonicalized paths.
     fn generate_args_from_paths(
         paths: &[AllowedPath],
-        allow_network: bool,
+        network: &NetworkAccess,
         allow_process_spawn: bool,
     ) -> Vec<String> {
         let mut args = Vec::with_capacity(16);
@@ -142,7 +167,7 @@ impl LinuxEnforcer {
         args.push("--unshare-pid".to_string());
 
         // Network isolation
-        if !allow_network {
+        if network.restricts() {
             args.push("--unshare-net".to_string());
         }
 
@@ -158,7 +183,9 @@ impl LinuxEnforcer {
 
         // Filesystem bind mounts, shallowest first: a later mount covers an earlier one, so the
         // most specific entry decides. Pinned directories become mount points, which the
-        // kernel refuses to rename or remove.
+        // kernel refuses to rename or remove. Under a restrictive network a socket directory
+        // below a mount is covered right after it, before any deeper grant is mounted.
+        let mut covered: Vec<&str> = Vec::new();
         for (path, mode) in Layering::new(paths).mounts() {
             let path_str = path.to_string_lossy().to_string();
             match mode {
@@ -173,6 +200,25 @@ impl LinuxEnforcer {
                     args.push(path_str);
                 }
             }
+            if !network.restricts() {
+                continue;
+            }
+            for directory in SOCKET_DIRECTORIES {
+                let target = std::path::Path::new(directory);
+                let below = target != path && target.starts_with(path);
+                if below
+                    && !covered.contains(directory)
+                    && std::fs::symlink_metadata(target).is_ok_and(|m| m.is_dir())
+                {
+                    args.push("--tmpfs".to_string());
+                    args.push((*directory).to_string());
+                    covered.push(directory);
+                }
+            }
+        }
+        for directory in covered {
+            args.push("--remount-ro".to_string());
+            args.push(directory.to_string());
         }
 
         args
@@ -188,6 +234,10 @@ impl Default for LinuxEnforcer {
 impl SandboxEnforcer for LinuxEnforcer {
     fn name(&self) -> &str {
         "bubblewrap"
+    }
+
+    fn network_support(&self) -> NetworkSupport {
+        NetworkSupport { denied: true, proxied: false }
     }
 
     fn probe(&self) -> Result<(), SandboxError> {
@@ -245,22 +295,18 @@ impl SandboxEnforcer for LinuxEnforcer {
         args: &[OsString],
         policy: &SandboxPolicy,
     ) -> Result<WrappedCommand, SandboxError> {
-        // Warn if domain-level network rules are present — bubblewrap can't enforce them
-        if !policy.allow_network && !policy.network_rules.is_empty() {
-            tracing::warn!(
-                rules_count = policy.network_rules.len(),
-                "bubblewrap does not support per-domain network filtering; \
-                 network_rules will be ignored and all network access will be blocked"
-            );
-        }
+        self.network_support().check(self.name(), &policy.network)?;
 
         // 1. Canonicalize all paths in the policy
         let canonicalized_paths = canonicalize_paths(&policy.allowed_paths)?;
+        if policy.network.restricts() {
+            refuse_socket_directories(&canonicalized_paths, &policy.network)?;
+        }
 
         // 2. Generate bwrap args from canonicalized paths
         let bwrap_args = Self::generate_args_from_paths(
             &canonicalized_paths,
-            policy.allow_network,
+            &policy.network,
             policy.allow_process_spawn,
         );
 
@@ -332,6 +378,60 @@ impl SandboxEnforcer for LinuxEnforcer {
 }
 
 /// Canonicalizes all paths in the policy, logging warnings for changed paths.
+/// Refuses a grant of a shared socket directory, or of a path under `/run` that holds a Unix
+/// socket: a bind mount keeps its sockets reachable whatever the network namespace.
+fn refuse_socket_directories(
+    paths: &[AllowedPath],
+    network: &NetworkAccess,
+) -> Result<(), SandboxError> {
+    let run = std::path::Path::new("/run");
+    for entry in paths {
+        let shared = SOCKET_DIRECTORIES
+            .iter()
+            .any(|directory| entry.path == std::path::Path::new(directory));
+        // A walk of at most this many entries; a larger tree is refused unread.
+        let mut budget = 4096;
+        if shared || (entry.path.starts_with(run) && holds_socket(&entry.path, &mut budget)) {
+            return Err(SandboxError::Unenforceable {
+                enforcer: "bubblewrap".to_string(),
+                requirement: format!(
+                    "network access {network} while granting '{}': Unix sockets there (Docker, \
+                     D-Bus, systemd, SSH agents) stay reachable through a bind mount; grant a \
+                     directory below it that holds none",
+                    entry.path.display()
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Whether `path` is, or holds within `budget` entries, a Unix socket; a directory that cannot
+/// be listed or a tree past the budget counts as holding one.
+fn holds_socket(path: &std::path::Path, budget: &mut usize) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    let Ok(metadata) = std::fs::symlink_metadata(path) else { return true };
+    if metadata.file_type().is_socket() {
+        return true;
+    }
+    if !metadata.is_dir() {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(path) else { return true };
+    for entry in entries {
+        if *budget == 0 {
+            return true;
+        }
+        *budget -= 1;
+        let Ok(entry) = entry else { return true };
+        let Ok(kind) = entry.file_type() else { return true };
+        if kind.is_socket() || (kind.is_dir() && holds_socket(&entry.path(), budget)) {
+            return true;
+        }
+    }
+    false
+}
+
 fn canonicalize_paths(paths: &[AllowedPath]) -> Result<Vec<AllowedPath>, SandboxError> {
     let mut result = Vec::with_capacity(paths.len());
 
@@ -434,16 +534,13 @@ mod tests {
     #[test]
     fn every_policy_starts_a_new_session() {
         for allow_process_spawn in [false, true] {
-            for allow_network in [false, true] {
-                let args = LinuxEnforcer::generate_args_from_paths(
-                    &[],
-                    allow_network,
-                    allow_process_spawn,
-                );
+            for network in [NetworkAccess::Denied, NetworkAccess::Open] {
+                let args =
+                    LinuxEnforcer::generate_args_from_paths(&[], &network, allow_process_spawn);
                 assert_eq!(
                     args.iter().filter(|arg| *arg == "--new-session").count(),
                     1,
-                    "spawn={allow_process_spawn} network={allow_network}: {args:?}"
+                    "spawn={allow_process_spawn} network={network}: {args:?}"
                 );
             }
         }
@@ -510,6 +607,63 @@ mod tests {
     fn test_name() {
         let enforcer = LinuxEnforcer::new();
         assert_eq!(enforcer.name(), "bubblewrap");
+    }
+
+    /// Proxied network access needs the proxy listener inside the sandbox's network namespace,
+    /// which this enforcer does not set up; it refuses rather than run with no network or an
+    /// open one.
+    #[test]
+    fn proxied_network_access_is_refused() {
+        let endpoint = super::super::ProxyEndpoint { port: 3128 };
+        let policy = SandboxPolicyBuilder::new().proxied(endpoint).build();
+
+        let result = LinuxEnforcer::new().wrap_command(OsStr::new("true"), &[], &policy);
+
+        assert!(matches!(result, Err(SandboxError::Unenforceable { .. })), "{result:?}");
+    }
+
+    /// A read-only bind does not refuse `connect` on a Unix socket, so the shared socket
+    /// directories are refused under a restrictive network; an open network grants them.
+    #[test]
+    fn socket_directories_are_refused_under_denied_network() {
+        let enforcer = LinuxEnforcer::new();
+        for path in ["/run", "/tmp"] {
+            let denied = SandboxPolicyBuilder::new().allow_read(path).build();
+            let result = enforcer.wrap_command(OsStr::new("true"), &[], &denied);
+            assert!(
+                matches!(result, Err(SandboxError::Unenforceable { .. })),
+                "{path}: {result:?}"
+            );
+
+            let open = SandboxPolicyBuilder::new().allow_read(path).allow_network().build();
+            assert!(enforcer.wrap_command(OsStr::new("true"), &[], &open).is_ok(), "{path}");
+        }
+        let narrow = SandboxPolicyBuilder::new().allow_read("/usr").build();
+        assert!(enforcer.wrap_command(OsStr::new("true"), &[], &narrow).is_ok());
+    }
+
+    /// A grant of `/` covers the socket directories with empty read-only `tmpfs` mounts before
+    /// a deeper grant, so the workspace below `/tmp` stays reachable and the rest does not.
+    #[test]
+    fn a_granted_root_covers_the_socket_directories_under_denied_network() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let workspace = std::fs::canonicalize(workspace.path()).expect("canonical");
+        let paths = [
+            AllowedPath { path: std::path::PathBuf::from("/"), mode: AccessMode::ReadOnly },
+            AllowedPath { path: workspace.clone(), mode: AccessMode::ReadWrite },
+        ];
+        let args = LinuxEnforcer::generate_args_from_paths(&paths, &NetworkAccess::Denied, true);
+        let position = |needle: &[&str]| args.windows(needle.len()).position(|w| w == needle);
+        let root = position(&["--ro-bind", "/", "/"]).expect("the root is bound");
+        let run = position(&["--tmpfs", "/run"]).expect("/run is covered");
+        let tmp = position(&["--tmpfs", "/tmp"]).expect("/tmp is covered");
+        let workspace = workspace.to_string_lossy().into_owned();
+        let bound = position(&["--bind", &workspace, &workspace]).expect("the workspace is bound");
+        assert!(root < run && run < bound && tmp < bound, "{args:?}");
+        assert!(position(&["--remount-ro", "/run"]).is_some_and(|ro| ro > bound), "{args:?}");
+
+        let open = LinuxEnforcer::generate_args_from_paths(&paths, &NetworkAccess::Open, true);
+        assert!(!open.iter().any(|arg| arg == "--tmpfs"), "{open:?}");
     }
 
     #[test]

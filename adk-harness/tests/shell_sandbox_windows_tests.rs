@@ -22,7 +22,7 @@ use adk_harness::{
 };
 use adk_model::ScriptedResponse;
 use adk_sandbox::SandboxError;
-use adk_sandbox::sandbox::{SandboxEnforcer, SandboxPolicy, WrappedCommand};
+use adk_sandbox::sandbox::{NetworkSupport, SandboxEnforcer, SandboxPolicy, WrappedCommand};
 use common::{Outcome, fixture_in, outcome, response_of};
 use serde_json::json;
 
@@ -44,6 +44,10 @@ impl SandboxEnforcer for Failing {
             message: "probe refused for the test".into(),
         })
     }
+    fn network_support(&self) -> NetworkSupport {
+        NetworkSupport::NONE
+    }
+
     fn wrap_command(
         &self,
         _program: &OsStr,

@@ -68,6 +68,19 @@ pub enum SandboxError {
     #[error("policy violation: {0}")]
     PolicyViolation(String),
 
+    /// The enforcer cannot enforce part of the policy, so the command does not run.
+    #[error(
+        "enforcer '{enforcer}' cannot enforce {requirement}, so the command does not run with \
+         less confinement than its policy asks for; choose a mode the enforcer supports (see \
+         `SandboxEnforcer::network_support`) or an enforcer that supports this one"
+    )]
+    Unenforceable {
+        /// The enforcer name.
+        enforcer: String,
+        /// What it cannot enforce, such as `network access denied`.
+        requirement: String,
+    },
+
     // ── Workspace lifecycle variants (behind `workspace` feature) ──────────
     /// Workspace provisioning failed.
     #[cfg(feature = "workspace")]
@@ -151,6 +164,9 @@ impl From<SandboxError> for adk_core::AdkError {
             }
             SandboxError::PolicyViolation(_) => {
                 (ErrorCategory::InvalidInput, "code.sandbox_policy_violation")
+            }
+            SandboxError::Unenforceable { .. } => {
+                (ErrorCategory::Unsupported, "code.sandbox_unenforceable")
             }
             #[cfg(feature = "workspace")]
             SandboxError::ProvisionFailed { .. } => {

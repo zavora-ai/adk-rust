@@ -42,13 +42,15 @@
 //! | The MSYS2 or Cygwin namespace of any other installation | **Not protected** — a command that starts such an installation's program by its path while none of the user's runs creates that namespace at Low integrity, and a program of it the user starts before the command ends shares it |
 //! | Descendant processes | Killed with the call's Job Object |
 //! | Inherited handles | `spawn_contained`'s three standard handles only, never inheritable in this process, so no process another thread starts can take one; `run_confined` inherits none |
-//! | Network | **Not enforced** — Windows offers no per-process network filter without AppContainer; the first policy in the process with `allow_network = false` or with `network_rules` logs a `tracing::warn`, once per process, and every command keeps full network access |
+//! | Network | **Not enforced** — Windows offers no per-process network filter without AppContainer. A policy whose network access is `Denied` or `Proxied` is refused with `SandboxError::Unenforceable`, unless the enforcer was built with [`WindowsEnforcer::acknowledge_open_network`]; then the command runs with full network access and the first such policy in the process logs a `tracing::warn` |
 //! | Labels and grants | Persist on the granted paths after the call: `RESTRICTED`'s entry, and a Low label on each read-write path, so any Low-integrity process of the machine may write there |
 
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
-use super::{AccessMode, AllowedPath, SandboxEnforcer, SandboxPolicy, WrappedCommand};
+use super::{
+    AccessMode, AllowedPath, NetworkSupport, SandboxEnforcer, SandboxPolicy, WrappedCommand,
+};
 use crate::error::SandboxError;
 
 /// The enforcer name reported in [`SandboxEnforcer::name`], audit records and
@@ -86,12 +88,50 @@ pub const ENFORCER_NAME: &str = "restricted-token";
 /// assert_eq!(outcome.exit_code, Some(0));
 /// # Ok::<(), adk_sandbox::SandboxError>(())
 /// ```
-pub struct WindowsEnforcer;
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WindowsEnforcer {
+    open_network_acknowledged: bool,
+}
 
 impl WindowsEnforcer {
-    /// Creates a new Windows restricted-token enforcer.
+    /// Creates a new Windows restricted-token enforcer, which refuses a policy whose network
+    /// access is `Denied` or `Proxied`.
     pub fn new() -> Self {
-        Self
+        Self { open_network_acknowledged: false }
+    }
+
+    /// Runs a policy whose network access is `Denied` or `Proxied` with the network open, which
+    /// the restricted token cannot restrict. Without it such a policy is refused with
+    /// [`SandboxError::Unenforceable`].
+    ///
+    /// For a caller that reports the open network itself, as the harness shell does; the first
+    /// such policy in the process also logs a `tracing::warn`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_sandbox::sandbox::windows::WindowsEnforcer;
+    ///
+    /// let enforcer = WindowsEnforcer::new().acknowledge_open_network();
+    /// assert!(enforcer.open_network_acknowledged());
+    /// ```
+    #[must_use]
+    pub fn acknowledge_open_network(mut self) -> Self {
+        self.open_network_acknowledged = true;
+        self
+    }
+
+    /// Whether [`acknowledge_open_network`](Self::acknowledge_open_network) was set.
+    pub fn open_network_acknowledged(&self) -> bool {
+        self.open_network_acknowledged
+    }
+
+    /// Refuses a restrictive network the caller has not acknowledged stays open.
+    fn check_network(&self, policy: &SandboxPolicy) -> Result<(), SandboxError> {
+        if self.open_network_acknowledged {
+            return Ok(());
+        }
+        self.network_support().check(ENFORCER_NAME, &policy.network)
     }
 
     /// Runs `program` with `args` under a restricted token, with ACL grants on the policy's
@@ -107,15 +147,17 @@ impl WindowsEnforcer {
     /// call timed out. On a timeout the job is terminated and [`ConfinedOutcome::timed_out`]
     /// is `true`.
     ///
-    /// The network is not restricted: the command keeps full network access. The first call
-    /// in the process whose policy has `allow_network = false` or `network_rules` logs a
-    /// `tracing::warn` with that policy's fields; later calls log nothing.
+    /// The network is not restricted. A policy whose network access is `Denied` or `Proxied`
+    /// is refused unless the enforcer [acknowledges](Self::acknowledge_open_network) that the
+    /// network stays open; the first such policy in the process then logs a `tracing::warn`.
     ///
     /// # Errors
     ///
-    /// Returns [`SandboxError::EnforcerUnavailable`] off Windows, [`SandboxError::PolicyViolation`]
-    /// when an allowed path cannot be resolved, and [`SandboxError::EnforcerFailed`] when a Win32
-    /// step fails (with the failing call and the OS error).
+    /// Returns [`SandboxError::Unenforceable`] for a restrictive network that was not
+    /// acknowledged, [`SandboxError::EnforcerUnavailable`] off Windows,
+    /// [`SandboxError::PolicyViolation`] when an allowed path cannot be resolved, and
+    /// [`SandboxError::EnforcerFailed`] when a Win32 step fails (with the failing call and the
+    /// OS error).
     pub fn run_confined(
         &self,
         policy: &SandboxPolicy,
@@ -124,6 +166,7 @@ impl WindowsEnforcer {
         cwd: &std::path::Path,
         timeout: Option<std::time::Duration>,
     ) -> Result<ConfinedOutcome, SandboxError> {
+        self.check_network(policy)?;
         let grants = grant_targets(policy);
         #[cfg(all(target_os = "windows", feature = "sandbox-windows"))]
         {
@@ -162,9 +205,10 @@ impl WindowsEnforcer {
     ///
     /// # Errors
     ///
-    /// Returns [`SandboxError::PolicyViolation`] when an allowed path cannot be resolved, and
-    /// [`SandboxError::EnforcerFailed`] when a Win32 step fails (with the failing call and the
-    /// OS error).
+    /// Returns [`SandboxError::Unenforceable`] for a restrictive network that was not
+    /// acknowledged, [`SandboxError::PolicyViolation`] when an allowed path cannot be resolved,
+    /// and [`SandboxError::EnforcerFailed`] when a Win32 step fails (with the failing call and
+    /// the OS error).
     ///
     /// # Example
     ///
@@ -200,6 +244,7 @@ impl WindowsEnforcer {
         args: &[OsString],
         cwd: &std::path::Path,
     ) -> Result<crate::process_tree::ContainedChild, SandboxError> {
+        self.check_network(policy)?;
         imp::spawn_contained(policy, &grant_targets(policy), program, args, cwd)
     }
 
@@ -235,7 +280,7 @@ impl WindowsEnforcer {
             let system = std::env::var_os("SystemRoot")
                 .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
                 .join("System32");
-            // The probe asks for no network restriction, so it logs no network warning.
+            // The probe asks for no network restriction, so it is neither refused nor warned of.
             let outcome = self
                 .run_confined(
                     &super::SandboxPolicyBuilder::new().allow_network().build(),
@@ -265,12 +310,6 @@ impl WindowsEnforcer {
                     .to_string(),
             ))
         }
-    }
-}
-
-impl Default for WindowsEnforcer {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -320,6 +359,12 @@ pub fn grant_targets(policy: &SandboxPolicy) -> Vec<AllowedPath> {
 impl SandboxEnforcer for WindowsEnforcer {
     fn name(&self) -> &str {
         ENFORCER_NAME
+    }
+
+    /// The restricted token has no network filter, so no restrictive mode is enforced;
+    /// [`WindowsEnforcer::acknowledge_open_network`] runs them with the network open.
+    fn network_support(&self) -> NetworkSupport {
+        NetworkSupport::NONE
     }
 
     fn probe(&self) -> Result<(), SandboxError> {
@@ -1443,8 +1488,8 @@ mod imp {
         }
     }
 
-    /// Logs, for the first policy of this process that asks to restrict the network, that the
-    /// token does not.
+    /// Logs, for the first acknowledged policy of this process that asks to restrict the
+    /// network, that the token does not.
     static NETWORK_WARNING: std::sync::Once = std::sync::Once::new();
 
     /// A process the restricted token runs, in its job and resumed.
@@ -1470,16 +1515,14 @@ mod imp {
         cwd: &Path,
         stdio: Option<&ChildStdio>,
     ) -> Result<Launched, SandboxError> {
-        // The token has no network filter, so the command keeps full network access whatever
-        // the policy asks for. Once per process, since `allow_network` defaults to `false` and
-        // a shell would otherwise warn on every command.
-        if !policy.allow_network || !policy.network_rules.is_empty() {
+        // A restrictive network reaches here only when the caller acknowledged that the token
+        // leaves it open. Once per process, since a shell would otherwise warn on every command.
+        if policy.network.restricts() {
             NETWORK_WARNING.call_once(|| {
                 tracing::warn!(
-                    allow_network = policy.allow_network,
-                    rules_count = policy.network_rules.len(),
-                    "the restricted-token enforcer does not enforce allow_network = false or \
-                     network_rules; confined processes keep full network access"
+                    sandbox.network = %policy.network,
+                    "the restricted-token enforcer does not restrict the network; confined \
+                     processes keep full network access, as the caller acknowledged"
                 );
             });
         }
@@ -1761,8 +1804,9 @@ mod imp {
             assert_eq!((out.trim(), err.trim()), ("out", "err"));
         }
 
-        /// The restricted token has no network filter, so a confined command keeps full
-        /// network access, and the first policy of the process that asks for less says so.
+        /// The restricted token has no network filter: a restrictive network is refused unless
+        /// acknowledged, and the first acknowledged one of the process says the network stays
+        /// open.
         mod network {
             use std::sync::{Arc, Mutex};
 
@@ -1818,14 +1862,15 @@ mod imp {
                 fn exit(&self, _: &Id) {}
             }
 
-            /// Runs `cmd.exe /d /c exit 0` from the system directory under `policy`, and
-            /// returns the fields of each network warning it logged.
+            /// Runs `cmd.exe /d /c exit 0` from the system directory under `policy`, with the
+            /// open network acknowledged, and returns the fields of each network warning it
+            /// logged.
             fn network_warnings(policy: &SandboxPolicy) -> Vec<Vec<String>> {
                 let warnings = NetworkWarnings::default();
                 let system =
                     PathBuf::from(OsString::from_wide(&system_directory().expect("system")));
                 let outcome = tracing::subscriber::with_default(warnings.clone(), || {
-                    WindowsEnforcer::new().run_confined(
+                    WindowsEnforcer::new().acknowledge_open_network().run_confined(
                         policy,
                         system.join("cmd.exe").as_os_str(),
                         &[OsString::from("/d"), OsString::from("/c"), OsString::from("exit 0")],
@@ -1842,18 +1887,18 @@ mod imp {
             /// it is the only test of this library that starts a confined process, and the
             /// first assertion fails if another one logged the warning first.
             #[test]
-            fn the_first_policy_that_restricts_the_network_warns_once() {
+            fn the_first_acknowledged_restrictive_policy_warns_once() {
                 assert!(
                     !NETWORK_WARNING.is_completed(),
                     "another test in this process logged the network warning first"
                 );
                 let open = SandboxPolicyBuilder::new().allow_network().build();
-                let rules = SandboxPolicyBuilder::new().allow_domain("example.com", &[443]).build();
                 let denied = SandboxPolicyBuilder::new().build();
+                let again = SandboxPolicyBuilder::new().build();
 
-                let logged: Vec<_> = [&open, &rules, &denied].map(network_warnings).into();
+                let logged: Vec<_> = [&open, &denied, &again].map(network_warnings).into();
 
-                let first = vec!["allow_network=false".to_string(), "rules_count=1".to_string()];
+                let first = vec!["sandbox.network=denied".to_string()];
                 assert_eq!(logged, vec![vec![], vec![first], vec![]]);
             }
         }
@@ -1868,6 +1913,32 @@ mod tests {
     #[test]
     fn name_is_restricted_token() {
         assert_eq!(WindowsEnforcer::new().name(), ENFORCER_NAME);
+    }
+
+    /// The restricted token cannot restrict the network, so a restrictive policy is refused
+    /// before anything starts unless the caller acknowledged the open network.
+    #[test]
+    fn a_restrictive_network_is_refused_unless_acknowledged() {
+        let endpoint = crate::sandbox::ProxyEndpoint { port: 3128 };
+        for policy in [
+            SandboxPolicyBuilder::new().build(),
+            SandboxPolicyBuilder::new().proxied(endpoint).build(),
+        ] {
+            let result = WindowsEnforcer::new().run_confined(
+                &policy,
+                OsStr::new("cmd.exe"),
+                &[],
+                std::path::Path::new("."),
+                None,
+            );
+            assert!(matches!(result, Err(SandboxError::Unenforceable { .. })), "{result:?}");
+            assert!(WindowsEnforcer::new().check_network(&policy).is_err());
+            assert!(
+                WindowsEnforcer::new().acknowledge_open_network().check_network(&policy).is_ok()
+            );
+        }
+        let open = SandboxPolicyBuilder::new().allow_network().build();
+        assert!(WindowsEnforcer::new().check_network(&open).is_ok());
     }
 
     #[test]

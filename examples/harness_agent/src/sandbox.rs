@@ -15,7 +15,7 @@ use adk_harness::{
 };
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_sandbox::SandboxError;
-use adk_sandbox::sandbox::{SandboxEnforcer, SandboxPolicy, WrappedCommand};
+use adk_sandbox::sandbox::{NetworkSupport, SandboxEnforcer, SandboxPolicy, WrappedCommand};
 use anyhow::Result;
 use serde_json::{Value, json};
 
@@ -161,6 +161,10 @@ impl SandboxEnforcer for NoNestedReadOnly {
     fn probe(&self) -> Result<(), SandboxError> {
         Ok(())
     }
+    fn network_support(&self) -> NetworkSupport {
+        NetworkSupport { denied: true, proxied: false }
+    }
+
     fn wrap_command(&self, program: &OsStr, args: &[OsString], _policy: &SandboxPolicy) -> Result<WrappedCommand, SandboxError> {
         Ok(WrappedCommand { program: program.to_owned(), args: args.to_vec() })
     }
