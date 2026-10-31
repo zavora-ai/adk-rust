@@ -603,7 +603,7 @@ fn runtime_denial_content() -> Value {
                 json!({ "error": "Tool 'test_tool' execution denied by confirmation policy" }),
             ),
             id: Some("call-runtime".to_string()),
-            annotations: None,
+            annotations: Some(json!({ adk_core::TOOL_RESULT_STATUS_KEY: "refused" })),
         }],
     })
     .unwrap()

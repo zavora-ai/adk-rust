@@ -139,26 +139,29 @@ impl InFlightCalls {
     /// response.
     fn answer_interrupted(&mut self) -> Vec<Event> {
         self.answer_with(|call| {
-            adk_core::outcome_unknown_response(format!(
+            let response = adk_core::outcome_unknown_response(format!(
                 "the run was cancelled while '{}' was in flight, so the call may have taken effect; check its result before calling it again",
                 call.name
-            ))
+            ));
+            (response, adk_core::ToolResultStatus::OutcomeUnknown)
         })
     }
 
-    /// Answers every call still in flight with `respond(call)`, one event per author,
-    /// branch, and invocation.
+    /// Answers every call still in flight with `respond(call)`, a response and its status,
+    /// one event per author, branch, and invocation.
     fn answer_with(
         &mut self,
-        mut respond: impl FnMut(&InFlightCall) -> serde_json::Value,
+        mut respond: impl FnMut(&InFlightCall) -> (serde_json::Value, adk_core::ToolResultStatus),
     ) -> Vec<Event> {
         let mut events: Vec<Event> = Vec::new();
         for call in std::mem::take(&mut self.0) {
-            let response = Part::FunctionResponse {
-                function_response: FunctionResponseData::new(call.name.clone(), respond(&call)),
+            let (response, status) = respond(&call);
+            let mut response = Part::FunctionResponse {
+                function_response: FunctionResponseData::new(call.name.clone(), response),
                 id: call.id,
                 annotations: None,
             };
+            response.set_tool_result_status(status, None);
             let existing = events.iter_mut().find(|event| {
                 event.author == call.author
                     && event.branch == call.branch
@@ -185,12 +188,14 @@ impl InFlightCalls {
 }
 
 /// The function response a recovering worker gives a call that a stopped process left
-/// unanswered, from the action ledger's record of it.
+/// unanswered, from the action ledger's record of it, with the status the record shows.
 fn recovered_call_response(
     name: &str,
     record: Option<adk_core::ActionRecord>,
-) -> serde_json::Value {
-    match record.and_then(|record| record.outcome) {
+) -> (serde_json::Value, adk_core::ToolResultStatus) {
+    let outcome = record.and_then(|record| record.outcome);
+    let status = adk_core::ToolResultStatus::of_record(outcome.as_ref());
+    let response = match outcome {
         Some(adk_core::ActionOutcome::Succeeded { result_digest }) => serde_json::json!({
             "status": "already_succeeded",
             "result_digest": result_digest,
@@ -204,7 +209,8 @@ fn recovered_call_response(
         _ => adk_core::outcome_unknown_response(format!(
             "the process running '{name}' stopped before the call recorded an outcome, so it may have taken effect; check its result before calling it again"
         )),
-    }
+    };
+    (response, status)
 }
 
 /// Screens the saved user messages of `session` that lack the
@@ -2907,5 +2913,103 @@ mod in_flight_tests {
             .collect();
         assert_eq!(answered_calls, [("pay", Some("c1")), ("notify", None)]);
         assert!(in_flight.answer_interrupted().is_empty(), "calls are answered once");
+    }
+
+    fn answered(name: &str, id: &str, response: serde_json::Value, status: &str) -> Part {
+        Part::FunctionResponse {
+            function_response: FunctionResponseData::new(name, response),
+            id: Some(id.to_string()),
+            annotations: Some(json!({ adk_core::TOOL_RESULT_STATUS_KEY: status })),
+        }
+    }
+
+    /// #1006 left the runner's answers without a status, so a cancelled call read as the
+    /// tool's own result.
+    #[test]
+    fn a_cancelled_runs_calls_are_answered_with_an_unknown_outcome() {
+        let mut in_flight = InFlightCalls::default();
+        in_flight.observe(&event("agent", "model", vec![call("pay", Some("c1"))]));
+
+        let answered_events = in_flight.answer_interrupted();
+
+        let parts = answered_events[0].llm_response.content.clone().unwrap().parts;
+        assert_eq!(
+            parts,
+            vec![answered(
+                "pay",
+                "c1",
+                adk_core::outcome_unknown_response(
+                    "the run was cancelled while 'pay' was in flight, so the call may have \
+                     taken effect; check its result before calling it again"
+                ),
+                "outcome_unknown",
+            )]
+        );
+    }
+
+    #[test]
+    fn a_recovered_call_is_answered_with_the_status_its_record_shows() {
+        let record = |outcome: Option<adk_core::ActionOutcome>| {
+            let mut record = adk_core::ActionRecord::new(
+                "k",
+                "pay",
+                &json!({}),
+                adk_core::ToolEffect::NonIdempotent,
+            );
+            record.outcome = outcome;
+            Some(record)
+        };
+        let frozen = adk_core::not_run_text(&adk_core::AdkError::agent("execution is frozen"));
+        let cases = [
+            (
+                record(Some(adk_core::ActionOutcome::Succeeded { result_digest: "d".into() })),
+                json!({
+                    "status": "already_succeeded",
+                    "result_digest": "d",
+                    "detail": "this call to 'pay' completed before the run was recovered; it \
+                               was not executed again",
+                }),
+                "succeeded",
+            ),
+            (
+                record(Some(adk_core::ActionOutcome::Failed { error: "declined".into() })),
+                json!({
+                    "status": "already_failed",
+                    "error": "declined",
+                    "detail": "this call to 'pay' failed before the run was recovered; it was \
+                               not executed again",
+                }),
+                "failed",
+            ),
+            (
+                record(Some(adk_core::ActionOutcome::Failed { error: frozen.clone() })),
+                json!({
+                    "status": "already_failed",
+                    "error": frozen,
+                    "detail": "this call to 'pay' failed before the run was recovered; it was \
+                               not executed again",
+                }),
+                "not_run",
+            ),
+            (
+                None,
+                adk_core::outcome_unknown_response(
+                    "the process running 'pay' stopped before the call recorded an outcome, so \
+                     it may have taken effect; check its result before calling it again",
+                ),
+                "outcome_unknown",
+            ),
+        ];
+        for (record, response, status) in cases {
+            let mut in_flight = InFlightCalls::default();
+            in_flight.observe(&event("agent", "model", vec![call("pay", Some("c1"))]));
+            let answered_events = in_flight
+                .answer_with(|call| super::recovered_call_response(&call.name, record.clone()));
+            assert_eq!(
+                answered_events[0].llm_response.content.clone().unwrap().parts,
+                vec![answered("pay", "c1", response, status)],
+                "{status}"
+            );
+        }
     }
 }

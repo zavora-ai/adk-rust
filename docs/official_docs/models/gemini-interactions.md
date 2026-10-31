@@ -362,6 +362,12 @@ The transport forwards `max_output_tokens`, `temperature`, `top_p`, `seed`, and
 `frequency_penalty`, `presence_penalty`, or `top_logprobs` fails with
 `model.unsupported_config` before it is sent.
 
+### Tool errors
+
+A `function_result` step is sent with `is_error: true` when the agent answered the call as
+`refused`, `not_run` or `failed` ([tool result status](../tools/function-tools.md#tool-result-status));
+a tool's own result, including one with an `error` field, is sent without it.
+
 ### Terminal outcomes
 
 A turn ends only on a terminal outcome, in streaming and non-streaming mode:

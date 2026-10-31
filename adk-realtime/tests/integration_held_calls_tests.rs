@@ -429,3 +429,194 @@ async fn a_frozen_kill_switch_ends_the_dispatch_with_an_error() {
     assert!(matches!(runner.resume_held_calls().await, Ok(resumed) if resumed.is_empty()));
     let _ = runner.close().await;
 }
+
+/// The function response part the session records for `call_id`, the last one written.
+fn recorded_answer(events: &[adk_core::Event], call_id: &str) -> adk_core::Part {
+    events
+        .iter()
+        .filter_map(|event| event.content())
+        .flat_map(|content| content.parts.iter())
+        .rev()
+        .find(|part| {
+            matches!(part, adk_core::Part::FunctionResponse { id: Some(id), .. } if id == call_id)
+        })
+        .cloned()
+        .unwrap_or_else(|| panic!("{call_id} is answered: {events:?}"))
+}
+
+fn annotated(
+    name: &str,
+    call_id: &str,
+    response: Value,
+    annotations: Option<Value>,
+) -> adk_core::Part {
+    adk_core::Part::FunctionResponse {
+        function_response: adk_core::FunctionResponseData::new(name, response),
+        id: Some(call_id.to_string()),
+        annotations,
+    }
+}
+
+/// The session records a held call `held` and its denial `refused`, as `LlmAgent` does.
+#[tokio::test]
+async fn the_recorded_answers_carry_their_status() {
+    let (runner, _model, sessions, _executions, store) = held_bash_runner(false).await;
+    runner.send_text("run the tests").await.unwrap();
+    let (_, request) = holds(&drain(&runner).await).remove(0);
+    assert_eq!(
+        recorded_answer(&events_of(&sessions).await, "call-1"),
+        annotated(
+            "bash",
+            "call-1",
+            adk_core::confirmation_pending_response(
+                "Tool 'bash' requires confirmation: commands need approval"
+            ),
+            Some(json!({ adk_core::TOOL_RESULT_STATUS_KEY: "held" })),
+        )
+    );
+
+    store.decide(&scope(), &request.fingerprint(), ToolApproval::deny()).await.unwrap();
+    let resumed = runner.resume_held_calls().await.unwrap();
+    assert_eq!(
+        recorded_answer(&events_of(&sessions).await, "call-1"),
+        annotated(
+            "bash",
+            "call-1",
+            resumed[0].result.clone(),
+            Some(json!({ adk_core::TOOL_RESULT_STATUS_KEY: "refused" })),
+        )
+    );
+    let _ = runner.close().await;
+}
+
+/// Hangs past the runner's tool timeout with `effect`.
+struct Hangs(ToolEffect);
+
+#[async_trait]
+impl Tool for Hangs {
+    fn name(&self) -> &str {
+        "charge"
+    }
+    fn description(&self) -> &str {
+        "charges a card"
+    }
+    fn effect(&self) -> ToolEffect {
+        self.0
+    }
+    async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        Ok(json!({ "charged": true }))
+    }
+}
+
+/// #1006 labelled every realtime timeout `failed`, though a non-idempotent call that timed out
+/// may have taken effect.
+#[tokio::test(start_paused = true)]
+async fn a_timeout_is_an_unknown_outcome_only_for_a_non_idempotent_tool() {
+    for (effect, expected) in
+        [(ToolEffect::NonIdempotent, "outcome_unknown"), (ToolEffect::Idempotent, "failed")]
+    {
+        let sessions = sessions().await;
+        let tool: Arc<dyn Tool> = Arc::new(Hangs(effect));
+        let runner = IntegratedRealtimeRunner::builder()
+            .model(Arc::new(ScriptedRealtimeModel::new(vec![])))
+            .identity(APP, USER, SESSION)
+            .session_service(sessions.clone())
+            .adk_tool(tool.clone())
+            .tool_timeout(Duration::from_millis(50))
+            .build()
+            .unwrap();
+        let call = ToolCall {
+            call_id: "call-9".to_string(),
+            name: "charge".to_string(),
+            arguments: json!({}),
+        };
+
+        let result = runner.execute_tool_with_plugins_for_test(&tool, &call).await.unwrap();
+
+        assert_eq!(result, json!({ "error": "Tool 'charge' timed out after 50ms" }));
+        assert_eq!(
+            recorded_answer(&events_of(&sessions).await, "call-9"),
+            annotated(
+                "charge",
+                "call-9",
+                result,
+                Some(json!({
+                    adk_core::TOOL_RESULT_STATUS_KEY: expected,
+                    adk_core::TOOL_RESULT_ERROR_CODE_KEY: "tool.timeout",
+                    adk_core::TOOL_RESULT_ERROR_CATEGORY_KEY: "timeout",
+                })),
+            ),
+            "{effect:?}"
+        );
+    }
+}
+
+/// Asks for a confirmation as an agent tool's delegate does, then hangs past the timeout.
+struct DelegatesThenHangs(Arc<InMemoryApprovalStore>);
+
+fn delegated() -> ToolConfirmationRequest {
+    ToolConfirmationRequest::new("write_file", json!({ "path": "src/lib.rs" }))
+        .with_function_call_id("inner-1")
+}
+
+#[async_trait]
+impl Tool for DelegatesThenHangs {
+    fn name(&self) -> &str {
+        "reviewer"
+    }
+    fn description(&self) -> &str {
+        "delegates to a reviewer agent"
+    }
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        self.0.record_pending(&scope(), &delegated()).await?;
+        ctx.set_actions(EventActions {
+            tool_confirmation: Some(delegated()),
+            ..EventActions::default()
+        });
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        Ok(json!({ "reviewed": true }))
+    }
+}
+
+/// #1006 left a superseded request pending, so a later approval could authorize an identical
+/// call.
+#[tokio::test(start_paused = true)]
+async fn an_unknown_outcome_supersedes_a_delegates_request_and_withdraws_it() {
+    let sessions = sessions().await;
+    let store = Arc::new(InMemoryApprovalStore::new());
+    let tool: Arc<dyn Tool> = Arc::new(DelegatesThenHangs(store.clone()));
+    let runner = IntegratedRealtimeRunner::builder()
+        .model(Arc::new(ScriptedRealtimeModel::new(vec![])))
+        .identity(APP, USER, SESSION)
+        .session_service(sessions.clone())
+        .adk_tool(tool.clone())
+        .tool_timeout(Duration::from_millis(50))
+        .tool_governance(RunConfig::builder().approval_store(store.clone()).build())
+        .build()
+        .unwrap();
+    let call = ToolCall {
+        call_id: "call-3".to_string(),
+        name: "reviewer".to_string(),
+        arguments: json!({}),
+    };
+
+    let result = runner.execute_tool_with_plugins_for_test(&tool, &call).await.unwrap();
+
+    assert_eq!(result, json!({ "error": "Tool 'reviewer' timed out after 50ms" }));
+    assert_eq!(
+        recorded_answer(&events_of(&sessions).await, "call-3"),
+        annotated(
+            "reviewer",
+            "call-3",
+            result,
+            Some(json!({
+                adk_core::TOOL_RESULT_STATUS_KEY: "outcome_unknown",
+                adk_core::TOOL_RESULT_ERROR_CODE_KEY: "tool.timeout",
+                adk_core::TOOL_RESULT_ERROR_CATEGORY_KEY: "timeout",
+            })),
+        )
+    );
+    assert!(runner.held_calls().await.unwrap().is_empty(), "the call is not held");
+    assert!(store.pending(&scope()).await.unwrap().is_empty(), "the request is withdrawn");
+}

@@ -488,7 +488,11 @@ fn append_steps(content: &Content, steps: &mut Vec<Step>) {
                         call_id: id.clone().unwrap_or_default(),
                         name: Some(function_response.name.clone()),
                         result: function_response.response.clone(),
-                        is_error: None,
+                        // Only an answer the agent wrote says the call failed or never ran.
+                        is_error: part
+                            .tool_result_status()
+                            .is_some_and(adk_core::ToolResultStatus::is_error)
+                            .then_some(true),
                         signature: None,
                     });
                 }
@@ -1157,6 +1161,63 @@ mod tests {
             }
             other => panic!("expected Input::Steps, got {other:?}"),
         }
+    }
+
+    /// A function result is flagged `is_error` only when the agent wrote it for a call that
+    /// was refused, not run, or failed.
+    #[test]
+    fn only_a_refused_unrun_or_failed_answer_is_flagged_an_error() {
+        use adk_core::ToolResultStatus;
+        let flag = |status: Option<ToolResultStatus>| {
+            let mut answer = Part::FunctionResponse {
+                function_response: FunctionResponseData::new(
+                    "get_weather",
+                    serde_json::json!({ "error": "denied" }),
+                ),
+                id: Some("call-1".to_string()),
+                annotations: None,
+            };
+            if let Some(status) = status {
+                answer.set_tool_result_status(status, None);
+            }
+            let request = request_with(vec![
+                Content::new("user").with_text("What's the weather?"),
+                Content {
+                    role: "model".to_string(),
+                    parts: vec![Part::FunctionCall {
+                        name: "get_weather".to_string(),
+                        args: serde_json::json!({}),
+                        id: Some("call-1".to_string()),
+                        thought_signature: None,
+                    }],
+                },
+                Content { role: "function".to_string(), parts: vec![answer] },
+            ]);
+            let built = build_request(&request, &model_target(), None, true, true)
+                .expect("build_request should succeed");
+            let Input::Steps(steps) = built.input else { panic!("expected steps") };
+            steps
+                .into_iter()
+                .find_map(|step| match step {
+                    Step::FunctionResult { is_error, .. } => Some(is_error),
+                    _ => None,
+                })
+                .expect("a function_result step")
+        };
+        for status in
+            [ToolResultStatus::Refused, ToolResultStatus::NotRun, ToolResultStatus::Failed]
+        {
+            assert_eq!(flag(Some(status)), Some(true), "{status:?}");
+        }
+        for status in [
+            ToolResultStatus::Held,
+            ToolResultStatus::OutcomeUnknown,
+            ToolResultStatus::Withheld,
+            ToolResultStatus::Succeeded,
+        ] {
+            assert_eq!(flag(Some(status)), None, "{status:?}");
+        }
+        assert_eq!(flag(None), None, "a tool's own payload is not read");
     }
 
     #[test]

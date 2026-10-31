@@ -237,6 +237,13 @@ fn build(model: BoxedModel) -> adk_realtime::Result<RealtimeRunner> {
 | The result screen withholds the result | `{"status": "result_withheld", "error": "tool '<name>' ran, but its result was withheld: <reason>; ..."}` |
 | The kill switch is frozen | Nothing — the session ends with a `governance.frozen` error |
 
+`RealtimeAgent` and `IntegratedRealtimeRunner` record each answer in the session with the
+[tool result status](../tools/function-tools.md#tool-result-status) `LlmAgent` gives it: `not_run`, `refused`, `held`,
+`failed`, `withheld`, or `outcome_unknown` for a `NonIdempotent` tool that ran past its timeout
+(a `ReadOnly` or `Idempotent` one is `failed`). A `NonIdempotent` call that times out after its
+delegate held a call is not held: the delegate's request is withdrawn, as in `LlmAgent`. A native
+handler's result goes to the provider session only and carries no status.
+
 A held call's request names the runner's acting agent (`urn:adk:agent:{app}/{agent_name}`
 unless the run configures a principal) and the tool's origin. An ADK tool carries its own
 `Tool::origin()`; a native handler carries `REALTIME_HANDLER_ORIGIN` (`realtime`) and a digest

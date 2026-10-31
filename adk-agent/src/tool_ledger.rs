@@ -7,7 +7,10 @@
 use std::sync::Arc;
 
 use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind, AuditRecordOutcome};
-use adk_core::{ActionLedger, ActionOutcome, ActionRecord, InvocationContext, ToolEffect};
+use adk_core::{
+    ActionLedger, ActionOutcome, ActionRecord, AdkError, InvocationContext, ToolEffect,
+    ToolResultStatus,
+};
 use serde_json::Value;
 
 /// The action-ledger key of a held tool call that a later run resumes.
@@ -52,13 +55,23 @@ pub(crate) struct LedgeredCall {
     key: String,
 }
 
+/// The ledger's answer to a call that must not execute.
+pub(crate) struct LedgerAnswer {
+    /// The function response that answers the call.
+    pub(crate) response: Value,
+    /// What the answer reports: the recorded outcome, or `NotRun` when the ledger failed.
+    pub(crate) status: ToolResultStatus,
+    /// The ledger's error, when it could not be read or written.
+    pub(crate) cause: Option<AdkError>,
+}
+
 /// Consults the action ledger before a call executes.
 ///
 /// Returns `Ok(Ok(None))` when the call is not ledgered (no ledger configured, or an
 /// effect other than [`ToolEffect::NonIdempotent`]), and `Ok(Ok(Some(_)))` once the
-/// call has been begun under `key`. Returns `Ok(Err(response))` when the call must
+/// call has been begun under `key`. Returns `Ok(Err(answer))` when the call must
 /// not execute: the ledger already holds a record for `key`, or cannot be read or
-/// written. `response` is the function response that answers the call.
+/// written.
 ///
 /// # Errors
 ///
@@ -70,54 +83,63 @@ pub(crate) async fn begin_ledgered_call(
     key: String,
     name: &str,
     args: &Value,
-) -> adk_core::Result<Result<Option<LedgeredCall>, Value>> {
+) -> adk_core::Result<Result<Option<LedgeredCall>, LedgerAnswer>> {
     let ledger = match &ctx.run_config().action_ledger {
         Some(ledger) if effect == ToolEffect::NonIdempotent => ledger.clone(),
         _ => return Ok(Ok(None)),
     };
-    let answer = match ledger.get(&key).await {
-        Ok(Some(record)) => match record.outcome {
-            Some(ActionOutcome::Succeeded { result_digest }) => serde_json::json!({
-                "status": "already_succeeded",
-                "result_digest": result_digest,
-                "detail": format!("this call to '{name}' already completed; it was not executed again"),
-            }),
-            Some(ActionOutcome::Failed { error }) => serde_json::json!({
-                "status": "already_failed",
-                "error": error,
-                "detail": format!("this call to '{name}' already failed; it was not executed again"),
-            }),
-            _ => {
-                record_outcome_unknown(ctx, name, args, "began_without_outcome").await?;
-                adk_core::outcome_unknown_response(format!(
-                    "an earlier attempt of this call to '{name}' began but recorded no outcome, so it may have taken effect; it was not executed again"
-                ))
+    let mut status = ToolResultStatus::NotRun;
+    let mut cause = None;
+    let response = match ledger.get(&key).await {
+        Ok(Some(record)) => {
+            status = ToolResultStatus::of_record(record.outcome.as_ref());
+            match record.outcome {
+                Some(ActionOutcome::Succeeded { result_digest }) => serde_json::json!({
+                    "status": "already_succeeded",
+                    "result_digest": result_digest,
+                    "detail": format!("this call to '{name}' already completed; it was not executed again"),
+                }),
+                Some(ActionOutcome::Failed { error }) => serde_json::json!({
+                    "status": "already_failed",
+                    "error": error,
+                    "detail": format!("this call to '{name}' already failed; it was not executed again"),
+                }),
+                _ => {
+                    record_outcome_unknown(ctx, name, args, "began_without_outcome").await?;
+                    adk_core::outcome_unknown_response(format!(
+                        "an earlier attempt of this call to '{name}' began but recorded no outcome, so it may have taken effect; it was not executed again"
+                    ))
+                }
             }
-        },
+        }
         // A store error can name its connection, so the model is given its code only.
         Ok(None) => match ledger.begin(&ActionRecord::new(key.clone(), name, args, effect)).await {
             Ok(()) => return Ok(Ok(Some(LedgeredCall { ledger, key }))),
             Err(error) => {
                 tracing::error!(tool.name = %name, error = %error, "action ledger could not record the call");
-                serde_json::json!({
+                let response = serde_json::json!({
                     "error": format!("tool '{name}' was not executed: the action ledger could not record the call: {}", error.redacted())
-                })
+                });
+                cause = Some(error);
+                response
             }
         },
         Err(error) => {
             tracing::error!(tool.name = %name, error = %error, "action ledger could not be read");
-            serde_json::json!({
+            let response = serde_json::json!({
                 "error": format!("tool '{name}' was not executed: the action ledger could not be read: {}", error.redacted())
-            })
+            });
+            cause = Some(error);
+            response
         }
     };
     tracing::warn!(
         tool.name = %name,
         tool.idempotency_key = %key,
-        response = %answer,
+        response = %response,
         "non-idempotent call answered by the action ledger without executing"
     );
-    Ok(Err(answer))
+    Ok(Err(LedgerAnswer { response, status, cause }))
 }
 
 /// Records, through the run's [`RunConfig::audit`](adk_core::RunConfig::audit), a call

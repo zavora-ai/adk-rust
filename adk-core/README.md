@@ -120,6 +120,8 @@ impl Tool for GetWeather {
 
 Only `ReadOnly` and `Idempotent` tools are retried, and only after a retryable error or a timeout. With an `ActionLedger` on `RunConfig::action_ledger` (`InMemoryActionLedger` here, `SqliteActionLedger` and the other backends in `adk-session`), a `NonIdempotent` call executes at most once per `ToolContext::idempotency_key()`; a replay of a call that never recorded an outcome is answered with `outcome_unknown_response()` instead of executing again.
 
+An answer an agent writes in place of a tool's result — a refusal, a hold, a failure, a withheld result, an unknown outcome, a ledger replay — carries a `ToolResultStatus` (`refused`, `not_run`, `held`, `failed`, `outcome_unknown`, `withheld`, `succeeded`) in the function response's annotations, read with `Part::tool_result_status()`, beside the code and category of the error behind it. The payload the model reads is unchanged.
+
 `ToolExecutionStrategy::Auto` keeps the LLM-returned order and overlaps a call with its adjacent neighbours only when the selected tool returns `true` from both `is_read_only()` and `is_concurrency_safe()`. Every other call runs alone, in its place: it starts after the calls listed before it finish, and the calls listed after it wait for it. The guarantee is ordering only — a write that is held for confirmation, refused, skipped or failed has changed nothing when the next call runs.
 
 `ensure_unique_tool_names` fails with `agent.duplicate_tool_name` (`DUPLICATE_TOOL_NAME_CODE`) when two tools share a name; `LlmAgentBuilder::build` and the other agent builders run the same check.

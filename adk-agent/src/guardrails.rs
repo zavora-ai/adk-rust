@@ -365,13 +365,15 @@ impl adk_core::ToolCallScreen for GuardrailScreen<'_> {
 /// (`ToolGuardrail::validate_result`) before the model and the session see them.
 ///
 /// A withheld result is replaced by `adk_core::result_blocked_response`, and its inline and
-/// file data are dropped with it. Returns the screened content and the reason for each
-/// withheld response, which the caller logs under the payload rule.
+/// file data are dropped with it; its status follows `ToolResultStatus::when_withheld`, given
+/// whether the tool `executed`. Returns the screened content and the reason for each withheld
+/// response, which the caller logs under the payload rule.
 #[cfg(feature = "guardrails")]
 pub(crate) async fn screen_tool_result(
     guardrails: &ToolGuardrailSet,
     tool_name: &str,
     args: &serde_json::Value,
+    executed: bool,
     mut content: Content,
 ) -> (Content, Vec<String>) {
     use adk_core::ToolResultScreen as _;
@@ -381,6 +383,7 @@ pub(crate) async fn screen_tool_result(
         return (content, withheld);
     }
     for part in &mut content.parts {
+        let previous = part.tool_result_status();
         let Part::FunctionResponse { function_response, .. } = part else { continue };
         match guardrails.screen_result(tool_name, args, &function_response.response).await {
             Ok(result) => function_response.response = result,
@@ -389,6 +392,11 @@ pub(crate) async fn screen_tool_result(
                 function_response.inline_data.clear();
                 function_response.file_data.clear();
                 withheld.push(reason);
+                let status = adk_core::ToolResultStatus::when_withheld(previous, executed);
+                // A status that stands keeps the cause behind it.
+                if previous != Some(status) {
+                    part.set_tool_result_status(status, None);
+                }
             }
         }
     }
@@ -400,6 +408,7 @@ pub(crate) async fn screen_tool_result(
     _guardrails: &ToolGuardrailSet,
     _tool_name: &str,
     _args: &serde_json::Value,
+    _executed: bool,
     content: Content,
 ) -> (Content, Vec<String>) {
     (content, Vec::new())

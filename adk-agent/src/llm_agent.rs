@@ -6,8 +6,8 @@ use adk_core::{
     GovernedCall, InstructionProvider, InvocationContext, Llm, LlmRequest, LlmResponse,
     MemoryEntry, OnToolErrorCallback, Part, ReadonlyContext, Result, RetryBudget, Tool,
     ToolAuthorization, ToolCallbackContext, ToolConfirmationPolicy, ToolConfirmationRequest,
-    ToolContext, ToolEffect, ToolExecutionStrategy, ToolGate, ToolOutcome, Toolset,
-    authorize_tool_call,
+    ToolContext, ToolEffect, ToolExecutionStrategy, ToolGate, ToolOutcome, ToolResultStatus,
+    Toolset, authorize_tool_call,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -2401,6 +2401,8 @@ struct ToolExecutionResult {
     escalate_or_skip: bool,
     /// Set when the call is held for a confirmation decision that does not exist yet.
     pending: Option<ToolConfirmationRequest>,
+    /// Whether the tool's `execute` was entered in this dispatch.
+    executed: bool,
 }
 
 /// Runs output guardrails on the function responses of a result that ends the turn.
@@ -2437,14 +2439,16 @@ async fn screen_terminal_tool_output(
 /// Turns a tool callback's substitute content into the response to the call it replaces.
 ///
 /// Providers reject a request whose function call has no function response with the same id,
-/// so a function response part is re-addressed to this call and text-only content is wrapped
-/// as one by `wrap_text`. Only the function response is kept, as OpenAI Chat reads the first
-/// part of a tool message and nothing else.
+/// so a function response part is re-addressed to this call, keeping the annotations the
+/// callback set, and text-only content is wrapped as one by `wrap_text`, with `text_status`.
+/// Only the function response is kept, as OpenAI Chat reads the first part of a tool message
+/// and nothing else.
 fn callback_tool_response(
     content: Content,
     name: &str,
     id: Option<&String>,
     wrap_text: impl FnOnce(String) -> serde_json::Value,
+    text_status: Option<ToolResultStatus>,
 ) -> Content {
     let mut text = String::new();
     let mut response = None;
@@ -2467,10 +2471,16 @@ fn callback_tool_response(
             }
         }
     }
-    let response = response.unwrap_or_else(|| Part::FunctionResponse {
-        function_response: FunctionResponseData::new(name, wrap_text(text)),
-        id: id.cloned(),
-        annotations: None,
+    let response = response.unwrap_or_else(|| {
+        let mut part = Part::FunctionResponse {
+            function_response: FunctionResponseData::new(name, wrap_text(text)),
+            id: id.cloned(),
+            annotations: None,
+        };
+        if let Some(status) = text_status {
+            part.set_tool_result_status(status, None);
+        }
+        part
     });
     Content { role: "function".to_string(), parts: vec![response] }
 }
@@ -2659,8 +2669,14 @@ impl ToolExecutor<'_> {
         if let Some((name, args)) = screened_call
             && result.pending.is_none()
         {
-            let (content, withheld) =
-                screen_tool_result(self.tool_guardrails, &name, &args, result.content).await;
+            let (content, withheld) = screen_tool_result(
+                self.tool_guardrails,
+                &name,
+                &args,
+                result.executed,
+                result.content,
+            )
+            .await;
             result.content = content;
             for reason in withheld {
                 // A guardrail's reason can describe the result it withheld.
@@ -2766,15 +2782,25 @@ impl ToolExecutor<'_> {
         // Set once `execute` was called, so its side effect may have happened.
         let mut tool_executed = false;
         let mut pending_confirmation: Option<ToolConfirmationRequest> = None;
-        let respond = |response: serde_json::Value| Content {
-            role: "function".to_string(),
-            parts: vec![Part::FunctionResponse {
-                function_response: FunctionResponseData::new(name.clone(), response),
+        // Set when a call that ran ended with an unknown outcome: no later stage settles it.
+        let mut unknown_outcome: Option<Arc<adk_core::AdkError>> = None;
+        // An answer the agent writes in place of the tool's result, with its status.
+        let answer = |response: serde_json::Value,
+                      status: Option<ToolResultStatus>,
+                      cause: Option<&adk_core::AdkError>| {
+            let mut part = Part::FunctionResponse {
+                function_response: FunctionResponseData::from_tool_result(name.clone(), response),
                 id: id.clone(),
                 annotations: None,
-            }],
+            };
+            if let Some(status) = status {
+                part.set_tool_result_status(status, cause);
+            }
+            Content { role: "function".to_string(), parts: vec![part] }
         };
-        let error_response = |message: String| respond(serde_json::json!({ "error": message }));
+        let not_run = |message: String, cause: Option<&adk_core::AdkError>| {
+            answer(serde_json::json!({ "error": message }), Some(ToolResultStatus::NotRun), cause)
+        };
         // A callback's error message stays local unless the agent exposes error messages.
         let callback_failure = |error: &adk_core::AdkError| {
             if self.expose_tool_error_messages { error.to_string() } else { error.redacted() }
@@ -2790,13 +2816,17 @@ impl ToolExecutor<'_> {
             );
             return Ok(ToolExecutionResult {
                 index,
-                content: error_response(format!(
-                    "tool '{name}' was not run: {reason}. Call it again with arguments that are \
-                     one JSON object matching its parameters."
-                )),
+                content: not_run(
+                    format!(
+                        "tool '{name}' was not run: {reason}. Call it again with arguments that \
+                         are one JSON object matching its parameters."
+                    ),
+                    None,
+                ),
                 actions: tool_actions,
                 escalate_or_skip: false,
                 pending: None,
+                executed: false,
             });
         }
 
@@ -2850,10 +2880,13 @@ impl ToolExecutor<'_> {
                         error.message = %self.logged_message(&e.message),
                         "before-tool plugin failed; the tool was not run"
                     );
-                    response_content = Some(error_response(format!(
-                        "tool '{name}' was not run: a before-tool plugin failed with {}",
-                        callback_failure(&e)
-                    )));
+                    response_content = Some(not_run(
+                        format!(
+                            "tool '{name}' was not run: a before-tool plugin failed with {}",
+                            callback_failure(&e)
+                        ),
+                        Some(&e),
+                    ));
                     run_after_tool_callbacks = false;
                 }
             }
@@ -2893,6 +2926,7 @@ impl ToolExecutor<'_> {
                             &name,
                             id.as_ref(),
                             |text| serde_json::json!({ "error": text }),
+                            Some(ToolResultStatus::NotRun),
                         ));
                         break;
                     }
@@ -2905,10 +2939,13 @@ impl ToolExecutor<'_> {
                             error.message = %self.logged_message(&e.message),
                             "before-tool callback failed; the tool was not run"
                         );
-                        response_content = Some(error_response(format!(
-                            "tool '{name}' was not run: a before-tool callback failed with {}",
-                            callback_failure(&e)
-                        )));
+                        response_content = Some(not_run(
+                            format!(
+                                "tool '{name}' was not run: a before-tool callback failed with {}",
+                                callback_failure(&e)
+                            ),
+                            Some(&e),
+                        ));
                         run_after_tool_callbacks = false;
                         break;
                     }
@@ -2927,7 +2964,7 @@ impl ToolExecutor<'_> {
                     name, cb_state.threshold
                 );
                 tracing::warn!(tool.name = %name, "circuit breaker open, skipping tool execution");
-                response_content = Some(error_response(msg));
+                response_content = Some(not_run(msg, None));
                 run_after_tool_callbacks = false;
             }
             drop(guard);
@@ -2974,12 +3011,19 @@ impl ToolExecutor<'_> {
                         "tool call refused"
                     );
                     tool_actions.tool_confirmation_decision = confirmation;
-                    response_content = Some(error_response(reason));
+                    response_content = Some(answer(
+                        serde_json::json!({ "error": reason }),
+                        Some(ToolResultStatus::Refused),
+                        None,
+                    ));
                     run_after_tool_callbacks = false;
                 }
                 Ok(ToolAuthorization::Pending { request, reason }) => {
-                    response_content =
-                        Some(respond(adk_core::confirmation_pending_response(reason)));
+                    response_content = Some(answer(
+                        adk_core::confirmation_pending_response(reason),
+                        Some(ToolResultStatus::Held),
+                        None,
+                    ));
                     pending_confirmation = Some(request);
                     run_after_tool_callbacks = false;
                 }
@@ -3001,7 +3045,7 @@ impl ToolExecutor<'_> {
                     if let Some(held) = &resumed {
                         adk_core::withdraw_held_call(&gate, held).await?;
                     }
-                    response_content = Some(error_response(adk_core::not_run_text(&error)));
+                    response_content = Some(not_run(adk_core::not_run_text(&error), Some(&error)));
                     run_after_tool_callbacks = false;
                 }
                 Err(error) => {
@@ -3024,10 +3068,11 @@ impl ToolExecutor<'_> {
                     // Concurrency limit reached with Fail policy — return error
                     return Ok(ToolExecutionResult {
                         index,
-                        content: error_response(e.to_string()),
+                        content: not_run(e.to_string(), Some(&e)),
                         actions: tool_actions,
                         escalate_or_skip: false,
                         pending: None,
+                        executed: false,
                     });
                 }
             }
@@ -3067,23 +3112,18 @@ impl ToolExecutor<'_> {
                 .await?
                 {
                     Ok(ledgered) => ledgered,
-                    Err(answer) => {
+                    Err(recorded) => {
                         return Ok(ToolExecutionResult {
                             index,
-                            content: Content {
-                                role: "function".to_string(),
-                                parts: vec![Part::FunctionResponse {
-                                    function_response: FunctionResponseData::from_tool_result(
-                                        name.clone(),
-                                        answer,
-                                    ),
-                                    id: id.clone(),
-                                    annotations: None,
-                                }],
-                            },
+                            content: answer(
+                                recorded.response,
+                                Some(recorded.status),
+                                recorded.cause.as_ref(),
+                            ),
                             actions: tool_actions,
                             escalate_or_skip: false,
                             pending: None,
+                            executed: false,
                         });
                     }
                 };
@@ -3116,10 +3156,11 @@ impl ToolExecutor<'_> {
                     }
                     return Ok(ToolExecutionResult {
                         index,
-                        content: error_response(text),
+                        content: not_run(text, Some(&refusal)),
                         actions: tool_actions,
                         escalate_or_skip: false,
                         pending: None,
+                        executed: false,
                     });
                 }
 
@@ -3305,6 +3346,16 @@ impl ToolExecutor<'_> {
                         if interrupted { error.message.clone() } else { error.to_string() }
                     });
                 let tool_success = retry_result.is_some();
+                // What the answer reports when the tool did not return a result.
+                let mut status = match last_error.as_deref() {
+                    _ if tool_success => None,
+                    _ if outcome_unknown => Some(ToolResultStatus::OutcomeUnknown),
+                    Some(error) => Some(ToolResultStatus::of_tool_error(error)),
+                    None => Some(ToolResultStatus::Failed),
+                };
+                if outcome_unknown {
+                    unknown_outcome = last_error.clone();
+                }
                 let function_response = match retry_result {
                     Some(value) => value,
                     None => failure_response.unwrap_or_else(
@@ -3364,7 +3415,17 @@ impl ToolExecutor<'_> {
                             }
                         }
                     }
-                    fallback_result.unwrap_or(function_response)
+                    match fallback_result {
+                        // The fallback is the answer the model reads; only an unknown outcome,
+                        // which no fallback settles, keeps its status.
+                        Some(result) => {
+                            if !outcome_unknown {
+                                status = None;
+                            }
+                            result
+                        }
+                        None => function_response,
+                    }
                 } else {
                     function_response
                 };
@@ -3379,11 +3440,27 @@ impl ToolExecutor<'_> {
                 // the run ends on the delegate's request, and this call resumes once that
                 // request has a decision.
                 let final_function_response = match tool_actions.tool_confirmation.take() {
+                    // A call that may have taken effect is not held to run again on a decision.
+                    // Its request is withdrawn, so no decision on it authorizes an identical
+                    // call, and the call is answered with its unknown outcome.
+                    Some(request) if outcome_unknown => {
+                        tracing::warn!(
+                            tool.name = %name,
+                            "a call with an unknown outcome asked for a confirmation; withdrawing the request"
+                        );
+                        let gate = ToolGate::for_context(self.ctx.as_ref());
+                        if let Err(error) = adk_core::withdraw_held_call(&gate, &request).await {
+                            self.approval_failed.send_replace(true);
+                            return Err(error);
+                        }
+                        final_function_response
+                    }
                     Some(request) => {
                         tool_actions.skip_summarization = false;
                         tool_actions.escalate = false;
                         pending_confirmation = Some(request);
                         run_after_tool_callbacks = false;
+                        status = Some(ToolResultStatus::Held);
                         if adk_core::is_confirmation_pending(&final_function_response) {
                             final_function_response
                         } else {
@@ -3396,19 +3473,11 @@ impl ToolExecutor<'_> {
                 };
                 executed_tool = Some(tool.clone());
                 executed_tool_response = Some(final_function_response.clone());
-                response_content = Some(Content {
-                    role: "function".to_string(),
-                    parts: vec![Part::FunctionResponse {
-                        function_response: FunctionResponseData::from_tool_result(
-                            name.clone(),
-                            final_function_response,
-                        ),
-                        id: id.clone(),
-                        annotations: None,
-                    }],
-                });
+                let cause =
+                    last_error.as_deref().filter(|_| status != Some(ToolResultStatus::Held));
+                response_content = Some(answer(final_function_response, status, cause));
             } else {
-                response_content = Some(error_response(format!("Tool {name} not found")));
+                response_content = Some(not_run(format!("Tool {name} not found"), None));
             }
         }
 
@@ -3438,6 +3507,7 @@ impl ToolExecutor<'_> {
                             &name,
                             id.as_ref(),
                             |text| serde_json::json!({ "result": text }),
+                            None,
                         );
                         break;
                     }
@@ -3461,17 +3531,7 @@ impl ToolExecutor<'_> {
                     .await
                     {
                         Ok(Some(modified_value)) => {
-                            response_content = Content {
-                                role: "function".to_string(),
-                                parts: vec![Part::FunctionResponse {
-                                    function_response: FunctionResponseData::from_tool_result(
-                                        name.clone(),
-                                        modified_value,
-                                    ),
-                                    id: id.clone(),
-                                    annotations: None,
-                                }],
-                            };
+                            response_content = answer(modified_value, None, None);
                             break;
                         }
                         Ok(None) => continue,
@@ -3509,23 +3569,16 @@ impl ToolExecutor<'_> {
                     .run_after_tool_call(
                         tool_ref.clone(),
                         &final_args,
-                        result_value,
+                        result_value.clone(),
                         cb_ctx.clone(),
                     )
                     .await
                 {
+                    // A result the plugins passed through stays the answer, with its status.
                     Ok(adk_plugin::AfterToolCallResult::Continue(modified_result)) => {
-                        response_content = Content {
-                            role: "function".to_string(),
-                            parts: vec![Part::FunctionResponse {
-                                function_response: FunctionResponseData::from_tool_result(
-                                    name.clone(),
-                                    modified_result,
-                                ),
-                                id: id.clone(),
-                                annotations: None,
-                            }],
-                        };
+                        if modified_result != result_value {
+                            response_content = answer(modified_result, None, None);
+                        }
                     }
                     Err(e) => failure = Some(e),
                 }
@@ -3543,17 +3596,30 @@ impl ToolExecutor<'_> {
                 // The tool's side effect stands and its ledger record says so; the model is
                 // told not to repeat it, since a new call has a new idempotency key.
                 response_content = if tool_executed {
-                    respond(adk_core::result_withheld_response(
-                        &name,
-                        &error,
-                        self.expose_tool_error_messages,
-                    ))
+                    answer(
+                        adk_core::result_withheld_response(
+                            &name,
+                            &error,
+                            self.expose_tool_error_messages,
+                        ),
+                        Some(ToolResultStatus::Withheld),
+                        Some(&error),
+                    )
                 } else {
-                    error_response(format!(
-                        "tool '{name}' was not run, and its after-tool pipeline failed with {}",
-                        callback_failure(&error)
-                    ))
+                    not_run(
+                        format!(
+                            "tool '{name}' was not run, and its after-tool pipeline failed with {}",
+                            callback_failure(&error)
+                        ),
+                        Some(&error),
+                    )
                 };
+            }
+            // A stage that replaced or withheld the answer did not settle an unknown outcome.
+            if let Some(cause) = &unknown_outcome {
+                for part in &mut response_content.parts {
+                    part.set_tool_result_status(ToolResultStatus::OutcomeUnknown, Some(cause));
+                }
             }
         }
 
@@ -3564,6 +3630,7 @@ impl ToolExecutor<'_> {
             actions: tool_actions,
             escalate_or_skip,
             pending: pending_confirmation,
+            executed: tool_executed,
         })
     }
 }
@@ -4866,22 +4933,22 @@ impl Agent for LlmAgent {
 
                             let valid_target = valid_transfer_targets.iter().any(|n| n == &target_agent);
                             if !valid_target {
-                                let error_content = Content {
-                                    role: "function".to_string(),
-                                    parts: vec![Part::FunctionResponse {
-                                        function_response: FunctionResponseData::new(
-                                            call.name.clone(),
-                                            serde_json::json!({
-                                                "error": format!(
-                                                    "Agent '{}' not found. Available agents: {:?}",
-                                                    target_agent, valid_transfer_targets
-                                                )
-                                            }),
-                                        ),
-                                        id: call.id.clone(),
-                                        annotations: None,
-                                    }],
+                                let mut refusal = Part::FunctionResponse {
+                                    function_response: FunctionResponseData::new(
+                                        call.name.clone(),
+                                        serde_json::json!({
+                                            "error": format!(
+                                                "Agent '{}' not found. Available agents: {:?}",
+                                                target_agent, valid_transfer_targets
+                                            )
+                                        }),
+                                    ),
+                                    id: call.id.clone(),
+                                    annotations: None,
                                 };
+                                refusal.set_tool_result_status(ToolResultStatus::NotRun, None);
+                                let error_content =
+                                    Content { role: "function".to_string(), parts: vec![refusal] };
                                 conversation_history.push(error_content.clone());
                                 let mut error_event = Event::new(&invocation_id);
                                 error_event.author = agent_name.clone();
@@ -4897,21 +4964,26 @@ impl Agent for LlmAgent {
                                 .iter()
                                 .filter(|other| !answered_calls.contains(&other.index))
                                 .map(|other| {
-                                    let response = if other.index == call.index {
+                                    let transfers = other.index == call.index;
+                                    let response = if transfers {
                                         serde_json::json!({ "transferred_to": target_agent })
                                     } else {
                                         serde_json::json!({
                                             "error": format!("not run: control transferred to {target_agent}")
                                         })
                                     };
-                                    Part::FunctionResponse {
+                                    let mut part = Part::FunctionResponse {
                                         function_response: FunctionResponseData::new(
                                             other.name.clone(),
                                             response,
                                         ),
                                         id: other.id.clone(),
                                         annotations: None,
+                                    };
+                                    if !transfers {
+                                        part.set_tool_result_status(ToolResultStatus::NotRun, None);
                                     }
+                                    part
                                 })
                                 .collect();
                             let mut transfer_event = Event::new(&invocation_id);
@@ -4952,15 +5024,20 @@ impl Agent for LlmAgent {
                     if let Some(tracker) = budget_tracker.as_ref()
                         && let Err(exceeded) = tracker.begin_tool_calls(fc_parts.len() as u64)
                     {
+                        let cause = adk_core::AdkError::from(exceeded.clone());
                         let parts = fc_parts
                             .iter()
-                            .map(|call| Part::FunctionResponse {
-                                function_response: FunctionResponseData::new(
-                                    call.name.clone(),
-                                    serde_json::json!({ "error": format!("not run: {exceeded}") }),
-                                ),
-                                id: call.id.clone(),
-                                annotations: None,
+                            .map(|call| {
+                                let mut part = Part::FunctionResponse {
+                                    function_response: FunctionResponseData::new(
+                                        call.name.clone(),
+                                        serde_json::json!({ "error": format!("not run: {exceeded}") }),
+                                    ),
+                                    id: call.id.clone(),
+                                    annotations: None,
+                                };
+                                part.set_tool_result_status(ToolResultStatus::NotRun, Some(&cause));
+                                part
                             })
                             .collect();
                         let mut budget_event = Event::new(&invocation_id);

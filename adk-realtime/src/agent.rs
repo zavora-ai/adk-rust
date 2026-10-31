@@ -59,7 +59,8 @@ use adk_core::{
     AdkError, AfterAgentCallback, AfterToolCallback, Agent, AgentInteractionMode,
     BeforeAgentCallback, BeforeToolCallback, CallbackContext, Content, Event, EventActions,
     EventStream, GlobalInstructionProvider, InstructionProvider, InvocationContext, MemoryEntry,
-    Part, ReadonlyContext, Result, Tool, ToolCallbackContext, ToolContext, Toolset,
+    Part, ReadonlyContext, Result, Tool, ToolCallbackContext, ToolContext, ToolResultStatus,
+    Toolset,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -980,11 +981,7 @@ impl Agent for RealtimeAgent {
                         tool_event.actions = outcome.actions.clone();
                         tool_event.llm_response.content = Some(Content {
                             role: "function".to_string(),
-                            parts: vec![Part::FunctionResponse {
-                                function_response: adk_core::FunctionResponseData::new(held.name.clone(), outcome.result.clone()),
-                                id: Some(function_call_id.clone()),
-                                annotations: None,
-                            }],
+                            parts: vec![outcome.part(&held.name, &function_call_id)],
                         });
                         yield Ok(tool_event);
                         let rendered = outcome.result.to_string();
@@ -1333,7 +1330,7 @@ impl Agent for RealtimeAgent {
                                 // Execute tool through the governed path.
                                 let tool = resolved_tools.iter().find(|t| t.name() == name);
 
-                                let (result, actions) = if let Some(tool) = tool {
+                                let outcome = if let Some(tool) = tool {
                                     match dispatch_tool(
                                         &ctx,
                                         tool,
@@ -1348,8 +1345,8 @@ impl Agent for RealtimeAgent {
                                     )
                                     .await
                                     {
-                                        Ok(outcome) => {
-                                            if let Some(request) = outcome.held {
+                                        Ok(mut outcome) => {
+                                            if let Some(request) = outcome.held.take() {
                                                 // Surfaced for an approver; the session continues
                                                 // and the model is told the call was not run.
                                                 let mut held_event = Event::new(&invocation_id);
@@ -1357,7 +1354,7 @@ impl Agent for RealtimeAgent {
                                                 held_event.actions.tool_confirmation = Some(request);
                                                 yield Ok(held_event);
                                             }
-                                            (outcome.result, outcome.actions)
+                                            outcome
                                         }
                                         Err(error) => {
                                             // The kill switch or the approval service ended the run.
@@ -1367,11 +1364,14 @@ impl Agent for RealtimeAgent {
                                         }
                                     }
                                 } else {
-                                    (
+                                    ToolDispatch::answer(
                                         serde_json::json!({ "error": format!("Tool {} not found", name) }),
-                                        EventActions::default(),
+                                        ToolResultStatus::NotRun,
+                                        None,
                                     )
                                 };
+                                let part = outcome.part(&name, &call_id);
+                                let ToolDispatch { result, actions, .. } = outcome;
 
                                 // Yield tool event
                                 let mut tool_event = Event::new(&invocation_id);
@@ -1379,11 +1379,7 @@ impl Agent for RealtimeAgent {
                                 tool_event.actions = actions.clone();
                                 tool_event.llm_response.content = Some(Content {
                                     role: "function".to_string(),
-                                    parts: vec![Part::FunctionResponse {
-                                        function_response: adk_core::FunctionResponseData::new(name.clone(), result.clone()),
-                                        id: Some(call_id.clone()),
-                                        annotations: None,
-                                    }],
+                                    parts: vec![part],
                                 });
                                 yield Ok(tool_event);
 
@@ -1677,6 +1673,34 @@ struct ToolDispatch {
     actions: EventActions,
     /// The request for a call held for a confirmation decision.
     held: Option<adk_core::ToolConfirmationRequest>,
+    /// The status of an answer the agent wrote in place of the tool's result.
+    status: Option<ToolResultStatus>,
+    /// The error behind `status`, when there is one.
+    cause: Option<AdkError>,
+}
+
+impl ToolDispatch {
+    /// An answer the agent writes, before anything ran.
+    fn answer(
+        result: serde_json::Value,
+        status: ToolResultStatus,
+        cause: Option<AdkError>,
+    ) -> Self {
+        Self { result, actions: EventActions::default(), held: None, status: Some(status), cause }
+    }
+
+    /// The function response the session records for call `call_id` to `name`.
+    fn part(&self, name: &str, call_id: &str) -> Part {
+        let mut part = Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new(name, self.result.clone()),
+            id: Some(call_id.to_string()),
+            annotations: None,
+        };
+        if let Some(status) = self.status {
+            part.set_tool_result_status(status, self.cause.as_ref());
+        }
+        part
+    }
 }
 
 /// Runs one realtime tool call: its arguments are parsed strictly, the run's invocation
@@ -1708,11 +1732,11 @@ async fn dispatch_tool(
     let args = match crate::runner::parse_tool_arguments(arguments) {
         Ok(args) => args,
         Err(reason) => {
-            return Ok(ToolDispatch {
-                result: serde_json::json!({ "error": format!("Tool '{name}' was not run: {reason}") }),
-                actions: EventActions::default(),
-                held: None,
-            });
+            return Ok(ToolDispatch::answer(
+                serde_json::json!({ "error": format!("Tool '{name}' was not run: {reason}") }),
+                ToolResultStatus::NotRun,
+                None,
+            ));
         }
     };
     let screened_args = policy.screen.as_ref().map(|_| args.clone());
@@ -1756,6 +1780,8 @@ async fn dispatch_tool(
 
     let mut short_circuit: Option<serde_json::Value> = None;
     let mut run_after_tool_callbacks = true;
+    let mut status = None;
+    let mut cause = None;
     for hook in hooks {
         match hook.before_tool(cb_ctx.clone()).await {
             Ok(Some(content)) => {
@@ -1767,6 +1793,8 @@ async fn dispatch_tool(
                 log_failure(&e, "before_tool");
                 short_circuit = Some(not_run(&e));
                 run_after_tool_callbacks = false;
+                status = Some(ToolResultStatus::NotRun);
+                cause = Some(e);
                 break;
             }
         }
@@ -1783,6 +1811,8 @@ async fn dispatch_tool(
                     log_failure(&e, "before_tool");
                     short_circuit = Some(not_run(&e));
                     run_after_tool_callbacks = false;
+                    status = Some(ToolResultStatus::NotRun);
+                    cause = Some(e);
                     break;
                 }
             }
@@ -1792,6 +1822,8 @@ async fn dispatch_tool(
     let mut held = None;
     let mut confirmation = None;
     let mut executed = false;
+    // Set when a non-idempotent call timed out, so its effect is unknown.
+    let mut outcome_unknown = false;
     let mut result = match short_circuit {
         Some(result) => result,
         None => {
@@ -1811,21 +1843,44 @@ async fn dispatch_tool(
                         Ok(Ok(value)) => value,
                         Ok(Err(e)) => {
                             log_failure(&e, "execute");
-                            adk_core::tool_error_response(&name, &e, policy.expose_error_messages)
+                            let response = adk_core::tool_error_response(
+                                &name,
+                                &e,
+                                policy.expose_error_messages,
+                            );
+                            status = Some(ToolResultStatus::of_tool_error(&e));
+                            cause = Some(e);
+                            response
                         }
-                        Err(_) => serde_json::json!({
-                            "error": format!("Tool '{name}' timed out after {timeout:?}")
-                        }),
+                        Err(_) => {
+                            let message = format!("Tool '{name}' timed out after {timeout:?}");
+                            // A timed-out call was dropped mid-flight, as in `LlmAgent`.
+                            outcome_unknown = tool.effect() == adk_core::ToolEffect::NonIdempotent;
+                            status = Some(if outcome_unknown {
+                                ToolResultStatus::OutcomeUnknown
+                            } else {
+                                ToolResultStatus::Failed
+                            });
+                            cause = Some(AdkError::new(
+                                adk_core::ErrorComponent::Tool,
+                                adk_core::ErrorCategory::Timeout,
+                                "tool.timeout",
+                                message.clone(),
+                            ));
+                            serde_json::json!({ "error": message })
+                        }
                     }
                 }
                 adk_core::ToolAuthorization::Refuse { reason, confirmation: decision } => {
                     confirmation = decision;
                     run_after_tool_callbacks = false;
+                    status = Some(ToolResultStatus::Refused);
                     serde_json::json!({ "error": reason })
                 }
                 adk_core::ToolAuthorization::Pending { request, reason } => {
                     held = Some(request);
                     run_after_tool_callbacks = false;
+                    status = Some(ToolResultStatus::Held);
                     serde_json::json!({ "error": reason })
                 }
             }
@@ -1838,18 +1893,31 @@ async fn dispatch_tool(
     if executed && held.is_none() {
         let mut actions = tool_ctx.actions();
         if let Some(mut request) = actions.tool_confirmation.take() {
-            actions.skip_summarization = false;
-            actions.escalate = false;
-            tool_ctx.set_actions(actions);
-            // The request describes the delegate's call; its ID is this call's, so the
-            // hold resumes as the agent-tool call (`held_tool_calls`).
-            request.function_call_id = Some(call_id.to_string());
-            held = Some(request);
-            run_after_tool_callbacks = false;
-            if !adk_core::is_confirmation_pending(&result) {
-                result = adk_core::confirmation_pending_response(format!(
-                    "Tool '{name}' is waiting for a confirmation"
-                ));
+            if outcome_unknown {
+                // A call that may have taken effect is not held to run again on a decision,
+                // and no decision on its request may authorize an identical call.
+                tool_ctx.set_actions(actions);
+                adk_core::withdraw_held_call(
+                    &adk_core::ToolGate::for_context(ctx.as_ref()),
+                    &request,
+                )
+                .await?;
+            } else {
+                actions.skip_summarization = false;
+                actions.escalate = false;
+                tool_ctx.set_actions(actions);
+                // The request describes the delegate's call; its ID is this call's, so the
+                // hold resumes as the agent-tool call (`held_tool_calls`).
+                request.function_call_id = Some(call_id.to_string());
+                held = Some(request);
+                run_after_tool_callbacks = false;
+                status = Some(ToolResultStatus::Held);
+                cause = None;
+                if !adk_core::is_confirmation_pending(&result) {
+                    result = adk_core::confirmation_pending_response(format!(
+                        "Tool '{name}' is waiting for a confirmation"
+                    ));
+                }
             }
         }
     }
@@ -1876,6 +1944,7 @@ async fn dispatch_tool(
                 match callback(cb_ctx.clone()).await {
                     Ok(Some(modified)) => {
                         result = content_to_tool_result(&modified);
+                        replaced = true;
                         break;
                     }
                     Ok(None) => continue,
@@ -1888,6 +1957,11 @@ async fn dispatch_tool(
         }
         // An after-tool stage is where results are redacted, so the result it did not finish
         // with is withheld; the model is told the tool ran so it does not repeat the effect.
+        // A replacement is the answer the model reads; only an unknown outcome outlives it.
+        if replaced && !outcome_unknown {
+            status = None;
+            cause = None;
+        }
         if let Some(error) = failed {
             log_failure(&error, "after_tool");
             result = if executed {
@@ -1900,20 +1974,37 @@ async fn dispatch_tool(
                     )
                 })
             };
+            if !outcome_unknown {
+                status = Some(if executed {
+                    ToolResultStatus::Withheld
+                } else {
+                    ToolResultStatus::NotRun
+                });
+                cause = Some(error);
+            }
         }
     }
 
     if held.is_none()
         && let (Some(screen), Some(args)) = (policy.screen.as_ref(), screened_args.as_ref())
     {
-        result = adk_core::screen_tool_result(screen.as_ref(), &name, args, result).await;
+        let withheld;
+        (result, withheld) =
+            crate::runner::screen_result(screen.as_ref(), &name, args, result).await;
+        if withheld {
+            let screened = ToolResultStatus::when_withheld(status, executed);
+            if status != Some(screened) {
+                status = Some(screened);
+                cause = None;
+            }
+        }
     }
 
     let mut actions = tool_ctx.actions();
     if actions.tool_confirmation_decision.is_none() {
         actions.tool_confirmation_decision = confirmation;
     }
-    Ok(ToolDispatch { result, actions, held })
+    Ok(ToolDispatch { result, actions, held, status, cause })
 }
 
 /// Turns a callback's substitute `Content` into the result sent back to the provider.
@@ -2716,5 +2807,252 @@ mod tool_safety_tests {
         assert!(ctx.shared_state().is_some(), "shared state must reach realtime tools");
         assert!(ctx.is_authenticated(), "an authenticated caller must not look anonymous");
         assert_eq!(ctx.app_name(), "app", "identity still delegates");
+    }
+
+    /// The status of every answer the realtime agent writes: whole function response parts.
+    mod tool_status {
+        use super::*;
+        use adk_core::{ApprovalStore as _, ToolEffect};
+
+        /// The part the session records for `call-1`, with `annotations`.
+        fn part(
+            name: &str,
+            response: serde_json::Value,
+            annotations: Option<serde_json::Value>,
+        ) -> Part {
+            Part::FunctionResponse {
+                function_response: adk_core::FunctionResponseData::new(name, response),
+                id: Some("call-1".to_string()),
+                annotations,
+            }
+        }
+
+        fn status(status: &str) -> Option<serde_json::Value> {
+            Some(serde_json::json!({ adk_core::TOOL_RESULT_STATUS_KEY: status }))
+        }
+
+        fn caused(status: &str, code: &str, category: &str) -> Option<serde_json::Value> {
+            Some(serde_json::json!({
+                adk_core::TOOL_RESULT_STATUS_KEY: status,
+                adk_core::TOOL_RESULT_ERROR_CODE_KEY: code,
+                adk_core::TOOL_RESULT_ERROR_CATEGORY_KEY: category,
+            }))
+        }
+
+        /// Sleeps past the dispatch timeout with `effect`; when `store` is set it first asks
+        /// for a confirmation as an agent tool's delegate does.
+        struct Hangs {
+            effect: ToolEffect,
+            store: Option<Arc<adk_core::InMemoryApprovalStore>>,
+        }
+
+        fn delegated() -> adk_core::ToolConfirmationRequest {
+            adk_core::ToolConfirmationRequest::new("write_file", serde_json::json!({ "p": 1 }))
+                .with_function_call_id("inner-1")
+        }
+
+        fn scope() -> adk_core::ApprovalScope {
+            adk_core::ApprovalScope::new("app", "user", "session")
+        }
+
+        #[async_trait]
+        impl Tool for Hangs {
+            fn name(&self) -> &str {
+                "slow"
+            }
+            fn description(&self) -> &str {
+                "never finishes in time"
+            }
+            fn effect(&self) -> ToolEffect {
+                self.effect
+            }
+            async fn execute(
+                &self,
+                ctx: Arc<dyn ToolContext>,
+                _args: serde_json::Value,
+            ) -> Result<serde_json::Value> {
+                if let Some(store) = &self.store {
+                    store.record_pending(&scope(), &delegated()).await?;
+                    ctx.set_actions(EventActions {
+                        tool_confirmation: Some(delegated()),
+                        ..Default::default()
+                    });
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                Ok(serde_json::json!({ "late": true }))
+            }
+        }
+
+        /// #1006 labelled every realtime timeout `failed`, though a non-idempotent call that
+        /// timed out may have taken effect.
+        #[tokio::test(start_paused = true)]
+        async fn a_timeout_is_an_unknown_outcome_only_for_a_non_idempotent_tool() {
+            for (effect, expected) in
+                [(ToolEffect::NonIdempotent, "outcome_unknown"), (ToolEffect::Idempotent, "failed")]
+            {
+                let tool: Arc<dyn Tool> = Arc::new(Hangs { effect, store: None });
+                let outcome =
+                    dispatch_with(RunConfig::default(), &tool, "{}", vec![], vec![]).await.unwrap();
+                assert_eq!(
+                    outcome.part("slow", "call-1"),
+                    part(
+                        "slow",
+                        serde_json::json!({ "error": "Tool 'slow' timed out after 50ms" }),
+                        caused(expected, "tool.timeout", "timeout"),
+                    ),
+                    "{effect:?}"
+                );
+            }
+        }
+
+        /// #1006 left a superseded request pending, so a later approval could authorize an
+        /// identical call.
+        #[tokio::test(start_paused = true)]
+        async fn an_unknown_outcome_supersedes_a_delegates_request_and_withdraws_it() {
+            let store = Arc::new(adk_core::InMemoryApprovalStore::new());
+            let tool: Arc<dyn Tool> =
+                Arc::new(Hangs { effect: ToolEffect::NonIdempotent, store: Some(store.clone()) });
+            let config = RunConfig::builder().approval_store(store.clone()).build();
+
+            let outcome = dispatch_with(config, &tool, "{}", vec![], vec![]).await.unwrap();
+
+            assert!(outcome.held.is_none(), "the call is not held");
+            assert!(outcome.actions.tool_confirmation.is_none());
+            assert_eq!(
+                outcome.part("slow", "call-1"),
+                part(
+                    "slow",
+                    serde_json::json!({ "error": "Tool 'slow' timed out after 50ms" }),
+                    caused("outcome_unknown", "tool.timeout", "timeout"),
+                )
+            );
+            assert!(store.pending(&scope()).await.unwrap().is_empty(), "the request is withdrawn");
+        }
+
+        #[tokio::test]
+        async fn refusals_holds_and_skipped_calls_carry_their_status() {
+            let executions = Arc::new(AtomicUsize::new(0));
+            let tool = counting(&executions);
+
+            let deny = RunConfig::builder()
+                .tool_policy(Arc::new(
+                    adk_core::DeclarativePolicy::builder().deny("counting", "closed").build(),
+                ))
+                .build();
+            let outcome = dispatch_with(deny, &tool, "{}", vec![], vec![]).await.unwrap();
+            assert_eq!(
+                outcome.part("counting", "call-1"),
+                part(
+                    "counting",
+                    serde_json::json!({ "error": "Tool 'counting' denied by policy: closed" }),
+                    status("refused"),
+                )
+            );
+
+            let approval = RunConfig::builder()
+                .tool_policy(Arc::new(
+                    adk_core::DeclarativePolicy::builder()
+                        .require_approval("counting", "voice actions")
+                        .build(),
+                ))
+                .build();
+            let outcome = dispatch_with(approval, &tool, "{}", vec![], vec![]).await.unwrap();
+            assert_eq!(
+                outcome.part("counting", "call-1"),
+                part(
+                    "counting",
+                    serde_json::json!({
+                        "error": "Tool 'counting' requires confirmation: voice actions"
+                    }),
+                    status("held"),
+                )
+            );
+
+            let outcome =
+                dispatch_with(RunConfig::default(), &tool, "[1]", vec![], vec![]).await.unwrap();
+            assert_eq!(
+                outcome.part("counting", "call-1"),
+                part("counting", outcome.result.clone(), status("not_run"))
+            );
+
+            let before: Vec<BeforeToolCallback> = vec![Box::new(|_ctx| {
+                Box::pin(async {
+                    Err(AdkError::new(
+                        adk_core::ErrorComponent::Agent,
+                        adk_core::ErrorCategory::Unavailable,
+                        "audit.down",
+                        "audit sink down",
+                    ))
+                })
+            })];
+            let outcome =
+                dispatch_with(RunConfig::default(), &tool, "{}", before, vec![]).await.unwrap();
+            assert_eq!(
+                outcome.part("counting", "call-1"),
+                part(
+                    "counting",
+                    serde_json::json!({
+                        "error": "tool 'counting' was not run: a before-tool callback failed \
+                                  with agent.unavailable (audit.down)"
+                    }),
+                    caused("not_run", "audit.down", "unavailable"),
+                )
+            );
+            assert_eq!(executions.load(Ordering::SeqCst), 0);
+
+            let outcome =
+                dispatch_with(RunConfig::default(), &tool, "{}", vec![], vec![]).await.unwrap();
+            assert_eq!(
+                outcome.part("counting", "call-1"),
+                part("counting", serde_json::json!({ "ran": true }), None),
+                "a tool's own result carries no status"
+            );
+        }
+
+        /// Withholds every result.
+        struct WithholdAll;
+
+        #[async_trait]
+        impl adk_core::ToolResultScreen for WithholdAll {
+            async fn screen_result(
+                &self,
+                _tool: &str,
+                _args: &serde_json::Value,
+                _result: &serde_json::Value,
+            ) -> std::result::Result<serde_json::Value, String> {
+                Err("screening is down".to_string())
+            }
+        }
+
+        #[tokio::test]
+        async fn a_withheld_result_is_withheld_only_when_the_call_ran() {
+            let executions = Arc::new(AtomicUsize::new(0));
+            let tool = counting(&executions);
+            let policy = ToolResultPolicy {
+                timeout: std::time::Duration::from_millis(50),
+                screen: Some(Arc::new(WithholdAll)),
+                expose_error_messages: false,
+            };
+            let blocked = adk_core::result_blocked_response("counting", "screening is down");
+
+            let outcome =
+                dispatch_with_policy(RunConfig::default(), &tool, "{}", vec![], vec![], &policy)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                outcome.part("counting", "call-1"),
+                part("counting", blocked.clone(), status("withheld"))
+            );
+
+            let deny = RunConfig::builder()
+                .tool_policy(Arc::new(adk_core::DeclarativePolicy::builder().build()))
+                .build();
+            let outcome =
+                dispatch_with_policy(deny, &tool, "{}", vec![], vec![], &policy).await.unwrap();
+            assert_eq!(
+                outcome.part("counting", "call-1"),
+                part("counting", blocked, status("refused"))
+            );
+        }
     }
 }

@@ -8,7 +8,8 @@ use adk_core::{
     InMemoryApprovalStore, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part,
     REQUESTED_CALL_METADATA_KEY, RequestContext, RequestedCall, RequestedVia, Result, RunConfig,
     SessionId, SubjectKind, SubjectRef, Tool, ToolApproval, ToolConfirmationDecision,
-    ToolConfirmationHandler, ToolConfirmationRequest, ToolContext, ToolOrigin, UserId,
+    ToolConfirmationHandler, ToolConfirmationRequest, ToolContext, ToolOrigin, ToolResultStatus,
+    UserId,
 };
 use adk_runner::Runner;
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
@@ -236,7 +237,19 @@ async fn run(runner: &Runner, text: &str, config: RunConfig) -> Vec<Event> {
 }
 
 /// The agent's events of `call`: the call, then its answer.
-fn written(call: &RequestedCall, answer: Value) -> Vec<(String, Vec<Part>, Option<String>)> {
+/// The call and its answer, as the agent writes them; `status` is the answer's
+/// [`ToolResultStatus`].
+fn written(
+    call: &RequestedCall,
+    answer: Value,
+    status: ToolResultStatus,
+) -> Vec<(String, Vec<Part>, Option<String>)> {
+    let mut response = Part::FunctionResponse {
+        function_response: adk_core::FunctionResponseData::new(call.tool_name.clone(), answer),
+        id: Some(call.function_call_id.clone()),
+        annotations: None,
+    };
+    response.set_tool_result_status(status, None);
     vec![
         (
             "model".to_string(),
@@ -248,18 +261,7 @@ fn written(call: &RequestedCall, answer: Value) -> Vec<(String, Vec<Part>, Optio
             }],
             Some(call.metadata()),
         ),
-        (
-            "function".to_string(),
-            vec![Part::FunctionResponse {
-                function_response: adk_core::FunctionResponseData::new(
-                    call.tool_name.clone(),
-                    answer,
-                ),
-                id: Some(call.function_call_id.clone()),
-                annotations: None,
-            }],
-            Some(call.metadata()),
-        ),
+        ("function".to_string(), vec![response], Some(call.metadata())),
     ]
 }
 
@@ -362,7 +364,7 @@ async fn a_requested_call_is_held_as_the_agent_with_no_model_call() {
     let reason = "Tool 'send_invoice' requires confirmation: a person asked for it";
     assert_eq!(
         agent_writes(&events),
-        written(&call, adk_core::confirmation_pending_response(reason))
+        written(&call, adk_core::confirmation_pending_response(reason), ToolResultStatus::Held)
     );
     // Nothing is written in the person's name: the arguments hold constants the agent drew,
     // which a person's own message would make "You said this" memory (spec 3.1 §9.2 I41).
@@ -465,7 +467,8 @@ async fn a_policy_denial_refuses_with_no_model_call() {
         agent_writes(&events),
         written(
             &call,
-            json!({ "error": "Tool 'send_invoice' denied by policy: not from this home" })
+            json!({ "error": "Tool 'send_invoice' denied by policy: not from this home" }),
+            ToolResultStatus::Refused,
         )
     );
     assert!(holds(&events).is_empty());
@@ -497,7 +500,11 @@ async fn unknown_kernel_and_drawing_tools_and_bad_arguments_are_refused() {
     for (call, error) in cases {
         let fixture = fixture(vec![kernel.clone(), draw.clone()]).await;
         let events = run(&fixture.runner, "", signed_in(Some(call.clone()))).await;
-        assert_eq!(agent_writes(&events), written(&call, json!({ "error": error })), "{error}");
+        assert_eq!(
+            agent_writes(&events),
+            written(&call, json!({ "error": error }), ToolResultStatus::Refused),
+            "{error}"
+        );
         assert!(holds(&events).is_empty(), "{error}");
         assert_eq!(fixture.model.calls(), 0, "{error}");
     }
@@ -533,7 +540,8 @@ async fn an_unauthenticated_run_or_another_persons_request_is_refused() {
             json!({
                 "error": "Tool 'send_invoice' was not run: a call a person asks for needs a \
                           signed-in person"
-            })
+            }),
+            ToolResultStatus::Refused,
         )
     );
 
@@ -548,7 +556,8 @@ async fn an_unauthenticated_run_or_another_persons_request_is_refused() {
             json!({
                 "error": "Tool 'send_invoice' was not run: it was asked for by someone other \
                           than this session's person"
-            })
+            }),
+            ToolResultStatus::Refused,
         )
     );
     assert!(fixture.executions.lock().unwrap().is_empty());
@@ -612,7 +621,8 @@ async fn codeact_refuses_requested_calls() {
             json!({
                 "error": "Tool 'send_invoice' was not run: this agent runs code and cannot hold \
                           a call for a person's decision"
-            })
+            }),
+            ToolResultStatus::Refused,
         )
     );
     assert_eq!(model.calls(), 0);
@@ -669,7 +679,7 @@ async fn a_before_tool_callback_answers_a_requested_call_before_it_is_held() {
     assert!(store.pending(&scope()).await.unwrap().is_empty());
     assert_eq!(
         agent_writes(&events),
-        written(&call, json!({ "error": "invoices go out on Fridays" }))
+        written(&call, json!({ "error": "invoices go out on Fridays" }), ToolResultStatus::NotRun)
     );
     assert_eq!(model.calls(), 0);
     assert!(executions.lock().unwrap().is_empty());

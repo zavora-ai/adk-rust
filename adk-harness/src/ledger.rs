@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use adk_core::ActionLedger;
 #[cfg(feature = "runner")]
-use adk_core::{ActionOutcome, ActionRecord};
+use adk_core::{ActionOutcome, ActionRecord, FunctionResponseData, Part, ToolResultStatus};
 #[cfg(feature = "runner")]
 use serde_json::{Value, json};
 
@@ -29,11 +29,12 @@ pub(crate) fn held_call_key(
     adk_agent::held_call_ledger_key(app, user, session, call_id, fingerprint)
 }
 
-/// The function response for a held call that ran but whose result was never saved,
-/// from its ledger record; the shapes the agent answers a re-issued call with.
+/// The function response for the held call `id` to `name` that ran but whose result was never
+/// saved, from its ledger record; the shapes, and the status, the agent answers a re-issued
+/// call with.
 #[cfg(feature = "runner")]
-pub(crate) fn recorded_answer(name: &str, record: &ActionRecord) -> Value {
-    match &record.outcome {
+pub(crate) fn recorded_answer(name: &str, id: Option<&String>, record: &ActionRecord) -> Part {
+    let response: Value = match &record.outcome {
         Some(ActionOutcome::Succeeded { result_digest }) => json!({
             "status": "already_succeeded",
             "result_digest": result_digest,
@@ -48,7 +49,14 @@ pub(crate) fn recorded_answer(name: &str, record: &ActionRecord) -> Value {
             "an earlier attempt of this call to '{name}' began but recorded no outcome, so it \
              may have taken effect; it was not executed again"
         )),
-    }
+    };
+    let mut part = Part::FunctionResponse {
+        function_response: FunctionResponseData::new(name, response),
+        id: id.cloned(),
+        annotations: None,
+    };
+    part.set_tool_result_status(ToolResultStatus::of_record(record.outcome.as_ref()), None);
+    part
 }
 
 /// The harness's action ledger and the one each run records in (spec 3.1 §7.12).
@@ -128,6 +136,37 @@ mod tests {
         assert_eq!(other, first_run, "the fingerprint ignores the call id");
         let rewritten = held_call_key("app", "alice", "s1", "call-2", &fingerprint);
         assert!(ledger.get(&rewritten).await.unwrap().is_none(), "another call has its own record");
+    }
+
+    /// A held call answered from its record carries the status `LlmAgent` gives the same
+    /// replay, so one fact reaches a host as one status.
+    #[test]
+    fn a_recorded_answer_carries_the_records_status() {
+        let id = "call-1".to_string();
+        let frozen = adk_core::not_run_text(&adk_core::AdkError::agent("execution is frozen"));
+        for (outcome, status) in [
+            (Some(ActionOutcome::Succeeded { result_digest: "d".into() }), "succeeded"),
+            (Some(ActionOutcome::Failed { error: "exit 1".into() }), "failed"),
+            (Some(ActionOutcome::Failed { error: frozen }), "not_run"),
+            (None, "outcome_unknown"),
+        ] {
+            let mut record = ActionRecord::new("k", "bash", &json!({}), ToolEffect::NonIdempotent);
+            record.outcome = outcome;
+            let Part::FunctionResponse { function_response, .. } =
+                recorded_answer("bash", Some(&id), &record)
+            else {
+                panic!("a function response");
+            };
+            assert_eq!(
+                recorded_answer("bash", Some(&id), &record),
+                Part::FunctionResponse {
+                    function_response,
+                    id: Some(id.clone()),
+                    annotations: Some(json!({ adk_core::TOOL_RESULT_STATUS_KEY: status })),
+                },
+                "{status}"
+            );
+        }
     }
 
     #[test]

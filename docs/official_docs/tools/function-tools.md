@@ -500,6 +500,76 @@ what the model reads. Timeouts, panics, and the agent's own refusals keep their 
 `NonIdempotent` call that timed out or panicked is answered with an
 [outcome-unknown response](tool-effects.md#unknown-outcomes).
 
+### Tool Result Status
+
+An answer the agent writes in place of a tool's result carries an `adk_core::ToolResultStatus`
+in the function response's annotations, so a client, an eval, or an audit reads what happened to
+the call without parsing the payload. The payload the model reads does not change. A response
+without a status is the tool's own result, an answer a callback or plugin supplied, or one stored
+before the status existed.
+
+| Status | The call | Set on |
+|--------|----------|--------|
+| `refused` | Did not run: an authorization check refused it | `ToolPolicy` denial, tool guardrail denial, an approver's or handler's decline, a held call resumed by another agent or for another tool, an access guard's denial (`tool.permission_denied`), a person's requested call the agent does not take |
+| `not_run` | Did not run, for another reason | Kill switch, run budget, transfer to another agent, undecodable arguments, unknown tool, open circuit breaker, concurrency limit, a before-tool callback or plugin that failed or answered with text, an action ledger that could not be used |
+| `held` | Waits for a confirmation decision | A call held for confirmation, or an agent tool whose delegate holds one |
+| `failed` | Ran and failed with a known outcome | A tool error; a timeout or panic of a `ReadOnly` or `Idempotent` tool |
+| `outcome_unknown` | Began and may have taken effect | A `NonIdempotent` call that timed out or panicked, a call in flight when the run was cancelled or its process stopped, a ledger record begun without an outcome |
+| `withheld` | Ran; its result is withheld | An after-tool callback or plugin failed, or the result screen withheld the result |
+| `succeeded` | Ran in an earlier attempt | An action-ledger replay or durable recovery of a call that succeeded |
+
+When an error is behind the status, its code and category are annotated beside it:
+
+```json
+{
+  "functionResponse": { "name": "pay", "response": { "error": "not run: execution is frozen" } },
+  "id": "call-1",
+  "annotations": {
+    "adk.tool_result.status": "not_run",
+    "adk.tool_result.error_code": "governance.frozen",
+    "adk.tool_result.error_category": "forbidden"
+  }
+}
+```
+
+Read it with `Part::tool_result_status()`, `Part::tool_result_error_code()` and
+`Part::tool_result_error_category()`:
+
+```rust
+use adk_core::{FunctionResponseData, Part, ToolResultStatus};
+use serde_json::json;
+
+fn main() {
+    let mut answer = Part::FunctionResponse {
+        function_response: FunctionResponseData::new("pay", json!({ "error": "denied" })),
+        id: Some("call-1".to_string()),
+        annotations: None,
+    };
+    answer.set_tool_result_status(ToolResultStatus::Refused, None);
+
+    assert_eq!(answer.tool_result_status(), Some(ToolResultStatus::Refused));
+    assert!(ToolResultStatus::Refused.is_error());
+}
+```
+
+- **Hooks own their answers.** An `on_tool_error` fallback, an after-tool callback's or plugin's
+  replacement, and a before-tool callback's function response are the answer the model reads, so
+  they carry the annotations the hook gives them. `outcome_unknown` is kept over any replacement,
+  since no hook can settle whether the call took effect.
+- **Withholding keeps what is known.** A result screened out after the answer was written
+  becomes `withheld` when the call ran — now, or in the earlier attempt an action-ledger replay
+  reports — and keeps `refused`, `not_run` or `outcome_unknown` otherwise.
+- **Providers.** Anthropic and Gemini Interactions receive `is_error: true` on `refused`,
+  `not_run` and `failed` answers (`ToolResultStatus::is_error`). The other statuses are not
+  flagged, since an error flag invites the model to repeat a call that ran, may have run, or
+  waits for a decision. Providers without a tool-error field receive the payload only, and the
+  annotations themselves never reach a provider.
+
+`LlmAgent`, `CodeActAgent` (on the answer to a held call it resumes), the realtime agent and
+integrated runner, the runner's answers to cancelled and recovered calls, and the harness all set
+it. See [Tool Authorization](../security/tool-authorization.md#answer-status) for the status of
+each governance answer.
+
 ---
 
 ## Tool Context
