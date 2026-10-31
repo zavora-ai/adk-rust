@@ -2540,24 +2540,37 @@ impl ToolExecutor<'_> {
                 all_results
             }
             ToolDispatchMode::Auto => {
-                // A call may overlap another only when its tool is
-                // read-only *and* declares concurrency safety.
-                let (concurrent_fcs, sequential_fcs): (Vec<_>, Vec<_>) =
-                    fc_parts.into_iter().partition(|call| {
-                        self.tool_map
-                            .get(&call.name)
-                            .is_some_and(|tool| tool.is_read_only() && tool.is_concurrency_safe())
-                    });
-                let mut all_results = Vec::new();
+                use futures::StreamExt as _;
 
-                // Concurrency enforcement is handled by the semaphore
-                // inside ToolExecutor.
-                if !concurrent_fcs.is_empty() {
-                    use futures::StreamExt as _;
-                    let buffer_size = concurrent_fcs.len().max(1);
+                // A call may overlap another only when its tool is read-only *and* declares
+                // concurrency safety. Only a run of adjacent such calls overlaps; any other
+                // call runs alone, in the model's order, so a read listed after a write sees
+                // the write.
+                let is_concurrent = |call: &PendingToolCall| {
+                    self.tool_map
+                        .get(&call.name)
+                        .is_some_and(|tool| tool.is_read_only() && tool.is_concurrency_safe())
+                };
+                let mut all_results = Vec::with_capacity(fc_parts.len());
+                let mut calls = fc_parts.into_iter().peekable();
+                while let Some(call) = calls.next() {
+                    if !is_concurrent(&call) {
+                        all_results.push(self.execute(call).await?);
+                        continue;
+                    }
+
+                    let mut concurrent_batch = vec![call];
+                    while calls.peek().is_some_and(is_concurrent) {
+                        if let Some(next) = calls.next() {
+                            concurrent_batch.push(next);
+                        }
+                    }
+
+                    // Concurrency enforcement is handled by the semaphore inside ToolExecutor.
+                    let buffer_size = concurrent_batch.len();
                     all_results.extend(
                         futures::stream::iter(
-                            concurrent_fcs.into_iter().map(|call| self.execute(call)),
+                            concurrent_batch.into_iter().map(|call| self.execute(call)),
                         )
                         .buffer_unordered(buffer_size)
                         .collect::<Vec<_>>()
@@ -2565,11 +2578,6 @@ impl ToolExecutor<'_> {
                         .into_iter()
                         .collect::<Result<Vec<_>>>()?,
                     );
-                }
-
-                // Everything else runs one at a time.
-                for call in sequential_fcs {
-                    all_results.push(self.execute(call).await?);
                 }
                 all_results
             }

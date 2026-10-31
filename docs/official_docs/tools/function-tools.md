@@ -749,7 +749,7 @@ cargo run --manifest-path examples/tool_schemas/Cargo.toml
 3. **Return structured JSON** - Use clear field names
 4. **Keep tools focused** - Each tool should do one thing well
 5. **Write errors for the model as results** - Return `Ok(json!({"error": "..."}))` for text the model should read; an `Err`'s message stays out of the model request
-6. **Mark safe read-only tools** - Set both `.with_read_only(true)` and `.with_concurrency_safe(true)` so `Auto` dispatch can include them in its concurrent subset
+6. **Mark safe read-only tools** - Set both `.with_read_only(true)` and `.with_concurrency_safe(true)` so `Auto` dispatch can overlap adjacent calls to them
 
 ---
 
@@ -771,7 +771,7 @@ let update = FunctionTool::new("update", "Update record", |_ctx, _args| async mo
 });
 ```
 
-When `ToolExecutionStrategy::Auto` is active, the dispatch loop first runs calls concurrently when their selected tools return `true` from both `is_read_only()` and `is_concurrency_safe()`. It then executes all remaining calls sequentially. `ToolExecutionStrategy::Parallel` is an explicit override that bypasses these signals, so its caller owns concurrency safety.
+When `ToolExecutionStrategy::Auto` is active, the dispatch loop keeps the LLM-returned order. A run of adjacent calls whose selected tools return `true` from both `is_read_only()` and `is_concurrency_safe()` runs concurrently; every other call runs alone, in its place, so a read listed after a write sees the write. `ToolExecutionStrategy::Parallel` is an explicit override that bypasses these signals, so its caller owns concurrency safety.
 
 `.with_effect(ToolEffect::Idempotent)` declares a mutation tool safe to repeat, so a retry budget may retry it. Without it, a read-only tool is `ReadOnly` and every other tool is `NonIdempotent` and never retried. See [Tool Effects](tool-effects.md).
 
