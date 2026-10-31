@@ -290,6 +290,31 @@ plugin events, and compaction events — is written through
 composite can therefore bind each event to its tenant, and can reject or ignore
 the raw-session-ID `append_event` path entirely.
 
+### Refreshing the Session View
+
+Within a run, the Runner keeps its own copy of the session's events and appends each event
+as the agent yields it. A `SessionService` that stores something other than what it was given
+(redacting, merging, projecting per identity, compacting durably) is bypassed until the next run.
+`Runner::with_session_event_refresh(true)` reads the session back with `get_for_identity` after
+the user's message and after every non-partial event it persists, and uses the stored events as
+the run's view, so later agents in the run (a workflow's next sub-agent, a transfer target) see
+the service's view:
+
+```rust
+let runner = Runner::builder()
+    .app_name("my_app")
+    .agent(agent)
+    .session_service(session_service)
+    .build()?
+    .with_session_event_refresh(true);
+```
+
+Every event, partial chunks included, still reaches the caller's stream; partial chunks are not
+added to the view. A read that fails ends the run with the service's error rather than continue on
+a stale view. Saved messages the run screened with input guardrails keep their screened content.
+In-memory compaction (intra-invocation and `context-compaction`) is replaced by the stored view at
+the next refresh. The option costs one read per persisted event and is off by default.
+
 ## Execution Flow
 
 ```
