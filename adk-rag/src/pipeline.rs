@@ -331,8 +331,6 @@ impl RagPipelineBuilder {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use async_trait::async_trait;
 
     use super::*;
@@ -369,12 +367,7 @@ mod tests {
             .expect("build pipeline");
         pipeline.create_collection("docs").await.expect("create collection");
 
-        let document = Document {
-            id: "doc".to_string(),
-            text: "abcdefgh".to_string(),
-            metadata: HashMap::new(),
-            source_uri: None,
-        };
+        let document = Document::new("doc", "abcdefgh");
         let err = pipeline.ingest("docs", &document).await.expect_err("short embedding batch");
         assert!(
             matches!(&err, RagError::PipelineError(message)

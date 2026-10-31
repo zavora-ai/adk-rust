@@ -26,15 +26,8 @@ fn arb_normalized_embedding(dim: usize) -> impl Strategy<Value = Vec<f32>> {
 
 /// Generate a chunk with a normalized embedding.
 fn arb_chunk(dim: usize) -> impl Strategy<Value = Chunk> {
-    ("[a-z]{3,8}", "[a-z ]{5,30}", arb_normalized_embedding(dim)).prop_map(
-        |(id, text, embedding)| Chunk {
-            id,
-            text,
-            embedding,
-            metadata: HashMap::new(),
-            document_id: "doc_1".to_string(),
-        },
-    )
+    ("[a-z]{3,8}", "[a-z ]{5,30}", arb_normalized_embedding(dim))
+        .prop_map(|(id, text, embedding)| Chunk::new(id, "doc_1", text).with_embedding(embedding))
 }
 
 /// **Feature: adk-rag, Property 3: In-memory vector store search ordering**

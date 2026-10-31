@@ -2110,13 +2110,13 @@ async fn main() -> anyhow::Result<()> {{
     );
 
     pipeline.create_collection("docs").await?;
-    pipeline.ingest("docs", &Document {{
-        id: "example".into(),
-        text: "ADK-Rust is a framework for building AI agents in Rust. \
-               It supports multiple LLM providers, tool calling, RAG, and more.".into(),
-        metadata: Default::default(),
-        source_uri: None,
-    }}).await?;
+    pipeline.ingest("docs", &Document::new(
+        "example",
+        "ADK-Rust is a framework for building AI agents in Rust. \
+         It supports multiple LLM providers, tool calling, RAG, and more.",
+    )
+    .with_source_uri("https://github.com/zavora-ai/adk-rust")
+    .with_title("ADK-Rust")).await?;
 
     println!("Ingested documents. Ask questions about your knowledge base.\\n");
 

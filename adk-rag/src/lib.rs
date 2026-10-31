@@ -62,16 +62,14 @@
 //!     .build()?;
 //!
 //! pipeline.create_collection("docs").await?;
-//! let document = Document {
-//!     id: "intro".into(),
-//!     text: "Rust is a systems programming language.".into(),
-//!     metadata: Default::default(),
-//!     source_uri: None,
-//! };
+//! let document = Document::new("intro", "Rust is a systems programming language.")
+//!     .with_source_uri("https://example.com/rust")
+//!     .with_title("About Rust");
 //! pipeline.ingest("docs", &document).await?;
 //!
 //! let results = pipeline.query("docs", "systems language").await?;
 //! assert_eq!(results[0].chunk.document_id, "intro");
+//! assert_eq!(results[0].chunk.source_uri.as_deref(), Some("https://example.com/rust"));
 //! # Ok(())
 //! # }
 //! ```

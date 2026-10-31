@@ -13,8 +13,8 @@
 //! | `delete` | `dataObjects:batchDelete`, falling back to per-object delete when IDs are missing |
 //! | `search` | `dataObjects:search` with a `vectorSearch` query (`DOT_PRODUCT`) |
 //!
-//! Chunk text and metadata are stored **in** the Data Object alongside the
-//! vector, so no companion store is needed. The store operates in BYOE
+//! Chunk text, metadata, source URI, and title are stored **in** the Data Object
+//! alongside the vector, so no companion store is needed. The store operates in BYOE
 //! (bring-your-own-embeddings) mode — embeddings come from adk-rag's
 //! embedder pipeline, and auto-embedding is deliberately not enabled, to
 //! keep parity with the other backends. Scores are `DOT_PRODUCT` distances,
@@ -534,18 +534,24 @@ impl VectorStore for AgentRetrievalStore {
 
 fn output_fields() -> Value {
     json!({
-        "dataFields": ["text", "documentId", "metadata"],
+        "dataFields": ["text", "documentId", "metadata", "sourceUri", "title"],
         "vectorFields": [VECTOR_FIELD],
     })
 }
 
 fn data_object_body(chunk: &Chunk) -> Value {
+    let mut data = json!({
+        "text": chunk.text,
+        "documentId": chunk.document_id,
+        "metadata": chunk.metadata,
+    });
+    for (field, value) in [("sourceUri", &chunk.source_uri), ("title", &chunk.title)] {
+        if let Some(value) = value {
+            data[field] = json!(value);
+        }
+    }
     json!({
-        "data": {
-            "text": chunk.text,
-            "documentId": chunk.document_id,
-            "metadata": chunk.metadata,
-        },
+        "data": data,
         "vectors": {
             VECTOR_FIELD: { "dense": { "values": chunk.embedding } },
         },
@@ -595,6 +601,10 @@ struct WireData {
     document_id: String,
     #[serde(default)]
     metadata: HashMap<String, String>,
+    #[serde(default)]
+    source_uri: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -627,16 +637,12 @@ fn search_result_from_wire(wire: WireSearchResult) -> Result<SearchResult> {
         .and_then(|vector| vector.dense.as_ref())
         .map(|dense| dense.values.clone())
         .unwrap_or_default();
-    Ok(SearchResult {
-        chunk: Chunk {
-            id,
-            text: wire.data_object.data.text,
-            embedding,
-            metadata: wire.data_object.data.metadata,
-            document_id: wire.data_object.data.document_id,
-        },
-        score: wire.distance as f32,
-    })
+    let data = wire.data_object.data;
+    let mut chunk = Chunk::new(id, data.document_id, data.text).with_embedding(embedding);
+    chunk.metadata = data.metadata;
+    chunk.source_uri = data.source_uri;
+    chunk.title = data.title;
+    Ok(SearchResult { chunk, score: wire.distance as f32 })
 }
 
 #[cfg(test)]
@@ -714,18 +720,23 @@ mod tests {
 
     #[test]
     fn data_object_body_stores_text_and_metadata_with_the_vector() {
-        let chunk = Chunk {
-            id: "c1".to_string(),
-            text: "hello".to_string(),
-            embedding: vec![0.1, 0.2],
-            metadata: HashMap::from([("k".to_string(), "v".to_string())]),
-            document_id: "d1".to_string(),
-        };
+        let chunk =
+            Chunk::new("c1", "d1", "hello").with_embedding(vec![0.1, 0.2]).with_metadata("k", "v");
         assert_eq!(
             data_object_body(&chunk),
             json!({
                 "data": { "text": "hello", "documentId": "d1", "metadata": { "k": "v" } },
                 "vectors": { "embedding": { "dense": { "values": [0.1f32, 0.2f32] } } },
+            }),
+        );
+        assert_eq!(
+            data_object_body(&chunk.with_source_uri("https://example.com/a").with_title("A"))["data"],
+            json!({
+                "text": "hello",
+                "documentId": "d1",
+                "metadata": { "k": "v" },
+                "sourceUri": "https://example.com/a",
+                "title": "A",
             }),
         );
     }

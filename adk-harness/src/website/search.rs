@@ -105,12 +105,9 @@ impl SiteSearch {
         for (path, markdown) in twins {
             let url = page_url(&path);
             let title = title_of(&markdown, &url);
-            let document = Document {
-                id: url.clone(),
-                text: markdown,
-                metadata: std::collections::HashMap::new(),
-                source_uri: Some(url.clone()),
-            };
+            let document = Document::new(url.clone(), markdown)
+                .with_source_uri(url.clone())
+                .with_title(&title);
             for chunk in chunker.chunk(&document) {
                 let words = terms_of(&format!("{title} {}", chunk.text));
                 let mut terms = HashMap::new();

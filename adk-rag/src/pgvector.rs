@@ -42,7 +42,9 @@ use crate::vectorstore::VectorStore;
 /// A [`VectorStore`] backed by PostgreSQL with the pgvector extension.
 ///
 /// Each collection is stored as a separate table named `rag_<name>` with columns:
-/// `id`, `text`, `embedding` (vector), `metadata` (jsonb), `document_id`. See the
+/// `id`, `text`, `embedding` (vector), `metadata` (jsonb), `document_id`, `source_uri`,
+/// and `title`. `create_collection` adds `source_uri` and `title` to a table created
+/// before they existed, keeping its rows. See the
 /// [module documentation](self) for the collection naming rule.
 pub struct PgVectorStore {
     pool: PgPool,
@@ -124,14 +126,24 @@ impl VectorStore for PgVectorStore {
                 text TEXT NOT NULL, \
                 embedding vector({dimensions}), \
                 metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb, \
-                document_id TEXT NOT NULL\
+                document_id TEXT NOT NULL, \
+                source_uri TEXT, \
+                title TEXT\
             )"
         );
+        // Tables created before provenance was stored gain the columns in place.
+        let migrate_sql = format!(
+            "ALTER TABLE {table_name} \
+                ADD COLUMN IF NOT EXISTS source_uri TEXT, \
+                ADD COLUMN IF NOT EXISTS title TEXT"
+        );
 
-        sqlx::query(sqlx::AssertSqlSafe(create_sql.as_str()))
-            .execute(&self.pool)
-            .await
-            .map_err(Self::map_err)?;
+        for sql in [create_sql, migrate_sql] {
+            sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
+                .execute(&self.pool)
+                .await
+                .map_err(Self::map_err)?;
+        }
 
         debug!(collection = name, table = %table_name, dimensions, "created pgvector table");
         Ok(())
@@ -160,13 +172,16 @@ impl VectorStore for PgVectorStore {
 
         // `table_name` passed `Self::table_name`; every value is a bound parameter.
         let upsert_sql = format!(
-            "INSERT INTO {table_name} (id, text, embedding, metadata, document_id) \
-             VALUES ($1, $2, $3::vector, $4::jsonb, $5) \
+            "INSERT INTO {table_name} \
+                (id, text, embedding, metadata, document_id, source_uri, title) \
+             VALUES ($1, $2, $3::vector, $4::jsonb, $5, $6, $7) \
              ON CONFLICT (id) DO UPDATE SET \
                 text = EXCLUDED.text, \
                 embedding = EXCLUDED.embedding, \
                 metadata = EXCLUDED.metadata, \
-                document_id = EXCLUDED.document_id"
+                document_id = EXCLUDED.document_id, \
+                source_uri = EXCLUDED.source_uri, \
+                title = EXCLUDED.title"
         );
 
         for chunk in chunks {
@@ -185,6 +200,8 @@ impl VectorStore for PgVectorStore {
                 .bind(&embedding_str)
                 .bind(&metadata_json)
                 .bind(&chunk.document_id)
+                .bind(&chunk.source_uri)
+                .bind(&chunk.title)
                 .execute(&self.pool)
                 .await
                 .map_err(Self::map_err)?;
@@ -227,7 +244,7 @@ impl VectorStore for PgVectorStore {
         // Returns distance (0 = identical), so score = 1 - distance.
         // `table_name` passed `Self::table_name`; the query vector is a bound parameter.
         let search_sql = format!(
-            "SELECT id, text, metadata, document_id, \
+            "SELECT id, text, metadata, document_id, source_uri, title, \
                     1 - (embedding <=> $1::vector) AS score \
              FROM {table_name} \
              ORDER BY embedding <=> $1::vector \
@@ -261,10 +278,11 @@ impl VectorStore for PgVectorStore {
                     })
                     .unwrap_or_default();
 
-                SearchResult {
-                    chunk: Chunk { id, text, embedding: vec![], metadata, document_id },
-                    score: score as f32,
-                }
+                let mut chunk = Chunk::new(id, document_id, text);
+                chunk.metadata = metadata;
+                chunk.source_uri = row.get("source_uri");
+                chunk.title = row.get("title");
+                SearchResult { chunk, score: score as f32 }
             })
             .collect();
 

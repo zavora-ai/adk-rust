@@ -20,7 +20,8 @@
 //! // The agent calls the tool with:
 //! // { "query": "How do I configure X?", "collection": "faq", "top_k": 5 }
 //! // and receives, best first:
-//! // [{ "id": "...", "document_id": "...", "text": "...", "metadata": {...}, "score": 0.83 }]
+//! // [{ "id": "...", "document_id": "...", "text": "...", "metadata": {...},
+//! //    "source_uri": "https://...", "title": "...", "score": 0.83 }]
 //! ```
 
 use std::collections::HashMap;
@@ -52,8 +53,10 @@ use crate::pipeline::RagPipeline;
 /// tenant therefore needs one tool per tenant, built with that tenant's collection.
 ///
 /// The result is an array of retrieved chunks, best first, each with its `id`,
-/// `document_id`, `text`, `metadata`, and `score`. Embedding vectors stay out of the
-/// result: they mean nothing to a model and would fill its context.
+/// `document_id`, `text`, `metadata`, and `score`, plus the chunk's `source_uri` and
+/// `title` when its document had them, so the model can cite the source. Embedding
+/// vectors stay out of the result: they mean nothing to a model and would fill its
+/// context.
 ///
 /// The tool is read-only and concurrency-safe, so `DeclarativePolicy::allow_read_only`
 /// admits it and `ToolExecutionStrategy::Auto` overlaps it with adjacent read-only calls.
@@ -251,6 +254,10 @@ struct RetrievedChunk<'a> {
     document_id: &'a str,
     text: &'a str,
     metadata: &'a HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_uri: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<&'a str>,
     score: f32,
 }
 
@@ -261,6 +268,8 @@ impl<'a> From<&'a SearchResult> for RetrievedChunk<'a> {
             document_id: &result.chunk.document_id,
             text: &result.chunk.text,
             metadata: &result.chunk.metadata,
+            source_uri: result.chunk.source_uri.as_deref(),
+            title: result.chunk.title.as_deref(),
             score: result.score,
         }
     }
@@ -344,12 +353,10 @@ mod tests {
             ("tenant_b", "secret", "returns for tenant b only"),
         ] {
             pipeline.create_collection(collection).await.expect("create collection");
-            let document = Document {
-                id: id.to_string(),
-                text: text.to_string(),
-                metadata: HashMap::from([("source".to_string(), format!("{id}.md"))]),
-                source_uri: None,
-            };
+            let mut document = Document::new(id, text).with_metadata("source", format!("{id}.md"));
+            if id == "a" {
+                document = document.with_source_uri("https://example.com/a").with_title("Returns");
+            }
             pipeline.ingest(collection, &document).await.expect("ingest");
         }
         pipeline
@@ -387,7 +394,14 @@ mod tests {
             let mut keys: Vec<&str> =
                 item.as_object().expect("object").keys().map(String::as_str).collect();
             keys.sort_unstable();
-            assert_eq!(keys, ["document_id", "id", "metadata", "score", "text"]);
+            if item["document_id"] == "a" {
+                assert_eq!(
+                    keys,
+                    ["document_id", "id", "metadata", "score", "source_uri", "text", "title"]
+                );
+            } else {
+                assert_eq!(keys, ["document_id", "id", "metadata", "score", "text"]);
+            }
         }
         let first = &results[0];
         assert_eq!(
@@ -395,6 +409,35 @@ mod tests {
             format!("{}.md", first["document_id"].as_str().unwrap())
         );
         assert!(!result.to_string().contains("embedding"));
+    }
+
+    #[tokio::test]
+    async fn results_carry_the_source_uri_and_title_of_documents_that_have_them() {
+        let result = tool(None)
+            .await
+            .execute(context(), json!({"query": "returns", "top_k": 3}))
+            .await
+            .expect("search");
+
+        let mut provenance: Vec<(String, Value, Value)> = result
+            .as_array()
+            .expect("an array of results")
+            .iter()
+            .map(|item| {
+                let id = item["document_id"].as_str().expect("document_id").to_string();
+                let field = |name: &str| item.get(name).cloned().unwrap_or(Value::Null);
+                (id, field("source_uri"), field("title"))
+            })
+            .collect();
+        provenance.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            provenance,
+            [
+                ("a".to_string(), json!("https://example.com/a"), json!("Returns")),
+                ("b".to_string(), Value::Null, Value::Null),
+                ("c".to_string(), Value::Null, Value::Null),
+            ]
+        );
     }
 
     #[tokio::test]

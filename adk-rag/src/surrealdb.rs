@@ -50,6 +50,8 @@ struct ChunkRow {
     embedding: Vec<f32>,
     metadata: HashMap<String, String>,
     document_id: String,
+    source_uri: Option<String>,
+    title: Option<String>,
 }
 
 /// A row returned from a KNN search query.
@@ -59,6 +61,8 @@ struct SearchRow {
     text: String,
     metadata: HashMap<String, String>,
     document_id: String,
+    source_uri: Option<String>,
+    title: Option<String>,
     distance: f32,
 }
 
@@ -156,6 +160,8 @@ impl VectorStore for SurrealVectorStore {
              DEFINE FIELD IF NOT EXISTS embedding ON `{table}` TYPE array<float>; \
              DEFINE FIELD IF NOT EXISTS metadata ON `{table}` TYPE object FLEXIBLE; \
              DEFINE FIELD IF NOT EXISTS document_id ON `{table}` TYPE string; \
+             DEFINE FIELD IF NOT EXISTS source_uri ON `{table}` TYPE option<string>; \
+             DEFINE FIELD IF NOT EXISTS title ON `{table}` TYPE option<string>; \
              DEFINE INDEX IF NOT EXISTS `idx_{table}_hnsw` ON `{table}` \
                  FIELDS embedding HNSW DIMENSION {dimensions} DIST COSINE;"
         );
@@ -188,6 +194,8 @@ impl VectorStore for SurrealVectorStore {
                 embedding: chunk.embedding.clone(),
                 metadata: chunk.metadata.clone(),
                 document_id: chunk.document_id.clone(),
+                source_uri: chunk.source_uri.clone(),
+                title: chunk.title.clone(),
             };
 
             // Use record ID as (table, chunk.id) for upsert semantics
@@ -228,7 +236,7 @@ impl VectorStore for SurrealVectorStore {
 
         // Use SurrealDB's KNN operator with cosine distance
         let sql = format!(
-            "SELECT id, text, metadata, document_id, \
+            "SELECT id, text, metadata, document_id, source_uri, title, \
                     vector::distance::knn() AS distance \
              FROM `{table}` \
              WHERE embedding <|{top_k},COSINE|> $embedding \
@@ -249,16 +257,11 @@ impl VectorStore for SurrealVectorStore {
                 // Cosine distance → similarity: score = 1.0 - distance
                 let score = 1.0 - row.distance;
 
-                SearchResult {
-                    chunk: Chunk {
-                        id,
-                        text: row.text,
-                        embedding: vec![],
-                        metadata: row.metadata,
-                        document_id: row.document_id,
-                    },
-                    score,
-                }
+                let mut chunk = Chunk::new(id, row.document_id, row.text);
+                chunk.metadata = row.metadata;
+                chunk.source_uri = row.source_uri;
+                chunk.title = row.title;
+                SearchResult { chunk, score }
             })
             .collect();
 

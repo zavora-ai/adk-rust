@@ -153,15 +153,8 @@ impl Chunker for FixedSizeChunker {
             .into_iter()
             .enumerate()
             .map(|(chunk_index, text)| {
-                let mut metadata = document.metadata.clone();
-                metadata.insert("chunk_index".to_string(), chunk_index.to_string());
-                Chunk {
-                    id: format!("{}_{chunk_index}", document.id),
-                    text,
-                    embedding: Vec::new(),
-                    metadata,
-                    document_id: document.id.clone(),
-                }
+                Chunk::from_document(document, format!("{}_{chunk_index}", document.id), text)
+                    .with_metadata("chunk_index", chunk_index.to_string())
             })
             .collect()
     }
@@ -351,15 +344,8 @@ impl Chunker for RecursiveChunker {
             .into_iter()
             .enumerate()
             .map(|(i, text)| {
-                let mut metadata = document.metadata.clone();
-                metadata.insert("chunk_index".to_string(), i.to_string());
-                Chunk {
-                    id: format!("{}_{i}", document.id),
-                    text,
-                    embedding: Vec::new(),
-                    metadata,
-                    document_id: document.id.clone(),
-                }
+                Chunk::from_document(document, format!("{}_{i}", document.id), text)
+                    .with_metadata("chunk_index", i.to_string())
             })
             .collect()
     }
@@ -513,17 +499,11 @@ impl Chunker for MarkdownChunker {
             };
 
             for text in sub_chunks {
-                let mut metadata = document.metadata.clone();
-                metadata.insert("chunk_index".to_string(), chunk_index.to_string());
-                metadata.insert("header_path".to_string(), section.header_path.clone());
-
-                chunks.push(Chunk {
-                    id: format!("{}_{chunk_index}", document.id),
-                    text,
-                    embedding: Vec::new(),
-                    metadata,
-                    document_id: document.id.clone(),
-                });
+                chunks.push(
+                    Chunk::from_document(document, format!("{}_{chunk_index}", document.id), text)
+                        .with_metadata("chunk_index", chunk_index.to_string())
+                        .with_metadata("header_path", section.header_path.clone()),
+                );
                 chunk_index += 1;
             }
         }
@@ -537,14 +517,38 @@ mod tests {
     use super::*;
     use crate::Document;
     use proptest::prelude::*;
-    use std::collections::HashMap;
 
     fn doc(text: &str) -> Document {
-        Document {
-            id: "test".to_string(),
-            text: text.to_string(),
-            metadata: HashMap::new(),
-            source_uri: None,
+        Document::new("test", text)
+    }
+
+    #[test]
+    fn every_chunker_copies_provenance_and_metadata_to_each_chunk() {
+        let document =
+            Document::new("guide", "# Setup\n\nInstall it. Then run it.\n\n# Use\n\nCall it.")
+                .with_source_uri("https://example.com/guide")
+                .with_title("Guide")
+                .with_metadata("lang", "en");
+        let chunkers: [(&str, Box<dyn Chunker>); 3] = [
+            ("fixed", Box::new(FixedSizeChunker::new(16, 0))),
+            ("recursive", Box::new(RecursiveChunker::new(16, 0))),
+            ("markdown", Box::new(MarkdownChunker::new(16, 0))),
+        ];
+        for (name, chunker) in chunkers {
+            let chunks = chunker.chunk(&document);
+            assert!(chunks.len() > 1, "{name} splits the document");
+            for (index, chunk) in chunks.iter().enumerate() {
+                assert_eq!(chunk.id, format!("guide_{index}"), "{name}");
+                assert_eq!(chunk.document_id, "guide", "{name}");
+                assert_eq!(
+                    chunk.source_uri.as_deref(),
+                    Some("https://example.com/guide"),
+                    "{name}"
+                );
+                assert_eq!(chunk.title.as_deref(), Some("Guide"), "{name}");
+                assert_eq!(chunk.metadata["lang"], "en", "{name}");
+                assert_eq!(chunk.metadata["chunk_index"], index.to_string(), "{name}");
+            }
         }
     }
 

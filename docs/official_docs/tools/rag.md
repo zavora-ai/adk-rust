@@ -43,7 +43,6 @@ adk-rag = { version = "3.0.0", features = ["gemini"] }
 A `RagPipeline` wires together four components: a chunker, an embedding provider, a vector store, and an optional reranker.
 
 ```rust
-use std::collections::HashMap;
 use std::sync::Arc;
 use adk_rag::{
     Document, FixedSizeChunker, InMemoryVectorStore,
@@ -84,17 +83,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a collection and ingest a document
     pipeline.create_collection("docs").await?;
-    pipeline.ingest("docs", &Document {
-        id: "intro".into(),
-        text: "Rust is a systems programming language focused on safety and speed.".into(),
-        metadata: HashMap::from([("topic".into(), "rust".into())]),
-        source_uri: None,
-    }).await?;
+    let document = Document::new(
+        "intro",
+        "Rust is a systems programming language focused on safety and speed.",
+    )
+    .with_source_uri("https://www.rust-lang.org/")
+    .with_title("Rust")
+    .with_metadata("topic", "rust");
+    pipeline.ingest("docs", &document).await?;
 
     // Query
     let results = pipeline.query("docs", "safe programming").await?;
     for r in &results {
-        println!("[{:.3}] {}", r.score, r.chunk.text);
+        let source = r.chunk.source_uri.as_deref().unwrap_or("unknown source");
+        println!("[{:.3}] {} ({source})", r.score, r.chunk.text);
     }
     Ok(())
 }
@@ -107,6 +109,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 3. `InMemoryVectorStore` stores the vectors and searches by cosine similarity
 4. `query()` embeds the question, finds the closest chunks, and returns them ranked by score;
    `query_with_top_k()` does the same with a result count of its own
+
+`Document` and `Chunk` are `#[non_exhaustive]`, so they are built with `Document::new(id, text)`
+and `Chunk::new(id, document_id, text)` plus the `with_*` builders rather than struct literals.
+
+### Provenance
+
+A document's `source_uri` and `title` say where its text came from:
+
+| Stage | What happens to `source_uri` and `title` |
+|-------|------------------------------------------|
+| Chunking | Every built-in chunker copies them onto each chunk (`Chunk::from_document` does it for a custom chunker) |
+| Storage | Every vector store persists them as fields of their own, beside the metadata |
+| Search | Every vector store returns them on `SearchResult::chunk` |
+| `RagTool` | Each result carries them when the document had them, so the model can cite the source |
+
+Metadata is stored verbatim with no reserved keys, so provenance never collides with a metadata
+entry. Data stored before provenance existed returns `None` for both fields, except on LanceDB,
+whose tables need re-creating (see [Vector Store Backends](#vector-store-backends)).
 
 ---
 
@@ -141,12 +161,12 @@ async fn main() -> anyhow::Result<()> {
 
     // Ingest documents
     pipeline.create_collection("kb").await?;
-    pipeline.ingest("kb", &Document {
-        id: "returns".into(),
-        text: "Our return policy allows returns within 30 days with a receipt.".into(),
-        metadata: Default::default(),
-        source_uri: None,
-    }).await?;
+    pipeline.ingest(
+        "kb",
+        &Document::new("returns", "Our return policy allows returns within 30 days with a receipt.")
+            .with_source_uri("https://example.com/help/returns")
+            .with_title("Returns policy"),
+    ).await?;
 
     // Wrap pipeline as a tool and attach to an agent
     let agent = LlmAgentBuilder::new("support")
@@ -169,7 +189,7 @@ This example also depends on `adk-agent`, `adk-model` (`gemini`), `adk-runner`, 
 | Name | `rag_search` |
 | Parameters | `query` (required), `top_k` (overrides the configured value; the reranker and similarity threshold still apply), and `collection` only when the tool has allowed collections (see [Multiple Collections](#multiple-collections)) |
 | Collections | The collection given to `RagTool::new`, plus any given to `with_allowed_collections`; the model cannot reach any other |
-| Returns | An array of `{"id", "document_id", "text", "metadata", "score"}` results, best first; embedding vectors are not included |
+| Returns | An array of `{"id", "document_id", "text", "metadata", "score"}` results, best first, each with `source_uri` and `title` when its document had them; embedding vectors are not included |
 | Invalid arguments | A missing `query`, a `top_k` that is not a positive integer, or a `collection` the tool does not allow fails the call with `tool.invalid_arguments`, whose message the model receives |
 | Effect | `ToolEffect::ReadOnly` and concurrency-safe, so `DeclarativePolicy::allow_read_only()` admits it and `ToolExecutionStrategy::Auto` overlaps it with adjacent read-only calls |
 
@@ -327,6 +347,17 @@ letters, digits, and underscores that start with a letter work on every backend.
 `QdrantVectorStore` stores each chunk under the UUID v5 of its chunk ID, because Qdrant accepts
 only unsigned integers and UUIDs as point IDs, and keeps the chunk ID in the `chunk_id` payload
 field that search reads back.
+
+Every backend stores a chunk's `source_uri` and `title` as fields of their own:
+
+| Backend | Storage | Data stored before provenance |
+|---------|---------|-------------------------------|
+| `InMemoryVectorStore` | The stored `Chunk` | — |
+| `PgVectorStore` | `source_uri` and `title` columns | `create_collection` adds the columns in place; old rows return `None` |
+| `LanceDBVectorStore` | `source_uri` and `title` columns | `upsert` fails with guidance: delete the collection, create it again, and re-ingest |
+| `QdrantVectorStore` | `source_uri` and `title` payload fields | Old points return `None` until re-ingested |
+| `SurrealVectorStore` | `source_uri` and `title` fields | `create_collection` defines the fields; old rows return `None` |
+| `AgentRetrievalStore` | `sourceUri` and `title` data fields | Old data objects return `None` until re-ingested |
 
 ---
 
