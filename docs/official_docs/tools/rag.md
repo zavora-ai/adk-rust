@@ -310,6 +310,22 @@ retrieve from a Vertex AI RAG Engine corpus instead of a local pipeline.
 > underscores; any other name returns `RagError::VectorStoreError` instead of being
 > rewritten, so two distinct names never share a table.
 
+No backend rewrites a collection name onto another collection:
+
+| Backend | Collection names |
+|---------|------------------|
+| `PgVectorStore` | 1 to 59 ASCII lowercase letters, digits, and underscores |
+| `SurrealVectorStore` | One or more ASCII letters, digits, and underscores; case sensitive |
+| `AgentRetrievalStore` | ASCII lowercase letters, digits, and underscores, starting with a letter and ending with a letter or digit; each underscore becomes a hyphen in the collection ID |
+| `InMemoryVectorStore`, `QdrantVectorStore`, `LanceDBVectorStore` | Passed through unchanged; the store refuses names it does not support |
+
+A name outside a backend's rule returns `RagError::VectorStoreError`. Names of lowercase
+letters, digits, and underscores that start with a letter work on every backend.
+
+`QdrantVectorStore` stores each chunk under the UUID v5 of its chunk ID, because Qdrant accepts
+only unsigned integers and UUIDs as point IDs, and keeps the chunk ID in the `chunk_id` payload
+field that search reads back.
+
 ---
 
 ## Custom Reranker
