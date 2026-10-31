@@ -5,7 +5,7 @@
 //! every later turn loaded that checkpoint, skipped the loop, and answered with
 //! the first turn's output.
 
-mod support;
+use crate::support;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
