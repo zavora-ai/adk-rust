@@ -88,6 +88,9 @@
 # The website runtime (spec 3.5 §7.1): adk-site, adk-drivers and adk-awp's verifier enter the
 # harness only through it; `web-fixture` admits the loopback site its tests sign against.
 1 adk-harness website,web-fixture doc
+# The website draft store on PostgreSQL and Redis (spec 3.5 §7.8.2); the live-server suites run
+# in the postgres job.
+1 adk-harness website,postgres,redis
 # Agent surfaces (spec 3.3 §6.1): `adk_rust::surface`, in no tier.
 1 adk-rust surface
 
