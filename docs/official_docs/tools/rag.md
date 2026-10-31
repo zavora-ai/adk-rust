@@ -317,7 +317,8 @@ No backend rewrites a collection name onto another collection:
 | `PgVectorStore` | 1 to 59 ASCII lowercase letters, digits, and underscores |
 | `SurrealVectorStore` | One or more ASCII letters, digits, and underscores; case sensitive |
 | `AgentRetrievalStore` | ASCII lowercase letters, digits, and underscores, starting with a letter and ending with a letter or digit; each underscore becomes a hyphen in the collection ID |
-| `InMemoryVectorStore`, `QdrantVectorStore`, `LanceDBVectorStore` | Passed through unchanged; the store refuses names it does not support |
+| `LanceDBVectorStore` | One or more ASCII letters, digits, underscores, hyphens, and periods; on a case-insensitive filesystem (the macOS and Windows defaults), names that differ only in case share a table |
+| `InMemoryVectorStore`, `QdrantVectorStore` | Passed through unchanged; Qdrant refuses names it does not support |
 
 A name outside a backend's rule returns `RagError::VectorStoreError`. Names of lowercase
 letters, digits, and underscores that start with a letter work on every backend.
