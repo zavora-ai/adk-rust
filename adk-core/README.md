@@ -120,7 +120,7 @@ impl Tool for GetWeather {
 
 Only `ReadOnly` and `Idempotent` tools are retried, and only after a retryable error or a timeout. With an `ActionLedger` on `RunConfig::action_ledger` (`InMemoryActionLedger` here, `SqliteActionLedger` and the other backends in `adk-session`), a `NonIdempotent` call executes at most once per `ToolContext::idempotency_key()`; a replay of a call that never recorded an outcome is answered with `outcome_unknown_response()` instead of executing again.
 
-`ToolExecutionStrategy::Auto` includes a call in its concurrent subset only when the selected tool returns `true` from both `is_read_only()` and `is_concurrency_safe()`. It runs that safe subset first, then executes the remaining calls sequentially.
+`ToolExecutionStrategy::Auto` keeps the LLM-returned order and overlaps a call with its adjacent neighbours only when the selected tool returns `true` from both `is_read_only()` and `is_concurrency_safe()`. Every other call runs alone, in its place: it starts after the calls listed before it finish, and the calls listed after it wait for it. The guarantee is ordering only — a write that is held for confirmation, refused, skipped or failed has changed nothing when the next call runs.
 
 `ensure_unique_tool_names` fails with `agent.duplicate_tool_name` (`DUPLICATE_TOOL_NAME_CODE`) when two tools share a name; `LlmAgentBuilder::build` and the other agent builders run the same check.
 
@@ -550,7 +550,7 @@ Each alias boxes an async closure: `Box<dyn Fn(..) -> Pin<Box<dyn Future<Output 
 |----------|----------|
 | `Sequential` (default) | One call at a time, in order |
 | `Parallel` | Every call concurrently; does not inspect tool metadata |
-| `Auto` | The read-only, concurrency-safe subset concurrently, then the rest in order |
+| `Auto` | In order; adjacent read-only, concurrency-safe calls overlap |
 
 Set per agent with `LlmAgentBuilder::tool_execution_strategy()`.
 

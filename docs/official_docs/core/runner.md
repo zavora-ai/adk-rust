@@ -385,7 +385,7 @@ Controls how multiple tool calls from a single LLM response are dispatched:
 |----------|----------|
 | `Sequential` (default) | Execute tools one at a time in LLM-returned order |
 | `Parallel` | Execute all tools concurrently; the caller owns safety |
-| `Auto` | Execute the safe read-only subset concurrently, then all remaining calls sequentially |
+| `Auto` | In LLM order; overlap only adjacent safe read-only calls, every other call runs alone in its place |
 
 Set per-agent via `LlmAgentBuilder`:
 
@@ -400,12 +400,12 @@ fn build(model: Arc<dyn Llm>, search_tool: FunctionTool, save_tool: Arc<dyn Tool
         .model(model)
         .tool_execution_strategy(ToolExecutionStrategy::Auto)
         .tool(Arc::new(search_tool.with_read_only(true).with_concurrency_safe(true)))
-        .tool(save_tool) // runs after the concurrent safe subset
+        .tool(save_tool) // runs alone, in the model's order
         .build()
 }
 ```
 
-In `Auto` mode, the dispatch loop queries both `is_read_only()` and `is_concurrency_safe()`. Calls whose selected tools return `true` for both methods run concurrently first; all remaining calls then run sequentially. `Parallel` bypasses these metadata checks as an explicit caller override. Results are always reassembled in the original LLM-returned order regardless of strategy. Failed tools produce a JSON error response without aborting the batch.
+In `Auto` mode, the dispatch loop queries both `is_read_only()` and `is_concurrency_safe()`. Adjacent calls whose selected tools return `true` for both methods run concurrently; every other call runs alone, in the LLM-returned order. `Parallel` bypasses these metadata checks as an explicit caller override. Results are always reassembled in the original LLM-returned order regardless of strategy. A tool that fails produces a JSON error response without aborting the batch; an error from the tool confirmation handler ends the run.
 
 ## Run Budgets
 
