@@ -4,7 +4,7 @@
 //! partition, and hands every source the process table and the ledger; a partition without
 //! a source falls back to the main one and keeps its own partition.
 
-mod common;
+use crate::common;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};

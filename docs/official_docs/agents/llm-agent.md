@@ -668,6 +668,60 @@ let agent = LlmAgentBuilder::new("bounded_agent")
 
 The default is 100 iterations, which is sufficient for most use cases. Lower values (5-20) are recommended for simple Q&A agents, while higher values may be needed for complex multi-step reasoning tasks.
 
+### Steering a Running Agent
+
+A long tool loop can run for minutes. `Runner::steer` lets a user correct it while it runs
+("skip the tests, just fix the build") instead of waiting for the turn to end. The runner
+screens the message as it screens the run's own message and queues it on the run; see
+[Runner: Steering a Running Agent](../core/runner.md#steering-a-running-agent) for the call, the
+receipt and its outcomes.
+
+The agent takes the queued messages at a safe point of its loop: after a tool step's results
+are in its history and the toolsets are resolved again, and before the next model request is
+built. For each message it yields a user-authored event carrying an
+`EventActions::steering` marker, which the runner saves, and adds the message to its history, so
+the next request, its history processors and its `before_model` callbacks see it after the
+step's tool results.
+
+| Rule | Effect |
+|------|--------|
+| A turn that ends with a direct answer | Takes no message; the run ends and returns what is queued |
+| The checks before a model call fail | Cancellation, a freeze or `max_iterations` end the run before the safe point, so the message is returned, not saved |
+| Later agents and turns | The saved event is a user turn in their history, in the order it was said |
+| The run's own message | Stays where it is; an agent never stands it in for a steering message |
+| `SequentialAgent`, `LoopAgent`, transfer targets | Share the run's queue, so the agent running at the next safe point takes the message |
+| `ParallelAgent` branches | Take none; the message waits for the first safe point after the join |
+| Agent tools and graph nodes | Run their own conversation and take none |
+
+`CodeActAgent` takes steering messages the same way, after a script turn hands control back and
+before its next model request.
+
+```rust
+use adk_core::{AdkIdentity, Content, SteerOutcome};
+use adk_runner::Runner;
+use futures::StreamExt;
+
+/// Sends a correction to the running turn, or as the next turn when no turn takes it.
+async fn correct(runner: &Runner, identity: &AdkIdentity, text: &str) -> adk_core::Result<()> {
+    let message = Content::new("user").with_text(text);
+    let returned = match runner.steer(identity, message.clone()).await {
+        Ok(receipt) => match receipt.outcome().await? {
+            SteerOutcome::Delivered { .. } => return Ok(()),
+            SteerOutcome::Returned(sent) => sent,
+        },
+        // No run is in flight for this session.
+        Err(error) if error.is_not_found() => message,
+        Err(error) => return Err(error),
+    };
+    let mut next_turn =
+        runner.run(identity.user_id.clone(), identity.session_id.clone(), returned).await?;
+    while let Some(event) = next_turn.next().await {
+        event?;
+    }
+    Ok(())
+}
+```
+
 ---
 
 ## Dynamic Toolsets

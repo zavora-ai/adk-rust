@@ -12,7 +12,7 @@
 //! ```bash
 //! NEO4J_PASSWORD=secret \
 //!   cargo nextest run -p adk-kernel --features neo4j --run-ignored only \
-//!   --test store_conformance_neo4j
+//!   --test integration -E 'test(/^store_conformance_neo4j::/)'
 //! ```
 
 #![cfg(feature = "neo4j")]

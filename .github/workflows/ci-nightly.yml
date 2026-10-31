@@ -403,9 +403,7 @@ jobs:
         cargo nextest run -p adk-kernel
         --features mongodb,neo4j,firestore
         --run-ignored all --no-fail-fast
-        --test store_conformance_mongodb
-        --test store_conformance_neo4j
-        --test store_conformance_firestore
+        --test integration -E 'test(/^store_conformance_(mongodb|neo4j|firestore)::/)'
 
     - name: Run the kernel's MongoDB store suite on a standalone server
       if: ${{ !cancelled() }}
@@ -415,7 +413,7 @@ jobs:
         cargo nextest run -p adk-kernel
         --features mongodb,neo4j,firestore
         --run-ignored all --no-fail-fast
-        --test store_conformance_mongodb
+        --test integration -E 'test(/^store_conformance_mongodb::/)'
 
     - name: Run graph checkpointer conformance suites
       if: ${{ !cancelled() }}
@@ -423,12 +421,8 @@ jobs:
         cargo nextest run -p adk-graph
         --features sqlite,postgres,redis,mongodb,neo4j,firestore
         --run-ignored all --no-fail-fast
-        --test checkpointer_conformance
-        --test checkpointer_conformance_postgres
-        --test checkpointer_conformance_redis
-        --test checkpointer_conformance_mongodb
-        --test checkpointer_conformance_neo4j
-        --test checkpointer_conformance_firestore
+        --test integration
+        -E 'test(/^checkpointer_conformance(_postgres|_redis|_mongodb|_neo4j|_firestore)?::/)'
 
   # ── S19 soak: a site that never stops changing (spec 3.5 §11) ──
   # 50,000 products fed every minute for 24 simulated hours on a warped clock against

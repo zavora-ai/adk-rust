@@ -385,7 +385,10 @@ pub trait ToolContext: CallbackContext {
         false
     }
 
-    /// Returns authenticated request metadata inherited from the parent run.
+    /// Returns the request metadata inherited from the parent run
+    /// ([`InvocationContext::request_metadata`](crate::InvocationContext::request_metadata)):
+    /// authenticated only when [`is_authenticated`](crate::ReadonlyContext::is_authenticated)
+    /// says so.
     fn request_metadata(&self) -> std::collections::HashMap<String, Value> {
         std::collections::HashMap::new()
     }

@@ -463,10 +463,14 @@ impl PromptConfig {
             .iter()
             .all(|part| matches!(part, Part::Text { text } if text.trim().is_empty()));
         if !empty_turn {
-            match session_history.iter().rposition(|content| {
-                content.role == "user"
-                    && !adk_core::history::is_other_agent_context(content)
-                    && !adk_core::history::is_system_notice(content)
+            // The run's own message, never a steering message a run-mate took after it.
+            let own = session_history.iter().rposition(|content| content == ctx.user_content());
+            match own.or_else(|| {
+                session_history.iter().rposition(|content| {
+                    content.role == "user"
+                        && !adk_core::history::is_other_agent_context(content)
+                        && !adk_core::history::is_system_notice(content)
+                })
             }) {
                 Some(index) => session_history[index] = current_user_content.clone(),
                 None => session_history.push(current_user_content.clone()),
@@ -3736,6 +3740,8 @@ impl Agent for LlmAgent {
             // The run ends once its held calls and a person's call are dealt with: a resumed
             // call ended the turn, or one was held again.
             let mut ends_here = false;
+            // Set by each tool step, so the next model call is preceded by a safe point.
+            let mut steering_due = false;
             {
                 let gate = ToolGate::for_context(ctx.as_ref());
                 for held in ctx.session().held_tool_calls(&agent_name, ctx.branch()) {
@@ -3904,6 +3910,7 @@ impl Agent for LlmAgent {
                     tool_map = refreshed_tools.map;
                     tool_declarations = refreshed_tools.declarations;
                     valid_transfer_targets = refreshed_tools.transfer_targets;
+                    steering_due = true;
                 }
             }
 
@@ -4035,6 +4042,25 @@ impl Agent for LlmAgent {
                         format!("Max iterations ({max_iterations}) exceeded")
                     ));
                     return;
+                }
+
+                // ===== STEERING =====
+                // The safe point: the last tool step's results are in the history and the next
+                // request is not built yet, so a steering message lands after them. It is taken
+                // only once the checks above pass, so a run they end returns its queued
+                // messages to their senders instead of saving one no model call will carry.
+                if std::mem::take(&mut steering_due)
+                    && let Some(inbox) = ctx.steering_inbox()
+                {
+                    for message in inbox.drain() {
+                        tracing::debug!(
+                            agent.name = %agent_name,
+                            steer.id = %message.marker.steer_id,
+                            "steering message added to the history"
+                        );
+                        yield Ok(message.to_event(&invocation_id, ctx.branch()));
+                        conversation_history.push(message.content);
+                    }
                 }
 
                 let config = build_generation_config(
@@ -5106,6 +5132,7 @@ impl Agent for LlmAgent {
                     tool_map = refreshed_tools.map;
                     tool_declarations = refreshed_tools.declarations;
                     valid_transfer_targets = refreshed_tools.transfer_targets;
+                    steering_due = true;
                 }
 
                 // If all function calls were from long-running tools, we need ONE more model call

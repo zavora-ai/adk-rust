@@ -6,7 +6,7 @@
 
 #![cfg(all(feature = "drivers", feature = "sqlite"))]
 
-mod driver_support;
+use crate::driver_support;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,12 +29,6 @@ use adk_server::background::DurableWorkerConfig;
 use adk_session::{InMemorySessionService, SessionService};
 use driver_support::Workdir;
 use serde_json::json;
-
-#[tokio::test]
-#[ignore = "runs only as the stdio driver the tests start"]
-async fn stdio_driver() {
-    driver_support::serve_stdio().await;
-}
 
 const APP: &str = "adk-rust";
 

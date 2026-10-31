@@ -9,7 +9,7 @@
 
 #![cfg(feature = "drivers")]
 
-mod driver_support;
+use crate::driver_support;
 
 use std::sync::{Arc, OnceLock};
 
@@ -23,12 +23,6 @@ use adk_kernel::stores::InMemoryDriverStore;
 use driver_support::{RunContext, Workdir};
 use proptest::prelude::*;
 use serde_json::json;
-
-#[tokio::test]
-#[ignore = "runs only as the stdio driver the tests start"]
-async fn stdio_driver() {
-    driver_support::serve_stdio().await;
-}
 
 /// One driver process shared by every case, with its stores.
 struct Shared {

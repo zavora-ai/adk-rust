@@ -1,7 +1,7 @@
 //! A graph cannot hold a call for a person's decision, so a graph that starts a run refuses
 //! the call a person asked for before any node runs (spec 3.3 §7.4 rule 5).
 
-mod support;
+use crate::support;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

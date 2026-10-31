@@ -457,6 +457,89 @@ async fn the_experiments_look_runs_on_its_trigger() {
     served.shutdown().await.unwrap();
 }
 
+/// Caps the daily spend of the site's back-office partition.
+async fn cap_back_office(served: &Served, micro_usd: u64) {
+    let id = served.sites[0].partitions.back_office().id.clone();
+    let record = served.stores.partitions.get(&id).await.unwrap().expect("the back office");
+    let capped = record.with_quotas(adk_kernel::Quotas::new().with_daily_spend_cap(micro_usd));
+    served.stores.partitions.put(capped, adk_core::audit_log::AuditActor::default()).await.unwrap();
+}
+
+/// A back-office process the kernel deferred on a spent daily budget still wakes after the
+/// site restarts, once the budget has room (#1278): the process table is durable in
+/// `data/kernel.db` beside the runs, so the kernel finds the sleeper and its wake set again.
+#[tokio::test]
+async fn a_budget_deferred_sleeper_wakes_after_a_restart() {
+    use adk_kernel::{ProcessStore as _, Wake};
+    use adk_model::{ScriptedLlm, ScriptedResponse};
+    use adk_server::awp::SignalEmitter as _;
+
+    let dir = project(SiteKind::Business).await;
+    owner_signs(dir.path()).await;
+    without_quiet_hours(dir.path());
+    let with_model = |options: &mut ServeOptions| {
+        let replies = (0..8).map(|_| ScriptedResponse::text("Nothing to draft today."));
+        options.site.model =
+            Some(Arc::new(ScriptedLlm::new("scripted", replies.collect::<Vec<_>>())));
+    };
+
+    let served = start(dir.path(), with_model).await;
+    commit(&served, dir.path()).await;
+    cap_back_office(&served, 0).await;
+    let site = &served.sites[0];
+    let budget = Wake::BudgetReplenished { partition: site.partitions.back_office().id.clone() };
+    site.signals()
+        .emit(awp_types::Signal {
+            id: uuid::Uuid::new_v4(),
+            kind: awp_types::SignalKind::ContentGap {
+                topic: awp_types::Bounded::new("delivery", 120).unwrap(),
+                question_count: 3,
+                samples: vec![awp_types::Bounded::truncated("Do you deliver to Naivasha?", 200)],
+            },
+            emitted_by: AgentRole::Concierge.principal(&site.site),
+            emitted_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+    let mut deferred = None;
+    for _ in 0..120 {
+        for run in served.stores.runs.list(RunFilter::default()).await.unwrap() {
+            if run.target != "growth" || run.state != RunState::Waiting {
+                continue;
+            }
+            let meta = served.stores.processes.get(&run.run_id).await.unwrap();
+            if meta.and_then(|meta| meta.wake).is_some_and(|wake| wake.any_of == [budget.clone()]) {
+                deferred = Some(run.run_id);
+            }
+        }
+        if deferred.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let all = served.stores.runs.list(RunFilter::default()).await.unwrap();
+    let pid = deferred
+        .unwrap_or_else(|| panic!("the freshness job is deferred on the spent budget: {all:#?}"));
+    served.shutdown().await.unwrap();
+
+    let served = start(dir.path(), with_model).await;
+    let meta = served.stores.processes.get(&pid).await.unwrap().expect("the process row survives");
+    assert_eq!(meta.wake.expect("the sleeper keeps its wake set").any_of, [budget]);
+    // A raised cap gives the budget room: the kernel's next tick wakes the sleeper.
+    cap_back_office(&served, 1_000_000).await;
+    let mut woken = false;
+    for _ in 0..120 {
+        if served.stores.runs.get(&pid).await.unwrap().unwrap().state == RunState::Completed {
+            woken = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let run = served.stores.runs.get(&pid).await.unwrap().unwrap();
+    assert!(woken, "the deferred job runs once the budget has room: {run:#?}");
+    served.shutdown().await.unwrap();
+}
+
 /// Anonymous callers are limited by their own address, not one bucket every visitor shares:
 /// the edge listener hands the peer address to the edge (spec 3.5 §7.3). Two loopback
 /// addresses, IPv4 and IPv6, stand for two visitors.

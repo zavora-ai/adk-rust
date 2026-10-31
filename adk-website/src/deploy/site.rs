@@ -16,7 +16,7 @@
 //! | Repository | [`RepositoryEntry`](crate::repository::RepositoryEntry) from `repository.json`: its signed hooks on the edge, each push a kernel run, its decision cards in the kernel's approvals (spec 3.5 §7.8.2) |
 //! | Durable state | In `data/edge.db`: the back office's drafts and requests (`SqliteSiteDraftStore`), quotes, orders and the bookings of `calendar.json`'s slots ([`SqliteCommerceStore`], [`StoredCalendar`]), the owner's open, deferred and waiting alarms ([`SqliteAlarmStore`]), and the edge's rate-limit windows |
 //! | Packs | The built-in capability packs and those installed in `packs/`, verified against `packs/trust.json` ([`PackDir::load`](crate::packs::installed::PackDir::load)): their capabilities on the edge, their playbooks in the agents' workspaces (spec 3.5 §7.23) |
-//! | Audit trail | `data/audit.jsonl` (`adk-core`'s `FileAuditRecorder`): the pipeline's, the edge's, the update engine's, the alarms', the review's, the experiments', the ladder's, the tracker's and the signals' records (spec 3.5 §9.3) |
+//! | Audit trail | `data/audit.jsonl` (`adk-core`'s `FileAuditRecorder`): the pipeline's, the edge's, the update engine's, the alarms', the review's, the experiments', the ladder's, the tracker's and the signals' records, and the kernel's serving the site (spec 3.5 §9.3) |
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -395,6 +395,9 @@ pub struct RunningSite {
     /// (spec 3.5 §7.15).
     pub learning: Arc<crate::learning::PlaybookLearning>,
     pub(crate) reporting: Reporting,
+    /// The site's audit trail in `data/audit.jsonl`, which the kernel serving the site
+    /// records into too.
+    pub(crate) audit: adk_core::audit_log::AuditTrail,
     pub(crate) publish_delay: chrono::Duration,
     pub(crate) wallet: Option<adk_payments::wallet::Wallet>,
     /// The edge's signals into the back office, which wake the kernel's processes once the
@@ -901,6 +904,7 @@ impl RunningSite {
             repository,
             learning,
             reporting,
+            audit: trail,
             wallet: options.wallet.clone(),
             signals: edge_signals,
             publish_delay: options.publish_delay.unwrap_or_else(|| {

@@ -6,7 +6,7 @@
 
 #![cfg(feature = "managed")]
 
-mod managed_support;
+use crate::managed_support;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};

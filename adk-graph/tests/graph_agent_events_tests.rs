@@ -6,7 +6,7 @@
 //! yielded only the output mapper's events, so a caller saw nothing until the
 //! graph finished and the session never held the inner agents' turns.
 
-mod support;
+use crate::support;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

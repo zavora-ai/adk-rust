@@ -189,6 +189,9 @@ pub mod schema_utils;
 pub mod shared_state;
 /// One spend ledger for model calls and payments: reservations, limits, and committed spend.
 pub mod spend;
+/// User messages that reach a run while it runs: the run's inbox, the receipt and the
+/// event marker.
+pub mod steering;
 /// Tool trait, toolset, execution strategy, and registry.
 pub mod tool;
 /// Semaphore-based tool concurrency management.
@@ -315,6 +318,10 @@ pub use shared_state::{SharedState, SharedStateError};
 pub use spend::{
     DEFAULT_RESERVATION_TTL, InMemorySpendLedger, ReservationId, SPEND_LIMIT_EXCEEDED_CODE,
     SpendError, SpendKey, SpendLedger, SpendLimit, SpendLimits, SpendPeriod, usd_to_micro_usd,
+};
+pub use steering::{
+    STEER_INVALID_MESSAGE_CODE, STEER_NO_ACTIVE_RUN_CODE, SteerOutcome, SteerReceipt,
+    SteeringInbox, SteeringMarker, SteeringMessage, validate_steering_message,
 };
 pub use tool::{
     DUPLICATE_TOOL_NAME_CODE, RetryBudget, Tool, ToolContext, ToolEffect, ToolExecutionStrategy,

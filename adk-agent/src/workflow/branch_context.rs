@@ -24,7 +24,8 @@ pub(crate) fn derive_sub_branch(parent: &str, segment: &str) -> String {
     format!("{parent}.{segment}")
 }
 
-/// Context wrapper that overrides [`ReadonlyContext::branch`].
+/// Context wrapper that overrides [`ReadonlyContext::branch`] and
+/// [`InvocationContext::steering_inbox`].
 ///
 /// `ParallelAgent` gives each sub-agent its own branch so that history reads
 /// scoped by branch exclude what concurrent siblings produced. Every other
@@ -64,7 +65,7 @@ impl ReadonlyContext for BranchContext {
         self.inner.session_id()
     }
 
-    /// The only overridden method: this sub-agent's own branch.
+    /// Overridden: this sub-agent's own branch.
     fn branch(&self) -> &str {
         &self.branch
     }
@@ -163,6 +164,13 @@ impl InvocationContext for BranchContext {
 
     fn requires_tool_confirmation(&self, tool_name: &str) -> bool {
         self.inner.requires_tool_confirmation(tool_name)
+    }
+
+    /// Overridden too: concurrent branches would race for one message, so a branch takes
+    /// none, and a message sent during the fan-out waits for the first safe point after
+    /// the join.
+    fn steering_inbox(&self) -> Option<adk_core::SteeringInbox> {
+        None
     }
 
     async fn get_secret(&self, name: &str) -> Result<Option<String>> {

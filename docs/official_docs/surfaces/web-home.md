@@ -363,12 +363,15 @@ cd adk-surface/web
 npm ci
 npm run verify     # type check, component tests, build into ../assets/web
 npm run dev        # against `adk-rust serve` on 127.0.0.1:8080
+npm run e2e:build  # build every end-to-end server first, each with its own features
 npm run e2e        # Playwright against the scripted kernel of examples/scripted_home.rs
 ```
 
 `npm run dev` also serves `/ui/fixture.html`, the screens over the example of spec 3.3 §5.1.
 The end-to-end tests start `cargo run -p adk-surface --features web --example scripted_home`
-in a new, empty workspace each run (`HOME_E2E_BIN` names an example already built). The
+in a new, empty workspace each run (`HOME_E2E_BIN` names an example already built). Playwright
+starts every project's server before the first test, one after another, so `npm run e2e:build`
+builds them all first and none compiles while the others wait. The
 example's kernel keeps a `/proc` ledger, and its quiet time ended an hour before it started.
 The first test opens the home, sees the call the scripted agent's harness holds, allows it
 once and checks that it ran once; the second runs a turn with one decision, sees the morning

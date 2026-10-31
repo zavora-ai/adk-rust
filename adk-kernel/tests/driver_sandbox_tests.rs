@@ -9,7 +9,7 @@
 
 #![cfg(all(feature = "drivers", unix))]
 
-mod driver_support;
+use crate::driver_support;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -21,12 +21,6 @@ use adk_kernel::drivers::{DriverIsolation, DriverManifest, DriverSupervisor};
 use adk_kernel::stores::InMemoryDriverStore;
 use driver_support::{RunContext, Workdir};
 use serde_json::json;
-
-#[tokio::test]
-#[ignore = "runs only as the stdio driver the tests start"]
-async fn stdio_driver() {
-    driver_support::serve_stdio().await;
-}
 
 /// Whether the platform's enforcer runs here; panics when one is required and missing.
 fn enforcer_available() -> bool {

@@ -212,6 +212,21 @@ audited.
 | `reply_in_thread` | Sends text to the conversation's own thread, inside `ReplyPolicy`'s template and rate; the thread comes from the conversation, never from the model, and replies carry no attachments |
 | `emit_signal` | Files one typed `awp_types::Signal` through a `SignalEmitter`; a signal naming a requester names the verified caller |
 
+Each conversation runs as one session user:
+
+| Caller | Session user | `is_authenticated()` |
+|--------|--------------|----------------------|
+| A verified credential | The requester id, such as `wba:…` or `key:{id}` | `true` |
+| Anyone else | `public-{id}`: an HMAC-SHA256 of the caller's limit key under a key derived from `ConsentConfig::subject_key` | `false` |
+
+A visitor's run carries the conversation's tier, thread, binding and consent as
+`RunConfig::request_metadata`, which the public tools read and which authenticates no one, so
+no standing approval, Auto mode, requested call or other privilege reserved for an
+authenticated user applies to it. The visitor id cannot be computed from an address without
+the subject key, and stays the same for one address while the key is kept: keep the subject
+key across restarts to keep visitors' conversations. Visitors behind one address share an id,
+and with it their `user:` session state.
+
 The back office hears of a hostile conversation whatever the model does. When the policy
 refused one of the agent's tool calls in a turn, or the `ConversationScreen` flagged the
 message, and the agent filed no signal for the turn, the edge files one through the same
@@ -251,6 +266,8 @@ Subscriptions need tier `known` or above through Web Bot Auth or OAuth, and belo
 requester that created them. `POST /awp/v2/events` with `{"types": [...], "url": "https://…"}`
 answers `201` with the subscription and its Standard Webhooks secret, shown once. A URL that is
 not `https`, or that names or resolves to a loopback, private or link-local address, is refused.
+The check runs again when the edge connects; `AwpEdgeBuilder::build` fails with
+`awp.events.client_unavailable` when the delivery client that runs it cannot be built.
 
 | Event | Published by |
 |-------|--------------|
@@ -274,7 +291,8 @@ views; the edge serves no route for it.
 ## Consent
 
 `ConsentConfig` names the scopes the site asks for, the policy versions with their digests, and
-the key subject sessions are authenticated with. `POST /awp/v2/consent` answers `201` with a
+the key subject sessions are authenticated with; the public partition derives its visitor ids
+from the same key. `POST /awp/v2/consent` answers `201` with a
 receipt signed by the edge's `receipt` key and the subject's session token in `AWP-Subject`;
 the subject is a pseudonymous `subj_…` reference. The other consent routes authenticate the
 subject by that token, in `AWP-Subject` or a signed link's `subject` parameter, never by the

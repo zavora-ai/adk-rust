@@ -4,7 +4,7 @@
 //! pause: a review node in a loop, or on the next turn of a `GraphAgent`, read
 //! the earlier approval and let the next request through without asking.
 
-mod support;
+use crate::support;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

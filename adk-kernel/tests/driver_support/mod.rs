@@ -41,6 +41,12 @@ pub async fn serve_stdio() {
     let _ = running.waiting().await;
 }
 
+#[tokio::test]
+#[ignore = "runs only as the stdio driver the tests start"]
+async fn stdio_driver() {
+    serve_stdio().await;
+}
+
 fn schema(value: Value) -> Arc<JsonObject> {
     Arc::new(value.as_object().cloned().unwrap_or_default())
 }
@@ -278,7 +284,7 @@ impl Workdir {
         let toml = format!(
             "id = \"{id}\"\n\
              command = {}\n\
-             args = [\"stdio_driver\", \"--exact\", \"--ignored\", \"--quiet\", \"--test-threads=1\"]\n\
+             args = [\"driver_support::stdio_driver\", \"--exact\", \"--ignored\", \"--quiet\", \"--test-threads=1\"]\n\
              protocol = \"discover\"\n\
              env = {{ {SERVER_ENV} = \"1\", {LOG_ENV} = {}, {DECLARATION_ENV} = {} }}\n\
              restart = {{ max_attempts = 5, initial_delay_ms = 100, max_delay_ms = 400, backoff_multiplier = 2.0 }}\n\

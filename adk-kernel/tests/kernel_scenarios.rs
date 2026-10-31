@@ -767,7 +767,12 @@ async fn k9_a_run_that_meets_the_freeze_itself_parks_on_the_second_replica() {
         )
         .build()
         .unwrap();
-    let mut builder = kernel("replica-b", &replicas[1], &controls[1], Arc::new(SystemClock), 2);
+    // K9 measures the kill switch, not lease recovery, so replica B keeps the default lease: on
+    // the one-second lease, a write that stalls past it fences both runs before they park.
+    let worker =
+        DurableWorkerConfig::default().with_worker_id("replica-b").with_max_concurrent_runs(2);
+    let mut builder = kernel("replica-b", &replicas[1], &controls[1], Arc::new(SystemClock), 2)
+        .config(config("replica-b", &controls[1], Arc::new(SystemClock), 2).with_worker(worker));
     for (i, model) in models.iter().enumerate() {
         let agent = LlmAgentBuilder::new("agent")
             .model(Arc::clone(model) as Arc<dyn Llm>)
@@ -1188,7 +1193,7 @@ async fn chaos_kernel_process() {
 fn kernel_process(dir: &Path, life: &str, pid: &str) -> tokio::process::Child {
     let stderr = std::fs::File::create(dir.join(format!("{life}.stderr"))).unwrap();
     tokio::process::Command::new(std::env::current_exe().unwrap())
-        .args(["chaos_kernel_process", "--exact", "--ignored", "--nocapture"])
+        .args(["kernel_scenarios::chaos_kernel_process", "--exact", "--ignored", "--nocapture"])
         .env(CHAOS_DIR, dir)
         .env(CHAOS_LIFE, life)
         .env(CHAOS_PID, pid)

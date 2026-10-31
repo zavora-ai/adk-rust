@@ -2,7 +2,7 @@
 //! `GET /api/kernel/agents/{id}` answer the operator and a device with the `read` scope; a
 //! device without it is refused; no route changes an agent.
 
-mod agents_support;
+use crate::agents_support;
 
 use std::sync::Arc;
 
