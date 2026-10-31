@@ -116,10 +116,10 @@ async fn get(url: &str) -> (u16, String) {
 
 /// Commits the project's draft charter by its owner, as onboarding's signing does.
 async fn commit_charter(site: &Path) {
-    use adk_kernel::charter::{CharterStore as _, CommitDecision, RoleApproval};
+    use adk_kernel::charter::{CommitDecision, RoleApproval};
     let paths = adk_website::deploy::ProjectPaths::new(site);
     let stores =
-        adk_website::deploy::KernelStores::open(&paths.database("kernel"), "owner").await.unwrap();
+        adk_website::deploy::SiteStores::open(&paths.database("kernel"), "owner").await.unwrap();
     let draft: awp_types::Charter =
         serde_json::from_slice(&std::fs::read(site.join("charter.draft.json")).unwrap()).unwrap();
     let now = chrono::Utc::now();
@@ -129,7 +129,7 @@ async fn commit_charter(site: &Path) {
         adk_core::principal::SubjectRef::human("owner"),
         now,
     ));
-    stores.charters.commit(draft, decision).await.unwrap();
+    stores.kernel.charter.charters.commit(draft, decision).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

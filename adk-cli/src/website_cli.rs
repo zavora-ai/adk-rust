@@ -4,7 +4,7 @@
 //! | Command | Library |
 //! |---|---|
 //! | `website new [dir] [--agency]` | `adk_website::onboarding::scaffold`, `adk_website::deploy::config::configure` (the email, upkeep sources, wallet and probe in the project's configuration files), then `adk_website::deploy::serve` (or `serve_agency`), and the website views of `adk-surface` over a `WebsiteDesk` on a loopback home |
-//! | `website status` | `KernelStores` and the site log in the project's `data/` |
+//! | `website status` | `SiteStores` and the site log in the project's `data/` |
 //! | `website review` | `RunningSite::review`: the weekly review, composed from the stores |
 //! | `website charter` | The charter store: the charter in force and its history |
 //! | `website jobs [promote\|demote <job>]` | The autonomy ladder; a promotion is the owner's decision and grants its standing rules, a demotion revokes them (A-I13) |
@@ -17,9 +17,8 @@ use std::sync::Arc;
 
 use adk_core::principal::SubjectRef;
 use adk_harness::website::{LadderCompiler, apply_demotion, job_levels, promote_job};
-use adk_kernel::charter::CharterStore as _;
 use adk_kernel::charter::OwnerDecision;
-use adk_website::deploy::{KernelStores, ProjectPaths, RunningSite, ServeOptions, SiteOptions};
+use adk_website::deploy::{ProjectPaths, RunningSite, ServeOptions, SiteOptions, SiteStores};
 use adk_website::onboarding::scaffold::{ScaffoldOptions, scaffold};
 use anyhow::{Context, Result, bail};
 use awp_types::{AutonomyLevel, Charter, Role, SiteKind};
@@ -372,7 +371,7 @@ struct Opened {
     site: adk_harness::website::SiteRef,
     domain: String,
     template: adk_website::kinds::KindTemplate,
-    stores: KernelStores,
+    stores: SiteStores,
     owner: String,
 }
 
@@ -402,7 +401,7 @@ async fn open(target: &Target) -> Result<Opened> {
     let owner = target.owner.clone().unwrap_or_else(person);
     std::fs::create_dir_all(paths.data())?;
     // An agency's sites run on the agency's kernel database (A-I22).
-    let stores = KernelStores::open(&paths.kernel_database(), &owner).await?;
+    let stores = SiteStores::open(&paths.kernel_database(), &owner).await?;
     let site = adk_harness::website::SiteRef::new(
         drafted.site_id,
         config.domain.replace('.', "-"),
@@ -420,7 +419,7 @@ async fn open(target: &Target) -> Result<Opened> {
 
 /// The charter in force, else the project's draft.
 async fn charter_of(opened: &Opened) -> Result<(Option<Charter>, bool)> {
-    if let Some(current) = opened.stores.charters.current(opened.site.id).await? {
+    if let Some(current) = opened.stores.kernel.charter.charters.current(opened.site.id).await? {
         return Ok((Some(current.charter), true));
     }
     Ok((identity(&opened.paths), false))
@@ -448,8 +447,10 @@ fn compiler(opened: &Opened) -> LadderCompiler {
 
 /// The ladder over the site's stores, checked against its charters.
 fn ladder(opened: &Opened) -> adk_kernel::charter::AutonomyLadder {
-    let charters: Arc<dyn adk_kernel::charter::CharterStore> = opened.stores.charters.clone();
-    adk_kernel::charter::AutonomyLadder::new(opened.stores.autonomy.clone()).with_charters(charters)
+    let charters: Arc<dyn adk_kernel::charter::CharterStore> =
+        opened.stores.kernel.charter.charters.clone();
+    adk_kernel::charter::AutonomyLadder::new(opened.stores.kernel.charter.autonomy.clone())
+        .with_charters(charters)
 }
 
 fn level_name(level: AutonomyLevel) -> String {
@@ -472,9 +473,13 @@ async fn status(target: &Target, json: bool) -> Result<()> {
     let opened = open(target).await?;
     let (charter, committed) = charter_of(&opened).await?;
     let devices =
-        adk_kernel::pairing::Pairing::new(opened.stores.devices.clone()).devices().await?;
-    let levels =
-        job_levels(&compiler(&opened), opened.stores.autonomy.as_ref(), opened.site.id).await?;
+        adk_kernel::pairing::Pairing::new(opened.stores.kernel.devices.clone()).devices().await?;
+    let levels = job_levels(
+        &compiler(&opened),
+        opened.stores.kernel.charter.autonomy.as_ref(),
+        opened.site.id,
+    )
+    .await?;
     let release = latest_release(&opened).await?;
     let launched = release > 0;
     if json {
@@ -573,8 +578,8 @@ async fn review(target: &Target, week: Option<chrono::NaiveDate>, json: bool) ->
 async fn charter(target: &Target, json: bool) -> Result<()> {
     let opened = open(target).await?;
     let id = opened.site.id;
-    let history = opened.stores.charters.history(id).await?;
-    let current = opened.stores.charters.current(id).await?;
+    let history = opened.stores.kernel.charter.charters.history(id).await?;
+    let current = opened.stores.kernel.charter.charters.current(id).await?;
     if json {
         let value = json!({
             "current": current,
@@ -660,8 +665,12 @@ async fn jobs(target: &Target, command: Option<JobsCommand>, json: bool) -> Resu
     }
     match command {
         None => {
-            let levels =
-                job_levels(&compiler, opened.stores.autonomy.as_ref(), opened.site.id).await?;
+            let levels = job_levels(
+                &compiler,
+                opened.stores.kernel.charter.autonomy.as_ref(),
+                opened.site.id,
+            )
+            .await?;
             if json {
                 let value: Vec<_> = levels
                     .iter()
@@ -740,7 +749,7 @@ mod home {
     use adk_server::auth_bridge::{RequestContextError, RequestContextExtractor};
     use adk_server::{ServerBuilder, ServerConfig};
     use adk_session::{InMemorySessionService, SessionService};
-    use adk_website::deploy::{KernelStores, RunningSite};
+    use adk_website::deploy::{RunningSite, SiteStores};
     use adk_website::onboarding::SetupGate;
     use adk_website::ui::{FileDeskStore, WebsiteDesk};
     use anyhow::{Context, Result};
@@ -792,10 +801,11 @@ mod home {
     /// The owner's desk over the served site and the kernel's stores.
     pub(super) async fn desk(
         site: &RunningSite,
-        stores: &KernelStores,
+        stores: &SiteStores,
         owner: &str,
     ) -> Result<WebsiteDesk> {
-        let gate = SetupGate::new(adk_kernel::pairing::Pairing::new(stores.devices.clone()), owner);
+        let gate =
+            SetupGate::new(adk_kernel::pairing::Pairing::new(stores.kernel.devices.clone()), owner);
         let rules: Arc<dyn adk_harness::StandingRuleStore> = stores.rules.clone();
         let config = adk_site::content::SiteConfig::from_toml(&std::fs::read_to_string(
             site.paths.root().join("site.toml"),
@@ -808,9 +818,9 @@ mod home {
         )
         .languages(config.languages.clone())
         .setup(Arc::new(gate))
-        .charters(stores.charters.clone())
+        .charters(stores.kernel.charter.charters.clone())
         .ladder(site.ladder.clone(), rules)
-        .signals(stores.signals.clone(), site.partitions.back_office().id.clone())
+        .signals(stores.kernel.charter.signals.clone(), site.partitions.back_office().id.clone())
         .updates(site.updates.clone())
         .alarms(site.alarms.clone())
         .incidents(site.incidents.clone())
