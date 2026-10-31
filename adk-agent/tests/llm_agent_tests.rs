@@ -1022,3 +1022,365 @@ mod sandbox_conflict_tests {
         assert!(result.is_ok());
     }
 }
+
+// ===== History processor =====
+
+fn lookup_tool() -> Arc<dyn adk_core::Tool> {
+    Arc::new(FunctionTool::new(
+        "lookup",
+        "Looks up one page of rows",
+        |_ctx: Arc<dyn ToolContext>, _args: Value| async move { Ok(serde_json::json!({ "rows": 3 })) },
+    ))
+}
+
+/// The contents of the run's complete events, and its errors, in order.
+async fn run_to_end(agent: &adk_agent::LlmAgent, ctx: TestContext) -> Vec<Result<Content, String>> {
+    use futures::StreamExt;
+
+    let stream = agent.run(Arc::new(ctx)).await.unwrap();
+    stream
+        .filter_map(|item| async move {
+            match item {
+                Ok(event) if event.llm_response.partial => None,
+                Ok(event) => event.llm_response.content.map(Ok),
+                Err(error) => Some(Err(error.to_string())),
+            }
+        })
+        .collect()
+        .await
+}
+
+#[tokio::test]
+async fn test_history_processor_replaces_the_history_once_and_later_steps_append() {
+    let model =
+        ScriptedLlm::new(vec![vec![function_call("lookup", "call_1", serde_json::json!({}))]]);
+    let requests = model.requests.clone();
+    let seen = Arc::new(Mutex::new(Vec::<Vec<Content>>::new()));
+    let recorder = seen.clone();
+    let agent = LlmAgentBuilder::new("compacting")
+        .model(Arc::new(model))
+        .tool(lookup_tool())
+        .history_processor(Box::new(move |_ctx, history: Vec<Content>| {
+            let seen = recorder.clone();
+            Box::pin(async move {
+                let first = {
+                    let mut seen = seen.lock().unwrap();
+                    seen.push(history.clone());
+                    seen.len() == 1
+                };
+                Ok(if first { vec![Content::new("user").with_text(SUMMARY)] } else { history })
+            })
+        }))
+        .build()
+        .unwrap();
+    let session_history = vec![
+        Content::new("user").with_text("an old question"),
+        Content::new("model").with_text("an old answer"),
+        Content::new("user").with_text("count the rows"),
+    ];
+
+    let contents =
+        run_to_end(&agent, TestContext::with_history("count the rows", session_history.clone()))
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+    let summary = Content::new("user").with_text(SUMMARY);
+    let (call, result) = (contents[0].clone(), contents[1].clone());
+    let json = |contents: Vec<Vec<Content>>| serde_json::to_value(contents).unwrap();
+    // The processor received the session history, then its own summary with the tool step
+    // appended, and the provider received the same.
+    assert_eq!(
+        json(seen.lock().unwrap().clone()),
+        json(vec![session_history, vec![summary.clone(), call.clone(), result.clone()]])
+    );
+    let sent = requests.lock().unwrap().iter().map(|request| request.contents.clone()).collect();
+    assert_eq!(json(sent), json(vec![vec![summary.clone()], vec![summary, call, result]]));
+}
+
+#[tokio::test]
+async fn test_history_processor_error_ends_the_turn() {
+    let model =
+        ScriptedLlm::new(vec![vec![function_call("lookup", "call_1", serde_json::json!({}))]]);
+    let requests = model.requests.clone();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let agent = LlmAgentBuilder::new("failing")
+        .model(Arc::new(model))
+        .tool(lookup_tool())
+        .history_processor(Box::new(move |_ctx, history: Vec<Content>| {
+            let calls = calls.clone();
+            Box::pin(async move {
+                if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Ok(history)
+                } else {
+                    Err(adk_core::AdkError::agent("the history store is unavailable"))
+                }
+            })
+        }))
+        .build()
+        .unwrap();
+
+    let outcomes = run_to_end(&agent, TestContext::new("count the rows"))
+        .await
+        .into_iter()
+        .map(|outcome| outcome.map(|content| content.role))
+        .collect::<Vec<_>>();
+
+    // The call and its response, then the error in place of the second request.
+    assert_eq!(
+        outcomes,
+        vec![
+            Ok("model".to_string()),
+            Ok("function".to_string()),
+            Err(adk_core::AdkError::agent("the history store is unavailable").to_string()),
+        ]
+    );
+    assert_eq!(requests.lock().unwrap().len(), 1);
+}
+
+const MEMORY_HEADER: &str = "--- Relevant Memories ---";
+const HOOK_MARK: &str = "<plugin-context>";
+const REMINDER: &str = "<system-reminder>";
+const SUMMARY: &str = "summary of earlier work";
+
+/// Adds memories to the system content of every request, as
+/// `PreloadMemoryTool::into_before_model_callback` does.
+fn preload_memory_like() -> adk_core::BeforeModelCallback {
+    Box::new(|_ctx, mut request: LlmRequest| {
+        Box::pin(async move {
+            let memory_text = format!(
+                "\n\n{MEMORY_HEADER}\n[2026-10-01T00:00:00+00:00] user: rows are counted per page\n--- End Memories ---\n"
+            );
+            match request.contents.iter_mut().find(|content| content.role == "system") {
+                Some(system) => system.parts.push(Part::Text { text: memory_text }),
+                None => request.contents.insert(0, Content::new("system").with_text(memory_text)),
+            }
+            Ok(adk_core::BeforeModelResult::Continue(request))
+        })
+    })
+}
+
+/// Adds request context, as a runner plugin does through `RunConfig::invocation_hooks`.
+#[derive(Debug)]
+struct ContextHook;
+
+#[async_trait]
+impl adk_core::InvocationHooks for ContextHook {
+    async fn before_model(
+        &self,
+        _ctx: Arc<dyn adk_core::CallbackContext>,
+        mut request: LlmRequest,
+    ) -> adk_core::Result<adk_core::BeforeModelResult> {
+        request.contents.insert(
+            0,
+            Content::new("user").with_text(format!("{HOOK_MARK}tenant=acme</plugin-context>")),
+        );
+        Ok(adk_core::BeforeModelResult::Continue(request))
+    }
+}
+
+/// Appends a reminder to every request, as adk-harness's toolset does.
+struct ReminderToolset;
+
+#[async_trait]
+impl adk_core::Toolset for ReminderToolset {
+    fn name(&self) -> &str {
+        "reminders"
+    }
+
+    async fn tools(
+        &self,
+        _ctx: Arc<dyn ReadonlyContext>,
+    ) -> adk_core::Result<Vec<Arc<dyn adk_core::Tool>>> {
+        Ok(Vec::new())
+    }
+
+    async fn process_llm_request(
+        &self,
+        _ctx: Arc<dyn ReadonlyContext>,
+        request: &mut LlmRequest,
+    ) -> adk_core::Result<()> {
+        request.contents.push(
+            Content::new("user")
+                .with_text(format!("{REMINDER}\nmode: default\n</system-reminder>")),
+        );
+        Ok(())
+    }
+}
+
+/// A session of `cycles` earlier turns that each used a tool, then the message.
+fn tool_history(cycles: usize) -> Vec<Content> {
+    let mut history = Vec::new();
+    for i in 0..cycles {
+        let id = format!("h{i}");
+        history.push(Content::new("user").with_text(format!("q{i}")));
+        history.push(Content {
+            role: "model".into(),
+            parts: vec![function_call("lookup", &id, serde_json::json!({}))],
+        });
+        history.push(Content {
+            role: "function".into(),
+            parts: vec![Part::FunctionResponse {
+                function_response: adk_core::FunctionResponseData::new(
+                    "lookup",
+                    serde_json::json!({ "rows": i }),
+                ),
+                id: Some(id),
+                annotations: None,
+            }],
+        });
+        history.push(Content::new("model").with_text(format!("a{i}")));
+    }
+    history.push(Content::new("user").with_text("count the rows"));
+    history
+}
+
+/// Occurrences of `needle` in the request's text parts.
+fn count(request: &LlmRequest, needle: &str) -> usize {
+    request
+        .contents
+        .iter()
+        .flat_map(|content| content.parts.iter().filter_map(Part::text))
+        .map(|text| text.matches(needle).count())
+        .sum()
+}
+
+/// Function responses whose call is not in the content right before them, where Anthropic,
+/// OpenAI and Gemini require it. Paired by ID, or by name when the ID is absent.
+fn orphaned_responses(request: &LlmRequest) -> Vec<String> {
+    let mut orphans = Vec::new();
+    for (index, content) in request.contents.iter().enumerate() {
+        for part in &content.parts {
+            let Part::FunctionResponse { function_response, id, .. } = part else { continue };
+            let paired = index.checked_sub(1).is_some_and(|previous| {
+                request.contents[previous].parts.iter().any(|part| match part {
+                    Part::FunctionCall { name, id: call_id, .. } => match (id, call_id) {
+                        (Some(id), Some(call_id)) => id == call_id,
+                        (None, None) => name == &function_response.name,
+                        _ => false,
+                    },
+                    _ => false,
+                })
+            });
+            if !paired {
+                orphans.push(format!("{}#{id:?}@{index}", function_response.name));
+            }
+        }
+    }
+    orphans
+}
+
+struct ProcessorRun {
+    requests: Vec<LlmRequest>,
+    cuts: usize,
+    seen: Vec<Vec<Content>>,
+}
+
+/// Runs `steps` tool steps under a threshold compaction, a memory callback, a run hook and a
+/// reminder toolset, starting from 25 turns of history.
+async fn run_with_processor(call_ids: bool, steps: usize) -> ProcessorRun {
+    let turns = (0..steps)
+        .map(|i| {
+            vec![Part::FunctionCall {
+                name: "lookup".to_string(),
+                args: serde_json::json!({ "page": i }),
+                id: call_ids.then(|| format!("call_{i}")),
+                thought_signature: None,
+            }]
+        })
+        .collect();
+    let model = ScriptedLlm::new(turns);
+    let requests = model.requests.clone();
+    let cuts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (cuts_in, seen_in) = (cuts.clone(), seen.clone());
+    let agent = LlmAgentBuilder::new("compacting")
+        .model(Arc::new(model))
+        .instruction("You count rows.")
+        .tool(lookup_tool())
+        .toolset(Arc::new(ReminderToolset))
+        .before_model_callback(preload_memory_like())
+        // Past 24 turns, keeps about the last 11 behind a summary.
+        .history_processor(Box::new(move |_ctx, history: Vec<Content>| {
+            let (cuts, seen) = (cuts_in.clone(), seen_in.clone());
+            Box::pin(async move {
+                seen.lock().unwrap().push(history.clone());
+                let (system, turns): (Vec<_>, Vec<_>) =
+                    history.into_iter().partition(|content| content.role == "system");
+                if turns.len() <= 24 {
+                    return Ok(system.into_iter().chain(turns).collect());
+                }
+                cuts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let cut = adk_core::history::balanced_content_cut(&turns, turns.len() - 11);
+                Ok(system
+                    .into_iter()
+                    .chain([Content::new("user").with_text(SUMMARY)])
+                    .chain(turns.into_iter().skip(cut))
+                    .collect())
+            })
+        }))
+        .build()
+        .unwrap();
+    let ctx = TestContext {
+        config: RunConfig { invocation_hooks: vec![Arc::new(ContextHook)], ..RunConfig::default() },
+        ..TestContext::with_history("count the rows", tool_history(6))
+    };
+
+    for outcome in run_to_end(&agent, ctx).await {
+        outcome.unwrap();
+    }
+    let requests = requests.lock().unwrap().clone();
+    let seen = seen.lock().unwrap().clone();
+    ProcessorRun { requests, cuts: cuts.load(std::sync::atomic::Ordering::SeqCst), seen }
+}
+
+#[tokio::test]
+async fn test_history_processor_keeps_per_request_material_per_request() {
+    let run = run_with_processor(true, 5).await;
+
+    let per_request = run
+        .requests
+        .iter()
+        .map(|request| {
+            (
+                count(request, MEMORY_HEADER),
+                count(request, HOOK_MARK),
+                count(request, REMINDER),
+                count(request, SUMMARY),
+                orphaned_responses(request),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(per_request, vec![(1, 1, 1, 1, Vec::<String>::new()); 6]);
+    // The compaction ran on the first request and carried over to the other five.
+    assert_eq!(run.cuts, 1);
+}
+
+#[tokio::test]
+async fn test_history_processor_sees_the_agents_own_call_ids() {
+    let run = run_with_processor(false, 3).await;
+
+    let ids = |contents: &[Content]| {
+        let ids = contents
+            .iter()
+            .flat_map(|content| &content.parts)
+            .filter_map(|part| match part {
+                Part::FunctionCall { id, .. } | Part::FunctionResponse { id, .. } => Some(id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let generated = ids
+            .iter()
+            .filter(|id| {
+                id.as_deref().is_some_and(|id| id.starts_with(adk_core::GENERATED_CALL_ID_PREFIX))
+            })
+            .count();
+        (generated, ids.iter().filter(|id| id.is_none()).count())
+    };
+    // Three calls and their responses: the processor reads the IDs the agent generated, and
+    // the provider receives the calls without them.
+    assert_eq!(ids(run.seen.last().unwrap()), (6, 0));
+    assert_eq!(ids(&run.requests.last().unwrap().contents), (0, 6));
+    assert!(run.requests.iter().all(|request| orphaned_responses(request).is_empty()));
+}

@@ -335,6 +335,7 @@ pub struct LlmAgent {
     expose_tool_error_messages: bool,
     before_callbacks: Arc<Vec<BeforeAgentCallback>>,
     after_callbacks: Arc<Vec<AfterAgentCallback>>,
+    history_processors: Arc<Vec<adk_core::HistoryProcessor>>,
     before_model_callbacks: Arc<Vec<BeforeModelCallback>>,
     after_model_callbacks: Arc<Vec<AfterModelCallback>>,
     before_tool_callbacks: Arc<Vec<BeforeToolCallback>>,
@@ -966,6 +967,7 @@ pub struct LlmAgentBuilder {
     expose_tool_error_messages: bool,
     before_callbacks: Vec<BeforeAgentCallback>,
     after_callbacks: Vec<AfterAgentCallback>,
+    history_processors: Vec<adk_core::HistoryProcessor>,
     before_model_callbacks: Vec<BeforeModelCallback>,
     after_model_callbacks: Vec<AfterModelCallback>,
     before_tool_callbacks: Vec<BeforeToolCallback>,
@@ -1020,6 +1022,7 @@ impl LlmAgentBuilder {
             expose_tool_error_messages: false,
             before_callbacks: Vec::new(),
             after_callbacks: Vec::new(),
+            history_processors: Vec::new(),
             before_model_callbacks: Vec::new(),
             after_model_callbacks: Vec::new(),
             before_tool_callbacks: Vec::new(),
@@ -1374,6 +1377,58 @@ impl LlmAgentBuilder {
     /// Add an after-agent callback.
     pub fn after_callback(mut self, callback: AfterAgentCallback) -> Self {
         self.after_callbacks.push(callback);
+        self
+    }
+
+    /// Add a history processor that rewrites the agent's conversation history before each
+    /// model request.
+    ///
+    /// Processors run before every model call of a turn, the first included, in the order
+    /// added, each receiving the previous one's output. The result replaces the history the
+    /// turn continues from: later steps append to it, so a compaction runs once and carries
+    /// over to the rest of the turn. The session keeps every event, and the next turn builds
+    /// its history from the session again.
+    ///
+    /// A processor receives the agent's own history: its instructions as `system` contents,
+    /// the conversation, and the turn's calls and responses, including call IDs the agent
+    /// generated for a provider that sent none. Toolsets, enhanced plugins, invocation hooks
+    /// and [`before_model_callback`](Self::before_model_callback)s apply afterwards, to each
+    /// request, and what they add never enters the history. A processor error ends the turn
+    /// with that error.
+    ///
+    /// A before-model callback shapes one request; a history processor changes what the agent
+    /// works from for the rest of the turn. A cut must keep every function response with its
+    /// call: [`balanced_content_cut`](adk_core::history::balanced_content_cut) moves a cut
+    /// back to the nearest point that does.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_agent::LlmAgentBuilder;
+    /// use adk_core::Content;
+    /// use adk_core::history::balanced_content_cut;
+    ///
+    /// // Past 40 turns, replaces all but about the last 20 with a note. The cut moves earlier
+    /// // when it would separate a function response from its call.
+    /// let builder = LlmAgentBuilder::new("assistant").history_processor(Box::new(
+    ///     |_ctx, history: Vec<Content>| {
+    ///         Box::pin(async move {
+    ///             let (system, turns): (Vec<_>, Vec<_>) =
+    ///                 history.into_iter().partition(|content| content.role == "system");
+    ///             if turns.len() <= 40 {
+    ///                 return Ok(system.into_iter().chain(turns).collect());
+    ///             }
+    ///             let cut = balanced_content_cut(&turns, turns.len() - 20);
+    ///             let note = Content::new("user")
+    ///                 .with_text(format!("({cut} earlier turns were removed.)"));
+    ///             Ok(system.into_iter().chain([note]).chain(turns.into_iter().skip(cut)).collect())
+    ///         })
+    ///     },
+    /// ));
+    /// # let _ = builder;
+    /// ```
+    pub fn history_processor(mut self, processor: adk_core::HistoryProcessor) -> Self {
+        self.history_processors.push(processor);
         self
     }
 
@@ -1758,6 +1813,7 @@ impl LlmAgentBuilder {
             expose_tool_error_messages: self.expose_tool_error_messages,
             before_callbacks: Arc::new(self.before_callbacks),
             after_callbacks: Arc::new(self.after_callbacks),
+            history_processors: Arc::new(self.history_processors),
             before_model_callbacks: Arc::new(self.before_model_callbacks),
             after_model_callbacks: Arc::new(self.after_model_callbacks),
             before_tool_callbacks: Arc::new(self.before_tool_callbacks),
@@ -3598,6 +3654,7 @@ impl Agent for LlmAgent {
         // Clone Arc references (cheap)
         let before_agent_callbacks = self.before_callbacks.clone();
         let after_agent_callbacks = self.after_callbacks.clone();
+        let history_processors = self.history_processors.clone();
         let before_model_callbacks = self.before_model_callbacks.clone();
         let after_model_callbacks = self.after_model_callbacks.clone();
         let before_tool_callbacks = self.before_tool_callbacks.clone();
@@ -3987,6 +4044,32 @@ impl Agent for LlmAgent {
                     prompt_config.output_schema.as_ref(),
                     ctx.run_config().cached_content.as_deref(),
                 );
+
+                // The processors own the agent's history; what toolsets, plugins, run hooks
+                // and before-model callbacks add below stays in this one request.
+                let history_len = conversation_history.len();
+                for processor in history_processors.iter() {
+                    match processor(
+                        ctx.clone() as Arc<dyn CallbackContext>,
+                        std::mem::take(&mut conversation_history),
+                    )
+                    .await
+                    {
+                        Ok(history) => conversation_history = history,
+                        Err(error) => {
+                            yield Err(error);
+                            return;
+                        }
+                    }
+                }
+                if conversation_history.len() != history_len {
+                    tracing::debug!(
+                        agent.name = %agent_name,
+                        history.before = history_len,
+                        history.after = conversation_history.len(),
+                        "history processors rewrote the history"
+                    );
+                }
 
                 // Call IDs the agent generated for a provider that sent none stay out of
                 // what the provider receives.

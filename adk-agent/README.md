@@ -140,6 +140,7 @@ The example needs `adk-agent`, `adk-core`, `adk-model`, `adk-runner`, `adk-sessi
 | `strict_toolsets(bool)` | Fail the turn when a toolset fails to resolve, instead of skipping it |
 | `sub_agent(agent)` | Add a sub-agent for transfers |
 | `max_iterations(n)` | Set the maximum model round-trips (default 100, `DEFAULT_MAX_ITERATIONS`) |
+| `history_processor(fn)` | Add a processor that rewrites the agent's history before each model request; the rest of the turn continues from its result |
 | `tool_timeout(duration)` | Set the per-tool timeout (default five minutes, `DEFAULT_TOOL_TIMEOUT`) |
 | `expose_tool_error_messages(bool)` | Send every failed tool's error message to the model; by default only a rejection's message (`ErrorCategory::is_rejection`) joins its component, category, and code |
 | `default_retry_budget(budget)` | Set the retry budget for every tool |

@@ -183,6 +183,9 @@ uncompacted; deny it to release them.
 
 - Compaction failure is non-fatal — the runner logs a warning and continues
 - Compaction runs after the invocation's events have streamed, before the run's stream ends
+- Compaction between the model calls of one turn is an `LlmAgent` history processor's job
+  (`LlmAgentBuilder::history_processor`, see [History Processors](../callbacks/callbacks.md#history-processors)),
+  which cuts with `adk_core::history::balanced_content_cut`
 - The summarizer's model call is metered against the run's budget and spend ledger (`ModelCallScope`)
 - The compaction event is persisted to the session service for durability
 - Use a fast, inexpensive model for summarization (e.g., `gemini-3.5-flash-lite`)
