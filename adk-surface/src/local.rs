@@ -370,12 +370,17 @@ impl LocalSource {
         {
             return None;
         }
-        let suggestions = StandingRule::suggestions(&held.request);
-        let suggestion = suggestions
-            .iter()
-            .find(|suggestion| suggestion.label.contains("within"))
-            .or_else(|| suggestions.first())?
-            .clone();
+        // A file write: every file write in its folder (spec 3.3 §8.2). A file change no
+        // folder rule covers — a delete or a move — is asked about every time.
+        let suggestion = match harness.agent().folder_suggestion(&held.request) {
+            Some(folder) => folder,
+            None => StandingRule::suggestions(&held.request).into_iter().find(|suggestion| {
+                !suggestion
+                    .predicates
+                    .iter()
+                    .any(|predicate| matches!(predicate, RulePredicate::PathWithin { .. }))
+            })?,
+        };
         let label = always_allow_label(&suggestion);
         let created_by = caller.map_or_else(
             || adk_core::principal::SubjectRef::human(request.scope.user_id.clone()),
@@ -469,13 +474,20 @@ impl LocalSource {
 }
 
 /// "Always allow …" for the rule `suggestion` makes, saying all it covers: the command
-/// prefix, the folder or the whole workspace, the site, or the tool with any arguments, in
-/// every session or this one, and that commands running project scripts allow whatever they
-/// do (spec 3.3 §8.2, spec 3.1 §7.5).
+/// prefix, the file writes in the folder or the whole workspace, the site, or the tool with
+/// any arguments, in every session or this one, and that commands running project scripts
+/// allow whatever they do (spec 3.3 §8.2, spec 3.1 §7.5).
 fn always_allow_label(suggestion: &RuleSuggestion) -> String {
     let (label, covers) = match suggestion.predicates.first() {
         Some(RulePredicate::ShellPrefix { tokens, .. }) => {
             (words::ALWAYS_ALLOW_FOR_THIS_COMMAND, format!("{} …", tokens.join(" ")))
+        }
+        Some(RulePredicate::WritesWithin { dir }) if dir == "." => (
+            words::ALWAYS_ALLOW_FOR_THIS_FOLDER,
+            "file writes anywhere in the workspace".to_string(),
+        ),
+        Some(RulePredicate::WritesWithin { dir }) => {
+            (words::ALWAYS_ALLOW_FOR_THIS_FOLDER, format!("file writes anywhere in {dir}/"))
         }
         Some(RulePredicate::PathWithin { dir, .. }) if dir == "." => {
             (words::ALWAYS_ALLOW_FOR_THIS_FOLDER, "anywhere in the workspace".to_string())

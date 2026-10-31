@@ -437,6 +437,8 @@ Surfaces a person uses speak plainly. The terminal and developer panels may use 
 | Stop or restart one agent | **Pause** / **Resume** | Pause: web home, terminal; Resume: web home, paired local terminal |
 | Remove an agent | **Remove**, then **Remove** or **Keep** | web, terminal |
 
+**Always allow for this folder** makes one standing rule for every file write in the folder the call writes in, for the session: `write_file`, `edit_file` and an `apply_patch` that only adds or updates files, each pinned to its exact declaration (`OriginPin::ExactEach`, `RulePredicate::WritesWithin`, spec 3.1 §7.5). A write outside the folder, a `..` or symlink escape, a delete, a move, the shell and every other tool still ask; a call no folder rule covers is offered **Allow once** and **Deny** only.
+
 ## 9. Visual language
 
 The look follows [adk-rust.com](https://adk-rust.com): Inter and JetBrains Mono, rust orange as the one accent, two-tone display headings, a soft rust glow in one corner. Light and dark come from one set of tokens, and every dark screen is the light screen rendered with the dark set.

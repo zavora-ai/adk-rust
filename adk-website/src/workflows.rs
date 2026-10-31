@@ -1,7 +1,7 @@
 //! The site's model-free jobs as kernel runs (spec 3.5 §7.20, §7.11, §7.21): the Guardian's
 //! probe ([`PROBE_WORKFLOW`]), the hosting job's upkeep check ([`WATCH_WORKFLOW`]) and the
-//! weekly review's composition ([`DIGEST_WORKFLOW`]), and a push to the content repository
-//! ([`REPOSITORY_WORKFLOW`]).
+//! weekly review's composition ([`DIGEST_WORKFLOW`]), a push to the content repository
+//! ([`REPOSITORY_WORKFLOW`]), and the playbook-learning run ([`LEARNING_WORKFLOW`]).
 //! Register [`SiteWorkflows`] with `KernelBuilder::workflows` and each process's trigger from
 //! [`crate::jobs::processes`]; the other site processes run their job's agent.
 
@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use crate::incident::GuardianProbe;
 pub use crate::jobs::{DIGEST_WORKFLOW, PROBE_WORKFLOW, WATCH_WORKFLOW};
+pub use crate::learning::LEARNING_WORKFLOW;
 pub use crate::repository::REPOSITORY_WORKFLOW;
 use crate::review::{ReviewComposer, ReviewInputs};
 
@@ -39,6 +40,7 @@ pub struct SiteWorkflows {
     watches: BTreeMap<Uuid, Arc<crate::upkeep::UpkeepCheck>>,
     digests: BTreeMap<Uuid, DigestTarget>,
     repositories: BTreeMap<Uuid, Arc<crate::repository::RepositoryEntry>>,
+    learnings: BTreeMap<Uuid, Arc<crate::learning::PlaybookLearning>>,
 }
 
 impl SiteWorkflows {
@@ -72,6 +74,17 @@ impl SiteWorkflows {
         self
     }
 
+    /// Runs `site`'s weekly playbook learning (spec 3.5 §7.15).
+    #[must_use]
+    pub fn learning(
+        mut self,
+        site: Uuid,
+        learning: Arc<crate::learning::PlaybookLearning>,
+    ) -> Self {
+        self.learnings.insert(site, learning);
+        self
+    }
+
     /// Sends `site`'s weekly review to `target`.
     #[must_use]
     pub fn digest(mut self, site: Uuid, target: DigestTarget) -> Self {
@@ -85,7 +98,11 @@ impl WorkflowExecutor for SiteWorkflows {
     fn has_workflow(&self, workflow_id: &str) -> bool {
         matches!(
             workflow_id,
-            PROBE_WORKFLOW | WATCH_WORKFLOW | DIGEST_WORKFLOW | REPOSITORY_WORKFLOW
+            PROBE_WORKFLOW
+                | WATCH_WORKFLOW
+                | DIGEST_WORKFLOW
+                | REPOSITORY_WORKFLOW
+                | LEARNING_WORKFLOW
         )
     }
 
@@ -150,6 +167,12 @@ impl WorkflowExecutor for SiteWorkflows {
                             format!("no content repository is configured for site {site}")
                         })?;
                         entry.execute(&input).await.map_err(|e| e.to_string())
+                    }
+                    LEARNING_WORKFLOW => {
+                        let learning = self.learnings.get(&site).ok_or_else(|| {
+                            format!("no playbook learning is registered for site {site}")
+                        })?;
+                        learning.run().await.map_err(|e| e.to_string())
                     }
                     other => Err(format!("{other} is not a website workflow")),
                 }

@@ -5,7 +5,7 @@
 
 #![cfg(all(feature = "sandbox", feature = "runner", unix))]
 
-mod common;
+use crate::common;
 
 use std::ffi::{OsStr, OsString};
 use std::sync::Arc;

@@ -41,7 +41,9 @@ fn spec_7_2_example_parses_into_site_contract() {
         env!("CARGO_MANIFEST_DIR"),
         "/../docs/design/spec-3.5-agentic-web.md"
     ))
-    .expect("spec 3.5 is in the repository");
+    .expect("spec 3.5 is in the repository")
+    // A Windows checkout may convert the spec's line ends.
+    .replace("\r\n", "\n");
     let section = &spec[spec.find("### 7.2 The site contract").expect("§7.2 exists")..];
     let start = section.find("```json\n").expect("§7.2 has a JSON example") + "```json\n".len();
     let end = start + section[start..].find("```").expect("the example ends");

@@ -48,6 +48,10 @@ struct Shared {
     next_event: AtomicU64,
     waiting_syncs: AtomicUsize,
     refusals: Mutex<VecDeque<(StatusCode, Value)>>,
+    /// The homeserver predates authenticated media.
+    legacy_only: std::sync::atomic::AtomicBool,
+    /// Each media download: the endpoint, `v1` or `legacy`.
+    downloads: Mutex<Vec<String>>,
 }
 
 /// The fake homeserver, served until it is dropped.
@@ -72,6 +76,8 @@ impl FakeMatrix {
             .route("/_matrix/client/v3/rooms/{room}/send/{kind}/{txn}", put(send))
             .route("/_matrix/client/v3/rooms/{room}/event/{event}", get(event))
             .route("/_matrix/client/v3/join/{room}", post(join))
+            .route("/_matrix/client/v1/media/download/{server}/{id}", get(media_v1))
+            .route("/_matrix/media/v3/download/{server}/{id}", get(media_legacy))
             .with_state(shared.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -152,6 +158,34 @@ impl FakeMatrix {
             "type": "m.room.message", "sender": sender, "event_id": self.event_id(),
             "origin_server_ts": 1_761_300_000_000u64, "content": { "msgtype": "m.text", "body": body },
         })
+    }
+
+    /// Makes the homeserver one that predates authenticated media.
+    pub fn legacy_media_only(&self) {
+        self.shared.legacy_only.store(true, Ordering::SeqCst);
+    }
+
+    /// Each media download: `v1` or `legacy`.
+    pub fn downloads(&self) -> Vec<String> {
+        self.shared.downloads.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    /// `sender`'s image `name` of `mimetype` at `mxc`, captioned `caption`, not yet delivered.
+    pub fn image_event(
+        &self,
+        sender: &str,
+        mxc: &str,
+        mimetype: &str,
+        caption: Option<&str>,
+    ) -> Value {
+        let mut content = json!({ "msgtype": "m.image", "body": "rye.png", "url": mxc,
+                                  "info": { "mimetype": mimetype, "size": PNG.len() } });
+        if let Some(caption) = caption {
+            content["body"] = json!(caption);
+            content["filename"] = json!("rye.png");
+        }
+        json!({ "type": "m.room.message", "sender": sender, "event_id": self.event_id(),
+                "origin_server_ts": 1_761_300_000_000u64, "content": content })
     }
 
     /// `sender`'s reaction with `key` on `event`, not yet delivered.
@@ -342,4 +376,33 @@ async fn join(
     }
     shared.joins.lock().unwrap_or_else(PoisonError::into_inner).push(room.clone());
     Json(json!({ "room_id": room })).into_response()
+}
+
+/// A 1×1 PNG, the photo every file is.
+pub const PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64, 0x60, 0xf8, 0x5f,
+    0x0f, 0x00, 0x02, 0x87, 0x01, 0x80, 0xeb, 0x47, 0xba, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+async fn media_v1(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    if !authorized(&headers) {
+        return unknown_token();
+    }
+    if shared.legacy_only.load(Ordering::SeqCst) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "errcode": "M_UNRECOGNIZED", "error": "Unrecognized request" })),
+        )
+            .into_response();
+    }
+    shared.downloads.lock().unwrap_or_else(PoisonError::into_inner).push("v1".into());
+    ([("content-type", "image/png")], PNG.to_vec()).into_response()
+}
+
+async fn media_legacy(State(shared): State<Arc<Shared>>) -> Response {
+    shared.downloads.lock().unwrap_or_else(PoisonError::into_inner).push("legacy".into());
+    ([("content-type", "image/png")], PNG.to_vec()).into_response()
 }

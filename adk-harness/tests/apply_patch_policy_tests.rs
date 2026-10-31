@@ -4,7 +4,7 @@
 
 #![cfg(feature = "runner")]
 
-mod common;
+use crate::common;
 
 use adk_harness::{HarnessMode, PromptAnswer, RulePredicate};
 use adk_model::ScriptedResponse;

@@ -93,6 +93,9 @@ test("Threads, Today and Memory & rules never scroll as a page, at any size or a
 
 test("on a desktop the rail, the thread and the right panel scroll inside themselves, the message box in view", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 600 });
+  // The right panel outgrows this window only with the morning briefing in it, which the
+  // example shows outside its 22:00–07:00 quiet time on the browser's clock.
+  await page.clock.setFixedTime(new Date(2026, 9, 26, 12, 0));
   await page.goto("/ui/fixture.html?section=threads");
   await expect(page.getByRole("heading", { name: "Finance" })).toBeVisible();
   const thread = page.locator(".thread-scroll");

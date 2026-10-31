@@ -6,7 +6,7 @@
 
 #![cfg(all(feature = "runner", feature = "web"))]
 
-mod common;
+use crate::common;
 
 use std::sync::{Arc, Mutex};
 

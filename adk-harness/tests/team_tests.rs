@@ -2,7 +2,7 @@
 
 #![cfg(all(feature = "team", feature = "runner"))]
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::time::Duration;

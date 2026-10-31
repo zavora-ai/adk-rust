@@ -10,6 +10,7 @@
 //! | Experiments | `ExperimentRunner` with `BeaconKpi`, the job pauses, the ladder, the alarms and `RepublishOnStop`; its daily trigger |
 //! | Measurement | `KpiTracker` with the beacon, commerce, spend and agent-search sources (and AEO with search providers), their counts in `data/edge.db` |
 //! | Review | `ReviewComposer` with the alarms, the experiments and the updates |
+//! | Learning | [`PlaybookLearning`](crate::learning::PlaybookLearning) over the review, the experiments and the ladder: proposals in `data/learning/proposals.json` and the owner's cards, playbook versions in `data/playbooks/`; its weekly trigger (spec 3.5 §7.15) |
 //! | Leads | The contact book and nurture counts in `data/edge.db` ([`SqliteLeadRecords`]), scored against the kind's threshold; the email outbox, when configured, reading consent from the edge's receipts |
 //! | Upkeep | [`UpkeepCheck`] over the edge's lockfile and the certificate, when configured |
 //! | Repository | [`RepositoryEntry`](crate::repository::RepositoryEntry) from `repository.json`: its signed hooks on the edge, each push a kernel run, its decision cards in the kernel's approvals (spec 3.5 §7.8.2) |
@@ -390,6 +391,9 @@ pub struct RunningSite {
     /// Files and git as an entry point, when the project has a `repository.json`: its hooks
     /// on the edge at `/hooks/{name}` (spec 3.5 §7.8.2).
     pub repository: Option<Arc<crate::repository::RepositoryEntry>>,
+    /// The playbook-learning job: proposals from the week's outcomes, decided by the owner
+    /// (spec 3.5 §7.15).
+    pub learning: Arc<crate::learning::PlaybookLearning>,
     pub(crate) reporting: Reporting,
     pub(crate) publish_delay: chrono::Duration,
     pub(crate) wallet: Option<adk_payments::wallet::Wallet>,
@@ -835,7 +839,22 @@ impl RunningSite {
                 .with_incidents(incidents.clone()),
         );
         let cron = options.experiments_cron.clone().unwrap_or_else(|| "0 30 3 * * *".into());
-        let triggers = vec![experiments.trigger(&site.name, &cron)];
+        let learning =
+            Arc::new(crate::learning::PlaybookLearning::open(crate::learning::LearningParts {
+                site: site.clone(),
+                team: crate::team::SiteTeam::new(site.clone(), &template),
+                owner: options.owner.clone(),
+                composer: (*review).clone(),
+                experiments: experiments.clone(),
+                charters: charters.clone(),
+                ladder: ladder.clone(),
+                approvals: stores.approvals.clone(),
+                data: paths.data(),
+            })?);
+        let triggers = vec![
+            experiments.trigger(&site.name, &cron),
+            learning.trigger(&site.name, crate::learning::LEARNING_CRON),
+        ];
         let repository = crate::repository::RepositoryEntry::open(
             &paths,
             crate::repository::RepositoryParts {
@@ -880,6 +899,7 @@ impl RunningSite {
             inbox,
             guardian,
             repository,
+            learning,
             reporting,
             wallet: options.wallet.clone(),
             signals: edge_signals,
@@ -962,6 +982,7 @@ impl RunningSite {
         if let Some(entry) = self.repository.clone() {
             self.tasks.push(entry.spawn(idle));
         }
+        self.tasks.push(self.learning.clone().spawn(idle));
         let _resolver = self.edge.edge.spawn_resolver(Duration::from_secs(5));
         // Deliveries a stopped process left in `data/edge.db` resume once their lease passes.
         let _deliveries = self.edge.edge.spawn_delivery_resumer(Duration::from_secs(30));

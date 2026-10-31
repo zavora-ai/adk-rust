@@ -258,6 +258,14 @@ struct Inner {
     rooms: Mutex<Rooms>,
 }
 
+/// What an event carries beyond its inbound value.
+pub(crate) struct Carried {
+    /// The card a reaction annotates.
+    card: Option<String>,
+    /// The image an `m.image` event names.
+    files: Vec<crate::channels::media::FileRef>,
+}
+
 /// What the adapter knows of its rooms and cards.
 #[derive(Default)]
 struct Rooms {
@@ -460,7 +468,7 @@ impl MatrixAdapter {
         batch: &Value,
         first: bool,
         me: &str,
-        sender: &mpsc::UnboundedSender<Update<String>>,
+        sender: &mpsc::UnboundedSender<Update<Carried>>,
     ) {
         let rooms = &batch["rooms"];
         for (room, invite) in rooms["invite"].as_object().into_iter().flatten() {
@@ -528,7 +536,9 @@ impl MatrixAdapter {
             for event in others {
                 let Some(inbound) = self.inbound(room, event).await else { continue };
                 let card = wire::reaction(event).map(|(card, _)| card);
-                if sender.send(Update { inbound: Some(inbound), press: card }).is_err() {
+                let files = wire::image(event).into_iter().collect();
+                let carried = Carried { card, files };
+                if sender.send(Update { inbound: Some(inbound), press: Some(carried) }).is_err() {
                     return;
                 }
             }
@@ -550,7 +560,7 @@ impl MatrixAdapter {
 #[async_trait]
 impl Taker for MatrixAdapter {
     /// The card a reaction annotates.
-    type Press = String;
+    type Press = Carried;
 
     fn channel_name(&self) -> &'static str {
         MATRIX_CHANNEL
@@ -561,10 +571,20 @@ impl Taker for MatrixAdapter {
     async fn take(
         &self,
         gateway: &ChannelGateway,
-        update: &Update<String>,
+        update: &Update<Carried>,
         paired: bool,
     ) -> adk_kernel::Result<()> {
-        let Some(inbound) = update.inbound.clone() else { return Ok(()) };
+        let Some(mut inbound) = update.inbound.clone() else { return Ok(()) };
+        let carried = update.press.as_ref();
+        // A paired account's images, for a host that takes them; a stranger's are never
+        // downloaded (spec 3.5 §10 X12).
+        let files = carried.map_or(&[][..], |carried| carried.files.as_slice());
+        if paired && !files.is_empty() {
+            let api = &self.inner.api;
+            let attachments =
+                crate::channels::media::fetch_all(files, |file| api.download(file)).await;
+            inbound = inbound.with_attachments(attachments);
+        }
         let card = match &inbound.body {
             InboundBody::Answer { decision, .. } => {
                 match paired_binding(gateway, MATRIX_CHANNEL, &inbound.account).await {
@@ -584,7 +604,8 @@ impl Taker for MatrixAdapter {
                         )));
                     }
                 }
-                Some(PressedCard { card: update.press.clone(), decision: decision.clone() })
+                let card = carried.and_then(|carried| carried.card.clone());
+                Some(PressedCard { card, decision: decision.clone() })
             }
             _ => None,
         };
@@ -592,9 +613,10 @@ impl Taker for MatrixAdapter {
         HANDLING.scope(handling, gateway.receive(inbound)).await.map(drop)
     }
 
-    async fn not_taken(&self, update: &Update<String>) {
+    async fn not_taken(&self, update: &Update<Carried>) {
         let Some(inbound) = &update.inbound else { return };
-        let text = if update.press.is_some() { ANSWER_NOT_TAKEN } else { MESSAGE_NOT_TAKEN };
+        let pressed = update.press.as_ref().is_some_and(|carried| carried.card.is_some());
+        let text = if pressed { ANSWER_NOT_TAKEN } else { MESSAGE_NOT_TAKEN };
         for content in wire::plain(text) {
             if let Err(error) = self.send(&inbound.thread, "m.room.message", &content).await {
                 tracing::debug!(error = %error, "a person could not be told their message was not taken");

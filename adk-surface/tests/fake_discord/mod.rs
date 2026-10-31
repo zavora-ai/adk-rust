@@ -50,6 +50,10 @@ struct Shared {
     pending: Mutex<VecDeque<Message>>,
     seq: AtomicU64,
     next_id: AtomicU64,
+    /// `http://{addr}`, where attachments are served.
+    base: Mutex<String>,
+    /// The `Authorization` header of each attachment download, empty for none.
+    downloads: Mutex<Vec<String>>,
     heartbeat_ms: AtomicU64,
     silent: AtomicBool,
     refusals: Mutex<VecDeque<(String, StatusCode, Value)>>,
@@ -78,6 +82,7 @@ impl FakeDiscord {
         let app = Router::new().fallback(rest).with_state(shared.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        *shared.base.lock().unwrap() = format!("http://{addr}");
         let web = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let gateways = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         *shared.gateway_url.lock().unwrap() = format!("ws://{}", gateways.local_addr().unwrap());
@@ -209,6 +214,26 @@ impl FakeDiscord {
         })
     }
 
+    /// `user` sends `files` (name and content type) with `text` in their direct message.
+    pub fn send_files(&self, user: &str, channel: &str, text: &str, files: &[(&str, &str)]) {
+        let mut d = self.message_event(user, channel, text);
+        let base = self.shared.base.lock().unwrap().clone();
+        let attachments: Vec<Value> = files
+            .iter()
+            .map(|(name, content_type)| {
+                json!({ "id": self.next_id(), "filename": name, "content_type": content_type,
+                        "size": PNG.len(), "url": format!("{base}/attachments/{name}") })
+            })
+            .collect();
+        d["attachments"] = json!(attachments);
+        self.dispatch("MESSAGE_CREATE", d);
+    }
+
+    /// The `Authorization` header of each attachment download, empty for none.
+    pub fn downloads(&self) -> Vec<String> {
+        self.shared.downloads.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
     pub fn say(&self, user: &str, channel: &str, text: &str) {
         let d = self.message_event(user, channel, text);
         self.dispatch("MESSAGE_CREATE", d);
@@ -326,6 +351,16 @@ async fn rest(
     headers: HeaderMap,
     body: Option<Json<Value>>,
 ) -> Response {
+    // Discord's CDN serves attachments to anyone who has the address.
+    if method == Method::GET && uri.path().starts_with("/attachments/") {
+        let auth = headers.get("authorization").and_then(|value| value.to_str().ok());
+        shared
+            .downloads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(auth.unwrap_or_default().to_string());
+        return ([("content-type", "image/png")], PNG.to_vec()).into_response();
+    }
     let route = uri.path().trim_start_matches("/api/v10").to_string();
     let auth =
         headers.get("authorization").and_then(|value| value.to_str().ok()).unwrap_or_default();
@@ -366,3 +401,12 @@ async fn rest(
         None => Json(json!({})).into_response(),
     }
 }
+
+/// A 1×1 PNG, the photo every file is.
+pub const PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64, 0x60, 0xf8, 0x5f,
+    0x0f, 0x00, 0x02, 0x87, 0x01, 0x80, 0xeb, 0x47, 0xba, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];

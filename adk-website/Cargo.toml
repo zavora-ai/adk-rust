@@ -80,6 +80,8 @@ schemars = { version = "1.0", features = ["chrono04"] }
 # (spec 3.5 §7.23).
 semver = "1"
 serde.workspace = true
+# A playbook revision's diff of its text (spec 3.5 §7.15).
+similar = "3"
 # The edge's SQLite stores in a served project (spec 3.5 §7.9).
 sqlx = { workspace = true, features = ["sqlite"] }
 serde_json.workspace = true

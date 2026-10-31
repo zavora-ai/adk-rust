@@ -6,7 +6,7 @@
 // The fixture server samples through rmcp's deprecated (SEP-2577) surface, as adk-tool does.
 #![allow(deprecated)]
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -199,9 +199,15 @@ async fn stdio_server() {
 fn server_config() -> McpServerConfig {
     McpServerConfig {
         command: std::env::current_exe().unwrap().display().to_string(),
-        args: ["stdio_server", "--exact", "--ignored", "--quiet", "--test-threads=1"]
-            .map(str::to_string)
-            .to_vec(),
+        args: [
+            "mcp_interaction_tests::stdio_server",
+            "--exact",
+            "--ignored",
+            "--quiet",
+            "--test-threads=1",
+        ]
+        .map(str::to_string)
+        .to_vec(),
         env: HashMap::from([(SERVER_ENV.to_string(), "1".to_string())]),
         ..Default::default()
     }

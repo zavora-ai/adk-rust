@@ -8,7 +8,7 @@
 
 #![cfg(all(feature = "sandbox", feature = "runner", windows))]
 
-mod common;
+use crate::common;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};

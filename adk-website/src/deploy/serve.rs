@@ -215,6 +215,8 @@ async fn start(
         if let Some(entry) = &site.repository {
             site_workflows = site_workflows.repository(site.site.id, entry.clone());
         }
+        // The weekly playbook learning, decided by the owner (spec 3.5 §7.15).
+        site_workflows = site_workflows.learning(site.site.id, site.learning.clone());
         if let Some(check) = site.upkeep(&stores, &options.site) {
             site_workflows = site_workflows.watch(site.site.id, check);
             runs.push(SiteProcessKind::Watch);

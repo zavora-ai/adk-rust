@@ -1,0 +1,3 @@
+# Fixtures compared byte for byte, and a site whose build is: never convert line endings, so
+# a Windows checkout reads what Linux does.
+* -text

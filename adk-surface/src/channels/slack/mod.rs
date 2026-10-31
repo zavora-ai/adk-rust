@@ -237,6 +237,14 @@ impl fmt::Debug for SlackAdapter {
     }
 }
 
+/// What an envelope carries beyond its inbound value.
+pub(crate) struct Carried {
+    /// A pressed button's card.
+    press: Option<Press>,
+    /// The files a message shared.
+    files: Vec<crate::channels::media::FileRef>,
+}
+
 /// Why a socket ended.
 enum Ended {
     /// Slack asked for a new connection.
@@ -327,7 +335,7 @@ impl SlackAdapter {
     }
 
     /// Reads one socket until Slack asks for another or it fails.
-    async fn serve(&self, url: &str, sender: &mpsc::UnboundedSender<Update<Press>>) -> Ended {
+    async fn serve(&self, url: &str, sender: &mpsc::UnboundedSender<Update<Carried>>) -> Ended {
         if let Err(reason) = checked_base(url, "the Slack socket address", true) {
             return Ended::Failed(reason);
         }
@@ -378,7 +386,12 @@ impl SlackAdapter {
             }
             let parsed = wire::parse(&envelope);
             if parsed.inbound.is_some()
-                && sender.send(Update { inbound: parsed.inbound, press: parsed.press }).is_err()
+                && sender
+                    .send(Update {
+                        inbound: parsed.inbound,
+                        press: Some(Carried { press: parsed.press, files: parsed.files }),
+                    })
+                    .is_err()
             {
                 return Ended::Failed("the adapter stopped".into());
             }
@@ -408,7 +421,7 @@ impl SlackAdapter {
 
 #[async_trait]
 impl Taker for SlackAdapter {
-    type Press = Press;
+    type Press = Carried;
 
     fn channel_name(&self) -> &'static str {
         SLACK_CHANNEL
@@ -418,11 +431,21 @@ impl Taker for SlackAdapter {
     async fn take(
         &self,
         gateway: &ChannelGateway,
-        update: &Update<Press>,
+        update: &Update<Carried>,
         paired: bool,
     ) -> adk_kernel::Result<()> {
-        let Some(inbound) = update.inbound.clone() else { return Ok(()) };
-        let press = update.press.as_ref();
+        let Some(mut inbound) = update.inbound.clone() else { return Ok(()) };
+        let carried = update.press.as_ref();
+        let press = carried.and_then(|carried| carried.press.as_ref());
+        // A paired account's images, for a host that takes them; a stranger's are never
+        // downloaded (spec 3.5 §10 X12).
+        let files = carried.map_or(&[][..], |carried| carried.files.as_slice());
+        if paired && !files.is_empty() {
+            let api = &self.inner.api;
+            let attachments =
+                crate::channels::media::fetch_all(files, |file| api.download(file)).await;
+            inbound = inbound.with_attachments(attachments);
+        }
         let card = match (&inbound.body, press) {
             (InboundBody::Answer { decision, .. }, Some(press)) => Some(PressedCard {
                 card: press.card.as_ref().map(|(_, ts)| ts.clone()),
@@ -445,9 +468,10 @@ impl Taker for SlackAdapter {
         Ok(())
     }
 
-    async fn not_taken(&self, update: &Update<Press>) {
+    async fn not_taken(&self, update: &Update<Carried>) {
         let Some(inbound) = &update.inbound else { return };
-        let text = if update.press.is_some() { ANSWER_NOT_TAKEN } else { MESSAGE_NOT_TAKEN };
+        let pressed = update.press.as_ref().is_some_and(|carried| carried.press.is_some());
+        let text = if pressed { ANSWER_NOT_TAKEN } else { MESSAGE_NOT_TAKEN };
         for body in wire::plain(text) {
             if let Err(error) = self.post(&inbound.thread, body).await {
                 tracing::debug!(error = %error, "a person could not be told their message was not taken");

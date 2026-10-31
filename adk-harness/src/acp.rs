@@ -12,22 +12,33 @@ use crate::{
     SuggestedScope,
 };
 
-/// The narrowest rule offered for `request`: a command's two-token prefix, a file's own
-/// folder, a site, or the tool from its exact publisher.
-fn narrowest(request: &ToolConfirmationRequest) -> Option<RuleSuggestion> {
+/// The narrowest rule offered for `request`: a file write's folder rule, a command's
+/// two-token prefix, a site, or the tool from its exact publisher. A file change no folder
+/// rule covers — a delete or a move — gets none.
+fn narrowest(harness: &HarnessAgent, request: &ToolConfirmationRequest) -> Option<RuleSuggestion> {
+    if let Some(folder) = harness.folder_suggestion(request) {
+        return Some(folder);
+    }
     let reach = |suggestion: &RuleSuggestion| -> usize {
         suggestion
             .predicates
             .iter()
             .map(|predicate| match predicate {
                 RulePredicate::ShellPrefix { tokens, .. } => tokens.len(),
-                RulePredicate::PathWithin { dir, .. } if dir == "." => 1,
-                RulePredicate::PathWithin { dir, .. } => 2 + dir.matches('/').count(),
                 RulePredicate::Arg(_) => 1,
+                RulePredicate::PathWithin { .. } | RulePredicate::WritesWithin { .. } => 0,
             })
             .sum()
     };
-    StandingRule::suggestions(request).into_iter().max_by_key(reach)
+    StandingRule::suggestions(request)
+        .into_iter()
+        .filter(|suggestion| {
+            !suggestion
+                .predicates
+                .iter()
+                .any(|predicate| matches!(predicate, RulePredicate::PathWithin { .. }))
+        })
+        .max_by_key(reach)
 }
 
 /// What a rule from `suggestion` covers, completing "Always allow …" (spec 3.3 §8.2): where it
@@ -36,8 +47,14 @@ fn narrowest(request: &ToolConfirmationRequest) -> Option<RuleSuggestion> {
 fn covers(suggestion: &RuleSuggestion) -> StandingOffer {
     let what = match suggestion.predicates.first() {
         Some(RulePredicate::ShellPrefix { .. }) => "for this command",
-        Some(RulePredicate::PathWithin { dir, .. }) if dir == "." => "for this workspace",
-        Some(RulePredicate::PathWithin { .. }) => "for this folder",
+        Some(RulePredicate::PathWithin { dir, .. } | RulePredicate::WritesWithin { dir })
+            if dir == "." =>
+        {
+            "for this workspace"
+        }
+        Some(RulePredicate::PathWithin { .. } | RulePredicate::WritesWithin { .. }) => {
+            "for this folder"
+        }
         Some(RulePredicate::Arg(_)) => "for this site",
         None => "for this person",
     };
@@ -128,7 +145,7 @@ impl StandingPermissions for HarnessAgent {
         if !rules_apply(self) {
             return None;
         }
-        let suggestion = narrowest(request)?;
+        let suggestion = narrowest(self, request)?;
         self.rule_for_held_call(
             request,
             suggestion.clone(),
@@ -202,7 +219,7 @@ impl StandingPermissions for HarnessAgent {
                  decide the call once",
             ));
         }
-        let suggestion = narrowest(request)
+        let suggestion = narrowest(self, request)
             .ok_or_else(|| refused("no standing rule applies to this call; decide it once"))?;
         let decision = match decision {
             ToolConfirmationDecision::Approve => StandingDecision::Allow,

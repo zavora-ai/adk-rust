@@ -1,6 +1,8 @@
 //! Standing rules: "don't ask again" decisions bound to a subject and a tool declaration
 //! (spec 3.1 §7.5).
 
+use std::collections::BTreeMap;
+
 use adk_core::principal::{SubjectKind, SubjectRef};
 use adk_core::{ArgPredicate, STATIC_TOOL_ORIGIN, ToolConfirmationRequest, ToolOrigin};
 use chrono::{DateTime, Utc};
@@ -117,6 +119,17 @@ pub enum OriginPin {
         /// [`ToolOrigin::source`].
         source: String,
     },
+    /// One publisher and one exact declaration for each tool it names: the file-writing
+    /// tools of a folder rule (spec 3.3 §8.2 "Always allow for this folder"). A call is
+    /// covered only through its own tool's declaration, so the rule stops covering a tool
+    /// whose declaration changes, as an [`Exact`](Self::Exact) pin does.
+    #[serde(rename_all = "camelCase")]
+    ExactEach {
+        /// [`ToolOrigin::source`].
+        source: String,
+        /// Each tool's [`ToolOrigin::declaration_digest`], by tool name.
+        declarations: BTreeMap<String, String>,
+    },
 }
 
 impl OriginPin {
@@ -135,13 +148,20 @@ impl OriginPin {
                 *source == origin.source && *declaration_digest == origin.declaration_digest
             }
             Self::AnyDeclaration { source } => *source == origin.source,
+            // The digest covers the declaration's name, so it names the tool as well.
+            Self::ExactEach { source, declarations } => {
+                *source == origin.source
+                    && declarations.values().any(|digest| *digest == origin.declaration_digest)
+            }
         }
     }
 
     /// The pinned publisher.
     pub fn source(&self) -> &str {
         match self {
-            Self::Exact { source, .. } | Self::AnyDeclaration { source } => source,
+            Self::Exact { source, .. }
+            | Self::AnyDeclaration { source }
+            | Self::ExactEach { source, .. } => source,
         }
     }
 }
@@ -266,6 +286,15 @@ pub enum RulePredicate {
     PathWithin {
         /// JSON pointer to the path.
         pointer: String,
+        /// Directory relative to the workspace root; `.` is the root.
+        dir: String,
+    },
+    /// The call only writes files — `write_file`, `edit_file`, or an `apply_patch` that adds
+    /// files or updates them in place — and every path it writes lies within `dir` and is
+    /// not protected, each resolved as `PathWithin` resolves its path. A delete or a move
+    /// never holds (spec 3.3 §8.2 "Always allow for this folder").
+    #[serde(rename_all = "camelCase")]
+    WritesWithin {
         /// Directory relative to the workspace root; `.` is the root.
         dir: String,
     },
@@ -437,7 +466,8 @@ pub struct RuleSuggestion {
     pub scope: SuggestedScope,
     /// Tool-name glob.
     pub tool: String,
-    /// The declaration the rule binds to; always [`OriginPin::Exact`].
+    /// The declaration the rule binds to: [`OriginPin::Exact`], or for a folder rule
+    /// [`OriginPin::ExactEach`] over its file-writing tools.
     pub origin: OriginPin,
     /// Conditions.
     pub predicates: Vec<RulePredicate>,
@@ -702,18 +732,7 @@ impl StandingRule {
                 }],
                 runs_scripts: false,
             }];
-            // The directory every path shares.
-            let dir = paths
-                .iter()
-                .map(|path| {
-                    std::path::Path::new(path.trim_start_matches("./"))
-                        .parent()
-                        .map(|parent| parent.to_string_lossy().into_owned())
-                        .unwrap_or_default()
-                })
-                .reduce(|shared, next| common_dir(&shared, &next))
-                .filter(|parent| !parent.is_empty() && !parent.starts_with('/'));
-            if let Some(dir) = dir {
+            if let Some(dir) = shared_dir(&paths) {
                 out.push(RuleSuggestion {
                     label: format!("{name}: within {dir}/"),
                     scope: SuggestedScope::Session,
@@ -739,6 +758,54 @@ impl StandingRule {
         }]
     }
 
+    /// The rule "Always allow for this folder" makes for `request` (spec 3.3 §8.2): every file
+    /// write within the folder the call writes in — the workspace root for a file there or an
+    /// absolute path — by any of the harness's file-writing tools, `write_file`, `edit_file`
+    /// and `apply_patch`, each pinned to the declaration `origin_of` gives for it; scoped to
+    /// the session, as the edit suggestions are.
+    ///
+    /// `None` when the call is not one of those tools with that declaration, when it deletes
+    /// or moves a file, or when a path it writes is protected or climbs with `..`.
+    pub(crate) fn folder_suggestion(
+        request: &ToolConfirmationRequest,
+        origin_of: impl Fn(&str) -> Option<ToolOrigin>,
+    ) -> Option<RuleSuggestion> {
+        let origin = request.origin.as_ref()?;
+        let name = request.tool_name.as_str();
+        if origin.source != STATIC_TOOL_ORIGIN
+            || !EDIT_TOOLS.contains(&name)
+            || origin_of(name).as_ref() != Some(origin)
+        {
+            return None;
+        }
+        let paths = crate::edits::written_paths(name, &request.args)?;
+        if paths.is_empty()
+            || paths.iter().any(|path| {
+                is_protected_path(path) || path.split(['/', '\\']).any(|part| part == "..")
+            })
+        {
+            return None;
+        }
+        let declarations = EDIT_TOOLS
+            .iter()
+            .filter_map(|tool| Some((tool.to_string(), origin_of(tool)?)))
+            .filter(|(_, origin)| origin.source == STATIC_TOOL_ORIGIN)
+            .map(|(tool, origin)| (tool, origin.declaration_digest))
+            .collect();
+        let (dir, label) = match shared_dir(&paths) {
+            Some(dir) => (dir.clone(), format!("file writes: within {dir}/")),
+            None => (".".to_string(), "file writes: anywhere in the workspace".to_string()),
+        };
+        Some(RuleSuggestion {
+            label,
+            scope: SuggestedScope::Session,
+            tool: "*".into(),
+            origin: OriginPin::ExactEach { source: STATIC_TOOL_ORIGIN.into(), declarations },
+            predicates: vec![RulePredicate::WritesWithin { dir }],
+            runs_scripts: false,
+        })
+    }
+
     /// Whether the rule has expired at `now`.
     ///
     /// # Example
@@ -749,6 +816,21 @@ impl StandingRule {
     pub fn is_expired(&self, now: DateTime<Utc>) -> bool {
         self.expires_at.is_some_and(|at| now >= at)
     }
+}
+
+/// The directory every one of `paths` lies within, relative to the workspace root; `None`
+/// when that is the root itself or a path is absolute.
+fn shared_dir(paths: &[String]) -> Option<String> {
+    paths
+        .iter()
+        .map(|path| {
+            std::path::Path::new(path.trim_start_matches("./"))
+                .parent()
+                .map(|parent| parent.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        })
+        .reduce(|shared, next| common_dir(&shared, &next))
+        .filter(|parent| !parent.is_empty() && !parent.starts_with('/'))
 }
 
 /// The longest directory both `a` and `b` lie within, by whole components.
@@ -800,6 +882,83 @@ mod tests {
         let protected = ToolConfirmationRequest::new("write_file", json!({ "path": "AGENTS.md" }))
             .with_origin(origin);
         assert!(StandingRule::suggestions(&protected).is_empty());
+    }
+
+    /// The harness's three file-writing tools, as `folder_suggestion` looks them up.
+    fn writer(name: &str) -> Option<ToolOrigin> {
+        EDIT_TOOLS
+            .contains(&name)
+            .then(|| ToolOrigin::new("static", &json!({ "name": name }), None))
+    }
+
+    #[test]
+    fn the_folder_rule_pins_every_file_writing_tool_and_names_the_folder() {
+        let request = ToolConfirmationRequest::new("write_file", json!({ "path": "notes/a.md" }))
+            .with_origin(writer("write_file").unwrap());
+        let folder = StandingRule::folder_suggestion(&request, writer).unwrap();
+        let declarations: BTreeMap<String, String> = EDIT_TOOLS
+            .iter()
+            .map(|tool| (tool.to_string(), writer(tool).unwrap().declaration_digest))
+            .collect();
+        assert_eq!(
+            folder,
+            RuleSuggestion {
+                label: "file writes: within notes/".into(),
+                scope: SuggestedScope::Session,
+                tool: "*".into(),
+                origin: OriginPin::ExactEach { source: "static".into(), declarations },
+                predicates: vec![RulePredicate::WritesWithin { dir: "notes".into() }],
+                runs_scripts: false,
+            }
+        );
+        // Every tool it pins is admitted, and only at its declaration.
+        for tool in EDIT_TOOLS {
+            assert!(folder.origin.admits(&writer(tool).unwrap()), "{tool}");
+        }
+        let changed = ToolOrigin::new("static", &json!({ "name": "edit_file", "v": 2 }), None);
+        assert!(!folder.origin.admits(&changed));
+        let other = ToolOrigin::new("static", &json!({ "name": "read_file" }), None);
+        assert!(!folder.origin.admits(&other));
+        let mcp = ToolOrigin { source: "mcp:fs".into(), ..writer("write_file").unwrap() };
+        assert!(!folder.origin.admits(&mcp));
+
+        // A file at the root is the workspace's folder.
+        let root = ToolConfirmationRequest::new("edit_file", json!({ "path": "a.md" }))
+            .with_origin(writer("edit_file").unwrap());
+        let workspace = StandingRule::folder_suggestion(&root, writer).unwrap();
+        assert_eq!(workspace.label, "file writes: anywhere in the workspace");
+        assert_eq!(workspace.predicates, [RulePredicate::WritesWithin { dir: ".".into() }]);
+    }
+
+    #[test]
+    fn no_folder_rule_for_a_delete_a_move_an_escape_or_another_declaration() {
+        let patch = |text: &str| {
+            ToolConfirmationRequest::new("apply_patch", json!({ "patch": text }))
+                .with_origin(writer("apply_patch").unwrap())
+        };
+        let add = patch("*** Begin Patch\n*** Add File: notes/a.md\n+x\n*** End Patch");
+        assert!(StandingRule::folder_suggestion(&add, writer).is_some());
+        for refused in [
+            patch("*** Begin Patch\n*** Delete File: notes/a.md\n*** End Patch"),
+            patch(
+                "*** Begin Patch\n*** Update File: notes/a.md\n*** Move to: notes/b.md\n@@\n-x\n+y\n*** End Patch",
+            ),
+            ToolConfirmationRequest::new("write_file", json!({ "path": "notes/../a.md" }))
+                .with_origin(writer("write_file").unwrap()),
+            ToolConfirmationRequest::new("write_file", json!({ "path": "notes/AGENTS.md" }))
+                .with_origin(writer("write_file").unwrap()),
+            ToolConfirmationRequest::new("write_file", json!({ "path": "notes/a.md" }))
+                .with_origin(ToolOrigin::new(
+                    "static",
+                    &json!({ "name": "write_file", "v": 2 }),
+                    None,
+                )),
+            ToolConfirmationRequest::new("write_file", json!({ "path": "notes/a.md" })),
+            ToolConfirmationRequest::new("bash", json!({ "command": "touch notes/a.md" }))
+                .with_origin(ToolOrigin::new("static", &json!({ "name": "bash" }), None)),
+        ] {
+            assert_eq!(StandingRule::folder_suggestion(&refused, writer), None, "{refused:?}");
+        }
     }
 
     #[test]

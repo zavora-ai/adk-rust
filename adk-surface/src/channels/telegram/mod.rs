@@ -638,8 +638,10 @@ impl TelegramAdapter {
             }
             return Ok(());
         };
-        // A photo's bytes, for a host that takes them (spec 3.5 §10 X12).
-        if let Some(photo) = &parsed.photo
+        // A paired account's photo, for a host that takes it; a stranger's is never
+        // downloaded (spec 3.5 §10 X12).
+        if paired
+            && let Some(photo) = &parsed.photo
             && let Some(attachment) = self.inner.api.download(photo).await
         {
             inbound = inbound.with_attachments([attachment]);

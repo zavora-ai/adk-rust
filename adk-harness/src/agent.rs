@@ -1304,6 +1304,11 @@ impl HarnessAgent {
         if !kind.rule_eligible() || crate::TableRow::of(&kind, protected).is_non_waivable() {
             return Err(rule_refused("no standing rule applies to this call; decide it once"));
         }
+        // "Always allow for this folder": the harness's file-writing tools, each pinned to
+        // its declaration (spec 3.3 §8.2).
+        if self.folder_suggestion(request).as_ref() == Some(&suggestion) {
+            return Ok(suggestion.into_rule(owner, decision, Some(request.fingerprint())));
+        }
         if !suggestion.origin.admits(origin)
             || !matches!(suggestion.origin, crate::OriginPin::Exact { .. })
             || suggestion.tool != request.tool_name
@@ -1318,6 +1323,32 @@ impl HarnessAgent {
             return Err(rule_refused("only a suggested rule can be remembered as an allow rule"));
         }
         Ok(suggestion.into_rule(owner, decision, Some(request.fingerprint())))
+    }
+
+    /// The rule "Always allow for this folder" makes for the held call `request`
+    /// (spec 3.3 §8.2): every call of this harness's file-writing tools — `write_file`,
+    /// `edit_file`, and an `apply_patch` that adds files or updates them in place — whose
+    /// paths all lie within the folder `request` writes in, each tool pinned to its exact
+    /// declaration, for the session. Paths outside the folder, `..` and symlink escapes,
+    /// protected paths, deletes, moves, the shell and every other tool still ask.
+    ///
+    /// `None` when `request` is not a file write of this harness's own tools: another tool,
+    /// another declaration, a delete or a move, a protected path or a path with `..`.
+    /// [`rule_for_held_call`](Self::rule_for_held_call) makes the rule from it.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let folder = harness.folder_suggestion(&held.request).expect("a file write");
+    /// assert_eq!(folder.label, "file writes: within notes/");
+    /// let rule = harness.rule_for_held_call(&held.request, folder, StandingDecision::Allow, &owner)?;
+    /// harness.grant_rule(rule, "web", Some(&held.request)).await?;
+    /// ```
+    pub fn folder_suggestion(
+        &self,
+        request: &adk_core::ToolConfirmationRequest,
+    ) -> Option<crate::RuleSuggestion> {
+        crate::StandingRule::folder_suggestion(request, |name| self.runtime.toolset.origin_of(name))
     }
 
     /// Stores `rule`, recording `harness.rule.created` with `surface` (such as `rest`) in

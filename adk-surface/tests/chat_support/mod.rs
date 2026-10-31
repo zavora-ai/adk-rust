@@ -85,3 +85,52 @@ pub fn live_env(names: &[&str]) -> Option<Vec<String>> {
     }
     names.iter().map(|name| std::env::var(name).ok().filter(|value| !value.is_empty())).collect()
 }
+
+/// Captures every inbound value a gateway is given, and leaves each to it.
+#[derive(Default)]
+pub struct Capture(pub std::sync::Mutex<Vec<adk_kernel::channels::ChannelInbound>>);
+
+#[async_trait::async_trait]
+impl adk_kernel::channels::InboundRoute for Capture {
+    async fn take(
+        &self,
+        inbound: &adk_kernel::channels::ChannelInbound,
+        _binding: Option<&ChannelBinding>,
+    ) -> adk_kernel::Result<bool> {
+        self.0.lock().unwrap().push(inbound.clone());
+        Ok(false)
+    }
+}
+
+/// A gateway over the contract suite's kernel double with `sink`, whose route captures every
+/// inbound value; `account` on `channel` is paired from `thread`.
+pub async fn capturing(
+    sink: Arc<dyn ChannelSink>,
+    channel: &str,
+    account: &str,
+    thread: &str,
+) -> (Arc<ContractHost>, Arc<Capture>, ChannelGateway) {
+    let host = Arc::new(ContractHost::new());
+    let bindings = Arc::new(InMemoryChannelBindingStore::new());
+    pair(&bindings, channel, account, thread, "ana").await;
+    let capture = Arc::new(Capture::default());
+    let gateway = ChannelGateway::builder(host.clone(), bindings)
+        .sink(sink)
+        .home_url(HOME)
+        .route(capture.clone())
+        .build();
+    gateway.start().await.unwrap();
+    (host, capture, gateway)
+}
+
+/// Waits until `capture` holds `count` inbound values, and returns them.
+pub async fn captured(
+    capture: &Capture,
+    count: usize,
+) -> Vec<adk_kernel::channels::ChannelInbound> {
+    eventually(&format!("{count} inbound values"), || async {
+        let taken = capture.0.lock().unwrap().clone();
+        (taken.len() >= count).then_some(taken)
+    })
+    .await
+}

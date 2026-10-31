@@ -6,8 +6,7 @@
 
 #![cfg(feature = "website")]
 
-mod common;
-mod website_common;
+use crate::website_common;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

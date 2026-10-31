@@ -73,7 +73,6 @@ jobs:
       with:
         components: clippy,rustfmt
         cache-key: desktop
-        cache-save: ${{ github.event_name == 'push' }}
 
     - name: Setup Node.js
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -134,7 +133,8 @@ jobs:
         { echo '### Tray end to end'; echo '```json'; cat "$DESKTOP_E2E_OUT/tray_end_to_end/tray.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
     # The §12 store gate: the one-agent steps against `adk-rust up` on SQLite and PostgreSQL,
-    # with the shell started with the kernel's token.
+    # with the shell started with the kernel's token. The home sits beside the workspace: `up`
+    # refuses a home inside the folder it snapshots (spec 3.1 I68).
     - name: Store gate (adk-rust up, SQLite and PostgreSQL)
       timeout-minutes: 20
       run: |
@@ -148,7 +148,7 @@ jobs:
         ]
         JSON
         token="$(openssl rand -hex 16)"
-        up="$CARGO_TARGET_DIR/debug/adk-rust --model-script $script up --home {workspace}/home --dir {workspace} --mode ask --no-memory --no-consolidation --auth-token $token"
+        up="$CARGO_TARGET_DIR/debug/adk-rust --model-script $script up --home {workspace}.home --dir {workspace} --mode ask --no-memory --no-consolidation --auth-token $token"
         DESKTOP_E2E_STORE=sqlite adk-surface/desktop/e2e.sh store_gate http://127.0.0.1:8793/ \
           "$up --bind 127.0.0.1:8793" "$token"
         mv "$DESKTOP_E2E_OUT/store_gate" "$DESKTOP_E2E_OUT/store_gate-sqlite"
@@ -179,7 +179,6 @@ jobs:
       uses: ./.github/actions/setup-rust
       with:
         cache-key: desktop-${{ matrix.os }}
-        cache-save: ${{ github.event_name == 'push' }}
         neutralize-wild: 'false'
 
     - name: Setup Node.js

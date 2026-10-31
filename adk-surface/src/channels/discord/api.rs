@@ -139,6 +139,23 @@ impl DiscordApi {
         })
     }
 
+    /// Downloads `file`, an attachment of a message, from Discord's CDN — or the API
+    /// address's own host, a test double — without the bot token.
+    pub(crate) async fn download(
+        &self,
+        file: crate::channels::media::FileRef,
+    ) -> Option<(String, Vec<u8>)> {
+        let url = reqwest::Url::parse(&file.url).ok()?;
+        let base = reqwest::Url::parse(&self.base).ok()?;
+        let cdn = url.scheme() == "https"
+            && matches!(url.host_str(), Some("cdn.discordapp.com" | "media.discordapp.net"));
+        if !cdn && url.origin() != base.origin() {
+            tracing::debug!("a discord attachment served from another host was not downloaded");
+            return None;
+        }
+        crate::channels::media::download(self.client.get(url), file.media_type.as_deref()).await
+    }
+
     fn redact(&self, text: &str) -> String {
         text.replace(&self.token, "[token]")
     }

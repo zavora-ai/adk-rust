@@ -3,7 +3,7 @@
 
 #![cfg(all(feature = "team", feature = "runner"))]
 
-mod common;
+use crate::common;
 
 use std::path::Path;
 use std::sync::Arc;

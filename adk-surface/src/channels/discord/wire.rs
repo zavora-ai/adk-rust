@@ -7,6 +7,7 @@ use chrono::FixedOffset;
 use serde_json::{Value, json};
 
 use super::DISCORD_CHANNEL;
+use crate::channels::media::FileRef;
 use crate::channels::shared::{
     Heading, Piece, Words, buttons, card_words, chunks, clean_inbound, parse_callback, truncate,
 };
@@ -46,6 +47,8 @@ pub(crate) struct Press {
 pub(crate) struct Parsed {
     pub(crate) inbound: Option<ChannelInbound>,
     pub(crate) press: Option<Press>,
+    /// The files a message carried (spec 3.5 §10 X12).
+    pub(crate) files: Vec<FileRef>,
     pub(crate) interaction: Option<Interaction>,
 }
 
@@ -61,7 +64,10 @@ fn text_of(value: &Value) -> &str {
 pub(crate) fn parse(payload: &Value) -> Parsed {
     let d = &payload["d"];
     match payload["t"].as_str() {
-        Some("MESSAGE_CREATE") => Parsed { inbound: typed(d), ..Parsed::default() },
+        Some("MESSAGE_CREATE") => match typed(d) {
+            Some((inbound, files)) => Parsed { inbound: Some(inbound), files, ..Parsed::default() },
+            None => Parsed::default(),
+        },
         Some("INTERACTION_CREATE") => interaction(d),
         _ => Parsed::default(),
     }
@@ -75,7 +81,7 @@ fn display_name(user: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-fn typed(d: &Value) -> Option<ChannelInbound> {
+fn typed(d: &Value) -> Option<(ChannelInbound, Vec<FileRef>)> {
     let author = &d["author"];
     // Type 0 is a message and 19 a reply; servers have a guild id.
     let kind = d["type"].as_u64().unwrap_or_default();
@@ -90,12 +96,30 @@ fn typed(d: &Value) -> Option<ChannelInbound> {
     if user.is_empty() || channel.is_empty() || id.is_empty() {
         return None;
     }
-    let text = clean_inbound(text_of(&d["content"]))?;
+    let files: Vec<FileRef> = d["attachments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|file| {
+            Some(FileRef {
+                url: file["url"].as_str()?.to_string(),
+                media_type: file["content_type"].as_str().map(str::to_string),
+                name: text_of(&file["filename"]).to_string(),
+                size: file["size"].as_u64(),
+            })
+        })
+        .collect();
+    let text = match clean_inbound(text_of(&d["content"])) {
+        Some(text) => text,
+        None if !files.is_empty() => String::new(),
+        None => return None,
+    };
     let inbound = ChannelInbound::text(DISCORD_CHANNEL, user, channel, id, text);
-    Some(match display_name(author) {
+    let inbound = match display_name(author) {
         Some(name) => inbound.with_display_name(name),
         None => inbound,
-    })
+    };
+    Some((inbound, files))
 }
 
 /// A component press or a command; only a pressed answer button answers a decision (S-I4).
@@ -154,7 +178,7 @@ fn interaction(d: &Value) -> Parsed {
         Some(name) => inbound.with_display_name(name),
         None => inbound,
     };
-    Parsed { inbound: Some(inbound), press, interaction: Some(interaction) }
+    Parsed { inbound: Some(inbound), press, interaction: Some(interaction), files: Vec::new() }
 }
 
 /// Text for Discord's markdown (S-I9): every character that formats, links, quotes, lists or
