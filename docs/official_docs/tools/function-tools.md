@@ -771,7 +771,7 @@ let update = FunctionTool::new("update", "Update record", |_ctx, _args| async mo
 });
 ```
 
-When `ToolExecutionStrategy::Auto` is active, the dispatch loop keeps the LLM-returned order. A run of adjacent calls whose selected tools return `true` from both `is_read_only()` and `is_concurrency_safe()` runs concurrently; every other call runs alone, in its place, so a read listed after a write sees the write. `ToolExecutionStrategy::Parallel` is an explicit override that bypasses these signals, so its caller owns concurrency safety.
+When `ToolExecutionStrategy::Auto` is active, the dispatch loop keeps the LLM-returned order. A run of adjacent calls whose selected tools return `true` from both `is_read_only()` and `is_concurrency_safe()` runs concurrently; every other call runs alone, in its place: it starts after the calls listed before it finish, and the calls listed after it wait for it. The guarantee is ordering only — a write that is held for confirmation, refused by policy, answered by a before-tool callback or failed has changed nothing when the next call runs. `ToolExecutionStrategy::Parallel` is an explicit override that bypasses these signals, so its caller owns concurrency safety.
 
 `.with_effect(ToolEffect::Idempotent)` declares a mutation tool safe to repeat, so a retry budget may retry it. Without it, a read-only tool is `ReadOnly` and every other tool is `NonIdempotent` and never retried. See [Tool Effects](tool-effects.md).
 
