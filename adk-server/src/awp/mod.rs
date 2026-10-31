@@ -443,6 +443,9 @@ impl AwpEdgeBuilder {
     }
 
     /// Sets the consent scopes, policy versions and the subject session key (spec 3.5 §7.5).
+    ///
+    /// The subject key also keys the ids of public visitors, so a key kept across restarts
+    /// keeps their conversations; the default key is random per process.
     #[must_use]
     pub fn consent(mut self, consent: ConsentConfig) -> Self {
         self.consent = consent;
@@ -469,7 +472,8 @@ impl AwpEdgeBuilder {
     /// # Errors
     ///
     /// An `AdkError` when the public URL is not an `http` or `https` origin, the principal's id
-    /// is invalid, or the MCP server or the public agent's runner cannot be built.
+    /// is invalid, or the event delivery client, the MCP server or the public agent's runner
+    /// cannot be built.
     pub fn build(self) -> Result<AwpEdge, AdkError> {
         let invalid = |code: &'static str, message: String| {
             AdkError::new(ErrorComponent::Server, ErrorCategory::InvalidInput, code, message)
@@ -496,7 +500,7 @@ impl AwpEdgeBuilder {
                 .unwrap_or_else(|| Arc::new(InMemoryEventLog::new())),
             self.events,
             self.public_url.as_str(),
-        );
+        )?;
         control.attach_events(events.clone());
         let references = events.references();
         let principal = match self.principal {
@@ -576,6 +580,7 @@ impl AwpEdgeBuilder {
                     "awp-public",
                     audit.as_ref(),
                     watch,
+                    public::visitor_key(&self.consent.subject_key),
                 )?))
             }
         };

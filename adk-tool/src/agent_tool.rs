@@ -241,6 +241,7 @@ fn delegated_run_config(parent: RunConfig) -> RunConfig {
         approval_service,
         durable_run_id,
         request_context,
+        request_metadata,
         tool_confirmation_timeout,
         spend_ledger,
         llm_spend_estimate,
@@ -279,8 +280,9 @@ fn delegated_run_config(parent: RunConfig) -> RunConfig {
         approval_store,
         approval_service,
         durable_run_id,
-        // The delegate acts for the caller's authenticated user.
+        // The delegate acts for the caller's authenticated user, in the same request.
         request_context,
+        request_metadata,
         tool_confirmation_timeout,
         spend_ledger,
         llm_spend_estimate,

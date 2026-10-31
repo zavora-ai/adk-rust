@@ -22,8 +22,8 @@ use std::sync::Arc;
 use adk_awp::v2::capability::META_TIER;
 use adk_core::audit_log::AuditTrail;
 use adk_core::{
-    AdkError, Agent, Content, Llm, Part, PolicyCall, PolicyDecision, RequestContext, Result,
-    RunConfig, SessionId, ToolPolicy, ToolPolicyRequest, UserId,
+    AdkError, Agent, Content, Llm, Part, PolicyCall, PolicyDecision, Result, RunConfig, SessionId,
+    ToolPolicy, ToolPolicyRequest, UserId,
 };
 use adk_drivers::ThreadReplier;
 use adk_harness::website::SitePartitions;
@@ -295,14 +295,8 @@ impl SiteInbox {
             (META_BINDING.to_string(), message.channel.clone()),
             (META_LIMIT_KEY.to_string(), format!("{}:{}", message.channel, message.account)),
         ]);
-        let config = RunConfig {
-            request_context: Some(RequestContext {
-                user_id: user.clone(),
-                scopes: Vec::new(),
-                metadata,
-            }),
-            ..RunConfig::default()
-        };
+        // A channel account is a stranger's claim, not an authenticated identity.
+        let config = RunConfig { request_metadata: metadata, ..RunConfig::default() };
         let mut events = self
             .runner
             .run_with_config(

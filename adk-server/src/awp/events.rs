@@ -11,7 +11,8 @@
 //! Subscription routes need tier `known` or above through Web Bot Auth or OAuth; a
 //! subscription belongs to the requester that created it. Delivery URLs must be `https` and
 //! public: the edge refuses loopback, private and link-local addresses when it registers a URL
-//! and when it connects.
+//! and when it connects. An edge whose delivery client cannot be built with that check does
+//! not build.
 //!
 //! Each delivery is a Standard Webhooks message — `webhook-id` (the event id),
 //! `webhook-timestamp`, `webhook-signature` — with `AWP-Version: 2.0`. A failed delivery is
@@ -450,12 +451,18 @@ fn jittered(wait: Duration) -> Duration {
 }
 
 impl EdgeEvents {
+    /// The edge's events over `subscriptions` and `log`.
+    ///
+    /// # Errors
+    ///
+    /// `awp.events.client_unavailable` when the delivery client cannot be built; a default
+    /// client in its place would skip the egress check.
     pub(crate) fn new(
         subscriptions: Arc<dyn SubscriptionStore>,
         log: Arc<dyn EventLog>,
         config: EventsConfig,
         base_url: &str,
-    ) -> Self {
+    ) -> adk_core::Result<Self> {
         let mut builder = reqwest::Client::builder()
             .timeout(config.attempt_timeout)
             .redirect(reqwest::redirect::Policy::none())
@@ -463,11 +470,19 @@ impl EdgeEvents {
         if !config.egress.allow_private {
             builder = builder.no_proxy().dns_resolver(Arc::new(PublicOnly));
         }
-        let client = builder.build().unwrap_or_else(|error| {
-            tracing::error!(error = %error, "awp event client failed to build; using the default");
-            reqwest::Client::new()
-        });
-        Self {
+        let client = builder.build().map_err(|error| {
+            adk_core::AdkError::new(
+                adk_core::ErrorComponent::Server,
+                adk_core::ErrorCategory::Internal,
+                "awp.events.client_unavailable",
+                format!(
+                    "the AWP event delivery client could not be built ({error}); the edge does \
+                     not deliver events without its egress check. Fix the TLS setup the error \
+                     names, such as a native root certificate store with no valid certificate"
+                ),
+            )
+        })?;
+        Ok(Self {
             inner: Arc::new(Inner {
                 subscriptions,
                 log,
@@ -478,7 +493,7 @@ impl EdgeEvents {
                 references: Arc::default(),
                 last_purge: Mutex::new(Utc::now()),
             }),
-        }
+        })
     }
 
     /// The consent-reference index, kept beside the events.
