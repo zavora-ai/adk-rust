@@ -8,9 +8,12 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use adk_core::{ManualClock, SubjectRef};
-use adk_kernel::charter::{InMemoryKpiStore, KpiSource, KpiTracker, SiteProcessKind};
-use adk_kernel::wake::Wake;
+use adk_core::{InMemoryRunStore, ManualClock, SubjectRef};
+use adk_kernel::Kernel;
+use adk_kernel::charter::{
+    CharterKit, InMemoryKpiStore, InMemorySignalStore, KpiSource, KpiTracker, SiteProcessKind,
+};
+use adk_kernel::wake::{Trigger, Wake};
 use adk_payments::wallet::{
     InMemoryWalletProvider, InMemoryWalletStore, Wallet, WalletKpiSource, WalletPolicy,
 };
@@ -97,22 +100,40 @@ async fn a_scaffolded_project_loads_and_builds_with_its_theme() {
 async fn the_jobs_become_kernel_processes_and_the_digest_runs_as_a_workflow() {
     let site = Site::new(SiteKind::Business, "Juniper Bakery", "juniper.example", &["en"]).await;
     let partition = site.partitions.back_office().id.clone();
-    let processes = jobs::processes(&site.team, &site.template.jobs(), &site.site.name, &partition);
+    let processes = jobs::processes(&site.team, &site.template.jobs());
     let kinds: BTreeMap<SiteProcessKind, &jobs::SiteProcess> =
         processes.iter().map(|p| (p.kind, p)).collect();
     assert_eq!(kinds.len(), 7, "a business runs every site process");
     assert_eq!(kinds[&SiteProcessKind::Probe].target, PROBE_WORKFLOW);
     assert_eq!(kinds[&SiteProcessKind::Digest].target, DIGEST_WORKFLOW);
     assert_eq!(kinds[&SiteProcessKind::Outreach].target, "revenue");
+    // The charter kit binds each job as a standing trigger of the back office.
+    let kit = processes.iter().fold(
+        CharterKit::new(
+            site.site.id,
+            site.site.name.as_str(),
+            partition.clone(),
+            Arc::new(InMemorySignalStore::new()),
+        ),
+        |kit, process| kit.job(process.kind, process.target.clone(), process.input.clone()),
+    );
+    let kernel = kit
+        .install(Kernel::builder().run_store(Arc::new(InMemoryRunStore::new())))
+        .build()
+        .unwrap();
+    let triggers: BTreeMap<&str, &Trigger> =
+        kernel.wake_router().triggers().iter().map(|t| (t.name.as_str(), t)).collect();
     assert!(
-        matches!(&kinds[&SiteProcessKind::Probe].trigger.wake, Wake::Cron { expr, .. } if expr == "0 */5 * * * *")
+        matches!(&triggers["site.probe"].wake, Wake::Cron { expr, .. } if expr == "0 */5 * * * *")
     );
     assert!(
-        matches!(&kinds[&SiteProcessKind::Content].trigger.wake, Wake::Signal { kind, .. } if kind == "content_gap")
+        matches!(&triggers["site.content"].wake, Wake::Signal { kind, .. } if kind == "content_gap")
     );
     for process in &processes {
-        assert_eq!(process.trigger.partition, partition, "the back office runs them");
-        assert_eq!(process.trigger.run.input["playbook"], jobs::job(process.job).unwrap().playbook);
+        let trigger = triggers[process.kind.as_str()];
+        assert_eq!(trigger.partition, partition, "the back office runs them");
+        assert_eq!(trigger.run.input["playbook"], jobs::job(process.job).unwrap().playbook);
+        assert_eq!(trigger.run.user_id, "site");
     }
 
     let inputs = CharterInputs::new(

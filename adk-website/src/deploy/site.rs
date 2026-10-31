@@ -937,30 +937,26 @@ impl RunningSite {
         &self.triggers
     }
 
-    /// Starts the site's background work: the update engine on its schedule, measurement
-    /// every `idle` (AEO once a day), and the edge's trust resolver.
+    /// Starts the site's background work: the update engine on its schedule, AEO once a day
+    /// (checked every `idle`), and the edge's trust resolver. The KPI tracker runs as the
+    /// kernel's `kernel.kpi` process ([`CharterKit`](adk_kernel::charter::CharterKit)).
     pub fn start(&mut self, idle: Duration) {
         self.tasks.push(self.driver.clone().spawn(idle));
-        let tracker = self.tracker.clone();
-        let aeo = self.aeo.take();
-        self.tasks.push(tokio::spawn(async move {
-            let mut last_aeo: Option<chrono::NaiveDate> = None;
-            loop {
-                if let Err(error) = tracker.tick().await {
-                    tracing::warn!(error = %error, "the KPI tracker's tick failed");
-                }
-                let today = chrono::Utc::now().date_naive();
-                if let Some(aeo) = &aeo
-                    && last_aeo != Some(today)
-                {
-                    match aeo.run().await {
-                        Ok(_) => last_aeo = Some(today),
-                        Err(error) => tracing::warn!(error = %error, "AEO tracking failed"),
+        if let Some(aeo) = self.aeo.take() {
+            self.tasks.push(tokio::spawn(async move {
+                let mut last_aeo: Option<chrono::NaiveDate> = None;
+                loop {
+                    let today = chrono::Utc::now().date_naive();
+                    if last_aeo != Some(today) {
+                        match aeo.run().await {
+                            Ok(_) => last_aeo = Some(today),
+                            Err(error) => tracing::warn!(error = %error, "AEO tracking failed"),
+                        }
                     }
+                    tokio::time::sleep(idle).await;
                 }
-                tokio::time::sleep(idle).await;
-            }
-        }));
+            }));
+        }
         // The Inbox reads the site's email while the site serves; the cursor survives a
         // restart, so no message is read twice (spec 3.5 §7.19).
         if let (Some(inbox), Some(outbox)) = (self.inbox.clone(), self.outbox.clone()) {

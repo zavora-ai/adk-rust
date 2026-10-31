@@ -13,6 +13,7 @@
 //! | [`AutonomyStore`], [`AutonomyLadder`], [`JobAutonomy`], [`AutonomyChange`], [`JobDecision`], [`OwnerDecision`], [`PromotionPolicy`] | Each job's autonomy level and history: promotion only by an owner's decision, demotion one level on a breach, two rejections in a row or an incident | §7.11, A-I13 |
 //! | [`SignalStore`], [`SignalSink`], [`SignalRecord`], [`SignalSourceTool`] | Typed signals filed in the back office's agenda as [`AgendaOrigin::Signal`](crate::AgendaOrigin::Signal) items, counted by kind and topic, rate-limited per source, waking [`Wake::Signal`](crate::Wake::Signal) sleepers; never a crossing | §7.10, A-I3 |
 //! | [`SiteProcessKind`] | The site's process kinds, `site.probe` to `site.digest` | §7.11, §7.19 |
+//! | [`CharterKit`] | Installs a site's jobs, KPI tracker and signals on a kernel: each kind bound to the product's target, the tracker as the `kernel.kpi` process, the unbound kinds in the kernel's inventory | §7.10, §7.11, §7.20 |
 //! | [`CharterEvent`], [`CharterEventSink`] | Commits, baselines, breaches, pauses and autonomy changes, each with its urgency | §7.21 |
 //!
 //! Every store has in-memory, SQLite, PostgreSQL and Redis backends that pass one
@@ -44,6 +45,7 @@ use uuid::Uuid;
 
 mod autonomy;
 mod directory;
+mod kit;
 mod kpi;
 mod signal;
 mod site;
@@ -56,6 +58,7 @@ pub use autonomy::{
     JobDecision, OwnerDecision, PromotionEligibility, PromotionPolicy, ladder_rank,
 };
 pub use directory::{CharterDirectory, chain_policy, group_role, role_group};
+pub use kit::CharterKit;
 pub use kpi::{
     GuardrailState, KpiAggregate, KpiPeriod, KpiSample, KpiState, KpiStore, aggregate, period_start,
 };
