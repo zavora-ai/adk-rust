@@ -469,7 +469,8 @@ impl AwpEdgeBuilder {
     /// # Errors
     ///
     /// An `AdkError` when the public URL is not an `http` or `https` origin, the principal's id
-    /// is invalid, or the MCP server or the public agent's runner cannot be built.
+    /// is invalid, or the event delivery client, the MCP server or the public agent's runner
+    /// cannot be built.
     pub fn build(self) -> Result<AwpEdge, AdkError> {
         let invalid = |code: &'static str, message: String| {
             AdkError::new(ErrorComponent::Server, ErrorCategory::InvalidInput, code, message)
@@ -496,7 +497,7 @@ impl AwpEdgeBuilder {
                 .unwrap_or_else(|| Arc::new(InMemoryEventLog::new())),
             self.events,
             self.public_url.as_str(),
-        );
+        )?;
         control.attach_events(events.clone());
         let references = events.references();
         let principal = match self.principal {
