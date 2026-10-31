@@ -16,14 +16,18 @@ use async_stream::stream;
 use std::{collections::HashMap, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
-/// A run currently in flight, tracked so it can be interrupted.
+/// A run currently in flight, tracked so it can be interrupted and steered.
 ///
 /// Keyed by run ID rather than session ID: a session ID is only unique within an
 /// app and user, and one identity may have several runs in flight at once.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct ActiveRun {
     identity: adk_core::AdkIdentity,
     token: CancellationToken,
+    inbox: adk_core::SteeringInbox,
+    /// The run's context, which plugins screen a steering message with.
+    #[cfg(feature = "plugins")]
+    scope: RunScope,
 }
 
 /// Registry of in-flight runs, keyed by run ID.
@@ -255,13 +259,15 @@ async fn screen_unscreened_messages(
     Ok(replacements)
 }
 
-/// Deregisters a run when its event stream is dropped.
+/// Deregisters a run when its event stream is dropped, and returns the steering messages
+/// no safe point took.
 ///
 /// Removal is by run ID, so a finishing run can never deregister a different run
 /// that happens to share the same session ID.
 struct ActiveRunCleanup {
     active_runs: ActiveRuns,
     run_id: u64,
+    inbox: adk_core::SteeringInbox,
 }
 
 /// A newly registered runner invocation and its event stream.
@@ -298,6 +304,9 @@ impl Drop for ActiveRunCleanup {
     fn drop(&mut self) {
         let mut runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
         runs.remove(&self.run_id);
+        drop(runs);
+        // Deregistered first, so `steer` either finds the run before this or not at all.
+        self.inbox.close();
     }
 }
 
@@ -993,11 +1002,19 @@ impl Runner {
             None => CancellationToken::new(),
         };
         let run_id = self.next_run_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let steering_inbox = adk_core::SteeringInbox::new();
+        let run_scope = RunScope::default();
         {
             let mut runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
             runs.insert(
                 run_id,
-                ActiveRun { identity: identity.clone(), token: session_token.clone() },
+                ActiveRun {
+                    identity: identity.clone(),
+                    token: session_token.clone(),
+                    inbox: steering_inbox.clone(),
+                    #[cfg(feature = "plugins")]
+                    scope: run_scope.clone(),
+                },
             );
         }
         let active_runs = self.active_runs.clone();
@@ -1007,10 +1024,13 @@ impl Runner {
         // as `run` is called, so deregistration must also survive a stream that is
         // dropped before it is ever polled. Moving the guard into the generator
         // keeps it alive exactly as long as the stream.
-        let cleanup = ActiveRunCleanup { active_runs: active_runs.clone(), run_id };
+        let cleanup = ActiveRunCleanup {
+            active_runs: active_runs.clone(),
+            run_id,
+            inbox: steering_inbox.clone(),
+        };
         let stop_invocation_id = invocation_id.to_string();
         let stop_default_author = self.root_agent.name().to_string();
-        let run_scope = RunScope::default();
         let mut finish = RunFinish {
             scope: run_scope.clone(),
             #[cfg(feature = "plugins")]
@@ -1175,7 +1195,9 @@ impl Runner {
             }
 
             // Apply run config (streaming mode, etc.)
-            invocation_ctx = invocation_ctx.with_run_config(run_config.clone());
+            invocation_ctx = invocation_ctx
+                .with_run_config(run_config.clone())
+                .with_steering_inbox(steering_inbox.clone());
 
             // Apply request context from auth middleware bridge if present
             if let Some(rc) = request_context.clone() {
@@ -1282,7 +1304,9 @@ impl Runner {
                         if let Some(memory) = memory_service_clone.clone() {
                             refreshed_ctx = refreshed_ctx.with_memory(memory);
                         }
-                        refreshed_ctx = refreshed_ctx.with_run_config(run_config.clone());
+                        refreshed_ctx = refreshed_ctx
+                            .with_run_config(run_config.clone())
+                            .with_steering_inbox(steering_inbox.clone());
                         if let Some(rc) = request_context.clone() {
                             refreshed_ctx = refreshed_ctx.with_request_context(rc);
                         }
@@ -1438,7 +1462,9 @@ impl Runner {
                     if let Some(memory) = memory_service_clone.clone() {
                         refreshed_ctx = refreshed_ctx.with_memory(memory);
                     }
-                    refreshed_ctx = refreshed_ctx.with_run_config(run_config.clone());
+                    refreshed_ctx = refreshed_ctx
+                        .with_run_config(run_config.clone())
+                        .with_steering_inbox(steering_inbox.clone());
                     if let Some(rc) = request_context.clone() {
                         refreshed_ctx = refreshed_ctx.with_request_context(rc);
                     }
@@ -1596,6 +1622,10 @@ impl Runner {
             } {
                 match result {
                     Ok(mut event) => {
+                        // Read before plugins see the event, so one that rewrites it cannot
+                        // leave the message's receipt waiting.
+                        let steer_id =
+                            event.actions.steering.as_ref().map(|marker| marker.steer_id.clone());
                         #[cfg(feature = "plugins")]
                         if let Some(manager) = plugin_manager.as_ref() {
                             match manager
@@ -1676,6 +1706,11 @@ impl Runner {
                                 yield Err(e);
                                 return;
                             }
+                        if let Some(steer_id) = &steer_id
+                            && !event.llm_response.partial
+                        {
+                            steering_inbox.delivered(steer_id, &event.id);
+                        }
                         yield Ok(event);
                         if let Err(exceeded) = budget_check {
                             yield Err(exceeded.into());
@@ -1824,7 +1859,9 @@ impl Runner {
                 if let Some(ref memory) = memory_service_clone {
                     transfer_ctx = transfer_ctx.with_memory(memory.clone());
                 }
-                transfer_ctx = transfer_ctx.with_run_config(transfer_run_config);
+                transfer_ctx = transfer_ctx
+                    .with_run_config(transfer_run_config)
+                    .with_steering_inbox(steering_inbox.clone());
                 if let Some(rc) = request_context.clone() {
                     transfer_ctx = transfer_ctx.with_request_context(rc);
                 }
@@ -1867,6 +1904,11 @@ impl Runner {
                 } {
                     match result {
                         Ok(mut event) => {
+                            let steer_id = event
+                                .actions
+                                .steering
+                                .as_ref()
+                                .map(|marker| marker.steer_id.clone());
                             #[cfg(feature = "plugins")]
                             if let Some(manager) = plugin_manager.as_ref() {
                                 match manager
@@ -1936,6 +1978,11 @@ impl Runner {
                                     yield Err(e);
                                     return;
                                 }
+                            if let Some(steer_id) = &steer_id
+                                && !event.llm_response.partial
+                            {
+                                steering_inbox.delivered(steer_id, &event.id);
+                            }
                             yield Ok(event);
                             if let Err(exceeded) = budget_check {
                                 yield Err(exceeded.into());
@@ -2003,8 +2050,11 @@ impl Runner {
 
                 if event_count > 0 {
                     let all_events = ctx.mutable_session().as_ref().events_snapshot();
-                    let invocation_count = all_events.iter().filter(|e| e.author == "user").count()
-                        as u32;
+                    // A steering message joins the run it reached, so it starts no invocation.
+                    let starts_invocation =
+                        |e: &Event| e.author == "user" && e.actions.steering.is_none();
+                    let invocation_count =
+                        all_events.iter().filter(|e| starts_invocation(e)).count() as u32;
 
                     if invocation_count > 0
                         && invocation_count.is_multiple_of(compaction_cfg.compaction_interval)
@@ -2016,7 +2066,7 @@ impl Runner {
                         // Find the boundary: keep the last `overlap` user messages and everything after
                         let user_msg_indices: Vec<usize> = all_events.iter()
                             .enumerate()
-                            .filter(|(_, e)| e.author == "user")
+                            .filter(|(_, e)| starts_invocation(e))
                             .map(|(i, _)| i)
                             .collect();
 
@@ -2411,6 +2461,134 @@ impl Runner {
             );
         }
         cancelled
+    }
+
+    /// Sends `content` to the run in flight for `identity`, which takes it at its next safe
+    /// point instead of after the turn ends.
+    ///
+    /// The message is screened as a run's own message is: the plugins' `on_user_message`,
+    /// then the agent tree's input guardrails ([`Agent::screen_user_input`]). What they let
+    /// through is queued on the run's [`SteeringInbox`](adk_core::SteeringInbox). An
+    /// `LlmAgent` or `CodeActAgent` takes the queue after a tool step's results are in its
+    /// history and before its next model call, and yields each message as a user-authored
+    /// event carrying a [`SteeringMarker`](adk_core::SteeringMarker), which the runner saves
+    /// like any other event. A turn that ends with a direct answer takes none. Workflow
+    /// members and transfer targets of the run share its queue; `ParallelAgent` branches do
+    /// not take it, so a message sent during a fan-out waits for the first safe point after
+    /// the join. With several runs in flight for `identity`, the most recently started one
+    /// receives the message.
+    ///
+    /// The receipt resolves to [`SteerOutcome::Delivered`](adk_core::SteerOutcome::Delivered)
+    /// once the runner saves the message's event, or to
+    /// [`SteerOutcome::Returned`](adk_core::SteerOutcome::Returned) with the message as sent
+    /// when the run ends first — it finished, failed, was frozen or interrupted, reached
+    /// `max_iterations` or held a call. Send a returned message as the session's next message,
+    /// which the runner screens as it screens any.
+    ///
+    /// # Errors
+    ///
+    /// | Code | When |
+    /// |------|------|
+    /// | `agent.steer.invalid_message` | `content` is not role `user` with text or attachments only |
+    /// | `agent.steer.no_active_run` | No run is in flight for `identity` |
+    /// | `agent.steer.run_not_ready` | Plugins are configured and the run has not built its context yet, or has finished |
+    /// | The guardrail's or plugin's code | An input guardrail blocks the message, or a plugin fails |
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::{AdkIdentity, AppName, Content, SessionId, SteerOutcome, UserId};
+    ///
+    /// let identity = AdkIdentity::new(
+    ///     AppName::try_from("support")?,
+    ///     UserId::try_from("alice")?,
+    ///     SessionId::try_from("session-1")?,
+    /// );
+    /// let receipt = runner
+    ///     .steer(&identity, Content::new("user").with_text("use the staging database"))
+    ///     .await?;
+    /// match receipt.outcome().await? {
+    ///     SteerOutcome::Delivered { event_id } => println!("delivered as {event_id}"),
+    ///     SteerOutcome::Returned(message) => {
+    ///         let _next_turn = runner.run(identity.user_id.clone(), identity.session_id.clone(), message);
+    ///     }
+    /// }
+    /// ```
+    pub async fn steer(
+        &self,
+        identity: &adk_core::AdkIdentity,
+        content: Content,
+    ) -> Result<adk_core::SteerReceipt> {
+        adk_core::validate_steering_message(&content)?;
+        let run = {
+            let runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
+            runs.iter()
+                .filter(|(_, run)| run.identity == *identity)
+                .max_by_key(|(run_id, _)| **run_id)
+                .map(|(_, run)| run.clone())
+        };
+        let Some(run) = run else {
+            tracing::debug!(
+                app.name = %identity.app_name,
+                user.id = %identity.user_id,
+                session.id = %identity.session_id,
+                "no active run to steer"
+            );
+            return Err(adk_core::AdkError::new(
+                adk_core::ErrorComponent::Agent,
+                adk_core::ErrorCategory::NotFound,
+                adk_core::STEER_NO_ACTIVE_RUN_CODE,
+                format!(
+                    "no run is in flight for session '{}' of user '{}'; send the message as \
+                     the session's next message",
+                    identity.session_id, identity.user_id
+                ),
+            ));
+        };
+        // A returned message goes back as sent, so the next run's screening applies once.
+        #[cfg(not(feature = "plugins"))]
+        let screening = content.clone();
+        #[cfg(feature = "plugins")]
+        let screening = match self.plugin_manager.as_ref() {
+            Some(manager) => {
+                let Some(ctx) = run.scope.get() else {
+                    return Err(adk_core::AdkError::new(
+                        adk_core::ErrorComponent::Agent,
+                        adk_core::ErrorCategory::Unavailable,
+                        "agent.steer.run_not_ready",
+                        format!(
+                            "the run for session '{}' is starting or finishing, so its plugins \
+                             cannot screen the message; steer again once the run has produced \
+                             an event, or send it as the session's next message",
+                            identity.session_id
+                        ),
+                    ));
+                };
+                manager
+                    .run_on_user_message(
+                        ctx as Arc<dyn adk_core::InvocationContext>,
+                        content.clone(),
+                    )
+                    .await?
+                    .unwrap_or_else(|| content.clone())
+            }
+            None => content.clone(),
+        };
+        let screened = self.root_agent.screen_user_input(&screening).await?;
+        let input_screened = screened.is_some();
+        let receipt = run.inbox.push(
+            content,
+            screened.unwrap_or(screening),
+            identity.user_id.as_ref(),
+            input_screened,
+        )?;
+        tracing::info!(
+            session.id = %identity.session_id,
+            steer.id = receipt.steer_id(),
+            steer.sequence = receipt.sequence(),
+            "steering message queued"
+        );
+        Ok(receipt)
     }
 
     /// Returns the identity of every run currently in flight.

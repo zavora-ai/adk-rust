@@ -983,7 +983,13 @@ fn translate_ag_ui_event(
         // run finishes; a decision is reported by the result of the call it decided.
         tool_confirmation,
         tool_confirmation_decision: _,
+        steering,
     } = &event.actions;
+    // A steering message is the person's own input, which, like the run's message, this
+    // translation does not echo; it stays in the session.
+    if steering.is_some() {
+        return translated;
+    }
 
     if !state_delta.is_empty() {
         translated.push(json!({

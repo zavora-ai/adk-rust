@@ -553,6 +553,8 @@ pub struct InvocationContext {
     cancellation_token: Option<tokio_util::sync::CancellationToken>,
     /// Stable root invocation for a multi-hop orchestration tree.
     orchestration_root_invocation_id: String,
+    /// The run's queue of steering messages, shared by every agent the run hands control to.
+    steering_inbox: Option<adk_core::SteeringInbox>,
 }
 
 impl InvocationContext {
@@ -587,6 +589,7 @@ impl InvocationContext {
             secret_service: None,
             cancellation_token: None,
             orchestration_root_invocation_id,
+            steering_inbox: None,
         })
     }
 
@@ -646,6 +649,7 @@ impl InvocationContext {
             secret_service: None,
             cancellation_token: None,
             orchestration_root_invocation_id,
+            steering_inbox: None,
         })
     }
 
@@ -740,6 +744,16 @@ impl InvocationContext {
         self
     }
 
+    /// Attach the run's steering inbox, which
+    /// [`steering_inbox`](adk_core::InvocationContext::steering_inbox) returns.
+    ///
+    /// The [`Runner`](crate::Runner) installs one per run, so every agent the run hands
+    /// control to takes the messages [`Runner::steer`](crate::Runner::steer) queues.
+    pub fn with_steering_inbox(mut self, inbox: adk_core::SteeringInbox) -> Self {
+        self.steering_inbox = Some(inbox);
+        self
+    }
+
     /// Get a reference to the mutable session.
     /// This allows the Runner to apply state deltas when events are processed.
     pub fn mutable_session(&self) -> &Arc<MutableSession> {
@@ -763,6 +777,7 @@ impl InvocationContext {
             secret_service: self.secret_service.clone(),
             cancellation_token: self.cancellation_token.clone(),
             orchestration_root_invocation_id: self.orchestration_root_invocation_id.clone(),
+            steering_inbox: self.steering_inbox.clone(),
         }
     }
 }
@@ -878,6 +893,10 @@ impl InvocationContextTrait for InvocationContext {
 
     fn orchestration_root_invocation_id(&self) -> &str {
         &self.orchestration_root_invocation_id
+    }
+
+    fn steering_inbox(&self) -> Option<adk_core::SteeringInbox> {
+        self.steering_inbox.clone()
     }
 
     async fn get_secret(&self, name: &str) -> adk_core::Result<Option<String>> {

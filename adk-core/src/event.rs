@@ -118,6 +118,13 @@ pub struct EventActions {
     /// [`workflow_resume_positions`](crate::workflow_resume_positions).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub workflow_positions: HashMap<String, WorkflowPosition>,
+    /// Set on a user message that reached the run while it ran, through `Runner::steer`.
+    ///
+    /// The message is a user turn like any other in later history, but it is not the run's
+    /// own message: an agent never stands the run's message in for it, and compaction does
+    /// not count it as an invocation. See [`steering`](crate::steering).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steering: Option<crate::SteeringMarker>,
 }
 
 /// Where a workflow agent was when a call held for confirmation stopped it.

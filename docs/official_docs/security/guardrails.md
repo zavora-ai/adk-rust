@@ -367,7 +367,9 @@ A block ends the run with an `AdkError` a caller can tell apart from a failure:
 
 The blocking guardrail is the first whose failure is above `Low`. The message keeps the form
 `output guardrails blocked content: <name> (<severity>): <reason>`. The runner's save-time input
-screening raises the same error.
+screening raises the same error. `Runner::steer` screens a message sent to a running turn the
+same way and returns the block to its caller, and nothing is queued; see
+[Steering a Running Agent](../core/runner.md#steering-a-running-agent).
 
 ```rust
 use adk_guardrail::OUTPUT_BLOCKED_CODE;
