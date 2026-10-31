@@ -2,9 +2,9 @@
 //!
 //! A file node used the interpolated path as given, so `../` or an absolute
 //! path reached any file the process could. The HTTP, notification, and RSS
-//! nodes requested any URL the state produced. All are now confined, and a node
-//! whose backend does not exist says it is not implemented rather than pointing
-//! at a feature flag.
+//! nodes requested any URL the state produced. All are now confined — the HTTP
+//! nodes to public addresses unless the host opts in — and a node whose backend does
+//! not exist says it is not implemented rather than pointing at a feature flag.
 
 #![cfg(feature = "action")]
 
@@ -133,6 +133,65 @@ async fn a_file_url_is_rejected_by_an_http_node() {
     assert!(message.contains("scheme 'file' is not permitted"), "{message}");
 }
 
+#[cfg(feature = "action-http")]
+fn fetch_node() -> ActionNodeConfig {
+    use adk_action::{HttpAuth, HttpBody, HttpMethod, HttpNodeConfig, HttpResponse};
+
+    ActionNodeConfig::Http(HttpNodeConfig {
+        standard: standard("fetch"),
+        method: HttpMethod::Get,
+        url: "{{url}}".to_string(),
+        auth: HttpAuth::None,
+        headers: std::collections::HashMap::new(),
+        body: HttpBody::None,
+        response: HttpResponse { response_type: "text".to_string(), status_validation: None },
+        rate_limit: None,
+    })
+}
+
+/// A URL from workflow state reaches no loopback, private, link-local or metadata address,
+/// and no name for one, under the default policy.
+#[cfg(feature = "action-http")]
+#[tokio::test]
+async fn an_http_node_reaches_no_internal_address_by_default() {
+    let internal = Internal::start().await;
+    let port = internal.base.rsplit(':').next().unwrap().to_string();
+    let executor = ActionNodeExecutor::new(fetch_node());
+    for url in [
+        format!("{}/status", internal.base),
+        format!("http://localhost:{port}/status"),
+        format!("http://[::ffff:127.0.0.1]:{port}/status"),
+        format!("http://2130706433:{port}/status"),
+        "http://169.254.169.254/latest/meta-data/iam/security-credentials/".to_string(),
+        "http://10.0.0.7/admin".to_string(),
+        "https://[fd00:ec2::254]/latest/meta-data/".to_string(),
+    ] {
+        let state = State::from([("url".to_string(), json!(url))]);
+        let message = failure(&executor, state).await;
+        assert!(message.contains("non-public address"), "{url}: {message}");
+    }
+    assert_eq!(internal.served(), 0, "no internal request was sent");
+}
+
+/// `allow_private_networks` admits internal targets, by address and by a name that
+/// resolves to one.
+#[cfg(feature = "action-http")]
+#[tokio::test]
+async fn private_targets_are_reached_only_with_the_opt_in() {
+    use adk_graph::action::http::HttpActionPolicy;
+
+    let internal = Internal::start().await;
+    let port = internal.base.rsplit(':').next().unwrap().to_string();
+    let executor = ActionNodeExecutor::new(fetch_node())
+        .with_http_policy(HttpActionPolicy::new().allow_private_networks());
+    for url in [format!("{}/status", internal.base), format!("http://localhost:{port}/status")] {
+        let state = State::from([("url".to_string(), json!(url))]);
+        let ctx = NodeContext::new(state, ExecutionConfig::new("confinement"), 0);
+        executor.execute(&ctx).await.unwrap_or_else(|error| panic!("{url}: {error}"));
+    }
+    assert_eq!(internal.served(), 2);
+}
+
 /// A local HTTP server standing in for an internal service.
 ///
 /// It answers `GET /redirect` with a redirect to `localhost` on the same port, and every
@@ -238,7 +297,9 @@ async fn a_notification_webhook_the_policy_permits_is_sent() {
 
     let internal = Internal::start().await;
     let executor = ActionNodeExecutor::new(notification_node(&format!("{}/hook", internal.base)))
-        .with_http_policy(HttpActionPolicy::new().allow_hosts(["127.0.0.1"]));
+        .with_http_policy(
+            HttpActionPolicy::new().allow_hosts(["127.0.0.1"]).allow_private_networks(),
+        );
     let ctx = NodeContext::new(State::new(), ExecutionConfig::new("confinement"), 0);
 
     executor.execute(&ctx).await.expect("a permitted webhook is sent");
@@ -278,7 +339,9 @@ async fn an_rss_redirect_to_an_unlisted_host_is_not_followed() {
 
     let internal = Internal::start().await;
     let executor = ActionNodeExecutor::new(rss_node(&format!("{}/redirect", internal.base)))
-        .with_http_policy(HttpActionPolicy::new().allow_hosts(["127.0.0.1"]));
+        .with_http_policy(
+            HttpActionPolicy::new().allow_hosts(["127.0.0.1"]).allow_private_networks(),
+        );
 
     let message = failure(&executor, State::new()).await;
 

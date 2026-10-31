@@ -258,8 +258,30 @@ fn is_non_public_v6(v6: Ipv6Addr) -> bool {
         || v6.is_multicast()
 }
 
-/// Resolves host names and refuses any answer that contains a non-public address.
-struct PublicOnlyResolver;
+/// A `reqwest` resolver that refuses any answer containing a non-public address
+/// ([`is_non_public`]).
+///
+/// Set it with `ClientBuilder::dns_resolver` together with `ClientBuilder::no_proxy`, since a
+/// proxy resolves the host itself. It checks every host name the client connects to, each
+/// redirect included; a URL whose host is an IP address literal is not resolved, so check
+/// that address with [`is_non_public`] first.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+///
+/// use adk_core::webhook_delivery::PublicOnlyResolver;
+///
+/// let client = reqwest::Client::builder()
+///     .no_proxy()
+///     .dns_resolver(Arc::new(PublicOnlyResolver))
+///     .build()
+///     .expect("the client builds");
+/// # drop(client);
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PublicOnlyResolver;
 
 impl reqwest::dns::Resolve for PublicOnlyResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
