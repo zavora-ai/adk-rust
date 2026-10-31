@@ -22,6 +22,17 @@ pub struct WhisperApiStt {
 }
 
 impl WhisperApiStt {
+    /// Create with an explicit API key (useful for testing without env vars).
+    #[doc(hidden)]
+    pub fn with_api_key(api_key: String) -> Self {
+        Self {
+            api_key,
+            client: reqwest::Client::new(),
+            base_url: "https://api.openai.com".into(),
+            model: "whisper-1".into(),
+        }
+    }
+
     /// Create from environment variable `OPENAI_API_KEY`.
     pub fn from_env() -> AudioResult<Self> {
         let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| AudioError::Stt {
@@ -110,7 +121,11 @@ impl SttProvider for WhisperApiStt {
         _audio: Pin<Box<dyn Stream<Item = AudioFrame> + Send>>,
         _opts: &SttOptions,
     ) -> AudioResult<Pin<Box<dyn Stream<Item = AudioResult<Transcript>> + Send>>> {
-        // Whisper API doesn't support native streaming; use windowed fallback
-        Ok(Box::pin(futures::stream::empty()))
+        Err(AudioError::Stt {
+            provider: "whisper".into(),
+            message: "streaming transcription not yet implemented; call `transcribe` with the \
+                      buffered audio"
+                .into(),
+        })
     }
 }

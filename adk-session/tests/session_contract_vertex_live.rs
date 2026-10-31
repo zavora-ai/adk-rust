@@ -59,6 +59,24 @@ async fn test_vertex_service_live_contract() {
 
 #[tokio::test]
 #[ignore = "requires live Vertex Session Service resources + ADC; run with --ignored"]
+async fn test_vertex_live_delete_all_sessions_erases_the_users_sessions() {
+    let service = VertexAiSessionService::new_with_adc(VertexAiSessionConfig::new(
+        required_env_any(&ENV_PROJECT_ID_KEYS),
+        required_env_any(&ENV_LOCATION_KEYS),
+    ))
+    .expect("build vertex session service");
+
+    common::state_contract::assert_delete_all_sessions_contract(
+        &service,
+        &required_env_any(&ENV_APP_NAME_KEYS),
+        &required_env_any(&ENV_OTHER_APP_NAME_KEYS),
+        false,
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires live Vertex Session Service resources + ADC; run with --ignored"]
 async fn test_vertex_live_from_env_ttl_multi_turn_round_trip() {
     let config = VertexAiSessionConfig::from_env()
         .expect("GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION, and GOOGLE_CLOUD_AGENT_ENGINE_ID are required")

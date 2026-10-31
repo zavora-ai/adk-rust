@@ -2858,3 +2858,16 @@ async fn test_vertex_live_ga_v1_canary() {
         Err(error) => assert!(error.is_not_found(), "expected not-found after delete: {error}"),
     }
 }
+
+/// The Session API keeps `user:` keys in each session, so deleting the user's sessions erases
+/// them; no value is read through another session.
+#[tokio::test]
+async fn test_vertex_delete_all_sessions_erases_the_users_sessions() {
+    let (_state, service, server) = test_service().await;
+
+    common::state_contract::assert_delete_all_sessions_contract(&service, "1001", "2002", false)
+        .await;
+
+    server.abort();
+    let _ = server.await;
+}

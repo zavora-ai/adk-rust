@@ -736,13 +736,27 @@ impl SessionService for PostgresSessionService {
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
         validate_scope(app_name, user_id)?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
         // CASCADE handles events deletion automatically
         sqlx::query("DELETE FROM sessions WHERE app_name = $1 AND user_id = $2")
             .bind(app_name)
             .bind(user_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| adk_core::AdkError::session(format!("delete_all_sessions failed: {e}")))?;
+        sqlx::query("DELETE FROM user_states WHERE app_name = $1 AND user_id = $2")
+            .bind(app_name)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("delete_all_sessions failed: {e}")))?;
+        tx.commit()
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
         Ok(())
     }
 

@@ -344,3 +344,27 @@ async fn redis_standalone_reads_data_written_by_earlier_releases() {
     service.delete_all_sessions(&app, user).await.unwrap();
     let _: () = raw.quit().await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires a Redis server at REDIS_URL"]
+async fn redis_standalone_delete_all_sessions_erases_the_user_tier() {
+    common::state_contract::assert_delete_all_sessions_contract(
+        &standalone().await,
+        &run_app("erase"),
+        &run_app("erase-other"),
+        true,
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires a Redis Cluster at REDIS_CLUSTER_NODES"]
+async fn redis_cluster_delete_all_sessions_erases_the_user_tier() {
+    common::state_contract::assert_delete_all_sessions_contract(
+        &cluster().await,
+        &run_app("erase"),
+        &run_app("erase-other"),
+        true,
+    )
+    .await;
+}

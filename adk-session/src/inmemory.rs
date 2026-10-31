@@ -271,11 +271,15 @@ impl SessionService for InMemorySessionService {
 
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
         validate_scope(app_name, user_id)?;
-        let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
-        sessions.retain(|_, data| {
+        self.sessions.write().unwrap_or_else(|e| e.into_inner()).retain(|_, data| {
             !(data.identity.app_name.as_ref() == app_name
                 && data.identity.user_id.as_ref() == user_id)
         });
+        if let Some(users) =
+            self.user_state.write().unwrap_or_else(|e| e.into_inner()).get_mut(app_name)
+        {
+            users.remove(user_id);
+        }
         Ok(())
     }
 

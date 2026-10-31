@@ -350,7 +350,10 @@ Changed settings and cursors live in the `ControlStore`
 Kernels share one run store, process store and governance store. Give each replica
 `KernelConfig::mirrored_governance(store)`, a kill switch that polls the shared state every
 250 ms, so a freeze on any replica parks every running process on all of them within a
-second.
+second. `Kernel::start` reads the store once before it takes work, waiting at most
+`KernelConfig::GOVERNANCE_FIRST_READ`, so a replica that starts during a freeze stays frozen and
+work spawned once `start` returns is never refused as unread. A store that cannot be read
+leaves the replica refusing work until its mirror reads it.
 
 | Store | Backends |
 |---|---|

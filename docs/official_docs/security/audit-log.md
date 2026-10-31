@@ -126,7 +126,7 @@ processes append to one file, cuts a line a crash left unfinished, and reads the
 | Event | Where | `kind` | `action` | `decision` / `outcome` | `policyRef` |
 |-------|-------|--------|----------|------------------------|-------------|
 | Tool call allowed | Governed path, before `execute` | `tool_call` | Tool name | `allowed` | `tool_policy[:<name>]`, `confirmation`, or absent with no policy |
-| Tool call denied | Governed path | `tool_call` | Tool name | `denied` / `not_run` | `tool_policy[:<name>]`, `guardrail`, `governance` (frozen), `confirmation` |
+| Tool call denied | Governed path | `tool_call` | Tool name | `denied` / `not_run` | `tool_policy[:<name>]`, `guardrail`, `governance` (frozen, also while the call waited for a decision), `confirmation` |
 | Tool call held for approval | Governed path | `tool_call` | Tool name | `approval_required` / `not_run` | `tool_policy[:<name>]` or `confirmation` |
 | Approval decision applied | Governed path, before the call's decision | `approval` | Tool name | `approved` or `rejected` | — |
 | Approver decision | `StoreApprovalService::with_audit`, before the decision is stored | `approval` | Tool name | `approved` (approve, edit) or `rejected` (reject, respond) | — |

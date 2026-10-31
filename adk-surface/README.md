@@ -156,6 +156,7 @@ exists where the server serves less.
 ```bash
 cd adk-surface/web
 npm ci && npm run verify   # type check, component tests, build into ../assets/web
+npm run e2e:build          # build every end-to-end server first
 npm run e2e                # Playwright against examples/scripted_home.rs
 ```
 

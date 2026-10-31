@@ -165,8 +165,12 @@ impl SttProvider for GeminiStt {
         _audio: Pin<Box<dyn Stream<Item = AudioFrame> + Send>>,
         _opts: &SttOptions,
     ) -> AudioResult<Pin<Box<dyn Stream<Item = AudioResult<Transcript>> + Send>>> {
-        // Gemini generateContent doesn't support streaming STT.
-        // For real-time streaming, use adk-realtime with Gemini Live.
-        Ok(Box::pin(futures::stream::empty()))
+        Err(AudioError::Stt {
+            provider: "gemini".into(),
+            message: "streaming transcription not yet implemented; call `transcribe` with the \
+                      buffered audio, or use the Gemini Live API through `adk-realtime` for live \
+                      audio"
+                .into(),
+        })
     }
 }

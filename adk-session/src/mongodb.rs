@@ -756,11 +756,14 @@ impl SessionService for MongoSessionService {
         let filter = doc! { "app_name": app_name, "user_id": user_id };
         let ev_coll = self.db.collection::<Document>("events");
         let sess_coll = self.db.collection::<Document>("sessions");
+        let user_coll = self.db.collection::<Document>("user_states");
 
         let mut txn = self.maybe_start_transaction().await?;
         with_optional_session!(ev_coll.delete_many(filter.clone()), txn.as_mut())
             .map_err(|e| adk_core::AdkError::session(format!("delete_all_sessions failed: {e}")))?;
-        with_optional_session!(sess_coll.delete_many(filter), txn.as_mut())
+        with_optional_session!(sess_coll.delete_many(filter.clone()), txn.as_mut())
+            .map_err(|e| adk_core::AdkError::session(format!("delete_all_sessions failed: {e}")))?;
+        with_optional_session!(user_coll.delete_many(filter), txn.as_mut())
             .map_err(|e| adk_core::AdkError::session(format!("delete_all_sessions failed: {e}")))?;
         MongoSessionService::maybe_commit(&mut txn).await?;
         Ok(())
