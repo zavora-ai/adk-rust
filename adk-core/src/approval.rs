@@ -1898,6 +1898,12 @@ impl StoreApprovalService {
         at: DateTime<Utc>,
     ) -> Result<Option<SubjectRef>> {
         let approver = &decision.approver;
+        if approver.kind == SubjectKind::Visitor {
+            return Err(forbidden(
+                "approval.visitor_not_allowed",
+                "a visitor cannot decide an approval request; approvers are identified subjects",
+            ));
+        }
         let forbid_self = request.policy.forbid_self_approval;
         if forbid_self && request.is_self(approver) {
             return Err(forbidden(

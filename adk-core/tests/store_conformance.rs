@@ -147,3 +147,31 @@ impl adk_core::conformance::AuditLogStoreHarness for InMemoryAuditLog {
 mod audit_log {
     adk_core::audit_log_store_conformance_tests!(harness = super::InMemoryAuditLog::default());
 }
+
+#[derive(Default)]
+struct InMemorySubjects(adk_core::subject::InMemorySubjectRegistry);
+
+#[async_trait]
+impl adk_core::conformance::SubjectRegistryHarness for InMemorySubjects {
+    async fn open(&self, clock: Arc<dyn Clock>) -> Arc<dyn adk_core::subject::SubjectRegistry> {
+        Arc::new(self.0.clone().with_clock(clock))
+    }
+}
+
+mod subject_registry {
+    adk_core::subject_registry_conformance_tests!(harness = super::InMemorySubjects::default());
+}
+
+#[derive(Default)]
+struct InMemoryConsent(adk_core::subject::InMemoryConsentStore);
+
+#[async_trait]
+impl adk_core::conformance::ConsentStoreHarness for InMemoryConsent {
+    async fn open(&self) -> Arc<dyn adk_core::subject::ConsentStore> {
+        Arc::new(self.0.clone())
+    }
+}
+
+mod consent_store {
+    adk_core::consent_store_conformance_tests!(harness = super::InMemoryConsent::default());
+}
