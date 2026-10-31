@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use adk_core::audit_log::AuditTrail;
 use adk_core::{AdkError, Result};
 use adk_kernel::control::ControlPlaneConfig;
 use adk_kernel::pairing::{IssuedCode, Pairing};
@@ -138,11 +139,15 @@ impl Drop for Served {
 }
 
 /// Starts the kernel over `stores` with `sites`' workflows and triggers and device pairing on
-/// its control plane, then the edge's listener serving `app`.
+/// its control plane, recording into `audit`, then the edge's listener serving `app`.
+// `serve` and `serve_agency` differ in every argument; a struct for one private call adds
+// nothing.
+#[allow(clippy::too_many_arguments)]
 async fn start(
     name: &str,
     home: PathBuf,
     stores: KernelStores,
+    audit: AuditTrail,
     mut sites: Vec<RunningSite>,
     options: &ServeOptions,
     app: axum::Router,
@@ -185,9 +190,15 @@ async fn start(
     {
         kernel_config = kernel_config.with_quiet_hours(quiet);
     }
+    // The process table is durable beside the runs: the wake router finds sleepers only
+    // through it, so a restart keeps every wake set, admission deferral and daily total.
     let mut builder = Kernel::builder()
         .config(kernel_config)
         .run_store(stores.runs.clone())
+        .process_store(stores.processes.clone())
+        .schedule_store(stores.schedules.clone())
+        .spend_ledger(stores.spend.clone())
+        .audit(audit)
         .approval_service(stores.approvals.clone())
         .partitions(stores.partitions.clone())
         .agenda_store(stores.agenda.clone())
@@ -201,15 +212,21 @@ async fn start(
         // `urn:adk:agent:{site}/{agent}`, an agency's sites included.
         let app = site.site.name.as_str();
         let mut runs: Vec<SiteProcessKind> = Vec::new();
+        // Why each kind this site does not run is skipped, for the startup log.
+        let mut skipped: Vec<(SiteProcessKind, &str)> = Vec::new();
         if let Some(target) = site.digest_target(&options.site) {
             site_workflows = site_workflows.digest(site.site.id, target);
             runs.push(SiteProcessKind::Digest);
+        } else {
+            skipped.push((SiteProcessKind::Digest, "the owner has no channel"));
         }
         // The Guardian's probe every five minutes, when the site has a domain claim (spec
         // 3.5 §7.20, A-I9).
         if let Some(probe) = &site.guardian {
             site_workflows = site_workflows.probe(site.site.id, probe.clone());
             runs.push(SiteProcessKind::Probe);
+        } else {
+            skipped.push((SiteProcessKind::Probe, "no probe options or no domain claim"));
         }
         // A push to the content repository is a run of the site's own (spec 3.5 §7.8.2).
         if let Some(entry) = &site.repository {
@@ -220,6 +237,8 @@ async fn start(
         if let Some(check) = site.upkeep(&stores, &options.site) {
             site_workflows = site_workflows.watch(site.site.id, check);
             runs.push(SiteProcessKind::Watch);
+        } else {
+            skipped.push((SiteProcessKind::Watch, "no advisory or certificate source"));
         }
         if let (Some(model), Some(sessions)) = (&options.site.model, &sessions) {
             let team = site.back_office(&stores, model.clone()).await?;
@@ -233,10 +252,29 @@ async fn start(
                 SiteProcessKind::Outreach,
                 SiteProcessKind::Support,
             ]);
+        } else {
+            skipped.extend(
+                [
+                    SiteProcessKind::Content,
+                    SiteProcessKind::Reviews,
+                    SiteProcessKind::Outreach,
+                    SiteProcessKind::Support,
+                ]
+                .map(|kind| (kind, "the site has no model")),
+            );
         }
         for process in crate::jobs::processes(&team, &site.template.jobs(), app, &partition) {
             if runs.contains(&process.kind) {
                 triggers.push(process.trigger);
+            } else if let Some((_, reason)) = skipped.iter().find(|(kind, _)| *kind == process.kind)
+            {
+                tracing::info!(
+                    site = app,
+                    job = process.job,
+                    process = process.kind.as_str(),
+                    reason,
+                    "the job's process is not scheduled"
+                );
             }
         }
     }
@@ -317,7 +355,9 @@ pub async fn serve(mut options: ServeOptions) -> Result<Served> {
     site.partitions.install(&stores.partitions, adk_core::audit_log::AuditActor::default()).await?;
     let app = site.router.clone();
     let name = site.site.name.clone();
-    start(&name, paths.data().join("kernel"), stores, vec![site], &options, app, doorbell).await
+    let audit = site.audit.clone();
+    start(&name, paths.data().join("kernel"), stores, audit, vec![site], &options, app, doorbell)
+        .await
 }
 
 /// An agency's file: the sites it runs, each a project directory relative to the file
@@ -352,6 +392,11 @@ pub async fn serve_agency(file: &Path, options: ServeOptions) -> Result<Served> 
     let agency_paths = ProjectPaths::new(root);
     std::fs::create_dir_all(agency_paths.data()).map_err(config)?;
     let stores = KernelStores::open(&agency_paths.database("kernel"), &options.site.owner).await?;
+    // The agency's kernel serves every site, so it records into the agency's own trail.
+    let audit = AuditTrail::new(Arc::new(
+        adk_core::audit_log::FileAuditRecorder::open(agency_paths.data().join("audit.jsonl"))?
+            .with_log_id("agency"),
+    ));
     let mut agency = Agency::new(stores.partitions.clone());
     let (mut edges, mut sites) = (std::collections::BTreeMap::new(), Vec::new());
     for listed in &listed.sites {
@@ -370,5 +415,6 @@ pub async fn serve_agency(file: &Path, options: ServeOptions) -> Result<Served> 
             "an agency's sites run no chat gateway: serve each site on its own for chat"
         );
     }
-    start("agency", agency_paths.data().join("kernel"), stores, sites, &options, app, None).await
+    start("agency", agency_paths.data().join("kernel"), stores, audit, sites, &options, app, None)
+        .await
 }

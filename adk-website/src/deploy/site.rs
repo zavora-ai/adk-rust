@@ -395,6 +395,9 @@ pub struct RunningSite {
     /// (spec 3.5 §7.15).
     pub learning: Arc<crate::learning::PlaybookLearning>,
     pub(crate) reporting: Reporting,
+    /// The site's audit trail in `data/audit.jsonl`, which the kernel serving the site
+    /// records into too.
+    pub(crate) audit: adk_core::audit_log::AuditTrail,
     pub(crate) publish_delay: chrono::Duration,
     pub(crate) wallet: Option<adk_payments::wallet::Wallet>,
     /// The edge's signals into the back office, which wake the kernel's processes once the
@@ -901,6 +904,7 @@ impl RunningSite {
             repository,
             learning,
             reporting,
+            audit: trail,
             wallet: options.wallet.clone(),
             signals: edge_signals,
             publish_delay: options.publish_delay.unwrap_or_else(|| {
