@@ -702,6 +702,19 @@ pub trait InvocationContext: CallbackContext {
         false
     }
 
+    /// Returns the inbox of user messages sent to this run while it runs, through
+    /// `Runner::steer`.
+    ///
+    /// An agent takes the queued messages at a safe point of its loop, after a tool step's
+    /// results are in its history and before its next model request, and yields each as
+    /// [`SteeringMessage::to_event`](crate::SteeringMessage::to_event). A wrapper context
+    /// forwards it. A context whose agent must not take steering returns `None`: a
+    /// `ParallelAgent` branch, whose message waits for the first safe point after the join.
+    /// The default returns `None`.
+    fn steering_inbox(&self) -> Option<crate::SteeringInbox> {
+        None
+    }
+
     /// Retrieve a secret by name from the configured secret provider.
     ///
     /// Returns `Ok(Some(value))` when a provider is configured and the secret

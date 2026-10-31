@@ -15,6 +15,7 @@ Agent execution runtime for ADK-Rust.
 - **Session integration** — loads the session, appends every event, and applies state deltas as they arrive
 - **Services** — gives agents and tools the artifact service (scoped to the session), the memory service, and the request context
 - **Agent transfers** — runs transfer targets, enforcing each source agent's transfer restrictions
+- **Steering** — `Runner::steer` sends a screened message to a run in flight, which its agent takes at the next safe point
 - **Governance** — the run's tool policy, kill switch, budgets, spend ledger, action ledger, approval store, and audit trail
 - **Context compaction** — summarizes older events to bound model context
 - **`Launcher`** — a minimal stdin/stdout console loop
@@ -147,6 +148,7 @@ In an ordinary agent tree, the runner checks every handoff — from a model's `t
 | Input screening | Every agent's input guardrails screen the user message before it is saved |
 | Plugin `on_event` | Sees every event the run yields, including a `before_run` early exit, a cancelled run's answers to its calls in flight, and a budget stop event |
 | Cancellation | `Runner::interrupt(session_id)` stops a run; each call still in flight is answered `{"status": "outcome_unknown"}`, persisted, and yielded |
+| Steering | `Runner::steer(identity, content)` screens a message like the run's own and queues it on that run; an agent takes it after a tool step and the runner saves it as a user event, or its `SteerReceipt` returns it when the run ends first |
 | Plugin `after_run` | Runs once for every run whose `before_run` ran, however it ends — including a consumer that drops the stream, whose calls in flight are answered outcome-unknown first. A durable attempt its worker drops writes nothing; the recovering worker finishes the run |
 | `Runner::close` | Closes every agent's toolsets through `Agent::close`, then the plugins |
 
@@ -229,7 +231,7 @@ See [Context Compaction](../docs/official_docs/sessions/context-compaction.md) f
 | A cancelled run persists `outcome_unknown` answers to its in-flight calls | — |
 | Nested agents' input guardrails screen every user message before it is saved | — |
 | A run acting for a subject other than its session's user fails with `identity.subject_mismatch` | Configure `subject_delegation` |
-| `Runner::close`, `Runner::cancel_durable_runs`, `Runner::recover_unanswered_calls`, and `Runner::allowed_transfer_targets` are new | — |
+| `Runner::close`, `Runner::cancel_durable_runs`, `Runner::recover_unanswered_calls`, `Runner::allowed_transfer_targets`, and `Runner::steer` are new | — |
 
 See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
 

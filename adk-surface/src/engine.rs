@@ -72,9 +72,9 @@ async fn with_digest<F: std::future::Future>(digest: Option<String>, future: F) 
 /// A command from a surface (spec 3.3 §6). Every command runs as an authenticated
 /// [`Caller`], whose subject, surface and [`Origin`] reach its audit record.
 ///
-/// §6 also names "steer", a message that reaches a turn while it runs. No runtime under the
-/// engine takes input in the middle of a turn, so there is no steer command: a message sent
-/// during a turn is the session's next message ([`Send`](Self::Send)), and
+/// §6 also names "steer", a message that reaches a turn while it runs. The runtime takes one
+/// through `Runner::steer`, but the engine has no steer command yet: a message sent during a
+/// turn is the session's next message ([`Send`](Self::Send)), and
 /// [`StopAll`](Self::StopAll) stops a turn that has gone wrong.
 ///
 /// # Example
