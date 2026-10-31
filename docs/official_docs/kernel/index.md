@@ -35,7 +35,7 @@ non-loopback refusal, the `--store` backend — and adds the kernel:
 | Process table | The durable runs plus the kernel's side table: parent, partition, queue, kind, wake set, suspension |
 | Event bus | Every process change, wake, hold, decision and governance change, numbered by cursor, to subscribers and sinks such as outbound webhooks ([event bus](events.md)) |
 | Control plane | `/api/kernel/...` on the Unix socket at the kernel home (a named pipe on Windows) and on HTTP, beside the approvals inbox |
-| Kill switch | `GovernanceControl` mirrored from the store every 250 ms, so a freeze reaches every replica within a second |
+| Kill switch | `GovernanceControl` mirrored from the store every 250 ms, so a freeze reaches every replica within a second; read once before the kernel takes work (`KernelConfig::GOVERNANCE_FIRST_READ`, 5 s at most) |
 | Audit | One signed log per replica (`kernel-<id>`), holding the harness's tool-call records and the kernel's `kernel.*` records |
 | Activity ledger | Content-free rows of what the agents did, beside the other stores, and the daily baseline pass ([`/proc`](proc.md)) |
 
