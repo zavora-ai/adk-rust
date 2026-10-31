@@ -21,7 +21,7 @@
 - **The served back office** (`adk-website`): with a model, `deploy::serve` hosts the
   back-office agents on the kernel — the Steward's target runs the whole back office as one
   team, `BuiltTeam::team_runner`; each agent runs its jobs' processes, `BuiltTeam::agent_runner`
-  — under the owner's standing rules in `data/kernel.db` (`KernelStores::rules`), with held
+  — under the owner's standing rules in `data/kernel.db` (`SiteStores::rules`), with held
   calls in the owner's approval inbox; the edge's signals wake those processes
   (`edge::adapters::KernelSignals::wake`). `SiteOptions` gains `email`, `publish_delay`,
   `advisories`, `certificate` and `wallet` (spec 3.5 §7.19, §7.20, §7.22).

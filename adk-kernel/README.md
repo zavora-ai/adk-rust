@@ -365,6 +365,15 @@ leaves the replica refusing work until its mirror reads it.
 | `channels::ChannelBindingStore` (feature `channels`) | `InMemoryChannelBindingStore`; `SqliteChannelBindingStore`; `PostgresChannelBindingStore`; `RedisChannelBindingStore` |
 | Runs, sessions, schedules, approvals, governance state, action ledger | `adk-session`'s stores on the same backend |
 
+`stores::KernelStores` opens every one of these stores on one backend — `KernelStores::open(url)`
+for `memory:`, `sqlite://`, `postgres://`, `redis://`, `mongodb://`, `neo4j://` or `firestore://`,
+or `KernelStores::in_memory()` — and `KernelBuilder::stores` takes it, a store set on the builder
+winning. A store the builder is given neither way is kept in memory with a warning naming it;
+`KernelBuilder::require_durable()` refuses to build instead, naming each, and
+`Kernel::store_uses()` reports where every store came from. `adk-rust up` (unless `--ephemeral`)
+and `adk-website serve` require durable stores. See
+[Kernel store backends](../docs/official_docs/kernel/backends.md#every-store-at-once-kernelstores).
+
 `process_store_conformance_tests!`, `agenda_store_conformance_tests!`,
 `driver_store_conformance_tests!`, `device_store_conformance_tests!` and
 `channel_binding_store_conformance_tests!` (feature `conformance`) check a backend against the

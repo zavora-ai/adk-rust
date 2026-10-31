@@ -244,7 +244,7 @@ many sites from one harness:
 | Measurement | `MeteredActionLedger` and `EdgeMeter` on the edge, `MeteredSpendLedger` for agents' spend, and the tracker's sources |
 | Channels | In-thread replies through the channel a message came in on: `SiteOptions::repliers`, the site's email outbox, and the chat channels of the owner's sinks (`inbox::ChannelReplier`); the calendar from `caldav.json` (the owner's CalDAV calendar, `edge::caldav::CalDavCalendar`) or `calendar.json`, payment links from `payments.json`, or `SiteOptions` (`Ap2Desk`, `TokenDesk` or `PaymentRails` as `SiteOptions::payments`); refused without them; the owner's amount thresholds from the charter's `amountThresholds`, else `approvals.json` ([Writing capability packs](capability-packs.md#bookings)) |
 | Public agents | With `SiteOptions::model`, `edge::concierge` mounts the Concierge through `AwpEdge::public_agent`: the website preset in the public partition over the edge's own tools — the declared capabilities (a declared `search_site` among them), `reply_in_thread` and the edge's `emit_signal` — so the edge's public policy admits every call. Where the kind runs one, `inbox::SiteInbox` is the Inbox over the same tools and policy: it reads the site's email while the site serves (the cursor kept in `data/inbox/email.cursor`), and `SiteInbox::receive_inbound` reads a chat message a `ChannelSink` adapter received from an account no person paired — a paired account's message, by `SiteOptions::channel_bindings`, is the owner's (A-I24). Each reply answers the message's own thread; a flagged or refused message the Inbox filed no signal for gets the site's `inbound_message` signal, with none of its text (A-I3) |
-| Kernel | The process table, schedules, spend ledger and runs in `data/kernel.db`; the kernel's audit records in the site's `data/audit.jsonl` (an agency's in the agency's `data/audit.jsonl`). At start, `serve` logs each job whose process it does not schedule, with the reason: no channel (`site.digest`), no probe options or domain claim (`site.probe`), no advisory or certificate source (`site.watch`), or no model (`site.content`, `site.reviews`, `site.outreach`, `site.support`) |
+| Kernel | Every kernel store in `data/kernel.db` — the process table, schedules, spend ledger, runs, the kill switch and the control plane's settings among them — refusing to start with one in memory; the kernel's audit records in the site's `data/audit.jsonl` (an agency's in the agency's `data/audit.jsonl`). At start, `serve` logs each job whose process it does not schedule, with the reason: no channel (`site.digest`), no probe options or domain claim (`site.probe`), no advisory or certificate source (`site.watch`), or no model (`site.content`, `site.reviews`, `site.outreach`, `site.support`) |
 | Back office | With `SiteOptions::model`, the kernel hosts the back office (`deploy::back_office`): the Steward's target runs the team, every agent its jobs' processes on their signals and schedules, under the owner's standing rules in `data/kernel.db` — what `adk-rust website jobs promote` grants takes effect while the site serves — with held calls in the owner's approval inbox; the edge's signals wake them, and the kernel defers each proactive run inside the charter's quiet hours (an agency's kernel holds none). Revenue gets the nurture sends (`SiteOptions::email`) and the handoff, Growth the experiment tools, Guardian `edge_read_only`, Finance the wallet (`SiteOptions::wallet`); agent sessions are kept in `data/kernel/sessions.db` |
 | Upkeep | With `SiteOptions::advisories` or `SiteOptions::certificate`, the daily `site.watch` runs `UpkeepCheck` |
 | Learning | `learning::PlaybookLearning` runs weekly after the review (`website.steward.learning`): an experiment its test decided, or a KPI short of the owner's target two weeks running, proposes a playbook revision on the owner's decision card (at Observe, in the report only); an accepted or edited revision is the playbook's next version, written into its agents' workspaces ([Playbook Learning](website-learning.md)) |
@@ -308,21 +308,27 @@ The gateway's route (`deploy::chat::SiteChat`) tells two kinds of sender apart:
 | Anyone else | The Inbox reads the message as a visitor's, and answers in the thread; without an Inbox the site files an `inbound_message` signal. No pairing code, no turn, and no media kept |
 | Anyone else typing `/pair` (Slack's and Discord's `/pair` command) | The gateway's pairing code, which the owner accepts with `adk-rust pair accept` against the site's kernel |
 
-Pairings are kept in `data/kernel.db` (`KernelStores::channel_bindings`), unless
+Pairings are kept in `data/kernel.db` (`SiteStores::kernel.channel_bindings`), unless
 `SiteOptions::channel_bindings` names another store. The site's edge serves WhatsApp's
 webhook at `/channels/whatsapp` (`deploy::chat::WHATSAPP_PATH`): give WhatsApp the edge's
 public URL with that path and the verify token. An agency runs no chat gateway.
 
+The kernel's stores are one `adk_kernel::stores::KernelStores` on `data/kernel.db`
+(`deploy::SiteStores::kernel`), and the served kernel requires every one of them to be durable
+(`KernelBuilder::require_durable`): a store that would be kept in memory refuses the start.
+
 | Store | Survives a restart |
 |-------|--------------------|
-| Charters, KPIs, autonomy levels, signals | `adk_kernel::charter::Sqlite*Store` |
-| Agenda, partitions, devices, cron watermarks | `adk_kernel` SQLite stores |
-| The process table: wake sets, quiet-hours and budget deferrals, suspensions, daily spend totals | `adk_kernel::SqliteProcessStore` (`KernelStores::processes`), so a process asleep before a restart still wakes after it |
-| Schedules the kernel's scheduler fires | `adk_session::SqliteScheduleStore` (`KernelStores::schedules`) |
+| Charters, KPIs, autonomy levels, signals | `adk_kernel::charter::Sqlite*Store` (`SiteStores::kernel.charter`) |
+| Agenda, partitions, devices, cron watermarks, added agents | `adk_kernel` SQLite stores |
+| The process table: wake sets, quiet-hours and budget deferrals, suspensions, daily spend totals | `adk_kernel::SqliteProcessStore` (`SiteStores::kernel.processes`), so a process asleep before a restart still wakes after it |
+| Schedules the kernel's scheduler fires | `adk_session::SqliteScheduleStore` (`SiteStores::kernel.schedules`) |
+| The kill switch: a freeze holds across a restart | `adk_session::SqliteGovernanceStateStore`, which the kernel's `GovernanceControl` mirrors |
+| The control plane's changed settings and "While you were away" cursors | `adk_kernel::control::SqliteControlStore` |
 | Runs (weekly reviews among them), approvals, action and spend ledgers | `adk_session` SQLite stores; the kernel reads the spend ledger for its process views |
 | Leads, consent, held calls, idempotency | `adk_server::awp::stores::SqliteEdgeStores` in `data/edge.db` |
 | The contact book, nurture counts and handoffs | `leads::SqliteLeadRecords` in `data/edge.db` |
-| The owner's standing rules | `adk_harness::SqliteStandingRuleStore` in `data/kernel.db` (`KernelStores::rules`) |
+| The owner's standing rules | `adk_harness::SqliteStandingRuleStore` in `data/kernel.db` (`SiteStores::rules`) |
 | Reviews the site may quote | `data/reviews.json` |
 | The desk's work in progress | `data/desk.json`, under `adk-rust website new` |
 | Retained events, catalogue pages, consent references, pending deliveries, beacon counts | The same `SqliteEdgeStores`, as the edge's event log and beacon store; the deliveries a stopped process left resume once their lease passes |

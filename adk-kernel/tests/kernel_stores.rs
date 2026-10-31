@@ -14,14 +14,13 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use adk_core::{InMemoryRunStore, NewRun};
+use adk_core::InMemoryRunStore;
 use adk_kernel::control::ControlPlaneConfig;
 use adk_kernel::stores::{KernelStores, StoreOrigin, StoreUse};
 use adk_kernel::{
-    InMemoryProcessStore, Kernel, KernelConfig, KernelError, Partition, ProcessKind, ProcessMeta,
+    InMemoryProcessStore, Kernel, KernelConfig, KernelError, ProcessKind, ProcessMeta,
     ProcessStore, QueueClass,
 };
-use chrono::{TimeZone, Utc};
 
 fn reason(error: KernelError) -> String {
     match error {
@@ -36,6 +35,7 @@ fn used<'a>(kernel: &'a Kernel, store: &str) -> &'a StoreUse {
     })
 }
 
+#[cfg(feature = "sqlite")]
 fn sqlite_url(dir: &tempfile::TempDir) -> String {
     format!("sqlite://{}?mode=rwc", dir.path().join("kernel.db").display())
 }
@@ -152,6 +152,7 @@ async fn a_store_set_on_the_builder_wins_over_the_bundles_whichever_comes_first(
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_durable_bundle_satisfies_require_durable_with_a_mirrored_kill_switch() {
     let dir = tempfile::tempdir().unwrap();
@@ -172,6 +173,7 @@ async fn a_durable_bundle_satisfies_require_durable_with_a_mirrored_kill_switch(
     assert_eq!(used(&kernel, "governance").origin, StoreOrigin::Bundle);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn the_sqlite_bundle_survives_a_restart() {
     let dir = tempfile::tempdir().unwrap();
@@ -181,11 +183,16 @@ async fn the_sqlite_bundle_survives_a_restart() {
 
 /// Writes through one bundle and reads through a second opened the same way, as a restarted
 /// or second replica would.
-pub async fn round_trip<F, Fut>(open: F)
+#[cfg(any(feature = "sqlite", feature = "postgres", feature = "redis"))]
+async fn round_trip<F, Fut>(open: F)
 where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = KernelStores>,
 {
+    use adk_core::NewRun;
+    use adk_kernel::Partition;
+    use chrono::{TimeZone as _, Utc};
+
     let id = uuid::Uuid::new_v4().simple().to_string();
     let pid = format!("run-{id}");
     let partition = format!("work-{id}");

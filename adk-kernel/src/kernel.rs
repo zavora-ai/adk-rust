@@ -2309,7 +2309,7 @@ impl Slots<'_> {
             return set;
         }
         let bundle = self.bundle?;
-        self.uses.push(self.from_bundle(store, field));
+        self.uses.push(self.bundled(store, field));
         Some(pick(bundle))
     }
 
@@ -2319,7 +2319,7 @@ impl Slots<'_> {
         memory
     }
 
-    fn from_bundle(&self, store: &str, field: &str) -> StoreUse {
+    fn bundled(&self, store: &str, field: &str) -> StoreUse {
         let bundle = self.bundle.expect("only called with a bundle");
         let mut used = StoreUse::new(store, StoreOrigin::Bundle, bundle.is_in_memory(field));
         used.bundle = Some(bundle.label().to_string());
@@ -2342,7 +2342,7 @@ impl Slots<'_> {
                     config.governance =
                         KernelConfig::mirrored_governance(Arc::clone(&bundle.governance));
                 }
-                self.from_bundle("governance", "governance")
+                self.bundled("governance", "governance")
             }
             (None, None) => StoreUse::new("governance", StoreOrigin::Defaulted, true),
         };
@@ -2355,7 +2355,7 @@ impl Slots<'_> {
             StoreUse::new("control_store", StoreOrigin::Set, false)
         } else if let Some(bundle) = self.bundle {
             config.control.control_store = Arc::clone(&bundle.control);
-            self.from_bundle("control_store", "control")
+            self.bundled("control_store", "control")
         } else {
             StoreUse::new("control_store", StoreOrigin::Defaulted, true)
         };
