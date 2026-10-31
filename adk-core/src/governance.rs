@@ -4795,11 +4795,12 @@ mod tests {
         assert!(waiting.await.unwrap_err().to_string().contains("abandoned"));
     }
 
-    /// The kind, decision, policy and outcome of each governed record, in order.
-    fn decisions(
-        recorder: &crate::audit_log::InMemoryAuditRecorder,
-    ) -> Vec<(AuditRecordKind, Option<AuditDecision>, Option<String>, Option<AuditRecordOutcome>)>
-    {
+    /// The kind, decision, policy and outcome of one governed record.
+    type Recorded =
+        (AuditRecordKind, Option<AuditDecision>, Option<String>, Option<AuditRecordOutcome>);
+
+    /// What each governed record says, in order.
+    fn decisions(recorder: &crate::audit_log::InMemoryAuditRecorder) -> Vec<Recorded> {
         recorder
             .records()
             .into_iter()
@@ -4808,8 +4809,7 @@ mod tests {
     }
 
     /// The record of a call the kill switch refused.
-    fn refused_by_the_switch()
-    -> (AuditRecordKind, Option<AuditDecision>, Option<String>, Option<AuditRecordOutcome>) {
+    fn refused_by_the_switch() -> Recorded {
         (
             AuditRecordKind::ToolCall,
             Some(AuditDecision::Denied),
