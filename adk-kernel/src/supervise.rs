@@ -11,7 +11,7 @@ use adk_core::principal::SubjectRef;
 use adk_core::schedule::{DEFAULT_MISFIRE_GRACE, MissedFirePolicy, ScheduleSpec, plan_fires};
 use adk_core::{
     Clock, DurableRunStore, GovernanceControl, Part, RunCheckpointRef, RunFilter, RunRecord,
-    RunState, SpendKey,
+    RunState, SpendKey, UsageUnit, UsageVector,
 };
 use adk_server::background::{DurableWorker, ParkReason, WorkerHandle, WorkerHooks};
 use adk_session::{GetRequest, SessionService};
@@ -28,7 +28,7 @@ use crate::sched::QueueClass;
 use crate::sched::{
     Admission, AdmissionInput, ProcessClass, QuietHours, Quotas, admit, youngest_background,
 };
-use crate::stores::{ProcessFilter, ProcessStore};
+use crate::stores::{ProcessFilter, ProcessStore, UsageTotals};
 use crate::wake::KERNEL_WAKE_TARGET;
 use crate::wake::{Wake, WakeSet};
 
@@ -557,31 +557,35 @@ impl Supervision {
                 return;
             }
         };
-        let previous = local.last.or(local.baseline).unwrap_or_default();
+        let previous = local.last.clone().or(local.baseline.clone()).unwrap_or_default();
         // A counter that went down was restarted with the agent; everything since counts.
-        let delta = if usage.cost_micro_usd >= previous.cost_micro_usd {
-            usage.cost_micro_usd - previous.cost_micro_usd
-        } else {
-            usage.cost_micro_usd
-        };
+        let since = |now: u64, before: u64| if now >= before { now - before } else { now };
+        let units: UsageVector = usage
+            .units
+            .iter()
+            .map(|(unit, amount)| (unit, since(amount, previous.units.get(unit))))
+            .collect();
+        let delta = SpendDelta::new(since(usage.cost_micro_usd, previous.cost_micro_usd))
+            .with_model_calls(since(usage.model_calls, previous.model_calls))
+            .with_total_tokens(since(usage.total_tokens, previous.total_tokens))
+            .with_units(units);
         let now = self.clock.now();
         {
             let mut table = self.local.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = table.get_mut(pid) {
                 entry.last = Some(usage);
-                entry.attributed = entry.attributed.saturating_add(delta);
+                entry.attributed = entry.attributed.saturating_add(delta.micro_usd);
                 entry.samples.push_back((now, entry.attributed));
                 if entry.samples.len() > SAMPLES {
                     entry.samples.pop_front();
                 }
             }
         }
-        if delta == 0 {
+        if delta.is_empty() {
             return;
         }
-        let delta = SpendDelta::new(delta);
         if let Err(error) =
-            self.processes.add_spend(pid, &local.partition, now.date_naive(), delta).await
+            self.processes.add_spend(pid, &local.partition, now.date_naive(), delta.clone()).await
         {
             tracing::warn!(process.pid = pid, error = %error, "could not record the process's spend");
         }
@@ -634,14 +638,26 @@ pub(crate) fn class_of(run: &RunRecord, meta: &ProcessMeta) -> ProcessClass {
     }
 }
 
+/// Totals read as spent in full, for a store that cannot be read: admission then holds work
+/// instead of letting it spend past a cap.
+fn exhausted() -> UsageTotals {
+    UsageTotals {
+        micro_usd: u64::MAX,
+        model_calls: u64::MAX,
+        total_tokens: u64::MAX,
+        units: UsageUnit::ALL.into_iter().map(|unit| (unit, u64::MAX)).collect(),
+    }
+}
+
 impl Supervision {
-    /// The partition's spend today, in micro-USD, from the kernel's daily totals.
-    pub(crate) async fn partition_spent(&self, partition: &PartitionId) -> u64 {
+    /// The partition's usage today — spend, model calls, tokens and units — from the
+    /// kernel's daily totals.
+    pub(crate) async fn partition_usage(&self, partition: &PartitionId) -> UsageTotals {
         let today = self.clock.now().date_naive();
         let scope = crate::stores::SpendScope::Partition(partition.clone());
-        self.processes.spend(&scope, today, today).await.unwrap_or_else(|error| {
-            tracing::warn!(partition = %partition, error = %error, "could not read the partition's spend; treating it as spent");
-            u64::MAX
+        self.processes.usage(&scope, today, today).await.unwrap_or_else(|error| {
+            tracing::warn!(partition = %partition, error = %error, "could not read the partition's usage; treating it as spent");
+            exhausted()
         })
     }
 
@@ -664,9 +680,9 @@ impl Supervision {
         spent
     }
 
-    /// The partition's proactive spend today: the daily totals of its agenda and maintenance
-    /// processes, in micro-USD.
-    pub(crate) async fn proactive_spent(&self, partition: &PartitionId) -> u64 {
+    /// The partition's proactive usage today: the daily totals of its agenda and maintenance
+    /// processes — spend, model calls and tokens — that the daily proactive budget caps.
+    pub(crate) async fn proactive_usage(&self, partition: &PartitionId) -> UsageTotals {
         let today = self.clock.now().date_naive();
         let metas = match self
             .processes
@@ -676,20 +692,20 @@ impl Supervision {
             Ok(metas) => metas,
             Err(error) => {
                 tracing::warn!(partition = %partition, error = %error, "could not list the partition's processes; treating its budget as spent");
-                return u64::MAX;
+                return exhausted();
             }
         };
-        let mut total = 0u64;
+        let mut total = UsageTotals::default();
         for meta in metas
             .iter()
             .filter(|meta| matches!(meta.kind, ProcessKind::Proposed | ProcessKind::Maintenance))
         {
             let scope = crate::stores::SpendScope::Process(meta.pid.clone());
-            match self.processes.spend(&scope, today, today).await {
-                Ok(spent) => total = total.saturating_add(spent),
+            match self.processes.usage(&scope, today, today).await {
+                Ok(used) => total.merge(&used),
                 Err(error) => {
-                    tracing::warn!(process.pid = %meta.pid, error = %error, "could not read a process's spend; treating the budget as spent");
-                    return u64::MAX;
+                    tracing::warn!(process.pid = %meta.pid, error = %error, "could not read a process's usage; treating the budget as spent");
+                    return exhausted();
                 }
             }
         }
@@ -716,6 +732,17 @@ impl Supervision {
     /// The cost cap of the daily proactive budget.
     fn daily_budget_cost(&self) -> Option<u64> {
         self.proactivity.daily_budget.max_cost_micro_usd
+    }
+
+    /// The model-call and token caps of the daily proactive budget.
+    fn daily_budget_calls_and_tokens(&self) -> (Option<u64>, Option<u64>) {
+        let budget = &self.proactivity.daily_budget;
+        (budget.max_model_calls, budget.max_total_tokens)
+    }
+
+    /// Whether the daily proactive budget sets a cap admission applies.
+    fn daily_budget_caps(&self) -> bool {
+        self.daily_budget_cost().is_some() || self.daily_budget_calls_and_tokens() != (None, None)
     }
 
     /// Every quiet-hours window that applies in `partition`: the kernel's, the proactivity
@@ -818,8 +845,11 @@ impl Supervision {
             running: 0,
             preemptible: false,
             partition_spent: 0,
+            partition_units: UsageVector::new(),
             proactive_spent: 0,
+            proactive_calls_and_tokens: (0, 0),
             daily_budget: None,
+            daily_calls_and_tokens: (None, None),
             need: 0,
         };
         match admit(&probe) {
@@ -898,20 +928,20 @@ impl Supervision {
         let _gate = self.admission.lock().await;
         let (running, background) = self.admitted(&meta.partition, &run.run_id).await;
         let budgeted = class != ProcessClass::Interactive
-            && (quotas.daily_spend_cap.is_some()
-                || (class == ProcessClass::Proactive && self.daily_budget_cost().is_some()));
-        let (partition_spent, proactive_spent, need) = if budgeted {
+            && (quotas.caps_daily_usage()
+                || (class == ProcessClass::Proactive && self.daily_budget_caps()));
+        let (partition, proactive, need) = if budgeted {
             (
-                self.partition_spent(&meta.partition).await,
+                self.partition_usage(&meta.partition).await,
                 if class == ProcessClass::Proactive {
-                    self.proactive_spent(&meta.partition).await
+                    self.proactive_usage(&meta.partition).await
                 } else {
-                    0
+                    UsageTotals::default()
                 },
                 self.item_need(meta).await,
             )
         } else {
-            (0, 0, 0)
+            (UsageTotals::default(), UsageTotals::default(), 0)
         };
         let decision = admit(&AdmissionInput {
             class,
@@ -924,9 +954,12 @@ impl Supervision {
             quotas: &quotas,
             running,
             preemptible: !background.is_empty(),
-            partition_spent,
-            proactive_spent,
+            partition_spent: partition.micro_usd,
+            partition_units: partition.units,
+            proactive_spent: proactive.micro_usd,
+            proactive_calls_and_tokens: (proactive.model_calls, proactive.total_tokens),
             daily_budget: self.daily_budget_cost(),
+            daily_calls_and_tokens: self.daily_budget_calls_and_tokens(),
             need,
         });
         let wake = match decision {
@@ -1111,17 +1144,23 @@ impl Supervision {
         for (partition, (proactive, need)) in partitions {
             // Without a cap there is nothing to replenish: such a sleeper waits on its other
             // wakes.
-            let budget = if proactive { self.daily_budget_cost() } else { None };
-            let cap = self.quotas_of(&partition).await.daily_spend_cap;
-            if cap.is_none() && budget.is_none() {
+            let budgeted = proactive && self.daily_budget_caps();
+            let quotas = self.quotas_of(&partition).await;
+            if !quotas.caps_daily_usage() && !budgeted {
                 continue;
             }
             let fits = |cap: Option<u64>, spent: u64| {
                 cap.is_none_or(|cap| spent.saturating_add(need.max(1)) <= cap)
             };
-            let mut room = fits(cap, self.partition_spent(&partition).await);
-            if budget.is_some() {
-                room &= fits(budget, self.proactive_spent(&partition).await);
+            let used = self.partition_usage(&partition).await;
+            let mut room = fits(quotas.daily_spend_cap, used.micro_usd)
+                && quotas.daily_caps.iter().all(|(unit, max)| used.units.get(*unit) < *max);
+            if budgeted {
+                let proactive = self.proactive_usage(&partition).await;
+                let (max_calls, max_tokens) = self.daily_budget_calls_and_tokens();
+                room &= fits(self.daily_budget_cost(), proactive.micro_usd)
+                    && max_calls.is_none_or(|max| proactive.model_calls < max)
+                    && max_tokens.is_none_or(|max| proactive.total_tokens < max);
             }
             if room {
                 replenished.push(partition);

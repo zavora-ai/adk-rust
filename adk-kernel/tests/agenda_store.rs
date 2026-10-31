@@ -138,7 +138,7 @@ mod sqlite {
         agenda.migrate().await.expect("migrate");
         agenda.migrate().await.expect("migrate again");
         assert_eq!(count(&pool, "_adk_kernel_agenda_migrations").await, 1);
-        assert_eq!(count(&pool, "_adk_kernel_process_migrations").await, 1);
+        assert_eq!(count(&pool, "_adk_kernel_process_migrations").await, 2);
         agenda
             .put(AgendaItem::new(
                 "item-1",

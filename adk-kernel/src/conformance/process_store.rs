@@ -13,6 +13,7 @@
 //! | [`sustained_writes`] | A sustained stream of puts, updates and deletes from two handles, read concurrently, stays consistent and readable (SQLite's write lock and WAL included) |
 //! | [`suspend_request_round_trips`] | `set_suspend_requested` sets and clears the flag leaving every other field, `put` writes it, `list` filters on it, and an unknown `pid` fails with `kernel.not_found` |
 //! | [`spend_sums_by_day_and_scope`] | `spend` sums `add_spend` over an inclusive day range per process or per partition; concurrent additions from two handles all count; deleting a process keeps its spend |
+//! | [`usage_sums_counters_by_day_and_scope`] | `usage` sums the cost, model calls, total tokens and every unit `add_spend` recorded, per process or per partition over an inclusive day range, through a second handle; concurrent additions all count; deleting a process keeps its usage |
 //!
 //! Every case writes under fresh process ids in fresh partitions and deletes its rows at
 //! the end, so a harness may point every case at one shared database. Spend totals have no
@@ -32,7 +33,7 @@ use crate::error::{KernelError, NOT_FOUND_CODE};
 use crate::partition::PartitionId;
 use crate::process::{ProcessKind, ProcessMeta, Suspension};
 use crate::sched::QueueClass;
-use crate::stores::{ProcessFilter, ProcessStore, SpendScope};
+use crate::stores::{ProcessFilter, ProcessStore, SpendScope, UsageTotals};
 use crate::wake::{ExpiryAction, Wake, WakeSet};
 
 /// Opens a [`ProcessStore`] backend for the conformance suite.
@@ -803,4 +804,126 @@ pub async fn spend_sums_by_day_and_scope(harness: &dyn ProcessStoreHarness) {
     assert!(first.delete(&b).await.expect("delete"));
     assert_eq!(spend(process(&b), d1, d2).await, 1_000 + 820, "deleting the row keeps the spend");
     assert_eq!(spend(partition_of(&here), d1, d1).await, 100 + 50 + 1_000 + 10);
+}
+
+/// `usage` sums what `add_spend` recorded — cost, model calls, total tokens and each unit —
+/// over an inclusive range of UTC days, per process or per partition, read through a second
+/// handle: a delta with units and no cost counts, a unit no delta named stays absent, twenty
+/// concurrent additions from two handles all count, and deleting a process's row keeps its
+/// usage. `spend` agrees with the cost `usage` reports.
+pub async fn usage_sums_counters_by_day_and_scope(harness: &dyn ProcessStoreHarness) {
+    use adk_core::{UsageUnit, UsageVector};
+
+    let first = harness.open().await;
+    let second = if harness.is_durable() { harness.open().await } else { first.clone() };
+    let (here, there) = (partition(), partition());
+    let (a, b) = (unique("pid"), unique("pid"));
+    let day = |year, month, day| NaiveDate::from_ymd_opt(year, month, day).expect("valid day");
+    let (d1, d2, d3) = (day(2026, 12, 31), day(2027, 1, 1), day(2027, 1, 7));
+    let images = |count| UsageVector::new().with(UsageUnit::Images, count);
+    let add = |store: Arc<dyn ProcessStore>, pid: String, partition: PartitionId, day, delta| async move {
+        store.add_spend(&pid, &partition, day, delta).await.expect("add spend");
+    };
+    add(first.clone(), a.clone(), here.clone(), d1, SpendDelta::new(10_000).with_units(images(1)))
+        .await;
+    add(
+        second.clone(),
+        a.clone(),
+        here.clone(),
+        d1,
+        SpendDelta::new(400).with_model_calls(2).with_total_tokens(1_500).with_units(
+            UsageVector::new()
+                .with(UsageUnit::InputTokens, 1_200)
+                .with(UsageUnit::OutputTokens, 300)
+                .with(UsageUnit::AudioMillis, 90_400),
+        ),
+    )
+    .await;
+    // Units without cost: a local model's usage still counts.
+    add(first.clone(), a.clone(), here.clone(), d2, SpendDelta::default().with_units(images(2)))
+        .await;
+    add(first.clone(), a.clone(), here.clone(), d3, SpendDelta::new(1).with_model_calls(1)).await;
+    add(first.clone(), b.clone(), here.clone(), d1, SpendDelta::new(5).with_units(images(4))).await;
+    add(
+        first.clone(),
+        b.clone(),
+        there.clone(),
+        d1,
+        SpendDelta::new(7).with_units(images(1 << 40)),
+    )
+    .await;
+
+    let usage = |scope: SpendScope, from, to| {
+        let store = second.clone();
+        async move { store.usage(&scope, from, to).await.expect("usage") }
+    };
+    let process = |pid: &String| SpendScope::Process(pid.clone());
+    let partition_of = |partition: &PartitionId| SpendScope::Partition(partition.clone());
+    let totals = |micro_usd, model_calls, total_tokens, units| UsageTotals {
+        micro_usd,
+        model_calls,
+        total_tokens,
+        units,
+    };
+    assert_eq!(
+        usage(process(&a), d1, d1).await,
+        totals(
+            10_400,
+            2,
+            1_500,
+            UsageVector::new()
+                .with(UsageUnit::Images, 1)
+                .with(UsageUnit::InputTokens, 1_200)
+                .with(UsageUnit::OutputTokens, 300)
+                .with(UsageUnit::AudioMillis, 90_400)
+        ),
+        "one day accumulates every counter"
+    );
+    assert_eq!(usage(process(&a), d2, d2).await, totals(0, 0, 0, images(2)), "units alone count");
+    assert_eq!(usage(process(&a), d2, d3).await, totals(1, 1, 0, images(2)));
+    assert_eq!(
+        usage(process(&a), d3, d1).await,
+        UsageTotals::default(),
+        "a reversed range is empty"
+    );
+    assert_eq!(usage(process(&unique("pid")), d1, d3).await, UsageTotals::default());
+    assert_eq!(usage(partition_of(&here), d1, d1).await.units.get(UsageUnit::Images), 1 + 4);
+    assert_eq!(usage(partition_of(&here), d1, d3).await.units.get(UsageUnit::Images), 1 + 2 + 4);
+    assert_eq!(usage(partition_of(&here), d1, d3).await.micro_usd, 10_400 + 1 + 5);
+    assert_eq!(usage(partition_of(&there), d1, d3).await, totals(7, 0, 0, images(1 << 40)));
+    assert_eq!(usage(process(&b), d1, d1).await.units.get(UsageUnit::Images), 4 + (1 << 40));
+    for scope in [process(&a), partition_of(&here)] {
+        let spend = second.spend(&scope, d1, d3).await.expect("spend");
+        assert_eq!(spend, usage(scope, d1, d3).await.micro_usd, "spend agrees with usage");
+    }
+
+    let adders: Vec<_> = (1..=20_u64)
+        .map(|count| {
+            let store = if count % 2 == 0 { first.clone() } else { second.clone() };
+            let delta = SpendDelta::new(count).with_model_calls(1).with_units(images(count));
+            tokio::spawn(add(store, b.clone(), here.clone(), d2, delta))
+        })
+        .collect();
+    for adder in adders {
+        adder.await.expect("adder completes");
+    }
+    assert_eq!(
+        usage(process(&b), d2, d2).await,
+        totals(210, 20, 0, images(210)),
+        "concurrent additions all count"
+    );
+
+    first
+        .put(
+            ProcessMeta::new(&b, QueueClass::Background, ProcessKind::Goal)
+                .with_partition(here.clone()),
+        )
+        .await
+        .expect("put");
+    assert!(first.delete(&b).await.expect("delete"));
+    assert_eq!(
+        usage(process(&b), d2, d2).await,
+        totals(210, 20, 0, images(210)),
+        "deleting the row keeps the usage"
+    );
 }

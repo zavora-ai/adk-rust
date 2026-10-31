@@ -402,27 +402,82 @@ impl EventFilter {
     }
 }
 
-/// An amount of committed spend (spec 3.2 §7.6), in micro-USD as `SpendLedger` counts it.
+/// Usage a process committed (spec 3.2 §7.6): the cost in micro-USD as `SpendLedger`
+/// counts it, the model calls and tokens a run budget counts, and the usage per
+/// [`UsageUnit`](adk_core::UsageUnit).
+///
+/// The kernel adds deltas to its daily totals ([`ProcessStore::add_spend`](crate::ProcessStore::add_spend)),
+/// which admission reads against [`Quotas`](crate::Quotas) and the daily proactive budget.
 ///
 /// # Example
 ///
 /// ```rust
+/// use adk_core::{UsageUnit, UsageVector};
 /// use adk_kernel::SpendDelta;
 ///
-/// assert_eq!(SpendDelta::new(12_500).micro_usd, 12_500);
+/// let delta = SpendDelta::new(12_500)
+///     .with_model_calls(2)
+///     .with_total_tokens(1_800)
+///     .with_units(UsageVector::new().with(UsageUnit::Images, 1));
+/// assert_eq!(delta.micro_usd, 12_500);
+/// assert_eq!(delta.units.get(UsageUnit::Images), 1);
+/// assert!(!delta.is_empty());
+/// assert!(SpendDelta::default().is_empty());
 /// ```
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct SpendDelta {
-    /// The amount, in micro-USD.
+    /// The cost, in micro-USD.
     pub micro_usd: u64,
+    /// Model calls started.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub model_calls: u64,
+    /// Input plus output tokens, as a run budget counts them.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub total_tokens: u64,
+    /// Usage per unit.
+    #[serde(default, skip_serializing_if = "adk_core::UsageVector::is_empty")]
+    pub units: adk_core::UsageVector,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl SpendDelta {
     /// A delta of `micro_usd`.
     pub fn new(micro_usd: u64) -> Self {
-        Self { micro_usd }
+        Self { micro_usd, ..Self::default() }
+    }
+
+    /// Sets the model calls.
+    #[must_use]
+    pub fn with_model_calls(mut self, model_calls: u64) -> Self {
+        self.model_calls = model_calls;
+        self
+    }
+
+    /// Sets the total tokens.
+    #[must_use]
+    pub fn with_total_tokens(mut self, total_tokens: u64) -> Self {
+        self.total_tokens = total_tokens;
+        self
+    }
+
+    /// Sets the usage per unit.
+    #[must_use]
+    pub fn with_units(mut self, units: adk_core::UsageVector) -> Self {
+        self.units = units;
+        self
+    }
+
+    /// Returns `true` when the delta adds nothing.
+    pub fn is_empty(&self) -> bool {
+        self.micro_usd == 0
+            && self.model_calls == 0
+            && self.total_tokens == 0
+            && self.units.is_empty()
     }
 }
 

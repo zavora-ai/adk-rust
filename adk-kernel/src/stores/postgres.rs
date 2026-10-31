@@ -8,10 +8,11 @@ use crate::error::{KernelError, Result};
 ///
 /// `pid` takes the `C` collation, so `list` orders by the bytes of the UTF-8 text on every
 /// server, as the other backends do, whatever the database's locale.
-const MIGRATIONS: &[(i64, &str, &str)] = &[(
-    1,
-    "create kernel process and spend tables",
-    "\
+const MIGRATIONS: &[(i64, &str, &str)] = &[
+    (
+        1,
+        "create kernel process and spend tables",
+        "\
 CREATE TABLE IF NOT EXISTS adk_kernel_processes (\
     pid TEXT COLLATE \"C\" PRIMARY KEY, \
     parent TEXT, \
@@ -36,14 +37,29 @@ CREATE TABLE IF NOT EXISTS adk_kernel_spend (\
     PRIMARY KEY (pid, partition_id, day)\
 );\
 CREATE INDEX IF NOT EXISTS adk_kernel_spend_partition ON adk_kernel_spend (partition_id, day);",
-)];
+    ),
+    (
+        2,
+        "create kernel usage counters table",
+        "\
+CREATE TABLE IF NOT EXISTS adk_kernel_usage (\
+    pid TEXT NOT NULL, \
+    partition_id TEXT NOT NULL, \
+    day BIGINT NOT NULL, \
+    counter TEXT NOT NULL, \
+    amount BIGINT NOT NULL, \
+    PRIMARY KEY (pid, partition_id, day, counter)\
+);\
+CREATE INDEX IF NOT EXISTS adk_kernel_usage_partition ON adk_kernel_usage (partition_id, day);",
+    ),
+];
 
 /// A [`ProcessStore`](crate::ProcessStore) in PostgreSQL, shared by every replica (spec 3.2
 /// §7.1, feature `postgres`).
 ///
 /// It opens from the URL of `adk-rust serve --store`, which keeps sessions, approvals, runs,
 /// modes, rules and plan checkpoints in the same database. Its tables are
-/// `adk_kernel_processes` and `adk_kernel_spend`; [`migrate`](Self::migrate) records its
+/// `adk_kernel_processes`, `adk_kernel_spend` and `adk_kernel_usage`; [`migrate`](Self::migrate) records its
 /// steps in
 /// `_adk_kernel_process_migrations` under an advisory lock, so replicas starting together
 /// migrate one at a time.

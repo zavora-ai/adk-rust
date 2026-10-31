@@ -593,6 +593,10 @@ pub struct TickInputs {
     pub daily_budget: RunBudget,
     /// The partition's proactive spend today, in micro-USD, ticks included.
     pub proactive_spent: u64,
+    /// The partition's proactive model calls today, ticks included.
+    pub proactive_model_calls: u64,
+    /// The partition's proactive tokens today, ticks included.
+    pub proactive_tokens: u64,
 }
 
 impl TickInputs {
@@ -606,6 +610,8 @@ impl TickInputs {
             quiet_hours: Vec::new(),
             daily_budget: RunBudget::new(),
             proactive_spent: 0,
+            proactive_model_calls: 0,
+            proactive_tokens: 0,
         }
     }
 
@@ -629,6 +635,28 @@ impl TickInputs {
     pub fn with_daily_budget(mut self, budget: RunBudget, spent_micro_usd: u64) -> Self {
         self.daily_budget = budget;
         self.proactive_spent = spent_micro_usd;
+        self
+    }
+
+    /// Sets the model calls and tokens the partition's proactive processes used today, which
+    /// the daily budget's `max_model_calls` and `max_total_tokens` cap.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::RunBudget;
+    /// use adk_kernel::{PartitionMode, TickInputs, TickMaterial};
+    ///
+    /// let now = chrono::Utc::now();
+    /// let inputs = TickInputs::new(now, TickMaterial::new("alice", PartitionMode::Ask))
+    ///     .with_daily_budget(RunBudget::new().max_total_tokens(50_000), 0)
+    ///     .with_proactive_calls_and_tokens(4, 12_000);
+    /// assert_eq!((inputs.proactive_model_calls, inputs.proactive_tokens), (4, 12_000));
+    /// ```
+    #[must_use]
+    pub fn with_proactive_calls_and_tokens(mut self, model_calls: u64, tokens: u64) -> Self {
+        self.proactive_model_calls = model_calls;
+        self.proactive_tokens = tokens;
         self
     }
 }
@@ -775,7 +803,10 @@ pub fn admit_tick(tick: &ConsolidationTick, inputs: &TickInputs) -> TickAdmissio
     }
     let daily = &inputs.daily_budget;
     let spent = material.spent_today;
-    if daily.max_cost_micro_usd.is_some_and(|cap| inputs.proactive_spent >= cap) {
+    if daily.max_cost_micro_usd.is_some_and(|cap| inputs.proactive_spent >= cap)
+        || daily.max_model_calls.is_some_and(|cap| inputs.proactive_model_calls >= cap)
+        || daily.max_total_tokens.is_some_and(|cap| inputs.proactive_tokens >= cap)
+    {
         return TickAdmission::Budget;
     }
     let remaining = |cap: Option<u64>, used: u64| {
@@ -818,8 +849,11 @@ pub fn admit_tick(tick: &ConsolidationTick, inputs: &TickInputs) -> TickAdmissio
             }
         }
     }
+    // A tick spends at most its share and what the day leaves of the proactive budget.
+    let day_left = |cap: Option<u64>, used: u64| cap.map(|cap| cap.saturating_sub(used));
+    let tokens_left = day_left(daily.max_total_tokens, inputs.proactive_tokens);
     let mut budget = RunBudget::new().max_total_tokens(
-        tokens.map_or(tick.max_tokens_per_tick, |left| left.min(tick.max_tokens_per_tick)),
+        [tokens, tokens_left].into_iter().flatten().fold(tick.max_tokens_per_tick, u64::min),
     );
     if let Some(cost) = cost {
         let day_left =
@@ -827,7 +861,8 @@ pub fn admit_tick(tick: &ConsolidationTick, inputs: &TickInputs) -> TickAdmissio
         budget = budget.max_cost_micro_usd(cost.min(day_left));
     }
     if let Some(calls) = calls {
-        budget = budget.max_model_calls(calls);
+        let day_left = day_left(daily.max_model_calls, inputs.proactive_model_calls);
+        budget = budget.max_model_calls(day_left.map_or(calls, |left| calls.min(left)));
     }
     if daily.allow_unpriced_models {
         budget = budget.allow_unpriced_models();
@@ -900,16 +935,14 @@ impl ConsolidationExecutor {
             .with_budget(input.budget);
         let outcome = consolidator.consolidate(run).await.map_err(|error| error.to_string())?;
         // The tick's spend is proactive spend of the partition (spec 3.2 §7.5, §7.9).
-        if outcome.spend.cost_micro_usd > 0
+        let spend = SpendDelta::new(outcome.spend.cost_micro_usd)
+            .with_model_calls(outcome.spend.model_calls)
+            .with_total_tokens(outcome.spend.total_tokens);
+        if !spend.is_empty()
             && let Err(error) = self
                 .sup
                 .processes
-                .add_spend(
-                    run_id,
-                    &input.partition,
-                    now.date_naive(),
-                    SpendDelta::new(outcome.spend.cost_micro_usd),
-                )
+                .add_spend(run_id, &input.partition, now.date_naive(), spend)
                 .await
         {
             tracing::warn!(process.pid = run_id, error = %error, "could not record a consolidation tick's spend");
@@ -1057,16 +1090,20 @@ impl ConsolidationTicker {
         // A mode tightened while the kernel runs holds the tick back (spec 3.3 §10 K3).
         material.mode = self.sup.area_mode(partition, material.mode).await;
         let daily = self.sup.proactivity.daily_budget.clone();
-        let spent = if daily.max_cost_micro_usd.is_some() {
-            self.sup.proactive_spent(partition).await
+        let used = if daily.max_cost_micro_usd.is_some()
+            || daily.max_model_calls.is_some()
+            || daily.max_total_tokens.is_some()
+        {
+            self.sup.proactive_usage(partition).await
         } else {
-            0
+            crate::stores::UsageTotals::default()
         };
         let quiet = self.sup.quiet_windows(partition).await;
         let inputs = TickInputs::new(now, material.clone())
             .with_busy(self.busy(partition).await)
             .with_quiet_hours(quiet)
-            .with_daily_budget(daily, spent);
+            .with_daily_budget(daily, used.micro_usd)
+            .with_proactive_calls_and_tokens(used.model_calls, used.total_tokens);
         let budget = match admit_tick(tick, &inputs) {
             TickAdmission::Admit { budget } => budget,
             held => {

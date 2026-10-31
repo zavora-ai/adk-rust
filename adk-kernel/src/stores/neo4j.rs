@@ -8,7 +8,10 @@ use async_trait::async_trait;
 use chrono::NaiveDate;
 use neo4rs::{Graph, Neo4jErrorKind, Query, Row, Txn, query};
 
-use super::{ProcessFilter, ProcessStore, SpendScope, day_number, stored_micro_usd, stored_total};
+use super::{
+    ProcessFilter, ProcessStore, SpendScope, UsageTotals, counters, day_number, stored_amount,
+    stored_micro_usd, stored_total,
+};
 use crate::bus::SpendDelta;
 use crate::error::{KernelError, Result};
 use crate::partition::PartitionId;
@@ -216,7 +219,13 @@ RETURN p.pid AS pid, p.parent AS parent, p.partition AS partition, p.queue AS qu
 const ADD_SPEND: &str = "\
 MERGE (s:AdkKernelSpend {key: $key}) \
 ON CREATE SET s.pid = $pid, s.partition = $partition, s.day = $day, s.micro_usd = 0 \
-SET s.micro_usd = s.micro_usd + $amount";
+SET s.micro_usd = s.micro_usd + $amount \
+WITH s \
+UNWIND range(0, size($names) - 1) AS i \
+MERGE (u:AdkKernelUsage {key: $key + ':' + $names[i]}) \
+ON CREATE SET u.pid = $pid, u.partition = $partition, u.day = $day, u.counter = $names[i], \
+    u.amount = 0 \
+SET u.amount = u.amount + $amounts[i]";
 
 /// A [`ProcessStore`] in Neo4j, shared by every replica (spec 3.2 §7.1, §13 Q8, feature
 /// `neo4j`).
@@ -225,6 +234,7 @@ SET s.micro_usd = s.micro_usd + $amount";
 /// |-------|--------------|------------|
 /// | `AdkKernelProcess` | `pid` | `order_key` (the hex of the pid), `partition`, `queue`, `suspend_requested` and, when set, `parent` and `agenda_item`, the properties `list` filters on; `kind`, `labels` and, when set, `wake` and `suspended_by` as JSON text |
 /// | `AdkKernelSpend` | `key`: the hex of the pid and the partition with the day | `pid`, `partition`, `day` (days from the common era) and `micro_usd` |
+/// | `AdkKernelUsage` | `key`: the spend key with the counter's name | `pid`, `partition`, `day`, `counter` (model calls, total tokens or a unit) and `amount` |
 ///
 /// `list` orders by `order_key`, so pids order by their UTF-8 bytes whatever the database's
 /// collation. `set_wake`, `set_queue` and `set_suspend_requested` each set one property, so
@@ -304,6 +314,12 @@ impl Neo4jProcessStore {
                      FOR (s:AdkKernelSpend) ON (s.pid)",
                     "CREATE INDEX adk_kernel_spend_partition IF NOT EXISTS \
                      FOR (s:AdkKernelSpend) ON (s.partition)",
+                    "CREATE CONSTRAINT adk_kernel_usage_key IF NOT EXISTS \
+                     FOR (u:AdkKernelUsage) REQUIRE u.key IS UNIQUE",
+                    "CREATE INDEX adk_kernel_usage_pid IF NOT EXISTS \
+                     FOR (u:AdkKernelUsage) ON (u.pid)",
+                    "CREATE INDEX adk_kernel_usage_partition IF NOT EXISTS \
+                     FOR (u:AdkKernelUsage) ON (u.partition)",
                 ],
             )
             .await
@@ -477,12 +493,20 @@ impl ProcessStore for Neo4jProcessStore {
         delta: SpendDelta,
     ) -> Result<()> {
         let day = day_number(day);
+        let mut names = Vec::new();
+        let mut amounts = Vec::new();
+        for (name, amount) in counters(&delta) {
+            names.push(name.to_string());
+            amounts.push(stored_amount(BACKEND, name, amount)?);
+        }
         let statement = query(ADD_SPEND)
             .param("key", format!("{}:{}:{day}", order_key(pid), order_key(partition.as_str())))
             .param("pid", pid)
             .param("partition", partition.as_str())
             .param("day", day)
-            .param("amount", stored_micro_usd(BACKEND, delta)?);
+            .param("amount", stored_micro_usd(BACKEND, &delta)?)
+            .param("names", names)
+            .param("amounts", amounts);
         let graph = self.graph.clone();
         detached(async move {
             rows(&graph, statement, "add to the spend totals").await?;
@@ -514,5 +538,37 @@ impl ProcessStore for Neo4jProcessStore {
         })
         .await?;
         stored_total(BACKEND, total)
+    }
+
+    async fn usage(
+        &self,
+        scope: &SpendScope,
+        from: NaiveDate,
+        to_inclusive: NaiveDate,
+    ) -> Result<UsageTotals> {
+        let (field, key) = match scope {
+            SpendScope::Process(pid) => ("pid", pid.clone()),
+            SpendScope::Partition(partition) => ("partition", partition.as_str().to_string()),
+        };
+        let statement = query(&format!(
+            "MATCH (u:AdkKernelUsage) WHERE u.{field} = $key AND u.day >= $from AND u.day <= $to \
+             RETURN u.counter AS counter, sum(u.amount) AS total"
+        ))
+        .param("key", key)
+        .param("from", day_number(from))
+        .param("to", day_number(to_inclusive));
+        let mut totals = UsageTotals {
+            micro_usd: self.spend(scope, from, to_inclusive).await?,
+            ..UsageTotals::default()
+        };
+        let graph = self.graph.clone();
+        let counters =
+            detached(async move { rows(&graph, statement, "sum the usage totals").await }).await?;
+        for row in &counters {
+            let name: String = column(row, "counter")?;
+            let amount: i64 = column(row, "total")?;
+            totals.add_counter(&name, stored_total(BACKEND, amount)?);
+        }
+        Ok(totals)
     }
 }

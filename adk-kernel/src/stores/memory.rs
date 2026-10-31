@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use chrono::NaiveDate;
 use tokio::sync::RwLock;
 
-use super::{ProcessFilter, ProcessStore, SpendScope};
+use super::{ProcessFilter, ProcessStore, SpendScope, UsageTotals};
 use crate::bus::SpendDelta;
 use crate::error::{KernelError, Result};
 use crate::partition::PartitionId;
@@ -43,8 +43,8 @@ use crate::wake::WakeSet;
 #[derive(Debug, Default)]
 pub struct InMemoryProcessStore {
     rows: RwLock<BTreeMap<String, ProcessMeta>>,
-    /// Micro-USD per process, partition and UTC day.
-    spend: RwLock<BTreeMap<(String, PartitionId, NaiveDate), u64>>,
+    /// Usage per process, partition and UTC day.
+    spend: RwLock<BTreeMap<(String, PartitionId, NaiveDate), UsageTotals>>,
 }
 
 impl InMemoryProcessStore {
@@ -121,8 +121,7 @@ impl ProcessStore for InMemoryProcessStore {
         delta: SpendDelta,
     ) -> Result<()> {
         let mut spend = self.spend.write().await;
-        let total = spend.entry((pid.to_string(), partition.clone(), day)).or_default();
-        *total = total.saturating_add(delta.micro_usd);
+        spend.entry((pid.to_string(), partition.clone(), day)).or_default().add(&delta);
         Ok(())
     }
 
@@ -132,18 +131,25 @@ impl ProcessStore for InMemoryProcessStore {
         from: NaiveDate,
         to_inclusive: NaiveDate,
     ) -> Result<u64> {
-        Ok(self
-            .spend
-            .read()
-            .await
-            .iter()
-            .filter(|((pid, partition, day), _)| {
-                (from..=to_inclusive).contains(day)
-                    && match scope {
-                        SpendScope::Process(process) => process == pid,
-                        SpendScope::Partition(scoped) => scoped == partition,
-                    }
-            })
-            .fold(0_u64, |sum, (_, micro_usd)| sum.saturating_add(*micro_usd)))
+        Ok(self.usage(scope, from, to_inclusive).await?.micro_usd)
+    }
+
+    async fn usage(
+        &self,
+        scope: &SpendScope,
+        from: NaiveDate,
+        to_inclusive: NaiveDate,
+    ) -> Result<UsageTotals> {
+        let mut totals = UsageTotals::default();
+        for ((pid, partition, day), day_totals) in self.spend.read().await.iter() {
+            let in_scope = match scope {
+                SpendScope::Process(process) => process == pid,
+                SpendScope::Partition(scoped) => scoped == partition,
+            };
+            if in_scope && (from..=to_inclusive).contains(day) {
+                totals.merge(day_totals);
+            }
+        }
+        Ok(totals)
     }
 }

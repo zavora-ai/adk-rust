@@ -215,7 +215,7 @@ mod sqlite {
         SqliteAutonomyStore::new(pool.clone()).migrate().await.expect("migrate");
         SqliteSignalStore::new(pool.clone()).migrate().await.expect("migrate again");
         assert_eq!(count(&pool, "_adk_kernel_charter_migrations").await, 1);
-        assert_eq!(count(&pool, "_adk_kernel_process_migrations").await, 1);
+        assert_eq!(count(&pool, "_adk_kernel_process_migrations").await, 2);
         assert_eq!(count(&pool, "_adk_session_migrations").await, sessions_before);
         assert_eq!(count(&pool, "adk_kernel_charters").await, 0);
     }

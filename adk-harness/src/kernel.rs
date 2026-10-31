@@ -367,11 +367,7 @@ impl ProgressSource for HarnessProgress {
 
     #[cfg(feature = "observe")]
     async fn usage(&self, run: &RunRecord) -> adk_kernel::Result<Option<adk_kernel::RunUsage>> {
-        Ok(self.trails.session_usage(&run.app_name, &run.user_id, &session_of(run)).map(
-            |(model_calls, tool_calls, cost)| {
-                adk_kernel::RunUsage::new(model_calls, tool_calls, cost)
-            },
-        ))
+        Ok(self.trails.session_usage(&run.app_name, &run.user_id, &session_of(run)))
     }
 
     fn attach(&self, processes: ProcessHandle) {

@@ -98,7 +98,7 @@ async fn migrations_share_harness_db_and_settings_survive_a_restart() {
     store.migrate().await.expect("migrate");
     store.migrate().await.expect("migrate again");
     assert_eq!(count(&pool, "_adk_kernel_control_migrations").await, 1);
-    assert_eq!(count(&pool, "_adk_kernel_process_migrations").await, 1);
+    assert_eq!(count(&pool, "_adk_kernel_process_migrations").await, 2);
 
     let now = chrono::Utc::now();
     let settings = AreaSettings::new("default")

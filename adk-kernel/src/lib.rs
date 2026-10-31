@@ -204,7 +204,7 @@ pub use stores::SqlitePartitionStore;
 pub use stores::SqliteProcessStore;
 pub use stores::{
     InMemoryAgendaStore, InMemoryCronWatermarkStore, InMemoryPartitionStore, InMemoryProcessStore,
-    ProcessFilter, ProcessStore, SpendScope,
+    ProcessFilter, ProcessStore, SpendScope, UsageTotals,
 };
 #[cfg(feature = "webhooks")]
 pub use wake::webhook_wake_hook;

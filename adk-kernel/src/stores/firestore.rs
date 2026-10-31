@@ -10,7 +10,10 @@ use firestore::{FirestoreDb, FirestoreTransactionOptions, FirestoreWritePrecondi
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 
-use super::{ProcessFilter, ProcessStore, SpendScope, day_number, stored_micro_usd, stored_total};
+use super::{
+    ProcessFilter, ProcessStore, SpendScope, UsageTotals, counters, day_number, stored_amount,
+    stored_micro_usd, stored_total,
+};
 use crate::bus::SpendDelta;
 use crate::error::{KernelError, Result};
 use crate::partition::PartitionId;
@@ -223,6 +226,9 @@ struct SpendDoc {
     day: i64,
     #[serde(default, skip_serializing)]
     micro_usd: i64,
+    /// Model calls, total tokens and units by name, written only by increments.
+    #[serde(default, skip_serializing)]
+    counters: std::collections::BTreeMap<String, i64>,
 }
 
 /// A [`ProcessStore`] in Firestore, shared by every replica (spec 3.2 §7.1, §13 Q8, feature
@@ -231,8 +237,8 @@ struct SpendDoc {
 /// | Collection (document ID) | Contents |
 /// |--------------------------|----------|
 /// | `adk_kernel_processes` (hex of the pid) | `pid`, `partition`, `queue`, `suspend_requested` and, when set, `parent` and `agenda_item`; `kind`, `labels` and, when set, `wake` and `suspended_by` as JSON text |
-/// | `adk_kernel_spend` (SHA-256 of pid, partition and day) | One process's spend in one partition on one UTC day: `pid`, `partition`, `day` (days from the common era), `micro_usd` |
-/// | `adk_kernel_partition_spend` (SHA-256 of partition and day) | One partition's spend on one UTC day: `partition`, `day`, `micro_usd` |
+/// | `adk_kernel_spend` (SHA-256 of pid, partition and day) | One process's spend in one partition on one UTC day: `pid`, `partition`, `day` (days from the common era), `micro_usd`, and `counters`: model calls, total tokens and units by name |
+/// | `adk_kernel_partition_spend` (SHA-256 of partition and day) | One partition's spend on one UTC day: `partition`, `day`, `micro_usd`, `counters` |
 ///
 /// `list` queries with equality filters only and Firestore orders their results by
 /// document name, the hex of the pid, which orders as the pid's UTF-8 bytes do; Firestore
@@ -421,14 +427,18 @@ impl ProcessStore for FirestoreProcessStore {
         day: NaiveDate,
         delta: SpendDelta,
     ) -> Result<()> {
-        let amount = stored_micro_usd(BACKEND, delta)?;
+        let mut increments = vec![("micro_usd".to_string(), stored_micro_usd(BACKEND, &delta)?)];
+        for (name, amount) in counters(&delta) {
+            increments.push((format!("counters.{name}"), stored_amount(BACKEND, name, amount)?));
+        }
+        let increments = Arc::new(increments);
         let day = day_number(day);
         let day_text = day.to_string();
         let process = SpendDoc {
             pid: Some(pid.to_string()),
             partition: partition.as_str().to_string(),
             day,
-            micro_usd: 0,
+            ..SpendDoc::default()
         };
         let shared = SpendDoc { pid: None, ..process.clone() };
         let writes = Arc::new([
@@ -449,6 +459,7 @@ impl ProcessStore for FirestoreProcessStore {
             .run_transaction_with_options(
                 move |db, transaction| -> TxFuture<'_, ()> {
                     let writes = writes.clone();
+                    let increments = increments.clone();
                     Box::pin(async move {
                         for (collection, id, mask, doc) in writes.iter() {
                             db.fluent()
@@ -457,7 +468,13 @@ impl ProcessStore for FirestoreProcessStore {
                                 .in_col(collection)
                                 .document_id(id)
                                 .object(doc)
-                                .transforms(|t| t.fields([t.field("micro_usd").increment(amount)]))
+                                .transforms(|t| {
+                                    t.fields(
+                                        increments.iter().map(|(field, amount)| {
+                                            t.field(field).increment(*amount)
+                                        }),
+                                    )
+                                })
                                 .add_to_transaction(transaction)
                                 .map_err(tx_fail("add to the spend totals"))?;
                         }
@@ -488,5 +505,29 @@ impl ProcessStore for FirestoreProcessStore {
             .filter(|doc| days.contains(&doc.day))
             .fold(0_i64, |total, doc| total.saturating_add(doc.micro_usd));
         stored_total(BACKEND, total)
+    }
+
+    async fn usage(
+        &self,
+        scope: &SpendScope,
+        from: NaiveDate,
+        to_inclusive: NaiveDate,
+    ) -> Result<UsageTotals> {
+        let docs = match scope {
+            SpendScope::Process(pid) => self.day_totals(PROCESS_SPEND, "pid", pid).await?,
+            SpendScope::Partition(partition) => {
+                self.day_totals(PARTITION_SPEND, "partition", partition.as_str()).await?
+            }
+        };
+        let days = day_number(from)..=day_number(to_inclusive);
+        let mut totals = UsageTotals::default();
+        for doc in docs.iter().filter(|doc| days.contains(&doc.day)) {
+            totals.micro_usd =
+                totals.micro_usd.saturating_add(stored_total(BACKEND, doc.micro_usd)?);
+            for (name, amount) in &doc.counters {
+                totals.add_counter(name, stored_total(BACKEND, *amount)?);
+            }
+        }
+        Ok(totals)
     }
 }

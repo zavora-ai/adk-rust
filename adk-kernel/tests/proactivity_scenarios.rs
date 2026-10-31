@@ -440,6 +440,163 @@ async fn k4_in_auto_it_runs_after_quiet_hours_within_the_daily_budget() {
     kernel.stop().await.unwrap();
 }
 
+/// A partition's daily unit cap holds background work: with three images already used today
+/// under `dailyCaps.images = 3`, a fourth background process sleeps until
+/// `BudgetReplenished` and runs the next UTC day; a human turn is never held.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_daily_unit_cap_holds_background_work_until_the_next_day() {
+    let today = Utc::now().date_naive();
+    let noon = Utc.from_utc_datetime(&today.and_hms_opt(12, 0, 0).unwrap());
+    let clock = ManualClock::new(noon);
+    let mut world = World::new(vec![
+        ScriptedResponse::text("Answered the person."),
+        ScriptedResponse::text("Rendered the fourth card."),
+    ]);
+    world.runs = Arc::new(InMemoryRunStore::new().with_clock(Arc::new(clock.clone())));
+    let control = GovernanceControl::new();
+    let quotas = Quotas::new().with_daily_cap(adk_core::UsageUnit::Images, 3);
+    let kernel = kernel(
+        &world,
+        &control,
+        config(&control, Arc::new(clock.clone())).with_quotas(quotas),
+        None,
+        Arc::new(HeldStep(Arc::default())),
+    );
+    kernel.start().await.unwrap();
+    let partition = PartitionId::default();
+    let images = adk_core::UsageVector::new().with(adk_core::UsageUnit::Images, 3);
+    world
+        .processes
+        .add_spend("earlier-renders", &partition, today, SpendDelta::new(30_000).with_units(images))
+        .await
+        .unwrap();
+
+    let human = kernel
+        .processes()
+        .spawn(run_on(QueueClass::Interactive, "hello"), ProcessSpec::new(ProcessKind::Interactive))
+        .await
+        .unwrap();
+    in_state(&world.runs, &human.meta.pid, RunState::Completed).await;
+
+    let render = kernel
+        .processes()
+        .spawn(
+            run_on(QueueClass::Background, "render the fourth card"),
+            ProcessSpec::new(ProcessKind::Goal),
+        )
+        .await
+        .unwrap();
+    let asleep = eventually("the capped process asleep", || async {
+        let process = kernel.processes().get(&render.meta.pid).await.ok().flatten()?;
+        (process.run.state == RunState::Waiting && process.meta.wake.is_some()).then_some(process)
+    })
+    .await;
+    assert_eq!(
+        asleep.meta.wake.unwrap().any_of,
+        [Wake::BudgetReplenished { partition: partition.clone() }]
+    );
+    assert_eq!(asleep.meta.labels.get("kernel.admission").map(String::as_str), Some("budget"));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(world.model_calls(), 1, "only the human turn ran");
+
+    clock.advance(Duration::from_secs(24 * 60 * 60));
+    in_state(&world.runs, &render.meta.pid, RunState::Completed).await;
+    assert_eq!(world.model_calls(), 2);
+    kernel.stop().await.unwrap();
+}
+
+/// The daily proactive budget's token cap is a per-partition daily total (spec 3.2 §7.5): once
+/// proactive processes used it, a proposal is refused and a proactive process sleeps until
+/// `BudgetReplenished`, while background work still runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_daily_proactive_token_cap_refuses_proposals_and_holds_proactive_work() {
+    let today = Utc::now().date_naive();
+    let noon = Utc.from_utc_datetime(&today.and_hms_opt(12, 0, 0).unwrap());
+    let clock = ManualClock::new(noon);
+    let mut world = World::new(vec![
+        ScriptedResponse::text("Background work ran."),
+        ScriptedResponse::text("Maintenance ran the next day."),
+    ]);
+    world.runs = Arc::new(InMemoryRunStore::new().with_clock(Arc::new(clock.clone())));
+    let control = GovernanceControl::new();
+    let policy = ProactivityPolicy::default()
+        .with_daily_budget(RunBudget::new().max_total_tokens(10_000).max_model_calls(50));
+    let kernel = kernel(
+        &world,
+        &control,
+        config(&control, Arc::new(clock.clone())).with_proactivity(policy),
+        None,
+        Arc::new(HeldStep(Arc::default())),
+    );
+    kernel.start().await.unwrap();
+    let parent = proposer(&world.runs).await;
+    let partition = PartitionId::default();
+    // An earlier maintenance process used the day's tokens.
+    world
+        .processes
+        .put(
+            adk_kernel::ProcessMeta::new(
+                "earlier-tick",
+                QueueClass::Maintenance,
+                ProcessKind::Maintenance,
+            )
+            .with_partition(partition.clone()),
+        )
+        .await
+        .unwrap();
+    world
+        .processes
+        .add_spend(
+            "earlier-tick",
+            &partition,
+            today,
+            SpendDelta::new(0).with_model_calls(3).with_total_tokens(10_000),
+        )
+        .await
+        .unwrap();
+
+    let ProposalOutcome::Rejected { reason } = kernel
+        .agenda()
+        .propose(followup(&parent, "Over the token budget"), PartitionMode::Auto)
+        .await
+        .unwrap()
+    else {
+        panic!("the day's proactive tokens are spent");
+    };
+    assert!(reason.contains("daily proactive budget") && reason.contains("tokens"), "{reason}");
+
+    let background = kernel
+        .processes()
+        .spawn(run_on(QueueClass::Background, "background"), ProcessSpec::new(ProcessKind::Goal))
+        .await
+        .unwrap();
+    in_state(&world.runs, &background.meta.pid, RunState::Completed).await;
+
+    let tick = kernel
+        .processes()
+        .spawn(
+            run_on(QueueClass::Background, "consolidate"),
+            ProcessSpec::new(ProcessKind::Maintenance),
+        )
+        .await
+        .unwrap();
+    let asleep = eventually("the proactive process asleep", || async {
+        let process = kernel.processes().get(&tick.meta.pid).await.ok().flatten()?;
+        (process.run.state == RunState::Waiting && process.meta.wake.is_some()).then_some(process)
+    })
+    .await;
+    assert_eq!(
+        asleep.meta.wake.unwrap().any_of,
+        [Wake::BudgetReplenished { partition: partition.clone() }]
+    );
+    assert_eq!(world.model_calls(), 1, "only the background work ran");
+
+    clock.advance(Duration::from_secs(24 * 60 * 60));
+    in_state(&world.runs, &tick.meta.pid, RunState::Completed).await;
+    assert_eq!(world.model_calls(), 2);
+    kernel.stop().await.unwrap();
+}
+
 /// K-I23: an item the consolidation tick proposed waits for a person even in an Auto
 /// partition; a service cannot approve it; a person's inbox approval runs it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

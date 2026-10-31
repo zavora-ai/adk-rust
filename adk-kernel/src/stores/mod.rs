@@ -60,7 +60,7 @@ use async_trait::async_trait;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
-use adk_core::RunState;
+use adk_core::{RunState, UsageUnit, UsageVector};
 
 use crate::bus::SpendDelta;
 use crate::error::Result;
@@ -337,8 +337,8 @@ pub trait ProcessStore: Send + Sync {
     /// `pid`, or [`KernelError::Store`](crate::KernelError::Store) when the backend fails.
     async fn set_suspend_requested(&self, pid: &str, requested: bool) -> Result<()>;
 
-    /// Adds `delta` to the spend of `pid` in `partition` on the UTC day `day`. Additions
-    /// from concurrent writers all count.
+    /// Adds `delta` — its cost, model calls, total tokens and units — to the totals of `pid`
+    /// in `partition` on the UTC day `day`. Additions from concurrent writers all count.
     ///
     /// # Errors
     ///
@@ -363,6 +363,146 @@ pub trait ProcessStore: Send + Sync {
         from: NaiveDate,
         to_inclusive: NaiveDate,
     ) -> Result<u64>;
+
+    /// What `scope` used from `from` through `to_inclusive`: the cost, model calls, total
+    /// tokens and units [`add_spend`](Self::add_spend) recorded; zero when none was.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Store`](crate::KernelError::Store) when the backend fails.
+    async fn usage(
+        &self,
+        scope: &SpendScope,
+        from: NaiveDate,
+        to_inclusive: NaiveDate,
+    ) -> Result<UsageTotals>;
+}
+
+/// What a process or a partition used over a span of UTC days ([`ProcessStore::usage`]).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{UsageUnit, UsageVector};
+/// use adk_kernel::SpendDelta;
+/// use adk_kernel::stores::UsageTotals;
+///
+/// let mut totals = UsageTotals::default();
+/// totals.add(&SpendDelta::new(10_000).with_units(UsageVector::new().with(UsageUnit::Images, 1)));
+/// totals.add(&SpendDelta::new(500).with_model_calls(1).with_total_tokens(900));
+/// assert_eq!(totals.micro_usd, 10_500);
+/// assert_eq!((totals.model_calls, totals.total_tokens), (1, 900));
+/// assert_eq!(totals.units.get(UsageUnit::Images), 1);
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct UsageTotals {
+    /// Cost, in micro-USD.
+    pub micro_usd: u64,
+    /// Model calls.
+    pub model_calls: u64,
+    /// Input plus output tokens.
+    pub total_tokens: u64,
+    /// Usage per unit.
+    pub units: UsageVector,
+}
+
+impl UsageTotals {
+    /// Adds `delta`, saturating.
+    pub fn add(&mut self, delta: &SpendDelta) {
+        self.micro_usd = self.micro_usd.saturating_add(delta.micro_usd);
+        self.model_calls = self.model_calls.saturating_add(delta.model_calls);
+        self.total_tokens = self.total_tokens.saturating_add(delta.total_tokens);
+        self.units.merge(&delta.units);
+    }
+
+    /// Adds every total of `other`, saturating.
+    pub fn merge(&mut self, other: &UsageTotals) {
+        self.micro_usd = self.micro_usd.saturating_add(other.micro_usd);
+        self.model_calls = self.model_calls.saturating_add(other.model_calls);
+        self.total_tokens = self.total_tokens.saturating_add(other.total_tokens);
+        self.units.merge(&other.units);
+    }
+
+    /// Adds `amount` to the counter a durable backend stores as `name` ([`counters`]); an
+    /// unknown name, written by a later version, is skipped.
+    #[cfg(any(
+        feature = "sqlite",
+        feature = "postgres",
+        feature = "redis",
+        feature = "mongodb",
+        feature = "firestore",
+        feature = "neo4j"
+    ))]
+    pub(crate) fn add_counter(&mut self, name: &str, amount: u64) {
+        match name {
+            MODEL_CALLS_COUNTER => self.model_calls = self.model_calls.saturating_add(amount),
+            TOTAL_TOKENS_COUNTER => self.total_tokens = self.total_tokens.saturating_add(amount),
+            unit => {
+                if let Some(unit) = UsageUnit::ALL.into_iter().find(|known| known.as_str() == unit)
+                {
+                    self.units.add(unit, amount);
+                }
+            }
+        }
+    }
+}
+
+/// The counter name of [`SpendDelta::model_calls`] in the durable backends.
+#[cfg(any(
+    feature = "sqlite",
+    feature = "postgres",
+    feature = "redis",
+    feature = "mongodb",
+    feature = "firestore",
+    feature = "neo4j"
+))]
+const MODEL_CALLS_COUNTER: &str = "modelCalls";
+
+/// The counter name of [`SpendDelta::total_tokens`] in the durable backends.
+#[cfg(any(
+    feature = "sqlite",
+    feature = "postgres",
+    feature = "redis",
+    feature = "mongodb",
+    feature = "firestore",
+    feature = "neo4j"
+))]
+const TOTAL_TOKENS_COUNTER: &str = "totalTokens";
+
+/// A counter amount as a durable backend stores it, a signed 64-bit integer.
+#[cfg(any(
+    feature = "sqlite",
+    feature = "postgres",
+    feature = "redis",
+    feature = "mongodb",
+    feature = "firestore",
+    feature = "neo4j"
+))]
+pub(crate) fn stored_amount(backend: &'static str, name: &str, amount: u64) -> Result<i64> {
+    i64::try_from(amount).map_err(|_| crate::KernelError::Store {
+        backend,
+        reason: format!("a {name} delta of {amount} exceeds a signed 64-bit integer"),
+    })
+}
+
+/// The named counters a durable backend stores beside a delta's micro-USD: model calls,
+/// total tokens and each unit by its wire name, the zero ones left out.
+#[cfg(any(
+    feature = "sqlite",
+    feature = "postgres",
+    feature = "redis",
+    feature = "mongodb",
+    feature = "firestore",
+    feature = "neo4j"
+))]
+pub(crate) fn counters(delta: &SpendDelta) -> Vec<(&'static str, u64)> {
+    [(MODEL_CALLS_COUNTER, delta.model_calls), (TOTAL_TOKENS_COUNTER, delta.total_tokens)]
+        .into_iter()
+        .chain(delta.units.iter().map(|(unit, amount)| (unit.as_str(), amount)))
+        .filter(|(_, amount)| *amount > 0)
+        .collect()
 }
 
 /// Whose spend [`ProcessStore::spend`] sums (spec 3.2 §7.3, §7.10).
@@ -498,7 +638,7 @@ pub(crate) fn day_number(day: NaiveDate) -> i64 {
 
 /// A spend delta as the document and graph backends store it, a signed 64-bit integer.
 #[cfg(any(feature = "mongodb", feature = "firestore", feature = "neo4j"))]
-pub(crate) fn stored_micro_usd(backend: &'static str, delta: SpendDelta) -> Result<i64> {
+pub(crate) fn stored_micro_usd(backend: &'static str, delta: &SpendDelta) -> Result<i64> {
     i64::try_from(delta.micro_usd).map_err(|_| crate::KernelError::Store {
         backend,
         reason: format!(

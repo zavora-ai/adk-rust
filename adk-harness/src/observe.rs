@@ -618,7 +618,9 @@ pub(crate) fn observe_run(
             let usage = self.tracker.as_ref().map(|tracker| tracker.usage()).unwrap_or_default();
             if !self.settled {
                 self.settled = true;
-                self.trails.usage_settle(&self.session_key, &usage);
+                let units =
+                    self.tracker.as_ref().map(|tracker| tracker.units()).unwrap_or_default();
+                self.trails.usage_settle(&self.session_key, &usage, &units);
                 self.trails.clear(&self.session_key);
                 self.accounts.finish_run(self.subject.clone(), &usage, self.tokens);
             }
@@ -730,6 +732,8 @@ struct SessionUsage {
     model_calls: u64,
     tool_calls: u64,
     cost_micro_usd: u64,
+    total_tokens: u64,
+    units: adk_core::UsageVector,
     live: Option<Arc<BudgetTracker>>,
 }
 
@@ -793,33 +797,48 @@ impl RunTrails {
         usage.entry(key.clone()).or_default().live = Some(tracker);
     }
 
-    /// Adds a finished run's `usage` to the session's total.
-    fn usage_settle(&self, key: &(String, String, String), run: &BudgetUsage) {
+    /// Adds a finished run's `usage` and `units` to the session's total.
+    fn usage_settle(
+        &self,
+        key: &(String, String, String),
+        run: &BudgetUsage,
+        units: &adk_core::UsageVector,
+    ) {
         let mut usage = self.usage.lock().unwrap_or_else(|e| e.into_inner());
         let entry = usage.entry(key.clone()).or_default();
         entry.model_calls += run.model_calls;
         entry.tool_calls += run.tool_calls;
         entry.cost_micro_usd = entry.cost_micro_usd.saturating_add(run.cost_micro_usd);
+        entry.total_tokens = entry.total_tokens.saturating_add(run.total_tokens);
+        entry.units.merge(units);
         entry.live = None;
     }
 
-    /// The session's model calls, tool calls and cost in micro-USD since the harness was
-    /// built, its run in flight included; `None` before its first run.
+    /// The session's model calls, tool calls, cost in micro-USD, tokens and units since the
+    /// harness was built, its run in flight included; `None` before its first run.
     #[cfg(feature = "kernel")]
     pub(crate) fn session_usage(
         &self,
         app: &str,
         user: &str,
         session: &str,
-    ) -> Option<(u64, u64, u64)> {
+    ) -> Option<adk_kernel::RunUsage> {
         let usage = self.usage.lock().unwrap_or_else(|e| e.into_inner());
         let entry = usage.get(&session_key(app, user, session))?;
         let live = entry.live.as_ref().map(|tracker| tracker.usage()).unwrap_or_default();
-        Some((
-            entry.model_calls + live.model_calls,
-            entry.tool_calls + live.tool_calls,
-            entry.cost_micro_usd.saturating_add(live.cost_micro_usd),
-        ))
+        let mut units = entry.units.clone();
+        if let Some(tracker) = &entry.live {
+            units.merge(&tracker.units());
+        }
+        Some(
+            adk_kernel::RunUsage::new(
+                entry.model_calls + live.model_calls,
+                entry.tool_calls + live.tool_calls,
+                entry.cost_micro_usd.saturating_add(live.cost_micro_usd),
+            )
+            .with_total_tokens(entry.total_tokens.saturating_add(live.total_tokens))
+            .with_units(units),
+        )
     }
 
     fn set_verdict(&self, key: (String, String, String), verdict: String) {

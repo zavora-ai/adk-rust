@@ -1260,7 +1260,8 @@ impl Agenda {
         if item.origin.is_question() {
             return Ok(None);
         }
-        if let Some(cap) = policy.daily_budget.max_cost_micro_usd {
+        let daily = &policy.daily_budget;
+        if let Some(cap) = daily.max_cost_micro_usd {
             let need =
                 item.budget.as_ref().and_then(|budget| budget.max_cost_micro_usd).unwrap_or(0);
             if need > cap {
@@ -1268,13 +1269,26 @@ impl Agenda {
                     "its budget of {need} micro-USD exceeds the daily proactive budget of {cap}"
                 )));
             }
-            let spent = sup.proactive_spent(&item.partition).await;
-            if spent >= cap {
-                return Ok(Some(format!(
-                    "partition {} spent its daily proactive budget ({spent} of {cap} micro-USD)",
-                    item.partition
-                )));
-            }
+        }
+        if daily.max_cost_micro_usd.is_none()
+            && daily.max_model_calls.is_none()
+            && daily.max_total_tokens.is_none()
+        {
+            return Ok(None);
+        }
+        let used = sup.proactive_usage(&item.partition).await;
+        let reached = [
+            (daily.max_cost_micro_usd, used.micro_usd, "micro-USD"),
+            (daily.max_model_calls, used.model_calls, "model calls"),
+            (daily.max_total_tokens, used.total_tokens, "tokens"),
+        ]
+        .into_iter()
+        .find_map(|(cap, used, unit)| cap.filter(|cap| used >= *cap).map(|cap| (used, cap, unit)));
+        if let Some((used, cap, unit)) = reached {
+            return Ok(Some(format!(
+                "partition {} spent its daily proactive budget ({used} of {cap} {unit})",
+                item.partition
+            )));
         }
         Ok(None)
     }
