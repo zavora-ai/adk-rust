@@ -372,7 +372,9 @@ impl PhoneBuilder {
     ///
     /// Returns an invalid-input error when the home URL is not https (or http on
     /// `localhost`) or is an IP address, [`MobileError::PasskeyRefused`] when its host cannot
-    /// hold passkeys, and [`MobileError::PushKey`] when no key can be made.
+    /// hold passkeys, [`MobileError::PushKey`] when no key can be made, and
+    /// [`MobileError::Source`] (`surface.phone.push_client`) when the push client cannot be
+    /// built.
     pub fn build(self) -> Result<Phone, MobileError> {
         let home = self.home_url.as_deref().map(Home::parse).transpose()?;
         let verifier = home
@@ -407,7 +409,7 @@ impl PhoneBuilder {
                 home,
                 passkeys: Passkeys::new(verifier, store.clone()),
                 store,
-                sender: PushSender::new(vapid, self.allowlist.clone(), self.backoff),
+                sender: PushSender::new(vapid, self.allowlist.clone(), self.backoff)?,
                 quiet,
                 approvals: self.approvals,
                 audit: self.audit,

@@ -4,7 +4,7 @@
 //!
 //! | Step | Behaviour |
 //! |------|-----------|
-//! | Egress check | The URL must pass the [`EgressPolicy`]: HTTPS, and a host that is not, and does not resolve to, a loopback, private, link-local, or other non-public address. Resolution happens inside the HTTP client, so the address checked is the address connected to |
+//! | Egress check | The URL must pass the [`EgressPolicy`]: HTTPS, and a host that is not, and does not resolve to, a loopback, private, link-local, or other non-public address. Resolution happens inside the HTTP client, so the address checked is the address connected to; when that client cannot be built, every delivery is dead-lettered and none is sent |
 //! | Signing | Every attempt is signed with [Standard Webhooks](crate::webhook) under the message's stable `webhook-id` and a fresh `webhook-timestamp` |
 //! | Success | Any `2xx` response |
 //! | Retry | Connection errors, timeouts, `408`, `425`, `429`, and `5xx`, with exponential backoff and full jitter, honouring `Retry-After` up to the backoff cap |
@@ -428,7 +428,8 @@ enum Attempt {
 /// Clones share the HTTP client and the dead-letter sink.
 #[derive(Clone)]
 pub struct WebhookDelivery {
-    client: reqwest::Client,
+    /// The client that enforces the egress policy, or why it could not be built.
+    client: Result<reqwest::Client, String>,
     retry: RetryPolicy,
     egress: EgressPolicy,
     dead_letters: Option<Arc<dyn DeadLetterSink>>,
@@ -468,9 +469,16 @@ impl WebhookDelivery {
             // A proxy would resolve the host itself, out of the resolver's reach.
             builder = builder.no_proxy().dns_resolver(Arc::new(PublicOnlyResolver));
         }
-        let client = builder.build().unwrap_or_else(|error| {
-            tracing::error!(error = %error, "webhook client failed to build; using the default client");
-            reqwest::Client::new()
+        // Never a default client in its place: it would skip the resolver's check, use the
+        // system proxies and follow redirects.
+        let client = builder.build().map_err(|error| {
+            tracing::error!(error = %error, "webhook client failed to build; every delivery is refused");
+            format!(
+                "the webhook HTTP client could not be built ({}), so no delivery is sent \
+                 without its egress guard; fix the TLS setup the error names, such as a native \
+                 root certificate store with no valid certificate, and restart",
+                full_error(&error)
+            )
         });
         Self { client, retry, egress, dead_letters: None, clock: Arc::new(SystemClock) }
     }
@@ -511,6 +519,9 @@ impl WebhookDelivery {
 
     /// Delivers `message` to `endpoint`, retrying until it succeeds, fails permanently,
     /// or runs out of attempts, and dead-letters it in the last two cases.
+    ///
+    /// A sender whose HTTP client could not be built dead-letters every message without an
+    /// attempt.
     pub async fn deliver(
         &self,
         endpoint: &WebhookEndpoint,
@@ -520,10 +531,19 @@ impl WebhookDelivery {
             Ok(url) => url,
             Err(reason) => return self.dead_letter(endpoint, message, 0, None, reason).await,
         };
+        let client = match &self.client {
+            Ok(client) => client,
+            Err(reason) => {
+                return self.dead_letter(endpoint, message, 0, None, reason.clone()).await;
+            }
+        };
         let mut attempt = 0;
         loop {
             attempt += 1;
-            let (status, error, retry_after) = match self.attempt(&url, endpoint, message).await {
+            let (status, error, retry_after) = match self
+                .attempt(client, &url, endpoint, message)
+                .await
+            {
                 Attempt::Delivered(status) => {
                     tracing::debug!(webhook.id = %message.id, http.status = status, attempt, "webhook delivered");
                     return DeliveryReport::Delivered { attempts: attempt, status };
@@ -552,13 +572,13 @@ impl WebhookDelivery {
 
     async fn attempt(
         &self,
+        client: &reqwest::Client,
         url: &reqwest::Url,
         endpoint: &WebhookEndpoint,
         message: &WebhookMessage,
     ) -> Attempt {
         let signed = endpoint.signer.sign(&message.id, self.clock.now().timestamp(), &message.body);
-        let mut request = self
-            .client
+        let mut request = client
             .post(url.clone())
             .header(reqwest::header::CONTENT_TYPE, &message.content_type)
             .body(message.body.clone());
@@ -704,6 +724,51 @@ mod tests {
             "https://[2606:4700::1111]/x",
         ] {
             assert!(policy.check_url(url).is_ok(), "{url}");
+        }
+    }
+
+    /// A sender whose guarded client did not build sends nothing: no fallback client reaches
+    /// the endpoint, and the message is dead-lettered with the reason.
+    #[tokio::test]
+    async fn a_client_that_did_not_build_refuses_every_delivery() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let sink = Arc::new(InMemoryDeadLetterSink::new());
+        let delivery = WebhookDelivery {
+            client: Err("the webhook HTTP client could not be built (no TLS)".to_string()),
+            ..WebhookDelivery::new()
+                .with_egress_policy(EgressPolicy::allow_private_networks())
+                .with_dead_letter_sink(sink.clone())
+        };
+        let endpoint = WebhookEndpoint::new(
+            format!("http://{address}/hook"),
+            WebhookSecret::from_base64("whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw").unwrap(),
+        );
+        let message = WebhookMessage::json("msg_1", &serde_json::json!({ "ok": true })).unwrap();
+
+        let report = delivery.deliver(&endpoint, &message).await;
+
+        let DeliveryReport::DeadLettered(letter) = report else {
+            panic!("a delivery without its guarded client must not succeed: {report:?}");
+        };
+        assert_eq!(letter.attempts, 0);
+        assert_eq!(letter.last_error, "the webhook HTTP client could not be built (no TLS)");
+        assert_eq!(sink.letters(), vec![letter]);
+        let accepted = tokio::time::timeout(Duration::from_millis(200), listener.accept()).await;
+        assert!(accepted.is_err(), "no request reached the endpoint");
+
+        // Under the default, public-only policy too: a public URL gets no attempt.
+        let guarded = WebhookDelivery {
+            client: Err("the webhook HTTP client could not be built (no TLS)".to_string()),
+            ..WebhookDelivery::new()
+        };
+        let public = WebhookEndpoint::new(
+            "https://hooks.example.com/runs",
+            WebhookSecret::from_base64("whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw").unwrap(),
+        );
+        match guarded.deliver(&public, &message).await {
+            DeliveryReport::DeadLettered(letter) => assert_eq!(letter.attempts, 0),
+            other => panic!("a delivery without its guarded client must not succeed: {other:?}"),
         }
     }
 

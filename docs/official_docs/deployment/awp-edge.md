@@ -266,6 +266,8 @@ Subscriptions need tier `known` or above through Web Bot Auth or OAuth, and belo
 requester that created them. `POST /awp/v2/events` with `{"types": [...], "url": "https://…"}`
 answers `201` with the subscription and its Standard Webhooks secret, shown once. A URL that is
 not `https`, or that names or resolves to a loopback, private or link-local address, is refused.
+The check runs again when the edge connects; `AwpEdgeBuilder::build` fails with
+`awp.events.client_unavailable` when the delivery client that runs it cannot be built.
 
 | Event | Published by |
 |-------|--------------|
