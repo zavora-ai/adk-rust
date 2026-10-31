@@ -343,6 +343,10 @@ impl Write for BoundedJsonCounter {
 /// `sessionState` and each event's `stateDelta` like any other key, and `get` returns the
 /// values the Session API stores for that session. Unlike the database backends, this
 /// client does not merge app or user state written through other sessions.
+///
+/// `delete_all_sessions` deletes each session `list` returns for the app and user, one
+/// operation at a time, and so erases the user's `user:` keys with them. It is not atomic:
+/// after an error some sessions may be gone, and calling again finishes the erasure.
 pub struct VertexAiSessionService {
     client: GcpHttpClient,
     project_id: String,
@@ -1492,6 +1496,33 @@ impl SessionService for VertexAiSessionService {
 
         self.forget_session_scope(&req.session_id, &req.app_name, &req.user_id).await;
 
+        Ok(())
+    }
+
+    async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
+        crate::service::validate_scope(app_name, user_id)?;
+        let sessions = self
+            .list(ListRequest {
+                app_name: app_name.to_string(),
+                user_id: user_id.to_string(),
+                limit: None,
+                offset: None,
+            })
+            .await?;
+        for session in sessions {
+            let deleted = self
+                .delete(DeleteRequest {
+                    app_name: app_name.to_string(),
+                    user_id: user_id.to_string(),
+                    session_id: session.id().to_string(),
+                })
+                .await;
+            match deleted {
+                // A concurrent caller deleted it after the list.
+                Err(error) if error.is_not_found() => {}
+                other => other?,
+            }
+        }
         Ok(())
     }
 

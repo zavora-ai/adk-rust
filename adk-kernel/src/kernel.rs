@@ -191,6 +191,10 @@ impl KernelConfig {
     /// implements `GovernanceWatch`, so the default 2 s poll would miss the one-second bound.
     pub const GOVERNANCE_POLL: Duration = Duration::from_millis(250);
 
+    /// How long [`Kernel::start`] waits for the first read of a mirrored kill switch before
+    /// it takes work anyway, refusing it until the mirror reads the store.
+    pub const GOVERNANCE_FIRST_READ: Duration = Duration::from_secs(5);
+
     /// Sets the application runs belong to.
     #[must_use]
     pub fn with_app_name(mut self, app_name: impl Into<String>) -> Self {
@@ -517,8 +521,14 @@ impl Kernel {
     /// Starts the workers, scheduler, wake sources and control plane, after reconciling
     /// the wakes missed while the kernel was down. Records `kernel.started`.
     ///
-    /// Processes a drain parked, and those a freeze parked when the freeze has been lifted
-    /// since, are woken first.
+    /// A mirrored kill switch is read before anything else, for at most
+    /// [`KernelConfig::GOVERNANCE_FIRST_READ`], so work spawned once `start` returns is
+    /// decided by the store's state rather than refused as never read. A store that cannot be
+    /// read in that time leaves the control stale: the kernel starts and refuses work until
+    /// its mirror reads the store.
+    ///
+    /// Processes a drain parked are woken first, and those a freeze parked when the control
+    /// allows work again.
     ///
     /// # Errors
     ///
@@ -540,6 +550,20 @@ impl Kernel {
         }
         let stop = CancellationToken::new();
         let mut tasks = Vec::new();
+        // Until a mirrored control's first read, `check` refuses all work and `is_frozen`
+        // reads a freeze in force as lifted.
+        match tokio::time::timeout(KernelConfig::GOVERNANCE_FIRST_READ, governance.refresh()).await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(
+                error = %error,
+                "could not read the governance store; work is refused until it is read"
+            ),
+            Err(_) => tracing::warn!(
+                timeout.ms = KernelConfig::GOVERNANCE_FIRST_READ.as_millis() as u64,
+                "the governance store did not answer; work is refused until it is read"
+            ),
+        }
         if let Some(mirror) = governance.spawn_mirror() {
             tasks.push(mirror);
         }
@@ -562,7 +586,7 @@ impl Kernel {
                 );
             }
         }
-        if !governance.is_frozen() {
+        if governance.check().is_ok() {
             sup.wake_suspended(&Suspension::Freeze).await;
         }
         sup.wake_suspended(&Suspension::Drain).await;
@@ -1297,6 +1321,7 @@ async fn file_roots(sup: &Supervision, router: &WakeRouter) -> BTreeMap<PathBuf,
 fn spawn_mirror(sup: Arc<Supervision>, stop: CancellationToken) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut frozen = sup.governance.is_frozen();
+        let mut refused = sup.governance.check().is_err();
         loop {
             tokio::select! {
                 () = stop.cancelled() => return,
@@ -1307,13 +1332,17 @@ fn spawn_mirror(sup: Arc<Supervision>, stop: CancellationToken) -> JoinHandle<()
             if now != frozen {
                 frozen = now;
                 sup.publish(KernelEvent::Governance { frozen, reason: sup.governance.reason() });
-                if !frozen {
-                    for (_, worker) in sup.workers() {
-                        worker.wake_frozen().await;
-                    }
-                    sup.wake_suspended(&Suspension::Freeze).await;
-                }
             }
+            // Work is allowed again after an unfreeze, and once a store that was stale, or not
+            // read when the kernel started, is read unfrozen.
+            let refuses = sup.governance.check().is_err();
+            if refused && !refuses {
+                for (_, worker) in sup.workers() {
+                    worker.wake_frozen().await;
+                }
+                sup.wake_suspended(&Suspension::Freeze).await;
+            }
+            refused = refuses;
         }
     })
 }
@@ -2256,6 +2285,175 @@ mod tests {
             assert!(error.to_string().contains("already listens"), "{error}");
             first.stop().await.unwrap();
         }
+    }
+
+    /// A shared governance store whose reads answer after `delay`, and fail while unreachable.
+    struct SlowGovernanceStore {
+        inner: Arc<adk_core::InMemoryGovernanceStateStore>,
+        delay: Duration,
+        reachable: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl SlowGovernanceStore {
+        fn over(inner: &Arc<adk_core::InMemoryGovernanceStateStore>, delay: Duration) -> Self {
+            Self {
+                inner: Arc::clone(inner),
+                delay,
+                reachable: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl GovernanceStateStore for SlowGovernanceStore {
+        async fn get(
+            &self,
+            scope: &adk_core::GovernanceScope,
+        ) -> adk_core::Result<Option<adk_core::GovernanceState>> {
+            tokio::time::sleep(self.delay).await;
+            if !self.reachable.load(Ordering::SeqCst) {
+                return Err(adk_core::AdkError::session("the governance store is unreachable"));
+            }
+            self.inner.get(scope).await
+        }
+
+        async fn set(
+            &self,
+            scope: adk_core::GovernanceScope,
+            expected_epoch: u64,
+            frozen: bool,
+            reason: Option<String>,
+            issued_by: Option<adk_core::SubjectRef>,
+        ) -> adk_core::Result<adk_core::GovernanceState> {
+            self.inner.set(scope, expected_epoch, frozen, reason, issued_by).await
+        }
+
+        async fn list(&self) -> adk_core::Result<Vec<adk_core::GovernanceState>> {
+            self.inner.list().await
+        }
+    }
+
+    /// A run no worker claims for an hour, so its process stays a queued sleeper.
+    fn sleeper() -> NewRun {
+        NewRun::new("background", "adk-rust", "alice", "adk-rust", json!({ "text": "x" }))
+            .with_not_before(chrono::Utc::now() + chrono::Duration::hours(1))
+    }
+
+    fn operator() -> AuditActor {
+        AuditActor::subject(adk_core::SubjectRef::human("operator"))
+    }
+
+    /// K9's race: work spawned as soon as `start` returns is decided by the mirrored store,
+    /// even when the store answers slower than the rest of the start-up, rather than refused
+    /// as never read.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn work_spawned_once_start_returns_is_not_refused_as_never_read() {
+        let store = Arc::new(adk_core::InMemoryGovernanceStateStore::new());
+        let slow = SlowGovernanceStore::over(&store, Duration::from_millis(500));
+        let kernel = Kernel::builder()
+            .config(
+                KernelConfig::default()
+                    .with_governance(KernelConfig::mirrored_governance(Arc::new(slow))),
+            )
+            .run_store(Arc::new(InMemoryRunStore::new()))
+            .build()
+            .unwrap();
+        kernel.start().await.unwrap();
+        let spawned =
+            kernel.processes().spawn(sleeper(), ProcessSpec::new(ProcessKind::Interactive)).await;
+        assert!(spawned.is_ok(), "{:?}", spawned.err());
+        kernel.stop().await.unwrap();
+    }
+
+    /// The kill switch stays fail-closed: a kernel whose store cannot be read starts and
+    /// refuses work until its mirror reads the store.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_kernel_whose_governance_store_is_unreachable_refuses_work_until_it_is_read() {
+        let store = Arc::new(adk_core::InMemoryGovernanceStateStore::new());
+        let slow = SlowGovernanceStore::over(&store, Duration::ZERO);
+        let reachable = Arc::clone(&slow.reachable);
+        reachable.store(false, Ordering::SeqCst);
+        let kernel = Kernel::builder()
+            .config(
+                KernelConfig::default()
+                    .with_governance(KernelConfig::mirrored_governance(Arc::new(slow))),
+            )
+            .run_store(Arc::new(InMemoryRunStore::new()))
+            .build()
+            .unwrap();
+        kernel.start().await.unwrap();
+        let refused = kernel
+            .processes()
+            .spawn(sleeper(), ProcessSpec::new(ProcessKind::Interactive))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&refused, KernelError::Frozen { reason } if reason.contains("last read never")),
+            "{refused:?}"
+        );
+
+        reachable.store(true, Ordering::SeqCst);
+        let started = tokio::time::Instant::now();
+        while kernel.config().governance.check().is_err() {
+            assert!(started.elapsed() < Duration::from_secs(3), "the mirror never read the store");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        kernel
+            .processes()
+            .spawn(sleeper(), ProcessSpec::new(ProcessKind::Interactive))
+            .await
+            .unwrap();
+        kernel.stop().await.unwrap();
+    }
+
+    /// A replica that starts while the replicated freeze is in force reads it before it wakes
+    /// anything: the processes the freeze parked stay parked until the unfreeze.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_replica_started_during_a_freeze_keeps_the_frozen_processes_parked() {
+        let store = Arc::new(adk_core::InMemoryGovernanceStateStore::new());
+        let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+        let processes: Arc<dyn ProcessStore> = Arc::new(InMemoryProcessStore::new());
+        let replica = |delay: Duration| {
+            let control = KernelConfig::mirrored_governance(Arc::new(SlowGovernanceStore::over(
+                &store, delay,
+            )));
+            Kernel::builder()
+                .config(KernelConfig::default().with_governance(control))
+                .run_store(Arc::clone(&runs))
+                .process_store(Arc::clone(&processes))
+                .build()
+                .unwrap()
+        };
+        let first = replica(Duration::ZERO);
+        first.start().await.unwrap();
+        let process = first
+            .processes()
+            .spawn(sleeper(), ProcessSpec::new(ProcessKind::Interactive))
+            .await
+            .unwrap();
+        let pid = process.meta.pid.clone();
+        processes.put(process.meta.with_suspension(Suspension::Freeze)).await.unwrap();
+        first.freeze("incident 9", operator()).await.unwrap();
+        first.stop().await.unwrap();
+
+        // The new replica's store answers slower than the rest of its start-up.
+        let second = replica(Duration::from_millis(300));
+        second.start().await.unwrap();
+        let parked = processes.get(&pid).await.unwrap().unwrap();
+        assert_eq!(parked.suspended_by, Some(Suspension::Freeze));
+        let refused = second
+            .processes()
+            .spawn(sleeper(), ProcessSpec::new(ProcessKind::Interactive))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&refused, KernelError::Frozen { reason } if reason == "incident 9"),
+            "{refused:?}"
+        );
+
+        second.unfreeze(operator()).await.unwrap();
+        assert_eq!(processes.get(&pid).await.unwrap().unwrap().suspended_by, None);
+        second.stop().await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

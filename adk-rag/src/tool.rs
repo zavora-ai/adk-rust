@@ -3,6 +3,11 @@
 //! The [`RagTool`] wraps a [`RagPipeline`] as an
 //! [`adk_core::Tool`] so that agents can perform retrieval as a tool call.
 //!
+//! The tool searches only the collections it is configured with. A one-collection
+//! tool ([`RagTool::new`]) offers the model no `collection` argument; a tool given more
+//! collections with [`RagTool::with_allowed_collections`] lists them in its schema and
+//! refuses any other name.
+//!
 //! # Example
 //!
 //! ```rust,ignore
@@ -10,7 +15,7 @@
 //! use adk_rag::{RagPipeline, RagTool};
 //!
 //! let pipeline = Arc::new(build_pipeline()?);
-//! let tool = RagTool::new(pipeline, "my_docs");
+//! let tool = RagTool::new(pipeline, "docs").with_allowed_collections(["faq"]);
 //!
 //! // The agent calls the tool with:
 //! // { "query": "How do I configure X?", "collection": "faq", "top_k": 5 }
@@ -27,7 +32,7 @@ use adk_core::{
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::{Value, json};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::document::SearchResult;
 use crate::pipeline::RagPipeline;
@@ -35,25 +40,99 @@ use crate::pipeline::RagPipeline;
 /// A retrieval tool that wraps a [`RagPipeline`] for agentic use.
 ///
 /// Implements [`adk_core::Tool`] so it can be attached to any ADK agent.
-/// The tool accepts a required `query` string and optional `collection`
-/// and `top_k` parameters. Every query runs through the pipeline's reranker and
-/// similarity threshold, including one that overrides `top_k`.
+/// The tool accepts a required `query` string and an optional `top_k`. Every query
+/// runs through the pipeline's reranker and similarity threshold, including one that
+/// overrides `top_k`.
+///
+/// The collections are configuration, not model input. [`RagTool::new`] binds the
+/// tool to one collection and its schema has no `collection` argument.
+/// [`RagTool::with_allowed_collections`] lets the model choose among further
+/// collections, which the schema lists; a call that names any other collection fails
+/// with `tool.invalid_arguments` before the vector store is queried. One collection per
+/// tenant therefore needs one tool per tenant, built with that tenant's collection.
 ///
 /// The result is an array of retrieved chunks, best first, each with its `id`,
 /// `document_id`, `text`, `metadata`, and `score`. Embedding vectors stay out of the
 /// result: they mean nothing to a model and would fill its context.
+///
+/// The tool is read-only and concurrency-safe, so `DeclarativePolicy::allow_read_only`
+/// admits it and `ToolExecutionStrategy::Auto` overlaps it with adjacent read-only calls.
 pub struct RagTool {
     pipeline: Arc<RagPipeline>,
     default_collection: String,
+    /// Collections a call may name besides the default, in schema order.
+    other_collections: Vec<String>,
 }
 
 impl RagTool {
-    /// Create a new `RagTool` backed by the given pipeline.
+    /// Create a new `RagTool` that searches `default_collection` only.
     ///
-    /// The `default_collection` is used when the agent does not specify
-    /// a collection in the tool call arguments.
+    /// The tool's schema has no `collection` argument. A call that still names a
+    /// collection other than `default_collection` fails with `tool.invalid_arguments`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use adk_rag::RagTool;
+    ///
+    /// // One tool per tenant, each bound to that tenant's collection.
+    /// let tool = RagTool::new(Arc::clone(&pipeline), format!("kb_{tenant_id}"));
+    /// ```
     pub fn new(pipeline: Arc<RagPipeline>, default_collection: impl Into<String>) -> Self {
-        Self { pipeline, default_collection: default_collection.into() }
+        Self { pipeline, default_collection: default_collection.into(), other_collections: vec![] }
+    }
+
+    /// Replace the collections the model may name besides the default.
+    ///
+    /// The schema's `collection` argument lists the default first, then these. A call
+    /// without `collection` searches the default; a call naming a collection outside
+    /// the list fails with `tool.invalid_arguments`, whose message names the allowed
+    /// collections. An empty list returns the tool to its one-collection form.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use adk_rag::RagTool;
+    ///
+    /// // Searches "docs" by default; the model may also choose "faq" or "changelog".
+    /// let tool = RagTool::new(pipeline, "docs").with_allowed_collections(["faq", "changelog"]);
+    /// ```
+    #[must_use]
+    pub fn with_allowed_collections<I, S>(mut self, collections: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.other_collections.clear();
+        for collection in collections.into_iter().map(Into::into) {
+            if collection != self.default_collection
+                && !self.other_collections.contains(&collection)
+            {
+                self.other_collections.push(collection);
+            }
+        }
+        self
+    }
+
+    /// The default collection, then the others a call may name.
+    fn allowed_collections(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(&self.default_collection).chain(&self.other_collections).map(String::as_str)
+    }
+
+    /// Tells the model which collections it may name.
+    fn collection_guidance(&self) -> String {
+        let default = &self.default_collection;
+        if self.other_collections.is_empty() {
+            return format!("it searches only '{default}', so omit 'collection'");
+        }
+        let allowed = self
+            .allowed_collections()
+            .map(|name| format!("'{name}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("choose one of {allowed}, or omit 'collection' to search '{default}'")
     }
 }
 
@@ -68,24 +147,40 @@ impl Tool for RagTool {
     }
 
     fn parameters_schema(&self) -> Option<Value> {
+        let mut properties = json!({
+            "query": {
+                "type": "string",
+                "description": "The search query to find relevant documents"
+            },
+            "top_k": {
+                "type": "integer",
+                "description": "Maximum number of results to return. Uses the pipeline default if omitted."
+            }
+        });
+        if !self.other_collections.is_empty() {
+            let allowed: Vec<&str> = self.allowed_collections().collect();
+            properties["collection"] = json!({
+                "type": "string",
+                "enum": allowed,
+                "description": format!(
+                    "The collection to search. Searches '{}' if omitted.",
+                    self.default_collection
+                )
+            });
+        }
         Some(json!({
             "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query to find relevant documents"
-                },
-                "collection": {
-                    "type": "string",
-                    "description": "The name of the collection to search. Uses the default collection if omitted."
-                },
-                "top_k": {
-                    "type": "integer",
-                    "description": "Maximum number of results to return. Uses the pipeline default if omitted."
-                }
-            },
+            "properties": properties,
             "required": ["query"]
         }))
+    }
+
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        true
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
@@ -94,8 +189,31 @@ impl Tool for RagTool {
             .and_then(Value::as_str)
             .ok_or_else(|| invalid_arguments("missing required 'query' parameter"))?;
 
-        let collection =
-            args.get("collection").and_then(Value::as_str).unwrap_or(&self.default_collection);
+        let collection = match args.get("collection") {
+            None | Some(Value::Null) => self.default_collection.as_str(),
+            Some(Value::String(requested))
+                if self.allowed_collections().any(|allowed| allowed == requested) =>
+            {
+                requested.as_str()
+            }
+            Some(Value::String(requested)) => {
+                warn!(
+                    collection = requested.as_str(),
+                    default_collection = %self.default_collection,
+                    "rag_search refused a collection outside its allowlist"
+                );
+                return Err(invalid_arguments(&format!(
+                    "collection '{requested}' is not searchable by this tool; {}",
+                    self.collection_guidance()
+                )));
+            }
+            Some(_) => {
+                return Err(invalid_arguments(&format!(
+                    "'collection' must be a string; {}",
+                    self.collection_guidance()
+                )));
+            }
+        };
 
         let top_k = match args.get("top_k") {
             None | Some(Value::Null) => self.pipeline.config().top_k,
@@ -206,7 +324,9 @@ mod tests {
         }
     }
 
-    async fn tool(reranker: Option<Arc<ReversingReranker>>) -> RagTool {
+    /// A pipeline with three collections: "kb" holds documents a, b, and c, "faq" holds
+    /// "faq", and "tenant_b" holds "secret".
+    async fn pipeline(reranker: Option<Arc<ReversingReranker>>) -> Arc<RagPipeline> {
         let mut builder = RagPipeline::builder()
             .config(RagConfig::builder().top_k(3).build().expect("valid config"))
             .embedding_provider(Arc::new(CountingEmbedder))
@@ -216,19 +336,39 @@ mod tests {
             builder = builder.reranker(reranker);
         }
         let pipeline = Arc::new(builder.build().expect("build pipeline"));
-        pipeline.create_collection("kb").await.expect("create collection");
-        for (id, text) in
-            [("a", "returns within thirty days"), ("b", "ships in two days"), ("c", "warranty")]
-        {
+        for (collection, id, text) in [
+            ("kb", "a", "returns within thirty days"),
+            ("kb", "b", "ships in two days"),
+            ("kb", "c", "warranty"),
+            ("faq", "faq", "returns are free"),
+            ("tenant_b", "secret", "returns for tenant b only"),
+        ] {
+            pipeline.create_collection(collection).await.expect("create collection");
             let document = Document {
                 id: id.to_string(),
                 text: text.to_string(),
                 metadata: HashMap::from([("source".to_string(), format!("{id}.md"))]),
                 source_uri: None,
             };
-            pipeline.ingest("kb", &document).await.expect("ingest");
+            pipeline.ingest(collection, &document).await.expect("ingest");
         }
-        RagTool::new(pipeline, "kb")
+        pipeline
+    }
+
+    async fn tool(reranker: Option<Arc<ReversingReranker>>) -> RagTool {
+        RagTool::new(pipeline(reranker).await, "kb")
+    }
+
+    /// The document ids a search returned, sorted.
+    fn document_ids(result: &Value) -> Vec<&str> {
+        let mut ids: Vec<&str> = result
+            .as_array()
+            .expect("an array of results")
+            .iter()
+            .map(|item| item["document_id"].as_str().expect("document_id"))
+            .collect();
+        ids.sort_unstable();
+        ids
     }
 
     fn context() -> Arc<dyn ToolContext> {
@@ -284,5 +424,108 @@ mod tests {
                 .expect_err("invalid top_k");
             assert_eq!(error.code, TOOL_INVALID_ARGUMENTS_CODE, "top_k {top_k}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_one_collection_tool_offers_no_collection_and_refuses_another() {
+        let tool = tool(None).await;
+        assert_eq!(
+            tool.parameters_schema(),
+            Some(json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query to find relevant documents"
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return. Uses the pipeline default if omitted."
+                    }
+                },
+                "required": ["query"]
+            }))
+        );
+
+        let named = tool
+            .execute(context(), json!({"query": "returns", "collection": "kb"}))
+            .await
+            .expect("its own collection");
+        let omitted = tool.execute(context(), json!({"query": "returns"})).await.expect("search");
+        assert_eq!(named, omitted);
+
+        // "tenant_b" exists in the store, so only the allowlist keeps it out.
+        let error = tool
+            .execute(context(), json!({"query": "returns", "collection": "tenant_b"}))
+            .await
+            .expect_err("another collection");
+        assert_eq!(
+            (error.category, error.code, error.message.as_str()),
+            (
+                ErrorCategory::InvalidInput,
+                TOOL_INVALID_ARGUMENTS_CODE,
+                "rag_search: collection 'tenant_b' is not searchable by this tool; it searches \
+                 only 'kb', so omit 'collection'"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn an_allowed_collection_is_searched_and_any_other_is_refused() {
+        let tool =
+            RagTool::new(pipeline(None).await, "kb").with_allowed_collections(["faq", "kb", "faq"]);
+        assert_eq!(
+            tool.parameters_schema().map(|schema| schema["properties"]["collection"].clone()),
+            Some(json!({
+                "type": "string",
+                "enum": ["kb", "faq"],
+                "description": "The collection to search. Searches 'kb' if omitted."
+            }))
+        );
+
+        let faq = tool
+            .execute(context(), json!({"query": "returns", "collection": "faq"}))
+            .await
+            .expect("an allowed collection");
+        assert_eq!(document_ids(&faq), ["faq"]);
+
+        let allowed = "choose one of 'kb', 'faq', or omit 'collection' to search 'kb'";
+        for (collection, message) in [
+            (
+                json!("tenant_b"),
+                format!(
+                    "rag_search: collection 'tenant_b' is not searchable by this tool; {allowed}"
+                ),
+            ),
+            (json!(7), format!("rag_search: 'collection' must be a string; {allowed}")),
+        ] {
+            let error = tool
+                .execute(context(), json!({"query": "returns", "collection": collection}))
+                .await
+                .expect_err("refused collection");
+            assert_eq!(
+                (error.category, error.code, error.message),
+                (ErrorCategory::InvalidInput, TOOL_INVALID_ARGUMENTS_CODE, message)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_call_without_a_collection_searches_the_default() {
+        let tool =
+            RagTool::new(pipeline(None).await, "kb").with_allowed_collections(["faq", "tenant_b"]);
+        for args in [json!({"query": "returns"}), json!({"query": "returns", "collection": null})] {
+            let result = tool.execute(context(), args).await.expect("search");
+            assert_eq!(document_ids(&result), ["a", "b", "c"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_tool_is_read_only_and_concurrency_safe() {
+        let tool = tool(None).await;
+        assert_eq!(
+            (tool.is_read_only(), tool.is_concurrency_safe(), tool.effect()),
+            (true, true, adk_core::ToolEffect::ReadOnly)
+        );
     }
 }

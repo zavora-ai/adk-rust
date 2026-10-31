@@ -110,14 +110,16 @@ with the API key and an optional base URL.
 
 ### STT
 
-Every STT provider implements `SttProvider` with `transcribe` and `transcribe_stream`.
+Every STT provider implements `SttProvider` with `transcribe` and `transcribe_stream`. A provider
+without streaming support returns `AudioError::Stt` from `transcribe_stream` rather than an empty
+stream, and dropping a returned stream stops the provider's work for it.
 
-| Provider | Default model | Environment variable |
-|----------|---------------|----------------------|
-| `WhisperApiStt` | `whisper-1` | `OPENAI_API_KEY` |
-| `DeepgramStt` | `nova-3`, with diarization and streaming | `DEEPGRAM_API_KEY` |
-| `AssemblyAiStt` | asynchronous jobs and streaming | `ASSEMBLYAI_API_KEY` |
-| `GeminiStt` | `gemini-3.7-flash` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+| Provider | Default model | `transcribe_stream` | Environment variable |
+|----------|---------------|---------------------|----------------------|
+| `WhisperApiStt` | `whisper-1` | `AudioError::Stt` (not yet implemented) | `OPENAI_API_KEY` |
+| `DeepgramStt` | `nova-3`, with diarization | WebSocket streaming; dropping the stream closes the socket | `DEEPGRAM_API_KEY` |
+| `AssemblyAiStt` | asynchronous jobs | `AudioError::Stt` (not yet implemented) | `ASSEMBLYAI_API_KEY` |
+| `GeminiStt` | `gemini-3.7-flash` | `AudioError::Stt`; use the Gemini Live API through `adk-realtime` for live audio | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
 
 ```rust
 use adk_audio::{AudioFrame, SttOptions, SttProvider, WhisperApiStt};
