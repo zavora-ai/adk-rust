@@ -1,5 +1,6 @@
 //! The SQLite spend ledger, action ledger, approval store, lease store, run store,
-//! schedule store, and governance state store pass the shared conformance suites. Each test uses its own database file, and every `open` is a new
+//! schedule store, governance state store, subject registry, and consent store pass the shared
+//! conformance suites. Each test uses its own database file, and every `open` is a new
 //! connection pool, as a restarted process would create.
 
 #![cfg(feature = "sqlite")]
@@ -160,4 +161,33 @@ mod audit_log {
 
 mod approval_service {
     adk_core::approval_service_conformance_tests!(harness = super::FileDatabase::new());
+}
+
+#[async_trait]
+impl adk_core::conformance::SubjectRegistryHarness for FileDatabase {
+    async fn open(&self, clock: Arc<dyn Clock>) -> Arc<dyn adk_core::subject::SubjectRegistry> {
+        let registry = adk_session::SqliteSubjectRegistry::new(&self.url())
+            .await
+            .expect("SQLite opens")
+            .with_clock(clock);
+        registry.migrate().await.expect("subject schema migrates");
+        Arc::new(registry)
+    }
+}
+
+mod subject_registry {
+    adk_core::subject_registry_conformance_tests!(harness = super::FileDatabase::new());
+}
+
+#[async_trait]
+impl adk_core::conformance::ConsentStoreHarness for FileDatabase {
+    async fn open(&self) -> Arc<dyn adk_core::subject::ConsentStore> {
+        let store = adk_session::SqliteConsentStore::new(&self.url()).await.expect("SQLite opens");
+        store.migrate().await.expect("subject schema migrates");
+        Arc::new(store)
+    }
+}
+
+mod consent_store {
+    adk_core::consent_store_conformance_tests!(harness = super::FileDatabase::new());
 }

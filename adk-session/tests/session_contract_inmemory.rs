@@ -70,3 +70,21 @@ async fn test_inmemory_delete_all_sessions_erases_the_user_tier() {
     )
     .await;
 }
+
+/// One in-memory service shared by every handle the harness opens.
+struct SharedInMemory(std::sync::Arc<InMemorySessionService>);
+
+#[adk_core::async_trait]
+impl common::subject_data::OpenSessions for SharedInMemory {
+    async fn service(&self) -> std::sync::Arc<dyn adk_session::SessionService> {
+        self.0.clone()
+    }
+}
+
+mod subject_data {
+    adk_core::subject_data_store_conformance_tests!(
+        harness = crate::common::subject_data::SessionData(super::SharedInMemory(
+            std::sync::Arc::new(adk_session::InMemorySessionService::new())
+        ))
+    );
+}

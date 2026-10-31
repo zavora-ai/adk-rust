@@ -12,7 +12,9 @@
 //!   `VertexAiSessionService` - database backends, each behind its feature
 //! - `EncryptedSession` - AES-256-GCM encryption over any backend (`encrypted-session` feature)
 //! - Durable stores for every backend: spend ledgers, action ledgers, approval stores, audit log
-//!   stores, and the lease, run, schedule, and governance state stores of the durable runtime
+//!   stores, the lease, run, schedule, and governance state stores of the durable runtime, and
+//!   the subject registries and consent stores of [`adk_core::subject`]
+//! - [`SessionSubjectData`] - A subject's sessions, exported and erased through any backend
 //! - [`Session`] - Conversation session with state and events
 //! - [`State`] - Key-value state with typed prefixes
 //! - [`SessionService`] - Trait for custom session backends
@@ -86,6 +88,11 @@ pub mod session;
 pub mod state;
 /// Shared utilities for extracting and merging state deltas across backends.
 pub mod state_utils;
+/// The session family's adapter for subject export and erasure.
+pub mod subject;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+/// SQL-backed subject registries and consent stores.
+pub mod subject_sql;
 
 #[cfg(any(feature = "redis", feature = "mongodb", feature = "neo4j", feature = "firestore"))]
 mod durable_common;
@@ -179,6 +186,11 @@ pub use service::{
 pub use session::{KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER, Session};
 pub use state::{ReadonlyState, State};
 pub use state_utils::{extract_state_deltas, merge_states};
+pub use subject::SessionSubjectData;
+#[cfg(feature = "postgres")]
+pub use subject_sql::{PostgresConsentStore, PostgresSubjectRegistry};
+#[cfg(feature = "sqlite")]
+pub use subject_sql::{SqliteConsentStore, SqliteSubjectRegistry};
 
 #[cfg(feature = "postgres")]
 pub use approval::PostgresApprovalStore;
