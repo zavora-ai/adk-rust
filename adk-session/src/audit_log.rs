@@ -15,8 +15,8 @@
 use std::ops::Range;
 
 use adk_core::audit_log::{
-    AuditAppend, AuditCheckpoint, AuditHash, AuditLogEntry, AuditLogStore, out_of_range_error,
-    validate_append, validate_checkpoint,
+    AuditAppend, AuditCheckpoint, AuditHash, AuditLogEntry, AuditLogStore, check_redaction,
+    out_of_range_error, validate_append, validate_checkpoint,
 };
 use adk_core::{AdkError, Result};
 use async_trait::async_trait;
@@ -358,6 +358,24 @@ macro_rules! sql_audit_log_store {
                 .await
                 .map_err(|e| store_error(format!("audit log prune failed: {e}")))?;
                 Ok(pruned.rows_affected())
+            }
+
+            async fn redact(&self, log_id: &str, seqs: &[u64]) -> Result<u64> {
+                check_redaction(log_id, seqs, self.size(log_id).await?)?;
+                let mut redacted = 0;
+                for seq in seqs {
+                    redacted += sqlx::query(
+                        "UPDATE adk_audit_entries SET record = NULL \
+                         WHERE log_id = $1 AND seq = $2 AND record IS NOT NULL",
+                    )
+                    .bind(log_id)
+                    .bind(to_i64(*seq, "seq")?)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| store_error(format!("audit log redact failed: {e}")))?
+                    .rows_affected();
+                }
+                Ok(redacted)
             }
 
             async fn logs(&self) -> Result<Vec<String>> {

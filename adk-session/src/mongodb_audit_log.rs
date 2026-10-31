@@ -30,8 +30,8 @@
 use std::ops::Range;
 
 use adk_core::audit_log::{
-    AuditAppend, AuditCheckpoint, AuditHash, AuditLogEntry, AuditLogStore, out_of_range_error,
-    seq_conflict_error, validate_append, validate_checkpoint,
+    AuditAppend, AuditCheckpoint, AuditHash, AuditLogEntry, AuditLogStore, check_redaction,
+    out_of_range_error, seq_conflict_error, validate_append, validate_checkpoint,
 };
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result};
 use async_trait::async_trait;
@@ -489,6 +489,24 @@ impl AuditLogStore for MongoAuditLogStore {
             .await
             .map_err(mongo_error("prune"))?;
         Ok(pruned.modified_count)
+    }
+
+    async fn redact(&self, log_id: &str, seqs: &[u64]) -> Result<u64> {
+        check_redaction(log_id, seqs, self.size(log_id).await?)?;
+        let positions = seqs.iter().map(|seq| to_i64(*seq, "seq")).collect::<Result<Vec<_>>>()?;
+        let redacted = self
+            .entries()
+            .update_many(
+                doc! {
+                    "log_id": log_id,
+                    "seq": { "$in": positions },
+                    "record": { "$ne": Bson::Null },
+                },
+                doc! { "$set": { "record": Bson::Null } },
+            )
+            .await
+            .map_err(mongo_error("redact"))?;
+        Ok(redacted.modified_count)
     }
 
     async fn logs(&self) -> Result<Vec<String>> {

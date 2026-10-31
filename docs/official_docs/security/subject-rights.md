@@ -257,6 +257,17 @@ service whose deletes complete asynchronously, such as Vertex AI's.
 Both take `with_support` for a managed service whose deletes complete asynchronously, such as
 Vertex AI Memory Bank or a GCS bucket with object versioning or soft delete.
 
+### Audit log
+
+| Piece | Crate | Does |
+|-------|-------|------|
+| `PseudonymousRecorder` | `adk-core` | Names covered subjects in new audit records by registry pseudonym |
+| `AuditLogSubjectData` | `adk-core` | Adapter over any `AuditLogStore`: exports the records that name the subject's id and erases them with `AuditLogStore::redact`, keeping every leaf hash |
+| `PseudonymousAuditSink` | `adk-auth` | Pseudonymises `AuditEvent::user` and `on_behalf_of`, and drops `ip_address` |
+
+Audit leaves are never removed; a redacted log still verifies. See
+[Audit Log](audit-log.md#subjects-in-records).
+
 ## Writing an adapter
 
 A store family implements `SubjectDataStore` once and proves it with the shared suite:

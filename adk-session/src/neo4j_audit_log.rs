@@ -34,8 +34,8 @@ use crate::neo4j_stores::{Inline, detached};
 use std::ops::Range;
 
 use adk_core::audit_log::{
-    AuditAppend, AuditCheckpoint, AuditHash, AuditLogEntry, AuditLogStore, out_of_range_error,
-    seq_conflict_error, validate_append, validate_checkpoint,
+    AuditAppend, AuditCheckpoint, AuditHash, AuditLogEntry, AuditLogStore, check_redaction,
+    out_of_range_error, seq_conflict_error, validate_append, validate_checkpoint,
 };
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result};
 use async_trait::async_trait;
@@ -503,6 +503,27 @@ impl AuditLogStore for Inline<Neo4jAuditLogStore> {
         }
     }
 
+    async fn redact(&self, log_id: &str, seqs: &[u64]) -> Result<u64> {
+        check_redaction(log_id, seqs, self.size(log_id).await?)?;
+        let mut redacted = 0;
+        for seq in seqs {
+            let found = graph_rows(
+                &self.graph,
+                query(
+                    "MATCH (e:AdkAuditEntry {log_id: $log_id, seq: $seq}) \
+                     WHERE e.record IS NOT NULL REMOVE e.record RETURN count(e) AS redacted",
+                )
+                .param("log_id", log_id)
+                .param("seq", to_i64(*seq, "seq")?),
+            )
+            .await?;
+            if let Some(row) = found.first() {
+                redacted += to_u64(column(row, "redacted")?, "redacted")?;
+            }
+        }
+        Ok(redacted)
+    }
+
     async fn logs(&self) -> Result<Vec<String>> {
         // A log node exists from an append's first lock; only a committed append sets `size`.
         let found = graph_rows(
@@ -566,6 +587,12 @@ impl AuditLogStore for Neo4jAuditLogStore {
         let inline = Inline(self.clone());
         let log_id = log_id.to_owned();
         detached(async move { inline.prune(&log_id, before_seq).await }).await
+    }
+
+    async fn redact(&self, log_id: &str, seqs: &[u64]) -> Result<u64> {
+        let inline = Inline(self.clone());
+        let (log_id, seqs) = (log_id.to_owned(), seqs.to_vec());
+        detached(async move { inline.redact(&log_id, &seqs).await }).await
     }
 
     async fn logs(&self) -> Result<Vec<String>> {

@@ -625,6 +625,11 @@ macro_rules! audit_log_store_conformance_tests {
         }
         $(#[$attr])*
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn audit_log_redaction_keeps_hashes() {
+            $crate::conformance::audit_log_store::redaction_keeps_hashes(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn audit_log_logs_survive_a_restart() {
             $crate::conformance::audit_log_store::logs_survive_a_restart(&$harness).await;
         }

@@ -55,6 +55,7 @@
 
 mod access_control;
 mod audit;
+mod audit_pseudonyms;
 mod broker;
 mod error;
 mod middleware;
@@ -93,6 +94,7 @@ pub use audit::{
     AuditEvent, AuditEventType, AuditFailureMode, AuditFilter, AuditOutcome, AuditSink,
     FileAuditSink, InMemoryAuditSink,
 };
+pub use audit_pseudonyms::PseudonymousAuditSink;
 pub use broker::SecretCredentialBroker;
 pub use error::{AccessDenied, AuthError};
 pub use middleware::{AuthMiddleware, ProtectedTool, ProtectedToolDyn, ToolExt};

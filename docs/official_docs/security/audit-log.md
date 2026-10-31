@@ -212,6 +212,32 @@ ideally encrypted under a per-subject key, and record only its digest in `payloa
 `AuditLogStore::prune(log_id, before_seq)` drops record bodies older than a position and
 keeps their leaf hashes, so a pruned log still verifies; the report counts pruned entries.
 
+### Subjects in records
+
+Records name the subject an agent acts for in `actor.onBehalfOf` and `actor.delegationChain`.
+Two mechanisms keep those names from outliving a subject's erasure:
+
+| Mechanism | Covers | Effect |
+|-----------|--------|--------|
+| `adk_core::subject::PseudonymousRecorder` | Records written from now on | Wraps the recorder and replaces covered subjects (visitors by default; `for_every_subject()` adds humans and services) with their `SubjectRegistry` pseudonym, `psn:…`. Erasure deletes the pseudonym, so the records stay and no longer lead back to the person |
+| `AuditLogStore::redact(log_id, seqs)` with `adk_core::subject::AuditLogSubjectData` | Records already written with a subject's id | The adapter finds every record whose actor names the subject's id (any kind but an agent) and redacts its body; leaf hashes stay, so checkpoints and proofs verify, and the report counts redacted entries as pruned |
+
+Every store backend implements `redact`, proven by the conformance case
+`redaction_keeps_hashes`. `adk_auth::PseudonymousAuditSink` does the same for
+`adk_auth::AuditEvent`: it pseudonymises `user` and `on_behalf_of` and drops `ip_address`
+before the wrapped sink chains the event.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::audit_log::{AuditTrail, InMemoryAuditRecorder};
+use adk_core::subject::{InMemorySubjectRegistry, PseudonymousRecorder};
+
+let registry = Arc::new(InMemorySubjectRegistry::new());
+let recorder = PseudonymousRecorder::new(Arc::new(InMemoryAuditRecorder::new()), registry);
+let trail = AuditTrail::new(Arc::new(recorder));
+```
+
 ## Checkpoints and keys
 
 A checkpoint is signed every `checkpoint_every` records, on the first append after
