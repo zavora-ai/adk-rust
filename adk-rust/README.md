@@ -22,7 +22,7 @@
 | OpenCode Go and Zen | `opencode` | — |
 | Amazon Bedrock | `bedrock` | account- and region-specific |
 | Azure AI Inference | `azure-ai` | endpoint-specific |
-| Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI, OrcaRouter, Cheaper Inference, and other OpenAI-compatible APIs | `openai` (`OpenAICompatibleConfig` presets) | per preset |
+| Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI, OrcaRouter, Cheaper Inference, API Route, and other OpenAI-compatible APIs | `openai` (`OpenAICompatibleConfig` presets) | per preset |
 
 The catalog defaults are `adk_rust::model::catalog` constants; every client takes any model ID.
 

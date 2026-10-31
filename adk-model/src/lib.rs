@@ -11,7 +11,7 @@
 //! | `OpenAIClient` | OpenAI Chat Completions | `openai` |
 //! | `openai::OpenAIResponsesClient` | OpenAI Responses API | `openai` |
 //! | `AzureOpenAIClient` | Azure OpenAI | `openai` |
-//! | `OpenAICompatible` | Any OpenAI-compatible endpoint, with presets for xAI, Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova, OrcaRouter, Cheaper Inference, MiniMax, Zhipu AI, Baidu, Cohere, ByteDance, and Gemini | `openai` |
+//! | `OpenAICompatible` | Any OpenAI-compatible endpoint, with presets for xAI, Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova, OrcaRouter, Cheaper Inference, API Route, MiniMax, Zhipu AI, Baidu, Cohere, ByteDance, and Gemini | `openai` |
 //! | `AnthropicClient` | Anthropic Claude | `anthropic` |
 //! | `DeepSeekClient` | DeepSeek | `deepseek` |
 //! | `GroqClient` | Groq | `groq` |
