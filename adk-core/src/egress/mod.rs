@@ -944,7 +944,8 @@ fn is_numeric_host(host: &str) -> bool {
 ///
 /// # async fn example() -> std::io::Result<()> {
 /// let resolver = StaticResolver::new().with_host("api.test", ["10.0.0.7".parse().unwrap()]);
-/// assert_eq!(resolver.resolve("api.test").await?, vec!["10.0.0.7".parse().unwrap()]);
+/// let expected: std::net::IpAddr = "10.0.0.7".parse().unwrap();
+/// assert_eq!(resolver.resolve("api.test").await?, vec![expected]);
 /// # Ok(())
 /// # }
 /// ```
