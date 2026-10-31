@@ -774,10 +774,10 @@ Three strategies are available:
 - `Parallel` — all tools execute concurrently; this explicit override bypasses safety metadata, so the caller owns safety
 - `Auto` — tools execute in LLM order; only a run of adjacent calls whose tools are both read-only and concurrency-safe overlaps, and every other call runs alone in its place
 
-Results are always returned in the original LLM order regardless of strategy. Failed tools produce a JSON error response without aborting the batch.
+Results are always returned in the original LLM order regardless of strategy. A tool that fails produces a JSON error response without aborting the batch; an error from the tool confirmation handler ends the run.
 
 The strategy is set per-agent via `LlmAgentBuilder::tool_execution_strategy()`. If not set, the default is `Sequential`.
-Use `LlmAgentBuilder::parallelize_agent_delegations(true)` when only consecutive agent-delegation calls should overlap. Ordinary tools remain sequential and keep their original phase ordering.
+Use `LlmAgentBuilder::parallelize_agent_delegations(true)` when only consecutive agent-delegation calls should overlap. Ordinary tools run one at a time, in the model's order.
 
 ## Tool Resilience
 

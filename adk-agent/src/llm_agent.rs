@@ -1552,11 +1552,9 @@ impl LlmAgentBuilder {
 
     /// Set the tool execution strategy for this agent.
     ///
-    /// When set, this overrides the `RunConfig`'s `tool_execution_strategy`
-    /// for this agent's dispatch loop. When `None` (the default), the
-    /// `RunConfig` value is used. [`ToolExecutionStrategy::Parallel`] is an
-    /// explicit override that bypasses tool safety metadata, so the caller owns
-    /// concurrency safety.
+    /// Without it, the agent dispatches with [`ToolExecutionStrategy::Sequential`].
+    /// [`ToolExecutionStrategy::Parallel`] is an explicit override that bypasses
+    /// tool safety metadata, so the caller owns concurrency safety.
     pub fn tool_execution_strategy(mut self, strategy: ToolExecutionStrategy) -> Self {
         self.tool_execution_strategy = Some(strategy);
         self
@@ -2600,8 +2598,8 @@ impl ToolExecutor<'_> {
 
                 // A call may overlap another only when its tool is read-only *and* declares
                 // concurrency safety. Only a run of adjacent such calls overlaps; any other
-                // call runs alone, in the model's order, so a read listed after a write sees
-                // the write.
+                // call runs alone, in the model's order, so it starts only after every call
+                // listed before it has finished.
                 let is_concurrent = |call: &PendingToolCall| {
                     self.tool_map
                         .get(&call.name)

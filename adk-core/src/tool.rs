@@ -661,7 +661,8 @@ pub enum ToolExecutionStrategy {
     Parallel,
     /// Execute calls in LLM-returned order, overlapping only a run of adjacent
     /// calls whose tools report both read-only and concurrency-safe. Any other
-    /// call runs alone, in its place, so a read listed after a write sees it.
+    /// call runs alone, in its place: it starts after the calls listed before it
+    /// finish, and the calls listed after it wait for it.
     Auto,
 }
 
