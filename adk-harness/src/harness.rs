@@ -558,14 +558,11 @@ impl Harness {
                             "held call ran without its result being saved; answering it from the action ledger"
                         );
                         answered.push(call_id.to_string());
-                        answers.push(Part::FunctionResponse {
-                            function_response: FunctionResponseData::new(
-                                call.name.clone(),
-                                crate::ledger::recorded_answer(&call.name, &record),
-                            ),
-                            id: call.id.clone(),
-                            annotations: None,
-                        });
+                        answers.push(crate::ledger::recorded_answer(
+                            &call.name,
+                            call.id.as_ref(),
+                            &record,
+                        ));
                     }
                     // No handler answers a call a person asked for, so it waits again too
                     // (spec 3.3 §7.4 rule 5).
@@ -686,16 +683,20 @@ impl Harness {
                             }
                             None => true,
                         })
-                        .map(|call| Part::FunctionResponse {
-                            function_response: FunctionResponseData::new(
-                                call.name.clone(),
-                                json!({
-                                    "error": format!("Tool '{}' was not run: cancelled by mode change to {mode}", call.name),
-                                    "status": CANCELLED_BY_MODE_CHANGE_STATUS,
-                                }),
-                            ),
-                            id: call.id.clone(),
-                            annotations: None,
+                        .map(|call| {
+                            let mut part = Part::FunctionResponse {
+                                function_response: FunctionResponseData::new(
+                                    call.name.clone(),
+                                    json!({
+                                        "error": format!("Tool '{}' was not run: cancelled by mode change to {mode}", call.name),
+                                        "status": CANCELLED_BY_MODE_CHANGE_STATUS,
+                                    }),
+                                ),
+                                id: call.id.clone(),
+                                annotations: None,
+                            };
+                            part.set_tool_result_status(adk_core::ToolResultStatus::NotRun, None);
+                            part
                         })
                         .collect(),
                 });

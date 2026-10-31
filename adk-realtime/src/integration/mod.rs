@@ -230,6 +230,49 @@ struct GovernedOutcome {
     result: Value,
     /// The request for a call held for a confirmation decision.
     held: Option<adk_core::ToolConfirmationRequest>,
+    /// The status of an answer the runner wrote in place of the tool's result.
+    status: Option<adk_core::ToolResultStatus>,
+    /// The error behind `status`, when there is one.
+    cause: Option<adk_core::AdkError>,
+    /// Whether the tool executed.
+    executed: bool,
+}
+
+impl GovernedOutcome {
+    /// An answer the runner writes, before anything ran.
+    fn answer(
+        result: Value,
+        status: adk_core::ToolResultStatus,
+        cause: Option<adk_core::AdkError>,
+    ) -> Self {
+        Self { result, held: None, status: Some(status), cause, executed: false }
+    }
+
+    /// Applies a result screen's verdict: a withheld result's status follows
+    /// [`ToolResultStatus::when_withheld`](adk_core::ToolResultStatus::when_withheld).
+    fn screened(&mut self, (result, withheld): (Value, bool)) {
+        self.result = result;
+        if withheld {
+            let status = adk_core::ToolResultStatus::when_withheld(self.status, self.executed);
+            if self.status != Some(status) {
+                self.status = Some(status);
+                self.cause = None;
+            }
+        }
+    }
+
+    /// The function response the session records for call `call_id` to `name`.
+    fn part(&self, name: &str, call_id: &str) -> adk_core::Part {
+        let mut part = adk_core::Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new(name, self.result.clone()),
+            id: Some(call_id.to_string()),
+            annotations: None,
+        };
+        if let Some(status) = self.status {
+            part.set_tool_result_status(status, self.cause.as_ref());
+        }
+        part
+    }
 }
 
 /// Renders the most recent `limit` turns as bounded `role: text` lines.
@@ -748,16 +791,20 @@ impl IntegratedRealtimeRunner {
             let call =
                 adk_core::GovernedCall::for_tool(tool.as_ref(), call_id.clone(), held.args.clone())
                     .resuming(held.request.clone());
-            let outcome = inner.governed_call(&tool, &ctx, call).await?;
+            let mut outcome = inner.governed_call(&tool, &ctx, call).await?;
             if outcome.held.is_some() {
                 // The decision was not live after all: the call stays held.
                 continue;
             }
-            let result =
-                inner.runner.screen_tool_result(&held.name, &held.args, outcome.result).await;
-            inner.persist_answer(&call_id, &held.name, &held.args, &result).await;
-            inner.deliver_resumed_result(&call_id, &held.name, &result).await?;
-            resumed.push(ResumedToolCall { call_id, name: held.name, result });
+            outcome.screened(
+                inner
+                    .runner
+                    .screen_tool_result(&held.name, &held.args, outcome.result.clone())
+                    .await,
+            );
+            inner.persist_answer(&call_id, &held.name, &held.args, &outcome).await;
+            inner.deliver_resumed_result(&call_id, &held.name, &outcome.result).await?;
+            resumed.push(ResumedToolCall { call_id, name: held.name, result: outcome.result });
         }
         Ok(resumed)
     }
@@ -1025,9 +1072,8 @@ impl Inner {
         call: &crate::events::ToolCall,
     ) -> Result<Value> {
         let ctx = self.create_tool_context(&call.call_id);
-        let mut held = None;
 
-        let result = if let Some(ref pm) = self.plugin_manager {
+        let mut outcome = if let Some(ref pm) = self.plugin_manager {
             // Run before_tool_call pipeline
             match pm
                 .run_before_tool_call(
@@ -1039,17 +1085,26 @@ impl Inner {
             {
                 Ok(adk_plugin::BeforeToolCallResult::ShortCircuit(value)) => {
                     tracing::debug!(tool = tool.name(), "plugin short-circuited tool execution");
-                    value
+                    GovernedOutcome {
+                        result: value,
+                        held: None,
+                        status: None,
+                        cause: None,
+                        executed: false,
+                    }
                 }
                 Ok(adk_plugin::BeforeToolCallResult::Continue(args)) => {
                     // The governed path sees the plugin-rewritten arguments.
-                    let outcome = self.governed_execute(tool, &ctx, &call.call_id, args).await?;
-                    held = outcome.held;
-                    if held.is_some() {
+                    let mut outcome =
+                        self.governed_execute(tool, &ctx, &call.call_id, args).await?;
+                    if outcome.held.is_some() {
                         // A held call has no result to screen; the after-tool pipeline runs
                         // when the call resumes.
-                        outcome.result
+                        outcome
                     } else {
+                        // An unknown outcome outlives whatever replaces the answer.
+                        let unknown =
+                            outcome.status == Some(adk_core::ToolResultStatus::OutcomeUnknown);
                         // Run after_tool_call pipeline
                         match pm
                             .run_after_tool_call(
@@ -1060,7 +1115,15 @@ impl Inner {
                             )
                             .await
                         {
-                            Ok(adk_plugin::AfterToolCallResult::Continue(v)) => v,
+                            Ok(adk_plugin::AfterToolCallResult::Continue(v)) => {
+                                // The plugin's value is the answer the model reads.
+                                if v != outcome.result && !unknown {
+                                    outcome.status = None;
+                                    outcome.cause = None;
+                                }
+                                outcome.result = v;
+                                outcome
+                            }
                             Err(e) => {
                                 // Fail closed. An after-tool plugin is where result redaction
                                 // and screening live, so the unscreened result is withheld.
@@ -1080,11 +1143,16 @@ impl Inner {
                                         "after_tool_call plugin failed; withholding the tool result"
                                     );
                                 }
-                                adk_core::result_withheld_response(
+                                outcome.result = adk_core::result_withheld_response(
                                     tool.name(),
                                     &e,
                                     self.runner.exposes_tool_error_messages(),
-                                )
+                                );
+                                if !unknown {
+                                    outcome.status = Some(adk_core::ToolResultStatus::Withheld);
+                                    outcome.cause = Some(e);
+                                }
+                                outcome
                             }
                         }
                     }
@@ -1112,28 +1180,32 @@ impl Inner {
                     } else {
                         e.redacted()
                     };
-                    serde_json::json!({
-                        "error": format!(
-                            "tool {} was refused: its before-tool plugin pipeline failed with \
-                             {failure}. Execution is refused rather than proceeding without policy.",
-                            tool.name()
-                        )
-                    })
+                    GovernedOutcome::answer(
+                        serde_json::json!({
+                            "error": format!(
+                                "tool {} was refused: its before-tool plugin pipeline failed with \
+                                 {failure}. Execution is refused rather than proceeding without policy.",
+                                tool.name()
+                            )
+                        }),
+                        adk_core::ToolResultStatus::NotRun,
+                        Some(e),
+                    )
                 }
             }
         } else {
-            let outcome =
-                self.governed_execute(tool, &ctx, &call.call_id, call.arguments.clone()).await?;
-            held = outcome.held;
-            outcome.result
+            self.governed_execute(tool, &ctx, &call.call_id, call.arguments.clone()).await?
         };
         // Screened after every plugin, so neither the transcript, the session, nor the model
         // sees a result the screen did not pass. A held call carries no result to screen.
-        let result = if held.is_some() {
-            result
-        } else {
-            self.runner.screen_tool_result(&call.name, &call.arguments, result).await
-        };
+        if outcome.held.is_none() {
+            outcome.screened(
+                self.runner
+                    .screen_tool_result(&call.name, &call.arguments, outcome.result.clone())
+                    .await,
+            );
+        }
+        let result = outcome.result.clone();
 
         // Record completed tool call in aggregator
         self.aggregator.write().await.record_tool_call(CompletedToolCall {
@@ -1151,18 +1223,14 @@ impl Inner {
             id: Some(call.call_id.clone()),
             thought_signature: None,
         });
-        content.parts.push(adk_core::Part::FunctionResponse {
-            function_response: adk_core::FunctionResponseData::new(&call.name, result.clone()),
-            id: Some(call.call_id.clone()),
-            annotations: None,
-        });
+        content.parts.push(outcome.part(&call.name, &call.call_id));
 
         let mut adk_event = adk_core::Event::new(&call.call_id);
         adk_event.author = "tool".to_string();
         adk_event.set_content(content);
         self.persist_event(adk_event, "tool event session persist failed (non-fatal)").await;
 
-        if let Some(request) = held {
+        if let Some(request) = outcome.held {
             self.surface_hold(&call.call_id, &call.name, &call.arguments, request).await;
         }
 
@@ -1195,6 +1263,10 @@ impl Inner {
             adk_core::ToolAuthorization::Execute { args, .. } => {
                 let timeout = self.runner.tool_timeout();
                 let execution = tool.execute(ctx.clone() as Arc<dyn adk_core::ToolContext>, args);
+                let mut status = None;
+                let mut cause = None;
+                // Set when a non-idempotent call timed out, so its effect is unknown.
+                let mut outcome_unknown = false;
                 let result = match tokio::time::timeout(timeout, execution).await {
                     Ok(Ok(value)) => value,
                     Ok(Err(e)) => {
@@ -1212,21 +1284,45 @@ impl Inner {
                                 "realtime tool failed"
                             );
                         }
-                        adk_core::tool_error_response(
+                        let response = adk_core::tool_error_response(
                             tool.name(),
                             &e,
                             self.runner.exposes_tool_error_messages(),
-                        )
+                        );
+                        status = Some(adk_core::ToolResultStatus::of_tool_error(&e));
+                        cause = Some(e);
+                        response
                     }
-                    Err(_) => serde_json::json!({
-                        "error": format!("Tool '{}' timed out after {timeout:?}", tool.name())
-                    }),
+                    Err(_) => {
+                        let message = format!("Tool '{}' timed out after {timeout:?}", tool.name());
+                        // A timed-out call was dropped mid-flight, as in `LlmAgent`.
+                        outcome_unknown = tool.effect() == adk_core::ToolEffect::NonIdempotent;
+                        status = Some(if outcome_unknown {
+                            adk_core::ToolResultStatus::OutcomeUnknown
+                        } else {
+                            adk_core::ToolResultStatus::Failed
+                        });
+                        cause = Some(adk_core::AdkError::new(
+                            adk_core::ErrorComponent::Tool,
+                            adk_core::ErrorCategory::Timeout,
+                            "tool.timeout",
+                            message.clone(),
+                        ));
+                        serde_json::json!({ "error": message })
+                    }
                 };
                 // An agent tool whose delegate held a call of its own holds this call with
                 // it: the request is the delegate's, and this call resumes once that request
                 // has a decision (spec 3.1 §10 F4), as `LlmAgent` does.
                 let mut actions = ctx.actions();
                 match actions.tool_confirmation.take() {
+                    // A call that may have taken effect is not held to run again on a
+                    // decision, and no decision on its request may authorize an identical call.
+                    Some(request) if outcome_unknown => {
+                        ctx.set_actions(actions);
+                        self.runner.withdraw_held_call(&request).await?;
+                        GovernedOutcome { result, held: None, status, cause, executed: true }
+                    }
                     Some(mut request) => {
                         actions.skip_summarization = false;
                         actions.escalate = false;
@@ -1242,17 +1338,29 @@ impl Inner {
                                 tool.name()
                             ))
                         };
-                        GovernedOutcome { result, held: Some(request) }
+                        GovernedOutcome {
+                            result,
+                            held: Some(request),
+                            status: Some(adk_core::ToolResultStatus::Held),
+                            cause: None,
+                            executed: true,
+                        }
                     }
-                    None => GovernedOutcome { result, held: None },
+                    None => GovernedOutcome { result, held: None, status, cause, executed: true },
                 }
             }
-            adk_core::ToolAuthorization::Refuse { reason, .. } => {
-                GovernedOutcome { result: serde_json::json!({ "error": reason }), held: None }
-            }
+            adk_core::ToolAuthorization::Refuse { reason, .. } => GovernedOutcome::answer(
+                serde_json::json!({ "error": reason }),
+                adk_core::ToolResultStatus::Refused,
+                None,
+            ),
             adk_core::ToolAuthorization::Pending { request, reason } => GovernedOutcome {
-                result: adk_core::confirmation_pending_response(reason),
                 held: Some(request),
+                ..GovernedOutcome::answer(
+                    adk_core::confirmation_pending_response(reason),
+                    adk_core::ToolResultStatus::Held,
+                    None,
+                )
             },
         })
     }
@@ -1293,7 +1401,14 @@ impl Inner {
     }
 
     /// Saves a resumed call's answer authored by the runner's agent, which clears its hold.
-    async fn persist_answer(&self, call_id: &str, name: &str, args: &Value, result: &Value) {
+    async fn persist_answer(
+        &self,
+        call_id: &str,
+        name: &str,
+        args: &Value,
+        outcome: &GovernedOutcome,
+    ) {
+        let result = &outcome.result;
         let mut content = adk_core::Content::new("model");
         content.parts.push(adk_core::Part::FunctionCall {
             name: name.to_string(),
@@ -1301,11 +1416,7 @@ impl Inner {
             id: Some(call_id.to_string()),
             thought_signature: None,
         });
-        content.parts.push(adk_core::Part::FunctionResponse {
-            function_response: adk_core::FunctionResponseData::new(name, result.clone()),
-            id: Some(call_id.to_string()),
-            annotations: None,
-        });
+        content.parts.push(outcome.part(name, call_id));
         let mut event = adk_core::Event::new(call_id);
         event.author = self.runner.agent_name().to_string();
         event.set_content(content);

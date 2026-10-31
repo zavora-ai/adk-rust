@@ -139,26 +139,29 @@ impl InFlightCalls {
     /// response.
     fn answer_interrupted(&mut self) -> Vec<Event> {
         self.answer_with(|call| {
-            adk_core::outcome_unknown_response(format!(
+            let response = adk_core::outcome_unknown_response(format!(
                 "the run was cancelled while '{}' was in flight, so the call may have taken effect; check its result before calling it again",
                 call.name
-            ))
+            ));
+            (response, adk_core::ToolResultStatus::OutcomeUnknown)
         })
     }
 
-    /// Answers every call still in flight with `respond(call)`, one event per author,
-    /// branch, and invocation.
+    /// Answers every call still in flight with `respond(call)`, a response and its status,
+    /// one event per author, branch, and invocation.
     fn answer_with(
         &mut self,
-        mut respond: impl FnMut(&InFlightCall) -> serde_json::Value,
+        mut respond: impl FnMut(&InFlightCall) -> (serde_json::Value, adk_core::ToolResultStatus),
     ) -> Vec<Event> {
         let mut events: Vec<Event> = Vec::new();
         for call in std::mem::take(&mut self.0) {
-            let response = Part::FunctionResponse {
-                function_response: FunctionResponseData::new(call.name.clone(), respond(&call)),
+            let (response, status) = respond(&call);
+            let mut response = Part::FunctionResponse {
+                function_response: FunctionResponseData::new(call.name.clone(), response),
                 id: call.id,
                 annotations: None,
             };
+            response.set_tool_result_status(status, None);
             let existing = events.iter_mut().find(|event| {
                 event.author == call.author
                     && event.branch == call.branch
@@ -185,12 +188,14 @@ impl InFlightCalls {
 }
 
 /// The function response a recovering worker gives a call that a stopped process left
-/// unanswered, from the action ledger's record of it.
+/// unanswered, from the action ledger's record of it, with the status the record shows.
 fn recovered_call_response(
     name: &str,
     record: Option<adk_core::ActionRecord>,
-) -> serde_json::Value {
-    match record.and_then(|record| record.outcome) {
+) -> (serde_json::Value, adk_core::ToolResultStatus) {
+    let outcome = record.and_then(|record| record.outcome);
+    let status = adk_core::ToolResultStatus::of_record(outcome.as_ref());
+    let response = match outcome {
         Some(adk_core::ActionOutcome::Succeeded { result_digest }) => serde_json::json!({
             "status": "already_succeeded",
             "result_digest": result_digest,
@@ -204,7 +209,8 @@ fn recovered_call_response(
         _ => adk_core::outcome_unknown_response(format!(
             "the process running '{name}' stopped before the call recorded an outcome, so it may have taken effect; check its result before calling it again"
         )),
-    }
+    };
+    (response, status)
 }
 
 /// Screens the saved user messages of `session` that lack the

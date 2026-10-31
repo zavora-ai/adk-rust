@@ -122,7 +122,11 @@ pub fn content_to_message(
                 Some(ContentBlock::ToolResult(ToolResultBlock {
                     tool_use_id: id.clone().unwrap_or_else(|| "unknown".to_string()),
                     content: Some(tool_result_content(function_response)),
-                    is_error: None,
+                    // Only an answer the agent wrote says the call failed or never ran.
+                    is_error: part
+                        .tool_result_status()
+                        .is_some_and(adk_core::ToolResultStatus::is_error)
+                        .then_some(true),
                     cache_control: None,
                 }))
             }

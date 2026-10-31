@@ -4,11 +4,299 @@
 //! fails, when its result cannot be released, or when the model's arguments cannot be decoded,
 //! these builders produce that response without passing error detail to the model by default.
 //! A [`ToolResultScreen`] decides what of a tool's result the model and the session may see.
+//!
+//! An answer the agent writes in place of the tool's result carries a [`ToolResultStatus`] in
+//! the part's annotations ([`Part::tool_result_status`]), so a host, an eval, or an audit reads
+//! what happened to the call without parsing the payload.
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::AdkError;
+use crate::{ActionOutcome, AdkError, ErrorCategory, Part};
+
+/// The annotation key of a function response's [`ToolResultStatus`].
+pub const TOOL_RESULT_STATUS_KEY: &str = "adk.tool_result.status";
+
+/// The annotation key of the [`AdkError::code`] behind a function response's status.
+pub const TOOL_RESULT_ERROR_CODE_KEY: &str = "adk.tool_result.error_code";
+
+/// The annotation key of the [`ErrorCategory`] behind a function response's status.
+pub const TOOL_RESULT_ERROR_CATEGORY_KEY: &str = "adk.tool_result.error_category";
+
+/// What happened to a tool call that the agent, not the tool, answered.
+///
+/// An agent sets it on the function response it writes in place of the tool's result —
+/// a refusal, a hold, a failure, a withheld result, an unknown outcome, an action-ledger
+/// replay — as the [`TOOL_RESULT_STATUS_KEY`] annotation; the payload the model reads is
+/// unchanged. A response without a status is the tool's own result, an answer a callback or
+/// plugin supplied, or one stored before the status existed. The status is never derived from
+/// the payload, which a tool owns.
+///
+/// | Status | The call | Issued again |
+/// |--------|----------|--------------|
+/// | `Refused` | did not run: an authorization check refused it | meets the same check |
+/// | `NotRun` | did not run, for a reason other than an authorization decision | may run once the reason clears |
+/// | `Held` | waits for a confirmation decision; a later run answers it | should not be; decide it instead |
+/// | `Failed` | ran and failed with a known outcome | as the tool allows |
+/// | `OutcomeUnknown` | began and may have taken effect | only after checking its effect |
+/// | `Withheld` | ran; its result is withheld | should not be |
+/// | `Succeeded` | ran in an earlier attempt; this answer reports that, not the result | should not be |
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::ToolResultStatus;
+///
+/// assert_eq!(serde_json::to_value(ToolResultStatus::NotRun).unwrap(), "not_run");
+/// assert!(ToolResultStatus::Refused.is_error());
+/// assert!(!ToolResultStatus::OutcomeUnknown.is_error());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ToolResultStatus {
+    /// An authorization check refused the call, so it did not run: a `ToolPolicy` denial, a
+    /// tool guardrail's denial, an approver's or handler's decline, a held call resumed by
+    /// another agent or for another tool, an access guard inside the tool
+    /// ([`TOOL_PERMISSION_DENIED_CODE`]), or a call a person asked for that the agent does not
+    /// take.
+    Refused,
+    /// The call did not run, for a reason other than an authorization decision: the kill
+    /// switch, the run budget, a transfer to another agent, arguments that did not decode, an
+    /// unknown tool, an open circuit breaker, a concurrency limit, a before-tool callback or
+    /// plugin that failed or answered with text, or an action ledger that could not be used.
+    NotRun,
+    /// The call waits for a confirmation decision; a later run answers it.
+    Held,
+    /// The call ran and failed with a known outcome.
+    Failed,
+    /// The call began and may or may not have taken effect: a non-idempotent call that timed
+    /// out or panicked, a call in flight when the run was cancelled or its process stopped, or
+    /// one whose action-ledger record was begun without an outcome.
+    OutcomeUnknown,
+    /// The call ran, but its result is withheld: an after-tool stage failed, or the result
+    /// screen withheld it.
+    Withheld,
+    /// An earlier attempt of the call succeeded, as its action-ledger record shows; the answer
+    /// reports that instead of the result, and the call did not run again.
+    Succeeded,
+}
+
+impl ToolResultStatus {
+    /// Whether a provider with a tool-error flag marks the answer as an error: `Refused`,
+    /// `NotRun` and `Failed`. The others are not errors to report, or an error flag would
+    /// invite the model to repeat a call that ran, may have run, or waits for a decision.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::ToolResultStatus;
+    ///
+    /// assert!(ToolResultStatus::Failed.is_error());
+    /// assert!(!ToolResultStatus::Withheld.is_error());
+    /// assert!(!ToolResultStatus::Held.is_error());
+    /// ```
+    pub fn is_error(self) -> bool {
+        matches!(self, Self::Refused | Self::NotRun | Self::Failed)
+    }
+
+    /// The status of a call whose tool returned `error`: `Refused` for an access guard's
+    /// denial ([`TOOL_PERMISSION_DENIED_CODE`]), which the guard returns before the tool runs,
+    /// and `Failed` for any other error.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{AdkError, ErrorCategory, ErrorComponent, TOOL_PERMISSION_DENIED_CODE, ToolResultStatus};
+    ///
+    /// let denied = AdkError::new(
+    ///     ErrorComponent::Tool,
+    ///     ErrorCategory::Forbidden,
+    ///     TOOL_PERMISSION_DENIED_CODE,
+    ///     "missing scope: payments",
+    /// );
+    /// assert_eq!(ToolResultStatus::of_tool_error(&denied), ToolResultStatus::Refused);
+    /// assert_eq!(ToolResultStatus::of_tool_error(&AdkError::tool("boom")), ToolResultStatus::Failed);
+    /// ```
+    pub fn of_tool_error(error: &AdkError) -> Self {
+        if error.code == TOOL_PERMISSION_DENIED_CODE { Self::Refused } else { Self::Failed }
+    }
+
+    /// The status of an answer given from an action-ledger record whose outcome is `outcome`:
+    /// `Succeeded` and `Failed` as recorded, `NotRun` for a call the kill switch refused after
+    /// the record was begun ([`not_run_text`](crate::not_run_text)), and `OutcomeUnknown` for a
+    /// record begun without an outcome.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{ActionOutcome, ToolResultStatus};
+    ///
+    /// let failed = ActionOutcome::Failed { error: "card declined".into() };
+    /// assert_eq!(ToolResultStatus::of_record(Some(&failed)), ToolResultStatus::Failed);
+    /// let frozen = ActionOutcome::Failed { error: "not run: execution is frozen".into() };
+    /// assert_eq!(ToolResultStatus::of_record(Some(&frozen)), ToolResultStatus::NotRun);
+    /// assert_eq!(ToolResultStatus::of_record(None), ToolResultStatus::OutcomeUnknown);
+    /// ```
+    pub fn of_record(outcome: Option<&ActionOutcome>) -> Self {
+        match outcome {
+            Some(ActionOutcome::Succeeded { .. }) => Self::Succeeded,
+            Some(ActionOutcome::Failed { error }) if crate::is_not_run(error) => Self::NotRun,
+            Some(ActionOutcome::Failed { .. }) => Self::Failed,
+            _ => Self::OutcomeUnknown,
+        }
+    }
+
+    /// The status of an answer whose result is withheld after it was written, given the
+    /// answer's `previous` status and whether the tool `executed` in this dispatch.
+    ///
+    /// Withholding a result does not change whether the call ran: `NotRun`, `Refused` and
+    /// `OutcomeUnknown` stand. Any other answer of a call that ran — now, or in the earlier
+    /// attempt an action-ledger replay reports — is `Withheld`. An answer without a status of a
+    /// call that did not execute, such as a before-tool callback's substitute, is `NotRun`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::ToolResultStatus;
+    ///
+    /// // A ledger replay of a call that succeeded never executes now, but it ran.
+    /// let replay = Some(ToolResultStatus::Succeeded);
+    /// assert_eq!(ToolResultStatus::when_withheld(replay, false), ToolResultStatus::Withheld);
+    /// let refusal = Some(ToolResultStatus::Refused);
+    /// assert_eq!(ToolResultStatus::when_withheld(refusal, false), ToolResultStatus::Refused);
+    /// assert_eq!(ToolResultStatus::when_withheld(None, true), ToolResultStatus::Withheld);
+    /// assert_eq!(ToolResultStatus::when_withheld(None, false), ToolResultStatus::NotRun);
+    /// ```
+    pub fn when_withheld(previous: Option<Self>, executed: bool) -> Self {
+        match previous {
+            Some(kept @ (Self::NotRun | Self::Refused | Self::OutcomeUnknown)) => kept,
+            Some(Self::Failed | Self::Withheld | Self::Succeeded) => Self::Withheld,
+            Some(Self::Held) | None if executed => Self::Withheld,
+            Some(Self::Held) | None => Self::NotRun,
+        }
+    }
+}
+
+impl Part {
+    /// Returns the [`ToolResultStatus`] of a function response the agent wrote, or `None` for
+    /// a tool's own result, a callback's answer, another part, or an unknown status value.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{FunctionResponseData, Part, ToolResultStatus};
+    /// use serde_json::json;
+    ///
+    /// let mut part = Part::FunctionResponse {
+    ///     function_response: FunctionResponseData::new("pay", json!({"error": "denied"})),
+    ///     id: Some("call-1".into()),
+    ///     annotations: None,
+    /// };
+    /// assert_eq!(part.tool_result_status(), None);
+    /// part.set_tool_result_status(ToolResultStatus::Refused, None);
+    /// assert_eq!(part.tool_result_status(), Some(ToolResultStatus::Refused));
+    /// ```
+    pub fn tool_result_status(&self) -> Option<ToolResultStatus> {
+        ToolResultStatus::deserialize(self.tool_result_annotation(TOOL_RESULT_STATUS_KEY)?).ok()
+    }
+
+    /// Returns the code of the error behind a function response's status, when one was.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{AdkError, ErrorCategory, ErrorComponent, FunctionResponseData, Part, ToolResultStatus};
+    /// use serde_json::json;
+    ///
+    /// let timeout =
+    ///     AdkError::new(ErrorComponent::Tool, ErrorCategory::Timeout, "tool.timeout", "timed out");
+    /// let mut part = Part::FunctionResponse {
+    ///     function_response: FunctionResponseData::new("lookup", json!({"error": "timed out"})),
+    ///     id: None,
+    ///     annotations: None,
+    /// };
+    /// part.set_tool_result_status(ToolResultStatus::Failed, Some(&timeout));
+    /// assert_eq!(part.tool_result_error_code(), Some("tool.timeout"));
+    /// ```
+    pub fn tool_result_error_code(&self) -> Option<&str> {
+        self.tool_result_annotation(TOOL_RESULT_ERROR_CODE_KEY)?.as_str()
+    }
+
+    /// Returns the category of the error behind a function response's status, when one was.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{AdkError, ErrorCategory, FunctionResponseData, Part, ToolResultStatus};
+    /// use serde_json::json;
+    ///
+    /// let frozen = AdkError::agent("execution is frozen");
+    /// let mut part = Part::FunctionResponse {
+    ///     function_response: FunctionResponseData::new("pay", json!({"error": "not run"})),
+    ///     id: None,
+    ///     annotations: None,
+    /// };
+    /// part.set_tool_result_status(ToolResultStatus::NotRun, Some(&frozen));
+    /// assert_eq!(part.tool_result_error_category(), Some(ErrorCategory::Internal));
+    /// ```
+    pub fn tool_result_error_category(&self) -> Option<ErrorCategory> {
+        ErrorCategory::deserialize(self.tool_result_annotation(TOOL_RESULT_ERROR_CATEGORY_KEY)?)
+            .ok()
+    }
+
+    /// Sets a function response's [`ToolResultStatus`], with the code and category of `cause`,
+    /// the error behind it, when there is one. The payload and the part's other annotations are
+    /// kept, a non-object annotation under `"value"`; an earlier cause is replaced. Other parts
+    /// are left as they are.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{FunctionResponseData, Part, TOOL_RESULT_STATUS_KEY, ToolResultStatus};
+    /// use serde_json::json;
+    ///
+    /// let mut part = Part::FunctionResponse {
+    ///     function_response: FunctionResponseData::new("pay", json!({"error": "held"})),
+    ///     id: None,
+    ///     annotations: Some(json!({"priority": 1})),
+    /// };
+    /// part.set_tool_result_status(ToolResultStatus::Held, None);
+    /// assert_eq!(part.annotations(), Some(&json!({"priority": 1, TOOL_RESULT_STATUS_KEY: "held"})));
+    /// ```
+    pub fn set_tool_result_status(&mut self, status: ToolResultStatus, cause: Option<&AdkError>) {
+        let Part::FunctionResponse { annotations, .. } = self else { return };
+        let mut fields = match annotations.take() {
+            Some(Value::Object(fields)) => fields,
+            Some(other) => {
+                let mut fields = serde_json::Map::new();
+                fields.insert("value".to_string(), other);
+                fields
+            }
+            None => serde_json::Map::new(),
+        };
+        fields.insert(TOOL_RESULT_STATUS_KEY.to_string(), json!(status));
+        match cause {
+            Some(error) => {
+                fields.insert(TOOL_RESULT_ERROR_CODE_KEY.to_string(), json!(error.code));
+                fields.insert(TOOL_RESULT_ERROR_CATEGORY_KEY.to_string(), json!(error.category));
+            }
+            None => {
+                fields.remove(TOOL_RESULT_ERROR_CODE_KEY);
+                fields.remove(TOOL_RESULT_ERROR_CATEGORY_KEY);
+            }
+        }
+        *annotations = Some(Value::Object(fields));
+    }
+
+    fn tool_result_annotation(&self, key: &str) -> Option<&Value> {
+        match self {
+            Part::FunctionResponse { annotations: Some(annotations), .. } => annotations.get(key),
+            _ => None,
+        }
+    }
+}
 
 /// The error code for a call whose arguments do not fit the tool.
 ///
@@ -399,5 +687,129 @@ mod tests {
         extended["city"] = json!("Nairobi");
         assert_eq!(invalid_tool_arguments_reason(&extended), None);
         assert_eq!(invalid_tool_arguments_reason(&json!("{")), None);
+    }
+
+    fn response(annotations: Option<Value>) -> Part {
+        Part::FunctionResponse {
+            function_response: crate::FunctionResponseData::new(
+                "lookup",
+                json!({"error": "x", TOOL_RESULT_STATUS_KEY: "failed"}),
+            ),
+            id: Some("call-1".into()),
+            annotations,
+        }
+    }
+
+    #[test]
+    fn every_status_round_trips_through_the_annotation() {
+        for (encoded, status) in [
+            ("refused", ToolResultStatus::Refused),
+            ("not_run", ToolResultStatus::NotRun),
+            ("held", ToolResultStatus::Held),
+            ("failed", ToolResultStatus::Failed),
+            ("outcome_unknown", ToolResultStatus::OutcomeUnknown),
+            ("withheld", ToolResultStatus::Withheld),
+            ("succeeded", ToolResultStatus::Succeeded),
+        ] {
+            let mut part = response(None);
+            part.set_tool_result_status(status, None);
+            assert_eq!(part, response(Some(json!({ TOOL_RESULT_STATUS_KEY: encoded }))));
+            let decoded: Part =
+                serde_json::from_value(serde_json::to_value(&part).unwrap()).unwrap();
+            assert_eq!(decoded.tool_result_status(), Some(status));
+        }
+    }
+
+    #[test]
+    fn the_status_is_read_from_the_annotation_never_the_payload() {
+        assert_eq!(response(None).tool_result_status(), None);
+        assert_eq!(
+            response(Some(json!({ TOOL_RESULT_STATUS_KEY: "cancelled" }))).tool_result_status(),
+            None
+        );
+        let file = Part::FileData {
+            mime_type: "text/plain".into(),
+            file_uri: "https://example.test/a".into(),
+            annotations: Some(json!({ TOOL_RESULT_STATUS_KEY: "failed" })),
+        };
+        assert_eq!(file.tool_result_status(), None);
+    }
+
+    #[test]
+    fn setting_a_status_keeps_other_annotations_and_replaces_the_cause() {
+        let timeout =
+            AdkError::new(ErrorComponent::Tool, ErrorCategory::Timeout, "tool.timeout", "slow");
+        let mut part = response(Some(json!({ "priority": 1 })));
+        part.set_tool_result_status(ToolResultStatus::OutcomeUnknown, Some(&timeout));
+        assert_eq!(
+            part,
+            response(Some(json!({
+                "priority": 1,
+                TOOL_RESULT_STATUS_KEY: "outcome_unknown",
+                TOOL_RESULT_ERROR_CODE_KEY: "tool.timeout",
+                TOOL_RESULT_ERROR_CATEGORY_KEY: "timeout",
+            })))
+        );
+        assert_eq!(part.tool_result_error_code(), Some("tool.timeout"));
+        assert_eq!(part.tool_result_error_category(), Some(ErrorCategory::Timeout));
+
+        part.set_tool_result_status(ToolResultStatus::Withheld, None);
+        assert_eq!(
+            part,
+            response(Some(json!({ "priority": 1, TOOL_RESULT_STATUS_KEY: "withheld" })))
+        );
+
+        let mut odd = response(Some(json!("note")));
+        odd.set_tool_result_status(ToolResultStatus::Held, None);
+        assert_eq!(odd, response(Some(json!({ "value": "note", TOOL_RESULT_STATUS_KEY: "held" }))));
+    }
+
+    #[test]
+    fn a_ledger_record_maps_to_one_status() {
+        let cases = [
+            (
+                Some(ActionOutcome::Succeeded { result_digest: "d".into() }),
+                ToolResultStatus::Succeeded,
+            ),
+            (Some(ActionOutcome::Failed { error: "declined".into() }), ToolResultStatus::Failed),
+            (
+                Some(ActionOutcome::Failed {
+                    error: crate::not_run_text(&AdkError::agent("frozen")),
+                }),
+                ToolResultStatus::NotRun,
+            ),
+            (None, ToolResultStatus::OutcomeUnknown),
+        ];
+        for (outcome, status) in cases {
+            assert_eq!(ToolResultStatus::of_record(outcome.as_ref()), status, "{outcome:?}");
+        }
+    }
+
+    #[test]
+    fn withholding_keeps_what_is_known_about_whether_the_call_ran() {
+        use ToolResultStatus::*;
+        let cases = [
+            (Some(NotRun), true, NotRun),
+            (Some(Refused), true, Refused),
+            (Some(OutcomeUnknown), false, OutcomeUnknown),
+            (Some(Failed), false, Withheld),
+            (Some(Succeeded), false, Withheld),
+            (Some(Withheld), false, Withheld),
+            (Some(Held), false, NotRun),
+            (None, true, Withheld),
+            (None, false, NotRun),
+        ];
+        for (previous, executed, expected) in cases {
+            assert_eq!(
+                ToolResultStatus::when_withheld(previous, executed),
+                expected,
+                "{previous:?}, executed {executed}"
+            );
+        }
+        let errors: Vec<_> = [Refused, NotRun, Held, Failed, OutcomeUnknown, Withheld, Succeeded]
+            .into_iter()
+            .filter(|status| status.is_error())
+            .collect();
+        assert_eq!(errors, [Refused, NotRun, Failed]);
     }
 }

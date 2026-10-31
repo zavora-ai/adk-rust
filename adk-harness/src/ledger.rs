@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use adk_core::ActionLedger;
 #[cfg(feature = "runner")]
-use adk_core::{ActionOutcome, ActionRecord};
+use adk_core::{ActionOutcome, ActionRecord, FunctionResponseData, Part, ToolResultStatus};
 #[cfg(feature = "runner")]
 use serde_json::{Value, json};
 
@@ -29,11 +29,12 @@ pub(crate) fn held_call_key(
     adk_agent::held_call_ledger_key(app, user, session, call_id, fingerprint)
 }
 
-/// The function response for a held call that ran but whose result was never saved,
-/// from its ledger record; the shapes the agent answers a re-issued call with.
+/// The function response for the held call `id` to `name` that ran but whose result was never
+/// saved, from its ledger record; the shapes, and the status, the agent answers a re-issued
+/// call with.
 #[cfg(feature = "runner")]
-pub(crate) fn recorded_answer(name: &str, record: &ActionRecord) -> Value {
-    match &record.outcome {
+pub(crate) fn recorded_answer(name: &str, id: Option<&String>, record: &ActionRecord) -> Part {
+    let response: Value = match &record.outcome {
         Some(ActionOutcome::Succeeded { result_digest }) => json!({
             "status": "already_succeeded",
             "result_digest": result_digest,
@@ -48,7 +49,14 @@ pub(crate) fn recorded_answer(name: &str, record: &ActionRecord) -> Value {
             "an earlier attempt of this call to '{name}' began but recorded no outcome, so it \
              may have taken effect; it was not executed again"
         )),
-    }
+    };
+    let mut part = Part::FunctionResponse {
+        function_response: FunctionResponseData::new(name, response),
+        id: id.cloned(),
+        annotations: None,
+    };
+    part.set_tool_result_status(ToolResultStatus::of_record(record.outcome.as_ref()), None);
+    part
 }
 
 /// The harness's action ledger and the one each run records in (spec 3.1 §7.12).

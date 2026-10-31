@@ -32,6 +32,26 @@ pub const DEFAULT_REALTIME_AGENT_NAME: &str = "realtime";
 /// handler's description or parameters change.
 pub const REALTIME_HANDLER_ORIGIN: &str = "realtime";
 
+/// Runs `screen` on `result`, returning the result to deliver — the
+/// [`result_blocked_response`](adk_core::result_blocked_response) that replaces a withheld one —
+/// and whether the screen withheld it, which sets the answer's
+/// [`ToolResultStatus`](adk_core::ToolResultStatus).
+pub(crate) async fn screen_result(
+    screen: &dyn adk_core::ToolResultScreen,
+    name: &str,
+    args: &serde_json::Value,
+    result: serde_json::Value,
+) -> (serde_json::Value, bool) {
+    match screen.screen_result(name, args, &result).await {
+        Ok(screened) => (screened, false),
+        Err(reason) => {
+            // The reason can describe the result, so it goes to the model, not the log.
+            tracing::warn!(tool.name = %name, "tool result withheld by its screen");
+            (adk_core::result_blocked_response(name, &reason), true)
+        }
+    }
+}
+
 /// Parses a provider's tool-call arguments.
 ///
 /// Empty arguments are an empty object. Anything that is not a JSON object is refused,
@@ -1324,6 +1344,27 @@ impl RealtimeRunner {
             .map_err(|error| RealtimeError::ToolError(error.to_string()))
     }
 
+    /// Withdraws `request`, a call's confirmation request that will not be waited on, so no
+    /// decision on it authorizes an identical call ([`adk_core::withdraw_held_call`]).
+    #[cfg(feature = "integration")]
+    pub(crate) async fn withdraw_held_call(
+        &self,
+        request: &adk_core::ToolConfirmationRequest,
+    ) -> Result<()> {
+        let Some(governance) = &self.governance else {
+            return Ok(());
+        };
+        let gate = adk_core::ToolGate::new(
+            &governance.config,
+            &self.agent_name,
+            &governance.scope.session_id,
+            governance.scope.clone(),
+        );
+        adk_core::withdraw_held_call(&gate, request)
+            .await
+            .map_err(|error| RealtimeError::ToolError(error.to_string()))
+    }
+
     /// How long one tool call may run.
     #[cfg(feature = "integration")]
     pub(crate) fn tool_timeout(&self) -> std::time::Duration {
@@ -1336,16 +1377,17 @@ impl RealtimeRunner {
         self.expose_tool_error_messages
     }
 
-    /// Runs the configured result screen, if any, on `result`.
+    /// Runs the configured result screen, if any, on `result`, returning the result to deliver
+    /// and whether the screen withheld it.
     pub(crate) async fn screen_tool_result(
         &self,
         name: &str,
         args: &serde_json::Value,
         result: serde_json::Value,
-    ) -> serde_json::Value {
+    ) -> (serde_json::Value, bool) {
         match &self.tool_result_screen {
-            Some(screen) => adk_core::screen_tool_result(screen.as_ref(), name, args, result).await,
-            None => result,
+            Some(screen) => screen_result(screen.as_ref(), name, args, result).await,
+            None => (result, false),
         }
     }
 
@@ -1416,7 +1458,7 @@ impl RealtimeRunner {
                     }
                 };
                 match screened_args {
-                    Some(args) => self.screen_tool_result(name, &args, result).await,
+                    Some(args) => self.screen_tool_result(name, &args, result).await.0,
                     None => result,
                 }
             }

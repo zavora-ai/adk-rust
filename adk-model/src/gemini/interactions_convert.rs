@@ -488,7 +488,11 @@ fn append_steps(content: &Content, steps: &mut Vec<Step>) {
                         call_id: id.clone().unwrap_or_default(),
                         name: Some(function_response.name.clone()),
                         result: function_response.response.clone(),
-                        is_error: None,
+                        // Only an answer the agent wrote says the call failed or never ran.
+                        is_error: part
+                            .tool_result_status()
+                            .is_some_and(adk_core::ToolResultStatus::is_error)
+                            .then_some(true),
                         signature: None,
                     });
                 }

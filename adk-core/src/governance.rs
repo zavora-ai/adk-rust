@@ -1937,8 +1937,9 @@ impl RequestedCall {
     }
 
     /// The [`events`](Self::events) that refuse this call as `agent_name` for `reason`: it is
-    /// answered as not run. An agent that cannot hold a call for a person's decision answers
-    /// a run's requested call with these, before any model call.
+    /// answered as not run, with the status [`ToolResultStatus::Refused`](crate::ToolResultStatus).
+    /// An agent that cannot hold a call for a person's decision answers a run's requested call
+    /// with these, before any model call.
     ///
     /// # Example
     ///
@@ -1953,7 +1954,7 @@ impl RequestedCall {
     ///     RequestedVia::form("invoice-10", 1, "send"),
     /// );
     /// let events = call.refusal_events("inv-1", "", "pipeline", "it runs other agents");
-    /// let Some(Part::FunctionResponse { function_response, .. }) =
+    /// let Some(answer @ Part::FunctionResponse { function_response, .. }) =
     ///     events[2].content().and_then(|content| content.parts.first())
     /// else {
     ///     panic!("the call is answered");
@@ -1962,6 +1963,7 @@ impl RequestedCall {
     ///     function_response.response,
     ///     json!({ "error": "Tool 'send_invoice' was not run: it runs other agents" })
     /// );
+    /// assert_eq!(answer.tool_result_status(), Some(adk_core::ToolResultStatus::Refused));
     /// ```
     pub fn refusal_events(
         &self,
@@ -1971,7 +1973,16 @@ impl RequestedCall {
         reason: &str,
     ) -> Vec<Event> {
         let error = format!("Tool '{}' was not run: {reason}", self.tool_name);
-        self.events(invocation_id, branch, agent_name, serde_json::json!({ "error": error }))
+        let mut events =
+            self.events(invocation_id, branch, agent_name, serde_json::json!({ "error": error }));
+        if let Some(content) =
+            events.last_mut().and_then(|event| event.llm_response.content.as_mut())
+        {
+            for part in &mut content.parts {
+                part.set_tool_result_status(crate::ToolResultStatus::Refused, None);
+            }
+        }
+        events
     }
 }
 

@@ -34,8 +34,8 @@ use adk_core::{
     IncludeContents, InstructionProvider, InvocationContext, Llm, LlmRequest, LlmResponse,
     MemoryEntry, OnToolErrorCallback, Part, ReadonlyContext, RetryBudget, SharedState, Tool,
     ToolAuthorization, ToolCallbackContext, ToolConfirmationDecision, ToolConfirmationPolicy,
-    ToolConfirmationRequest, ToolContext, ToolEffect, ToolGate, ToolOutcome, Toolset,
-    authorize_tool_call,
+    ToolConfirmationRequest, ToolContext, ToolEffect, ToolGate, ToolOutcome, ToolResultStatus,
+    Toolset, authorize_tool_call,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -324,6 +324,8 @@ fn run_codeact(mut input: LoopInputs) -> impl Stream<Item = adk_core::Result<Eve
                             "status": "decided",
                             "detail": "an identical call in a later turn took this call's decision",
                         })),
+                        // The identical call ran in its place; this one never did.
+                        Some(ToolResultStatus::NotRun),
                     ));
                     yield Ok(answer);
                 }
@@ -480,6 +482,8 @@ fn drive_codeact(
                 let mut resume_control = ToolControl::default();
                 // A call still waiting for a decision, re-held with its final arguments.
                 let mut held: Option<ToolConfirmationRequest> = None;
+                // The status of the answer a call resolved now carries, when the agent wrote it.
+                let mut resolved_status: Option<ToolResultStatus> = None;
                 let resolution: Option<ResolutionRecord> = match &cp.disposition {
                     // No decision is recorded for the call: it keeps waiting, unasked.
                     Disposition::AwaitingConfirmation if hold.is_some() => {
@@ -498,8 +502,9 @@ fn drive_codeact(
                         )
                         .await
                         {
-                            Resumed::Ready(with, control) => {
+                            Resumed::Ready(with, control, status) => {
                                 resume_control = control;
+                                resolved_status = status;
                                 Some(resume_to_record(with))
                             }
                             Resumed::Held(request) => {
@@ -539,7 +544,7 @@ fn drive_codeact(
                         // A decided call is answered on the event that records its
                         // resolution, as LlmAgent answers a resumed one (spec 3.3 §7.3).
                         let answer = (cp.disposition == Disposition::AwaitingConfirmation)
-                            .then(|| held_call_answer(&cp.call, &rec));
+                            .then(|| held_call_answer(&cp.call, &rec, resolved_status));
                         // A tool that escalated / requested skip-summarization /
                         // a transfer on this resume ends the run now, before the
                         // result is fed back to the script (matches the inline
@@ -710,7 +715,7 @@ fn drive_codeact(
                                     invocation_ctx.clone(), &run_id, iteration, call_id,
                                 ));
                             let exec = match run_tool(&tool, &tool_ctx, args, &tool_policy, &mut circuit).await {
-                                ToolRun::Finished(exec) => exec,
+                                ToolRun::Finished(exec, _) => exec,
                                 ToolRun::Held(request) => {
                                     let cp = mk_checkpoint(
                                         iteration,
@@ -813,7 +818,7 @@ fn drive_codeact(
                                     invocation_ctx.clone(), &run_id, iteration, call_id,
                                 ));
                             let exec = match run_tool(&tool, &tool_ctx, args, &tool_policy, &mut circuit).await {
-                                ToolRun::Finished(exec) => exec,
+                                ToolRun::Finished(exec, _) => exec,
                                 ToolRun::Held(request) => {
                                     // Supersedes the SAVE-BEFORE checkpoint: the tool did not run.
                                     let cp = mk_checkpoint(
@@ -881,7 +886,7 @@ fn drive_codeact(
                                     invocation_ctx.clone(), &run_id, iteration, call_id,
                                 ));
                             let exec = match run_tool(&tool, &tool_ctx, args, &tool_policy, &mut circuit).await {
-                                ToolRun::Finished(exec) => exec,
+                                ToolRun::Finished(exec, _) => exec,
                                 ToolRun::Held(request) => match &waiting {
                                     // This turn answers a message while another call waits
                                     // for a decision; it cannot wait for a second one.
@@ -1053,8 +1058,9 @@ fn drive_codeact(
 
 /// How a resumed or recovered call ended.
 enum Resumed {
-    /// The value or error to feed back, with any terminal signal the tool raised.
-    Ready(ResumeWith, ToolControl),
+    /// The value or error to feed back, with any terminal signal the tool raised and the
+    /// status of an answer the agent wrote.
+    Ready(ResumeWith, ToolControl, Option<ToolResultStatus>),
     /// The call still needs a confirmation decision.
     Held(ToolConfirmationRequest),
     /// The run must end.
@@ -1079,26 +1085,29 @@ async fn execute_for_resume(
 ) -> Resumed {
     match tools.get(&call.tool) {
         Some(tool) => {
-            let result = match run_tool(tool, &tool_ctx, call.args.clone(), policy, circuit).await {
-                ToolRun::Finished(Ok(v)) => ResumeWith::Value(v),
-                ToolRun::Finished(Err(msg)) => ResumeWith::Raise(msg),
-                ToolRun::Held(request) => return Resumed::Held(request),
-                ToolRun::Abort(error) => return Resumed::Abort(error),
-            };
+            let (result, status) =
+                match run_tool(tool, &tool_ctx, call.args.clone(), policy, circuit).await {
+                    ToolRun::Finished(Ok(v), status) => (ResumeWith::Value(v), status),
+                    ToolRun::Finished(Err(msg), status) => (ResumeWith::Raise(msg), status),
+                    ToolRun::Held(request) => return Resumed::Held(request),
+                    ToolRun::Abort(error) => return Resumed::Abort(error),
+                };
             let control = capture_actions(pending, tool_ctx.actions());
-            Resumed::Ready(result, control)
+            Resumed::Ready(result, control, status)
         }
         None => Resumed::Ready(
             ResumeWith::Raise(unknown_tool_message(&call.tool)),
             ToolControl::default(),
+            Some(ToolResultStatus::NotRun),
         ),
     }
 }
 
 /// How one tool call ended.
 enum ToolRun {
-    /// A value to feed back into the script, or a message to raise in it.
-    Finished(Result<Value, String>),
+    /// A value to feed back into the script, or a message to raise in it, with the status of
+    /// the answer when the agent, not the tool, wrote it.
+    Finished(Result<Value, String>, Option<ToolResultStatus>),
     /// The call needs a confirmation decision that does not exist yet.
     Held(ToolConfirmationRequest),
     /// The run must end: the kill switch is set, or the approval service failed.
@@ -1125,27 +1134,30 @@ async fn run_tool(
     if let Some(cb) = circuit.as_ref()
         && cb.is_open(&name)
     {
-        return ToolRun::Finished(Err(format!(
-            "tool '{name}' is temporarily disabled after {} consecutive failures",
-            cb.threshold
-        )));
+        return ToolRun::Finished(
+            Err(format!(
+                "tool '{name}' is temporarily disabled after {} consecutive failures",
+                cb.threshold
+            )),
+            Some(ToolResultStatus::NotRun),
+        );
     }
 
     match run_authorized_tool(tool, tool_ctx, args, policy, circuit).await {
         Ok(outcome) => outcome,
-        Err(message) => ToolRun::Finished(Err(message)),
+        Err((message, status)) => ToolRun::Finished(Err(message), Some(status)),
     }
 }
 
 /// The body of [`run_tool`] after the circuit-breaker check, with `?` for raised
-/// messages.
+/// messages and their status.
 async fn run_authorized_tool(
     tool: &Arc<dyn Tool>,
     tool_ctx: &Arc<dyn ToolContext>,
     args: Value,
     policy: &ToolPolicy<'_>,
     circuit: &mut Option<CircuitBreaker>,
-) -> Result<ToolRun, String> {
+) -> Result<ToolRun, (String, ToolResultStatus)> {
     let name = tool.name().to_string();
 
     // before-tool plugins: rewrite args or short-circuit with a synthetic result.
@@ -1157,9 +1169,9 @@ async fn run_authorized_tool(
         {
             Ok(BeforeToolCallResult::Continue(modified)) => modified,
             Ok(BeforeToolCallResult::ShortCircuit(result)) => {
-                return Ok(ToolRun::Finished(Ok(result)));
+                return Ok(ToolRun::Finished(Ok(result), None));
             }
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err((e.to_string(), ToolResultStatus::NotRun)),
         },
         None => args,
     };
@@ -1175,10 +1187,10 @@ async fn run_authorized_tool(
         for callback in policy.hooks.before_tool.iter().chain(policy.before_tool) {
             match callback(cb_ctx.clone()).await {
                 Ok(Some(content)) => {
-                    return Ok(ToolRun::Finished(Ok(content_to_tool_value(&content))));
+                    return Ok(ToolRun::Finished(Ok(content_to_tool_value(&content)), None));
                 }
                 Ok(None) => continue,
-                Err(e) => return Err(e.to_string()),
+                Err(e) => return Err((e.to_string(), ToolResultStatus::NotRun)),
             }
         }
     }
@@ -1194,10 +1206,11 @@ async fn run_authorized_tool(
         match authorize_tool_call(&ToolGate::for_context(invocation_ctx.as_ref()), call).await {
             Ok(ToolAuthorization::Execute { args, .. }) => args,
             Ok(ToolAuthorization::Refuse { reason, confirmation }) => {
-                return Err(match confirmation {
+                let message = match confirmation {
                     Some(ToolConfirmationDecision::Deny) => denied_message(&name),
                     _ => reason,
-                });
+                };
+                return Err((message, ToolResultStatus::Refused));
             }
             Ok(ToolAuthorization::Pending { request, .. }) => return Ok(ToolRun::Held(request)),
             Err(error) => return Ok(ToolRun::Abort(error)),
@@ -1216,7 +1229,9 @@ async fn run_authorized_tool(
     .await
     {
         Ok(Ok(ledgered)) => ledgered,
-        Ok(Err(answer)) => return Ok(ToolRun::Finished(Err(render_value(&answer)))),
+        Ok(Err(answer)) => {
+            return Ok(ToolRun::Finished(Err(render_value(&answer.response)), Some(answer.status)));
+        }
         Err(error) => return Ok(ToolRun::Abort(error)),
     };
 
@@ -1345,6 +1360,15 @@ async fn run_authorized_tool(
     if let Some(cb) = circuit.as_mut() {
         cb.record(&name, tool_succeeded);
     }
+    // The status of a failure, as `LlmAgent` reports it. A value that stands in for the result
+    // (a fallback or a callback's) has none, except an unknown outcome, which no value settles.
+    let failure_status = match last_failure.as_deref() {
+        _ if outcome_unknown => ToolResultStatus::OutcomeUnknown,
+        Some(error) => ToolResultStatus::of_tool_error(error),
+        None => ToolResultStatus::Failed,
+    };
+    let unknown = outcome_unknown.then_some(ToolResultStatus::OutcomeUnknown);
+    let withheld = unknown.unwrap_or(ToolResultStatus::Withheld);
 
     let outcome = ToolOutcome {
         tool_name: name.clone(),
@@ -1409,7 +1433,7 @@ async fn run_authorized_tool(
                     break;
                 }
                 Ok(None) => continue,
-                Err(e) => return Err(e.to_string()),
+                Err(e) => return Err((e.to_string(), withheld)),
             }
         }
         let callback_value = match &result {
@@ -1424,12 +1448,12 @@ async fn run_authorized_tool(
                     break;
                 }
                 Ok(None) => continue,
-                Err(e) => return Err(e.to_string()),
+                Err(e) => return Err((e.to_string(), withheld)),
             }
         }
     }
 
-    let result = result?;
+    let result = result.map_err(|message| (message, failure_status))?;
 
     // after-tool plugins may transform the successful result last.
     #[cfg(feature = "enhanced-plugins")]
@@ -1443,11 +1467,13 @@ async fn run_authorized_tool(
             )
             .await
         {
-            Ok(AfterToolCallResult::Continue(modified)) => Ok(ToolRun::Finished(Ok(modified))),
-            Err(e) => Err(e.to_string()),
+            Ok(AfterToolCallResult::Continue(modified)) => {
+                Ok(ToolRun::Finished(Ok(modified), unknown))
+            }
+            Err(e) => Err((e.to_string(), withheld)),
         };
     }
-    Ok(ToolRun::Finished(Ok(result)))
+    Ok(ToolRun::Finished(Ok(result), unknown))
 }
 
 /// Run-control signals a tool may raise via its [`EventActions`].
@@ -1572,20 +1598,25 @@ fn content_to_tool_value(content: &Content) -> Value {
 /// [`held_tool_calls`](adk_core::held_tool_calls) holds a call until a response with its ID,
 /// and compaction never passes a held call (spec 3.3 §7.3). The model is never sent it: a
 /// CodeAct model issues no function calls, and the history leaves out a response that
-/// answers none.
-fn held_call_answer(call: &PendingToolCall, rec: &ResolutionRecord) -> Content {
+/// answers none. `status` is the answer's status when the agent, not the tool, wrote it.
+fn held_call_answer(
+    call: &PendingToolCall,
+    rec: &ResolutionRecord,
+    status: Option<ToolResultStatus>,
+) -> Content {
     let response = match rec {
         ResolutionRecord::Value(value) => value.clone(),
         ResolutionRecord::Raise(message) => serde_json::json!({ "error": message }),
     };
-    Content {
-        role: "function".to_string(),
-        parts: vec![Part::FunctionResponse {
-            function_response: adk_core::FunctionResponseData::new(call.tool.clone(), response),
-            id: Some(call.call_id.to_string()),
-            annotations: None,
-        }],
+    let mut part = Part::FunctionResponse {
+        function_response: adk_core::FunctionResponseData::new(call.tool.clone(), response),
+        id: Some(call.call_id.to_string()),
+        annotations: None,
+    };
+    if let Some(status) = status {
+        part.set_tool_result_status(status, None);
     }
+    Content { role: "function".to_string(), parts: vec![part] }
 }
 
 /// A durability event: persists the checkpoint to session state, no content.
