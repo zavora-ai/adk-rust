@@ -32,6 +32,8 @@ adk-gemini = { workspace = true, optional = true }
 google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
 reqwest = { workspace = true, optional = true }
 qdrant-client = { version = "1.13", optional = true }
+# Qdrant point IDs are UUID v5 values derived from chunk IDs.
+uuid = { workspace = true, features = ["v5"], optional = true }
 # lancedb's public API takes and returns arrow types, so our arrow types must come from
 # the exact arrow line lancedb was compiled against. Since 0.28 lancedb re-exports every
 # arrow crate it depends on (`lancedb::arrow::{arrow_array, arrow_schema, ...}`), so we
@@ -61,7 +63,7 @@ tempfile = "3"
 default = []
 gemini = ["dep:adk-gemini"]
 openai = ["dep:reqwest"]
-qdrant = ["dep:qdrant-client"]
+qdrant = ["dep:qdrant-client", "dep:uuid"]
 lancedb = ["dep:lancedb", "dep:futures"]
 pgvector = ["dep:sqlx"]
 agent-retrieval = ["dep:adk-gcp", "dep:google-cloud-auth", "dep:reqwest"]

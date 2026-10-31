@@ -126,32 +126,37 @@ impl SurrealVectorStore {
         RagError::VectorStoreError { backend: "surrealdb".to_string(), message: e.to_string() }
     }
 
-    /// Sanitize a collection name for use as a SurrealDB table name.
-    fn sanitize_table_name(name: &str) -> Result<String> {
-        let sanitized: String =
-            name.chars().map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' }).collect();
-        if sanitized.is_empty() {
+    /// Maps a collection name to its table name, rejecting names outside the rule.
+    ///
+    /// Rejecting rather than rewriting keeps the mapping one-to-one, so two collections
+    /// never share a table. Queries quote the name, so SurrealQL keywords and leading
+    /// digits are valid names.
+    fn table_name(name: &str) -> Result<&str> {
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
             return Err(RagError::VectorStoreError {
                 backend: "surrealdb".to_string(),
-                message: "collection name is empty after sanitization".to_string(),
+                message: format!(
+                    "invalid collection name `{name}`: use one or more ASCII letters, digits, or \
+                     underscores"
+                ),
             });
         }
-        Ok(sanitized)
+        Ok(name)
     }
 }
 
 #[async_trait]
 impl VectorStore for SurrealVectorStore {
     async fn create_collection(&self, name: &str, dimensions: usize) -> Result<()> {
-        let table = Self::sanitize_table_name(name)?;
+        let table = Self::table_name(name)?;
 
         let sql = format!(
-            "DEFINE TABLE IF NOT EXISTS {table}; \
-             DEFINE FIELD IF NOT EXISTS text ON {table} TYPE string; \
-             DEFINE FIELD IF NOT EXISTS embedding ON {table} TYPE array<float>; \
-             DEFINE FIELD IF NOT EXISTS metadata ON {table} TYPE object FLEXIBLE; \
-             DEFINE FIELD IF NOT EXISTS document_id ON {table} TYPE string; \
-             DEFINE INDEX IF NOT EXISTS idx_{table}_hnsw ON {table} \
+            "DEFINE TABLE IF NOT EXISTS `{table}`; \
+             DEFINE FIELD IF NOT EXISTS text ON `{table}` TYPE string; \
+             DEFINE FIELD IF NOT EXISTS embedding ON `{table}` TYPE array<float>; \
+             DEFINE FIELD IF NOT EXISTS metadata ON `{table}` TYPE object FLEXIBLE; \
+             DEFINE FIELD IF NOT EXISTS document_id ON `{table}` TYPE string; \
+             DEFINE INDEX IF NOT EXISTS `idx_{table}_hnsw` ON `{table}` \
                  FIELDS embedding HNSW DIMENSION {dimensions} DIST COSINE;"
         );
 
@@ -162,9 +167,9 @@ impl VectorStore for SurrealVectorStore {
     }
 
     async fn delete_collection(&self, name: &str) -> Result<()> {
-        let table = Self::sanitize_table_name(name)?;
+        let table = Self::table_name(name)?;
 
-        self.db.query(format!("REMOVE TABLE IF EXISTS {table};")).await.map_err(Self::map_err)?;
+        self.db.query(format!("REMOVE TABLE IF EXISTS `{table}`;")).await.map_err(Self::map_err)?;
 
         debug!(collection = name, table = %table, "deleted surrealdb collection");
         Ok(())
@@ -175,7 +180,7 @@ impl VectorStore for SurrealVectorStore {
             return Ok(());
         }
 
-        let table = Self::sanitize_table_name(collection)?;
+        let table = Self::table_name(collection)?;
 
         for chunk in chunks {
             let row = ChunkRow {
@@ -188,7 +193,7 @@ impl VectorStore for SurrealVectorStore {
             // Use record ID as (table, chunk.id) for upsert semantics
             let _: Option<ChunkRow> = self
                 .db
-                .upsert((&table as &str, &chunk.id as &str))
+                .upsert((table, chunk.id.as_str()))
                 .content(row)
                 .await
                 .map_err(Self::map_err)?;
@@ -203,11 +208,10 @@ impl VectorStore for SurrealVectorStore {
             return Ok(());
         }
 
-        let table = Self::sanitize_table_name(collection)?;
+        let table = Self::table_name(collection)?;
 
         for id in ids {
-            let _: Option<ChunkRow> =
-                self.db.delete((&table as &str, *id)).await.map_err(Self::map_err)?;
+            let _: Option<ChunkRow> = self.db.delete((table, *id)).await.map_err(Self::map_err)?;
         }
 
         debug!(collection, count = ids.len(), "deleted chunks from surrealdb");
@@ -220,13 +224,13 @@ impl VectorStore for SurrealVectorStore {
         embedding: &[f32],
         top_k: usize,
     ) -> Result<Vec<SearchResult>> {
-        let table = Self::sanitize_table_name(collection)?;
+        let table = Self::table_name(collection)?;
 
         // Use SurrealDB's KNN operator with cosine distance
         let sql = format!(
             "SELECT id, text, metadata, document_id, \
                     vector::distance::knn() AS distance \
-             FROM {table} \
+             FROM `{table}` \
              WHERE embedding <|{top_k},COSINE|> $embedding \
              ORDER BY distance;"
         );
