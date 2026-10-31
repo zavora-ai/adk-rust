@@ -3,7 +3,7 @@
 
 #![cfg(all(feature = "runner", unix))]
 
-mod common;
+use crate::common;
 
 use std::os::unix::fs::symlink;
 

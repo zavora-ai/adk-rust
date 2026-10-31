@@ -86,11 +86,7 @@ jobs:
           -E 'binary(sandbox_integration_tests)'
 
     - name: Shell sandbox tests (adk-harness)
-      run: cargo nextest run -p adk-harness --test shell_sandbox_tests --no-fail-fast
+      run: cargo nextest run -p adk-harness --test integration -E 'test(/^shell_sandbox_tests::/)' --no-fail-fast
 
     - name: Driver sandbox tests (adk-kernel)
       run: cargo nextest run -p adk-kernel --test driver_sandbox_tests --no-fail-fast
-
-    - name: Summary
-      if: always()
-      run: echo "### 🧱 bubblewrap enforcement proven on ubuntu-24.04 (ADK_SANDBOX_REQUIRE_ENFORCER=1)" >> "$GITHUB_STEP_SUMMARY"

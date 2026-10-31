@@ -4,7 +4,7 @@
 
 #![cfg(all(feature = "acp-server", feature = "runner"))]
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 

@@ -5,7 +5,7 @@
 
 #![cfg(all(feature = "kernel", feature = "graph"))]
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::time::Duration;

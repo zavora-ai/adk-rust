@@ -6,9 +6,6 @@
 
 #![cfg(feature = "graph")]
 
-#[cfg(all(feature = "sqlite", feature = "runner"))]
-mod common;
-
 use adk_graph::{Checkpoint, State};
 use adk_harness::checkpointer_from_url;
 use serde_json::json;

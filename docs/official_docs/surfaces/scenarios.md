@@ -89,8 +89,8 @@ of a kernel hosting both areas' harnesses on a scripted model and a manual clock
 
 | Store | Command |
 |---|---|
-| SQLite | `cargo nextest run -p adk-harness --features kernel,memory --test work_stays_at_work` |
-| PostgreSQL | `DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres cargo nextest run -p adk-harness --features kernel,memory,postgres --test work_stays_at_work --run-ignored only` |
+| SQLite | `cargo nextest run -p adk-harness --features kernel,memory --test integration -E 'test(/^work_stays_at_work::/)'` |
+| PostgreSQL | `DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres cargo nextest run -p adk-harness --features kernel,memory,postgres --test integration -E 'test(/^work_stays_at_work::/)' --run-ignored only` |
 
 | Pass condition | Read from |
 |---|---|

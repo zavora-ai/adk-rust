@@ -4,9 +4,14 @@
 #
 # Format: <shard> <package> <features> [flags]. Features are comma-separated with no spaces,
 # or `-` for none; flags too: `no-default` builds with `--no-default-features`, `doc` also
-# runs the doctests.
+# runs the doctests, `lib` lints the library alone and runs no tests, and `solo` runs the
+# pair's tests on its own build instead of its crate's combined one, for tests that assert
+# an exact feature set (adk-cli's scripted capability lists, for example).
+# Every pair is linted on its own; a crate's tests run once with its pairs' features
+# combined (scripts/check-feature-coverage.sh). A pull request runs only the pairs of the
+# crates it can affect (scripts/ci-scope.py); the nightly tier runs every pair's tests alone.
 # To cover another feature-gated module, add ONE line and pick the shard whose crates it
-# already depends on. Shards are numbered 0 to 10; `ci.yml` lists the same range.
+# already depends on. Shards are numbered 0 to 10.
 
 # Shard 0 — adk-rag backends. lancedb pulls the whole lance/datafusion tree and is the
 # slowest pair; it stays in the PR tier because an arrow version mismatch once sat broken
@@ -120,14 +125,14 @@
 8 adk-cli postgres,redis
 # The `chat` end-to-end tests in a pseudo-terminal: held calls, Ctrl-C, sessions; with
 # `audit-sql`, "Hire a helper" (spec 3.3 §12 phase 4) checks the kernel's record with `audit verify`.
-10 adk-cli scripted-model,audit-sql
+10 adk-cli scripted-model,audit-sql solo
 # `adk-rust --voice` (spec 3.1 §7.17) and `up --pack voice` (spec 3.3 §5.6) end to end on a
 # scripted realtime provider; `voice-desktop` implies `voice` and adds the microphone and the
 # speaker of the console voice and the terminal's voice mode.
-8 adk-cli voice-desktop,scripted-model
+8 adk-cli voice-desktop,scripted-model solo
 # `adk-rust site …` and `awp …` (spec 3.5 §8.1) on adk-site and adk-awp's verifier, with the
 # freeze test's DNS fixture.
-8 adk-cli website,scripted-model
+8 adk-cli website,scripted-model solo
 # adk-cli without the harness: the chat agent and the legacy `code`, `goal` and `ultracode`.
 8 adk-cli gemini no-default
 # adk-cli with no provider at all: every `--provider` reports that it is not compiled.
@@ -179,7 +184,7 @@
 9 adk-surface mobile doc
 # `adk-rust up --home-url` serving the phone on SQLite with a scripted model; with `voice`,
 # "Speak, glance, stop" (spec 3.3 §12 phase 5) on the same kernel.
-10 adk-cli mobile,voice,scripted-model
+10 adk-cli mobile,voice,scripted-model solo
 # Voice and video (spec 3.3 §5.6): spoken answers through the engine, the voice conversation on
 # a scripted realtime model, the camera and screen gate; with `web`, the voice routes and
 # socket; with `tui`, the terminal's voice line.
@@ -198,7 +203,7 @@
 9 adk-surface web,tui,voice,channels,verb-ui
 9 adk-surface tui,verb-ui
 9 adk-surface voice,verb-ui
-10 adk-cli verb-ui,voice,scripted-model,audit-sql
+10 adk-cli verb-ui,voice,scripted-model,audit-sql solo
 # The workflow observer (spec 3.3 §12): runs, steps and forks of graph agents, card hints for
 # governed nodes, the fork command, and with `web` the Runs tab's routes, its API contract and
 # the "Approve, rewind, fork" scenario.
@@ -210,16 +215,16 @@
 9 adk-surface genui doc
 9 adk-surface web,genui
 9 adk-surface tui,genui
-10 adk-cli genui,scripted-model
+10 adk-cli genui,scripted-model solo
 # Apps from MCP servers (spec 3.3 §6.1 `genui-apps`): the host, its routes and the hostile app
 # legs, with the doctests.
 9 adk-surface genui-apps doc
 # `adk-rust serve` and `up` hosting apps: the sandbox listener, the home's origins and the
 # apps-origin refusal wrapped around the served router.
-10 adk-cli genui-apps,scripted-model
+10 adk-cli genui-apps,scripted-model solo
 # `adk-rust` as the terminal surface in a pseudo-terminal: full screen, inline, JSON, a
 # kernel on its socket and a paired one over HTTP (spec 3.3 §5.2, §10 K2).
-10 adk-cli tui,scripted-model
+10 adk-cli tui,scripted-model solo
 # Service drivers (spec 3.5 §7.13): the contracts, manifests, rules and in-memory adapters
 # without a reference adapter, with their conformance suites.
 2 adk-drivers conformance no-default

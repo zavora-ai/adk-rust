@@ -847,7 +847,9 @@ mod tests {
             id: Some(id.into()),
             annotations: None,
         };
-        let root = Path::new("/work");
+        // `/work` has no drive letter, so it is not absolute on Windows.
+        let root = &std::env::temp_dir().join("work");
+        let absolute = root.join("src").join("c.rs");
         let events = vec![
             event(
                 "i1",
@@ -855,7 +857,7 @@ mod tests {
                 vec![
                     call("c1", "write_file", json!({"path": "./a.txt", "content": "x"})),
                     call("c2", "bash", json!({"command": "echo b > b.txt"})),
-                    call("c3", "edit_file", json!({"path": "/work/src/c.rs"})),
+                    call("c3", "edit_file", json!({"path": absolute.to_string_lossy()})),
                     call("c4", "write_file", json!({"path": "denied.txt"})),
                 ],
             ),

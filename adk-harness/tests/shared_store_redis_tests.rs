@@ -8,13 +8,12 @@
 //! ```bash
 //! REDIS_URL=redis://localhost:6379 \
 //!   cargo nextest run -p adk-harness --features redis --run-ignored only \
-//!   --test shared_store_redis_tests
+//!   --test integration -E 'test(/^shared_store_redis_tests::/)'
 //! ```
 
 #![cfg(all(feature = "redis", feature = "runner"))]
 
-mod common;
-mod replicas;
+use crate::replicas;
 
 use std::sync::Arc;
 use std::time::Duration;

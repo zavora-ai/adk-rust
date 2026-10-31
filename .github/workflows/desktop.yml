@@ -73,7 +73,6 @@ jobs:
       with:
         components: clippy,rustfmt
         cache-key: desktop
-        cache-save: ${{ github.event_name == 'push' }}
 
     - name: Setup Node.js
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -180,7 +179,6 @@ jobs:
       uses: ./.github/actions/setup-rust
       with:
         cache-key: desktop-${{ matrix.os }}
-        cache-save: ${{ github.event_name == 'push' }}
         neutralize-wild: 'false'
 
     - name: Setup Node.js

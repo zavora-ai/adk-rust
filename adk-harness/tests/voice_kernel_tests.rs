@@ -10,7 +10,7 @@
 
 #![cfg(all(feature = "voice", feature = "kernel"))]
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

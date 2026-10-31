@@ -4,7 +4,7 @@
 
 #![cfg(all(feature = "hooks", feature = "runner", unix))]
 
-mod common;
+use crate::common;
 
 use adk_core::Part;
 use adk_harness::hooks::{HOOK_NOTICE_KEY, HookEvent, HookSet, HookSpec};

@@ -7,7 +7,7 @@
 
 #![cfg(feature = "runner")]
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

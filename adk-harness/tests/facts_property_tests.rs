@@ -4,7 +4,7 @@
 
 #![cfg(all(feature = "runner", feature = "memory"))]
 
-mod common;
+use crate::common;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};

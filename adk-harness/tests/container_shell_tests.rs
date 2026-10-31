@@ -5,12 +5,13 @@
 //! `alpine:3.20` image are ignored by default:
 //!
 //! ```bash
-//! cargo nextest run -p adk-harness --features docker --test container_shell_tests --run-ignored only
+//! cargo nextest run -p adk-harness --features docker --run-ignored only --test integration \
+//!   -E 'test(/^container_shell_tests::/)'
 //! ```
 
 #![cfg(all(feature = "docker", feature = "runner", unix))]
 
-mod common;
+use crate::common;
 
 use std::collections::HashSet;
 use std::future::Future;
