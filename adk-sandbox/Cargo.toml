@@ -27,6 +27,9 @@ tempfile = "3.10"
 wasmtime = { version = "48", optional = true }
 wasmtime-wasi = { version = "48", optional = true }
 
+# Optional dependency for the egress proxy's audit records
+chrono = { workspace = true, optional = true }
+
 # Optional dependencies for workspace feature
 tar = { version = "0.4", optional = true }
 bollard = { version = "0.18", optional = true }
@@ -56,6 +59,9 @@ windows-sys = { version = "0.59", optional = true, features = [
 default = ["process"]
 wasm = ["dep:wasmtime", "dep:wasmtime-wasi"]
 process = []  # no extra deps, uses tokio
+
+# The egress proxy a `Proxied` sandbox reaches the network through (`egress_proxy`).
+egress-proxy = ["dep:chrono", "adk-core/egress-dns", "tokio/net", "tokio/macros"]
 
 # Workspace lifecycle (sandbox-agent harness)
 workspace = ["dep:tar", "dep:uuid"]

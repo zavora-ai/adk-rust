@@ -36,6 +36,7 @@ adk-rust = { version = "3.0", features = ["sandbox"] }
 | `sandbox-windows` | Windows restricted-token enforcement | ❌      | `windows-sys`      |
 | `sandbox-native` | All three enforcers; only the target platform's compiles | ❌ | All of the above |
 | `process-tree` | `process_tree::JobObject` and `ContainedChild`: a process tree held in a Job Object on Windows (implied by `sandbox-windows`); `process_tree::ProcessGroup`: one held in a session and process group of its own on Unix | ❌ | `windows-sys` on Windows |
+| `egress-proxy` | `egress_proxy::EgressProxy`: the HTTP egress proxy that admits a sandboxed call's connections by an `EgressPolicy`, with SNI matching and per-call audit records ([Network Egress Policy](../docs/official_docs/security/egress.md#egress-proxy-for-sandboxed-processes)) | ❌ | `chrono` |
 | `workspace` | Workspace lifecycle + `LocalUnixClient` | ❌   | `tar`, `uuid`      |
 | `workspace-docker` | `DockerClient` (implies `workspace`) | ❌ | `bollard`, `futures` |
 

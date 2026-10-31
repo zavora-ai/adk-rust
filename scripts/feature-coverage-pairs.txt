@@ -358,6 +358,8 @@
 # The Windows restricted-token enforcer (spec 3.2 §10 W5): its grant mapping and probe compile
 # and are tested on every host; the Win32 launch runs on the PR tier's `windows` job.
 6 adk-sandbox sandbox-windows
+# The egress proxy (#1281): policy checks, SNI matching and audit records over local listeners.
+6 adk-sandbox egress-proxy
 # `DockerClient` and its host-config and bind-mount tests: no workspace member enables
 # `workspace-docker`; the tests that need a Docker daemon are ignored.
 6 adk-sandbox workspace-docker
