@@ -1,0 +1,7 @@
+{
+  "name": "K-20: A budget wake",
+  "description": "Admission already parks a budget-deferred process on `budgetReplenished` and wakes it when the budget returns, so as a standing wake it never fires.",
+  "agent_def": { "name": "digest", "model": "gemini-3.5-flash-lite" },
+  "kernel": { "wakeSets": [{ "name": "refill", "anyOf": [{ "budgetReplenished": { "partition": "default" } }], "input": "Spend it." }] },
+  "expect": { "error_contains": ["refill", "budgetReplenished", "admission already parks"] }
+}

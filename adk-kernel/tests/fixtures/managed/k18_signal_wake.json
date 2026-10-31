@@ -1,0 +1,22 @@
+{
+  "name": "K-18: A signal wake",
+  "description": "A wake set hears a signal kind: in its own partition when the wake names none, or in a partition the block declares. Hosting it needs a tenant with a signal store.",
+  "agent_def": { "name": "writer", "model": "gemini-3.5-flash-lite" },
+  "kernel": {
+    "partitions": [{ "id": "back-office", "class": "staff" }],
+    "wakeSets": [
+      { "name": "gaps", "anyOf": [{ "signal": { "kind": "content_gap" } }], "input": "Write the page the visitors asked for." },
+      { "name": "reviews", "anyOf": [{ "signal": { "kind": "review_seen", "partition": "back-office" } }], "input": "Draft a reply to the review.", "partition": "back-office" }
+    ]
+  },
+  "expect": {
+    "canonical": {
+      "partitions": [{ "id": "back-office", "class": "staff", "defaultMode": "ask", "crossPartition": "deny" }],
+      "wakeSets": [
+        { "name": "gaps", "anyOf": [{ "signal": { "kind": "content_gap" } }], "input": "Write the page the visitors asked for.", "overlap": "skip" },
+        { "name": "reviews", "anyOf": [{ "signal": { "kind": "review_seen", "partition": "back-office" } }], "input": "Draft a reply to the review.", "partition": "back-office", "overlap": "skip" }
+      ]
+    },
+    "consolidation": false
+  }
+}

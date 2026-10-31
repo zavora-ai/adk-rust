@@ -3,8 +3,8 @@
 //! [`assert_vector_store_contract`] walks one store through the semantics every
 //! backend must share: idempotent collection creation, upsert-then-search round
 //! trips, descending-score ordering bounded by `top_k`, deletion by ID,
-//! empty-input no-ops, metadata preservation, collection isolation, and
-//! collection teardown. Each backend's `vector_store_contract_*.rs` test file
+//! empty-input no-ops, metadata preservation, collection isolation, distinct
+//! names never sharing a collection, and collection teardown. Each backend's `vector_store_contract_*.rs` test file
 //! constructs a fresh store and runs the suite, so the backends stay
 //! behaviorally interchangeable.
 //!
@@ -234,6 +234,26 @@ pub async fn assert_vector_store_contract(store: &dyn VectorStore, options: Cont
     let in_a = store.search("contract_iso_a", &[1.0, 0.0, 0.0, 0.0], 10).await.expect("search");
     assert_eq!(in_a.len(), 1);
     assert_round_trip(&in_a[0].chunk, &only_a);
+
+    // ── distinct names never share a collection ──
+    // A backend accepts a name only if it maps to a collection of its own; a name it
+    // would have to rewrite onto another (`contract-alias` onto `contract_alias`) is
+    // refused instead.
+    let mut accepted = Vec::new();
+    for name in ["contract_alias", "contract-alias", "contract alias", "contract.alias"] {
+        if store.create_collection(name, DIM).await.is_ok() {
+            accepted.push(name);
+        }
+    }
+    assert_eq!(accepted.first(), Some(&"contract_alias"), "every backend accepts `contract_alias`");
+    for (i, name) in accepted.iter().enumerate() {
+        let own = chunk(&format!("alias_{i}"), name, vec![1.0, 0.0, 0.0, 0.0]);
+        store.upsert(name, &[own]).await.expect("upsert into an accepted collection");
+    }
+    for (i, name) in accepted.iter().enumerate() {
+        let results = store.search(name, &[1.0, 0.0, 0.0, 0.0], 10).await.expect("search");
+        assert_eq!(ids(&results), [format!("alias_{i}")], "collection {name:?} shares rows");
+    }
 
     // ── delete_collection makes the data unreachable ──
     store.create_collection("contract_drop", DIM).await.expect("create collection");

@@ -287,7 +287,8 @@ jobs:
   # which the pgvector and memory suites need. Service containers cannot mount files,
   # so the TLS server is started by a step. scripts/test-postgres.sh lists the suites.
   # The Redis service serves the harness's shared mode and rule stores, whose replicas
-  # are the same suites' Redis leg, and the kernel's process store.
+  # are the same suites' Redis leg, and the kernel's process store. The Qdrant service
+  # serves adk-rag's Qdrant contract suite, the other service-backed vector store.
   postgres:
     needs: scope
     if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'push'
@@ -308,6 +309,10 @@ jobs:
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s --health-timeout 5s --health-retries 20
+      # The image ships no HTTP client for a health command; the suite's step polls /readyz.
+      qdrant:
+        image: qdrant/qdrant:v1.19.2
+        ports: ["6333:6333", "6334:6334"]
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
       DATABASE_URL_TLS: postgres://postgres:postgres@localhost:5433/postgres
@@ -370,6 +375,17 @@ jobs:
         --features postgres,redis,channels,charter
         --run-ignored only --no-fail-fast --test integration
         -E 'test(/^(process|agenda|driver|ledger|device|control|channel|partition|cron_watermark|agents|charter)_store_redis::/)'
+
+    # adk-rag's Qdrant backend: the shared VectorStore contract and chunk-ID round trips.
+    - name: Run the RAG Qdrant suite
+      if: ${{ !cancelled() }}
+      env:
+        QDRANT_URL: http://localhost:6334
+      run: |
+        curl --silent --show-error --fail --retry 30 --retry-delay 2 --retry-all-errors \
+          http://localhost:6333/readyz
+        cargo nextest run --profile ci -p adk-rag --features qdrant \
+          --run-ignored only --no-fail-fast --test vector_store_contract_qdrant
 
   # ── Docs: documentation coverage for Stable-tier crates ──────
   docs:

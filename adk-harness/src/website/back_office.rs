@@ -27,10 +27,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::catalog::{self, BACK_OFFICE_ORIGIN, ToolSpec};
-use super::drafts::DraftKind;
-use super::site::{
-    CharterSignRequest, DraftRecord, PromotionRequest, SiteRuntime, kernel_error, site_error,
-};
+use super::drafts::{DraftKind, StoredDraft};
+use super::site::{CharterSignRequest, PromotionRequest, SiteRuntime, kernel_error, site_error};
 
 /// The session state key holding the [`EntryPoint`] of the turn: the authoring router sets it
 /// for a paired owner's message (spec 3.5 §7.8.2 "Entry points", A-I24); without it, a change
@@ -598,29 +596,27 @@ impl Tool for BackOfficeTool {
                         generated: args.generated,
                     })
                     .map_err(site_error)?;
-                let mut drafts = site.drafts.lock().await;
-                let record = drafts
-                    .get_mut(&args.draft)
+                let (version, mut draft) = site
+                    .content_draft(&args.draft)
+                    .await?
                     .ok_or_else(|| invalid(name, format!("no draft '{}'", args.draft)))?;
                 let item = match &args.item {
-                    Some(id) => record.draft.change.items.iter_mut().find(|item| item.id.0 == *id),
-                    None => record.draft.change.items.first_mut(),
+                    Some(id) => draft.change.items.iter_mut().find(|item| item.id.0 == *id),
+                    None => draft.change.items.first_mut(),
                 }
                 .ok_or_else(|| invalid(name, "the draft holds no such item"))?;
                 let dir = format!("content/{}/{}", kind_directory(item.kind), item.slug);
                 let media = processed.media_ref(&dir);
                 item.media.retain(|held| held.path != media.path);
                 item.media.push(media.clone());
-                record.draft.change.media.push((media.path.clone(), processed.bytes.clone()));
+                draft.change.media.push((media.path.clone(), processed.bytes.clone()));
                 for variant in &processed.variants {
-                    record
-                        .draft
+                    draft
                         .change
                         .media
                         .push((format!("{dir}/{}", variant.name), variant.bytes.clone()));
                 }
-                record.preview = None;
-                site.keep_draft(&args.draft, &record.draft).await?;
+                site.replace_draft(&args.draft, version, &draft).await?;
                 Ok(json!({
                     "draft": args.draft,
                     "media": media,
@@ -638,18 +634,16 @@ impl Tool for BackOfficeTool {
                     Ok(()) => Vec::new(),
                     Err(error) => error.violations.iter().map(|v| format!("{v:?}")).collect(),
                 };
-                let id = site.next_id("charter");
-                site.keep(DraftKind::Charter, &id, &charter).await?;
-                site.charter_drafts.lock().await.insert(id.clone(), charter);
+                let id = site.create(DraftKind::Charter, &charter).await?.id;
                 Ok(json!({ "draft": id, "valid": violations.is_empty(), "violations": violations }))
             }
             catalog::RELEASE_PREVIEW => {
                 let args: DraftRef = parse(name, args)?;
-                let mut drafts = site.drafts.lock().await;
-                let record = drafts
-                    .get_mut(&args.draft)
+                let (version, draft) = site
+                    .content_draft(&args.draft)
+                    .await?
                     .ok_or_else(|| invalid(name, format!("no draft '{}'", args.draft)))?;
-                let preview = site.pipeline.preview(&record.draft).await.map_err(site_error)?;
+                let preview = site.pipeline.preview(&draft).await.map_err(site_error)?;
                 let out = json!({
                     "draft": args.draft,
                     "preview": preview.staged.digest,
@@ -658,7 +652,7 @@ impl Tool for BackOfficeTool {
                     "diff": preview.diff,
                     "onPreviewHost": preview.report.is_some(),
                 });
-                record.preview = Some(preview);
+                site.previews.lock().await.insert(args.draft, (version, preview));
                 Ok(out)
             }
             catalog::SITE_DISCOVER => {
@@ -686,17 +680,14 @@ impl Tool for BackOfficeTool {
                 }
                 .into_schedule()
                 .ok_or_else(|| invalid(name, "a schedule needs at least one time"))?;
-                {
-                    let mut drafts = site.drafts.lock().await;
-                    let record = drafts
-                        .get_mut(&args.draft)
-                        .ok_or_else(|| invalid(name, format!("no draft '{}'", args.draft)))?;
-                    for item in &mut record.draft.change.items {
-                        item.schedule = Some(schedule.clone());
-                    }
-                    record.preview = None;
-                    site.keep_draft(&args.draft, &record.draft).await?;
+                let (version, mut draft) = site
+                    .content_draft(&args.draft)
+                    .await?
+                    .ok_or_else(|| invalid(name, format!("no draft '{}'", args.draft)))?;
+                for item in &mut draft.change.items {
+                    item.schedule = Some(schedule.clone());
                 }
+                site.replace_draft(&args.draft, version, &draft).await?;
                 publish(site, &args.draft).await
             }
             catalog::SITE_PUBLISH => {
@@ -789,10 +780,10 @@ impl Tool for BackOfficeTool {
             }
             catalog::CHARTER_COMMIT_REQUEST => {
                 let args: DraftRef = parse(name, args)?;
-                let draft =
-                    site.charter_drafts.lock().await.get(&args.draft).cloned().ok_or_else(
-                        || invalid(name, format!("no charter draft '{}'", args.draft)),
-                    )?;
+                let (_, draft) = site
+                    .record::<Charter>(DraftKind::Charter, &args.draft)
+                    .await?
+                    .ok_or_else(|| invalid(name, format!("no charter draft '{}'", args.draft)))?;
                 if let Err(error) = draft.validate() {
                     return Err(invalid(name, format!("the draft cannot be committed: {error}")));
                 }
@@ -811,8 +802,9 @@ impl Tool for BackOfficeTool {
                     .find(|chain| chain.action == adk_kernel::charter::CHARTER_ACTION)
                     .map(|chain| chain.roles.clone())
                     .unwrap_or_else(|| vec![Role::Owner]);
+                // The store allocates the id; a stored request takes it when it is read.
                 let request = CharterSignRequest {
-                    id: site.next_id("charter-sign"),
+                    id: String::new(),
                     draft,
                     roles: roles.clone(),
                     signatures: Vec::new(),
@@ -820,9 +812,7 @@ impl Tool for BackOfficeTool {
                     requested_at: site.clock.now(),
                     committed: None,
                 };
-                let id = request.id.clone();
-                site.keep(DraftKind::CharterSign, &id, &request).await?;
-                site.requests.charters.lock().await.insert(id.clone(), request);
+                let id = site.create(DraftKind::CharterSign, &request).await?.id;
                 Ok(json!({
                     "request": id,
                     "signers": roles,
@@ -833,15 +823,13 @@ impl Tool for BackOfficeTool {
             catalog::JOB_PROMOTION_REQUEST => {
                 let args: PromotionArgs = parse(name, args)?;
                 let request = PromotionRequest {
-                    id: site.next_id("promotion"),
+                    id: String::new(),
                     job: args.job,
                     reason: args.reason,
                     requested_by: proposer(&ctx),
                     requested_at: site.clock.now(),
                 };
-                let id = request.id.clone();
-                site.keep(DraftKind::Promotion, &id, &request).await?;
-                site.requests.promotions.lock().await.insert(id.clone(), request);
+                let id = site.create(DraftKind::Promotion, &request).await?.id;
                 Ok(json!({
                     "request": id,
                     "promoted": false,
@@ -874,12 +862,11 @@ async fn draft(
     // The pipeline checks and records the new item alone, so a joined draft's earlier items
     // are not recorded again.
     let single: Draft = site.pipeline.draft(change).await.map_err(site_error)?;
-    let mut drafts = site.drafts.lock().await;
-    let (joined, candidate) = match join {
+    let (id, candidate, gate) = match join {
         Some(id) => {
-            let mut held = drafts
-                .get(&id)
-                .map(|record| record.draft.clone())
+            let (version, mut held) = site
+                .content_draft(&id)
+                .await?
                 .ok_or_else(|| invalid("content_draft", format!("no draft '{id}'")))?;
             for item in single.change.items {
                 match held.change.items.iter_mut().find(|known| known.id == item.id) {
@@ -890,15 +877,17 @@ async fn draft(
                     }
                 }
             }
-            (Some(id), held)
+            let gate = site.pipeline.check(&held).await.map_err(site_error)?;
+            site.replace_draft(&id, version, &held).await?;
+            (id, held, gate)
         }
-        None => (None, single),
+        None => {
+            let gate = site.pipeline.check(&single).await.map_err(site_error)?;
+            let id = site.create(DraftKind::Content, &StoredDraft::of(&single)).await?.id;
+            (id, single, gate)
+        }
     };
     let ids: Vec<String> = candidate.change.items.iter().map(|item| item.id.0.clone()).collect();
-    let gate = site.pipeline.check(&candidate).await.map_err(site_error)?;
-    let id = joined.unwrap_or_else(|| site.next_id("draft"));
-    site.keep_draft(&id, &candidate).await?;
-    drafts.insert(id.clone(), DraftRecord { draft: candidate, preview: None });
     Ok(json!({
         "draft": id,
         "items": ids,
@@ -906,15 +895,29 @@ async fn draft(
     }))
 }
 
-/// Steps 3 to 8 for a held draft: preview, approval, release, publication.
+/// Steps 3 to 8 for a held draft: preview, approval, release, publication. Of two runtimes
+/// releasing one draft, the one whose claim on the draft's version lands completes it.
 async fn publish(site: &Arc<SiteRuntime>, id: &str) -> Result<Value> {
-    let mut drafts = site.drafts.lock().await;
-    let record =
-        drafts.get_mut(id).ok_or_else(|| invalid("site_publish", format!("no draft '{id}'")))?;
-    if record.preview.is_none() {
-        record.preview = Some(site.pipeline.preview(&record.draft).await.map_err(site_error)?);
-    }
-    let preview = record.preview.as_ref().ok_or_else(|| AdkError::tool("no preview"))?;
+    let _publishing = site.publishing.lock().await;
+    let (version, draft) = site
+        .content_draft(id)
+        .await?
+        .ok_or_else(|| invalid("site_publish", format!("no draft '{id}'")))?;
+    let cached = site
+        .previews
+        .lock()
+        .await
+        .get(id)
+        .filter(|(shown, _)| *shown == version)
+        .map(|(_, preview)| preview.clone());
+    let preview = match cached {
+        Some(preview) => preview,
+        None => {
+            let preview = site.pipeline.preview(&draft).await.map_err(site_error)?;
+            site.previews.lock().await.insert(id.to_string(), (version, preview.clone()));
+            preview
+        }
+    };
     if preview.gate.refuses_release() {
         return Err(site_error(adk_site::SiteError::GateFailed(preview.gate.summary())));
     }
@@ -923,12 +926,11 @@ async fn publish(site: &Arc<SiteRuntime>, id: &str) -> Result<Value> {
             json!({ "published": false, "held": "launch gate", "summary": preview.gate.summary() }),
         );
     }
-    match site.pipeline.approve(&record.draft, preview).await.map_err(site_error)? {
+    match site.pipeline.approve(&draft, &preview).await.map_err(site_error)? {
         ApprovalDecision::Approved { decision, approvers } => {
-            let outcome =
-                site.pipeline.complete(&record.draft, decision).await.map_err(site_error)?;
+            site.replace(DraftKind::Content, id, version, &StoredDraft::of(&draft)).await?;
+            let outcome = site.pipeline.complete(&draft, decision).await.map_err(site_error)?;
             let _ = tokio::fs::remove_dir_all(&preview.staged.root).await;
-            drafts.remove(id);
             site.forget_draft(id).await;
             let mut out = outcome_json(&outcome);
             out["approvers"] = json!(approvers);
@@ -940,7 +942,6 @@ async fn publish(site: &Arc<SiteRuntime>, id: &str) -> Result<Value> {
             "note": "the release waits for every role of its approval chain",
         })),
         ApprovalDecision::Rejected { by, reason } => {
-            drafts.remove(id);
             site.forget_draft(id).await;
             Ok(json!({ "published": false, "rejected": { "by": by, "reason": reason } }))
         }

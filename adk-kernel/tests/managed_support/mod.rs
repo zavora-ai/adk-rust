@@ -17,7 +17,7 @@ use adk_core::{
 };
 use adk_kernel::KernelConfig;
 use adk_kernel::control::ControlPlaneConfig;
-use adk_kernel::managed::TenantKernel;
+use adk_kernel::managed::{TenantKernel, TenantKernelBuilder};
 use adk_managed::resolver::{ModelResolver, ResolverResult};
 use adk_managed::types::{ManagedAgentDef, ModelRef, RuntimeError};
 use adk_managed::{
@@ -190,7 +190,20 @@ impl Tenant {
         confirm: bool,
         state: Arc<dyn ManagedStateStore>,
     ) -> Self {
-        Self::build(name, sessions, confirm, state, fast_config(name))
+        Self::build(name, sessions, confirm, state, fast_config(name), |builder| builder)
+    }
+
+    /// A tenant whose signals are counted in `signals` (spec 3.5 §7.10).
+    #[cfg(feature = "charter")]
+    pub fn with_signals(
+        name: &str,
+        sessions: Arc<InMemorySessionService>,
+        signals: Arc<dyn adk_kernel::charter::SignalStore>,
+    ) -> Self {
+        let state = Arc::new(InMemoryManagedStateStore::new());
+        Self::build(name, sessions, false, state, fast_config(name), |builder| {
+            builder.signal_store(signals)
+        })
     }
 
     /// A tenant whose kernel starts from the operator's `config`.
@@ -199,7 +212,8 @@ impl Tenant {
         sessions: Arc<InMemorySessionService>,
         config: KernelConfig,
     ) -> Self {
-        Self::build(name, sessions, false, Arc::new(InMemoryManagedStateStore::new()), config)
+        let state = Arc::new(InMemoryManagedStateStore::new());
+        Self::build(name, sessions, false, state, config, |builder| builder)
     }
 
     fn build(
@@ -208,6 +222,7 @@ impl Tenant {
         confirm: bool,
         state: Arc<dyn ManagedStateStore>,
         config: KernelConfig,
+        extra: impl FnOnce(TenantKernelBuilder) -> TenantKernelBuilder,
     ) -> Self {
         let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
         let decisions = Arc::new(InMemoryApprovalStore::new());
@@ -228,12 +243,11 @@ impl Tenant {
             calls: Arc::clone(&calls),
             confirm,
         });
-        let kernel = TenantKernel::builder(name, stores, sessions as Arc<dyn SessionService>)
+        let builder = TenantKernel::builder(name, stores, sessions as Arc<dyn SessionService>)
             .config(config)
             .resolver(resolver)
-            .action_ledger(Arc::clone(&ledger) as Arc<dyn ActionLedger>)
-            .build()
-            .unwrap();
+            .action_ledger(Arc::clone(&ledger) as Arc<dyn ActionLedger>);
+        let kernel = extra(builder).build().unwrap();
         let runtime = kernel.runtime(Arc::new(Models));
         Self { name: name.into(), runs, service, kernel, runtime, model, calls, ledger }
     }
