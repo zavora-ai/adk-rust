@@ -357,6 +357,15 @@ fn main() -> adk_audio::AudioResult<()> {
 }
 ```
 
+### Metering
+
+`SttProvider::billing` and `TtsProvider::billing` name the vendor and model a cloud provider's
+calls are billed under; local models return `None`. `TranscribeTool` and `SpeakTool` meter each
+billed call against the run the tool call belongs to, in `audioMillis` and `characters`, through
+`adk_core::meter_usage`. The bundled cloud providers carry no per-unit price, so a run budget's
+cost cap or a spend-ledger limit refuses their calls before they are sent; see
+[Calls billed in units](../docs/official_docs/security/spend-ledger.md#calls-billed-in-units).
+
 ## VAD and music
 
 `VadProcessor` (`is_speech`, `segment`) and `MusicProvider` are traits; the crate ships no

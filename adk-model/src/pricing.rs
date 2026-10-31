@@ -1,4 +1,5 @@
-//! Token prices for every provider and cost calculation from [`UsageMetadata`](adk_core::UsageMetadata).
+//! Token prices for every provider and cost calculation from [`UsageMetadata`](adk_core::UsageMetadata),
+//! plus per-unit prices for models billed per image, per second of audio or per character.
 //!
 //! [`PricingCatalog`] is the single table `adk-model` uses to fill
 //! [`UsageMetadata::cost`](adk_core::UsageMetadata::cost) on provider responses that do not report a cost
@@ -59,6 +60,22 @@
 //! `None` from [`PricingCatalog::cost_usd`] means the cost is unknown, never
 //! that the request was free.
 //!
+//! # Per-unit prices
+//!
+//! Models billed in units rather than tokens carry a [`UnitPrice`]: an
+//! [`adk_core::UnitRate`] per [`adk_core::UsageUnit`]. [`PricingCatalog::unit_cost_micro_usd`]
+//! prices a [`UsageVector`](adk_core::UsageVector), both the most a call can use (its
+//! spend hold) and what it used.
+//!
+//! | Model | Unit | Price |
+//! |-------|------|-------|
+//! | `muse-image-1.0` | images returned | $0.01 per image |
+//! | `muse-voice-transcribe-1.0` | audio milliseconds, billed in whole seconds rounded down | $0.18 per hour |
+//! | `sam-3.1` | images segmented | $2.50 per 1,000 images |
+//!
+//! `sam-3.1` video segmentation ($0.20 per 1,000 frames) is not priced: frames are not a
+//! usage unit.
+//!
 //! # Example
 //!
 //! ```
@@ -78,7 +95,7 @@
 //! assert!(PricingCatalog::standard().cost_usd(Some("openai"), "my-fine-tune", &usage).is_none());
 //! ```
 
-use adk_core::{LlmRequest, Part, UsageMetadata};
+use adk_core::{LlmRequest, Part, UnitRate, UsageMetadata, UsageUnit, UsageVector};
 use chrono::NaiveDate;
 use std::sync::LazyLock;
 
@@ -471,6 +488,39 @@ impl ModelPrice {
     }
 }
 
+/// A vendor's list price for one model billed in units rather than tokens.
+///
+/// # Example
+///
+/// ```
+/// use adk_core::{UnitRate, UsageUnit, UsageVector};
+/// use adk_model::pricing::{PriceVendor, PricingCatalog, UnitPrice};
+///
+/// let catalog = PricingCatalog::new("internal").with_unit_price(UnitPrice::new(
+///     PriceVendor::Meta,
+///     "muse-image-1.0",
+///     UnitRate::new(UsageUnit::Images, 10_000, 1),
+/// ));
+/// let four = UsageVector::new().with(UsageUnit::Images, 4);
+/// assert_eq!(catalog.unit_cost_micro_usd(Some("muse"), "muse-image-1.0", &four), Some(40_000));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitPrice {
+    /// Vendor whose published price this is.
+    pub vendor: PriceVendor,
+    /// Model identifier, matched as [`PricingCatalog::lookup`] matches token prices.
+    pub model: String,
+    /// The price per unit.
+    pub rate: UnitRate,
+}
+
+impl UnitPrice {
+    /// `rate` for `model`, as published by `vendor`.
+    pub fn new(vendor: PriceVendor, model: impl Into<String>, rate: UnitRate) -> Self {
+        Self { vendor, model: model.into(), rate }
+    }
+}
+
 /// A table of model prices, looked up by provider and model identifier.
 ///
 /// [`PricingCatalog::standard`] is the table every `adk-model` provider uses.
@@ -495,12 +545,13 @@ pub struct PricingCatalog {
     version: String,
     prices: Vec<ModelPrice>,
     fees: Vec<BuiltinToolFee>,
+    units: Vec<UnitPrice>,
 }
 
 impl PricingCatalog {
     /// Creates an empty catalog labelled `version`.
     pub fn new(version: impl Into<String>) -> Self {
-        Self { version: version.into(), prices: Vec::new(), fees: Vec::new() }
+        Self { version: version.into(), prices: Vec::new(), fees: Vec::new(), units: Vec::new() }
     }
 
     /// The standard catalog of published list prices, verified on
@@ -554,6 +605,80 @@ impl PricingCatalog {
     /// Every built-in tool fee in the catalog.
     pub fn builtin_tool_fees(&self) -> &[BuiltinToolFee] {
         &self.fees
+    }
+
+    /// Adds or replaces the price of `price.model` in `price.rate.unit`.
+    pub fn with_unit_price(mut self, price: UnitPrice) -> Self {
+        self.units.retain(|existing| {
+            existing.model != price.model || existing.rate.unit != price.rate.unit
+        });
+        self.units.push(price);
+        self
+    }
+
+    /// Every per-unit price in the catalog.
+    pub fn unit_prices(&self) -> &[UnitPrice] {
+        &self.units
+    }
+
+    /// Resolves the price of `unit` on `model` as served by `provider`.
+    ///
+    /// The model matches as in [`lookup`](Self::lookup): exactly, or as a dated alias.
+    /// `None` for `provider` matches any vendor.
+    pub fn unit_price(
+        &self,
+        provider: Option<&str>,
+        model: &str,
+        unit: UsageUnit,
+    ) -> Option<&UnitPrice> {
+        let canonical = canonical_model_id(model);
+        let candidates = self.units.iter().filter(|price| price.rate.unit == unit);
+        let candidate =
+            candidates.clone().find(|price| price.model == canonical).or_else(|| {
+                candidates
+                    .filter(|price| {
+                        canonical.strip_prefix(price.model.as_str()).is_some_and(is_version_suffix)
+                    })
+                    .max_by_key(|price| price.model.len())
+            })?;
+        match provider {
+            Some(provider) if !candidate.vendor.billed_by(provider) => None,
+            _ => Some(candidate),
+        }
+    }
+
+    /// Cost in micro-USD of `usage` on `model` as served by `provider`, or `None` when a
+    /// unit it counts has no price.
+    ///
+    /// Pass the most a call can use to get the bound its spend hold reserves, and what it
+    /// used to get what it commits.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_core::{UsageUnit, UsageVector};
+    /// use adk_model::pricing::PricingCatalog;
+    ///
+    /// let catalog = PricingCatalog::standard();
+    /// // 90.4 s of audio bills as 90 s at $0.18 per hour.
+    /// let audio = UsageVector::new().with(UsageUnit::AudioMillis, 90_400);
+    /// assert_eq!(
+    ///     catalog.unit_cost_micro_usd(Some("muse"), "muse-voice-transcribe-1.0", &audio),
+    ///     Some(4_500)
+    /// );
+    /// let pages = UsageVector::new().with(UsageUnit::Pages, 1);
+    /// assert_eq!(catalog.unit_cost_micro_usd(Some("muse"), "muse-voice-transcribe-1.0", &pages), None);
+    /// ```
+    pub fn unit_cost_micro_usd(
+        &self,
+        provider: Option<&str>,
+        model: &str,
+        usage: &UsageVector,
+    ) -> Option<u64> {
+        usage.iter().try_fold(0u64, |total, (unit, amount)| {
+            let price = self.unit_price(provider, model, unit)?;
+            Some(total.saturating_add(price.rate.cost_micro_usd(amount)))
+        })
     }
 
     /// Resolves the fee for `kind` on `model` as served by `provider`.
@@ -1055,9 +1180,8 @@ fn standard_catalog() -> PricingCatalog {
         cached(Meta, "muse-spark-1.3-contributor", 0.10, 0.20, 0.002),
         cached(Meta, "muse-spark-1.2-contributor", 0.10, 0.20, 0.002),
         cached(Meta, "muse-wonder-1.0", 4.00, 20.00, 0.20),
-        // muse-image-1.0 ($0.01/image), muse-voice-transcribe-1.0 ($0.18/hour), and
-        // sam-3.1 ($2.50/1k images) bill per unit, not per token, so they carry no
-        // token rates here.
+        // muse-image-1.0, muse-voice-transcribe-1.0 and sam-3.1 bill per unit, not per
+        // token; their rates are in `standard_unit_prices`.
         // ── xAI ──
         // Source: https://docs.x.ai/docs/models, retrieved 2026-10-11. Aliases are the ones
         // the page lists for each model; `-latest` and dated suffixes resolve automatically.
@@ -1180,7 +1304,31 @@ fn standard_catalog() -> PricingCatalog {
             None => price,
         })
         .collect();
-    PricingCatalog { version: PRICING_EFFECTIVE_DATE.to_string(), prices, fees: standard_fees() }
+    PricingCatalog {
+        version: PRICING_EFFECTIVE_DATE.to_string(),
+        prices,
+        fees: standard_fees(),
+        units: standard_unit_prices(),
+    }
+}
+
+/// Published per-unit prices, verified on 2026-10-31.
+fn standard_unit_prices() -> Vec<UnitPrice> {
+    use PriceVendor::Meta;
+    vec![
+        // https://dev.meta.ai/docs/pricing-rate-limits (fetched 2026-10-31): muse-image-1.0
+        // "$0.01 per image", billed only for images generated and returned.
+        UnitPrice::new(Meta, "muse-image-1.0", UnitRate::new(UsageUnit::Images, 10_000, 1)),
+        // muse-voice-transcribe-1.0 "$0.18 per hour of audio processed", "metered in whole
+        // seconds, rounded down"; streaming and file transcription are priced the same.
+        UnitPrice::new(
+            Meta,
+            "muse-voice-transcribe-1.0",
+            UnitRate::new(UsageUnit::AudioMillis, 180_000, 3_600_000).rounded_down_to(1_000),
+        ),
+        // sam-3.1 image segmentation "$2.50 per 1,000 images".
+        UnitPrice::new(Meta, "sam-3.1", UnitRate::new(UsageUnit::Images, 2_500_000, 1_000)),
+    ]
 }
 
 /// Published built-in tool fees, verified on 2026-10-11.
@@ -1219,6 +1367,63 @@ fn standard_fees() -> Vec<BuiltinToolFee> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn muse_media_is_priced_per_unit() {
+        let catalog = PricingCatalog::standard();
+        let images = |count| UsageVector::new().with(UsageUnit::Images, count);
+        assert_eq!(
+            catalog.unit_cost_micro_usd(Some("muse"), "muse-image-1.0", &images(1)),
+            Some(10_000)
+        );
+        assert_eq!(
+            catalog.unit_cost_micro_usd(Some("muse"), "sam-3.1", &images(1_000)),
+            Some(2_500_000)
+        );
+        assert_eq!(catalog.unit_cost_micro_usd(Some("muse"), "sam-3.1", &images(1)), Some(2_500));
+        let audio = |ms| UsageVector::new().with(UsageUnit::AudioMillis, ms);
+        let transcribe =
+            |ms| catalog.unit_cost_micro_usd(Some("muse"), "muse-voice-transcribe-1.0", &audio(ms));
+        assert_eq!(transcribe(90_000), Some(4_500));
+        assert_eq!(transcribe(3_600_000), Some(180_000));
+        assert_eq!(transcribe(999), Some(0));
+    }
+
+    #[test]
+    fn a_unit_price_applies_only_where_the_vendor_bills_it() {
+        let catalog = PricingCatalog::standard();
+        let images = UsageVector::new().with(UsageUnit::Images, 1);
+        assert_eq!(catalog.unit_cost_micro_usd(Some("openai"), "muse-image-1.0", &images), None);
+        assert_eq!(catalog.unit_cost_micro_usd(None, "muse-image-1.0", &images), Some(10_000));
+        assert_eq!(catalog.unit_cost_micro_usd(Some("muse"), "muse-image-2.0", &images), None);
+        // A token price is not a unit price.
+        assert!(catalog.lookup(Some("muse"), "muse-image-1.0").is_none());
+        assert_eq!(catalog.unit_cost_micro_usd(Some("muse"), "muse-spark-1.3", &images), None);
+    }
+
+    #[test]
+    fn a_unit_price_replaces_the_same_model_and_unit() {
+        let catalog = PricingCatalog::new("t")
+            .with_unit_price(UnitPrice::new(
+                PriceVendor::Meta,
+                "m",
+                UnitRate::new(UsageUnit::Images, 1, 1),
+            ))
+            .with_unit_price(UnitPrice::new(
+                PriceVendor::Meta,
+                "m",
+                UnitRate::new(UsageUnit::Pages, 5, 1),
+            ))
+            .with_unit_price(UnitPrice::new(
+                PriceVendor::Meta,
+                "m",
+                UnitRate::new(UsageUnit::Images, 2, 1),
+            ));
+        assert_eq!(catalog.unit_prices().len(), 2);
+        let both = UsageVector::new().with(UsageUnit::Images, 3).with(UsageUnit::Pages, 1);
+        assert_eq!(catalog.unit_cost_micro_usd(None, "m", &both), Some(11));
+        assert_eq!(catalog.unit_cost_micro_usd(None, "m", &UsageVector::new()), Some(0));
+    }
 
     fn today() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 10, 10).unwrap()

@@ -74,6 +74,10 @@ impl OpenAiTts {
 
 #[async_trait]
 impl TtsProvider for OpenAiTts {
+    fn billing(&self) -> Option<crate::AudioBilling> {
+        Some(crate::AudioBilling::new("openai", self.model.clone()))
+    }
+
     async fn synthesize(&self, request: &TtsRequest) -> AudioResult<AudioFrame> {
         let voice = if request.voice.is_empty() { "alloy" } else { &request.voice };
         let url = format!("{}/v1/audio/speech", self.base_url());

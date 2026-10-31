@@ -20,6 +20,8 @@
 //! - [`AgentId`] / [`AgentPrincipal`] / [`ActingContext`] / [`ActingConfig`] - Agent identity
 //! - [`LeaseStore`] / [`DurableRunStore`] / [`ScheduleStore`] / [`GovernanceStateStore`] -
 //!   Durable runtime contracts: fenced leases, the run queue, schedules, and freeze state
+//! - [`subject::SubjectRights`] / [`subject::ConsentStore`] / [`subject::SubjectRegistry`] -
+//!   Visitor ids, consent, and a subject's export, erasure, and links across stores
 //!
 //! ## Feature Flags
 //!
@@ -192,6 +194,8 @@ pub mod spend;
 /// User messages that reach a run while it runs: the run's inbox, the receipt and the
 /// event marker.
 pub mod steering;
+/// Data subjects: visitor ids, consent, and export, erasure, and linking across stores.
+pub mod subject;
 /// Tool trait, toolset, execution strategy, and registry.
 pub mod tool;
 /// Semaphore-based tool concurrency management.
@@ -200,6 +204,8 @@ pub mod tool_concurrency;
 pub mod tool_response;
 /// Content, Part, and multimodal data types.
 pub mod types;
+/// Vendor-neutral usage units and per-unit prices.
+pub mod usage;
 #[cfg(feature = "webhooks")]
 pub mod webhook;
 #[cfg(feature = "webhook-delivery")]
@@ -225,9 +231,9 @@ pub use approval::{
     APPROVAL_REAPPLY_GRACE, ApprovalAction, ApprovalCall, ApprovalCursor, ApprovalDecision,
     ApprovalDelegation, ApprovalEventKind, ApprovalNotification, ApprovalNotifier, ApprovalPolicy,
     ApprovalRequest, ApprovalRequestQuery, ApprovalRisk, ApprovalRoute, ApprovalRouter,
-    ApprovalService, ApprovalState, ApprovalTick, ApproverSelector, DEFAULT_APPROVAL_PAGE,
-    DelegationScope, DelegationWindow, EscalationStep, ExpiryAction, InboxPage, InboxQuery,
-    StoreApprovalService,
+    ApprovalService, ApprovalState, ApprovalTick, ApproverDirectory, ApproverSelector,
+    DEFAULT_APPROVAL_PAGE, DelegationScope, DelegationWindow, EscalationStep, ExpiryAction,
+    InboxPage, InboxQuery, StoreApprovalService,
 };
 pub use budget::{
     BUDGET_LIMIT_KEY, BUDGET_RECORDED_KEY, BudgetExceeded, BudgetLimit, BudgetTracker, BudgetUsage,
@@ -284,8 +290,9 @@ pub use instruction_template::inject_session_state;
 pub use intra_compaction::IntraCompactionConfig;
 pub use lease::{InMemoryLeaseStore, Lease, LeaseStore};
 pub use metering::{
-    LlmSpendEstimate, MeteredLlm, ModelCallScope, ModelSpendHold, UNBOUNDED_HOLD_MICRO_USD,
-    generate_metered, vendor_for_model,
+    LlmSpendEstimate, MeteredLlm, MeteredUsage, ModelCallScope, ModelSpendHold,
+    UNBOUNDED_HOLD_MICRO_USD, UsageCall, UsageHold, generate_metered, meter_usage,
+    vendor_for_model,
 };
 pub use model::{
     BuiltinToolUse, CacheCapable, CitationMetadata, CitationSource, ContextCacheConfig, Effort,
@@ -340,6 +347,7 @@ pub use types::{
     GENERATED_CALL_ID_PREFIX, InlineDataPart, MAX_INLINE_DATA_SIZE, Part, TextResourceContents,
 };
 pub use url::Url;
+pub use usage::{UnitRate, UsageUnit, UsageVector};
 
 // Re-export async_trait so the #[tool] macro's generated code can reference it
 // via adk_tool::async_trait (adk_tool re-exports from adk_core).

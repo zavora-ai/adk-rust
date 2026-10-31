@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use adk_core::{UsageUnit, UsageVector};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -9,7 +10,8 @@ use crate::traits::{TtsProvider, TtsRequest};
 
 /// Tool that synthesizes text to speech audio.
 ///
-/// Accepts JSON `{text, voice?, emotion?}` and returns `{duration_ms, sample_rate}`.
+/// Accepts JSON `{text, voice?, emotion?}` and returns `{duration_ms, sample_rate}`. A call to
+/// a billed provider is metered against the run ([`crate::metering`]).
 pub struct SpeakTool {
     tts: Arc<dyn TtsProvider>,
     default_voice: String,
@@ -52,11 +54,22 @@ impl adk_core::Tool for SpeakTool {
         let text = args["text"].as_str().unwrap_or_default();
         let voice = args["voice"].as_str().unwrap_or(&self.default_voice).to_string();
         let request = TtsRequest { text: text.into(), voice, ..Default::default() };
-        let frame = self
-            .tts
-            .synthesize(&request)
-            .await
-            .map_err(|e| adk_core::AdkError::tool(format!("speak: {e}")))?;
+        let synthesize = async {
+            self.tts
+                .synthesize(&request)
+                .await
+                .map_err(|e| adk_core::AdkError::tool(format!("speak: {e}")))
+        };
+        // A billed provider's call counts against the run; a refused one is never sent.
+        let frame = match self.tts.billing() {
+            Some(billing) => {
+                let characters = request.text.chars().count() as u64;
+                let (call, usage) =
+                    billing.meter(UsageVector::new().with(UsageUnit::Characters, characters));
+                adk_core::meter_usage(call, async { Ok((synthesize.await?, usage)) }).await?
+            }
+            None => synthesize.await?,
+        };
         Ok(serde_json::json!({
             "duration_ms": frame.duration_ms,
             "sample_rate": frame.sample_rate

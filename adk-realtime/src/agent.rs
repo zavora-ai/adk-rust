@@ -1838,8 +1838,11 @@ async fn dispatch_tool(
                     confirmation = decision;
                     executed = true;
                     let timeout = policy.timeout;
-                    match tokio::time::timeout(timeout, tool.execute(tool_ctx.clone(), args)).await
-                    {
+                    let execution = adk_core::ModelCallScope::within_tool(
+                        tool_ctx.as_ref(),
+                        tool.execute(tool_ctx.clone(), args),
+                    );
+                    match tokio::time::timeout(timeout, execution).await {
                         Ok(Ok(value)) => value,
                         Ok(Err(e)) => {
                             log_failure(&e, "execute");

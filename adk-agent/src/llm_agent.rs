@@ -5399,10 +5399,17 @@ async fn execute_tool(
     args: serde_json::Value,
 ) -> Result<serde_json::Value> {
     let runtime = tokio::runtime::Handle::try_current().ok().filter(|_| tool.is_agent_delegation());
+    // The run's scope is current inside the tool, so media calls it makes count against the run.
     let Some(runtime) = runtime else {
-        return tool.execute(ctx, args).await;
+        return adk_core::ModelCallScope::within_tool(
+            ctx.as_ref(),
+            tool.execute(ctx.clone(), args),
+        )
+        .await;
     };
-    let call = async move { tool.execute(ctx, args).await };
+    let call = async move {
+        adk_core::ModelCallScope::within_tool(ctx.as_ref(), tool.execute(ctx.clone(), args)).await
+    };
     let mut task = AbortOnDrop(runtime.spawn(call.in_current_span()));
     match (&mut task.0).await {
         Ok(result) => result,

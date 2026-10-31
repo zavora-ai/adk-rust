@@ -821,9 +821,11 @@ impl ReadonlyContext for InvocationContext {
         self.run_config.acting_context_for(self.app_name(), self.agent_name(), self.user_id())
     }
 
-    /// `true` when the run carries a [`RequestContext`] (spec 3.1 §10 F5).
+    /// `true` when the run carries a [`RequestContext`] (spec 3.1 §10 F5) and its subject
+    /// is not a [`Visitor`](adk_core::SubjectKind::Visitor), whom no credential identifies.
     fn is_authenticated(&self) -> bool {
         self.request_context.is_some()
+            && self.run_config.acting.subject_kind != adk_core::SubjectKind::Visitor
     }
 
     fn state(&self) -> Option<&dyn adk_core::State> {

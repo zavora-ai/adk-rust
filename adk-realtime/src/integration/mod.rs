@@ -1262,7 +1262,10 @@ impl Inner {
         Ok(match self.runner.authorize_tool_call(call).await? {
             adk_core::ToolAuthorization::Execute { args, .. } => {
                 let timeout = self.runner.tool_timeout();
-                let execution = tool.execute(ctx.clone() as Arc<dyn adk_core::ToolContext>, args);
+                let execution = adk_core::ModelCallScope::within_tool(
+                    ctx.as_ref(),
+                    tool.execute(ctx.clone() as Arc<dyn adk_core::ToolContext>, args),
+                );
                 let mut status = None;
                 let mut cause = None;
                 // Set when a non-idempotent call timed out, so its effect is unknown.

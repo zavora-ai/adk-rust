@@ -61,6 +61,10 @@ impl CartesiaTts {
 
 #[async_trait]
 impl TtsProvider for CartesiaTts {
+    fn billing(&self) -> Option<crate::AudioBilling> {
+        Some(crate::AudioBilling::new("cartesia", self.model.clone()))
+    }
+
     async fn synthesize(&self, request: &TtsRequest) -> AudioResult<AudioFrame> {
         let voice_id = if request.voice.is_empty() { &self.voices[0].id } else { &request.voice };
         let url = format!("{}/tts/bytes", self.base_url());

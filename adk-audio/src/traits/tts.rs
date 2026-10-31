@@ -8,6 +8,7 @@ use futures::Stream;
 use crate::codec::AudioFormat;
 use crate::error::AudioResult;
 use crate::frame::AudioFrame;
+use crate::metering::AudioBilling;
 
 /// Emotion hint for TTS synthesis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,4 +92,11 @@ pub trait TtsProvider: Send + Sync {
 
     /// List available voices for this provider.
     fn voice_catalog(&self) -> &[Voice];
+
+    /// The vendor and model this provider's calls are billed under, for metering them
+    /// against the current run ([`crate::metering`]). `None`, the default, for a provider
+    /// that bills nothing, such as a local model.
+    fn billing(&self) -> Option<AudioBilling> {
+        None
+    }
 }

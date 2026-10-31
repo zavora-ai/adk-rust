@@ -382,7 +382,7 @@ let _log_line = err.diagnostics().to_string(); // everything but the message
 | Policy | `ToolPolicy`, `DeclarativePolicy`, `StrictestPolicy` | Allow, deny, or require approval; `DeclarativePolicy` denies unlisted tools; `evaluate_call` also receives the tool's `ToolOrigin` and the call ID (`PolicyCall`); `StrictestPolicy` applies several policies and keeps the strictest decision |
 | Screen | `ToolCallScreen` | The agent's guardrails; a rewrite is checked against the policy again |
 | Confirmation | `ToolApproval`, `ApprovalStore`, `ToolConfirmationHandler::decide_approval` | A live handler may return edited arguments, checked against the policy again, or a denial message. Decisions bind to the call's fingerprint — acting agent, tool origin and declaration digest, tool name, arguments — so they survive a re-issued call ID and never authorize another agent's call or another server's tool |
-| Approval service | `ApprovalService`, `StoreApprovalService`, `ApprovalPolicy` | An inbox over the approval store: quorum, delegation, escalation, expiry, and edit / reject / respond actions with compare-and-swap decisions |
+| Approval service | `ApprovalService`, `StoreApprovalService`, `ApprovalPolicy` | An inbox over the approval store: quorum, slots filled by distinct approvers, an approver directory, delegation, escalation, expiry, and edit / reject / respond actions with compare-and-swap decisions |
 
 ```rust
 use adk_core::{ArgPredicate, DeclarativePolicy, PolicyDecision, PolicyRule, ToolPolicyRequest};
@@ -429,9 +429,15 @@ let ledger = InMemorySpendLedger::new(
 
 `ModelCallScope` applies the run budget and the spend ledger to model calls made outside an agent's own loop — compaction summaries, LLM routing, MCP sampling. `generate_metered` and `MeteredLlm` meter against the scope made current with `ModelCallScope::within`. `LlmResponse` carries `model` and `provider` so usage and cost are attributable.
 
+Calls billed in units rather than tokens — images, audio, characters — go through `ModelCallScope::meter` or `meter_usage`: the spend hold covers `UsageCall::max_cost_micro_usd` before the call is sent, and `MeteredUsage` commits the cost in micro-USD and counts its `UsageVector` (`UsageUnit::Images`, `AudioMillis`, `Characters`, …) in `BudgetTracker::units`. A unit call with no known price is refused under a cost cap. Agents make the run's scope current around every tool call (`ModelCallScope::within_tool`), so media calls in tools count against the run. `UnitRate` prices a unit in integer micro-USD.
+
 ## Audit Records
 
 `AuditRecorder` (module `audit_log`) receives a record for every governed tool decision, approval decision, kill-switch change, and `outcome_unknown` answer; `InMemoryAuditRecorder` keeps them in memory and `FileAuditRecorder` appends them to a JSON Lines file that survives a restart. Each record names the acting agent and the subject it acts for and carries an argument digest, never the arguments. Under `AuditFailureMode::Block` (the default) an action whose record cannot be written does not happen. `AuditLogStore` and `InMemoryAuditLogStore` hold append-only logs with a compare-and-swap on the log size; `adk-auth`'s `signed_audit::AuditLog` signs them.
+
+## Subject Rights
+
+Module `subject` holds what a deployment needs to know whom it holds data about and to act on that person's data across stores. `SubjectKind::Visitor` names a person known only by a random `VisitorId`; a visitor's run is never authenticated and a visitor cannot decide an approval. `ConsentStore` keeps `ConsentRecord`s per subject and `ConsentPurpose`; `SubjectRegistry` keeps each subject's pseudonym, links, and erasure state. `SubjectRights` exports, erases, and links a subject over every registered `SubjectDataStore` adapter and reports each store's outcome — `erased`, `scheduled`, `unsupported`, `unreachable`, or `failed` — so no store is skipped silently. `InMemorySubjectRegistry` and `InMemoryConsentStore` are the reference implementations, and `subject_registry_conformance_tests!`, `consent_store_conformance_tests!`, and `subject_data_store_conformance_tests!` (feature `conformance`) prove other backends. See [Subject Rights](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/subject-rights.md).
 
 ## Durable Runtime Contracts
 

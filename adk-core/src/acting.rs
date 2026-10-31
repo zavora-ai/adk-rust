@@ -59,6 +59,7 @@ impl fmt::Display for SubjectKind {
             Self::Human => "human",
             Self::Service => "service",
             Self::Agent => "agent",
+            Self::Visitor => "visitor",
         })
     }
 }

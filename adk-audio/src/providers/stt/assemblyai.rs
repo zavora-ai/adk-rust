@@ -47,6 +47,10 @@ impl AssemblyAiStt {
 
 #[async_trait]
 impl SttProvider for AssemblyAiStt {
+    fn billing(&self) -> Option<crate::AudioBilling> {
+        Some(crate::AudioBilling::new("assemblyai", "assemblyai"))
+    }
+
     async fn transcribe(&self, audio: &AudioFrame, opts: &SttOptions) -> AudioResult<Transcript> {
         let wav_bytes = frame_to_wav_bytes(audio)?;
 

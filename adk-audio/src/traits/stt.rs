@@ -7,6 +7,7 @@ use futures::Stream;
 
 use crate::error::AudioResult;
 use crate::frame::AudioFrame;
+use crate::metering::AudioBilling;
 
 /// Options for speech-to-text transcription.
 #[derive(Debug, Clone, Default)]
@@ -86,4 +87,11 @@ pub trait SttProvider: Send + Sync {
         audio: Pin<Box<dyn Stream<Item = AudioFrame> + Send>>,
         opts: &SttOptions,
     ) -> AudioResult<Pin<Box<dyn Stream<Item = AudioResult<Transcript>> + Send>>>;
+
+    /// The vendor and model this provider's calls are billed under, for metering them
+    /// against the current run ([`crate::metering`]). `None`, the default, for a provider
+    /// that bills nothing, such as a local model.
+    fn billing(&self) -> Option<AudioBilling> {
+        None
+    }
 }
