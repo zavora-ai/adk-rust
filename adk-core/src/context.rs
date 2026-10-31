@@ -1465,6 +1465,11 @@ impl<'a> BatchCall<'a> {
 /// [`approval_service`](RunConfig::approval_service), if any), the run ends with it waiting,
 /// and only a decision recorded for it resumes it; the handler is not asked about it again
 /// (spec 3.3 §7.3). [`RunConfig::deny_on_confirmation_timeout`] restores the denial.
+///
+/// A freeze of one of the run's [`governance`](RunConfig::governance) controls ends the
+/// wait at once, whatever the timeout: the handler's future is dropped, the call is refused
+/// with the freeze error, and an inbox request opened for it is withdrawn, so an answer
+/// given later — during the freeze or after an unfreeze — does not run it.
 #[async_trait]
 pub trait ToolConfirmationHandler: std::fmt::Debug + Send + Sync {
     /// Approve or deny one pending tool call.
@@ -1724,7 +1729,8 @@ pub struct RunConfig {
     /// [`ToolPolicy`](crate::ToolPolicy) and [`authorize_tool_call`](crate::authorize_tool_call).
     pub tool_policy: Option<Arc<dyn crate::ToolPolicy>>,
     /// Kill switches checked at run start, before each model call, and before each tool
-    /// call. The run stops when any of them is frozen.
+    /// call, and watched while a call waits for a confirmation decision. The run stops when
+    /// any of them is frozen.
     pub governance: Vec<crate::GovernanceControl>,
     /// Confirmation decisions keyed by tool-call fingerprint
     /// ([`ToolConfirmationRequest::fingerprint`]).
@@ -1773,7 +1779,8 @@ pub struct RunConfig {
     /// to decide one call. A call it does not decide in time waits in the
     /// [`approval_store`](Self::approval_store) when the run has one, and is denied
     /// otherwise or under [`deny_on_confirmation_timeout`](Self::deny_on_confirmation_timeout).
-    /// Defaults to
+    /// A freeze of the run's [`governance`](Self::governance) ends the wait sooner and
+    /// refuses the call. Defaults to
     /// [`DEFAULT_TOOL_CONFIRMATION_TIMEOUT`](crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT).
     pub tool_confirmation_timeout: std::time::Duration,
     /// Ledger that model calls and payment tools reserve budget against.
@@ -1911,6 +1918,33 @@ impl RunConfig {
     /// Returns the frozen control's `governance.frozen` error.
     pub fn check_governance(&self) -> Result<()> {
         self.governance.iter().try_for_each(crate::GovernanceControl::check)
+    }
+
+    /// Waits until any of the run's [`governance`](Self::governance) controls refuses work,
+    /// and returns its error, as [`check_governance`](Self::check_governance) would give it.
+    ///
+    /// Never resolves for a run without a control. See
+    /// [`GovernanceControl::refused`](crate::GovernanceControl::refused).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{GOVERNANCE_FROZEN_CODE, GovernanceControl, RunConfig};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() {
+    /// let control = GovernanceControl::new();
+    /// let config = RunConfig::builder().governance(control.clone()).build();
+    /// control.freeze("incident 4012");
+    /// assert_eq!(config.governance_refused().await.code, GOVERNANCE_FROZEN_CODE);
+    /// # }
+    /// ```
+    pub async fn governance_refused(&self) -> crate::AdkError {
+        if self.governance.is_empty() {
+            return std::future::pending().await;
+        }
+        let waits = self.governance.iter().map(|control| Box::pin(control.refused()));
+        futures::future::select_all(waits).await.0
     }
 
     /// The acting context of the agent named `agent_name` running for `user_id`.

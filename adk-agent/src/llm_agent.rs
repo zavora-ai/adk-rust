@@ -2954,7 +2954,8 @@ impl ToolExecutor<'_> {
             // The governed path resumes a held call only for the agent and tool it was held
             // for. A request naming another tool belongs to a delegate the tool runs, whose
             // own governed path binds it.
-            if let Some(held) = resumes.filter(|held| held.tool_name == name) {
+            let resumed = resumes.filter(|held| held.tool_name == name);
+            if let Some(held) = resumed.clone() {
                 call = call.resuming(held);
             }
             // A call a person asked for is held for them however the agent is configured,
@@ -2994,6 +2995,12 @@ impl ToolExecutor<'_> {
                         error = %error.diagnostics(),
                         "tool call not run: the governance control refuses work"
                     );
+                    // The answer releases a resumed call's hold, so the decision it was
+                    // resumed on is spent with it: after an unfreeze it cannot run an
+                    // identical call that nobody decided (spec 3.3 §7.3).
+                    if let Some(held) = &resumed {
+                        adk_core::withdraw_held_call(&gate, held).await?;
+                    }
                     response_content = Some(error_response(adk_core::not_run_text(&error)));
                     run_after_tool_callbacks = false;
                 }

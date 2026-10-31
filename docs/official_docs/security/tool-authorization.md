@@ -339,6 +339,7 @@ that has a decision. The decision does not depend on the model issuing the call 
 | Deny | Answers the call with "Tool 'delete_file' execution denied by confirmation policy"; the tool does not run |
 | None yet | Leaves the call held; the run continues to the model, which sees the pending response |
 | Any, but the tool changed | Answers the call as not run, naming what changed, and spends the stored decision: the agent resuming it is not the one that held it, the tool name now resolves to another publisher (another MCP server), or the tool's description, parameters, or annotations changed since the hold. The model can issue the call again, which needs its own approval |
+| Any, but the run is frozen | A frozen runner refuses the run before reading the session, so the call stays held with its decision. A freeze that lands after the run started answers the call `not run` and spends its decision (see [Kill Switch](#kill-switch)) |
 
 - **One response per call.** The resumed call's response supersedes its confirmation-pending
   response, both in the running turn and in the history projected for later runs, so providers
@@ -665,6 +666,27 @@ let config = RunConfig::builder()
     .tool_confirmation_timeout(Duration::from_secs(120))
     .build();
 ```
+
+The timeout is the only deadline the run sets, and the [kill switch](#kill-switch) overrides it.
+A freeze that lands while the handler decides ends the wait at once, whatever the timeout
+(`Duration::MAX` included):
+
+| Step | What happens |
+|------|--------------|
+| The wait ends | The handler's future is dropped as soon as the run's `GovernanceControl` refuses work (`GovernanceControl::refused`): at once for a local freeze, at the next store read for a replicated one, and when a fail-closed mirror goes stale |
+| The call is refused | The governed path returns the freeze error (`governance.frozen`, or `governance.stale`): `LlmAgent` answers the call `not run` and ends the turn at its next model call; `CodeActAgent` and the realtime runners end the run with the error |
+| The wait is closed | Open inbox requests for the call are withdrawn, its pending store entry is cleared, and a decision that reached the store during the wait is absorbed, as for any other decision source |
+| The refusal is recorded | A `tool_call` audit record with decision `denied`, outcome `not_run` and `policyRef: governance` |
+
+An answer that arrives later — during the freeze or after the unfreeze — runs neither the call
+nor an identical later one: the model can issue the call again, and the new call needs its own
+decision. A handler that watches the switch itself and fails with the freeze error is treated
+the same way, and so is a timeout that expires while the run is frozen.
+
+> **Note:** No handler-owned deadline exists. A handler ends its own wait sooner by
+> returning a decision; for a longer one, raise `tool_confirmation_timeout`; for a deadline on
+> a durable request, set `ApprovalPolicy::expires_after` on the
+> [approval service](#approval-service) route.
 
 ### Editing a Call in the Handler
 
@@ -1271,7 +1293,9 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
 4. Circuit breaker
 5. The governed path (`adk_core::authorize_tool_call`) on the final arguments:
    1. Kill switch — a frozen run's call is answered `not run` and the run ends with a
-      `governance.frozen` error at its next model call (`CodeActAgent`: at once)
+      `governance.frozen` error at its next model call (`CodeActAgent`: at once). The switch
+      is also watched during step 5's wait for the handler, and a freeze there refuses the
+      call the same way
    2. Resume binding, for a held call being resumed — another acting agent or another tool
       origin answers the call as not run and spends its stored decision
    3. `ToolPolicy` — a denial becomes the call's result
@@ -1321,6 +1345,8 @@ reachable through `Runner::governance()`; share one control across runners with
 | Run start | The run's stream yields a `governance.frozen` error before the session is read |
 | Before each model call | The agent ends the run with the error; no request, and so no built-in tool, reaches the provider |
 | Before each tool call | The tool does not execute. `LlmAgent` answers the call, and each later call of the same batch, `{"error": "not run: ..."}` and ends the run with the error at its next model call, so the session holds a response for every call; `CodeActAgent` ends the run with the error |
+| While a call waits for a decision | The `ToolConfirmationHandler`'s wait ends at once and the call is refused as above; what the wait left open in the approval inbox and store is closed, so no later answer runs it (see [Handler Timeout](#handler-timeout)) |
+| A held call | Held calls stay held with their decisions: a run refused at its start never reads them, and a resume refused before its decision is read leaves the decision in the store, so the call resumes after the unfreeze under the policy in force then. `LlmAgent`, which answers a refused resumed call `not run`, withdraws it instead, so its decision is spent |
 
 ```rust
 use adk_core::GovernanceControl;
