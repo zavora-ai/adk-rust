@@ -904,6 +904,16 @@ impl SessionService for Inline<Neo4jSessionService> {
         .await
         .map_err(|e| adk_core::AdkError::session(format!("delete_all_sessions failed: {e}")))?;
 
+        txn.run(
+            neo4rs::query(
+                "MATCH (u:UserState {app_name: $app_name, user_id: $user_id}) DETACH DELETE u",
+            )
+            .param("app_name", app_name.to_string())
+            .param("user_id", user_id.to_string()),
+        )
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("delete_all_sessions failed: {e}")))?;
+
         txn.commit()
             .await
             .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
