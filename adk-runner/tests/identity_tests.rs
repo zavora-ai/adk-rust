@@ -272,6 +272,20 @@ fn the_identity_is_authenticated_only_with_a_request_context() {
 }
 
 #[test]
+fn a_visitor_run_is_never_authenticated() {
+    let config =
+        adk_core::RunConfig::builder().subject_kind(adk_core::SubjectKind::Visitor).build();
+    let visitor = make_ctx("app", "v:1", "sess", "inv", "agent", "")
+        .with_run_config(config)
+        .with_request_context(RequestContext {
+            user_id: "v:1".to_string(),
+            scopes: vec![],
+            metadata: HashMap::new(),
+        });
+    assert!(!visitor.is_authenticated(), "no credential identifies a visitor");
+}
+
+#[test]
 fn run_request_metadata_reaches_tools_without_authenticating() {
     let config = adk_core::RunConfig::builder()
         .request_metadata("thread", "chat-7")

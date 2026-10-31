@@ -65,8 +65,9 @@ suite "adk-memory" -p adk-memory --features sqlite-memory,database-memory \
     --test upgrade_from_sqlx_0_8
 
 # The feature set matches the Redis step of CI's postgres job, so both reuse one build.
-suite "adk-harness" -p adk-harness --features memory,postgres,redis \
-    --test integration -E 'test(/^(fact_conformance_tests|shared_store_postgres_tests)::/)'
+suite "adk-harness" -p adk-harness --features memory,postgres,redis,website \
+    --test integration \
+    -E 'test(/^(fact_conformance_tests|shared_store_postgres_tests|site_draft_store_postgres_tests)::/)'
 
 suite "adk-graph" -p adk-graph --features postgres --test integration \
     -E 'test(/^checkpointer_conformance_postgres::/)'

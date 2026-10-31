@@ -73,6 +73,8 @@ mod shared_store_postgres_tests;
 mod shared_store_redis_tests;
 mod shell_sandbox_tests;
 mod shell_sandbox_windows_tests;
+mod site_draft_store_postgres_tests;
+mod site_draft_store_redis_tests;
 mod skill_audit_tests;
 mod snapshot_rewind_tests;
 mod store_conformance_tests;
