@@ -382,7 +382,7 @@ let _log_line = err.diagnostics().to_string(); // everything but the message
 | Policy | `ToolPolicy`, `DeclarativePolicy`, `StrictestPolicy` | Allow, deny, or require approval; `DeclarativePolicy` denies unlisted tools; `evaluate_call` also receives the tool's `ToolOrigin` and the call ID (`PolicyCall`); `StrictestPolicy` applies several policies and keeps the strictest decision |
 | Screen | `ToolCallScreen` | The agent's guardrails; a rewrite is checked against the policy again |
 | Confirmation | `ToolApproval`, `ApprovalStore`, `ToolConfirmationHandler::decide_approval` | A live handler may return edited arguments, checked against the policy again, or a denial message. Decisions bind to the call's fingerprint — acting agent, tool origin and declaration digest, tool name, arguments — so they survive a re-issued call ID and never authorize another agent's call or another server's tool |
-| Approval service | `ApprovalService`, `StoreApprovalService`, `ApprovalPolicy` | An inbox over the approval store: quorum, delegation, escalation, expiry, and edit / reject / respond actions with compare-and-swap decisions |
+| Approval service | `ApprovalService`, `StoreApprovalService`, `ApprovalPolicy` | An inbox over the approval store: quorum, slots filled by distinct approvers, an approver directory, delegation, escalation, expiry, and edit / reject / respond actions with compare-and-swap decisions |
 
 ```rust
 use adk_core::{ArgPredicate, DeclarativePolicy, PolicyDecision, PolicyRule, ToolPolicyRequest};

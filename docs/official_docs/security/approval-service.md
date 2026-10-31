@@ -10,6 +10,8 @@ PostgreSQL, Redis, MongoDB, Neo4j, or Firestore.
 |------------|-----------|
 | **Inbox** | Lists the requests an approver may decide now — by name, by group, or through a live delegation — oldest first, paged by cursor; `InboxQuery::with_session` narrows it to the decisions one session — application, user and session ID — waits on |
 | **Quorum** | A request resolves once `quorum` distinct approvers approve; a delegate's approval counts for the delegator |
+| **Slots** | A request with `slots` resolves only once distinct approvers fill every slot, one each — an editor and a publisher who are two people — whatever order they decide in |
+| **Directory** | An `ApproverDirectory` on the service states each approver's and delegator's groups; callers' asserted groups are ignored |
 | **Self-approval** | Refused by default for the requester, the acting agent, and anyone acting through their delegation |
 | **Actions** | Approve, edit (approve with substituted arguments), reject, respond (answer the model instead of running the call) |
 | **Concurrency** | Every change is a compare-and-swap on the request's `version`; of two approvers deciding one version, one wins and the other receives `409 approval.version_conflict` |
@@ -106,7 +108,8 @@ async fn configure() -> adk_core::Result<RunConfig> {
 | Field | Default | Meaning |
 |-------|---------|---------|
 | `approvers` | — | `ApproverSelector::Subject(SubjectRef)` or `ApproverSelector::Group(name)` |
-| `quorum` | 1 | Distinct approvals needed |
+| `slots` | none | Selectors distinct approvers must fill, one approver each; a selector listed twice needs two people. Whoever a slot selects may approve |
+| `quorum` | 1 | Distinct approvals needed; `ApprovalPolicy::for_slots` sets it to the number of slots |
 | `forbid_self_approval` | `true` | Refuse the requester and the acting agent; `allow_self_approval()` clears it |
 | `escalation` | none | Steps `{after, to}`, ordered by `after` |
 | `on_expiry` | `Deny` | What expiry does |
@@ -115,6 +118,62 @@ async fn configure() -> adk_core::Result<RunConfig> {
 The requester is the acting context's `on_behalf_of` subject, or the session's user when the
 call carries no acting context. Group membership is asserted by the caller deciding
 (`ApprovalDecision::approver_groups`); `adk-server` takes it from the authenticated request.
+
+### Slots
+
+A policy with slots needs one distinct approver per slot. Approvals beyond the quorum do not
+resolve the request while a slot is open, and the service matches approvers to slots over all
+counted approvals, so a person who could fill either of two slots never blocks the other.
+`ApprovalRequest::open_slots` lists the slots still waiting.
+
+```rust
+use adk_core::{ApprovalPolicy, ApproverSelector};
+
+/// An editor and a publisher, two distinct people, neither the requester.
+fn release_policy() -> ApprovalPolicy {
+    ApprovalPolicy::for_slots([
+        ApproverSelector::group("role:editor"),
+        ApproverSelector::group("role:publisher"),
+    ])
+}
+```
+
+### Approver Directory
+
+`StoreApprovalService::with_directory` makes an `ApproverDirectory` the authority on
+membership: the service asks it for the groups of the approver and of any delegator, for every
+decision and every inbox, and records the answer in `approver_groups` and `authority_groups`.
+A group the caller asserts does not count, so a surface cannot claim a role for the person
+deciding. `adk_kernel::charter::CharterDirectory` answers from the site charter in force.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::principal::SubjectRef;
+use adk_core::{ApprovalRequest, ApproverDirectory, InMemoryApprovalStore, StoreApprovalService};
+use async_trait::async_trait;
+
+struct Staff;
+
+#[async_trait]
+impl ApproverDirectory for Staff {
+    async fn groups(
+        &self,
+        subject: &SubjectRef,
+        _request: &ApprovalRequest,
+    ) -> adk_core::Result<Vec<String>> {
+        Ok(match subject.id.as_str() {
+            "ana@example.com" => vec!["finance".to_string()],
+            _ => Vec::new(),
+        })
+    }
+}
+
+fn service() -> StoreApprovalService {
+    StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+        .with_directory(Arc::new(Staff))
+}
+```
 
 ## Decisions
 
