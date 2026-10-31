@@ -204,6 +204,8 @@ pub mod tool_concurrency;
 pub mod tool_response;
 /// Content, Part, and multimodal data types.
 pub mod types;
+/// Vendor-neutral usage units and per-unit prices.
+pub mod usage;
 #[cfg(feature = "webhooks")]
 pub mod webhook;
 #[cfg(feature = "webhook-delivery")]
@@ -288,8 +290,9 @@ pub use instruction_template::inject_session_state;
 pub use intra_compaction::IntraCompactionConfig;
 pub use lease::{InMemoryLeaseStore, Lease, LeaseStore};
 pub use metering::{
-    LlmSpendEstimate, MeteredLlm, ModelCallScope, ModelSpendHold, UNBOUNDED_HOLD_MICRO_USD,
-    generate_metered, vendor_for_model,
+    LlmSpendEstimate, MeteredLlm, MeteredUsage, ModelCallScope, ModelSpendHold,
+    UNBOUNDED_HOLD_MICRO_USD, UsageCall, UsageHold, generate_metered, meter_usage,
+    vendor_for_model,
 };
 pub use model::{
     BuiltinToolUse, CacheCapable, CitationMetadata, CitationSource, ContextCacheConfig, Effort,
@@ -344,6 +347,7 @@ pub use types::{
     GENERATED_CALL_ID_PREFIX, InlineDataPart, MAX_INLINE_DATA_SIZE, Part, TextResourceContents,
 };
 pub use url::Url;
+pub use usage::{UnitRate, UsageUnit, UsageVector};
 
 // Re-export async_trait so the #[tool] macro's generated code can reference it
 // via adk_tool::async_trait (adk_tool re-exports from adk_core).

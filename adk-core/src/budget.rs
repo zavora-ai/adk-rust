@@ -35,6 +35,12 @@
 //! closed and stops the run with `cost unknown for model …`. Use
 //! [`RunBudget::allow_unpriced_models`] to count such responses as zero cost.
 //!
+//! Calls billed in units other than tokens — images, audio, characters — are metered
+//! through [`ModelCallScope::meter`](crate::ModelCallScope::meter): their cost counts
+//! against the cost limit, their tokens against the token limit, and every unit is kept
+//! in [`BudgetTracker::units`]. They are not model calls. A unit call with no known price
+//! is refused before it is sent when a cost cap applies.
+//!
 //! # Example
 //!
 //! ```
@@ -57,7 +63,7 @@
 
 use crate::{
     AdkError, ErrorCategory, ErrorComponent, ErrorDetails, Event, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, Result, UsageMetadata,
+    LlmResponseStream, Result, UsageMetadata, UsageUnit, UsageVector,
 };
 use futures::Stream;
 use std::fmt;
@@ -284,6 +290,19 @@ impl BudgetExceeded {
         }
     }
 
+    fn unpriced_units(model: &str, used: u64, max: u64) -> Self {
+        Self {
+            limit: BudgetLimit::Cost,
+            used,
+            max,
+            code: "budget.cost_unknown",
+            message: format!(
+                "cost unknown for '{model}': the budget has a cost cap of {} and no per-unit price is known for this call, so it was not sent; add the price to the pricing catalog or opt out with RunBudget::allow_unpriced_models()",
+                format_micro_usd(max)
+            ),
+        }
+    }
+
     fn untokened(model: &str, used: u64, max: u64) -> Self {
         Self {
             limit: BudgetLimit::TotalTokens,
@@ -390,6 +409,7 @@ pub struct BudgetTracker {
     total_tokens: AtomicU64,
     cost_micro_usd: AtomicU64,
     tool_calls: AtomicU64,
+    units: Mutex<UsageVector>,
     exceeded: Mutex<Option<BudgetExceeded>>,
     parent: Option<Arc<BudgetTracker>>,
 }
@@ -422,6 +442,7 @@ impl BudgetTracker {
             total_tokens: AtomicU64::new(usage.total_tokens),
             cost_micro_usd: AtomicU64::new(usage.cost_micro_usd),
             tool_calls: AtomicU64::new(usage.tool_calls),
+            units: Mutex::new(UsageVector::new()),
             exceeded: Mutex::new(None),
             parent,
         }
@@ -446,6 +467,39 @@ impl BudgetTracker {
             tool_calls: self.tool_calls.load(Ordering::SeqCst),
             elapsed: self.started_at.elapsed(),
         }
+    }
+
+    /// Usage counted by this tracker per [`UsageUnit`]: the input and output tokens of
+    /// model calls, and every unit of the calls metered through
+    /// [`ModelCallScope::meter`](crate::ModelCallScope::meter).
+    ///
+    /// A tracker created with [`resume`](Self::resume) starts with no units.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use adk_core::{
+    ///     BudgetTracker, LlmResponse, RunBudget, UsageMetadata, UsageUnit, UsageVector,
+    /// };
+    ///
+    /// let tracker = Arc::new(BudgetTracker::new(RunBudget::new()));
+    /// let mut meter = tracker.begin_model_call("gemini-3.7-flash").unwrap();
+    /// let mut response = LlmResponse::default();
+    /// response.usage_metadata = Some(UsageMetadata {
+    ///     prompt_token_count: 120,
+    ///     candidates_token_count: 30,
+    ///     total_token_count: 150,
+    ///     ..Default::default()
+    /// });
+    /// meter.observe(&response);
+    /// assert_eq!(
+    ///     tracker.units(),
+    ///     UsageVector::new().with(UsageUnit::InputTokens, 120).with(UsageUnit::OutputTokens, 30)
+    /// );
+    /// ```
+    pub fn units(&self) -> UsageVector {
+        self.units.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// The first unknown-usage violation recorded by this tracker or an ancestor.
@@ -494,6 +548,58 @@ impl BudgetTracker {
             responses_seen: false,
             settled: false,
         })
+    }
+
+    /// Checks the limits that gate a call billed in units ([`ModelCallScope::meter`](crate::ModelCallScope::meter)).
+    ///
+    /// The call is not a model call and reserves nothing. `priced` is `false` when no price
+    /// is known for the call: a cost cap that does not
+    /// [`allow_unpriced_models`](RunBudget::allow_unpriced_models) then refuses it, before
+    /// it is sent.
+    pub(crate) fn begin_usage(
+        &self,
+        model: &str,
+        priced: bool,
+    ) -> std::result::Result<(), BudgetExceeded> {
+        self.check()?;
+        self.check_chain(Strictness::Exceeded)?;
+        if !priced {
+            self.refuse_unpriced(model)?;
+        }
+        Ok(())
+    }
+
+    fn refuse_unpriced(&self, model: &str) -> std::result::Result<(), BudgetExceeded> {
+        if let Some(max) = self.budget.max_cost_micro_usd
+            && !self.budget.allow_unpriced_models
+        {
+            let used = self.cost_micro_usd.load(Ordering::SeqCst);
+            return Err(BudgetExceeded::unpriced_units(model, used, max));
+        }
+        match &self.parent {
+            Some(parent) => parent.refuse_unpriced(model),
+            None => Ok(()),
+        }
+    }
+
+    /// Counts what a call billed in units used: its cost, its tokens, and every unit.
+    pub(crate) fn record_units(&self, model: &str, units: &UsageVector, cost: Option<u64>) {
+        self.add(Counter::TotalTokens, units.tokens());
+        match cost {
+            Some(cost) => self.add(Counter::Cost, cost),
+            None => self.flag_unpriced(model),
+        }
+        self.add_units(units);
+    }
+
+    fn add_units(&self, units: &UsageVector) {
+        if units.is_empty() {
+            return;
+        }
+        self.units.lock().unwrap_or_else(|e| e.into_inner()).merge(units);
+        if let Some(parent) = &self.parent {
+            parent.add_units(units);
+        }
     }
 
     /// Reserves `count` tool calls, after checking every limit that gates them.
@@ -729,6 +835,12 @@ impl BudgetTracker {
             Some(usage) => {
                 self.add(Counter::TotalTokens, u64::try_from(usage.total_token_count).unwrap_or(0));
                 self.add(Counter::ToolCalls, usage.builtin_tool_use_count());
+                let count = |tokens: i32| u64::try_from(tokens).unwrap_or(0);
+                self.add_units(
+                    &UsageVector::new()
+                        .with(UsageUnit::InputTokens, count(usage.prompt_token_count))
+                        .with(UsageUnit::OutputTokens, count(usage.candidates_token_count)),
+                );
                 match usage.cost {
                     Some(cost) => self.add(Counter::Cost, usd_to_micro(cost)),
                     None => self.flag_unpriced(model),

@@ -696,6 +696,11 @@ maps `GenerateContentConfig::effort` to the API's `reasoning_effort`.
 | `MuseFilesClient` | `/files` CRUD + content | Uploads to 1GiB, referenced by `input_file` parts |
 | `MuseAsrClient` | `/asr/transcribe` | `muse-voice-transcribe-1.0` ($0.18/hour, diarization) |
 
+`MuseImagesClient` and `MuseAsrClient` meter every call against the current run: the spend
+hold covers the call before it is sent, and the images returned or the audio transcribed are
+committed at the catalog's per-unit price. See
+[Calls billed in units](../security/spend-ledger.md#calls-billed-in-units).
+
 `muse-wonder-1.0` (preview flagship, $4/$20/$0.20 cached per 1M) works through
 `MuseConfig::wonder`. `sam-3.1` is catalogued for Responses-based segmentation;
 there is no dedicated SAM client yet.

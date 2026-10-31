@@ -543,6 +543,11 @@ fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
   cap set, a response whose cost is unknown stops the run with
   `cost unknown for model '…'`; `RunBudget::allow_unpriced_models()` counts such
   responses as zero cost instead.
+- **Media calls count their cost, not a model call**: image generation,
+  transcription and speech synthesis made inside a tool are metered in units
+  (`BudgetTracker::units`) and count against the cost and token limits. A media
+  call with no known price is refused before it is sent under a cost cap — see
+  [Calls billed in units](../security/spend-ledger.md#calls-billed-in-units).
 
 A run that reaches a limit yields a final event explaining why — persisted with
 the session, with `llm_response.error_code` set to the `budget.*` code and the

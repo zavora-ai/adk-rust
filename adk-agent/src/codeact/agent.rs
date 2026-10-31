@@ -1278,7 +1278,10 @@ async fn run_authorized_tool(
             tool_ctx.set_actions(initial_actions.clone());
         }
         final_attempt = attempt;
-        let execution = tool.execute(tool_ctx.clone(), args.clone());
+        let execution = adk_core::ModelCallScope::within_tool(
+            tool_ctx.as_ref(),
+            tool.execute(tool_ctx.clone(), args.clone()),
+        );
         let bounded = async {
             match timeout {
                 Some(limit) => tokio::time::timeout(limit, execution).await.map_err(|_| limit),

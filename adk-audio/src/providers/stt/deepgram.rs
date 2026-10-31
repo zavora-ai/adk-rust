@@ -81,6 +81,10 @@ impl DeepgramStt {
 
 #[async_trait]
 impl SttProvider for DeepgramStt {
+    fn billing(&self) -> Option<crate::AudioBilling> {
+        Some(crate::AudioBilling::new("deepgram", "nova-3"))
+    }
+
     async fn transcribe(&self, audio: &AudioFrame, opts: &SttOptions) -> AudioResult<Transcript> {
         assert!(self.base_url.starts_with("https://"), "Deepgram requires HTTPS");
         let wav_bytes = frame_to_wav_bytes(audio)?;

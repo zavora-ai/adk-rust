@@ -155,6 +155,10 @@ impl GeminiTts {
 
 #[async_trait]
 impl TtsProvider for GeminiTts {
+    fn billing(&self) -> Option<crate::AudioBilling> {
+        Some(crate::AudioBilling::new("gemini", self.model.clone()))
+    }
+
     async fn synthesize(&self, request: &TtsRequest) -> AudioResult<AudioFrame> {
         let url = self.base_url();
         let speech_config = self.build_speech_config(&request.voice);

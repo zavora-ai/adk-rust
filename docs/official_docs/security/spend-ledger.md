@@ -209,6 +209,54 @@ scope to meter them. `OpenAIResponsesClient::compact_response` is called by appl
 code, not by the runner. Realtime sessions (`adk-realtime`) are billed per session and audio
 minute and do not go through the `Llm` trait.
 
+### Calls billed in units
+
+Image generation, transcription and speech synthesis bill per image, per second of audio or
+per character, not per token. They go through `ModelCallScope::meter`, or
+`adk_core::meter_usage` against the current scope, which applies the same two gates:
+
+| Step | Spend ledger | Run budget |
+|------|--------------|------------|
+| Before the call | Reserves `UsageCall::max_cost_micro_usd`, or the unbounded hold when no price is known | Refuses when a limit is reached, or when no price is known under a cost cap (`budget.cost_unknown`) |
+| After the call | Commits `MeteredUsage::cost_micro_usd` in micro-USD | Counts the cost and tokens, and every unit in `BudgetTracker::units` |
+| Call failed | Releases the hold | Counts nothing |
+
+| Call | Unit | Price | Vendor key |
+|------|------|-------|------------|
+| `MuseImagesClient::generate`, `edit` | `images` returned | $0.01 per image (`muse-image-1.0`); the hold covers the requested `n` | `muse` |
+| `MuseAsrClient::transcribe` | `audioMillis` reported | $0.18 per hour, whole seconds rounded down; the hold covers the WAV file's duration, or the 10-minute file limit when the header cannot be read | `muse` |
+| `TranscribeTool` | `audioMillis` sent | The provider's `AudioBilling` rate; none for the bundled cloud providers | The provider's |
+| `SpeakTool` | `characters` sent | The provider's `AudioBilling` rate; none for the bundled cloud providers | The provider's |
+
+`adk_model::pricing::PricingCatalog::unit_cost_micro_usd` prices a `UsageVector` from the
+catalog's per-unit prices (`muse-image-1.0`, `muse-voice-transcribe-1.0`, `sam-3.1`). Units are
+never ledger amounts: the ledger stays in micro-USD, and a unit call is not a model call.
+
+| Behaviour | Detail |
+|-----------|--------|
+| Inside a tool | `LlmAgent`, `CodeActAgent` and the realtime runtimes make the run's scope current around every tool call (`ModelCallScope::within_tool`), so media calls a tool makes count against the run and its agent |
+| Unknown price | Refused under any covering ledger limit, and under a budget cost cap unless the budget `allow_unpriced_models()`; without a cap the ledger commits the run's per-call spend estimate |
+| Local models | Report no `AudioBilling` and are not metered |
+| Kernel totals | A harness-hosted process's spend is read from its run budget, so media cost reaches the partition's daily total and `Quotas::daily_spend_cap` |
+| Outside a run | Unmetered unless a scope is made current |
+
+```rust
+use std::sync::Arc;
+
+use adk_core::{InMemorySpendLedger, ModelCallScope, SpendKey, SpendLimits, SpendPeriod};
+use adk_model::muse::{ImageOptions, ImagesResponse, MuseConfig, MuseImagesClient};
+
+async fn render(api_key: &str) -> adk_core::Result<ImagesResponse> {
+    let cap = SpendKey::org("studio").with_vendor("muse").per(SpendPeriod::Day);
+    let ledger = Arc::new(InMemorySpendLedger::new(SpendLimits::new().limit(cap, 1_000_000)));
+    let scope = ModelCallScope::new().with_spend_ledger(ledger, "studio");
+    let images = MuseImagesClient::new(MuseConfig::new(api_key, "muse-image-1.0"))?;
+    // Holds $0.04 for four images, then commits $0.01 for each image returned.
+    let options = ImageOptions { n: Some(4), ..ImageOptions::default() };
+    scope.within(images.generate("a red barn at dawn", options)).await
+}
+```
+
 ## Payment spend
 
 The payment tools reserve each checkout total at completion under the key

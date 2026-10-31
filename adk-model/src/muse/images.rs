@@ -3,10 +3,15 @@
 //! OpenAI Images-compatible endpoints:
 //! - `POST /v1/images/generations` (text-to-image)
 //! - `POST /v1/images/edits` (image edit/compose, multipart)
+//!
+//! Every call is metered against the current run ([`adk_core::meter_usage`]): the spend
+//! hold covers the requested image count at the catalog's per-image price, and the images
+//! returned are committed. A call refused by the run's budget or spend ledger is not sent.
 
 use super::config::MuseConfig;
+use crate::pricing::PricingCatalog;
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
-use adk_core::{AdkError, ErrorComponent};
+use adk_core::{AdkError, ErrorComponent, MeteredUsage, UsageCall, UsageUnit, UsageVector};
 use reqwest::Client;
 use serde::Deserialize;
 
@@ -108,13 +113,15 @@ impl MuseImagesClient {
     ///
     /// # Errors
     ///
-    /// Returns the API error (HTTP status, code `model.muse.api_error`) on rejection.
+    /// Returns the API error (HTTP status, code `model.muse.api_error`) on rejection, or
+    /// the current run's refusal (spend limit, budget) before anything is sent.
     pub async fn generate(
         &self,
         prompt: impl Into<String>,
         options: ImageOptions,
     ) -> Result<ImagesResponse, AdkError> {
         let url = format!("{}/images/generations", self.base());
+        let call = self.usage_call(options.n);
         let body = serde_json::json!({
             "model": self.config.model,
             "prompt": prompt.into(),
@@ -122,14 +129,20 @@ impl MuseImagesClient {
             "size": options.size,
             "response_format": options.response_format,
         });
-        self.post_json(&url, body).await
+        adk_core::meter_usage(call, async {
+            let response = self.post_json(&url, body).await?;
+            let usage = self.usage(&response);
+            Ok((response, usage))
+        })
+        .await
     }
 
     /// Edit or compose from an existing image (multipart upload).
     ///
     /// # Errors
     ///
-    /// Returns the API error (HTTP status, code `model.muse.api_error`) on rejection.
+    /// Returns the API error (HTTP status, code `model.muse.api_error`) on rejection, or
+    /// the current run's refusal (spend limit, budget) before anything is sent.
     pub async fn edit(
         &self,
         image: Vec<u8>,
@@ -139,20 +152,23 @@ impl MuseImagesClient {
         options: ImageOptions,
     ) -> Result<ImagesResponse, AdkError> {
         let url = format!("{}/images/edits", self.base());
+        let call = self.usage_call(options.n);
         let filename = filename.into();
         let prompt = prompt.into();
         let (opt_n, opt_size, opt_format) =
             (options.n, options.size.clone(), options.response_format.clone());
         let client = self.client.clone();
         let api_key = self.config.api_key.clone();
+        let model = self.config.model.clone();
         let retry_config = self.retry_config.clone();
-        execute_with_retry(&retry_config, is_retryable_model_error, || {
+        let edited = execute_with_retry(&retry_config, is_retryable_model_error, || {
             let client = client.clone();
             let url = url.clone();
             let api_key = api_key.clone();
             let image = image.clone();
             let filename = filename.clone();
             let prompt = prompt.clone();
+            let model = model.clone();
             let (opt_n, opt_size, opt_format) = (opt_n, opt_size.clone(), opt_format.clone());
             async move {
                 let part = reqwest::multipart::Part::bytes(image)
@@ -160,7 +176,7 @@ impl MuseImagesClient {
                     .mime_str(content_type)
                     .map_err(|e| AdkError::model(format!("invalid image content type: {e}")))?;
                 let mut form = reqwest::multipart::Form::new()
-                    .text("model", MUSE_IMAGE_MODEL.to_string())
+                    .text("model", model)
                     .text("prompt", prompt)
                     .part("image", part);
                 if let Some(n) = opt_n {
@@ -189,8 +205,42 @@ impl MuseImagesClient {
                     })?;
                 Self::read_response(response).await
             }
+        });
+        adk_core::meter_usage(call, async {
+            let response = edited.await?;
+            let usage = self.usage(&response);
+            Ok((response, usage))
         })
         .await
+    }
+
+    /// The metered call for `n` images (one when unset), bounded at the catalog price.
+    fn usage_call(&self, n: Option<u32>) -> UsageCall {
+        let requested = UsageVector::new().with(UsageUnit::Images, u64::from(n.unwrap_or(1)));
+        let call = UsageCall::new("muse", self.config.model.clone());
+        match PricingCatalog::standard().unit_cost_micro_usd(
+            Some("muse"),
+            &self.config.model,
+            &requested,
+        ) {
+            Some(bound) => call.with_max_cost_micro_usd(bound),
+            None => call,
+        }
+    }
+
+    /// The images a response returned, which are the ones billed.
+    fn usage(&self, response: &ImagesResponse) -> MeteredUsage {
+        let returned = UsageVector::new().with(UsageUnit::Images, response.data.len() as u64);
+        let cost = PricingCatalog::standard().unit_cost_micro_usd(
+            Some("muse"),
+            &self.config.model,
+            &returned,
+        );
+        let usage = MeteredUsage::new(returned);
+        match cost {
+            Some(cost) => usage.with_cost_micro_usd(cost),
+            None => usage,
+        }
     }
 
     fn base(&self) -> String {
