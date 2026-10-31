@@ -360,6 +360,20 @@ jobs:
         --test store_conformance_firestore
         --test spend_ledger_postgres
 
+    # The session services' erasure contract on the backends the PR tier does not reach
+    # (PostgreSQL's runs in the PR tier's postgres job); the Redis Cluster case needs a cluster.
+    - name: Run the session erasure contract on every backend
+      if: ${{ !cancelled() }}
+      run: >-
+        cargo nextest run -p adk-session
+        --features sqlite,postgres,redis,mongodb,neo4j,firestore
+        --run-ignored all --no-fail-fast
+        --test session_contract_redis
+        --test mongodb_state_tests
+        --test neo4j_state_tests
+        --test session_contract_firestore
+        -E 'test(/delete_all_sessions_erases/) and not test(/cluster/)'
+
     # The Phase 2 gates — crash mid-payment, one firing per schedule, stalled worker,
     # kill switch — with separate worker, scheduler, and replica processes on every
     # backend. Gates on one server run one at a time (`.config/nextest.toml` groups).
