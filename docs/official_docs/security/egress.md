@@ -1,0 +1,180 @@
+# Network Egress Policy
+
+`adk_core::egress` decides which hosts, ports and addresses a connection may reach. One
+`EgressPolicy` describes the destinations; framework HTTP clients enforce it through
+`GuardedClient`; one address classifier, `classify`, is shared by every check in the
+workspace.
+
+| Part | Type | Feature |
+|------|------|---------|
+| Policy and decision | `EgressPolicy`, `EgressRule`, `EgressTarget`, `EgressDenial` | — |
+| Address classifier | `classify`, `is_non_public`, `AddressClass` | — |
+| Name resolution | `HostResolver`, `StaticResolver`, `SystemResolver` | `SystemResolver`: `egress-dns` |
+| Guarded HTTP client | `GuardedClient`, `GuardedClientBuilder`, `EgressResolver` | `egress-client` |
+
+```toml
+[dependencies]
+adk-core = { version = "3.0.0", features = ["egress-client"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+## Rules
+
+A policy is a list of rules plus two switches. A rule without a port admits every port.
+
+| Rule | Text | Admits |
+|------|------|--------|
+| Any host | `*`, `*:443` | Every host name, and IP literals whose address passes the address check |
+| Exact host | `api.example.com`, `api.example.com:443` | That name |
+| Subdomains | `*.example.com`, `*.example.com:443` | Every name below `example.com`, not `example.com` itself |
+| CIDR | `10.0.0.0/8`, `10.0.0.5:5432`, `fd00::/8`, `[fd00::/8]:443` | IP literals in the range on the port, and names that resolve into the range |
+
+| Constructor | Admits |
+|-------------|--------|
+| `EgressPolicy::deny_all()` | Nothing until rules are added |
+| `EgressPolicy::public_only()` (the default) | Any host over `https`, on public addresses |
+| `EgressPolicy::allowlist(rules)` | Exactly the rules, over `https` |
+| `EgressPolicy::allow_private_networks()` | Any host over `http` or `https`, on any address except cloud metadata; for in-cluster receivers and tests |
+
+| Switch | Effect |
+|--------|--------|
+| `with_private_networks()` | Admits loopback, private and other non-public addresses for admitted hosts |
+| `with_plain_http()` | Admits `http` URLs |
+
+## Decisions
+
+`EgressPolicy::decide` is a pure function of the policy and an `EgressTarget`:
+
+| Target | Checked | When |
+|--------|---------|------|
+| `Name { host, port }` | A host rule admits the name and port | Before resolution |
+| `Address { host, address }` | The address passes the address check | For every address the name resolves to, at connect time |
+| `Literal(address)` | A CIDR rule admits the address and port, or an any-host rule admits the port and the address passes the address check | Before connecting |
+
+| Address class | Address check |
+|---------------|---------------|
+| `Metadata` | Always refused, whatever the rules say |
+| `Public` | Admitted |
+| Every other class | Admitted only inside a CIDR rule, or with `with_private_networks()` |
+
+`EgressPolicy::check_url` combines the scheme check with the `Name` or `Literal` check of a
+URL. `localhost` and `*.localhost` names are checked as loopback before resolution. A host name
+whose last label is numeric (`127.1`, `0x7f.1`, `2130706433`) is refused, since `inet_aton`-style
+resolvers read it as an IPv4 address.
+
+Every refusal is an `EgressDenial` whose `Display` form is the guidance a caller reads and whose
+`code()` is a stable identifier such as `egress.host_not_allowed`. `find_denial` recovers it
+from an error's source chain.
+
+```rust
+use adk_core::egress::{EgressDenial, EgressPolicy, EgressTarget};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let policy = EgressPolicy::allowlist(["api.github.com:443", "*.pythonhosted.org:443"])?;
+
+    assert!(policy.check_url("https://files.pythonhosted.org/simple/").is_ok());
+    assert!(matches!(
+        policy.check_url("https://example.com/"),
+        Err(EgressDenial::HostNotAllowed { .. })
+    ));
+    assert!(matches!(
+        policy.decide(&EgressTarget::Address {
+            host: "api.github.com",
+            address: "10.0.0.7".parse()?,
+        }),
+        Err(EgressDenial::AddressNotAllowed { .. })
+    ));
+    Ok(())
+}
+```
+
+## Narrowing
+
+`narrow` intersects two policies: a destination passes the result only when it passes both,
+and both switches stay on only when both policies set them. An operator's policy is the
+ceiling; every lower layer narrows it and none can widen it. A narrowed policy can only be
+narrowed further: `allow` and the switches leave it unchanged.
+
+```rust
+use adk_core::egress::EgressPolicy;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let operator = EgressPolicy::allowlist(["*.example.com:443"])?;
+    let tool = EgressPolicy::allowlist(["api.example.com", "evil.test"])?;
+    let effective = operator.narrow(&tool);
+
+    assert!(effective.check_url("https://api.example.com/v1").is_ok());
+    assert!(effective.check_url("https://evil.test/").is_err());
+    assert!(effective.check_url("https://docs.example.com/").is_err());
+    Ok(())
+}
+```
+
+## Address classes
+
+`classify` is the one classifier every egress check uses — webhook delivery, AWP event
+delivery, the A2A push sender, Web Bot Auth directories, website migration, graph HTTP action
+nodes, the harness `web_fetch` tool and browser navigation. An IPv6 address embedding an IPv4
+address — IPv4-mapped, NAT64 or 6to4 — has the class of the address it embeds.
+
+| Class | IPv4 | IPv6 |
+|-------|------|------|
+| `Metadata` | `169.254.169.254`, `169.254.170.2`, `169.254.170.23`, `100.100.100.200`, `168.63.129.16` | `fd00:ec2::254`, `fd00:ec2::23` |
+| `Unspecified` | `0.0.0.0/8` | `::` |
+| `Loopback` | `127.0.0.0/8` | `::1` |
+| `Private` | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` | `fc00::/7`, `fec0::/10` |
+| `LinkLocal` | `169.254.0.0/16` | `fe80::/10` |
+| `SharedAddressSpace` | `100.64.0.0/10` | — |
+| `Multicast` | `224.0.0.0/4` | `ff00::/8` |
+| `Reserved` | `240.0.0.0/4`, `198.18.0.0/15`, `192.0.0.0/24` | `100::/64`, IPv4-compatible and IPv4-translated forms |
+| `Tunnel` | — | Teredo `2001::/32`, local-use NAT64 `64:ff9b:1::/48` |
+| `Public` | everything else | everything else |
+
+## Guarded HTTP client
+
+`GuardedClient` (feature `egress-client`) enforces a policy on every request it sends:
+
+| Check | Where |
+|-------|-------|
+| Scheme, host name and port, IP literals | Before the request is built (`check_url`) |
+| Every address a name resolves to | At connect time, through `EgressResolver`: the address checked is the address connected to, and one refused address refuses the whole answer |
+| Every redirect hop | Scheme, host, port and literal again, then resolution again |
+| Proxies | None: environment and system proxy settings are ignored, since a proxy resolves names itself |
+| Build failure | `EgressClientError`; no unguarded client is used in its place |
+
+```rust,no_run
+use std::time::Duration;
+
+use adk_core::egress::{EgressPolicy, GuardedClient, find_denial};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = GuardedClient::builder(EgressPolicy::allowlist(["api.github.com:443"])?)
+        .timeout(Duration::from_secs(10))
+        .redirects(3)
+        .build()?;
+
+    let request = client.get("https://api.github.com/zen")?;
+    match request.send().await {
+        Ok(response) => println!("{}", response.status()),
+        Err(error) => match find_denial(&error) {
+            Some(denial) => println!("refused ({}): {denial}", denial.code()),
+            None => println!("failed: {error}"),
+        },
+    }
+    Ok(())
+}
+```
+
+`GuardedClientBuilder::resolver` takes any `HostResolver`; `StaticResolver` maps fixed names to
+addresses for tests. A crate that needs its own `reqwest` client options sets
+`EgressResolver` with `ClientBuilder::dns_resolver` and `ClientBuilder::no_proxy`, and checks
+URLs and redirect hops with `check_parsed_url` itself.
+
+## Limits
+
+- **Not data-loss prevention.** An admitted host receives whatever is sent to it.
+- **Not proof against domain fronting.** A host rule matches the name a client asks for; a
+  shared CDN can route that connection to another tenant.
+- **Only checked connections are covered.** A socket opened by code that does not consult the
+  policy — including third-party code running in the agent's process — is not contained.

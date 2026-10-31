@@ -48,7 +48,9 @@ No feature is enabled by default.
 | `conformance` | The `conformance` module: the `*_conformance_tests!` suites for durable store backends |
 | `cron` | Cron schedules in IANA time zones for `ScheduleStore` and `schedule::plan_fires` |
 | `webhooks` | The `webhook` module: Standard Webhooks signing, verification, and replay protection |
-| `webhook-delivery` | The `webhook_delivery` module: signed outbound webhook delivery (implies `webhooks`) |
+| `egress-dns` | `egress::SystemResolver`: the operating system resolver for egress checks |
+| `egress-client` | `egress::GuardedClient` and `egress::EgressResolver`: HTTP clients that enforce an `EgressPolicy` (implies `egress-dns`) |
+| `webhook-delivery` | The `webhook_delivery` module: signed outbound webhook delivery (implies `webhooks`, `egress-client`) |
 
 ## Core Traits
 
@@ -405,6 +407,10 @@ Provider-executed built-in tools (Gemini Google Search, OpenAI hosted web search
 
 Every run has an acting agent. `AgentId`, `AgentPrincipal`, and `ActingContext` (module `principal`) identify it; `ActingConfig` (module `acting`, on `RunConfig::acting`) maps agent names to principals and pins the subject to the session's user. Without configuration an agent acts as `urn:adk:agent:{app}/{agent}`. `IdentitySource`, `StaticIdentitySource`, and `CredentialBroker` (module `credential`) resolve principals and mint audience-bound `ScopedToken`s. `PolicyRule::for_agent`, `for_tenant`, and `for_class` restrict a policy rule to an acting agent.
 
+## Network Egress
+
+`egress::EgressPolicy` is a host, port and CIDR allowlist with a pure `decide()`, intersected by `narrow()` so lower layers only tighten an operator's ceiling; cloud metadata endpoints are always refused and non-public addresses need an explicit CIDR rule or `with_private_networks()`. `egress::classify` is the one address classifier the workspace shares. `egress::GuardedClient` (feature `egress-client`) checks every request URL, every resolved address and every redirect hop, ignores proxy settings, and fails to build rather than fall back to an unguarded client. See [Network Egress Policy](../docs/official_docs/security/egress.md).
+
 ## Run Budgets and Spend
 
 `RunBudget` limits model calls, total tokens, cost (micro-USD), wall time, and tool calls; `RunConfig::budget` carries it and `RunConfig::budget_tracker` carries the shared `BudgetTracker`. A violation converts to an `AdkError` with category `ResourceExhausted` and a `budget.*` code.
@@ -489,7 +495,7 @@ adk-core = { version = "3.0.0", features = ["conformance"] }
 | Module | Feature | Provides |
 |--------|---------|----------|
 | `webhook` | `webhooks` | Standard Webhooks `WebhookSigner` / `WebhookVerifier` (timestamp tolerance, several secrets for rotation), `WebhookReplayGuard` |
-| `webhook_delivery` | `webhook-delivery` | `WebhookDelivery`: signed outbound POSTs with exponential backoff and jitter, a `DeadLetterSink`, and an `EgressPolicy` that refuses internal destinations at resolve time |
+| `webhook_delivery` | `webhook-delivery` | `WebhookDelivery`: signed outbound POSTs with exponential backoff and jitter, a `DeadLetterSink`, and an `egress::EgressPolicy` enforced at resolve time |
 | `queue_source` | — | `QueueSource` (pull, ack, nack), `InMemoryQueueSource`, and `QueueIngress`, which enqueues each message as a durable run keyed by its message id and acks only after the enqueue succeeds |
 
 `queue_source_conformance_tests!` (feature `conformance`) checks any `QueueSource`. See [Wake-ups and Webhooks](../docs/official_docs/core/wake-ups.md).

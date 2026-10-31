@@ -8,13 +8,12 @@
 //! configured out of band.
 
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use adk_core::Clock;
-use adk_core::webhook_delivery::{EgressPolicy, is_non_public};
+use adk_core::egress::{EgressPolicy, GuardedClient, find_denial};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use tokio::sync::{Mutex, RwLock};
@@ -106,8 +105,9 @@ impl KeyDirectorySource for InMemoryKeyDirectorySource {
 
 /// Fetches key directories over HTTPS under the draft's SSRF guidance (§6.7).
 ///
-/// Defaults: https only and public addresses only ([`EgressPolicy::default`]), checked on the
-/// URL and again on every resolved address; no proxy; no redirects (§5.5); a 5 s timeout;
+/// Defaults: https only and public addresses only ([`EgressPolicy::default`]), checked by a
+/// [`GuardedClient`] on the URL and again on every resolved address; no proxy; no redirects
+/// (§5.5); a 5 s timeout;
 /// 64 KiB and 64 keys at most; the response must be `200 OK` with media type
 /// `application/http-message-signatures-directory+json`.
 ///
@@ -126,8 +126,7 @@ impl KeyDirectorySource for InMemoryKeyDirectorySource {
 /// ```
 #[derive(Debug, Clone)]
 pub struct HttpKeyDirectorySource {
-    client: reqwest::Client,
-    egress: EgressPolicy,
+    client: GuardedClient,
     max_bytes: usize,
     max_keys: usize,
 }
@@ -151,32 +150,6 @@ impl HttpKeyDirectorySource {
             max_keys: 64,
         }
     }
-
-    fn check_egress(&self, origin: &str, url: &reqwest::Url) -> Result<(), WebBotAuthError> {
-        let refused =
-            |reason: String| WebBotAuthError::EgressRefused { origin: origin.to_string(), reason };
-        match url.scheme() {
-            "https" => {}
-            "http" if self.egress.allow_http => {}
-            other => return Err(refused(format!("scheme `{other}` is not allowed; use https"))),
-        }
-        if self.egress.allow_private {
-            return Ok(());
-        }
-        let host = url.host_str().ok_or_else(|| refused("the origin has no host".into()))?;
-        let unbracketed = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
-        if let Ok(ip) = unbracketed.parse::<IpAddr>() {
-            if is_non_public(ip) {
-                return Err(refused(format!("{ip} is not a public address")));
-            }
-            return Ok(());
-        }
-        let name = host.trim_end_matches('.').to_ascii_lowercase();
-        if name == "localhost" || name.ends_with(".localhost") {
-            return Err(refused("localhost is not a public address".into()));
-        }
-        Ok(())
-    }
 }
 
 /// Builds an [`HttpKeyDirectorySource`].
@@ -190,7 +163,8 @@ pub struct HttpKeyDirectorySourceBuilder {
 
 impl HttpKeyDirectorySourceBuilder {
     /// Sets the egress policy. [`EgressPolicy::allow_private_networks`] admits loopback,
-    /// private addresses and plain http, for tests and in-cluster directories only.
+    /// private addresses and plain http (never cloud metadata), for tests and in-cluster
+    /// directories only.
     pub fn egress_policy(mut self, egress: EgressPolicy) -> Self {
         self.egress = egress;
         self
@@ -220,24 +194,14 @@ impl HttpKeyDirectorySourceBuilder {
     ///
     /// Returns [`WebBotAuthError::InvalidConfig`] when the HTTP client cannot be built.
     pub fn build(self) -> Result<HttpKeyDirectorySource, WebBotAuthError> {
-        let mut builder = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
+        let client = GuardedClient::builder(self.egress)
+            .redirects(0)
             .timeout(self.timeout)
             .connect_timeout(self.timeout.min(Duration::from_secs(5)))
-            .user_agent(concat!("adk-rust-web-bot-auth/", env!("CARGO_PKG_VERSION")));
-        if !self.egress.allow_private {
-            // A proxy would resolve the host itself, out of the resolver's reach.
-            builder = builder.no_proxy().dns_resolver(Arc::new(PublicOnlyResolver));
-        }
-        let client = builder
+            .user_agent(concat!("adk-rust-web-bot-auth/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|e| WebBotAuthError::InvalidConfig { reason: e.to_string() })?;
-        Ok(HttpKeyDirectorySource {
-            client,
-            egress: self.egress,
-            max_bytes: self.max_bytes,
-            max_keys: self.max_keys,
-        })
+        Ok(HttpKeyDirectorySource { client, max_bytes: self.max_bytes, max_keys: self.max_keys })
     }
 }
 
@@ -252,32 +216,24 @@ impl KeyDirectorySource for HttpKeyDirectorySource {
             origin: origin.to_string(),
             reason,
         };
-        let url =
-            reqwest::Url::parse(&format!("{origin}{DIRECTORY_WELL_KNOWN_PATH}")).map_err(|e| {
-                WebBotAuthError::InvalidConfig {
-                    reason: format!("`{origin}` is not an origin: {e}"),
-                }
-            })?;
-        self.check_egress(origin, &url)?;
+        let refused =
+            |reason: String| WebBotAuthError::EgressRefused { origin: origin.to_string(), reason };
+        let url = format!("{origin}{DIRECTORY_WELL_KNOWN_PATH}");
+        if let Err(e) = reqwest::Url::parse(&url) {
+            return Err(WebBotAuthError::InvalidConfig {
+                reason: format!("`{origin}` is not an origin: {e}"),
+            });
+        }
         let mut response = self
             .client
-            .get(url)
+            .get(&url)
+            .map_err(|denial| refused(denial.to_string()))?
             .header(reqwest::header::ACCEPT, DIRECTORY_MEDIA_TYPE)
             .send()
             .await
-            .map_err(|error| {
-                let refused = std::iter::successors(
-                    Some(&error as &(dyn std::error::Error + 'static)),
-                    |e| e.source(),
-                )
-                .find_map(|e| e.downcast_ref::<ResolverRefused>());
-                match refused {
-                    Some(refused) => WebBotAuthError::EgressRefused {
-                        origin: origin.to_string(),
-                        reason: refused.0.clone(),
-                    },
-                    None => unavailable(error.without_url().to_string()),
-                }
+            .map_err(|error| match find_denial(&error) {
+                Some(denial) => refused(denial.to_string()),
+                None => unavailable(error.without_url().to_string()),
             })?;
         let status = response.status();
         if status != reqwest::StatusCode::OK {
@@ -347,39 +303,6 @@ fn cache_lifetime(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
     let age = header(reqwest::header::AGE).and_then(|a| a.parse::<u64>().ok()).unwrap_or(0);
     lifetime.map(|lifetime| lifetime.saturating_sub(Duration::from_secs(age)))
 }
-
-/// Resolves host names and refuses any answer that contains a non-public address.
-struct PublicOnlyResolver;
-
-impl reqwest::dns::Resolve for PublicOnlyResolver {
-    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        let host = name.as_str().to_string();
-        Box::pin(async move {
-            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
-                .await
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
-                .collect();
-            if let Some(blocked) = addrs.iter().find(|addr| is_non_public(addr.ip())) {
-                let reason = format!("{host} resolves to the non-public address {}", blocked.ip());
-                return Err(
-                    Box::new(ResolverRefused(reason)) as Box<dyn std::error::Error + Send + Sync>
-                );
-            }
-            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
-        })
-    }
-}
-
-#[derive(Debug)]
-struct ResolverRefused(String);
-
-impl std::fmt::Display for ResolverRefused {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "egress refused: {}", self.0)
-    }
-}
-
-impl std::error::Error for ResolverRefused {}
 
 /// How the verifier caches key directories (draft Appendix C.4–C.5).
 ///
@@ -674,22 +597,10 @@ mod tests {
         assert_eq!(cache_lifetime(&headers(&[])), None);
     }
 
-    #[tokio::test]
-    async fn resolver_refuses_names_that_resolve_to_loopback() {
-        use reqwest::dns::Resolve;
-        use std::str::FromStr;
-        let name = reqwest::dns::Name::from_str("localhost").unwrap();
-        let error = match PublicOnlyResolver.resolve(name).await {
-            Ok(_) => panic!("localhost must be refused"),
-            Err(error) => error,
-        };
-        assert!(error.to_string().contains("non-public"), "{error}");
-    }
-
     #[test]
     fn defaults_follow_the_draft_ssrf_guidance() {
         let builder = HttpKeyDirectorySource::builder();
-        assert_eq!(builder.egress, EgressPolicy { allow_private: false, allow_http: false });
+        assert_eq!(builder.egress, EgressPolicy::public_only());
         assert_eq!(builder.timeout, Duration::from_secs(5));
         assert_eq!(builder.max_bytes, 64 * 1024);
         assert_eq!(builder.max_keys, 64);
@@ -726,8 +637,8 @@ mod tests {
         assert_eq!(source.fetch_count(), 4);
     }
 
-    #[test]
-    fn egress_refuses_non_public_origins() {
+    #[tokio::test]
+    async fn egress_refuses_non_public_origins() {
         let source = HttpKeyDirectorySource::new().unwrap();
         for origin in [
             "https://127.0.0.1",
@@ -737,17 +648,14 @@ mod tests {
             "https://localhost",
             "https://api.localhost",
             "http://bot.example",
+            "https://[::ffff:169.254.169.254]",
+            "https://168.63.129.16",
         ] {
-            let url = reqwest::Url::parse(&format!("{origin}{DIRECTORY_WELL_KNOWN_PATH}")).unwrap();
             assert!(
-                matches!(
-                    source.check_egress(origin, &url),
-                    Err(WebBotAuthError::EgressRefused { .. })
-                ),
+                matches!(source.fetch(origin).await, Err(WebBotAuthError::EgressRefused { .. })),
                 "{origin} must be refused"
             );
         }
-        let url = reqwest::Url::parse("https://bot.example/.well-known/x").unwrap();
-        assert!(source.check_egress("https://bot.example", &url).is_ok());
+        assert!(source.client.get("https://bot.example/.well-known/x").is_ok());
     }
 }

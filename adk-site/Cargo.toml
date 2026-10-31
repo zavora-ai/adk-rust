@@ -23,6 +23,7 @@ default = []
 # probes and the encrypted legacy archive.
 migrate = [
     "adk-auth/web-bot-auth",
+    "adk-core/egress-client",
     "dep:adk-artifact",
     "dep:adk-guardrail",
     "dep:aws-lc-rs",

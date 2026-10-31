@@ -7,6 +7,8 @@
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use adk_core::egress::is_non_public;
+
 /// Why a URL is refused by the grammar (spec 3.1 §7.20 "Resolution").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UrlRefusal {
@@ -311,61 +313,6 @@ fn literal_address(host: &str) -> Option<IpAddr> {
     None
 }
 
-/// Whether `ip` is a loopback, link-local, private, unspecified, multicast or
-/// IPv4-mapped address of those kinds (spec 3.1 §9.2 I46).
-///
-/// # Example
-///
-/// ```rust
-/// use adk_harness::web::is_private_ip;
-///
-/// assert!(is_private_ip("127.0.0.1".parse().unwrap()));
-/// assert!(is_private_ip("169.254.169.254".parse().unwrap()));
-/// assert!(is_private_ip("10.1.2.3".parse().unwrap()));
-/// assert!(is_private_ip("::ffff:192.168.0.1".parse().unwrap()));
-/// assert!(is_private_ip("fe80::1".parse().unwrap()));
-/// assert!(!is_private_ip("93.184.216.34".parse().unwrap()));
-/// ```
-pub fn is_private_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => is_private_v4(v4),
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_private_v4(v4);
-            }
-            let segments = v6.segments();
-            // NAT64 (64:ff9b::/96) and 6to4 (2002::/16) embed an IPv4 address.
-            if segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
-                let [a, b, c, d] =
-                    ((u32::from(segments[6]) << 16) | u32::from(segments[7])).to_be_bytes();
-                return is_private_v4(Ipv4Addr::new(a, b, c, d));
-            }
-            if segments[0] == 0x2002 {
-                let [a, b, c, d] =
-                    ((u32::from(segments[1]) << 16) | u32::from(segments[2])).to_be_bytes();
-                return is_private_v4(Ipv4Addr::new(a, b, c, d));
-            }
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                || (segments[0] & 0xfe00) == 0xfc00 // fc00::/7 unique local
-                || (segments[0] & 0xffc0) == 0xfe80 // fe80::/10 link-local
-        }
-    }
-}
-
-fn is_private_v4(v4: Ipv4Addr) -> bool {
-    let [a, b, _, _] = v4.octets();
-    v4.is_loopback()
-        || v4.is_private()
-        || v4.is_link_local()
-        || v4.is_unspecified()
-        || v4.is_broadcast()
-        || v4.is_multicast()
-        || a == 0
-        || (a == 100 && (64..128).contains(&b)) // 100.64.0.0/10 shared address space
-}
-
 /// Whether `host` names a private target before any resolution: a literal of a private
 /// kind, `localhost`, or a `.local` / `.internal` name (spec 3.1 §7.20 "Resolution").
 ///
@@ -389,7 +336,7 @@ pub fn is_private_host(host: &str) -> bool {
         return false;
     }
     if let Some(ip) = literal {
-        return is_private_ip(ip);
+        return is_non_public(ip);
     }
     host == "localhost"
         || host.ends_with(".localhost")
@@ -474,10 +421,10 @@ mod tests {
             "64:ff9b::a00:1",
             "2002:7f00:1::",
         ] {
-            assert!(is_private_ip(ip.parse().unwrap()), "{ip}");
+            assert!(is_non_public(ip.parse().unwrap()), "{ip}");
         }
         for ip in ["8.8.8.8", "93.184.216.34", "172.32.0.1", "2606:4700::1111", "::ffff:8.8.8.8"] {
-            assert!(!is_private_ip(ip.parse().unwrap()), "{ip}");
+            assert!(!is_non_public(ip.parse().unwrap()), "{ip}");
         }
     }
 

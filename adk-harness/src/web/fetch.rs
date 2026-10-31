@@ -6,11 +6,12 @@ use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use adk_core::egress::is_non_public;
 use futures::StreamExt as _;
 use sha2::{Digest, Sha256};
 
 use super::WebConfig;
-use super::domain::{ParsedUrl, UrlRefusal, host_allowlisted, is_private_host, is_private_ip};
+use super::domain::{ParsedUrl, UrlRefusal, host_allowlisted, is_private_host};
 use super::html::{TextShape, html_to_text};
 use super::screen::has_secret;
 
@@ -317,7 +318,7 @@ impl Fetcher {
     /// `PrivateTarget` for a private address, `Unresolvable` when nothing resolves.
     pub async fn resolve(&self, url: &ParsedUrl) -> Result<Vec<SocketAddr>, FetchRefusal> {
         if let Some(ip) = url.literal() {
-            if is_private_ip(ip)
+            if is_non_public(ip)
                 && !(ip.is_loopback() && super::domain::fixture_loopback_permitted())
             {
                 return Err(FetchRefusal::PrivateTarget {
@@ -340,7 +341,7 @@ impl Fetcher {
         }
         let permitted = super::domain::fixture_loopback_permitted();
         if let Some(private) = addresses.iter().find(|address| {
-            is_private_ip(address.ip()) && !(permitted && address.ip().is_loopback())
+            is_non_public(address.ip()) && !(permitted && address.ip().is_loopback())
         }) {
             return Err(FetchRefusal::PrivateTarget {
                 host: url.host.clone(),

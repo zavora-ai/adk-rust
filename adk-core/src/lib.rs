@@ -31,6 +31,8 @@
 //! | `conformance` | The `conformance` module: suites for durable store backends |
 //! | `cron` | Cron schedules in IANA time zones |
 //! | `webhooks` | The `webhook` module: Standard Webhooks signing and verification |
+//! | `egress-dns` | `egress::SystemResolver`: the operating system resolver for egress checks |
+//! | `egress-client` | `egress::GuardedClient`: an HTTP client that enforces an `EgressPolicy` |
 //! | `webhook-delivery` | The `webhook_delivery` module: signed outbound delivery |
 //!
 //! ## Quick Start
@@ -146,6 +148,8 @@ pub mod conformance;
 pub mod context;
 /// Agent credentials, identity sources, and resource-scoped token brokers.
 pub mod credential;
+/// Network egress policy, the shared address classifier, and the egress-guarded HTTP client.
+pub mod egress;
 /// Unified structured error type and result alias.
 pub mod error;
 /// Event types representing agent interactions in a conversation.

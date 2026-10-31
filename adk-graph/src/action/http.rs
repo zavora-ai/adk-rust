@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 
 use adk_action::{HttpAuth, HttpBody, HttpMethod, HttpNodeConfig, interpolate_variables};
-use adk_core::webhook_delivery::{PublicOnlyResolver, is_non_public};
+use adk_core::egress::{EgressPolicy, EgressResolver, is_non_public};
 use serde_json::{Value, json};
 
 use crate::error::{GraphError, Result};
@@ -27,7 +27,7 @@ use crate::node::{NodeContext, NodeOutput};
 /// |---------|---------|
 /// | Schemes | `https` and `http` |
 /// | Hosts | Any host |
-/// | Addresses | Public only: a host that is, or resolves to, a loopback, private, link-local (cloud metadata included), CGNAT, unique-local, multicast or IPv4-embedding IPv6 address is refused ([`adk_core::webhook_delivery::is_non_public`]) |
+/// | Addresses | Public only: a host that is, or resolves to, a loopback, private, link-local, cloud metadata, CGNAT, unique-local, multicast, reserved or IPv4-embedding IPv6 address is refused ([`adk_core::egress::is_non_public`]) |
 /// | Redirects | Up to 5, each checked against this policy |
 ///
 /// Host names are resolved inside the HTTP client by a resolver that refuses non-public
@@ -239,7 +239,8 @@ impl HttpActionPolicy {
         let mut builder = reqwest::Client::builder().redirect(self.redirect_policy());
         if !self.allow_private {
             // A proxy would resolve the host itself, out of the resolver's reach.
-            builder = builder.no_proxy().dns_resolver(std::sync::Arc::new(PublicOnlyResolver));
+            let resolver = EgressResolver::new(EgressPolicy::public_only());
+            builder = builder.no_proxy().dns_resolver(std::sync::Arc::new(resolver));
         }
         builder.build().map_err(|e| format!("failed to build the HTTP client: {e}"))
     }

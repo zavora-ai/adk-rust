@@ -5,9 +5,10 @@
 //! with retry logic and SSRF validation, and [`NoOpPushNotificationSender`] for
 //! development and testing.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 use std::time::Duration;
 
+use adk_core::egress::is_non_public;
 use async_trait::async_trait;
 use serde::Serialize;
 
@@ -207,19 +208,10 @@ impl PushNotificationSender for HttpPushNotificationSender {
 
 /// Validates a webhook URL to prevent SSRF attacks.
 ///
-/// Rejects URLs whose host is a literal address in a non-public range, or a
-/// `localhost` name:
-///
-/// | Range | Purpose |
-/// |-------|---------|
-/// | `0.0.0.0/8`, `::` | "this network" / unspecified |
-/// | `127.0.0.0/8`, `::1` | loopback |
-/// | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` | private |
-/// | `100.64.0.0/10` | carrier-grade NAT shared space |
-/// | `169.254.0.0/16`, `fe80::/10` | link-local, including cloud metadata endpoints |
-/// | `fc00::/7`, `fec0::/10` | IPv6 unique-local and deprecated site-local |
-/// | `224.0.0.0/4`, `255.255.255.255`, `ff00::/8` | multicast and broadcast |
-/// | `::ffff:0:0/96`, `::/96`, `64:ff9b::/96` | IPv6 forms embedding any IPv4 address above |
+/// Rejects URLs whose host is a literal address of any class but
+/// [`AddressClass::Public`](adk_core::egress::AddressClass::Public) — loopback, private,
+/// link-local, cloud metadata, reserved, and IPv6 forms embedding such an IPv4 address — or a
+/// `localhost` name.
 ///
 /// The URL parser normalizes alternative IPv4 spellings (`0x7f.1`, `2130706433`)
 /// before the check. Host names other than `localhost` are not resolved here;
@@ -265,47 +257,6 @@ pub fn validate_webhook_url(url: &str) -> Result<(), A2aError> {
     }
 
     Ok(())
-}
-
-/// Returns `true` for an address a webhook must not target; see [`validate_webhook_url`].
-fn is_non_public(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => is_non_public_v4(v4),
-        IpAddr::V6(v6) => is_non_public_v6(v6),
-    }
-}
-
-fn is_non_public_v4(v4: Ipv4Addr) -> bool {
-    let [a, b, ..] = v4.octets();
-    a == 0
-        || v4.is_loopback()
-        || v4.is_private()
-        || v4.is_link_local()
-        || (a == 100 && (64..=127).contains(&b))
-        || v4.is_multicast()
-        || v4.is_broadcast()
-}
-
-fn is_non_public_v6(v6: Ipv6Addr) -> bool {
-    let segments = v6.segments();
-    // NAT64 (64:ff9b::/96) carries an IPv4 address in its low 32 bits.
-    let nat64 = segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0];
-    // `to_ipv4` covers both IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible (::a.b.c.d).
-    let embedded = v6.to_ipv4().or_else(|| {
-        nat64.then(|| {
-            let [.., hi, lo] = segments;
-            Ipv4Addr::from((u32::from(hi) << 16) | u32::from(lo))
-        })
-    });
-    if let Some(v4) = embedded {
-        return is_non_public_v4(v4);
-    }
-    v6.is_unspecified()
-        || v6.is_loopback()
-        || (segments[0] & 0xfe00) == 0xfc00
-        || (segments[0] & 0xffc0) == 0xfe80
-        || (segments[0] & 0xffc0) == 0xfec0
-        || v6.is_multicast()
 }
 
 #[cfg(test)]

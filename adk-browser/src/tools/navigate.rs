@@ -1,6 +1,7 @@
 //! Navigate tool for browser navigation.
 
 use crate::session::BrowserSession;
+use adk_core::egress::is_non_public;
 use adk_core::{Result, Tool, ToolContext};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -115,18 +116,15 @@ impl UrlPolicy {
             return None;
         }
         let private = match parsed.host()? {
-            url::Host::Ipv4(ip) => is_private_ipv4(ip),
-            url::Host::Ipv6(ip) => is_private_ipv6(ip),
+            url::Host::Ipv4(ip) => is_non_public(ip.into()),
+            url::Host::Ipv6(ip) => is_non_public(ip.into()),
             url::Host::Domain(domain) => {
                 let domain = domain.trim_end_matches('.').to_ascii_lowercase();
                 if PRIVATE_HOST_NAMES.contains(&domain.as_str()) || domain.ends_with(".localhost") {
                     true
                 } else {
                     match resolve(&domain, parsed.port_or_known_default()).await {
-                        Some(addresses) => addresses.iter().any(|address| match address {
-                            std::net::IpAddr::V4(ip) => is_private_ipv4(*ip),
-                            std::net::IpAddr::V6(ip) => is_private_ipv6(*ip),
-                        }),
+                        Some(addresses) => addresses.iter().any(|address| is_non_public(*address)),
                         None if self.allow_unresolved_hosts => false,
                         None => return Some(HostRefusal::Unresolved(domain)),
                     }
@@ -163,38 +161,6 @@ async fn resolve(domain: &str, port: Option<u16>) -> Option<Vec<std::net::IpAddr
         }
         Ok(Err(_)) | Err(_) => None,
     }
-}
-
-fn is_private_ipv4(ip: std::net::Ipv4Addr) -> bool {
-    let [first, second, ..] = ip.octets();
-    ip.is_loopback()
-        || ip.is_private()
-        // 169.254.0.0/16, which holds the cloud metadata address 169.254.169.254.
-        || ip.is_link_local()
-        || ip.is_broadcast()
-        // 0.0.0.0/8 reaches the local host on common platforms.
-        || first == 0
-        // 100.64.0.0/10 shared address space, which holds Alibaba Cloud's metadata service.
-        || (first == 100 && (second & 0xc0) == 64)
-}
-
-fn is_private_ipv6(ip: std::net::Ipv6Addr) -> bool {
-    let segments = ip.segments();
-    // IPv4-mapped, IPv4-compatible, and NAT64 (64:ff9b::/96) addresses reach an IPv4 host.
-    let embedded = ip.to_ipv4().or_else(|| {
-        (segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0])
-            .then(|| std::net::Ipv4Addr::from(((segments[6] as u32) << 16) | segments[7] as u32))
-    });
-    if let Some(v4) = embedded {
-        return is_private_ipv4(v4);
-    }
-    ip.is_loopback()
-        || ip.is_unspecified()
-        // fc00::/7 unique local, which holds AWS's IPv6 metadata address fd00:ec2::254.
-        || (segments[0] & 0xfe00) == 0xfc00
-        // fe80::/10 link-local and the deprecated fec0::/10 site-local.
-        || (segments[0] & 0xffc0) == 0xfe80
-        || (segments[0] & 0xffc0) == 0xfec0
 }
 
 /// Tool for navigating to URLs.

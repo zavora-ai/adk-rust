@@ -32,8 +32,8 @@ mod screen;
 mod search;
 
 pub use domain::{
-    ParsedUrl, UrlRefusal, domain_matches, host_allowlisted, is_private_host, is_private_ip,
-    url_allowlisted, url_host, url_names_private_target,
+    ParsedUrl, UrlRefusal, domain_matches, host_allowlisted, is_private_host, url_allowlisted,
+    url_host, url_names_private_target,
 };
 #[cfg(feature = "web")]
 pub use fetch::{

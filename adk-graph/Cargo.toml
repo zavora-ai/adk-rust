@@ -76,8 +76,8 @@ conformance = []
 # Action node feature flags
 action = ["dep:adk-action", "dep:regex"]
 action-trigger = ["action", "dep:tokio-cron-scheduler"]
-# `adk-core/webhook-delivery` supplies the public-only address check and resolver.
-action-http = ["action", "dep:reqwest", "dep:sha2", "adk-core/webhook-delivery"]
+# `adk-core/egress-client` supplies the public-only address check and resolver.
+action-http = ["action", "dep:reqwest", "dep:sha2", "adk-core/egress-client"]
 action-db = ["action"]
 action-db-mongo = ["action"]
 action-db-redis = ["action"]

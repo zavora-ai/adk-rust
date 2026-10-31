@@ -271,7 +271,7 @@ async fn durable_edge(file: &File) -> AwpEdge {
         receipt: Arc::new(Ed25519DocumentSigner::from_seed("receipt", [2; 32]).unwrap()),
     };
     let mut events = EventsConfig::default()
-        .egress(adk_core::webhook_delivery::EgressPolicy::allow_private_networks())
+        .egress(adk_core::egress::EgressPolicy::allow_private_networks())
         .retry_schedule(vec![Duration::from_secs(3_600)]);
     events.delivery_lease = Duration::from_secs(5);
     AwpEdge::builder(

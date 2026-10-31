@@ -263,7 +263,7 @@ endpoint:
 
 | Step | Behaviour |
 |------|-----------|
-| Egress check | HTTPS only, and the host must not be, or resolve to, a loopback, private, link-local, CGNAT, multicast, or IPv4-embedding IPv6 address. Resolution runs inside the HTTP client, so the address checked is the address connected to; redirects are never followed and system proxies are bypassed. When that client cannot be built, for example because the TLS setup fails, every message is dead-lettered with the reason and no request is sent |
+| Egress check | The [egress policy](../security/egress.md), by default HTTPS only, and the host must not be, or resolve to, a loopback, private, link-local, cloud metadata, CGNAT, multicast, reserved, or IPv4-embedding IPv6 address. Requests go through a `GuardedClient`, so the address checked is the address connected to; redirects are never followed and system proxies are bypassed. When that client cannot be built, for example because the TLS setup fails, every message is dead-lettered with the reason and no request is sent |
 | Signing | Each attempt is signed under the message's stable `webhook-id` with a fresh timestamp |
 | Success | Any `2xx` |
 | Retry | Connection errors, timeouts, `408`, `425`, `429`, and `5xx`: exponential backoff with full jitter, raised to `Retry-After` up to the backoff cap |
@@ -300,9 +300,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`EgressPolicy::allow_private_networks()` lifts the address and scheme checks for receivers an
-operator configures inside a private network. Do not use it when callers register their own
-URLs.
+`with_egress_policy` takes an `adk_core::egress::EgressPolicy`.
+`EgressPolicy::allow_private_networks()` lifts the address and scheme checks, except for cloud
+metadata endpoints, for receivers an operator configures inside a private network. Do not use
+it when callers register their own URLs.
 
 ### AWP event subscriptions
 

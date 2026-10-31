@@ -45,8 +45,12 @@ conformance = ["tokio/rt"]
 cron = ["dep:cron", "dep:chrono-tz"]
 # Standard Webhooks signing and verification (`adk_core::webhook`).
 webhooks = ["dep:hmac", "dep:base64"]
+# The operating system resolver for egress checks (`adk_core::egress::SystemResolver`).
+egress-dns = ["tokio/net"]
+# The egress-guarded HTTP client (`adk_core::egress::GuardedClient`, `EgressResolver`).
+egress-client = ["egress-dns", "dep:reqwest"]
 # Signed outbound webhook delivery with retries and an egress guard (`adk_core::webhook_delivery`).
-webhook-delivery = ["webhooks", "dep:reqwest", "tokio/net"]
+webhook-delivery = ["webhooks", "egress-client"]
 # The `RequestContextExtractor` trait an HTTP server authenticates requests through
 # (`adk_core::request_context`); here so `adk-auth` implements it without depending on `adk-server`.
 auth-bridge = ["dep:http"]
