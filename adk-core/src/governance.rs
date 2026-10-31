@@ -622,7 +622,7 @@ impl GovernanceControl {
             (Some(_), None) => tracing::info!("replicated kill switch lifted"),
             _ => {}
         }
-        // Also on an unchanged state: the read renewed the staleness lease waiters time.
+        // Also when nothing changed: the read renewed the staleness lease that waiters time.
         self.inner.changed.notify_waiters();
         Ok(())
     }
