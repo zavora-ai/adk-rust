@@ -5641,6 +5641,50 @@ mod tests {
         }
     }
 
+    /// The review of #1005: a freeze that lands while the handler decides ends the wait, and
+    /// the run ends with the freeze before the tool starts, as `LlmAgent`'s call is refused.
+    #[tokio::test]
+    async fn a_freeze_ends_the_wait_for_the_confirmation_handler() {
+        let control = adk_core::GovernanceControl::new();
+        let handler = Arc::new(NeverAnswers::default());
+        let (charge, executions) = charge_tool(adk_core::ToolEffect::NonIdempotent, None);
+        let runtime = Arc::new(ScriptedRuntime::with_suspension(vec![charge_program(&[0])]));
+        let incoming = user("pay");
+        let mut input = base_inputs(FakeLlm::new("noop"), runtime, incoming.clone());
+        input.invocation_ctx = Arc::new(
+            MockInvocationContext::new(incoming).with_run_config(
+                adk_core::RunConfig::builder()
+                    .tool_confirmation_handler(handler.clone())
+                    .governance(control.clone())
+                    .build(),
+            ),
+        );
+        input.tools = vec![charge];
+        input.policy = ToolConfirmationPolicy::Always;
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            control.freeze("incident 4016");
+        });
+
+        let ended = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut stream = Box::pin(run_codeact(input));
+            while let Some(item) = stream.next().await {
+                if let Err(error) = item {
+                    return Some(error);
+                }
+            }
+            None
+        })
+        .await
+        .expect("the freeze ends the wait");
+
+        let error = ended.expect("the run ends with the freeze");
+        assert_eq!(error.code, adk_core::GOVERNANCE_FROZEN_CODE);
+        assert!(error.message.contains("incident 4016"), "{error}");
+        assert_eq!(handler.0.load(std::sync::atomic::Ordering::SeqCst), 1, "it was asked");
+        assert!(executions.lock().unwrap().is_empty(), "the tool never started");
+    }
+
     /// The checkpoint `event` writes to session state, as stored; `None` leaves state as it is.
     fn kept(event: &Event) -> Option<Value> {
         event.actions.state_delta.get(PENDING_STATE_KEY).cloned()

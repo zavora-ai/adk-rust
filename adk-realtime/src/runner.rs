@@ -1904,6 +1904,54 @@ mod runner_tests {
         assert_eq!(executions.load(Ordering::SeqCst), 0);
     }
 
+    /// The review of #1005: a freeze while the confirmation handler decides ends the wait,
+    /// and the dispatch ends with the freeze before the handler runs, as an agent's call is
+    /// refused.
+    #[tokio::test]
+    async fn a_freeze_ends_the_wait_for_the_confirmation_handler() {
+        #[derive(Debug)]
+        struct NeverAnswers;
+
+        #[async_trait]
+        impl adk_core::ToolConfirmationHandler for NeverAnswers {
+            async fn decide(
+                &self,
+                _request: &adk_core::ToolConfirmationRequest,
+            ) -> adk_core::Result<adk_core::ToolConfirmationDecision> {
+                std::future::pending().await
+            }
+        }
+
+        let counts = Arc::new(Counts::default());
+        let executions = Arc::new(AtomicUsize::new(0));
+        let control = adk_core::GovernanceControl::new();
+        let config = adk_core::RunConfig::builder()
+            .tool_policy(Arc::new(
+                adk_core::DeclarativePolicy::builder()
+                    .require_approval("pay", "payments need a person")
+                    .build(),
+            ))
+            .tool_confirmation_handler(Arc::new(NeverAnswers))
+            .governance(control.clone())
+            .build();
+        let runner = governed_runner(Arc::clone(&counts), Arc::clone(&executions), config).await;
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            control.freeze("incident 4017");
+        });
+
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            runner.dispatch_tool_call("c1", "pay", "{}"),
+        )
+        .await
+        .expect("the freeze ends the wait")
+        .unwrap_err();
+        assert!(error.to_string().contains("incident 4017"), "{error}");
+        assert_eq!(executions.load(Ordering::SeqCst), 0, "the handler never runs");
+        assert_eq!(*counts.last_output.lock(), None, "nothing is sent for the refused call");
+    }
+
     /// A native handler's held call names the runner's agent and the `realtime` origin of
     /// the handler's definition, so an approval of it never covers the handler once
     /// redefined, nor another agent's identical call (#1210).
