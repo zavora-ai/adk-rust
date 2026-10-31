@@ -233,8 +233,8 @@ pub use budget::{
 pub use callbacks::{
     AfterAgentCallback, AfterModelCallback, AfterToolCallback, AfterToolCallbackFull,
     BaseEventsSummarizer, BeforeAgentCallback, BeforeModelCallback, BeforeModelResult,
-    BeforeToolCallback, EventsCompactionConfig, GlobalInstructionProvider, InstructionProvider,
-    InvocationHooks, OnToolErrorCallback,
+    BeforeToolCallback, EventsCompactionConfig, GlobalInstructionProvider, HistoryProcessor,
+    InstructionProvider, InvocationHooks, OnToolErrorCallback,
 };
 pub use clock::{Clock, ManualClock, SystemClock};
 pub use context::{

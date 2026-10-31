@@ -42,6 +42,23 @@ pub type BeforeModelCallback = Box<
         + Send
         + Sync,
 >;
+/// Rewrites an agent's conversation history before each model request of a turn.
+///
+/// Receives the history the agent continues from and returns its replacement: later steps of
+/// the turn append to the returned contents, so a compaction runs once and carries over. The
+/// history holds the agent's own contents only, never what a toolset, plugin, invocation hook
+/// or [`BeforeModelCallback`] adds to one request. An error ends the turn with that error.
+///
+/// A cut that keeps a function response without its call is rejected by providers;
+/// [`balanced_content_cut`](crate::history::balanced_content_cut) finds a safe one.
+pub type HistoryProcessor = Box<
+    dyn Fn(
+            Arc<dyn CallbackContext>,
+            Vec<Content>,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<Content>>> + Send>>
+        + Send
+        + Sync,
+>;
 /// Callback invoked after a model call. Return `Ok(Some(response))` to override.
 pub type AfterModelCallback = Box<
     dyn Fn(

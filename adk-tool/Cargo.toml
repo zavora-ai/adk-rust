@@ -171,6 +171,10 @@ name = "mcp_server_agent_tests"
 required-features = ["mcp-server", "http-transport"]
 
 [[test]]
+name = "preload_memory_tests"
+required-features = ["memory-tools"]
+
+[[test]]
 name = "example_store_contract"
 required-features = ["example-store"]
 
