@@ -54,6 +54,7 @@ pub mod gcs;
 pub mod inmemory;
 pub mod scoped;
 pub mod service;
+pub mod subject;
 
 pub use file::FileArtifactService;
 #[cfg(feature = "gcs")]
@@ -62,5 +63,7 @@ pub use inmemory::InMemoryArtifactService;
 pub use scoped::ScopedArtifacts;
 pub use service::{
     ArtifactService, DeleteRequest, ListRequest, ListResponse, LoadRequest, LoadResponse,
-    SaveRequest, SaveResponse, USER_SCOPE_SESSION_ID, VersionsRequest, VersionsResponse,
+    SaveRequest, SaveResponse, USER_SCOPE_SESSION_ID, UserArtifact, VersionsRequest,
+    VersionsResponse,
 };
+pub use subject::ArtifactSubjectData;

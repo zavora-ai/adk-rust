@@ -26,6 +26,12 @@ pub(crate) fn encode_segment(segment: &str) -> Cow<'_, str> {
     Cow::Owned(encoded)
 }
 
+/// Reverses [`encode_segment`].
+#[cfg(feature = "redis-memory")]
+pub(crate) fn decode_segment(segment: &str) -> String {
+    segment.replace("%3A", ":").replace("%25", "%")
+}
+
 /// Escapes the Redis glob metacharacters `*`, `?`, `[`, `]` and `\` with a backslash.
 ///
 /// The result matches only the literal text when embedded in a `SCAN MATCH` or
@@ -66,6 +72,14 @@ mod tests {
     fn encoded_segments_never_contain_the_delimiter() {
         for raw in ["a:b", "::", "%3A:%25", "x"] {
             assert!(!encode_segment(raw).contains(':'), "{raw} leaked a delimiter");
+        }
+    }
+
+    #[cfg(feature = "redis-memory")]
+    #[test]
+    fn decoding_reverses_encoding() {
+        for raw in ["alice", "a:b", "100%", "%3A:%25", "::%%"] {
+            assert_eq!(decode_segment(&encode_segment(raw)), raw);
         }
     }
 

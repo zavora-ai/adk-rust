@@ -171,6 +171,57 @@ pub struct VersionsResponse {
     pub versions: Vec<i64>,
 }
 
+/// One stored version of one of a user's artifacts, as
+/// [`ArtifactService::list_user`] returns it.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_artifact::UserArtifact;
+///
+/// let shared = UserArtifact {
+///     session_id: None,
+///     file_name: "user:avatar.png".to_string(),
+///     version: 1,
+///     mime_type: Some("image/png".to_string()),
+///     size: 2048,
+/// };
+/// assert!(shared.session_id.is_none(), "user: artifacts belong to no session");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserArtifact {
+    /// The session the artifact belongs to; `None` for a `user:` artifact every session
+    /// of the user shares.
+    pub session_id: Option<String>,
+    /// The artifact's file name.
+    pub file_name: String,
+    /// The version.
+    pub version: i64,
+    /// The stored part's MIME type: `text/plain` for text, the declared type for inline
+    /// data and file references, `None` for any other part.
+    pub mime_type: Option<String>,
+    /// The stored content's size in bytes: the text or inline data, 0 for a file
+    /// reference, and the JSON form for any other part.
+    pub size: u64,
+}
+
+/// The MIME type and byte size [`UserArtifact`] reports for a stored part.
+pub(crate) fn part_summary(part: &Part) -> (Option<String>, u64) {
+    match part {
+        Part::Text { text } => (Some("text/plain".to_string()), text.len() as u64),
+        Part::InlineData { mime_type, data, .. } => (Some(mime_type.clone()), data.len() as u64),
+        Part::FileData { mime_type, .. } => (Some(mime_type.clone()), 0),
+        Part::Thinking { .. }
+        | Part::FunctionCall { .. }
+        | Part::FunctionResponse { .. }
+        | Part::ServerToolCall { .. }
+        | Part::ServerToolResponse { .. }
+        | Part::EmbeddedResource { .. } => {
+            (None, serde_json::to_vec(part).map_or(0, |json| json.len() as u64))
+        }
+    }
+}
+
 /// Trait for artifact storage backends.
 ///
 /// Implementations must be thread-safe (`Send + Sync`) and support
@@ -203,6 +254,33 @@ pub trait ArtifactService: Send + Sync {
     async fn list(&self, req: ListRequest) -> Result<ListResponse>;
     /// List all available versions of a specific artifact.
     async fn versions(&self, req: VersionsRequest) -> Result<VersionsResponse>;
+
+    /// Lists every stored version of every artifact of `user_id` in `app_name` — in
+    /// every session and in the `user:` scope — ordered by session, name, and version.
+    ///
+    /// [`ArtifactSubjectData`](crate::ArtifactSubjectData) exports a data subject's
+    /// artifacts through it.
+    ///
+    /// # Errors
+    ///
+    /// The default returns `subject.unsupported`
+    /// ([`SUBJECT_UNSUPPORTED_CODE`](adk_core::subject::SUBJECT_UNSUPPORTED_CODE)).
+    async fn list_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserArtifact>> {
+        let _ = (app_name, user_id);
+        Err(adk_core::subject::unsupported_error("artifacts", "list"))
+    }
+
+    /// Deletes every version of every artifact of `user_id` in `app_name`, in every
+    /// session and in the `user:` scope, and returns how many versions it deleted.
+    ///
+    /// # Errors
+    ///
+    /// The default returns `subject.unsupported`
+    /// ([`SUBJECT_UNSUPPORTED_CODE`](adk_core::subject::SUBJECT_UNSUPPORTED_CODE)).
+    async fn delete_user(&self, app_name: &str, user_id: &str) -> Result<u64> {
+        let _ = (app_name, user_id);
+        Err(adk_core::subject::unsupported_error("artifacts", "delete"))
+    }
 
     /// Verify backend connectivity.
     ///

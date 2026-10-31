@@ -34,7 +34,8 @@ reqwest = { workspace = true, optional = true }
 google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "macros"] }
+adk-core = { path = "../adk-core", features = ["conformance"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
 proptest = "1.5"
 serde_json.workspace = true
 chrono.workspace = true

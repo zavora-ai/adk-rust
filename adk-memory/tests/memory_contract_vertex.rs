@@ -306,6 +306,45 @@ async fn delete_user_enumerates_the_scope_and_deletes_each_memory() {
 }
 
 #[tokio::test]
+async fn export_user_pages_through_the_scope() {
+    let state = SharedState::default();
+    {
+        let mut lock = state.lock().await;
+        lock.retrieve_responses.push(json!({
+            "retrievedMemories": [
+                { "memory": { "name": memory_name("m-1"), "fact": "a", "updateTime": "2025-01-02T00:00:00Z" } },
+            ],
+            "nextPageToken": "page-2",
+        }));
+        lock.retrieve_responses.push(json!({
+            "retrievedMemories": [
+                { "memory": { "name": memory_name("m-2"), "fact": "b", "updateTime": "2025-01-01T00:00:00Z" } },
+            ],
+        }));
+    }
+    let endpoint = start_mock(state.clone()).await;
+    let service = build_service(&endpoint).await;
+
+    let exported = service.export_user(APP, USER).await.unwrap();
+    let facts: Vec<Value> = exported
+        .iter()
+        .map(|memory| {
+            serde_json::to_value(&memory.entry.content).unwrap()["parts"][0]["text"].clone()
+        })
+        .collect();
+    assert_eq!(facts, [json!("b"), json!("a")], "oldest first");
+    let captured = state.lock().await;
+    assert_eq!(
+        captured.retrieve_bodies[1],
+        json!({
+            "scope": { "app_name": APP, "user_id": USER },
+            "simpleRetrievalParams": { "pageSize": 100, "pageToken": "page-2" },
+        }),
+    );
+    assert!(captured.deleted_memories.is_empty(), "an export deletes nothing");
+}
+
+#[tokio::test]
 async fn adapter_exposes_the_backend_as_core_memory() {
     let state = SharedState::default();
     state.lock().await.retrieve_responses.push(json!({

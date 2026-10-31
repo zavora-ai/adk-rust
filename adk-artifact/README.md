@@ -280,6 +280,18 @@ async fn delete(service: &dyn ArtifactService) -> adk_core::Result<()> {
 
 Deleting a non-existent artifact or version is a no-op (no error returned).
 
+## Deleting and Listing a User's Artifacts
+
+`delete_user(app, user)` deletes every version of every artifact of the user in the app — in
+every session and in the `user:` scope — and returns how many versions it deleted;
+`list_user(app, user)` lists those versions with their MIME type and size. The in-memory, file,
+and GCS backends implement both; the defaults return `subject.unsupported`.
+
+`ArtifactSubjectData` adapts any `ArtifactService` to `adk_core::subject::SubjectDataStore`
+for `SubjectRights`. A GCS bucket with object versioning or soft delete keeps noncurrent copies
+for its retention period; declare it with
+`ArtifactSubjectData::with_support(StoreSupport::Eventual { within })`.
+
 ## ScopedArtifacts
 
 `ScopedArtifacts` wraps an `ArtifactService` and implements the simpler `adk_core::Artifacts` trait by automatically injecting `app_name`, `user_id`, and `session_id` into every request. This is the interface agents use at runtime.

@@ -22,7 +22,7 @@
 
 use crate::service::{
     ArtifactService, DeleteRequest, ListRequest, ListResponse, LoadRequest, LoadResponse,
-    SaveRequest, SaveResponse, VersionsRequest, VersionsResponse, artifact_not_found,
+    SaveRequest, SaveResponse, UserArtifact, VersionsRequest, VersionsResponse, artifact_not_found,
     check_session_id, invalid_file_name, invalid_identifier, version_exists,
 };
 use adk_core::{AdkError, ErrorComponent, Part, Result};
@@ -66,6 +66,9 @@ const GCS_ERROR_CODES: GcpErrorCodes = GcpErrorCodes {
 fn gcp_error_context() -> GcpErrorContext {
     GcpErrorContext::new(ErrorComponent::Artifact, GCS_ERROR_CODES, "gcs").with_provider("gcs")
 }
+
+/// The blob-name segment `user:` artifacts are stored under instead of a session id.
+const USER_NAMESPACE_SEGMENT: &str = "user";
 
 // GCS object metadata keys shared with adk-python's GcsArtifactService.
 const GCS_DISPLAY_NAME_METADATA_KEY: &str = "adkDisplayName";
@@ -150,6 +153,9 @@ struct ObjectResource {
     content_type: Option<String>,
     #[serde(default)]
     metadata: Option<HashMap<String, String>>,
+    /// The object's size in bytes, which the JSON API sends as a decimal string.
+    #[serde(default)]
+    size: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -440,6 +446,34 @@ impl GcsArtifactService {
             return Err(Self::http_error(status, "upload object", &body));
         }
         Ok(true)
+    }
+
+    /// Every version object of a user, with its session (`None` for the `user:`
+    /// namespace), artifact name, and version, ordered by session, name, and version.
+    async fn user_objects(
+        &self,
+        app_name: &str,
+        user_id: &str,
+    ) -> Result<Vec<(ObjectResource, Option<String>, String, i64)>> {
+        validate_path_segment(app_name, "app_name")?;
+        validate_path_segment(user_id, "user_id")?;
+        let prefix = format!("{app_name}/{user_id}/");
+        let mut found = Vec::new();
+        for object in self.list_objects(&prefix).await? {
+            // `{scope}/{filename}/{version}`, where the filename may contain '/'.
+            let Some((scope, rest)) =
+                object.name.strip_prefix(prefix.as_str()).and_then(|rest| rest.split_once('/'))
+            else {
+                continue;
+            };
+            let Some((file_name, version)) = rest.rsplit_once('/') else { continue };
+            let Ok(version) = version.parse::<i64>() else { continue };
+            let session_id = (scope != USER_NAMESPACE_SEGMENT).then(|| scope.to_string());
+            let file_name = file_name.to_string();
+            found.push((object, session_id, file_name, version));
+        }
+        found.sort_by(|a, b| (&a.1, &a.2, a.3).cmp(&(&b.1, &b.2, b.3)));
+        Ok(found)
     }
 
     async fn delete_object(&self, blob_name: &str) -> Result<()> {
@@ -770,6 +804,35 @@ impl ArtifactService for GcsArtifactService {
             self.delete_object(&blob_name).await?;
         }
         Ok(())
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn list_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserArtifact>> {
+        let mut artifacts = Vec::new();
+        for (object, session_id, file_name, version) in self.user_objects(app_name, user_id).await?
+        {
+            let metadata = object.metadata.unwrap_or_default();
+            artifacts.push(UserArtifact {
+                session_id,
+                file_name,
+                version,
+                mime_type: metadata
+                    .get(GCS_FILE_MIME_TYPE_METADATA_KEY)
+                    .cloned()
+                    .or(object.content_type),
+                size: object.size.and_then(|size| size.parse().ok()).unwrap_or(0),
+            });
+        }
+        Ok(artifacts)
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn delete_user(&self, app_name: &str, user_id: &str) -> Result<u64> {
+        let objects = self.user_objects(app_name, user_id).await?;
+        for (object, ..) in &objects {
+            self.delete_object(&object.name).await?;
+        }
+        Ok(objects.len() as u64)
     }
 
     #[tracing::instrument(skip_all)]

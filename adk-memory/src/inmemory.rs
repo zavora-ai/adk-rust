@@ -19,6 +19,9 @@ struct StoredEntry {
 
 type MemoryStore = HashMap<MemoryKey, HashMap<String, Vec<StoredEntry>>>;
 
+/// The session key entries added without a session are kept under.
+const DIRECT_SESSION: &str = "__direct__";
+
 /// In-process memory with keyword search, for development and tests.
 ///
 /// Search tokenizes the query and every entry with [`extract_words`](crate::text::extract_words),
@@ -151,7 +154,7 @@ impl MemoryService for InMemoryMemoryService {
 
         let mut store = self.store.write().unwrap();
         let sessions = store.entry(key).or_default();
-        sessions.entry("__direct__".to_string()).or_default().push(stored);
+        sessions.entry(DIRECT_SESSION.to_string()).or_default().push(stored);
 
         Ok(())
     }
@@ -171,7 +174,7 @@ impl MemoryService for InMemoryMemoryService {
 
         let mut store = self.store.write().unwrap();
         let sessions = store.entry(key).or_default();
-        sessions.entry("__direct__".to_string()).or_default().push(stored);
+        sessions.entry(DIRECT_SESSION.to_string()).or_default().push(stored);
 
         Ok(())
     }
@@ -284,6 +287,25 @@ impl MemoryService for InMemoryMemoryService {
         store.remove(&key);
 
         Ok(())
+    }
+
+    async fn export_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserMemory>> {
+        let key = MemoryKey { app_name: app_name.to_string(), user_id: user_id.to_string() };
+        let store = self.store.read().unwrap();
+        let mut memories: Vec<UserMemory> = store
+            .get(&key)
+            .into_iter()
+            .flatten()
+            .flat_map(|(session_id, entries)| {
+                entries.iter().map(move |stored| UserMemory {
+                    entry: stored.entry.clone(),
+                    session_id: (session_id != DIRECT_SESSION).then(|| session_id.clone()),
+                    project_id: stored.project_id.clone(),
+                })
+            })
+            .collect();
+        memories.sort_by_key(|memory| memory.entry.timestamp);
+        Ok(memories)
     }
 
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse> {

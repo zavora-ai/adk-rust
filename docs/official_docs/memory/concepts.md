@@ -36,7 +36,8 @@ pub trait MemoryService: Send + Sync {
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse>;
 
     // Optional (default: an error naming the method)
-    async fn delete_user(&self, app: &str, user: &str) -> Result<()>;          // GDPR
+    async fn delete_user(&self, app: &str, user: &str) -> Result<()>;
+    async fn export_user(&self, app: &str, user: &str) -> Result<Vec<UserMemory>>;
     async fn delete_session(&self, app: &str, user: &str, session: &str) -> Result<()>;
     async fn add_entry(&self, app: &str, user: &str, entry: MemoryEntry) -> Result<()>;
     async fn delete_entries(&self, app: &str, user: &str, query: &str) -> Result<u64>;
@@ -147,16 +148,21 @@ would remove entries outside the named project — neither is something a caller
 detect from the return value. `MemoryServiceAdapter::supports_project_scoping`
 reports what its backend supports.
 
-## GDPR erasure
+## Erasure and export
 
 `delete_user(app, user)` removes **all** of a user's memories (entries and
-embeddings) across all projects — the right-to-erasure primitive. Backends that
-store durably implement it; call it from your account-deletion path.
+embeddings) across all projects; `export_user(app, user)` returns exactly those entries,
+oldest first, each with its session and project. Every backend in this crate implements both.
 
 ```rust
 use adk_memory::MemoryService;
 
+let entries = memory.export_user("support", "alice").await?;
 memory.delete_user("support", "alice").await?;
 ```
+
+`MemorySubjectData` adapts any `MemoryService` to `adk_core::subject::SubjectDataStore`, so
+`SubjectRights` exports and erases a person's memory with the rest of their data. See
+[Subject Rights](../security/subject-rights.md).
 
 Next: [Backends →](backends.md)

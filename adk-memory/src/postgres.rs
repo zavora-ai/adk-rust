@@ -725,6 +725,37 @@ impl MemoryService for PostgresMemoryService {
     }
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
+    async fn export_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserMemory>> {
+        let rows = sqlx::query(
+            "SELECT session_id, project_id, content, author, timestamp FROM memory_entries \
+             WHERE app_name = $1 AND user_id = $2 ORDER BY timestamp, id",
+        )
+        .bind(app_name)
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| adk_core::AdkError::memory(format!("export_user failed: {e}")))?;
+        rows.into_iter()
+            .map(|row| {
+                let content: serde_json::Value = row.get("content");
+                // Entries added without a session are stored with an empty session id.
+                let session_id: String = row.get("session_id");
+                Ok(UserMemory {
+                    entry: MemoryEntry {
+                        content: serde_json::from_value(content).map_err(|e| {
+                            adk_core::AdkError::memory(format!("stored content is corrupt: {e}"))
+                        })?,
+                        author: row.get("author"),
+                        timestamp: row.get("timestamp"),
+                    },
+                    session_id: (!session_id.is_empty()).then_some(session_id),
+                    project_id: row.get("project_id"),
+                })
+            })
+            .collect()
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
     async fn delete_user(&self, app_name: &str, user_id: &str) -> Result<()> {
         sqlx::query("DELETE FROM memory_entries WHERE app_name = $1 AND user_id = $2")
             .bind(app_name)

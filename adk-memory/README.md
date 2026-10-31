@@ -166,7 +166,7 @@ async fn delete(service: &dyn MemoryService) -> adk_core::Result<()> {
     // Global delete — only removes global entries
     service.delete_entries("app", "user", "query").await?;
 
-    // GDPR delete_user — removes everything (global + all projects)
+    // delete_user removes everything (global + all projects)
     service.delete_user("app", "user").await?;
     Ok(())
 }
@@ -277,11 +277,33 @@ async fn main() -> adk_core::Result<()> {
 | `add_session(app, user, session, entries)` | required |
 | `search(SearchRequest)` | required |
 | `delete_user`, `delete_session`, `add_entry`, `delete_entries`, `list_recent` | Return a "not implemented" error; backends override them |
+| `export_user(app, user)` | Returns `subject.unsupported`; every backend in this crate lists the user's entries, global and project-scoped |
 | `health_check()` | `Ok(())` |
 | `supports_project_scoping()` | `false` |
 | `add_session_to_project`, `add_entry_to_project`, `delete_entries_in_project`, `delete_project` | Return an error |
 
 The project methods refuse instead of falling back to global writes or deletes, which would cross the project boundary. Every backend in this crate except `VertexAiMemoryBankService` and `GraphMemoryService` implements them and returns `true` from `supports_project_scoping()`.
+
+## Subject Export and Erasure
+
+`MemorySubjectData` adapts any `MemoryService` to `adk_core::subject::SubjectDataStore`: it
+exports a subject's entries through `export_user` and erases them through `delete_user`, for
+each of the subject's user ids in each covered application. Every backend passes
+`adk_core::subject_data_store_conformance_tests!`.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::subject::{InMemoryConsentStore, InMemorySubjectRegistry, SubjectRights};
+use adk_memory::{InMemoryMemoryService, MemorySubjectData};
+
+let rights = SubjectRights::new(
+    Arc::new(InMemorySubjectRegistry::new()),
+    Arc::new(InMemoryConsentStore::new()),
+)
+.with_app("support")
+.with_store(Arc::new(MemorySubjectData::new(Arc::new(InMemoryMemoryService::new()))));
+```
 
 ## Related Crates
 

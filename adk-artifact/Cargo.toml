@@ -28,6 +28,7 @@ reqwest = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
+adk-core = { path = "../adk-core", features = ["conformance"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["fs", "rt", "rt-multi-thread", "macros", "net", "sync"] }
 axum = "0.8"

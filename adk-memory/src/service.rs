@@ -2,11 +2,46 @@ use adk_core::{Content, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct MemoryEntry {
     pub content: Content,
     pub author: String,
     pub timestamp: DateTime<Utc>,
+}
+
+/// One stored memory of a user, as [`MemoryService::export_user`] returns it.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::Content;
+/// use adk_memory::{MemoryEntry, UserMemory};
+///
+/// let memory = UserMemory {
+///     entry: MemoryEntry {
+///         content: Content::new("user").with_text("Hometown: Nairobi."),
+///         author: "user".to_string(),
+///         timestamp: chrono::Utc::now(),
+///     },
+///     session_id: Some("s1".to_string()),
+///     project_id: None,
+/// };
+/// let json = serde_json::to_value(&memory).unwrap();
+/// assert_eq!(json["sessionId"], "s1");
+/// assert_eq!(json["author"], "user");
+/// ```
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserMemory {
+    /// The entry.
+    #[serde(flatten)]
+    pub entry: MemoryEntry,
+    /// The session the entry was added from; `None` for an entry added directly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// The project the entry is scoped to; `None` for a global entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -60,11 +95,28 @@ pub trait MemoryService: Send + Sync {
 
     /// Delete all memory entries for a specific user.
     ///
-    /// Required for GDPR right-to-erasure compliance. Removes all stored
-    /// memories (including embeddings) for the given app and user.
+    /// Removes every stored memory of the user in the app, embeddings and
+    /// project-scoped entries included.
     async fn delete_user(&self, app_name: &str, user_id: &str) -> Result<()> {
         let _ = (app_name, user_id);
         Err(adk_core::AdkError::memory("delete_user not implemented"))
+    }
+
+    /// Returns every memory held for `user_id` in `app_name` — added from a session or
+    /// directly, global or project-scoped — oldest first. [`delete_user`](Self::delete_user)
+    /// removes exactly these.
+    ///
+    /// [`MemorySubjectData`](crate::MemorySubjectData) exports a data subject's memory
+    /// through it.
+    ///
+    /// # Errors
+    ///
+    /// The default returns `subject.unsupported`
+    /// ([`SUBJECT_UNSUPPORTED_CODE`](adk_core::subject::SUBJECT_UNSUPPORTED_CODE)), so a
+    /// backend that cannot list a user's entries is reported, not silently empty.
+    async fn export_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserMemory>> {
+        let _ = (app_name, user_id);
+        Err(adk_core::subject::unsupported_error("memory", "export"))
     }
 
     /// Delete all memory entries for a specific session.

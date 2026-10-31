@@ -26,6 +26,9 @@ use std::path::Path;
 use std::str::FromStr;
 use tracing::instrument;
 
+/// The session id entries added without a session are stored under.
+const DIRECT_SESSION: &str = "__direct__";
+
 /// Private struct for deserializing JSON memory entries during import.
 #[derive(Deserialize)]
 struct JsonMemoryEntry {
@@ -390,6 +393,43 @@ impl MemoryService for SqliteMemoryService {
         Ok(())
     }
 
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
+    async fn export_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserMemory>> {
+        let rows = sqlx::query(
+            "SELECT session_id, project_id, content, author, timestamp FROM memory_entries \
+             WHERE app_name = ? AND user_id = ? ORDER BY timestamp, id",
+        )
+        .bind(app_name)
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| adk_core::AdkError::memory(format!("export_user failed: {e}")))?;
+        rows.iter()
+            .map(|row| {
+                let content: String = row.get("content");
+                let timestamp: String = row.get("timestamp");
+                let session_id: String = row.get("session_id");
+                Ok(UserMemory {
+                    entry: MemoryEntry {
+                        content: serde_json::from_str(&content).map_err(|e| {
+                            adk_core::AdkError::memory(format!("stored content is corrupt: {e}"))
+                        })?,
+                        author: row.get("author"),
+                        timestamp: chrono::DateTime::parse_from_rfc3339(&timestamp)
+                            .map(|dt| dt.with_timezone(&chrono::Utc))
+                            .map_err(|e| {
+                                adk_core::AdkError::memory(format!(
+                                    "stored timestamp is corrupt: {e}"
+                                ))
+                            })?,
+                    },
+                    session_id: (session_id != DIRECT_SESSION).then_some(session_id),
+                    project_id: row.get("project_id"),
+                })
+            })
+            .collect()
+    }
+
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, session_id = %session_id))]
     async fn delete_session(&self, app_name: &str, user_id: &str, session_id: &str) -> Result<()> {
         let pool = self.pool.clone();
@@ -420,7 +460,7 @@ impl MemoryService for SqliteMemoryService {
         )
         .bind(app_name)
         .bind(user_id)
-        .bind("__direct__")
+        .bind(DIRECT_SESSION)
         .bind(&content_json)
         .bind(&content_text)
         .bind(&entry.author)
@@ -535,7 +575,7 @@ impl MemoryService for SqliteMemoryService {
         )
         .bind(app_name)
         .bind(user_id)
-        .bind("__direct__")
+        .bind(DIRECT_SESSION)
         .bind(&content_json)
         .bind(&content_text)
         .bind(&entry.author)
