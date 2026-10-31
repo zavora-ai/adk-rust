@@ -17,6 +17,8 @@
 //! | [`a_call_held_again_keeps_its_open_request`] | A call held again while its request is pending gets that request back, never a second one (spec 3.3 §7.3) |
 //! | [`cancel_and_reject_deny_the_call`] | Cancelling or rejecting records a denial carrying the reason |
 //! | [`requests_survive_a_restart`] | A partly approved request survives a restart and is resolved through a new handle |
+//! | [`slots_need_distinct_approvers`] | A request with slots stays pending, with no decision for the call, until distinct approvers fill every slot, whatever order they decide in; a partly filled request survives a restart |
+//! | [`directory_decides_groups`] | A service with an [`ApproverDirectory`] takes approvers' and delegators' groups from it, for decisions and inboxes, and ignores the groups a caller asserts |
 //!
 //! Each case lists and ticks only its own application's requests, so cases sharing one
 //! database do not expire or escalate each other's requests.
@@ -34,9 +36,10 @@ use crate::principal::SubjectRef;
 use crate::{
     ApprovalAction, ApprovalDecision, ApprovalDelegation, ApprovalEventKind, ApprovalNotification,
     ApprovalNotifier, ApprovalPolicy, ApprovalRequest, ApprovalRequestQuery, ApprovalScope,
-    ApprovalService, ApprovalState, ApprovalStore, ApprovalTick, ApproverSelector, Clock,
-    DelegationScope, DelegationWindow, InboxQuery, ManualClock, PendingApproval, Result,
-    StoreApprovalService, ToolApproval, ToolConfirmationDecision, ToolConfirmationRequest,
+    ApprovalService, ApprovalState, ApprovalStore, ApprovalTick, ApproverDirectory,
+    ApproverSelector, Clock, DelegationScope, DelegationWindow, InboxQuery, ManualClock,
+    PendingApproval, Result, StoreApprovalService, ToolApproval, ToolConfirmationDecision,
+    ToolConfirmationRequest,
 };
 
 /// Restricts listings to one application, so a case's `tick` and inbox see only its
@@ -163,6 +166,12 @@ impl Fixture {
             .with_clock(Arc::new(clock.clone()))
             .with_notifier(recorder.clone());
         Self { service, store, clock, recorder, app: app.to_string() }
+    }
+
+    /// Takes approvers' groups from `directory`.
+    fn with_directory(mut self, directory: Arc<dyn ApproverDirectory>) -> Self {
+        self.service = self.service.with_directory(directory);
+        self
     }
 
     async fn new<H: ApprovalStoreHarness + ?Sized>(harness: &H) -> Self {
@@ -744,4 +753,165 @@ pub async fn requests_survive_a_restart<H: ApprovalStoreHarness + ?Sized>(harnes
     let resolved = fx.service.decide(&half.id, half.version, member("bo")).await.expect("bo");
     assert_eq!(resolved.state, ApprovalState::Approved);
     assert_eq!(fx.taken(&resolved).await, Some(ToolApproval::approve()));
+}
+
+/// A request with slots `[editor, publisher]` stays pending until two distinct people fill
+/// them, however many approvals it has: the quorum alone does not resolve it, the call has
+/// no decision before then, and which slot a person fills is not fixed by the order of
+/// decisions. A partly filled request survives a restart.
+pub async fn slots_need_distinct_approvers<H: ApprovalStoreHarness + ?Sized>(harness: &H) {
+    let app = unique_unicode("app");
+    let editor = ApproverSelector::group("conformance:editor");
+    let publisher = ApproverSelector::group("conformance:publisher");
+    let chain = || ApprovalPolicy::for_slots([editor.clone(), publisher.clone()]);
+    let by = |name: &str, groups: &[&str]| {
+        ApprovalDecision::approve(SubjectRef::human(name)).with_groups(groups.iter().copied())
+    };
+
+    let half = {
+        let fx = Fixture::open(harness, &app).await;
+        let request = fx.submit(chain()).await;
+        assert_eq!(request.policy.slots, [editor.clone(), publisher.clone()]);
+        assert_eq!(
+            code(fx.service.decide(&request.id, request.version, by("eve", &[])).await),
+            "approval.not_an_approver",
+            "someone no slot selects cannot approve"
+        );
+        let ed = fx
+            .service
+            .decide(&request.id, request.version, by("ed", &["conformance:editor"]))
+            .await
+            .expect("ed");
+        assert_eq!(ed.state, ApprovalState::Pending);
+        assert_eq!(ed.open_slots(), [&publisher], "the publisher's slot is open");
+        let second_editor = fx
+            .service
+            .decide(&ed.id, ed.version, by("edna", &["conformance:editor"]))
+            .await
+            .expect("edna");
+        assert_eq!(
+            second_editor.state,
+            ApprovalState::Pending,
+            "two approvals meet the quorum, but no publisher approved"
+        );
+        assert!(!fx.has_decision(&second_editor).await, "the call stays held");
+        second_editor
+    };
+
+    let fx = Fixture::open(harness, &app).await;
+    assert_eq!(fx.service.get(&half.id).await.expect("get"), Some(half.clone()), "restart");
+    let resolved = fx
+        .service
+        .decide(&half.id, half.version, by("paul", &["conformance:publisher"]))
+        .await
+        .expect("paul");
+    assert_eq!(resolved.state, ApprovalState::Approved);
+    assert!(resolved.open_slots().is_empty());
+    assert_eq!(fx.taken(&resolved).await, Some(ToolApproval::approve()), "the call is approved");
+
+    // Eva holds both roles and decides first; Ed, an editor, then completes the chain, with
+    // Eva moved to the publisher's slot.
+    let request = fx.submit(chain()).await;
+    let eva = fx
+        .service
+        .decide(
+            &request.id,
+            request.version,
+            by("eva", &["conformance:editor", "conformance:publisher"]),
+        )
+        .await
+        .expect("eva");
+    assert_eq!(eva.state, ApprovalState::Pending, "one person fills one slot");
+    assert_eq!(
+        code(
+            fx.service
+                .decide(
+                    &eva.id,
+                    eva.version,
+                    by("eva", &["conformance:editor", "conformance:publisher"])
+                )
+                .await
+        ),
+        "approval.already_decided",
+        "and cannot fill the other"
+    );
+    let ed = fx
+        .service
+        .decide(&eva.id, eva.version, by("ed", &["conformance:editor"]))
+        .await
+        .expect("ed");
+    assert_eq!(ed.state, ApprovalState::Approved, "the order of decisions does not matter");
+}
+
+/// Groups from a directory: the person it names approves without asserting a group, one
+/// asserting a group the directory does not give them is refused, inboxes follow the
+/// directory, and a delegate acts under the delegator's groups from the directory.
+pub async fn directory_decides_groups<H: ApprovalStoreHarness + ?Sized>(harness: &H) {
+    #[derive(Debug)]
+    struct Finance(Vec<String>);
+
+    #[async_trait]
+    impl ApproverDirectory for Finance {
+        async fn groups(
+            &self,
+            subject: &SubjectRef,
+            _request: &ApprovalRequest,
+        ) -> Result<Vec<String>> {
+            Ok(if self.0.contains(&subject.id) {
+                vec!["conformance:finance".to_string()]
+            } else {
+                Vec::new()
+            })
+        }
+    }
+
+    let ana = unique("ana");
+    let carol = unique("carol");
+    let fx = Fixture::new(harness)
+        .await
+        .with_directory(Arc::new(Finance(vec![ana.clone(), carol.clone()])));
+    let request = fx.submit(finance()).await;
+
+    let claimed = member("bo");
+    assert_eq!(
+        code(fx.service.decide(&request.id, request.version, claimed).await),
+        "approval.not_an_approver",
+        "a group the caller asserts does not count"
+    );
+    let ids = |page: crate::InboxPage| page.items.into_iter().map(|r| r.id).collect::<Vec<_>>();
+    let bo_inbox = InboxQuery::for_approver(SubjectRef::human("bo"), ["conformance:finance"]);
+    assert!(ids(fx.service.inbox(bo_inbox).await.expect("inbox")).is_empty());
+    let ana_inbox = InboxQuery::for_approver(SubjectRef::human(&ana), Vec::<String>::new());
+    assert_eq!(
+        ids(fx.service.inbox(ana_inbox).await.expect("inbox")),
+        std::slice::from_ref(&request.id),
+        "the directory's groups fill the inbox"
+    );
+
+    let decided = fx
+        .service
+        .decide(&request.id, request.version, ApprovalDecision::approve(SubjectRef::human(&ana)))
+        .await
+        .expect("ana");
+    assert_eq!(decided.state, ApprovalState::Approved);
+    assert_eq!(decided.decisions[0].approver_groups, ["conformance:finance"], "recorded");
+    assert_eq!(decided.decisions[0].authority_groups, ["conformance:finance"]);
+
+    let dave = SubjectRef::human(unique("dave"));
+    fx.service
+        .delegate(ApprovalDelegation::new(
+            SubjectRef::human(&carol),
+            dave.clone(),
+            DelegationWindow::new(at(Duration::ZERO), at(minutes(60))),
+        ))
+        .await
+        .expect("delegate");
+    let other = fx.submit(finance()).await;
+    let delegated = fx
+        .service
+        .decide(&other.id, other.version, ApprovalDecision::approve(dave))
+        .await
+        .expect("dave decides for carol");
+    assert_eq!(delegated.decisions[0].via_delegation, Some(SubjectRef::human(&carol)));
+    assert_eq!(delegated.decisions[0].authority_groups, ["conformance:finance"]);
 }

@@ -377,6 +377,17 @@ macro_rules! approval_service_conformance_tests {
         async fn approval_service_requests_survive_a_restart() {
             $crate::conformance::approval_service::requests_survive_a_restart(&$harness).await;
         }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_service_slots_need_distinct_approvers() {
+            $crate::conformance::approval_service::slots_need_distinct_approvers(&$harness)
+                .await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_service_directory_decides_groups() {
+            $crate::conformance::approval_service::directory_decides_groups(&$harness).await;
+        }
     };
 }
 
