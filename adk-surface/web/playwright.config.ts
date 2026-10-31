@@ -11,7 +11,9 @@ import type { PlaywrightTestConfig } from "@playwright/test";
 // starts an example already built instead of `cargo run` (a project served by a command reads
 // its own variables: `MEMORY_E2E_BIN` names the `adk-rust` that `memory-kernel.sh` runs);
 // `<PREFIX>_E2E_URL` points the project at a server already running, with
-// `<PREFIX>_E2E_WORKSPACE` naming that server's workspace.
+// `<PREFIX>_E2E_WORKSPACE` naming that server's workspace. Playwright starts the servers one
+// after another before the first test, so `npm run e2e:build` (`e2e/build-servers.mjs`) builds
+// them all first and none compiles while the servers before it wait.
 interface Surface {
   /** The project's name: `npx playwright test --project <name>`. */
   name: string;
@@ -21,6 +23,8 @@ interface Surface {
   example?: string;
   /** The command that serves it instead of an example, given the port and the workspace. */
   command?: string;
+  /** What `command` builds before it serves, for `npm run e2e:build` to build first. */
+  build?: string;
   /** The adk-surface features the example needs; `web` unless named. */
   features?: string;
   /** The host the page is opened at: `127.0.0.1` unless named; `localhost` where WebAuthn needs a domain. */
@@ -38,6 +42,9 @@ interface Surface {
   /** Stopped with SIGTERM, so its command cleans up, rather than killed outright. */
   stopsCleanly?: boolean;
 }
+
+/** The `adk-rust` that `memory-kernel.sh` and `agents-kernel.sh` serve. */
+const scriptedKernel = "cargo build -p adk-cli --features scripted-model,audit-sql --bin adk-rust";
 
 const surfaces: Surface[] = [
   {
@@ -63,6 +70,7 @@ const surfaces: Surface[] = [
     name: "memory",
     prefix: "MEMORY",
     command: "bash adk-surface/web/e2e/memory-kernel.sh",
+    build: scriptedKernel,
     // 8792 is taken by the tray and the voice view.
     port: 8796,
     stopsCleanly: true,
@@ -118,6 +126,7 @@ const surfaces: Surface[] = [
     name: "agents",
     prefix: "AGENTS",
     command: "bash adk-surface/web/e2e/agents-kernel.sh",
+    build: scriptedKernel,
     // 8792, 8796, 8797, 8799 and 8800 are taken.
     port: 8801,
     testMatch: ["agents.spec.ts"],
@@ -241,6 +250,12 @@ const servers = surfaces.map((surface) => {
     surface.command ??
     env(surface, "BIN") ??
     `cargo run -p adk-surface --features ${surface.features ?? "web"} --example ${surface.example} --`;
+  // What `npm run e2e:build` builds: the example `cargo run` would build, with its features.
+  const build = env(surface, "BIN")
+    ? undefined
+    : surface.command
+      ? surface.build
+      : `cargo build -p adk-surface --features ${surface.features ?? "web"} --example ${surface.example}`;
   return {
     surface,
     url: url ?? `http://${surface.host ?? "127.0.0.1"}:${port}`,
@@ -250,6 +265,7 @@ const servers = surfaces.map((surface) => {
     port,
     workspace,
     command,
+    build,
   };
 });
 
@@ -259,18 +275,22 @@ const named = process.argv.flatMap((arg, index, all) =>
   arg === "--project" ? [all[index + 1]] : arg.startsWith("--project=") ? [arg.slice("--project=".length)] : [],
 );
 
-const webServer: PlaywrightTestConfig["webServer"] = servers
+const started = servers
   .filter((server) => !server.external)
-  .filter((server) => named.length === 0 || named.includes(server.surface.name))
-  .map((server) => ({
-    command: `${server.command} ${server.port} ${server.workspace} ${server.surface.args ?? ""}`.trim(),
-    cwd: "../..",
-    url: `${server.ready}${server.surface.ready}`,
-    reuseExistingServer: false,
-    timeout: 20 * 60_000,
-    stdout: "pipe" as const,
-    ...(server.surface.stopsCleanly ? { gracefulShutdown: { signal: "SIGTERM" as const, timeout: 15_000 } } : {}),
-  }));
+  .filter((server) => named.length === 0 || named.includes(server.surface.name));
+
+/** The builds of the servers this run starts, in order and once each (`npm run e2e:build`). */
+export const builds = [...new Set(started.flatMap((server) => (server.build ? [server.build] : [])))];
+
+const webServer: PlaywrightTestConfig["webServer"] = started.map((server) => ({
+  command: `${server.command} ${server.port} ${server.workspace} ${server.surface.args ?? ""}`.trim(),
+  cwd: "../..",
+  url: `${server.ready}${server.surface.ready}`,
+  reuseExistingServer: false,
+  timeout: 20 * 60_000,
+  stdout: "pipe" as const,
+  ...(server.surface.stopsCleanly ? { gracefulShutdown: { signal: "SIGTERM" as const, timeout: 15_000 } } : {}),
+}));
 
 export default defineConfig({
   testDir: "e2e",

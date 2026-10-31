@@ -51,7 +51,7 @@
 //! | `create` | One script that writes nothing when the session hash exists: session hash, app and user tier fields, index entries, lookup | A check that the session hash is absent; index entries, lookup, and the app and user tier fields; then the session hash, in a script that writes nothing when it exists |
 //! | `append_event` | One script: event, session-tier compare-and-swap, update-time index entry, app and user tier fields | One script: event and session-tier compare-and-swap; then the update-time index entry and the app and the user tier fields, one command each |
 //! | `delete` | One `MULTI`/`EXEC`: session hash, events, lookup, index entries | Session hash and events in one `DEL`, then the lookup and the index entries |
-//! | `delete_all_sessions` | One `MULTI`/`EXEC` over every session of the user | Each session as in `delete`, then the index |
+//! | `delete_all_sessions` | One `MULTI`/`EXEC` over every session of the user, the index and the user tier | Each session as in `delete`, then the index and the user tier |
 //!
 //! A Redis Cluster runs a script or transaction only when every key it names hashes to one
 //! slot, and the app and user tiers are shared by many sessions, so in cluster mode they are
@@ -1191,10 +1191,13 @@ impl SessionService for RedisSessionService {
             .smembers(&idx_k)
             .await
             .map_err(|e| adk_core::AdkError::session(format!("redis smembers failed: {e}")))?;
-
-        if session_ids.is_empty() {
-            return Ok(());
-        }
+        // The indexes and the user tier: a user whose sessions are already gone still has
+        // the tier erased.
+        let user_keys = vec![
+            idx_k.clone(),
+            layout.updated_index(app_name, user_id),
+            layout.user_state(app_name, user_id),
+        ];
 
         match layout {
             KeyLayout::Standalone => {
@@ -1203,7 +1206,7 @@ impl SessionService for RedisSessionService {
                     remove_session(&trx, layout, app_name, user_id, sid).await?;
                 }
                 let _: () = trx
-                    .del(vec![idx_k.clone(), layout.updated_index(app_name, user_id)])
+                    .del(user_keys)
                     .await
                     .map_err(|e| adk_core::AdkError::session(format!("redis del failed: {e}")))?;
                 let _: () = trx.exec(true).await.map_err(|e| {
@@ -1214,12 +1217,12 @@ impl SessionService for RedisSessionService {
                 for sid in &session_ids {
                     remove_session(&self.client, layout, app_name, user_id, sid).await?;
                 }
-                // The set and the sorted set share the `{<app>:<user>}` hash tag.
-                let _: () = self
-                    .client
-                    .del(vec![idx_k.clone(), layout.updated_index(app_name, user_id)])
-                    .await
-                    .map_err(|e| adk_core::AdkError::session(format!("redis del failed: {e}")))?;
+                // The set, the sorted set and the user tier share the `{<app>:<user>}` hash
+                // tag.
+                let _: () =
+                    self.client.del(user_keys).await.map_err(|e| {
+                        adk_core::AdkError::session(format!("redis del failed: {e}"))
+                    })?;
             }
         }
 

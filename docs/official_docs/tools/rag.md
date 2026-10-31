@@ -167,10 +167,11 @@ This example also depends on `adk-agent`, `adk-model` (`gemini`), `adk-runner`, 
 | `RagTool` | Value |
 |-----------|-------|
 | Name | `rag_search` |
-| Parameters | `query` (required), `collection` (defaults to the collection given to `RagTool::new`), `top_k` (overrides the configured value; the reranker and similarity threshold still apply) |
+| Parameters | `query` (required), `top_k` (overrides the configured value; the reranker and similarity threshold still apply), and `collection` only when the tool has allowed collections (see [Multiple Collections](#multiple-collections)) |
+| Collections | The collection given to `RagTool::new`, plus any given to `with_allowed_collections`; the model cannot reach any other |
 | Returns | An array of `{"id", "document_id", "text", "metadata", "score"}` results, best first; embedding vectors are not included |
-| Invalid arguments | A missing `query` or a `top_k` that is not a positive integer fails the call with `tool.invalid_arguments`, whose message the model receives |
-| Effect | `ToolEffect::NonIdempotent` (the default), so a default-deny `DeclarativePolicy` must allow it by name |
+| Invalid arguments | A missing `query`, a `top_k` that is not a positive integer, or a `collection` the tool does not allow fails the call with `tool.invalid_arguments`, whose message the model receives |
+| Effect | `ToolEffect::ReadOnly` and concurrency-safe, so `DeclarativePolicy::allow_read_only()` admits it and `ToolExecutionStrategy::Auto` overlaps it with adjacent read-only calls |
 
 When a user asks "What's your return policy?", the agent:
 1. Decides it needs to search the knowledge base
@@ -357,32 +358,62 @@ let pipeline = RagPipeline::builder()
 
 ## Multiple Collections
 
-Use separate collections for different knowledge domains. The agent can search specific collections or you can create multiple `RagTool` instances:
+Use separate collections for different knowledge domains. A `RagTool` searches only the
+collections it is configured with — the model never names a collection the application did not
+give it.
+
+| Configuration | Schema | A call naming another collection |
+|---------------|--------|----------------------------------|
+| `RagTool::new(pipeline, "docs")` | No `collection` argument | Fails with `tool.invalid_arguments`: the tool searches only `docs` |
+| `RagTool::new(pipeline, "docs").with_allowed_collections(["faq"])` | `collection` lists `docs` and `faq`; omitted, it searches `docs` | Fails with `tool.invalid_arguments`, naming `docs` and `faq` |
+
+Give one tool several collections when the model should choose among them:
 
 ```rust
-// Create collections for different content types
-pipeline.create_collection("docs").await?;
-pipeline.create_collection("faq").await?;
-pipeline.create_collection("changelog").await?;
+use std::sync::Arc;
 
-// Ingest into each
-pipeline.ingest("docs", &setup_doc).await?;
-pipeline.ingest("faq", &faq_doc).await?;
-pipeline.ingest("changelog", &release_doc).await?;
+use adk_agent::LlmAgentBuilder;
+use adk_model::gemini::GeminiModel;
+use adk_rag::{RagPipeline, RagTool};
 
-// One tool per collection — the agent picks which to search
-let docs_tool = RagTool::new(pipeline.clone(), "docs");
-let faq_tool = RagTool::new(pipeline.clone(), "faq");
+async fn support_agent(
+    pipeline: Arc<RagPipeline>,
+    model: GeminiModel,
+) -> anyhow::Result<adk_agent::LlmAgent> {
+    // Create collections for different content types
+    pipeline.create_collection("docs").await?;
+    pipeline.create_collection("faq").await?;
+    pipeline.create_collection("changelog").await?;
 
-let agent = LlmAgentBuilder::new("support")
-    .instruction("Search 'docs' for how-to questions, 'faq' for common questions.")
-    .model(Arc::new(model))
-    .tool(Arc::new(docs_tool))
-    .tool(Arc::new(faq_tool))
-    .build()?;
+    // "docs" by default; the model may also choose "faq" or "changelog"
+    let search = RagTool::new(pipeline, "docs").with_allowed_collections(["faq", "changelog"]);
+
+    let agent = LlmAgentBuilder::new("support")
+        .instruction("Search 'docs' for how-to questions, 'faq' for common questions.")
+        .model(Arc::new(model))
+        .tool(Arc::new(search))
+        .build()?;
+    Ok(agent)
+}
 ```
 
-The agent can also override the collection at query time by passing `"collection": "faq"` in the tool call.
+### One collection per tenant
+
+When each tenant has its own collection, build the tool per request with that tenant's
+collection, and do not add other tenants' collections to `with_allowed_collections`:
+
+```rust
+use std::sync::Arc;
+
+use adk_rag::{RagPipeline, RagTool};
+
+fn tenant_search(pipeline: Arc<RagPipeline>, tenant_id: &str) -> RagTool {
+    // The tenant comes from the authenticated request, never from the model.
+    RagTool::new(pipeline, format!("kb_{tenant_id}"))
+}
+```
+
+A call that names another tenant's collection fails before the vector store is queried.
 
 ---
 

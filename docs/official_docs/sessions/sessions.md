@@ -87,6 +87,23 @@ The trait also has identity-addressed methods (`get_for_identity`, `append_event
 | Event order | Timestamp order; events with equal timestamps keep their append order |
 | `list` | Most recently updated first; equal update times by session ID, descending, so `offset`/`limit` pages are stable |
 | `rewind`, `rewind_steps` | Change only the session the identity names, and rebuild its state from the state it was created with plus the remaining events' deltas; app and user state are not rewound |
+| `delete_all_sessions(app, user)` | Erases every session of the user in the app with its events, and the user's `user:` tier, also when no session is left; the `app:` tier, the user's data in other apps and other users' data stay; a repeated call succeeds |
+
+`delete_all_sessions` is the call that erases a user's session data: no other method removes
+the `user:` tier. Each backend erases as follows:
+
+| Backend | How |
+|---------|-----|
+| In-memory, SQLite, PostgreSQL, Neo4j | One lock or transaction over the sessions, events, and user tier |
+| MongoDB | One transaction where the deployment supports transactions, else one delete per collection |
+| Redis | One `MULTI`/`EXEC` on a standalone server; on a cluster, each session, then the indexes and the user tier |
+| Firestore | Each session, then the user's state document |
+| Vertex AI | Each session `list` returns; the Session API keeps `user:` keys in each session, so they go with it |
+| `EncryptedSession` | The inner backend's |
+
+Where the erasure is not one transaction, an error can leave part of the data; calling
+again finishes the erasure. A backend that does not implement the method returns
+`session.delete_all.unsupported` (`Unsupported`).
 
 Strings containing U+0000 in event content and state read back unchanged. PostgreSQL stores
 them in an escaped form, since `JSONB` cannot hold U+0000; strings without U+0000 are stored as
@@ -772,7 +789,7 @@ A session ID is unique within an app, and the owning `user_id` is a field of the
 | `create` | Fails with `session.already_exists` (`Conflict`) when the ID is taken in the app |
 | `get`, `append_event_for_identity` | Fails with `session.not_found` |
 | `delete` | No-op, identical to deleting a missing session |
-| `list`, `delete_all_sessions` | Only the caller's own sessions are returned or removed |
+| `list`, `delete_all_sessions` | Only the caller's own sessions are returned or removed; `delete_all_sessions` then deletes the user's state document |
 
 A new session never inherits events left under its path. App names, user IDs, and session IDs are document IDs, so they must not contain `/`.
 

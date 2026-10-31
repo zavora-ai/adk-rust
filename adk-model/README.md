@@ -532,6 +532,7 @@ feature.
 | SambaNova | `OpenAICompatibleConfig::sambanova` | `gpt-oss-120b` |
 | OrcaRouter | `OpenAICompatibleConfig::orcarouter` | none; model IDs carry a vendor prefix such as `openai/gpt-5.6-terra` |
 | Cheaper Inference | `OpenAICompatibleConfig::cheaper_inference` | none; model IDs are bare, such as `gpt-5.4-mini` |
+| API Route | `OpenAICompatibleConfig::api_route` | none; `GET /v1/models` lists the IDs a key can use |
 | MiniMax | `OpenAICompatibleConfig::minimax` | `MiniMax-M2.7` |
 | Zhipu AI | `OpenAICompatibleConfig::zhipu` | `glm-5.2` |
 | Baidu ERNIE (Qianfan) | `OpenAICompatibleConfig::baidu` | `ernie-5.1` |
