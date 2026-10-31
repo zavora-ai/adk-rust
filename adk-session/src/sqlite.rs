@@ -611,6 +611,15 @@ impl SessionService for SqliteSessionService {
                 adk_core::AdkError::session(format!("delete_all_sessions failed: {}", e))
             })?;
 
+        sqlx::query("DELETE FROM user_states WHERE app_name = ? AND user_id = ?")
+            .bind(app_name)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                adk_core::AdkError::session(format!("delete_all_sessions failed: {}", e))
+            })?;
+
         tx.commit()
             .await
             .map_err(|e| adk_core::AdkError::session(format!("commit failed: {}", e)))?;

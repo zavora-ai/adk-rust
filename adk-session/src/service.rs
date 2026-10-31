@@ -422,14 +422,33 @@ pub trait SessionService: Send + Sync {
         self.append_event(req.identity.session_id.as_ref(), req.event).await
     }
 
-    /// Delete all sessions for a given app and user.
+    /// Erases what the user `user_id` holds in the app `app_name`: every session with its
+    /// events, and the user's `user:` state tier.
     ///
-    /// Removes all sessions and their associated events. Useful for
-    /// bulk cleanup and GDPR right-to-erasure compliance.
-    /// The default implementation validates the identifiers, then returns an error.
+    /// The `app:` tier, the user's sessions and state in other apps, and other users'
+    /// sessions and state are untouched. No other method removes the `user:` tier, so this is
+    /// the call for bulk cleanup and for a request to erase a user's session data. The tier is
+    /// erased when the user has no sessions left, and a repeated call succeeds.
+    ///
+    /// The default implementation validates the identifiers, then returns
+    /// `session.delete_all.unsupported`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-input error when an identifier fails validation,
+    /// `session.delete_all.unsupported` ([`Unsupported`](adk_core::ErrorCategory::Unsupported))
+    /// from a backend that does not implement it, or a backend error. A backend that cannot
+    /// erase in one transaction may have removed some sessions before the error; calling again
+    /// finishes the erasure.
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
         validate_scope(app_name, user_id)?;
-        Err(adk_core::AdkError::session("delete_all_sessions not implemented"))
+        Err(AdkError::new(
+            ErrorComponent::Session,
+            ErrorCategory::Unsupported,
+            "session.delete_all.unsupported",
+            "this session backend does not implement delete_all_sessions; delete each session \
+             from `list` and erase the user's `user:` state in the backend",
+        ))
     }
 
     /// Rewinds the session `identity` to `target_event_id`.
