@@ -25,7 +25,24 @@
 //! - [`ModelCallScope::generate`] meters one call explicitly.
 //! - [`ModelCallScope::within`] makes the scope current for a future; inside it,
 //!   [`generate_metered`] and [`MeteredLlm`] meter against it. The runner wraps
-//!   its compaction calls this way, and the MCP client wraps sampling requests.
+//!   its compaction calls this way, the MCP client wraps sampling requests, and
+//!   `LlmAgent`, `CodeActAgent` and the realtime runtimes wrap every tool call in the
+//!   run's scope ([`ModelCallScope::within_tool`]).
+//!
+//! # Calls billed in units
+//!
+//! Image generation, transcription and speech synthesis are billed per image, per second
+//! of audio or per character, not per token. [`ModelCallScope::meter`] (or
+//! [`meter_usage`], against the current scope) applies the same two gates to them:
+//!
+//! | Step | Budget | Spend ledger |
+//! |------|--------|--------------|
+//! | Before the call | refuses when a limit is reached, or when the call has no known price under a cost cap | reserves [`UsageCall::max_cost_micro_usd`], or [`UNBOUNDED_HOLD_MICRO_USD`] without a price |
+//! | After the call | counts its cost, tokens and [`UsageVector`] | commits [`MeteredUsage::cost_micro_usd`] |
+//! | Call failed | — | the hold is released |
+//!
+//! Units are counted in the budget ([`BudgetTracker::units`]) and never in the ledger,
+//! whose amounts are micro-USD only. A unit call is not a model call.
 //!
 //! # Example
 //!
@@ -51,8 +68,8 @@ use futures::StreamExt;
 
 use crate::{
     BudgetTracker, Llm, LlmRequest, LlmResponse, LlmResponseStream, ReservationId, Result,
-    RunConfig, SpendKey, SpendLedger, budget::meter_stream, schema_adapter::SchemaAdapter,
-    usd_to_micro_usd,
+    RunConfig, SpendKey, SpendLedger, ToolContext, UsageVector, budget::meter_stream,
+    schema_adapter::SchemaAdapter, usd_to_micro_usd,
 };
 
 /// Hold reserved for a model call whose cost cannot be bounded.
@@ -140,6 +157,7 @@ impl Default for LlmSpendEstimate {
 ///
 /// assert_eq!(vendor_for_model("models/gemini-3.7-flash"), "gemini");
 /// assert_eq!(vendor_for_model("grok-4.6"), "xai");
+/// assert_eq!(vendor_for_model("muse-spark-1.3"), "muse");
 /// assert_eq!(vendor_for_model("my-fine-tune"), "unknown");
 /// ```
 pub fn vendor_for_model(model: &str) -> &'static str {
@@ -157,6 +175,8 @@ pub fn vendor_for_model(model: &str) -> &'static str {
         "xai"
     } else if starts(&["mistral", "magistral", "codestral", "devstral", "ministral", "pixtral"]) {
         "mistral"
+    } else if starts(&["muse-"]) {
+        "muse"
     } else {
         "unknown"
     }
@@ -207,7 +227,7 @@ struct HoldState {
     key: SpendKey,
     estimate: u64,
     saw_response: bool,
-    cost: Option<f64>,
+    cost_micro_usd: Option<u64>,
     provider: Option<String>,
 }
 
@@ -219,7 +239,7 @@ impl fmt::Debug for ModelSpendHold {
                 .field("reservation", &state.reservation)
                 .field("key", &state.key)
                 .field("estimate", &state.estimate)
-                .field("cost", &state.cost);
+                .field("cost_micro_usd", &state.cost_micro_usd);
         }
         debug.finish_non_exhaustive()
     }
@@ -247,7 +267,7 @@ impl ModelSpendHold {
                 key,
                 estimate: estimate_micro_usd,
                 saw_response: false,
-                cost: None,
+                cost_micro_usd: None,
                 provider: None,
             }),
         })
@@ -273,10 +293,40 @@ impl ModelSpendHold {
         };
         state.saw_response = true;
         if let Some(cost) = response.usage_metadata.as_ref().and_then(|usage| usage.cost) {
-            state.cost = Some(cost);
+            state.cost_micro_usd = usd_to_micro_usd(cost);
         }
         if let Some(provider) = &response.provider {
             state.provider = Some(provider.clone());
+        }
+    }
+
+    /// Records that the call completed at `cost_micro_usd`, or at an unknown cost.
+    ///
+    /// For calls that report no [`LlmResponse`], such as the unit-billed calls of
+    /// [`ModelCallScope::meter`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use adk_core::{InMemorySpendLedger, ModelSpendHold, SpendKey, SpendLedger, SpendPeriod};
+    ///
+    /// # async fn demo() -> adk_core::Result<()> {
+    /// let ledger = Arc::new(InMemorySpendLedger::default());
+    /// let mut hold = ModelSpendHold::reserve(ledger.clone(), SpendKey::org("acme"), 20_000).await?;
+    /// hold.observe_cost(Some(10_000));
+    /// hold.settle().await;
+    /// assert_eq!(ledger.spent(&SpendKey::org("acme"), SpendPeriod::Day).await?, 10_000);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn observe_cost(&mut self, cost_micro_usd: Option<u64>) {
+        let Some(state) = self.inner.as_mut() else {
+            return;
+        };
+        state.saw_response = true;
+        if cost_micro_usd.is_some() {
+            state.cost_micro_usd = cost_micro_usd;
         }
     }
 
@@ -292,14 +342,15 @@ impl ModelSpendHold {
 
 impl HoldState {
     async fn settle(self) -> Option<String> {
-        let Self { ledger, reservation, key, estimate, saw_response, cost, provider } = self;
+        let Self { ledger, reservation, key, estimate, saw_response, cost_micro_usd, provider } =
+            self;
         if !saw_response {
             if let Err(error) = ledger.release(reservation).await {
                 tracing::warn!(error = %error, spend.key = %key, "failed to release model spend reservation");
             }
             return None;
         }
-        let amount = match cost.and_then(usd_to_micro_usd) {
+        let amount = match cost_micro_usd {
             Some(amount) => amount,
             None => {
                 tracing::warn!(
@@ -491,12 +542,68 @@ impl ModelCallScope {
 
     /// The key a call to `model` reserves under, when the scope has a spend ledger.
     pub fn spend_key(&self, model: &str) -> Option<SpendKey> {
+        self.vendor_spend_key(vendor_for_model(model))
+    }
+
+    /// The key a call billed by `vendor` reserves under, when the scope has a spend ledger.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use adk_core::{InMemorySpendLedger, ModelCallScope};
+    ///
+    /// let scope = ModelCallScope::new().with_spend_ledger(Arc::new(InMemorySpendLedger::default()), "acme");
+    /// assert_eq!(scope.vendor_spend_key("muse").unwrap().vendor.as_deref(), Some("muse"));
+    /// assert!(ModelCallScope::new().vendor_spend_key("muse").is_none());
+    /// ```
+    pub fn vendor_spend_key(&self, vendor: &str) -> Option<SpendKey> {
         let spend = self.spend.as_ref()?;
-        let key = SpendKey::org(&spend.org).with_vendor(vendor_for_model(model));
+        let key = SpendKey::org(&spend.org).with_vendor(vendor);
         Some(match &spend.agent {
             Some(agent) => key.with_agent(agent.clone()),
             None => key,
         })
+    }
+
+    /// The scope of the run a tool call belongs to, when the tool's runtime exposes the
+    /// run's [`RunConfig`] ([`ToolContext::run_config`]).
+    ///
+    /// Spend is attributed to the context's app and the agent making the call, as
+    /// [`for_run`](Self::for_run) attributes it.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let scope = adk_core::ModelCallScope::for_tool(ctx.as_ref());
+    /// ```
+    pub fn for_tool(ctx: &dyn ToolContext) -> Option<Self> {
+        ctx.run_config().map(|config| Self::for_run(config, ctx.app_name(), ctx.agent_name()))
+    }
+
+    /// Runs a tool call with the scope of the run it belongs to current
+    /// ([`for_tool`](Self::for_tool)), so the media and model calls the tool makes through
+    /// [`meter_usage`] and [`generate_metered`] count against the run. Without a run
+    /// configuration on `ctx`, `future` runs as is.
+    ///
+    /// Agents call this around every tool execution.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let result = ModelCallScope::within_tool(ctx.as_ref(), tool.execute(ctx.clone(), args)).await;
+    /// ```
+    pub fn within_tool<F: Future>(
+        ctx: &dyn ToolContext,
+        future: F,
+    ) -> impl Future<Output = F::Output> + use<F> {
+        let scope = Self::for_tool(ctx);
+        async move {
+            match scope {
+                Some(scope) => scope.within(future).await,
+                None => future.await,
+            }
+        }
     }
 
     /// Returns `true` when both scopes count against the same budget and ledger.
@@ -591,6 +698,252 @@ impl ModelCallScope {
             Some(hold) => commit_on_completion(responses, hold),
             None => responses,
         })
+    }
+}
+
+impl ModelCallScope {
+    /// Checks the budget and reserves the spend for one call billed in units.
+    ///
+    /// Reserves [`UsageCall::max_cost_micro_usd`] in the spend ledger — or
+    /// [`UNBOUNDED_HOLD_MICRO_USD`] when the call has no known price, which every covering
+    /// cap refuses — then checks the run budget, which refuses a call with no known price
+    /// under a cost cap. Settle the returned hold with [`UsageHold::commit`] once the call
+    /// completes; a hold released or dropped unsettled records nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the ledger's error when the reservation is refused, or a
+    /// [`ResourceExhausted`](crate::ErrorCategory::ResourceExhausted) error when the
+    /// budget refuses the call. Nothing has been sent when either refuses.
+    pub async fn begin_usage(&self, call: &UsageCall) -> Result<UsageHold> {
+        let spend = match (&self.spend, self.vendor_spend_key(&call.vendor)) {
+            (Some(spend), Some(key)) => Some(match call.max_cost_micro_usd {
+                Some(bound) => ModelSpendHold::reserve(spend.ledger.clone(), key, bound).await?,
+                None => {
+                    ModelSpendHold::reserve(spend.ledger.clone(), key, UNBOUNDED_HOLD_MICRO_USD)
+                        .await?
+                        .with_unpriced_commit(spend.estimate.per_call_micro_usd)
+                }
+            }),
+            _ => None,
+        };
+        if let Some(tracker) = &self.budget
+            && let Err(exceeded) =
+                tracker.begin_usage(&call.model, call.max_cost_micro_usd.is_some())
+        {
+            if let Some(hold) = spend {
+                hold.settle().await;
+            }
+            return Err(exceeded.into());
+        }
+        Ok(UsageHold { spend, budget: self.budget.clone(), model: call.model.clone() })
+    }
+
+    /// Runs one call billed in units under this scope.
+    ///
+    /// `future` is the call: it returns its value with the [`MeteredUsage`] it incurred.
+    /// The budget is checked and the spend reserved before `future` is polled
+    /// ([`begin_usage`](Self::begin_usage)), the usage is committed when it succeeds, and
+    /// the hold is released when it fails. An unmetered scope runs `future` as is.
+    ///
+    /// # Errors
+    ///
+    /// A refusal from [`begin_usage`](Self::begin_usage), in which case `future` never
+    /// runs, or the error `future` returns.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use adk_core::{
+    ///     InMemorySpendLedger, MeteredUsage, ModelCallScope, SpendKey, SpendLedger, SpendLimits,
+    ///     SpendPeriod, UsageCall, UsageUnit, UsageVector,
+    /// };
+    ///
+    /// # async fn demo() -> adk_core::Result<()> {
+    /// let limits = SpendLimits::new().limit(SpendKey::org("acme").per(SpendPeriod::Day), 1_000_000);
+    /// let ledger = Arc::new(InMemorySpendLedger::new(limits));
+    /// let scope = ModelCallScope::new().with_spend_ledger(ledger.clone(), "acme");
+    ///
+    /// let call = UsageCall::new("muse", "muse-image-1.0").with_max_cost_micro_usd(10_000);
+    /// let image = scope
+    ///     .meter(call, async {
+    ///         let usage = MeteredUsage::new(UsageVector::new().with(UsageUnit::Images, 1))
+    ///             .with_cost_micro_usd(10_000);
+    ///         Ok(("image bytes", usage))
+    ///     })
+    ///     .await?;
+    /// assert_eq!(image, "image bytes");
+    /// assert_eq!(ledger.spent(&SpendKey::org("acme"), SpendPeriod::Day).await?, 10_000);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn meter<T, F>(&self, call: UsageCall, future: F) -> Result<T>
+    where
+        F: Future<Output = Result<(T, MeteredUsage)>>,
+    {
+        if self.is_unmetered() {
+            return future.await.map(|(value, _)| value);
+        }
+        let hold = self.begin_usage(&call).await?;
+        match future.await {
+            Ok((value, usage)) => {
+                hold.commit(usage).await;
+                Ok(value)
+            }
+            Err(error) => {
+                hold.release().await;
+                Err(error)
+            }
+        }
+    }
+}
+
+/// One call billed in units: the vendor and model it is billed under, and the most it
+/// can cost.
+///
+/// # Example
+///
+/// ```
+/// use adk_core::UsageCall;
+///
+/// let call = UsageCall::new("muse", "muse-image-1.0").with_max_cost_micro_usd(40_000);
+/// assert_eq!(call.max_cost_micro_usd, Some(40_000));
+/// assert_eq!(UsageCall::new("deepgram", "nova-3").max_cost_micro_usd, None);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UsageCall {
+    /// The spend key vendor the call is reserved and committed under, such as `muse`.
+    pub vendor: String,
+    /// The model or service called, named in budget errors and logs.
+    pub model: String,
+    /// Upper bound on the call's cost, or `None` when no price is known.
+    pub max_cost_micro_usd: Option<u64>,
+}
+
+impl UsageCall {
+    /// A call to `model`, billed by `vendor`, with no known price.
+    pub fn new(vendor: impl Into<String>, model: impl Into<String>) -> Self {
+        Self { vendor: vendor.into(), model: model.into(), max_cost_micro_usd: None }
+    }
+
+    /// Sets the most the call can cost.
+    pub fn with_max_cost_micro_usd(mut self, max_cost_micro_usd: u64) -> Self {
+        self.max_cost_micro_usd = Some(max_cost_micro_usd);
+        self
+    }
+}
+
+/// What one call billed in units used, and what it cost when the price is known.
+///
+/// # Example
+///
+/// ```
+/// use adk_core::{MeteredUsage, UsageUnit, UsageVector};
+///
+/// let usage = MeteredUsage::new(UsageVector::new().with(UsageUnit::AudioMillis, 90_000))
+///     .with_cost_micro_usd(4_500);
+/// assert_eq!(usage.units.get(UsageUnit::AudioMillis), 90_000);
+/// assert_eq!(usage.cost_micro_usd, Some(4_500));
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MeteredUsage {
+    /// Usage per unit.
+    pub units: UsageVector,
+    /// Cost in micro-USD, or `None` when no price is known.
+    pub cost_micro_usd: Option<u64>,
+}
+
+impl MeteredUsage {
+    /// Usage of `units` at an unknown cost.
+    pub fn new(units: UsageVector) -> Self {
+        Self { units, cost_micro_usd: None }
+    }
+
+    /// Sets the cost.
+    pub fn with_cost_micro_usd(mut self, cost_micro_usd: u64) -> Self {
+        self.cost_micro_usd = Some(cost_micro_usd);
+        self
+    }
+}
+
+/// The open budget check and spend hold of one call billed in units, from
+/// [`ModelCallScope::begin_usage`].
+///
+/// | Settled with | Spend ledger | Budget |
+/// |--------------|--------------|--------|
+/// | [`commit`](Self::commit) | the reported cost, or the reserved bound (the scope's per-call estimate for an unpriced call) when none is reported | cost, tokens and units counted; an unknown cost under a cost cap stops the run |
+/// | [`release`](Self::release), or dropped | hold released | nothing counted |
+#[must_use = "an unsettled usage hold records nothing"]
+pub struct UsageHold {
+    spend: Option<ModelSpendHold>,
+    budget: Option<Arc<BudgetTracker>>,
+    model: String,
+}
+
+impl fmt::Debug for UsageHold {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UsageHold")
+            .field("spend", &self.spend)
+            .field("model", &self.model)
+            .finish_non_exhaustive()
+    }
+}
+
+impl UsageHold {
+    /// Records what the call used.
+    pub async fn commit(mut self, usage: MeteredUsage) {
+        if let Some(tracker) = &self.budget {
+            tracker.record_units(&self.model, &usage.units, usage.cost_micro_usd);
+        }
+        if let Some(mut hold) = self.spend.take() {
+            hold.observe_cost(usage.cost_micro_usd);
+            hold.settle().await;
+        }
+    }
+
+    /// Releases the hold of a call that failed, recording nothing.
+    pub async fn release(mut self) {
+        if let Some(hold) = self.spend.take() {
+            hold.settle().await;
+        }
+    }
+}
+
+/// Runs one call billed in units under the [current](ModelCallScope::current) scope, or
+/// unmetered when there is none. See [`ModelCallScope::meter`].
+///
+/// Media clients call this so a call made inside a tool counts against the run the tool
+/// belongs to.
+///
+/// # Errors
+///
+/// See [`ModelCallScope::meter`].
+///
+/// # Example
+///
+/// ```
+/// use adk_core::{MeteredUsage, UsageCall, UsageUnit, UsageVector, meter_usage};
+///
+/// # async fn demo() -> adk_core::Result<()> {
+/// let call = UsageCall::new("muse", "muse-image-1.0").with_max_cost_micro_usd(10_000);
+/// let images = meter_usage(call, async {
+///     Ok((1, MeteredUsage::new(UsageVector::new().with(UsageUnit::Images, 1))))
+/// })
+/// .await?;
+/// assert_eq!(images, 1);
+/// # Ok(())
+/// # }
+/// ```
+pub async fn meter_usage<T, F>(call: UsageCall, future: F) -> Result<T>
+where
+    F: Future<Output = Result<(T, MeteredUsage)>>,
+{
+    match ModelCallScope::current() {
+        Some(scope) => scope.meter(call, future).await,
+        None => future.await.map(|(value, _)| value),
     }
 }
 
@@ -718,6 +1071,158 @@ impl Llm for MeteredLlm {
 mod tests {
     use super::*;
 
+    use crate::{InMemorySpendLedger, RunBudget, SpendLimits, SpendPeriod, UsageUnit};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    fn image_call(images: u64) -> UsageCall {
+        UsageCall::new("muse", "muse-image-1.0").with_max_cost_micro_usd(images * 10_000)
+    }
+
+    fn images(count: u64) -> MeteredUsage {
+        MeteredUsage::new(UsageVector::new().with(UsageUnit::Images, count))
+            .with_cost_micro_usd(count * 10_000)
+    }
+
+    fn capped(micro_usd: u64) -> Arc<InMemorySpendLedger> {
+        Arc::new(InMemorySpendLedger::new(
+            SpendLimits::new().limit(SpendKey::org("acme").per(SpendPeriod::Day), micro_usd),
+        ))
+    }
+
+    #[tokio::test]
+    async fn a_unit_call_over_the_cap_is_refused_before_it_is_sent() {
+        let ledger = capped(5_000);
+        let scope = ModelCallScope::new().with_spend_ledger(ledger.clone(), "acme");
+        let sent = AtomicBool::new(false);
+        let refused = scope
+            .meter(image_call(1), async {
+                sent.store(true, Ordering::SeqCst);
+                Ok(((), images(1)))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, crate::SPEND_LIMIT_EXCEEDED_CODE);
+        assert!(!sent.load(Ordering::SeqCst));
+        assert_eq!(ledger.spent(&SpendKey::org("acme"), SpendPeriod::Day).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_unit_call_commits_its_cost_to_the_ledger_and_the_budget() {
+        let ledger = capped(1_000_000);
+        let tracker = Arc::new(BudgetTracker::new(RunBudget::new().max_cost_usd(1.0)));
+        let scope = ModelCallScope::new()
+            .with_budget(tracker.clone())
+            .with_spend_ledger(ledger.clone(), "acme");
+        scope.meter(image_call(2), async { Ok(((), images(2))) }).await.unwrap();
+
+        let key = SpendKey::org("acme").with_vendor("muse");
+        assert_eq!(ledger.spent(&key, SpendPeriod::Day).await.unwrap(), 20_000);
+        assert_eq!(tracker.usage().cost_micro_usd, 20_000);
+        assert_eq!(tracker.usage().model_calls, 0);
+        assert_eq!(tracker.units(), UsageVector::new().with(UsageUnit::Images, 2));
+    }
+
+    #[tokio::test]
+    async fn a_failed_unit_call_releases_its_hold_and_counts_nothing() {
+        let ledger = capped(10_000);
+        let tracker = Arc::new(BudgetTracker::new(RunBudget::new()));
+        let scope = ModelCallScope::new()
+            .with_budget(tracker.clone())
+            .with_spend_ledger(ledger.clone(), "acme");
+        let failed = scope
+            .meter(image_call(1), async {
+                Err::<((), MeteredUsage), _>(crate::AdkError::model("down"))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(failed.message, "down");
+        assert_eq!(tracker.units(), UsageVector::new());
+        // The released hold leaves the whole cap for the next call.
+        scope.meter(image_call(1), async { Ok(((), images(1))) }).await.unwrap();
+        assert_eq!(ledger.spent(&SpendKey::org("acme"), SpendPeriod::Day).await.unwrap(), 10_000);
+    }
+
+    #[tokio::test]
+    async fn an_unpriced_unit_call_is_refused_under_a_ledger_cap() {
+        let scope = ModelCallScope::new().with_spend_ledger(capped(1_000_000), "acme");
+        let sent = AtomicBool::new(false);
+        let refused = scope
+            .meter(UsageCall::new("deepgram", "nova-3"), async {
+                sent.store(true, Ordering::SeqCst);
+                Ok(((), MeteredUsage::default()))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, crate::SPEND_LIMIT_EXCEEDED_CODE);
+        assert!(!sent.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn an_unpriced_unit_call_is_refused_under_a_budget_cost_cap() {
+        let tracker = Arc::new(BudgetTracker::new(RunBudget::new().max_cost_usd(5.0)));
+        let scope = ModelCallScope::new().with_budget(tracker.clone());
+        let sent = AtomicBool::new(false);
+        let refused = scope
+            .meter(UsageCall::new("deepgram", "nova-3"), async {
+                sent.store(true, Ordering::SeqCst);
+                Ok(((), MeteredUsage::default()))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "budget.cost_unknown");
+        assert!(!sent.load(Ordering::SeqCst));
+        // Nothing ran, so nothing is recorded against later calls.
+        assert!(tracker.check().is_ok());
+
+        let opted_out = Arc::new(BudgetTracker::new(
+            RunBudget::new().max_cost_usd(5.0).allow_unpriced_models(),
+        ));
+        let scope = ModelCallScope::new().with_budget(opted_out.clone());
+        scope
+            .meter(UsageCall::new("deepgram", "nova-3"), async {
+                Ok(((), MeteredUsage::new(UsageVector::new().with(UsageUnit::AudioMillis, 800))))
+            })
+            .await
+            .unwrap();
+        assert_eq!(opted_out.units(), UsageVector::new().with(UsageUnit::AudioMillis, 800));
+    }
+
+    #[tokio::test]
+    async fn an_unpriced_unit_call_without_a_cap_commits_the_estimate() {
+        let ledger = Arc::new(InMemorySpendLedger::default());
+        let scope = ModelCallScope::new()
+            .with_spend_ledger(ledger.clone(), "acme")
+            .with_spend_estimate(LlmSpendEstimate::per_call(7_000));
+        scope
+            .meter(UsageCall::new("deepgram", "nova-3"), async {
+                Ok(((), MeteredUsage::default()))
+            })
+            .await
+            .unwrap();
+        let key = SpendKey::org("acme").with_vendor("deepgram");
+        assert_eq!(ledger.spent(&key, SpendPeriod::Day).await.unwrap(), 7_000);
+    }
+
+    #[tokio::test]
+    async fn a_unit_call_is_refused_once_the_budget_is_spent() {
+        let tracker = Arc::new(BudgetTracker::new(RunBudget::new().max_cost_micro_usd(10_000)));
+        let scope = ModelCallScope::new().with_budget(tracker.clone());
+        scope.meter(image_call(1), async { Ok(((), images(1))) }).await.unwrap();
+        let refused = scope.meter(image_call(1), async { Ok(((), images(1))) }).await.unwrap_err();
+        assert_eq!(refused.code, "budget.cost");
+    }
+
+    #[tokio::test]
+    async fn the_free_function_meters_against_the_current_scope() {
+        let tracker = Arc::new(BudgetTracker::new(RunBudget::new()));
+        let scope = ModelCallScope::new().with_budget(tracker.clone());
+        scope.within(meter_usage(image_call(1), async { Ok(((), images(1))) })).await.unwrap();
+        assert_eq!(tracker.usage().cost_micro_usd, 10_000);
+        // Outside any scope the call runs unmetered.
+        meter_usage(image_call(1), async { Ok(((), images(1))) }).await.unwrap();
+        assert_eq!(tracker.usage().cost_micro_usd, 10_000);
+    }
+
     #[test]
     fn vendor_is_read_from_the_model_family() {
         assert_eq!(vendor_for_model("gemini-3.7-flash"), "gemini");
@@ -726,6 +1231,7 @@ mod tests {
         assert_eq!(vendor_for_model("gpt-5.2"), "openai");
         assert_eq!(vendor_for_model("o3-mini"), "openai");
         assert_eq!(vendor_for_model("deepseek-v4"), "deepseek");
+        assert_eq!(vendor_for_model("muse-image-1.0"), "muse");
         assert_eq!(vendor_for_model("llama-4-scout"), "unknown");
     }
 

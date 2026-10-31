@@ -87,6 +87,10 @@ impl ElevenLabsTts {
 
 #[async_trait]
 impl TtsProvider for ElevenLabsTts {
+    fn billing(&self) -> Option<crate::AudioBilling> {
+        Some(crate::AudioBilling::new("elevenlabs", "eleven_multilingual_v2"))
+    }
+
     async fn synthesize(&self, request: &TtsRequest) -> AudioResult<AudioFrame> {
         let voice_id = if request.voice.is_empty() { &self.voices[0].id } else { &request.voice };
         let url =

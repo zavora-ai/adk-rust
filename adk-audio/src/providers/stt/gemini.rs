@@ -95,6 +95,10 @@ impl GeminiStt {
 
 #[async_trait]
 impl SttProvider for GeminiStt {
+    fn billing(&self) -> Option<crate::AudioBilling> {
+        Some(crate::AudioBilling::new("gemini", self.model.clone()))
+    }
+
     async fn transcribe(&self, audio: &AudioFrame, opts: &SttOptions) -> AudioResult<Transcript> {
         let wav_bytes = frame_to_wav_bytes(audio)?;
 

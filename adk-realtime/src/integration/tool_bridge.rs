@@ -88,7 +88,8 @@ impl ToolBridgeAdapter {
 impl ToolHandler for ToolBridgeAdapter {
     async fn execute(&self, call: &ToolCall) -> Result<Value> {
         let ctx: Arc<dyn ToolContext> = self.context_factory.create_context(&call.call_id);
-        match self.tool.execute(ctx, call.arguments.clone()).await {
+        let execution = self.tool.execute(ctx.clone(), call.arguments.clone());
+        match adk_core::ModelCallScope::within_tool(ctx.as_ref(), execution).await {
             Ok(value) => Ok(value),
             Err(e) => {
                 Ok(adk_core::tool_error_response(self.tool.name(), &e, self.expose_error_messages))

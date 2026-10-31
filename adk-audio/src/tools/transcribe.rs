@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use adk_core::{UsageUnit, UsageVector};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -9,7 +10,8 @@ use crate::traits::{SttOptions, SttProvider};
 
 /// Tool that transcribes audio to text.
 ///
-/// Accepts JSON referencing an audio artifact and returns `{text, confidence}`.
+/// Accepts JSON referencing an audio artifact and returns `{text, confidence}`. A call to a
+/// billed provider is metered against the run ([`crate::metering`]).
 pub struct TranscribeTool {
     stt: Arc<dyn SttProvider>,
 }
@@ -59,11 +61,22 @@ impl adk_core::Tool for TranscribeTool {
         let frame = crate::frame::AudioFrame::new(Bytes::from(data), sample_rate, 1);
 
         let opts = SttOptions { language, ..Default::default() };
-        let transcript = self
-            .stt
-            .transcribe(&frame, &opts)
-            .await
-            .map_err(|e| adk_core::AdkError::tool(format!("transcribe: {e}")))?;
+        let transcribe = async {
+            self.stt
+                .transcribe(&frame, &opts)
+                .await
+                .map_err(|e| adk_core::AdkError::tool(format!("transcribe: {e}")))
+        };
+        // A billed provider's call counts against the run; a refused one is never sent.
+        let transcript = match self.stt.billing() {
+            Some(billing) => {
+                let audio =
+                    UsageVector::new().with(UsageUnit::AudioMillis, u64::from(frame.duration_ms));
+                let (call, usage) = billing.meter(audio);
+                adk_core::meter_usage(call, async { Ok((transcribe.await?, usage)) }).await?
+            }
+            None => transcribe.await?,
+        };
 
         Ok(serde_json::json!({
             "text": transcript.text,

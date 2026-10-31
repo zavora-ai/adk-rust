@@ -42,6 +42,7 @@
 pub mod codec;
 pub mod error;
 pub mod frame;
+pub mod metering;
 pub mod mixer;
 pub mod pipeline;
 pub mod providers;
@@ -76,6 +77,7 @@ pub mod registry;
 pub use codec::{AudioFormat, decode, encode};
 pub use error::{AudioError, AudioResult};
 pub use frame::{AudioFrame, merge_frames};
+pub use metering::AudioBilling;
 pub use mixer::Mixer;
 pub use pipeline::{
     AudioPipelineBuilder, PipelineControl, PipelineHandle, PipelineInput, PipelineMetrics,
