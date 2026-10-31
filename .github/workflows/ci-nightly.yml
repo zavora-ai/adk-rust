@@ -360,8 +360,9 @@ jobs:
         --test store_conformance_firestore
         --test spend_ledger_postgres
 
-    # The session services' erasure contract on the backends the PR tier does not reach
-    # (PostgreSQL's runs in the PR tier's postgres job); the Redis Cluster case needs a cluster.
+    # The session services' erasure contract and the subject data suite on the backends the
+    # PR tier does not reach (PostgreSQL's run in the PR tier's postgres job); the Redis Cluster
+    # case needs a cluster.
     - name: Run the session erasure contract on every backend
       if: ${{ !cancelled() }}
       run: >-
@@ -372,7 +373,7 @@ jobs:
         --test mongodb_state_tests
         --test neo4j_state_tests
         --test session_contract_firestore
-        -E 'test(/delete_all_sessions_erases/) and not test(/cluster/)'
+        -E 'test(/delete_all_sessions_erases|subject_data/) and not test(/cluster/)'
 
     # The Phase 2 gates — crash mid-payment, one firing per schedule, stalled worker,
     # kill switch — with separate worker, scheduler, and replica processes on every
