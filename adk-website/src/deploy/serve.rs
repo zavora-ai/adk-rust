@@ -309,15 +309,15 @@ async fn start(
         let sink = kernel.signal_sink(partition).map_err(config)?;
         site.signals.attach(sink.with_audit(site.audit.clone()));
     }
-    kernel.start().await.map_err(config)?;
-    // A guardrail breached before the restart pauses its jobs again before the tracker's
-    // next run (A-I15).
+    // A guardrail breached before the restart pauses its jobs again before the kernel takes
+    // their work (A-I15).
     for site in &sites {
         let paused = site.tracker().restore_pauses().await.map_err(config)?;
         if !paused.is_empty() {
             tracing::info!(site = %site.site.name, jobs = ?paused, "jobs paused by a breached guardrail");
         }
     }
+    kernel.start().await.map_err(config)?;
     let kernel_addr = kernel
         .control_addr()
         .await

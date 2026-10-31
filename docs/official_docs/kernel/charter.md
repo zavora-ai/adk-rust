@@ -227,7 +227,7 @@ fn kernel(stores: &KernelStores, site: uuid::Uuid, has_channel: bool) -> Result<
 The workflows a bound target names are the product's, added with `KernelBuilder::workflow`, which
 keeps every executor given beside the others; `KernelBuilder::workflows` replaces them.
 `adk-website serve` binds its jobs this way (`adk_website::jobs::processes` is its binding table)
-and calls `KpiTracker::restore_pauses` once its kernel starts.
+and calls `KpiTracker::restore_pauses` before its kernel starts.
 
 ## Events and urgency
 
