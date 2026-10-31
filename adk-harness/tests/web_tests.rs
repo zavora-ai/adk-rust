@@ -3,7 +3,7 @@
 
 #![cfg(all(feature = "runner", feature = "web", feature = "web-fixture"))]
 
-mod common;
+use crate::common;
 
 use std::net::SocketAddr;
 use std::sync::Arc;

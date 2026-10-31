@@ -5,8 +5,9 @@
 //! response parsing (json/text), and status code validation.
 //!
 //! The URL is interpolated from workflow state, so every request, and every
-//! redirect it follows, is checked against an [`HttpActionPolicy`]. Logs and
-//! errors show the URL without its query string or credentials.
+//! redirect it follows, is checked against an [`HttpActionPolicy`], which by default
+//! admits public addresses only. Logs and errors show the URL without its query string
+//! or credentials.
 //!
 //! The same policy governs the notification node's webhook and the RSS node's
 //! feed URL.
@@ -14,6 +15,7 @@
 use std::collections::HashMap;
 
 use adk_action::{HttpAuth, HttpBody, HttpMethod, HttpNodeConfig, interpolate_variables};
+use adk_core::webhook_delivery::{PublicOnlyResolver, is_non_public};
 use serde_json::{Value, json};
 
 use crate::error::{GraphError, Result};
@@ -25,7 +27,13 @@ use crate::node::{NodeContext, NodeOutput};
 /// |---------|---------|
 /// | Schemes | `https` and `http` |
 /// | Hosts | Any host |
+/// | Addresses | Public only: a host that is, or resolves to, a loopback, private, link-local (cloud metadata included), CGNAT, unique-local, multicast or IPv4-embedding IPv6 address is refused ([`adk_core::webhook_delivery::is_non_public`]) |
 /// | Redirects | Up to 5, each checked against this policy |
+///
+/// Host names are resolved inside the HTTP client by a resolver that refuses non-public
+/// answers, so the address checked is the address connected to, and system proxies are not
+/// used. [`allow_private_networks`](Self::allow_private_networks) admits every address, and
+/// with it the system proxies, for workflows that call services on a private network.
 ///
 /// # Example
 ///
@@ -44,6 +52,7 @@ pub struct HttpActionPolicy {
     allowed_schemes: Vec<String>,
     allowed_hosts: Option<Vec<String>>,
     max_redirects: usize,
+    allow_private: bool,
     /// The host's secret a governed call's credential digests are keyed with.
     credential_key: Option<std::sync::Arc<[u8]>>,
 }
@@ -54,6 +63,7 @@ impl std::fmt::Debug for HttpActionPolicy {
             .field("allowed_schemes", &self.allowed_schemes)
             .field("allowed_hosts", &self.allowed_hosts)
             .field("max_redirects", &self.max_redirects)
+            .field("allow_private", &self.allow_private)
             .field("credential_key", &self.credential_key.as_ref().map(|_| "[set]"))
             .finish()
     }
@@ -65,15 +75,38 @@ impl Default for HttpActionPolicy {
             allowed_schemes: vec!["https".to_string(), "http".to_string()],
             allowed_hosts: None,
             max_redirects: 5,
+            allow_private: false,
             credential_key: None,
         }
     }
 }
 
 impl HttpActionPolicy {
-    /// Creates the default policy: `https` and `http`, any host, 5 checked redirects.
+    /// Creates the default policy: `https` and `http`, any public host, 5 checked redirects.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Admits loopback, private, link-local and other non-public addresses, and requests
+    /// through the system proxies.
+    ///
+    /// Use it only for workflows whose URLs an operator controls: a URL interpolated from
+    /// state can then reach the host's own services and the cloud metadata endpoint.
+    /// Combine it with [`allow_hosts`](Self::allow_hosts) to name the internal hosts.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_graph::action::http::HttpActionPolicy;
+    ///
+    /// let policy = HttpActionPolicy::new()
+    ///     .allow_hosts(["billing.internal.example.com"])
+    ///     .allow_private_networks();
+    /// ```
+    #[must_use]
+    pub fn allow_private_networks(mut self) -> Self {
+        self.allow_private = true;
+        self
     }
 
     /// Replaces the permitted URL schemes, compared case-insensitively.
@@ -164,28 +197,51 @@ impl HttpActionPolicy {
                 self.allowed_schemes.join(", ")
             ));
         }
-        let Some(allowed_hosts) = &self.allowed_hosts else { return Ok(()) };
         let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
-        let permitted = allowed_hosts.iter().any(|allowed| match allowed.strip_prefix("*.") {
-            Some(domain) => host.strip_suffix(domain).is_some_and(|rest| rest.ends_with('.')),
-            None => *allowed == host,
-        });
-        if permitted {
-            Ok(())
-        } else {
-            Err(format!(
-                "host '{host}' is not in the HTTP action policy allowlist; add it with \
-                 `HttpActionPolicy::allow_hosts`"
-            ))
+        if let Some(allowed_hosts) = &self.allowed_hosts {
+            let permitted = allowed_hosts.iter().any(|allowed| match allowed.strip_prefix("*.") {
+                Some(domain) => host.strip_suffix(domain).is_some_and(|rest| rest.ends_with('.')),
+                None => *allowed == host,
+            });
+            if !permitted {
+                return Err(format!(
+                    "host '{host}' is not in the HTTP action policy allowlist; add it with \
+                     `HttpActionPolicy::allow_hosts`"
+                ));
+            }
         }
+        if self.allow_private {
+            return Ok(());
+        }
+        // An address literal is never resolved, so the resolver cannot check it. IPv6 hosts
+        // are serialized in brackets, and every IPv4 form as a dotted quad.
+        let unbracketed = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(&host);
+        let non_public = match unbracketed.parse::<std::net::IpAddr>() {
+            Ok(ip) => is_non_public(ip),
+            Err(_) => {
+                let name = host.trim_end_matches('.');
+                name == "localhost" || name.ends_with(".localhost")
+            }
+        };
+        if non_public {
+            return Err(format!(
+                "host '{host}' is a loopback, private, link-local or other non-public address, \
+                 which the HTTP action policy refuses by default; for a workflow whose URLs an \
+                 operator controls, set `HttpActionPolicy::allow_private_networks`"
+            ));
+        }
+        Ok(())
     }
 
-    /// A client whose redirects are checked against this policy.
+    /// A client whose redirects are checked against this policy and, unless private networks
+    /// are allowed, whose resolver refuses non-public addresses.
     pub(crate) fn client(&self) -> std::result::Result<reqwest::Client, String> {
-        reqwest::Client::builder()
-            .redirect(self.redirect_policy())
-            .build()
-            .map_err(|e| format!("failed to build the HTTP client: {e}"))
+        let mut builder = reqwest::Client::builder().redirect(self.redirect_policy());
+        if !self.allow_private {
+            // A proxy would resolve the host itself, out of the resolver's reach.
+            builder = builder.no_proxy().dns_resolver(std::sync::Arc::new(PublicOnlyResolver));
+        }
+        builder.build().map_err(|e| format!("failed to build the HTTP client: {e}"))
     }
 
     /// A redirect policy that re-applies [`Self::check`] to every hop.
@@ -886,12 +942,72 @@ mod tests {
     }
 
     #[test]
-    fn http_and_https_to_any_host_are_permitted_by_default() {
+    fn http_and_https_to_public_hosts_are_permitted_by_default() {
         let policy = HttpActionPolicy::default();
-        assert_eq!(
-            (policy.check(&url("https://example.com/a")), policy.check(&url("http://10.0.0.1/"))),
-            (Ok(()), Ok(()))
-        );
+        for raw in ["https://example.com/a", "http://93.184.216.34/", "https://[2606:4700::1111]/"]
+        {
+            assert_eq!(policy.check(&url(raw)), Ok(()), "{raw}");
+        }
+    }
+
+    #[test]
+    fn non_public_addresses_are_refused_unless_private_networks_are_allowed() {
+        let internal = [
+            "http://127.0.0.1:8080/",
+            "http://0x7f.1/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.1/",
+            "http://172.16.4.2/",
+            "http://192.168.1.1/",
+            "http://100.64.0.1/",
+            "http://0.0.0.0/",
+            "http://[::1]/",
+            "http://[::ffff:169.254.169.254]/",
+            "http://[64:ff9b::a9fe:a9fe]/",
+            "http://[fd00:ec2::254]/",
+            "http://[fe80::1]/",
+            "http://localhost/",
+            "http://LOCALHOST./",
+            "http://api.localhost/",
+        ];
+        let default = HttpActionPolicy::default();
+        let opted_in = HttpActionPolicy::new().allow_private_networks();
+        for raw in internal {
+            let error = default.check(&url(raw)).unwrap_err();
+            assert!(error.contains("allow_private_networks"), "{raw}: {error}");
+            assert_eq!(opted_in.check(&url(raw)), Ok(()), "{raw}");
+        }
+    }
+
+    #[test]
+    fn an_allowlisted_host_is_still_refused_at_a_non_public_address() {
+        let policy = HttpActionPolicy::new().allow_hosts(["127.0.0.1"]);
+        assert!(policy.check(&url("http://127.0.0.1/")).unwrap_err().contains("non-public"));
+        let opted_in = policy.allow_private_networks();
+        assert_eq!(opted_in.check(&url("http://127.0.0.1/")), Ok(()));
+    }
+
+    /// The client checks the address a name resolves to when it connects, so a name that
+    /// resolves to loopback is refused on the first request and on every redirect.
+    #[tokio::test]
+    async fn the_default_client_refuses_a_name_that_resolves_to_loopback() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let target = format!("http://localhost:{port}/");
+
+        let error = HttpActionPolicy::default().client().unwrap().get(&target).send().await;
+        let error = error.expect_err("a name for loopback must not be connected to");
+        assert!(error.is_connect(), "{error:?}");
+        let accepted =
+            tokio::time::timeout(std::time::Duration::from_millis(200), listener.accept()).await;
+        assert!(accepted.is_err(), "no connection reached the listener");
+
+        let opted_in = HttpActionPolicy::new().allow_private_networks().client().unwrap();
+        let request = tokio::spawn(async move { opted_in.get(&target).send().await });
+        let accepted =
+            tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept()).await;
+        assert!(matches!(accepted, Ok(Ok(_))), "the opt-in connects");
+        request.abort();
     }
 
     #[test]

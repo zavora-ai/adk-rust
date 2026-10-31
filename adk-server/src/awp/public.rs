@@ -21,6 +21,19 @@
 //! input, and the agent filed no signal for it, the edge files one of its own —
 //! `abuse_observed` naming a verified caller, else `inbound_message` for the thread (spec 3.5
 //! §7.10, A-I3, S7).
+//!
+//! Who a conversation runs as:
+//!
+//! | Caller | Session user | `is_authenticated()` |
+//! |---|---|---|
+//! | Verified credential | Its requester id | `true` |
+//! | Anyone else | `public-{id}`, an HMAC of its limit key under a key derived from [`ConsentConfig::subject_key`](super::ConsentConfig::subject_key) | `false` |
+//!
+//! A visitor's run carries the conversation's metadata as
+//! [`RunConfig::request_metadata`], which authenticates no one, so no standing approval, Auto
+//! mode, requested call or other privilege reserved for an authenticated user applies to it.
+//! The visitor id is stable for one limit key while the subject key is kept; visitors behind
+//! one address share it, and with it their `user:` state.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -40,8 +53,9 @@ use awp_types::{
     AbuseKind, Channel, MessageCategory, RequesterId, Signal, SignalKind, ThreadRef, TrustTier,
 };
 use futures::StreamExt;
+use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -896,12 +910,21 @@ pub(crate) struct Watch {
     pub(crate) edge: String,
 }
 
+/// Derives the key visitor ids are made with from the edge's subject key, so a visitor id
+/// and a subject session token are never made with the same key.
+pub(crate) fn visitor_key(subject_key: &[u8]) -> Arc<[u8]> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(subject_key).expect("HMAC takes any key length");
+    mac.update(b"adk-awp public visitor id v1");
+    Arc::from(mac.finalize().into_bytes().as_slice())
+}
+
 /// The public agent the conversation endpoints run, under the public partition's policy.
 pub(crate) struct PublicPartition {
     runner: Runner,
     sessions: Arc<dyn SessionService>,
     app_name: String,
     watch: Watch,
+    visitor_key: Arc<[u8]>,
 }
 
 impl PublicPartition {
@@ -912,6 +935,7 @@ impl PublicPartition {
         app_name: &str,
         audit: Option<&adk_core::audit_log::AuditTrail>,
         watch: Watch,
+        visitor_key: Arc<[u8]>,
     ) -> Result<Self> {
         let policy = WatchedPolicy { inner: tools.policy(), watch: watch.turns.clone() };
         let mut builder = Runner::builder()
@@ -924,13 +948,19 @@ impl PublicPartition {
             builder = builder.audit_log(Arc::clone(audit.recorder()));
         }
         let runner = builder.build()?;
-        Ok(Self { runner, sessions, app_name: app_name.to_owned(), watch })
+        Ok(Self { runner, sessions, app_name: app_name.to_owned(), watch, visitor_key })
     }
 
-    /// The session user a caller converses as: its requester id, else a digest of its limit key.
-    fn user_for(caller: &EdgeCaller) -> String {
+    /// The session user a caller converses as: its requester id, else an HMAC of its limit
+    /// key, so the id does not reveal the address or credential it was derived from.
+    fn user_for(&self, caller: &EdgeCaller) -> String {
         caller.requester.as_ref().map_or_else(
-            || format!("public-{}", hex::encode(&Sha256::digest(caller.limit_key.as_bytes())[..8])),
+            || {
+                let mut mac = Hmac::<Sha256>::new_from_slice(&self.visitor_key)
+                    .expect("HMAC takes any key length");
+                mac.update(caller.limit_key.as_bytes());
+                format!("public-{}", hex::encode(&mac.finalize().into_bytes()[..16]))
+            },
             |requester| requester.as_str().to_owned(),
         )
     }
@@ -951,7 +981,7 @@ impl PublicPartition {
         consent: &[Uuid],
         governance: Option<adk_core::GovernanceControl>,
     ) -> Result<String> {
-        let user = Self::user_for(caller);
+        let user = self.user_for(caller);
         let flagged = self.watch.screen.flags(text);
         self.watch.turns.begin(&user, session);
         let reply =
@@ -1059,15 +1089,20 @@ impl PublicPartition {
                 consent.iter().map(ToString::to_string).collect::<Vec<_>>().join(","),
             ),
         ]);
-        if let Some(requester) = &caller.requester {
-            metadata.insert(META_REQUESTER.to_owned(), requester.as_str().to_owned());
-        }
+        // A verified credential authenticates its requester; any other caller's run carries
+        // the metadata without authenticating anyone.
+        let (request_context, request_metadata) = match &caller.requester {
+            Some(requester) => {
+                metadata.insert(META_REQUESTER.to_owned(), requester.as_str().to_owned());
+                let context =
+                    RequestContext { user_id: user.to_owned(), scopes: Vec::new(), metadata };
+                (Some(context), HashMap::new())
+            }
+            None => (None, metadata),
+        };
         let run_config = RunConfig {
-            request_context: Some(RequestContext {
-                user_id: user.to_owned(),
-                scopes: Vec::new(),
-                metadata,
-            }),
+            request_context,
+            request_metadata,
             governance: governance.into_iter().collect(),
             ..RunConfig::default()
         };

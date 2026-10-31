@@ -75,7 +75,7 @@ jobs:
     - name: Container shell against the daemon (adk-harness)
       run: |
         cargo nextest run -p adk-harness --features docker,hooks \
-          --test container_shell_tests --run-ignored all --no-fail-fast
+          --test integration -E 'test(/^container_shell_tests::/)' --run-ignored all --no-fail-fast
 
     - name: Container scenario (examples/harness_agent)
       run: cargo run --manifest-path examples/harness_agent/Cargo.toml -- container_shell_shares_workspace

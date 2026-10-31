@@ -140,6 +140,7 @@ The example needs `adk-agent`, `adk-core`, `adk-model`, `adk-runner`, `adk-sessi
 | `strict_toolsets(bool)` | Fail the turn when a toolset fails to resolve, instead of skipping it |
 | `sub_agent(agent)` | Add a sub-agent for transfers |
 | `max_iterations(n)` | Set the maximum model round-trips (default 100, `DEFAULT_MAX_ITERATIONS`) |
+| `history_processor(fn)` | Add a processor that rewrites the agent's history before each model request; the rest of the turn continues from its result |
 | `tool_timeout(duration)` | Set the per-tool timeout (default five minutes, `DEFAULT_TOOL_TIMEOUT`) |
 | `expose_tool_error_messages(bool)` | Send every failed tool's error message to the model; by default only a rejection's message (`ErrorCategory::is_rejection`) joins its component, category, and code |
 | `default_retry_budget(budget)` | Set the retry budget for every tool |
@@ -182,6 +183,10 @@ A workflow agent stops when a sub-agent holds a call and resumes at that sub-age
 The function response for a failed tool call names the error's component, category, and code (`{"error": ...}`) instead of quoting its message, so a provider never receives text a tool did not mean to share. `expose_tool_error_messages(true)` sends the full message; an `on_tool_error` callback, or a tool that returns `Ok(json!({"error": "..."}))`, chooses the text for one failure. Argument validation errors (`tool.invalid_arguments`) keep their message so the model can correct the call.
 
 A toolset whose `tools()` call fails is skipped for that turn with a `warn` log; `strict_toolsets(true)` fails the turn instead. A final model turn with no answer — no parts, only thinking, or only whitespace — fails the run with `model.empty_response`.
+
+### Steering
+
+`LlmAgent` and `CodeActAgent` take the messages `Runner::steer` queues on their run at a safe point: after a tool step's results are in the history and before the next model request. Each message is yielded as a user-authored event marked with `EventActions::steering`, which the runner saves, and joins the history the next request carries; a turn that ends with a direct answer takes none. Workflow members and transfer targets share the run's queue, and `ParallelAgent` branches take none. See [Steering a Running Agent](../docs/official_docs/agents/llm-agent.md#steering-a-running-agent).
 
 ### Generation Config
 

@@ -8,7 +8,7 @@
 // `adk-tool` (for `SimpleToolContext`) comes with `team`, `web` or `mcp`.
 #![cfg(all(feature = "kernel", any(feature = "team", feature = "web", feature = "mcp")))]
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -134,7 +134,7 @@ async fn a_redeclared_driver_tool_stops_matching_its_rule_until_reapproved() {
         .build();
     drivers.start().await.unwrap();
     let manifest = DriverManifest::from_toml(&format!(
-        "id = \"notes\"\ncommand = {:?}\nargs = [\"stdio_driver\", \"--exact\", \"--ignored\", \"--quiet\", \"--test-threads=1\"]\n\
+        "id = \"notes\"\ncommand = {:?}\nargs = [\"kernel_driver_tests::stdio_driver\", \"--exact\", \"--ignored\", \"--quiet\", \"--test-threads=1\"]\n\
          sandbox = \"unsandboxed\"\nenv = {{ {SERVER_ENV} = \"1\", {DECLARATION_ENV} = {:?} }}\n\
          [tools]\nsend_note = \"send_external\"\nread_note = \"read\"\n",
         std::env::current_exe().unwrap().display().to_string(),

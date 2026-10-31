@@ -198,8 +198,9 @@ pub trait Tool: Send + Sync {
 
     /// Indicates whether this tool performs no side effects.
     ///
-    /// [`ToolExecutionStrategy::Auto`] includes a call in its concurrent subset
-    /// only when the selected tool is both read-only and concurrency-safe.
+    /// [`ToolExecutionStrategy::Auto`] overlaps a call with its adjacent
+    /// neighbours only when the selected tool is both read-only and
+    /// concurrency-safe.
     fn is_read_only(&self) -> bool {
         false
     }
@@ -384,7 +385,10 @@ pub trait ToolContext: CallbackContext {
         false
     }
 
-    /// Returns authenticated request metadata inherited from the parent run.
+    /// Returns the request metadata inherited from the parent run
+    /// ([`InvocationContext::request_metadata`](crate::InvocationContext::request_metadata)):
+    /// authenticated only when [`is_authenticated`](crate::ReadonlyContext::is_authenticated)
+    /// says so.
     fn request_metadata(&self) -> std::collections::HashMap<String, Value> {
         std::collections::HashMap::new()
     }
@@ -658,8 +662,10 @@ pub enum ToolExecutionStrategy {
     /// This is an explicit caller override. The caller is responsible for
     /// ensuring every selected tool is safe to execute concurrently.
     Parallel,
-    /// Execute calls whose tools report both read-only and concurrency-safe
-    /// concurrently, then execute all remaining calls sequentially.
+    /// Execute calls in LLM-returned order, overlapping only a run of adjacent
+    /// calls whose tools report both read-only and concurrency-safe. Any other
+    /// call runs alone, in its place: it starts after the calls listed before it
+    /// finish, and the calls listed after it wait for it.
     Auto,
 }
 

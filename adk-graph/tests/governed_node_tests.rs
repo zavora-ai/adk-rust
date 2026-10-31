@@ -1199,6 +1199,7 @@ mod http {
             HttpActionPolicy::new()
                 .allow_schemes(["http"])
                 .allow_hosts(["127.0.0.1"])
+                .allow_private_networks()
                 .max_redirects(0),
         )
     }

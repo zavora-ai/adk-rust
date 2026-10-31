@@ -263,7 +263,7 @@ endpoint:
 
 | Step | Behaviour |
 |------|-----------|
-| Egress check | HTTPS only, and the host must not be, or resolve to, a loopback, private, link-local, CGNAT, multicast, or IPv4-embedding IPv6 address. Resolution runs inside the HTTP client, so the address checked is the address connected to; redirects are never followed and system proxies are bypassed |
+| Egress check | HTTPS only, and the host must not be, or resolve to, a loopback, private, link-local, CGNAT, multicast, or IPv4-embedding IPv6 address. Resolution runs inside the HTTP client, so the address checked is the address connected to; redirects are never followed and system proxies are bypassed. When that client cannot be built, for example because the TLS setup fails, every message is dead-lettered with the reason and no request is sent |
 | Signing | Each attempt is signed under the message's stable `webhook-id` with a fresh timestamp |
 | Success | Any `2xx` |
 | Retry | Connection errors, timeouts, `408`, `425`, `429`, and `5xx`: exponential backoff with full jitter, raised to `Retry-After` up to the backoff cap |

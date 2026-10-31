@@ -8,13 +8,12 @@
 //! ```bash
 //! DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
 //!   cargo nextest run -p adk-harness --features postgres --run-ignored only \
-//!   --test shared_store_postgres_tests
+//!   --test integration -E 'test(/^shared_store_postgres_tests::/)'
 //! ```
 
 #![cfg(all(feature = "postgres", feature = "runner"))]
 
-mod common;
-mod replicas;
+use crate::replicas;
 
 use std::str::FromStr;
 use std::sync::Arc;

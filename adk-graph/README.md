@@ -791,8 +791,10 @@ Paths and URLs come from workflow state, so both are confined:
   every root through a symbolic link, fails the node.
 - **HTTP**, **notification**, and **RSS** nodes accept only the schemes, hosts, and
   redirect count an `HttpActionPolicy` permits (`with_http_policy`). The default allows
-  `https` and `http` to any host and up to 5 redirects, each re-checked. Logs omit the
-  query string, and the notification webhook URL is logged by host only.
+  `https` and `http` to any public host and up to 5 redirects, each re-checked; a host that
+  is, or resolves to, a loopback, private, link-local or metadata address is refused unless
+  `allow_private_networks` is set. Logs omit the query string, and the notification webhook
+  URL is logged by host only.
 
 ## SQLx compatibility
 

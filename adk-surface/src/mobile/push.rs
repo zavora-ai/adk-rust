@@ -199,14 +199,36 @@ pub(crate) struct PushSender {
 }
 
 impl PushSender {
-    pub(crate) fn new(vapid: Vapid, allowlist: PushAllowlist, backoff: Duration) -> Self {
+    /// A sender to the push services `allowlist` names, signing with `vapid`.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::Source`] with `surface.phone.push_client` when the client cannot be
+    /// built; a default client in its place would follow redirects.
+    pub(crate) fn new(
+        vapid: Vapid,
+        allowlist: PushAllowlist,
+        backoff: Duration,
+    ) -> Result<Self, MobileError> {
         // A push service never redirects; following one could reach a host the list refuses.
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(15))
             .build()
-            .unwrap_or_default();
-        Self { client, vapid, allowlist, ttl: PUSH_TTL, backoff, attempts: 3 }
+            .map_err(|error| {
+                MobileError::Source(adk_core::AdkError::new(
+                    adk_core::ErrorComponent::Server,
+                    adk_core::ErrorCategory::Internal,
+                    "surface.phone.push_client",
+                    format!(
+                        "the push client could not be built ({error}); the phone sends no \
+                         wake-up through a client that follows redirects. Fix the TLS setup the \
+                         error names, such as a native root certificate store with no valid \
+                         certificate"
+                    ),
+                ))
+            })?;
+        Ok(Self { client, vapid, allowlist, ttl: PUSH_TTL, backoff, attempts: 3 })
     }
 
     pub(crate) fn vapid(&self) -> &Vapid {

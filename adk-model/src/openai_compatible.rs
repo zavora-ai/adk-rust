@@ -220,6 +220,32 @@ impl OpenAICompatibleConfig {
             .with_base_url("https://api.orcarouter.ai/v1")
     }
 
+    /// Cheaper Inference preset.
+    ///
+    /// Cheaper Inference serves models from several vendors behind one
+    /// OpenAI-compatible endpoint; model IDs are bare, such as `gpt-5.4-mini`
+    /// or `claude-sonnet-5`.
+    ///
+    /// Default model suggestion: `gpt-5.4-mini`
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_model::{OpenAICompatible, OpenAICompatibleConfig};
+    ///
+    /// let config = OpenAICompatibleConfig::cheaper_inference("ci_live_...", "gpt-5.4-mini");
+    /// assert_eq!(config.base_url.as_deref(), Some("https://api.cheaperinference.com/v1"));
+    ///
+    /// let model = OpenAICompatible::new(config)?;
+    /// # let _ = model;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    pub fn cheaper_inference(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::new(api_key, model)
+            .with_provider_name("cheaper-inference")
+            .with_base_url("https://api.cheaperinference.com/v1")
+    }
+
     /// Google Gemini (OpenAI-compatible) preset.
     ///
     /// Targets Gemini's OpenAI-compatibility endpoint, letting you use a Gemini
@@ -1652,6 +1678,18 @@ mod tests {
 
         let client = OpenAICompatible::new(config).expect("client builds");
         assert_eq!(client.name(), "openai/gpt-5.6-terra");
+    }
+
+    #[test]
+    fn cheaper_inference_preset_sets_endpoint_and_provider() {
+        let config = OpenAICompatibleConfig::cheaper_inference("test-key", "gpt-5.4-mini");
+        assert_eq!(config.provider_name, "cheaper-inference");
+        assert_eq!(config.model, "gpt-5.4-mini");
+        assert_eq!(config.base_url.as_deref(), Some("https://api.cheaperinference.com/v1"));
+        assert_eq!(config.api_key, "test-key");
+
+        let client = OpenAICompatible::new(config).expect("client builds");
+        assert_eq!(client.name(), "gpt-5.4-mini");
     }
 
     #[test]

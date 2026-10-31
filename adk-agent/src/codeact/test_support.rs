@@ -169,6 +169,7 @@ pub(crate) struct MockInvocationContext {
     user_content: Content,
     session: MockSession,
     run_config: RunConfig,
+    steering_inbox: Option<adk_core::SteeringInbox>,
 }
 
 impl MockInvocationContext {
@@ -179,6 +180,7 @@ impl MockInvocationContext {
             user_content,
             session: MockSession::new(HashMap::new()),
             run_config: RunConfig::default(),
+            steering_inbox: None,
         }
     }
 
@@ -224,6 +226,12 @@ impl MockInvocationContext {
     /// Add a run-wide hook, as a runner installs its plugin manager.
     pub(crate) fn with_invocation_hook(mut self, hook: Arc<dyn adk_core::InvocationHooks>) -> Self {
         self.run_config.invocation_hooks.push(hook);
+        self
+    }
+
+    /// Attach a steering inbox, as a runner does for every run.
+    pub(crate) fn with_steering_inbox(mut self, inbox: adk_core::SteeringInbox) -> Self {
+        self.steering_inbox = Some(inbox);
         self
     }
 
@@ -290,6 +298,9 @@ impl InvocationContext for MockInvocationContext {
     fn end_invocation(&self) {}
     fn ended(&self) -> bool {
         false
+    }
+    fn steering_inbox(&self) -> Option<adk_core::SteeringInbox> {
+        self.steering_inbox.clone()
     }
 }
 

@@ -128,6 +128,12 @@ so it needs an interactive session with Accessibility and Screen Recording permi
 |---------|---------|-----|
 | `examples/orcarouter` | OrcaRouter through the `OpenAICompatibleConfig::orcarouter` preset — chat, tool calling, and a second vendor on the same client | `cargo run --manifest-path examples/orcarouter/Cargo.toml` |
 
+**Requires `CHEAPER_INFERENCE_API_KEY`:**
+
+| Example | Feature | Run |
+|---------|---------|-----|
+| `examples/cheaper_inference` | Cheaper Inference through the `OpenAICompatibleConfig::cheaper_inference` preset — chat, tool calling, and a second vendor on the same client | `cargo run --manifest-path examples/cheaper_inference/Cargo.toml` |
+
 **Requires Google Cloud ADC (`gcloud auth application-default login`):**
 
 | Example | Feature | Run |

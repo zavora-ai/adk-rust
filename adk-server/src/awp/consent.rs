@@ -70,7 +70,8 @@ pub struct ConsentConfig {
     pub scopes: Vec<ConsentScope>,
     /// Policies by version.
     pub policies: BTreeMap<String, ConsentPolicy>,
-    /// The key subject sessions and signed links are authenticated with.
+    /// The key subject sessions and signed links are authenticated with, and the public
+    /// partition's visitor ids are derived from.
     pub subject_key: Arc<[u8]>,
     /// How long a subject session lasts.
     pub session_ttl: chrono::Duration,

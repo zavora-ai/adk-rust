@@ -169,6 +169,10 @@ impl InvocationContext for ActingAgentContext {
         self.inner.requires_tool_confirmation(tool_name)
     }
 
+    fn steering_inbox(&self) -> Option<adk_core::SteeringInbox> {
+        self.inner.steering_inbox()
+    }
+
     async fn get_secret(&self, name: &str) -> Result<Option<String>> {
         self.inner.get_secret(name).await
     }

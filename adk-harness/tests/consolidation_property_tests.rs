@@ -6,7 +6,7 @@
 
 #![cfg(all(feature = "runner", feature = "memory"))]
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -23,6 +23,9 @@ plugin callback that returns a value skips the agent's callbacks of that kind. T
 `on_model_error`: it runs when a model call or its response stream fails, and a response it
 returns answers the turn in the failed call's place. See [Plugins](../core/plugins.md).
 
+A [history processor](#history-processors) is not a callback of one request: it rewrites the
+agent's own history before each model call, and the rest of the turn continues from its result.
+
 ### When `after_agent` Runs
 
 | How the agent's turn ends | `after_agent` |
@@ -168,6 +171,11 @@ error's component, category, and code but not its message, except for a rejectio
 | `Ok(BeforeModelResult::Skip(response))` | Skip model call, use this response instead |
 | `Err(e)` | Abort execution with error |
 
+A modified request changes that model call only: the agent builds the next request of the turn
+from its own history again. A callback that compacts the history repeats the work on every
+request, and its result never carries over. Compaction belongs in a
+[history processor](#history-processors).
+
 **AfterModelCallback** uses `Option<LlmResponse>`:
 
 | Return Value | Effect |
@@ -181,6 +189,72 @@ error's component, category, and code but not its message, except for a rejectio
 - **Before agent/tool callbacks**: Return `None` to continue, `Some(content)` to skip
 - **Before model callback**: Return `Continue(request)` to proceed, `Skip(response)` to bypass the model
 - **After callbacks**: Return `None` to keep original, `Some(...)` to replace
+
+## History Processors
+
+A history processor rewrites an `LlmAgent`'s conversation history before each model request of
+a turn, the first included. Its output replaces the history the turn continues from: later
+steps append to it, so a compaction runs once and carries over. The session keeps every event,
+and the next turn builds its history from the session again.
+
+```rust
+use adk_rust::{CallbackContext, Content, Result};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
+// HistoryProcessor - receives the agent's history and returns its replacement
+type HistoryProcessor = Box<
+    dyn Fn(Arc<dyn CallbackContext>, Vec<Content>)
+        -> Pin<Box<dyn Future<Output = Result<Vec<Content>>> + Send>>
+    + Send + Sync
+>;
+```
+
+| | History processor | `before_model` callback |
+|--|-------------------|-------------------------|
+| Receives | The agent's own history: instructions as `system` contents, the conversation, and the turn's calls and responses, with the call IDs the agent generated for a provider that sent none | The request as built, with what toolsets, enhanced plugins, run hooks and earlier callbacks added |
+| Its result | Replaces the history; later steps of the turn append to it | Is sent once; the next request is built from the history again |
+| Runs | Before each model request, ahead of toolsets, plugins, run hooks and callbacks | Before each model request, after toolsets, enhanced plugins and run hooks |
+| Use it for | Compaction, windows over long tool loops | Per-request material: memories, reminders, caching |
+| `Err(e)` | Ends the turn with the error | Ends the turn with the error |
+
+Processors run in the order added, each receiving the previous one's output. What toolsets,
+plugins, run hooks and `before_model` callbacks add to a request never enters the history, so
+it reaches each request once however the history is compacted.
+
+A provider rejects a function response whose call is not in the request.
+`adk_rust::history::balanced_content_cut` moves a cut back to the nearest point that keeps
+every response with its call:
+
+```rust
+use adk_rust::history::balanced_content_cut;
+use adk_rust::prelude::*;
+use std::sync::Arc;
+
+fn long_running_agent(model: Arc<dyn Llm>) -> Result<LlmAgent> {
+    LlmAgentBuilder::new("long_running_agent")
+        .model(model)
+        .instruction("You reconcile ledgers page by page.")
+        // Past 40 turns, replaces all but about the last 20 with a note.
+        .history_processor(Box::new(|_ctx, history: Vec<Content>| {
+            Box::pin(async move {
+                let (system, turns): (Vec<_>, Vec<_>) =
+                    history.into_iter().partition(|content| content.role == "system");
+                if turns.len() <= 40 {
+                    return Ok(system.into_iter().chain(turns).collect());
+                }
+                let cut = balanced_content_cut(&turns, turns.len() - 20);
+                let note = Content::new("user")
+                    .with_text(format!("({cut} earlier turns were removed.)"));
+                Ok(system.into_iter().chain([note]).chain(turns.into_iter().skip(cut)).collect())
+            })
+        }))
+        .build()
+}
+```
+
+`CodeActAgent` has no history processor.
 
 ## Adding Callbacks to Agents
 
