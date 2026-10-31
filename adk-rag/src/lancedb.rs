@@ -7,11 +7,13 @@
 //!
 //! ```rust,ignore
 //! use adk_rag::lancedb::LanceDBVectorStore;
+//! use adk_rag::{CollectionSpec, Scope, VectorQuery, VectorStore};
 //!
 //! let store = LanceDBVectorStore::new("data/my-vectors").await?;
-//! store.create_collection("docs", 384).await?;
-//! store.upsert("docs", &chunks).await?;
-//! let results = store.search("docs", &query_embedding, 5).await?;
+//! let scope = Scope::single_tenant();
+//! store.create_collection("docs", &CollectionSpec::new(384)).await?;
+//! store.upsert("docs", &scope, &chunks).await?;
+//! let results = store.search("docs", &scope, &VectorQuery::new(&query_embedding, 5)).await?;
 //! ```
 
 use std::collections::HashMap;
@@ -31,12 +33,13 @@ use lancedb::arrow::arrow_array::{
 };
 use lancedb::arrow::arrow_schema::{DataType, Field, Schema};
 use lancedb::expr::{DfExpr, col, is_in, lit};
-use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::query::{ExecutableQuery, QueryBase, Select};
 use tracing::debug;
 
 use crate::document::{Chunk, SearchResult};
 use crate::error::{RagError, Result};
-use crate::vectorstore::VectorStore;
+use crate::scope::Scope;
+use crate::vectorstore::{CollectionSpec, VectorQuery, VectorStore};
 
 /// A [`VectorStore`] backed by [LanceDB](https://lancedb.github.io/lancedb/).
 ///
@@ -47,9 +50,11 @@ use crate::vectorstore::VectorStore;
 /// same chunks again updates them instead of adding duplicates. Every embedding
 /// in an `upsert` must match the collection's dimensions.
 ///
-/// A chunk's `source_uri` and `title` are columns of their own. A table created
-/// before those columns existed fails `upsert` with guidance to re-create it and
-/// re-ingest its documents.
+/// Rows are keyed by `scope` and `id`: `upsert` merges on both, and search, delete,
+/// count, and purge select the scope with a typed predicate that LanceDB applies before
+/// the nearest rows are chosen. A chunk's `source_uri` and `title` are columns of their
+/// own. A table created by an earlier release, without these columns, fails `upsert`
+/// with guidance to re-create it and re-ingest its documents.
 pub struct LanceDBVectorStore {
     connection: Connection,
 }
@@ -90,16 +95,31 @@ impl LanceDBVectorStore {
         Ok(name)
     }
 
-    /// Builds the `id IN (...)` predicate that selects rows by chunk id.
+    /// Builds the predicate that selects a scope's rows.
     ///
-    /// Ids become typed string literals in a DataFusion expression rather than
-    /// text spliced into SQL, so a quote in an id cannot alter the predicate.
-    fn id_predicate(ids: &[&str]) -> DfExpr {
-        is_in(col("id"), ids.iter().map(|id| lit(*id)).collect())
+    /// The scope becomes a typed string literal in a DataFusion expression rather than text
+    /// spliced into SQL, so a quote in a scope cannot alter the predicate.
+    fn scope_predicate(scope: &Scope) -> DfExpr {
+        col("scope").eq(lit(scope.as_str()))
+    }
+
+    /// Builds the predicate that selects a scope's rows by chunk id, with every id a typed
+    /// string literal.
+    fn id_predicate(scope: &Scope, ids: &[&str]) -> DfExpr {
+        Self::scope_predicate(scope).and(is_in(col("id"), ids.iter().map(|id| lit(*id)).collect()))
+    }
+
+    async fn open(&self, collection: &str) -> Result<lancedb::Table> {
+        self.connection
+            .open_table(Self::table_name(collection)?)
+            .execute()
+            .await
+            .map_err(Self::map_err)
     }
 
     fn build_schema(dimensions: usize) -> Arc<Schema> {
         Arc::new(Schema::new(vec![
+            Field::new("scope", DataType::Utf8, false),
             Field::new("id", DataType::Utf8, false),
             Field::new("text", DataType::Utf8, false),
             Field::new(
@@ -120,8 +140,9 @@ impl LanceDBVectorStore {
 
 #[async_trait]
 impl VectorStore for LanceDBVectorStore {
-    async fn create_collection(&self, name: &str, dimensions: usize) -> Result<()> {
+    async fn create_collection(&self, name: &str, spec: &CollectionSpec) -> Result<()> {
         let name = Self::table_name(name)?;
+        let dimensions = spec.dimensions;
         let tables = self.connection.table_names().execute().await.map_err(Self::map_err)?;
         if tables.iter().any(|t| t == name) {
             debug!(collection = name, "lancedb table already exists, skipping creation");
@@ -141,7 +162,7 @@ impl VectorStore for LanceDBVectorStore {
         Ok(())
     }
 
-    async fn upsert(&self, collection: &str, chunks: &[Chunk]) -> Result<()> {
+    async fn upsert(&self, collection: &str, scope: &Scope, chunks: &[Chunk]) -> Result<()> {
         if chunks.is_empty() {
             return Ok(());
         }
@@ -159,12 +180,7 @@ impl VectorStore for LanceDBVectorStore {
             .map(|(_, chunk)| chunk)
             .collect();
 
-        let table = self
-            .connection
-            .open_table(Self::table_name(collection)?)
-            .execute()
-            .await
-            .map_err(Self::map_err)?;
+        let table = self.open(collection).await?;
         let table_schema = table.schema().await.map_err(Self::map_err)?;
         let dimensions = match table_schema.field_with_name("vector").map(Field::data_type) {
             Ok(DataType::FixedSizeList(_, size)) => *size as usize,
@@ -175,10 +191,14 @@ impl VectorStore for LanceDBVectorStore {
                 )));
             }
         };
-        if table_schema.field_with_name("source_uri").is_err() {
+        let schema = Self::build_schema(dimensions);
+        if let Some(missing) =
+            schema.fields().iter().find(|field| table_schema.field_with_name(field.name()).is_err())
+        {
             return Err(Self::store_error(format!(
-                "collection '{collection}' predates the `source_uri` and `title` columns; \
-                 delete it, create it again, and re-ingest its documents"
+                "collection '{collection}' was created by an earlier release and has no `{}` \
+                 column; delete it, create it again, and re-ingest its documents",
+                missing.name()
             )));
         }
         if let Some(chunk) = chunks.iter().find(|c| c.embedding.len() != dimensions) {
@@ -189,8 +209,7 @@ impl VectorStore for LanceDBVectorStore {
                 chunk.embedding.len()
             )));
         }
-        let schema = Self::build_schema(dimensions);
-
+        let scopes = vec![scope.as_str(); chunks.len()];
         let ids: Vec<&str> = chunks.iter().map(|c| c.id.as_str()).collect();
         let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
         let doc_ids: Vec<&str> = chunks.iter().map(|c| c.document_id.as_str()).collect();
@@ -214,6 +233,7 @@ impl VectorStore for LanceDBVectorStore {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
+                Arc::new(StringArray::from(scopes)),
                 Arc::new(StringArray::from(ids)),
                 Arc::new(StringArray::from(texts)),
                 Arc::new(vector_array) as Arc<dyn Array>,
@@ -227,7 +247,7 @@ impl VectorStore for LanceDBVectorStore {
 
         let batches: Box<dyn RecordBatchReader + Send> =
             Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema));
-        let mut merge = table.merge_insert(&["id"]);
+        let mut merge = table.merge_insert(&["scope", "id"]);
         merge.when_matched_update_all(None).when_not_matched_insert_all();
         merge.execute(batches).await.map_err(Self::map_err)?;
 
@@ -235,18 +255,13 @@ impl VectorStore for LanceDBVectorStore {
         Ok(())
     }
 
-    async fn delete(&self, collection: &str, ids: &[&str]) -> Result<()> {
+    async fn delete(&self, collection: &str, scope: &Scope, ids: &[&str]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
         }
 
-        let table = self
-            .connection
-            .open_table(Self::table_name(collection)?)
-            .execute()
-            .await
-            .map_err(Self::map_err)?;
-        table.delete(&Self::id_predicate(ids)).await.map_err(Self::map_err)?;
+        let table = self.open(collection).await?;
+        table.delete(&Self::id_predicate(scope, ids)).await.map_err(Self::map_err)?;
 
         debug!(collection, count = ids.len(), "deleted chunks from lancedb");
         Ok(())
@@ -255,24 +270,22 @@ impl VectorStore for LanceDBVectorStore {
     async fn search(
         &self,
         collection: &str,
-        embedding: &[f32],
-        top_k: usize,
+        scope: &Scope,
+        query: &VectorQuery<'_>,
     ) -> Result<Vec<SearchResult>> {
-        let table = self
-            .connection
-            .open_table(Self::table_name(collection)?)
-            .execute()
-            .await
-            .map_err(Self::map_err)?;
+        let table = self.open(collection).await?;
 
+        // A vector query prefilters by default: the scope applies before the nearest rows
+        // are chosen.
         let stream = table
             .query()
-            .nearest_to(embedding)
+            .only_if_expr(Self::scope_predicate(scope))
+            .nearest_to(query.embedding)
             .map_err(|e| RagError::VectorStoreError {
                 backend: "lancedb".to_string(),
                 message: format!("failed to build vector query: {e}"),
             })?
-            .limit(top_k)
+            .limit(query.top_k)
             .execute()
             .await
             .map_err(Self::map_err)?;
@@ -336,6 +349,28 @@ impl VectorStore for LanceDBVectorStore {
 
         Ok(results)
     }
+
+    async fn count(&self, collection: &str, scope: &Scope) -> Result<u64> {
+        let table = self.open(collection).await?;
+        let batches: Vec<RecordBatch> = table
+            .query()
+            .only_if_expr(Self::scope_predicate(scope))
+            .select(Select::columns(&["id"]))
+            .execute()
+            .await
+            .map_err(Self::map_err)?
+            .try_collect()
+            .await
+            .map_err(|e| Self::store_error(format!("failed to count rows: {e}")))?;
+        Ok(batches.iter().map(|batch| batch.num_rows() as u64).sum())
+    }
+
+    async fn purge_scope(&self, collection: &str, scope: &Scope) -> Result<u64> {
+        let table = self.open(collection).await?;
+        let deleted = table.delete(&Self::scope_predicate(scope)).await.map_err(Self::map_err)?;
+        debug!(collection, purged = deleted.num_deleted_rows, "purged scope from lancedb");
+        Ok(deleted.num_deleted_rows)
+    }
 }
 
 #[cfg(test)]
@@ -344,15 +379,18 @@ mod tests {
     use lancedb::expr::expr_to_sql_string;
 
     #[test]
-    fn id_predicate_keeps_quotes_inside_the_literal() {
+    fn predicates_keep_quotes_inside_the_literal() {
         let injection = "x') OR ('1'='1";
+        let scope = Scope::new(injection).expect("valid scope");
         assert_eq!(
-            LanceDBVectorStore::id_predicate(&["a", injection]),
-            col("id").in_list(vec![lit("a"), lit(injection)], false)
+            LanceDBVectorStore::id_predicate(&scope, &["a", injection]),
+            col("scope")
+                .eq(lit(injection))
+                .and(col("id").in_list(vec![lit("a"), lit(injection)], false))
         );
 
-        let sql = expr_to_sql_string(&LanceDBVectorStore::id_predicate(&[injection]))
+        let sql = expr_to_sql_string(&LanceDBVectorStore::id_predicate(&scope, &[injection]))
             .expect("render predicate");
-        assert!(sql.contains("'x'') OR (''1''=''1'"), "quote not escaped: {sql}");
+        assert_eq!(sql.matches("'x'') OR (''1''=''1'").count(), 2, "quote not escaped: {sql}");
     }
 }

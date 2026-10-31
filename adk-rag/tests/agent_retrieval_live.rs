@@ -8,9 +8,9 @@
 
 #![cfg(feature = "agent-retrieval")]
 
-use adk_rag::VectorStore;
 use adk_rag::agent_retrieval::{AgentRetrievalConfig, AgentRetrievalStore};
 use adk_rag::{Chunk, RagError};
+use adk_rag::{CollectionSpec, Scope, VectorQuery, VectorStore};
 
 fn chunk(id: &str, text: &str, embedding: Vec<f32>) -> Chunk {
     Chunk::new(id, "live-doc", text)
@@ -26,20 +26,26 @@ async fn agent_retrieval_live_round_trip() -> Result<(), RagError> {
     let store = AgentRetrievalStore::new_with_adc(config)?;
     let collection = format!("adk_live_{}", std::process::id());
 
-    store.create_collection(&collection, 4).await?;
+    store.create_collection(&collection, &CollectionSpec::new(4)).await?;
     let result = async {
         let stored = vec![
             chunk("live-a", "alpha", vec![1.0, 0.0, 0.0, 0.0]),
             chunk("live-b", "beta", vec![0.0, 1.0, 0.0, 0.0]),
         ];
-        store.upsert(&collection, &stored).await?;
+        store.upsert(&collection, &Scope::single_tenant(), &stored).await?;
 
-        let results = store.search(&collection, &[0.0, 1.0, 0.0, 0.0], 2).await?;
+        let results = store
+            .search(
+                &collection,
+                &Scope::single_tenant(),
+                &VectorQuery::new(&[0.0, 1.0, 0.0, 0.0], 2),
+            )
+            .await?;
         assert!(!results.is_empty(), "live search returned no results");
         assert_eq!(results[0].chunk.id, "live-b");
         assert_eq!(results[0].chunk.source_uri.as_deref(), Some("https://example.com/live-b"));
 
-        store.delete(&collection, &["live-a", "live-b"]).await?;
+        store.delete(&collection, &Scope::single_tenant(), &["live-a", "live-b"]).await?;
         Ok::<_, RagError>(())
     }
     .await;

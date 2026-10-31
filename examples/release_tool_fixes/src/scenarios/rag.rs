@@ -9,7 +9,7 @@ use adk_core::Tool;
 use adk_model::GeminiModel;
 use adk_rag::{
     Document, EmbeddingProvider, GeminiEmbeddingProvider, InMemoryVectorStore, RagConfig,
-    RagPipeline, RagTool, RecursiveChunker, Reranker, SearchResult,
+    RagPipeline, RagTool, RecursiveChunker, Reranker, Scope, SearchResult,
 };
 use adk_tool::SimpleToolContext;
 use async_trait::async_trait;
@@ -86,7 +86,7 @@ async fn pipeline(
     }
     let pipeline = Arc::new(builder.build()?);
     pipeline.create_collection("kb").await?;
-    pipeline.ingest_batch("kb", &documents()).await?;
+    pipeline.scoped(Scope::single_tenant()).ingest_batch("kb", &documents()).await?;
     Ok(pipeline)
 }
 

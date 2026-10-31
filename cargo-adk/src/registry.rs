@@ -533,7 +533,7 @@ pub async fn greet(args: GreetArgs) -> std::result::Result<Value, AdkError> {
             code_fragments: AgentCodeFragments {
                 imports: vec![
                     "use std::sync::Arc;",
-                    "use adk_rag::{Document, FixedSizeChunker, GeminiEmbeddingProvider, InMemoryVectorStore, RagConfig, RagPipeline, RagTool};",
+                    "use adk_rag::{Document, FixedSizeChunker, GeminiEmbeddingProvider, InMemoryVectorStore, RagConfig, RagPipeline, RagTool, Scope};",
                 ],
                 agent_construction: r#"// Embeddings use Gemini; set GOOGLE_API_KEY for the embedding provider.
     let gemini_key = std::env::var("GOOGLE_API_KEY")
@@ -549,7 +549,8 @@ pub async fn greet(args: GreetArgs) -> std::result::Result<Value, AdkError> {
     );
 
     pipeline.create_collection("docs").await?;
-    pipeline.ingest("docs", &Document::new(
+    // An application with one tenant ingests and searches the single-tenant scope.
+    pipeline.scoped(Scope::single_tenant()).ingest("docs", &Document::new(
         "example",
         "ADK-Rust is a framework for building AI agents in Rust. \
          It supports multiple LLM providers, tool calling, RAG, and more.",

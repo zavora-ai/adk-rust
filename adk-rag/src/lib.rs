@@ -36,6 +36,7 @@
 //!
 //! use adk_rag::{
 //!     Document, EmbeddingProvider, InMemoryVectorStore, RagConfig, RagPipeline, RecursiveChunker,
+//!     Scope,
 //! };
 //! use async_trait::async_trait;
 //!
@@ -65,9 +66,12 @@
 //! let document = Document::new("intro", "Rust is a systems programming language.")
 //!     .with_source_uri("https://example.com/rust")
 //!     .with_title("About Rust");
-//! pipeline.ingest("docs", &document).await?;
 //!
-//! let results = pipeline.query("docs", "systems language").await?;
+//! // Every read and write names a scope; an application with one tenant uses this one.
+//! let rag = pipeline.scoped(Scope::single_tenant());
+//! rag.ingest("docs", &document).await?;
+//!
+//! let results = rag.query("docs", "systems language").await?;
 //! assert_eq!(results[0].chunk.document_id, "intro");
 //! assert_eq!(results[0].chunk.source_uri.as_deref(), Some("https://example.com/rust"));
 //! # Ok(())
@@ -82,6 +86,7 @@ pub mod error;
 pub mod inmemory;
 pub mod pipeline;
 pub mod reranker;
+pub mod scope;
 pub mod tool;
 pub mod vectorstore;
 
@@ -112,10 +117,11 @@ pub use document::{Chunk, Document, SearchResult};
 pub use embedding::EmbeddingProvider;
 pub use error::{RagError, Result};
 pub use inmemory::InMemoryVectorStore;
-pub use pipeline::{RagPipeline, RagPipelineBuilder};
+pub use pipeline::{QueryOptions, RagPipeline, RagPipelineBuilder, ScopedRag};
 pub use reranker::{NoOpReranker, Reranker};
+pub use scope::Scope;
 pub use tool::RagTool;
-pub use vectorstore::VectorStore;
+pub use vectorstore::{CollectionSpec, VectorQuery, VectorStore};
 
 #[cfg(feature = "gemini")]
 pub use gemini::GeminiEmbeddingProvider;

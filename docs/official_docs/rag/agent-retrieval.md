@@ -10,15 +10,18 @@ adk-rag = { version = "3.0.0", features = ["agent-retrieval"] }
 ## Quick start
 
 ```rust,no_run
-use adk_rag::VectorStore;
 use adk_rag::agent_retrieval::{AgentRetrievalConfig, AgentRetrievalStore};
+use adk_rag::{CollectionSpec, Scope, VectorQuery, VectorStore};
 
-async fn run() -> adk_rag::Result<()> {
+async fn run(embedding: Vec<f32>) -> adk_rag::Result<()> {
     // Application Default Credentials; project/location from the environment.
     let store = AgentRetrievalStore::new_with_adc(AgentRetrievalConfig::from_env()?)?;
 
-    store.create_collection("docs", 768).await?;
-    // upsert / search / delete exactly as with any other VectorStore backend
+    store.create_collection("docs", &CollectionSpec::new(768)).await?;
+    // upsert / search / delete / count / purge_scope as with any other VectorStore backend
+    let tenant = Scope::from_parts(["support", "tenant-42"])?;
+    let results = store.search("docs", &tenant, &VectorQuery::new(&embedding, 5)).await?;
+    println!("{} results", results.len());
     Ok(())
 }
 ```
@@ -27,13 +30,24 @@ async fn run() -> adk_rag::Result<()> {
 
 | Trait operation | Agent Retrieval call |
 |-----------------|----------------------|
-| `create_collection` | `POST {parent}/collections` (long-running operation; `ALREADY_EXISTS` is a no-op) |
+| `create_collection` | `POST {parent}/collections` with a data schema (long-running operation; `ALREADY_EXISTS` is a no-op) |
 | `delete_collection` | `DELETE {collection}` (long-running operation; `NOT_FOUND` is a no-op) |
 | `upsert` | `dataObjects:batchCreate` (≤1000, atomic), falling back to per-object create-else-patch for last-write-wins |
 | `delete` | `dataObjects:batchDelete`, falling back to per-object delete when IDs are missing |
-| `search` | `dataObjects:search` with a `vectorSearch` query |
+| `search` | `dataObjects:search` with a `vectorSearch` query filtered by scope |
+| `count` | `dataObjects:query` filtered by scope, 1000 per page |
+| `purge_scope` | `dataObjects:query` filtered by scope, then `dataObjects:batchDelete` |
 
-Chunk text and metadata are stored **in** the Data Object alongside the vector — no companion store is needed. The store runs in BYOE (bring-your-own-embeddings) mode: embeddings come from adk-rag's embedder pipeline, keeping behavior identical across backends. Scores are `DOT_PRODUCT` distances, which equal cosine similarity for normalized embeddings (higher is more relevant).
+Chunk text, metadata, provenance, scope, and chunk ID are stored **in** the Data Object alongside the vector — no companion store is needed:
+
+| Data field | Holds |
+|------------|-------|
+| `scope` | The `Scope` key; every search, count, and purge filters on it inside the service |
+| `chunkId` | The chunk ID, returned by search |
+| `documentId`, `text`, `sourceUri`, `title` | The chunk's fields |
+| `metadataJson` | The chunk's metadata as one JSON string |
+
+Agent Retrieval validates each Data Object against the collection's data schema and admits no undeclared field, so `create_collection` declares every field above, and metadata — whose keys vary — is one string. A Data Object ID is an RFC 1035 label, which a chunk ID such as `doc_0` is not, so each chunk is stored under `c` followed by the UUID v5 of its scope and chunk ID in hexadecimal. A collection created by an earlier release has no data schema: delete it, create it again, and re-ingest. The store runs in BYOE (bring-your-own-embeddings) mode: embeddings come from adk-rag's embedder pipeline, keeping behavior identical across backends. Scores are `DOT_PRODUCT` distances, which equal cosine similarity for normalized embeddings (higher is more relevant).
 
 ## Configuration
 
@@ -47,13 +61,15 @@ Collection IDs are RFC 1035 labels. A collection name uses ASCII lowercase lette
 
 ## Beyond the trait
 
-For callers holding the concrete `AgentRetrievalStore`, `hybrid_search` runs a semantic and a keyword query in one `dataObjects:batchSearch` call and returns the reciprocal-rank-fusion ranked list:
+For callers holding the concrete `AgentRetrievalStore`, `hybrid_search` runs a semantic and a keyword query in one `dataObjects:batchSearch` call, both filtered by scope, and returns the reciprocal-rank-fusion ranked list:
 
 ```rust,no_run
 # use adk_rag::agent_retrieval::{AgentRetrievalConfig, AgentRetrievalStore};
+# use adk_rag::Scope;
 # async fn run(store: AgentRetrievalStore, embedding: Vec<f32>) -> adk_rag::Result<()> {
+let scope = Scope::single_tenant();
 let results = store
-    .hybrid_search("docs", &embedding, "quarterly revenue", 10, (0.6, 0.4))
+    .hybrid_search("docs", &scope, &embedding, "quarterly revenue", 10, (0.6, 0.4))
     .await?;
 # Ok(())
 # }
@@ -68,7 +84,7 @@ let results = store
 
 ## Testing
 
-The backend passes the shared `VectorStore` contract and property suite against an in-process mock of the `vectorsearch.googleapis.com` surface, so it is behaviorally interchangeable with the other stores. The `#[ignore]` live test creates and deletes its own uniquely named collection, as the pgvector and Qdrant contract suites do on their servers:
+The backend passes the shared `VectorStore` contract and property suite against an in-process mock of the `vectorsearch.googleapis.com` surface — which evaluates filters and pages queries as the REST reference describes — so it is behaviorally interchangeable with the other stores. The `#[ignore]` live test creates and deletes its own uniquely named collection, as the pgvector and Qdrant contract suites do on their servers:
 
 ```bash
 GOOGLE_CLOUD_PROJECT=my-project GOOGLE_CLOUD_LOCATION=us-central1 \

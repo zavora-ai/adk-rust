@@ -15,10 +15,11 @@
 
 mod common;
 
+use adk_rag::Scope;
 use adk_rag::document::{Chunk, SearchResult};
 use adk_rag::error::Result;
 use adk_rag::qdrant::QdrantVectorStore;
-use adk_rag::vectorstore::VectorStore;
+use adk_rag::vectorstore::{CollectionSpec, VectorQuery, VectorStore};
 use async_trait::async_trait;
 use common::vector_store_contract::{ContractOptions, assert_vector_store_contract};
 use qdrant_client::Qdrant;
@@ -64,29 +65,37 @@ impl Prefixed {
 
 #[async_trait]
 impl VectorStore for Prefixed {
-    async fn create_collection(&self, name: &str, dimensions: usize) -> Result<()> {
-        self.store.create_collection(&self.name(name), dimensions).await
+    async fn create_collection(&self, name: &str, spec: &CollectionSpec) -> Result<()> {
+        self.store.create_collection(&self.name(name), spec).await
     }
 
     async fn delete_collection(&self, name: &str) -> Result<()> {
         self.store.delete_collection(&self.name(name)).await
     }
 
-    async fn upsert(&self, collection: &str, chunks: &[Chunk]) -> Result<()> {
-        self.store.upsert(&self.name(collection), chunks).await
+    async fn upsert(&self, collection: &str, scope: &Scope, chunks: &[Chunk]) -> Result<()> {
+        self.store.upsert(&self.name(collection), scope, chunks).await
     }
 
-    async fn delete(&self, collection: &str, ids: &[&str]) -> Result<()> {
-        self.store.delete(&self.name(collection), ids).await
+    async fn delete(&self, collection: &str, scope: &Scope, ids: &[&str]) -> Result<()> {
+        self.store.delete(&self.name(collection), scope, ids).await
     }
 
     async fn search(
         &self,
         collection: &str,
-        embedding: &[f32],
-        top_k: usize,
+        scope: &Scope,
+        query: &VectorQuery<'_>,
     ) -> Result<Vec<SearchResult>> {
-        self.store.search(&self.name(collection), embedding, top_k).await
+        self.store.search(&self.name(collection), scope, query).await
+    }
+
+    async fn count(&self, collection: &str, scope: &Scope) -> Result<u64> {
+        self.store.count(&self.name(collection), scope).await
+    }
+
+    async fn purge_scope(&self, collection: &str, scope: &Scope) -> Result<u64> {
+        self.store.purge_scope(&self.name(collection), scope).await
     }
 }
 
@@ -107,7 +116,8 @@ async fn chunker_and_uuid_shaped_chunk_ids_round_trip() {
     let prefix = run_prefix("ids");
     let collection = format!("{prefix}docs");
     let store = QdrantVectorStore::new(&qdrant_url()).expect("connect");
-    store.create_collection(&collection, 2).await.expect("create collection");
+    let scope = Scope::single_tenant();
+    store.create_collection(&collection, &CollectionSpec::new(2)).await.expect("create collection");
 
     let chunk = |id: &str, embedding: Vec<f32>| {
         Chunk::new(id, "doc", format!("text of {id}"))
@@ -118,12 +128,12 @@ async fn chunker_and_uuid_shaped_chunk_ids_round_trip() {
     let ids = ["doc_0", "doc_1", "550e8400-e29b-41d4-a716-446655440000", "42"];
     let chunks: Vec<Chunk> =
         ids.iter().enumerate().map(|(i, id)| chunk(id, vec![1.0, i as f32])).collect();
-    store.upsert(&collection, &chunks).await.expect("upsert");
+    store.upsert(&collection, &scope, &chunks).await.expect("upsert");
     // Re-upserting a chunk ID replaces its point.
-    store.upsert(&collection, &chunks[1..2]).await.expect("upsert again");
+    store.upsert(&collection, &scope, &chunks[1..2]).await.expect("upsert again");
 
     let mut found: Vec<Chunk> = store
-        .search(&collection, &[1.0, 0.0], 10)
+        .search(&collection, &scope, &VectorQuery::new(&[1.0, 0.0], 10))
         .await
         .expect("search")
         .into_iter()
@@ -135,9 +145,9 @@ async fn chunker_and_uuid_shaped_chunk_ids_round_trip() {
     expected.sort_by(|a, b| a.id.cmp(&b.id));
     assert_eq!(found, expected);
 
-    store.delete(&collection, &["doc_0", "42"]).await.expect("delete");
+    store.delete(&collection, &scope, &["doc_0", "42"]).await.expect("delete");
     let mut remaining: Vec<String> = store
-        .search(&collection, &[1.0, 0.0], 10)
+        .search(&collection, &scope, &VectorQuery::new(&[1.0, 0.0], 10))
         .await
         .expect("search")
         .into_iter()

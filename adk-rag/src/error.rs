@@ -44,6 +44,10 @@ pub enum RagError {
     #[error("Pipeline error: {0}")]
     PipelineError(String),
 
+    /// A scope key that [`Scope`](crate::Scope) does not accept.
+    #[error("Invalid scope: {0}")]
+    InvalidScope(String),
+
     /// An error propagated from `adk-core`.
     #[error(transparent)]
     AdkError(#[from] adk_core::AdkError),
@@ -66,6 +70,7 @@ impl From<RagError> for adk_core::AdkError {
             RagError::RerankerError { .. } => (ErrorCategory::Internal, "memory.reranker"),
             RagError::ConfigError(_) => (ErrorCategory::InvalidInput, "memory.rag_config"),
             RagError::PipelineError(_) => (ErrorCategory::Internal, "memory.rag_pipeline"),
+            RagError::InvalidScope(_) => (ErrorCategory::InvalidInput, "memory.rag_scope"),
             RagError::AdkError(_) => unreachable!(),
         };
         adk_core::AdkError::new(ErrorComponent::Memory, category, code, err.to_string())
