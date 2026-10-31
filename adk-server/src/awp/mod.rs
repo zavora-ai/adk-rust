@@ -443,6 +443,9 @@ impl AwpEdgeBuilder {
     }
 
     /// Sets the consent scopes, policy versions and the subject session key (spec 3.5 §7.5).
+    ///
+    /// The subject key also keys the ids of public visitors, so a key kept across restarts
+    /// keeps their conversations; the default key is random per process.
     #[must_use]
     pub fn consent(mut self, consent: ConsentConfig) -> Self {
         self.consent = consent;
@@ -577,6 +580,7 @@ impl AwpEdgeBuilder {
                     "awp-public",
                     audit.as_ref(),
                     watch,
+                    public::visitor_key(&self.consent.subject_key),
                 )?))
             }
         };
