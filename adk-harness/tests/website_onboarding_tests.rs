@@ -194,7 +194,7 @@ async fn one_scripted_onboarding_pass() {
     });
     model.push(call("content_draft", hours));
     model.push(call("content_draft", history));
-    model.push(call("release_preview", json!({ "draft": "draft-3" })));
+    model.push(call("release_preview", json!({ "draft": "draft-1" })));
     model.push(ScriptedResponse::text("Here is the preview."));
     let built = send("Build the site.").await;
     assert_eq!(response(&built, "content_draft", 0)["gate"]["passed"], true);
@@ -208,7 +208,7 @@ async fn one_scripted_onboarding_pass() {
 
     // 7 Launch gate, 8 launch (held for the owner, A-I21), then `awp verify`.
     model.push(call("launch_gate_run", json!({})));
-    model.push(call("site_publish", json!({ "draft": "draft-3" })));
+    model.push(call("site_publish", json!({ "draft": "draft-1" })));
     model.push(call("awp_verify", json!({ "origin": server.url("") })));
     model.push(ScriptedResponse::text("Live and verified."));
     let launched = send("Launch it.").await;

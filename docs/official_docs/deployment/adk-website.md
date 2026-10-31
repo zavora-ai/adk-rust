@@ -329,7 +329,7 @@ public URL with that path and the verify token. An agency runs no chat gateway.
 | Measurement counts (`MeteredActionLedger`, `EdgeMeter`, `MeteredSpendLedger`, host logs, AEO) | `SqliteEdgeStores` in `data/edge.db`, under the namespace `{site}#measurement` |
 | The edge's rate-limit windows | The same `SqliteEdgeStores`, through `EdgeLimits::store` |
 | Quotes, orders and the bookings of `calendar.json`'s slots | `edge::commerce::SqliteCommerceStore` in `data/edge.db`, with `edge::commerce::StoredCalendar`; `SiteEdge::build_with_commerce` takes the store |
-| The back office's drafts, charter drafts, charter signing and promotion requests | `adk_harness::website::SqliteSiteDraftStore` in `data/edge.db`, read back by `SiteRuntime::restore_drafts`; a preview and the votes on it are made again |
+| The back office's drafts, charter drafts, charter signing and promotion requests | `adk_harness::website::SqliteSiteDraftStore` in `data/edge.db`, read by the runtime at every call and written by version; a preview and the votes on it are made again |
 | The owner's open, deferred and waiting alarms | `alarms::SqliteAlarmStore` in `data/edge.db` (`AlarmRouter::with_store`) |
 | Pushes the content repository's hooks delivered, and what became of each | `data/repository/pushes.json` |
 | Playbook revision proposals; accepted playbook versions | `data/learning/proposals.json`; `data/playbooks/{playbook}.json` |

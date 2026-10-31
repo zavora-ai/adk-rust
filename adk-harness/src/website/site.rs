@@ -32,7 +32,10 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use super::drafts::{DraftKind, SiteDraftStore, StoredDraft};
+use super::drafts::{
+    DraftKind, InMemorySiteDraftStore, SiteDraftStore, StoredDraft, StoredRecord, conflict,
+    store_error,
+};
 use crate::facts::{FactScope, FactStatus, FactStore};
 
 /// The approver a release names when the governed path, not an approval chain, allowed it:
@@ -371,19 +374,6 @@ pub struct PromotionRequest {
     pub requested_at: DateTime<Utc>,
 }
 
-/// The decisions a site waits on (spec 3.5 §7.6, §7.11).
-#[derive(Default)]
-pub(crate) struct SiteRequests {
-    pub(crate) charters: Mutex<BTreeMap<String, CharterSignRequest>>,
-    pub(crate) promotions: Mutex<BTreeMap<String, PromotionRequest>>,
-}
-
-/// A draft the back office holds until it is published (spec 3.5 §7.8.2 step 1).
-pub(crate) struct DraftRecord {
-    pub(crate) draft: Draft,
-    pub(crate) preview: Option<Preview>,
-}
-
 /// Everything the back-office tools act on (spec 3.5 §7.8, §7.8.2): build one with
 /// [`SiteRuntime::builder`].
 pub struct SiteRuntime {
@@ -404,11 +394,11 @@ pub struct SiteRuntime {
     pub(crate) crawler: Option<Arc<dyn crate::web::RequestSigner>>,
     pub(crate) audit: Option<adk_core::audit_log::AuditTrail>,
     pub(crate) clock: Arc<dyn Clock>,
-    pub(crate) drafts: Mutex<BTreeMap<String, DraftRecord>>,
-    pub(crate) charter_drafts: Mutex<BTreeMap<String, Charter>>,
-    pub(crate) requests: SiteRequests,
-    pub(crate) next: std::sync::atomic::AtomicU64,
-    pub(crate) draft_store: Option<Arc<dyn SiteDraftStore>>,
+    /// The previews this process staged, by draft id, with the draft version each shows.
+    pub(crate) previews: Mutex<BTreeMap<String, (u64, Preview)>>,
+    /// Held across a release's preview, approval and completion in this process.
+    pub(crate) publishing: Mutex<()>,
+    pub(crate) draft_store: Arc<dyn SiteDraftStore>,
 }
 
 impl std::fmt::Debug for SiteRuntime {
@@ -444,9 +434,10 @@ pub struct SiteRuntimeBuilder {
 
 impl SiteRuntimeBuilder {
     /// Keeps the back office's drafts — content drafts, charter drafts, charter signing and
-    /// promotion requests — in `store`, so they survive a restart (spec 3.5 §7.8.2 step 1);
-    /// in memory only by default. After building, [`SiteRuntime::restore_drafts`] reads back
-    /// what the store holds.
+    /// promotion requests — in `store`, so they survive a restart and every runtime over the
+    /// store sees the same ones (spec 3.5 §7.8.2 step 1); an [`InMemorySiteDraftStore`] by
+    /// default. The runtime reads the store at every call and writes it with a
+    /// compare-and-swap, so two runtimes editing one draft never overwrite each other.
     ///
     /// # Example
     ///
@@ -611,11 +602,11 @@ impl SiteRuntimeBuilder {
             crawler: self.crawler,
             audit: self.audit,
             clock: self.clock,
-            drafts: Mutex::new(BTreeMap::new()),
-            charter_drafts: Mutex::new(BTreeMap::new()),
-            requests: SiteRequests::default(),
-            next: std::sync::atomic::AtomicU64::new(1),
-            draft_store: self.draft_store,
+            previews: Mutex::new(BTreeMap::new()),
+            publishing: Mutex::new(()),
+            draft_store: self
+                .draft_store
+                .unwrap_or_else(|| Arc::new(InMemorySiteDraftStore::default())),
         })
     }
 }
@@ -699,7 +690,8 @@ impl SiteRuntime {
 
     /// The newest content draft that entered through `entry`, with its id and its items
     /// (spec 3.5 §7.8.2 "Entry points", §5 S18): the draft a paired person's turn made, which
-    /// the photos their message carried join. `None` when that entry has no draft waiting.
+    /// the photos their message carried join. `None` when that entry has no draft waiting or
+    /// the draft store cannot be read.
     ///
     /// # Example
     ///
@@ -717,13 +709,18 @@ impl SiteRuntime {
         &self,
         entry: &EntryPoint,
     ) -> Option<(String, Vec<awp_types::ContentItem>)> {
-        let number = |id: &str| id.rsplit('-').next().and_then(|n| n.parse::<u64>().ok());
-        let drafts = self.drafts.lock().await;
-        drafts
-            .iter()
-            .filter(|(_, record)| record.draft.change.entry == *entry)
-            .max_by_key(|(id, _)| number(id))
-            .map(|(id, record)| (id.clone(), record.draft.change.items.clone()))
+        let records = match self.draft_store.list(self.site.id, DraftKind::Content).await {
+            Ok(records) => records,
+            Err(error) => {
+                tracing::warn!(website.site = %self.site.name, error = %error, "the draft store cannot be read");
+                return None;
+            }
+        };
+        // The store lists in creation order, so the last match is the newest.
+        records.into_iter().rev().find_map(|record| {
+            let draft = read::<StoredDraft>(record.value).ok()?;
+            (draft.entry == *entry).then_some((record.id, draft.items))
+        })
     }
 
     /// Whether the site has been launched: a production release is logged or served
@@ -735,82 +732,109 @@ impl SiteRuntime {
         matches!(self.host.fetch(CHECKPOINT_PATH).await, Ok(Some(_)))
     }
 
-    pub(crate) fn next_id(&self, prefix: &str) -> String {
-        let n = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        format!("{prefix}-{n}")
-    }
-
-    /// Reads back the drafts the runtime's draft store holds (spec 3.5 §7.8.2 step 1): content
-    /// drafts, charter drafts, and the charter signing and promotion requests that wait. New
-    /// ids continue after the highest one restored. Returns how many were restored; none
-    /// without a draft store.
+    /// Counts the drafts and requests the runtime's draft store holds for the site — content
+    /// drafts, charter drafts, and the charter signing and promotion requests that wait — and
+    /// checks that each reads back (spec 3.5 §7.8.2 step 1). The runtime reads the store at
+    /// every call, so nothing is copied; a restarted process calls this to report and check
+    /// what it resumes.
     ///
     /// # Errors
     ///
     /// The store's error, or a stored record that does not read back.
     pub async fn restore_drafts(&self) -> Result<usize> {
-        let Some(store) = &self.draft_store else { return Ok(0) };
         let site = self.site.id;
-        let mut restored = 0;
-        let mut highest = 0u64;
-        let mut seen = |id: &str| {
-            if let Some(n) = id.rsplit('-').next().and_then(|n| n.parse::<u64>().ok()) {
-                highest = highest.max(n);
+        let mut held = 0;
+        for kind in DraftKind::ALL {
+            for record in self.draft_store.list(site, kind).await? {
+                match kind {
+                    DraftKind::Content => {
+                        read::<StoredDraft>(record.value)?.into_draft()?;
+                    }
+                    DraftKind::Charter => {
+                        read::<Charter>(record.value)?;
+                    }
+                    DraftKind::CharterSign => {
+                        read::<CharterSignRequest>(record.value)?;
+                    }
+                    DraftKind::Promotion => {
+                        read::<PromotionRequest>(record.value)?;
+                    }
+                }
+                held += 1;
             }
-        };
-        fn read<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> {
-            serde_json::from_value(value).map_err(super::drafts::store_error)
         }
-        for (id, value) in store.list(site, DraftKind::Content).await? {
-            let draft = read::<StoredDraft>(value)?.into_draft()?;
-            seen(&id);
-            self.drafts.lock().await.insert(id, DraftRecord { draft, preview: None });
-            restored += 1;
+        if held > 0 {
+            tracing::info!(website.site = %self.site.name, website.drafts.held = held, "drafts held in the draft store");
         }
-        for (id, value) in store.list(site, DraftKind::Charter).await? {
-            seen(&id);
-            self.charter_drafts.lock().await.insert(id, read(value)?);
-            restored += 1;
-        }
-        for (id, value) in store.list(site, DraftKind::CharterSign).await? {
-            seen(&id);
-            self.requests.charters.lock().await.insert(id, read(value)?);
-            restored += 1;
-        }
-        for (id, value) in store.list(site, DraftKind::Promotion).await? {
-            seen(&id);
-            self.requests.promotions.lock().await.insert(id, read(value)?);
-            restored += 1;
-        }
-        self.next.fetch_max(highest + 1, std::sync::atomic::Ordering::Relaxed);
-        if restored > 0 {
-            tracing::info!(website.site = %self.site.name, website.drafts.restored = restored, "drafts restored");
-        }
-        Ok(restored)
+        Ok(held)
     }
 
-    /// Keeps `value` as `id` of `kind` in the draft store, when the runtime has one.
-    pub(crate) async fn keep(
+    /// Keeps `value` as a new record of `kind` under an id the store allocates.
+    pub(crate) async fn create(
+        &self,
+        kind: DraftKind,
+        value: &impl Serialize,
+    ) -> Result<StoredRecord> {
+        let value = serde_json::to_value(value).map_err(store_error)?;
+        self.draft_store.create(self.site.id, kind, &value).await
+    }
+
+    /// The record `id` of `kind` and the version it was read at.
+    pub(crate) async fn record<T: serde::de::DeserializeOwned>(
         &self,
         kind: DraftKind,
         id: &str,
-        value: &impl Serialize,
-    ) -> Result<()> {
-        let Some(store) = &self.draft_store else { return Ok(()) };
-        let value = serde_json::to_value(value).map_err(super::drafts::store_error)?;
-        store.put(self.site.id, kind, id, &value).await
+    ) -> Result<Option<(u64, T)>> {
+        match self.draft_store.get(self.site.id, kind, id).await? {
+            Some(record) => Ok(Some((record.version, read(record.value)?))),
+            None => Ok(None),
+        }
     }
 
-    /// Keeps the content draft `id`.
-    pub(crate) async fn keep_draft(&self, id: &str, draft: &Draft) -> Result<()> {
-        self.keep(DraftKind::Content, id, &StoredDraft::of(draft)).await
+    /// Writes `value` over the record `id` of `kind` read at `version`.
+    ///
+    /// # Errors
+    ///
+    /// `website.drafts.conflict` when the record changed or was removed since it was read.
+    pub(crate) async fn replace(
+        &self,
+        kind: DraftKind,
+        id: &str,
+        version: u64,
+        value: &impl Serialize,
+    ) -> Result<()> {
+        let value = serde_json::to_value(value).map_err(store_error)?;
+        if self.draft_store.replace(self.site.id, kind, id, &value, version).await? {
+            Ok(())
+        } else {
+            Err(conflict(kind, id))
+        }
+    }
+
+    /// The content draft `id` and the version it was read at.
+    pub(crate) async fn content_draft(&self, id: &str) -> Result<Option<(u64, Draft)>> {
+        match self.record::<StoredDraft>(DraftKind::Content, id).await? {
+            Some((version, stored)) => Ok(Some((version, stored.into_draft()?))),
+            None => Ok(None),
+        }
+    }
+
+    /// Writes `draft` over the content draft `id` read at `version`; its preview no longer
+    /// shows it.
+    ///
+    /// # Errors
+    ///
+    /// `website.drafts.conflict` when the draft changed or was removed since it was read.
+    pub(crate) async fn replace_draft(&self, id: &str, version: u64, draft: &Draft) -> Result<()> {
+        self.previews.lock().await.remove(id);
+        self.replace(DraftKind::Content, id, version, &StoredDraft::of(draft)).await
     }
 
     /// Forgets the content draft `id`: it was published or refused. A failure is logged; the
     /// release stands.
     pub(crate) async fn forget_draft(&self, id: &str) {
-        let Some(store) = &self.draft_store else { return };
-        if let Err(error) = store.remove(self.site.id, DraftKind::Content, id).await {
+        self.previews.lock().await.remove(id);
+        if let Err(error) = self.draft_store.remove(self.site.id, DraftKind::Content, id).await {
             tracing::warn!(website.draft = id, error = %error, "a finished draft stays in the draft store");
         }
     }
@@ -837,7 +861,7 @@ impl SiteRuntime {
         }
         project.as_of = self.clock.now();
         project.redirects_format = self.host.redirects_format();
-        let out = self.work.join(self.next_id("gate"));
+        let out = self.work.join(format!("gate-{}", Uuid::new_v4()));
         let report = self.generator.build(&project, &out).await.map_err(site_error)?;
         let verdict = self
             .gate
@@ -857,14 +881,47 @@ impl SiteRuntime {
         verdict
     }
 
+    /// The records of `kind`, each with the id the store gave it; a record that does not read
+    /// back, or a store that cannot be read, is logged and left out.
+    async fn requests<T: serde::de::DeserializeOwned>(
+        &self,
+        kind: DraftKind,
+        with_id: impl Fn(&mut T, String),
+    ) -> Vec<T> {
+        let records = match self.draft_store.list(self.site.id, kind).await {
+            Ok(records) => records,
+            Err(error) => {
+                tracing::warn!(website.site = %self.site.name, error = %error, "the draft store cannot be read");
+                return Vec::new();
+            }
+        };
+        records
+            .into_iter()
+            .filter_map(|record| match read::<T>(record.value) {
+                Ok(mut request) => {
+                    with_id(&mut request, record.id);
+                    Some(request)
+                }
+                Err(error) => {
+                    tracing::warn!(website.request = %record.id, error = %error, "a stored request does not read back");
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// The charter signing requests that wait.
     pub async fn charter_requests(&self) -> Vec<CharterSignRequest> {
-        self.requests.charters.lock().await.values().cloned().collect()
+        self.requests(DraftKind::CharterSign, |request: &mut CharterSignRequest, id| {
+            request.id = id;
+        })
+        .await
     }
 
     /// The promotion requests that wait for the owner.
     pub async fn promotion_requests(&self) -> Vec<PromotionRequest> {
-        self.requests.promotions.lock().await.values().cloned().collect()
+        self.requests(DraftKind::Promotion, |request: &mut PromotionRequest, id| request.id = id)
+            .await
     }
 
     /// Records `approval` — a person signing in a role — on the charter request `id`, and
@@ -875,7 +932,8 @@ impl SiteRuntime {
     /// # Errors
     ///
     /// `NotFound` for an unknown request; `Forbidden` for a signature no person made or in a
-    /// role the signer does not hold; the store's errors.
+    /// role the signer does not hold; `website.drafts.conflict` when another signature was
+    /// recorded meanwhile; the store's errors.
     pub async fn sign_charter(
         &self,
         id: &str,
@@ -885,15 +943,18 @@ impl SiteRuntime {
         let charters = self.charters.as_ref().ok_or_else(|| {
             AdkError::config("signing a charter needs the site's charter store (spec 3.5 §7.6)")
         })?;
-        let mut requests = self.requests.charters.lock().await;
-        let request = requests.get_mut(id).ok_or_else(|| {
-            AdkError::new(
-                ErrorComponent::Tool,
-                ErrorCategory::NotFound,
-                "website.charter.request_not_found",
-                format!("no charter signing request '{id}'"),
-            )
-        })?;
+        let (version, mut request) = self
+            .record::<CharterSignRequest>(DraftKind::CharterSign, id)
+            .await?
+            .ok_or_else(|| {
+                AdkError::new(
+                    ErrorComponent::Tool,
+                    ErrorCategory::NotFound,
+                    "website.charter.request_not_found",
+                    format!("no charter signing request '{id}'"),
+                )
+            })?;
+        request.id = id.to_string();
         if super::is_agent(&approval.principal) {
             return Err(AdkError::new(
                 ErrorComponent::Tool,
@@ -922,19 +983,28 @@ impl SiteRuntime {
         if check_chain(&governing, &adk_kernel::charter::CHARTER_ACTION, &request.signatures, None)
             .is_err()
         {
-            self.keep(DraftKind::CharterSign, id, &*request).await?;
+            self.replace(DraftKind::CharterSign, id, version, &request).await?;
             return Ok(None);
         }
         let mut decision = CommitDecision::new(decision_id, self.clock.now());
         for signature in &request.signatures {
             decision = decision.with_approval(signature.clone());
         }
-        let version =
+        let committed =
             commit_audited(charters.as_ref(), request.draft.clone(), decision, self.audit.as_ref())
                 .await
                 .map_err(kernel_error)?;
-        request.committed = Some(version.version());
-        self.keep(DraftKind::CharterSign, id, &*request).await?;
-        Ok(Some(version))
+        request.committed = Some(committed.version());
+        // The charter store's own compare-and-set decided the commit; the request only
+        // records it.
+        if let Err(error) = self.replace(DraftKind::CharterSign, id, version, &request).await {
+            tracing::warn!(website.request = id, error = %error, "a committed charter's request was not updated");
+        }
+        Ok(Some(committed))
     }
+}
+
+/// Reads a stored record as `T`.
+fn read<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> {
+    serde_json::from_value(value).map_err(store_error)
 }
