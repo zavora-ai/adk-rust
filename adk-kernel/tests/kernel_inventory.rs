@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use adk_core::schedule::MissedFirePolicy;
-use adk_core::{InMemoryRunStore, NewRun, RunFilter, RunState};
+use adk_core::{InMemoryRunStore, NewRun};
 use adk_kernel::control::api::IssueRequest;
 use adk_kernel::control::{ControlClient, ControlPlane, ControlPlaneConfig};
 use adk_kernel::inventory::{InventoryWarning, KernelInventory};
@@ -139,6 +139,7 @@ fn a_hosts_warning_joins_the_inventory() {
 
 #[cfg(feature = "charter")]
 mod signals {
+    use adk_core::{RunFilter, RunState};
     use adk_kernel::charter::{InMemorySignalStore, SignalOutcome};
     use awp_types::{Bounded, Signal, SignalKind};
 
