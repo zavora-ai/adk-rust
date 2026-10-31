@@ -15,7 +15,7 @@ adk-harness = { version = "3.0.0", features = ["website"] }
 | Preset | `Preset::Website`, `WEBSITE_SYSTEM_PROMPT` | §7.1, §10 X10 |
 | Tool catalogue | `CATALOG`, `ToolSpec`, `WebsiteClasses` | §7.10, §7.11, §7.13 |
 | Site runtime | `SiteRuntime`, `SiteApprovals`, `FactClaimCheck` | §7.8, §7.8.2, A-I18, A-I23 |
-| Durable drafts | `SiteDraftStore`, `StoredRecord`, `InMemorySiteDraftStore`, `SqliteSiteDraftStore` (feature `sqlite`), `DraftKind`, `site_draft_store_conformance_tests!` | §7.8.2, §7.6, §7.11 |
+| Durable drafts | `SiteDraftStore`, `StoredRecord`, `InMemorySiteDraftStore`, `SqliteSiteDraftStore` (feature `sqlite`), `PostgresSiteDraftStore` (feature `postgres`), `RedisSiteDraftStore` (feature `redis`), `DraftKind`, `site_draft_store_conformance_tests!` | §7.8.2, §7.6, §7.11 |
 | Back office | `back_office_tools`, `WebsitePolicy` | §7.8.2, §7.10, A-I13, A-I21 |
 | Public partition | `SearchSiteTool`, `EmitSignalTool`, `PublicPolicy`, `screen_bounded` | §7.10, A-I2, A-I3 |
 | Partitions | `SitePartitions`, `PublicKit`, `ServedPublicTools`, `BackOfficeKit`, `website_public`, `website_public_served`, `website_back_office` | §7.9, §7.10, §7.19, A-I22 |
@@ -98,7 +98,8 @@ the draft once every required signer has signed. Every DNS change is held by `ad
 `DriverCapPolicy`.
 
 `SiteRuntimeBuilder::drafts` keeps the content drafts, charter drafts, and charter signing and
-promotion requests in a `SiteDraftStore` (an `InMemorySiteDraftStore` by default). The store is
+promotion requests in a `SiteDraftStore`: an `InMemorySiteDraftStore` by default, or
+`SqliteSiteDraftStore`, `PostgresSiteDraftStore` or `RedisSiteDraftStore`. The store is
 the source of truth: the runtime reads it at every call, so a restarted runtime, or a second
 replica over the same store, sees the same drafts.
 
