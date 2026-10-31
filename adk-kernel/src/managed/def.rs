@@ -214,7 +214,7 @@ impl KernelDef {
     /// | coordinator | it names a partition the block does not declare |
     /// | drivers | a manifest fails `DriverManifest::validate`, an id is repeated, a partition is not declared, the sandbox is `unsandboxed`, a declaration digest is pinned |
     /// | proactivity | a share, score or fraction of the consolidation tick is outside its range, or its schedule is blank |
-    /// | wake sets | a name is blank, repeated or not an identifier, `anyOf` or `input` is empty, a wake is not a cron, webhook or queue wake, a cron expression does not parse, a hook or source is blank, the partition is not declared, the queue is `interactive`, the user is blank |
+    /// | wake sets | a name is blank, repeated or not an identifier, `anyOf` or `input` is empty, a wake is not a cron, webhook, queue or signal wake, a cron expression does not parse, a hook or source is blank, a signal kind is not an identifier, the partition — the set's or a signal wake's — is not declared, the queue is `interactive`, the user is blank |
     ///
     /// # Errors
     ///
@@ -477,11 +477,21 @@ impl PartitionDef {
 ///
 /// A wake set is standing: every firing starts a process, keyed by the wake's own key, so
 /// a repeated delivery starts nothing (K-I3). `overlap` says what a firing does while the
-/// set's previous process is unfinished. A definition's standing wakes are cron, webhook and
-/// queue wakes: a file-change wake would watch the host's files, and approval, run-finished,
-/// time, budget and manual wakes name one sleeping process. The hosting application serves
-/// a webhook through `webhook_wake_hook` and a queue through `queue_wake_ingress` on the
-/// tenant's run store.
+/// set's previous process is unfinished. The hosting application serves a webhook through
+/// `webhook_wake_hook` and a queue through `queue_wake_ingress` on the tenant's run store,
+/// and files a signal through `TenantKernel::signal_sink` (feature `charter`).
+///
+/// | Wake | In a wake set |
+/// |---|---|
+/// | `cron`, `webhook`, `queue` | Accepted |
+/// | `signal` | Accepted: its `kind` an identifier, its `partition` one the block declares; unset, the set's own partition, so a definition hears only signals filed in its partitions. The tenant needs a signal store (`TenantKernelBuilder::signal_store`) |
+/// | `fileChange` | Refused: it would watch the host's files |
+/// | `at` | Refused: it matches no event, only a sleeper's time; a cron wake recurs, and one-shot work is a schedule (`ScheduleSpec::At`) on the tenant's schedule store |
+/// | `budgetReplenished` | Refused: admission already parks a budget-deferred process on it and wakes it when the budget returns, so as a standing wake it never fires |
+/// | `approval`, `runFinished`, `manual` | Refused: each names one sleeping process |
+///
+/// A run a signal starts stays unauthenticated, and its input is the set's `input`, never
+/// the signal's text (spec 3.5 A-I3).
 ///
 /// # Example
 ///
@@ -620,14 +630,20 @@ impl WakeSetDef {
             )));
         }
         for wake in &self.any_of {
-            validate_wake(&self.name, wake)?;
+            validate_wake(&self.name, wake, partitions)?;
         }
         Ok(())
     }
 }
 
-/// One wake of a definition's wake set: a cron, webhook or queue wake.
-fn validate_wake(set: &str, wake: &Wake) -> Result<()> {
+/// One wake of a definition's wake set: a cron, webhook, queue or signal wake.
+fn validate_wake(set: &str, wake: &Wake, partitions: &BTreeSet<PartitionId>) -> Result<()> {
+    let one_process = |kind: &str| {
+        Err(invalid(format!(
+            "wake set `{set}`: `{kind}` names one sleeping process, not a standing wake; use a \
+             cron, webhook, queue or signal wake"
+        )))
+    };
     match wake {
         Wake::Cron { expr, missed } => {
             CronTrigger::new(expr).map_err(|error| {
@@ -648,22 +664,37 @@ fn validate_wake(set: &str, wake: &Wake) -> Result<()> {
             Err(invalid(format!("wake set `{set}` names a blank queue source")))
         }
         Wake::Queue { .. } => Ok(()),
+        Wake::Signal { kind, partition } => {
+            name("signal kind", kind).map_err(|error| match error {
+                KernelError::Config { reason } => invalid(format!("wake set `{set}`: {reason}")),
+                other => other,
+            })?;
+            match partition {
+                Some(partition) if !partitions.contains(partition) => Err(invalid(format!(
+                    "wake set `{set}` hears `{kind}` signals in partition `{partition}`, which \
+                     the block does not declare; declare it, or leave `partition` out to hear \
+                     the set's own"
+                ))),
+                _ => Ok(()),
+            }
+        }
         Wake::FileChange { .. } => Err(invalid(format!(
             "wake set `{set}`: a definition does not watch the host's files; use a cron, \
-             webhook or queue wake"
+             webhook, queue or signal wake"
         ))),
-        other => Err(invalid(format!(
-            "wake set `{set}`: `{}` names one sleeping process, not a standing wake; use a \
-             cron, webhook or queue wake",
-            serde_json::to_value(other)
-                .ok()
-                .and_then(|value| match value {
-                    serde_json::Value::String(kind) => Some(kind),
-                    serde_json::Value::Object(map) => map.keys().next().cloned(),
-                    _ => None,
-                })
-                .unwrap_or_default()
+        Wake::At(_) => Err(invalid(format!(
+            "wake set `{set}`: an `at` wake matches no event, only a sleeping process's time, so \
+             it starts nothing; use a cron wake for recurring work, or a schedule \
+             (`ScheduleSpec::At`) on the tenant's schedule store for one-shot work"
         ))),
+        Wake::BudgetReplenished { .. } => Err(invalid(format!(
+            "wake set `{set}`: a `budgetReplenished` wake never fires as a standing wake: \
+             admission already parks a budget-deferred process on it and wakes it when the \
+             budget returns; use a cron, webhook, queue or signal wake"
+        ))),
+        Wake::Approval { .. } => one_process("approval"),
+        Wake::RunFinished { .. } => one_process("runFinished"),
+        Wake::Manual => one_process("manual"),
     }
 }
 
@@ -919,6 +950,62 @@ mod tests {
         for (kernel, needle) in cases {
             let reason = reason(kernel.validate().unwrap_err());
             assert!(reason.contains(needle), "expected `{needle}` in: {reason}");
+        }
+    }
+
+    fn signal(kind: &str, partition: Option<&str>) -> Wake {
+        Wake::Signal { kind: kind.into(), partition: partition.map(PartitionId::new) }
+    }
+
+    #[test]
+    fn a_signal_wake_is_a_standing_wake_of_the_sets_own_or_a_declared_partition() {
+        let gap = |partition: Option<&str>| {
+            WakeSetDef::new("gaps", [signal("content_gap", partition)], "Fill the gap.")
+        };
+        KernelDef::new().with_wake_set(gap(None)).validate().unwrap();
+        KernelDef::new().with_wake_set(gap(Some(PartitionId::DEFAULT))).validate().unwrap();
+        let work = KernelDef::new().with_partition(PartitionDef::new("work", "work"));
+        work.clone().with_wake_set(gap(Some("work"))).validate().unwrap();
+        work.with_wake_set(gap(Some("work")).with_partition("work")).validate().unwrap();
+        let wire: WakeSetDef = serde_json::from_value(json!({
+            "name": "gaps",
+            "anyOf": [{ "signal": { "kind": "content_gap" } }],
+            "input": "Fill the gap.",
+        }))
+        .unwrap();
+        assert_eq!(wire, gap(None));
+    }
+
+    #[test]
+    fn a_signal_wake_names_an_identifier_kind_in_a_declared_partition() {
+        let cases = [
+            (signal("content_gap", Some("home")), "partition `home`"),
+            (signal("", None), "signal kind"),
+            (signal("content gap", None), "signal kind `content gap`"),
+        ];
+        for (wake, needle) in cases {
+            let kernel = KernelDef::new().with_wake_set(WakeSetDef::new("gaps", [wake], "x"));
+            let reason = reason(kernel.validate().unwrap_err());
+            assert!(reason.contains(needle) && reason.contains("gaps"), "{needle}: {reason}");
+        }
+    }
+
+    #[test]
+    fn time_and_budget_wakes_are_refused_naming_what_to_use_instead() {
+        let cases = [
+            (Wake::At(chrono::Utc::now()), ["`at` wake", "ScheduleSpec::At"]),
+            (
+                Wake::BudgetReplenished { partition: PartitionId::default() },
+                ["`budgetReplenished`", "admission already parks"],
+            ),
+            (Wake::RunFinished { pid: "run-1".into() }, ["`runFinished`", "signal wake"]),
+        ];
+        for (wake, needles) in cases {
+            let kernel = KernelDef::new().with_wake_set(WakeSetDef::new("later", [wake], "x"));
+            let reason = reason(kernel.validate().unwrap_err());
+            for needle in needles {
+                assert!(reason.contains(needle), "expected `{needle}` in: {reason}");
+            }
         }
     }
 

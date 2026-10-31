@@ -1,0 +1,7 @@
+{
+  "name": "K-19: A time wake",
+  "description": "An `at` wake matches no event, only a sleeping process's time, so as a standing wake it starts nothing: recurring work is a cron wake, one-shot work a schedule.",
+  "agent_def": { "name": "digest", "model": "gemini-3.5-flash-lite" },
+  "kernel": { "wakeSets": [{ "name": "once", "anyOf": [{ "at": "2026-11-01T09:00:00Z" }], "input": "Summarize." }] },
+  "expect": { "error_contains": ["once", "`at` wake", "ScheduleSpec::At"] }
+}
