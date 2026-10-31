@@ -478,11 +478,12 @@ pub fn build_create_response(
         None
     };
 
-    // 7. Read extensions["openai"]["previous_response_id"]
+    // 7. Read extensions["openai"]["previous_response_id"] and ["store"]
     let previous_response_id = openai_ext
         .and_then(|o| o.get("previous_response_id"))
         .and_then(|v| v.as_str())
         .map(String::from);
+    let store = openai_ext.and_then(|o| o.get("store")).and_then(|v| v.as_bool());
 
     // 10. Read extensions["openai"]["background"] and auto-enable for deep research models
     let explicit_background =
@@ -593,6 +594,9 @@ pub fn build_create_response(
     }
     if let Some(prev_id) = previous_response_id {
         builder.previous_response_id(prev_id);
+    }
+    if let Some(store) = store {
+        builder.store(store);
     }
     if let Some(bg) = background {
         builder.background(bg);

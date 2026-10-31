@@ -701,6 +701,49 @@ hold covers the call before it is sent, and the images returned or the audio tra
 committed at the catalog's per-unit price. See
 [Calls billed in units](../security/spend-ledger.md#calls-billed-in-units).
 
+### Responses mode
+
+`MuseConfig::with_api(MuseApi::Responses)` drives `/responses` through the shared Open Responses
+engine (`OpenAIResponsesClient` in open-responses mode at Meta's base URL), streamed or not, behind
+the same `Llm` surface. Responses are attributed and priced as `muse`, and errors name `muse`.
+Enable the `muse-responses` feature:
+
+```toml
+[dependencies]
+adk-model = { version = "3.0.0", features = ["muse-responses"] }
+```
+
+```rust
+use adk_core::GenerateContentConfig;
+use adk_model::muse::{MuseApi, MuseClient, MuseConfig};
+use serde_json::json;
+
+fn responses_client(api_key: &str) -> adk_core::Result<(MuseClient, GenerateContentConfig)> {
+    let client = MuseClient::new(MuseConfig::spark_1_3(api_key).with_api(MuseApi::Responses))?;
+    let mut config = GenerateContentConfig::default();
+    // Chain onto the previous turn so Spark's reasoning carries across turns.
+    config.extensions.insert(
+        "muse".to_string(),
+        json!({ "previous_response_id": "resp_abc123", "store": true }),
+    );
+    Ok((client, config))
+}
+```
+
+| `extensions["muse"]` key | Sent as |
+|--------------------------|---------|
+| `previous_response_id` | Chains onto a stored response |
+| `store` | Persists the response server-side |
+| `reasoning` | `effort` and `summary` |
+| `include` | Extra output, such as `reasoning.encrypted_content` |
+| `background` | Runs the response asynchronously (not streamed) |
+
+Settings the Meta Responses API rejects fail with `model.unsupported_config` before any request
+is sent: `background` with streaming, `top_logprobs`, reasoning effort `none`,
+`reasoning.encrypted_content` with `previous_response_id`, stop sequences, penalties and `seed`.
+Output caps under 1,024 tokens are raised to `MUSE_MIN_MAX_TOKENS`, as on Chat Completions. An
+`extensions["openai"]` namespace is not sent to Meta.
+
 `muse-wonder-1.0` (preview flagship, $4/$20/$0.20 cached per 1M) works through
 `MuseConfig::wonder`. `sam-3.1` is catalogued for Responses-based segmentation;
 there is no dedicated SAM client yet.

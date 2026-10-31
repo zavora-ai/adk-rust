@@ -163,6 +163,11 @@ fn configs() -> [OpenAIResponsesConfig; 3] {
 `with_service_tier`, `with_prompt_cache_retention`, and `with_open_responses_mode` (for
 Open Responses servers) are also available.
 
+`OpenAIResponsesClient::with_provider_name` names the provider behind an Open Responses
+endpoint: the name replaces `openai-responses` on the telemetry span, in the spend bound and
+on errors, and replaces `openai` as the provider responses are priced under. `MuseClient` in
+Responses mode uses it to bill at Meta's rates ([Meta Muse](providers.md#responses-mode)).
+
 ### Reasoning Models
 
 For GPT-5.6 reasoning models, configure reasoning effort and summary:
@@ -380,9 +385,9 @@ fn build(model: Arc<dyn Llm>) -> anyhow::Result<LlmAgent> {
 }
 ```
 
-The `openai` extension also takes `previous_response_id`, `include`, `max_tool_calls`,
-`background`, `conversation_id`, `prompt_id`, `prompt_cache_retention`, `service_tier`, and
-`built_in_tools`.
+The `openai` extension also takes `previous_response_id`, `store`, `include`,
+`max_tool_calls`, `background`, `conversation_id`, `prompt_id`, `prompt_cache_retention`,
+`service_tier`, and `built_in_tools`.
 
 ### Built-In Tools
 

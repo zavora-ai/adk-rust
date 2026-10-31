@@ -1,10 +1,11 @@
 //! Muse client implementation.
 
-use super::config::{MUSE_API_BASE, MuseConfig};
+use super::config::{MUSE_API_BASE, MuseApi, MuseConfig};
 use super::convert::{self, ChatCompletionRequest, ChatCompletionResponse};
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{
-    AdkError, ErrorComponent, FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part,
+    AdkError, ErrorCategory, ErrorComponent, FinishReason, Llm, LlmRequest, LlmResponse,
+    LlmResponseStream, Part,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -57,6 +58,9 @@ const STREAM_ERROR: &str = "model.muse.stream_error";
 
 /// Muse client for Meta's Muse Spark models.
 ///
+/// Calls Chat Completions by default, or the Responses API with
+/// [`MuseConfig::with_api`]`(`[`MuseApi::Responses`]`)` (feature `muse-responses`).
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -70,18 +74,73 @@ pub struct MuseClient {
     client: Client,
     config: MuseConfig,
     retry_config: RetryConfig,
+    /// The Open Responses engine, when the config selects [`MuseApi::Responses`].
+    #[cfg(feature = "muse-responses")]
+    responses: Option<crate::openai::OpenAIResponsesClient>,
 }
 
 impl MuseClient {
     /// Create a new Muse client.
+    ///
+    /// # Errors
+    ///
+    /// Returns `model.muse.invalid_config` when the config selects [`MuseApi::Responses`]
+    /// without the `muse-responses` feature, or an error when an HTTP client cannot be
+    /// built.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_model::muse::{MuseApi, MuseClient, MuseConfig};
+    ///
+    /// let chat = MuseClient::new(MuseConfig::spark_1_3("LLM-key"))?;
+    /// assert_eq!(chat.api(), MuseApi::ChatCompletions);
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
     pub fn new(config: MuseConfig) -> Result<Self, AdkError> {
         crate::catalog::warn_if_obsolete("muse", &config.model);
         let client = crate::HttpTimeouts::default()
             .apply(Client::builder())
             .build()
             .map_err(|e| AdkError::model(format!("Failed to create HTTP client: {e}")))?;
+        #[cfg(feature = "muse-responses")]
+        let responses = match config.api {
+            MuseApi::ChatCompletions => None,
+            MuseApi::Responses => Some(
+                crate::openai::OpenAIResponsesClient::new(
+                    crate::openai::OpenAIResponsesConfig::new(
+                        config.api_key.clone(),
+                        config.model.clone(),
+                    )
+                    .with_base_url(config.effective_base_url().trim_end_matches('/'))
+                    .with_open_responses_mode(true),
+                )?
+                .with_provider_name("muse"),
+            ),
+        };
+        #[cfg(not(feature = "muse-responses"))]
+        if config.api == MuseApi::Responses {
+            return Err(AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::InvalidInput,
+                "model.muse.invalid_config",
+                "MuseApi::Responses needs the adk-model `muse-responses` feature",
+            )
+            .with_provider("muse"));
+        }
 
-        Ok(Self { client, config, retry_config: RetryConfig::default() })
+        Ok(Self {
+            client,
+            config,
+            retry_config: RetryConfig::default(),
+            #[cfg(feature = "muse-responses")]
+            responses,
+        })
+    }
+
+    /// The endpoint the client calls.
+    pub fn api(&self) -> MuseApi {
+        self.config.api
     }
 
     /// Sets the connect and idle timeouts of the HTTP transport, so a stalled stream fails
@@ -111,18 +170,27 @@ impl MuseClient {
             .apply(Client::builder())
             .build()
             .map_err(|e| AdkError::model(format!("Failed to create HTTP client: {e}")))?;
+        #[cfg(feature = "muse-responses")]
+        {
+            self.responses =
+                self.responses.map(|responses| responses.with_timeouts(timeouts)).transpose()?;
+        }
         Ok(self)
     }
 
     /// Set the retry configuration (builder pattern).
     #[must_use]
     pub fn with_retry_config(mut self, retry_config: RetryConfig) -> Self {
-        self.retry_config = retry_config;
+        self.set_retry_config(retry_config);
         self
     }
 
     /// Set the retry configuration (mutable reference).
     pub fn set_retry_config(&mut self, retry_config: RetryConfig) {
+        #[cfg(feature = "muse-responses")]
+        if let Some(responses) = self.responses.as_mut() {
+            responses.set_retry_config(retry_config.clone());
+        }
         self.retry_config = retry_config;
     }
 
@@ -135,6 +203,79 @@ impl MuseClient {
     fn api_url(&self) -> String {
         let base = self.config.base_url.as_deref().unwrap_or(MUSE_API_BASE);
         format!("{}/chat/completions", base.trim_end_matches('/'))
+    }
+
+    /// The request the Responses engine sends: the Muse request profile checked, the
+    /// `extensions["muse"]` options moved to the engine's namespace, and the output cap
+    /// raised to [`MUSE_MIN_MAX_TOKENS`](super::config::MUSE_MIN_MAX_TOKENS).
+    ///
+    /// # Errors
+    ///
+    /// Returns `model.unsupported_config` for a setting the Meta Responses API rejects.
+    #[cfg(feature = "muse-responses")]
+    fn responses_request(
+        &self,
+        mut request: LlmRequest,
+        stream: bool,
+    ) -> Result<LlmRequest, AdkError> {
+        crate::generation_config::reject_unsupported(
+            "muse",
+            request.config.as_ref(),
+            crate::generation_config::Supports {
+                stop_sequences: false,
+                seed: false,
+                penalties: false,
+                top_logprobs: false,
+            },
+        )?;
+        let unsupported = |message: &str| {
+            AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::InvalidInput,
+                "model.unsupported_config",
+                message,
+            )
+            .with_provider("muse")
+        };
+        let config = request.config.get_or_insert_with(Default::default);
+        let options = config.extensions.remove("muse");
+        let option = |key: &str| options.as_ref().and_then(|options| options.get(key));
+        if stream && option("background").and_then(Value::as_bool) == Some(true) {
+            return Err(unsupported(
+                "the Meta Responses API rejects `background` with streaming; send the background request without streaming and poll it",
+            ));
+        }
+        if option("reasoning").and_then(|reasoning| reasoning.get("effort")).and_then(Value::as_str)
+            == Some("none")
+        {
+            return Err(unsupported(
+                "the Meta Responses API rejects reasoning effort `none`; use `low`",
+            ));
+        }
+        let encrypted = option("include").and_then(Value::as_array).is_some_and(|include| {
+            include.iter().any(|item| item.as_str() == Some("reasoning.encrypted_content"))
+        });
+        if encrypted && option("previous_response_id").is_some() {
+            return Err(unsupported(
+                "the Meta Responses API rejects `reasoning.encrypted_content` with `previous_response_id`; chain turns with `previous_response_id` alone",
+            ));
+        }
+        // The engine reads `extensions["openai"]`; an OpenAI namespace set for another client
+        // is not sent to Meta.
+        let forwarded: serde_json::Map<String, Value> =
+            ["previous_response_id", "store", "reasoning", "include", "background"]
+                .into_iter()
+                .filter_map(|key| option(key).map(|value| (key.to_string(), value.clone())))
+                .collect();
+        config.extensions.insert("openai".to_string(), Value::Object(forwarded));
+        let cap = config
+            .max_output_tokens
+            .and_then(|tokens| u32::try_from(tokens).ok())
+            .or(self.config.max_tokens);
+        config.max_output_tokens = cap
+            .map(|cap| cap.max(super::config::MUSE_MIN_MAX_TOKENS))
+            .and_then(|cap| i32::try_from(cap).ok());
+        Ok(request)
     }
 
     /// Build a chat completion request from an LLM request.
@@ -247,6 +388,11 @@ impl Llm for MuseClient {
         request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream, AdkError> {
+        #[cfg(feature = "muse-responses")]
+        if let Some(responses) = &self.responses {
+            let request = self.responses_request(request, stream)?;
+            return responses.generate_content(request, stream).await;
+        }
         let usage_span = adk_telemetry::llm_generate_span("muse", &self.config.model, stream);
         let api_url = self.api_url();
         let api_key = self.config.api_key.clone();

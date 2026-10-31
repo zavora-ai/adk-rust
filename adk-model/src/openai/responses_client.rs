@@ -64,6 +64,8 @@ pub struct OpenAIResponsesClient {
     open_responses_mode: bool,
     /// Connect and idle bounds of both HTTP clients.
     timeouts: crate::HttpTimeouts,
+    /// Provider that serves the endpoint, when not OpenAI; see [`Self::with_provider_name`].
+    provider_name: Option<String>,
 }
 
 impl OpenAIResponsesClient {
@@ -161,7 +163,39 @@ impl OpenAIResponsesClient {
             base_url,
             open_responses_mode,
             timeouts,
+            provider_name: None,
         })
+    }
+
+    /// Names the provider that serves the endpoint, such as `muse` for the Meta Model API.
+    ///
+    /// The name replaces `openai-responses` on the telemetry span, in the spend bound
+    /// ([`Llm::max_cost_micro_usd`]) and on every error the client returns, and replaces
+    /// `openai` as the provider responses are priced and attributed under, so the pricing
+    /// catalog bills the provider's own rates.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig};
+    ///
+    /// let config = OpenAIResponsesConfig::new("key", "muse-spark-1.3")
+    ///     .with_base_url("https://api.meta.ai/v1")
+    ///     .with_open_responses_mode(true);
+    /// let client = OpenAIResponsesClient::new(config)?.with_provider_name("muse");
+    /// assert_eq!(client.provider_name(), "muse");
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    #[must_use]
+    pub fn with_provider_name(mut self, provider_name: impl Into<String>) -> Self {
+        self.provider_name = Some(provider_name.into());
+        self
+    }
+
+    /// The provider name spans, spend bounds and errors carry: the
+    /// [`with_provider_name`](Self::with_provider_name) name, or `openai-responses`.
+    pub fn provider_name(&self) -> &str {
+        self.provider_name.as_deref().unwrap_or("openai-responses")
     }
 
     /// Adds default HTTP headers to generation and auxiliary requests.
@@ -951,7 +985,7 @@ impl Llm for OpenAIResponsesClient {
     // The request's `max_output_tokens`, reasoning included, or the model's output limit.
     fn max_cost_micro_usd(&self, request: &adk_core::LlmRequest) -> Option<u64> {
         crate::pricing::PricingCatalog::standard().max_cost_micro_usd(
-            Some("openai-responses"),
+            Some(self.provider_name()),
             self.name(),
             request,
             crate::pricing::request_output_cap(request),
@@ -999,7 +1033,27 @@ impl Llm for OpenAIResponsesClient {
         request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream, AdkError> {
-        let usage_span = adk_telemetry::llm_generate_span("openai-responses", &self.model, stream);
+        let responses = self.generate(request, stream).await;
+        let Some(provider) = self.provider_name.clone() else {
+            return responses;
+        };
+        let responses = responses.map_err(|error| error.with_provider(provider.clone()))?;
+        Ok(Box::pin(
+            responses.map(move |item| item.map_err(|error| error.with_provider(provider.clone()))),
+        ))
+    }
+}
+
+impl OpenAIResponsesClient {
+    async fn generate(
+        &self,
+        request: LlmRequest,
+        stream: bool,
+    ) -> Result<LlmResponseStream, AdkError> {
+        let usage_span =
+            adk_telemetry::llm_generate_span(self.provider_name(), &self.model, stream);
+        // Responses are priced under the provider that bills them.
+        let billed_by = self.provider_name.as_deref().unwrap_or("openai");
 
         let create_request = responses_convert::build_create_response(
             &self.model,
@@ -1077,7 +1131,7 @@ impl Llm for OpenAIResponsesClient {
             Ok(crate::usage_tracking::with_priced_usage_tracking(
                 Box::pin(response_stream),
                 usage_span,
-                "openai",
+                billed_by,
                 &self.model,
             ))
         } else {
@@ -1121,7 +1175,7 @@ impl Llm for OpenAIResponsesClient {
             Ok(crate::usage_tracking::with_priced_usage_tracking(
                 Box::pin(response_stream),
                 usage_span,
-                "openai",
+                billed_by,
                 &self.model,
             ))
         }
