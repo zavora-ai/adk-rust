@@ -630,7 +630,10 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             );
         }
     }
-    let kernel = kernel.build()?;
+    let kernel = kernel.build().context(
+        "adk-rust up keeps every kernel store in harness.db or the --store backend; pass \
+         --ephemeral to keep them in memory",
+    )?;
     held.attach(&kernel);
     // The inbox decides through the harness's approval service, which wakes the kernel's
     // approval sleepers; the service the builder was given would not.

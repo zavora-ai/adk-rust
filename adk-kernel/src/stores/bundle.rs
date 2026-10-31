@@ -228,8 +228,8 @@ impl KernelStores {
             .map(|(scheme, _)| scheme.to_ascii_lowercase())
             .filter(|scheme| !scheme.is_empty())
             .ok_or_else(|| unknown_scheme(&label))?;
-        let stores = match scheme.as_str() {
-            "memory" => return Ok(Self::in_memory()),
+        let stores: Self = match scheme.as_str() {
+            "memory" => Self::in_memory(),
             #[cfg(feature = "sqlite")]
             "sqlite" => {
                 let pool = sqlx::sqlite::SqlitePoolOptions::new()
