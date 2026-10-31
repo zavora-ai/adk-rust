@@ -187,6 +187,17 @@ impl ControlClient {
         self.call(Method::GET, paths::HEALTH.to_string(), None::<&()>).await
     }
 
+    /// `GET /kernel/inventory`: what the kernel runs, and a warning for each thing it would
+    /// silently not do (`Kernel::inventory`); for the `operator` scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// kernel's error for a caller without the `operator` scope.
+    pub async fn inventory(&self) -> Result<crate::inventory::KernelInventory> {
+        self.call(Method::GET, paths::INVENTORY.to_string(), None::<&()>).await
+    }
+
     /// `GET /kernel/partitions`: the partition table (spec 3.2 §7.8).
     ///
     /// # Errors

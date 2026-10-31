@@ -24,6 +24,7 @@
 //! |---|---|
 //! | [`Kernel`], [`KernelBuilder`], [`KernelConfig`], [`KernelHealth`], [`KernelState`] | §7.2 |
 //! | [`Process`], [`ProcessMeta`], [`ProcessView`], [`GoalProgress`], [`ProcessKind`], [`Suspension`], [`ProcessTable`], [`ProcessSpec`], [`ProgressSource`] | §7.3 |
+//! | [`inventory`]: [`KernelInventory`](inventory::KernelInventory), [`InventoryWarning`](inventory::InventoryWarning), [`Kernel::inventory`], `GET /api/kernel/inventory`; `KernelBuilder::signals` and `Kernel::signal_sink` (feature `charter`) | §7.1, §7.4 |
 //! | [`stores::KernelStores`], [`stores::StoreUse`], [`stores::StoreOrigin`]: every stateful store on one backend, [`KernelBuilder::stores`], [`KernelBuilder::require_durable`], [`Kernel::store_uses`] | §7.1, §13 Q8 |
 //! | [`ProcessStore`], [`ProcessFilter`], [`SpendScope`], [`InMemoryProcessStore`], `SqliteProcessStore`, `PostgresProcessStore`, `RedisProcessStore`, `MongoProcessStore`, `FirestoreProcessStore`, `Neo4jProcessStore` | §7.3, §13 Q8 |
 //! | [`Wake`], [`WakeSet`], [`ExpiryAction`], [`WakeSource`], [`WakeEvent`], [`keys`], [`Trigger`], [`WakeRouter`], [`WakeOutcome`], [`KernelWakeExecutor`], the wake source adapters | §7.4 |
@@ -105,6 +106,7 @@ pub mod consolidation;
 pub mod control;
 pub mod drivers;
 pub mod error;
+pub mod inventory;
 pub mod kernel;
 #[cfg(feature = "managed")]
 pub mod managed;

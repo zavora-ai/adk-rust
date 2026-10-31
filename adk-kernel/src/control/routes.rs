@@ -73,6 +73,10 @@ pub(crate) trait ControlBackend: Send + Sync + 'static {
     fn agenda(&self) -> Option<Agenda> {
         None
     }
+    /// What the kernel runs and would silently not do; `None` on a backend without one.
+    fn inventory(&self) -> Option<crate::inventory::KernelInventory> {
+        None
+    }
     /// The driver supervisor, when the kernel has one (spec 3.2 §7.7).
     #[cfg(feature = "drivers")]
     fn drivers(&self) -> Option<crate::drivers::DriverSupervisor> {
@@ -153,6 +157,10 @@ impl ControlBackend for Kernel {
 
     fn has_target(&self, target: &str) -> bool {
         Kernel::has_target(self, target)
+    }
+
+    fn inventory(&self) -> Option<crate::inventory::KernelInventory> {
+        Some(Kernel::inventory(self))
     }
 
     async fn spawn(&self, run: NewRun, spec: ProcessSpec) -> Result<Process> {
@@ -244,6 +252,7 @@ impl ControlBackend for Kernel {
 pub(crate) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
     let router = Router::new()
         .route(paths::HEALTH, get(health))
+        .route(paths::INVENTORY, get(inventory))
         .route(paths::PROCESSES, get(processes).post(spawn))
         .route(paths::KILL, post(kill))
         .route(paths::NICE, post(nice))
@@ -396,6 +405,16 @@ async fn after_action(backend: &dyn ControlBackend, pid: &str) -> Result<Json<Pr
 
 async fn health(State(backend): Backend, _caller: Caller) -> Json<KernelHealth> {
     Json(backend.health())
+}
+
+async fn inventory(
+    State(backend): Backend,
+    caller: Caller,
+) -> Result<Json<crate::inventory::KernelInventory>> {
+    caller.require_operator("read the kernel's inventory")?;
+    backend.inventory().map(Json).ok_or_else(|| KernelError::Config {
+        reason: "this control plane serves no kernel inventory".into(),
+    })
 }
 
 async fn processes(

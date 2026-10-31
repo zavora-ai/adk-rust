@@ -164,8 +164,12 @@ async fn main() -> adk_kernel::Result<()> {
 }
 ```
 
-On a running kernel, `SignalSink::for_kernel(&kernel, store, partition)` uses the kernel's
-agenda store, wake router, event bus and clock.
+A kernel files signals in the partitions registered with `KernelBuilder::signals(store,
+partition)`: `Kernel::signal_sink(partition)` returns the partition's sink on the kernel's agenda
+store, wake router, event bus, clock and audit trail, and the kernel's
+[inventory](control-plane.md#inventory) warns about a signal trigger in a partition with no
+registered store, since nothing would file its signals. `SignalSink::for_kernel(&kernel, store,
+partition)` builds the same sink without registering the partition.
 
 ## Site process kinds
 

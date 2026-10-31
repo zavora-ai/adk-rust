@@ -52,12 +52,12 @@ impl KernelSignals {
         Self { sink: std::sync::RwLock::new(sink) }
     }
 
-    /// Wakes the kernel's `Wake::Signal` sleepers through `router` for app `app` from now on
-    /// (spec 3.5 §7.10, §7.20): the edge is built before the kernel that serves it, so the
-    /// served site connects its signals once the kernel exists.
-    pub fn wake(&self, router: adk_kernel::WakeRouter, app: impl Into<String>) {
-        let mut sink = self.sink.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-        *sink = sink.clone().with_wakes(router, app);
+    /// Files signals through `sink` from now on, such as the kernel's
+    /// (`Kernel::signal_sink`), which wakes its `Wake::Signal` sleepers and triggers (spec 3.5
+    /// §7.10, §7.20): the edge is built before the kernel that serves it, so the served site
+    /// connects its signals once the kernel exists.
+    pub fn attach(&self, sink: SignalSink) {
+        *self.sink.write().unwrap_or_else(std::sync::PoisonError::into_inner) = sink;
     }
 }
 

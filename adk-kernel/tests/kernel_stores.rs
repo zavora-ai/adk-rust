@@ -12,14 +12,12 @@
 //!   --test integration -E 'test(/^kernel_stores::/)'
 //! ```
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use adk_core::InMemoryRunStore;
-use adk_kernel::control::ControlPlaneConfig;
 use adk_kernel::stores::{KernelStores, StoreOrigin, StoreUse};
 use adk_kernel::{
-    InMemoryProcessStore, Kernel, KernelConfig, KernelError, ProcessKind, ProcessMeta,
-    ProcessStore, QueueClass,
+    InMemoryProcessStore, Kernel, KernelError, ProcessKind, ProcessMeta, ProcessStore, QueueClass,
 };
 
 fn reason(error: KernelError) -> String {
@@ -97,40 +95,6 @@ fn without_require_durable_a_defaulted_store_is_recorded_and_the_kernel_builds()
     assert!(kernel.store_uses().iter().all(|used| used.store != "schedule_store"));
 }
 
-#[test]
-fn the_builder_warns_once_for_each_store_it_defaults() {
-    use tracing_subscriber::layer::SubscriberExt as _;
-
-    let logs = Captured::default();
-    let writer = logs.clone();
-    let subscriber = tracing_subscriber::registry().with(
-        tracing_subscriber::fmt::layer().with_ansi(false).with_writer(move || writer.clone()),
-    );
-    tracing::subscriber::with_default(subscriber, || {
-        // No control plane is served, so the settings store goes unread and unwarned.
-        Kernel::builder()
-            .config(
-                KernelConfig::default()
-                    .with_control(ControlPlaneConfig::default().without_socket()),
-            )
-            .run_store(Arc::new(InMemoryRunStore::new()))
-            .process_store(Arc::new(InMemoryProcessStore::new()))
-            .build()
-            .unwrap();
-    });
-    let text = logs.text();
-    let warned: Vec<&str> = text
-        .lines()
-        .filter(|line| line.contains("WARN"))
-        .filter_map(|line| line.split("kernel.store=").nth(1)?.split_whitespace().next())
-        .collect();
-    assert_eq!(
-        warned,
-        ["agenda_store", "partitions", "watermark_store", "agent_store", "governance"],
-        "{text}"
-    );
-}
-
 #[tokio::test]
 async fn a_store_set_on_the_builder_wins_over_the_bundles_whichever_comes_first() {
     let mine: Arc<dyn ProcessStore> = Arc::new(InMemoryProcessStore::new());
@@ -159,9 +123,9 @@ async fn a_durable_bundle_satisfies_require_durable_with_a_mirrored_kill_switch(
     let stores = KernelStores::open(&sqlite_url(&dir)).await.unwrap();
     let kernel = Kernel::builder()
         .config(
-            KernelConfig::default()
+            adk_kernel::KernelConfig::default()
                 .with_home(dir.path())
-                .with_control(ControlPlaneConfig::default().without_socket()),
+                .with_control(adk_kernel::control::ControlPlaneConfig::default().without_socket()),
         )
         .stores(&stores)
         .require_durable()
@@ -272,25 +236,4 @@ async fn the_neo4j_bundle_keeps_what_neo4j_holds() {
 #[ignore = "needs the Firestore emulator at FIRESTORE_EMULATOR_HOST"]
 async fn the_firestore_bundle_keeps_what_firestore_holds() {
     partial_round_trip("firestore://adk-kernel-test").await;
-}
-
-/// A `MakeWriter` into a shared buffer.
-#[derive(Clone, Default)]
-struct Captured(Arc<Mutex<Vec<u8>>>);
-
-impl Captured {
-    fn text(&self) -> String {
-        String::from_utf8_lossy(&self.0.lock().unwrap_or_else(PoisonError::into_inner)).into_owned()
-    }
-}
-
-impl std::io::Write for Captured {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
 }

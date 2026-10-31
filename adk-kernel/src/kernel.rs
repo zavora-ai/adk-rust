@@ -62,6 +62,7 @@ use crate::bus::{EventBus, EventSink, EventSubscriber, KernelEvent};
 use crate::consolidation::{ConsolidationExecutor, ConsolidationTicker, Consolidator};
 use crate::control::{ControlPlane, ControlPlaneConfig};
 use crate::error::{KernelError, Result};
+use crate::inventory::{InventoryTrigger, InventoryWarning, KernelInventory};
 use crate::partition::{PartitionId, Partitions};
 #[cfg(feature = "proc")]
 use crate::proc::{Ledger, LedgerEventSink};
@@ -436,6 +437,13 @@ struct KernelInner {
     workflows: Option<Arc<dyn WorkflowExecutor>>,
     wake_sources: Vec<Arc<dyn WakeSource>>,
     queue_ingresses: Vec<QueueIngress>,
+    /// Whether the agent table can add agents: the builder was given a factory.
+    adds_agents: bool,
+    /// The signal store of each partition the kernel files signals in (spec 3.5 §7.10).
+    #[cfg(feature = "charter")]
+    signal_stores: BTreeMap<PartitionId, Arc<dyn crate::charter::SignalStore>>,
+    /// Warnings the host or a kit added to the inventory.
+    inventory_warnings: Vec<InventoryWarning>,
     consolidation: Option<ConsolidationTicker>,
     #[cfg(feature = "drivers")]
     drivers: Option<crate::drivers::DriverSupervisor>,
@@ -493,6 +501,164 @@ impl Kernel {
     /// held in memory (spec 3.2 §7.1, [`KernelBuilder::require_durable`]).
     pub fn store_uses(&self) -> &[StoreUse] {
         &self.inner.store_uses
+    }
+
+    /// What the kernel runs, and a warning for each thing it would silently not do
+    /// ([`KernelInventory`]): logged when the kernel starts and served at
+    /// `GET /api/kernel/inventory`.
+    pub fn inventory(&self) -> KernelInventory {
+        let inner = &self.inner;
+        let mut warnings = Vec::new();
+        #[cfg(feature = "charter")]
+        let signal_partitions: Vec<PartitionId> = inner.signal_stores.keys().cloned().collect();
+        #[cfg(not(feature = "charter"))]
+        let signal_partitions: Vec<PartitionId> = Vec::new();
+        let triggers: Vec<InventoryTrigger> = inner
+            .router
+            .triggers()
+            .iter()
+            .map(|trigger| {
+                let served = self.has_target(&trigger.run.target);
+                if !served {
+                    warnings.push(
+                        InventoryWarning::new(
+                            InventoryWarning::TRIGGER_UNSERVED,
+                            format!(
+                                "trigger `{}` starts `{}`, which no agent or workflow of the \
+                                 kernel serves, so each of its runs fails; register the target \
+                                 or remove the trigger",
+                                trigger.name, trigger.run.target
+                            ),
+                        )
+                        .with_subject(trigger.name.clone()),
+                    );
+                }
+                if let Wake::Signal { kind, partition } = &trigger.wake {
+                    let filed = match partition {
+                        Some(partition) => signal_partitions.contains(partition),
+                        None => !signal_partitions.is_empty(),
+                    };
+                    if !filed {
+                        let place = partition
+                            .as_ref()
+                            .map_or_else(|| "any partition".to_string(), |p| format!("`{p}`"));
+                        warnings.push(
+                            InventoryWarning::new(
+                                InventoryWarning::SIGNAL_UNFILED,
+                                format!(
+                                    "trigger `{}` wakes on `{kind}` signals in {place}, and the \
+                                     kernel files no signals there, so it never fires; register \
+                                     a signal store with KernelBuilder::signals",
+                                    trigger.name
+                                ),
+                            )
+                            .with_subject(trigger.name.clone()),
+                        );
+                    }
+                }
+                InventoryTrigger {
+                    name: trigger.name.clone(),
+                    wake: trigger.wake.clone(),
+                    target: trigger.run.target.clone(),
+                    queue: trigger.run.queue.clone(),
+                    partition: trigger.partition.clone(),
+                    served,
+                }
+            })
+            .collect();
+        let served = inner.config.control.socket.is_some() || inner.config.control.http.is_some();
+        let mut bundled: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for used in inner.store_uses.iter().filter(|used| used.in_memory) {
+            match (used.origin, &used.bundle) {
+                (StoreOrigin::Bundle, Some(label)) => {
+                    bundled.entry(label.as_str()).or_default().push(used.store.as_str());
+                }
+                // The settings store is read only by a control plane.
+                (StoreOrigin::Defaulted, _) if used.store == "control_store" && !served => {}
+                _ => warnings.push(
+                    InventoryWarning::new(
+                        InventoryWarning::STORE_IN_MEMORY,
+                        format!(
+                            "the kernel keeps its `{}` in memory, so its state ends with the \
+                             process; give the builder durable stores (KernelBuilder::stores) or \
+                             set it with {}",
+                            used.store,
+                            store_remedy(&used.store)
+                        ),
+                    )
+                    .with_subject(used.store.clone()),
+                ),
+            }
+        }
+        for (label, stores) in bundled {
+            warnings.push(
+                InventoryWarning::new(
+                    InventoryWarning::STORE_IN_MEMORY,
+                    format!(
+                        "the stores `{label}` keep {} in memory, so their state ends with the \
+                         process",
+                        stores.join(", ")
+                    ),
+                )
+                .with_subject(label),
+            );
+        }
+        let targets = self.targets();
+        if targets.is_empty()
+            && triggers.is_empty()
+            && inner.schedules.is_none()
+            && inner.workflows.is_none()
+            && !inner.adds_agents
+        {
+            warnings.push(InventoryWarning::new(
+                InventoryWarning::KERNEL_IDLE,
+                "the kernel has nothing to run: no agent, trigger, workflow, schedule store or \
+                 agent factory",
+            ));
+        }
+        warnings.extend(inner.inventory_warnings.iter().cloned());
+        KernelInventory {
+            app_name: inner.config.app_name.clone(),
+            targets,
+            triggers,
+            wake_sources: inner
+                .wake_sources
+                .iter()
+                .map(|source| source.name().to_string())
+                .collect(),
+            schedules: inner.schedules.is_some(),
+            signal_partitions,
+            stores: inner.store_uses.clone(),
+            warnings,
+        }
+    }
+
+    /// The sink that files signals in `partition` (spec 3.5 §7.10; feature `charter`): on
+    /// the kernel's agenda store, wake router, event bus, clock and audit trail, through the
+    /// store [`KernelBuilder::signals`] registered for the partition. Each filed or counted
+    /// signal wakes the [`Wake::Signal`] sleepers and triggers of the partition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Config`] when no signal store is registered for `partition`.
+    #[cfg(feature = "charter")]
+    pub fn signal_sink(
+        &self,
+        partition: impl Into<PartitionId>,
+    ) -> Result<crate::charter::SignalSink> {
+        let partition = partition.into();
+        let store =
+            self.inner.signal_stores.get(&partition).ok_or_else(|| KernelError::Config {
+                reason: format!(
+                    "the kernel files no signals in partition `{partition}`; register a signal \
+                 store for it with KernelBuilder::signals"
+                ),
+            })?;
+        let sink = crate::charter::SignalSink::for_kernel(self, Arc::clone(store), partition);
+        Ok(match &self.inner.sup.audit {
+            Some(trail) => sink.with_audit(trail.clone()),
+            None => sink,
+        })
     }
 
     fn state(&self) -> KernelState {
@@ -715,6 +881,24 @@ impl Kernel {
         self.set_state(KernelState::Running);
         self.record_lifecycle(audit::KERNEL_STARTED, None).await;
         sup.publish(KernelEvent::Health(self.health()));
+        let inventory = self.inventory();
+        tracing::info!(
+            kernel.app = %inventory.app_name,
+            kernel.targets = ?inventory.targets,
+            kernel.triggers = inventory.triggers.len(),
+            kernel.wake_sources = inventory.wake_sources.len(),
+            kernel.schedules = inventory.schedules,
+            kernel.warnings = inventory.warnings.len(),
+            "kernel started"
+        );
+        for warning in &inventory.warnings {
+            tracing::warn!(
+                kernel.warning = %warning.code,
+                kernel.subject = warning.subject.as_deref().unwrap_or_default(),
+                "{}",
+                warning.message
+            );
+        }
         Ok(())
     }
 
@@ -1612,6 +1796,9 @@ pub struct KernelBuilder {
     watermarks: Option<Arc<dyn CronWatermarkStore>>,
     bundle: Option<KernelStores>,
     require_durable: bool,
+    #[cfg(feature = "charter")]
+    signal_stores: BTreeMap<PartitionId, Arc<dyn crate::charter::SignalStore>>,
+    inventory_warnings: Vec<InventoryWarning>,
 }
 
 impl fmt::Debug for KernelBuilder {
@@ -1998,8 +2185,8 @@ impl KernelBuilder {
 
     /// Refuses to build a kernel that would keep a stateful store in memory (spec 3.2
     /// §7.1): one the builder defaulted, one its [`KernelStores`] keeps in memory, or a kill
-    /// switch that is not mirrored. Without it, the builder logs a warning for each store it
-    /// defaults. [`Kernel::store_uses`] reports each store either way.
+    /// switch that is not mirrored. Without it, the kernel's [`inventory`](Kernel::inventory)
+    /// warns about each such store when the kernel starts. [`Kernel::store_uses`] reports each store either way.
     ///
     /// # Example
     ///
@@ -2018,6 +2205,63 @@ impl KernelBuilder {
     #[must_use]
     pub fn require_durable(mut self) -> Self {
         self.require_durable = true;
+        self
+    }
+
+    /// Files signals in `partition` through `store` (spec 3.5 §7.10; feature `charter`):
+    /// [`Kernel::signal_sink`] returns the partition's sink, and the kernel's
+    /// [`inventory`](Kernel::inventory) knows the partition's signal triggers can fire.
+    /// Registering a partition again replaces its store.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::InMemoryRunStore;
+    /// use adk_kernel::Kernel;
+    /// use adk_kernel::charter::InMemorySignalStore;
+    ///
+    /// let kernel = Kernel::builder()
+    ///     .run_store(Arc::new(InMemoryRunStore::new()))
+    ///     .signals(Arc::new(InMemorySignalStore::new()), "back-office")
+    ///     .build()?;
+    /// assert_eq!(kernel.signal_sink("back-office")?.partition().as_str(), "back-office");
+    /// assert!(kernel.signal_sink("public").is_err());
+    /// # Ok::<(), adk_kernel::KernelError>(())
+    /// ```
+    #[cfg(feature = "charter")]
+    #[must_use]
+    pub fn signals(
+        mut self,
+        store: Arc<dyn crate::charter::SignalStore>,
+        partition: impl Into<PartitionId>,
+    ) -> Self {
+        self.signal_stores.insert(partition.into(), store);
+        self
+    }
+
+    /// Adds `warning` to the kernel's [`inventory`](Kernel::inventory), logged when the kernel
+    /// starts: something the host or a kit would otherwise leave silent, such as a job it does
+    /// not schedule and why.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::InMemoryRunStore;
+    /// use adk_kernel::Kernel;
+    /// use adk_kernel::inventory::InventoryWarning;
+    ///
+    /// let kernel = Kernel::builder()
+    ///     .run_store(Arc::new(InMemoryRunStore::new()))
+    ///     .inventory_warning(InventoryWarning::new("site.job_unscheduled", "no channel for the digest"))
+    ///     .build()?;
+    /// assert!(kernel.inventory().warnings.iter().any(|warning| warning.code == "site.job_unscheduled"));
+    /// # Ok::<(), adk_kernel::KernelError>(())
+    /// ```
+    #[must_use]
+    pub fn inventory_warning(mut self, warning: InventoryWarning) -> Self {
+        self.inventory_warnings.push(warning);
         self
     }
 
@@ -2069,7 +2313,7 @@ impl KernelBuilder {
         let mut config = self.config;
         slots.governance(&mut config, self.governance);
         slots.control_store(&mut config);
-        let store_uses = slots.finish(&config, self.require_durable)?;
+        let store_uses = slots.finish(self.require_durable)?;
         let mut partition_progress = BTreeMap::new();
         for (partition, source) in self.partition_progress {
             if partition_progress.contains_key(&partition) {
@@ -2240,6 +2484,7 @@ impl KernelBuilder {
         }
         let consolidation = (!consolidators.is_empty())
             .then(|| ConsolidationTicker::new(Arc::clone(&sup), processes.clone(), consolidators));
+        let adds_agents = self.agent_factory.is_some();
         let agent_table = crate::agents::Agents::new(crate::agents::AgentsParts {
             sup: Arc::clone(&sup),
             processes: processes.clone(),
@@ -2276,6 +2521,10 @@ impl KernelBuilder {
                 workflows: self.workflows,
                 wake_sources,
                 queue_ingresses: self.queue_ingresses,
+                adds_agents,
+                #[cfg(feature = "charter")]
+                signal_stores: self.signal_stores,
+                inventory_warnings: self.inventory_warnings,
                 consolidation,
                 #[cfg(feature = "drivers")]
                 drivers: self.drivers,
@@ -2362,21 +2611,9 @@ impl Slots<'_> {
         self.uses.push(used);
     }
 
-    /// The record of every store: refused when `require_durable` and one is held in memory,
-    /// else a warning for each the builder defaulted.
-    fn finish(self, config: &KernelConfig, require_durable: bool) -> Result<Vec<StoreUse>> {
-        let remedy = |store: &str| match store {
-            "governance" => "KernelBuilder::governance with KernelConfig::mirrored_governance",
-            "control_store" => "ControlPlaneConfig::with_control_store",
-            "partitions" => "KernelBuilder::partitions",
-            "process_store" => "KernelBuilder::process_store",
-            "agenda_store" => "KernelBuilder::agenda_store",
-            "watermark_store" => "KernelBuilder::watermark_store",
-            "agent_store" => "KernelBuilder::agent_store",
-            "schedule_store" => "KernelBuilder::schedule_store",
-            "spend_ledger" => "KernelBuilder::spend_ledger",
-            _ => "KernelBuilder::run_store",
-        };
+    /// The record of every store, refused when `require_durable` and one is held in memory;
+    /// the inventory warns about each when the kernel starts.
+    fn finish(self, require_durable: bool) -> Result<Vec<StoreUse>> {
         if require_durable {
             let held: Vec<String> = self
                 .uses
@@ -2388,7 +2625,7 @@ impl Slots<'_> {
                             format!("the stores `{label}` keep it in memory")
                         }
                         (StoreOrigin::Set, _) => "the kill switch is not mirrored".to_string(),
-                        _ => format!("defaulted; set it with {}", remedy(&used.store)),
+                        _ => format!("defaulted; set it with {}", store_remedy(&used.store)),
                     };
                     format!("`{}` ({why})", used.store)
                 })
@@ -2404,25 +2641,23 @@ impl Slots<'_> {
                 });
             }
         }
-        let served = config.control.socket.is_some() || config.control.http.is_some();
-        for used in &self.uses {
-            if used.origin == StoreOrigin::Defaulted && (served || used.store != "control_store") {
-                tracing::warn!(
-                    kernel.store = %used.store,
-                    remedy = remedy(&used.store),
-                    "the kernel keeps this store in memory, so its state ends with the process; \
-                     give the builder durable stores (KernelBuilder::stores) or set it"
-                );
-            }
-        }
-        if let Some(bundle) = self.bundle.filter(|bundle| !bundle.is_durable()) {
-            tracing::info!(
-                kernel.stores = bundle.label(),
-                in_memory = ?bundle.in_memory_stores(),
-                "the kernel's stores keep these in memory"
-            );
-        }
         Ok(self.uses)
+    }
+}
+
+/// The builder setter that gives a kernel its `store` durably.
+fn store_remedy(store: &str) -> &'static str {
+    match store {
+        "governance" => "KernelBuilder::governance with KernelConfig::mirrored_governance",
+        "control_store" => "ControlPlaneConfig::with_control_store",
+        "partitions" => "KernelBuilder::partitions",
+        "process_store" => "KernelBuilder::process_store",
+        "agenda_store" => "KernelBuilder::agenda_store",
+        "watermark_store" => "KernelBuilder::watermark_store",
+        "agent_store" => "KernelBuilder::agent_store",
+        "schedule_store" => "KernelBuilder::schedule_store",
+        "spend_ledger" => "KernelBuilder::spend_ledger",
+        _ => "KernelBuilder::run_store",
     }
 }
 
