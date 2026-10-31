@@ -177,3 +177,36 @@ mod approval_service {
         harness = super::Postgres,
     );
 }
+
+#[async_trait]
+impl adk_core::conformance::SubjectRegistryHarness for Postgres {
+    async fn open(&self, clock: Arc<dyn Clock>) -> Arc<dyn adk_core::subject::SubjectRegistry> {
+        let registry =
+            adk_session::PostgresSubjectRegistry::from_pool(self.pool().await).with_clock(clock);
+        registry.migrate().await.expect("subject schema migrates");
+        Arc::new(registry)
+    }
+}
+
+mod subject_registry {
+    adk_core::subject_registry_conformance_tests!(
+        #[ignore = "requires a PostgreSQL server at DATABASE_URL"]
+        harness = super::Postgres,
+    );
+}
+
+#[async_trait]
+impl adk_core::conformance::ConsentStoreHarness for Postgres {
+    async fn open(&self) -> Arc<dyn adk_core::subject::ConsentStore> {
+        let store = adk_session::PostgresConsentStore::from_pool(self.pool().await);
+        store.migrate().await.expect("subject schema migrates");
+        Arc::new(store)
+    }
+}
+
+mod consent_store {
+    adk_core::consent_store_conformance_tests!(
+        #[ignore = "requires a PostgreSQL server at DATABASE_URL"]
+        harness = super::Postgres,
+    );
+}

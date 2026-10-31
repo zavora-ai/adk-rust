@@ -798,6 +798,20 @@ A new session never inherits events left under its path. App names, user IDs, an
 > adk-session = { version = "3.0.0", features = ["firestore"] }
 > ```
 
+## Subject Export and Erasure
+
+`SessionSubjectData` adapts any `SessionService` to `adk_core::subject::SubjectDataStore`, so
+`SubjectRights` exports and erases a person's sessions alongside their other data:
+
+| Operation | Per application and user id of the subject |
+|-----------|---------------------------------------------|
+| Export | Every session with its events and state, the `user:` tier included and the `app:` tier left out |
+| Erase | `delete_all_sessions`: every session, its events, and the `user:` tier |
+
+Every backend also ships a `SubjectRegistry` and a `ConsentStore`
+(`SqliteSubjectRegistry`, `PostgresConsentStore`, `RedisSubjectRegistry`, and so on). See
+[Subject Rights](../security/subject-rights.md).
+
 ## Schema Migrations
 
 All database-backed session services (SQLite, PostgreSQL, MongoDB, Neo4j) include a versioned, forward-only migration system. Applied versions are recorded in the `_adk_session_migrations` table (SQLite, PostgreSQL) or collection (MongoDB), or as `_AdkSessionMigration` nodes (Neo4j).

@@ -203,3 +203,39 @@ mod audit_log {
         harness = super::Audit,
     );
 }
+
+/// The subject registry and consent store over the emulator.
+struct SubjectsFirestore;
+
+#[async_trait]
+impl adk_core::conformance::SubjectRegistryHarness for SubjectsFirestore {
+    async fn open(&self, clock: Arc<dyn Clock>) -> Arc<dyn adk_core::subject::SubjectRegistry> {
+        let registry =
+            adk_session::FirestoreSubjectRegistry::from_db(emulator_db().await).with_clock(clock);
+        registry.migrate().await.expect("subject registry migrates");
+        Arc::new(registry)
+    }
+}
+
+mod subject_registry {
+    adk_core::subject_registry_conformance_tests!(
+        #[ignore = "requires the Firestore emulator at FIRESTORE_EMULATOR_HOST"]
+        harness = super::SubjectsFirestore,
+    );
+}
+
+#[async_trait]
+impl adk_core::conformance::ConsentStoreHarness for SubjectsFirestore {
+    async fn open(&self) -> Arc<dyn adk_core::subject::ConsentStore> {
+        let store = adk_session::FirestoreConsentStore::from_db(emulator_db().await);
+        store.migrate().await.expect("consent store migrates");
+        Arc::new(store)
+    }
+}
+
+mod consent_store {
+    adk_core::consent_store_conformance_tests!(
+        #[ignore = "requires the Firestore emulator at FIRESTORE_EMULATOR_HOST"]
+        harness = super::SubjectsFirestore,
+    );
+}

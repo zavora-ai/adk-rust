@@ -431,6 +431,51 @@ async fn main() -> adk_core::Result<()> {
 }
 ```
 
+## Subject Registry and Consent Stores
+
+Every session backend ships the `adk-core` subject registry and consent store, so
+`SubjectRights` runs on the database a deployment already uses:
+
+| Backend | Feature | Subject registry | Consent store |
+|---------|---------|------------------|---------------|
+| In-memory (`adk-core`) | — | `InMemorySubjectRegistry` | `InMemoryConsentStore` |
+| SQLite | `sqlite` | `SqliteSubjectRegistry` | `SqliteConsentStore` |
+| PostgreSQL | `postgres` | `PostgresSubjectRegistry` | `PostgresConsentStore` |
+| Redis | `redis` | `RedisSubjectRegistry` | `RedisConsentStore` |
+| MongoDB | `mongodb` | `MongoSubjectRegistry` | `MongoConsentStore` |
+| Neo4j | `neo4j` | `Neo4jSubjectRegistry` | `Neo4jConsentStore` |
+| Firestore | `firestore` | `FirestoreSubjectRegistry` | `FirestoreConsentStore` |
+
+Each type has `new(...)`, a constructor over a shared handle, and `migrate()`; the registries
+add `with_clock`. A visitor id links once (a conditional write on the empty link), and a
+revocation keeps its first time. `SessionSubjectData` is the session family's
+`SubjectDataStore` adapter over any `SessionService`: it exports a subject's sessions with their
+events and `user:` state, and erases them with `delete_all_sessions`.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::subject::SubjectRights;
+use adk_session::{SessionSubjectData, SqliteConsentStore, SqliteSessionService, SqliteSubjectRegistry};
+
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let url = "sqlite://app.db?mode=rwc";
+    let sessions = SqliteSessionService::new(url).await?;
+    sessions.migrate().await?;
+    let sessions = Arc::new(sessions);
+    let registry = SqliteSubjectRegistry::new(url).await?;
+    registry.migrate().await?;
+    let consent = SqliteConsentStore::new(url).await?;
+    let rights = SubjectRights::new(Arc::new(registry), Arc::new(consent))
+        .with_app("shop")
+        .with_store(Arc::new(SessionSubjectData::new(sessions)));
+    let report = rights.erase(&adk_core::SubjectRef::human("alice")).await?;
+    println!("{:?}", report.status);
+    Ok(())
+}
+```
+
 ## Rewind
 
 `rewind(&identity, event_id)` removes the events after `event_id`, and `rewind_steps(&identity, n)` removes the last `n`. Both address the session by its full `AdkIdentity` — app, user, and session — and rebuild the session-scoped state from the state the session was created with plus the remaining events' deltas; app and user state are shared with other sessions and are not rewound. The in-memory and SQLite backends and `EncryptedSession` implement rewind; every other backend returns `session.rewind.unsupported`.
