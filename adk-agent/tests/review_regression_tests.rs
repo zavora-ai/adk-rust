@@ -3,10 +3,13 @@ use adk_agent::{
     ParallelAgent, SequentialAgent,
 };
 use adk_core::{
-    Agent, CallbackContext, Content, Event, EventStream, FinishReason, InvocationContext, Llm,
-    LlmRequest, LlmResponse, LlmResponseStream, Part, Result, RunConfig, Session, State, Tool,
-    ToolContext, Toolset,
+    Agent, ApprovalScope, ApprovalStore, CallbackContext, Content, Event, EventStream,
+    FinishReason, InMemoryApprovalStore, InvocationContext, Llm, LlmRequest, LlmResponse,
+    LlmResponseStream, Part, Result, RunConfig, Session, SessionId, State, Tool, ToolApproval,
+    ToolConfirmationRequest, ToolContext, Toolset, UserId,
 };
+use adk_runner::Runner;
+use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -824,13 +827,227 @@ async fn test_auto_overlaps_adjacent_safe_calls_in_model_order() {
     assert_eq!(state.unsafe_started.load(Ordering::SeqCst), 2);
     assert_eq!(state.unsafe_max_active.load(Ordering::SeqCst), 1);
     assert!(!state.unsafe_started_while_safe_active.load(Ordering::SeqCst));
-    // The model's order holds across the unsafe calls: a read listed after a write must see it.
+    // The model's order holds across the unsafe calls.
     let start_order = state.start_order.lock().unwrap_or_else(|error| error.into_inner()).clone();
     assert_eq!(start_order.first().map(String::as_str), Some("unsafe-a"));
     let mut overlapped = start_order[1..3].to_vec();
     overlapped.sort();
     assert_eq!(overlapped, ["safe-a", "safe-b"]);
     assert_eq!(start_order.last().map(String::as_str), Some("unsafe-b"));
+}
+
+/// One value that `write_value` updates and `read_value` reports.
+#[derive(Default)]
+struct StoredValue {
+    value: AtomicUsize,
+    start_order: Mutex<Vec<String>>,
+}
+
+/// `write_value` mutates, with the default tool metadata; `read_value` is read-only and
+/// concurrency-safe.
+struct StoredValueTool {
+    write: bool,
+    store: Arc<StoredValue>,
+}
+
+#[async_trait]
+impl Tool for StoredValueTool {
+    fn name(&self) -> &str {
+        if self.write { "write_value" } else { "read_value" }
+    }
+
+    fn description(&self) -> &str {
+        "Writes or reads one stored value"
+    }
+
+    fn is_read_only(&self) -> bool {
+        !self.write
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        !self.write
+    }
+
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        self.store
+            .start_order
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(ctx.function_call_id().to_string());
+        if self.write {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            return Ok(json!({ "written": self.store.value.fetch_add(1, Ordering::SeqCst) + 1 }));
+        }
+        Ok(json!({ "value": self.store.value.load(Ordering::SeqCst) }))
+    }
+}
+
+#[tokio::test]
+async fn test_auto_runs_a_read_listed_after_a_write_after_the_write() {
+    let model = Arc::new(RecordingModel::new(vec![
+        RecordingModel::function_calls(vec![
+            Part::FunctionCall {
+                name: "read_value".to_string(),
+                args: json!({}),
+                id: Some("r1".to_string()),
+                thought_signature: None,
+            },
+            Part::FunctionCall {
+                name: "write_value".to_string(),
+                args: json!({}),
+                id: Some("w".to_string()),
+                thought_signature: None,
+            },
+            Part::FunctionCall {
+                name: "read_value".to_string(),
+                args: json!({}),
+                id: Some("r2".to_string()),
+                thought_signature: None,
+            },
+        ]),
+        RecordingModel::text_response("done"),
+    ]));
+    let requests = model.requests.clone();
+    let store = Arc::new(StoredValue::default());
+    let agent = LlmAgentBuilder::new("tool-agent")
+        .model(model)
+        .tool(Arc::new(StoredValueTool { write: true, store: store.clone() }))
+        .tool(Arc::new(StoredValueTool { write: false, store: store.clone() }))
+        .tool_execution_strategy(adk_core::ToolExecutionStrategy::Auto)
+        .build()
+        .unwrap();
+
+    let stream = agent.run(Arc::new(TestContext::new("run tools"))).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), drain_stream(stream))
+        .await
+        .expect("tool dispatch timed out")
+        .unwrap();
+
+    // The two reads are not adjacent, so each runs alone in its place around the write.
+    let requests = requests.lock().unwrap_or_else(|error| error.into_inner());
+    let responses: Vec<(Option<String>, Value)> = requests[1]
+        .contents
+        .iter()
+        .flat_map(|content| &content.parts)
+        .filter_map(|part| match part {
+            Part::FunctionResponse { function_response, id, .. } => {
+                Some((id.clone(), function_response.response.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        responses,
+        vec![
+            (Some("r1".to_string()), json!({ "value": 0 })),
+            (Some("w".to_string()), json!({ "written": 1 })),
+            (Some("r2".to_string()), json!({ "value": 1 })),
+        ]
+    );
+    assert_eq!(
+        *store.start_order.lock().unwrap_or_else(|error| error.into_inner()),
+        ["r1", "w", "r2"]
+    );
+}
+
+#[tokio::test]
+async fn test_auto_resumes_held_calls_in_model_order() {
+    let model = Arc::new(RecordingModel::new(vec![RecordingModel::function_calls(vec![
+        Part::FunctionCall {
+            name: "write_value".to_string(),
+            args: json!({}),
+            id: Some("w".to_string()),
+            thought_signature: None,
+        },
+        Part::FunctionCall {
+            name: "read_value".to_string(),
+            args: json!({}),
+            id: Some("r".to_string()),
+            thought_signature: None,
+        },
+    ])]));
+    let store = Arc::new(StoredValue::default());
+    let agent = LlmAgentBuilder::new("tool-agent")
+        .model(model)
+        .tool(Arc::new(StoredValueTool { write: true, store: store.clone() }))
+        .tool(Arc::new(StoredValueTool { write: false, store: store.clone() }))
+        .tool_execution_strategy(adk_core::ToolExecutionStrategy::Auto)
+        .require_tool_confirmation("write_value")
+        .require_tool_confirmation("read_value")
+        .build()
+        .unwrap();
+    let approvals = Arc::new(InMemoryApprovalStore::new());
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "app".to_string(),
+            user_id: "user".to_string(),
+            session_id: Some("session".to_string()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let runner = Runner::builder()
+        .app_name("app")
+        .agent(Arc::new(agent))
+        .session_service(sessions as Arc<dyn SessionService>)
+        .run_config(RunConfig::builder().approval_store(approvals.clone()).build())
+        .build()
+        .unwrap();
+
+    let stream = runner
+        .run_with_config(
+            UserId::new("user").unwrap(),
+            SessionId::new("session").unwrap(),
+            Content::new("user").with_text("go"),
+            None,
+        )
+        .await
+        .unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(2), drain_stream(stream))
+        .await
+        .expect("the first run timed out")
+        .unwrap();
+    let held: Vec<ToolConfirmationRequest> =
+        first.iter().filter_map(|event| event.actions.tool_confirmation.clone()).collect();
+    assert_eq!(held.len(), 2);
+    let scope = ApprovalScope::new("app", "user", "session");
+    for request in &held {
+        approvals.decide(&scope, &request.fingerprint(), ToolApproval::approve()).await.unwrap();
+    }
+
+    // The resumed calls dispatch through the same `Auto` walk, so the read runs after the write.
+    let stream = runner
+        .run_with_config(
+            UserId::new("user").unwrap(),
+            SessionId::new("session").unwrap(),
+            Content::new("user").with_text(""),
+            None,
+        )
+        .await
+        .unwrap();
+    let second = tokio::time::timeout(Duration::from_secs(2), drain_stream(stream))
+        .await
+        .expect("the resumed run timed out")
+        .unwrap();
+    let results: Vec<(Option<String>, Value)> = second
+        .iter()
+        .flat_map(|event| {
+            event
+                .tool_results()
+                .into_iter()
+                .map(|result| (result.call_id.map(str::to_string), result.response.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(
+        results,
+        vec![
+            (Some("w".to_string()), json!({ "written": 1 })),
+            (Some("r".to_string()), json!({ "value": 1 })),
+        ]
+    );
+    assert_eq!(*store.start_order.lock().unwrap_or_else(|error| error.into_inner()), ["w", "r"]);
 }
 
 #[tokio::test]

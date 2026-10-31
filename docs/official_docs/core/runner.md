@@ -405,7 +405,7 @@ fn build(model: Arc<dyn Llm>, search_tool: FunctionTool, save_tool: Arc<dyn Tool
 }
 ```
 
-In `Auto` mode, the dispatch loop queries both `is_read_only()` and `is_concurrency_safe()`. Adjacent calls whose selected tools return `true` for both methods run concurrently; every other call runs alone, in the LLM-returned order. `Parallel` bypasses these metadata checks as an explicit caller override. Results are always reassembled in the original LLM-returned order regardless of strategy. Failed tools produce a JSON error response without aborting the batch.
+In `Auto` mode, the dispatch loop queries both `is_read_only()` and `is_concurrency_safe()`. Adjacent calls whose selected tools return `true` for both methods run concurrently; every other call runs alone, in the LLM-returned order. `Parallel` bypasses these metadata checks as an explicit caller override. Results are always reassembled in the original LLM-returned order regardless of strategy. A tool that fails produces a JSON error response without aborting the batch; an error from the tool confirmation handler ends the run.
 
 ## Run Budgets
 
