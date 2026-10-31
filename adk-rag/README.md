@@ -45,16 +45,18 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     pipeline.create_collection("docs").await?;
 
-    pipeline.ingest("docs", &Document {
-        id: "intro".into(),
-        text: "Rust is a systems programming language focused on safety and speed.".into(),
-        metadata: Default::default(),
-        source_uri: None,
-    }).await?;
+    let document = Document::new(
+        "intro",
+        "Rust is a systems programming language focused on safety and speed.",
+    )
+    .with_source_uri("https://www.rust-lang.org/")
+    .with_title("Rust");
+    pipeline.ingest("docs", &document).await?;
 
     let results = pipeline.query("docs", "safe programming language").await?;
     for r in &results {
-        println!("[score: {:.3}] {}", r.score, r.chunk.text);
+        let source = r.chunk.source_uri.as_deref().unwrap_or("unknown source");
+        println!("[score: {:.3}] {} ({source})", r.score, r.chunk.text);
     }
     Ok(())
 }
@@ -109,12 +111,12 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     );
     pipeline.create_collection("kb").await?;
     pipeline
-        .ingest("kb", &Document {
-            id: "faq".into(),
-            text: "Our return policy allows returns within 30 days with a receipt.".into(),
-            metadata: Default::default(),
-            source_uri: None,
-        })
+        .ingest(
+            "kb",
+            &Document::new("faq", "Our return policy allows returns within 30 days with a receipt.")
+                .with_source_uri("https://example.com/help/returns")
+                .with_title("Returns FAQ"),
+        )
         .await?;
 
     let agent = LlmAgentBuilder::new("support_agent")
@@ -454,12 +456,10 @@ and the [`examples/vertex_rag`](https://github.com/zavora-ai/adk-rust/tree/main/
 use adk_rag::{Chunker, Document, FixedSizeChunker, MarkdownChunker, RecursiveChunker};
 
 fn main() {
-    let document = Document {
-        id: "guide".into(),
-        text: "# Setup\n\nInstall the toolchain.\n\n# Usage\n\nRun the binary.".into(),
-        metadata: Default::default(),
-        source_uri: None,
-    };
+    let document = Document::new(
+        "guide",
+        "# Setup\n\nInstall the toolchain.\n\n# Usage\n\nRun the binary.",
+    );
 
     // Fixed: 512 bytes per chunk, 100 bytes of overlap.
     let fixed = FixedSizeChunker::new(512, 100);
@@ -653,9 +653,29 @@ examples, such as a custom embedder and multi-collection search.
 
 | Type | Fields |
 |------|--------|
-| `Document` | `id`, `text`, `metadata: HashMap<String, String>`, `source_uri: Option<String>` |
-| `Chunk` | `id`, `text`, `embedding: Vec<f32>`, `metadata`, `document_id` |
+| `Document` | `id`, `text`, `metadata: HashMap<String, String>`, `source_uri: Option<String>`, `title: Option<String>` |
+| `Chunk` | `id`, `text`, `embedding: Vec<f32>`, `metadata`, `document_id`, `source_uri`, `title` |
 | `SearchResult` | `chunk: Chunk`, `score: f32` |
+
+`Document` and `Chunk` are `#[non_exhaustive]`: build them with `Document::new(id, text)` and
+`Chunk::new(id, document_id, text)` or `Chunk::from_document(&document, id, text)`, then the
+`with_metadata`, `with_source_uri`, `with_title`, and (for `Chunk`) `with_embedding` builders.
+
+### Provenance
+
+A document's `source_uri` and `title` say where its text came from. Every built-in chunker
+copies them onto each chunk, every vector store persists them as fields of their own and
+returns them with search results, and `RagTool` passes them to the model. Metadata is stored
+verbatim with no reserved keys, so provenance never collides with a metadata entry.
+
+| Backend | Where provenance is stored | Existing data |
+|---------|---------------------------|---------------|
+| In-memory | the stored `Chunk` | — |
+| pgvector | `source_uri` and `title` columns | `create_collection` adds the columns in place |
+| LanceDB | `source_uri` and `title` columns | re-create the table and re-ingest; `upsert` into an old table fails with that guidance |
+| Qdrant | `source_uri` and `title` payload fields | old points return `None` until re-ingested |
+| SurrealDB | `source_uri` and `title` fields | `create_collection` defines the fields; old rows return `None` |
+| Agent Retrieval | `sourceUri` and `title` data fields | old data objects return `None` until re-ingested |
 
 ### Pipeline methods
 
@@ -683,7 +703,8 @@ further collections:
 ```
 
 The tool returns the results best first, each as
-`{"id", "document_id", "text", "metadata", "score"}`. Embedding vectors are left out, and a
+`{"id", "document_id", "text", "metadata", "score"}` plus `source_uri` and `title` when the
+chunk's document had them. Embedding vectors are left out, and a
 `top_k` override is reranked and filtered like any other query. The tool is read-only and
 concurrency-safe. With one collection per tenant, build one tool per tenant from the
 authenticated request.

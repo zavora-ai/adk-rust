@@ -381,7 +381,7 @@ async fn search_sends_the_documented_vector_search_shape() {
                 "vector": { "values": [0.5f32, 0.25f32, 0.25f32] },
                 "topK": 7,
                 "outputFields": {
-                    "dataFields": ["text", "documentId", "metadata"],
+                    "dataFields": ["text", "documentId", "metadata", "sourceUri", "title"],
                     "vectorFields": ["embedding"],
                 },
             },
@@ -417,20 +417,8 @@ async fn hybrid_search_fuses_semantic_and_text_rankings() {
 
     store.create_collection("hybrid", 2).await.expect("create");
     let chunks = vec![
-        adk_rag::Chunk {
-            id: "vector-hit".to_string(),
-            text: "unrelated words".to_string(),
-            embedding: vec![1.0, 0.0],
-            metadata: std::collections::HashMap::new(),
-            document_id: "d".to_string(),
-        },
-        adk_rag::Chunk {
-            id: "text-hit".to_string(),
-            text: "the searched phrase".to_string(),
-            embedding: vec![0.0, 1.0],
-            metadata: std::collections::HashMap::new(),
-            document_id: "d".to_string(),
-        },
+        adk_rag::Chunk::new("vector-hit", "d", "unrelated words").with_embedding(vec![1.0, 0.0]),
+        adk_rag::Chunk::new("text-hit", "d", "the searched phrase").with_embedding(vec![0.0, 1.0]),
     ];
     store.upsert("hybrid", &chunks).await.expect("upsert");
 

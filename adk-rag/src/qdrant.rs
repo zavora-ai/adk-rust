@@ -53,7 +53,8 @@ fn point_id(chunk_id: &str) -> PointId {
 /// A [`VectorStore`] backed by [Qdrant](https://qdrant.tech/).
 ///
 /// Wraps a [`qdrant_client::Qdrant`] client and maps collections to Qdrant
-/// collections with cosine distance. Chunk metadata is stored as Qdrant payload.
+/// collections with cosine distance. Chunk text, document ID, metadata, source URI,
+/// and title are stored as Qdrant payload.
 /// Points are keyed by the UUID v5 of the chunk ID, which the payload keeps.
 pub struct QdrantVectorStore {
     client: Qdrant,
@@ -136,6 +137,12 @@ impl VectorStore for QdrantVectorStore {
                     "document_id".to_string(),
                     serde_json::Value::String(chunk.document_id.clone()),
                 );
+                for (field, value) in [("source_uri", &chunk.source_uri), ("title", &chunk.title)] {
+                    if let Some(value) = value {
+                        payload_map
+                            .insert(field.to_string(), serde_json::Value::String(value.clone()));
+                    }
+                }
                 let metadata_obj: serde_json::Map<String, serde_json::Value> = chunk
                     .metadata
                     .iter()
@@ -238,10 +245,11 @@ impl VectorStore for QdrantVectorStore {
                     })
                     .unwrap_or_default();
 
-                SearchResult {
-                    chunk: Chunk { id, text, embedding: vec![], metadata, document_id },
-                    score: scored.score,
-                }
+                let mut chunk = Chunk::new(id, document_id, text);
+                chunk.metadata = metadata;
+                chunk.source_uri = scored.payload.get("source_uri").and_then(Self::extract_string);
+                chunk.title = scored.payload.get("title").and_then(Self::extract_string);
+                SearchResult { chunk, score: scored.score }
             })
             .collect();
 

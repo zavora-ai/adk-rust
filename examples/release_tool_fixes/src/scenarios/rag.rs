@@ -1,7 +1,6 @@
 //! Item 1: `RagTool` returns text, metadata, and score without embedding vectors, and its
 //! `top_k` override still runs the reranker.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -69,12 +68,7 @@ impl Reranker for ReversingReranker {
 fn documents() -> Vec<Document> {
     [("returns", POLICY), ("shipping", SHIPPING), ("warranty", WARRANTY)]
         .into_iter()
-        .map(|(id, text)| Document {
-            id: id.to_string(),
-            text: text.to_string(),
-            metadata: HashMap::from([("source".to_string(), format!("{id}.md"))]),
-            source_uri: None,
-        })
+        .map(|(id, text)| Document::new(id, text).with_metadata("source", format!("{id}.md")))
         .collect()
 }
 

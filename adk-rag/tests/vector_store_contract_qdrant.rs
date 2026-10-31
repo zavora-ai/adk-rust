@@ -15,8 +15,6 @@
 
 mod common;
 
-use std::collections::HashMap;
-
 use adk_rag::document::{Chunk, SearchResult};
 use adk_rag::error::Result;
 use adk_rag::qdrant::QdrantVectorStore;
@@ -111,12 +109,10 @@ async fn chunker_and_uuid_shaped_chunk_ids_round_trip() {
     let store = QdrantVectorStore::new(&qdrant_url()).expect("connect");
     store.create_collection(&collection, 2).await.expect("create collection");
 
-    let chunk = |id: &str, embedding: Vec<f32>| Chunk {
-        id: id.to_string(),
-        text: format!("text of {id}"),
-        embedding,
-        metadata: HashMap::from([("source".to_string(), "qdrant".to_string())]),
-        document_id: "doc".to_string(),
+    let chunk = |id: &str, embedding: Vec<f32>| {
+        Chunk::new(id, "doc", format!("text of {id}"))
+            .with_embedding(embedding)
+            .with_metadata("source", "qdrant")
     };
     // `doc_0` is the built-in chunkers' ID shape, which Qdrant rejects as a point ID.
     let ids = ["doc_0", "doc_1", "550e8400-e29b-41d4-a716-446655440000", "42"];
@@ -135,7 +131,7 @@ async fn chunker_and_uuid_shaped_chunk_ids_round_trip() {
         .collect();
     found.sort_by(|a, b| a.id.cmp(&b.id));
     let mut expected: Vec<Chunk> =
-        chunks.iter().map(|chunk| Chunk { embedding: vec![], ..chunk.clone() }).collect();
+        chunks.iter().cloned().map(|chunk| chunk.with_embedding(vec![])).collect();
     expected.sort_by(|a, b| a.id.cmp(&b.id));
     assert_eq!(found, expected);
 

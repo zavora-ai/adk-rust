@@ -11,16 +11,12 @@
 use adk_rag::VectorStore;
 use adk_rag::agent_retrieval::{AgentRetrievalConfig, AgentRetrievalStore};
 use adk_rag::{Chunk, RagError};
-use std::collections::HashMap;
 
 fn chunk(id: &str, text: &str, embedding: Vec<f32>) -> Chunk {
-    Chunk {
-        id: id.to_string(),
-        text: text.to_string(),
-        embedding,
-        metadata: HashMap::from([("suite".to_string(), "live".to_string())]),
-        document_id: "live-doc".to_string(),
-    }
+    Chunk::new(id, "live-doc", text)
+        .with_embedding(embedding)
+        .with_metadata("suite", "live")
+        .with_source_uri(format!("https://example.com/{id}"))
 }
 
 #[tokio::test]
@@ -41,6 +37,7 @@ async fn agent_retrieval_live_round_trip() -> Result<(), RagError> {
         let results = store.search(&collection, &[0.0, 1.0, 0.0, 0.0], 2).await?;
         assert!(!results.is_empty(), "live search returned no results");
         assert_eq!(results[0].chunk.id, "live-b");
+        assert_eq!(results[0].chunk.source_uri.as_deref(), Some("https://example.com/live-b"));
 
         store.delete(&collection, &["live-a", "live-b"]).await?;
         Ok::<_, RagError>(())

@@ -28,13 +28,9 @@ async fn store() -> (TempDir, LanceDBVectorStore) {
 }
 
 fn chunk(id: &str, text: &str, embedding: Vec<f32>, metadata: HashMap<String, String>) -> Chunk {
-    Chunk {
-        id: id.to_string(),
-        text: text.to_string(),
-        embedding,
-        metadata,
-        document_id: "doc_1".to_string(),
-    }
+    let mut chunk = Chunk::new(id, "doc_1", text).with_embedding(embedding);
+    chunk.metadata = metadata;
+    chunk
 }
 
 fn plain(id: &str, text: &str, embedding: Vec<f32>) -> Chunk {
@@ -44,7 +40,9 @@ fn plain(id: &str, text: &str, embedding: Vec<f32>) -> Chunk {
 /// `search` never reads the vector column back, so every returned chunk has an
 /// empty embedding. This mirrors a stored chunk into the shape `search` yields.
 fn as_returned(c: &Chunk) -> Chunk {
-    Chunk { embedding: vec![], ..c.clone() }
+    let mut returned = c.clone();
+    returned.embedding.clear();
+    returned
 }
 
 fn ids(results: &[adk_rag::document::SearchResult]) -> Vec<String> {

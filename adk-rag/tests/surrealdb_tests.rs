@@ -5,21 +5,13 @@
 
 #![cfg(feature = "surrealdb")]
 
-use std::collections::HashMap;
-
 use adk_rag::VectorStore;
 use adk_rag::document::Chunk;
 use adk_rag::surrealdb::SurrealVectorStore;
 
 /// Helper: create a chunk with a given ID, text, and embedding.
 fn make_chunk(id: &str, text: &str, embedding: Vec<f32>, doc_id: &str) -> Chunk {
-    Chunk {
-        id: id.to_string(),
-        text: text.to_string(),
-        embedding,
-        metadata: HashMap::from([("source".to_string(), "test".to_string())]),
-        document_id: doc_id.to_string(),
-    }
+    Chunk::new(id, doc_id, text).with_embedding(embedding).with_metadata("source", "test")
 }
 
 /// L2-normalize a vector in place.

@@ -3,7 +3,7 @@
 //! [`assert_vector_store_contract`] walks one store through the semantics every
 //! backend must share: idempotent collection creation, upsert-then-search round
 //! trips, descending-score ordering bounded by `top_k`, deletion by ID,
-//! empty-input no-ops, metadata preservation, collection isolation, distinct
+//! empty-input no-ops, metadata and provenance preservation, collection isolation, distinct
 //! names never sharing a collection, and collection teardown. Each backend's `vector_store_contract_*.rs` test file
 //! constructs a fresh store and runs the suite, so the backends stay
 //! behaviorally interchangeable.
@@ -21,7 +21,7 @@
 // binary skips the proptest pieces), so the unused remainder is expected.
 #![allow(dead_code)]
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 use adk_rag::document::{Chunk, SearchResult};
 use adk_rag::vectorstore::VectorStore;
@@ -51,13 +51,7 @@ impl Default for ContractOptions {
 
 /// Build a chunk with the shared contract metadata.
 fn chunk(id: &str, text: &str, embedding: Vec<f32>) -> Chunk {
-    Chunk {
-        id: id.to_string(),
-        text: text.to_string(),
-        embedding,
-        metadata: HashMap::from([("source".to_string(), "contract".to_string())]),
-        document_id: "doc_1".to_string(),
-    }
+    Chunk::new(id, "doc_1", text).with_embedding(embedding).with_metadata("source", "contract")
 }
 
 /// Mirror a chunk into the shape backends are allowed to return.
@@ -67,7 +61,7 @@ fn chunk(id: &str, text: &str, embedding: Vec<f32>) -> Chunk {
 /// whole-object comparisons clear the embedding on both sides. The embedding
 /// itself is checked separately by [`assert_round_trip`].
 fn without_embedding(c: &Chunk) -> Chunk {
-    Chunk { embedding: vec![], ..c.clone() }
+    c.clone().with_embedding(vec![])
 }
 
 /// Assert a returned chunk matches its stored form.
@@ -223,6 +217,25 @@ pub async fn assert_vector_store_contract(store: &dyn VectorStore, options: Cont
     assert_eq!(results.len(), 1);
     assert_round_trip(&results[0].chunk, &carrier);
 
+    // ── source URI and title round-trip as fields of their own ──
+    store.create_collection("contract_provenance", DIM).await.expect("create collection");
+    let cited = chunk("cited", "cited text", vec![1.0, 0.0, 0.0, 0.0])
+        .with_source_uri("https://example.com/docs/a?page=2&lang=en#intro")
+        .with_title("Guide — naïve café 日本語");
+    let uncited = chunk("uncited", "uncited text", vec![0.0, 1.0, 0.0, 0.0]);
+    store.upsert("contract_provenance", &[cited.clone(), uncited.clone()]).await.expect("upsert");
+
+    let results =
+        store.search("contract_provenance", &[1.0, 0.0, 0.0, 0.0], 10).await.expect("search");
+    assert_eq!(ids(&results), ["cited", "uncited"]);
+    assert_round_trip(&results[0].chunk, &cited);
+    assert_round_trip(&results[1].chunk, &uncited);
+    assert!(
+        !results[0].chunk.metadata.contains_key("source_uri")
+            && !results[0].chunk.metadata.contains_key("title"),
+        "provenance must not be folded into metadata"
+    );
+
     // ── collections are isolated from each other ──
     store.create_collection("contract_iso_a", DIM).await.expect("create collection");
     store.create_collection("contract_iso_b", DIM).await.expect("create collection");
@@ -298,13 +311,7 @@ pub fn arb_unique_chunks(dim: usize, max: usize) -> impl Strategy<Value = Vec<Ch
     .prop_map(|by_id| {
         by_id
             .into_iter()
-            .map(|(id, (text, embedding))| Chunk {
-                id,
-                text,
-                embedding,
-                metadata: HashMap::new(),
-                document_id: "doc_1".to_string(),
-            })
+            .map(|(id, (text, embedding))| Chunk::new(id, "doc_1", text).with_embedding(embedding))
             .collect()
     })
 }

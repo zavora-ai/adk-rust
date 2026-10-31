@@ -46,6 +46,10 @@ use crate::vectorstore::VectorStore;
 /// `upsert` replaces rows by chunk id through a merge-insert, so ingesting the
 /// same chunks again updates them instead of adding duplicates. Every embedding
 /// in an `upsert` must match the collection's dimensions.
+///
+/// A chunk's `source_uri` and `title` are columns of their own. A table created
+/// before those columns existed fails `upsert` with guidance to re-create it and
+/// re-ingest its documents.
 pub struct LanceDBVectorStore {
     connection: Connection,
 }
@@ -108,6 +112,8 @@ impl LanceDBVectorStore {
             ),
             Field::new("document_id", DataType::Utf8, false),
             Field::new("metadata_json", DataType::Utf8, false),
+            Field::new("source_uri", DataType::Utf8, true),
+            Field::new("title", DataType::Utf8, true),
         ]))
     }
 }
@@ -169,6 +175,12 @@ impl VectorStore for LanceDBVectorStore {
                 )));
             }
         };
+        if table_schema.field_with_name("source_uri").is_err() {
+            return Err(Self::store_error(format!(
+                "collection '{collection}' predates the `source_uri` and `title` columns; \
+                 delete it, create it again, and re-ingest its documents"
+            )));
+        }
         if let Some(chunk) = chunks.iter().find(|c| c.embedding.len() != dimensions) {
             return Err(Self::store_error(format!(
                 "chunk '{}' has a {}-dimensional embedding but collection '{collection}' \
@@ -187,6 +199,9 @@ impl VectorStore for LanceDBVectorStore {
             .map(|c| serde_json::to_string(&c.metadata).unwrap_or_else(|_| "{}".to_string()))
             .collect();
         let metadata_refs: Vec<&str> = metadata_jsons.iter().map(|s| s.as_str()).collect();
+        let source_uris: Vec<Option<&str>> =
+            chunks.iter().map(|c| c.source_uri.as_deref()).collect();
+        let titles: Vec<Option<&str>> = chunks.iter().map(|c| c.title.as_deref()).collect();
 
         let all_values: Vec<f32> =
             chunks.iter().flat_map(|c| c.embedding.iter().copied()).collect();
@@ -204,6 +219,8 @@ impl VectorStore for LanceDBVectorStore {
                 Arc::new(vector_array) as Arc<dyn Array>,
                 Arc::new(StringArray::from(doc_ids)),
                 Arc::new(StringArray::from(metadata_refs)),
+                Arc::new(StringArray::from(source_uris)),
+                Arc::new(StringArray::from(titles)),
             ],
         )
         .map_err(|e| Self::store_error(format!("failed to build record batch: {e}")))?;
@@ -272,7 +289,15 @@ impl VectorStore for LanceDBVectorStore {
             let text_col = batch.column_by_name("text");
             let doc_id_col = batch.column_by_name("document_id");
             let metadata_col = batch.column_by_name("metadata_json");
+            let source_uri_col = batch.column_by_name("source_uri");
+            let title_col = batch.column_by_name("title");
             let distance_col = batch.column_by_name("_distance");
+            let optional = |column: Option<&Arc<dyn Array>>, i: usize| {
+                column
+                    .and_then(|c| c.as_string_opt::<i32>())
+                    .filter(|a: &&StringArray| a.is_valid(i))
+                    .map(|a| a.value(i).to_string())
+            };
 
             for i in 0..batch.num_rows() {
                 let id = id_col
@@ -301,10 +326,11 @@ impl VectorStore for LanceDBVectorStore {
                     .unwrap_or(0.0);
                 let score = 1.0 - distance;
 
-                results.push(SearchResult {
-                    chunk: Chunk { id, text, embedding: vec![], metadata, document_id },
-                    score,
-                });
+                let mut chunk = Chunk::new(id, document_id, text);
+                chunk.metadata = metadata;
+                chunk.source_uri = optional(source_uri_col, i);
+                chunk.title = optional(title_col, i);
+                results.push(SearchResult { chunk, score });
             }
         }
 
