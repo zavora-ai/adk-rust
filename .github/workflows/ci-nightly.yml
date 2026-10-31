@@ -389,9 +389,7 @@ jobs:
         cargo nextest run -p adk-kernel
         --features mongodb,neo4j,firestore
         --run-ignored all --no-fail-fast
-        --test store_conformance_mongodb
-        --test store_conformance_neo4j
-        --test store_conformance_firestore
+        --test integration -E 'test(/^store_conformance_(mongodb|neo4j|firestore)::/)'
 
     - name: Run the kernel's MongoDB store suite on a standalone server
       if: ${{ !cancelled() }}
@@ -401,7 +399,7 @@ jobs:
         cargo nextest run -p adk-kernel
         --features mongodb,neo4j,firestore
         --run-ignored all --no-fail-fast
-        --test store_conformance_mongodb
+        --test integration -E 'test(/^store_conformance_mongodb::/)'
 
     - name: Run graph checkpointer conformance suites
       if: ${{ !cancelled() }}

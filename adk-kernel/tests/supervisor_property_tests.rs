@@ -5,7 +5,7 @@
 //! call is made until `unfreeze` (K-I8). Each case runs over a process store whose writes
 //! take a generated 0–120 ms.
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 

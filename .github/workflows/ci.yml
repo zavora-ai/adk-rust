@@ -366,18 +366,8 @@ jobs:
       run: >-
         cargo nextest run --profile ci -p adk-kernel
         --features postgres,redis,channels,charter
-        --run-ignored only --no-fail-fast
-        --test process_store_redis
-        --test agenda_store_redis
-        --test driver_store_redis
-        --test ledger_store_redis
-        --test device_store_redis
-        --test control_store_redis
-        --test channel_store_redis
-        --test partition_store_redis
-        --test cron_watermark_store_redis
-        --test agents_store_redis
-        --test charter_store_redis
+        --run-ignored only --no-fail-fast --test integration
+        -E 'test(/^(process|agenda|driver|ledger|device|control|channel|partition|cron_watermark|agents|charter)_store_redis::/)'
 
   # ── Docs: documentation coverage for Stable-tier crates ──────
   docs:
@@ -675,7 +665,7 @@ jobs:
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         cargo test -p adk-kernel --lib -- drivers::launch::tests::the_plan_records
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        cargo test -p adk-kernel --test driver_scenarios a_drivers_process_tree
+        cargo test -p adk-kernel --test integration driver_scenarios::a_drivers_process_tree
 
     # The owner-only DACLs that stand in for mode 0600 (spec 3.2 §10 W4): the harness
     # store files and the CLI's session store.

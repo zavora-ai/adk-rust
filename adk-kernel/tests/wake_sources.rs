@@ -1,7 +1,7 @@
 //! Each wake source keys its events as the spec 3.2 §7.4 key table says, over the real
 //! `adk-agent` triggers, `StoreApprovalService`, `DurableWorker` hooks and `QueueIngress`.
 
-mod wake_support;
+use crate::wake_support;
 
 use std::sync::Arc;
 use std::time::Duration;

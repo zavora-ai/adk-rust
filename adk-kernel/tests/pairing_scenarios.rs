@@ -10,7 +10,7 @@
 //! - a code pairs one device, and pairing never widens the bind;
 //! - every pairing, removal and device action is recorded.
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

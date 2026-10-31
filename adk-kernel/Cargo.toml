@@ -10,6 +10,8 @@ repository.workspace = true
 documentation = "https://docs.rs/adk-kernel"
 keywords = ["adk", "agent", "kernel", "durable", "supervisor"]
 categories = ["asynchronous", "development-tools"]
+# Every file under `tests/` is a module of one test binary, so the dependencies link once.
+autotests = false
 
 # Feature set of spec 3.2 §7.1, with `channels` from spec 3.3 §10 K1.
 [features]
@@ -148,6 +150,10 @@ tempfile = "3"
 tokio = { workspace = true, features = ["full", "test-util"] }
 # Captures the webhook sink's logs to show they carry no secret.
 tracing-subscriber.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [package.metadata.docs.rs]
 all-features = true

@@ -1188,7 +1188,7 @@ async fn chaos_kernel_process() {
 fn kernel_process(dir: &Path, life: &str, pid: &str) -> tokio::process::Child {
     let stderr = std::fs::File::create(dir.join(format!("{life}.stderr"))).unwrap();
     tokio::process::Command::new(std::env::current_exe().unwrap())
-        .args(["chaos_kernel_process", "--exact", "--ignored", "--nocapture"])
+        .args(["kernel_scenarios::chaos_kernel_process", "--exact", "--ignored", "--nocapture"])
         .env(CHAOS_DIR, dir)
         .env(CHAOS_LIFE, life)
         .env(CHAOS_PID, pid)

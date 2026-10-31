@@ -4,7 +4,7 @@
 //! (K-I23). The quiet-hours and budget cases run on a `ManualClock` shared by the kernel and
 //! the run store.
 
-mod common;
+use crate::common;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};

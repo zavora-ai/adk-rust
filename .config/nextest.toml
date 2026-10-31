@@ -30,19 +30,19 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 # The Firestore emulator serializes contended transactions slowly; its suites get a
 # longer budget than the live database servers.
 [[profile.default.overrides]]
-filter = "binary(store_conformance_firestore)"
+filter = "binary(store_conformance_firestore) | (binary_id(adk-kernel::integration) and test(/^store_conformance_firestore::/))"
 slow-timeout = { period = "60s", terminate-after = 4 }
 
 # The SQLite process store's sustained-write suites commit a few thousand times to files
 # opened as harness.db is, synchronized; a Windows runner's disk takes 45–90 s for that.
 [[profile.default.overrides]]
-filter = "binary(process_store_sqlite)"
+filter = "binary_id(adk-kernel::integration) and test(/^process_store_sqlite::/)"
 slow-timeout = { period = "60s", terminate-after = 4 }
 
 # The away property test restarts a SQLite-backed kernel store in each of its cases; a Windows
 # runner needs over 90 s for the run.
 [[profile.default.overrides]]
-filter = "binary(away_property_tests)"
+filter = "binary_id(adk-kernel::integration) and test(/^away_property_tests::/)"
 slow-timeout = { period = "60s", terminate-after = 4 }
 
 # S19's scaled run simulates four hours of feeds and an hour of live blog against
