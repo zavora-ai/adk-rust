@@ -346,9 +346,9 @@ jobs:
       if: ${{ !cancelled() }}
       run: >-
         cargo nextest run --profile ci -p adk-harness
-        --features memory,postgres,redis
+        --features memory,postgres,redis,website
         --run-ignored only --no-fail-fast
-        --test integration -E 'test(/^shared_store_redis_tests::/)'
+        --test integration -E 'test(/^(shared_store_redis_tests|site_draft_store_redis_tests)::/)'
 
     # The feature set matches the adk-payments suite of scripts/test-postgres.sh, so the
     # build is reused.

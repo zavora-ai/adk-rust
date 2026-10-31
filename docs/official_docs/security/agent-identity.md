@@ -11,7 +11,7 @@ attributed to the agent that made it — across redeploys, replicas, and delegat
 |------|-------|
 | `AgentId` | A URI such as `spiffe://example.org/agent/billing` or `urn:adk:agent:billing`; non-empty, at most 512 bytes, no control characters. Stable across redeploys |
 | `AgentPrincipal` | The `id`, plus optional `tenant`, `class` (template or blueprint), `instance` (deployment or replica), `sponsor`, and free-form `attributes` |
-| `SubjectRef` | A `SubjectKind` (`Human`, `Service`, `Agent`) and an id |
+| `SubjectRef` | A `SubjectKind` (`Human`, `Service`, `Agent`, `Visitor`) and an id |
 | `ActingContext` | The `agent` principal, `on_behalf_of`, and the `delegation_chain` (outermost first) |
 | `ActingConfig` | A run's identity configuration: `principals` by agent name, `on_behalf_of`, `subject_kind`, and `delegation_chain` (`RunConfig::acting`) |
 
@@ -33,7 +33,7 @@ The runtime keeps these invariants:
 | Invariant | Rule | Enforced by |
 |-----------|------|-------------|
 | The session user is the subject | `on_behalf_of` is the session's `user_id` as the run's `subject_kind`. A run configured to act for another subject fails at its start with `identity.subject_mismatch` (`Forbidden`) and an `access` audit record, unless the runner's `SubjectDelegationPolicy` allows it; the session's subject then heads the delegation chain | `Runner`, before any agent runs |
-| The subject kind is explicit | `SubjectKind::Human` for interactive runs; `SubjectKind::Service` for runs created by `DurableScheduler`, `WebhookIngress`, and `QueueIngress` (`NewRun::with_service_subject`) | `ActingConfig::subject_kind`, the stored principal of a durable run |
+| The subject kind is explicit | `SubjectKind::Human` for interactive runs; `SubjectKind::Service` for runs created by `DurableScheduler`, `WebhookIngress`, and `QueueIngress` (`NewRun::with_service_subject`); `SubjectKind::Visitor` for a person known only by a `VisitorId` the deployment issued ([Subject Rights](subject-rights.md)) | `ActingConfig::subject_kind`, the stored principal of a durable run |
 | Each agent acts as itself | The executing agent — root, transfer target, workflow or team sub-agent — acts as its entry in `ActingConfig::principals`, else its derived id. A runner-level principal applies to the root agent only; an identity source names other agents through `principal_for` | `Runner`, `LlmAgent`, `CodeActAgent` |
 | One invocation id | `ActingContext` holds none; the invocation is `ReadonlyContext::invocation_id()`. Audit records pair the two with `AuditActor::new(&acting, invocation_id)` | The type |
 | A stored principal is a claim | `DurableWorker` acts as its own principal unless the run's stored agent id is in `DurableWorkerConfig::allowed_principals` (empty by default), and refuses any other stored agent id with `identity.principal_not_allowed` | `DurableWorker` |
@@ -189,6 +189,7 @@ context it wraps.
 | A runner built with `RunnerConfig::request_context` / `RunnerConfigBuilder::request_context` | `true` |
 | A run started with `RunConfig::request_context` naming the run's user (another user fails the run with `identity.subject_mismatch`) | `true` |
 | A run started with only `RunConfig::request_metadata`, which tools read through `request_metadata()` | `false` |
+| A run whose `ActingConfig::subject_kind` is `SubjectKind::Visitor`, with or without a request context | `false` |
 | An AWP edge conversation: a verified requester / any other visitor | `true` / `false` |
 | A `DurableWorker` run enqueued with `NewRun::with_authenticated_user` — every background run and cron job an authenticated `adk-server` caller submits | `true` |
 | An `IntegratedRealtimeRunner` built with `request_context` | `true` |

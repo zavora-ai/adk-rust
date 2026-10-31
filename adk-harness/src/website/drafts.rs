@@ -18,7 +18,9 @@
 //! | [`list`](SiteDraftStore::list) | The site's records of one kind, in creation order |
 //!
 //! [`InMemorySiteDraftStore`] serves tests and a single process; [`SqliteSiteDraftStore`]
-//! (feature `sqlite`) a served site. Every implementation passes the [`conformance`] suite,
+//! (feature `sqlite`) a served site; `PostgresSiteDraftStore` (feature `postgres`) and
+//! `RedisSiteDraftStore` (feature `redis`) every replica of one. Every implementation
+//! passes the [`conformance`] suite,
 //! which [`site_draft_store_conformance_tests!`](crate::site_draft_store_conformance_tests)
 //! runs. A preview is not kept: it names the build it staged, so a process makes it again.
 
@@ -293,7 +295,7 @@ pub(crate) fn conflict(kind: DraftKind, id: &str) -> AdkError {
 }
 
 /// A stored version as SQL's signed integer.
-#[cfg(feature = "sqlite")]
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
 fn sql_version(version: u64) -> Result<i64> {
     i64::try_from(version).map_err(|_| store_error(format!("version {version} is out of range")))
 }
@@ -418,7 +420,7 @@ impl SqliteSiteDraftStore {
     }
 }
 
-#[cfg(feature = "sqlite")]
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
 fn stored(id: String, version: i64, value: &str) -> Result<StoredRecord> {
     Ok(StoredRecord {
         id,
@@ -515,6 +517,426 @@ impl SiteDraftStore for SqliteSiteDraftStore {
         .await
         .map_err(store_error)?;
         rows.into_iter().map(|(id, version, value)| stored(id, version, &value)).collect()
+    }
+}
+
+#[cfg(feature = "postgres")]
+const POSTGRES_DRAFT_MIGRATIONS: &[(i64, &str, &str)] = &[(
+    1,
+    "create site draft tables",
+    "CREATE TABLE IF NOT EXISTS adk_website_drafts (\
+        site TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, \
+        version BIGINT NOT NULL, seq BIGINT NOT NULL, \
+        PRIMARY KEY (site, kind, id)); \
+     CREATE INDEX IF NOT EXISTS adk_website_drafts_in_order \
+        ON adk_website_drafts (site, kind, seq); \
+     CREATE TABLE IF NOT EXISTS adk_website_draft_ids (\
+        site TEXT NOT NULL, kind TEXT NOT NULL, last BIGINT NOT NULL, \
+        PRIMARY KEY (site, kind));",
+)];
+
+/// A [`SiteDraftStore`] in PostgreSQL, shared by every replica of a served site (feature
+/// `postgres`).
+///
+/// Records live in `adk_website_drafts` by site, kind and id with their version; the
+/// counter that allocates ids is a row per site and kind in `adk_website_draft_ids`,
+/// incremented by an upsert, so replicas creating at once get distinct ids.
+/// [`migrate`](Self::migrate) records its steps in `_adk_website_draft_migrations` under an
+/// advisory lock, so replicas starting together migrate one at a time.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use adk_harness::website::{DraftKind, PostgresSiteDraftStore, SiteDraftStore};
+///
+/// # async fn example() -> adk_core::Result<()> {
+/// let store = PostgresSiteDraftStore::connect("postgres://localhost/site").await?;
+/// store.migrate().await?;
+/// let drafts = store.list(uuid::Uuid::nil(), DraftKind::Content).await?;
+/// # let _ = drafts;
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(feature = "postgres")]
+#[derive(Debug, Clone)]
+pub struct PostgresSiteDraftStore {
+    pool: sqlx::PgPool,
+}
+
+#[cfg(feature = "postgres")]
+impl PostgresSiteDraftStore {
+    /// A store over `pool`, such as the one the site's other stores use; call
+    /// [`migrate`](Self::migrate) once.
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Connects to `database_url` with a pool of its own.
+    ///
+    /// # Errors
+    ///
+    /// `website.drafts.store` when the server cannot be reached.
+    pub async fn connect(database_url: &str) -> Result<Self> {
+        Ok(Self::new(sqlx::PgPool::connect(database_url).await.map_err(store_error)?))
+    }
+
+    /// Creates or upgrades the store's tables.
+    ///
+    /// # Errors
+    ///
+    /// The database's error, or a version mismatch when a newer release migrated the
+    /// database.
+    pub async fn migrate(&self) -> Result<()> {
+        crate::fsutil::migrate_postgres(
+            &self.pool,
+            "_adk_website_draft_migrations",
+            POSTGRES_DRAFT_MIGRATIONS,
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "postgres")]
+#[async_trait]
+impl SiteDraftStore for PostgresSiteDraftStore {
+    async fn create(&self, site: Uuid, kind: DraftKind, value: &Value) -> Result<StoredRecord> {
+        let mut tx = self.pool.begin().await.map_err(store_error)?;
+        let (n,): (i64,) = sqlx::query_as(
+            "INSERT INTO adk_website_draft_ids (site, kind, last) VALUES ($1, $2, 1)
+             ON CONFLICT (site, kind) DO UPDATE SET last = adk_website_draft_ids.last + 1
+             RETURNING last",
+        )
+        .bind(site.to_string())
+        .bind(kind.as_str())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(store_error)?;
+        let id = format!("{}-{n}", kind.id_prefix());
+        sqlx::query(
+            "INSERT INTO adk_website_drafts (site, kind, id, value, version, seq)
+             VALUES ($1, $2, $3, $4, 1, $5)",
+        )
+        .bind(site.to_string())
+        .bind(kind.as_str())
+        .bind(&id)
+        .bind(value.to_string())
+        .bind(n)
+        .execute(&mut *tx)
+        .await
+        .map_err(store_error)?;
+        tx.commit().await.map_err(store_error)?;
+        Ok(StoredRecord { id, version: 1, value: value.clone() })
+    }
+
+    async fn get(&self, site: Uuid, kind: DraftKind, id: &str) -> Result<Option<StoredRecord>> {
+        let row: Option<(i64, String)> = sqlx::query_as(
+            "SELECT version, value FROM adk_website_drafts
+             WHERE site = $1 AND kind = $2 AND id = $3",
+        )
+        .bind(site.to_string())
+        .bind(kind.as_str())
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(store_error)?;
+        row.map(|(version, value)| stored(id.to_string(), version, &value)).transpose()
+    }
+
+    async fn replace(
+        &self,
+        site: Uuid,
+        kind: DraftKind,
+        id: &str,
+        value: &Value,
+        expected_version: u64,
+    ) -> Result<bool> {
+        let updated = sqlx::query(
+            "UPDATE adk_website_drafts SET value = $1, version = version + 1
+             WHERE site = $2 AND kind = $3 AND id = $4 AND version = $5",
+        )
+        .bind(value.to_string())
+        .bind(site.to_string())
+        .bind(kind.as_str())
+        .bind(id)
+        .bind(sql_version(expected_version)?)
+        .execute(&self.pool)
+        .await
+        .map_err(store_error)?;
+        Ok(updated.rows_affected() == 1)
+    }
+
+    async fn remove(&self, site: Uuid, kind: DraftKind, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM adk_website_drafts WHERE site = $1 AND kind = $2 AND id = $3")
+            .bind(site.to_string())
+            .bind(kind.as_str())
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(store_error)?;
+        Ok(())
+    }
+
+    async fn list(&self, site: Uuid, kind: DraftKind) -> Result<Vec<StoredRecord>> {
+        let rows: Vec<(String, i64, String)> = sqlx::query_as(
+            "SELECT id, version, value FROM adk_website_drafts
+             WHERE site = $1 AND kind = $2 ORDER BY seq, id",
+        )
+        .bind(site.to_string())
+        .bind(kind.as_str())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_error)?;
+        rows.into_iter().map(|(id, version, value)| stored(id, version, &value)).collect()
+    }
+}
+
+/// KEYS: counters, values, versions, order. ARGV: kind, id prefix, value JSON. Allocates the
+/// kind's next number and stores the record at version 1; returns its id.
+#[cfg(feature = "redis")]
+const CREATE_DRAFT_SCRIPT: &str = r#"
+local n = redis.call('HINCRBY', KEYS[1], ARGV[1], 1)
+local id = ARGV[2] .. '-' .. n
+redis.call('HSET', KEYS[2], id, ARGV[3])
+redis.call('HSET', KEYS[3], id, 1)
+redis.call('ZADD', KEYS[4], n, id)
+return id
+"#;
+
+/// KEYS: values, versions. ARGV: id. Returns the record's version and value, or nothing.
+#[cfg(feature = "redis")]
+const GET_DRAFT_SCRIPT: &str = r#"
+local value = redis.call('HGET', KEYS[1], ARGV[1])
+if not value then return {} end
+return { redis.call('HGET', KEYS[2], ARGV[1]), value }
+"#;
+
+/// KEYS: values, versions. ARGV: id, value JSON, expected version. Writes the value and
+/// raises the version when the record is at the expected one; returns 1 when it wrote.
+#[cfg(feature = "redis")]
+const REPLACE_DRAFT_SCRIPT: &str = r#"
+local version = redis.call('HGET', KEYS[2], ARGV[1])
+if not version or version ~= ARGV[3] then return 0 end
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+redis.call('HINCRBY', KEYS[2], ARGV[1], 1)
+return 1
+"#;
+
+/// KEYS: values, versions, order. ARGV: id. Forgets the record.
+#[cfg(feature = "redis")]
+const REMOVE_DRAFT_SCRIPT: &str = r#"
+redis.call('HDEL', KEYS[1], ARGV[1])
+redis.call('HDEL', KEYS[2], ARGV[1])
+redis.call('ZREM', KEYS[3], ARGV[1])
+return 1
+"#;
+
+/// KEYS: values, versions, order. Returns id, version and value of every record in creation
+/// order, read atomically.
+#[cfg(feature = "redis")]
+const LIST_DRAFTS_SCRIPT: &str = r#"
+local out = {}
+for _, id in ipairs(redis.call('ZRANGE', KEYS[3], 0, -1)) do
+  local value = redis.call('HGET', KEYS[1], id)
+  if value then
+    table.insert(out, id)
+    table.insert(out, redis.call('HGET', KEYS[2], id))
+    table.insert(out, value)
+  end
+end
+return out
+"#;
+
+/// A [`SiteDraftStore`] in Redis, shared by every replica of a served site (feature
+/// `redis`).
+///
+/// A site's keys share its hash tag, so they sit in one Redis Cluster slot and every change
+/// runs as one atomic script:
+///
+/// | Key | Type | Contents |
+/// |-----|------|----------|
+/// | `<namespace>:{<site>}:draft-ids` | Hash | Kind → the last number allocated |
+/// | `<namespace>:{<site>}:drafts:<kind>` | Hash | Id → value JSON |
+/// | `<namespace>:{<site>}:draft-versions:<kind>` | Hash | Id → version |
+/// | `<namespace>:{<site>}:draft-order:<kind>` | Sorted set | Ids by number, for creation order |
+///
+/// The namespace is `adk:harness` unless [`with_namespace`](Self::with_namespace) sets
+/// another.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use adk_harness::website::{DraftKind, RedisSiteDraftStore, SiteDraftStore};
+///
+/// # async fn example() -> adk_core::Result<()> {
+/// let store = RedisSiteDraftStore::connect("redis://localhost:6379").await?;
+/// store.migrate().await?;
+/// let drafts = store.list(uuid::Uuid::nil(), DraftKind::Content).await?;
+/// # let _ = drafts;
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(feature = "redis")]
+#[derive(Debug, Clone)]
+pub struct RedisSiteDraftStore {
+    client: fred::prelude::Client,
+    namespace: String,
+}
+
+#[cfg(feature = "redis")]
+fn redis_error(action: &str, error: &dyn fmt::Display) -> AdkError {
+    store_error(format!("could not {action}: {error}"))
+}
+
+#[cfg(feature = "redis")]
+impl RedisSiteDraftStore {
+    /// A store over an initialized client, such as one shared with the harness's other
+    /// Redis stores.
+    pub fn from_client(client: fred::prelude::Client) -> Self {
+        Self { client, namespace: crate::fsutil::REDIS_NAMESPACE.to_string() }
+    }
+
+    /// Connects to `url`.
+    ///
+    /// # Errors
+    ///
+    /// `harness.store.database` when the server cannot be reached.
+    pub async fn connect(url: &str) -> Result<Self> {
+        Ok(Self::from_client(crate::fsutil::redis_connect(url).await?))
+    }
+
+    /// Keeps the store's keys under `namespace` instead of `adk:harness`, for example to
+    /// separate deployments that share a server.
+    #[must_use]
+    pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
+        self.namespace = crate::fsutil::redis_namespace(&namespace.into());
+        self
+    }
+
+    /// Loads the store's scripts into the server's script cache.
+    ///
+    /// # Errors
+    ///
+    /// `website.drafts.store` when the server rejects a script.
+    pub async fn migrate(&self) -> Result<()> {
+        use fred::prelude::LuaInterface as _;
+        for script in [
+            CREATE_DRAFT_SCRIPT,
+            GET_DRAFT_SCRIPT,
+            REPLACE_DRAFT_SCRIPT,
+            REMOVE_DRAFT_SCRIPT,
+            LIST_DRAFTS_SCRIPT,
+        ] {
+            let _: String = self
+                .client
+                .script_load(script)
+                .await
+                .map_err(|error| redis_error("load a script", &error))?;
+        }
+        Ok(())
+    }
+
+    /// The site's counters key, then the kind's values, versions and order keys.
+    fn keys(&self, site: Uuid, kind: DraftKind) -> [String; 4] {
+        let prefix =
+            format!("{}:{{{}}}", self.namespace, crate::fsutil::redis_segment(&site.to_string()));
+        let kind = kind.as_str();
+        [
+            format!("{prefix}:draft-ids"),
+            format!("{prefix}:drafts:{kind}"),
+            format!("{prefix}:draft-versions:{kind}"),
+            format!("{prefix}:draft-order:{kind}"),
+        ]
+    }
+}
+
+#[cfg(feature = "redis")]
+fn redis_record(id: String, version: &str, value: &str) -> Result<StoredRecord> {
+    Ok(StoredRecord {
+        id,
+        version: version.parse().map_err(store_error)?,
+        value: serde_json::from_str(value).map_err(store_error)?,
+    })
+}
+
+#[cfg(feature = "redis")]
+#[async_trait]
+impl SiteDraftStore for RedisSiteDraftStore {
+    async fn create(&self, site: Uuid, kind: DraftKind, value: &Value) -> Result<StoredRecord> {
+        use fred::prelude::LuaInterface as _;
+        let id: String = self
+            .client
+            .eval(
+                CREATE_DRAFT_SCRIPT,
+                self.keys(site, kind).to_vec(),
+                vec![kind.as_str().to_string(), kind.id_prefix().to_string(), value.to_string()],
+            )
+            .await
+            .map_err(|error| redis_error("create a draft", &error))?;
+        Ok(StoredRecord { id, version: 1, value: value.clone() })
+    }
+
+    async fn get(&self, site: Uuid, kind: DraftKind, id: &str) -> Result<Option<StoredRecord>> {
+        use fred::prelude::LuaInterface as _;
+        let [_, values, versions, _] = self.keys(site, kind);
+        let reply: Vec<String> = self
+            .client
+            .eval(GET_DRAFT_SCRIPT, vec![values, versions], vec![id.to_string()])
+            .await
+            .map_err(|error| redis_error("read a draft", &error))?;
+        match reply.as_slice() {
+            [version, value] => Ok(Some(redis_record(id.to_string(), version, value)?)),
+            _ => Ok(None),
+        }
+    }
+
+    async fn replace(
+        &self,
+        site: Uuid,
+        kind: DraftKind,
+        id: &str,
+        value: &Value,
+        expected_version: u64,
+    ) -> Result<bool> {
+        use fred::prelude::LuaInterface as _;
+        let [_, values, versions, _] = self.keys(site, kind);
+        let written: i64 = self
+            .client
+            .eval(
+                REPLACE_DRAFT_SCRIPT,
+                vec![values, versions],
+                vec![id.to_string(), value.to_string(), expected_version.to_string()],
+            )
+            .await
+            .map_err(|error| redis_error("replace a draft", &error))?;
+        Ok(written == 1)
+    }
+
+    async fn remove(&self, site: Uuid, kind: DraftKind, id: &str) -> Result<()> {
+        use fred::prelude::LuaInterface as _;
+        let [_, values, versions, order] = self.keys(site, kind);
+        let _: i64 = self
+            .client
+            .eval(REMOVE_DRAFT_SCRIPT, vec![values, versions, order], vec![id.to_string()])
+            .await
+            .map_err(|error| redis_error("remove a draft", &error))?;
+        Ok(())
+    }
+
+    async fn list(&self, site: Uuid, kind: DraftKind) -> Result<Vec<StoredRecord>> {
+        use fred::prelude::LuaInterface as _;
+        let [_, values, versions, order] = self.keys(site, kind);
+        let reply: Vec<String> = self
+            .client
+            .eval(LIST_DRAFTS_SCRIPT, vec![values, versions, order], Vec::<String>::new())
+            .await
+            .map_err(|error| redis_error("list drafts", &error))?;
+        reply
+            .chunks(3)
+            .map(|record| match record {
+                [id, version, value] => redis_record(id.clone(), version, value),
+                _ => Err(store_error("a draft listing came back incomplete")),
+            })
+            .collect()
     }
 }
 

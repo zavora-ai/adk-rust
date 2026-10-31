@@ -202,6 +202,11 @@ pub enum ExpiryAction {
 
 /// Who must approve a request, and what happens when nobody does.
 ///
+/// A request resolves as approved once [`quorum`](Self::quorum) distinct approvers approved
+/// and, when the policy has [`slots`](Self::slots), those approvers fill every slot, one
+/// distinct approver each: slots `[editor, publisher]` need an editor and a publisher who
+/// are two people, whatever order they decide in.
+///
 /// # Example
 ///
 /// ```rust
@@ -214,12 +219,25 @@ pub enum ExpiryAction {
 ///     .expires_after(Duration::from_secs(3_600));
 /// assert!(policy.forbid_self_approval);
 /// assert!(policy.validate().is_ok());
+///
+/// // One editor and one publisher, two distinct people.
+/// let chain = ApprovalPolicy::for_slots([
+///     ApproverSelector::group("role:editor"),
+///     ApproverSelector::group("role:publisher"),
+/// ]);
+/// assert_eq!(chain.quorum, 2);
+/// assert!(chain.validate().is_ok());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalPolicy {
-    /// Who may approve from the start.
+    /// Who may approve from the start, with the [`slots`](Self::slots)' selectors.
     pub approvers: Vec<ApproverSelector>,
+    /// Places distinct approvers must fill, one approver each, before the request is
+    /// approved; a selector listed twice needs two people. Whoever a slot selects may
+    /// approve. Empty for a policy that only counts approvals.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slots: Vec<ApproverSelector>,
     /// How many distinct approvers must approve. A decision made through a delegation
     /// counts for the delegator, so a delegator and their delegate count once.
     pub quorum: u32,
@@ -248,12 +266,41 @@ impl ApprovalPolicy {
     pub fn new(approvers: impl IntoIterator<Item = ApproverSelector>) -> Self {
         Self {
             approvers: approvers.into_iter().collect(),
+            slots: Vec::new(),
             quorum: 1,
             forbid_self_approval: true,
             escalation: Vec::new(),
             on_expiry: ExpiryAction::Deny,
             expires_after: None,
         }
+    }
+
+    /// A policy needing one distinct approver for each of `slots`, refusing
+    /// self-approval, with a quorum of the number of slots.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{ApprovalPolicy, ApproverSelector};
+    ///
+    /// // Two people from finance: the selector is listed twice.
+    /// let policy = ApprovalPolicy::for_slots([
+    ///     ApproverSelector::group("finance"),
+    ///     ApproverSelector::group("finance"),
+    /// ]);
+    /// assert_eq!((policy.slots.len(), policy.quorum), (2, 2));
+    /// ```
+    pub fn for_slots(slots: impl IntoIterator<Item = ApproverSelector>) -> Self {
+        let slots: Vec<ApproverSelector> = slots.into_iter().collect();
+        let quorum = u32::try_from(slots.len()).unwrap_or(u32::MAX).max(1);
+        Self { slots, quorum, ..Self::new([]) }
+    }
+
+    /// Adds slots that distinct approvers must fill.
+    #[must_use]
+    pub fn with_slots(mut self, slots: impl IntoIterator<Item = ApproverSelector>) -> Self {
+        self.slots.extend(slots);
+        self
     }
 
     /// Requires `quorum` distinct approvals.
@@ -292,11 +339,14 @@ impl ApprovalPolicy {
     ///
     /// # Errors
     ///
-    /// Returns `approval.invalid_policy` when there are no approvers, the quorum is
-    /// zero, or escalation steps are out of order.
+    /// Returns `approval.invalid_policy` when there are neither approvers nor slots, the
+    /// quorum is zero, or escalation steps are out of order.
     pub fn validate(&self) -> Result<()> {
-        if self.approvers.is_empty() {
-            return Err(invalid("approval.invalid_policy", "an approval policy needs approvers"));
+        if self.approvers.is_empty() && self.slots.is_empty() {
+            return Err(invalid(
+                "approval.invalid_policy",
+                "an approval policy needs approvers or slots",
+            ));
         }
         if self.quorum == 0 {
             return Err(invalid(
@@ -385,12 +435,18 @@ impl ApprovalState {
 pub struct ApprovalDecision {
     /// Who decided.
     pub approver: SubjectRef,
-    /// Groups the approver belongs to, as the caller's authentication established them.
+    /// Groups the approver belongs to, as the caller's authentication established them,
+    /// or as the service's [`ApproverDirectory`] states them when it has one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub approver_groups: Vec<String>,
     /// The delegator whose authority the approver acted under, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via_delegation: Option<SubjectRef>,
+    /// The groups of the decision's [authority](Self::authority) — the approver's, or the
+    /// delegator's under a delegation — as the service established them when it recorded
+    /// the decision. The policy's [`slots`](ApprovalPolicy::slots) are filled from them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authority_groups: Vec<String>,
     /// What the approver did.
     pub kind: ApprovalAction,
     /// The substituted arguments of an [`Edit`](ApprovalAction::Edit).
@@ -409,6 +465,7 @@ impl ApprovalDecision {
             approver,
             approver_groups: Vec::new(),
             via_delegation: None,
+            authority_groups: Vec::new(),
             kind,
             edited_args: None,
             reason: None,
@@ -734,13 +791,14 @@ impl ApprovalRequest {
         self.state == ApprovalState::Pending || !self.outcome_applied
     }
 
-    /// The approvers who may decide now: the policy's, plus those of every fired
-    /// escalation step.
+    /// The approvers who may decide now: the policy's approvers and slots, plus those of
+    /// every fired escalation step.
     pub fn eligible_approvers(&self) -> impl Iterator<Item = &ApproverSelector> {
         let fired = usize::try_from(self.escalations_fired).unwrap_or(usize::MAX);
         self.policy
             .approvers
             .iter()
+            .chain(self.policy.slots.iter())
             .chain(self.policy.escalation.iter().take(fired).flat_map(|step| step.to.iter()))
     }
 
@@ -772,24 +830,143 @@ impl ApprovalRequest {
     ///
     /// An edit restarts the count: approvals before it approved other arguments.
     pub fn quorum_progress(&self) -> (Vec<SubjectRef>, Option<Value>) {
-        let mut approvals: Vec<SubjectRef> = Vec::new();
+        let (counted, args) = self.counted_approvals();
+        (counted.into_iter().map(|decision| decision.authority().clone()).collect(), args)
+    }
+
+    /// The decisions that count toward the quorum, one per authority, and the arguments
+    /// an [`Edit`](ApprovalAction::Edit) substituted.
+    fn counted_approvals(&self) -> (Vec<&ApprovalDecision>, Option<Value>) {
+        let mut approvals: Vec<&ApprovalDecision> = Vec::new();
         let mut args = None;
         for decision in &self.decisions {
             match decision.kind {
                 ApprovalAction::Approve => {
-                    if !approvals.contains(decision.authority()) {
-                        approvals.push(decision.authority().clone());
+                    if !approvals.iter().any(|held| held.authority() == decision.authority()) {
+                        approvals.push(decision);
                     }
                 }
                 ApprovalAction::Edit => {
                     approvals.clear();
-                    approvals.push(decision.authority().clone());
+                    approvals.push(decision);
                     args = decision.edited_args.clone();
                 }
                 ApprovalAction::Reject | ApprovalAction::Respond => {}
             }
         }
         (approvals, args)
+    }
+
+    /// The policy's [slots](ApprovalPolicy::slots) the counted approvals leave unfilled,
+    /// each approver filling at most one: empty once every slot has its own approver.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::principal::SubjectRef;
+    /// use adk_core::{ApprovalDecision, ApprovalPolicy, ApprovalRequest, ApprovalScope,
+    ///     ApproverSelector, ToolConfirmationRequest};
+    /// use serde_json::json;
+    ///
+    /// let call = ToolConfirmationRequest::new("site_publish", json!({ "draft": "draft-1" }));
+    /// let editor = ApproverSelector::group("role:editor");
+    /// let publisher = ApproverSelector::group("role:publisher");
+    /// let mut request = ApprovalRequest::new(
+    ///     "apr-1",
+    ///     ApprovalScope::new("bakery", "amina", "drafts"),
+    ///     &call,
+    ///     ApprovalPolicy::for_slots([editor.clone(), publisher.clone()]),
+    /// );
+    /// let mut eva = ApprovalDecision::approve(SubjectRef::human("eva"));
+    /// eva.authority_groups = vec!["role:editor".into(), "role:publisher".into()];
+    /// request.decisions.push(eva);
+    /// assert_eq!(request.open_slots().len(), 1, "eva fills one slot, not both");
+    /// ```
+    pub fn open_slots(&self) -> Vec<&ApproverSelector> {
+        self.slot_holders()
+            .into_iter()
+            .filter(|(_, holder)| holder.is_none())
+            .map(|(slot, _)| slot)
+            .collect()
+    }
+
+    /// Each of the policy's [slots](ApprovalPolicy::slots), in order, with the counted
+    /// approval that fills it: a maximum matching of distinct approvers to slots, so the
+    /// order in which people decide never decides whether every slot can be filled.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::principal::SubjectRef;
+    /// use adk_core::{ApprovalDecision, ApprovalPolicy, ApprovalRequest, ApprovalScope,
+    ///     ApproverSelector, ToolConfirmationRequest};
+    /// use serde_json::json;
+    ///
+    /// let call = ToolConfirmationRequest::new("site_publish", json!({ "draft": "draft-1" }));
+    /// let mut request = ApprovalRequest::new(
+    ///     "apr-1",
+    ///     ApprovalScope::new("bakery", "amina", "drafts"),
+    ///     &call,
+    ///     ApprovalPolicy::for_slots([
+    ///         ApproverSelector::group("role:editor"),
+    ///         ApproverSelector::group("role:publisher"),
+    ///     ]),
+    /// );
+    /// let mut eva = ApprovalDecision::approve(SubjectRef::human("eva"));
+    /// eva.authority_groups = vec!["role:editor".into(), "role:publisher".into()];
+    /// let mut ed = ApprovalDecision::approve(SubjectRef::human("ed"));
+    /// ed.authority_groups = vec!["role:editor".into()];
+    /// request.decisions.extend([eva, ed]);
+    /// let holders: Vec<Option<&str>> = request
+    ///     .slot_holders()
+    ///     .into_iter()
+    ///     .map(|(_, holder)| holder.map(|decision| decision.authority().id.as_str()))
+    ///     .collect();
+    /// assert_eq!(holders, [Some("ed"), Some("eva")], "eva moves to the publisher's slot");
+    /// ```
+    pub fn slot_holders(&self) -> Vec<(&ApproverSelector, Option<&ApprovalDecision>)> {
+        let slots = &self.policy.slots;
+        if slots.is_empty() {
+            return Vec::new();
+        }
+        let (approvals, _) = self.counted_approvals();
+        // Augmenting paths: an approver takes a free slot they match, or one whose holder
+        // can move to another.
+        fn assign(
+            approver: usize,
+            approvals: &[&ApprovalDecision],
+            slots: &[ApproverSelector],
+            seen: &mut [bool],
+            filled_by: &mut [Option<usize>],
+        ) -> bool {
+            let decision = approvals[approver];
+            for (slot, selector) in slots.iter().enumerate() {
+                if seen[slot] || !selector.matches(decision.authority(), &decision.authority_groups)
+                {
+                    continue;
+                }
+                seen[slot] = true;
+                let free = match filled_by[slot] {
+                    None => true,
+                    Some(holder) => assign(holder, approvals, slots, seen, filled_by),
+                };
+                if free {
+                    filled_by[slot] = Some(approver);
+                    return true;
+                }
+            }
+            false
+        }
+        let mut filled_by: Vec<Option<usize>> = vec![None; slots.len()];
+        for approver in 0..approvals.len() {
+            let mut seen = vec![false; slots.len()];
+            assign(approver, &approvals, slots, &mut seen, &mut filled_by);
+        }
+        slots
+            .iter()
+            .zip(filled_by)
+            .map(|(slot, holder)| (slot, holder.map(|i| approvals[i])))
+            .collect()
     }
 
     /// The decision the governed path takes for the call once the request resolved, or
@@ -1653,6 +1830,51 @@ pub trait ApprovalService: fmt::Debug + Send + Sync {
     }
 }
 
+/// Who belongs to which approver group, as the deployment knows it.
+///
+/// A [`StoreApprovalService`] with a directory takes every approver's and delegator's
+/// groups from it and ignores the groups a caller asserts, so a surface cannot claim a
+/// group, such as a role in a charter, for the person deciding. Without one the service
+/// trusts the groups the caller's authentication established.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_core::principal::SubjectRef;
+/// use adk_core::{ApprovalRequest, ApproverDirectory, InMemoryApprovalStore, StoreApprovalService};
+/// use async_trait::async_trait;
+///
+/// struct Roles;
+///
+/// #[async_trait]
+/// impl ApproverDirectory for Roles {
+///     async fn groups(
+///         &self,
+///         subject: &SubjectRef,
+///         _request: &ApprovalRequest,
+///     ) -> adk_core::Result<Vec<String>> {
+///         Ok(match subject.id.as_str() {
+///             "eva" => vec!["role:editor".to_string()],
+///             _ => Vec::new(),
+///         })
+///     }
+/// }
+///
+/// let service = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+///     .with_directory(Arc::new(Roles));
+/// # let _ = service;
+/// ```
+#[async_trait]
+pub trait ApproverDirectory: Send + Sync {
+    /// The groups `subject` belongs to when deciding `request`.
+    ///
+    /// # Errors
+    ///
+    /// The directory's error; the service refuses the decision with it.
+    async fn groups(&self, subject: &SubjectRef, request: &ApprovalRequest) -> Result<Vec<String>>;
+}
+
 /// The [`ApprovalService`] over an [`ApprovalStore`].
 ///
 /// Durability and cross-process atomicity come from the store: on a durable backend
@@ -1679,6 +1901,7 @@ pub struct StoreApprovalService {
     run_store: Option<Arc<dyn DurableRunStore>>,
     router: Option<Arc<dyn ApprovalRouter>>,
     audit: Option<crate::audit_log::AuditTrail>,
+    directory: Option<Arc<dyn ApproverDirectory>>,
 }
 
 impl fmt::Debug for StoreApprovalService {
@@ -1690,6 +1913,7 @@ impl fmt::Debug for StoreApprovalService {
             .field("run_store", &self.run_store.is_some())
             .field("router", &self.router.is_some())
             .field("audit", &self.audit)
+            .field("directory", &self.directory.is_some())
             .finish()
     }
 }
@@ -1705,6 +1929,7 @@ impl StoreApprovalService {
             run_store: None,
             router: None,
             audit: None,
+            directory: None,
         }
     }
 
@@ -1762,6 +1987,28 @@ impl StoreApprovalService {
     pub fn with_audit(mut self, audit: crate::audit_log::AuditTrail) -> Self {
         self.audit = Some(audit);
         self
+    }
+
+    /// Takes approvers' and delegators' groups from `directory`, ignoring the groups
+    /// callers assert (see [`ApproverDirectory`]).
+    #[must_use]
+    pub fn with_directory(mut self, directory: Arc<dyn ApproverDirectory>) -> Self {
+        self.directory = Some(directory);
+        self
+    }
+
+    /// The groups of `subject` for `request`: the directory's when the service has one,
+    /// otherwise `asserted`.
+    async fn groups_of(
+        &self,
+        subject: &SubjectRef,
+        asserted: &[String],
+        request: &ApprovalRequest,
+    ) -> Result<Vec<String>> {
+        match &self.directory {
+            Some(directory) => directory.groups(subject, request).await,
+            None => Ok(asserted.to_vec()),
+        }
     }
 
     async fn notify(
@@ -1890,14 +2137,21 @@ impl StoreApprovalService {
             .collect())
     }
 
-    /// The authority `approver` may decide `request` under at `at`, or why not.
+    /// The delegator `approver` decides `request` for at `at`, if any, and the groups of
+    /// the decision's authority; or why the approver may not decide.
     async fn authority(
         &self,
         request: &ApprovalRequest,
         decision: &ApprovalDecision,
         at: DateTime<Utc>,
-    ) -> Result<Option<SubjectRef>> {
+    ) -> Result<(Option<SubjectRef>, Vec<String>)> {
         let approver = &decision.approver;
+        if approver.kind == SubjectKind::Visitor {
+            return Err(forbidden(
+                "approval.visitor_not_allowed",
+                "a visitor cannot decide an approval request; approvers are identified subjects",
+            ));
+        }
         let forbid_self = request.policy.forbid_self_approval;
         if forbid_self && request.is_self(approver) {
             return Err(forbidden(
@@ -1907,18 +2161,23 @@ impl StoreApprovalService {
         }
         let direct = request.is_eligible(approver, &decision.approver_groups);
         if direct && decision.via_delegation.is_none() {
-            return Ok(None);
+            return Ok((None, decision.approver_groups.clone()));
         }
-        let delegations = self.store.delegations_to(approver).await?;
-        let candidates: Vec<&ApprovalDelegation> = delegations
-            .iter()
-            .filter(|delegation| {
-                decision.via_delegation.as_ref().is_none_or(|from| *from == delegation.from)
-                    && delegation.scope.covers(request)
-                    && request.is_eligible(&delegation.from, &delegation.from_groups)
-            })
-            .collect();
-        if let Some(live) = candidates.iter().find(|delegation| delegation.window.contains(at)) {
+        let mut candidates: Vec<(ApprovalDelegation, Vec<String>)> = Vec::new();
+        for delegation in self.store.delegations_to(approver).await? {
+            if decision.via_delegation.as_ref().is_some_and(|from| *from != delegation.from)
+                || !delegation.scope.covers(request)
+            {
+                continue;
+            }
+            let groups = self.groups_of(&delegation.from, &delegation.from_groups, request).await?;
+            if request.is_eligible(&delegation.from, &groups) {
+                candidates.push((delegation, groups));
+            }
+        }
+        if let Some((live, groups)) =
+            candidates.iter().find(|(delegation, _)| delegation.window.contains(at))
+        {
             if forbid_self && request.is_self(&live.from) {
                 return Err(forbidden(
                     "approval.self_approval",
@@ -1928,7 +2187,7 @@ impl StoreApprovalService {
                     ),
                 ));
             }
-            return Ok(Some(live.from.clone()));
+            return Ok((Some(live.from.clone()), groups.clone()));
         }
         if !candidates.is_empty() {
             return Err(forbidden(
@@ -1945,29 +2204,42 @@ impl StoreApprovalService {
         ))
     }
 
-    /// Whether the inbox of `approver` in `groups`, with `delegations`, holds `request`.
-    fn in_inbox(
+    /// Whether the inbox `query` asks for, with the approver's `delegations`, holds
+    /// `request` at `at`.
+    async fn in_inbox(
+        &self,
         request: &ApprovalRequest,
-        approver: Option<&SubjectRef>,
-        groups: &[String],
+        query: &InboxQuery,
         delegations: &[ApprovalDelegation],
         at: DateTime<Utc>,
-    ) -> bool {
+    ) -> Result<bool> {
         let forbid_self = request.policy.forbid_self_approval;
-        let Some(approver) = approver else {
-            return groups.is_empty()
+        let Some(approver) = query.approver.as_ref() else {
+            return Ok(query.groups.is_empty()
                 || request.eligible_approvers().any(|selector| {
-                    matches!(selector, ApproverSelector::Group(group) if groups.contains(group))
-                });
+                    matches!(selector, ApproverSelector::Group(group) if query.groups.contains(group))
+                }));
         };
         if forbid_self && request.is_self(approver) {
-            return false;
+            return Ok(false);
         }
-        request.is_eligible(approver, groups)
-            || delegations.iter().any(|delegation| {
-                delegation.applies_to(request, at)
-                    && !(forbid_self && request.is_self(&delegation.from))
-            })
+        let groups = self.groups_of(approver, &query.groups, request).await?;
+        if request.is_eligible(approver, &groups) {
+            return Ok(true);
+        }
+        for delegation in delegations {
+            if !delegation.window.contains(at)
+                || !delegation.scope.covers(request)
+                || (forbid_self && request.is_self(&delegation.from))
+            {
+                continue;
+            }
+            let groups = self.groups_of(&delegation.from, &delegation.from_groups, request).await?;
+            if request.is_eligible(&delegation.from, &groups) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -2092,13 +2364,7 @@ impl ApprovalService for StoreApprovalService {
             let exhausted = batch.len() < DEFAULT_APPROVAL_PAGE;
             for request in batch {
                 after = Some(request.cursor());
-                if Self::in_inbox(
-                    &request,
-                    query.approver.as_ref(),
-                    &query.groups,
-                    &delegations,
-                    now,
-                ) {
+                if self.in_inbox(&request, &query, &delegations, now).await? {
                     items.push(request);
                     if items.len() == limit {
                         return Ok(InboxPage {
@@ -2161,7 +2427,10 @@ impl ApprovalService for StoreApprovalService {
             ApprovalAction::Approve | ApprovalAction::Reject => decision.edited_args = None,
             ApprovalAction::Edit | ApprovalAction::Respond => {}
         }
-        decision.via_delegation = self.authority(&request, &decision, now).await?;
+        decision.approver_groups =
+            self.groups_of(&decision.approver, &decision.approver_groups, &request).await?;
+        (decision.via_delegation, decision.authority_groups) =
+            self.authority(&request, &decision, now).await?;
         decision.decided_at = now;
         if matches!(decision.kind, ApprovalAction::Approve)
             && request.quorum_progress().0.contains(decision.authority())
@@ -2210,7 +2479,9 @@ impl ApprovalService for StoreApprovalService {
             ApprovalAction::Respond => ApprovalState::Responded,
             ApprovalAction::Approve | ApprovalAction::Edit => {
                 let approvals = next.quorum_progress().0.len();
-                if approvals >= usize::try_from(next.policy.quorum).unwrap_or(usize::MAX) {
+                if approvals >= usize::try_from(next.policy.quorum).unwrap_or(usize::MAX)
+                    && next.open_slots().is_empty()
+                {
                     ApprovalState::Approved
                 } else {
                     ApprovalState::Pending

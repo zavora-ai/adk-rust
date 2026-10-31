@@ -152,6 +152,9 @@ pub enum AuditRecordKind {
     Configuration,
     /// The log's checkpoint signing key changed.
     KeyRotated,
+    /// A subject's data was erased. The record names the subject by pseudonym only, with
+    /// each store's outcome.
+    Erasure,
     /// Any other kind.
     Other(String),
 }
@@ -168,6 +171,7 @@ impl AuditRecordKind {
             Self::Authentication => "authentication",
             Self::Configuration => "configuration",
             Self::KeyRotated => "key_rotated",
+            Self::Erasure => "erasure",
             Self::Other(name) => name,
         }
     }
@@ -184,6 +188,7 @@ impl From<String> for AuditRecordKind {
             "authentication" => Self::Authentication,
             "configuration" => Self::Configuration,
             "key_rotated" => Self::KeyRotated,
+            "erasure" => Self::Erasure,
             _ => Self::Other(value),
         }
     }

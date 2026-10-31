@@ -20,6 +20,8 @@
 //! - [`AgentId`] / [`AgentPrincipal`] / [`ActingContext`] / [`ActingConfig`] - Agent identity
 //! - [`LeaseStore`] / [`DurableRunStore`] / [`ScheduleStore`] / [`GovernanceStateStore`] -
 //!   Durable runtime contracts: fenced leases, the run queue, schedules, and freeze state
+//! - [`subject::SubjectRights`] / [`subject::ConsentStore`] / [`subject::SubjectRegistry`] -
+//!   Visitor ids, consent, and a subject's export, erasure, and links across stores
 //!
 //! ## Feature Flags
 //!
@@ -192,6 +194,8 @@ pub mod spend;
 /// User messages that reach a run while it runs: the run's inbox, the receipt and the
 /// event marker.
 pub mod steering;
+/// Data subjects: visitor ids, consent, and export, erasure, and linking across stores.
+pub mod subject;
 /// Tool trait, toolset, execution strategy, and registry.
 pub mod tool;
 /// Semaphore-based tool concurrency management.
@@ -227,9 +231,9 @@ pub use approval::{
     APPROVAL_REAPPLY_GRACE, ApprovalAction, ApprovalCall, ApprovalCursor, ApprovalDecision,
     ApprovalDelegation, ApprovalEventKind, ApprovalNotification, ApprovalNotifier, ApprovalPolicy,
     ApprovalRequest, ApprovalRequestQuery, ApprovalRisk, ApprovalRoute, ApprovalRouter,
-    ApprovalService, ApprovalState, ApprovalTick, ApproverSelector, DEFAULT_APPROVAL_PAGE,
-    DelegationScope, DelegationWindow, EscalationStep, ExpiryAction, InboxPage, InboxQuery,
-    StoreApprovalService,
+    ApprovalService, ApprovalState, ApprovalTick, ApproverDirectory, ApproverSelector,
+    DEFAULT_APPROVAL_PAGE, DelegationScope, DelegationWindow, EscalationStep, ExpiryAction,
+    InboxPage, InboxQuery, StoreApprovalService,
 };
 pub use budget::{
     BUDGET_LIMIT_KEY, BUDGET_RECORDED_KEY, BudgetExceeded, BudgetLimit, BudgetTracker, BudgetUsage,
