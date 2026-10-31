@@ -16,6 +16,9 @@
 //! | [`GovernanceStateStore`](crate::GovernanceStateStore) | [`GovernanceStateStoreHarness`](crate::conformance::GovernanceStateStoreHarness) | [`governance_state_store_conformance_tests!`](crate::governance_state_store_conformance_tests) | [`governance_state_store`](crate::conformance::governance_state_store) |
 //! | [`QueueSource`](crate::QueueSource) | [`QueueSourceHarness`](crate::conformance::QueueSourceHarness) | [`queue_source_conformance_tests!`](crate::queue_source_conformance_tests) | [`queue_source`](crate::conformance::queue_source) |
 //! | [`AuditLogStore`](crate::audit_log::AuditLogStore) | [`AuditLogStoreHarness`](crate::conformance::AuditLogStoreHarness) | [`audit_log_store_conformance_tests!`](crate::audit_log_store_conformance_tests) | [`audit_log_store`](crate::conformance::audit_log_store) |
+//! | [`SubjectRegistry`](crate::subject::SubjectRegistry) | [`SubjectRegistryHarness`](crate::conformance::SubjectRegistryHarness) | [`subject_registry_conformance_tests!`](crate::subject_registry_conformance_tests) | [`subject_registry`](crate::conformance::subject_registry) |
+//! | [`ConsentStore`](crate::subject::ConsentStore) | [`ConsentStoreHarness`](crate::conformance::ConsentStoreHarness) | [`consent_store_conformance_tests!`](crate::consent_store_conformance_tests) | [`consent_store`](crate::conformance::consent_store) |
+//! | [`SubjectDataStore`](crate::subject::SubjectDataStore) adapters | [`SubjectDataStoreHarness`](crate::conformance::SubjectDataStoreHarness) | [`subject_data_store_conformance_tests!`](crate::subject_data_store_conformance_tests) | [`subject_data_store`](crate::conformance::subject_data_store) |
 //!
 //! The harnesses of time-dependent stores receive the [`Clock`](crate::Clock) to read,
 //! and the suites drive it as a [`ManualClock`](crate::ManualClock), so lease expiry,
@@ -65,22 +68,28 @@ pub mod action_ledger;
 pub mod approval_service;
 pub mod approval_store;
 pub mod audit_log_store;
+pub mod consent_store;
 pub mod governance_state_store;
 pub mod lease_store;
 pub mod queue_source;
 pub mod run_store;
 pub mod schedule_store;
 pub mod spend_ledger;
+pub mod subject_data_store;
+pub mod subject_registry;
 
 pub use action_ledger::ActionLedgerHarness;
 pub use approval_store::ApprovalStoreHarness;
 pub use audit_log_store::AuditLogStoreHarness;
+pub use consent_store::ConsentStoreHarness;
 pub use governance_state_store::GovernanceStateStoreHarness;
 pub use lease_store::LeaseStoreHarness;
 pub use queue_source::QueueSourceHarness;
 pub use run_store::RunStoreHarness;
 pub use schedule_store::ScheduleStoreHarness;
 pub use spend_ledger::{SpendLedgerHarness, SpendLedgerSetup};
+pub use subject_data_store::SubjectDataStoreHarness;
+pub use subject_registry::SubjectRegistryHarness;
 
 /// Returns an identifier no other case or run uses. It contains `:` and `/` so a
 /// backend that builds keys or paths from identifiers is checked for escaping.
@@ -642,6 +651,123 @@ macro_rules! queue_source_conformance_tests {
         async fn queue_duplicate_publishes_are_both_delivered() {
             $crate::conformance::queue_source::duplicate_publishes_are_both_delivered(&$harness)
                 .await;
+        }
+    };
+}
+
+/// Generates one test per [`subject_registry`] case for a [`SubjectRegistryHarness`].
+///
+/// See the [module documentation](crate::conformance) for an example.
+#[macro_export]
+macro_rules! subject_registry_conformance_tests {
+    ($(#[$attr:meta])* harness = $harness:expr $(,)?) => {
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn registry_ensure_registers_once() {
+            $crate::conformance::subject_registry::ensure_registers_once(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn registry_concurrent_ensure_has_one_pseudonym() {
+            $crate::conformance::subject_registry::concurrent_ensure_has_one_pseudonym(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn registry_pseudonyms_resolve() {
+            $crate::conformance::subject_registry::pseudonyms_resolve(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn registry_links_once_per_visitor() {
+            $crate::conformance::subject_registry::links_once_per_visitor(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn registry_concurrent_links_have_one_winner() {
+            $crate::conformance::subject_registry::concurrent_links_have_one_winner(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn registry_erasing_blocks_links() {
+            $crate::conformance::subject_registry::erasing_blocks_links(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn registry_remove_forgets_the_subject() {
+            $crate::conformance::subject_registry::remove_forgets_the_subject(&$harness).await;
+        }
+    };
+}
+
+/// Generates one test per [`consent_store`] case for a [`ConsentStoreHarness`].
+///
+/// See the [module documentation](crate::conformance) for an example.
+#[macro_export]
+macro_rules! consent_store_conformance_tests {
+    ($(#[$attr:meta])* harness = $harness:expr $(,)?) => {
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn consent_grant_get_round_trip() {
+            $crate::conformance::consent_store::grant_get_round_trip(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn consent_records_are_per_subject() {
+            $crate::conformance::consent_store::records_are_per_subject(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn consent_revocation_keeps_the_first_time() {
+            $crate::conformance::consent_store::revocation_keeps_the_first_time(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn consent_revoke_purpose_revokes_live_records() {
+            $crate::conformance::consent_store::revoke_purpose_revokes_live_records(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn consent_live_respects_expiry_and_revocation() {
+            $crate::conformance::consent_store::live_respects_expiry_and_revocation(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn consent_erase_removes_one_subject() {
+            $crate::conformance::consent_store::erase_removes_one_subject(&$harness).await;
+        }
+    };
+}
+
+/// Generates one test per [`subject_data_store`] case for a [`SubjectDataStoreHarness`].
+///
+/// See the [module documentation](crate::conformance) for an example.
+#[macro_export]
+macro_rules! subject_data_store_conformance_tests {
+    ($(#[$attr:meta])* harness = $harness:expr $(,)?) => {
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn subject_data_export_returns_only_the_subject() {
+            $crate::conformance::subject_data_store::export_returns_only_the_subject(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn subject_data_erase_removes_only_the_subject() {
+            $crate::conformance::subject_data_store::erase_removes_only_the_subject(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn subject_data_erase_is_idempotent() {
+            $crate::conformance::subject_data_store::erase_is_idempotent(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn subject_data_erase_covers_linked_ids() {
+            $crate::conformance::subject_data_store::erase_covers_linked_ids(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn subject_data_erase_stays_in_its_applications() {
+            $crate::conformance::subject_data_store::erase_stays_in_its_applications(&$harness).await;
         }
     };
 }

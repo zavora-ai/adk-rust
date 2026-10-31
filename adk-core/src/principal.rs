@@ -3,7 +3,7 @@
 //! | Type | Identifies |
 //! |------|------------|
 //! | [`AgentId`] | One agent, stable across redeploys and replicas |
-//! | [`SubjectRef`] | A human, a service, or an agent, by kind and identifier |
+//! | [`SubjectRef`] | A human, a visitor, a service, or an agent, by kind and identifier |
 //! | [`AgentPrincipal`] | An agent with its tenant, class, instance, sponsor, and attributes |
 //! | [`ActingContext`] | An agent acting on behalf of a subject, through a delegation chain |
 //!
@@ -181,9 +181,16 @@ pub enum SubjectKind {
     Service,
     /// An agent; the identifier is an [`AgentId`] string.
     Agent,
+    /// A person the deployment knows only by an id it issued, such as a website visitor
+    /// who has not signed in; the identifier is a
+    /// [`VisitorId`](crate::subject::VisitorId) string.
+    ///
+    /// The id is pseudonymous, not anonymous: it names one person, so the data held under
+    /// it is that person's. A visitor's run is never authenticated.
+    Visitor,
 }
 
-/// A reference to a human, a service, or an agent.
+/// A reference to a human, a visitor, a service, or an agent.
 ///
 /// # Example
 ///
@@ -221,6 +228,22 @@ impl SubjectRef {
     /// Creates a reference to an agent.
     pub fn agent(id: &AgentId) -> Self {
         Self::new(SubjectKind::Agent, id.as_str())
+    }
+
+    /// Creates a reference to a visitor known by `id`, a
+    /// [`VisitorId`](crate::subject::VisitorId) the deployment issued.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::principal::{SubjectKind, SubjectRef};
+    /// use adk_core::subject::VisitorId;
+    ///
+    /// let visitor = SubjectRef::visitor(VisitorId::generate().as_str());
+    /// assert_eq!(visitor.kind, SubjectKind::Visitor);
+    /// ```
+    pub fn visitor(id: impl Into<String>) -> Self {
+        Self::new(SubjectKind::Visitor, id)
     }
 }
 
