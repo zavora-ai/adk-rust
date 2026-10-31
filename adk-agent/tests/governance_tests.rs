@@ -4,6 +4,9 @@
 //! run-to-run state — with a scripted model, and asserts on what the tool actually received.
 
 use adk_agent::{LlmAgent, LlmAgentBuilder};
+use adk_core::audit_log::{
+    AuditDecision, AuditRecordKind, AuditRecordOutcome, AuditTrail, InMemoryAuditRecorder,
+};
 use adk_core::{
     ApprovalScope, ApprovalStore, ArgPredicate, Content, DeclarativePolicy, Event,
     GovernanceControl, InMemoryApprovalStore, Llm, LlmRequest, LlmResponse, LlmResponseStream,
@@ -16,6 +19,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -618,4 +622,128 @@ async fn a_frozen_runner_refuses_new_runs_until_unfrozen() {
     let events = run(&runner, None).await;
     assert!(events.iter().all(Result::is_ok));
     assert_eq!(model.requests.lock().unwrap().len(), 1);
+}
+
+/// Every function response in `events`, as `(call id, response)`.
+fn answered(events: &[Result<Event>]) -> Vec<(Option<String>, Value)> {
+    events
+        .iter()
+        .filter_map(|event| event.as_ref().ok())
+        .filter_map(|event| event.llm_response.content.as_ref())
+        .flat_map(|content| &content.parts)
+        .filter_map(|part| match part {
+            Part::FunctionResponse { function_response, id, .. } => {
+                Some((id.clone(), function_response.response.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The review of #1005: a freeze that lands while the handler decides ends the wait. The
+/// call never runs, is answered `not run`, and is recorded as refused by the switch; the
+/// turn ends at its next model call, as for any call the switch refuses (spec 3.2 §10 S3).
+#[tokio::test]
+async fn a_freeze_ends_the_wait_for_the_confirmation_handler() {
+    let model = ScriptedModel::new(vec![calls(&[("transfer", json!({ "amount": 40 }), "c1")])]);
+    let (transfer, executions) = RecordingTool::new("transfer");
+    let control = GovernanceControl::new();
+    let runner = runner(approval_agent(model.clone(), transfer), |builder| {
+        builder.governance(control.clone())
+    })
+    .await;
+    let recorder = InMemoryAuditRecorder::new();
+    let config = RunConfig::builder()
+        .tool_confirmation_handler(Arc::new(NeverAnswers))
+        .audit(AuditTrail::new(Arc::new(recorder.clone())))
+        .build();
+    let operator = control.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        operator.freeze("incident 4014");
+    });
+
+    let events = run(&runner, Some(config)).await;
+
+    assert!(executions.lock().unwrap().is_empty(), "the call never runs");
+    let error = events.last().unwrap().as_ref().expect_err("the turn ends at the next model call");
+    assert_eq!(error.code, "governance.frozen");
+    let responses = answered(&events);
+    assert_eq!(responses.len(), 1, "{responses:?}");
+    let message = responses[0].1["error"].as_str().expect("an error response");
+    assert!(message.starts_with("not run: execution is frozen"), "{message}");
+    assert!(message.contains("incident 4014"), "{message}");
+    let tool_calls: Vec<_> = recorder
+        .records()
+        .into_iter()
+        .filter(|record| record.kind == AuditRecordKind::ToolCall)
+        .map(|record| (record.decision, record.policy_ref, record.outcome))
+        .collect();
+    assert_eq!(
+        tool_calls,
+        vec![(
+            Some(AuditDecision::Denied),
+            Some("governance".to_string()),
+            Some(AuditRecordOutcome::NotRun)
+        )]
+    );
+}
+
+/// A held call whose resume the switch refuses is answered `not run`, which releases its
+/// hold, so the decision it was resumed on is spent with it: after the unfreeze, the model's
+/// identical call is held for a decision of its own instead of running on the old one.
+#[tokio::test]
+async fn a_held_call_refused_by_a_freeze_spends_its_decision() {
+    let model = ScriptedModel::new(vec![
+        calls(&[("transfer", json!({ "amount": 40 }), "call-run1")]),
+        calls(&[("transfer", json!({ "amount": 40 }), "call-run3")]),
+    ]);
+    let (transfer, executions) = RecordingTool::new("transfer");
+    let control = GovernanceControl::new();
+    let store = Arc::new(InMemoryApprovalStore::new());
+    // Once armed, the operator freezes as the resumed call reaches the tool path, after the
+    // run started.
+    let operator = control.clone();
+    let armed = Arc::new(AtomicBool::new(false));
+    let trigger = armed.clone();
+    let agent = LlmAgentBuilder::new("ops")
+        .model(model)
+        .tool(transfer)
+        .require_tool_confirmation("transfer")
+        .before_tool_callback(Box::new(move |_ctx| {
+            if trigger.swap(false, Ordering::SeqCst) {
+                operator.freeze("incident 4015");
+            }
+            Box::pin(async { Ok(None) })
+        }))
+        .build()
+        .unwrap();
+    let config = RunConfig::builder().approval_store(store.clone()).build();
+    let runner =
+        runner(agent, |builder| builder.governance(control.clone()).run_config(config)).await;
+    let scope = ApprovalScope::new("governed", "user", "session");
+
+    run(&runner, None).await;
+    let pending = store.pending(&scope).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    let fingerprint = pending[0].fingerprint.clone();
+    store.decide(&scope, &fingerprint, ToolApproval::approve()).await.unwrap();
+
+    armed.store(true, Ordering::SeqCst);
+    let refused = run(&runner, None).await;
+    assert_eq!(refused.last().unwrap().as_ref().unwrap_err().code, "governance.frozen");
+    let responses = answered(&refused);
+    assert_eq!(responses.len(), 1, "{responses:?}");
+    assert_eq!(responses[0].0.as_deref(), Some("call-run1"));
+    assert!(
+        !store.has_decision(&scope, &fingerprint).await.unwrap(),
+        "the decision is spent with the refused call"
+    );
+
+    control.unfreeze();
+    let after = run(&runner, None).await;
+    assert!(executions.lock().unwrap().is_empty(), "nothing runs on the old decision");
+    let held = confirmation_requests(&after);
+    assert_eq!(held.len(), 1, "{after:?}");
+    assert_eq!(held[0].function_call_id.as_deref(), Some("call-run3"));
 }

@@ -538,3 +538,14 @@ async fn rewind_steps_count_only_visible_events() {
     assert_eq!(texts, ["one"]);
     assert_eq!(rewound.state().get("plan"), Some(json!("gold")));
 }
+
+#[tokio::test]
+async fn encrypted_delete_all_sessions_erases_the_user_tier() {
+    common::state_contract::assert_delete_all_sessions_contract(
+        &encrypted_in_memory(),
+        APP,
+        "vault-app-2",
+        true,
+    )
+    .await;
+}

@@ -1,9 +1,11 @@
 // Each test binary that declares `mod common` uses a different subset of these checks.
 #![allow(dead_code)]
 
+use adk_core::ErrorCategory;
 use adk_core::identity::{AdkIdentity, AppName, SessionId, UserId};
 use adk_session::{
-    AppendEventRequest, CreateRequest, Event, GetRequest, ListRequest, Session, SessionService,
+    AppendEventRequest, CreateRequest, DeleteRequest, Event, GetRequest, ListRequest, Session,
+    SessionService,
 };
 use chrono::{DateTime, Duration, SubsecRound, Utc};
 use serde_json::{Value, json};
@@ -272,5 +274,164 @@ pub async fn assert_event_filter_contract(
         let expected: Vec<(String, DateTime<Utc>)> =
             expected.iter().map(|&index| (ids[index].clone(), at(index as i64))).collect();
         assert_eq!(returned, expected, "num_recent_events={num_recent_events:?} after={after:?}");
+    }
+}
+
+async fn create_with_id(
+    service: &dyn SessionService,
+    app_name: &str,
+    user_id: &str,
+    session_id: &str,
+    initial: HashMap<String, Value>,
+) -> Box<dyn Session> {
+    service
+        .create(CreateRequest {
+            app_name: app_name.to_string(),
+            user_id: user_id.to_string(),
+            session_id: Some(session_id.to_string()),
+            state: initial,
+        })
+        .await
+        .expect("create session")
+}
+
+fn unique(prefix: &str) -> String {
+    format!("{prefix}-{}", uuid::Uuid::new_v4().simple())
+}
+
+/// Checks that `delete_all_sessions` erases what the user holds in the app — every session
+/// with its events, and the `user:` tier — and nothing else: the `app:` tier, the user's
+/// sessions in another app, and other users' sessions and `user:` values stay. A user whose
+/// sessions were deleted one by one has the tier erased too, and a repeated call succeeds.
+///
+/// `shared_tiers` is `false` for a backend that keeps `app:` and `user:` keys in each
+/// session instead of shared tiers (Vertex AI), where no value is read through another
+/// session.
+pub async fn assert_delete_all_sessions_contract(
+    service: &dyn SessionService,
+    app_name: &str,
+    other_app_name: &str,
+    shared_tiers: bool,
+) {
+    let (alice, bob, carol) = (unique("alice"), unique("bob"), unique("carol"));
+    let session = |user: &str, n: u8| format!("{user}-s{n}");
+    // Bob's session exists before Alice writes the app tier, so it reads her value through
+    // the tier.
+    create_with_id(
+        service,
+        app_name,
+        &bob,
+        &session(&bob, 1),
+        state(&[("user:language", json!("sw")), ("app:motd", json!("karibu"))]),
+    )
+    .await;
+    create_with_id(
+        service,
+        app_name,
+        &alice,
+        &session(&alice, 1),
+        state(&[("user:language", json!("en")), ("app:theme", json!("dark"))]),
+    )
+    .await;
+    create_with_id(service, app_name, &alice, &session(&alice, 2), HashMap::new()).await;
+    append_for_identity(
+        service,
+        app_name,
+        &alice,
+        &session(&alice, 2),
+        event_with_delta(state(&[("user:plan", json!("pro"))])),
+    )
+    .await;
+    create_with_id(
+        service,
+        other_app_name,
+        &alice,
+        &session(&alice, 1),
+        state(&[("user:language", json!("fr"))]),
+    )
+    .await;
+    // Carol's only session is deleted on its own, which leaves her user tier behind.
+    create_with_id(
+        service,
+        app_name,
+        &carol,
+        &session(&carol, 1),
+        state(&[("user:language", json!("de"))]),
+    )
+    .await;
+    service
+        .delete(DeleteRequest {
+            app_name: app_name.to_string(),
+            user_id: carol.clone(),
+            session_id: session(&carol, 1),
+        })
+        .await
+        .expect("delete carol's session");
+
+    service.delete_all_sessions(app_name, &alice).await.expect("delete all of alice's");
+    service.delete_all_sessions(app_name, &carol).await.expect("delete all of carol's");
+
+    let listed = service
+        .list(ListRequest {
+            app_name: app_name.to_string(),
+            user_id: alice.clone(),
+            limit: None,
+            offset: None,
+        })
+        .await
+        .expect("list alice's sessions");
+    assert!(listed.is_empty(), "alice has no session left in the app");
+    for n in [1, 2] {
+        let missing = service
+            .get(GetRequest {
+                app_name: app_name.to_string(),
+                user_id: alice.clone(),
+                session_id: session(&alice, n),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .err()
+            .expect("a deleted session is not found");
+        assert_eq!(missing.category, ErrorCategory::NotFound, "{missing}");
+    }
+
+    let fresh = create_with_id(service, app_name, &alice, &session(&alice, 3), HashMap::new())
+        .await
+        .state()
+        .all();
+    let fresh_carol =
+        create_with_id(service, app_name, &carol, &session(&carol, 2), HashMap::new())
+            .await
+            .state()
+            .all();
+    let erased = |state: &HashMap<String, Value>| {
+        state.keys().filter(|key| key.starts_with("user:")).cloned().collect::<Vec<_>>()
+    };
+    assert_eq!(erased(&fresh), Vec::<String>::new(), "alice's user tier is erased");
+    assert_eq!(erased(&fresh_carol), Vec::<String>::new(), "carol's user tier is erased");
+
+    let bob_state = get(service, app_name, &bob, &session(&bob, 1), None, None).await.state().all();
+    assert_eq!(
+        [bob_state.get("user:language"), bob_state.get("app:motd")],
+        [Some(&json!("sw")), Some(&json!("karibu"))],
+        "another user's session and user tier stay"
+    );
+    let elsewhere =
+        get(service, other_app_name, &alice, &session(&alice, 1), None, None).await.state().all();
+    assert_eq!(elsewhere.get("user:language"), Some(&json!("fr")), "another app's tier stays");
+    if shared_tiers {
+        assert_eq!(bob_state.get("app:theme"), Some(&json!("dark")), "the app tier stays");
+        assert_eq!(
+            fresh.get("app:theme"),
+            Some(&json!("dark")),
+            "a new session reads the app tier"
+        );
+    }
+
+    service.delete_all_sessions(app_name, &alice).await.expect("delete all again");
+    service.delete_all_sessions(app_name, &alice).await.expect("a repeated call succeeds");
+    for (app, user) in [(app_name, &bob), (app_name, &carol), (other_app_name, &alice)] {
+        service.delete_all_sessions(app, user).await.expect("clean up");
     }
 }

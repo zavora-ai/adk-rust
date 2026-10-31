@@ -58,3 +58,15 @@ async fn test_inmemory_rewind_contract() {
     let service = InMemorySessionService::new();
     common::integrity_contract::assert_rewind_contract(&service, "rewind_app").await;
 }
+
+#[tokio::test]
+async fn test_inmemory_delete_all_sessions_erases_the_user_tier() {
+    let service = InMemorySessionService::new();
+    common::state_contract::assert_delete_all_sessions_contract(
+        &service,
+        "erase_app",
+        "erase_app_2",
+        true,
+    )
+    .await;
+}

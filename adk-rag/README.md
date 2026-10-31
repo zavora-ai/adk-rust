@@ -669,8 +669,14 @@ examples, such as a custom embedder and multi-collection search.
 
 ### RagTool
 
-`RagTool::new(pipeline, default_collection)` exposes the pipeline as the `rag_search` tool. Its
-arguments are a required `query` and optional `collection` and `top_k`:
+`RagTool::new(pipeline, default_collection)` exposes the pipeline as the `rag_search` tool,
+searching that one collection. `with_allowed_collections([...])` lets the model choose among
+further collections:
+
+| Configuration | Arguments | A call naming another collection |
+|---------------|-----------|----------------------------------|
+| `RagTool::new(pipeline, "docs")` | `query` (required), `top_k` | Fails with `tool.invalid_arguments` |
+| `.with_allowed_collections(["faq"])` | `query` (required), `top_k`, `collection` (`docs` or `faq`; `docs` when omitted) | Fails with `tool.invalid_arguments`, naming the allowed collections |
 
 ```json
 { "query": "pricing info", "collection": "faq", "top_k": 5 }
@@ -678,7 +684,9 @@ arguments are a required `query` and optional `collection` and `top_k`:
 
 The tool returns the results best first, each as
 `{"id", "document_id", "text", "metadata", "score"}`. Embedding vectors are left out, and a
-`top_k` override is reranked and filtered like any other query.
+`top_k` override is reranked and filtered like any other query. The tool is read-only and
+concurrency-safe. With one collection per tenant, build one tool per tenant from the
+authenticated request.
 
 ## SQLx compatibility
 
