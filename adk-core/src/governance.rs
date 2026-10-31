@@ -2233,6 +2233,33 @@ pub async fn authorize_tool_call(
         return Err(frozen);
     }
 
+    // A tool the consent gate names runs only with the subject's consent for its purpose;
+    // a gate that cannot read consent refuses.
+    if let Some(consent) = &config.consent_gate
+        && let Some(purpose) = consent.tool_purpose(&tool_name)
+        && let Some(subject) = &gate.acting.on_behalf_of
+        && let Err(refused) = consent.require(subject, purpose).await
+    {
+        tracing::info!(
+            tool.name = %tool_name,
+            agent.id = %gate.acting.agent.id,
+            error.code = %refused.code,
+            "tool call refused by the consent gate"
+        );
+        audited
+            .decision(
+                &args,
+                AuditDecision::Denied,
+                Some(POLICY_REF_CONSENT),
+                Some(&refused.message),
+            )
+            .await?;
+        return Ok(ToolAuthorization::Refuse {
+            reason: format!("Tool '{tool_name}' was not run: {}", refused.message),
+            confirmation: None,
+        });
+    }
+
     if let Some(held) = &resumes
         && let Some(mismatch) = resume_mismatch(held, &gate.acting, origin.as_ref())
     {
@@ -2828,6 +2855,8 @@ async fn authorize_edited_args(
 
 /// `policy_ref` of a decision made by the kill switch.
 const POLICY_REF_GOVERNANCE: &str = "governance";
+/// `policy_ref` of a refusal by the run's consent gate ([`RunConfig::consent_gate`]).
+const POLICY_REF_CONSENT: &str = "consent";
 /// `policy_ref` of a decision made by the run's [`ToolPolicy`](crate::ToolPolicy), followed
 /// by `:<name>` when the policy names itself.
 const POLICY_REF_TOOL_POLICY: &str = "tool_policy";

@@ -1300,14 +1300,19 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
 5. The governed path (`adk_core::authorize_tool_call`) on the final arguments:
    1. Kill switch — a frozen run's call is answered `not run` and the run ends with a
       `governance.frozen` error at its next model call (`CodeActAgent`: at once). The switch
-      is also watched during step 5's wait for the handler, and a freeze there refuses the
+      is also watched during step 6's wait for the handler, and a freeze there refuses the
       call the same way
-   2. Resume binding, for a held call being resumed — another acting agent or another tool
+   2. Consent gate (`RunConfig::consent_gate`) — a tool the gate names with
+      `ConsentGate::with_tool` runs only when the subject the agent acts for has live consent
+      for the tool's purpose and is not being erased; otherwise the refusal (`consent.required`
+      or `subject.erasing`) becomes the call's result, audited with `policy_ref` `consent`. See
+      [Subject Rights](subject-rights.md#consent-gates)
+   3. Resume binding, for a held call being resumed — another acting agent or another tool
       origin answers the call as not run and spends its stored decision
-   3. `ToolPolicy` — a denial becomes the call's result
-   4. Tool guardrails (`ToolGuardrailSet`) — a denial becomes the call's result; a revision is
+   4. `ToolPolicy` — a denial becomes the call's result
+   5. Tool guardrails (`ToolGuardrailSet`) — a denial becomes the call's result; a revision is
       checked against the policy again
-   5. Confirmation, when the agent or the policy requires it — a call-ID decision, a fingerprint
+   6. Confirmation, when the agent or the policy requires it — a call-ID decision, a fingerprint
       approval, the `ApprovalStore`, the `ToolConfirmationHandler`, or a hold
 6. Action ledger (`ToolEffect::NonIdempotent` tools, `RunConfig::action_ledger`) — a recorded
    call is answered from its record without executing (`CodeActAgent` raises the answer into

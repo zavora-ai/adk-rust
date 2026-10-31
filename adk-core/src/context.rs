@@ -1775,6 +1775,11 @@ pub struct RunConfig {
     /// [`is_authenticated`](crate::ReadonlyContext::is_authenticated) answer `true`, sets
     /// no scopes, and names no user.
     pub request_metadata: HashMap<String, String>,
+    /// The consent gate the run's tool calls and the runner read: a tool the gate names is
+    /// refused without consent for its purpose, the runner refuses a run for a subject being
+    /// erased, and the run's spans carry the user id only with consent for analytics.
+    /// `None` gates nothing.
+    pub consent_gate: Option<crate::subject::ConsentGate>,
     /// How long the [`tool_confirmation_handler`](Self::tool_confirmation_handler) may take
     /// to decide one call. A call it does not decide in time waits in the
     /// [`approval_store`](Self::approval_store) when the run has one, and is denied
@@ -1877,6 +1882,7 @@ impl Default for RunConfig {
             durable_run_id: None,
             request_context: None,
             request_metadata: HashMap::new(),
+            consent_gate: None,
             tool_confirmation_timeout: crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT,
             spend_ledger: None,
             llm_spend_estimate: None,
@@ -2284,6 +2290,25 @@ impl RunConfigBuilder {
     /// ```
     pub fn request_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.config.request_metadata.insert(key.into(), value.into());
+        self
+    }
+
+    /// Sets the consent gate. See [`RunConfig::consent_gate`].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::RunConfig;
+    /// use adk_core::subject::{ConsentGate, ConsentPurpose, InMemoryConsentStore};
+    ///
+    /// let gate = ConsentGate::new(Arc::new(InMemoryConsentStore::new()))
+    ///     .with_tool("subscribe", ConsentPurpose::Newsletter);
+    /// let config = RunConfig::builder().consent_gate(gate).build();
+    /// assert!(config.consent_gate.is_some());
+    /// ```
+    pub fn consent_gate(mut self, gate: crate::subject::ConsentGate) -> Self {
+        self.config.consent_gate = Some(gate);
         self
     }
 

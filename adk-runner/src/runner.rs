@@ -986,6 +986,19 @@ impl Runner {
             Some(context) => Some(context),
             None => self.request_context.clone(),
         };
+        // No run starts for a subject being erased, and its spans name the user only with
+        // consent for analytics.
+        let telemetry_user_id = match &run_config.consent_gate {
+            Some(gate) => {
+                let subject =
+                    adk_core::SubjectRef::new(run_config.acting.subject_kind, user_id.as_str());
+                gate.ensure_writable(&subject).await?;
+                gate.permits(&subject, &adk_core::subject::ConsentPurpose::Analytics)
+                    .await?
+                    .then(|| user_id.as_str().to_owned())
+            }
+            None => Some(user_id.as_str().to_owned()),
+        };
         let intra_compactor = self.intra_compactor.clone();
         #[cfg(feature = "context-compaction")]
         let context_compaction = self.context_compaction.clone();
@@ -1547,11 +1560,15 @@ impl Runner {
                 "gcp.vertex.agent.event_id" = ctx.invocation_id(), // Use invocation_id as event_id for agent spans
                 "gen_ai.conversation.id" = ctx.session_id(),
                 "adk.app_name" = ctx.app_name(),
-                "adk.user_id" = ctx.user_id(),
+                "adk.user_id" = tracing::field::Empty,
                 "agent.name" = %agent_to_run.name(),
                 "adk.skills.selected_name" = %selected_skill_name,
                 "adk.skills.selected_id" = %selected_skill_id
             );
+
+            if let Some(user) = &telemetry_user_id {
+                agent_span.record("adk.user_id", user.as_str());
+            }
 
             let mut agent_stream = match agent_to_run.run(ctx.clone()).instrument(agent_span.clone()).await {
                 Ok(s) => s,

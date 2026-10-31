@@ -8,6 +8,7 @@
 //! | [`SubjectRegistry`] | Each subject's pseudonym, links, and erasure state — never its data |
 //! | [`SubjectDataStore`] | One store family's adapter: export and erase a subject's data |
 //! | [`SubjectRights`] | Fans `export`, `erase`, and `link` out over the registry, the consent store, and every adapter |
+//! | [`ConsentGate`] | Whether a subject may have something lasting written for a purpose; read by the session and memory wrappers, the tool path, and the runner |
 //!
 //! Stores keyed by `(app, user)` — sessions, memory, artifacts — find a subject by its
 //! id. The registry holds no index of records, so no second copy of a person's data can
@@ -61,6 +62,7 @@
 //! ```
 
 mod consent;
+mod gate;
 mod registry;
 mod rights;
 
@@ -76,6 +78,7 @@ pub use consent::{
     CONSENT_CONFLICT_CODE, ConsentEvidence, ConsentPurpose, ConsentRecord, ConsentStore,
     InMemoryConsentStore, consent_conflict_error,
 };
+pub use gate::{CONSENT_REQUIRED_CODE, ConsentGate, consent_required_error};
 pub use registry::{
     InMemorySubjectRegistry, PSEUDONYM_PREFIX, SUBJECT_ERASING_CODE, SUBJECT_LINK_CONSUMED_CODE,
     SUBJECT_LINK_INVALID_CODE, SubjectRecord, SubjectRegistry, SubjectState, erasing_error,

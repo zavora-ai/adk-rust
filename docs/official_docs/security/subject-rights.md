@@ -95,6 +95,42 @@ assert!(revocation.erasure.is_some());
 # }
 ```
 
+## Consent gates
+
+`ConsentGate` decides whether a subject may have something lasting written for a purpose.
+It gates visitors by default — a user id that parses as a `VisitorId` — and every human and
+service after `for_every_subject()`; agents are never gated. With a registry
+(`with_registry`), every writer below also refuses a subject that is being erased.
+
+| Writer | Purpose | Without consent |
+|--------|---------|-----------------|
+| `adk_session::ConsentGatedSessionService` | `SessionContinuity` | New sessions live in process memory (or the store given to `with_ephemeral`); appending to a durable session fails with `consent.required` |
+| `adk_session::ConsentGatedSessionService` | `PersistentProfile` | `user:` keys are dropped from created state and event deltas |
+| `adk_memory::ConsentGatedMemoryService` | `PersistentProfile` | Adds are skipped; search returns nothing |
+| `authorize_tool_call`, through `RunConfig::consent_gate` | The tool's purpose, from `ConsentGate::with_tool` | The call is refused with `consent.required`, audited with `policy_ref` `consent` |
+| The runner, through `RunConfig::consent_gate` | `Analytics` | The run's `agent.execute` span carries no `adk.user_id` |
+| The runner, through `RunConfig::consent_gate` | — | A subject being erased gets no run (`subject.erasing`) |
+
+Revoking consent stops later writes and erases nothing; reads and deletes reach both the
+durable and the in-memory store, so erasure finds a conversation wherever it lives.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::RunConfig;
+use adk_core::subject::{ConsentGate, ConsentPurpose, InMemoryConsentStore, InMemorySubjectRegistry};
+use adk_memory::{ConsentGatedMemoryService, InMemoryMemoryService};
+use adk_session::{ConsentGatedSessionService, InMemorySessionService};
+
+let gate = ConsentGate::new(Arc::new(InMemoryConsentStore::new()))
+    .with_registry(Arc::new(InMemorySubjectRegistry::new()))
+    .with_tool("subscribe_newsletter", ConsentPurpose::Newsletter);
+
+let sessions = ConsentGatedSessionService::new(Arc::new(InMemorySessionService::new()), gate.clone());
+let memory = ConsentGatedMemoryService::new(Arc::new(InMemoryMemoryService::new()), gate.clone());
+let run_config = RunConfig::builder().consent_gate(gate).build();
+```
+
 ## Erasure
 
 `SubjectRights::erase` works in this order, and can be repeated until it completes:
@@ -273,6 +309,7 @@ consent store backends the same way. All three need the `conformance` feature of
 | `subject.unsupported` | `Unsupported` | A store cannot export or erase by subject |
 | `consent.conflict` | `Conflict` | A consent record with the id exists |
 | `approval.visitor_not_allowed` | `Forbidden` | A visitor tried to decide an approval request |
+| `consent.required` | `Forbidden` | A write or tool call needs consent the subject has not given |
 
 ## Related
 

@@ -60,6 +60,8 @@ pub mod approval;
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 /// SQL-backed audit log stores for signed, Merkle-hashed audit logs.
 pub mod audit_log;
+/// A session service that writes nothing lasting for a subject without its consent.
+pub mod consent_gate;
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 mod durable_sql;
 /// Event types and the [`Events`] trait for accessing session event history.
@@ -192,6 +194,7 @@ pub mod subject_redis;
 /// Vertex AI Session API backend.
 pub mod vertex;
 
+pub use consent_gate::ConsentGatedSessionService;
 pub use event::{Event, EventActions, Events};
 pub use inmemory::InMemorySessionService;
 pub use service::{

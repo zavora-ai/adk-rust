@@ -242,6 +242,7 @@ fn delegated_run_config(parent: RunConfig) -> RunConfig {
         durable_run_id,
         request_context,
         request_metadata,
+        consent_gate,
         tool_confirmation_timeout,
         spend_ledger,
         llm_spend_estimate,
@@ -283,6 +284,8 @@ fn delegated_run_config(parent: RunConfig) -> RunConfig {
         // The delegate acts for the caller's authenticated user, in the same request.
         request_context,
         request_metadata,
+        // The delegate acts for the same subject, under the same consent.
+        consent_gate,
         tool_confirmation_timeout,
         spend_ledger,
         llm_spend_estimate,
