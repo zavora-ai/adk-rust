@@ -350,7 +350,10 @@ Changed settings and cursors live in the `ControlStore`
 Kernels share one run store, process store and governance store. Give each replica
 `KernelConfig::mirrored_governance(store)`, a kill switch that polls the shared state every
 250 ms, so a freeze on any replica parks every running process on all of them within a
-second.
+second. `Kernel::start` reads the store once before it takes work, waiting at most
+`KernelConfig::GOVERNANCE_FIRST_READ`, so a replica that starts during a freeze stays frozen and
+work spawned once `start` returns is never refused as unread. A store that cannot be read
+leaves the replica refusing work until its mirror reads it.
 
 | Store | Backends |
 |---|---|
@@ -445,9 +448,9 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `conformance` | off | The `conformance` module |
 | `drivers` | on | `drivers`: manifests, the driver store, the supervisor over `adk-tool`'s MCP manager, the stdio launcher on `adk-sandbox`'s enforcers |
 | `service` | on | The `service` module; `windows-service` on Windows |
-| `managed` | off | `managed`: `KernelDef` under the `adk.kernel` metadata key of a managed definition, and `TenantKernel`, one kernel per tenant over its `ManagedStores` on `adk-managed`'s runtime (Experimental) |
+| `managed` | off | `managed`: `KernelDef` under the `adk.kernel` metadata key of a managed definition, and `TenantKernel`, one kernel per tenant over its `ManagedStores` on `adk-managed`'s runtime (Experimental); with `charter`, a tenant's signal store and `TenantKernel::signal_sink` for a definition's signal wakes |
 | `channels` | off | The chat channel contract (spec 3.3 §10 K1): `channels`, the binding store on every backend, and with `conformance` the adapter contract suite |
-| `charter` | off | `charter` (spec 3.5 §7.10, §7.11): the charter store, the KPI tracker, autonomy records, signals and the site process kinds over `awp-types` 2.0, on every backend of the process store |
+| `charter` | off | `charter` (spec 3.5 §7.10, §7.11): the charter store, the KPI tracker, autonomy records, signals and the site process kinds over `awp-types` 2.0, the stores on in-memory, SQLite, PostgreSQL and Redis |
 
 ## Tests
 
@@ -466,6 +469,7 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `src/control/tests.rs` | The auth matrix on every transport: socket peers of another uid refused; on Windows the pipe's owner-only descriptor, its owner admitted, and a client of another identity refused by the DACL and, behind an open DACL, by the token check |
 | `src/service/tests.rs` | The launchd plist, systemd unit and Windows service rendered for each platform on every platform; `plutil` accepts the plist; the log is created `0600`. Real installs run in `.github/workflows/kernel-service.yml` |
 | `tests/managed_def_fixtures.rs`, `tests/managed_tenants.rs`, `tests/managed_tenant_property_tests.rs` (feature `managed`) | The kernel block's golden fixtures and refusals; a definition round-trips through the managed state store; a cron wake for one tenant runs on its stores only; a held call runs once after the tenant's approval; no wake, process or approval crosses tenants |
+| `tests/managed_signals.rs` (features `managed`, `charter`) | A definition's signal wake: a signal filed through `TenantKernel::signal_sink` starts the definition unauthenticated with its own input, only in its own partition, across a kernel restart; a tenant without a signal store refuses the definition |
 | `tests/managed_drivers.rs`, `tests/managed_cron_watermarks.rs` (feature `managed`) | A definition's driver mounts on its tenant only when a person approves, and another tenant never sees it; missed cron ticks fire once each as each wake set's policy picks them, across a restart and two replicas; an expression hosted again after it was idle replays nothing from the idle time |
 | `tests/sleeper_cron_watermarks.rs` | Cron sleepers over SQLite on a manual clock: a restarted kernel, or two replicas taking over, fire the occurrences missed while no kernel ran once each as `fireOnce`, `catchUp(2)` and `skip` pick them; a second restart replays nothing; a new series replays nothing from before it began |
 | `tests/cron_watermark_store_sqlite.rs`, `tests/cron_watermark_store_postgres.rs`, `tests/cron_watermark_store_redis.rs` | The cron watermark store's suite in memory and on SQLite; PostgreSQL and Redis in CI's `postgres` job; MongoDB, Firestore and Neo4j in `tests/store_conformance_*.rs` |

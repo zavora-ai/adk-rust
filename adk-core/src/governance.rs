@@ -27,6 +27,14 @@
 //! [`decide_approval`](crate::ToolConfirmationHandler::decide_approval), which is bounded by
 //! [`RunConfig::tool_confirmation_timeout`] and denies when it expires.
 //!
+//! The kill switch also ends that wait. A freeze while the handler decides refuses the call
+//! with the freeze error and records it as denied by the switch, and what the wait left open
+//! is closed as for any other decision (below), so a decision that arrives during the freeze
+//! or after an unfreeze runs neither this call nor an identical later one. A call held
+//! between runs is not waiting, so a freeze leaves it held: a resume while frozen is refused
+//! before its decision is read, and the call resumes after the unfreeze under the policy in
+//! force then.
+//!
 //! A call held without a decision is answered with a [`confirmation_pending_response`]
 //! and stays held across runs. So is a call the handler does not decide in time when the
 //! run has an [`ApprovalStore`] to read a later decision from: it waits for a decision
@@ -96,8 +104,10 @@ pub const DEFAULT_TOOL_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(300)
 /// An organisation-wide kill switch for agent execution.
 ///
 /// Clones share one flag. While frozen, a run fails at its start, an agent stops
-/// before its next model call, and no tool executes: each check ends the run with an
-/// error carrying the freeze reason.
+/// before its next model call, no tool executes, and a call waiting for a confirmation
+/// decision stops waiting and is refused: each check ends the run with an error carrying
+/// the freeze reason. [`refused`](Self::refused) resolves when the control starts refusing
+/// work.
 ///
 /// Attach a control to a runner with its builder's `governance`, or to a single run
 /// with [`RunConfigBuilder::governance`](crate::RunConfigBuilder::governance).
@@ -144,6 +154,8 @@ struct ControlState {
     replicated: std::sync::RwLock<Option<String>>,
     mirror: Option<Mirror>,
     audit: std::sync::RwLock<Option<AuditTrail>>,
+    /// Woken on every freeze, unfreeze and mirror read, for [`GovernanceControl::refused`].
+    changed: tokio::sync::Notify,
 }
 
 /// Error code returned while a mirrored control has not read its store within `max_staleness`.
@@ -470,11 +482,13 @@ impl GovernanceControl {
         tracing::warn!(governance.reason = %reason, "execution frozen");
         *self.inner.reason.write().unwrap_or_else(|e| e.into_inner()) = Some(reason);
         self.inner.frozen.store(true, Ordering::SeqCst);
+        self.inner.changed.notify_waiters();
     }
 
     fn clear_frozen(&self) {
         self.inner.frozen.store(false, Ordering::SeqCst);
         *self.inner.reason.write().unwrap_or_else(|e| e.into_inner()) = None;
+        self.inner.changed.notify_waiters();
         tracing::info!("execution unfrozen");
     }
 
@@ -608,7 +622,68 @@ impl GovernanceControl {
             (Some(_), None) => tracing::info!("replicated kill switch lifted"),
             _ => {}
         }
+        // Also when nothing changed: the read renewed the staleness lease that waiters time.
+        self.inner.changed.notify_waiters();
         Ok(())
+    }
+
+    /// Waits until the control refuses work, and returns the error [`check`](Self::check)
+    /// gives then: frozen, locally or by the mirrored store, or a fail-closed mirror past
+    /// its staleness limit.
+    ///
+    /// Resolves at once when the control already refuses work. Freezes and mirror reads
+    /// wake it as they happen and the staleness limit is timed, so nothing polls. The
+    /// governed path races every wait for a confirmation decision against it, so a freeze
+    /// ends the wait instead of letting the call run once someone decides it.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{GOVERNANCE_FROZEN_CODE, GovernanceControl};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() {
+    /// let control = GovernanceControl::new();
+    /// // A person who never answers.
+    /// let decision = std::future::pending::<()>();
+    /// let operator = control.clone();
+    /// tokio::spawn(async move { operator.freeze("incident 4012") });
+    ///
+    /// tokio::select! {
+    ///     () = decision => unreachable!("nobody answers"),
+    ///     error = control.refused() => assert_eq!(error.code, GOVERNANCE_FROZEN_CODE),
+    /// }
+    /// # }
+    /// ```
+    pub async fn refused(&self) -> AdkError {
+        loop {
+            let changed = self.inner.changed.notified();
+            tokio::pin!(changed);
+            // Registered before the state is read, so a change in between still wakes it.
+            changed.as_mut().enable();
+            if let Err(error) = self.check() {
+                return error;
+            }
+            let lease = self
+                .inner
+                .mirror
+                .as_ref()
+                .filter(|mirror| !mirror.config.fail_open)
+                .and_then(|mirror| {
+                    let age = mirror.staleness()?;
+                    // `is_stale` is strict, so the timer ends just past the limit.
+                    Some(mirror.config.max_staleness.saturating_sub(age) + Duration::from_millis(1))
+                });
+            match lease {
+                Some(remaining) => {
+                    tokio::select! {
+                        () = &mut changed => {}
+                        () = tokio::time::sleep(remaining) => {}
+                    }
+                }
+                None => changed.await,
+            }
+        }
     }
 
     /// Spawns the task that keeps a mirrored control in step with its store, and returns
@@ -2085,9 +2160,11 @@ pub enum ToolAuthorization {
 ///
 /// # Errors
 ///
-/// Returns an error, which ends the run, when the run is frozen, when the
+/// Returns an error, which ends the run, when the run is frozen — before the call, while
+/// the call waits for the confirmation handler, or when an approval arrives — when the
 /// confirmation handler or the approval store fails, or when the wait for the handler
-/// is abandoned through [`ToolGate::with_abandon_signal`].
+/// is abandoned through [`ToolGate::with_abandon_signal`]. A freeze returns the control's
+/// error ([`GOVERNANCE_FROZEN_CODE`], or [`GOVERNANCE_STALE_CODE`] for a stale mirror).
 ///
 /// # Example
 ///
@@ -2274,21 +2351,39 @@ pub async fn authorize_tool_call(
         acting: Some(Box::new(gate.acting.clone())),
         origin: origin.clone(),
     };
-    let Some((approval, source)) = resolve_confirmation(gate, &request, requested).await? else {
-        let held_by = if approval_reason.is_some() {
-            policy_ref.as_deref()
-        } else {
-            Some(POLICY_REF_CONFIRMATION)
-        };
-        audited
-            .decision(&args, AuditDecision::ApprovalRequired, held_by, approval_reason.as_deref())
-            .await?;
-        let reason = match approval_reason {
-            Some(reason) => format!("Tool '{tool_name}' requires confirmation: {reason}"),
-            None => format!("Tool '{tool_name}' requires confirmation"),
-        };
-        record_held_call(gate, &request, &reason).await?;
-        return Ok(ToolAuthorization::Pending { request, reason });
+    let (approval, source) = match resolve_confirmation(gate, &request, requested).await? {
+        Resolution::Decided(approval, source) => (approval, source),
+        Resolution::Undecided => {
+            let held_by = if approval_reason.is_some() {
+                policy_ref.as_deref()
+            } else {
+                Some(POLICY_REF_CONFIRMATION)
+            };
+            audited
+                .decision(
+                    &args,
+                    AuditDecision::ApprovalRequired,
+                    held_by,
+                    approval_reason.as_deref(),
+                )
+                .await?;
+            let reason = match approval_reason {
+                Some(reason) => format!("Tool '{tool_name}' requires confirmation: {reason}"),
+                None => format!("Tool '{tool_name}' requires confirmation"),
+            };
+            record_held_call(gate, &request, &reason).await?;
+            return Ok(ToolAuthorization::Pending { request, reason });
+        }
+        // The freeze ended the wait: the call is refused, and what the wait left open is
+        // closed first, so no decision reaching it later runs it after an unfreeze.
+        Resolution::Refused(refusal) => {
+            let closed = close_waiting_call(gate, &request, SOURCE_GOVERNANCE).await;
+            audited
+                .decision(&args, AuditDecision::Denied, Some(POLICY_REF_GOVERNANCE), None)
+                .await?;
+            closed?;
+            return Err(refusal);
+        }
     };
     close_waiting_call(gate, &request, source).await?;
     match approval.decision {
@@ -2365,6 +2460,10 @@ async fn record_held_call(
     Ok(())
 }
 
+/// The source [`close_waiting_call`] closes a call for when a kill switch refused it while
+/// it waited for a decision.
+const SOURCE_GOVERNANCE: &str = "governance";
+
 /// How long [`close_waiting_call`] waits for the outcome of a request another decision
 /// resolved to reach the store before it fails the call rather than race that write.
 const SETTLE_WITHIN: Duration = Duration::from_secs(10);
@@ -2387,10 +2486,14 @@ async fn close_waiting_call(
 ) -> Result<()> {
     let config = gate.run_config;
     let fingerprint = request.fingerprint();
-    let note = format!("the call was decided another way ({source})");
+    let note = match source {
+        SOURCE_GOVERNANCE => "the governance kill switch refused the call".to_string(),
+        _ => format!("the call was decided another way ({source})"),
+    };
     // Whether a decision for the call may have reached the store: the store was read
     // without one before this decision, or through a request for the call.
-    let mut absorb = matches!(source, "handler" | "handler_timeout" | "withdrawn");
+    let mut absorb =
+        matches!(source, "handler" | "handler_timeout" | "withdrawn" | SOURCE_GOVERNANCE);
     if let Some(service) = &config.approval_service {
         // Every request not yet applied: pending, or resolved with its outcome on the way. A
         // request already applied wrote its outcome, which may not have been taken yet.
@@ -2539,7 +2642,8 @@ pub async fn withdraw_held_call(
 /// by a decision for the call ID (bound to the request's fingerprint), a live approval
 /// keyed by fingerprint ([`RunConfig::tool_approvals`]), a decision in the run's
 /// [`ApprovalStore`], which this call consumes, or the confirmation handler, bounded by
-/// [`RunConfig::tool_confirmation_timeout`]. Build `request` with the acting context and
+/// [`RunConfig::tool_confirmation_timeout`] and by the run's kill switches, a freeze ending
+/// the wait and closing the request. Build `request` with the acting context and
 /// the tool's [`ToolOrigin`], so the decision binds to the agent and the tool that asked.
 ///
 /// Without a decision, `request` is recorded as pending in the approval store and
@@ -2551,8 +2655,8 @@ pub async fn withdraw_held_call(
 ///
 /// # Errors
 ///
-/// Returns an error when the run is frozen before or after the decision, or when the
-/// handler, the approval store, or the approval service fails.
+/// Returns an error when the run is frozen before, during or after the decision, or when
+/// the handler, the approval store, or the approval service fails.
 ///
 /// # Example
 ///
@@ -2592,14 +2696,21 @@ pub async fn confirm_tool_call(
 ) -> Result<Option<ToolApproval>> {
     let config = gate.run_config;
     config.check_governance()?;
-    let Some((approval, source)) = resolve_confirmation(gate, request, false).await? else {
-        tracing::info!(
-            tool.name = %request.tool_name,
-            agent.id = %gate.acting.agent.id,
-            "tool call held for confirmation during execution"
-        );
-        record_held_call(gate, request, reason).await?;
-        return Ok(None);
+    let (approval, source) = match resolve_confirmation(gate, request, false).await? {
+        Resolution::Decided(approval, source) => (approval, source),
+        Resolution::Undecided => {
+            tracing::info!(
+                tool.name = %request.tool_name,
+                agent.id = %gate.acting.agent.id,
+                "tool call held for confirmation during execution"
+            );
+            record_held_call(gate, request, reason).await?;
+            return Ok(None);
+        }
+        Resolution::Refused(refusal) => {
+            close_waiting_call(gate, request, SOURCE_GOVERNANCE).await?;
+            return Err(refusal);
+        }
     };
     close_waiting_call(gate, request, source).await?;
     tracing::info!(
@@ -2821,12 +2932,27 @@ async fn evaluate_policy(
     policy.evaluate_call(&request, &call).await
 }
 
+/// What [`resolve_confirmation`] found for a call.
+enum Resolution {
+    /// A decision, and the source it came from.
+    Decided(ToolApproval, &'static str),
+    /// No decision: the call is held for one.
+    Undecided,
+    /// A kill switch refused work while the handler was deciding, or when it stopped
+    /// without a decision; the error is the switch's.
+    Refused(AdkError),
+}
+
 /// Finds the decision for `request`, asking the live handler last.
+///
+/// The wait for the handler ends as soon as one of the run's kill switches refuses work
+/// ([`RunConfig::governance_refused`]): a call that waits for a person is not left to run
+/// once someone answers after the freeze, or after an unfreeze.
 async fn resolve_confirmation(
     gate: &ToolGate<'_>,
     request: &ToolConfirmationRequest,
     people_only: bool,
-) -> Result<Option<(ToolApproval, &'static str)>> {
+) -> Result<Resolution> {
     let config = gate.run_config;
     let fingerprint = request.fingerprint();
     let bare = |decision: ToolConfirmationDecision| match decision {
@@ -2843,7 +2969,7 @@ async fn resolve_confirmation(
                 function_call.id = %call_id,
                 "confirmation decision does not match this call's arguments, treating as unconfirmed"
             ),
-            _ => return Ok(Some((bare(*decision), "call_id"))),
+            _ => return Ok(Resolution::Decided(bare(*decision), "call_id")),
         }
     }
 
@@ -2851,7 +2977,7 @@ async fn resolve_confirmation(
     // rule 5): never by a standing approval of the call or by the handler.
     if !people_only && let Some(approval) = config.tool_approvals.get(&fingerprint) {
         if approval.is_live(Utc::now()) {
-            return Ok(Some((approval.clone(), "fingerprint")));
+            return Ok(Resolution::Decided(approval.clone(), "fingerprint"));
         }
         tracing::debug!(tool.name = %request.tool_name, "approval for this call has expired");
     }
@@ -2859,35 +2985,49 @@ async fn resolve_confirmation(
     if let Some(store) = &config.approval_store
         && let Some(approval) = store.take_approval(&gate.scope, &fingerprint).await?
     {
-        return Ok(Some((approval, "approval_store")));
+        return Ok(Resolution::Decided(approval, "approval_store"));
     }
 
     let Some(handler) = config.tool_confirmation_handler.as_ref().filter(|_| !people_only) else {
-        return Ok(None);
+        return Ok(Resolution::Undecided);
     };
     let timeout = config.tool_confirmation_timeout;
-    let decide = Box::pin(tokio::time::timeout(timeout, handler.decide_approval(request)));
-    let decided = match gate.abandon.clone() {
-        Some(mut abandon) => {
-            let abandoned = Box::pin(async move {
-                if abandon.wait_for(|failed| *failed).await.is_err() {
-                    // The batch ended without failing; never abandon.
-                    std::future::pending::<()>().await;
-                }
-            });
-            match futures::future::select(abandoned, decide).await {
-                futures::future::Either::Left(_) => {
-                    return Err(AdkError::tool(format!(
-                        "approval for tool '{}' was abandoned because another approval in the \
-                         same batch failed",
-                        request.tool_name
-                    )));
-                }
-                futures::future::Either::Right((decided, _)) => decided,
-            }
+    let decide = tokio::time::timeout(timeout, handler.decide_approval(request));
+    let abandoned = async {
+        if let Some(mut abandon) = gate.abandon.clone()
+            && abandon.wait_for(|failed| *failed).await.is_ok()
+        {
+            return;
         }
-        None => decide.await,
+        // No batch to abandon, or the batch ended without failing: never abandon.
+        std::future::pending::<()>().await;
     };
+    let decided = tokio::select! {
+        // A freeze outranks the other outcomes, so it is the one recorded.
+        biased;
+        refusal = config.governance_refused() => {
+            tracing::warn!(
+                tool.name = %request.tool_name,
+                "execution was frozen while the call waited for a decision; the call is not run"
+            );
+            return Ok(Resolution::Refused(refusal));
+        }
+        () = abandoned => {
+            return Err(AdkError::tool(format!(
+                "approval for tool '{}' was abandoned because another approval in the same \
+                 batch failed",
+                request.tool_name
+            )));
+        }
+        decided = decide => decided,
+    };
+    // A wait that ended without a decision while the switch refuses work — the handler's
+    // own freeze error, or a timeout — is the switch's refusal, not a hold or a denial.
+    if !matches!(decided, Ok(Ok(_)))
+        && let Err(refusal) = config.check_governance()
+    {
+        return Ok(Resolution::Refused(refusal));
+    }
     // Nothing is decided by silence where a later decision can be read back (spec 3.3 §7.3).
     if decided.is_err()
         && !config.deny_on_confirmation_timeout
@@ -2895,17 +3035,17 @@ async fn resolve_confirmation(
     {
         // A decision may have reached the store while the handler was asked.
         if let Some(approval) = store.take_approval(&gate.scope, &fingerprint).await? {
-            return Ok(Some((approval, "approval_store")));
+            return Ok(Resolution::Decided(approval, "approval_store"));
         }
         tracing::info!(
             tool.name = %request.tool_name,
             timeout = ?config.tool_confirmation_timeout,
             "confirmation handler did not decide in time; the call waits for a decision"
         );
-        return Ok(None);
+        return Ok(Resolution::Undecided);
     }
     match decided {
-        Ok(Ok(approval)) => Ok(Some((approval, "handler"))),
+        Ok(Ok(approval)) => Ok(Resolution::Decided(approval, "handler")),
         Ok(Err(error)) => Err(error),
         Err(_) => {
             tracing::warn!(
@@ -2913,7 +3053,7 @@ async fn resolve_confirmation(
                 timeout_secs = timeout.as_secs(),
                 "confirmation handler did not decide in time, denying the call"
             );
-            Ok(Some((ToolApproval::deny(), "handler_timeout")))
+            Ok(Resolution::Decided(ToolApproval::deny(), "handler_timeout"))
         }
     }
 }
@@ -4653,6 +4793,304 @@ mod tests {
         let waiting = authorize_tool_call(&gate, call);
         failed.send_replace(true);
         assert!(waiting.await.unwrap_err().to_string().contains("abandoned"));
+    }
+
+    /// The kind, decision, policy and outcome of one governed record.
+    type Recorded =
+        (AuditRecordKind, Option<AuditDecision>, Option<String>, Option<AuditRecordOutcome>);
+
+    /// What each governed record says, in order.
+    fn decisions(recorder: &crate::audit_log::InMemoryAuditRecorder) -> Vec<Recorded> {
+        recorder
+            .records()
+            .into_iter()
+            .map(|record| (record.kind, record.decision, record.policy_ref, record.outcome))
+            .collect()
+    }
+
+    /// The record of a call the kill switch refused.
+    fn refused_by_the_switch() -> Recorded {
+        (
+            AuditRecordKind::ToolCall,
+            Some(AuditDecision::Denied),
+            Some(POLICY_REF_GOVERNANCE.to_string()),
+            Some(AuditRecordOutcome::NotRun),
+        )
+    }
+
+    /// Runs `waiting` while `control` is frozen 20 ms in, and returns its outcome; fails the
+    /// test when the freeze does not end the wait within five seconds.
+    async fn frozen_during<T>(
+        control: &GovernanceControl,
+        waiting: impl std::future::Future<Output = T>,
+    ) -> T {
+        let freeze = async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            control.freeze("incident 4012");
+        };
+        let (outcome, ()) =
+            tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(waiting, freeze) })
+                .await
+                .expect("the freeze ends the wait for a decision");
+        outcome
+    }
+
+    #[tokio::test]
+    async fn refused_resolves_once_a_local_control_freezes() {
+        let control = GovernanceControl::new();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), control.refused()).await.is_err(),
+            "an unfrozen control does not refuse"
+        );
+        let error = frozen_during(&control, control.refused()).await;
+        assert_eq!(error.code, GOVERNANCE_FROZEN_CODE);
+        assert_eq!(control.refused().await.code, GOVERNANCE_FROZEN_CODE, "already frozen");
+
+        control.unfreeze();
+        assert!(tokio::time::timeout(Duration::from_millis(20), control.refused()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn refused_resolves_when_a_mirror_reads_a_replicated_freeze() {
+        let store = Arc::new(crate::governance_state::InMemoryGovernanceStateStore::new());
+        let issuer = GovernanceControl::mirrored(store.clone(), GovernanceMirrorConfig::default());
+        let replica = GovernanceControl::mirrored(store, GovernanceMirrorConfig::default());
+        replica.refresh().await.unwrap();
+
+        let waiting = replica.refused();
+        let freeze = async {
+            issuer.freeze_replicated("incident 7", None).await.unwrap();
+            replica.refresh().await.unwrap();
+        };
+        let (error, ()) =
+            tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(waiting, freeze) })
+                .await
+                .expect("the replica's read ends the wait");
+        assert_eq!(error.code, GOVERNANCE_FROZEN_CODE);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn refused_resolves_when_a_fail_closed_mirror_goes_stale() {
+        let store = Arc::new(crate::governance_state::InMemoryGovernanceStateStore::new());
+        let config = GovernanceMirrorConfig::default().with_max_staleness(Duration::from_secs(10));
+        let control = GovernanceControl::mirrored(store.clone(), config.clone());
+        control.refresh().await.unwrap();
+        let waiting = control.refused();
+        tokio::pin!(waiting);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), &mut waiting).await.is_err(),
+            "a fresh read is trusted"
+        );
+        control.refresh().await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(9), &mut waiting).await.is_err(),
+            "a read renews the lease"
+        );
+        let error = tokio::time::timeout(Duration::from_secs(2), &mut waiting)
+            .await
+            .expect("the lease runs out");
+        assert_eq!(error.code, GOVERNANCE_STALE_CODE);
+
+        let open = GovernanceControl::mirrored(store, config.with_fail_open(true));
+        open.refresh().await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(60), open.refused()).await.is_err(),
+            "a fail-open mirror never refuses for staleness"
+        );
+    }
+
+    /// The review of #1005: a freeze ends a wait on the handler, for the default deadline
+    /// and for one that never runs out, and the call is refused and recorded as refused by
+    /// the switch.
+    #[tokio::test]
+    async fn a_freeze_ends_the_wait_for_the_handler() {
+        for timeout in [DEFAULT_TOOL_CONFIRMATION_TIMEOUT, Duration::MAX] {
+            let control = GovernanceControl::new();
+            let recorder = crate::audit_log::InMemoryAuditRecorder::new();
+            let config = RunConfig::builder()
+                .tool_confirmation_handler(Arc::new(NeverDecides))
+                .tool_confirmation_timeout(timeout)
+                .governance(control.clone())
+                .audit(AuditTrail::new(Arc::new(recorder.clone())))
+                .build();
+            let call = GovernedCall::new("tool", "c1", json!({})).requiring_confirmation(true);
+
+            let error = frozen_during(&control, authorize_tool_call(&gate(&config), call))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, GOVERNANCE_FROZEN_CODE, "{timeout:?}");
+            assert!(error.message.contains("incident 4012"), "{error}");
+            assert_eq!(decisions(&recorder), vec![refused_by_the_switch()], "{timeout:?}");
+        }
+    }
+
+    /// A freeze withdraws the inbox request the call waited on: the approver cannot approve
+    /// it afterwards, and after the unfreeze an identical call needs a decision of its own.
+    #[tokio::test]
+    async fn a_freeze_withdraws_the_request_the_wait_left_open() {
+        let (store, service) = ops_inbox();
+        let call = || GovernedCall::new("tool", "c1", json!({})).requiring_confirmation(true);
+        let held = RunConfig::builder().approval_service(service.clone()).build();
+        assert!(matches!(
+            authorize_tool_call(&gate(&held), call()).await.unwrap(),
+            ToolAuthorization::Pending { .. }
+        ));
+        let open = service.inbox(crate::InboxQuery::for_group("ops")).await.unwrap().items;
+        assert_eq!(open.len(), 1);
+
+        let control = GovernanceControl::new();
+        let asked = RunConfig::builder()
+            .tool_confirmation_handler(Arc::new(NeverDecides))
+            .approval_service(service.clone())
+            .governance(control.clone())
+            .build();
+        let error =
+            frozen_during(&control, authorize_tool_call(&gate(&asked), call())).await.unwrap_err();
+        assert_eq!(error.code, GOVERNANCE_FROZEN_CODE);
+
+        let request = service.get(&open[0].id).await.unwrap().unwrap();
+        assert_eq!(request.state, crate::ApprovalState::Cancelled);
+        assert!(
+            service.decide(&request.id, request.version, ops_approval()).await.is_err(),
+            "the withdrawn request cannot be approved"
+        );
+        let scope = ApprovalScope::new("app", "user", "session");
+        assert!(store.pending(&scope).await.unwrap().is_empty());
+        assert!(!store.has_decision(&scope, &key("tool", &json!({}))).await.unwrap());
+
+        control.unfreeze();
+        assert!(
+            matches!(
+                authorize_tool_call(&gate(&held), call()).await.unwrap(),
+                ToolAuthorization::Pending { .. }
+            ),
+            "after the unfreeze the identical call needs its own decision"
+        );
+    }
+
+    /// An approval the inbox records while the frozen wait goes on is spent with the refused
+    /// call, so it never authorizes the call after the unfreeze.
+    #[tokio::test]
+    async fn a_decision_made_during_a_frozen_wait_is_spent() {
+        let (store, service) = ops_inbox();
+        let call = || GovernedCall::new("tool", "c1", json!({})).requiring_confirmation(true);
+        let held = RunConfig::builder().approval_service(service.clone()).build();
+        assert!(matches!(
+            authorize_tool_call(&gate(&held), call()).await.unwrap(),
+            ToolAuthorization::Pending { .. }
+        ));
+        let control = GovernanceControl::new();
+        let asked = RunConfig::builder()
+            .tool_confirmation_handler(Arc::new(DecidedInTheInbox(service.clone())))
+            .approval_service(service.clone())
+            .governance(control.clone())
+            .build();
+        let error =
+            frozen_during(&control, authorize_tool_call(&gate(&asked), call())).await.unwrap_err();
+        assert_eq!(error.code, GOVERNANCE_FROZEN_CODE);
+        let scope = ApprovalScope::new("app", "user", "session");
+        assert!(!store.has_decision(&scope, &key("tool", &json!({}))).await.unwrap());
+
+        control.unfreeze();
+        assert!(matches!(
+            authorize_tool_call(&gate(&held), call()).await.unwrap(),
+            ToolAuthorization::Pending { .. }
+        ));
+    }
+
+    /// A tool's escalation waiting on the handler (`confirm_tool_call`, as kernel drivers and
+    /// payments use it) ends on a freeze, and nothing is left held.
+    #[tokio::test]
+    async fn a_freeze_ends_a_confirmation_asked_during_execution() {
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let control = GovernanceControl::new();
+        let config = RunConfig::builder()
+            .tool_confirmation_handler(Arc::new(NeverDecides))
+            .approval_store(store.clone())
+            .governance(control.clone())
+            .build();
+        let gate = gate(&config);
+        let request = ToolConfirmationRequest::new("pay", json!({ "cents": 75_000 }))
+            .with_function_call_id("c1")
+            .with_acting_context(gate.acting_context().clone());
+
+        let error = frozen_during(&control, confirm_tool_call(&gate, &request, "over $50"))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, GOVERNANCE_FROZEN_CODE);
+        assert!(store.pending(gate.scope()).await.unwrap().is_empty());
+    }
+
+    /// Freezes the run's control and fails, as a handler that watches the switch itself does.
+    #[derive(Debug)]
+    struct FreezesAndFails(GovernanceControl);
+
+    #[async_trait]
+    impl ToolConfirmationHandler for FreezesAndFails {
+        async fn decide(
+            &self,
+            _request: &ToolConfirmationRequest,
+        ) -> Result<ToolConfirmationDecision> {
+            self.0.freeze("incident 4012");
+            Err(AdkError::agent("the person was not asked: execution is frozen"))
+        }
+    }
+
+    /// A handler that ends its own wait on the freeze is refused and recorded as the switch.
+    #[tokio::test]
+    async fn a_handler_ending_its_wait_on_a_freeze_is_refused_by_the_switch() {
+        let control = GovernanceControl::new();
+        let recorder = crate::audit_log::InMemoryAuditRecorder::new();
+        let config = RunConfig::builder()
+            .tool_confirmation_handler(Arc::new(FreezesAndFails(control.clone())))
+            .governance(control)
+            .audit(AuditTrail::new(Arc::new(recorder.clone())))
+            .build();
+        let call = GovernedCall::new("tool", "c1", json!({})).requiring_confirmation(true);
+        let error = authorize_tool_call(&gate(&config), call).await.unwrap_err();
+        assert_eq!(error.code, GOVERNANCE_FROZEN_CODE);
+        assert_eq!(decisions(&recorder), vec![refused_by_the_switch()]);
+    }
+
+    /// A held call resumed while frozen is refused before its decision is read, so the
+    /// decision survives the freeze and the call resumes after the unfreeze.
+    #[tokio::test]
+    async fn a_held_call_resumed_while_frozen_keeps_its_decision() {
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let control = GovernanceControl::new();
+        let recorder = crate::audit_log::InMemoryAuditRecorder::new();
+        let config = RunConfig::builder()
+            .approval_store(store.clone())
+            .governance(control.clone())
+            .audit(AuditTrail::new(Arc::new(recorder.clone())))
+            .build();
+        let gate = gate(&config);
+        let call = || {
+            let (call, _) = origin_call("mcp:bank", "c1", json!({}));
+            call.requiring_confirmation(true)
+        };
+        let ToolAuthorization::Pending { request, .. } =
+            authorize_tool_call(&gate, call()).await.unwrap()
+        else {
+            panic!("the call is held");
+        };
+        store.decide(gate.scope(), &request.fingerprint(), ToolApproval::approve()).await.unwrap();
+
+        control.freeze("incident 4012");
+        let error = authorize_tool_call(&gate, call().resuming(request.clone())).await.unwrap_err();
+        assert_eq!(error.code, GOVERNANCE_FROZEN_CODE);
+        assert!(store.has_decision(gate.scope(), &request.fingerprint()).await.unwrap());
+
+        control.unfreeze();
+        assert_eq!(
+            authorize_tool_call(&gate, call().resuming(request)).await.unwrap(),
+            ToolAuthorization::Execute {
+                args: json!({}),
+                confirmation: Some(ToolConfirmationDecision::Approve),
+            }
+        );
+        let records = decisions(&recorder);
+        assert_eq!(records[1], refused_by_the_switch(), "{records:?}");
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 {
   "name": "K-11: A wake on the host's files",
-  "description": "A definition's standing wakes are cron, webhook and queue wakes: a file-change wake would watch the host's files.",
+  "description": "A definition's standing wakes are cron, webhook, queue and signal wakes: a file-change wake would watch the host's files.",
   "agent_def": { "name": "digest", "model": "gemini-3.5-flash-lite" },
   "kernel": { "wakeSets": [{ "name": "lock", "anyOf": [{ "fileChange": { "root": "/etc", "glob": "*", "debounceMs": 500 } }], "input": "Audit it." }] },
   "expect": { "error_contains": ["lock", "host's files"] }

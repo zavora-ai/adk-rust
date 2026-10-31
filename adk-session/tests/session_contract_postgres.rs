@@ -53,3 +53,15 @@ async fn test_postgres_integrity_contract() {
     common::integrity_contract::assert_list_order_contract(&service, &app).await;
     common::integrity_contract::assert_rewind_unsupported(&service, &app).await;
 }
+
+#[tokio::test]
+#[ignore = "requires a PostgreSQL server at DATABASE_URL"]
+async fn test_postgres_delete_all_sessions_erases_the_user_tier() {
+    common::state_contract::assert_delete_all_sessions_contract(
+        &service().await,
+        &run_app("erase"),
+        &run_app("erase-other"),
+        true,
+    )
+    .await;
+}

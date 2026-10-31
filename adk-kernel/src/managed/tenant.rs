@@ -34,6 +34,11 @@ use crate::stores::{
 };
 use crate::wake::{CronWakeSource, Trigger, Wake};
 use crate::watermark::{CronWatermarkStore, SourceWatermark};
+#[cfg(feature = "charter")]
+use crate::{
+    charter::{SignalSink, SignalStore},
+    wake::WakeRouter,
+};
 
 /// One kernel over one tenant's [`ManagedStores`]: the managed form of the kernel (spec 3.2
 /// §7.13, §10 M1).
@@ -54,6 +59,7 @@ use crate::watermark::{CronWatermarkStore, SourceWatermark};
 /// | Agenda | the tenant's agenda store, and [`agenda_handle`](Self::agenda_handle) rebound to each kernel built |
 /// | Partitions | the tenant's partition table ([`partitions`](Self::partitions)) holding the definitions' [`KernelDef::partitions`], each with the tenant as its tenant; with a [`PartitionAgentResolver`], one agent per partition — one harness per partition — as `<definition>@<partition>`, bound to its partition and acting with its class and tenant (spec 3.2 §7.8) |
 /// | Drivers | the tenant's own [`DriverSupervisor`] ([`TenantKernelBuilder::drivers`]), its drivers under a home of the tenant's own: each driver a definition's partition mounts is proposed in the tenant's approval inbox, mounted when a person approves it ([`apply_driver_decisions`](Self::apply_driver_decisions)), its tools' declarations pinned at the first listing, and served to that partition's harness only (spec 3.2 §7.7, §7.8, K-I13) |
+/// | Signals | with the `charter` feature, the tenant's signal store (`TenantKernelBuilder::signal_store`): `TenantKernel::signal_sink` files a signal in a partition's agenda and wakes the wake sets that hear its kind there (spec 3.5 §7.10); a definition with a signal wake is refused on a tenant without one |
 /// | App name | the tenant: the `ManagedOwner::app_name` its sessions are created under |
 /// | Kill switch | its own `GovernanceControl`, unless the builder is given one |
 /// | Control plane | none of its own; mount `control::router(kernel)` on the host's server to serve one |
@@ -120,6 +126,8 @@ struct TenantInner {
     watermarks: Arc<dyn CronWatermarkStore>,
     drivers: Option<DriverSupervisor>,
     driver_approvers: ApprovalPolicy,
+    #[cfg(feature = "charter")]
+    signals: Option<Arc<dyn SignalStore>>,
     /// Applies inbox decisions on driver mounts while the tenant's kernel runs.
     driver_decisions: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     hosting: tokio::sync::Mutex<Hosting>,
@@ -182,6 +190,8 @@ impl TenantKernel {
             watermark_store: None,
             drivers: None,
             driver_approvers: None,
+            #[cfg(feature = "charter")]
+            signals: None,
         }
     }
 
@@ -220,6 +230,96 @@ impl TenantKernel {
     /// The tenant's driver supervisor, when the builder was given one (spec 3.2 §7.7).
     pub fn drivers(&self) -> Option<&DriverSupervisor> {
         self.inner.drivers.as_ref()
+    }
+
+    /// The tenant's signal store, when the builder was given one (spec 3.5 §7.10).
+    #[cfg(feature = "charter")]
+    pub fn signal_store(&self) -> Option<&Arc<dyn SignalStore>> {
+        self.inner.signals.as_ref()
+    }
+
+    /// A sink that files signals in `partition`'s agenda items on the tenant's agenda and
+    /// signal stores, and wakes the hosted wake sets that hear their kind there (spec 3.2
+    /// §7.13, spec 3.5 §7.10; feature `charter`).
+    ///
+    /// Each signal filed or counted becomes a keyed `kernel.wake` run on the tenant's run
+    /// store (`signal:<partition>:<item>:<count>`), which whichever kernel the tenant runs
+    /// routes, so a sink taken before a definition is hosted — and the kernel restarts —
+    /// keeps waking the new kernel, and a repeated key starts nothing (K-I3). A run a signal
+    /// starts carries no principal, so it stays unauthenticated (spec 3.1 I6), and its input
+    /// is the wake set's `input`, never the signal's text (spec 3.5 A-I3). The sink audits
+    /// `kernel.signal` on the tenant's audit trail and reads the kernel configuration's
+    /// clock; it publishes on no event bus, since each kernel the tenant builds has its own.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::RunFilter;
+    /// use adk_kernel::charter::{InMemorySignalStore, SignalOutcome};
+    /// use adk_kernel::managed::TenantKernel;
+    /// use adk_managed::ManagedStores;
+    /// use adk_session::InMemorySessionService;
+    /// use awp_types::{Bounded, Signal, SignalKind};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let stores = ManagedStores::in_memory();
+    /// let tenant = TenantKernel::builder("tenant-a", stores.clone(), Arc::new(InMemorySessionService::new()))
+    ///     .signal_store(Arc::new(InMemorySignalStore::new()))
+    ///     .build()?;
+    /// let sink = tenant.signal_sink("default").await?;
+    /// let gap = Signal {
+    ///     id: uuid::Uuid::new_v4(),
+    ///     kind: SignalKind::ContentGap { topic: Bounded::new("parking", 80).unwrap(), question_count: 1, samples: vec![] },
+    ///     emitted_by: "concierge".into(),
+    ///     emitted_at: chrono::Utc::now(),
+    /// };
+    /// assert!(matches!(sink.emit(gap).await?, SignalOutcome::Filed { count: 1, .. }));
+    /// // The wake waits on the tenant's run store for whichever kernel the tenant runs.
+    /// let wakes = stores.runs.list(RunFilter::default()).await?;
+    /// assert!(wakes[0].idempotency_key.as_deref().is_some_and(|key| key.starts_with("signal:default:")));
+    /// assert!(tenant.signal_sink("back-office").await.is_err(), "not in the tenant's partition table");
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Config`] when the tenant has no signal store, or `partition` is
+    /// neither the default partition nor one in the tenant's partition table; and the
+    /// partition table's error.
+    #[cfg(feature = "charter")]
+    pub async fn signal_sink(&self, partition: impl Into<PartitionId>) -> Result<SignalSink> {
+        let inner = &self.inner;
+        let partition = partition.into();
+        let Some(store) = &inner.signals else {
+            return Err(KernelError::Config {
+                reason: format!(
+                    "tenant `{}` has no signal store to file signals in; build it with \
+                     TenantKernelBuilder::signal_store",
+                    inner.tenant
+                ),
+            });
+        };
+        if partition != PartitionId::default() && inner.partitions.get(&partition).await?.is_none()
+        {
+            return Err(KernelError::Config {
+                reason: format!(
+                    "partition `{partition}` is not in tenant `{}`'s partition table; file \
+                     signals in the default partition or one a hosted definition declares",
+                    inner.tenant
+                ),
+            });
+        }
+        let router = WakeRouter::new(Arc::clone(&inner.stores.runs), Arc::clone(&inner.processes));
+        let mut sink = SignalSink::new(Arc::clone(store), Arc::clone(&inner.agenda), partition)
+            .with_wakes(router, inner.tenant.clone())
+            .with_clock(Arc::clone(&inner.config.clock));
+        if let Some(trail) = &inner.audit {
+            sink = sink.with_audit(trail.clone());
+        }
+        Ok(sink)
     }
 
     /// Mounts every driver a hosted definition's partition mounts whose proposal a person
@@ -389,6 +489,33 @@ impl TenantKernel {
                          target"
                     .into(),
             });
+        }
+        // A signal wake on a tenant that files no signals would never fire.
+        if let Some(set) = kernel
+            .wake_sets
+            .iter()
+            .find(|set| set.any_of.iter().any(|wake| matches!(wake, Wake::Signal { .. })))
+        {
+            #[cfg(feature = "charter")]
+            let missing = self
+                .inner
+                .signals
+                .is_none()
+                .then_some("build the tenant with TenantKernelBuilder::signal_store");
+            #[cfg(not(feature = "charter"))]
+            let missing = Some(
+                "build adk-kernel with the `charter` feature and the tenant with \
+                 TenantKernelBuilder::signal_store",
+            );
+            if let Some(fix) = missing {
+                return Err(KernelError::Config {
+                    reason: format!(
+                        "definition '{}': wake set `{}` wakes on a signal, and tenant `{}` has \
+                         no signal store to file signals in; {fix}",
+                        def.name, set.name, self.inner.tenant
+                    ),
+                });
+            }
         }
         let digest = serde_json::to_string(&SessionRecord::new("", "", def.clone()).agent)?;
         let mut hosting = self.inner.hosting.lock().await;
@@ -807,7 +934,8 @@ fn partition_target(target: &str, partition: &PartitionId) -> String {
 
 /// The kernel triggers of `set` on definition `target`: one per wake, named
 /// `<target>/<set>`, each enqueueing a run of `run_target` — the definition's target, or its
-/// partition's agent — for the tenant.
+/// partition's agent — for the tenant. A signal wake that names no partition hears the set's
+/// own, so a definition never hears the signals of another's partitions.
 fn triggers(tenant: &str, target: &str, run_target: &str, set: &WakeSetDef) -> Vec<Trigger> {
     let name = format!("{target}/{}", set.name);
     let on_conflict = match set.overlap {
@@ -822,11 +950,17 @@ fn triggers(tenant: &str, target: &str, run_target: &str, set: &WakeSetDef) -> V
         json!({ "text": set.input }),
     )
     .with_concurrency_key(format!("wake-set:{name}"), on_conflict);
+    let partition = KernelDef::partition_of(set);
     set.any_of
         .iter()
         .map(|wake| {
-            Trigger::new(name.clone(), wake.clone(), run.clone())
-                .with_partition(KernelDef::partition_of(set))
+            let wake = match wake {
+                Wake::Signal { kind, partition: None } => {
+                    Wake::Signal { kind: kind.clone(), partition: Some(partition.clone()) }
+                }
+                other => other.clone(),
+            };
+            Trigger::new(name.clone(), wake, run.clone()).with_partition(partition.clone())
         })
         .collect()
 }
@@ -948,6 +1082,8 @@ pub struct TenantKernelBuilder {
     watermark_store: Option<Arc<dyn CronWatermarkStore>>,
     drivers: Option<DriverSupervisor>,
     driver_approvers: Option<ApprovalPolicy>,
+    #[cfg(feature = "charter")]
+    signals: Option<Arc<dyn SignalStore>>,
 }
 
 impl fmt::Debug for TenantKernelBuilder {
@@ -1098,6 +1234,19 @@ impl TenantKernelBuilder {
         self
     }
 
+    /// Sets where the tenant's signals are counted, the tenant's own (spec 3.5 §7.10;
+    /// feature `charter`): [`TenantKernel::signal_sink`] files them, and a definition whose
+    /// wake set hears a signal is hosted only on a tenant with one. Defaults to none.
+    ///
+    /// `SignalStore` runs on in-memory, SQLite, PostgreSQL and Redis; a tenant whose other
+    /// stores are on MongoDB, Firestore or Neo4j keeps its signals on one of those.
+    #[cfg(feature = "charter")]
+    #[must_use]
+    pub fn signal_store(mut self, store: Arc<dyn SignalStore>) -> Self {
+        self.signals = Some(store);
+        self
+    }
+
     /// Builds the tenant's kernel. Nothing runs until [`TenantKernel::start`].
     ///
     /// # Errors
@@ -1153,6 +1302,8 @@ impl TenantKernelBuilder {
                 driver_approvers: self.driver_approvers.unwrap_or_else(|| {
                     ApprovalPolicy::new([ApproverSelector::group(DRIVER_APPROVER_GROUP)])
                 }),
+                #[cfg(feature = "charter")]
+                signals: self.signals,
                 driver_decisions: std::sync::Mutex::new(None),
                 hosting: tokio::sync::Mutex::new(Hosting::default()),
             }),
@@ -1314,8 +1465,9 @@ fn runtime_error(error: KernelError) -> RuntimeError {
 ///
 /// A tenant's stores are its own: [`insert`](Self::insert) refuses a tenant whose run
 /// store, decision store, state store, approval service, process store, partition store, cron
-/// watermark store, driver supervisor or driver store another tenant already holds, since a shared run store lets one tenant's workers claim the other's
-/// runs. Stores that are distinct values over one database are not detected; give each
+/// watermark store, signal store, driver supervisor or driver store another tenant already
+/// holds, since a shared run store lets one tenant's workers claim the other's runs, and a
+/// shared signal store counts one tenant's signals into the other's items. Stores that are distinct values over one database are not detected; give each
 /// tenant its own database, schema or key namespace.
 ///
 /// # Example
@@ -1453,6 +1605,12 @@ fn shared_store(a: &TenantKernel, b: &TenantKernel) -> Option<&'static str> {
     }
     if same(a.watermark_store(), b.watermark_store()) {
         return Some("cron watermark store");
+    }
+    #[cfg(feature = "charter")]
+    if let (Some(p), Some(q)) = (a.signal_store(), b.signal_store())
+        && same(p, q)
+    {
+        return Some("signal store");
     }
     if let (Some(p), Some(q)) = (a.drivers(), b.drivers()) {
         if p.same(q) {

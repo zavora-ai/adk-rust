@@ -68,6 +68,7 @@ mod managed_cron_watermarks;
 mod managed_def_fixtures;
 mod managed_drivers;
 mod managed_partitions;
+mod managed_signals;
 mod managed_tenant_property_tests;
 mod managed_tenants;
 mod pairing_property_tests;

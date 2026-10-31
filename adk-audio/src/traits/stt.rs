@@ -72,6 +72,15 @@ pub trait SttProvider: Send + Sync {
     async fn transcribe(&self, audio: &AudioFrame, opts: &SttOptions) -> AudioResult<Transcript>;
 
     /// Transcribe a stream of audio frames (streaming mode).
+    ///
+    /// A provider without streaming support returns [`AudioError::Stt`](crate::AudioError::Stt)
+    /// instead of an empty stream. Dropping the returned stream stops the provider's work for
+    /// it, including any task that forwards `audio`, and releases `audio`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioError::Stt`](crate::AudioError::Stt) when the provider does not support
+    /// streaming or cannot open the stream.
     async fn transcribe_stream(
         &self,
         audio: Pin<Box<dyn Stream<Item = AudioFrame> + Send>>,

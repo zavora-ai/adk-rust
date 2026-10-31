@@ -2,76 +2,76 @@
 //!
 //! **Property 1 (Bug 2): Unimplemented streams return explicit errors**
 //!
-//! For each provider without streaming support in `{"assemblyai", "MLX"}`, calling
-//! `transcribe_stream()` SHALL return `Err(AudioError::Stt { .. })` with a
-//! message containing "not yet implemented".
+//! A provider without streaming support SHALL return
+//! `Err(AudioError::Stt { .. })` from `transcribe_stream()` with a message that
+//! says streaming is not yet implemented and names `transcribe` as the
+//! alternative. `Ok(empty_stream)` reads as "no speech" and hides the gap.
 //!
-//! On unfixed code, all three return `Ok(empty_stream)`, so the assertion
-//! fails. On fixed code, all three return the expected error.
+//! Every `SttProvider` in the crate is accounted for:
+//!
+//! | Provider | `transcribe_stream` | Covered by |
+//! |----------|---------------------|------------|
+//! | `AssemblyAiStt` | error | this file |
+//! | `GeminiStt` | error | this file |
+//! | `WhisperApiStt` | error | this file |
+//! | `MlxSttProvider` (`mlx`) | error | this file |
+//! | `DeepgramStt` | WebSocket stream | `src/providers/stt/deepgram.rs` tests, against a scripted local server |
+//! | `OnnxSttProvider` (`onnx`) | one transcript per 30-second segment | needs downloaded model files; it transcribes the audio it receives |
 //!
 //! **Validates: Requirements 1.3, 1.4, 1.5, 1.6**
 
 use adk_audio::error::AudioError;
+use adk_audio::frame::AudioFrame;
 use adk_audio::traits::{SttOptions, SttProvider};
 
-fn init_crypto() {
-    adk_core::ensure_crypto_provider();
-}
+const UNSUPPORTED: &str =
+    "streaming transcription not yet implemented; call `transcribe` with the buffered audio";
 
-// ---------------------------------------------------------------------------
-// AssemblyAI
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn bug_condition_assemblyai_transcribe_stream_returns_error() {
-    init_crypto();
-    let provider = adk_audio::AssemblyAiStt::with_api_key("test-key".to_string());
-
-    let result = provider
-        .transcribe_stream(Box::pin(futures::stream::empty()), &SttOptions::default())
-        .await;
-
-    match result {
-        Err(AudioError::Stt { provider, message }) => {
-            assert_eq!(provider, "assemblyai");
-            assert!(
-                message.contains("not yet implemented"),
-                "expected 'not yet implemented' in message, got: {message}"
-            );
+/// Asserts `transcribe_stream` fails with `AudioError::Stt` for `provider` and `message`,
+/// for audio that is not empty.
+async fn assert_streaming_unsupported(stt: &dyn SttProvider, provider: &str, message: &str) {
+    let audio = futures::stream::iter([AudioFrame::new(vec![1_u8; 320], 16_000, 1)]);
+    match stt.transcribe_stream(Box::pin(audio), &SttOptions::default()).await {
+        Err(AudioError::Stt { provider: actual_provider, message: actual_message }) => {
+            assert_eq!((actual_provider.as_str(), actual_message.as_str()), (provider, message));
         }
         Err(other) => panic!("expected AudioError::Stt, got: {other}"),
         Ok(_) => panic!(
-            "BUG CONFIRMED: transcribe_stream() returned Ok(empty_stream) instead of Err. \
+            "BUG CONFIRMED: {provider} transcribe_stream() returned Ok(stream) instead of Err. \
              This is the silent stream bug."
         ),
     }
 }
 
-// ---------------------------------------------------------------------------
-// MLX
-// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn bug_condition_assemblyai_transcribe_stream_returns_error() {
+    adk_core::ensure_crypto_provider();
+    let stt = adk_audio::AssemblyAiStt::with_api_key("test-key".to_string());
+    assert_streaming_unsupported(&stt, "assemblyai", UNSUPPORTED).await;
+}
+
+#[tokio::test]
+async fn bug_condition_gemini_transcribe_stream_returns_error() {
+    adk_core::ensure_crypto_provider();
+    let stt = adk_audio::GeminiStt::new("test-key");
+    assert_streaming_unsupported(
+        &stt,
+        "gemini",
+        &format!("{UNSUPPORTED}, or use the Gemini Live API through `adk-realtime` for live audio"),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn bug_condition_whisper_api_transcribe_stream_returns_error() {
+    adk_core::ensure_crypto_provider();
+    let stt = adk_audio::WhisperApiStt::with_api_key("test-key".to_string());
+    assert_streaming_unsupported(&stt, "whisper", UNSUPPORTED).await;
+}
 
 #[cfg(feature = "mlx")]
 #[tokio::test]
 async fn bug_condition_mlx_transcribe_stream_returns_error() {
-    let provider = adk_audio::MlxSttProvider::with_dummy();
-
-    let result = provider
-        .transcribe_stream(Box::pin(futures::stream::empty()), &SttOptions::default())
-        .await;
-
-    match result {
-        Err(AudioError::Stt { provider, message }) => {
-            assert_eq!(provider, "MLX");
-            assert!(
-                message.contains("not yet implemented"),
-                "expected 'not yet implemented' in message, got: {message}"
-            );
-        }
-        Err(other) => panic!("expected AudioError::Stt, got: {other}"),
-        Ok(_) => panic!(
-            "BUG CONFIRMED: transcribe_stream() returned Ok(empty_stream) instead of Err. \
-             This is the silent stream bug."
-        ),
-    }
+    let stt = adk_audio::MlxSttProvider::with_dummy();
+    assert_streaming_unsupported(&stt, "MLX", UNSUPPORTED).await;
 }

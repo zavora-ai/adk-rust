@@ -24,7 +24,7 @@
 //! | `create` | Fails with `session.already_exists` (`Conflict`) when the ID is taken in the app |
 //! | `get`, `append_event_for_identity` | Fails with `session.not_found` |
 //! | `delete` | No-op, identical to deleting a missing session |
-//! | `list`, `delete_all_sessions` | Only the caller's own sessions are returned or removed |
+//! | `list`, `delete_all_sessions` | Only the caller's own sessions are returned or removed; `delete_all_sessions` then deletes the user's state document |
 //!
 //! A new session never inherits events: `create` removes any events left under its path.
 //! App names, user IDs, and session IDs are document IDs, so they must not contain `/`.
@@ -425,6 +425,8 @@ trait SessionStore: Send + Sync {
     async fn app_state(&self, app_name: &str) -> Result<HashMap<String, Value>>;
     /// Reads user-level state, empty when none has been written.
     async fn user_state(&self, app_name: &str, user_id: &str) -> Result<HashMap<String, Value>>;
+    /// Deletes the user-level state document; a missing one is not an error.
+    async fn delete_user_state(&self, app_name: &str, user_id: &str) -> Result<()>;
     /// Applies `commit` atomically when its guard holds inside the transaction.
     async fn commit(&self, commit: SessionCommit) -> Result<CommitOutcome>;
 }
@@ -577,6 +579,19 @@ impl SessionStore for FirestoreStore {
             .await
             .map_err(|e| firestore_error("query failed", e))?;
         Ok(doc.map(|d| d.state).unwrap_or_default())
+    }
+
+    async fn delete_user_state(&self, app_name: &str, user_id: &str) -> Result<()> {
+        let parent = self.user_parent(app_name, user_id)?;
+        self.db
+            .fluent()
+            .delete()
+            .from(USER_STATE_COLLECTION)
+            .parent(&parent)
+            .document_id(STATE_DOCUMENT_ID)
+            .execute()
+            .await
+            .map_err(|e| firestore_error("delete failed", e))
     }
 
     async fn commit(&self, commit: SessionCommit) -> Result<CommitOutcome> {
@@ -1021,6 +1036,7 @@ impl<S: SessionStore> SessionService for SessionCore<S> {
     }
 
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
+        // Sessions first, so a failure part-way leaves the tier for the repeated call.
         let sessions = self
             .list(ListRequest {
                 app_name: app_name.to_string(),
@@ -1039,7 +1055,7 @@ impl<S: SessionStore> SessionService for SessionCore<S> {
             .await?;
         }
 
-        Ok(())
+        self.store.delete_user_state(app_name, user_id).await
     }
 }
 
@@ -1233,6 +1249,11 @@ mod tests {
                 .get(&key(app_name, user_id))
                 .map(|doc| doc.state.clone())
                 .unwrap_or_default())
+        }
+
+        async fn delete_user_state(&self, app_name: &str, user_id: &str) -> Result<()> {
+            self.data.lock().unwrap().user_states.remove(&key(app_name, user_id));
+            Ok(())
         }
 
         async fn commit(&self, commit: SessionCommit) -> Result<CommitOutcome> {
@@ -1555,7 +1576,8 @@ mod tests {
             ("app", "bob", "b1"),
             ("other_app", "alice", "a3"),
         ] {
-            core.create(create_req(app, user, session, json!({}))).await.unwrap();
+            let state = json!({ "user:lang": format!("{app}/{user}"), "app:theme": app });
+            core.create(create_req(app, user, session, state)).await.unwrap();
         }
         // A document stored under `app` that claims to belong to another app.
         let forged = SessionDoc {
@@ -1594,6 +1616,13 @@ mod tests {
         assert_eq!(list("app", "alice").await, Vec::<String>::new());
         assert_eq!(list("app", "bob").await, vec!["b1"]);
         assert_eq!(list("other_app", "alice").await, vec!["a3"]);
+        // Alice's user tier in `app` goes with her sessions; every other tier stays.
+        assert_eq!(core.store.user_state("app", "alice").await.unwrap(), HashMap::new());
+        assert_eq!(core.store.user_state("app", "bob").await.unwrap()["lang"], json!("app/bob"));
+        let elsewhere = core.store.user_state("other_app", "alice").await.unwrap();
+        assert_eq!(elsewhere["lang"], json!("other_app/alice"));
+        assert_eq!(core.store.app_state("app").await.unwrap()["theme"], json!("app"));
+        core.delete_all_sessions("app", "alice").await.unwrap();
     }
 
     #[tokio::test]
