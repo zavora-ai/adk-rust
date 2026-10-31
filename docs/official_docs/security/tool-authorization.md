@@ -415,6 +415,12 @@ session. A call it holds is held by the caller too:
 | A call-ID decision for the request's `function_call_id`, bound to its fingerprint with `tool_confirmation_fingerprints` | A call-ID decision for the delegate's own call ID, bound to the request's fingerprint |
 | A call-ID decision without a fingerprint binding | The same, when the delegation holds one call; with several, it names none of them and reaches no call |
 
+A `NonIdempotent` agent tool that times out or panics after its delegate held a call is not
+held: its outcome is unknown, so a decision must not run it again. The call is answered
+`outcome_unknown`, and the delegate's request is withdrawn (`adk_core::withdraw_held_call`), so
+no later decision on it authorizes an identical call. `LlmAgent` and the realtime runners do the
+same; a withdrawal that fails ends the run.
+
 The same holds through any depth of nested agent tools: each level surfaces every request
 under its own caller's call ID. The requests before the last reach the caller's session through
 `ToolContext::emit_event`, which `LlmAgent` provides; a caller whose tool context does not emit
@@ -1333,6 +1339,45 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
 
 > **Note:** An `on_tool_error` callback that returns a fallback value replaces the error,
 > including an access denial. Keep fallbacks to tools whose failures are safe to paper over.
+
+## Answer Status
+
+Every answer the agent writes in place of a tool's result carries an `adk_core::ToolResultStatus`
+in the function response's annotations (`adk.tool_result.status`), with the code and category of
+the error behind it when there is one (`adk.tool_result.error_code`,
+`adk.tool_result.error_category`). The payload the model reads is unchanged; see
+[Tool Result Status](../tools/function-tools.md#tool-result-status) for the reading API and the
+provider flags.
+
+| Answer, in the [evaluation order](#combining-mechanisms) | Status | Cause annotated |
+|---------------------------------------------------------|--------|-----------------|
+| 1. Run budget: the batch does not fit | `not_run` | `budget.*` |
+| 2–3. A before-tool plugin or callback fails | `not_run` | The callback's error |
+| 3. A before-tool callback answers with text | `not_run` | — |
+| 3. A before-tool callback answers with a function response, or an enhanced plugin with a result | The callback's own | — |
+| 4. Circuit breaker open | `not_run` | — |
+| 5.1 Kill switch | `not_run` | `governance.frozen` |
+| 5.2 Resume binding mismatch | `refused` | — |
+| 5.3 `ToolPolicy` denial | `refused` | — |
+| 5.4 Tool guardrail denial | `refused` | — |
+| 5.5 A declined or timed-out confirmation | `refused` | — |
+| 5.5 Held for confirmation | `held` | — |
+| 6. Action ledger record: succeeded / failed / failed with a `not run` text / begun without an outcome | `succeeded` / `failed` / `not_run` / `outcome_unknown` | — |
+| 6. Action ledger cannot be read or written | `not_run` | The ledger's error |
+| 6. Kill switch after the ledger write | `not_run` | `governance.frozen` |
+| 7. RBAC or scope denial inside `execute()` (`tool.permission_denied`) | `refused` | `tool.permission_denied` |
+| 7. Tool error; timeout or panic of a `ReadOnly` or `Idempotent` tool | `failed` | The tool's error, `tool.timeout`, or `tool.panicked` |
+| 7–8. Timeout or panic of a `NonIdempotent` tool | `outcome_unknown` | `tool.timeout` or `tool.panicked` |
+| 7. An agent tool whose delegate holds a call | `held` | — |
+| 9. `on_tool_error` fallback | None; `outcome_unknown` is kept | — |
+| 10. After-tool replacement | None; `outcome_unknown` is kept | — |
+| 10. After-tool pipeline fails | `withheld` when the tool ran, else `not_run` | The stage's error |
+| 11. Tool guardrails withhold the result | `withheld` when the call ran (now or in the attempt a ledger replay reports); `refused`, `not_run` and `outcome_unknown` stand | — |
+
+Outside the per-call path: a call to an unknown tool, a transfer to an unknown agent, and the
+other calls of a turn that transfers are `not_run`; a person's requested call the agent does not
+take is `refused`; the runner answers the calls a cancelled run left in flight `outcome_unknown`,
+and the calls a stopped process left unanswered from their ledger record, as step 6 does.
 
 ## Kill Switch
 

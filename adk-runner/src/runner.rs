@@ -2914,4 +2914,102 @@ mod in_flight_tests {
         assert_eq!(answered_calls, [("pay", Some("c1")), ("notify", None)]);
         assert!(in_flight.answer_interrupted().is_empty(), "calls are answered once");
     }
+
+    fn answered(name: &str, id: &str, response: serde_json::Value, status: &str) -> Part {
+        Part::FunctionResponse {
+            function_response: FunctionResponseData::new(name, response),
+            id: Some(id.to_string()),
+            annotations: Some(json!({ adk_core::TOOL_RESULT_STATUS_KEY: status })),
+        }
+    }
+
+    /// #1006 left the runner's answers without a status, so a cancelled call read as the
+    /// tool's own result.
+    #[test]
+    fn a_cancelled_runs_calls_are_answered_with_an_unknown_outcome() {
+        let mut in_flight = InFlightCalls::default();
+        in_flight.observe(&event("agent", "model", vec![call("pay", Some("c1"))]));
+
+        let answered_events = in_flight.answer_interrupted();
+
+        let parts = answered_events[0].llm_response.content.clone().unwrap().parts;
+        assert_eq!(
+            parts,
+            vec![answered(
+                "pay",
+                "c1",
+                adk_core::outcome_unknown_response(
+                    "the run was cancelled while 'pay' was in flight, so the call may have \
+                     taken effect; check its result before calling it again"
+                ),
+                "outcome_unknown",
+            )]
+        );
+    }
+
+    #[test]
+    fn a_recovered_call_is_answered_with_the_status_its_record_shows() {
+        let record = |outcome: Option<adk_core::ActionOutcome>| {
+            let mut record = adk_core::ActionRecord::new(
+                "k",
+                "pay",
+                &json!({}),
+                adk_core::ToolEffect::NonIdempotent,
+            );
+            record.outcome = outcome;
+            Some(record)
+        };
+        let frozen = adk_core::not_run_text(&adk_core::AdkError::agent("execution is frozen"));
+        let cases = [
+            (
+                record(Some(adk_core::ActionOutcome::Succeeded { result_digest: "d".into() })),
+                json!({
+                    "status": "already_succeeded",
+                    "result_digest": "d",
+                    "detail": "this call to 'pay' completed before the run was recovered; it \
+                               was not executed again",
+                }),
+                "succeeded",
+            ),
+            (
+                record(Some(adk_core::ActionOutcome::Failed { error: "declined".into() })),
+                json!({
+                    "status": "already_failed",
+                    "error": "declined",
+                    "detail": "this call to 'pay' failed before the run was recovered; it was \
+                               not executed again",
+                }),
+                "failed",
+            ),
+            (
+                record(Some(adk_core::ActionOutcome::Failed { error: frozen.clone() })),
+                json!({
+                    "status": "already_failed",
+                    "error": frozen,
+                    "detail": "this call to 'pay' failed before the run was recovered; it was \
+                               not executed again",
+                }),
+                "not_run",
+            ),
+            (
+                None,
+                adk_core::outcome_unknown_response(
+                    "the process running 'pay' stopped before the call recorded an outcome, so \
+                     it may have taken effect; check its result before calling it again",
+                ),
+                "outcome_unknown",
+            ),
+        ];
+        for (record, response, status) in cases {
+            let mut in_flight = InFlightCalls::default();
+            in_flight.observe(&event("agent", "model", vec![call("pay", Some("c1"))]));
+            let answered_events = in_flight
+                .answer_with(|call| super::recovered_call_response(&call.name, record.clone()));
+            assert_eq!(
+                answered_events[0].llm_response.content.clone().unwrap().parts,
+                vec![answered("pay", "c1", response, status)],
+                "{status}"
+            );
+        }
+    }
 }

@@ -138,6 +138,37 @@ mod tests {
         assert!(ledger.get(&rewritten).await.unwrap().is_none(), "another call has its own record");
     }
 
+    /// A held call answered from its record carries the status `LlmAgent` gives the same
+    /// replay, so one fact reaches a host as one status.
+    #[test]
+    fn a_recorded_answer_carries_the_records_status() {
+        let id = "call-1".to_string();
+        let frozen = adk_core::not_run_text(&adk_core::AdkError::agent("execution is frozen"));
+        for (outcome, status) in [
+            (Some(ActionOutcome::Succeeded { result_digest: "d".into() }), "succeeded"),
+            (Some(ActionOutcome::Failed { error: "exit 1".into() }), "failed"),
+            (Some(ActionOutcome::Failed { error: frozen }), "not_run"),
+            (None, "outcome_unknown"),
+        ] {
+            let mut record = ActionRecord::new("k", "bash", &json!({}), ToolEffect::NonIdempotent);
+            record.outcome = outcome;
+            let Part::FunctionResponse { function_response, .. } =
+                recorded_answer("bash", Some(&id), &record)
+            else {
+                panic!("a function response");
+            };
+            assert_eq!(
+                recorded_answer("bash", Some(&id), &record),
+                Part::FunctionResponse {
+                    function_response,
+                    id: Some(id.clone()),
+                    annotations: Some(json!({ adk_core::TOOL_RESULT_STATUS_KEY: status })),
+                },
+                "{status}"
+            );
+        }
+    }
+
     #[test]
     fn a_run_records_in_its_own_ledger_else_in_the_store() {
         let store: Arc<dyn ActionLedger> = Arc::new(InMemoryActionLedger::new());

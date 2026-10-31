@@ -1033,6 +1033,44 @@ mod tests {
         );
     }
 
+    /// A tool result is flagged `is_error` only when the agent wrote it for a call that was
+    /// refused, not run, or failed; the tool's own `{"error": ..}` payload is not read.
+    #[test]
+    fn only_a_refused_unrun_or_failed_answer_is_flagged_an_error() {
+        use adk_core::ToolResultStatus;
+        let block = |status: Option<ToolResultStatus>| {
+            let mut part = Part::FunctionResponse {
+                function_response: adk_core::FunctionResponseData::new(
+                    "pay",
+                    serde_json::json!({ "error": "declined" }),
+                ),
+                id: Some("toolu_1".to_string()),
+                annotations: None,
+            };
+            if let Some(status) = status {
+                part.set_tool_result_status(status, None);
+            }
+            let content = Content { role: "function".to_string(), parts: vec![part] };
+            let message = content_to_message(&content, false).expect("content should convert");
+            serde_json::to_value(message).expect("message should serialize")["content"][0].clone()
+        };
+        let flagged = |status| block(Some(status)).get("is_error").cloned();
+        for status in
+            [ToolResultStatus::Refused, ToolResultStatus::NotRun, ToolResultStatus::Failed]
+        {
+            assert_eq!(flagged(status), Some(Value::Bool(true)), "{status:?}");
+        }
+        for status in [
+            ToolResultStatus::Held,
+            ToolResultStatus::OutcomeUnknown,
+            ToolResultStatus::Withheld,
+            ToolResultStatus::Succeeded,
+        ] {
+            assert_eq!(flagged(status), None, "{status:?}");
+        }
+        assert_eq!(block(None).get("is_error"), None, "a tool's own payload is not read");
+    }
+
     #[test]
     fn test_function_response_string_is_not_double_encoded() {
         let content = Content {

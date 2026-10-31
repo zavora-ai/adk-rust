@@ -424,7 +424,7 @@ fn resilient(model: Arc<dyn Llm>, tool: Arc<dyn Tool>) -> Result<LlmAgent> {
 }
 ```
 
-Per-tool budgets take precedence over the default. Without a budget, tools execute once. A budget retries only tools whose `effect()` is `ReadOnly` or `Idempotent`, only after a retryable error or a timeout, with exponential backoff up to `RetryBudget::max_delay` and jitter; each attempt gets a fresh tool context. A `NonIdempotent` tool runs once, and one that times out is answered with `{"status": "outcome_unknown"}`. With `RunConfig::action_ledger` set, a replayed `NonIdempotent` call is answered from the ledger instead of executing again.
+Per-tool budgets take precedence over the default. Without a budget, tools execute once. A budget retries only tools whose `effect()` is `ReadOnly` or `Idempotent`, only after a retryable error or a timeout, with exponential backoff up to `RetryBudget::max_delay` and jitter; each attempt gets a fresh tool context. A `NonIdempotent` tool runs once, and one that times out is answered with `{"status": "outcome_unknown"}`. With `RunConfig::action_ledger` set, a replayed `NonIdempotent` call is answered from the ledger instead of executing again. Every answer the agent writes in place of a tool's result carries an `adk_core::ToolResultStatus` annotation (`refused`, `not_run`, `held`, `failed`, `outcome_unknown`, `withheld`, `succeeded`).
 
 ### Circuit Breaker
 

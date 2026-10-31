@@ -209,10 +209,16 @@ invitation to try again:
 
 | Cause | Source |
 |-------|--------|
-| The call hit the agent's tool timeout | `LlmAgent`, `CodeActAgent` |
+| The call hit the agent's tool timeout | `LlmAgent`, `CodeActAgent` (the realtime runtimes annotate the status only) |
 | The tool panicked | `LlmAgent`, `CodeActAgent` |
 | The ledger holds a begun record for the key | `LlmAgent`, `CodeActAgent` |
 | The run was cancelled while the call was in flight | `Runner` |
+
+Each of these answers carries the `outcome_unknown`
+[tool result status](function-tools.md#tool-result-status), which an `on_tool_error` fallback or
+an after-tool replacement keeps; a replay answered `already_succeeded` or `already_failed`
+carries `succeeded` or `failed`, and `not_run` when the recorded failure is the kill switch's
+`not run` text.
 
 When a run is cancelled — `Runner::interrupt()` or a cancellation token — the runner
 persists one function response for every call still in flight, so each call keeps exactly
@@ -252,7 +258,9 @@ let bounded = AgentTool::new(research_agent).timeout(Duration::from_secs(45 * 60
 A delegation that runs past its limit is a failed call with a `Timeout` error, whichever
 failure mode the agent tool uses. The calling agent enforces the limit and handles it like any
 tool timeout: a `NonIdempotent` delegation, the default, is answered with
-`{"status": "outcome_unknown"}` and its ledger record stays begun.
+`{"status": "outcome_unknown"}` and its ledger record stays begun. A delegation that times out
+after its agent held a call is not held for that call: the request is withdrawn, so no later
+decision runs a delegation whose outcome is unknown.
 
 ## Related
 

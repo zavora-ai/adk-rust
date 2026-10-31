@@ -5997,6 +5997,27 @@ mod tests {
         let scope = adk_core::ApprovalScope::new("app", "user", "sess-test");
         assert!(store.pending(&scope).await.unwrap().is_empty());
         // Wave 2 gate, core item a: the session holds the call no longer.
+        // The waiting call never ran: the identical call ran in its place.
+        let mut answered = Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new(
+                "echo",
+                json!({
+                    "status": "decided",
+                    "detail": "an identical call in a later turn took this call's decision",
+                }),
+            ),
+            id: Some("7".to_string()),
+            annotations: None,
+        };
+        answered.set_tool_result_status(ToolResultStatus::NotRun, None);
+        let answers: Vec<_> = events
+            .iter()
+            .flat_map(|event| event.llm_response.content.iter())
+            .flat_map(|content| content.parts.iter())
+            .filter(|part| matches!(part, Part::FunctionResponse { .. }))
+            .cloned()
+            .collect();
+        assert_eq!(answers, vec![answered]);
         session.extend(events);
         assert!(adk_core::held_tool_calls(&session, "code-agent", "").is_empty());
     }
@@ -6064,6 +6085,79 @@ mod tests {
                 session.len(),
                 "compaction may pass the answered call"
             );
+        }
+    }
+
+    /// The answer to a held call carries the status of how its decision resolved it: none for
+    /// the tool's own result, `refused` for a denial, `failed` for a tool that failed.
+    #[tokio::test]
+    async fn a_held_calls_answer_carries_the_status_of_its_resolution() {
+        use adk_core::ApprovalStore as _;
+        let echoed = Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new("echo", json!({"msg": "x"})),
+            id: Some("7".to_string()),
+            annotations: None,
+        };
+        let mut denied = Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new(
+                "echo",
+                json!({ "error": denied_message("echo") }),
+            ),
+            id: Some("7".to_string()),
+            annotations: None,
+        };
+        denied.set_tool_result_status(ToolResultStatus::Refused, None);
+        for (tool, approval, expected) in [
+            ("echo", adk_core::ToolApproval::approve(), Some(echoed)),
+            ("echo", adk_core::ToolApproval::deny(), Some(denied)),
+            ("boom", adk_core::ToolApproval::approve(), None),
+        ] {
+            let handler = Arc::new(NeverAnswers::default());
+            let store = Arc::new(adk_core::InMemoryApprovalStore::new());
+            let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+                Planned::call(tool, json!({"msg": "x"}), 7),
+                Planned::Complete(json!({"type": "final_result", "value": "after"})),
+            ]]));
+            let mut input = waiting_inputs(
+                FakeLlm::new("noop"),
+                rt,
+                user("go"),
+                handler.clone(),
+                store.clone(),
+            );
+            input.tools.push(failing_tool());
+            let held = collect(input).await.last().unwrap().clone();
+            let request = held.actions.tool_confirmation.clone().expect("the call waits");
+
+            let scope = adk_core::ApprovalScope::new("app", "user", "sess-test");
+            store.decide(&scope, &request.fingerprint(), approval).await.unwrap();
+            let rt = Arc::new(ScriptedRuntime::with_suspension(vec![]));
+            let mut input =
+                waiting_inputs(FakeLlm::new("noop"), rt, Content::new("user"), handler, store);
+            input.tools.push(failing_tool());
+            input.pending = pending_in(&held);
+            let answer = collect(input)
+                .await
+                .iter()
+                .flat_map(|event| event.llm_response.content.iter())
+                .flat_map(|content| content.parts.iter())
+                .find(|part| matches!(part, Part::FunctionResponse { .. }))
+                .cloned()
+                .expect("the held call is answered");
+            let expected = expected.unwrap_or_else(|| {
+                // The failure's text is the tool's; its status is what this test is about.
+                let Part::FunctionResponse { function_response, .. } = &answer else {
+                    unreachable!()
+                };
+                let mut failed = Part::FunctionResponse {
+                    function_response: function_response.clone(),
+                    id: Some("7".to_string()),
+                    annotations: None,
+                };
+                failed.set_tool_result_status(ToolResultStatus::Failed, None);
+                failed
+            });
+            assert_eq!(answer, expected, "{tool}");
         }
     }
 

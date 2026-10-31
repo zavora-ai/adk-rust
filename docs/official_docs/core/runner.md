@@ -282,6 +282,12 @@ the broad form and `interrupt_identity` the precise one. Prefer
 Runs are tracked by a unique run ID rather than by session ID, so two runs for the
 same identity are tracked separately and each deregisters only itself.
 
+A cancelled run answers each tool call still in flight with an
+[outcome-unknown response](../tools/tool-effects.md#unknown-outcomes) carrying the
+`outcome_unknown` [tool result status](../tools/function-tools.md#tool-result-status), and
+`Runner::recover_unanswered_calls` answers the calls a stopped process left from their
+action-ledger records with the status each record shows.
+
 ### Persistence Is Identity-Bound
 
 Every event the Runner persists — user turns, model responses, transfer events,

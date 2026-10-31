@@ -74,6 +74,13 @@ with or without a ledger. Without a ledger, recovery re-runs the call (at least
 once). See [Tool Effects and the Action Ledger](../tools/tool-effects.md) for the
 key format.
 
+A held call that a decision resumes is answered in the session with a function response under
+its call ID, which the model is never sent. That answer carries the
+[tool result status](../tools/function-tools.md#tool-result-status) of how the call resolved —
+none for the tool's result, `refused` for a denial, `failed`, `withheld`, `outcome_unknown`, or
+the ledger record's status — and `not_run` when an identical call in a later turn took its
+decision. Calls raised into the program carry no function response, so they carry no status.
+
 This requires a runtime that can snapshot a paused call. A runtime that cannot
 runs long-running tools inline and rejects confirmation pauses.
 

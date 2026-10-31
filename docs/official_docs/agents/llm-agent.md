@@ -872,15 +872,19 @@ not use it as made (`ErrorCategory::is_rejection`: `InvalidInput`, `Forbidden`, 
 `Unsupported`, `Conflict`, `ResourceExhausted`) — keeps its message, cut at
 `TOOL_ERROR_MESSAGE_LIMIT` (500) characters, since that message is what the model acts on:
 
-| Outcome | Function response |
-|---------|-------------------|
-| Tool returns `Err(AdkError)` with an upstream or internal category | `{"error": "tool 'lookup_order' failed: tool.unavailable (tool.orders_db.unavailable)"}` |
-| Tool returns `Err(AdkError)` with a rejection category | `{"error": "tool 'bash' failed: tool.forbidden (harness.shell.protected): .git/hooks is a protected path"}` — the message, cut at 500 characters |
-| Error with code `adk_core::TOOL_INVALID_ARGUMENTS_CODE` (the `#[tool]` macro's argument errors) | `{"error": "tool.invalid_input: invalid arguments for 'lookup_order': missing field `id`"}` — the message tells the model what to fix |
-| Timeout | `{"error": "Tool 'slow_report' timed out after 50ms"}`; a `NonIdempotent` call gets `{"status": "outcome_unknown", ...}` |
-| Before-tool callback or plugin returns `Err` | `{"error": "tool 'lookup_order' was not run: a before-tool callback failed with agent.internal (agent.legacy)"}` |
-| After-tool hook, callback, or plugin returns `Err` | `{"status": "result_withheld", "error": "tool 'charge_card' ran, but its after-tool pipeline failed with ..., so its result is withheld; do not call it again for this request."}` |
-| The provider could not decode the model's arguments into a JSON object | `{"error": "tool 'get_weather' was not run: arguments are not valid JSON: ... Call it again with arguments that are one JSON object matching its parameters."}` — the tool does not run and the turn continues |
+| Outcome | Function response | Status |
+|---------|-------------------|--------|
+| Tool returns `Err(AdkError)` with an upstream or internal category | `{"error": "tool 'lookup_order' failed: tool.unavailable (tool.orders_db.unavailable)"}` | `failed` |
+| Tool returns `Err(AdkError)` with a rejection category | `{"error": "tool 'bash' failed: tool.forbidden (harness.shell.protected): .git/hooks is a protected path"}` — the message, cut at 500 characters | `failed`; `refused` for `tool.permission_denied` |
+| Error with code `adk_core::TOOL_INVALID_ARGUMENTS_CODE` (the `#[tool]` macro's argument errors) | `{"error": "tool.invalid_input: invalid arguments for 'lookup_order': missing field `id`"}` — the message tells the model what to fix | `failed` |
+| Timeout | `{"error": "Tool 'slow_report' timed out after 50ms"}`; a `NonIdempotent` call gets `{"status": "outcome_unknown", ...}` | `failed`; `outcome_unknown` for a `NonIdempotent` call |
+| Before-tool callback or plugin returns `Err` | `{"error": "tool 'lookup_order' was not run: a before-tool callback failed with agent.internal (agent.legacy)"}` | `not_run` |
+| After-tool hook, callback, or plugin returns `Err` | `{"status": "result_withheld", "error": "tool 'charge_card' ran, but its after-tool pipeline failed with ..., so its result is withheld; do not call it again for this request."}` | `withheld` |
+| The provider could not decode the model's arguments into a JSON object | `{"error": "tool 'get_weather' was not run: arguments are not valid JSON: ... Call it again with arguments that are one JSON object matching its parameters."}` — the tool does not run and the turn continues | `not_run` |
+
+The status is the function response's `ToolResultStatus` annotation, beside the code and
+category of the error behind it; see
+[Tool Result Status](../tools/function-tools.md#tool-result-status).
 
 - **Full messages**: `expose_tool_error_messages(true)` sends `component.category: message`
   instead. Enable it only when every tool's error messages are safe to send to the provider.

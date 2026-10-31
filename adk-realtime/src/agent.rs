@@ -2808,4 +2808,251 @@ mod tool_safety_tests {
         assert!(ctx.is_authenticated(), "an authenticated caller must not look anonymous");
         assert_eq!(ctx.app_name(), "app", "identity still delegates");
     }
+
+    /// The status of every answer the realtime agent writes: whole function response parts.
+    mod tool_status {
+        use super::*;
+        use adk_core::{ApprovalStore as _, ToolEffect};
+
+        /// The part the session records for `call-1`, with `annotations`.
+        fn part(
+            name: &str,
+            response: serde_json::Value,
+            annotations: Option<serde_json::Value>,
+        ) -> Part {
+            Part::FunctionResponse {
+                function_response: adk_core::FunctionResponseData::new(name, response),
+                id: Some("call-1".to_string()),
+                annotations,
+            }
+        }
+
+        fn status(status: &str) -> Option<serde_json::Value> {
+            Some(serde_json::json!({ adk_core::TOOL_RESULT_STATUS_KEY: status }))
+        }
+
+        fn caused(status: &str, code: &str, category: &str) -> Option<serde_json::Value> {
+            Some(serde_json::json!({
+                adk_core::TOOL_RESULT_STATUS_KEY: status,
+                adk_core::TOOL_RESULT_ERROR_CODE_KEY: code,
+                adk_core::TOOL_RESULT_ERROR_CATEGORY_KEY: category,
+            }))
+        }
+
+        /// Sleeps past the dispatch timeout with `effect`; when `store` is set it first asks
+        /// for a confirmation as an agent tool's delegate does.
+        struct Hangs {
+            effect: ToolEffect,
+            store: Option<Arc<adk_core::InMemoryApprovalStore>>,
+        }
+
+        fn delegated() -> adk_core::ToolConfirmationRequest {
+            adk_core::ToolConfirmationRequest::new("write_file", serde_json::json!({ "p": 1 }))
+                .with_function_call_id("inner-1")
+        }
+
+        fn scope() -> adk_core::ApprovalScope {
+            adk_core::ApprovalScope::new("app", "user", "session")
+        }
+
+        #[async_trait]
+        impl Tool for Hangs {
+            fn name(&self) -> &str {
+                "slow"
+            }
+            fn description(&self) -> &str {
+                "never finishes in time"
+            }
+            fn effect(&self) -> ToolEffect {
+                self.effect
+            }
+            async fn execute(
+                &self,
+                ctx: Arc<dyn ToolContext>,
+                _args: serde_json::Value,
+            ) -> Result<serde_json::Value> {
+                if let Some(store) = &self.store {
+                    store.record_pending(&scope(), &delegated()).await?;
+                    ctx.set_actions(EventActions {
+                        tool_confirmation: Some(delegated()),
+                        ..Default::default()
+                    });
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                Ok(serde_json::json!({ "late": true }))
+            }
+        }
+
+        /// #1006 labelled every realtime timeout `failed`, though a non-idempotent call that
+        /// timed out may have taken effect.
+        #[tokio::test(start_paused = true)]
+        async fn a_timeout_is_an_unknown_outcome_only_for_a_non_idempotent_tool() {
+            for (effect, expected) in
+                [(ToolEffect::NonIdempotent, "outcome_unknown"), (ToolEffect::Idempotent, "failed")]
+            {
+                let tool: Arc<dyn Tool> = Arc::new(Hangs { effect, store: None });
+                let outcome =
+                    dispatch_with(RunConfig::default(), &tool, "{}", vec![], vec![]).await.unwrap();
+                assert_eq!(
+                    outcome.part("slow", "call-1"),
+                    part(
+                        "slow",
+                        serde_json::json!({ "error": "Tool 'slow' timed out after 50ms" }),
+                        caused(expected, "tool.timeout", "timeout"),
+                    ),
+                    "{effect:?}"
+                );
+            }
+        }
+
+        /// #1006 left a superseded request pending, so a later approval could authorize an
+        /// identical call.
+        #[tokio::test(start_paused = true)]
+        async fn an_unknown_outcome_supersedes_a_delegates_request_and_withdraws_it() {
+            let store = Arc::new(adk_core::InMemoryApprovalStore::new());
+            let tool: Arc<dyn Tool> =
+                Arc::new(Hangs { effect: ToolEffect::NonIdempotent, store: Some(store.clone()) });
+            let config = RunConfig::builder().approval_store(store.clone()).build();
+
+            let outcome = dispatch_with(config, &tool, "{}", vec![], vec![]).await.unwrap();
+
+            assert!(outcome.held.is_none(), "the call is not held");
+            assert!(outcome.actions.tool_confirmation.is_none());
+            assert_eq!(
+                outcome.part("slow", "call-1"),
+                part(
+                    "slow",
+                    serde_json::json!({ "error": "Tool 'slow' timed out after 50ms" }),
+                    caused("outcome_unknown", "tool.timeout", "timeout"),
+                )
+            );
+            assert!(store.pending(&scope()).await.unwrap().is_empty(), "the request is withdrawn");
+        }
+
+        #[tokio::test]
+        async fn refusals_holds_and_skipped_calls_carry_their_status() {
+            let executions = Arc::new(AtomicUsize::new(0));
+            let tool = counting(&executions);
+
+            let deny = RunConfig::builder()
+                .tool_policy(Arc::new(
+                    adk_core::DeclarativePolicy::builder().deny("counting", "closed").build(),
+                ))
+                .build();
+            let outcome = dispatch_with(deny, &tool, "{}", vec![], vec![]).await.unwrap();
+            assert_eq!(
+                outcome.part("counting", "call-1"),
+                part(
+                    "counting",
+                    serde_json::json!({ "error": "Tool 'counting' denied by policy: closed" }),
+                    status("refused"),
+                )
+            );
+
+            let approval = RunConfig::builder()
+                .tool_policy(Arc::new(
+                    adk_core::DeclarativePolicy::builder()
+                        .require_approval("counting", "voice actions")
+                        .build(),
+                ))
+                .build();
+            let outcome = dispatch_with(approval, &tool, "{}", vec![], vec![]).await.unwrap();
+            assert_eq!(
+                outcome.part("counting", "call-1"),
+                part(
+                    "counting",
+                    serde_json::json!({
+                        "error": "Tool 'counting' requires confirmation: voice actions"
+                    }),
+                    status("held"),
+                )
+            );
+
+            let outcome =
+                dispatch_with(RunConfig::default(), &tool, "[1]", vec![], vec![]).await.unwrap();
+            assert_eq!(
+                outcome.part("counting", "call-1"),
+                part("counting", outcome.result.clone(), status("not_run"))
+            );
+
+            let before: Vec<BeforeToolCallback> = vec![Box::new(|_ctx| {
+                Box::pin(async {
+                    Err(AdkError::new(
+                        adk_core::ErrorComponent::Agent,
+                        adk_core::ErrorCategory::Unavailable,
+                        "audit.down",
+                        "audit sink down",
+                    ))
+                })
+            })];
+            let outcome =
+                dispatch_with(RunConfig::default(), &tool, "{}", before, vec![]).await.unwrap();
+            assert_eq!(
+                outcome.part("counting", "call-1"),
+                part(
+                    "counting",
+                    serde_json::json!({
+                        "error": "tool 'counting' was not run: a before-tool callback failed \
+                                  with agent.unavailable (audit.down)"
+                    }),
+                    caused("not_run", "audit.down", "unavailable"),
+                )
+            );
+            assert_eq!(executions.load(Ordering::SeqCst), 0);
+
+            let outcome =
+                dispatch_with(RunConfig::default(), &tool, "{}", vec![], vec![]).await.unwrap();
+            assert_eq!(
+                outcome.part("counting", "call-1"),
+                part("counting", serde_json::json!({ "ran": true }), None),
+                "a tool's own result carries no status"
+            );
+        }
+
+        /// Withholds every result.
+        struct WithholdAll;
+
+        #[async_trait]
+        impl adk_core::ToolResultScreen for WithholdAll {
+            async fn screen_result(
+                &self,
+                _tool: &str,
+                _args: &serde_json::Value,
+                _result: &serde_json::Value,
+            ) -> std::result::Result<serde_json::Value, String> {
+                Err("screening is down".to_string())
+            }
+        }
+
+        #[tokio::test]
+        async fn a_withheld_result_is_withheld_only_when_the_call_ran() {
+            let executions = Arc::new(AtomicUsize::new(0));
+            let tool = counting(&executions);
+            let policy = ToolResultPolicy {
+                timeout: std::time::Duration::from_millis(50),
+                screen: Some(Arc::new(WithholdAll)),
+                expose_error_messages: false,
+            };
+            let blocked = adk_core::result_blocked_response("counting", "screening is down");
+
+            let outcome =
+                dispatch_with_policy(RunConfig::default(), &tool, "{}", vec![], vec![], &policy)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                outcome.part("counting", "call-1"),
+                part("counting", blocked.clone(), status("withheld"))
+            );
+
+            let deny = RunConfig::builder()
+                .tool_policy(Arc::new(adk_core::DeclarativePolicy::builder().build()))
+                .build();
+            let outcome =
+                dispatch_with_policy(deny, &tool, "{}", vec![], vec![], &policy).await.unwrap();
+            assert_eq!(
+                outcome.part("counting", "call-1"),
+                part("counting", blocked, status("refused"))
+            );
+        }
+    }
 }
