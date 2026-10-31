@@ -246,6 +246,29 @@ impl OpenAICompatibleConfig {
             .with_base_url("https://api.cheaperinference.com/v1")
     }
 
+    /// API Route preset.
+    ///
+    /// API Route serves models from several vendors behind one OpenAI-compatible
+    /// endpoint; `GET /v1/models` lists the model IDs a key can use.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_model::{OpenAICompatible, OpenAICompatibleConfig};
+    ///
+    /// let config = OpenAICompatibleConfig::api_route("sk-...", "gpt-6.1-sol");
+    /// assert_eq!(config.base_url.as_deref(), Some("https://global.api-route.com/v1"));
+    ///
+    /// let model = OpenAICompatible::new(config)?;
+    /// # let _ = model;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    pub fn api_route(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::new(api_key, model)
+            .with_provider_name("api-route")
+            .with_base_url("https://global.api-route.com/v1")
+    }
+
     /// Google Gemini (OpenAI-compatible) preset.
     ///
     /// Targets Gemini's OpenAI-compatibility endpoint, letting you use a Gemini
@@ -1690,6 +1713,18 @@ mod tests {
 
         let client = OpenAICompatible::new(config).expect("client builds");
         assert_eq!(client.name(), "gpt-5.4-mini");
+    }
+
+    #[test]
+    fn api_route_preset_sets_endpoint_and_provider() {
+        let config = OpenAICompatibleConfig::api_route("test-key", "gpt-6.1-sol");
+        assert_eq!(config.provider_name, "api-route");
+        assert_eq!(config.model, "gpt-6.1-sol");
+        assert_eq!(config.base_url.as_deref(), Some("https://global.api-route.com/v1"));
+        assert_eq!(config.api_key, "test-key");
+
+        let client = OpenAICompatible::new(config).expect("client builds");
+        assert_eq!(client.name(), "gpt-6.1-sol");
     }
 
     #[test]
