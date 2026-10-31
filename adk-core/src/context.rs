@@ -658,10 +658,12 @@ pub trait InvocationContext: CallbackContext {
         vec![]
     }
 
-    /// Returns the request metadata from the auth middleware bridge, if present.
+    /// Returns the run's request metadata: the run's unauthenticated
+    /// [`RunConfig::request_metadata`] overlaid with the metadata of its
+    /// [`RequestContext`](crate::RequestContext), whose values win on a shared key.
     ///
-    /// This provides access to custom key-value pairs extracted from the HTTP
-    /// request by the [`RequestContextExtractor`](crate::RequestContext).
+    /// Only the request context's entries come from a request the server authenticated;
+    /// [`is_authenticated`](ReadonlyContext::is_authenticated) says whether there is one.
     fn request_metadata(&self) -> HashMap<String, serde_json::Value> {
         HashMap::new()
     }
@@ -1758,6 +1760,15 @@ pub struct RunConfig {
     /// refuses a run whose request context names anyone else. `DurableWorker` sets it for
     /// a run enqueued by an authenticated caller ([`NewRun::authenticated`](crate::NewRun::authenticated)).
     pub request_context: Option<crate::RequestContext>,
+    /// Request metadata the run carries without authenticating anyone, such as the thread
+    /// or channel an anonymous visitor wrote in.
+    ///
+    /// Tools read it through `request_metadata()`, where the
+    /// [`request_context`](Self::request_context)'s own metadata wins on a shared key.
+    /// Unlike a request context, it never makes
+    /// [`is_authenticated`](crate::ReadonlyContext::is_authenticated) answer `true`, sets
+    /// no scopes, and names no user.
+    pub request_metadata: HashMap<String, String>,
     /// How long the [`tool_confirmation_handler`](Self::tool_confirmation_handler) may take
     /// to decide one call. A call it does not decide in time waits in the
     /// [`approval_store`](Self::approval_store) when the run has one, and is denied
@@ -1858,6 +1869,7 @@ impl Default for RunConfig {
             approval_service: None,
             durable_run_id: None,
             request_context: None,
+            request_metadata: HashMap::new(),
             tool_confirmation_timeout: crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT,
             spend_ledger: None,
             llm_spend_estimate: None,
@@ -2221,6 +2233,23 @@ impl RunConfigBuilder {
     /// ```
     pub fn request_context(mut self, request_context: crate::RequestContext) -> Self {
         self.config.request_context = Some(request_context);
+        self
+    }
+
+    /// Adds one entry of request metadata that authenticates no one. See
+    /// [`RunConfig::request_metadata`].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::RunConfig;
+    ///
+    /// let config = RunConfig::builder().request_metadata("thread", "chat-7").build();
+    /// assert_eq!(config.request_metadata.get("thread").map(String::as_str), Some("chat-7"));
+    /// assert!(config.request_context.is_none());
+    /// ```
+    pub fn request_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.config.request_metadata.insert(key.into(), value.into());
         self
     }
 

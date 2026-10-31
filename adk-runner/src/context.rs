@@ -881,12 +881,14 @@ impl InvocationContextTrait for InvocationContext {
     }
 
     fn request_metadata(&self) -> HashMap<String, serde_json::Value> {
-        self.request_context.as_ref().map_or_else(HashMap::new, |rc| {
-            rc.metadata
-                .iter()
-                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-                .collect()
-        })
+        // The authenticated request context's entries are written last, so an
+        // unauthenticated entry never replaces one of them.
+        self.run_config
+            .request_metadata
+            .iter()
+            .chain(self.request_context.iter().flat_map(|rc| rc.metadata.iter()))
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+            .collect()
     }
 
     fn orchestration_root_invocation_id(&self) -> &str {

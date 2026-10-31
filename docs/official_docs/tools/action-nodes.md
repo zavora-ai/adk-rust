@@ -104,7 +104,15 @@ executor's `HttpActionPolicy`:
 |---------|---------|---------|
 | Schemes | `https` and `http`; `file:` and others are rejected | `allow_schemes` |
 | Hosts | Any | `allow_hosts` — exact names or `*.example.com` |
+| Addresses | Public only: a host that is, or resolves to, a loopback, private, link-local (the cloud metadata endpoint `169.254.169.254` included), CGNAT, unique-local, multicast or IPv4-embedding IPv6 address is refused, as is `localhost` | `allow_private_networks` admits them |
 | Redirects | Up to 5, each re-checked | `max_redirects`; `0` follows none |
+
+Host names are resolved inside the HTTP client by a resolver that refuses non-public answers, so
+the address checked is the address connected to, on the first request and on every redirect,
+and system proxies are not used. `allow_private_networks` lifts the address check and uses the
+system proxies again; set it only for workflows whose URLs an operator controls, together with
+`allow_hosts` naming the internal services. An allowlisted host is still refused at a
+non-public address without it.
 
 Logs and errors show the URL without its query string or credentials. A notification
 node's webhook URL is itself a credential, so its logs and errors name only the host.
@@ -116,6 +124,9 @@ use adk_graph::action::http::HttpActionPolicy;
 let files = ActionNodeExecutor::new(file_config).with_file_roots(["/srv/workflow-data"]);
 let fetch = ActionNodeExecutor::new(http_config).with_http_policy(
     HttpActionPolicy::new().allow_schemes(["https"]).allow_hosts(["api.example.com"]),
+);
+let billing = ActionNodeExecutor::new(billing_config).with_http_policy(
+    HttpActionPolicy::new().allow_hosts(["billing.internal.example.com"]).allow_private_networks(),
 );
 ```
 
