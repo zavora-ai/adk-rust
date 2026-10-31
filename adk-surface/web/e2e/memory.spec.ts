@@ -50,8 +50,17 @@ function verifierKey(signerKey: string): string {
   return `${name}+${hash}+${key.toString("base64")}`;
 }
 
+/** What a check of the kernel's signed record reports, the home's and `audit verify --json`'s alike. */
+interface VerifyReport {
+  records: number;
+  checkpointsVerified: number;
+  verifiedSize: number;
+  unsignedTail: number;
+  failures: Array<{ kind: string }>;
+}
+
 /** `adk-rust audit export` and `audit verify --json` of the kernel's record, as a person runs them. */
-function auditVerify(): { valid: boolean; records: number; failures: Array<{ kind: string }>; text: string } {
+function auditVerify(): { valid: boolean; records: number; failures: Array<{ kind: string }>; report: VerifyReport; text: string } {
   const bin = readFileSync(join(dir, "bin"), "utf8").trim();
   const kernelHome = find(home().root, "kernel-id")!;
   const id = readFileSync(join(kernelHome, "kernel-id"), "utf8").trim();
@@ -66,8 +75,8 @@ function auditVerify(): { valid: boolean; records: number; failures: Array<{ kin
     // `audit verify` exits 1 when the record does not verify, and prints its report all the same.
     text = (error as { stdout: Buffer }).stdout.toString();
   }
-  const report = JSON.parse(text) as { records: number; failures: Array<{ kind: string }> };
-  return { valid: report.failures.length === 0, records: report.records, failures: report.failures, text: readFileSync(out, "utf8") };
+  const report = JSON.parse(text) as VerifyReport;
+  return { valid: report.failures.length === 0, records: report.records, failures: report.failures, report, text: readFileSync(out, "utf8") };
 }
 
 function section(page: Page, heading: string): Locator {
@@ -90,7 +99,6 @@ async function send(page: Page, text: string) {
 
 test("Memory and rules corrects the memory, extends and stops a rule, and agrees with audit verify", async ({ page, request }) => {
   test.setTimeout(180_000);
-  const started = Date.now();
   const { workspace } = home();
 
   // What your agents remember: the session's facts, with where each came from.
@@ -186,21 +194,28 @@ test("Memory and rules corrects the memory, extends and stops a rule, and agrees
   expect(amounts.reduce((sum, cents) => sum + cents, 0)).toBe(Math.round(Number(spent.replace(/[^\d.]/g, "")) * 100));
 
   // The record's check is the one `adk-rust audit verify` makes on an export of it: the same
-  // count, valid or not alike. Records the log has not signed yet read as such, never as
-  // changed; once the log signs a checkpoint (a minute after the last, on its next record), the
-  // home reads "nothing has been changed or deleted" exactly when the command says VALID with
-  // no unsigned tail, and otherwise names the records signed since.
-  const agree = async (signed: boolean) => {
+  // count and the same signed records, valid or not alike. The log signs a checkpoint on its
+  // first record a minute or more after its last checkpoint, or after it opened as the kernel
+  // started, so what is signed when this test checks depends on how long the kernel ran before
+  // it. Before the first checkpoint, the home reads every record as not signed yet, never as
+  // changed; after it, the home reads "nothing has been changed or deleted" exactly when the
+  // command says VALID with no unsigned tail, and otherwise names the records signed since.
+  const agree = async () => {
     for (let attempt = 0; attempt < 5; attempt++) {
       await did.getByRole("button", { name: "Check again" }).click();
       const check = (await (await request.get("/api/kernel/record/check")).json()) as {
         valid: boolean;
         entries: number;
-        report: { unsignedTail: number };
+        report: VerifyReport;
       };
       const verified = auditVerify();
       if (verified.records !== check.entries) continue;
       expect(verified.valid).toBe(check.valid);
+      expect([verified.report.verifiedSize, verified.report.unsignedTail]).toEqual([
+        check.report.verifiedSize,
+        check.report.unsignedTail,
+      ]);
+      const signed = check.report.checkpointsVerified > 0;
       expect(check.valid).toBe(signed);
       const shown = did.locator(".record-sub").first();
       await expect(shown).toContainText(`All ${check.entries.toLocaleString("en-US")} of them`);
@@ -218,17 +233,27 @@ test("Memory and rules corrects the memory, extends and stops a rule, and agrees
       for (const text of ["Your bank is [BANK]", "You send invoices on the last working day", "[NAME]", "[NEW RATE]", "[RATE]"]) {
         expect(verified.text).not.toContain(text);
       }
-      return;
+      return check.report;
     }
     throw new Error("the record kept growing between the check and the export");
   };
-  await agree(false);
-  await page.waitForTimeout(Math.max(0, 62_000 - (Date.now() - started)));
+  const first = await agree();
+  // The next checkpoint is due a minute after the record whose append signed the last one, or,
+  // before any, a minute after the log's first record, which the kernel writes once it opened
+  // the log.
+  const { lines } = (await (await request.get("/api/kernel/record?limit=200")).json()) as {
+    lines: Array<{ seq: number; at: string }>;
+  };
+  const signer = lines.find((line) => line.seq === Math.max(first.verifiedSize - 1, 0));
+  expect(signer).toBeDefined();
+  await page.waitForTimeout(Math.max(0, Date.parse(signer!.at) + 62_000 - Date.now()));
   // A change of the daily spending limit is the record's next entry, and signs a checkpoint.
   await canDo.locator("li.setting", { hasText: "Daily spending limit" }).getByRole("button", { name: "Change" }).click();
   await canDo.getByLabel("Dollars a day").fill("5");
   await canDo.getByRole("button", { name: "Save" }).click();
   await expect(canDo.getByText(/^Was No limit\. Now \$5\.00\.$/)).toBeVisible();
-  await agree(true);
+  const last = await agree();
+  expect(last.checkpointsVerified).toBeGreaterThan(0);
+  expect(last.verifiedSize).toBeGreaterThan(first.verifiedSize);
   expect(existsSync(join(workspace, "notes", "a.txt"))).toBe(true);
 });
