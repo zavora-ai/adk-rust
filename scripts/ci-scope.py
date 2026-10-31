@@ -4,9 +4,9 @@
 Reads the changed file paths on stdin and prints `crates=` and `shards=` lines for
 $GITHUB_OUTPUT. A crate is affected when a file under it changed or when it depends,
 directly or through other workspace crates, on one that did. Files under docs/ or
-examples/, and Markdown and LICENSE files at the root, affect no crate. Any other file
-outside the crates (the lockfile, a manifest, .cargo/, CI, scripts), or an empty list,
-affects them all, and `crates=all` is printed.
+examples/, and Markdown (changelog.d/ included), LICENSE and .env.example outside the
+crates, affect no crate. Any other file outside the crates (the lockfile, a manifest,
+.cargo/, CI, scripts), or an empty list, affects them all, and `crates=all` is printed.
 
 Usage:
     git diff --name-only origin/main...HEAD | scripts/ci-scope.py
@@ -52,13 +52,14 @@ def crate_of(path):
 everything = not changed
 direct = set()
 for path in changed:
-    if path.startswith(("docs/", "examples/")) or ("/" not in path and (path.endswith(".md") or path == "LICENSE")):
+    if path.startswith(("docs/", "examples/")):
         continue
     name = crate_of(path)
-    if name is None:
+    if name is not None:
+        direct.add(name)
+    elif not (path.endswith(".md") or path in ("LICENSE", ".env.example")):
         everything = True
         break
-    direct.add(name)
 
 if everything:
     affected = set(crates)

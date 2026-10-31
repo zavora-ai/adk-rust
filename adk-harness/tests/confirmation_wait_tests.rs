@@ -5,12 +5,13 @@
 //! from the file `HARNESS_ENV_FILE` names, else the repository's `.env`:
 //!
 //! ```text
-//! cargo nextest run -p adk-harness --run-ignored only -E 'test(live_)' --test confirmation_wait_tests
+//! cargo nextest run -p adk-harness --run-ignored only --test integration \
+//!   -E 'test(/^confirmation_wait_tests::/) and test(live_)'
 //! ```
 
 #![cfg(feature = "runner")]
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

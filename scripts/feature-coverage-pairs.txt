@@ -274,6 +274,8 @@
 # MCP Apps on the client (spec 3.3 §6.1 `genui-apps`): the ui extension, `_meta.ui` and app
 # resources against an in-process server.
 4 adk-tool mcp,mcp-apps
+# `PreloadMemoryTool` under an `LlmAgent` history processor, through a `Runner`.
+4 adk-tool memory-tools
 4 adk-agent codeact
 # Guardrails are not in adk-agent's default features, so `tool_guardrail_tests` ran in no
 # required check.

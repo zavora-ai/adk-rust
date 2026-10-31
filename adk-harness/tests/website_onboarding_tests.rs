@@ -7,8 +7,8 @@
 
 #![cfg(all(feature = "website", feature = "web-fixture", feature = "graph"))]
 
-mod common;
-mod website_common;
+use crate::common;
+use crate::website_common;
 
 use std::sync::Arc;
 

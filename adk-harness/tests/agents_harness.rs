@@ -2,7 +2,7 @@
 
 #![cfg(all(feature = "kernel", feature = "web"))]
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 

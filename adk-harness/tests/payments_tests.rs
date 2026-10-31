@@ -6,7 +6,7 @@
 
 #![cfg(feature = "payments")]
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};

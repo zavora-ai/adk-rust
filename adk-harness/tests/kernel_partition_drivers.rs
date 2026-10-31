@@ -9,7 +9,7 @@
 
 #![cfg(feature = "kernel")]
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -81,7 +81,7 @@ fn manifest(id: &str, partitions: &[&str], tool: &str) -> DriverManifest {
 fn classed(id: &str, partitions: &[&str], tool: &str, class: &str) -> DriverManifest {
     DriverManifest::from_toml(&format!(
         "id = {id:?}\ncommand = {:?}\n\
-         args = [\"stdio_partition_driver\", \"--exact\", \"--ignored\", \"--quiet\", \"--test-threads=1\"]\n\
+         args = [\"kernel_partition_drivers::stdio_partition_driver\", \"--exact\", \"--ignored\", \"--quiet\", \"--test-threads=1\"]\n\
          partitions = {partitions:?}\nsandbox = \"unsandboxed\"\n\
          env = {{ {SERVER_ENV} = \"1\", {TOOL_ENV} = {tool:?} }}\n[tools]\n{tool} = {class:?}\n",
         std::env::current_exe().unwrap().display().to_string(),

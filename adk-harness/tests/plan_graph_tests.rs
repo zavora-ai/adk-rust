@@ -2,7 +2,7 @@
 
 #![cfg(all(feature = "graph", feature = "runner"))]
 
-mod common;
+use crate::common;
 
 use adk_harness::{
     HarnessDecision, HarnessMode, PLAN_GATE_TOOL, PlanGate, PlanGraphShape, PlanRunStatus,

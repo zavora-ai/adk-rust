@@ -5,7 +5,7 @@
 
 #![cfg(all(feature = "runner", feature = "memory"))]
 
-mod common;
+use crate::common;
 
 use adk_harness::{FileMemory, HarnessMode, MemoryConfig, MemoryLayout, MemoryLimits};
 use adk_model::ScriptedResponse;

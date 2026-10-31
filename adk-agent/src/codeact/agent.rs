@@ -417,6 +417,10 @@ fn drive_codeact(
         // Whether the transcript carries a message the model has not been sent yet.
         let mut unanswered = false;
 
+        // Set by each script turn that hands control back, so the next model call is
+        // preceded by a safe point.
+        let mut steering_due = false;
+
         // ----- self-route: resume a pending checkpoint, or start fresh -----
         match pending {
             None => {
@@ -601,6 +605,17 @@ fn drive_codeact(
                     if let Err(error) = invocation_ctx.run_config().check_governance() {
                         yield Err(error);
                         return;
+                    }
+                    // The safe point: the last script turn's results are in the transcript and
+                    // the next request is not built yet. Taken only once the checks above pass,
+                    // so a run they end returns its queued messages to their senders.
+                    if std::mem::take(&mut steering_due)
+                        && let Some(inbox) = invocation_ctx.steering_inbox()
+                    {
+                        for message in inbox.drain() {
+                            yield Ok(message.to_event(&invocation_id, invocation_ctx.branch()));
+                            transcript.push(message.content);
+                        }
                     }
                     unanswered = false;
                     let script = match next_script(
@@ -1031,6 +1046,7 @@ fn drive_codeact(
             if !script_output.is_empty() {
                 transcript.push(stdout_content(&truncate_middle(&script_output, max_error_chars)));
             }
+            steering_due = true;
         }
     }
 }
@@ -2099,8 +2115,13 @@ impl CodeActAgent {
                     ctx.session().conversation_history_for_agent(&self.name)
                 };
                 // Session history already contains the current user message;
-                // ensure the latest user turn reflects the current content.
-                if let Some(idx) = history.iter().rposition(|c| c.role == "user") {
+                // ensure the latest user turn reflects the current content. The run's own
+                // message is preferred, so a steering message a run-mate took after it stays.
+                if let Some(idx) = history
+                    .iter()
+                    .rposition(|c| *c == current)
+                    .or_else(|| history.iter().rposition(|c| c.role == "user"))
+                {
                     history[idx] = current;
                 } else {
                     history.push(current);
@@ -3687,6 +3708,66 @@ mod tests {
         assert_eq!(model.calls(), 2);
         let second = &model.seen.lock().unwrap()[1];
         assert!(second.iter().any(|c| c.role == "model"));
+    }
+
+    #[tokio::test]
+    async fn a_steering_message_joins_the_transcript_after_a_script_turn() {
+        let inbox = adk_core::SteeringInbox::new();
+        let receipt =
+            inbox.push(user("use metric units"), user("use metric units"), "user", true).unwrap();
+        let model = FakeLlm::new("the script");
+        let mut input = base_inputs(
+            model.clone(),
+            Arc::new(ScriptedRuntime::with_suspension(vec![
+                vec![Planned::Complete(json!({"type": "observation", "value": "look"}))],
+                vec![Planned::Complete(json!({"type": "final_result", "value": "done"}))],
+            ])),
+            user("go"),
+        );
+        input.invocation_ctx =
+            Arc::new(MockInvocationContext::new(user("go")).with_steering_inbox(inbox));
+        let events = collect(input).await;
+
+        let steered: Vec<&Event> =
+            events.iter().filter(|event| event.actions.steering.is_some()).collect();
+        assert_eq!(steered.len(), 1);
+        assert_eq!(
+            (
+                steered[0].author.as_str(),
+                steered[0].llm_response.content.clone(),
+                steered[0].actions.input_screened,
+                steered[0].actions.steering.as_ref().map(|marker| marker.steer_id.as_str()),
+            ),
+            ("user", Some(user("use metric units")), true, Some(receipt.steer_id()))
+        );
+        // The second request carries it after the first turn's observation.
+        let second = model.seen.lock().unwrap()[1].clone();
+        assert_eq!(second.last(), Some(&user("use metric units")));
+        assert!(second[second.len() - 2].parts[0].text().unwrap().starts_with("Observation:"));
+        assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("done"));
+    }
+
+    #[tokio::test]
+    async fn a_script_that_answers_directly_never_takes_steering() {
+        let inbox = adk_core::SteeringInbox::new();
+        let _receipt =
+            inbox.push(user("keep it short"), user("keep it short"), "user", false).unwrap();
+        let mut input = base_inputs(
+            FakeLlm::new("the script"),
+            Arc::new(ScriptedRuntime::with_suspension(vec![vec![Planned::Complete(
+                json!({"type": "final_result", "value": "done"}),
+            )]])),
+            user("go"),
+        );
+        input.invocation_ctx =
+            Arc::new(MockInvocationContext::new(user("go")).with_steering_inbox(inbox.clone()));
+        let events = collect(input).await;
+
+        assert!(events.iter().all(|event| event.actions.steering.is_none()));
+        assert_eq!(
+            inbox.drain().into_iter().map(|message| message.content).collect::<Vec<_>>(),
+            vec![user("keep it short")]
+        );
     }
 
     #[test]

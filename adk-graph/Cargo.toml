@@ -11,6 +11,8 @@ documentation = "https://docs.rs/adk-graph"
 readme = "README.md"
 keywords = ["ai", "agents", "workflow", "graph", "langgraph"]
 categories = ["science", "asynchronous"]
+# The integration tests build as one binary, `tests/integration.rs`, so dependencies link once.
+autotests = false
 
 [dependencies]
 adk-core.workspace = true
@@ -74,7 +76,8 @@ conformance = []
 # Action node feature flags
 action = ["dep:adk-action", "dep:regex"]
 action-trigger = ["action", "dep:tokio-cron-scheduler"]
-action-http = ["action", "dep:reqwest", "dep:sha2"]
+# `adk-core/webhook-delivery` supplies the public-only address check and resolver.
+action-http = ["action", "dep:reqwest", "dep:sha2", "adk-core/webhook-delivery"]
 action-db = ["action"]
 action-db-mongo = ["action"]
 action-db-redis = ["action"]
@@ -99,6 +102,10 @@ adk-tool = { path = "../adk-tool" }
 adk-agent = { path = "../adk-agent" }
 # For exercising the `#[entrypoint]`/`#[task]` expansion against this crate.
 adk-rust-macros = { path = "../adk-rust-macros" }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 # Document every feature-gated API on docs.rs.
 [package.metadata.docs.rs]

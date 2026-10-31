@@ -8,7 +8,7 @@
 //! ```bash
 //! DATABASE_URL=postgres://postgres@localhost:5432/postgres \
 //!   cargo nextest run -p adk-graph --features postgres --run-ignored only \
-//!   --test checkpointer_conformance_postgres
+//!   --test integration -E 'test(/^checkpointer_conformance_postgres::/)'
 //! ```
 
 #![cfg(feature = "postgres")]

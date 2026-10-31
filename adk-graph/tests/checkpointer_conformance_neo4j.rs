@@ -7,7 +7,7 @@
 //! ```bash
 //! NEO4J_PASSWORD=secret \
 //!   cargo nextest run -p adk-graph --features neo4j --run-ignored only \
-//!   --test checkpointer_conformance_neo4j
+//!   --test integration -E 'test(/^checkpointer_conformance_neo4j::/)'
 //! ```
 
 #![cfg(feature = "neo4j")]

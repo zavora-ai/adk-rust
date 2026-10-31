@@ -32,6 +32,18 @@ class CiScopeTests(unittest.TestCase):
             ("", []),
         )
 
+    def test_changelog_fragments_and_the_env_example_affect_no_crate(self) -> None:
+        self.assertEqual(
+            scope("changelog.d/added.example.md", ".env.example", "CONTRIBUTING.md"),
+            ("", []),
+        )
+
+    def test_a_changelog_fragment_keeps_a_crate_change_scoped(self) -> None:
+        self.assertEqual(
+            scope("adk-surface/src/lib.rs", "changelog.d/fixed.example.md"),
+            scope("adk-surface/src/lib.rs"),
+        )
+
     def test_a_file_outside_the_crates_affects_every_crate(self) -> None:
         crates, shards = scope("Cargo.lock")
 

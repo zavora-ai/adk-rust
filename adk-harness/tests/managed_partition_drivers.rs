@@ -86,7 +86,7 @@ async fn stdio_calendar_driver() {
 fn calendar() -> DriverManifest {
     DriverManifest::from_toml(&format!(
         "id = \"calendar\"\ncommand = {:?}\n\
-         args = [\"stdio_calendar_driver\", \"--exact\", \"--ignored\", \"--quiet\", \"--test-threads=1\"]\n\
+         args = [\"managed_partition_drivers::stdio_calendar_driver\", \"--exact\", \"--ignored\", \"--quiet\", \"--test-threads=1\"]\n\
          partitions = [\"work\"]\nenv = {{ {SERVER_ENV} = \"1\" }}\n[tools]\ncalendar_read = \"read\"\n",
         std::env::current_exe().unwrap().display().to_string(),
     ))

@@ -4,7 +4,7 @@
 
 #![cfg(all(feature = "runner", feature = "auth"))]
 
-mod common;
+use crate::common;
 
 use std::sync::{Arc, Mutex};
 

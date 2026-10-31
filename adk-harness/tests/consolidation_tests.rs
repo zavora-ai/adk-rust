@@ -8,7 +8,7 @@
 
 #![cfg(all(feature = "runner", feature = "memory"))]
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::time::Duration;

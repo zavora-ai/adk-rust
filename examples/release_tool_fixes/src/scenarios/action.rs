@@ -164,7 +164,9 @@ async fn rss_host() -> anyhow::Result<Verdict> {
 async fn rss_redirect() -> anyhow::Result<Verdict> {
     let server = internal().await?;
     let executor = ActionNodeExecutor::new(rss(&format!("{}/redirect", server.base)))
-        .with_http_policy(HttpActionPolicy::new().allow_hosts(["127.0.0.1"]));
+        .with_http_policy(
+            HttpActionPolicy::new().allow_hosts(["127.0.0.1"]).allow_private_networks(),
+        );
     let outcome = execute(&executor).await;
     let hits = server.hits.load(Ordering::SeqCst);
     Ok(verdict(vec![

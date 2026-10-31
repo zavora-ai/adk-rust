@@ -8,7 +8,8 @@
 //! every agent and goes back as a user-role turn. Events a tool publishes on
 //! its own branch ([`tool_branch`](crate::history::tool_branch)) are progress for observers,
 //! not context. A history cut — a window of recent events, or a compaction — keeps every
-//! function response with its call ([`balanced_cut`](crate::history::balanced_cut)).
+//! function response with its call ([`balanced_cut`](crate::history::balanced_cut), and
+//! [`balanced_content_cut`](crate::history::balanced_content_cut) for contents).
 
 use std::collections::{HashMap, HashSet};
 
@@ -331,16 +332,66 @@ pub fn function_call_ids(events: &[Event]) -> HashSet<String> {
 /// assert_eq!(balanced_cut(&events, 3), 3);
 /// ```
 pub fn balanced_cut(events: &[Event], end: usize) -> usize {
-    let end = end.min(events.len());
-    // For each response, the index of the event holding the call it answers.
+    let contents = events
+        .iter()
+        .map(|event| event.llm_response.content.as_ref().filter(|_| !event.llm_response.partial))
+        .collect::<Vec<_>>();
+    cut_keeping_pairs(&contents, end)
+}
+
+/// The largest index at or before `end` where cutting `contents` keeps every function response
+/// with its call.
+///
+/// The [`balanced_cut`] rule for contents rather than events, for code that holds a model
+/// history: a [`HistoryProcessor`](crate::HistoryProcessor) that drops or summarises
+/// `contents[..index]` and keeps `contents[index..]` cuts here, so no provider receives a
+/// function response whose call was cut away.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::history::balanced_content_cut;
+/// use adk_core::{Content, FunctionResponseData, Part};
+/// use serde_json::json;
+///
+/// let contents = vec![
+///     Content::new("user").with_text("where is A1?"),
+///     Content {
+///         role: "model".into(),
+///         parts: vec![Part::FunctionCall {
+///             name: "lookup".into(),
+///             args: json!({}),
+///             id: Some("c1".into()),
+///             thought_signature: None,
+///         }],
+///     },
+///     Content {
+///         role: "function".into(),
+///         parts: vec![Part::FunctionResponse {
+///             function_response: FunctionResponseData::new("lookup", json!({"status": "shipped"})),
+///             id: Some("c1".into()),
+///             annotations: None,
+///         }],
+///     },
+/// ];
+///
+/// // Cutting between the call and its response moves the cut back before the call.
+/// assert_eq!(balanced_content_cut(&contents, 2), 1);
+/// assert_eq!(balanced_content_cut(&contents, 3), 3);
+/// ```
+pub fn balanced_content_cut(contents: &[Content], end: usize) -> usize {
+    cut_keeping_pairs(&contents.iter().map(Some).collect::<Vec<_>>(), end)
+}
+
+/// [`balanced_cut`] over contents, where `None` stands for an event history ignores.
+fn cut_keeping_pairs(contents: &[Option<&Content>], end: usize) -> usize {
+    let end = end.min(contents.len());
+    // For each response, the index of the content holding the call it answers.
     let mut open_by_id = HashMap::<&str, usize>::new();
     let mut open_by_name = HashMap::<&str, Vec<usize>>::new();
     let mut earliest_needed = end;
-    for (index, event) in events.iter().enumerate() {
-        if event.llm_response.partial {
-            continue;
-        }
-        let Some(content) = &event.llm_response.content else {
+    for (index, content) in contents.iter().enumerate() {
+        let Some(content) = content else {
             continue;
         };
         for part in &content.parts {
@@ -379,7 +430,7 @@ pub fn balanced_cut(events: &[Event], end: usize) -> usize {
         return end;
     }
     // Moving the cut back can strand another call answered after the new cut.
-    balanced_cut(events, earliest_needed)
+    cut_keeping_pairs(contents, earliest_needed)
 }
 
 #[cfg(test)]
@@ -465,6 +516,31 @@ mod tests {
     fn an_unanswered_call_does_not_hold_the_cut_back() {
         let events = vec![text("user", "q"), call(Some("c1"), "a"), text("user", "q2")];
         assert_eq!(balanced_cut(&events, 2), 2);
+    }
+
+    #[test]
+    fn contents_cut_where_their_events_cut() {
+        let events = vec![
+            text("user", "q"),
+            call(Some("c1"), "a"),
+            call(Some("c2"), "b"),
+            response(Some("c1"), "a"),
+            response(Some("c2"), "b"),
+            call(None, "lookup"),
+            response(None, "lookup"),
+            text("model", "done"),
+        ];
+        let contents = events
+            .iter()
+            .filter_map(|event| event.llm_response.content.clone())
+            .collect::<Vec<_>>();
+        let by_events =
+            (0..=events.len()).map(|end| balanced_cut(&events, end)).collect::<Vec<_>>();
+        let by_contents = (0..=contents.len())
+            .map(|end| balanced_content_cut(&contents, end))
+            .collect::<Vec<_>>();
+        assert_eq!(by_contents, vec![0, 1, 1, 1, 1, 5, 5, 7, 8]);
+        assert_eq!(by_contents, by_events);
     }
 
     #[test]

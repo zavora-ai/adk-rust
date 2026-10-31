@@ -11,6 +11,8 @@ documentation = "https://docs.rs/adk-harness"
 readme = "README.md"
 keywords = ["adk", "agent", "harness", "coding", "governance"]
 categories = ["development-tools", "asynchronous"]
+# The integration tests build as one binary, `tests/integration.rs`, so dependencies link once.
+autotests = false
 
 # Feature set of spec 3.1 §7.1. Packs (browser, computer-use, payments, voice,
 # managed) are off by default.
@@ -219,6 +221,10 @@ tracing-subscriber = { workspace = true, features = ["registry"] }
 adk-enterprise = { path = "../adk-enterprise" }
 axum = "0.8"
 reqwest = { workspace = true }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [package.metadata.docs.rs]
 all-features = true

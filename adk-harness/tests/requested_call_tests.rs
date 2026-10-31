@@ -4,7 +4,7 @@
 
 #![cfg(feature = "runner")]
 
-mod common;
+use crate::common;
 
 use adk_core::{
     ApprovalScope, RequestContext, RequestedCall, RequestedVia, SubjectRef, ToolApproval,

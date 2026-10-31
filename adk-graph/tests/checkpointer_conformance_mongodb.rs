@@ -7,7 +7,7 @@
 //! ```bash
 //! MONGODB_URL=mongodb://localhost:27017 \
 //!   cargo nextest run -p adk-graph --features mongodb --run-ignored only \
-//!   --test checkpointer_conformance_mongodb
+//!   --test integration -E 'test(/^checkpointer_conformance_mongodb::/)'
 //! ```
 
 #![cfg(feature = "mongodb")]
