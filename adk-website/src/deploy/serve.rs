@@ -16,6 +16,12 @@
 //! source, and — with a model — the back office ([`super::back_office`]): the Steward leading
 //! the team, and each agent's jobs on their signals and schedules, under the owner's
 //! standing rules in `data/kernel.db`. Agent sessions are kept in `data/kernel/sessions.db`.
+//! At start, each job whose process is not scheduled is logged with the reason: no channel,
+//! no probe options or domain claim, no advisory or certificate source, or no model.
+//!
+//! The kernel's process table, schedules and spend ledger are in `data/kernel.db` beside the
+//! runs, and it records into the site's audit trail, `data/audit.jsonl`; an agency's kernel
+//! records into the agency's own `data/audit.jsonl`.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -212,7 +218,7 @@ async fn start(
         // `urn:adk:agent:{site}/{agent}`, an agency's sites included.
         let app = site.site.name.as_str();
         let mut runs: Vec<SiteProcessKind> = Vec::new();
-        // Why each kind this site does not run is skipped, for the startup log.
+        // The kinds this site does not run, each with its reason, for the startup log.
         let mut skipped: Vec<(SiteProcessKind, &str)> = Vec::new();
         if let Some(target) = site.digest_target(&options.site) {
             site_workflows = site_workflows.digest(site.site.id, target);
