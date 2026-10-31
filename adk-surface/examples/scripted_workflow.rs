@@ -198,7 +198,11 @@ fn invoice_run(
         rate_limit: None,
     }))
     .with_http_policy(
-        HttpActionPolicy::new().allow_schemes(["http"]).allow_hosts(["127.0.0.1"]).max_redirects(0),
+        HttpActionPolicy::new()
+            .allow_schemes(["http"])
+            .allow_hosts(["127.0.0.1"])
+            .allow_private_networks()
+            .max_redirects(0),
     );
     Ok(GraphAgent::builder(GRAPH)
         .description("Drafts an invoice, charges it once a person approves, files the receipt")

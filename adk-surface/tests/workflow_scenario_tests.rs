@@ -229,7 +229,11 @@ fn invoice_run(base: &str, checkpointer: Arc<dyn Checkpointer>) -> GraphAgent {
         rate_limit: None,
     }))
     .with_http_policy(
-        HttpActionPolicy::new().allow_schemes(["http"]).allow_hosts(["127.0.0.1"]).max_redirects(0),
+        HttpActionPolicy::new()
+            .allow_schemes(["http"])
+            .allow_hosts(["127.0.0.1"])
+            .allow_private_networks()
+            .max_redirects(0),
     );
     GraphAgent::builder("invoice-run")
         .channels(&["invoice", "note", "charge", "receipt"])
