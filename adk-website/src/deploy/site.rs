@@ -44,7 +44,7 @@ use awp_types::{Cadence, Charter, Reporting, SiteKind};
 use tokio::task::JoinHandle;
 
 use super::checks::{PaymentLinks, ReleaseDelegation, metered_trail};
-use super::kernel::KernelStores;
+use super::kernel::SiteStores;
 use super::project::{self, KeyFile, ProjectPaths};
 use super::updates::{SiteAlarms, UpdateCards, UpdateDriver, UpdateJournal};
 use crate::alarms::{AlarmRouter, SqliteAlarmStore};
@@ -435,7 +435,7 @@ impl RunningSite {
     /// open.
     pub async fn open(
         paths: ProjectPaths,
-        stores: &KernelStores,
+        stores: &SiteStores,
         options: &SiteOptions,
     ) -> Result<Self> {
         let (id, kind, drafted) = identity(&paths);
@@ -500,7 +500,7 @@ impl RunningSite {
         let announcer = Arc::new(DeferredAnnouncer::default());
         let verify_edge = Arc::new(crate::edge::adapters::DeferredFetcher::default());
         let quotes = Arc::new(ReviewQuotes::open(paths.data().join("reviews.json"))?);
-        let charters: Arc<dyn CharterStore> = stores.charters.clone();
+        let charters: Arc<dyn CharterStore> = stores.kernel.charter.charters.clone();
         let mut builder = SiteRuntime::builder(
             site.clone(),
             project.clone(),
@@ -547,7 +547,7 @@ impl RunningSite {
             router = router.with_sink(sink.clone(), thread.clone());
         }
         let alarms = Arc::new(router);
-        let ladder = AutonomyLadder::new(stores.autonomy.clone())
+        let ladder = AutonomyLadder::new(stores.kernel.charter.autonomy.clone())
             .with_charters(charters.clone())
             .with_audit(trail.clone());
         if let Some(current) = charters.current(site.id).await.map_err(config)? {
@@ -646,7 +646,7 @@ impl RunningSite {
                 as Arc<dyn adk_server::awp::ThreadSink>
         });
         let signals = partitions
-            .signal_sink(stores.signals.clone(), stores.agenda.clone())
+            .signal_sink(stores.kernel.charter.signals.clone(), stores.kernel.agenda.clone())
             .with_audit(trail.clone());
         let edge_signals = Arc::new(KernelSignals::new(signals));
         // The edge's rate-limit windows are shared through `data/edge.db` (spec 3.5 §7.9).
@@ -683,7 +683,7 @@ impl RunningSite {
                 threads,
                 quote_validity: chrono::Duration::days(7),
                 action_ledger: Some(Arc::new(crate::measurement::MeteredActionLedger::new(
-                    stores.actions.clone(),
+                    stores.kernel.actions.clone(),
                     counts.clone(),
                 ))),
                 audit: Some(metered_trail(recorder.clone(), counts.clone())),
@@ -792,7 +792,7 @@ impl RunningSite {
         ));
 
         let pauses = Arc::new(JobPauses::new());
-        let kpis: Arc<dyn KpiStore> = stores.kpis.clone();
+        let kpis: Arc<dyn KpiStore> = stores.kernel.charter.kpis.clone();
         let experiments = Arc::new(
             ExperimentRunner::new(site.id, charters.clone(), experiment_store)
                 .with_source(Arc::new(BeaconKpi::new(site.id, edge.edge.beacon())))
@@ -806,7 +806,7 @@ impl RunningSite {
                     AgentRole::Growth.principal(&site),
                 ))),
         );
-        let inner_spend: Arc<dyn SpendLedger> = stores.spend.clone();
+        let inner_spend: Arc<dyn SpendLedger> = stores.kernel.spend.clone();
         let spend = Arc::new(MeteredSpendLedger::new(inner_spend, counts.clone()));
         let aeo = (!options.search.is_empty()).then(|| {
             let mut tracker = AeoTracker::new(site.id, domain.clone(), counts.clone());
@@ -873,7 +873,7 @@ impl RunningSite {
         let mut router = site_router(&edge.edge, host, &project.config.name)
             .merge(stream_router(updates.clone()));
         if let Some(entry) = &repository {
-            router = router.merge(entry.router(stores.runs.clone()));
+            router = router.merge(entry.router(stores.kernel.runs.clone()));
         }
         verify_edge.set(Arc::new(adk_awp::verify::fetch::RouterFetcher::new(router.clone())));
         Ok(Self {
@@ -994,7 +994,7 @@ impl RunningSite {
 
     /// The hosting job's upkeep check (spec 3.5 §7.20), when the site has a lockfile with an
     /// advisory source or a certificate source: proposals go to `owner`'s approval inbox.
-    pub fn upkeep(&self, stores: &KernelStores, options: &SiteOptions) -> Option<Arc<UpkeepCheck>> {
+    pub fn upkeep(&self, stores: &SiteStores, options: &SiteOptions) -> Option<Arc<UpkeepCheck>> {
         if options.advisories.is_none() && options.certificate.is_none() {
             return None;
         }

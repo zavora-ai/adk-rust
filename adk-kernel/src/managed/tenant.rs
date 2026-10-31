@@ -29,8 +29,8 @@ use crate::error::{KernelError, Result};
 use crate::kernel::{Kernel, KernelConfig, KernelState};
 use crate::partition::{Partition, PartitionId, PartitionStore, Partitions};
 use crate::stores::{
-    InMemoryAgendaStore, InMemoryCronWatermarkStore, InMemoryPartitionStore, InMemoryProcessStore,
-    ProcessStore,
+    InMemoryAgendaStore, InMemoryAgentStore, InMemoryCronWatermarkStore, InMemoryPartitionStore,
+    InMemoryProcessStore, KernelStores, ProcessStore,
 };
 use crate::wake::{CronWakeSource, Trigger, Wake};
 use crate::watermark::{CronWatermarkStore, SourceWatermark};
@@ -120,6 +120,9 @@ struct TenantInner {
     audit: Option<AuditTrail>,
     agenda: Arc<dyn AgendaStore>,
     agenda_handle: AgendaHandle,
+    /// The agent table's store; a tenant kernel adds no agents, so it stays empty unless
+    /// the host's bundle holds some.
+    agents: Arc<dyn crate::agents::AgentStore>,
     consolidators: BTreeMap<PartitionId, Arc<dyn Consolidator>>,
     partitions: Partitions,
     partition_resolver: Option<Arc<dyn PartitionAgentResolver>>,
@@ -192,6 +195,7 @@ impl TenantKernel {
             driver_approvers: None,
             #[cfg(feature = "charter")]
             signals: None,
+            bundle: None,
         }
     }
 
@@ -791,6 +795,8 @@ impl TenantKernel {
             .session_service(Arc::clone(&inner.sessions))
             .agenda_store(Arc::clone(&inner.agenda))
             .agenda_handle(inner.agenda_handle.clone())
+            .agent_store(Arc::clone(&inner.agents))
+            .governance(inner.config.governance.clone())
             .partitions(inner.partitions.clone())
             .watermark_store(Arc::clone(&inner.watermarks));
         for (partition, consolidator) in &inner.consolidators {
@@ -1084,6 +1090,7 @@ pub struct TenantKernelBuilder {
     driver_approvers: Option<ApprovalPolicy>,
     #[cfg(feature = "charter")]
     signals: Option<Arc<dyn SignalStore>>,
+    bundle: Option<KernelStores>,
 }
 
 impl fmt::Debug for TenantKernelBuilder {
@@ -1247,7 +1254,39 @@ impl TenantKernelBuilder {
         self
     }
 
-    /// Builds the tenant's kernel. Nothing runs until [`TenantKernel::start`].
+    /// Takes the tenant's stateful stores the builder has no other from `stores`, the
+    /// tenant's own (spec 3.2 §7.1, §7.13): the process side table, schedules, spend and
+    /// action ledgers, agenda, partition table, cron watermarks, agent table and, with the
+    /// `charter` feature, the signal store; the kill
+    /// switch mirrored over `governance` unless [`governance`](Self::governance) is set or
+    /// the bundle keeps it in memory. A store set on the builder wins. The run store and the
+    /// approvals are the tenant's [`ManagedStores`]'.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_kernel::managed::TenantKernel;
+    /// use adk_kernel::stores::KernelStores;
+    /// use adk_managed::ManagedStores;
+    /// use adk_session::InMemorySessionService;
+    ///
+    /// let stores = KernelStores::in_memory();
+    /// let tenant = TenantKernel::builder("tenant-a", ManagedStores::in_memory(), Arc::new(InMemorySessionService::new()))
+    ///     .stores(&stores)
+    ///     .build()?;
+    /// assert!(Arc::ptr_eq(tenant.process_store(), &stores.processes));
+    /// # Ok::<(), adk_kernel::KernelError>(())
+    /// ```
+    #[must_use]
+    pub fn stores(mut self, stores: &KernelStores) -> Self {
+        self.bundle = Some(stores.clone());
+        self
+    }
+
+    /// Builds the tenant's kernel. Nothing runs until [`TenantKernel::start`]. Each store
+    /// neither set nor in the builder's [`stores`](Self::stores) is kept in memory, with a
+    /// warning naming it.
     ///
     /// # Errors
     ///
@@ -1263,18 +1302,68 @@ impl TenantKernelBuilder {
         let mut config = self.config.unwrap_or_default();
         config.app_name = self.tenant.clone();
         config.control = ControlPlaneConfig::default().without_socket();
-        if let Some(governance) = self.governance {
-            config.governance = governance;
+        let bundle = self.bundle.as_ref();
+        match (self.governance, bundle) {
+            (Some(governance), _) => config.governance = governance,
+            (None, Some(bundle))
+                if !config.governance.is_mirrored() && !bundle.is_in_memory("governance") =>
+            {
+                config.governance =
+                    KernelConfig::mirrored_governance(Arc::clone(&bundle.governance));
+            }
+            (None, _) => {}
         }
+        // A store neither set nor bundled is kept in memory, named once here; the kernels
+        // the tenant builds are given every store, so they warn about none.
+        let tenant = self.tenant.clone();
+        let memory = |store: &str| {
+            tracing::warn!(
+                tenant = %tenant,
+                kernel.store = store,
+                "the tenant's kernel keeps this store in memory, so its state ends with the \
+                 process; give the builder durable stores (TenantKernelBuilder::stores)"
+            );
+        };
+        let processes: Arc<dyn ProcessStore> = self
+            .processes
+            .or_else(|| bundle.map(|b| Arc::clone(&b.processes)))
+            .unwrap_or_else(|| {
+                memory("process_store");
+                Arc::new(InMemoryProcessStore::new())
+            });
+        let agenda: Arc<dyn AgendaStore> =
+            self.agenda.or_else(|| bundle.map(|b| Arc::clone(&b.agenda))).unwrap_or_else(|| {
+                memory("agenda_store");
+                Arc::new(InMemoryAgendaStore::new())
+            });
+        let partition_store: Arc<dyn PartitionStore> = self
+            .partition_store
+            .or_else(|| bundle.map(|b| Arc::clone(&b.partitions)))
+            .unwrap_or_else(|| {
+                memory("partition_store");
+                Arc::new(InMemoryPartitionStore::new())
+            });
+        let watermarks: Arc<dyn CronWatermarkStore> = self
+            .watermark_store
+            .or_else(|| bundle.map(|b| Arc::clone(&b.watermarks)))
+            .unwrap_or_else(|| {
+                memory("watermark_store");
+                Arc::new(InMemoryCronWatermarkStore::new())
+            });
+        let agents: Arc<dyn crate::agents::AgentStore> = match bundle {
+            Some(bundle) => Arc::clone(&bundle.agents),
+            None => Arc::new(InMemoryAgentStore::new()),
+        };
+        let schedules = self.schedules.or_else(|| bundle.map(|b| Arc::clone(&b.schedules)));
+        let spend = self.spend.or_else(|| bundle.map(|b| Arc::clone(&b.spend)));
+        let action_ledger = self.action_ledger.or_else(|| bundle.map(|b| Arc::clone(&b.actions)));
         if let Some(drivers) = &self.drivers {
             drivers.host_defaults(
                 &self.tenant,
                 &config.home.join("tenants").join(tenant_dir(&self.tenant)),
             );
         }
-        let mut partitions = Partitions::new(
-            self.partition_store.unwrap_or_else(|| Arc::new(InMemoryPartitionStore::new())),
-        );
+        let mut partitions = Partitions::new(partition_store);
         if let Some(trail) = &self.audit {
             partitions = partitions.with_audit(trail.clone());
         }
@@ -1284,26 +1373,25 @@ impl TenantKernelBuilder {
                 stores: self.stores,
                 sessions: self.sessions,
                 config,
-                processes: self.processes.unwrap_or_else(|| Arc::new(InMemoryProcessStore::new())),
-                schedules: self.schedules,
+                processes,
+                schedules,
                 resolver: self.resolver,
-                action_ledger: self.action_ledger,
-                spend: self.spend,
+                action_ledger,
+                spend,
                 audit: self.audit,
-                agenda: self.agenda.unwrap_or_else(|| Arc::new(InMemoryAgendaStore::new())),
+                agenda,
                 agenda_handle: self.agenda_handle.unwrap_or_default(),
+                agents,
                 consolidators: self.consolidators,
                 partitions,
                 partition_resolver: self.partition_resolver,
-                watermarks: self
-                    .watermark_store
-                    .unwrap_or_else(|| Arc::new(InMemoryCronWatermarkStore::new())),
+                watermarks,
                 drivers: self.drivers,
                 driver_approvers: self.driver_approvers.unwrap_or_else(|| {
                     ApprovalPolicy::new([ApproverSelector::group(DRIVER_APPROVER_GROUP)])
                 }),
                 #[cfg(feature = "charter")]
-                signals: self.signals,
+                signals: self.signals.or_else(|| bundle.map(|b| Arc::clone(&b.charter.signals))),
                 driver_decisions: std::sync::Mutex::new(None),
                 hosting: tokio::sync::Mutex::new(Hosting::default()),
             }),

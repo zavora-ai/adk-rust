@@ -12,7 +12,7 @@ use adk_kernel::channels::{
     ChannelBinding, ChannelBindingStore, ChannelInbound, InMemoryChannel,
     InMemoryChannelBindingStore,
 };
-use adk_kernel::charter::{SignalFilter, SignalStore};
+use adk_kernel::charter::SignalFilter;
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_website::deploy::{EmailOptions, ServeOptions, Served, serve};
 use adk_website::inbox::InboxOutcome;
@@ -139,7 +139,8 @@ async fn a_flagged_message_reaches_the_back_office_as_a_typed_signal() {
     );
     let outcome = inbox.receive_inbound(&hostile).await.unwrap();
     assert!(matches!(&outcome, InboxOutcome::Read { site_signal: true, .. }), "{outcome:?}");
-    let signals = served.stores.signals.list(&SignalFilter::default()).await.unwrap();
+    let signals =
+        served.stores.kernel.charter.signals.list(&SignalFilter::default()).await.unwrap();
     let inbound: Vec<_> = signals
         .iter()
         .filter_map(|stored| match &stored.signal.kind {

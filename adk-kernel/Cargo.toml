@@ -23,7 +23,7 @@ sqlite = ["dep:sqlx", "sqlx/sqlite", "adk-session/sqlite"]
 # Shared kernel stores for replicas, opened from the URL of `adk-rust serve --store`
 # (spec 3.2 §7.1, §13 Q8).
 postgres = ["dep:sqlx", "sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs", "adk-session/postgres"]
-redis = ["dep:fred"]
+redis = ["dep:fred", "adk-session/redis"]
 # The phase-4 backends of the kernel-owned stores (spec 3.2 §7.1, §13 Q8). Each also turns on
 # the same backend of adk-session's run, schedule and governance stores, which a kernel on that
 # backend keeps beside them.

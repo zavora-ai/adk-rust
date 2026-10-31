@@ -16,10 +16,8 @@ use std::time::Duration;
 use adk_awp::signing::jws::Ed25519DocumentSigner;
 use adk_core::principal::SubjectRef;
 use adk_core::webhook::{WebhookSecret, WebhookSigner};
-use adk_core::{
-    ApprovalDecision, ApprovalRequest, ApprovalState, DurableRunStore, InboxQuery, RunFilter,
-};
-use adk_kernel::charter::{CharterStore, CommitDecision, RoleApproval, SignalFilter, SignalStore};
+use adk_core::{ApprovalDecision, ApprovalRequest, ApprovalState, InboxQuery, RunFilter};
+use adk_kernel::charter::{CommitDecision, RoleApproval, SignalFilter};
 use adk_site::pipeline::{Change, EntryPoint, PipelineOutcome};
 use adk_website::contract::{ContractInputs, SiteKeys, site_documents};
 use adk_website::deploy::project::{KeyFile, ProjectPaths};
@@ -172,7 +170,7 @@ async fn launch(served: &Served, dir: &Path) {
     let decision = CommitDecision::new("dec-1", chrono::Utc::now()).with_approval(
         RoleApproval::new(Role::Owner, SubjectRef::human(OWNER), chrono::Utc::now()),
     );
-    served.stores.charters.commit(charter.clone(), decision).await.unwrap();
+    served.stores.kernel.charter.charters.commit(charter.clone(), decision).await.unwrap();
     let site = &served.sites[0];
     let change = Change {
         items: SitePlan::new(&charter, "Juniper Bakery").items(&charter, &[], &["KE".into()]),
@@ -236,7 +234,7 @@ async fn github(addr: SocketAddr, delivery: &str, secret: &str, body: &[u8]) -> 
 /// Waits for the push run `run_id` to end; its output.
 async fn finished(served: &Served, run_id: &str) -> Value {
     for _ in 0..200 {
-        let runs = served.stores.runs.list(RunFilter::default()).await.unwrap();
+        let runs = served.stores.kernel.runs.list(RunFilter::default()).await.unwrap();
         if let Some(run) = runs.iter().find(|run| run.run_id == run_id && run.state.is_terminal()) {
             assert_eq!(run.target, REPOSITORY_WORKFLOW);
             assert_eq!(run.error, None, "{run:#?}");
@@ -244,7 +242,7 @@ async fn finished(served: &Served, run_id: &str) -> Value {
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    let runs = served.stores.runs.list(RunFilter::default()).await.unwrap();
+    let runs = served.stores.kernel.runs.list(RunFilter::default()).await.unwrap();
     panic!("the push run {run_id} did not end: {runs:#?}");
 }
 
@@ -300,6 +298,7 @@ async fn a_signed_push_from_an_authorised_committer_waits_for_the_owner_then_pub
     assert!(
         served
             .stores
+            .kernel
             .runs
             .list(RunFilter::default())
             .await
@@ -379,8 +378,14 @@ async fn an_unlisted_committer_files_a_signal_and_a_declined_push_publishes_noth
         "{output}"
     );
     assert!(cards(&served).await.is_empty());
-    let signals =
-        served.stores.signals.list(&SignalFilter::default().kind("inbound_message")).await.unwrap();
+    let signals = served
+        .stores
+        .kernel
+        .charter
+        .signals
+        .list(&SignalFilter::default().kind("inbound_message"))
+        .await
+        .unwrap();
     assert_eq!(signals.len(), 1, "{signals:#?}");
     let filed = serde_json::to_string(&signals[0]).unwrap();
     assert!(!filed.contains("mallory") && !filed.contains("opening"), "typed fields only: {filed}");

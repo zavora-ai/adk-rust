@@ -60,6 +60,7 @@ mod driver_store_redis;
 mod driver_store_sqlite;
 mod k10_baselines;
 mod kernel_scenarios;
+mod kernel_stores;
 mod ledger_store_memory;
 mod ledger_store_postgres;
 mod ledger_store_redis;

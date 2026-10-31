@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use adk_kernel::channels::{
-    ChannelAttachment, ChannelBinding, ChannelBindingStore, ChannelGateway, ChannelInbound,
-    ChannelSink, InMemoryChannel, InboundOutcome,
+    ChannelAttachment, ChannelBinding, ChannelGateway, ChannelInbound, ChannelSink,
+    InMemoryChannel, InboundOutcome,
 };
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_site::pipeline::EntryPoint;
@@ -95,6 +95,7 @@ async fn strangers_reach_the_inbox_and_the_owners_photos_reach_the_draft() {
     let gateway = served.chat().expect("the site runs a chat gateway").clone();
     served
         .stores
+        .kernel
         .channel_bindings
         .put_binding(ChannelBinding::new("chat", "amina", "t-amina", "owner", chrono::Utc::now()))
         .await

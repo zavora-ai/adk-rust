@@ -333,6 +333,8 @@ pub struct ControlPlaneConfig {
     /// served beyond loopback without a sandbox (spec 3.3 §10 K3); a change to one made
     /// before is not applied.
     pub refused_modes: Vec<(crate::partition::PartitionMode, String)>,
+    /// The in-memory store `Default` made, to tell it from one the caller set.
+    default_control_store: Arc<dyn ControlStore>,
 }
 
 impl ControlPlaneConfig {
@@ -439,6 +441,15 @@ impl ControlPlaneConfig {
         self
     }
 
+    /// Whether the control store is still the in-memory one `Default` made, so a restart
+    /// brings back the start settings.
+    pub fn has_default_control_store(&self) -> bool {
+        std::ptr::addr_eq(
+            Arc::as_ptr(&self.control_store),
+            Arc::as_ptr(&self.default_control_store),
+        )
+    }
+
     /// Why the settings routes refuse to set `mode`, or `None`.
     pub fn refused_mode(&self, mode: crate::partition::PartitionMode) -> Option<&str> {
         self.refused_modes
@@ -522,12 +533,14 @@ impl ControlPlaneConfig {
 
 impl Default for ControlPlaneConfig {
     fn default() -> Self {
+        let control_store: Arc<dyn ControlStore> = Arc::new(InMemoryControlStore::new());
         Self {
             socket: Some(PathBuf::from(Self::DEFAULT_SOCKET)),
             http: None,
             extractor: None,
             pairing: None,
-            control_store: Arc::new(InMemoryControlStore::new()),
+            default_control_store: Arc::clone(&control_store),
+            control_store,
             memory: None,
             record: None,
             commands: None,

@@ -91,6 +91,7 @@ mod agent_neo4j;
 mod agent_redis;
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 pub(crate) mod agent_sql;
+mod bundle;
 #[cfg(feature = "charter")]
 pub(crate) mod charter_memory;
 #[cfg(all(feature = "charter", feature = "redis"))]
@@ -189,6 +190,7 @@ pub use agent_redis::RedisAgentStore;
 pub use agent_sql::PostgresAgentStore;
 #[cfg(feature = "sqlite")]
 pub use agent_sql::SqliteAgentStore;
+pub use bundle::{KernelStores, StoreOrigin, StoreUse};
 #[cfg(all(feature = "drivers", feature = "firestore"))]
 pub use driver_firestore::FirestoreDriverStore;
 #[cfg(feature = "drivers")]
