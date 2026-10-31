@@ -64,6 +64,8 @@ deepseek = ["dep:reqwest"]
 ollama = ["dep:ollama-rs", "dep:schemars", "dep:reqwest"]
 groq = ["dep:reqwest"]
 muse = ["dep:reqwest"]
+# Muse Responses mode (`MuseApi::Responses`) through the shared Open Responses engine.
+muse-responses = ["muse", "openai"]
 openrouter = ["dep:reqwest"]
 fireworks = ["openai"]
 together = ["openai"]

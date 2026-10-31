@@ -294,6 +294,8 @@
 4 adk-model openrouter
 # OpenCode Go and Zen routing over the OpenAI, Anthropic and Gemini clients.
 4 adk-model opencode
+# Muse Responses mode over the shared Open Responses engine.
+4 adk-model muse-responses
 4 adk-skill vertex-skill-registry
 
 # Shard 5 — adk-realtime, adk-session, adk-memory, adk-eval, adk-deploy, adk-bench.

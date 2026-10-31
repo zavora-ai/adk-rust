@@ -246,9 +246,9 @@ pub use http_timeouts::HttpTimeouts;
 pub use mock::MockLlm;
 #[cfg(feature = "muse")]
 pub use muse::{
-    FileObject, ImageData, ImageOptions, ImagesResponse, MuseAsrClient, MuseClient, MuseConfig,
-    MuseFilesClient, MuseImagesClient, MuseResponsesClient, ResponseObject, ResponseRequest,
-    TranscribeOptions, Transcript, TranscriptSegment,
+    FileObject, ImageData, ImageOptions, ImagesResponse, MuseApi, MuseAsrClient, MuseClient,
+    MuseConfig, MuseFilesClient, MuseImagesClient, MuseResponsesClient, ResponseObject,
+    ResponseRequest, TranscribeOptions, Transcript, TranscriptSegment,
 };
 #[cfg(feature = "ollama")]
 pub use ollama::{OllamaConfig, OllamaModel};

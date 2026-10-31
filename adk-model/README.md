@@ -305,6 +305,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | [`examples/openai_open_responses/`](../examples/openai_open_responses/) | Open Responses mode for other Responses-compatible servers |
 
 See the [Responses API guide](../docs/official_docs/models/openai-responses.md).
+`OpenAIResponsesClient::with_provider_name` attributes, prices and labels errors for another
+provider's Open Responses endpoint; `MuseClient` in `MuseApi::Responses` mode uses it.
 
 ### Anthropic
 
@@ -694,13 +696,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `openai-responses-full` | `openai-ws` and `openai-conversations` |
 | `anthropic` | `AnthropicClient` over `adk-anthropic` |
 | `deepseek` | `DeepSeekClient` |
+| `muse` | `MuseClient` and the Muse media, files and Responses clients |
+| `muse-responses` | `MuseApi::Responses` through the Open Responses engine (implies `muse`, `openai`) |
 | `groq` | `GroqClient` |
 | `ollama` | `OllamaModel` |
 | `openrouter` | `OpenRouterClient` |
 | `opencode` | `OpenCodeClient` (implies `openai`, `anthropic`, `gemini`) |
 | `bedrock` | `BedrockClient` |
 | `azure-ai` | `AzureAIClient` |
-| `all-providers` | `gemini`, `openai`, `anthropic`, `deepseek`, `ollama`, `groq`, `openrouter`, `opencode`, `bedrock`, `azure-ai` |
+| `all-providers` | `gemini`, `openai`, `anthropic`, `deepseek`, `ollama`, `groq`, `muse`, `openrouter`, `opencode`, `bedrock`, `azure-ai` |
 | `xai`, `fireworks`, `together`, `mistral`, `perplexity`, `cerebras`, `sambanova` | Aliases for `openai`, kept for compatibility; use the `OpenAICompatibleConfig` presets |
 
 The `openai` feature turns on `async-openai`'s `byot` feature. An application that also calls

@@ -10,6 +10,33 @@ pub const MUSE_API_BASE: &str = "https://api.meta.ai/v1";
 /// caps are raised to this instead of returning empty `length` responses.
 pub const MUSE_MIN_MAX_TOKENS: u32 = 1024;
 
+/// The Meta Model API endpoint a [`MuseClient`](crate::muse::MuseClient) calls.
+///
+/// | API | Endpoint | Carries |
+/// |-----|----------|---------|
+/// | [`ChatCompletions`](Self::ChatCompletions) (default) | `/chat/completions` | Stateless turns |
+/// | [`Responses`](Self::Responses) | `/responses` | Reasoning across turns (`previous_response_id`), stored responses, streamed events; needs the `muse-responses` feature |
+///
+/// # Example
+///
+/// ```
+/// use adk_model::muse::{MuseApi, MuseConfig};
+///
+/// let config = MuseConfig::spark_1_3("LLM-key").with_api(MuseApi::Responses);
+/// assert_eq!(config.api, MuseApi::Responses);
+/// assert_eq!(MuseConfig::spark_1_3("LLM-key").api, MuseApi::ChatCompletions);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum MuseApi {
+    /// Chat Completions, drop-in compatible with OpenAI's.
+    #[default]
+    ChatCompletions,
+    /// The Responses API, through the shared Open Responses engine.
+    Responses,
+}
+
 /// Configuration for the Meta Model API.
 ///
 /// The key is read from `META_API_KEY` (Meta also documents `MODEL_API_KEY`); see the
@@ -29,6 +56,9 @@ pub struct MuseConfig {
     /// Maximum tokens for output.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// The endpoint the client calls.
+    #[serde(default)]
+    pub api: MuseApi,
 }
 
 impl std::fmt::Debug for MuseConfig {
@@ -38,6 +68,7 @@ impl std::fmt::Debug for MuseConfig {
             .field("model", &self.model)
             .field("base_url", &self.base_url)
             .field("max_tokens", &self.max_tokens)
+            .field("api", &self.api)
             .finish()
     }
 }
@@ -49,6 +80,7 @@ impl Default for MuseConfig {
             model: crate::catalog::MUSE_DEFAULT.to_string(),
             base_url: None,
             max_tokens: None,
+            api: MuseApi::ChatCompletions,
         }
     }
 }
@@ -91,6 +123,12 @@ impl MuseConfig {
     /// Set max tokens for output.
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = Some(max_tokens);
+        self
+    }
+
+    /// Selects the endpoint the client calls.
+    pub fn with_api(mut self, api: MuseApi) -> Self {
+        self.api = api;
         self
     }
 

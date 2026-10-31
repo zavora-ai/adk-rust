@@ -18,6 +18,18 @@
 //! - **Streaming**: Real-time streaming responses
 //! - **Long Context**: 1,048,576-token context window across the Spark line
 //!
+//! # Responses mode
+//!
+//! [`MuseConfig::with_api`]`(`[`MuseApi::Responses`]`)` drives `/responses` through the shared
+//! Open Responses engine ([`OpenAIResponsesClient`](crate::openai::OpenAIResponsesClient)),
+//! streamed or not, with the same `Llm` surface; responses are attributed and priced as
+//! `muse`. It needs the `muse-responses` feature. Request options travel in
+//! `GenerateContentConfig::extensions["muse"]`: `previous_response_id`, `store`, `reasoning`
+//! (`effort`, `summary`), `include` and `background`. Combinations the API rejects —
+//! `background` with streaming, `top_logprobs`, reasoning effort `none`,
+//! `reasoning.encrypted_content` with `previous_response_id`, stop sequences, penalties —
+//! fail with `model.unsupported_config` before any request is sent.
+//!
 //! # Beyond chat
 //!
 //! [`MuseResponsesClient`] drives the stateful Responses API (reasoning carried
@@ -51,7 +63,7 @@ mod responses;
 
 pub use asr::{MUSE_VOICE_MODEL, MuseAsrClient, TranscribeOptions, Transcript, TranscriptSegment};
 pub use client::MuseClient;
-pub use config::{MUSE_API_BASE, MuseConfig};
+pub use config::{MUSE_API_BASE, MuseApi, MuseConfig};
 pub use files::{FileObject, MuseFilesClient};
 pub use images::{ImageData, ImageOptions, ImagesResponse, MUSE_IMAGE_MODEL, MuseImagesClient};
 pub use responses::{
