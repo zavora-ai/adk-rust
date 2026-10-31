@@ -436,10 +436,10 @@ fn recorded_answer(events: &[adk_core::Event], call_id: &str) -> adk_core::Part 
         .iter()
         .filter_map(|event| event.content())
         .flat_map(|content| content.parts.iter())
-        .filter(|part| {
+        .rev()
+        .find(|part| {
             matches!(part, adk_core::Part::FunctionResponse { id: Some(id), .. } if id == call_id)
         })
-        .last()
         .cloned()
         .unwrap_or_else(|| panic!("{call_id} is answered: {events:?}"))
 }

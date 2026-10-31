@@ -1356,7 +1356,7 @@ provider flags.
 | 3. A before-tool callback answers with text | `not_run` | — |
 | 3. A before-tool callback answers with a function response, or an enhanced plugin with a result | The callback's own | — |
 | 4. Circuit breaker open | `not_run` | — |
-| 5.1 Kill switch | `not_run` | `governance.frozen` |
+| 5.1 Kill switch, including a freeze that ends step 5.5's wait for the handler or refuses a resumed held call | `not_run` | `governance.frozen` or `governance.stale` |
 | 5.2 Resume binding mismatch | `refused` | — |
 | 5.3 `ToolPolicy` denial | `refused` | — |
 | 5.4 Tool guardrail denial | `refused` | — |
@@ -1364,7 +1364,7 @@ provider flags.
 | 5.5 Held for confirmation | `held` | — |
 | 6. Action ledger record: succeeded / failed / failed with a `not run` text / begun without an outcome | `succeeded` / `failed` / `not_run` / `outcome_unknown` | — |
 | 6. Action ledger cannot be read or written | `not_run` | The ledger's error |
-| 6. Kill switch after the ledger write | `not_run` | `governance.frozen` |
+| 6. Kill switch after the ledger write | `not_run` | `governance.frozen` or `governance.stale` |
 | 7. RBAC or scope denial inside `execute()` (`tool.permission_denied`) | `refused` | `tool.permission_denied` |
 | 7. Tool error; timeout or panic of a `ReadOnly` or `Idempotent` tool | `failed` | The tool's error, `tool.timeout`, or `tool.panicked` |
 | 7–8. Timeout or panic of a `NonIdempotent` tool | `outcome_unknown` | `tool.timeout` or `tool.panicked` |

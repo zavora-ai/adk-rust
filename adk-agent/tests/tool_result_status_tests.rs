@@ -477,6 +477,51 @@ async fn a_call_the_kill_switch_refuses_is_not_run_with_its_cause() {
     );
 }
 
+/// Never decides, so the call waits until something else ends the wait.
+#[derive(Debug)]
+struct NeverDecides;
+
+#[async_trait]
+impl adk_core::ToolConfirmationHandler for NeverDecides {
+    async fn decide(&self, _request: &ToolConfirmationRequest) -> Result<ToolConfirmationDecision> {
+        std::future::pending().await
+    }
+}
+
+/// A freeze that ends the wait for a confirmation (#1305) refuses the call as the kill switch
+/// does anywhere else: it did not run.
+#[tokio::test(start_paused = true)]
+async fn a_freeze_that_ends_a_confirmation_wait_is_not_run_with_its_cause() {
+    let control = GovernanceControl::new();
+    let freezer = control.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        freezer.freeze("incident 4016");
+    });
+    let tool = Pay::new();
+    let runs = tool.runs.clone();
+    let agent = shopper(pays(), tool).require_tool_confirmation("pay").build().unwrap();
+    let config = RunConfig::builder()
+        .tool_confirmation_handler(Arc::new(NeverDecides))
+        .governance(control)
+        .build();
+
+    let (events, error) = run(&agent, config.clone()).await;
+
+    let frozen = config.check_governance().unwrap_err();
+    assert_eq!(error.map(|error| error.code), Some(frozen.code));
+    assert_eq!(runs.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        answer(&events, "pay-1"),
+        part(
+            "pay",
+            "pay-1",
+            json!({ "error": adk_core::not_run_text(&frozen) }),
+            caused("not_run", frozen.code, "forbidden"),
+        )
+    );
+}
+
 /// Freezes `control` as it begins a record, as a freeze landing during the ledger write does.
 #[derive(Debug)]
 struct FreezingLedger {
