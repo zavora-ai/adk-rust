@@ -25,7 +25,7 @@ use adk_kernel::channels::{
     ChannelAttachment, ChannelBinding, ChannelBindingStore, ChannelInbound, InMemoryChannel,
     InMemoryChannelBindingStore, InboundRoute,
 };
-use adk_kernel::charter::{RoleApproval, SignalFilter, SignalStore};
+use adk_kernel::charter::{SignalFilter, SignalStore};
 use adk_model::ScriptedResponse;
 use adk_session::CreateRequest;
 use adk_site::batch::Update;
@@ -118,19 +118,17 @@ async fn newsroom(site: &Site) -> Result<(f64, bool, u64)> {
         })
         .await?;
     let preview = pipeline.preview(&draft).await?;
-    let ticket = preview.staged.digest.clone();
+    let ticket = match pipeline.approve(&draft, &preview).await? {
+        ApprovalDecision::Pending { ticket } => ticket,
+        other => return Err(anyhow!("the story did not wait for its chain: {other:?}")),
+    };
     let approvals = site.runtime.approvals();
-    approvals
-        .approve(&ticket, RoleApproval::new(Role::Editor, SubjectRef::human("editor"), Utc::now()))
-        .await;
+    let request =
+        approvals.get(&ticket).await?.ok_or_else(|| anyhow!("the story has no request"))?;
+    let editor = approvals.approve(&ticket, request.version, &SubjectRef::human("editor")).await?;
     let waiting =
         matches!(pipeline.approve(&draft, &preview).await?, ApprovalDecision::Pending { .. });
-    approvals
-        .approve(
-            &ticket,
-            RoleApproval::new(Role::Publisher, SubjectRef::human("publisher"), Utc::now()),
-        )
-        .await;
+    approvals.approve(&ticket, editor.version, &SubjectRef::human("publisher")).await?;
     let approved = Instant::now();
     let ApprovalDecision::Approved { decision, .. } = pipeline.approve(&draft, &preview).await?
     else {
@@ -154,20 +152,14 @@ async fn newsroom(site: &Site) -> Result<(f64, bool, u64)> {
         )
         .await?;
     // A correction goes through the same chain.
-    if let PipelineOutcome::Pending { draft, preview, .. } = &corrected {
-        let ticket = preview.staged.digest.clone();
-        approvals
-            .approve(
-                &ticket,
-                RoleApproval::new(Role::Editor, SubjectRef::human("editor"), Utc::now()),
-            )
-            .await;
-        approvals
-            .approve(
-                &ticket,
-                RoleApproval::new(Role::Publisher, SubjectRef::human("publisher"), Utc::now()),
-            )
-            .await;
+    if let PipelineOutcome::Pending { ticket, draft, preview } = &corrected {
+        for person in ["editor", "publisher"] {
+            let request = approvals
+                .get(ticket)
+                .await?
+                .ok_or_else(|| anyhow!("the correction has no request"))?;
+            approvals.approve(ticket, request.version, &SubjectRef::human(person)).await?;
+        }
         if let ApprovalDecision::Approved { decision, .. } =
             pipeline.approve(draft, preview).await?
         {

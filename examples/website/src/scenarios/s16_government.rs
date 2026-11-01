@@ -13,7 +13,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use adk_core::principal::SubjectRef;
-use adk_kernel::charter::RoleApproval;
 use adk_site::content::SiteProject;
 use adk_site::gate::{CheckStatus, GateCheck, GateInput, GateMode, LaunchGate, Quarantine};
 use adk_site::generator::{BuiltinGenerator, SiteGenerator};
@@ -192,24 +191,19 @@ pub async fn run(_mode: Mode) -> Result<Checks> {
     };
     let draft = pipeline.draft(change).await?;
     let preview = pipeline.preview(&draft).await?;
-    let ticket = preview.staged.digest.clone();
-    let before =
-        matches!(pipeline.approve(&draft, &preview).await?, ApprovalDecision::Pending { .. });
+    let ticket = match pipeline.approve(&draft, &preview).await? {
+        ApprovalDecision::Pending { ticket } => ticket,
+        other => return Err(anyhow!("the release did not wait for its chain: {other:?}")),
+    };
+    // The chain is one request in the site's approval service; the charter says who holds
+    // each role.
     let approvals = site.runtime.approvals();
-    approvals
-        .approve(
-            &ticket,
-            RoleApproval::new(Role::Editor, SubjectRef::human(CLERK), chrono::Utc::now()),
-        )
-        .await;
+    let request =
+        approvals.get(&ticket).await?.ok_or_else(|| anyhow!("the release has no request"))?;
+    let clerk = approvals.approve(&ticket, request.version, &SubjectRef::human(CLERK)).await?;
     let editor_only =
         matches!(pipeline.approve(&draft, &preview).await?, ApprovalDecision::Pending { .. });
-    approvals
-        .approve(
-            &ticket,
-            RoleApproval::new(Role::Publisher, SubjectRef::human(DIRECTOR), chrono::Utc::now()),
-        )
-        .await;
+    approvals.approve(&ticket, clerk.version, &SubjectRef::human(DIRECTOR)).await?;
     let decided = pipeline.approve(&draft, &preview).await?;
     let ApprovalDecision::Approved { approvers, decision } = decided else {
         return Err(anyhow!("the chain is not satisfied: {decided:?}"));
@@ -221,8 +215,7 @@ pub async fn run(_mode: Mode) -> Result<Checks> {
     };
     checks.check(
         "a release the editor proposes publishes only after the publisher approves (A-I23)",
-        before
-            && editor_only
+        editor_only
             && approvers.iter().any(|a| a == CLERK)
             && approvers.iter().any(|a| a == DIRECTOR),
         format!(

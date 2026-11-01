@@ -47,7 +47,6 @@ use adk_core::{
 };
 use adk_harness::website::{SiteRef, SiteRuntime};
 use adk_kernel::QueueClass;
-use adk_kernel::charter::RoleApproval;
 use adk_server::awp::SignalEmitter;
 use adk_server::webhooks::{
     ForgeSecret, ForgeSignature, WebhookHook, WebhookIngress, webhook_ingress_router,
@@ -55,8 +54,7 @@ use adk_server::webhooks::{
 use adk_site::content::{CONTENT_DIR, parse_content_file};
 use adk_site::pipeline::{ApprovalDecision, Change, Draft, EntryPoint, PipelineOutcome, Preview};
 use awp_types::{
-    Channel, ContentId, ContentItem, ContentState, MessageCategory, Role, Signal, SignalKind,
-    ThreadRef,
+    Channel, ContentId, ContentItem, ContentState, MessageCategory, Signal, SignalKind, ThreadRef,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -959,19 +957,23 @@ impl RepositoryEntry {
         }
         let Some(Pending { draft, preview }) = pending.get(card) else { return Ok(false) };
         let pipeline = self.parts.runtime.pipeline();
-        if record.state == PushState::Proposed {
-            // The owner's card is the owner's vote under an approval chain (A-I23); a vote
-            // that cannot count is left out by the site's approvals.
-            self.parts
-                .runtime
-                .approvals()
-                .approve(
-                    &preview.staged.digest,
-                    RoleApproval::new(Role::Owner, SubjectRef::human(by), Utc::now()),
-                )
-                .await;
+        let mut decided = pipeline.approve(draft, preview).await.map_err(config)?;
+        if let (ApprovalDecision::Pending { ticket }, PushState::Proposed) =
+            (&decided, &record.state)
+        {
+            // The owner's card is the owner's vote on the release's request under an approval
+            // chain (A-I23); a vote that cannot count is left out.
+            let approvals = self.parts.runtime.approvals();
+            if let Some(request) = approvals.get(ticket).await? {
+                match approvals.approve(ticket, request.version, &SubjectRef::human(by)).await {
+                    Ok(_) => decided = pipeline.approve(draft, preview).await.map_err(config)?,
+                    Err(error) => {
+                        tracing::info!(website.release.request = %ticket, error = %error, "the owner's vote does not count for the chain");
+                    }
+                }
+            }
         }
-        let decision = match pipeline.approve(draft, preview).await.map_err(config)? {
+        let decision = match decided {
             ApprovalDecision::Pending { .. } => {
                 let waiting = record.state != PushState::Approving;
                 record.state = PushState::Approving;

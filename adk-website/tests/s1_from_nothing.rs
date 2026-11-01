@@ -167,7 +167,6 @@ async fn s1_from_nothing_to_a_signed_verified_release() {
         .sign_charter(
             request["request"].as_str().unwrap(),
             RoleApproval::new(Role::Owner, SubjectRef::human(OWNER), chrono::Utc::now()),
-            "dec-charter-1",
         )
         .await
         .unwrap()

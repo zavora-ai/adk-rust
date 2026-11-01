@@ -7,9 +7,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use adk_core::principal::SubjectRef;
-use adk_core::{AdkError, Clock, ErrorCategory, ErrorComponent, Result, SystemClock};
+use adk_core::{
+    AdkError, ApprovalAction, ApprovalPolicy, ApprovalScope, ApprovalService, ApprovalState,
+    ApproverSelector, Clock, ErrorCategory, ErrorComponent, GovernanceControl,
+    InMemoryApprovalStore, InboxQuery, Result, StoreApprovalService, SystemClock,
+    ToolConfirmationRequest,
+};
 use adk_kernel::charter::{
-    CharterStore, CharterVersion, CommitDecision, RoleApproval, check_chain, commit_audited,
+    CHARTER_ACTION, CharterDirectory, CharterStore, CharterVersion, CommitDecision, RoleApproval,
+    chain_policy, commit_audited, group_role,
 };
 use adk_site::content::{ContentHistory, ContentStore, SiteProject};
 use adk_site::gate::{
@@ -28,7 +34,7 @@ use async_trait::async_trait;
 use awp_types::{Charter, ContentItem, Digest, Governance, Role};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -151,28 +157,79 @@ impl ClaimCheck for FactClaimCheck {
     }
 }
 
-/// A decision people make on a release under an approval chain (spec 3.5 A-I23).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
-enum ChainVote {
-    Approve(RoleApproval),
-    Reject { by: String, reason: String },
+/// The tool name of a release's approval request (spec 3.5 §7.8.2 step 4).
+pub const SITE_RELEASE_TOOL: &str = "site_release";
+
+/// The tool name of a charter signing request (spec 3.5 §7.6).
+pub const CHARTER_SIGN_TOOL: &str = "charter_sign";
+
+/// The tool name of a job promotion request (spec 3.5 §7.11, A-I13).
+pub const JOB_PROMOTION_TOOL: &str = "job_promotion";
+
+/// The session the site's approval requests are kept under, in the site's application.
+const APPROVAL_SESSION: &str = "site-approvals";
+
+/// What a release vote binds to (spec 3.5 §7.8.2 step 4, A-I23): the site and the
+/// [`change_digest`](adk_site::pipeline::change_digest) of the change — its action class,
+/// proposer, items and media, and the release and generator it was previewed on.
+///
+/// A rebuild of the same change on the same base gives the same fingerprint, so a vote
+/// survives a restart and a new preview; an edit, or another release becoming the base,
+/// gives a new fingerprint and a new request, so earlier votes stop counting.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_harness::website::ReleaseFingerprint;
+/// use awp_types::Digest;
+///
+/// let site = uuid::Uuid::nil();
+/// let change = Digest::from_sha256_bytes([7; 32]);
+/// let fingerprint = ReleaseFingerprint::new(site, &change);
+/// assert_eq!(fingerprint, ReleaseFingerprint::new(site, &change));
+/// assert!(fingerprint.request_id(site).starts_with("site-release-"));
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ReleaseFingerprint(String);
+
+impl ReleaseFingerprint {
+    /// The fingerprint of `change` on `site`.
+    pub fn new(site: Uuid, change: &Digest) -> Self {
+        use sha2::Digest as _;
+
+        let digest = sha2::Sha256::digest(format!("{site}\u{1f}{change}").as_bytes());
+        Self(Digest::from_sha256_bytes(digest.into()).to_string())
+    }
+
+    /// The fingerprint as `sha256:<hex>`.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The id of the release's approval request: `site-release-{site}-{first 16 hex digits}`.
+    pub fn request_id(&self, site: Uuid) -> String {
+        let hex = self.0.trim_start_matches("sha256:");
+        format!("site-release-{site}-{}", &hex[..16.min(hex.len())])
+    }
 }
 
-/// The release approval gate of a site (spec 3.5 §7.8.2 step 4, A-I23).
+/// The site's decisions people make, as requests in its approval service (spec 3.5 §7.6,
+/// §7.8.2 step 4, §7.11, A-I23): release chains, charter signatures and job promotions.
 ///
-/// | The charter | What decides |
+/// | The charter | What decides a release |
 /// |---|---|
-/// | names an approval chain for the action class | the people who hold its roles, each a distinct person and none the proposer, recorded with [`record_approval`](Self::record_approval) or [`approve`](Self::approve) |
+/// | names an approval chain for the action class | one [`ApprovalRequest`](adk_core::ApprovalRequest) per [`ReleaseFingerprint`], with one slot per role of the chain, filled by distinct people who hold the role, none the proposer |
 /// | names none | the governed path: the call ran because the job's level allowed it or the owner approved it, recorded as [`GOVERNED_APPROVER`] |
 ///
-/// A vote that cannot count — an agent's, one in a role its voter does not hold in the
-/// charter in force, the proposer's own — is refused and never reaches the chain check, so
-/// it cannot hold up the votes of the people who can approve.
+/// Every surface — the back office, the web desk, the kernel's inbox, a chat card — decides
+/// the same request through the service, which takes each person's roles from the charter
+/// in force ([`CharterDirectory`](adk_kernel::charter::CharterDirectory)), writes every vote
+/// to its audit trail, and settles concurrent votes by compare-and-swap. An early approval
+/// leaves the request pending and records no `site.content.approved`.
 pub struct SiteApprovals {
-    site: Uuid,
+    site: SiteRef,
     charters: Option<Arc<dyn CharterStore>>,
-    votes: Mutex<BTreeMap<Digest, Vec<ChainVote>>>,
+    service: Arc<dyn ApprovalService>,
 }
 
 impl std::fmt::Debug for SiteApprovals {
@@ -182,161 +239,248 @@ impl std::fmt::Debug for SiteApprovals {
 }
 
 impl SiteApprovals {
-    fn new(site: Uuid, charters: Option<Arc<dyn CharterStore>>) -> Self {
-        Self { site, charters, votes: Mutex::new(BTreeMap::new()) }
+    /// The approval service the requests live in.
+    pub fn service(&self) -> &Arc<dyn ApprovalService> {
+        &self.service
     }
 
-    /// Records a person's approval of the preview `digest` in `approval.role`; a vote that
-    /// cannot count (see [`record_approval`](Self::record_approval)) is dropped with a
-    /// warning.
-    pub async fn approve(&self, digest: &Digest, approval: RoleApproval) {
-        if let Err(error) = self.record_approval(digest, approval).await {
-            tracing::warn!(error = %error, website.release.preview = %digest, "an approval that cannot count was not recorded");
-        }
+    /// The request `id`.
+    ///
+    /// # Errors
+    ///
+    /// The approval service's error.
+    pub async fn get(&self, id: &str) -> Result<Option<adk_core::ApprovalRequest>> {
+        self.service.get(id).await
     }
 
-    /// Records a person's approval of the preview `digest` in `approval.role` (spec 3.5
-    /// A-I23).
+    /// Records `by`'s approval of the request `id` read at `version`: a release, a charter
+    /// signature or a promotion (spec 3.5 A-I23).
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let editor = RoleApproval::new(Role::Editor, SubjectRef::human("amina"), Utc::now());
-    /// runtime.approvals().record_approval(&preview.staged.digest, editor).await?;
+    /// let request = runtime.approvals().get(&ticket).await?.expect("the release's request");
+    /// let after = runtime.approvals().approve(&ticket, request.version, &SubjectRef::human("eva")).await?;
+    /// assert_eq!(after.state, ApprovalState::Pending, "the publisher has not approved yet");
     /// ```
     ///
     /// # Errors
     ///
-    /// `Forbidden` for an agent's vote, and for a vote in a role its voter does not hold in
-    /// the charter in force; the charter store's error.
-    pub async fn record_approval(&self, digest: &Digest, approval: RoleApproval) -> Result<()> {
-        let governance = self.governing().await?;
-        if let Some(reason) = vote_refusal(governance.as_ref(), &approval, None) {
-            return Err(AdkError::new(
-                ErrorComponent::Tool,
-                ErrorCategory::Forbidden,
-                "website.approval.refused",
-                format!("the approval cannot count: {reason} (spec 3.5 A-I23)"),
-            ));
-        }
-        self.votes
-            .lock()
-            .await
-            .entry(digest.clone())
-            .or_default()
-            .push(ChainVote::Approve(approval));
-        Ok(())
+    /// `website.approval.refused` for an agent; the service's `approval.not_an_approver` for
+    /// a person the charter gives none of the request's roles, `approval.self_approval` for
+    /// the proposer, `approval.already_decided` for a second approval by one person, and
+    /// `approval.version_conflict` when the request changed since `version`.
+    pub async fn approve(
+        &self,
+        id: &str,
+        version: u64,
+        by: &SubjectRef,
+    ) -> Result<adk_core::ApprovalRequest> {
+        refuse_agent(by)?;
+        self.service.decide(id, version, adk_core::ApprovalDecision::approve(by.clone())).await
     }
 
-    /// Records a person's refusal of the preview `digest`. Only a person holding a role of
-    /// the release's chain can refuse it; anyone else's refusal is ignored when the release
-    /// is decided.
-    pub async fn reject(&self, digest: &Digest, by: &SubjectRef, reason: &str) {
-        self.votes
-            .lock()
+    /// Records `by`'s refusal of the request `id` read at `version`; only a person who may
+    /// approve it may refuse it.
+    ///
+    /// # Errors
+    ///
+    /// As [`approve`](Self::approve).
+    pub async fn reject(
+        &self,
+        id: &str,
+        version: u64,
+        by: &SubjectRef,
+        reason: &str,
+    ) -> Result<adk_core::ApprovalRequest> {
+        refuse_agent(by)?;
+        self.service
+            .decide(id, version, adk_core::ApprovalDecision::reject(by.clone(), reason))
             .await
-            .entry(digest.clone())
-            .or_default()
-            .push(ChainVote::Reject { by: by.id.clone(), reason: reason.to_string() });
+    }
+
+    /// The site's requests with `tool` in `states`, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// The approval service's error.
+    pub async fn list(
+        &self,
+        tool: &str,
+        states: &[ApprovalState],
+    ) -> Result<Vec<adk_core::ApprovalRequest>> {
+        let mut query = InboxQuery::default()
+            .with_app_name(self.site.name.clone())
+            .with_states(states.iter().copied())
+            .with_limit(adk_core::DEFAULT_APPROVAL_PAGE);
+        let site = self.site.id.to_string();
+        let mut requests = Vec::new();
+        loop {
+            let page = self.service.inbox(query.clone()).await?;
+            requests.extend(page.items.into_iter().filter(|request| {
+                request.tool_name == tool
+                    && request.args_redacted.get("site").and_then(Value::as_str)
+                        == Some(site.as_str())
+            }));
+            match page.next_cursor {
+                Some(next) => query = query.with_cursor(Some(next)),
+                None => return Ok(requests),
+            }
+        }
+    }
+
+    /// Submits the request `id` for `tool` with `args` under `policy`, or returns the one
+    /// already submitted under `id`: a request is created once, so every replica and every
+    /// retry reaches the same record.
+    async fn submit(
+        &self,
+        id: String,
+        tool: &str,
+        args: Value,
+        summary: String,
+        policy: ApprovalPolicy,
+        requester: SubjectRef,
+    ) -> Result<adk_core::ApprovalRequest> {
+        let owner = match self.governing().await? {
+            Some(governance) => governance.holders(Role::Owner).next().map(str::to_string),
+            None => None,
+        };
+        let scope = ApprovalScope::new(
+            self.site.name.clone(),
+            owner.unwrap_or_else(|| "owner".to_string()),
+            APPROVAL_SESSION,
+        );
+        let call = ToolConfirmationRequest::new(tool, args);
+        let request = adk_core::ApprovalRequest::new(id, scope, &call, policy)
+            .with_summary(summary)
+            .with_requester(requester)
+            .with_allowed_actions([ApprovalAction::Approve, ApprovalAction::Reject]);
+        self.service.submit(request).await
     }
 
     /// The governance of the charter in force, when the runtime knows the charters.
     async fn governing(&self) -> Result<Option<Governance>> {
         let Some(charters) = &self.charters else { return Ok(None) };
-        let current = charters.current(self.site).await.map_err(kernel_error)?;
+        let current = charters.current(self.site.id).await.map_err(kernel_error)?;
         Ok(current.map(|version| version.charter.governance))
-    }
-
-    async fn governance(&self, action_class: &str) -> Result<Option<Governance>> {
-        Ok(self.governing().await?.filter(|governance| {
-            governance.approval_chains.iter().any(|chain| chain.action.as_str() == action_class)
-        }))
     }
 }
 
-/// Why `approval` cannot count towards a chain under `governance`: an agent's vote, a role
-/// the voter does not hold, or the proposer's own vote (spec 3.5 A-I23). `None` when it can.
-fn vote_refusal(
-    governance: Option<&Governance>,
-    approval: &RoleApproval,
-    proposer: Option<&str>,
-) -> Option<String> {
-    let who = &approval.principal;
-    if super::is_agent(who) {
-        return Some(format!("{} is not a person, and no agent holds a role", who.id));
+/// Refuses `by` when it is an agent: no agent approves, signs or holds a role (spec 3.5
+/// §7.6, A-I23).
+fn refuse_agent(by: &SubjectRef) -> Result<()> {
+    if super::is_agent(by) {
+        return Err(AdkError::new(
+            ErrorComponent::Tool,
+            ErrorCategory::Forbidden,
+            "website.approval.refused",
+            format!("{} is not a person, and no agent holds a role (spec 3.5 A-I23)", by.id),
+        ));
     }
-    if governance.is_some_and(|governance| !governance.holds(&who.id, approval.role)) {
-        return Some(format!("{} does not hold the {:?} role", who.id, approval.role));
+    Ok(())
+}
+
+/// The subject of `principal`: an agent for an agent identity, a person otherwise.
+fn subject_of(principal: &str) -> SubjectRef {
+    if adk_kernel::charter::is_agent_principal(principal) {
+        SubjectRef::new(adk_core::principal::SubjectKind::Agent, principal)
+    } else {
+        SubjectRef::human(principal)
     }
-    if proposer == Some(who.id.as_str()) {
-        return Some(format!("{} proposed it, so cannot also approve it", who.id));
-    }
-    None
+}
+
+/// The people who fill `request`'s slots, each with the role their slot names.
+fn role_approvals(request: &adk_core::ApprovalRequest) -> Vec<RoleApproval> {
+    request
+        .slot_holders()
+        .into_iter()
+        .filter_map(|(slot, holder)| {
+            let ApproverSelector::Group(group) = slot else { return None };
+            let decision = holder?;
+            Some(RoleApproval::new(
+                group_role(group)?,
+                decision.authority().clone(),
+                decision.decided_at,
+            ))
+        })
+        .collect()
 }
 
 #[async_trait]
 impl ApprovalGate for SiteApprovals {
     async fn decide(&self, request: &ApprovalRequest) -> adk_site::Result<ApprovalDecision> {
-        let governance = self
-            .governance(&request.action_class)
-            .await
-            .map_err(|e| adk_site::SiteError::Pipeline(e.to_string()))?;
+        let pipeline = |error: AdkError| adk_site::SiteError::Pipeline(error.to_string());
+        let action = awp_types::ActionClass::from(request.action_class.as_str());
+        let governance = self.governing().await.map_err(pipeline)?.filter(|governance| {
+            governance.approval_chains.iter().any(|chain| chain.action == action)
+        });
         let Some(governance) = governance else {
             return Ok(ApprovalDecision::Approved {
                 approvers: vec![GOVERNED_APPROVER.to_string()],
                 decision: None,
             });
         };
-        let votes =
-            self.votes.lock().await.get(&request.preview_digest).cloned().unwrap_or_default();
-        let action = awp_types::ActionClass::from(request.action_class.as_str());
-        let chain_roles: Vec<awp_types::Role> = governance
-            .approval_chains
-            .iter()
-            .find(|chain| chain.action == action)
-            .map(|chain| chain.roles.clone())
-            .unwrap_or_default();
-        // Only a person holding a role of the chain refuses a release.
-        if let Some(ChainVote::Reject { by, reason }) = votes.iter().find(|vote| match vote {
-            ChainVote::Reject { by, .. } => {
-                !adk_kernel::charter::is_agent_principal(by)
-                    && chain_roles.iter().any(|role| governance.holds(by, *role))
+        let fingerprint = ReleaseFingerprint::new(self.site.id, &request.change);
+        let id = fingerprint.request_id(self.site.id);
+        let items: Vec<&str> = request.items.iter().map(|item| item.0.as_str()).collect();
+        let summary = match items.as_slice() {
+            [one] => format!("Publish {one}"),
+            many => format!("Publish {} items", many.len()),
+        };
+        let args = json!({
+            "site": self.site.id,
+            "actionClass": request.action_class,
+            "proposer": request.proposer,
+            "items": items,
+            "fingerprint": fingerprint.as_str(),
+            "diff": request.diff,
+        });
+        let stored = self
+            .submit(
+                id.clone(),
+                SITE_RELEASE_TOOL,
+                args,
+                summary,
+                chain_policy(&governance, &action),
+                subject_of(&request.proposer),
+            )
+            .await
+            .map_err(pipeline)?;
+        Ok(match stored.state {
+            ApprovalState::Pending => {
+                tracing::info!(website.release.request = %id, website.release.open_slots = stored.open_slots().len(), "release waits for its approval chain");
+                ApprovalDecision::Pending { ticket: id }
             }
-            ChainVote::Approve(_) => false,
-        }) {
-            return Ok(ApprovalDecision::Rejected { by: by.clone(), reason: reason.clone() });
-        }
-        // A vote that cannot count is left out, so it never holds up the chain (A-I23).
-        let approvals: Vec<RoleApproval> = votes
-            .into_iter()
-            .filter_map(|vote| match vote {
-                ChainVote::Approve(approval) => {
-                    match vote_refusal(Some(&governance), &approval, Some(&request.proposer)) {
-                        None => Some(approval),
-                        Some(reason) => {
-                            tracing::info!(website.release.preview = %request.preview_digest, reason = %reason, "an approval that cannot count is left out");
-                            None
-                        }
-                    }
+            ApprovalState::Approved => ApprovalDecision::Approved {
+                approvers: role_approvals(&stored)
+                    .into_iter()
+                    .map(|approval| approval.principal.id)
+                    .collect(),
+                decision: Some(id),
+            },
+            ApprovalState::Rejected | ApprovalState::Responded => {
+                let last = stored.decisions.last();
+                ApprovalDecision::Rejected {
+                    by: last.map_or_else(String::new, |decision| decision.approver.id.clone()),
+                    reason: last.and_then(|decision| decision.reason.clone()).unwrap_or_default(),
                 }
-                ChainVote::Reject { .. } => None,
-            })
-            .collect();
-        match check_chain(&governance, &action, &approvals, Some(&request.proposer)) {
-            Ok(()) => Ok(ApprovalDecision::Approved {
-                approvers: approvals.iter().map(|a| a.principal.id.clone()).collect(),
-                decision: Some(format!("chain:{}", request.preview_digest)),
-            }),
-            Err(refusal) => {
-                tracing::info!(website.release.preview = %request.preview_digest, reason = %refusal, "release waits for its approval chain");
-                Ok(ApprovalDecision::Pending { ticket: request.preview_digest.to_string() })
             }
-        }
+            ApprovalState::Expired | ApprovalState::Cancelled => ApprovalDecision::Rejected {
+                by: "approval-service".to_string(),
+                reason: stored
+                    .note
+                    .clone()
+                    .unwrap_or_else(|| format!("the request {}", stored.state.as_str())),
+            },
+        })
     }
 }
 
-/// A request for every required signer of a charter version (spec 3.5 §7.6, §7.18 stage 5,
-/// A-I23): a decision card per signer, and a commit only when the chain is satisfied.
+/// A charter signing request (spec 3.5 §7.6, §7.18 stage 5, A-I23): an approval request
+/// with one slot per role of the charter-change chain, committed only when distinct people
+/// fill every slot. Read from the approval service with [`SiteRuntime::charter_requests`];
+/// a record of this shape in the draft store is converted by
+/// [`SiteRuntime::restore_drafts`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CharterSignRequest {
@@ -355,10 +499,40 @@ pub struct CharterSignRequest {
     /// The committed version, once every signer signed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub committed: Option<u32>,
+    /// The approval request's version, the compare-and-swap token for the next signature.
+    #[serde(default)]
+    pub version: u64,
+}
+
+impl CharterSignRequest {
+    /// The view of the approval request `request`.
+    fn of(request: &adk_core::ApprovalRequest) -> Result<Self> {
+        let draft: Charter =
+            read(request.args_redacted.get("charter").cloned().unwrap_or_default())?;
+        Ok(Self {
+            id: request.id.clone(),
+            draft,
+            roles: request
+                .policy
+                .slots
+                .iter()
+                .filter_map(|slot| match slot {
+                    ApproverSelector::Group(group) => group_role(group),
+                    ApproverSelector::Subject(_) => None,
+                })
+                .collect(),
+            signatures: role_approvals(request),
+            requested_by: request.requester.as_ref().map(|r| r.id.clone()).unwrap_or_default(),
+            requested_at: request.created_at,
+            committed: None,
+            version: request.version,
+        })
+    }
 }
 
 /// A request that the owner promote a job (spec 3.5 §7.11, A-I13): the weekly review's
-/// offer, decided only by an owner.
+/// offer, an approval request decided only by an owner. Read from the approval service with
+/// [`SiteRuntime::promotion_requests`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromotionRequest {
@@ -372,6 +546,26 @@ pub struct PromotionRequest {
     pub requested_by: String,
     /// When.
     pub requested_at: DateTime<Utc>,
+    /// The approval request's version.
+    #[serde(default)]
+    pub version: u64,
+}
+
+impl PromotionRequest {
+    /// The view of the approval request `request`.
+    fn of(request: &adk_core::ApprovalRequest) -> Self {
+        let text = |key: &str| {
+            request.args_redacted.get(key).and_then(Value::as_str).unwrap_or_default().to_string()
+        };
+        Self {
+            id: request.id.clone(),
+            job: text("job"),
+            reason: text("reason"),
+            requested_by: request.requester.as_ref().map(|r| r.id.clone()).unwrap_or_default(),
+            requested_at: request.created_at,
+            version: request.version,
+        }
+    }
 }
 
 /// Everything the back-office tools act on (spec 3.5 §7.8, §7.8.2): build one with
@@ -399,6 +593,7 @@ pub struct SiteRuntime {
     /// Held across a release's preview, approval and completion in this process.
     pub(crate) publishing: Mutex<()>,
     pub(crate) draft_store: Arc<dyn SiteDraftStore>,
+    pub(crate) governance: Option<GovernanceControl>,
 }
 
 impl std::fmt::Debug for SiteRuntime {
@@ -430,9 +625,56 @@ pub struct SiteRuntimeBuilder {
     clock: Arc<dyn Clock>,
     gate: LaunchGate,
     draft_store: Option<Arc<dyn SiteDraftStore>>,
+    approvals: Option<Arc<dyn ApprovalService>>,
+    governance: Option<GovernanceControl>,
+    require_durable: bool,
 }
 
 impl SiteRuntimeBuilder {
+    /// Keeps the site's decisions — release chains, charter signatures, job promotions — as
+    /// requests in `service` (spec 3.5 §7.8.2 step 4, A-I23), such as the kernel's, so the
+    /// back office, the web desk, the kernel's inbox and chat cards decide one record. The
+    /// service must take its groups from a
+    /// [`CharterDirectory`](adk_kernel::charter::CharterDirectory) for this site, so only the
+    /// people the charter names fill a chain's roles.
+    ///
+    /// Without one the runtime keeps them in a [`StoreApprovalService`] in memory, with the
+    /// directory, the runtime's clock and its audit trail.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let service = StoreApprovalService::new(Arc::new(approval_store))
+    ///     .with_directory(Arc::new(CharterDirectory::new(charters.clone())))
+    ///     .with_audit(trail.clone());
+    /// let runtime = SiteRuntime::builder(site, base, store, generator, host, log, work)
+    ///     .charters(charters)
+    ///     .approvals(Arc::new(service))
+    ///     .build()?;
+    /// ```
+    #[must_use]
+    pub fn approvals(mut self, service: Arc<dyn ApprovalService>) -> Self {
+        self.approvals = Some(service);
+        self
+    }
+
+    /// Holds publishing while `control` is frozen (spec 3.5 §7.8.2, D5): a release whose
+    /// approval chain is satisfied — by the back office or by a person in the desk — waits
+    /// until the freeze lifts. Decisions are still recorded while frozen.
+    #[must_use]
+    pub fn governance(mut self, control: GovernanceControl) -> Self {
+        self.governance = Some(control);
+        self
+    }
+
+    /// Refuses to build with a store the runtime would keep in memory: the draft store and
+    /// the approval service must be set, as a served site's are (spec 3.5 §7.8.2 step 1).
+    #[must_use]
+    pub fn require_durable(mut self) -> Self {
+        self.require_durable = true;
+        self
+    }
+
     /// Keeps the back office's drafts — content drafts, charter drafts, charter signing and
     /// promotion requests — in `store`, so they survive a restart and every runtime over the
     /// store sees the same ones (spec 3.5 §7.8.2 step 1); an [`InMemorySiteDraftStore`] by
@@ -444,7 +686,7 @@ impl SiteRuntimeBuilder {
     /// ```rust,ignore
     /// let runtime = SiteRuntime::builder(site, base, store, generator, host, log, work)
     ///     .drafts(Arc::new(InMemorySiteDraftStore::default()))
-    ///     .build();
+    ///     .build()?;
     /// runtime.restore_drafts().await?;
     /// ```
     #[must_use]
@@ -548,8 +790,53 @@ impl SiteRuntimeBuilder {
     }
 
     /// The runtime.
-    pub fn build(self) -> Arc<SiteRuntime> {
-        let approvals = Arc::new(SiteApprovals::new(self.site.id, self.charters.clone()));
+    ///
+    /// # Errors
+    ///
+    /// `website.runtime.not_durable` under [`require_durable`](Self::require_durable) when
+    /// the draft store or the approval service is not set.
+    pub fn build(self) -> Result<Arc<SiteRuntime>> {
+        if self.require_durable {
+            let held: Vec<&str> = [
+                (self.draft_store.is_none(), "drafts (SiteRuntimeBuilder::drafts)"),
+                (self.approvals.is_none(), "approvals (SiteRuntimeBuilder::approvals)"),
+            ]
+            .into_iter()
+            .filter_map(|(missing, store)| missing.then_some(store))
+            .collect();
+            if !held.is_empty() {
+                return Err(AdkError::new(
+                    ErrorComponent::Tool,
+                    ErrorCategory::InvalidInput,
+                    "website.runtime.not_durable",
+                    format!(
+                        "the site runtime would keep {} in memory, and a restart would lose \
+                         them; set a SQLite, PostgreSQL or Redis store for each",
+                        held.join(" and ")
+                    ),
+                ));
+            }
+        }
+        let service = match self.approvals {
+            Some(service) => service,
+            None => {
+                let mut service = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+                    .with_clock(self.clock.clone());
+                if let Some(charters) = &self.charters {
+                    let directory = CharterDirectory::new(charters.clone()).for_site(self.site.id);
+                    service = service.with_directory(Arc::new(directory));
+                }
+                if let Some(trail) = &self.audit {
+                    service = service.with_audit(trail.clone());
+                }
+                Arc::new(service) as Arc<dyn ApprovalService>
+            }
+        };
+        let approvals = Arc::new(SiteApprovals {
+            site: self.site.clone(),
+            charters: self.charters.clone(),
+            service,
+        });
         let gate = match &self.facts {
             Some((facts, scope)) => self
                 .gate
@@ -584,7 +871,7 @@ impl SiteRuntimeBuilder {
         if let Some(trail) = &self.audit {
             pipeline = pipeline.audit(trail.clone());
         }
-        Arc::new(SiteRuntime {
+        Ok(Arc::new(SiteRuntime {
             site: self.site,
             base: self.base,
             store: self.store,
@@ -607,7 +894,8 @@ impl SiteRuntimeBuilder {
             draft_store: self
                 .draft_store
                 .unwrap_or_else(|| Arc::new(InMemorySiteDraftStore::default())),
-        })
+            governance: self.governance,
+        }))
     }
 }
 
@@ -621,7 +909,7 @@ impl SiteRuntime {
     /// let runtime = SiteRuntime::builder(site, base, store, Arc::new(BuiltinGenerator), host, log, work)
     ///     .charters(charters)
     ///     .facts(facts, scope)
-    ///     .build();
+    ///     .build()?;
     /// ```
     pub fn builder(
         site: SiteRef,
@@ -654,6 +942,9 @@ impl SiteRuntime {
             clock: Arc::new(SystemClock),
             gate: LaunchGate::new(),
             draft_store: None,
+            approvals: None,
+            governance: None,
+            require_durable: false,
         }
     }
 
@@ -732,36 +1023,63 @@ impl SiteRuntime {
         matches!(self.host.fetch(CHECKPOINT_PATH).await, Ok(Some(_)))
     }
 
-    /// Counts the drafts and requests the runtime's draft store holds for the site — content
-    /// drafts, charter drafts, and the charter signing and promotion requests that wait — and
-    /// checks that each reads back (spec 3.5 §7.8.2 step 1). The runtime reads the store at
-    /// every call, so nothing is copied; a restarted process calls this to report and check
-    /// what it resumes.
+    /// Checks that the drafts the runtime's draft store holds for the site — content drafts
+    /// and charter drafts — read back, and converts the charter signing and promotion
+    /// requests an earlier version kept there into requests in the approval service
+    /// (spec 3.5 §7.8.2 step 1, A-I23). Each becomes the request
+    /// `site-charter-{site}-legacy-{id}` or `site-promotion-{site}-legacy-{id}`, keeps the
+    /// signatures of people who still hold their role, and leaves the draft store; a request
+    /// its signatures already satisfy is committed. A second run converts nothing twice. The
+    /// runtime reads the store at every call, so nothing is copied into memory. Returns how
+    /// many drafts and requests the store held.
     ///
     /// # Errors
     ///
-    /// The store's error, or a stored record that does not read back.
+    /// The draft store's or the approval service's error, or a stored record that does not
+    /// read back.
     pub async fn restore_drafts(&self) -> Result<usize> {
         let site = self.site.id;
         let mut held = 0;
-        for kind in DraftKind::ALL {
-            for record in self.draft_store.list(site, kind).await? {
-                match kind {
-                    DraftKind::Content => {
-                        read::<StoredDraft>(record.value)?.into_draft()?;
-                    }
-                    DraftKind::Charter => {
-                        read::<Charter>(record.value)?;
-                    }
-                    DraftKind::CharterSign => {
-                        read::<CharterSignRequest>(record.value)?;
-                    }
-                    DraftKind::Promotion => {
-                        read::<PromotionRequest>(record.value)?;
+        for record in self.draft_store.list(site, DraftKind::Content).await? {
+            read::<StoredDraft>(record.value)?.into_draft()?;
+            held += 1;
+        }
+        for record in self.draft_store.list(site, DraftKind::Charter).await? {
+            read::<Charter>(record.value)?;
+            held += 1;
+        }
+        for record in self.draft_store.list(site, DraftKind::CharterSign).await? {
+            let legacy: CharterSignRequest = read(record.value)?;
+            if legacy.committed.is_none() {
+                let id = format!("site-charter-{site}-legacy-{}", record.id);
+                let mut request = self
+                    .submit_charter_signing(id, None, legacy.draft, &legacy.requested_by)
+                    .await?;
+                for signature in legacy.signatures {
+                    match self
+                        .approvals
+                        .approve(&request.id, request.version, &signature.principal)
+                        .await
+                    {
+                        Ok(after) => request = after,
+                        Err(error) => {
+                            tracing::info!(website.request = %request.id, error = %error, "a signature that no longer counts was not carried over");
+                        }
                     }
                 }
-                held += 1;
+                if request.state == ApprovalState::Approved {
+                    self.commit_signed(&request).await?;
+                }
             }
+            self.draft_store.remove(site, DraftKind::CharterSign, &record.id).await?;
+            held += 1;
+        }
+        for record in self.draft_store.list(site, DraftKind::Promotion).await? {
+            let legacy: PromotionRequest = read(record.value)?;
+            let id = format!("site-promotion-{site}-legacy-{}", record.id);
+            self.submit_promotion(id, &legacy.job, &legacy.reason, &legacy.requested_by).await?;
+            self.draft_store.remove(site, DraftKind::Promotion, &record.id).await?;
+            held += 1;
         }
         if held > 0 {
             tracing::info!(website.site = %self.site.name, website.drafts.held = held, "drafts held in the draft store");
@@ -881,80 +1199,229 @@ impl SiteRuntime {
         verdict
     }
 
-    /// The records of `kind`, each with the id the store gave it; a record that does not read
-    /// back, or a store that cannot be read, is logged and left out.
-    async fn requests<T: serde::de::DeserializeOwned>(
+    /// Whether publishing is held: the runtime's governance control is frozen (spec 3.5
+    /// §7.8.2, D5). A release whose chain is satisfied waits until the freeze lifts.
+    pub fn is_frozen(&self) -> bool {
+        self.governance.as_ref().is_some_and(GovernanceControl::is_frozen)
+    }
+
+    /// Asks every required signer to sign the charter draft `draft` the back office keeps
+    /// (spec 3.5 §7.6, §7.18 stage 5, A-I23), as [`request_charter`](Self::request_charter)
+    /// does for its content.
+    ///
+    /// # Errors
+    ///
+    /// `website.charter.draft_not_found` for an unknown draft; as
+    /// [`request_charter`](Self::request_charter).
+    pub async fn request_charter_signing(
         &self,
-        kind: DraftKind,
-        with_id: impl Fn(&mut T, String),
-    ) -> Vec<T> {
-        let records = match self.draft_store.list(self.site.id, kind).await {
-            Ok(records) => records,
-            Err(error) => {
-                tracing::warn!(website.site = %self.site.name, error = %error, "the draft store cannot be read");
-                return Vec::new();
-            }
+        draft: &str,
+        requested_by: &str,
+    ) -> Result<adk_core::ApprovalRequest> {
+        let (_, charter) =
+            self.record::<Charter>(DraftKind::Charter, draft).await?.ok_or_else(|| {
+                AdkError::new(
+                    ErrorComponent::Tool,
+                    ErrorCategory::InvalidInput,
+                    "website.charter.draft_not_found",
+                    format!("no charter draft '{draft}'"),
+                )
+            })?;
+        self.request_charter(&charter, Some(draft), requested_by).await
+    }
+
+    /// Asks every required signer to sign `charter` as the site's next version (spec 3.5
+    /// §7.6, §7.18 stage 5, A-I23): one approval request per content and version in force,
+    /// with a slot for each role of the charter-change chain of the charter in force — or of
+    /// `charter`, for a site's first. The back office and the web desk asking for the same
+    /// content reach the same request; an edit gets a new one, so earlier signatures stop
+    /// counting.
+    ///
+    /// # Errors
+    ///
+    /// `website.charter.invalid` for a charter that fails `Charter::validate()`; the stores'
+    /// errors.
+    pub async fn request_charter(
+        &self,
+        charter: &Charter,
+        draft: Option<&str>,
+        requested_by: &str,
+    ) -> Result<adk_core::ApprovalRequest> {
+        if let Err(error) = charter.validate() {
+            return Err(AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::InvalidInput,
+                "website.charter.invalid",
+                format!("the draft cannot be committed: {error}"),
+            ));
+        }
+        let id = self.charter_request_id(charter).await?;
+        self.submit_charter_signing(id, draft, charter.clone(), requested_by).await
+    }
+
+    /// The signing request for `charter`, when one was asked for, with the version it
+    /// committed.
+    ///
+    /// # Errors
+    ///
+    /// The stores' errors.
+    pub async fn charter_request(&self, charter: &Charter) -> Result<Option<CharterSignRequest>> {
+        let id = self.charter_request_id(charter).await?;
+        let Some(request) = self.approvals.get(&id).await? else { return Ok(None) };
+        let mut view = CharterSignRequest::of(&request)?;
+        if let Some(charters) = &self.charters {
+            view.committed = charters
+                .history(self.site.id)
+                .await
+                .map_err(kernel_error)?
+                .iter()
+                .find(|version| version.decision.decision_id == id)
+                .map(CharterVersion::version);
+        }
+        Ok(Some(view))
+    }
+
+    /// The id of the signing request for `charter` as the next version:
+    /// `site-charter-{site}-v{next}-{first 16 hex digits of the content's digest}`.
+    async fn charter_request_id(&self, charter: &Charter) -> Result<String> {
+        let next = match &self.charters {
+            Some(charters) => charters
+                .current(self.site.id)
+                .await
+                .map_err(kernel_error)?
+                .map_or(1, |current| current.version() + 1),
+            None => 1,
         };
-        records
+        let content = serde_json::to_vec(charter).map_err(store_error)?;
+        let digest = adk_site::release::file_digest(&content).to_string();
+        let hex = digest.trim_start_matches("sha256:");
+        Ok(format!("site-charter-{}-v{next}-{}", self.site.id, &hex[..16.min(hex.len())]))
+    }
+
+    /// Submits the charter signing request `id` for `charter`.
+    async fn submit_charter_signing(
+        &self,
+        id: String,
+        draft: Option<&str>,
+        charter: Charter,
+        requested_by: &str,
+    ) -> Result<adk_core::ApprovalRequest> {
+        let governing = match &self.charters {
+            Some(charters) => charters
+                .current(self.site.id)
+                .await
+                .map_err(kernel_error)?
+                .map(|current| current.charter.governance),
+            None => None,
+        }
+        .unwrap_or_else(|| charter.governance.clone());
+        let summary = match &charter.mission {
+            mission if mission.is_empty() => "Sign the charter".to_string(),
+            mission => format!("Sign the charter: {mission}"),
+        };
+        let args = json!({ "site": self.site.id, "draft": draft, "charter": charter });
+        self.approvals
+            .submit(
+                id,
+                CHARTER_SIGN_TOOL,
+                args,
+                summary,
+                chain_policy(&governing, &CHARTER_ACTION),
+                subject_of(requested_by),
+            )
+            .await
+    }
+
+    /// Asks the owner to promote `job` (spec 3.5 §7.11, A-I13): an approval request only an
+    /// owner decides. While one waits for the job, asking again returns it.
+    ///
+    /// # Errors
+    ///
+    /// The approval service's error.
+    pub async fn request_promotion(
+        &self,
+        job: &str,
+        reason: &str,
+        requested_by: &str,
+    ) -> Result<adk_core::ApprovalRequest> {
+        let waiting = self.approvals.list(JOB_PROMOTION_TOOL, &[ApprovalState::Pending]).await?;
+        if let Some(open) = waiting
             .into_iter()
-            .filter_map(|record| match read::<T>(record.value) {
-                Ok(mut request) => {
-                    with_id(&mut request, record.id);
-                    Some(request)
-                }
-                Err(error) => {
-                    tracing::warn!(website.request = %record.id, error = %error, "a stored request does not read back");
-                    None
-                }
-            })
-            .collect()
+            .find(|request| request.args_redacted.get("job").and_then(Value::as_str) == Some(job))
+        {
+            return Ok(open);
+        }
+        let id = format!("site-promotion-{}-{}", self.site.id, Uuid::new_v4().simple());
+        self.submit_promotion(id, job, reason, requested_by).await
+    }
+
+    /// Submits the promotion request `id`.
+    async fn submit_promotion(
+        &self,
+        id: String,
+        job: &str,
+        reason: &str,
+        requested_by: &str,
+    ) -> Result<adk_core::ApprovalRequest> {
+        let owner = ApproverSelector::group(adk_kernel::charter::role_group(Role::Owner));
+        self.approvals
+            .submit(
+                id,
+                JOB_PROMOTION_TOOL,
+                json!({ "site": self.site.id, "job": job, "reason": reason }),
+                format!("Promote the {job} job: {reason}"),
+                ApprovalPolicy::for_slots([owner]),
+                subject_of(requested_by),
+            )
+            .await
     }
 
     /// The charter signing requests that wait.
     pub async fn charter_requests(&self) -> Vec<CharterSignRequest> {
-        self.requests(DraftKind::CharterSign, |request: &mut CharterSignRequest, id| {
-            request.id = id;
-        })
-        .await
+        match self.approvals.list(CHARTER_SIGN_TOOL, &[ApprovalState::Pending]).await {
+            Ok(requests) => requests
+                .iter()
+                .filter_map(|request| match CharterSignRequest::of(request) {
+                    Ok(view) => Some(view),
+                    Err(error) => {
+                        tracing::warn!(website.request = %request.id, error = %error, "a charter signing request does not read back");
+                        None
+                    }
+                })
+                .collect(),
+            Err(error) => {
+                tracing::warn!(website.site = %self.site.name, error = %error, "the approval service cannot be read");
+                Vec::new()
+            }
+        }
     }
 
     /// The promotion requests that wait for the owner.
     pub async fn promotion_requests(&self) -> Vec<PromotionRequest> {
-        self.requests(DraftKind::Promotion, |request: &mut PromotionRequest, id| request.id = id)
-            .await
+        match self.approvals.list(JOB_PROMOTION_TOOL, &[ApprovalState::Pending]).await {
+            Ok(requests) => requests.iter().map(PromotionRequest::of).collect(),
+            Err(error) => {
+                tracing::warn!(website.site = %self.site.name, error = %error, "the approval service cannot be read");
+                Vec::new()
+            }
+        }
     }
 
-    /// Records `approval` — a person signing in a role — on the charter request `id`, and
-    /// commits the draft through `commit_audited` once every required signer has signed,
-    /// each a distinct person (spec 3.5 §7.6, A-I23). No agent signs, and the agent that
-    /// asked never commits.
+    /// Records `approval` — a person signing in a role — on the charter signing request
+    /// `id`, and commits the draft through `commit_audited` once distinct people fill every
+    /// role of the chain (spec 3.5 §7.6, A-I23). The commit's decision is the request. No
+    /// agent signs, and the agent that asked never commits.
     ///
     /// # Errors
     ///
     /// `NotFound` for an unknown request; `Forbidden` for a signature no person made or in a
-    /// role the signer does not hold; `website.drafts.conflict` when another signature was
-    /// recorded meanwhile; the store's errors.
+    /// role the signer does not hold; the approval service's errors, such as
+    /// `approval.already_decided` for a second signature by one person; the stores' errors.
     pub async fn sign_charter(
         &self,
         id: &str,
         approval: RoleApproval,
-        decision_id: &str,
     ) -> Result<Option<CharterVersion>> {
-        let charters = self.charters.as_ref().ok_or_else(|| {
-            AdkError::config("signing a charter needs the site's charter store (spec 3.5 §7.6)")
-        })?;
-        let (version, mut request) = self
-            .record::<CharterSignRequest>(DraftKind::CharterSign, id)
-            .await?
-            .ok_or_else(|| {
-                AdkError::new(
-                    ErrorComponent::Tool,
-                    ErrorCategory::NotFound,
-                    "website.charter.request_not_found",
-                    format!("no charter signing request '{id}'"),
-                )
-            })?;
-        request.id = id.to_string();
         if super::is_agent(&approval.principal) {
             return Err(AdkError::new(
                 ErrorComponent::Tool,
@@ -966,9 +1433,25 @@ impl SiteRuntime {
                 ),
             ));
         }
+        let charters = self.charters.as_ref().ok_or_else(|| {
+            AdkError::config("signing a charter needs the site's charter store (spec 3.5 §7.6)")
+        })?;
+        let request = self
+            .approvals
+            .get(id)
+            .await?
+            .filter(|request| request.tool_name == CHARTER_SIGN_TOOL)
+            .ok_or_else(|| {
+                AdkError::new(
+                    ErrorComponent::Tool,
+                    ErrorCategory::NotFound,
+                    "website.charter.request_not_found",
+                    format!("no charter signing request '{id}'"),
+                )
+            })?;
         let governing = match charters.current(self.site.id).await.map_err(kernel_error)? {
             Some(current) => current.charter.governance,
-            None => request.draft.governance.clone(),
+            None => CharterSignRequest::of(&request)?.draft.governance,
         };
         if !governing.holds(&approval.principal.id, approval.role) {
             return Err(AdkError::new(
@@ -978,29 +1461,58 @@ impl SiteRuntime {
                 format!("{} does not hold the {:?} role", approval.principal.id, approval.role),
             ));
         }
-        request.signatures.retain(|held| held.principal.id != approval.principal.id);
-        request.signatures.push(approval);
-        if check_chain(&governing, &adk_kernel::charter::CHARTER_ACTION, &request.signatures, None)
-            .is_err()
-        {
-            self.replace(DraftKind::CharterSign, id, version, &request).await?;
+        let signed = self.approvals.approve(id, request.version, &approval.principal).await?;
+        if signed.state != ApprovalState::Approved {
             return Ok(None);
         }
-        let mut decision = CommitDecision::new(decision_id, self.clock.now());
-        for signature in &request.signatures {
-            decision = decision.with_approval(signature.clone());
+        self.commit_signed(&signed).await
+    }
+
+    /// Commits every charter whose signing request people approved on any surface — the
+    /// desk, the kernel's inbox, a chat card — and that is not committed yet. Returns the
+    /// versions committed now.
+    ///
+    /// # Errors
+    ///
+    /// The stores' errors.
+    pub async fn settle_charters(&self) -> Result<Vec<CharterVersion>> {
+        let mut committed = Vec::new();
+        for request in self.approvals.list(CHARTER_SIGN_TOOL, &[ApprovalState::Approved]).await? {
+            committed.extend(self.commit_signed(&request).await?);
         }
-        let committed =
-            commit_audited(charters.as_ref(), request.draft.clone(), decision, self.audit.as_ref())
-                .await
-                .map_err(kernel_error)?;
-        request.committed = Some(committed.version());
-        // The charter store's own compare-and-set decided the commit; the request only
-        // records it.
-        if let Err(error) = self.replace(DraftKind::CharterSign, id, version, &request).await {
-            tracing::warn!(website.request = id, error = %error, "a committed charter's request was not updated");
+        Ok(committed)
+    }
+
+    /// Commits the charter of the approved signing request `request`, its signers as the
+    /// decision's approvals and the request as the decision; `None` when a version already
+    /// carries that decision.
+    async fn commit_signed(
+        &self,
+        request: &adk_core::ApprovalRequest,
+    ) -> Result<Option<CharterVersion>> {
+        let charters = self.charters.as_ref().ok_or_else(|| {
+            AdkError::config("committing a charter needs the site's charter store (spec 3.5 §7.6)")
+        })?;
+        let committed = || async {
+            let history = charters.history(self.site.id).await.map_err(kernel_error)?;
+            Ok::<_, AdkError>(
+                history.iter().any(|version| version.decision.decision_id == request.id),
+            )
+        };
+        if committed().await? {
+            return Ok(None);
         }
-        Ok(Some(committed))
+        let view = CharterSignRequest::of(request)?;
+        let mut decision = CommitDecision::new(request.id.clone(), self.clock.now());
+        for signature in view.signatures {
+            decision = decision.with_approval(signature);
+        }
+        match commit_audited(charters.as_ref(), view.draft, decision, self.audit.as_ref()).await {
+            Ok(version) => Ok(Some(version)),
+            // Another replica committed the same decision first.
+            Err(_) if committed().await? => Ok(None),
+            Err(error) => Err(kernel_error(error)),
+        }
     }
 }
 

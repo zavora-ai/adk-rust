@@ -11,7 +11,7 @@ PostgreSQL, Redis, MongoDB, Neo4j, or Firestore.
 | **Inbox** | Lists the requests an approver may decide now — by name, by group, or through a live delegation — oldest first, paged by cursor; `InboxQuery::with_session` narrows it to the decisions one session — application, user and session ID — waits on |
 | **Quorum** | A request resolves once `quorum` distinct approvers approve; a delegate's approval counts for the delegator |
 | **Slots** | A request with `slots` resolves only once distinct approvers fill every slot, one each — an editor and a publisher who are two people — whatever order they decide in |
-| **Directory** | An `ApproverDirectory` on the service states each approver's and delegator's groups; callers' asserted groups are ignored |
+| **Directory** | An `ApproverDirectory` on the service states each approver's and delegator's membership of the groups it governs; callers' claims to those groups are ignored |
 | **Self-approval** | Refused by default for the requester, the acting agent, and anyone acting through their delegation |
 | **Actions** | Approve, edit (approve with substituted arguments), reject, respond (answer the model instead of running the call) |
 | **Concurrency** | Every change is a compare-and-swap on the request's `version`; of two approvers deciding one version, one wins and the other receives `409 approval.version_conflict` |
@@ -141,10 +141,11 @@ fn release_policy() -> ApprovalPolicy {
 ### Approver Directory
 
 `StoreApprovalService::with_directory` makes an `ApproverDirectory` the authority on
-membership: the service asks it for the groups of the approver and of any delegator, for every
-decision and every inbox, and records the answer in `approver_groups` and `authority_groups`.
-A group the caller asserts does not count, so a surface cannot claim a role for the person
-deciding. `adk_kernel::charter::CharterDirectory` answers from the site charter in force.
+membership of the groups it governs (`ApproverDirectory::governs`, every group by default):
+the service asks it for the groups of the approver and of any delegator, for every decision
+and every inbox, and records the answer in `approver_groups` and `authority_groups`. A claim
+to a governed group does not count, so a surface cannot claim a role for the person deciding;
+groups it does not govern, such as an operator scope, are kept as asserted. `adk_kernel::charter::CharterDirectory` answers from the site charter in force.
 
 ```rust
 use std::sync::Arc;

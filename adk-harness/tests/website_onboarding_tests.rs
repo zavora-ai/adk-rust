@@ -173,7 +173,6 @@ async fn one_scripted_onboarding_pass() {
         .sign_charter(
             request["request"].as_str().unwrap(),
             RoleApproval::new(Role::Owner, SubjectRef::human(OWNER), chrono::Utc::now()),
-            "dec-1",
         )
         .await
         .unwrap()

@@ -240,6 +240,7 @@ impl QuarantineBook {
             proposer: proposer.to_string(),
             entry: entry_point,
             preview_digest: entry.evidence_digest.clone(),
+            change: entry.evidence_digest.clone(),
             diff: Vec::new(),
         };
         let decision =

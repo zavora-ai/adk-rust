@@ -9,6 +9,7 @@ use crate::website_common;
 
 use std::sync::Arc;
 
+use adk_core::ApprovalState;
 use adk_core::principal::SubjectRef;
 use adk_harness::website::{AuthoringRoute, AuthoringRouter, ENTRY_STATE_KEY, back_office_tools};
 use adk_harness::{HarnessMode, PromptAnswer};
@@ -376,15 +377,16 @@ async fn requests_raise_decision_cards_and_commit_nothing() {
         SubjectRef::human("urn:adk:agent:bakery/steward"),
         chrono::Utc::now(),
     );
-    assert!(world.runtime.sign_charter(id, agent, "dec-x").await.is_err(), "no agent signs");
+    assert!(world.runtime.sign_charter(id, agent).await.is_err(), "no agent signs");
     let publisher =
         RoleApproval::new(Role::Owner, SubjectRef::human(PUBLISHER), chrono::Utc::now());
     assert!(
-        world.runtime.sign_charter(id, publisher, "dec-y").await.is_err(),
+        world.runtime.sign_charter(id, publisher).await.is_err(),
         "the publisher is not an owner"
     );
     let owner = RoleApproval::new(Role::Owner, SubjectRef::human(OWNER), chrono::Utc::now());
-    let committed = world.runtime.sign_charter(id, owner, "dec-2").await.unwrap().unwrap();
+    let committed = world.runtime.sign_charter(id, owner).await.unwrap().unwrap();
+    assert_eq!(committed.decision.decision_id, id, "the commit names the signing request");
     assert_eq!(committed.version(), 2);
     assert_eq!(
         world.charters.current(world.site.id).await.unwrap().unwrap().charter.mission,
@@ -417,28 +419,20 @@ async fn an_approval_chain_needs_every_role_by_a_distinct_person() {
     let first = send(&steward, "s1", "publish the hours").await;
     let pending = response(&first, "site_publish", 0);
     assert_eq!(pending["published"], false, "{pending}");
-    let ticket: awp_types::Digest = pending["pending"].as_str().unwrap().parse().unwrap();
+    let ticket = pending["pending"].as_str().unwrap().to_string();
     let approvals = world.runtime.approvals().clone();
+    let request = approvals.get(&ticket).await.unwrap().expect("the release's request");
+    assert_eq!(request.tool_name, adk_harness::website::SITE_RELEASE_TOOL);
 
-    approvals
-        .approve(
-            &ticket,
-            RoleApproval::new(Role::Editor, SubjectRef::human(OWNER), chrono::Utc::now()),
-        )
-        .await;
+    let editor =
+        approvals.approve(&ticket, request.version, &SubjectRef::human(OWNER)).await.unwrap();
+    assert_eq!(editor.state, ApprovalState::Pending, "the editor alone is not the chain");
     let second = send(&steward, "s1", "is it live?").await;
-    assert_eq!(
-        response(&second, "site_publish", 0)["published"],
-        false,
-        "the editor alone is not the chain"
-    );
+    let waiting = response(&second, "site_publish", 0);
+    assert_eq!(waiting["published"], false, "{waiting}");
+    assert_eq!(waiting["pending"], ticket.as_str(), "a new preview reaches the same request");
 
-    approvals
-        .approve(
-            &ticket,
-            RoleApproval::new(Role::Publisher, SubjectRef::human(PUBLISHER), chrono::Utc::now()),
-        )
-        .await;
+    approvals.approve(&ticket, editor.version, &SubjectRef::human(PUBLISHER)).await.unwrap();
     let third = send(&steward, "s1", "and now?").await;
     let live = response(&third, "site_publish", 0);
     assert_eq!(live["published"], true, "{live}");
@@ -466,28 +460,38 @@ async fn a_vote_without_the_role_is_refused_and_blocks_nothing() {
         |b| b.mode(HarnessMode::Ask).prompter(prompter.clone()),
     );
     let first = send(&steward, "s1", "publish the hours").await;
-    let ticket: awp_types::Digest =
-        response(&first, "site_publish", 0)["pending"].as_str().unwrap().parse().unwrap();
+    let ticket = response(&first, "site_publish", 0)["pending"].as_str().unwrap().to_string();
     let approvals = world.runtime.approvals().clone();
-    let now = chrono::Utc::now();
-    let stranger = RoleApproval::new(Role::Publisher, SubjectRef::human("mallory"), now);
-    let refused = approvals.record_approval(&ticket, stranger.clone()).await.unwrap_err();
-    assert!(refused.to_string().contains("does not hold"), "{refused}");
-    // Recorded without a check, neither counts.
-    approvals.approve(&ticket, stranger).await;
-    approvals
-        .approve(&ticket, RoleApproval::new(Role::Publisher, SubjectRef::human(OWNER), now))
-        .await;
-    approvals
-        .approve(&ticket, RoleApproval::new(Role::Editor, SubjectRef::human(OWNER), now))
-        .await;
-    approvals
-        .record_approval(
-            &ticket,
-            RoleApproval::new(Role::Publisher, SubjectRef::human(PUBLISHER), now),
-        )
-        .await
-        .unwrap();
+    let version = approvals.get(&ticket).await.unwrap().unwrap().version;
+    let code = |result: adk_core::Result<adk_core::ApprovalRequest>| {
+        result.map(|request| request.state).unwrap_err().code.to_string()
+    };
+    assert_eq!(
+        code(approvals.approve(&ticket, version, &SubjectRef::human("mallory")).await),
+        "approval.not_an_approver",
+        "the charter gives mallory no role"
+    );
+    assert_eq!(
+        code(
+            approvals
+                .approve(&ticket, version, &SubjectRef::human("urn:adk:agent:bakery/steward"))
+                .await
+        ),
+        "website.approval.refused",
+        "no agent votes"
+    );
+    let owner = approvals.approve(&ticket, version, &SubjectRef::human(OWNER)).await.unwrap();
+    assert_eq!(
+        code(approvals.approve(&ticket, owner.version, &SubjectRef::human(OWNER)).await),
+        "approval.already_decided",
+        "one person fills one role"
+    );
+    assert_eq!(
+        code(approvals.approve(&ticket, version, &SubjectRef::human(PUBLISHER)).await),
+        "approval.version_conflict",
+        "a vote on a stale version is refused"
+    );
+    approvals.approve(&ticket, owner.version, &SubjectRef::human(PUBLISHER)).await.unwrap();
     let second = send(&steward, "s1", "and now?").await;
     let live = response(&second, "site_publish", 0);
     assert_eq!(live["published"], true, "{live}");

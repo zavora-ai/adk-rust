@@ -421,6 +421,7 @@ fn assemble_runtime(
     .audit(AuditTrail::new(Arc::new(audit.clone())))
     .announcer(announcer.clone())
     .build()
+    .unwrap()
 }
 
 /// A polite source context whose every request is signed with a fresh Web Bot Auth key.

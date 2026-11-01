@@ -75,7 +75,11 @@ impl SiteStores {
         let kernel =
             KernelStores::from_sqlite_pool(pool.clone()).await.map_err(store)?.with_label(url);
         let mut service = StoreApprovalService::new(kernel.approvals.clone())
-            .with_router(ApprovalPolicy::new([ApproverSelector::human(owner)]));
+            .with_router(ApprovalPolicy::new([ApproverSelector::human(owner)]))
+            // The site charters decide who holds a role, never a surface's claim (A-I23).
+            .with_directory(Arc::new(adk_kernel::charter::CharterDirectory::new(
+                kernel.charter.charters.clone(),
+            )));
         for notifier in notifiers {
             service = service.with_notifier(notifier);
         }

@@ -1,8 +1,10 @@
-//! The back office's drafts live in the draft store (spec 3.5 §7.8.2 step 1, §7.6, §7.11): a
-//! content draft, a charter draft, a charter signing request and a promotion request made on
-//! one runtime are read by a second runtime over the same store, which publishes the draft
-//! and numbers new drafts after every number handed out. Two runtimes over one SQLite store
-//! get distinct ids, see each other's drafts, and never overwrite each other's edits.
+//! The back office's drafts live in the draft store and its requests in the approval service
+//! (spec 3.5 §7.8.2 step 1, §7.6, §7.11): a content draft and a charter draft made on one
+//! runtime, and the charter signing and promotion requests it submits, are read by a second
+//! runtime over the same stores, which publishes the draft and numbers new drafts after every
+//! number handed out. Two runtimes over one SQLite store get distinct ids, see each other's
+//! drafts, and never overwrite each other's edits; signing and promotion requests an earlier
+//! version kept in the draft store become approval requests once.
 
 #![cfg(feature = "website")]
 
@@ -11,8 +13,15 @@ use crate::website_common;
 use std::sync::Arc;
 
 use adk_core::audit_log::InMemoryAuditLogStore;
+use adk_core::principal::SubjectRef;
+use adk_core::{
+    ApprovalService, ApprovalState, GovernanceControl, InMemoryApprovalStore, StoreApprovalService,
+};
 use adk_harness::website::{
-    InMemorySiteDraftStore, SiteDraftStore, SiteRef, SiteRuntime, back_office_tools,
+    DraftKind, InMemorySiteDraftStore, SiteDraftStore, SiteRef, SiteRuntime, back_office_tools,
+};
+use adk_kernel::charter::{
+    CharterDirectory, CharterStore, CommitDecision, InMemoryCharterStore, RoleApproval,
 };
 use adk_site::content::{ContentStore, FsContentStore, InMemoryContentStore, SiteProject};
 use adk_site::generator::BuiltinGenerator;
@@ -29,6 +38,10 @@ struct Parts {
     log: Arc<SiteLog>,
     work: tempfile::TempDir,
     _host_dir: tempfile::TempDir,
+    /// The approval service every runtime over these parts shares, as replicas share one.
+    approvals: Arc<dyn ApprovalService>,
+    charters: Arc<InMemoryCharterStore>,
+    governance: GovernanceControl,
 }
 
 async fn parts() -> Parts {
@@ -47,6 +60,9 @@ async fn parts() -> Parts {
             .await
             .unwrap(),
     );
+    let charters = Arc::new(InMemoryCharterStore::new());
+    let approvals = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+        .with_directory(Arc::new(CharterDirectory::new(charters.clone()).for_site(site.id)));
     Parts {
         site,
         base,
@@ -55,6 +71,9 @@ async fn parts() -> Parts {
         log,
         work,
         _host_dir: host_dir,
+        approvals: Arc::new(approvals),
+        charters,
+        governance: GovernanceControl::new(),
     }
 }
 
@@ -75,7 +94,11 @@ fn runtime(
         work,
     )
     .drafts(drafts)
+    .approvals(parts.approvals.clone())
+    .charters(parts.charters.clone())
+    .governance(parts.governance.clone())
     .build()
+    .unwrap()
 }
 
 async fn try_call(runtime: &Arc<SiteRuntime>, name: &str, args: Value) -> adk_core::Result<Value> {
@@ -120,29 +143,34 @@ async fn drafts_and_requests_survive_a_restart() {
     let charter_draft = call(&first, "charter_draft", json!({ "charter": charter })).await;
     assert_eq!(charter_draft["draft"], "charter-1", "{charter_draft}");
     let request = call(&first, "charter_commit_request", json!({ "draft": "charter-1" })).await;
-    assert_eq!(request["request"], "charter-sign-1", "{request}");
+    let signing = request["request"].as_str().unwrap().to_string();
+    assert!(signing.starts_with(&format!("site-charter-{}-v1-", parts.site.id)), "{request}");
+    let again = call(&first, "charter_commit_request", json!({ "draft": "charter-1" })).await;
+    assert_eq!(again["request"], signing.as_str(), "the same content keeps its request");
     let promotion = call(
         &first,
         "job_promotion_request",
         json!({ "job": "freshness", "reason": "20 unchanged approvals" }),
     )
     .await;
-    assert_eq!(promotion["request"], "promotion-1", "{promotion}");
+    let promoting = promotion["request"].as_str().unwrap().to_string();
+    assert!(promoting.starts_with("site-promotion-"), "{promotion}");
     drop(first);
 
-    // The restarted runtime reads every one from the store.
+    // The restarted runtime reads the drafts from the store and the requests from the
+    // approval service.
     let second = runtime(&parts, drafts.clone(), parts.work.path());
-    assert_eq!(second.restore_drafts().await.unwrap(), 4);
+    assert_eq!(second.restore_drafts().await.unwrap(), 2);
     let requests = second.charter_requests().await;
     assert_eq!(requests.len(), 1);
     assert_eq!(
         (requests[0].id.as_str(), &requests[0].draft.mission),
-        ("charter-sign-1", &charter.mission)
+        (signing.as_str(), &charter.mission)
     );
     let promotions = second.promotion_requests().await;
     assert_eq!(
         (promotions[0].id.as_str(), promotions[0].job.as_str()),
-        ("promotion-1", "freshness")
+        (promoting.as_str(), "freshness")
     );
     let joined = call(&second, "content_draft", joining("about", "draft-1")).await;
     assert_eq!(joined["items"], json!(["pages/hours/en", "pages/about/en"]), "{joined}");
@@ -155,7 +183,144 @@ async fn drafts_and_requests_survive_a_restart() {
     let next = call(&second, "content_draft", page("menu")).await;
     assert_eq!(next["draft"], "draft-2", "{next}");
     let third = runtime(&parts, drafts, parts.work.path());
-    assert_eq!(third.restore_drafts().await.unwrap(), 4, "the published draft is gone");
+    assert_eq!(third.restore_drafts().await.unwrap(), 2, "the published draft is gone");
+}
+
+/// #1280: a charter signing request and a promotion request an earlier version kept in the
+/// draft store become approval requests once; the owner's signature is carried over and
+/// commits the charter, and a second restore converts nothing again.
+#[tokio::test]
+async fn stored_signing_and_promotion_requests_convert_once() {
+    let parts = parts().await;
+    let drafts: Arc<dyn SiteDraftStore> = Arc::new(InMemorySiteDraftStore::default());
+    let charter = website_common::charter(&parts.site, false);
+    let now = chrono::Utc::now();
+    let owner =
+        RoleApproval::new(awp_types::Role::Owner, SubjectRef::human(website_common::OWNER), now);
+    let legacy_signing = json!({
+        "id": "",
+        "draft": charter,
+        "roles": ["owner"],
+        "signatures": [owner],
+        "requestedBy": "urn:adk:agent:bakery/steward",
+        "requestedAt": now,
+    });
+    let legacy_promotion = json!({
+        "id": "",
+        "job": "freshness",
+        "reason": "20 unchanged approvals",
+        "requestedBy": "urn:adk:agent:bakery/steward",
+        "requestedAt": now,
+    });
+    let site = parts.site.id;
+    let signing = drafts.create(site, DraftKind::CharterSign, &legacy_signing).await.unwrap();
+    drafts.create(site, DraftKind::Promotion, &legacy_promotion).await.unwrap();
+
+    let runtime = runtime(&parts, drafts.clone(), parts.work.path());
+    assert_eq!(runtime.restore_drafts().await.unwrap(), 2, "both converted");
+    let committed = parts.charters.current(site).await.unwrap().expect("the owner had signed");
+    assert_eq!(committed.version(), 1);
+    assert_eq!(
+        committed.decision.decision_id,
+        format!("site-charter-{site}-legacy-{}", signing.id),
+        "the commit names the converted request"
+    );
+    let promotions = runtime.promotion_requests().await;
+    assert_eq!(promotions.len(), 1);
+    assert_eq!(promotions[0].id, format!("site-promotion-{site}-legacy-promotion-1"));
+    assert!(drafts.list(site, DraftKind::CharterSign).await.unwrap().is_empty());
+    assert!(drafts.list(site, DraftKind::Promotion).await.unwrap().is_empty());
+
+    assert_eq!(runtime.restore_drafts().await.unwrap(), 0, "nothing converts twice");
+    assert_eq!(runtime.promotion_requests().await.len(), 1);
+    assert_eq!(parts.charters.current(site).await.unwrap().unwrap().version(), 1);
+}
+
+/// #1280: a release under an editor-and-publisher chain is one approval request bound to
+/// the change. The editor's vote survives a restart and a new preview; an edit makes a new
+/// request the vote does not count for; a chain satisfied while frozen publishes only when
+/// the freeze lifts, once.
+#[tokio::test]
+async fn a_release_chain_survives_a_restart_and_binds_to_the_change() {
+    use website_common::{OWNER, PUBLISHER};
+
+    let parts = parts().await;
+    let now = chrono::Utc::now();
+    parts
+        .charters
+        .commit(
+            website_common::charter(&parts.site, true),
+            CommitDecision::new("dec-charter-1", now).with_approval(RoleApproval::new(
+                awp_types::Role::Owner,
+                SubjectRef::human(OWNER),
+                now,
+            )),
+        )
+        .await
+        .unwrap();
+    let drafts: Arc<dyn SiteDraftStore> = Arc::new(InMemorySiteDraftStore::default());
+    let first = runtime(&parts, drafts.clone(), parts.work.path());
+    call(&first, "content_draft", page("hours")).await;
+    let pending = call(&first, "site_publish", json!({ "draft": "draft-1" })).await;
+    let ticket = pending["pending"].as_str().expect("the chain holds the release").to_string();
+    let request = parts.approvals.get(&ticket).await.unwrap().unwrap();
+    let editor =
+        first.approvals().approve(&ticket, request.version, &SubjectRef::human(OWNER)).await;
+    assert_eq!(editor.unwrap().state, ApprovalState::Pending, "an early vote decides nothing");
+    drop(first);
+
+    // A restarted process previews the draft again and reaches the same request.
+    let second = runtime(&parts, drafts, parts.work.path());
+    let again = call(&second, "site_publish", json!({ "draft": "draft-1" })).await;
+    assert_eq!(again["pending"], ticket.as_str(), "{again}");
+
+    // An edit is a new change: the editor's vote does not count for it.
+    call(&second, "content_draft", joining("about", "draft-1")).await;
+    let edited = call(&second, "site_publish", json!({ "draft": "draft-1" })).await;
+    let edited = edited["pending"].as_str().expect("the edit waits for its chain").to_string();
+    assert_ne!(edited, ticket);
+    let fresh = parts.approvals.get(&edited).await.unwrap().unwrap();
+    assert!(fresh.decisions.is_empty(), "earlier votes stop counting");
+
+    // Votes are recorded while frozen; the release waits until the freeze lifts.
+    parts.governance.freeze("incident review");
+    let approvals = second.approvals();
+    let one = approvals.approve(&edited, fresh.version, &SubjectRef::human(OWNER)).await.unwrap();
+    let both =
+        approvals.approve(&edited, one.version, &SubjectRef::human(PUBLISHER)).await.unwrap();
+    assert_eq!(both.state, ApprovalState::Approved);
+    let held = call(&second, "site_publish", json!({ "draft": "draft-1" })).await;
+    assert_eq!((held["published"].clone(), held["held"].clone()), (json!(false), json!("frozen")));
+    assert!(parts.host.fetch("/hours/").await.unwrap().is_none(), "nothing published");
+    parts.governance.unfreeze();
+    let live = call(&second, "site_publish", json!({ "draft": "draft-1" })).await;
+    assert_eq!(live["published"], true, "{live}");
+    assert_eq!(live["approvers"], json!([OWNER, PUBLISHER]));
+    assert!(
+        try_call(&second, "site_publish", json!({ "draft": "draft-1" })).await.is_err(),
+        "the release publishes once"
+    );
+}
+
+/// #1280 (D3): a runtime that must be durable refuses stores it would keep in memory.
+#[tokio::test]
+async fn a_durable_runtime_refuses_in_memory_stores() {
+    let parts = parts().await;
+    let refused = SiteRuntime::builder(
+        parts.site.clone(),
+        parts.base.clone(),
+        parts.store.clone(),
+        Arc::new(BuiltinGenerator),
+        parts.host.clone(),
+        parts.log.clone(),
+        parts.work.path(),
+    )
+    .drafts(Arc::new(InMemorySiteDraftStore::default()))
+    .require_durable()
+    .build()
+    .unwrap_err();
+    assert_eq!(refused.code, "website.runtime.not_durable");
+    assert!(refused.to_string().contains("approvals"), "{refused}");
 }
 
 /// Holds the writes of one runtime until the test lets them through, so another runtime's

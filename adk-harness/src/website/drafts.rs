@@ -313,7 +313,7 @@ fn sql_version(version: u64) -> Result<i64> {
 /// drafts.migrate().await?;
 /// let runtime = SiteRuntime::builder(site, base, store, generator, host, log, work)
 ///     .drafts(Arc::new(drafts))
-///     .build();
+///     .build()?;
 /// ```
 #[cfg(feature = "sqlite")]
 #[derive(Debug, Clone)]

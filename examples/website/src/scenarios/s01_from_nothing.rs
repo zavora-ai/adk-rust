@@ -222,7 +222,6 @@ pub async fn run(mode: Mode) -> Result<Checks> {
         .sign_charter(
             request["request"].as_str().unwrap_or_default(),
             RoleApproval::new(Role::Owner, SubjectRef::human(OWNER), chrono::Utc::now()),
-            "dec-charter-1",
         )
         .await?
         .ok_or_else(|| anyhow!("the owner is every required signer"))?;

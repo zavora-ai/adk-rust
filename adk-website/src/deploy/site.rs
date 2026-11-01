@@ -513,6 +513,10 @@ impl RunningSite {
         .history(Arc::new(FileContentHistory::new(paths.history())))
         .charters(charters.clone())
         .drafts(Arc::new(drafts))
+        // The site's decisions are the kernel's requests: one record for the desk, the back
+        // office, the kernel's inbox and chat cards (spec 3.5 A-I23, #1280).
+        .approvals(stores.approvals.clone())
+        .require_durable()
         .audit(trail.clone())
         .gate(
             template
@@ -530,7 +534,7 @@ impl RunningSite {
         if let Some(previous) = previous {
             builder = builder.previous(previous);
         }
-        let runtime = builder.build();
+        let runtime = builder.build()?;
         runtime.restore_drafts().await?;
 
         let partitions = SitePartitions::new(&site);

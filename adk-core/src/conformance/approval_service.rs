@@ -844,8 +844,9 @@ pub async fn slots_need_distinct_approvers<H: ApprovalStoreHarness + ?Sized>(har
 }
 
 /// Groups from a directory: the person it names approves without asserting a group, one
-/// asserting a group the directory does not give them is refused, inboxes follow the
-/// directory, and a delegate acts under the delegator's groups from the directory.
+/// asserting a group the directory governs but does not give them is refused, inboxes follow
+/// the directory, a delegate acts under the delegator's groups from the directory, and a
+/// group the directory does not govern is kept as asserted.
 pub async fn directory_decides_groups<H: ApprovalStoreHarness + ?Sized>(harness: &H) {
     #[derive(Debug)]
     struct Finance(Vec<String>);
@@ -862,6 +863,10 @@ pub async fn directory_decides_groups<H: ApprovalStoreHarness + ?Sized>(harness:
             } else {
                 Vec::new()
             })
+        }
+
+        fn governs(&self, group: &str) -> bool {
+            group == "conformance:finance"
         }
     }
 
@@ -914,4 +919,10 @@ pub async fn directory_decides_groups<H: ApprovalStoreHarness + ?Sized>(harness:
         .expect("dave decides for carol");
     assert_eq!(delegated.decisions[0].via_delegation, Some(SubjectRef::human(&carol)));
     assert_eq!(delegated.decisions[0].authority_groups, ["conformance:finance"]);
+
+    let ops = fx.submit(ApprovalPolicy::new([ApproverSelector::group("conformance:ops")])).await;
+    let operator =
+        ApprovalDecision::approve(SubjectRef::human("olu")).with_groups(["conformance:ops"]);
+    let decided = fx.service.decide(&ops.id, ops.version, operator).await.expect("olu");
+    assert_eq!(decided.state, ApprovalState::Approved, "a group it does not govern is kept");
 }

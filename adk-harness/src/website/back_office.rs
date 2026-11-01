@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 
 use super::catalog::{self, BACK_OFFICE_ORIGIN, ToolSpec};
 use super::drafts::{DraftKind, StoredDraft};
-use super::site::{CharterSignRequest, PromotionRequest, SiteRuntime, kernel_error, site_error};
+use super::site::{SiteRuntime, site_error};
 
 /// The session state key holding the [`EntryPoint`] of the turn: the authoring router sets it
 /// for a paired owner's message (spec 3.5 §7.8.2 "Entry points", A-I24); without it, a change
@@ -780,58 +780,31 @@ impl Tool for BackOfficeTool {
             }
             catalog::CHARTER_COMMIT_REQUEST => {
                 let args: DraftRef = parse(name, args)?;
-                let (_, draft) = site
-                    .record::<Charter>(DraftKind::Charter, &args.draft)
-                    .await?
-                    .ok_or_else(|| invalid(name, format!("no charter draft '{}'", args.draft)))?;
-                if let Err(error) = draft.validate() {
-                    return Err(invalid(name, format!("the draft cannot be committed: {error}")));
-                }
-                let governing = match &site.charters {
-                    Some(charters) => charters
-                        .current(site.site.id)
-                        .await
-                        .map_err(kernel_error)?
-                        .map(|current| current.charter.governance),
-                    None => None,
-                }
-                .unwrap_or_else(|| draft.governance.clone());
-                let roles = governing
-                    .approval_chains
+                let request = site.request_charter_signing(&args.draft, &proposer(&ctx)).await?;
+                let signers: Vec<Role> = request
+                    .policy
+                    .slots
                     .iter()
-                    .find(|chain| chain.action == adk_kernel::charter::CHARTER_ACTION)
-                    .map(|chain| chain.roles.clone())
-                    .unwrap_or_else(|| vec![Role::Owner]);
-                // The store allocates the id; a stored request takes it when it is read.
-                let request = CharterSignRequest {
-                    id: String::new(),
-                    draft,
-                    roles: roles.clone(),
-                    signatures: Vec::new(),
-                    requested_by: proposer(&ctx),
-                    requested_at: site.clock.now(),
-                    committed: None,
-                };
-                let id = site.create(DraftKind::CharterSign, &request).await?.id;
+                    .filter_map(|slot| match slot {
+                        adk_core::ApproverSelector::Group(group) => {
+                            adk_kernel::charter::group_role(group)
+                        }
+                        adk_core::ApproverSelector::Subject(_) => None,
+                    })
+                    .collect();
                 Ok(json!({
-                    "request": id,
-                    "signers": roles,
+                    "request": request.id,
+                    "signers": signers,
                     "committed": false,
                     "note": "the charter takes effect only when every required signer has signed it",
                 }))
             }
             catalog::JOB_PROMOTION_REQUEST => {
                 let args: PromotionArgs = parse(name, args)?;
-                let request = PromotionRequest {
-                    id: String::new(),
-                    job: args.job,
-                    reason: args.reason,
-                    requested_by: proposer(&ctx),
-                    requested_at: site.clock.now(),
-                };
-                let id = site.create(DraftKind::Promotion, &request).await?.id;
+                let request =
+                    site.request_promotion(&args.job, &args.reason, &proposer(&ctx)).await?;
                 Ok(json!({
-                    "request": id,
+                    "request": request.id,
                     "promoted": false,
                     "note": "only the owner's decision promotes a job",
                 }))
@@ -927,6 +900,12 @@ async fn publish(site: &Arc<SiteRuntime>, id: &str) -> Result<Value> {
         );
     }
     match site.pipeline.approve(&draft, &preview).await.map_err(site_error)? {
+        ApprovalDecision::Approved { decision, .. } if site.is_frozen() => Ok(json!({
+            "published": false,
+            "held": "frozen",
+            "decision": decision,
+            "note": "the release is approved and publishes once the freeze lifts",
+        })),
         ApprovalDecision::Approved { decision, approvers } => {
             site.replace(DraftKind::Content, id, version, &StoredDraft::of(&draft)).await?;
             let outcome = site.pipeline.complete(&draft, decision).await.map_err(site_error)?;

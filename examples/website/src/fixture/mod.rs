@@ -732,7 +732,7 @@ impl Fixed<'_> {
         if let Some(quarantine) = &self.quarantine {
             builder = builder.quarantine(quarantine.clone());
         }
-        builder.build()
+        builder.build().expect("a runtime that need not be durable always builds")
     }
 }
 
