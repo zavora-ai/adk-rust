@@ -34,8 +34,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use adk_core::audit_log::{
-    AuditAppend, AuditCheckpoint, AuditHash, AuditLogEntry, AuditLogStore, out_of_range_error,
-    validate_append, validate_checkpoint,
+    AuditAppend, AuditCheckpoint, AuditHash, AuditLogEntry, AuditLogStore, check_redaction,
+    out_of_range_error, validate_append, validate_checkpoint,
 };
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result};
 use async_trait::async_trait;
@@ -526,6 +526,36 @@ impl AuditLogStore for FirestoreAuditLogStore {
             pruned += 1;
         }
         Ok(pruned)
+    }
+
+    async fn redact(&self, log_id: &str, seqs: &[u64]) -> Result<u64> {
+        check_redaction(log_id, seqs, self.size(log_id).await?)?;
+        let parent = self
+            .db
+            .parent_path(LOGS, log_doc_id(log_id))
+            .map_err(|e| storage_error(e.to_string()))?;
+        let mut redacted = 0;
+        for seq in seqs {
+            for entry in self.read_entries(log_id, *seq..*seq + 1).await? {
+                if entry.record.is_none() {
+                    continue;
+                }
+                let cleared = EntryDoc { record: None, ..entry };
+                self.db
+                    .fluent()
+                    .update()
+                    .in_col(ENTRIES)
+                    .precondition(FirestoreWritePrecondition::Exists(true))
+                    .document_id(padded(*seq))
+                    .parent(&parent)
+                    .object(&cleared)
+                    .execute::<EntryDoc>()
+                    .await
+                    .map_err(|e| storage_error(format!("redact failed: {e}")))?;
+                redacted += 1;
+            }
+        }
+        Ok(redacted)
     }
 
     async fn logs(&self) -> Result<Vec<String>> {

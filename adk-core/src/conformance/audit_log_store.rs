@@ -12,6 +12,7 @@
 //! | [`reads_past_the_end_fail`] | `read` past the log's size is `audit_log.out_of_range` |
 //! | [`checkpoints_never_fork`] | Checkpoints list by size, never exceed the log, refuse a second root, and accept a re-signed note |
 //! | [`prune_keeps_hashes`] | Pruning drops bodies below a position and keeps every hash |
+//! | [`redaction_keeps_hashes`] | Redaction drops the bodies at chosen positions, keeps every hash, counts each body once, and refuses a position past the end before dropping anything |
 //! | [`logs_survive_a_restart`] | A new handle sees every entry, node, and checkpoint |
 
 use std::sync::Arc;
@@ -276,6 +277,31 @@ pub async fn prune_keeps_hashes(harness: &impl AuditLogStoreHarness) {
     assert_eq!(read, expected);
     assert_eq!(store.hash_at(&log, 0, 1).await.unwrap(), Some(hash(1)));
     assert_eq!(store.hash_at(&log, 2, 0).await.unwrap(), Some(node(2, 0).hash));
+    store.append(batch(&log, 4..5, vec![])).await.unwrap();
+}
+
+/// Redaction drops the bodies at chosen positions and keeps every hash; a body already
+/// dropped is not counted again, and a position past the end refuses the whole request.
+pub async fn redaction_keeps_hashes(harness: &impl AuditLogStoreHarness) {
+    let store = harness.open().await;
+    let log = unique("audit");
+    store.append(batch(&log, 0..4, vec![node(1, 0), node(1, 1), node(2, 0)])).await.unwrap();
+    assert_code(store.redact(&log, &[1, 4]).await, "audit_log.out_of_range");
+    assert_eq!(
+        store.read(&log, 0..4).await.unwrap(),
+        entries(0..4),
+        "a refused request drops nothing"
+    );
+
+    assert_eq!(store.redact(&log, &[1, 3]).await.unwrap(), 2);
+    assert_eq!(store.redact(&log, &[1, 3]).await.unwrap(), 0);
+    let mut expected = entries(0..4);
+    expected[1].record = None;
+    expected[3].record = None;
+    assert_eq!(harness.open().await.read(&log, 0..4).await.unwrap(), expected);
+    assert_eq!(store.hash_at(&log, 0, 3).await.unwrap(), Some(hash(3)));
+    assert_eq!(store.hash_at(&log, 2, 0).await.unwrap(), Some(node(2, 0).hash));
+    assert_eq!(store.prune(&log, 2).await.unwrap(), 1, "pruning skips the redacted body");
     store.append(batch(&log, 4..5, vec![])).await.unwrap();
 }
 

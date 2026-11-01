@@ -598,6 +598,41 @@ pub trait AuditLogStore: Send + Sync {
 
     /// Returns the ids of every log in the store, sorted.
     async fn logs(&self) -> Result<Vec<String>>;
+
+    /// Drops the bodies of the records at `seqs`, keeping their hashes, and returns how many
+    /// bodies it dropped; a body already pruned or redacted is not counted.
+    ///
+    /// Signed checkpoints and inclusion proofs still verify, since they cover leaf hashes
+    /// only. [`AuditLogSubjectData`](crate::subject::AuditLogSubjectData) redacts the records
+    /// that name a subject being erased.
+    ///
+    /// # Errors
+    ///
+    /// `audit_log.out_of_range` when a position is past the log's end, checked before any
+    /// body is dropped ([`check_redaction`]). The default returns
+    /// `audit_log.redact_unsupported`.
+    async fn redact(&self, log_id: &str, seqs: &[u64]) -> Result<u64> {
+        let _ = seqs;
+        Err(audit_error(
+            ErrorCategory::Unsupported,
+            "audit_log.redact_unsupported",
+            format!("the audit log store holding '{log_id}' cannot redact single records"),
+        ))
+    }
+}
+
+/// Checks that every position in `seqs` is inside a log of `size` records. Every backend
+/// calls this before [`AuditLogStore::redact`] drops a body, so all of them refuse the same
+/// requests.
+///
+/// # Errors
+///
+/// `audit_log.out_of_range` naming the first position past the end.
+pub fn check_redaction(log_id: &str, seqs: &[u64], size: u64) -> Result<()> {
+    match seqs.iter().find(|seq| **seq >= size) {
+        Some(seq) => Err(out_of_range_error(log_id, size, *seq)),
+        None => Ok(()),
+    }
 }
 
 fn audit_error(category: ErrorCategory, code: &'static str, message: String) -> AdkError {
@@ -827,6 +862,20 @@ impl AuditLogStore for InMemoryAuditLogStore {
         let mut ids: Vec<String> = self.logs.read().await.keys().cloned().collect();
         ids.sort();
         Ok(ids)
+    }
+
+    async fn redact(&self, log_id: &str, seqs: &[u64]) -> Result<u64> {
+        let mut logs = self.logs.write().await;
+        let size = logs.get(log_id).map_or(0, |log| log.entries.len() as u64);
+        check_redaction(log_id, seqs, size)?;
+        let Some(log) = logs.get_mut(log_id) else { return Ok(0) };
+        let mut redacted = 0;
+        for seq in seqs {
+            if log.entries[*seq as usize].record.take().is_some() {
+                redacted += 1;
+            }
+        }
+        Ok(redacted)
     }
 }
 

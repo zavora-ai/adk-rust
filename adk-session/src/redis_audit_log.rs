@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use adk_core::audit_log::{
-    AuditAppend, AuditCheckpoint, AuditHash, AuditLogEntry, AuditLogStore,
+    AuditAppend, AuditCheckpoint, AuditHash, AuditLogEntry, AuditLogStore, check_redaction,
     checkpoint_conflict_error, out_of_range_error, seq_conflict_error, validate_append,
 };
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result};
@@ -83,6 +83,20 @@ for seq = 0, before - 1 do
   pruned = pruned + redis.call('HDEL', KEYS[2], tostring(seq))
 end
 return tostring(pruned)
+"#;
+
+/// KEYS: the size key, the records hash. ARGV: the positions to redact. Returns how many
+/// bodies it dropped, or `range:<size>` when a position is past the end.
+const REDACT_SCRIPT: &str = r#"
+local size = tonumber(redis.call('GET', KEYS[1]) or '0')
+for i = 1, #ARGV do
+  if tonumber(ARGV[i]) >= size then return 'range:' .. size end
+end
+local redacted = 0
+for i = 1, #ARGV do
+  redacted = redacted + redis.call('HDEL', KEYS[2], ARGV[i])
+end
+return tostring(redacted)
 "#;
 
 fn store_error(message: String) -> AdkError {
@@ -193,7 +207,7 @@ impl RedisAuditLogStore {
     ///
     /// Returns `session.audit_log.storage` when the server rejects a script.
     pub async fn migrate(&self) -> Result<()> {
-        for script in [APPEND_SCRIPT, CHECKPOINT_SCRIPT, PRUNE_SCRIPT] {
+        for script in [APPEND_SCRIPT, CHECKPOINT_SCRIPT, PRUNE_SCRIPT, REDACT_SCRIPT] {
             let _: String =
                 self.client.script_load(script).await.map_err(redis_error("script load"))?;
         }
@@ -338,6 +352,23 @@ impl AuditLogStore for RedisAuditLogStore {
             return Err(out_of_range_error(log_id, size, before_seq));
         }
         reply.parse().map_err(|_| store_error(format!("unexpected prune script reply '{reply}'")))
+    }
+
+    async fn redact(&self, log_id: &str, seqs: &[u64]) -> Result<u64> {
+        let keys = LogKeys::new(log_id);
+        let reply: String = self
+            .client
+            .eval(
+                REDACT_SCRIPT,
+                vec![keys.size, keys.records],
+                seqs.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            )
+            .await
+            .map_err(redis_error("redact"))?;
+        if let Some(size) = tagged_size(&reply, "range") {
+            return check_redaction(log_id, seqs, size).map(|()| 0);
+        }
+        reply.parse().map_err(|_| store_error(format!("unexpected redact script reply '{reply}'")))
     }
 
     async fn logs(&self) -> Result<Vec<String>> {

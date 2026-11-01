@@ -481,3 +481,31 @@ async fn checkpoint_matches_go_sumdb_note() {
     assert_eq!(note.verified_by(std::slice::from_ref(&verifier)).len(), 1);
     assert_eq!(CheckpointBody::parse(&note.text).unwrap(), body);
 }
+
+#[tokio::test]
+async fn erasing_a_subject_redacts_its_records_and_the_log_still_verifies() {
+    use adk_core::subject::{AuditLogSubjectData, SubjectDataStore, SubjectScope};
+
+    let store: Arc<dyn AuditLogStore> = Arc::new(InMemoryAuditLogStore::new());
+    let key = signer("audit.example.com", 1);
+    let log = open(store.clone(), key.clone(), &clock()).await;
+    let alice = SubjectRef::human("alice");
+    for n in 0..6 {
+        let mut draft = draft(n);
+        let subject = if n % 2 == 0 { alice.clone() } else { SubjectRef::human("bob") };
+        draft.actor.on_behalf_of = Some(subject);
+        log.append(draft).await.unwrap();
+    }
+    log.checkpoint().await.unwrap();
+
+    let audit = AuditLogSubjectData::new(store.clone());
+    let scope = SubjectScope::new(["shop"], alice);
+    assert_eq!(audit.erase(&scope).await.unwrap().deleted, 3);
+    assert_eq!(audit.erase(&scope).await.unwrap().deleted, 0, "a repeat redacts nothing");
+    assert_eq!(audit.export(&scope).await.unwrap(), json!({ "logs": [] }));
+
+    let report =
+        AuditExport::from_store(store.as_ref(), LOG_ID).await.unwrap().verify(&[trusted(&key)]);
+    assert!(report.is_valid(), "{report}");
+    assert_eq!(report.pruned, 3, "only the subject's bodies are gone");
+}

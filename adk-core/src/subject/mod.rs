@@ -9,6 +9,8 @@
 //! | [`SubjectDataStore`] | One store family's adapter: export and erase a subject's data |
 //! | [`SubjectRights`] | Fans `export`, `erase`, and `link` out over the registry, the consent store, and every adapter |
 //! | [`ConsentGate`] | Whether a subject may have something lasting written for a purpose; read by the session and memory wrappers, the tool path, and the runner |
+//! | [`PseudonymousRecorder`] | Names subjects in audit records by registry pseudonym |
+//! | [`AuditLogSubjectData`] | The audit log as an adapter: redacts the bodies of records that name a subject by id |
 //!
 //! Stores keyed by `(app, user)` — sessions, memory, artifacts — find a subject by its
 //! id. The registry holds no index of records, so no second copy of a person's data can
@@ -61,6 +63,7 @@
 //! # }
 //! ```
 
+mod audit;
 mod consent;
 mod gate;
 mod registry;
@@ -74,6 +77,7 @@ use thiserror::Error;
 
 use crate::principal::SubjectRef;
 
+pub use audit::{AuditLogSubjectData, PseudonymousRecorder};
 pub use consent::{
     CONSENT_CONFLICT_CODE, ConsentEvidence, ConsentPurpose, ConsentRecord, ConsentStore,
     InMemoryConsentStore, consent_conflict_error,

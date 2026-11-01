@@ -297,6 +297,13 @@ cut together with its later checkpoints, or an empty one, verifies unless the an
 checkpoints are passed as well (`--checkpoints`). See the
 [Audit Log guide](../docs/official_docs/security/audit-log.md).
 
+### Pseudonymous events
+
+`PseudonymousAuditSink` wraps any `AuditSink` and rewrites each event before it is chained:
+`user` and `on_behalf_of` become `adk_core::subject::SubjectRegistry` pseudonyms (visitors by
+default, every subject after `for_every_subject()`), and `ip_address` is dropped. Erasing a
+subject deletes its pseudonym, so the stored events stay chained and no longer name it.
+
 ## Web Bot Auth (`web-bot-auth`)
 
 `web_bot_auth` implements the IETF Web Bot Auth draft
