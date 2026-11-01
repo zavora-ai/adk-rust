@@ -13,7 +13,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use adk_core::principal::SubjectRef;
-use adk_kernel::charter::RoleApproval;
 use adk_site::content::SiteProject;
 use adk_site::gate::{GateCheck, GateInput, GateMode, LaunchGate, Quarantine};
 use adk_site::generator::{BuiltinGenerator, SiteGenerator};
@@ -175,21 +174,14 @@ async fn s16_a_public_body_needs_both_languages_no_trackers_and_two_people_to_pu
     let draft = pipeline.draft(change).await.unwrap();
     let preview = pipeline.preview(&draft).await.unwrap();
     assert!(preview.gate.passed(), "{}", preview.gate.summary());
-    let ticket = preview.staged.digest.clone();
-    assert!(
-        matches!(
-            pipeline.approve(&draft, &preview).await.unwrap(),
-            ApprovalDecision::Pending { .. }
-        ),
-        "nobody approved yet"
-    );
+    let ApprovalDecision::Pending { ticket } = pipeline.approve(&draft, &preview).await.unwrap()
+    else {
+        panic!("nobody approved yet");
+    };
     let approvals = site.runtime.approvals();
-    approvals
-        .approve(
-            &ticket,
-            RoleApproval::new(Role::Editor, SubjectRef::human(CLERK), chrono::Utc::now()),
-        )
-        .await;
+    let request = approvals.get(&ticket).await.unwrap().expect("the release's request");
+    let clerk =
+        approvals.approve(&ticket, request.version, &SubjectRef::human(CLERK)).await.unwrap();
     assert!(
         matches!(
             pipeline.approve(&draft, &preview).await.unwrap(),
@@ -197,12 +189,7 @@ async fn s16_a_public_body_needs_both_languages_no_trackers_and_two_people_to_pu
         ),
         "the editor alone is not the chain"
     );
-    approvals
-        .approve(
-            &ticket,
-            RoleApproval::new(Role::Publisher, SubjectRef::human(DIRECTOR), chrono::Utc::now()),
-        )
-        .await;
+    approvals.approve(&ticket, clerk.version, &SubjectRef::human(DIRECTOR)).await.unwrap();
     let ApprovalDecision::Approved { approvers, decision } =
         pipeline.approve(&draft, &preview).await.unwrap()
     else {

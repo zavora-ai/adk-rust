@@ -163,8 +163,52 @@ pub struct ApprovalRequest {
     pub entry: EntryPoint,
     /// The preview's manifest digest.
     pub preview_digest: Digest,
+    /// The change's own digest, which a rebuild keeps: see [`change_digest`]. An approval
+    /// recorded against it survives a new preview of the same change on the same base.
+    pub change: Digest,
     /// The page diffs.
     pub diff: Vec<PageDiff>,
+}
+
+/// The digest of a change as an approver decides on it (spec 3.5 §7.8.2 step 4): its action
+/// class, proposer, items and media, and the release and generator its preview was built
+/// on. A preview's own digest names its build time, so every rebuild changes it; this one
+/// stays the same until the change is edited or another release becomes its base.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let preview = pipeline.preview(&draft).await?;
+/// let again = pipeline.preview(&draft).await?;
+/// assert_ne!(preview.staged.digest, again.staged.digest);
+/// assert_eq!(change_digest(&draft, &preview)?, change_digest(&draft, &again)?);
+/// ```
+///
+/// # Errors
+///
+/// [`SiteError::Serde`] when an item holds a number JCS cannot carry.
+pub fn change_digest(draft: &Draft, preview: &Preview) -> Result<Digest> {
+    use sha2::Digest as _;
+
+    let mut items: Vec<&ContentItem> = draft.change.items.iter().collect();
+    items.sort_by(|a, b| a.id.cmp(&b.id));
+    let media: BTreeMap<&str, Digest> = draft
+        .change
+        .media
+        .iter()
+        .map(|(path, bytes)| (path.as_str(), file_digest(bytes)))
+        .collect();
+    let change = json!({
+        "actionClass": draft.change.action_class,
+        "proposer": draft.change.proposer,
+        "items": items,
+        "media": media,
+        "base": preview.staged.manifest.previous,
+        "generator": preview.staged.manifest.generator,
+    });
+    let canonical = adk_auth::signed_audit::canonicalize(&change)
+        .map_err(|e| SiteError::serde("change digest", e))?;
+    Ok(Digest::from_sha256_bytes(sha2::Sha256::digest(canonical.as_bytes()).into()))
 }
 
 /// An approver's decision.
@@ -850,6 +894,7 @@ impl PublishingPipeline {
             proposer: draft.change.proposer.clone(),
             entry: draft.change.entry.clone(),
             preview_digest: preview.staged.digest.clone(),
+            change: change_digest(draft, preview)?,
             diff: preview.diff.clone(),
         };
         let decision = self.approvals.decide(&request).await?;

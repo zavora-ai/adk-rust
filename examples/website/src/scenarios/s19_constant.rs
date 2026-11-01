@@ -345,7 +345,7 @@ pub async fn soak(scale: Scale) -> Result<(Checks, Value)> {
     .history(history.clone())
     .announcer(subscribers.clone())
     .clock(clock.clone())
-    .build();
+    .build()?;
     let edge_key = Arc::new(Ed25519EntrySigner::from_seed("edge-receipt-2026-11", [7; 32])?);
     let engine = Arc::new(
         UpdateEngine::builder(runtime.shared_pipeline(), Arc::new(InMemoryLiveStore::default()))

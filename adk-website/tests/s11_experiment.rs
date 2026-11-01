@@ -86,7 +86,8 @@ async fn s11_variant_b_lifts_signups_but_doubles_unsubscribes() {
     .gate(site.template.gate(&site.site.origin))
     .audit(AuditTrail::new(Arc::new(site.audit.clone())))
     .announcer(site.announcer.clone())
-    .build();
+    .build()
+    .unwrap();
     let growth = AgentRole::Growth.principal(&site.site);
 
     // Release 1: the site as onboarding builds it.

@@ -324,7 +324,7 @@ history has no gaps ([The charter store](../kernel/charter.md#the-charter-store)
 | Surface | How the owners sign |
 |---------|---------------------|
 | Onboarding on the web home | Each section as a card; **Sign as** for each role the person holds ([The Website's Views](../surfaces/website.md)) |
-| The harness | `charter_commit_request` is a decision card that commits nothing; `SiteRuntime::sign_charter` commits once every required signer has signed |
+| The harness | `charter_commit_request` submits an approval request with one slot per required signer and commits nothing; `SiteRuntime::sign_charter` commits once distinct people fill every slot, and the kernel's inbox or a chat card can sign the same request |
 | Code | `CharterStore::commit(draft, decision)`, or `commit_audited` to record the chain and the commit in the audit log |
 
 `adk-rust site` reads `charter.json`, or the draft `charter.draft.json`, from the project: a

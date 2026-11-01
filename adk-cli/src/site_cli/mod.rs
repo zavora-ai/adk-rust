@@ -717,6 +717,7 @@ fn approval_request(
         proposer: proposer(),
         entry: entry(),
         preview_digest: digest.clone(),
+        change: digest.clone(),
         diff,
     }
 }

@@ -250,6 +250,7 @@ impl SiteAssembly for Assembly {
         .gate(self.template.gate(&self.site.origin))
         .audit(self.trail.clone())
         .build()
+        .expect("a runtime that need not be durable always builds")
     }
 }
 

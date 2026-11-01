@@ -7,6 +7,7 @@
 //! | Item | What it does | Spec |
 //! |---|---|---|
 //! | [`CharterStore`], [`CharterVersion`], [`CommitDecision`], [`RoleApproval`], [`check_chain`], [`commit_audited`] | Every charter version with the decision that committed it; a commit refuses a draft that fails `Charter::validate()` and a decision whose approval chain distinct people did not satisfy | §7.6, §7.11, A-I23 |
+//! | [`CharterDirectory`], [`chain_policy`], [`role_group`], [`group_role`] | The charter in force as the approval service's directory: a chain becomes an `ApprovalPolicy` with one `role:{role}` slot per role, and only the people the charter names fill them | §7.6, A-I23 |
 //! | [`KpiStore`], [`KpiSample`], [`KpiAggregate`], [`KpiPeriod`], [`KpiState`], [`GuardrailState`] | Measurements per KPI with daily and weekly aggregates, and the tracker's state | §7.11 |
 //! | [`KpiSource`], [`KpiTracker`], [`KpiTrackerExecutor`], [`JobControl`], [`JobPauses`] | The KPI tracker: reads each KPI's source on its cadence, keeps the measure-only period, checks guardrails and pauses a breaching job before its next action | §7.11, A-I14, A-I15 |
 //! | [`AutonomyStore`], [`AutonomyLadder`], [`JobAutonomy`], [`AutonomyChange`], [`JobDecision`], [`OwnerDecision`], [`PromotionPolicy`] | Each job's autonomy level and history: promotion only by an owner's decision, demotion one level on a breach, two rejections in a row or an incident | §7.11, A-I13 |
@@ -42,6 +43,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 mod autonomy;
+mod directory;
 mod kpi;
 mod signal;
 mod site;
@@ -53,6 +55,7 @@ pub use autonomy::{
     AutonomyChange, AutonomyLadder, AutonomyReason, AutonomyStore, DecisionOutcome, JobAutonomy,
     JobDecision, OwnerDecision, PromotionEligibility, PromotionPolicy, ladder_rank,
 };
+pub use directory::{CharterDirectory, chain_policy, group_role, role_group};
 pub use kpi::{
     GuardrailState, KpiAggregate, KpiPeriod, KpiSample, KpiState, KpiStore, aggregate, period_start,
 };

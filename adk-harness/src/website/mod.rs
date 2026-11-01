@@ -5,7 +5,7 @@
 //! |---|---|---|
 //! | [`Preset::Website`](crate::Preset::Website), [`WEBSITE_SYSTEM_PROMPT`] | The preset: prompt scaffold, plan mode, no shell, website tool classes | §7.1, §10 X10 |
 //! | [`CATALOG`], [`ToolSpec`], [`WebsiteClasses`] | Every website tool's partition, effect, effect class, reversibility and holds | §7.10, §7.11, §7.13 |
-//! | [`SiteRuntime`], [`SiteApprovals`], [`FactClaimCheck`] | `adk-site`'s pipeline, gate and host for the tools; approval chains of distinct people; claims checked against `Known` facts | §7.8, §7.8.2, A-I18, A-I23 |
+//! | [`SiteRuntime`], [`SiteApprovals`], [`ReleaseFingerprint`], [`FactClaimCheck`] | `adk-site`'s pipeline, gate and host for the tools; release chains, charter signatures and promotions as approval requests decided by distinct people the charter names; claims checked against `Known` facts | §7.6, §7.8, §7.8.2, §7.11, A-I18, A-I23 |
 //! | [`SiteDraftStore`], [`StoredRecord`], [`InMemorySiteDraftStore`], `SqliteSiteDraftStore` (feature `sqlite`), `PostgresSiteDraftStore` (feature `postgres`), `RedisSiteDraftStore` (feature `redis`), [`site_draft_store_conformance_tests!`](crate::site_draft_store_conformance_tests) | The runtime's drafts and requests: store-allocated ids, versioned compare-and-swap writes, durable across a restart and shared by every runtime over one store | §7.8.2, §7.6, §7.11 |
 //! | [`back_office_tools`] | Content draft, edit, schedule, correct, withdraw, revert; translations; media; preview; publish; rollback; host reads; launch gate; `awp verify`; charter draft; charter-commit and promotion requests | §7.8.2, §7.10, §7.13 |
 //! | [`SearchSiteTool`], [`EmitSignalTool`], [`PublicPolicy`], [`screen_bounded`] | The public partition: search over the release's Markdown twins, typed screened signals, `adk-drivers`' `reply_in_thread`, and nothing else | §7.10, A-I2, A-I3 |
@@ -79,8 +79,9 @@ pub use public::{EmitSignalTool, PublicPolicy, SIGNAL_FIELD_MAX_CHARS, screen_bo
 pub use search::{SearchSiteTool, SiteHit, SiteSearch};
 pub use signing::{SiteSigning, WebBotAuthSigner};
 pub use site::{
-    CharterSignRequest, FactClaimCheck, GOVERNED_APPROVER, PromotionRequest, SiteApprovals,
-    SiteRef, SiteRuntime, SiteRuntimeBuilder,
+    CHARTER_SIGN_TOOL, CharterSignRequest, FactClaimCheck, GOVERNED_APPROVER, JOB_PROMOTION_TOOL,
+    PromotionRequest, ReleaseFingerprint, SITE_RELEASE_TOOL, SiteApprovals, SiteRef, SiteRuntime,
+    SiteRuntimeBuilder,
 };
 pub use verify::{ReleaseLogVerifier, SiteVerifier, VerifyCheck, VerifyReport};
 

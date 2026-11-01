@@ -651,3 +651,83 @@ async fn a_i23_commits_and_refusals_are_recorded() {
         serde_json::to_string(&records.iter().map(|r| &r.ext).collect::<Vec<_>>()).unwrap();
     assert!(!written.contains("solar"), "no charter text in the records");
 }
+
+/// A-I23 over the approval service (#1280): with a `CharterDirectory`, a chain's slots go to
+/// the people the charter in force names, whatever `role:` groups a surface asserts; an
+/// agent holds none; one person fills one slot; a request for a site with no charter gets no
+/// groups; before any charter is in force, the charter a signing request carries names its
+/// own signers.
+#[tokio::test]
+async fn the_charter_directory_decides_who_fills_a_chains_slots() {
+    use adk_core::{
+        ApprovalDecision, ApprovalRequest, ApprovalScope, ApprovalService, ApprovalState,
+        ApproverDirectory, InMemoryApprovalStore, StoreApprovalService, ToolConfirmationRequest,
+    };
+    use adk_kernel::charter::{CharterDirectory, chain_policy, role_group};
+    use awp_types::ActionClass;
+
+    let site = Uuid::new_v4();
+    let store = Arc::new(InMemoryCharterStore::new());
+    let directory = Arc::new(CharterDirectory::new(store.clone()));
+    let service = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+        .with_directory(directory.clone());
+    let first = with_role(charter(site, &["amina"]), Role::Editor, "eva");
+    let first = with_role(first, Role::Publisher, "eva");
+    let first = with_role(first, Role::Publisher, "paul");
+    let first = with_chain(first, ActionClass::Publish, &[Role::Editor, Role::Publisher]);
+    let call = |args: serde_json::Value| ToolConfirmationRequest::new("site_release", args);
+    let scope = ApprovalScope::new("solar", "amina", "site-approvals");
+
+    // Before a charter is in force, a signing request's own charter names its signers.
+    let signing = ApprovalRequest::new(
+        "sign-1",
+        scope.clone(),
+        &call(serde_json::json!({ "site": site, "charter": first })),
+        chain_policy(&first.governance, &CHARTER_ACTION),
+    );
+    assert_eq!(
+        directory.groups(&SubjectRef::human("amina"), &signing).await.unwrap(),
+        [role_group(Role::Owner)]
+    );
+    store.commit(first.clone(), decision("d-1", start(), &[(Role::Owner, "amina")])).await.unwrap();
+
+    let release = service
+        .submit(
+            ApprovalRequest::new(
+                "release-1",
+                scope.clone(),
+                &call(serde_json::json!({ "site": site, "items": ["pages/hours/en"] })),
+                chain_policy(&first.governance, &ActionClass::Publish),
+            )
+            .with_requester(SubjectRef::human("baraka")),
+        )
+        .await
+        .unwrap();
+    let claimed = ApprovalDecision::approve(SubjectRef::human("mallory"))
+        .with_groups([role_group(Role::Editor)]);
+    assert_eq!(
+        service.decide(&release.id, release.version, claimed).await.unwrap_err().code,
+        "approval.not_an_approver",
+        "a group the surface asserts does not count"
+    );
+    let agent = SubjectRef::human("urn:adk:agent:solar/steward");
+    assert!(directory.groups(&agent, &release).await.unwrap().is_empty(), "no agent holds a role");
+    let other_site = ApprovalRequest::new(
+        "release-2",
+        scope,
+        &call(serde_json::json!({ "site": Uuid::new_v4() })),
+        chain_policy(&first.governance, &ActionClass::Publish),
+    );
+    assert!(directory.groups(&SubjectRef::human("eva"), &other_site).await.unwrap().is_empty());
+
+    let eva = service
+        .decide(&release.id, release.version, ApprovalDecision::approve(SubjectRef::human("eva")))
+        .await
+        .unwrap();
+    assert_eq!(eva.state, ApprovalState::Pending, "eva fills one slot, not both");
+    let paul = service
+        .decide(&eva.id, eva.version, ApprovalDecision::approve(SubjectRef::human("paul")))
+        .await
+        .unwrap();
+    assert_eq!(paul.state, ApprovalState::Approved, "eva and paul fill one slot each");
+}

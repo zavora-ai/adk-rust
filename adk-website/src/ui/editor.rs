@@ -50,11 +50,13 @@ const KINDS: [ContentKind; 9] = [
     ContentKind::Collection,
 ];
 
-/// A release waiting for its approval chain (spec 3.5 §7.8.2 step 4, A-I23).
+/// A release waiting for its approval chain (spec 3.5 §7.8.2 step 4, A-I23): its request
+/// in the site's approval service.
 #[derive(Clone)]
 pub(crate) struct PendingRelease {
     pub(crate) draft: Draft,
     pub(crate) preview: Preview,
+    pub(crate) request: String,
     pub(crate) approvals: Vec<RoleApproval>,
 }
 
@@ -576,10 +578,11 @@ impl WebsiteDesk {
             ApprovalDecision::Approved { decision, .. } => {
                 self.finish(&draft, &preview, decision).await
             }
-            ApprovalDecision::Pending { .. } => {
+            ApprovalDecision::Pending { ticket } => {
                 Ok(ReleaseStep::Pending(Box::new(PendingRelease {
                     draft,
                     preview,
+                    request: ticket,
                     approvals: Vec::new(),
                 })))
             }
@@ -665,7 +668,11 @@ impl WebsiteDesk {
         }
         let approval = RoleApproval::new(role, SubjectRef::human(person), self.now());
         let runtime = self.runtime().await;
-        runtime.approvals().approve(&pending.preview.staged.digest, approval.clone()).await;
+        let approvals = runtime.approvals();
+        let request = approvals.get(&pending.request).await?.ok_or_else(|| {
+            not_found("website.editor.request", "the release's approval request is gone")
+        })?;
+        approvals.approve(&pending.request, request.version, &approval.principal).await?;
         pending.approvals.push(approval);
         match runtime.pipeline().approve(&pending.draft, &pending.preview).await.map_err(site)? {
             ApprovalDecision::Approved { decision, .. } => {
@@ -1121,10 +1128,13 @@ impl WebsiteDesk {
                     ));
                 }
                 let runtime = self.runtime().await;
-                runtime
-                    .approvals()
-                    .reject(&pending.preview.staged.digest, &SubjectRef::human(person), &reason)
-                    .await;
+                let approvals = runtime.approvals();
+                let request = approvals.get(&pending.request).await?.ok_or_else(|| {
+                    not_found("website.editor.request", "the release's approval request is gone")
+                })?;
+                approvals
+                    .reject(&pending.request, request.version, &SubjectRef::human(person), &reason)
+                    .await?;
                 let _ = tokio::fs::remove_dir_all(&pending.preview.staged.root).await;
                 held.pending = None;
                 held.outcome = Some(format!("{person} refused it: {reason}"));
@@ -1240,12 +1250,13 @@ impl WebsiteDesk {
     /// for the person and the draft's id.
     async fn adopt(&self, outcome: PipelineOutcome, person: &str) -> (String, Option<String>) {
         match outcome {
-            PipelineOutcome::Pending { draft, preview, .. } => {
+            PipelineOutcome::Pending { ticket, draft, preview } => {
                 let id = self.next_id("draft");
                 let changes = draft.change.items.first().map(|item| item.id.clone());
                 let mut held = self.editor_draft(draft.change.items[0].clone(), person, changes);
                 held.change = draft.change.clone();
-                held.pending = Some(PendingRelease { draft, preview, approvals: Vec::new() });
+                held.pending =
+                    Some(PendingRelease { draft, preview, request: ticket, approvals: Vec::new() });
                 self.inner.editor.lock().await.drafts.insert(id.clone(), held);
                 ("It waits for the approval chain.".into(), Some(id))
             }

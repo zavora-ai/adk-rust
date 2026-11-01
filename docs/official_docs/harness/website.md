@@ -14,7 +14,7 @@ adk-harness = { version = "3.0.0", features = ["website"] }
 |---|---|---|
 | Preset | `Preset::Website`, `WEBSITE_SYSTEM_PROMPT` | §7.1, §10 X10 |
 | Tool catalogue | `CATALOG`, `ToolSpec`, `WebsiteClasses` | §7.10, §7.11, §7.13 |
-| Site runtime | `SiteRuntime`, `SiteApprovals`, `FactClaimCheck` | §7.8, §7.8.2, A-I18, A-I23 |
+| Site runtime | `SiteRuntime`, `SiteApprovals`, `ReleaseFingerprint`, `FactClaimCheck` | §7.6, §7.8, §7.8.2, §7.11, A-I18, A-I23 |
 | Durable drafts | `SiteDraftStore`, `StoredRecord`, `InMemorySiteDraftStore`, `SqliteSiteDraftStore` (feature `sqlite`), `PostgresSiteDraftStore` (feature `postgres`), `RedisSiteDraftStore` (feature `redis`), `DraftKind`, `site_draft_store_conformance_tests!` | §7.8.2, §7.6, §7.11 |
 | Back office | `back_office_tools`, `WebsitePolicy` | §7.8.2, §7.10, A-I13, A-I21 |
 | Public partition | `SearchSiteTool`, `EmitSignalTool`, `PublicPolicy`, `screen_bounded` | §7.10, A-I2, A-I3 |
@@ -90,11 +90,8 @@ the item joins that draft, so one release carries several items, such as the pag
 release 1; `media_intake` takes the `item` an upload belongs to. A
 claim cites the facts it rests on; `FactClaimCheck` lets it publish only when each is `Known`
 in the site's scope (A-I18). A release under a charter approval chain publishes only when
-distinct people hold every role and none proposed it (A-I23); `SiteApprovals::record_approval`
-records their approvals and refuses an agent's vote or one in a role its voter does not hold.
-A vote that cannot count — recorded with `approve`, or left over from a charter change — is
-left out when the release is decided, so it never holds up the people who can approve. `charter_commit_request` commits nothing: `SiteRuntime::sign_charter` commits
-the draft once every required signer has signed. Every DNS change is held by `adk-drivers`'
+distinct people hold every role and none proposed it (A-I23). `charter_commit_request` commits
+nothing: `SiteRuntime::sign_charter` commits the draft once every required signer has signed. Every DNS change is held by `adk-drivers`'
 `DriverCapPolicy`.
 
 `SiteRuntimeBuilder::drafts` keeps the content drafts, charter drafts, and charter signing and
@@ -113,8 +110,40 @@ replica over the same store, sees the same drafts.
 releasing one draft, one publishes it. `SiteRuntime::restore_drafts` counts what the store
 holds and checks each record reads back. Every backend passes
 `site_draft_store_conformance_tests!`, which covers two handles on one database and a restart.
-A preview and the votes on it are not kept: a preview's digest names the build it staged, so
-it is made again. With
+A preview is not kept: a preview's digest names the build it staged, so it is made again.
+
+### Decisions are approval requests
+
+Every decision people make for a site is one `ApprovalRequest` in the site's
+`ApprovalService` (`SiteRuntimeBuilder::approvals`, an in-memory `StoreApprovalService` by
+default), so the back office, the web desk, the kernel's inbox and chat cards decide the same
+record, on any of the approval store's backends.
+
+| Decision | Request | Slots |
+|---|---|---|
+| A release under a chain (`site_release`) | `site-release-{site}-{fingerprint}`, one per `ReleaseFingerprint` | One per role of the action class's chain |
+| A charter signature (`charter_sign`) | `site-charter-{site}-v{next}-{digest}`, one per charter content and version in force | One per role of the charter-change chain, one owner without one |
+| A job promotion (`job_promotion`) | `site-promotion-{site}-{id}`, one waiting per job | One owner |
+
+`SiteApprovals::approve` and `reject` decide a request at the version read; the service
+refuses an agent, a person the charter gives none of the request's roles, the proposer, a
+second approval by one person, and a stale version (`approval.version_conflict`), and writes
+every vote to its audit trail. A `CharterDirectory` on the service takes each person's roles
+from the charter in force, so a surface cannot claim one.
+
+| Invariant | How |
+|---|---|
+| A vote binds to the change | `ReleaseFingerprint` digests the site, action class, proposer, items, media and the release and generator the change was previewed on; a rebuild reaches the same request, an edit or a new base release a new one |
+| An early approval decides nothing | The request stays pending until distinct people fill every slot; no `site.content.approved` is written |
+| One release | `site_publish` claims the draft's version before it completes the release |
+| Freeze | `SiteRuntimeBuilder::governance`: a release whose chain is satisfied answers `held: frozen` until the freeze lifts; votes are still recorded |
+| Durable | `SiteRuntimeBuilder::require_durable` refuses a runtime whose draft store or approval service is not set |
+
+`SiteRuntime::request_charter` asks for a charter's signatures, from the back office's
+`charter_commit_request` or the web desk alike; `sign_charter` signs and, once the chain is
+satisfied, commits with the request as the decision; `settle_charters` commits a charter whose
+request people approved on another surface. `restore_drafts` converts the charter signing and promotion requests an earlier
+version kept in the draft store into approval requests, once. With
 `SiteRuntimeBuilder::audit`, the runtime's pipeline writes the `site.content.*` and
 `site.release.*` records beside the runtime's own.
 

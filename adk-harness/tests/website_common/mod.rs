@@ -187,7 +187,7 @@ impl World {
         .history(Arc::new(InMemoryContentHistory::default()))
         .charters(charters.clone())
         .facts(facts.clone(), partitions.fact_scope(OWNER));
-        let runtime = configure(runtime).build();
+        let runtime = configure(runtime).build().unwrap();
         let charter = charter(&site, publish_chain);
         if with_charter {
             let decision = CommitDecision::new("dec-charter-1", chrono::Utc::now()).with_approval(

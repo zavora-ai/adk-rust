@@ -1833,9 +1833,11 @@ pub trait ApprovalService: fmt::Debug + Send + Sync {
 /// Who belongs to which approver group, as the deployment knows it.
 ///
 /// A [`StoreApprovalService`] with a directory takes every approver's and delegator's
-/// groups from it and ignores the groups a caller asserts, so a surface cannot claim a
-/// group, such as a role in a charter, for the person deciding. Without one the service
-/// trusts the groups the caller's authentication established.
+/// membership of the groups the directory [governs](Self::governs) from it, and ignores a
+/// caller's claim to one, so a surface cannot claim a group, such as a role in a charter,
+/// for the person deciding. Groups the directory does not govern, such as an operator scope
+/// the caller's authentication established, are kept as asserted. Without a directory the
+/// service trusts every asserted group.
 ///
 /// # Example
 ///
@@ -1873,6 +1875,13 @@ pub trait ApproverDirectory: Send + Sync {
     ///
     /// The directory's error; the service refuses the decision with it.
     async fn groups(&self, subject: &SubjectRef, request: &ApprovalRequest) -> Result<Vec<String>>;
+
+    /// Whether the directory decides membership of `group`, so a caller's claim to it is
+    /// ignored; every group by default.
+    fn governs(&self, group: &str) -> bool {
+        let _ = group;
+        true
+    }
 }
 
 /// The [`ApprovalService`] over an [`ApprovalStore`].
@@ -1997,18 +2006,23 @@ impl StoreApprovalService {
         self
     }
 
-    /// The groups of `subject` for `request`: the directory's when the service has one,
-    /// otherwise `asserted`.
+    /// The groups of `subject` for `request`: the directory's, with the `asserted` groups it
+    /// does not govern, when the service has one; otherwise `asserted`.
     async fn groups_of(
         &self,
         subject: &SubjectRef,
         asserted: &[String],
         request: &ApprovalRequest,
     ) -> Result<Vec<String>> {
-        match &self.directory {
-            Some(directory) => directory.groups(subject, request).await,
-            None => Ok(asserted.to_vec()),
+        let Some(directory) = &self.directory else { return Ok(asserted.to_vec()) };
+        let mut groups: Vec<String> =
+            asserted.iter().filter(|group| !directory.governs(group)).cloned().collect();
+        for group in directory.groups(subject, request).await? {
+            if !groups.contains(&group) {
+                groups.push(group);
+            }
         }
+        Ok(groups)
     }
 
     async fn notify(
