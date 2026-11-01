@@ -52,6 +52,11 @@ pub struct OsSandboxConfig {
     pub read_toolchains: bool,
     /// The enforcer; `None` uses `adk_sandbox::sandbox::get_enforcer()`.
     pub enforcer: Option<Arc<dyn SandboxEnforcer>>,
+    /// The hosts sandboxed commands may reach, through one egress proxy per command
+    /// (`Proxied` network access). It is narrowed by the run's egress policy, and the run's
+    /// policy alone applies when this is `None`; with neither, `network` decides. See
+    /// [`SandboxLauncher::egress_policy`].
+    pub egress: Option<adk_core::egress::EgressPolicy>,
 }
 
 impl Default for OsSandboxConfig {
@@ -63,6 +68,7 @@ impl Default for OsSandboxConfig {
             extra_write: Vec::new(),
             read_toolchains: true,
             enforcer: None,
+            egress: None,
         }
     }
 }
@@ -76,6 +82,7 @@ impl fmt::Debug for OsSandboxConfig {
             .field("extra_write", &self.extra_write)
             .field("read_toolchains", &self.read_toolchains)
             .field("enforcer", &self.enforcer.as_ref().map(|enforcer| enforcer.name().to_string()))
+            .field("egress", &self.egress.as_ref().map(ToString::to_string))
             .finish()
     }
 }
@@ -233,10 +240,40 @@ impl SandboxLauncher {
         }
     }
 
-    /// Whether the sandbox denies the network: not under `network`, and never on Windows,
-    /// whose restricted-token enforcer leaves the network open (spec 3.2 §10 W5).
+    /// Whether the sandbox denies the network: not under `network` or an egress policy, and
+    /// never on Windows, whose restricted-token enforcer leaves the network open (spec 3.2 §10
+    /// W5).
     pub(crate) fn denies_network(&self) -> bool {
-        !self.contained && !self.config.network
+        !self.contained && !self.config.network && self.config.egress.is_none()
+    }
+
+    /// The egress policy a command of a call runs under: this launcher's
+    /// ([`OsSandboxConfig::egress`]) narrowed by the run's, either alone, or `None`, when the
+    /// command's network follows [`OsSandboxConfig::network`].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::egress::EgressPolicy;
+    /// use adk_harness::{OsSandboxConfig, SandboxLauncher};
+    ///
+    /// let own = EgressPolicy::allowlist(["*.pythonhosted.org:443", "pypi.org:443"]).unwrap();
+    /// let launcher = SandboxLauncher::new(OsSandboxConfig { egress: Some(own), ..Default::default() });
+    /// let run = EgressPolicy::allowlist(["pypi.org:443"]).unwrap();
+    /// let policy = launcher.egress_policy(Some(&run)).unwrap();
+    /// assert!(policy.check_url("https://pypi.org/simple/").is_ok());
+    /// assert!(policy.check_url("https://files.pythonhosted.org/x").is_err());
+    /// ```
+    pub fn egress_policy(
+        &self,
+        run: Option<&adk_core::egress::EgressPolicy>,
+    ) -> Option<adk_core::egress::EgressPolicy> {
+        match (&self.config.egress, run) {
+            (Some(own), Some(run)) => Some(run.narrow(own)),
+            (Some(own), None) => Some(own.clone()),
+            (None, Some(run)) => Some(run.clone()),
+            (None, None) => None,
+        }
     }
 
     /// Whether the sandbox confines reads to the paths it grants; the Windows restricted-token
@@ -334,6 +371,7 @@ impl SandboxLauncher {
         let profile = json!({
             "enforcer": self.label,
             "network": self.config.network,
+            "egress": self.config.egress.as_ref().map(ToString::to_string),
             "allowProcessSpawn": self.config.allow_process_spawn,
             "readToolchains": self.config.read_toolchains,
             "extraRead": extra_read,
@@ -563,12 +601,27 @@ fn tempfile_dir() -> std::io::Result<PathBuf> {
 }
 
 impl CommandLauncher for SandboxLauncher {
+    /// The command alone; its egress proxy, when it has one, stops as this returns, so its
+    /// network reaches nothing. `bash` builds commands with
+    /// [`guarded_command`](CommandLauncher::guarded_command).
     fn command(
         &self,
         ws: &Workspace,
         script: &str,
         ctx: &dyn ToolContext,
     ) -> Result<tokio::process::Command, DevToolError> {
+        self.guarded_command(ws, script, ctx).map(|(command, _)| command)
+    }
+
+    /// Under an egress policy ([`SandboxLauncher::egress_policy`]) the command runs with
+    /// `Proxied` network access through its own egress proxy, which the guard keeps until the
+    /// command ends; the proxy records each connection under the call's id.
+    fn guarded_command(
+        &self,
+        ws: &Workspace,
+        script: &str,
+        ctx: &dyn ToolContext,
+    ) -> Result<(tokio::process::Command, Option<adk_devtools::LaunchGuard>), DevToolError> {
         if self.contained {
             return Err(DevToolError::Other(
                 "the restricted-token sandbox starts its commands itself (spec 3.2 §10 W5), and \
@@ -578,9 +631,25 @@ impl CommandLauncher for SandboxLauncher {
         }
         let enforcer = self.enforcer.clone().map_err(DevToolError::Other)?;
         let scratch = self.scratch_dir(ctx.app_name(), ctx.user_id(), ctx.session_id())?;
-        let policy = self.policy(ws, &scratch);
-        sandboxed_command(
-            self.command_enforcer(&enforcer, &policy, ws.root()).as_ref(),
+        let mut policy = self.policy(ws, &scratch);
+        let command_enforcer = self.command_enforcer(&enforcer, &policy, ws.root());
+        let guard = match self.egress_policy(ctx.egress_policy()) {
+            Some(egress) => {
+                let proxy = adk_sandbox::egress_proxy::EgressProxy::builder(egress)
+                    .call_id(ctx.function_call_id())
+                    .start_for(command_enforcer.as_ref())
+                    .map_err(|error| {
+                        DevToolError::Other(format!(
+                            "the sandboxed command's egress proxy could not start: {error}"
+                        ))
+                    })?;
+                policy.network = proxy.network();
+                Some(Box::new(proxy) as adk_devtools::LaunchGuard)
+            }
+            None => None,
+        };
+        let command = sandboxed_command(
+            command_enforcer.as_ref(),
             OsStr::new("sh"),
             &[OsString::from("-c"), OsString::from(script)],
             &policy,
@@ -588,11 +657,23 @@ impl CommandLauncher for SandboxLauncher {
         )
         .map_err(|error| {
             DevToolError::Other(format!("the sandboxed command could not be built: {error}"))
-        })
+        })?;
+        Ok((command, guard))
     }
 
     fn isolation(&self) -> &str {
         &self.label
+    }
+
+    /// Under a run egress policy every command reaches the network only through its own
+    /// egress proxy, so `bash` declares `Enforced`; the Windows restricted token cannot place
+    /// one and declares nothing, which a run egress policy refuses.
+    fn egress(&self) -> adk_core::egress::ToolEgress {
+        if self.contained {
+            adk_core::egress::ToolEgress::Undeclared
+        } else {
+            adk_core::egress::ToolEgress::Enforced
+        }
     }
 
     #[cfg(windows)]

@@ -64,7 +64,7 @@ pub mod tools;
 #[cfg(windows)]
 pub use adk_sandbox::process_tree::ContainedChild;
 pub use error::DevToolError;
-pub use launcher::{CommandLauncher, HostLauncher};
+pub use launcher::{CommandLauncher, HostLauncher, LaunchGuard};
 pub use read_ledger::{InMemoryReadLedger, ReadLedger, ReadScope, sha256_hex};
 pub use tools::{
     ApplyPatchTool, BashTool, BoundedOutput, DEFAULT_MAX_INLINE_BYTES, EditFileTool, GlobTool,

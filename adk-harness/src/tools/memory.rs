@@ -133,6 +133,11 @@ impl Tool for MemoryReadTool {
         "memory_read"
     }
 
+    /// Reaches only the memory store the harness was built with.
+    fn egress(&self, _args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::Configured
+    }
+
     fn description(&self) -> &str {
         "Read your memory from earlier sessions: without a path, the index of topics with \
          their summaries; with a path, that topic's content."
@@ -190,6 +195,11 @@ impl MemoryWriteTool {
 impl Tool for MemoryWriteTool {
     fn name(&self) -> &str {
         "memory_write"
+    }
+
+    /// Reaches only the memory store the harness was built with.
+    fn egress(&self, _args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::Configured
     }
 
     fn description(&self) -> &str {
@@ -250,6 +260,11 @@ impl MemoryDeleteTool {
 impl Tool for MemoryDeleteTool {
     fn name(&self) -> &str {
         "memory_delete"
+    }
+
+    /// Reaches only the memory store the harness was built with.
+    fn egress(&self, _args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::Configured
     }
 
     fn description(&self) -> &str {

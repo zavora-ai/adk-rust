@@ -230,6 +230,7 @@ impl BashTool {
                 return Ok((
                     Running::Contained(process),
                     ProcessGroupGuard {
+                        _launch: None,
                         job: Some(Arc::new(job)),
                         keep_on_exit: !kill_group_on_exit,
                     },
@@ -270,6 +271,11 @@ impl Tool for BashTool {
             },
             "required": ["command"]
         }))
+    }
+
+    /// What the launcher's commands reach on the network ([`CommandLauncher::egress`]).
+    fn egress(&self, _args: &Value) -> adk_core::egress::ToolEgress {
+        self.launcher.egress()
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
@@ -507,7 +513,7 @@ impl BashTool {
         ctx: &dyn ToolContext,
         kill_group_on_exit: bool,
     ) -> Result<(Running, ProcessGroupGuard, Option<Pipe>, Option<Pipe>)> {
-        let mut cmd = self.launcher.command(&self.workspace, script, ctx)?;
+        let (mut cmd, launch) = self.launcher.guarded_command(&self.workspace, script, ctx)?;
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
 
         // A new session detaches the command from any controlling terminal, so it cannot
@@ -534,10 +540,11 @@ impl BashTool {
 
         let mut child = cmd.spawn().map_err(DevToolError::from)?;
         #[cfg(unix)]
-        let group = ProcessGroupGuard { pid: child.id() };
+        let group = ProcessGroupGuard { pid: child.id(), _launch: launch };
         // On failure the suspended child is dropped, and `kill_on_drop` ends it.
         #[cfg(windows)]
         let group = ProcessGroupGuard {
+            _launch: launch,
             job: Some(Arc::new(contain(&child).map_err(|error| {
                 DevToolError::Other(format!(
                     "the command could not be placed in a Job Object, which stops the \
@@ -547,7 +554,7 @@ impl BashTool {
             keep_on_exit: !kill_group_on_exit,
         };
         #[cfg(not(any(unix, windows)))]
-        let group = ProcessGroupGuard {};
+        let group = ProcessGroupGuard { _launch: launch };
         // Only a Windows job is told whether to keep background processes.
         #[cfg(not(windows))]
         let _ = kill_group_on_exit;
@@ -610,6 +617,8 @@ impl Running {
 /// processes when the agent process exits, since the job closes with it (spec 3.2 §10
 /// W1).
 struct ProcessGroupGuard {
+    /// What the launcher keeps alive until the process ends ([`CommandLauncher::guarded_command`]).
+    _launch: Option<crate::LaunchGuard>,
     #[cfg(unix)]
     pid: Option<u32>,
     #[cfg(windows)]

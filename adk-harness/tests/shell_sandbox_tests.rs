@@ -258,6 +258,47 @@ impl adk_core::ToolConfirmationHandler for ApproveAll {
     }
 }
 
+// ----- Egress policy (#1281) -----
+
+#[test]
+fn an_egress_policy_changes_the_digest_and_bash_declares_it_enforced() {
+    use adk_core::egress::{EgressPolicy, ToolEgress};
+    let ws = adk_devtools::Workspace::new(".").allow_bash(true);
+    let ledger: Arc<dyn ShellLedger> = Arc::new(InMemoryShellLedger::new());
+    let sandboxed = |config: OsSandboxConfig| {
+        let launcher = SandboxLauncher::new(config);
+        HarnessBashTool::new(ws.clone(), launcher.status(), false, ledger.clone())
+            .with_sandbox(launcher)
+    };
+    let policy = EgressPolicy::allowlist(["pypi.org:443"]).unwrap();
+    let plain = sandboxed(with_enforcer(Arc::new(Passthrough)));
+    let proxied = sandboxed(OsSandboxConfig {
+        egress: Some(policy.clone()),
+        ..with_enforcer(Arc::new(Passthrough))
+    });
+    let digest = |tool: &HarnessBashTool| ToolOrigin::of(tool).declaration_digest;
+    assert_ne!(digest(&plain), digest(&proxied), "a rule under one allowlist matches no other");
+
+    assert_eq!(proxied.egress(&json!({ "command": "pip download x" })), ToolEgress::Enforced);
+    assert_eq!(
+        proxied.egress(&json!({ "command": "pip download x", "unsandboxed": true })),
+        ToolEgress::Undeclared,
+        "the unsandboxed retry declares nothing, so a run egress policy refuses it"
+    );
+    let host = HarnessBashTool::new(ws.clone(), IsolationStatus::Host, false, ledger.clone());
+    assert_eq!(host.egress(&json!({ "command": "ls" })), ToolEgress::Undeclared);
+
+    let launcher = SandboxLauncher::new(OsSandboxConfig {
+        egress: Some(policy),
+        ..with_enforcer(Arc::new(Passthrough))
+    });
+    let run = EgressPolicy::allowlist(["files.pythonhosted.org:443"]).unwrap();
+    let narrowed = launcher.egress_policy(Some(&run)).unwrap();
+    assert!(narrowed.check_url("https://pypi.org/").is_err(), "the run's policy narrows");
+    assert!(narrowed.check_url("https://files.pythonhosted.org/").is_err());
+    assert_eq!(launcher.egress_policy(None).unwrap().to_string(), "pypi.org:443");
+}
+
 // ----- Declaration and digest (I9) -----
 
 #[test]

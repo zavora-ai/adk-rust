@@ -387,6 +387,26 @@ impl CommandLauncher for CredentialLauncher {
         self.inner.isolation()
     }
 
+    fn guarded_command(
+        &self,
+        ws: &Workspace,
+        script: &str,
+        ctx: &dyn ToolContext,
+    ) -> std::result::Result<
+        (tokio::process::Command, Option<adk_devtools::LaunchGuard>),
+        DevToolError,
+    > {
+        let (mut command, guard) = self.inner.guarded_command(ws, script, ctx)?;
+        for (key, value) in self.calls.get(ctx.function_call_id()) {
+            command.env(key, value);
+        }
+        Ok((command, guard))
+    }
+
+    fn egress(&self) -> adk_core::egress::ToolEgress {
+        self.inner.egress()
+    }
+
     /// The Windows restricted-token sandbox starts the process itself, so the helper's
     /// environment travels with the call (spec 3.2 §10 W5).
     #[cfg(windows)]

@@ -104,6 +104,12 @@ impl Tool for WebFetchTool {
         true
     }
 
+    /// The URL's host and port; the fetch checks every redirect hop against the run's egress
+    /// policy as well.
+    fn egress(&self, args: &Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::for_urls([args["url"].as_str().unwrap_or_default()])
+    }
+
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let url = args
             .get("url")
@@ -166,7 +172,12 @@ impl Tool for WebFetchTool {
                 )
                 .await?;
         }
-        let fetched = match self.runtime.fetcher.fetch(url, max_bytes, shape, allowlist).await {
+        let fetched = match self
+            .runtime
+            .fetcher
+            .fetch(url, max_bytes, shape, allowlist, ctx.egress_policy())
+            .await
+        {
             Ok(fetched) => fetched,
             Err(refusal) => {
                 if let Some(audit) = &audit {
@@ -362,6 +373,11 @@ impl Tool for WebSearchTool {
 
     fn is_concurrency_safe(&self) -> bool {
         true
+    }
+
+    /// The search provider the harness was built with; the query chooses no host.
+    fn egress(&self, _args: &Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::Configured
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {

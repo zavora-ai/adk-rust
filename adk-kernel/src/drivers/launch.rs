@@ -76,6 +76,12 @@ pub(crate) struct LaunchPlan {
     /// The file the command resolves to, run in its place under the sandbox, which opens
     /// where a link points and not the link.
     program: Option<PathBuf>,
+    /// The hosts a sandboxed server reaches, through an egress proxy started with each
+    /// process (`[network] hosts` in its manifest), and the driver's id its records carry.
+    egress: Option<(adk_core::egress::EgressPolicy, String)>,
+    /// The egress proxy of the process last started; it stops when the next start replaces it
+    /// or the plan is dropped.
+    proxy: Arc<std::sync::Mutex<Option<adk_sandbox::egress_proxy::CallProxy>>>,
 }
 
 impl std::fmt::Debug for LaunchPlan {
@@ -97,19 +103,39 @@ impl LaunchPlan {
     ) -> adk_core::Result<tokio::process::Command> {
         let args: Vec<OsString> = config.args.iter().map(OsString::from).collect();
         let mut command = match &self.sandbox {
-            Some((enforcer, policy)) => adk_sandbox::sandbox::sandboxed_command(
-                enforcer.as_ref(),
-                self.program.as_deref().map_or(OsStr::new(&config.command), Path::as_os_str),
-                &args,
-                policy,
-                self.cwd.as_deref().unwrap_or(Path::new(".")),
-            )
-            .map_err(|error| {
-                AdkError::tool(format!(
-                    "the driver's OS sandbox refused its policy: {error}; check the manifest's \
-                     allow_read and allow_write paths exist"
-                ))
-            })?,
+            Some((enforcer, policy)) => {
+                let mut policy = policy.clone();
+                let proxy = match &self.egress {
+                    Some((egress, driver)) => {
+                        let proxy = adk_sandbox::egress_proxy::EgressProxy::builder(egress.clone())
+                            .call_id(format!("driver:{driver}"))
+                            .start_for(enforcer.as_ref())
+                            .map_err(|error| {
+                                AdkError::tool(format!(
+                                    "the driver's egress proxy could not start: {error}"
+                                ))
+                            })?;
+                        policy.network = proxy.network();
+                        Some(proxy)
+                    }
+                    None => None,
+                };
+                let command = adk_sandbox::sandbox::sandboxed_command(
+                    enforcer.as_ref(),
+                    self.program.as_deref().map_or(OsStr::new(&config.command), Path::as_os_str),
+                    &args,
+                    &policy,
+                    self.cwd.as_deref().unwrap_or(Path::new(".")),
+                )
+                .map_err(|error| {
+                    AdkError::tool(format!(
+                        "the driver's OS sandbox refused its policy: {error}; check the \
+                         manifest's allow_read and allow_write paths exist"
+                    ))
+                })?;
+                *self.proxy.lock().unwrap_or_else(|e| e.into_inner()) = proxy;
+                command
+            }
             None => {
                 let mut command = tokio::process::Command::new(&config.command);
                 command.args(&args).env_clear().envs(&self.env);
@@ -227,9 +253,21 @@ pub(crate) async fn prepare(
         process_tree: DriverProcessTree::platform(),
         sandbox: None,
         program: None,
+        egress: None,
+        proxy: Arc::default(),
+    };
+    let egress = manifest.access.egress_policy();
+    // Its hosts are enforced only by the sandbox's proxy; it never runs with the network open.
+    let hosts_need_sandbox = || {
+        refuse(format!(
+            "its network is limited to {} hosts, which only the OS sandbox enforces",
+            manifest.access.network_hosts.len()
+        ))
     };
     let unavailable = |reason: String, env: BTreeMap<String, String>| {
-        if fail_if_unavailable {
+        if egress.is_some() {
+            Err(hosts_need_sandbox())
+        } else if fail_if_unavailable {
             Err(refuse(format!(
                 "its `{}` sandbox is unavailable ({reason}) and the kernel refuses unsandboxed \
                  drivers (fail_if_sandbox_unavailable)",
@@ -241,6 +279,7 @@ pub(crate) async fn prepare(
         }
     };
     match manifest.sandbox {
+        DriverSandbox::Unsandboxed if egress.is_some() => Err(hosts_need_sandbox()),
         DriverSandbox::Unsandboxed => {
             Ok(unsandboxed("the manifest asks for no sandbox".to_string(), env))
         }
@@ -316,6 +355,8 @@ pub(crate) async fn prepare(
                 process_tree: DriverProcessTree::platform(),
                 sandbox: Some((enforcer, policy)),
                 program,
+                egress: egress.map(|egress| (egress, manifest.id.clone())),
+                proxy: Arc::default(),
             })
         }
     }

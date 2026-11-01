@@ -36,6 +36,11 @@ impl Tool for GrepTool {
         "grep"
     }
 
+    /// Searches the workspace on disk.
+    fn egress(&self, _args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::None
+    }
+
     fn description(&self) -> &str {
         "Search file contents for a regular expression. Returns matching lines as \
          'path:line: text'. Optionally restrict to a sub-path and/or a glob over file names."

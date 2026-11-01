@@ -303,7 +303,7 @@ pub(crate) async fn discover(
         fetcher = fetcher.with_signer(signer.clone());
     }
     let fetched = fetcher
-        .fetch(url, None, TextShape::Markdown, &[])
+        .fetch(url, None, TextShape::Markdown, &[], None)
         .await
         .map_err(|refusal| AdkError::tool(format!("{}: {refusal}", refusal.code())))?;
     let text = match fetched.body {

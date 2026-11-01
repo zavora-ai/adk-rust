@@ -21,7 +21,9 @@ use serde_json::{Map, Value, json};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use super::store::DriverPark;
+use adk_core::egress::ToolEgress;
+
+use super::store::{DriverIsolation, DriverPark};
 use super::supervisor::{DriverSupervisor, declaration_digest};
 use super::{EffectClass, driver_of, driver_source};
 use crate::partition::{
@@ -98,8 +100,17 @@ impl Toolset for DriverToolset {
                     continue;
                 }
                 claimed.insert(name.clone(), id.clone());
+                // The tools are listed from a running process, so `isolation` is how it started.
+                let sandboxed =
+                    record.isolation.as_ref().is_some_and(DriverIsolation::is_sandboxed);
+                let egress = match (&record.manifest.access, sandboxed) {
+                    (access, true) if access.egress_policy().is_some() => ToolEgress::Enforced,
+                    (access, true) if !access.allow_network => ToolEgress::None,
+                    _ => ToolEgress::Undeclared,
+                };
                 tools.push(Arc::new(DriverTool {
                     class: record.manifest.class_of(&name),
+                    egress,
                     inner: tool,
                     driver: id.clone(),
                     source: driver_source(id),
@@ -209,6 +220,9 @@ pub(crate) struct DriverTool {
     driver: String,
     source: String,
     class: EffectClass,
+    /// What the driver's process reaches: through its egress proxy, nothing under a sandbox
+    /// that denies the network, or undeclared.
+    egress: ToolEgress,
     drivers: DriverSupervisor,
 }
 
@@ -449,8 +463,8 @@ impl Tool for DriverTool {
         self.class.tool_effect()
     }
 
-    fn egress(&self, args: &Value) -> adk_core::egress::ToolEgress {
-        self.inner.egress(args)
+    fn egress(&self, _args: &Value) -> ToolEgress {
+        self.egress.clone()
     }
 
     fn is_read_only(&self) -> bool {

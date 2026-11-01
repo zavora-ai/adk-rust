@@ -38,6 +38,7 @@ send_draft   = "send_external"
 | `sandbox` | `os` | `os` runs it under Seatbelt (macOS) or bubblewrap (Linux); `container` has no driver launcher yet and is treated as an unavailable sandbox; `unsandboxed` runs it on the host, recorded as such |
 | `allow_read`, `allow_write` | `[]` | Paths a sandboxed server may read, or read and write, besides its program's directory, its scratch home and its secrets |
 | `allow_network` | `true` | Whether a sandboxed server may use the network |
+| `network = { hosts = [...] }` | none | With `allow_network`, the only hosts the server reaches (`api.example.com:443`, `*.example.com`, `10.0.0.0/8:5432`): each start of the process gets its own egress proxy and `Proxied` network access, its records carrying `driver:<id>`. Needs `sandbox = "os"`; the driver refuses to start rather than run without the sandbox. A project manifest may narrow the hosts, never widen them or reopen the network. See [Network Egress Policy](../security/egress.md) |
 | `restart` | `RestartPolicy::default()` | Restarts after a crash: attempts and backoff |
 | `sampling` | `false` | Whether the server may sample the harness model, metered against the run that called it |
 | `data_classes` | `[]` | Labels of the data it handles, shown when you approve it |
@@ -45,6 +46,10 @@ send_draft   = "send_external"
 
 Every driver declares MCP tasks, so a server that needs a long wait can hand back a durable
 task handle.
+
+A driver's tools declare their network use (`Tool::egress`) from how the process started:
+`Enforced` under its egress proxy, `None` under an OS sandbox with `allow_network = false`, and
+nothing otherwise, which a run with an egress policy refuses.
 
 ### Effect classes
 

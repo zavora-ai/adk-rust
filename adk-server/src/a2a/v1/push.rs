@@ -29,19 +29,25 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(10);
 /// Upper bound on establishing the connection for one delivery attempt.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The client [`HttpPushNotificationSender::new`] uses.
-///
-/// Redirects are not followed: [`validate_webhook_url`] checks the registered URL
-/// only, and a redirect would let a public endpoint bounce the request to an
-/// internal one. Timeouts keep an unresponsive webhook from holding a delivery
-/// task open.
-fn push_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
+/// A client under `policy` that follows no redirect and bounds each attempt.
+fn guarded_client(
+    policy: adk_core::egress::EgressPolicy,
+) -> Result<adk_core::egress::GuardedClient, String> {
+    adk_core::egress::GuardedClient::builder(policy)
         .timeout(DELIVERY_TIMEOUT)
         .connect_timeout(CONNECT_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
+        .redirects(0)
         .build()
-        .expect("push notification HTTP client must build with the default TLS backend")
+        .map_err(|error| error.to_string())
+}
+
+/// The client of a sender.
+enum PushClient {
+    /// [`HttpPushNotificationSender::new`]'s: public addresses only, checked when it connects
+    /// as well as on the URL, or why it could not be built.
+    Guarded(Result<adk_core::egress::GuardedClient, String>),
+    /// A caller's own, from [`HttpPushNotificationSender::with_client`].
+    Custom(reqwest::Client),
 }
 
 /// Async trait for delivering push notifications to webhook endpoints.
@@ -94,28 +100,33 @@ impl PushNotificationSender for NoOpPushNotificationSender {
 
 /// HTTP-based push notification sender with retry and SSRF validation.
 ///
-/// Uses `reqwest::Client` to POST JSON payloads to webhook URLs. Retries
-/// up to 3 times with exponential backoff (1s, 2s, 4s) on failure. Validates
-/// webhook URLs with [`validate_webhook_url`] before every delivery (SSRF
-/// prevention).
+/// POSTs JSON payloads to webhook URLs. Retries up to 3 times with exponential backoff
+/// (1s, 2s, 4s) on failure. Validates webhook URLs with [`validate_webhook_url`] before
+/// every delivery (SSRF prevention), and [`new`](Self::new)'s client checks every address a
+/// webhook's host resolves to when it connects, so a name pointed at an internal address is
+/// refused too.
 pub struct HttpPushNotificationSender {
-    client: reqwest::Client,
+    client: PushClient,
 }
 
 impl HttpPushNotificationSender {
-    /// Creates a new sender whose client does not follow redirects, gives up on
-    /// an attempt after 10 seconds, and on a connection after 5 seconds.
+    /// Creates a new sender whose client reaches public addresses only — the URL's and every
+    /// address its host resolves to — follows no redirect, ignores proxy settings, gives up
+    /// on an attempt after 10 seconds and on a connection after 5 seconds. When that client
+    /// cannot be built, every delivery fails; no unguarded client is used in its place.
     pub fn new() -> Self {
-        Self { client: push_http_client() }
+        let public = adk_core::egress::EgressPolicy::public_only().with_plain_http();
+        Self { client: PushClient::Guarded(guarded_client(public)) }
     }
 
     /// Creates a new sender with a custom `reqwest::Client`.
     ///
     /// The client should disable redirects (`reqwest::redirect::Policy::none()`)
     /// and set a timeout: URL validation covers the registered URL only, so a
-    /// followed redirect can reach an address the validation would have refused.
+    /// followed redirect, or a host name resolving to an internal address, can reach an
+    /// address the validation would have refused. [`new`](Self::new)'s client checks both.
     pub fn with_client(client: reqwest::Client) -> Self {
-        Self { client }
+        Self { client: PushClient::Custom(client) }
     }
 
     /// Sends a JSON payload to the given URL with retry logic.
@@ -128,7 +139,16 @@ impl HttpPushNotificationSender {
         validate_webhook_url(url)?;
 
         for attempt in 0..=MAX_RETRIES {
-            let mut request = self.client.post(url).json(body);
+            let request = match &self.client {
+                PushClient::Guarded(Ok(client)) => client.post(url).map_err(|denial| {
+                    A2aError::InvalidParams { message: format!("webhook URL refused: {denial}") }
+                })?,
+                PushClient::Guarded(Err(reason)) => {
+                    return Err(A2aError::PushDeliveryFailed { message: reason.clone() });
+                }
+                PushClient::Custom(client) => client.post(url),
+            };
+            let mut request = request.json(body);
 
             // Add Bearer auth if configured
             if let Some(ref auth) = config.authentication {
@@ -413,10 +433,14 @@ mod tests {
             stream.write_all(response.as_bytes()).unwrap();
         });
 
+        // The sender's client configuration, with loopback admitted to reach the test server.
+        let client =
+            guarded_client(adk_core::egress::EgressPolicy::allow_private_networks()).unwrap();
         let response = tokio::time::timeout(
             Duration::from_secs(5),
-            push_http_client()
-                .post(format!("http://{redirector_addr}/hook"))
+            client
+                .post(&format!("http://{redirector_addr}/hook"))
+                .unwrap()
                 .json(&serde_json::json!({}))
                 .send(),
         )

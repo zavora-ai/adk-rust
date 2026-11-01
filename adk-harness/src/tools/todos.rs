@@ -246,6 +246,11 @@ impl Tool for WriteTodosTool {
         "write_todos"
     }
 
+    /// Keeps the to-do list in the session.
+    fn egress(&self, _args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::None
+    }
+
     fn description(&self) -> &str {
         "Replace this session's todo list with a short plan of the task. Use it for any \
          task with more than two steps, mark exactly one item in_progress while you work \
@@ -350,6 +355,11 @@ impl UpdateTodoTool {
 impl Tool for UpdateTodoTool {
     fn name(&self) -> &str {
         "update_todo"
+    }
+
+    /// Keeps the to-do list in the session.
+    fn egress(&self, _args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::None
     }
 
     fn description(&self) -> &str {

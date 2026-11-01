@@ -39,6 +39,11 @@ const LOOSENING_KEYS: [&str; 5] = ["yes", "allow_unsandboxed", "trust", "packs",
 /// sandbox = true
 /// fail_if_unavailable = true
 ///
+/// # Sandboxed commands reach only these hosts, through an egress proxy (#1281); turns the
+/// # OS sandbox on.
+/// [network]
+/// allow = ["pypi.org:443", "*.pythonhosted.org:443"]
+///
 /// [deploy]
 /// mode = "plan"
 /// yes_policy = "deny"
@@ -63,6 +68,9 @@ pub struct HarnessConfig {
     pub sandbox: bool,
     /// `fail_if_unavailable = true`: refuse to build when the sandbox is unavailable.
     pub fail_if_unavailable: bool,
+    /// `[network] allow = [...]`: the hosts sandboxed commands may reach, which narrows the
+    /// shell's egress policy and turns the OS sandbox on.
+    pub network_allow: Option<adk_core::egress::EgressPolicy>,
     /// Settings the file made that were ignored, and why.
     pub notes: Vec<String>,
 }
@@ -74,6 +82,7 @@ struct ConfigFile {
     mode: Option<String>,
     sandbox: Option<bool>,
     fail_if_unavailable: Option<bool>,
+    network: Option<NetworkTable>,
     /// `[[hooks]]` tables are read by `hooks::HookSet::load_workspace` (spec 3.1 §7.22),
     /// so they are neither applied here nor reported as unknown.
     #[serde(default)]
@@ -86,6 +95,13 @@ struct ConfigFile {
     ultracode: Option<toml::Value>,
     #[serde(flatten)]
     other: BTreeMap<String, toml::Value>,
+}
+
+/// The `[network]` table.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct NetworkTable {
+    allow: Vec<String>,
 }
 
 impl HarnessConfig {
@@ -152,10 +168,18 @@ impl HarnessConfig {
                 format!("{HARNESS_CONFIG_FILE}: unknown key `{key}` ignored")
             });
         }
+        let network_allow = file
+            .network
+            .map(|network| adk_core::egress::EgressPolicy::allowlist(&network.allow))
+            .transpose()
+            .map_err(|error| {
+                AdkError::config(format!("{HARNESS_CONFIG_FILE}: [network]: {error}"))
+            })?;
         Ok(Self {
             mode,
-            sandbox: file.sandbox.unwrap_or(false),
+            sandbox: file.sandbox.unwrap_or(false) || network_allow.is_some(),
             fail_if_unavailable: file.fail_if_unavailable.unwrap_or(false),
+            network_allow,
             notes,
         })
     }
@@ -164,6 +188,21 @@ impl HarnessConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_network_allowlist_turns_the_sandbox_on_and_must_parse() {
+        let config = HarnessConfig::from_toml(
+            "[network]\nallow = [\"pypi.org:443\", \"*.pythonhosted.org\"]\n",
+        )
+        .unwrap();
+        assert!(config.sandbox);
+        let policy = config.network_allow.expect("the allowlist is read");
+        assert!(policy.check_url("https://files.pythonhosted.org/a").is_ok());
+        assert!(policy.check_url("https://example.com/").is_err());
+        assert!(HarnessConfig::from_toml("[network]\nallow = [\"https://pypi.org\"]\n").is_err());
+        assert!(HarnessConfig::from_toml("[network]\ndeny = []\n").is_err());
+        assert_eq!(HarnessConfig::from_toml("").unwrap().network_allow, None);
+    }
 
     #[test]
     fn the_file_can_only_tighten_and_reports_what_it_ignored() {

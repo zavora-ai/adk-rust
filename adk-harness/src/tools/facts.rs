@@ -74,6 +74,11 @@ impl Tool for MemorySearchTool {
         "memory_search"
     }
 
+    /// Reaches only the facts store the harness was built with.
+    fn egress(&self, _args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::Configured
+    }
+
     fn description(&self) -> &str {
         "Search what you remember about this user and project from earlier sessions: \
          preferences, how the project builds and tests, what fixed past failures, decisions. \
@@ -167,6 +172,11 @@ impl MemoryRememberTool {
 impl Tool for MemoryRememberTool {
     fn name(&self) -> &str {
         "memory_remember"
+    }
+
+    /// Reaches only the facts store the harness was built with.
+    fn egress(&self, _args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::Configured
     }
 
     fn description(&self) -> &str {

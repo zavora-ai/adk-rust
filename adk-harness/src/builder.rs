@@ -1027,6 +1027,17 @@ impl HarnessAgentBuilder {
                 crate::config::HARNESS_CONFIG_FILE
             ));
         }
+        // The allowlist narrows whatever the code set; the sandbox it needs was turned on
+        // above, since the file sets `sandbox` with it.
+        #[cfg(feature = "sandbox")]
+        if let (Some(allow), ShellIsolation::OsSandbox(sandbox)) =
+            (&config.network_allow, &mut self.shell.isolation)
+        {
+            sandbox.egress = Some(match sandbox.egress.take() {
+                Some(own) => own.narrow(allow),
+                None => allow.clone(),
+            });
+        }
         if config.fail_if_unavailable {
             self.shell.fail_if_unavailable = true;
         }
@@ -1950,9 +1961,17 @@ impl HarnessAgentBuilder {
                  shell or the OS sandbox with shell_credential (spec 3.1 §7.14)",
             ));
         }
-        // The personal preset's shell never retries on the host (spec 3.3 §10 H1).
+        // The personal preset's shell never retries on the host (spec 3.3 §10 H1), and a shell
+        // under an egress policy never leaves it for the host's open network (#1281).
+        #[cfg(feature = "sandbox")]
+        let egress_policy = matches!(
+            &self.shell.isolation,
+            ShellIsolation::OsSandbox(config) if config.egress.is_some()
+        );
+        #[cfg(not(feature = "sandbox"))]
+        let egress_policy = false;
         let allow_unsandboxed_retry =
-            self.shell.allow_unsandboxed_retry && !self.isolated_shell_only;
+            self.shell.allow_unsandboxed_retry && !self.isolated_shell_only && !egress_policy;
         #[cfg(feature = "docker")]
         let container_pool = match &shell.container {
             Some(config) if self.shell_enabled && workspace.bash_allowed() => {

@@ -34,6 +34,11 @@ impl Tool for GlobTool {
         "glob"
     }
 
+    /// Lists workspace paths on disk.
+    fn egress(&self, _args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::None
+    }
+
     fn description(&self) -> &str {
         "List files matching a glob pattern (e.g. 'src/**/*.rs'). Returns paths \
          relative to the workspace root. The pattern is relative to the workspace \
