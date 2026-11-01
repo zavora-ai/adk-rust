@@ -78,6 +78,7 @@ All routes are under `/api`, on both transports. `adk-rust up` merges them into 
 | Route | Purpose | `operator` | Recorded |
 |---|---|---|---|
 | `GET /kernel/health` | State, frozen, per-worker health, scheduler lag, store latency | — | — |
+| `GET /kernel/inventory` | What the kernel runs — targets, triggers with whether each target is served, wake sources, the partitions it files signals in, each store with where it came from — and a warning for each thing it would silently not do ([inventory](#inventory)) | Yes | — |
 | `GET /kernel/processes?partition=&state=&limit=` | The process table, each process with its live view | — | — |
 | `POST /kernel/processes` | Start a process of a registered target as the caller | Yes | `spawn` |
 | `POST /kernel/processes/{pid}/kill` | Cancel at the next checkpoint; body `{"reason": "..."}` | Yes | `kill` |
@@ -172,6 +173,21 @@ The answer carries `transcript` (the session's events after `after`), `cursor` (
 event's time, for the next attach), `pending` (the calls the session holds for a decision) and
 `process` (the unfinished process running the session, if any). A surface attaches only to
 its caller's own sessions.
+
+## Inventory
+
+`Kernel::inventory()` reports what a kernel runs and warns about what it would silently not
+do. The kernel logs it when it starts — one `kernel started` line, then one warning per entry —
+and serves it at `GET /api/kernel/inventory` to the `operator` scope
+(`ControlClient::inventory`).
+
+| Warning code | When |
+|---|---|
+| `kernel.trigger.unserved` | A trigger's run names a target no agent or workflow of the kernel serves, so each of its runs fails |
+| `kernel.trigger.signal_unfiled` | A trigger wakes on a `Wake::Signal` in a partition the kernel files no signals in (`KernelBuilder::signals`), so it never fires |
+| `kernel.store.in_memory` | A stateful store is held in memory: one warning per store the builder defaulted, naming its setter, and one per [`KernelStores`](backends.md#every-store-at-once-kernelstores) bundle that keeps stores in memory; the settings store only when the kernel serves a control plane |
+| `kernel.idle` | The kernel has no agent, trigger, workflow, schedule store or agent factory |
+| Any other code | A warning the host or a kit added with `KernelBuilder::inventory_warning`, such as a job it does not schedule and why |
 
 ## Audit records
 

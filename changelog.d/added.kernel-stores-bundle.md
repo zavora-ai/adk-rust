@@ -10,9 +10,9 @@
   MongoDB, Firestore or Neo4j backend yet; a bundle there keeps them in memory and names them
   (`in_memory_stores`). `KernelBuilder::stores` and `TenantKernelBuilder::stores` take the
   bundle, a store set on the builder winning, and mirror the kill switch over its governance
-  store. The builder now logs a warning for each stateful store it keeps in memory because none
-  was given; `KernelBuilder::require_durable()` refuses to build instead, naming each store and
-  the setter that fixes it, and `Kernel::store_uses()` reports where every store came from.
+  store. A kernel now warns about each stateful store it keeps in memory because none was given
+  (in its start-up inventory); `KernelBuilder::require_durable()` refuses to build instead,
+  naming each store and the setter that fixes it, and `Kernel::store_uses()` reports where every store came from.
   `adk-rust up` (unless `--ephemeral`) and `adk-website serve` take the bundle and require
   durable stores, so the served site's kill switch and control-plane settings now survive a
   restart too. `adk-website`'s store bundle is `deploy::SiteStores`, with the kernel's under

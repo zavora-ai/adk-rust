@@ -166,6 +166,9 @@ pub mod paths {
     pub const API_PREFIX: &str = "/api";
     /// `GET`: the kernel's health.
     pub const HEALTH: &str = "/kernel/health";
+    /// `GET`: what the kernel runs and would silently not do (`Kernel::inventory`), for the
+    /// `operator` scope.
+    pub const INVENTORY: &str = "/kernel/inventory";
     /// `GET`: the process table; `POST`: start a process.
     pub const PROCESSES: &str = "/kernel/processes";
     /// `POST`: kill a process.

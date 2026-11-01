@@ -74,9 +74,10 @@ async fn kernel(runner: Arc<Runner>) -> Result<Kernel, Box<dyn std::error::Error
 
 A store the builder is given neither directly nor through `KernelBuilder::stores` is kept in
 memory: the process table, agenda, partition table, cron watermarks, agent table, kill switch and
-control-plane settings. The builder logs a warning for each such store (the settings store only
-when the kernel serves a control plane), and `Kernel::store_uses()` reports every store with
-where it came from (`set`, `bundle` or `defaulted`) and whether it is held in memory.
+control-plane settings. The kernel's [inventory](control-plane.md#inventory) warns about each
+such store when the kernel starts (the settings store only when the kernel serves a control
+plane), and `Kernel::store_uses()` reports every store with where it came from (`set`,
+`bundle` or `defaulted`) and whether it is held in memory.
 
 `KernelBuilder::require_durable()` turns the warnings into a refusal: `build` returns a
 configuration error naming each store that would be kept in memory — one the builder

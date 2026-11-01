@@ -23,7 +23,7 @@
   team, `BuiltTeam::team_runner`; each agent runs its jobs' processes, `BuiltTeam::agent_runner`
   — under the owner's standing rules in `data/kernel.db` (`SiteStores::rules`), with held
   calls in the owner's approval inbox; the edge's signals wake those processes
-  (`edge::adapters::KernelSignals::wake`). `SiteOptions` gains `email`, `publish_delay`,
+  (`edge::adapters::KernelSignals::attach`). `SiteOptions` gains `email`, `publish_delay`,
   `advisories`, `certificate` and `wallet` (spec 3.5 §7.19, §7.20, §7.22).
 - **Review quotes in the running site** (`adk-website`, `adk-site`): `quotes::ReviewQuotes`
   keeps the reviews discovery found with the owner's approvals in `data/reviews.json`, and

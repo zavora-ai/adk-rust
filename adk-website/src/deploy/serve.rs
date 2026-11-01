@@ -212,6 +212,10 @@ async fn start(
     for site in &sites {
         use adk_kernel::charter::SiteProcessKind;
         triggers.extend(site.triggers().iter().cloned());
+        builder = builder.signals(
+            stores.kernel.charter.signals.clone(),
+            site.partitions.back_office().id.clone(),
+        );
         let team = SiteTeam::new(site.site.clone(), &site.template);
         let partition = site.partitions.back_office().id.clone();
         // The runs of a site's processes are its own app's, so its agents act as
@@ -292,9 +296,12 @@ async fn start(
     let workflows =
         ServedWorkflows::new(site_workflows, sites.iter().map(|site| site.experiments.clone()));
     let kernel = builder.workflows(Arc::new(workflows)).build().map_err(config)?;
-    // The edge's signals wake the back office's processes (spec 3.5 §7.10, §7.20).
+    // The edge's signals wake the back office's processes (spec 3.5 §7.10, §7.20), filed in
+    // each site's trail.
     for site in &sites {
-        site.signals.wake(kernel.wake_router().clone(), kernel.config().app_name.clone());
+        let partition = site.partitions.back_office().id.clone();
+        let sink = kernel.signal_sink(partition).map_err(config)?;
+        site.signals.attach(sink.with_audit(site.audit.clone()));
     }
     kernel.start().await.map_err(config)?;
     let kernel_addr = kernel
