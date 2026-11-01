@@ -102,7 +102,6 @@ async fn a_proxied_process_reaches_the_network_only_through_the_proxy() {
         .call_id("call-7")
         .audit(audit.clone())
         .start_for(enforcer.as_ref())
-        .await
         .expect("the proxy starts");
     let host = std::net::TcpListener::bind("127.0.0.1:0").expect("a host listener");
     let host_port = host.local_addr().expect("address").port();

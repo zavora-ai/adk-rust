@@ -254,7 +254,8 @@ impl EgressProxyBuilder {
     ///
     /// On the host's loopback the proxy listens at once. Inside a sandbox's network namespace
     /// it starts when the enforcer hands over the listener it opened there, as the command
-    /// built under [`CallProxy::network`] starts.
+    /// built under [`CallProxy::network`] starts. Call it within a Tokio runtime, which serves
+    /// the proxy.
     ///
     /// # Errors
     ///
@@ -273,8 +274,7 @@ impl EgressProxyBuilder {
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
     /// let enforcer = get_enforcer()?;
     /// let proxy = EgressProxy::builder(EgressPolicy::allowlist(["pypi.org:443"])?)
-    ///     .start_for(enforcer.as_ref())
-    ///     .await?;
+    ///     .start_for(enforcer.as_ref())?;
     /// let policy = SandboxPolicyBuilder::new()
     ///     .allow_read("/usr")
     ///     .network(proxy.network())
@@ -293,10 +293,11 @@ impl EgressProxyBuilder {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn start_for(self, enforcer: &dyn SandboxEnforcer) -> std::io::Result<CallProxy> {
+    pub fn start_for(self, enforcer: &dyn SandboxEnforcer) -> std::io::Result<CallProxy> {
         match enforcer.proxy_listener() {
             ProxyListener::HostLoopback => {
-                let proxy = self.bind().await?;
+                let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+                let proxy = self.serve(listener)?;
                 let port = proxy.port();
                 Ok(CallProxy {
                     network: NetworkAccess::Proxied { endpoint: ProxyEndpoint { port } },
