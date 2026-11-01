@@ -91,6 +91,7 @@ mod website_drafts_tests;
 mod website_ladder_tests;
 mod website_live_tests;
 mod website_onboarding_tests;
+mod website_replicas_tests;
 mod website_scenarios;
 mod work_stays_at_work;
 mod workspace_trust_tests;

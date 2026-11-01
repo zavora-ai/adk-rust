@@ -323,14 +323,14 @@ The kernel's stores are one `adk_kernel::stores::KernelStores` on `data/kernel.d
 | Agenda, partitions, devices, cron watermarks, added agents | `adk_kernel` SQLite stores |
 | The process table: wake sets, quiet-hours and budget deferrals, suspensions, daily spend totals | `adk_kernel::SqliteProcessStore` (`SiteStores::kernel.processes`), so a process asleep before a restart still wakes after it |
 | Schedules the kernel's scheduler fires | `adk_session::SqliteScheduleStore` (`SiteStores::kernel.schedules`) |
-| The kill switch: a freeze holds across a restart | `adk_session::SqliteGovernanceStateStore`, which the kernel's `GovernanceControl` mirrors |
+| The kill switch: a freeze holds across a restart | `adk_session::SqliteGovernanceStateStore`, which the kernel's and every site's `GovernanceControl` (`SiteStores::governance`) mirror; a freeze holds every release, one a person approves in the desk included |
 | The control plane's changed settings and "While you were away" cursors | `adk_kernel::control::SqliteControlStore` |
 | Runs (weekly reviews among them), approvals, action and spend ledgers | `adk_session` SQLite stores; the kernel reads the spend ledger for its process views |
 | Leads, consent, held calls, idempotency | `adk_server::awp::stores::SqliteEdgeStores` in `data/edge.db` |
 | The contact book, nurture counts and handoffs | `leads::SqliteLeadRecords` in `data/edge.db` |
 | The owner's standing rules | `adk_harness::SqliteStandingRuleStore` in `data/kernel.db` (`SiteStores::rules`) |
 | Reviews the site may quote | `data/reviews.json` |
-| The desk's work in progress | `data/desk.json`, under `adk-rust website new` |
+| The desk's work in progress | `data/desk.json`, under `adk-rust website new`; a release waiting for its chain keeps its request id there, while the votes stay in the approval request |
 | Retained events, catalogue pages, consent references, pending deliveries, beacon counts | The same `SqliteEdgeStores`, as the edge's event log and beacon store; the deliveries a stopped process left resume once their lease passes |
 | Measurement counts (`MeteredActionLedger`, `EdgeMeter`, `MeteredSpendLedger`, host logs, AEO) | `SqliteEdgeStores` in `data/edge.db`, under the namespace `{site}#measurement` |
 | The edge's rate-limit windows | The same `SqliteEdgeStores`, through `EdgeLimits::store` |
