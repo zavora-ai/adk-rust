@@ -866,6 +866,31 @@ macro_rules! sql_edge_stores {
                 Ok(())
             }
 
+            async fn forget_visitor(&self, visitor: &str) -> StoreResult<u64> {
+                let days: Vec<(i64,)> = sqlx::query_as(
+                    "SELECT day FROM adk_awp_beacon_visitors WHERE site = $1 AND visitor = $2",
+                )
+                .bind(&self.site)
+                .bind(visitor)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| backend($name, "read a visitor's days", &e))?;
+                for (day,) in &days {
+                    sqlx::query(
+                        "UPDATE adk_awp_beacon_visitors SET visitor = $1 \
+                         WHERE site = $2 AND day = $3 AND visitor = $4",
+                    )
+                    .bind(crate::awp::beacon::forgotten())
+                    .bind(&self.site)
+                    .bind(day)
+                    .bind(visitor)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| backend($name, "forget a visitor", &e))?;
+                }
+                Ok(days.len() as u64)
+            }
+
             async fn add_visitor(&self, day: NaiveDate, visitor: &str) -> StoreResult<()> {
                 sqlx::query(VISITOR_ADD)
                     .bind(&self.site)

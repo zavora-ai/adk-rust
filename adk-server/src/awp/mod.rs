@@ -77,6 +77,7 @@ pub mod tiers;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use adk_auth::VisitorTokens;
 use adk_awp::signing::jws::DocumentSigner;
 use adk_awp::v2::capability::CapabilityRegistry;
 use adk_awp::v2::response::envelope_response;
@@ -87,11 +88,16 @@ use adk_awp::v2::store::{
 };
 use adk_awp::v2::tier::TierAssigner;
 use adk_core::audit_log::AuditTrail;
+use adk_core::subject::{
+    ConsentGate, ConsentStore, InMemorySubjectRegistry, SubjectDataStore, SubjectRegistry,
+    SubjectRights, VisitorId,
+};
 use adk_core::{
     ActionLedger, AdkError, Agent, AgentId, AgentPrincipal, ApprovalService, ApprovalStore,
     ErrorCategory, ErrorComponent, GovernanceControl, InMemoryActionLedger, InMemoryApprovalStore,
     Url,
 };
+use adk_session::SessionSubjectData;
 use adk_session::{InMemorySessionService, SessionService};
 use adk_tool::mcp::server::McpSessions;
 use awp_types::{
@@ -107,8 +113,8 @@ use axum::routing::get;
 use tracing::Instrument as _;
 
 pub use a2a::AgentCardInfo;
-pub use beacon::{BeaconCounts, BeaconStore, InMemoryBeaconStore};
-pub use consent::{ConsentConfig, ConsentPolicy, LeadsData, SubjectData};
+pub use beacon::{BeaconCounts, BeaconStore, BeaconSubjectData, InMemoryBeaconStore};
+pub use consent::{ConsentConfig, ConsentPolicy, LeadsData, ReceiptConsentStore, SubjectData};
 pub use control::{EdgeMode, StatusError};
 pub use events::{
     EdgeEvents, EventLog, EventsConfig, InMemoryEventLog, PendingDelivery, RetainedEvent,
@@ -279,6 +285,8 @@ pub struct AwpEdgeBuilder {
     consent: ConsentConfig,
     subject_data: Option<Arc<dyn SubjectData>>,
     beacon: Option<Arc<dyn BeaconStore>>,
+    subject_registry: Option<Arc<dyn SubjectRegistry>>,
+    subject_stores: Vec<Arc<dyn SubjectDataStore>>,
 }
 
 impl AwpEdgeBuilder {
@@ -467,6 +475,23 @@ impl AwpEdgeBuilder {
         self
     }
 
+    /// Sets the subject registry: visitors' pseudonyms, links, and erasure state. A visitor
+    /// being erased can neither converse nor consent. In memory by default.
+    #[must_use]
+    pub fn subject_registry(mut self, registry: Arc<dyn SubjectRegistry>) -> Self {
+        self.subject_registry = Some(registry);
+        self
+    }
+
+    /// Adds a store that `GET /awp/v2/consent/export` and `POST /awp/v2/consent/erase` reach,
+    /// such as the memory or artifacts the public agent writes. The public partition's sessions
+    /// and the beacon's visitor sets are always reached.
+    #[must_use]
+    pub fn subject_store(mut self, store: Arc<dyn SubjectDataStore>) -> Self {
+        self.subject_stores.push(store);
+        self
+    }
+
     /// Builds the edge.
     ///
     /// # Errors
@@ -543,6 +568,20 @@ impl AwpEdgeBuilder {
             version: "2.0".to_owned(),
         });
 
+        // One source of consent: the receipts, which the gates and subject rights both read.
+        let consent_store: Arc<dyn ConsentStore> =
+            Arc::new(ReceiptConsentStore::new(Arc::clone(&stores.consent)));
+        let subject_registry: Arc<dyn SubjectRegistry> =
+            self.subject_registry.unwrap_or_else(|| Arc::new(InMemorySubjectRegistry::new()));
+        let gate = ConsentGate::new(Arc::clone(&consent_store))
+            .with_registry(Arc::clone(&subject_registry));
+        let visitors = VisitorTokens::new(Arc::clone(&self.consent.subject_key))
+            .with_ttl(self.consent.session_ttl);
+        let beacon_store = self
+            .beacon
+            .or_else(|| stores.beacon.clone())
+            .unwrap_or_else(|| Arc::new(InMemoryBeaconStore::new()));
+
         let live = LiveThreads::default();
         let public = match self.agent {
             None => None,
@@ -577,10 +616,10 @@ impl AwpEdgeBuilder {
                     agent,
                     &tools,
                     sessions,
-                    "awp-public",
+                    PUBLIC_APP,
                     audit.as_ref(),
                     watch,
-                    public::visitor_key(&self.consent.subject_key),
+                    gate.clone(),
                 )?))
             }
         };
@@ -615,8 +654,22 @@ impl AwpEdgeBuilder {
             &self.public_url,
             self.mcp_sessions,
         )?;
+        let mut rights =
+            SubjectRights::new(Arc::clone(&subject_registry), Arc::clone(&consent_store))
+                .with_app(PUBLIC_APP)
+                .with_store(Arc::new(BeaconSubjectData::new(Arc::clone(&beacon_store))));
+        if let Some(public) = &public {
+            rights = rights.with_store(Arc::new(SessionSubjectData::new(public.sessions())));
+        }
+        for store in self.subject_stores {
+            rights = rights.with_store(store);
+        }
+        if let Some(audit) = &audit {
+            rights = rights.with_audit(audit.clone());
+        }
         let consent = consent::ConsentState {
-            tokens: consent::SubjectTokens::for_config(&self.consent),
+            tokens: visitors.clone(),
+            rights,
             config: Arc::new(self.consent),
             store: Arc::clone(&stores.consent),
             held_calls: Arc::clone(&stores.held_calls),
@@ -628,10 +681,6 @@ impl AwpEdgeBuilder {
                 .unwrap_or_else(|| Arc::new(LeadsData::new(Arc::clone(&stores.leads)))),
             audit: audit.clone(),
         };
-        let beacon_store = self
-            .beacon
-            .or_else(|| stores.beacon.clone())
-            .unwrap_or_else(|| Arc::new(InMemoryBeaconStore::new()));
         let beacon = beacon::BeaconState {
             store: Arc::clone(&beacon_store),
             consent: Arc::clone(&stores.consent),
@@ -650,6 +699,7 @@ impl AwpEdgeBuilder {
                     public: Arc::clone(public),
                     live: live.clone(),
                     control: Arc::clone(&control),
+                    tokens: visitors.clone(),
                 }),
             );
         }
@@ -658,6 +708,7 @@ impl AwpEdgeBuilder {
             limits,
             control: Arc::clone(&control),
             executor: executor.clone(),
+            visitors,
         });
         let router = router.layer(from_fn_with_state(guard, edge_guard));
         Ok(AwpEdge {
@@ -735,6 +786,8 @@ impl AwpEdge {
             consent: ConsentConfig::default(),
             subject_data: None,
             beacon: None,
+            subject_registry: None,
+            subject_stores: Vec::new(),
         }
     }
 
@@ -903,7 +956,11 @@ struct Guard {
     limits: Arc<EdgeLimits>,
     control: Arc<EdgeControl>,
     executor: GovernedExecutor,
+    visitors: VisitorTokens,
 }
+
+/// The application name of the public partition's sessions.
+const PUBLIC_APP: &str = "awp-public";
 
 /// The edge's guard: mode, caller, rate limit, and the HTTP binding's read-only answer.
 async fn edge_guard(State(guard): State<Arc<Guard>>, request: Request, next: Next) -> Response {
@@ -912,7 +969,7 @@ async fn edge_guard(State(guard): State<Arc<Guard>>, request: Request, next: Nex
         return StatusCode::NOT_FOUND.into_response();
     }
     let (mut parts, mut body) = request.into_parts();
-    let caller = match guard.tiers.assess(&parts).await {
+    let mut caller = match guard.tiers.assess(&parts).await {
         Ok(caller) => caller,
         Err(refusal) => {
             tracing::info!(awp.identity = ?refusal.method, "awp.request.refused");
@@ -938,6 +995,24 @@ async fn edge_guard(State(guard): State<Arc<Guard>>, request: Request, next: Nex
             return response;
         }
     };
+    // A public caller converses as the visitor its token names, else as a new random one
+    // whose token the response hands back; nothing is derived from the request.
+    let mut issued = None;
+    if caller.requester.is_none() {
+        let link = parts.uri.query().and_then(|query| {
+            query
+                .split('&')
+                .find_map(|pair| pair.strip_prefix("subject="))
+                .map(|token| token.replace("%3A", ":").replace("%3a", ":"))
+        });
+        let presented = consent::presented_token(&parts.headers, link.as_deref())
+            .and_then(|token| guard.visitors.verify(&token));
+        caller.visitor = Some(presented.unwrap_or_else(|| {
+            let visitor = VisitorId::generate();
+            issued = Some(guard.visitors.issue(&visitor));
+            visitor
+        }));
+    }
     let path = parts.uri.path().to_owned();
     if parts.method == Method::POST
         && let Some(name) = path.strip_prefix("/awp/v2/capabilities/")
@@ -1022,6 +1097,12 @@ async fn edge_guard(State(guard): State<Arc<Guard>>, request: Request, next: Nex
         standing.remaining,
         standing.reset,
     );
+    if let Some(token) = issued
+        && !response.headers().contains_key(consent::SUBJECT_HEADER)
+        && let Ok(value) = HeaderValue::from_str(&token)
+    {
+        response.headers_mut().insert(consent::SUBJECT_HEADER, value);
+    }
     response
 }
 

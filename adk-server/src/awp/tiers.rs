@@ -54,6 +54,10 @@ pub struct EdgeCaller {
     pub rate_class: Option<String>,
     /// What the request claims to be, for analytics only.
     pub claimed_agent: Option<String>,
+    /// The visitor a public caller converses as: the id its `AWP-Subject` token or visitor
+    /// cookie carries, else a new random one the edge hands back in `AWP-Subject`. `None`
+    /// for a verified requester, who converses as itself.
+    pub visitor: Option<adk_core::subject::VisitorId>,
 }
 
 impl EdgeCaller {
@@ -65,6 +69,7 @@ impl EdgeCaller {
             limit_key: limit_key.into(),
             rate_class: None,
             claimed_agent: None,
+            visitor: None,
         }
     }
 
@@ -744,6 +749,7 @@ impl EdgeTiers {
                     limit_key: format!("id:{}", requester.as_str()),
                     requester: Some(requester),
                     claimed_agent: claimed,
+                    visitor: None,
                 }
             }
             None => {

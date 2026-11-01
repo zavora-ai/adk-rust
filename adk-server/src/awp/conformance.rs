@@ -251,6 +251,24 @@ pub async fn beacon_visitors_are_distinct_per_day<H: EdgeLogHarness + ?Sized>(ha
     assert_eq!(store.total("visitors", day(26), day(30)).await.unwrap(), 0);
 }
 
+/// Forgetting a visitor removes it from every day's set and keeps each day's count; a
+/// repeat forgets nothing.
+pub async fn beacon_forgets_a_visitor<H: EdgeLogHarness + ?Sized>(harness: &H) {
+    let store = harness.beacon().await;
+    let (forgotten, kept) = (
+        format!("v:{}", uuid::Uuid::new_v4().simple()),
+        format!("v:{}", uuid::Uuid::new_v4().simple()),
+    );
+    store.add_visitor(day(10), &forgotten).await.unwrap();
+    store.add_visitor(day(11), &forgotten).await.unwrap();
+    store.add_visitor(day(11), &kept).await.unwrap();
+    let before = store.total("visitors", day(10), day(12)).await.unwrap();
+    assert_eq!(store.forget_visitor(&forgotten).await.unwrap(), 2);
+    assert_eq!(store.forget_visitor(&forgotten).await.unwrap(), 0, "a repeat forgets nothing");
+    assert_eq!(store.total("visitors", day(10), day(12)).await.unwrap(), before, "counts stay");
+    assert_eq!(store.forget_visitor(&kept).await.unwrap(), 1, "the other visitor was untouched");
+}
+
 /// Concurrent counts are never lost (spec 3.5 §7.12).
 pub async fn beacon_concurrent_adds_are_not_lost<H: EdgeLogHarness + ?Sized>(harness: &H) {
     let mut tasks = Vec::new();
@@ -414,6 +432,7 @@ macro_rules! edge_log_conformance_tests {
             event_log_concurrent_claims_have_one_winner,
             beacon_counts_and_totals,
             beacon_visitors_are_distinct_per_day,
+            beacon_forgets_a_visitor,
             beacon_concurrent_adds_are_not_lost,
         );
     };

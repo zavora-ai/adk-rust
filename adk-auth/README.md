@@ -304,6 +304,14 @@ checkpoints are passed as well (`--checkpoints`). See the
 default, every subject after `for_every_subject()`), and `ip_address` is dropped. Erasing a
 subject deletes its pseudonym, so the stored events stay chained and no longer name it.
 
+## Visitor Tokens
+
+`VisitorTokens` signs a random `adk_core::subject::VisitorId` into
+`v1.{visitor id}.{expiry}.{HMAC-SHA256}` with the first of its keys and verifies with every key,
+so a site rotates keys without dropping visitors. A token proves the bearer was given the id; it
+authenticates no one. `set_cookie` builds the `__Host-adk_visitor` cookie (`Secure`, `HttpOnly`,
+`SameSite=Lax`) for a visitor who consented to being remembered.
+
 ## Web Bot Auth (`web-bot-auth`)
 
 `web_bot_auth` implements the IETF Web Bot Auth draft

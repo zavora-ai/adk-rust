@@ -934,6 +934,26 @@ impl BeaconStore for RedisEdgeStores {
         Ok(())
     }
 
+    async fn forget_visitor(&self, visitor: &str) -> StoreResult<u64> {
+        let mut forgot = 0;
+        for day in self.days("visitor-days", NaiveDate::MIN, NaiveDate::MAX).await? {
+            let removed: i64 = self
+                .client
+                .srem(self.key(&format!("visitors:{day}")), visitor)
+                .await
+                .map_err(failed("forget a visitor"))?;
+            if removed > 0 {
+                let _: i64 = self
+                    .client
+                    .sadd(self.key(&format!("visitors:{day}")), crate::awp::beacon::forgotten())
+                    .await
+                    .map_err(failed("forget a visitor"))?;
+                forgot += 1;
+            }
+        }
+        Ok(forgot)
+    }
+
     async fn total(&self, metric: &str, from: NaiveDate, to: NaiveDate) -> StoreResult<u64> {
         let mut total = 0_u64;
         if metric == "visitors" {

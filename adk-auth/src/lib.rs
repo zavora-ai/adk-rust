@@ -62,6 +62,8 @@ mod middleware;
 mod permission;
 mod role;
 pub mod scope;
+/// Tokens that carry a visitor id between a site and its visitors.
+pub mod visitor;
 
 #[cfg(feature = "auth-bridge")]
 pub mod auth_bridge;
@@ -104,6 +106,7 @@ pub use scope::{
     ContextScopeResolver, ScopeDenied, ScopeGuard, ScopeResolver, ScopeToolExt, ScopedTool,
     ScopedToolDyn, StaticScopeResolver, check_scopes,
 };
+pub use visitor::{VISITOR_COOKIE, VisitorTokens};
 
 #[cfg(feature = "auth-bridge")]
 pub use auth_bridge::{JwtRequestContextExtractor, JwtRequestContextExtractorBuilder};

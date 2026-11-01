@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use adk_awp::v2::store::{ConsentReceiptStore, StoreError, StoreResult};
+use adk_core::subject::{StoreErasure, SubjectDataStore, SubjectScope, unsupported_error};
 use async_trait::async_trait;
 use awp_types::{ConsentScope, ErrorBody, ErrorCode};
 use axum::Router;
@@ -53,6 +54,51 @@ pub trait BeaconStore: Send + Sync {
     /// The total of `metric` over the days in `[from, to)`; `visitors` sums distinct
     /// visitors per day.
     async fn total(&self, metric: &str, from: NaiveDate, to: NaiveDate) -> StoreResult<u64>;
+
+    /// Replaces `visitor` in every day's visitor set with a random token, so the day's count
+    /// stays and no set names the visitor; returns how many days named it.
+    async fn forget_visitor(&self, visitor: &str) -> StoreResult<u64>;
+}
+
+/// The token that takes an erased visitor's place in a day's visitor set.
+pub(crate) fn forgotten() -> String {
+    format!("erased:{}", Uuid::new_v4().simple())
+}
+
+/// The beacon's visitor sets as a [`SubjectDataStore`]: erasure replaces the subject in every
+/// day's set (counts stay); export is unsupported, since the sets record only presence.
+pub struct BeaconSubjectData {
+    store: Arc<dyn BeaconStore>,
+}
+
+impl BeaconSubjectData {
+    /// The visitor sets in `store`.
+    pub fn new(store: Arc<dyn BeaconStore>) -> Self {
+        Self { store }
+    }
+}
+
+#[async_trait]
+impl SubjectDataStore for BeaconSubjectData {
+    fn name(&self) -> &str {
+        "awp.beacon"
+    }
+
+    async fn export(&self, _scope: &SubjectScope) -> adk_core::Result<serde_json::Value> {
+        Err(unsupported_error("awp.beacon", "export"))
+    }
+
+    async fn erase(&self, scope: &SubjectScope) -> adk_core::Result<StoreErasure> {
+        let mut forgotten = 0;
+        for subject in scope.subjects() {
+            forgotten += self
+                .store
+                .forget_visitor(&subject.id)
+                .await
+                .map_err(|error| adk_core::AdkError::session(error.to_string()))?;
+        }
+        Ok(StoreErasure::deleted(forgotten))
+    }
 }
 
 /// An in-memory [`BeaconStore`].
@@ -89,6 +135,18 @@ impl BeaconStore for InMemoryBeaconStore {
             .or_default()
             .insert(visitor.to_owned());
         Ok(())
+    }
+
+    async fn forget_visitor(&self, visitor: &str) -> StoreResult<u64> {
+        let mut visitors = self.visitors.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut forgot = 0;
+        for seen in visitors.values_mut() {
+            if seen.remove(visitor) {
+                seen.insert(forgotten());
+                forgot += 1;
+            }
+        }
+        Ok(forgot)
     }
 
     async fn total(&self, metric: &str, from: NaiveDate, to: NaiveDate) -> StoreResult<u64> {

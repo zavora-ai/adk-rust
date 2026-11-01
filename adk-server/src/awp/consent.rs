@@ -8,10 +8,17 @@
 //! | `GET /awp/v2/consent/export` | Every receipt and every item of data the site holds about the subject |
 //! | `POST /awp/v2/consent/erase` | Revokes every receipt, erases the subject's data and receipts; answers `202` |
 //!
-//! These routes authenticate the **subject**, never the requester's tier: by a session token
-//! the edge issued, in `AWP-Subject`, or a link the edge signed and sent to the subject, whose
-//! `subject` query parameter carries the same token. A subject is a pseudonymous
-//! `subjectRef`; it holds no personal data.
+//! These routes authenticate the **subject**, never the requester's tier: by a visitor token
+//! the edge issued ([`VisitorTokens`]), in `AWP-Subject`, the `__Host-adk_visitor` cookie, or a
+//! link the edge signed and sent to the subject, whose `subject` query parameter carries the
+//! same token. A subject is a random [`VisitorId`]; it holds no personal data, and it is the
+//! same id the visitor converses as.
+//!
+//! Export and erasure also reach every store of the edge's [`SubjectRights`]: the public
+//! partition's sessions, the beacon's visitor sets, and each store added with
+//! [`AwpEdgeBuilder::subject_store`](super::AwpEdgeBuilder::subject_store). The receipts are
+//! the framework's consent records ([`ReceiptConsentStore`]), so there is one source of
+//! consent.
 //!
 //! A revocation takes effect at once: pending held calls that reference the receipt are
 //! rejected, later calls cannot use it, and `consent.revoked` reaches the requesters whose
@@ -20,6 +27,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use adk_auth::VisitorTokens;
 use adk_awp::signing::jws::{DocumentSigner, sign};
 use adk_awp::v2::response::awp_json;
 use adk_awp::v2::store::{
@@ -27,26 +35,27 @@ use adk_awp::v2::store::{
 };
 use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind, AuditTrail};
 use adk_core::principal::SubjectRef;
+use adk_core::subject::{
+    ConsentEvidence, ConsentPurpose, ConsentStore, SubjectRights, VisitorId, unsupported_error,
+};
 use async_trait::async_trait;
 use awp_types::{
     Channel, ConsentReceipt, ConsentRevoked, ConsentScope, Digest, ErrorBody, ErrorCode,
     HeldCallState, LegalBasis, Proof,
 };
+use axum::Extension;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
-use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::Sha256;
 use uuid::Uuid;
 
 use super::events::{ConsentReferences, EdgeEvents};
+use super::tiers::EdgeCaller;
 
 /// The consent routes' base path.
 pub const CONSENT_PATH: &str = "/awp/v2/consent";
@@ -70,8 +79,7 @@ pub struct ConsentConfig {
     pub scopes: Vec<ConsentScope>,
     /// Policies by version.
     pub policies: BTreeMap<String, ConsentPolicy>,
-    /// The key subject sessions and signed links are authenticated with, and the public
-    /// partition's visitor ids are derived from.
+    /// The key visitor tokens and signed links are authenticated with.
     pub subject_key: Arc<[u8]>,
     /// How long a subject session lasts.
     pub session_ttl: chrono::Duration,
@@ -187,52 +195,134 @@ impl SubjectData for LeadsData {
     }
 }
 
-/// Issues and checks subject session tokens: `v1.{subject}.{expiry}.{HMAC-SHA256}`.
-#[derive(Clone)]
-pub(crate) struct SubjectTokens {
-    key: Arc<[u8]>,
-    ttl: chrono::Duration,
+/// The visitor token a request presents: the `AWP-Subject` header, a signed link's `subject`
+/// query parameter, or the `__Host-adk_visitor` cookie, in that order.
+pub(crate) fn presented_token(headers: &HeaderMap, link: Option<&str>) -> Option<String> {
+    headers
+        .get(SUBJECT_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .or_else(|| link.map(str::to_owned))
+        .or_else(|| {
+            headers
+                .get(axum::http::header::COOKIE)
+                .and_then(|value| value.to_str().ok())
+                .and_then(VisitorTokens::from_cookie_header)
+                .map(str::to_owned)
+        })
 }
 
-impl SubjectTokens {
-    fn mac(&self, payload: &str) -> String {
-        let mut mac = Hmac::<Sha256>::new_from_slice(&self.key).expect("HMAC takes any key length");
-        mac.update(payload.as_bytes());
-        URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+/// The edge's consent receipts as the framework's [`ConsentStore`], so the consent gates of
+/// the public partition read the receipts the consent routes issue: one source of consent.
+///
+/// A receipt becomes a record of a visitor subject, its scope the purpose of the same name,
+/// and the signed receipt its evidence (`awp.receipt`). Consent is granted only through
+/// `POST /awp/v2/consent`, which signs the receipt, so [`grant`](ConsentStore::grant) is
+/// unsupported.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_awp::v2::store::InMemoryConsentReceiptStore;
+/// use adk_core::subject::{ConsentStore, VisitorId};
+/// use adk_server::awp::ReceiptConsentStore;
+///
+/// # async fn demo() -> adk_core::Result<()> {
+/// let consent = ReceiptConsentStore::new(Arc::new(InMemoryConsentReceiptStore::new()));
+/// assert!(consent.for_subject(&VisitorId::generate().subject()).await?.is_empty());
+/// # Ok(())
+/// # }
+/// ```
+pub struct ReceiptConsentStore {
+    receipts: Arc<dyn ConsentReceiptStore>,
+}
+
+impl ReceiptConsentStore {
+    /// The receipts in `receipts`.
+    pub fn new(receipts: Arc<dyn ConsentReceiptStore>) -> Self {
+        Self { receipts }
+    }
+}
+
+impl std::fmt::Debug for ReceiptConsentStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReceiptConsentStore").finish_non_exhaustive()
+    }
+}
+
+fn receipt_failed(error: StoreError) -> adk_core::AdkError {
+    adk_core::AdkError::session(format!("awp consent receipts unavailable: {error}"))
+}
+
+fn consent_record(record: ConsentRecord) -> adk_core::subject::ConsentRecord {
+    let receipt = record.receipt;
+    let document = serde_json::to_value(&receipt).ok();
+    let mut evidence = ConsentEvidence::new("awp.receipt", receipt.id.to_string());
+    evidence.document = document;
+    adk_core::subject::ConsentRecord {
+        id: receipt.id.to_string(),
+        subject: SubjectRef::visitor(receipt.subject_ref),
+        purpose: ConsentPurpose::from(receipt.scope.as_str()),
+        policy_version: receipt.policy_version,
+        granted_at: receipt.granted_at,
+        expires_at: receipt.expires_at,
+        revoked_at: record.revoked_at,
+        evidence: Some(evidence),
+    }
+}
+
+#[async_trait]
+impl ConsentStore for ReceiptConsentStore {
+    async fn grant(&self, _record: adk_core::subject::ConsentRecord) -> adk_core::Result<()> {
+        Err(unsupported_error("awp receipts", "grant consent outside POST /awp/v2/consent"))
     }
 
-    pub(crate) fn issue(&self, subject: &str) -> String {
-        let expiry = (Utc::now() + self.ttl).timestamp();
-        let payload = format!("v1.{}.{expiry}", URL_SAFE_NO_PAD.encode(subject));
-        let mac = self.mac(&payload);
-        format!("{payload}.{mac}")
+    async fn get(&self, id: &str) -> adk_core::Result<Option<adk_core::subject::ConsentRecord>> {
+        let Ok(id) = id.parse::<Uuid>() else { return Ok(None) };
+        Ok(self.receipts.get(id).await.map_err(receipt_failed)?.map(consent_record))
     }
 
-    pub(crate) fn subject_of(&self, token: &str) -> Option<String> {
-        let (payload, mac) = token.rsplit_once('.')?;
-        let expected = self.mac(payload);
-        let equal = expected.len() == mac.len()
-            && expected.bytes().zip(mac.bytes()).fold(0_u8, |acc, (a, b)| acc | (a ^ b)) == 0;
-        if !equal {
-            return None;
+    async fn for_subject(
+        &self,
+        subject: &SubjectRef,
+    ) -> adk_core::Result<Vec<adk_core::subject::ConsentRecord>> {
+        let mut records: Vec<_> = self
+            .receipts
+            .for_subject(&subject.id)
+            .await
+            .map_err(receipt_failed)?
+            .into_iter()
+            .map(consent_record)
+            .filter(|record| record.subject == *subject)
+            .collect();
+        records.sort_by(|a, b| a.granted_at.cmp(&b.granted_at).then_with(|| a.id.cmp(&b.id)));
+        Ok(records)
+    }
+
+    async fn revoke(
+        &self,
+        id: &str,
+        at: DateTime<Utc>,
+    ) -> adk_core::Result<Option<adk_core::subject::ConsentRecord>> {
+        let Ok(id) = id.parse::<Uuid>() else { return Ok(None) };
+        Ok(self.receipts.revoke(id, at).await.map_err(receipt_failed)?.map(consent_record))
+    }
+
+    async fn erase(&self, subject: &SubjectRef) -> adk_core::Result<u64> {
+        if subject.kind != adk_core::SubjectKind::Visitor {
+            return Ok(0);
         }
-        let mut parts = payload.split('.');
-        let (Some("v1"), Some(subject), Some(expiry), None) =
-            (parts.next(), parts.next(), parts.next(), parts.next())
-        else {
-            return None;
-        };
-        if expiry.parse::<i64>().ok()? < Utc::now().timestamp() {
-            return None;
-        }
-        String::from_utf8(URL_SAFE_NO_PAD.decode(subject).ok()?).ok()
+        let erased = self.receipts.erase(&subject.id).await.map_err(receipt_failed)?;
+        Ok(erased as u64)
     }
 }
 
 #[derive(Clone)]
 pub(crate) struct ConsentState {
     pub(crate) config: Arc<ConsentConfig>,
-    pub(crate) tokens: SubjectTokens,
+    pub(crate) tokens: VisitorTokens,
+    pub(crate) rights: SubjectRights,
     pub(crate) store: Arc<dyn ConsentReceiptStore>,
     pub(crate) held_calls: Arc<dyn HeldCallStore>,
     pub(crate) references: ConsentReferences,
@@ -240,12 +330,6 @@ pub(crate) struct ConsentState {
     pub(crate) signer: Arc<dyn DocumentSigner>,
     pub(crate) data: Arc<dyn SubjectData>,
     pub(crate) audit: Option<AuditTrail>,
-}
-
-impl SubjectTokens {
-    pub(crate) fn for_config(config: &ConsentConfig) -> Self {
-        Self { key: Arc::clone(&config.subject_key), ttl: config.session_ttl }
-    }
 }
 
 impl ConsentState {
@@ -258,20 +342,17 @@ impl ConsentState {
             .with_state(self.clone())
     }
 
-    /// The authenticated subject: the `AWP-Subject` session, or the signed link's `subject`.
+    /// The authenticated subject: the visitor a presented token names.
     fn subject(&self, headers: &HeaderMap, query: &BTreeMap<String, String>) -> Option<String> {
-        let token = headers
-            .get(SUBJECT_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned)
-            .or_else(|| query.get("subject").cloned())?;
-        self.tokens.subject_of(token.trim())
+        presented_token(headers, query.get("subject").map(String::as_str))
+            .and_then(|token| self.tokens.verify(&token))
+            .map(String::from)
     }
 
     async fn audit(&self, action: &str, subject: &str, fields: Value) {
         let Some(trail) = &self.audit else { return };
         let mut draft = AuditRecordDraft::new(AuditRecordKind::Other("awp".to_owned()), action)
-            .actor(AuditActor::subject(SubjectRef::service(format!("subject:{subject}"))));
+            .actor(AuditActor::subject(SubjectRef::visitor(subject)));
         if let Value::Object(fields) = fields {
             for (key, value) in fields {
                 draft = draft.ext(key, value);
@@ -362,6 +443,7 @@ struct Grant {
 async fn grant(
     State(state): State<ConsentState>,
     Query(query): Query<BTreeMap<String, String>>,
+    caller: Option<Extension<EdgeCaller>>,
     headers: HeaderMap,
     Json(body): Json<Grant>,
 ) -> Response {
@@ -378,9 +460,14 @@ async fn grant(
     if jurisdiction.len() != 2 || !jurisdiction.bytes().all(|b| b.is_ascii_uppercase()) {
         return refuse(ErrorCode::InvalidRequest, "jurisdiction is an ISO 3166-1 alpha-2 code");
     }
+    // The visitor the caller converses as consents; a caller with none gets a new id.
     let subject = state
         .subject(&headers, &query)
-        .unwrap_or_else(|| format!("subj_{}", Uuid::new_v4().simple()));
+        .or_else(|| caller.and_then(|Extension(caller)| caller.visitor).map(String::from))
+        .unwrap_or_else(|| VisitorId::generate().to_string());
+    if let Err(error) = state.rights.ensure_writable(&SubjectRef::visitor(subject.as_str())).await {
+        return refuse(ErrorCode::Forbidden, &error.message);
+    }
     let now = Utc::now();
     let mut receipt = ConsentReceipt {
         id: Uuid::new_v4(),
@@ -413,7 +500,9 @@ async fn grant(
         )
         .await;
     let mut response = awp_json(StatusCode::CREATED, &receipt);
-    if let Ok(token) = HeaderValue::from_str(&state.tokens.issue(&subject)) {
+    if let Ok(visitor) = subject.parse::<VisitorId>()
+        && let Ok(token) = HeaderValue::from_str(&state.tokens.issue(&visitor))
+    {
         response.headers_mut().insert(SUBJECT_HEADER, token);
     }
     response
@@ -484,7 +573,17 @@ async fn export(
             return refuse(ErrorCode::InternalError, "the data could not be exported");
         }
     };
-    awp_json(StatusCode::OK, &json!({ "subjectRef": subject, "receipts": receipts, "data": data }))
+    let stores = match state.rights.export(&SubjectRef::visitor(subject.as_str())).await {
+        Ok(export) => export.stores,
+        Err(error) => {
+            tracing::error!(error = %error, "awp subject stores not exported");
+            return refuse(ErrorCode::InternalError, "the data could not be exported");
+        }
+    };
+    awp_json(
+        StatusCode::OK,
+        &json!({ "subjectRef": subject, "receipts": receipts, "data": data, "stores": stores }),
+    )
 }
 
 async fn erase(
@@ -523,6 +622,21 @@ async fn erase(
         Ok(count) => count,
         Err(error) => return store_failed(&error),
     };
+    // Every other store the edge holds the visitor's data in, and the registry, last.
+    let report = match state.rights.erase(&SubjectRef::visitor(subject.as_str())).await {
+        Ok(report) => report,
+        Err(error) => {
+            tracing::error!(error = %error, "awp subject erasure did not run");
+            return refuse(ErrorCode::InternalError, "the data could not be erased");
+        }
+    };
     state.audit("awp.consent.erased", &subject, json!({ "receipts": erased, "data": data })).await;
-    awp_json(StatusCode::ACCEPTED, &json!({ "erased": { "receipts": erased, "data": data } }))
+    awp_json(
+        StatusCode::ACCEPTED,
+        &json!({
+            "erased": { "receipts": erased, "data": data },
+            "status": report.status,
+            "stores": report.stores,
+        }),
+    )
 }

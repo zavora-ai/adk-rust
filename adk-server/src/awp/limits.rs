@@ -456,6 +456,7 @@ mod tests {
             limit_key: format!("id:{id}"),
             rate_class: None,
             claimed_agent: None,
+            visitor: None,
         };
         let (a, b) = (known("a"), known("b"));
         assert!(limits.check_request(&a).is_ok());

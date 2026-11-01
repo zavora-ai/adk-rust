@@ -217,15 +217,22 @@ Each conversation runs as one session user:
 | Caller | Session user | `is_authenticated()` |
 |--------|--------------|----------------------|
 | A verified credential | The requester id, such as `wba:…` or `key:{id}` | `true` |
-| Anyone else | `public-{id}`: an HMAC-SHA256 of the caller's limit key under a key derived from `ConsentConfig::subject_key` | `false` |
+| Anyone else | Its visitor id: the random `VisitorId` (`v:…`) its token carries, else a new one | `false` |
 
-A visitor's run carries the conversation's tier, thread, binding and consent as
-`RunConfig::request_metadata`, which the public tools read and which authenticates no one, so
-no standing approval, Auto mode, requested call or other privilege reserved for an
-authenticated user applies to it. The visitor id cannot be computed from an address without
-the subject key, and stays the same for one address while the key is kept: keep the subject
-key across restarts to keep visitors' conversations. Visitors behind one address share an id,
-and with it their `user:` session state.
+A public caller's token travels in the `AWP-Subject` header, a signed link's `subject` query
+parameter, or the `__Host-adk_visitor` cookie (`adk_auth::VisitorTokens`, keyed by
+`ConsentConfig::subject_key`). A caller without one gets a new random visitor id, and the
+response hands its token back in `AWP-Subject`; the chat socket's first frame carries it as
+`subject`, since a browser cannot read the upgrade's headers. Nothing is derived from the
+address, and the edge sets no cookie.
+
+A visitor's run acts for a `SubjectKind::Visitor` and carries the conversation's tier, thread,
+binding and consent as `RunConfig::request_metadata`, which the public tools read and which
+authenticates no one, so no standing approval, Auto mode, requested call or other privilege
+reserved for an authenticated user applies to it. The partition's sessions and runs go through
+a `ConsentGate` over the edge's receipts: without a live `session_continuity` receipt a
+visitor's conversation stays in process memory, and without `persistent_profile` its `user:`
+state is not written. See [Subject Rights](../security/subject-rights.md).
 
 The back office hears of a hostile conversation whatever the model does. When the policy
 refused one of the agent's tool calls in a turn, or the `ConversationScreen` flagged the
@@ -291,12 +298,25 @@ views; the edge serves no route for it.
 ## Consent
 
 `ConsentConfig` names the scopes the site asks for, the policy versions with their digests, and
-the key subject sessions are authenticated with; the public partition derives its visitor ids
-from the same key. `POST /awp/v2/consent` answers `201` with a
-receipt signed by the edge's `receipt` key and the subject's session token in `AWP-Subject`;
-the subject is a pseudonymous `subj_…` reference. The other consent routes authenticate the
-subject by that token, in `AWP-Subject` or a signed link's `subject` parameter, never by the
-requester's tier.
+the key visitor tokens are signed with. `POST /awp/v2/consent` answers `201` with a receipt
+signed by the edge's `receipt` key and the visitor's token in `AWP-Subject`; the subject is the
+visitor id the caller converses as. The other consent routes authenticate the subject by that
+token — in `AWP-Subject`, a signed link's `subject` parameter, or the visitor cookie — never by
+the requester's tier.
+
+The receipts are the framework's consent records (`ReceiptConsentStore`), so the public
+partition's gates and the edge's `SubjectRights` read one source. Export and erasure reach the
+receipts and the leads as before, and every store of the edge's `SubjectRights`:
+
+| Store | Reached by |
+|-------|------------|
+| The public partition's sessions, durable and in memory | Always |
+| The beacon's visitor sets (erasure replaces the id; counts stay) | Always |
+| Memory, artifacts, or any other `SubjectDataStore` | `AwpEdgeBuilder::subject_store` |
+
+`AwpEdgeBuilder::subject_registry` sets the registry of pseudonyms, links, and erasure state; a
+visitor being erased can neither converse nor consent. The erase route's response adds
+`status` (`completed` or `partial`) and one line per store; export adds `stores`.
 
 A revocation takes effect at once: pending held calls that rely on the receipt end `rejected`
 with `consent_required`, later calls cannot use it, and `consent.revoked` reaches the
