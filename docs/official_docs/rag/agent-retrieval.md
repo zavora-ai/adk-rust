@@ -47,6 +47,8 @@ Chunk text, metadata, provenance, scope, and chunk ID are stored **in** the Data
 | `documentId`, `text`, `sourceUri`, `title` | The chunk's fields |
 | `metadataJson` | The chunk's metadata as one JSON string |
 
+Each key in `CollectionSpec::filterable` is a further string field, `m_<key>`, which `upsert` fills from the chunk's metadata. A `Filter` compiles to the service's `$eq`, `$in`, `$and`, and `$or`, plus `$ne` and `$nin` for a negated `Eq` or `In` on the document or chunk ID; `Exists`, other negations, and nesting deeper than two levels (the scope's `$and` counts as one) fail with `RagError::UnsupportedFilter` before any request. `count` and `delete_where` page through `dataObjects:query` with the same filter.
+
 Agent Retrieval validates each Data Object against the collection's data schema and admits no undeclared field, so `create_collection` declares every field above, and metadata — whose keys vary — is one string. A Data Object ID is an RFC 1035 label, which a chunk ID such as `doc_0` is not, so each chunk is stored under `c` followed by the UUID v5 of its scope and chunk ID in hexadecimal. A collection created by an earlier release has no data schema: delete it, create it again, and re-ingest. The store runs in BYOE (bring-your-own-embeddings) mode: embeddings come from adk-rag's embedder pipeline, keeping behavior identical across backends. Scores are `DOT_PRODUCT` distances, which equal cosine similarity for normalized embeddings (higher is more relevant).
 
 ## Configuration

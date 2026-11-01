@@ -47,3 +47,27 @@ mod prop_surrealdb_search_invariants {
         }
     }
 }
+
+/// **VectorStore contract, filters (differential)**
+/// *For any* generated filter, search and count SHALL select exactly the chunks
+/// `Filter::matches` selects.
+mod prop_surrealdb_filters_match_the_reference {
+    use super::*;
+    use common::vector_store_contract::{arb_filter, check_generated_filters};
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn generated_filters_match_the_reference(
+            filters in proptest::collection::vec(arb_filter(), 1..8),
+        ) {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let store =
+                    SurrealVectorStore::in_memory().await.expect("embedded surrealdb starts");
+                check_generated_filters(&store, &filters, false).await
+            })?;
+        }
+    }
+}

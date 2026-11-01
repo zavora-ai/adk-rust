@@ -38,8 +38,12 @@ use tracing::debug;
 
 use crate::document::{Chunk, SearchResult};
 use crate::error::{RagError, Result};
+use crate::filter::{self, Filter};
 use crate::scope::Scope;
 use crate::vectorstore::{CollectionSpec, VectorQuery, VectorStore};
+
+/// Prefix of the column that holds a filterable metadata key.
+const METADATA_COLUMN_PREFIX: &str = "m_";
 
 /// A [`VectorStore`] backed by [LanceDB](https://lancedb.github.io/lancedb/).
 ///
@@ -55,6 +59,12 @@ use crate::vectorstore::{CollectionSpec, VectorQuery, VectorStore};
 /// the nearest rows are chosen. A chunk's `source_uri` and `title` are columns of their
 /// own. A table created by an earlier release, without these columns, fails `upsert`
 /// with guidance to re-create it and re-ingest its documents.
+///
+/// Each key in [`CollectionSpec::filterable`] is a nullable column `m_<key>` that `upsert`
+/// fills from the chunk's metadata, and a [`Filter`] compiles to a typed DataFusion
+/// expression over these columns that LanceDB applies before the nearest rows are chosen.
+/// A filter on a key the table has no column for fails with
+/// [`RagError::UnsupportedFilter`].
 pub struct LanceDBVectorStore {
     connection: Connection,
 }
@@ -117,30 +127,169 @@ impl LanceDBVectorStore {
             .map_err(Self::map_err)
     }
 
-    fn build_schema(dimensions: usize) -> Arc<Schema> {
-        Arc::new(Schema::new(vec![
-            Field::new("scope", DataType::Utf8, false),
-            Field::new("id", DataType::Utf8, false),
-            Field::new("text", DataType::Utf8, false),
-            Field::new(
-                "vector",
-                DataType::FixedSizeList(
-                    Arc::new(Field::new("item", DataType::Float32, true)),
-                    dimensions as i32,
+    /// Physically removes the rows earlier deletes in `collection` marked as deleted, and
+    /// every older version of the table, returning the bytes freed.
+    ///
+    /// LanceDB's `delete` is logical: it writes a new table version whose fragments mark
+    /// the rows deleted, while the data files and older versions still hold them.
+    /// [`VectorStore::delete_where`], `delete`, and `purge_scope` stop at that; erasure that
+    /// must remove the bytes calls this afterwards. It rewrites every fragment that has a
+    /// deleted row, then prunes all versions but the current one, so the table can no longer
+    /// be checked out at an earlier version.
+    ///
+    /// **Important:** run it only while no other process writes to the collection: pruning
+    /// removes files of every older version, including one a concurrent writer still uses.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_rag::{Field, Filter, Scope, VectorStore};
+    ///
+    /// let subject = Filter::eq(Field::metadata("subject"), "visitor-42");
+    /// store.delete_where("docs", &Scope::single_tenant(), &subject).await?;
+    /// let freed = store.purge_deleted("docs").await?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RagError::VectorStoreError`] when the table cannot be opened, compacted, or
+    /// pruned.
+    pub async fn purge_deleted(&self, collection: &str) -> Result<u64> {
+        let table = self.open(collection).await?;
+        let compaction = lancedb::table::CompactionOptions {
+            materialize_deletions: true,
+            materialize_deletions_threshold: 0.0,
+            ..Default::default()
+        };
+        table
+            .optimize(lancedb::table::OptimizeAction::Compact {
+                options: compaction,
+                remap_options: None,
+            })
+            .await
+            .map_err(Self::map_err)?;
+        let pruned = table
+            .optimize(lancedb::table::OptimizeAction::Prune {
+                older_than: Some(lancedb::table::optimize::Duration::zero()),
+                delete_unverified: Some(true),
+                error_if_tagged_old_versions: Some(true),
+            })
+            .await
+            .map_err(Self::map_err)?;
+        let freed = pruned.prune.map_or(0, |stats| stats.bytes_removed);
+        debug!(collection, bytes.freed = freed, "purged deleted lancedb rows");
+        Ok(freed)
+    }
+
+    /// The column holding a filterable metadata key.
+    fn metadata_column(key: &str) -> String {
+        format!("{METADATA_COLUMN_PREFIX}{key}")
+    }
+
+    /// Compiles `filter` to a typed expression over `schema`'s columns.
+    ///
+    /// Every leaf is two-valued (`IS NOT NULL AND ..`), so `NOT` matches a row that lacks
+    /// the field, as [`Filter::matches`] does.
+    fn filter_expr(collection: &str, schema: &Schema, filter: &Filter) -> Result<DfExpr> {
+        let column = |field: &filter::Field| -> Result<DfExpr> {
+            Ok(match field {
+                filter::Field::Metadata(key) => {
+                    let name = Self::metadata_column(key);
+                    if schema.field_with_name(&name).is_err() {
+                        return Err(RagError::UnsupportedFilter(format!(
+                            "metadata key `{key}` is not declared filterable on collection \
+                             '{collection}'; create the collection with it in \
+                             `CollectionSpec::with_filterable`"
+                        )));
+                    }
+                    col(name)
+                }
+                filter::Field::DocumentId => col("document_id"),
+                filter::Field::SourceUri => col("source_uri"),
+                filter::Field::ChunkId => col("id"),
+            })
+        };
+        Ok(match filter {
+            Filter::Eq(field, value) => {
+                let column = column(field)?;
+                column.clone().is_not_null().and(column.eq(lit(value.as_str())))
+            }
+            Filter::In(field, values) => {
+                let column = column(field)?;
+                let values = values.iter().map(|value| lit(value.as_str())).collect();
+                column.clone().is_not_null().and(column.in_list(values, false))
+            }
+            Filter::Exists(field) => column(field)?.is_not_null(),
+            Filter::And(filters) | Filter::Or(filters) => {
+                let mut exprs = filters
+                    .iter()
+                    .map(|filter| Self::filter_expr(collection, schema, filter))
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter();
+                let first = exprs.next().ok_or_else(|| {
+                    RagError::UnsupportedFilter("an `And` or `Or` filter needs a filter".into())
+                })?;
+                if matches!(filter, Filter::And(_)) {
+                    exprs.fold(first, DfExpr::and)
+                } else {
+                    exprs.fold(first, DfExpr::or)
+                }
+            }
+            Filter::Not(filter) => !Self::filter_expr(collection, schema, filter)?,
+        })
+    }
+
+    /// The scope predicate, joined with `filter` compiled over the table's columns.
+    async fn predicate(
+        collection: &str,
+        table: &lancedb::Table,
+        scope: &Scope,
+        filter: Option<&Filter>,
+    ) -> Result<DfExpr> {
+        let Some(filter) = filter else {
+            return Ok(Self::scope_predicate(scope));
+        };
+        filter.validate()?;
+        let schema = table.schema().await.map_err(Self::map_err)?;
+        Ok(Self::scope_predicate(scope).and(Self::filter_expr(collection, &schema, filter)?))
+    }
+
+    fn build_schema<'a>(
+        dimensions: usize,
+        filterable: impl IntoIterator<Item = &'a str>,
+    ) -> Arc<Schema> {
+        let declared = filterable
+            .into_iter()
+            .map(|key| Field::new(Self::metadata_column(key), DataType::Utf8, true));
+        Arc::new(Schema::new(
+            [
+                Field::new("scope", DataType::Utf8, false),
+                Field::new("id", DataType::Utf8, false),
+                Field::new("text", DataType::Utf8, false),
+                Field::new(
+                    "vector",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("item", DataType::Float32, true)),
+                        dimensions as i32,
+                    ),
+                    true,
                 ),
-                true,
-            ),
-            Field::new("document_id", DataType::Utf8, false),
-            Field::new("metadata_json", DataType::Utf8, false),
-            Field::new("source_uri", DataType::Utf8, true),
-            Field::new("title", DataType::Utf8, true),
-        ]))
+                Field::new("document_id", DataType::Utf8, false),
+                Field::new("metadata_json", DataType::Utf8, false),
+                Field::new("source_uri", DataType::Utf8, true),
+                Field::new("title", DataType::Utf8, true),
+            ]
+            .into_iter()
+            .chain(declared)
+            .collect::<Vec<_>>(),
+        ))
     }
 }
 
 #[async_trait]
 impl VectorStore for LanceDBVectorStore {
     async fn create_collection(&self, name: &str, spec: &CollectionSpec) -> Result<()> {
+        spec.validate()?;
         let name = Self::table_name(name)?;
         let dimensions = spec.dimensions;
         let tables = self.connection.table_names().execute().await.map_err(Self::map_err)?;
@@ -149,7 +298,7 @@ impl VectorStore for LanceDBVectorStore {
             return Ok(());
         }
 
-        let schema = Self::build_schema(dimensions);
+        let schema = Self::build_schema(dimensions, spec.filterable.iter().map(String::as_str));
         self.connection.create_empty_table(name, schema).execute().await.map_err(Self::map_err)?;
 
         debug!(collection = name, dimensions, "created lancedb table");
@@ -191,7 +340,12 @@ impl VectorStore for LanceDBVectorStore {
                 )));
             }
         };
-        let schema = Self::build_schema(dimensions);
+        let declared: Vec<&str> = table_schema
+            .fields()
+            .iter()
+            .filter_map(|field| field.name().strip_prefix(METADATA_COLUMN_PREFIX))
+            .collect();
+        let schema = Self::build_schema(dimensions, declared.iter().copied());
         if let Some(missing) =
             schema.fields().iter().find(|field| table_schema.field_with_name(field.name()).is_err())
         {
@@ -241,7 +395,14 @@ impl VectorStore for LanceDBVectorStore {
                 Arc::new(StringArray::from(metadata_refs)),
                 Arc::new(StringArray::from(source_uris)),
                 Arc::new(StringArray::from(titles)),
-            ],
+            ]
+            .into_iter()
+            .chain(declared.iter().map(|key| {
+                let values: Vec<Option<&str>> =
+                    chunks.iter().map(|c| c.metadata.get(*key).map(String::as_str)).collect();
+                Arc::new(StringArray::from(values)) as Arc<dyn Array>
+            }))
+            .collect(),
         )
         .map_err(|e| Self::store_error(format!("failed to build record batch: {e}")))?;
 
@@ -277,9 +438,10 @@ impl VectorStore for LanceDBVectorStore {
 
         // A vector query prefilters by default: the scope applies before the nearest rows
         // are chosen.
+        let predicate = Self::predicate(collection, &table, scope, query.filter).await?;
         let stream = table
             .query()
-            .only_if_expr(Self::scope_predicate(scope))
+            .only_if_expr(predicate)
             .nearest_to(query.embedding)
             .map_err(|e| RagError::VectorStoreError {
                 backend: "lancedb".to_string(),
@@ -350,11 +512,12 @@ impl VectorStore for LanceDBVectorStore {
         Ok(results)
     }
 
-    async fn count(&self, collection: &str, scope: &Scope) -> Result<u64> {
+    async fn count(&self, collection: &str, scope: &Scope, filter: Option<&Filter>) -> Result<u64> {
         let table = self.open(collection).await?;
+        let predicate = Self::predicate(collection, &table, scope, filter).await?;
         let batches: Vec<RecordBatch> = table
             .query()
-            .only_if_expr(Self::scope_predicate(scope))
+            .only_if_expr(predicate)
             .select(Select::columns(&["id"]))
             .execute()
             .await
@@ -363,6 +526,18 @@ impl VectorStore for LanceDBVectorStore {
             .await
             .map_err(|e| Self::store_error(format!("failed to count rows: {e}")))?;
         Ok(batches.iter().map(|batch| batch.num_rows() as u64).sum())
+    }
+
+    async fn delete_where(&self, collection: &str, scope: &Scope, filter: &Filter) -> Result<u64> {
+        let table = self.open(collection).await?;
+        let predicate = Self::predicate(collection, &table, scope, Some(filter)).await?;
+        let deleted = table.delete(&predicate).await.map_err(Self::map_err)?;
+        debug!(
+            collection,
+            deleted = deleted.num_deleted_rows,
+            "deleted matching chunks from lancedb"
+        );
+        Ok(deleted.num_deleted_rows)
     }
 
     async fn purge_scope(&self, collection: &str, scope: &Scope) -> Result<u64> {

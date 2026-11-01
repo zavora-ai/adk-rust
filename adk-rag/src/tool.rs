@@ -36,8 +36,12 @@ use serde_json::{Value, json};
 use tracing::{error, info, warn};
 
 use crate::document::SearchResult;
+use crate::filter::{Field, Filter};
 use crate::pipeline::{QueryOptions, RagPipeline};
 use crate::scope::Scope;
+
+/// Resolves the scope a `rag_search` call searches from the call's context.
+type ScopeResolver = dyn Fn(&dyn ToolContext) -> adk_core::Result<Scope> + Send + Sync;
 
 /// A retrieval tool that wraps a [`RagPipeline`] for agentic use.
 ///
@@ -59,17 +63,24 @@ use crate::scope::Scope;
 /// vectors stay out of the result: they mean nothing to a model and would fill its
 /// context.
 ///
-/// The tool searches one [`Scope`]: [`Scope::single_tenant`] unless
-/// [`RagTool::with_scope`] sets another. The model cannot name a scope.
+/// Each call searches one [`Scope`]: [`Scope::single_tenant`] unless
+/// [`RagTool::with_scope`] fixes another or [`RagTool::with_scope_from`] resolves it from the
+/// call's context. The model cannot name a scope. A policy filter
+/// ([`RagTool::with_policy_filter`]) applies to every call, and the model may narrow results
+/// further only on the metadata keys [`RagTool::with_model_filterable`] lists.
 ///
 /// The tool is read-only and concurrency-safe, so `DeclarativePolicy::allow_read_only`
 /// admits it and `ToolExecutionStrategy::Auto` overlaps it with adjacent read-only calls.
 pub struct RagTool {
     pipeline: Arc<RagPipeline>,
-    scope: Scope,
+    scope: Arc<ScopeResolver>,
     default_collection: String,
     /// Collections a call may name besides the default, in schema order.
     other_collections: Vec<String>,
+    /// Applied to every call, beside any filter the model sends.
+    policy_filter: Option<Filter>,
+    /// Metadata keys the model may filter on, in schema order.
+    model_filterable: Vec<String>,
 }
 
 impl RagTool {
@@ -90,9 +101,11 @@ impl RagTool {
     pub fn new(pipeline: Arc<RagPipeline>, default_collection: impl Into<String>) -> Self {
         Self {
             pipeline,
-            scope: Scope::single_tenant(),
+            scope: Arc::new(|_: &dyn ToolContext| Ok(Scope::single_tenant())),
             default_collection: default_collection.into(),
             other_collections: vec![],
+            policy_filter: None,
+            model_filterable: vec![],
         }
     }
 
@@ -111,8 +124,131 @@ impl RagTool {
     /// ```
     #[must_use]
     pub fn with_scope(mut self, scope: Scope) -> Self {
-        self.scope = scope;
+        self.scope = Arc::new(move |_: &dyn ToolContext| Ok(scope.clone()));
         self
+    }
+
+    /// Resolves each call's scope from its context, such as the authenticated user, instead
+    /// of using one fixed scope.
+    ///
+    /// The resolver sees the call's [`ToolContext`] — app, user, session, state, identity —
+    /// and never the model's arguments. An error fails the call before the vector store is
+    /// queried.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_rag::{RagTool, Scope};
+    ///
+    /// // Each user searches the documents ingested under their organization's scope.
+    /// let tool = RagTool::new(pipeline, "kb").with_scope_from(|ctx| {
+    ///     let org = ctx.state().get("app:org").and_then(|v| v.as_str().map(str::to_string));
+    ///     let org = org.ok_or_else(|| adk_core::AdkError::tool("no organization in state"))?;
+    ///     Ok(Scope::from_parts(["support", org.as_str()])?)
+    /// });
+    /// ```
+    #[must_use]
+    pub fn with_scope_from<F>(mut self, resolve: F) -> Self
+    where
+        F: Fn(&dyn ToolContext) -> adk_core::Result<Scope> + Send + Sync + 'static,
+    {
+        self.scope = Arc::new(resolve);
+        self
+    }
+
+    /// Searches a scope per user: `Scope::from_parts([app_name, user_id])` of each call.
+    ///
+    /// Ingest each user's documents under the same scope.
+    #[must_use]
+    pub fn with_scope_per_user(self) -> Self {
+        self.with_scope_from(|ctx| Ok(Scope::from_parts([ctx.app_name(), ctx.user_id()])?))
+    }
+
+    /// Applies `filter` to every call, AND-ed with any filter the model sends.
+    ///
+    /// The policy filter is configuration, such as `visibility = public` for an anonymous
+    /// audience; the model can narrow its results but never widen them past it. Its metadata
+    /// keys must be declared filterable on the collections the tool searches.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_rag::{Field, Filter, RagTool};
+    ///
+    /// let tool = RagTool::new(pipeline, "kb")
+    ///     .with_policy_filter(Filter::eq(Field::metadata("visibility"), "public"));
+    /// ```
+    #[must_use]
+    pub fn with_policy_filter(mut self, filter: Filter) -> Self {
+        self.policy_filter = Some(filter);
+        self
+    }
+
+    /// Lets the model filter on these metadata keys with a `filter` argument.
+    ///
+    /// The argument maps each key to a string (equal) or an array of strings (one of), and
+    /// every entry must match. A key outside this list fails the call with
+    /// `tool.invalid_arguments`. Each key must be declared filterable on the collections the
+    /// tool searches.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // The model may send {"query": "...", "filter": {"section": ["billing", "refunds"]}}.
+    /// let tool = RagTool::new(pipeline, "kb").with_model_filterable(["section", "lang"]);
+    /// ```
+    #[must_use]
+    pub fn with_model_filterable<I, S>(mut self, keys: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.model_filterable.clear();
+        for key in keys.into_iter().map(Into::into) {
+            if !self.model_filterable.contains(&key) {
+                self.model_filterable.push(key);
+            }
+        }
+        self
+    }
+
+    /// The filter the model's `filter` argument asks for, limited to model-filterable keys.
+    fn model_filter(&self, argument: Option<&Value>) -> adk_core::Result<Option<Filter>> {
+        let entries = match argument {
+            None | Some(Value::Null) => return Ok(None),
+            Some(Value::Object(entries)) if entries.is_empty() => return Ok(None),
+            Some(Value::Object(entries)) => entries,
+            Some(_) => return Err(invalid_arguments("'filter' must be an object")),
+        };
+        let allowed = self.model_filterable.join("', '");
+        let mut filters = Vec::with_capacity(entries.len());
+        for (key, value) in entries {
+            if !self.model_filterable.contains(key) {
+                return Err(invalid_arguments(&format!(
+                    "'filter' cannot use '{key}'; the filterable keys are '{allowed}'"
+                )));
+            }
+            let field = Field::metadata(key.clone());
+            filters.push(match value {
+                Value::String(value) => Filter::eq(field, value.clone()),
+                Value::Array(values) if !values.is_empty() => {
+                    let values = values
+                        .iter()
+                        .map(|value| value.as_str().map(str::to_string))
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or_else(|| {
+                            invalid_arguments(&format!("'filter.{key}' must hold strings"))
+                        })?;
+                    Filter::is_in(field, values)
+                }
+                _ => {
+                    return Err(invalid_arguments(&format!(
+                        "'filter.{key}' must be a string or a non-empty array of strings"
+                    )));
+                }
+            });
+        }
+        Ok(Some(Filter::and(filters)))
     }
 
     /// Replace the collections the model may name besides the default.
@@ -189,6 +325,27 @@ impl Tool for RagTool {
                 "description": "Maximum number of results to return. Uses the pipeline default if omitted."
             }
         });
+        if !self.model_filterable.is_empty() {
+            let mut keys = serde_json::Map::new();
+            for key in &self.model_filterable {
+                keys.insert(
+                    key.clone(),
+                    json!({
+                        "anyOf": [
+                            { "type": "string" },
+                            { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+                        ]
+                    }),
+                );
+            }
+            properties["filter"] = json!({
+                "type": "object",
+                "properties": keys,
+                "additionalProperties": false,
+                "description": "Only return results whose metadata matches every entry: a string \
+                                must equal the value, an array must contain it."
+            });
+        }
         if !self.other_collections.is_empty() {
             let allowed: Vec<&str> = self.allowed_collections().collect();
             properties["collection"] = json!({
@@ -215,7 +372,7 @@ impl Tool for RagTool {
         true
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
         let query = args
             .get("query")
             .and_then(Value::as_str)
@@ -260,18 +417,22 @@ impl Tool for RagTool {
                 .ok_or_else(|| invalid_arguments("'top_k' must be a positive integer"))?,
         };
 
-        info!(query, collection, top_k, scope = self.scope.as_str(), "rag_search tool called");
+        let model_filter = self.model_filter(args.get("filter"))?;
+        let scope = (self.scope)(ctx.as_ref())?;
+        info!(query, collection, top_k, scope = scope.as_str(), "rag_search tool called");
 
-        let options = QueryOptions::new().with_top_k(top_k);
-        let results = self
-            .pipeline
-            .scoped(self.scope.clone())
-            .query_with(collection, query, &options)
-            .await
-            .map_err(|e| {
-                error!(error = %e, "rag_search failed");
-                AdkError::tool(format!("RAG search failed: {e}"))
-            })?;
+        let mut options = QueryOptions::new().with_top_k(top_k);
+        let filters: Vec<Filter> = self.policy_filter.iter().cloned().chain(model_filter).collect();
+        if !filters.is_empty() {
+            options = options.with_filter(Filter::and(filters));
+        }
+        let results =
+            self.pipeline.scoped(scope).query_with(collection, query, &options).await.map_err(
+                |e| {
+                    error!(error = %e, "rag_search failed");
+                    AdkError::tool(format!("RAG search failed: {e}"))
+                },
+            )?;
 
         let retrieved: Vec<RetrievedChunk<'_>> = results.iter().map(RetrievedChunk::from).collect();
         serde_json::to_value(&retrieved).map_err(|e| {
@@ -649,5 +810,88 @@ mod tests {
             (tool.is_read_only(), tool.is_concurrency_safe(), tool.effect()),
             (true, true, adk_core::ToolEffect::ReadOnly)
         );
+    }
+
+    #[tokio::test]
+    async fn a_scope_resolved_from_the_context_never_from_arguments() {
+        let pipeline = pipeline(None).await;
+        let user = Scope::from_parts(["rag-tool-test", "anonymous"]).expect("scope");
+        pipeline
+            .scoped(user)
+            .ingest("kb", &Document::new("mine", "returns of this user"))
+            .await
+            .expect("ingest");
+
+        let tool = RagTool::new(pipeline.clone(), "kb").with_scope_per_user();
+        let result = tool
+            .execute(context(), json!({"query": "returns", "top_k": 10, "scope": "x"}))
+            .await
+            .expect("search");
+        assert_eq!(document_ids(&result), ["mine"]);
+
+        let refusing = RagTool::new(pipeline, "kb")
+            .with_scope_from(|_| Err(AdkError::tool("no tenant on this request")));
+        let error =
+            refusing.execute(context(), json!({"query": "returns"})).await.expect_err("refused");
+        assert!(error.message.contains("no tenant"), "{error}");
+    }
+
+    async fn filtered_tool() -> RagTool {
+        let pipeline = pipeline(None).await;
+        pipeline
+            .create_collection_with_filterable("policies", ["visibility", "section"])
+            .await
+            .expect("create");
+        let rag = pipeline.scoped(Scope::single_tenant());
+        for (id, visibility, section) in [
+            ("public_billing", "public", "billing"),
+            ("public_refunds", "public", "refunds"),
+            ("private_billing", "private", "billing"),
+        ] {
+            let document = Document::new(id, format!("returns {id}"))
+                .with_metadata("visibility", visibility)
+                .with_metadata("section", section);
+            rag.ingest("policies", &document).await.expect("ingest");
+        }
+        RagTool::new(pipeline, "policies")
+            .with_policy_filter(Filter::eq(Field::metadata("visibility"), "public"))
+            .with_model_filterable(["section"])
+    }
+
+    #[tokio::test]
+    async fn the_policy_filter_always_applies_and_the_model_may_only_narrow() {
+        let tool = filtered_tool().await;
+        let search = |args: Value| tool.execute(context(), args);
+
+        let all = search(json!({"query": "returns", "top_k": 10})).await.expect("search");
+        assert_eq!(document_ids(&all), ["public_billing", "public_refunds"]);
+        let billing = search(json!({"query": "returns", "filter": {"section": "billing"}}))
+            .await
+            .expect("search");
+        assert_eq!(document_ids(&billing), ["public_billing"]);
+        let either = search(json!({"query": "returns", "filter": {"section": ["refunds", "x"]}}))
+            .await
+            .expect("search");
+        assert_eq!(document_ids(&either), ["public_refunds"]);
+
+        for filter in [
+            json!({"visibility": "private"}),
+            json!({"section": 3}),
+            json!({"section": []}),
+            json!("section=billing"),
+        ] {
+            let error = search(json!({"query": "returns", "filter": filter}))
+                .await
+                .expect_err("invalid filter");
+            assert_eq!(error.code, TOOL_INVALID_ARGUMENTS_CODE, "{filter}");
+        }
+
+        let schema = tool.parameters_schema().expect("schema");
+        let keys: Vec<&String> = schema["properties"]["filter"]["properties"]
+            .as_object()
+            .expect("keys")
+            .keys()
+            .collect();
+        assert_eq!(keys, ["section"]);
     }
 }

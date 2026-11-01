@@ -5,8 +5,10 @@
 //! trips, descending-score ordering bounded by `top_k`, deletion by ID,
 //! empty-input no-ops, metadata and provenance preservation, collection isolation, distinct
 //! names never sharing a collection, scope isolation (one chunk ID in two scopes, delete,
-//! count, and purge per scope, and a small scope's recall beside a large nearer one), and
-//! collection teardown. Each backend's `vector_store_contract_*.rs` test file
+//! count, and purge per scope, and a small scope's recall beside a large nearer one),
+//! filters (a catalogue compared with `Filter::matches`, injection values, malformed
+//! filters refused before I/O, `delete_where` per scope, and a selective filter's recall),
+//! and collection teardown. Each backend's `vector_store_contract_*.rs` test file
 //! constructs a fresh store and runs the suite, so the backends stay
 //! behaviorally interchangeable.
 //!
@@ -25,9 +27,10 @@
 
 use std::collections::BTreeSet;
 
-use adk_rag::Scope;
 use adk_rag::document::{Chunk, SearchResult};
+use adk_rag::error::RagError;
 use adk_rag::vectorstore::{CollectionSpec, VectorQuery, VectorStore};
+use adk_rag::{Field, Filter, Scope};
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
 
@@ -44,12 +47,186 @@ pub struct ContractOptions {
     /// InMemory, SurrealDB, and LanceDB (through a merge-insert keyed on the
     /// id) all replace by ID, so every current suite leaves this `true`.
     pub upsert_replaces_by_id: bool,
+    /// Whether the backend may refuse a well-formed filter shape with
+    /// `RagError::UnsupportedFilter`.
+    ///
+    /// Agent Retrieval's filter language has no `$exists` or `$not` and nests at most two
+    /// levels, so it refuses those shapes; every other backend expresses every filter.
+    pub partial_filters: bool,
 }
 
 impl Default for ContractOptions {
     fn default() -> Self {
-        Self { upsert_replaces_by_id: true }
+        Self { upsert_replaces_by_id: true, partial_filters: false }
     }
+}
+
+/// Metadata keys the filter scenarios declare filterable.
+pub const FILTER_KEYS: [&str; 2] = ["lang", "tier"];
+
+/// Values the filter scenarios store and compare, injection attempts for every backend's
+/// query language included.
+pub const FILTER_VALUES: [&str; 8] =
+    ["en", "fr", "gold", "x' OR '1'='1", "\"; DROP TABLE rag_x; --", "$eq", "日本語 ✓", "doc_b"];
+
+/// Twelve chunks whose fields cover present, missing, and shared values of every filter
+/// field, for comparing a backend's filtering with [`Filter::matches`].
+pub fn filter_dataset() -> Vec<Chunk> {
+    (0..12)
+        .map(|i| {
+            let mut chunk = Chunk::new(
+                format!("f{i}"),
+                ["doc_a", "doc_b", "doc_c"][i % 3],
+                format!("filter chunk {i}"),
+            )
+            .with_embedding(vec![1.0, i as f32 / 12.0, (i % 4) as f32 / 4.0, 0.5]);
+            if i % 4 != 3 {
+                chunk = chunk.with_metadata("lang", FILTER_VALUES[i % 7]);
+            }
+            if i % 3 == 0 {
+                chunk = chunk.with_metadata("tier", FILTER_VALUES[(i + 2) % 8]);
+            }
+            if i % 2 == 0 {
+                chunk = chunk.with_source_uri(format!("https://example.com/{}", i % 5));
+            }
+            chunk.with_metadata("unfiltered", "kept verbatim")
+        })
+        .collect()
+}
+
+/// A catalogue of filters over [`filter_dataset`]: every leaf on every field, every
+/// combinator, and injection values.
+pub fn filter_catalogue() -> Vec<Filter> {
+    let lang = || Field::metadata("lang");
+    let tier = || Field::metadata("tier");
+    let mut filters = Vec::new();
+    for value in FILTER_VALUES {
+        filters.push(Filter::eq(lang(), value));
+        filters.push(Filter::eq(tier(), value));
+    }
+    filters.extend([
+        Filter::eq(Field::DocumentId, "doc_b"),
+        Filter::eq(Field::ChunkId, "f4"),
+        Filter::eq(Field::SourceUri, "https://example.com/2"),
+        Filter::is_in(lang(), ["fr", "x' OR '1'='1", "absent"]),
+        Filter::is_in(Field::DocumentId, ["doc_a", "doc_c"]),
+        Filter::is_in(Field::ChunkId, ["f1", "f2", "f11", "missing"]),
+        Filter::exists(tier()),
+        Filter::exists(Field::SourceUri),
+        Filter::exists(Field::DocumentId),
+        !Filter::eq(lang(), "en"),
+        !Filter::eq(Field::DocumentId, "doc_a"),
+        !Filter::is_in(Field::ChunkId, ["f0", "f1"]),
+        !Filter::exists(tier()),
+        Filter::and([Filter::eq(Field::DocumentId, "doc_a"), Filter::exists(lang())]),
+        Filter::or([Filter::eq(lang(), "fr"), Filter::eq(tier(), "gold")]),
+        Filter::and([
+            Filter::or([Filter::eq(lang(), "en"), Filter::eq(lang(), "fr")]),
+            !Filter::is_in(Field::DocumentId, ["doc_c"]),
+        ]),
+        !Filter::or([Filter::exists(Field::SourceUri), Filter::eq(lang(), "gold")]),
+        Filter::or([
+            Filter::and([Filter::eq(Field::DocumentId, "doc_b"), Filter::exists(tier())]),
+            Filter::and([Filter::eq(Field::ChunkId, "f0"), !Filter::eq(lang(), "fr")]),
+        ]),
+    ]);
+    filters
+}
+
+/// Checks that `search`, with `top_k` above the row count, and `count` select exactly the
+/// chunks [`Filter::matches`] selects, for every filter.
+///
+/// `chunks` must already be stored in `scope` of `collection`. A backend with
+/// `partial_filters` may refuse a filter with `RagError::UnsupportedFilter`; any other
+/// error fails.
+pub async fn check_filters_match_the_reference(
+    store: &dyn VectorStore,
+    collection: &str,
+    scope: &Scope,
+    chunks: &[Chunk],
+    filters: &[Filter],
+    partial_filters: bool,
+) -> Result<(), TestCaseError> {
+    let probe = [1.0, 0.5, 0.25, 0.5];
+    for filter in filters {
+        let mut expected: Vec<String> =
+            chunks.iter().filter(|chunk| filter.matches(chunk)).map(|c| c.id.clone()).collect();
+        expected.sort();
+        let query = VectorQuery::new(&probe, chunks.len() + 5).with_filter(filter);
+        match store.search(collection, scope, &query).await {
+            Ok(results) => {
+                prop_assert_eq!(sorted_ids(&results), expected.clone(), "search with {:?}", filter);
+                let count = store.count(collection, scope, Some(filter)).await;
+                prop_assert_eq!(
+                    count.map_err(|e| e.to_string()),
+                    Ok(expected.len() as u64),
+                    "count with {:?}",
+                    filter
+                );
+            }
+            Err(RagError::UnsupportedFilter(_)) if partial_filters => {}
+            Err(error) => {
+                return Err(TestCaseError::fail(format!("search with {filter:?} failed: {error}")));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Stores [`filter_dataset`] in a fresh collection of `store` and checks `filters` against
+/// [`Filter::matches`] with [`check_filters_match_the_reference`].
+pub async fn check_generated_filters(
+    store: &dyn VectorStore,
+    filters: &[Filter],
+    partial_filters: bool,
+) -> Result<(), TestCaseError> {
+    let fail =
+        |op: &str, e: adk_rag::error::RagError| TestCaseError::fail(format!("{op} failed: {e}"));
+    let scope = Scope::from_parts(["filter", "property"]).expect("valid scope");
+    let dataset = filter_dataset();
+    store
+        .create_collection("filter_property", &spec().with_filterable(FILTER_KEYS))
+        .await
+        .map_err(|e| fail("create", e))?;
+    store.upsert("filter_property", &scope, &dataset).await.map_err(|e| fail("upsert", e))?;
+    check_filters_match_the_reference(
+        store,
+        "filter_property",
+        &scope,
+        &dataset,
+        filters,
+        partial_filters,
+    )
+    .await
+}
+
+/// Generates filters over [`filter_dataset`]'s fields and values, up to three levels deep.
+pub fn arb_filter() -> impl Strategy<Value = Filter> {
+    let field = prop_oneof![
+        Just(Field::metadata("lang")),
+        Just(Field::metadata("tier")),
+        Just(Field::DocumentId),
+        Just(Field::SourceUri),
+        Just(Field::ChunkId),
+    ];
+    let value = prop_oneof![
+        proptest::sample::select(FILTER_VALUES.to_vec()).prop_map(str::to_string),
+        proptest::sample::select(vec!["doc_a", "doc_c", "f3", "f7", "https://example.com/4"])
+            .prop_map(str::to_string),
+    ];
+    let leaf = prop_oneof![
+        (field.clone(), value.clone()).prop_map(|(field, value)| Filter::eq(field, value)),
+        (field.clone(), proptest::collection::vec(value, 1..4))
+            .prop_map(|(field, values)| Filter::is_in(field, values)),
+        field.prop_map(Filter::exists),
+    ];
+    leaf.prop_recursive(3, 12, 3, |inner| {
+        prop_oneof![
+            proptest::collection::vec(inner.clone(), 1..4).prop_map(Filter::and),
+            proptest::collection::vec(inner.clone(), 1..4).prop_map(Filter::or),
+            inner.prop_map(|filter| !filter),
+        ]
+    })
 }
 
 fn spec() -> CollectionSpec {
@@ -345,9 +522,9 @@ pub async fn assert_vector_store_contract(store: &dyn VectorStore, options: Cont
     let in_unused = store.search("contract_scopes", &unused, &query).await.expect("search");
     assert!(in_unused.is_empty(), "an unwritten scope holds nothing, got {in_unused:?}");
 
-    assert_eq!(store.count("contract_scopes", &tenant_a).await.expect("count a"), 1);
-    assert_eq!(store.count("contract_scopes", &tenant_b).await.expect("count b"), 2);
-    assert_eq!(store.count("contract_scopes", &unused).await.expect("count"), 0);
+    assert_eq!(store.count("contract_scopes", &tenant_a, None).await.expect("count a"), 1);
+    assert_eq!(store.count("contract_scopes", &tenant_b, None).await.expect("count b"), 2);
+    assert_eq!(store.count("contract_scopes", &unused, None).await.expect("count"), 0);
 
     // delete in one scope leaves the other scope's chunk with the same ID
     store.delete("contract_scopes", &tenant_a, &["shared"]).await.expect("delete in a");
@@ -361,9 +538,9 @@ pub async fn assert_vector_store_contract(store: &dyn VectorStore, options: Cont
         .await
         .expect("upsert a again");
     assert_eq!(store.purge_scope("contract_scopes", &tenant_b).await.expect("purge b"), 2);
-    assert_eq!(store.count("contract_scopes", &tenant_b).await.expect("count b"), 0);
+    assert_eq!(store.count("contract_scopes", &tenant_b, None).await.expect("count b"), 0);
     assert!(store.search("contract_scopes", &tenant_b, &query).await.expect("search").is_empty());
-    assert_eq!(store.count("contract_scopes", &tenant_a).await.expect("count a"), 1);
+    assert_eq!(store.count("contract_scopes", &tenant_a, None).await.expect("count a"), 1);
     assert_eq!(store.purge_scope("contract_scopes", &unused).await.expect("purge"), 0);
 
     // ── a small scope keeps its recall beside a large, nearer one ──
@@ -385,7 +562,76 @@ pub async fn assert_vector_store_contract(store: &dyn VectorStore, options: Cont
     let nearest = VectorQuery::new(&[1.0, 0.0, 0.0, 0.0], 1);
     let found = store.search("contract_recall", &small, &nearest).await.expect("search");
     assert_eq!(ids(&found), ["lone"], "top_k=1 in the small scope must find its chunk");
-    assert_eq!(store.count("contract_recall", &large).await.expect("count"), 500);
+    assert_eq!(store.count("contract_recall", &large, None).await.expect("count"), 500);
+
+    // ── filters select exactly what the reference evaluator selects ──
+    let filter_spec = spec().with_filterable(FILTER_KEYS);
+    store.create_collection("contract_filter", &filter_spec).await.expect("create collection");
+    let dataset = filter_dataset();
+    store.upsert("contract_filter", &scope, &dataset).await.expect("upsert");
+    // The same chunks in another scope must never leak into the scope's results.
+    let other = Scope::from_parts(["contract", "filter other"]).expect("valid scope");
+    store.upsert("contract_filter", &other, &dataset).await.expect("upsert other");
+    check_filters_match_the_reference(
+        store,
+        "contract_filter",
+        &scope,
+        &dataset,
+        &filter_catalogue(),
+        options.partial_filters,
+    )
+    .await
+    .expect("filters match the reference");
+
+    // ── a malformed filter fails before any I/O and changes nothing ──
+    for malformed in [
+        Filter::and([]),
+        Filter::or([]),
+        Filter::is_in(Field::DocumentId, Vec::<String>::new()),
+        Filter::eq(Field::metadata("not a key"), "x"),
+    ] {
+        let query = VectorQuery::new(&[1.0, 0.0, 0.0, 0.0], 5).with_filter(&malformed);
+        let searched = store.search("contract_filter", &scope, &query).await;
+        assert!(matches!(searched, Err(RagError::UnsupportedFilter(_))), "{malformed:?}");
+        let deleted = store.delete_where("contract_filter", &scope, &malformed).await;
+        assert!(matches!(deleted, Err(RagError::UnsupportedFilter(_))), "{malformed:?}");
+    }
+    assert_eq!(store.count("contract_filter", &scope, None).await.expect("count"), 12);
+
+    // ── delete_where removes the scope's matching chunks only ──
+    // f10 alone stores the injection value, literally.
+    let injection = Filter::eq(Field::metadata("lang"), FILTER_VALUES[3]);
+    assert_eq!(
+        store.delete_where("contract_filter", &scope, &injection).await.expect("delete"),
+        1,
+        "an injection value deletes only the chunk that stores it literally"
+    );
+    assert_eq!(store.count("contract_filter", &scope, None).await.expect("count"), 11);
+    let doc_b = Filter::eq(Field::DocumentId, "doc_b");
+    assert_eq!(store.count("contract_filter", &scope, Some(&doc_b)).await.expect("count"), 3);
+    assert_eq!(store.delete_where("contract_filter", &scope, &doc_b).await.expect("delete"), 3);
+    assert_eq!(store.count("contract_filter", &scope, Some(&doc_b)).await.expect("count"), 0);
+    assert_eq!(store.count("contract_filter", &scope, None).await.expect("count"), 8);
+    assert_eq!(store.count("contract_filter", &other, Some(&doc_b)).await.expect("count"), 4);
+    assert_eq!(store.count("contract_filter", &other, None).await.expect("count"), 12);
+
+    // ── a selective filter keeps its recall beside many nearer non-matching chunks ──
+    store.create_collection("contract_filter_recall", &filter_spec).await.expect("create");
+    let rare = chunk("rare", "the only french chunk", vec![0.0, 0.0, 0.0, 1.0])
+        .with_metadata("lang", "fr");
+    let mut crowd: Vec<Chunk> = (0..500)
+        .map(|i| {
+            let jitter = i as f32 / 5000.0;
+            chunk(&format!("en_{i}"), "nearer", vec![1.0, jitter, 0.0, 0.1])
+                .with_metadata("lang", "en")
+        })
+        .collect();
+    crowd.push(rare);
+    store.upsert("contract_filter_recall", &scope, &crowd).await.expect("upsert");
+    let french = Filter::eq(Field::metadata("lang"), "fr");
+    let query = VectorQuery::new(&[1.0, 0.0, 0.0, 0.0], 1).with_filter(&french);
+    let found = store.search("contract_filter_recall", &scope, &query).await.expect("search");
+    assert_eq!(ids(&found), ["rare"], "top_k=1 with a selective filter must find the match");
 
     // ── delete_collection makes the data unreachable ──
     store.create_collection("contract_drop", &spec()).await.expect("create collection");

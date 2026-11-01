@@ -39,6 +39,7 @@ use tracing::debug;
 
 use crate::document::{Chunk, SearchResult};
 use crate::error::{RagError, Result};
+use crate::filter::{Field, Filter};
 use crate::scope::Scope;
 use crate::vectorstore::{CollectionSpec, VectorQuery, VectorStore};
 
@@ -112,9 +113,95 @@ impl PgVectorStore {
     }
 }
 
+/// A bound parameter of a compiled filter.
+#[derive(Debug, PartialEq)]
+enum Bind {
+    Text(String),
+    TextArray(Vec<String>),
+}
+
+/// A filter compiled to a SQL condition whose every key and value is a bound parameter.
+#[derive(Debug, PartialEq)]
+struct SqlFilter {
+    condition: String,
+    binds: Vec<Bind>,
+}
+
+impl SqlFilter {
+    /// Compiles `filter`, numbering its parameters from `$first_param`.
+    ///
+    /// Every leaf is a two-valued condition (`COALESCE(.., false)`), so `NOT` matches a row
+    /// that lacks the field, as [`Filter::matches`] does.
+    fn compile(filter: &Filter, first_param: usize) -> Result<Self> {
+        filter.validate()?;
+        let mut compiled = Self { condition: String::new(), binds: Vec::new() };
+        compiled.condition = compiled.push(filter, first_param);
+        Ok(compiled)
+    }
+
+    fn param(&mut self, bind: Bind, first_param: usize) -> String {
+        self.binds.push(bind);
+        format!("${}", first_param + self.binds.len() - 1)
+    }
+
+    /// The SQL value of `field`, which is NULL when a row lacks it.
+    fn value(&mut self, field: &Field, first_param: usize) -> String {
+        match field {
+            Field::Metadata(key) => {
+                let key = self.param(Bind::Text(key.clone()), first_param);
+                format!("(metadata->>{key}::text)")
+            }
+            Field::DocumentId => "document_id".to_string(),
+            Field::SourceUri => "source_uri".to_string(),
+            Field::ChunkId => "id".to_string(),
+        }
+    }
+
+    fn push(&mut self, filter: &Filter, first_param: usize) -> String {
+        match filter {
+            Filter::Eq(field, value) => {
+                let column = self.value(field, first_param);
+                let value = self.param(Bind::Text(value.clone()), first_param);
+                format!("COALESCE({column} = {value}::text, false)")
+            }
+            Filter::In(field, values) => {
+                let column = self.value(field, first_param);
+                let values = self.param(Bind::TextArray(values.clone()), first_param);
+                format!("COALESCE({column} = ANY({values}::text[]), false)")
+            }
+            Filter::Exists(field) => {
+                let column = self.value(field, first_param);
+                format!("({column} IS NOT NULL)")
+            }
+            Filter::And(filters) | Filter::Or(filters) => {
+                let joiner = if matches!(filter, Filter::And(_)) { " AND " } else { " OR " };
+                let parts: Vec<String> =
+                    filters.iter().map(|filter| self.push(filter, first_param)).collect();
+                format!("({})", parts.join(joiner))
+            }
+            Filter::Not(filter) => format!("(NOT {})", self.push(filter, first_param)),
+        }
+    }
+
+    /// Binds the filter's parameters after those already bound to `query`.
+    fn bind<'q>(
+        &'q self,
+        mut query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    ) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+        for bind in &self.binds {
+            query = match bind {
+                Bind::Text(value) => query.bind(value),
+                Bind::TextArray(values) => query.bind(values),
+            };
+        }
+        query
+    }
+}
+
 #[async_trait]
 impl VectorStore for PgVectorStore {
     async fn create_collection(&self, name: &str, spec: &CollectionSpec) -> Result<()> {
+        spec.validate()?;
         let table_name = Self::table_name(name)?;
         let dimensions = spec.dimensions;
 
@@ -280,15 +367,18 @@ impl VectorStore for PgVectorStore {
     ) -> Result<Vec<SearchResult>> {
         let table_name = Self::table_name(collection)?;
 
+        let filter = query.filter.map(|filter| SqlFilter::compile(filter, 4)).transpose()?;
+        let condition = filter.as_ref().map_or("TRUE", |filter| filter.condition.as_str());
+
         // pgvector cosine distance operator: <=>
-        // Returns distance (0 = identical), so score = 1 - distance. The scope is part of
-        // the WHERE clause, so it applies before LIMIT picks the nearest rows.
+        // Returns distance (0 = identical), so score = 1 - distance. The scope and filter
+        // are part of the WHERE clause, so they apply before LIMIT picks the nearest rows.
         // `table_name` passed `Self::table_name`; every value is a bound parameter.
         let search_sql = format!(
             "SELECT id, text, metadata, document_id, source_uri, title, \
                     1 - (embedding <=> $1::vector) AS score \
              FROM {table_name} \
-             WHERE scope = $3 \
+             WHERE scope = $3 AND {condition} \
              ORDER BY embedding <=> $1::vector \
              LIMIT $2"
         );
@@ -298,13 +388,14 @@ impl VectorStore for PgVectorStore {
             query.embedding.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")
         );
 
-        let rows = sqlx::query(sqlx::AssertSqlSafe(search_sql.as_str()))
+        let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(search_sql.as_str()))
             .bind(&embedding_str)
             .bind(query.top_k as i64)
-            .bind(scope.as_str())
-            .fetch_all(&self.pool)
-            .await
-            .map_err(Self::map_err)?;
+            .bind(scope.as_str());
+        if let Some(filter) = &filter {
+            sql_query = filter.bind(sql_query);
+        }
+        let rows = sql_query.fetch_all(&self.pool).await.map_err(Self::map_err)?;
 
         let results = rows
             .iter()
@@ -334,17 +425,40 @@ impl VectorStore for PgVectorStore {
         Ok(results)
     }
 
-    async fn count(&self, collection: &str, scope: &Scope) -> Result<u64> {
+    async fn count(&self, collection: &str, scope: &Scope, filter: Option<&Filter>) -> Result<u64> {
         let table_name = Self::table_name(collection)?;
+        let filter = filter.map(|filter| SqlFilter::compile(filter, 2)).transpose()?;
+        let condition = filter.as_ref().map_or("TRUE", |filter| filter.condition.as_str());
 
-        // `table_name` passed `Self::table_name`; the scope is a bound parameter.
-        let count_sql = format!("SELECT count(*) FROM {table_name} WHERE scope = $1");
-        let (count,): (i64,) = sqlx::query_as(sqlx::AssertSqlSafe(count_sql.as_str()))
-            .bind(scope.as_str())
-            .fetch_one(&self.pool)
-            .await
-            .map_err(Self::map_err)?;
+        // `table_name` passed `Self::table_name`; every value is a bound parameter.
+        let count_sql =
+            format!("SELECT count(*) FROM {table_name} WHERE scope = $1 AND {condition}");
+        let mut sql_query =
+            sqlx::query(sqlx::AssertSqlSafe(count_sql.as_str())).bind(scope.as_str());
+        if let Some(filter) = &filter {
+            sql_query = filter.bind(sql_query);
+        }
+        let row = sql_query.fetch_one(&self.pool).await.map_err(Self::map_err)?;
+        let count: i64 = row.get(0);
         Ok(count.unsigned_abs())
+    }
+
+    async fn delete_where(&self, collection: &str, scope: &Scope, filter: &Filter) -> Result<u64> {
+        let table_name = Self::table_name(collection)?;
+        let filter = SqlFilter::compile(filter, 2)?;
+        let condition = &filter.condition;
+
+        // `table_name` passed `Self::table_name`; every value is a bound parameter.
+        let delete_sql = format!("DELETE FROM {table_name} WHERE scope = $1 AND {condition}");
+        let sql_query = sqlx::query(sqlx::AssertSqlSafe(delete_sql.as_str())).bind(scope.as_str());
+        let result = filter.bind(sql_query).execute(&self.pool).await.map_err(Self::map_err)?;
+
+        debug!(
+            collection,
+            deleted = result.rows_affected(),
+            "deleted matching chunks from pgvector"
+        );
+        Ok(result.rows_affected())
     }
 
     async fn purge_scope(&self, collection: &str, scope: &Scope) -> Result<u64> {
@@ -366,6 +480,36 @@ impl VectorStore for PgVectorStore {
 #[cfg(test)]
 mod tests {
     use super::PgVectorStore;
+
+    #[test]
+    fn filters_compile_to_bound_parameters_and_two_valued_leaves() {
+        use super::{Bind, SqlFilter};
+        use crate::filter::{Field, Filter};
+
+        let injection = "x' OR '1'='1";
+        let filter = Filter::and([
+            Filter::eq(Field::metadata("lang"), injection),
+            !Filter::is_in(Field::DocumentId, ["a", "b"]),
+            Filter::or([Filter::exists(Field::SourceUri), Filter::eq(Field::ChunkId, "c")]),
+        ]);
+        let compiled = SqlFilter::compile(&filter, 4).expect("compiles");
+        assert_eq!(
+            compiled,
+            SqlFilter {
+                condition: "(COALESCE((metadata->>$4::text) = $5::text, false) AND \
+                            (NOT COALESCE(document_id = ANY($6::text[]), false)) AND \
+                            ((source_uri IS NOT NULL) OR COALESCE(id = $7::text, false)))"
+                    .to_string(),
+                binds: vec![
+                    Bind::Text("lang".to_string()),
+                    Bind::Text(injection.to_string()),
+                    Bind::TextArray(vec!["a".to_string(), "b".to_string()]),
+                    Bind::Text("c".to_string()),
+                ],
+            }
+        );
+        assert!(SqlFilter::compile(&Filter::and([]), 1).is_err(), "an empty And is refused");
+    }
 
     #[test]
     fn accepts_lowercase_ascii_identifiers() {

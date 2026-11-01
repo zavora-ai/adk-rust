@@ -704,16 +704,23 @@ every backend, including a scope of one chunk beside 500 nearer chunks of anothe
 | Method | Does |
 |--------|------|
 | `create_collection(name)`, `delete_collection(name)` | Manage collections in the vector store |
+| `create_collection_with_filterable(name, ["lang"])` | Create a collection whose listed metadata keys filters may name |
 | `scoped(scope)` | A `ScopedRag` that ingests into, searches, and deletes from one scope |
 
 | `ScopedRag` method | Does |
 |--------------------|------|
-| `ingest(collection, &document)` | Chunk, embed, and store one document; returns its chunks |
+| `ingest(collection, &document)` | Chunk, embed, and store one document, replacing its earlier chunks; returns its chunks |
 | `ingest_batch(collection, &documents)` | The same for several documents |
 | `query(collection, text)` | Embed, search the scope, rerank, and drop results below `similarity_threshold` |
-| `query_with(collection, text, &options)` | The same with `QueryOptions`, such as `QueryOptions::new().with_top_k(3)` |
-| `count(collection)` | The number of chunks the scope holds |
+| `query_with(collection, text, &options)` | The same with `QueryOptions`: `with_top_k(3)`, `with_filter(filter)` |
+| `count(collection)`, `count_where(collection, &filter)` | The number of the scope's chunks, or of those the filter matches |
+| `delete_where(collection, &filter)` | Delete the scope's chunks the filter matches; returns how many |
+| `delete_document(collection, id)` | Delete every chunk of one document in the scope |
 | `purge_scope(collection)` | Delete every chunk of the scope; returns how many it held |
+
+`ingest` upserts the new chunks, then deletes the document's chunks in the scope that the new
+version no longer has, so a shorter version leaves no stale chunks and a search never finds the
+document without chunks. A document with empty text removes the document.
 
 | Backend | Scope storage | Data stored before scopes |
 |---------|---------------|---------------------------|
@@ -724,12 +731,57 @@ every backend, including a scope of one chunk beside 500 nearer chunks of anothe
 | SurrealDB | `scope` and `chunk_id` fields, index on `scope`; record ID from scope and chunk ID | re-ingest |
 | Agent Retrieval | `scope` data field; Data Object ID from scope and chunk ID; declared data schema | re-create and re-ingest |
 
+### Filters
+
+A `Filter` is a typed predicate over a chunk's metadata, `document_id`, `source_uri`, and chunk
+ID. Every backend compiles it into its own query language with bound parameters or typed
+expressions and applies it with the scope, before the top `k` are chosen.
+
+```rust
+use adk_rag::{Field, Filter, QueryOptions};
+
+let filter = Filter::and([
+    Filter::eq(Field::metadata("lang"), "en"),
+    Filter::is_in(Field::metadata("section"), ["billing", "refunds"]),
+    !Filter::exists(Field::metadata("archived")),
+]);
+let options = QueryOptions::new().with_top_k(5).with_filter(filter);
+```
+
+| Filter | Matches |
+|--------|---------|
+| `Filter::eq(field, value)` | The field is present and equals the value |
+| `Filter::is_in(field, values)` | The field is present and equals one of the values (at least one) |
+| `Filter::exists(field)` | The field is present |
+| `Filter::and([..])`, `Filter::or([..])` | Every / at least one filter matches (at least one filter) |
+| `!filter` | The filter does not match, so `!Filter::eq(field, v)` matches chunks without the field |
+
+Values are strings. A metadata key a filter names must be declared on the collection —
+`create_collection_with_filterable(name, keys)`, or `CollectionSpec::with_filterable` on a
+`VectorStore` — and use ASCII letters, digits, and underscores. The pipeline refuses an
+undeclared key, an empty `And`, `Or`, or `In`, and any shape a backend cannot express with
+`RagError::UnsupportedFilter` before any I/O; no backend ignores a predicate or applies part of
+one. `Filter::matches` is the reference evaluator: the in-memory store uses it, and the shared
+contract compares every other backend with it on a filter catalogue and on generated filter
+trees.
+
+| Backend | Compiles to | Declared keys |
+|---------|-------------|---------------|
+| In-memory | `Filter::matches` | — |
+| pgvector | `WHERE` conditions; keys and values are bound parameters, leaves wrapped in `COALESCE(.., false)` | — |
+| LanceDB | Typed DataFusion expressions, prefiltered | Nullable `m_<key>` columns |
+| Qdrant | Nested `must` / `should` / `must_not` filters on `metadata.<key>` | Keyword payload indexes |
+| SurrealDB | A condition beside the KNN operator; values are bound parameters | — |
+| Agent Retrieval | `$eq`, `$in`, `$and`, `$or`; `$ne`/`$nin` for `!` around `Eq`/`In` on the document or chunk ID | `m_<key>` data fields in the schema |
+
+Agent Retrieval refuses `Exists`, other negations, and nesting deeper than two levels (the
+scope's `$and` counts as one), because its filter language cannot express them.
+
 ### RagTool
 
 `RagTool::new(pipeline, default_collection)` exposes the pipeline as the `rag_search` tool,
-searching that one collection in `Scope::single_tenant()`; `with_scope(scope)` sets another
-scope, which the model cannot change. `with_allowed_collections([...])` lets the model choose
-among further collections:
+searching that one collection in `Scope::single_tenant()`. `with_allowed_collections([...])`
+lets the model choose among further collections:
 
 | Configuration | Arguments | A call naming another collection |
 |---------------|-----------|----------------------------------|
@@ -738,6 +790,28 @@ among further collections:
 
 ```json
 { "query": "pricing info", "collection": "faq", "top_k": 5 }
+```
+
+| Builder | Effect |
+|---------|--------|
+| `with_scope(scope)` | Every call searches `scope` |
+| `with_scope_from(\|ctx\| ..)` | Each call's scope is resolved from its `ToolContext` (app, user, session, state, identity); an error fails the call before any search |
+| `with_scope_per_user()` | `Scope::from_parts([app_name, user_id])` of each call |
+| `with_policy_filter(filter)` | `filter` applies to every call, AND-ed with the model's |
+| `with_model_filterable(["section"])` | The schema gains a `filter` argument mapping each listed metadata key to a string (equal) or an array of strings (one of); any other key fails with `tool.invalid_arguments` |
+
+The scope and policy filter are configuration, never model arguments, so the model can narrow
+results but never reach another scope or widen past the policy. Keys of the policy filter and
+model-filterable keys must be declared filterable on the collection.
+
+```rust,ignore
+use adk_rag::{Field, Filter, RagTool};
+
+let tool = RagTool::new(pipeline, "kb")
+    .with_scope_per_user()
+    .with_policy_filter(Filter::eq(Field::metadata("visibility"), "public"))
+    .with_model_filterable(["section"]);
+// The model may call: {"query": "refund window", "filter": {"section": ["billing", "refunds"]}}
 ```
 
 The tool returns the results best first, each as

@@ -15,11 +15,11 @@
 
 mod common;
 
-use adk_rag::Scope;
 use adk_rag::document::{Chunk, SearchResult};
 use adk_rag::error::Result;
 use adk_rag::qdrant::QdrantVectorStore;
 use adk_rag::vectorstore::{CollectionSpec, VectorQuery, VectorStore};
+use adk_rag::{Filter, Scope};
 use async_trait::async_trait;
 use common::vector_store_contract::{ContractOptions, assert_vector_store_contract};
 use qdrant_client::Qdrant;
@@ -90,8 +90,12 @@ impl VectorStore for Prefixed {
         self.store.search(&self.name(collection), scope, query).await
     }
 
-    async fn count(&self, collection: &str, scope: &Scope) -> Result<u64> {
-        self.store.count(&self.name(collection), scope).await
+    async fn count(&self, collection: &str, scope: &Scope, filter: Option<&Filter>) -> Result<u64> {
+        self.store.count(&self.name(collection), scope, filter).await
+    }
+
+    async fn delete_where(&self, collection: &str, scope: &Scope, filter: &Filter) -> Result<u64> {
+        self.store.delete_where(&self.name(collection), scope, filter).await
     }
 
     async fn purge_scope(&self, collection: &str, scope: &Scope) -> Result<u64> {
