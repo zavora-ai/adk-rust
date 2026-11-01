@@ -35,7 +35,9 @@
 //! [`MuseResponsesClient`] drives the stateful Responses API (reasoning carried
 //! across turns, stored responses, background runs). [`MuseImagesClient`],
 //! [`MuseFilesClient`], and [`MuseAsrClient`] cover `muse-image-1.0` generation
-//! and edits, the Files API, and `muse-voice-transcribe-1.0` transcription.
+//! and edits, the Files API, and `muse-voice-transcribe-1.0` transcription;
+//! `MuseRealtimeAsrClient` (feature `muse-realtime`) transcribes live audio over the
+//! realtime WebSocket.
 //!
 //! # Example
 //!
@@ -54,6 +56,8 @@
 //! ```
 
 mod asr;
+#[cfg(feature = "muse-realtime")]
+mod asr_realtime;
 mod client;
 mod config;
 mod convert;
@@ -62,6 +66,10 @@ mod images;
 mod responses;
 
 pub use asr::{MUSE_VOICE_MODEL, MuseAsrClient, TranscribeOptions, Transcript, TranscriptSegment};
+#[cfg(feature = "muse-realtime")]
+pub use asr_realtime::{
+    AsrEncoding, AsrEvent, AsrEventStream, AsrMode, MuseRealtimeAsrClient, RealtimeAsrOptions,
+};
 pub use client::MuseClient;
 pub use config::{MUSE_API_BASE, MuseApi, MuseConfig};
 pub use files::{FileObject, MuseFilesClient};

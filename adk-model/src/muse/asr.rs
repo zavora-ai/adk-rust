@@ -4,8 +4,8 @@
 //! transcript text out — 25 languages with code-switching, diarization, and
 //! turn-level timestamps. File audio: WAV mono PCM16 at 16/24kHz.
 //!
-//! The realtime WebSocket (`wss://api.meta.ai/v1/asr/realtime`) is a follow-up;
-//! this client covers the file path.
+//! Live transcription over the realtime WebSocket is `MuseRealtimeAsrClient` (feature
+//! `muse-realtime`); this client covers the file path.
 //!
 //! Every transcription is metered against the current run ([`adk_core::meter_usage`]): the
 //! spend hold covers the WAV file's duration (or the 10-minute file limit when the header

@@ -66,6 +66,8 @@ groq = ["dep:reqwest"]
 muse = ["dep:reqwest"]
 # Muse Responses mode (`MuseApi::Responses`) through the shared Open Responses engine.
 muse-responses = ["muse", "openai"]
+# Muse realtime transcription (`MuseRealtimeAsrClient`) over the realtime WebSocket.
+muse-realtime = ["muse", "dep:tokio-tungstenite", "tokio/rt"]
 openrouter = ["dep:reqwest"]
 fireworks = ["openai"]
 together = ["openai"]

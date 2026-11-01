@@ -3,11 +3,15 @@
 mod assemblyai;
 mod deepgram;
 mod gemini;
+#[cfg(feature = "muse")]
+mod muse;
 mod whisper_api;
 
 pub use assemblyai::AssemblyAiStt;
 pub use deepgram::DeepgramStt;
 pub use gemini::GeminiStt;
+#[cfg(feature = "muse")]
+pub use muse::MuseStt;
 pub use whisper_api::WhisperApiStt;
 
 /// Convert an AudioFrame to WAV bytes for upload to STT APIs.

@@ -695,11 +695,50 @@ maps `GenerateContentConfig::effort` to the API's `reasoning_effort`.
 | `MuseImagesClient` | `/images/generations`, `/images/edits` | `muse-image-1.0` ($0.01/image) |
 | `MuseFilesClient` | `/files` CRUD + content | Uploads to 1GiB, referenced by `input_file` parts |
 | `MuseAsrClient` | `/asr/transcribe` | `muse-voice-transcribe-1.0` ($0.18/hour, diarization) |
+| `MuseRealtimeAsrClient` (`muse-realtime`) | `wss://…/asr/realtime` | Live `muse-voice-transcribe-1.0`: turns, partials, finals, speakers, progress |
 
 `MuseImagesClient` and `MuseAsrClient` meter every call against the current run: the spend
 hold covers the call before it is sent, and the images returned or the audio transcribed are
 committed at the catalog's per-unit price. See
 [Calls billed in units](../security/spend-ledger.md#calls-billed-in-units).
+
+### Realtime transcription
+
+`MuseRealtimeAsrClient` (feature `muse-realtime`) transcribes live PCM16 mono audio over Meta's
+realtime WebSocket; `adk_audio::MuseStt` (feature `muse` of `adk-audio`) wraps it and
+`MuseAsrClient` as an `SttProvider`, with `TranscriptEvent`s.
+
+| Behaviour | Detail |
+|-----------|--------|
+| Handshake | One frame carries the key (`authorization.accessToken`), encoding, model, mode and hints; no audio is sent before the server's `sessionId` acknowledgement, within 10 s |
+| Audio | Binary frames, held while more than the lead window (2 s by default; Meta allows 5 s) is ahead of the audio the server reports processed |
+| End | `endStream` when the audio ends; trailing events are read until close `1000` |
+| Turns | A `transcript` belongs to the latest `speechStart`; `speechComplete` gives each turn's final text in `ENDPOINTING` and `DIARIZATION` mode |
+| Close codes | `1008` → `InvalidInput`; `1011` → `Unavailable`, `model.muse.session_limit` when the 60-minute limit ended it; `1013` → `RateLimited`; no close frame → `model.muse.realtime_incomplete` |
+| Reconnect | Never: Meta has no resume token, and a new session would bill the audio again |
+| Spend | A full 60-minute session ($0.18) is held before the socket opens; the audio processed is committed in whole seconds when the session ends, and nothing when it ends before a transcript |
+| Drop | Dropping the event stream stops sending, closes the socket and releases the audio |
+
+```rust
+use adk_model::muse::{AsrEvent, AsrMode, MuseConfig, MuseRealtimeAsrClient, RealtimeAsrOptions};
+use futures::{Stream, StreamExt};
+
+async fn live(
+    api_key: &str,
+    audio: impl Stream<Item = Vec<u8>> + Send + 'static,
+) -> adk_core::Result<Vec<String>> {
+    let asr = MuseRealtimeAsrClient::new(MuseConfig::new(api_key, "muse-voice-transcribe-1.0"))?
+        .with_options(RealtimeAsrOptions::default().with_mode(AsrMode::Endpointing));
+    let mut events = asr.transcribe(audio).await?;
+    let mut turns = Vec::new();
+    while let Some(event) = events.next().await {
+        if let AsrEvent::SpeechComplete { text, .. } = event? {
+            turns.push(text);
+        }
+    }
+    Ok(turns)
+}
+```
 
 ### Responses mode
 

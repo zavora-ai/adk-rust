@@ -296,6 +296,8 @@
 4 adk-model opencode
 # Muse Responses mode over the shared Open Responses engine.
 4 adk-model muse-responses
+# Muse realtime transcription over the realtime WebSocket.
+4 adk-model muse-realtime
 4 adk-skill vertex-skill-registry
 
 # Shard 5 — adk-realtime, adk-session, adk-memory, adk-eval, adk-deploy, adk-bench.
@@ -333,6 +335,8 @@
 
 # Shard 6 — small opt-in surfaces and adk-sandbox.
 6 adk-audio fx
+# `MuseStt` over adk-model's Muse clients.
+6 adk-audio muse
 # adk-auth's SSO/OAuth surface drifted out of the clippy gate; a jsonwebtoken major bump
 # broke it while every required check stayed green.
 6 adk-auth sso

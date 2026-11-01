@@ -178,6 +178,7 @@ name = "adk-audio"
 version = "3.0.0"
 dependencies = [
  "adk-core",
+ "adk-model",
  "adk-realtime",
  "async-stream",
  "async-trait",
