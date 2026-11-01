@@ -89,8 +89,8 @@ use adk_awp::v2::store::{
 use adk_awp::v2::tier::TierAssigner;
 use adk_core::audit_log::AuditTrail;
 use adk_core::subject::{
-    ConsentGate, ConsentStore, InMemorySubjectRegistry, SubjectDataStore, SubjectRegistry,
-    SubjectRights, VisitorId,
+    ConsentGate, ConsentStore, InMemorySubjectRegistry, PseudonymousRecorder, SubjectDataStore,
+    SubjectRegistry, SubjectRights, VisitorId,
 };
 use adk_core::{
     ActionLedger, AdkError, Agent, AgentId, AgentPrincipal, ApprovalService, ApprovalStore,
@@ -334,7 +334,9 @@ impl AwpEdgeBuilder {
     }
 
     /// Records governed decisions, `awp.capability.*` records and verified discovery
-    /// (`awp.request.verified`) on `audit`.
+    /// (`awp.request.verified`) on `audit`. The edge wraps its recorder in a
+    /// [`PseudonymousRecorder`](adk_core::subject::PseudonymousRecorder) over the subject
+    /// registry, so records name visitors by pseudonym, never by visitor id.
     #[must_use]
     pub fn audit(mut self, audit: AuditTrail) -> Self {
         self.audit = Some(audit);
@@ -541,7 +543,16 @@ impl AwpEdgeBuilder {
             .and_then(|service| service.approval_store())
             .or(self.approval_store)
             .unwrap_or_else(|| Arc::new(InMemoryApprovalStore::new()));
-        let audit = self.audit;
+        let subject_registry: Arc<dyn SubjectRegistry> =
+            self.subject_registry.unwrap_or_else(|| Arc::new(InMemorySubjectRegistry::new()));
+        // Records name visitors by pseudonym; erasure deletes the pseudonym.
+        let audit = self.audit.map(|trail| {
+            let recorder = PseudonymousRecorder::new(
+                Arc::clone(trail.recorder()),
+                Arc::clone(&subject_registry),
+            );
+            AuditTrail::new(Arc::new(recorder)).with_failure_mode(trail.failure_mode())
+        });
         let tiers = Arc::new(self.tiers);
         let limits = Arc::new(self.limits.classes(tiers.rules().rate_classes.clone()));
         let policy =
@@ -571,8 +582,6 @@ impl AwpEdgeBuilder {
         // One source of consent: the receipts, which the gates and subject rights both read.
         let consent_store: Arc<dyn ConsentStore> =
             Arc::new(ReceiptConsentStore::new(Arc::clone(&stores.consent)));
-        let subject_registry: Arc<dyn SubjectRegistry> =
-            self.subject_registry.unwrap_or_else(|| Arc::new(InMemorySubjectRegistry::new()));
         let gate = ConsentGate::new(Arc::clone(&consent_store))
             .with_registry(Arc::clone(&subject_registry));
         let visitors = VisitorTokens::new(Arc::clone(&self.consent.subject_key))

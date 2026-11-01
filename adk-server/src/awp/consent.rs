@@ -622,6 +622,8 @@ async fn erase(
         Ok(count) => count,
         Err(error) => return store_failed(&error),
     };
+    // Recorded while the visitor still has its pseudonym; the registry forgets it last.
+    state.audit("awp.consent.erased", &subject, json!({ "receipts": erased, "data": data })).await;
     // Every other store the edge holds the visitor's data in, and the registry, last.
     let report = match state.rights.erase(&SubjectRef::visitor(subject.as_str())).await {
         Ok(report) => report,
@@ -630,7 +632,6 @@ async fn erase(
             return refuse(ErrorCode::InternalError, "the data could not be erased");
         }
     };
-    state.audit("awp.consent.erased", &subject, json!({ "receipts": erased, "data": data })).await;
     awp_json(
         StatusCode::ACCEPTED,
         &json!({
