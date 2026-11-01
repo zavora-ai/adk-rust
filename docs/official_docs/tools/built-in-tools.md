@@ -191,7 +191,7 @@ The delegate's run config is built from the caller's field by field:
 | Description | Same as the wrapped agent's description |
 | Parameters | `request`: string (the input to send to the sub-agent) |
 | Effect | `ToolEffect::NonIdempotent` (the default) |
-| Returns | `{"response": "..."}` with the sub-agent's text output, plus `"server_tool_responses": [...]` with the payloads of its provider-side tool results (such as Gemini code execution's `codeExecutionResult`) when it ran any; the tool result the sub-agent ended on when it ended on one (a tool that skips summarization, or a nested `AgentTool` with `skip_summarization(true)`), or `{"responses": [{"name", "response"}, ...]}` for several |
+| Returns | `{"response": "..."}` with the sub-agent's text output, plus `"server_tool_responses": [...]` with the payloads of its provider-side tool results (such as Gemini code execution's `codeExecutionResult`) when it ran any, never a provider's replay-only copy of its turn; the tool result the sub-agent ended on when it ended on one (a tool that skips summarization, or a nested `AgentTool` with `skip_summarization(true)`), or `{"responses": [{"name", "response"}, ...]}` for several |
 
 ### Failures and Timeouts
 

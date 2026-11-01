@@ -15,6 +15,13 @@ impl TestContext {
         self
     }
 
+    // This shared fixture is also compiled by tests that send plain text.
+    #[allow(dead_code)]
+    pub fn with_user_content(mut self, content: Content) -> Self {
+        self.content = content;
+        self
+    }
+
     pub fn new(message: &str) -> Self {
         Self {
             content: Content {

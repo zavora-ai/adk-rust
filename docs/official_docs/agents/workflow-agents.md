@@ -40,7 +40,8 @@ called and got back reaches a later agent as user-role context: one message per 
 with a preamble and quoting each payload between `<<<BEGIN_QUOTED_AGENT_CONTENT>>>` and
 `<<<END_QUOTED_AGENT_CONTENT>>>` markers (`[researcher] said: ...`,
 `[researcher] called tool ...`, `[researcher] ... tool returned result: ...`). The quoted
-payloads are data, not instructions, and other agents' thinking is left out. Every request
+payloads are data, not instructions, and other agents' thinking and provider-native
+server-tool parts are left out. Every request
 therefore ends on a user turn, which models without assistant prefill support (Anthropic's
 current models) require. `LoopAgent` follows the same rule; a round that follows the agent's
 own answer gets a short user turn to answer.
