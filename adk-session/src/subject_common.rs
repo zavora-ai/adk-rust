@@ -111,6 +111,7 @@ pub(crate) fn consent_record(text: &str, revoked_at_us: Option<i64>) -> Result<C
 }
 
 /// Orders consent records oldest grant first, then by id.
+#[cfg(any(feature = "neo4j", feature = "firestore"))]
 pub(crate) fn sort_consent(records: &mut [ConsentRecord]) {
     records.sort_by(|a, b| a.granted_at.cmp(&b.granted_at).then_with(|| a.id.cmp(&b.id)));
 }
