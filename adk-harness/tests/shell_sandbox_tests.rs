@@ -19,7 +19,7 @@ use adk_harness::{
 };
 use adk_model::ScriptedResponse;
 use adk_sandbox::SandboxError;
-use adk_sandbox::sandbox::{SandboxEnforcer, SandboxPolicy, WrappedCommand};
+use adk_sandbox::sandbox::{NetworkSupport, SandboxEnforcer, SandboxPolicy, WrappedCommand};
 use common::{Outcome, fixture_in, outcome, response_of, responses};
 use serde_json::{Value, json};
 
@@ -33,6 +33,10 @@ impl SandboxEnforcer for Passthrough {
     fn probe(&self) -> Result<(), SandboxError> {
         Ok(())
     }
+    fn network_support(&self) -> NetworkSupport {
+        NetworkSupport { denied: true, proxied: true }
+    }
+
     fn wrap_command(
         &self,
         program: &OsStr,
@@ -56,6 +60,10 @@ impl SandboxEnforcer for Failing {
             message: "probe refused for the test".into(),
         })
     }
+    fn network_support(&self) -> NetworkSupport {
+        NetworkSupport::NONE
+    }
+
     fn wrap_command(
         &self,
         _program: &OsStr,
@@ -204,6 +212,10 @@ async fn a_sandbox_lost_after_build_refuses_rather_than_running_on_the_host() {
                 Failing.probe()
             }
         }
+        fn network_support(&self) -> NetworkSupport {
+            NetworkSupport { denied: true, proxied: true }
+        }
+
         fn wrap_command(
             &self,
             program: &OsStr,
@@ -876,7 +888,7 @@ fn the_launcher_policy_keeps_existing_protected_paths_read_only() {
     assert!(mode(&rw, &root.join(".git")).is_empty(), "the index, refs and objects stay writable");
     assert_eq!(mode(&rw, &root.join("AGENTS.md")), [ReadOnly]);
     assert_eq!(mode(&rw, &scratch), [ReadWrite]);
-    assert!(!rw.allow_network);
+    assert_eq!(rw.network, adk_sandbox::sandbox::NetworkAccess::Denied);
     assert_eq!(rw.env.get("HOME"), Some(&scratch.display().to_string()));
     let ro = launcher.read_only().policy(&ws, &scratch);
     assert_eq!(mode(&ro, &root), [ReadOnly]);

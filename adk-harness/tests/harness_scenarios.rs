@@ -383,6 +383,10 @@ async fn an_unavailable_sandbox_degrades_or_fails_the_build() {
                 message: "not installed".into(),
             })
         }
+        fn network_support(&self) -> adk_sandbox::sandbox::NetworkSupport {
+            adk_sandbox::sandbox::NetworkSupport::NONE
+        }
+
         fn wrap_command(
             &self,
             _program: &std::ffi::OsStr,

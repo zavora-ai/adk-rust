@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use proptest::prelude::*;
 
 use adk_sandbox::sandbox::linux::{LinuxEnforcer, SECCOMP_FD};
-use adk_sandbox::sandbox::{AccessMode, AllowedPath, SandboxPolicy};
+use adk_sandbox::sandbox::{AccessMode, AllowedPath, NetworkAccess, ProxyEndpoint, SandboxPolicy};
 
 // ---------------------------------------------------------------------------
 // Generators
@@ -29,18 +29,25 @@ fn arb_allowed_path() -> impl Strategy<Value = AllowedPath> {
         .prop_map(|(path, mode)| AllowedPath { path: PathBuf::from(path), mode })
 }
 
+fn arb_network() -> impl Strategy<Value = NetworkAccess> {
+    prop_oneof![
+        Just(NetworkAccess::Denied),
+        Just(NetworkAccess::Open),
+        (1u16..).prop_map(|port| NetworkAccess::Proxied { endpoint: ProxyEndpoint { port } }),
+    ]
+}
+
 fn arb_sandbox_policy() -> impl Strategy<Value = SandboxPolicy> {
     (
         proptest::collection::vec(arb_allowed_path(), 0..10),
-        any::<bool>(),
+        arb_network(),
         any::<bool>(),
         proptest::collection::vec(("[A-Z_]{1,8}", "[a-zA-Z0-9]{0,16}"), 0..5),
     )
         .prop_map(|(paths, network, spawn, env_pairs)| SandboxPolicy {
             allowed_paths: paths,
-            allow_network: network,
+            network,
             allow_process_spawn: spawn,
-            network_rules: Vec::new(),
             env: env_pairs.into_iter().collect(),
         })
 }
@@ -92,9 +99,8 @@ fn arb_nested_policy() -> impl Strategy<Value = SandboxPolicy> {
     )
     .prop_map(|allowed_paths| SandboxPolicy {
         allowed_paths,
-        allow_network: false,
+        network: NetworkAccess::Denied,
         allow_process_spawn: true,
-        network_rules: Vec::new(),
         env: Default::default(),
     })
 }
@@ -132,7 +138,7 @@ proptest! {
     /// *For any* valid `SandboxPolicy`, the generated bwrap args SHALL:
     /// - Start with `--die-with-parent`
     /// - Contain `--unshare-pid`
-    /// - Contain `--unshare-net` iff `allow_network` is false
+    /// - Contain `--unshare-net` iff the network is not `Open`
     /// - Contain `--new-session` exactly once, whatever the policy
     /// - Contain `--seccomp <SECCOMP_FD>` iff `allow_process_spawn` is false
     /// - Have one `--ro-bind path path` per read-only path
@@ -157,9 +163,9 @@ proptest! {
             "args must contain --unshare-pid: {args:?}"
         );
 
-        // Network: --unshare-net iff allow_network is false
+        // Network: --unshare-net unless the network is open
         let has_unshare_net = args.contains(&"--unshare-net".to_string());
-        if policy.allow_network {
+        if !policy.network.restricts() {
             prop_assert!(
                 !has_unshare_net,
                 "args should NOT contain --unshare-net when network is allowed: {args:?}"

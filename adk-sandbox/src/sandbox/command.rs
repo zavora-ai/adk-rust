@@ -18,7 +18,7 @@ use crate::error::SandboxError;
 /// | Program | The enforcer's wrapper (`sandbox-exec`, `bwrap`), resolved against the caller's `PATH` |
 /// | Arguments | The wrapper arguments from [`SandboxEnforcer::wrap_command`], then `program` and `args` |
 /// | Working directory | `cwd` |
-/// | Environment | Cleared, then exactly `policy.env` |
+/// | Environment | Cleared, then exactly `policy.env`, plus the proxy variables of a `Proxied` network ([`NetworkAccess::proxy_env`](super::NetworkAccess::proxy_env)) |
 /// | Spawn-time state | Whatever [`SandboxEnforcer::configure_command`] installs (the Linux seccomp descriptor) |
 ///
 /// `cwd` is not granted by this function: the enforcers deny every path the policy does not
@@ -64,8 +64,9 @@ use crate::error::SandboxError;
 ///
 /// # Errors
 ///
-/// Returns the error from [`SandboxEnforcer::wrap_command`] — `PolicyViolation` when an
-/// allowed path cannot be resolved — or from [`SandboxEnforcer::configure_command`].
+/// Returns `Unenforceable` when the enforcer does not enforce the policy's network mode, the
+/// error from [`SandboxEnforcer::wrap_command`] — `PolicyViolation` when an allowed path cannot
+/// be resolved — or from [`SandboxEnforcer::configure_command`].
 pub fn sandboxed_command(
     enforcer: &dyn SandboxEnforcer,
     program: &OsStr,
@@ -92,6 +93,9 @@ pub fn sandboxed_command(
         }
     }
 
+    // Checked here as well as by the enforcer, so an enforcer that forgets cannot run a
+    // command with more network access than the policy asks for.
+    enforcer.network_support().check(enforcer.name(), &policy.network)?;
     let wrapped = enforcer.wrap_command(&program, args, &policy)?;
 
     // Resolved before `configure_command`, which may attach spawn-time state (the Linux
@@ -100,7 +104,12 @@ pub fn sandboxed_command(
     let wrapper =
         resolve_program(&wrapped.program).map_or(wrapped.program, PathBuf::into_os_string);
     let mut command = tokio::process::Command::new(wrapper);
-    command.args(&wrapped.args).current_dir(cwd).env_clear().envs(&policy.env);
+    command
+        .args(&wrapped.args)
+        .current_dir(cwd)
+        .env_clear()
+        .envs(&policy.env)
+        .envs(policy.network.proxy_env());
     enforcer.configure_command(&mut command, &policy)?;
     Ok(command)
 }
@@ -206,7 +215,9 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::sandbox::{SandboxPolicyBuilder, WrappedCommand};
+    use crate::sandbox::{
+        NetworkAccess, NetworkSupport, ProxyEndpoint, SandboxPolicyBuilder, WrappedCommand,
+    };
 
     /// Records what it was asked to wrap and prefixes a fixed wrapper.
     #[derive(Default)]
@@ -215,6 +226,8 @@ mod tests {
         configured: Mutex<Option<SandboxPolicy>>,
         /// When set, the program runs unwrapped, so a test can execute the result.
         passthrough: bool,
+        /// When set, the enforcer claims no network enforcement.
+        no_network_support: bool,
     }
 
     impl SandboxEnforcer for RecordingEnforcer {
@@ -224,6 +237,14 @@ mod tests {
 
         fn probe(&self) -> Result<(), SandboxError> {
             Ok(())
+        }
+
+        fn network_support(&self) -> NetworkSupport {
+            if self.no_network_support {
+                NetworkSupport::NONE
+            } else {
+                NetworkSupport { denied: true, proxied: true }
+            }
         }
 
         fn wrap_command(
@@ -264,6 +285,10 @@ mod tests {
 
         fn probe(&self) -> Result<(), SandboxError> {
             Ok(())
+        }
+
+        fn network_support(&self) -> NetworkSupport {
+            NetworkSupport { denied: true, proxied: true }
         }
 
         fn wrap_command(
@@ -346,6 +371,54 @@ mod tests {
         .collect();
         assert_eq!(environment, expected);
         assert!(enforcer.configured.lock().unwrap().is_some(), "configure_command ran");
+    }
+
+    #[test]
+    fn a_proxied_command_runs_with_the_proxy_variables_last() {
+        let enforcer = RecordingEnforcer::default();
+        let endpoint = ProxyEndpoint { port: 47811 };
+        let policy = SandboxPolicyBuilder::new()
+            .env("HTTPS_PROXY", "http://elsewhere.test:3128")
+            .env("NO_PROXY", "*")
+            .proxied(endpoint)
+            .build();
+
+        let command =
+            sandboxed_command(&enforcer, OsStr::new("/bin/sh"), &[], &policy, Path::new("/"))
+                .expect("the command builds");
+
+        let value = |name: &str| {
+            command
+                .as_std()
+                .get_envs()
+                .filter(|(key, _)| *key == OsStr::new(name))
+                .last()
+                .and_then(|(_, value)| value.map(|value| value.to_string_lossy().into_owned()))
+        };
+        assert_eq!(value("HTTPS_PROXY").as_deref(), Some("http://127.0.0.1:47811"));
+        assert_eq!(value("http_proxy").as_deref(), Some("http://127.0.0.1:47811"));
+        assert_eq!(value("NO_PROXY").as_deref(), Some(""));
+    }
+
+    #[test]
+    fn a_network_mode_the_enforcer_does_not_enforce_is_refused_before_wrapping() {
+        let enforcer = RecordingEnforcer { no_network_support: true, ..Default::default() };
+        for network in
+            [NetworkAccess::Denied, NetworkAccess::Proxied { endpoint: ProxyEndpoint { port: 1 } }]
+        {
+            let policy = SandboxPolicyBuilder::new().network(network).build();
+            let result =
+                sandboxed_command(&enforcer, OsStr::new("/bin/sh"), &[], &policy, Path::new("/"));
+            assert!(
+                matches!(result, Err(SandboxError::Unenforceable { .. })),
+                "{network}: {result:?}"
+            );
+        }
+        assert!(enforcer.wrapped.lock().unwrap().is_none(), "wrap_command never ran");
+        let open = SandboxPolicyBuilder::new().allow_network().build();
+        assert!(
+            sandboxed_command(&enforcer, OsStr::new("/bin/sh"), &[], &open, Path::new("/")).is_ok()
+        );
     }
 
     #[test]

@@ -616,6 +616,17 @@ jobs:
     - name: Build workspace
       run: cargo build --workspace
 
+    # The one macOS-only enforcement the PR tier runs: Seatbelt profiles, `Proxied` network
+    # access and the egress proxy, live under `sandbox-exec`. A test that cannot start the
+    # enforcer fails instead of skipping.
+    - name: Seatbelt enforcement tests (adk-sandbox)
+      env:
+        ADK_SANDBOX_REQUIRE_ENFORCER: "1"
+      run: >-
+        cargo test -p adk-sandbox --features sandbox-macos,egress-proxy
+        --lib --test seatbelt_enforcement_tests --test sandboxed_command_tests
+        --test proxied_sandbox_tests --test seatbelt_profile_property_tests
+
   # ── Cross-platform: Windows build + Windows-only code ──────────
   # The pull request runs the code that exists only on Windows; the full nextest run,
   # the kernel scenarios included, is in the merge tier (ci-merge.yml).

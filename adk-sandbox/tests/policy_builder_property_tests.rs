@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use proptest::prelude::*;
 
-use adk_sandbox::sandbox::{AccessMode, AllowedPath, SandboxPolicyBuilder};
+use adk_sandbox::sandbox::{AccessMode, AllowedPath, NetworkAccess, SandboxPolicyBuilder};
 
 // ---------------------------------------------------------------------------
 // Generators
@@ -42,7 +42,7 @@ proptest! {
     /// and `env` calls), the `SandboxPolicy` returned by `build()` SHALL:
     /// - Contain exactly the `AllowedPath` entries in order (allow_read → ReadOnly,
     ///   allow_read_write → ReadWrite)
-    /// - Have `allow_network` true iff `allow_network()` was called
+    /// - Have `Open` network access iff `allow_network()` was called, else `Denied`
     /// - Have `allow_process_spawn` true iff `allow_process_spawn()` was called
     /// - Contain exactly the environment variable entries added via `env()` calls
     ///
@@ -96,7 +96,8 @@ proptest! {
         }
 
         // Verify network flag
-        prop_assert_eq!(policy.allow_network, enable_network);
+        let expected_network = if enable_network { NetworkAccess::Open } else { NetworkAccess::Denied };
+        prop_assert_eq!(policy.network, expected_network);
 
         // Verify process spawn flag
         prop_assert_eq!(policy.allow_process_spawn, enable_spawn);
@@ -116,7 +117,7 @@ proptest! {
         let policy = SandboxPolicyBuilder::new().build();
 
         prop_assert!(policy.allowed_paths.is_empty());
-        prop_assert!(!policy.allow_network);
+        prop_assert_eq!(policy.network, NetworkAccess::Denied);
         prop_assert!(!policy.allow_process_spawn);
         prop_assert!(policy.env.is_empty());
     }

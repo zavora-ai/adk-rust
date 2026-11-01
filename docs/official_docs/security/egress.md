@@ -11,6 +11,7 @@ workspace.
 | Address classifier | `classify`, `is_non_public`, `AddressClass` | — |
 | Name resolution | `HostResolver`, `StaticResolver`, `SystemResolver` | `SystemResolver`: `egress-dns` |
 | Guarded HTTP client | `GuardedClient`, `GuardedClientBuilder`, `EgressResolver` | `egress-client` |
+| Egress proxy for sandboxed processes | `adk_sandbox::egress_proxy::EgressProxy`, `EgressRecord`, `EgressAudit` | `adk-sandbox`: `egress-proxy` |
 
 ```toml
 [dependencies]
@@ -171,10 +172,54 @@ addresses for tests. A crate that needs its own `reqwest` client options sets
 `EgressResolver` with `ClientBuilder::dns_resolver` and `ClientBuilder::no_proxy`, and checks
 URLs and redirect hops with `check_parsed_url` itself.
 
+## Egress proxy for sandboxed processes
+
+`adk_sandbox::egress_proxy::EgressProxy` (feature `egress-proxy` of `adk-sandbox`) enforces a
+policy on a child process's connections. The sandbox lets the process reach only the proxy's
+loopback port (network access `Proxied`), and the standard proxy variables point it there.
+
+| Request | Handling |
+|---------|----------|
+| `CONNECT host:port` | The name and port are checked; the proxy resolves the name itself, checks every address, and connects only to an address it checked. The TLS `ClientHello` must name `host` in its SNI: no SNI, Encrypted Client Hello, or a stream that is not TLS is refused. A `CONNECT` to an IP literal is admitted by the policy's address rules alone |
+| `GET http://host/path` (absolute form) | Only when the policy admits plain `http`; checked the same way, forwarded with `Host` set to the checked authority and hop-by-hop headers removed |
+| Loopback or unspecified destinations | Always refused, so the proxy never connects to itself or to the host's local services |
+| Anything else | `400 Bad Request` |
+
+A refusal answers `403 Forbidden` with the reason and an `X-Adk-Egress-Denied` header carrying
+the denial code (`egress.host_not_allowed`, `egress.sni_mismatch`, …). Every connection is one
+`EgressRecord` — call id, host, port, connected address, SNI, outcome and byte counts — for the
+proxy's `EgressAudit`, and one `tracing` event. Start one proxy per sandboxed call so each record
+names its call; dropping the proxy closes its listener and every open connection.
+
+```rust,no_run
+use std::sync::Arc;
+
+use adk_core::egress::EgressPolicy;
+use adk_sandbox::egress_proxy::{EgressProxy, InMemoryEgressAudit};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let audit = Arc::new(InMemoryEgressAudit::new());
+    let proxy = EgressProxy::builder(EgressPolicy::allowlist(["pypi.org:443", "*.pythonhosted.org:443"])?)
+        .call_id("call-42")
+        .audit(audit.clone())
+        .bind()
+        .await?;
+    println!("HTTPS_PROXY=http://127.0.0.1:{}", proxy.port());
+    // Run the sandboxed command; then read what it reached.
+    for record in audit.records() {
+        println!("{:?} {}:{} {:?}", record.protocol, record.host, record.port, record.outcome);
+    }
+    Ok(())
+}
+```
+
 ## Limits
 
 - **Not data-loss prevention.** An admitted host receives whatever is sent to it.
 - **Not proof against domain fronting.** A host rule matches the name a client asks for; a
   shared CDN can route that connection to another tenant.
 - **Only checked connections are covered.** A socket opened by code that does not consult the
-  policy — including third-party code running in the agent's process — is not contained.
+  policy — including third-party code running in the agent's process — is not contained. A
+  child process is contained only when its sandbox enforces `Proxied` network access, so that
+  the proxy is the one destination it can reach.

@@ -81,34 +81,182 @@ pub struct AllowedPath {
     pub mode: AccessMode,
 }
 
-/// A network access rule specifying an allowed domain and ports.
+/// The loopback port of an egress proxy, the one destination a
+/// [`NetworkAccess::Proxied`] process may reach.
 ///
-/// Declares intent for per-domain network filtering. **No enforcer can apply
-/// it:** Seatbelt network filters accept only `*` or `localhost` as the host,
-/// and bubblewrap and the Windows restricted token have no domain-level control.
-/// Under Seatbelt and bubblewrap network access is all or nothing via
-/// `allow_network`, and rules present with `allow_network = false` block all
-/// network access and log a `tracing::warn`. The Windows restricted token does not
-/// restrict the network at all: the network stays open, and the first policy in the
-/// process with rules logs a `tracing::warn`.
+/// The process reaches it at `127.0.0.1:<port>` and finds it through the standard proxy
+/// variables [`NetworkAccess::proxy_env`] names.
 ///
 /// # Example
 ///
 /// ```rust
-/// use adk_sandbox::sandbox::NetworkRule;
+/// use adk_sandbox::sandbox::ProxyEndpoint;
 ///
-/// let rule = NetworkRule {
-///     domain: "api.openai.com".to_string(),
-///     ports: vec![443],
-/// };
+/// let endpoint = ProxyEndpoint { port: 47811 };
+/// assert_eq!(endpoint.url(), "http://127.0.0.1:47811");
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NetworkRule {
-    /// The domain name to allow (e.g., "api.openai.com").
-    pub domain: String,
-    /// The ports to allow on this domain. Empty means all ports.
-    pub ports: Vec<u16>,
+pub struct ProxyEndpoint {
+    /// The loopback port.
+    pub port: u16,
+}
+
+impl ProxyEndpoint {
+    /// The proxy URL a process configures, `http://127.0.0.1:<port>`.
+    pub fn url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+}
+
+/// What a sandboxed process may reach on the network.
+///
+/// | Mode | The process reaches |
+/// |------|---------------------|
+/// | `Denied` (the default) | Nothing |
+/// | `Proxied` | Only the egress proxy at [`ProxyEndpoint`], which decides every destination |
+/// | `Open` | Everything the host reaches |
+///
+/// An enforcer that cannot enforce the mode refuses the policy with
+/// [`SandboxError::Unenforceable`] instead of running it with more network access; see
+/// [`SandboxEnforcer::network_support`].
+///
+/// # Example
+///
+/// ```rust
+/// use adk_sandbox::sandbox::{NetworkAccess, ProxyEndpoint};
+///
+/// let proxied = NetworkAccess::Proxied { endpoint: ProxyEndpoint { port: 47811 } };
+/// assert!(proxied.restricts());
+/// assert!(proxied.proxy_env().contains(&("HTTPS_PROXY", "http://127.0.0.1:47811".to_string())));
+/// assert!(NetworkAccess::Denied.proxy_env().is_empty());
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "mode")]
+pub enum NetworkAccess {
+    /// No network access.
+    #[default]
+    Denied,
+    /// Network access only through the egress proxy at `endpoint`.
+    Proxied {
+        /// Where the proxy listens.
+        endpoint: ProxyEndpoint,
+    },
+    /// Unrestricted network access.
+    Open,
+}
+
+impl NetworkAccess {
+    /// Whether the mode restricts the network (`Denied` or `Proxied`).
+    pub fn restricts(&self) -> bool {
+        !matches!(self, Self::Open)
+    }
+
+    /// The variables a `Proxied` process runs with, upper and lower case: `HTTP_PROXY`,
+    /// `HTTPS_PROXY` and `ALL_PROXY` name the endpoint, and `NO_PROXY` is empty so no
+    /// destination bypasses it. Empty for the other modes.
+    pub fn proxy_env(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::Proxied { endpoint } => {
+                let url = endpoint.url();
+                let mut env: Vec<(&'static str, String)> = [
+                    "HTTP_PROXY",
+                    "HTTPS_PROXY",
+                    "ALL_PROXY",
+                    "http_proxy",
+                    "https_proxy",
+                    "all_proxy",
+                ]
+                .into_iter()
+                .map(|name| (name, url.clone()))
+                .collect();
+                env.push(("NO_PROXY", String::new()));
+                env.push(("no_proxy", String::new()));
+                env
+            }
+            Self::Denied | Self::Open => Vec::new(),
+        }
+    }
+}
+
+impl std::fmt::Display for NetworkAccess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Denied => f.write_str("denied"),
+            Self::Proxied { endpoint } => write!(f, "proxied through 127.0.0.1:{}", endpoint.port),
+            Self::Open => f.write_str("open"),
+        }
+    }
+}
+
+/// Which restrictive [`NetworkAccess`] modes an enforcer enforces; `Open` needs no enforcement.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_sandbox::sandbox::{NetworkAccess, NetworkSupport};
+///
+/// let support = NetworkSupport { denied: true, proxied: false };
+/// assert!(support.enforces(&NetworkAccess::Denied));
+/// assert!(support.enforces(&NetworkAccess::Open));
+/// assert!(NetworkSupport::NONE.check("custom", &NetworkAccess::Denied).is_err());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkSupport {
+    /// Whether `Denied` is enforced.
+    pub denied: bool,
+    /// Whether `Proxied` is enforced.
+    pub proxied: bool,
+}
+
+impl NetworkSupport {
+    /// No network restriction is enforced.
+    pub const NONE: Self = Self { denied: false, proxied: false };
+
+    /// Whether `network` is enforced.
+    pub fn enforces(&self, network: &NetworkAccess) -> bool {
+        match network {
+            NetworkAccess::Denied => self.denied,
+            NetworkAccess::Proxied { .. } => self.proxied,
+            NetworkAccess::Open => true,
+        }
+    }
+
+    /// `Ok` when `network` is enforced.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SandboxError::Unenforceable`] naming `enforcer` when `network` is not enforced.
+    pub fn check(&self, enforcer: &str, network: &NetworkAccess) -> Result<(), SandboxError> {
+        if self.enforces(network) {
+            return Ok(());
+        }
+        Err(SandboxError::Unenforceable {
+            enforcer: enforcer.to_string(),
+            requirement: format!("network access {network}"),
+        })
+    }
+}
+
+/// Where the egress proxy of a [`NetworkAccess::Proxied`] call must listen for the sandboxed
+/// process to reach it ([`SandboxEnforcer::proxy_listener`]).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_sandbox::sandbox::ProxyListener;
+///
+/// assert_ne!(ProxyListener::HostLoopback, ProxyListener::SandboxLoopback);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProxyListener {
+    /// The host's loopback interface, which the sandbox shares (Seatbelt).
+    HostLoopback,
+    /// The loopback interface of the sandbox's own network namespace, where the enforcer
+    /// places a listener the proxy serves (bubblewrap).
+    SandboxLoopback,
 }
 
 /// A declarative sandbox policy describing allowed operations.
@@ -118,45 +266,34 @@ pub struct NetworkRule {
 ///
 /// # Network Access
 ///
-/// Network access has two levels of control:
+/// [`network`](Self::network) is one of three modes, and an enforcer runs a policy only when
+/// it enforces the mode; otherwise it returns [`SandboxError::Unenforceable`]:
 ///
-/// 1. **Binary** (`allow_network`): `true` allows all network access. `false`
-///    asks for all network access to be blocked.
+/// | Enforcer | `Denied` | `Proxied` | `Open` |
+/// |----------|----------|-----------|--------|
+/// | Seatbelt (macOS) | `(deny network*)`, Unix-domain sockets included | Only `localhost:<port>` of the proxy | Allowed |
+/// | bubblewrap (Linux) | `--unshare-net`: no IP traffic and no abstract Unix sockets; Unix sockets on the filesystem under granted paths stay reachable, so `/` and `/run` cannot be granted | Refused | Allowed |
+/// | Restricted token (Windows) | Refused, unless the caller acknowledges that the network stays open (`WindowsEnforcer::acknowledge_open_network`) | Refused the same way | Allowed |
 ///
-/// 2. **Domain allowlist** (`network_rules`): recorded for callers and
-///    future enforcers, but **not enforced on any platform**.
-///
-/// What each enforcer does with them:
-///
-/// | Enforcer | `allow_network = false` | `network_rules` |
-/// |----------|-------------------------|-----------------|
-/// | Seatbelt (macOS) | All network access blocked | Ignored with a `tracing::warn` when `allow_network` is `false`; all network access stays blocked (fails closed) |
-/// | bubblewrap (Linux) | All network access blocked (`--unshare-net`) | Ignored with a `tracing::warn` when `allow_network` is `false`; all network access stays blocked (fails closed) |
-/// | Restricted token (Windows) | **Not enforced** — the process keeps full network access; logs a `tracing::warn` once per process | **Not enforced** — logs a `tracing::warn` once per process; the process keeps full network access |
-///
-/// The Windows restricted token has no per-process network filter, so a policy that
-/// must keep a process off the network is enforced only by Seatbelt and bubblewrap.
+/// Policies serialized before 3.0 load: `allowNetwork: true` becomes `Open`, `false` becomes
+/// `Denied`, and `networkRules` is dropped, as no enforcer ever applied it.
 ///
 /// # Example
 ///
 /// ```rust
-/// use adk_sandbox::sandbox::SandboxPolicyBuilder;
+/// use adk_sandbox::sandbox::{NetworkAccess, SandboxPolicy, SandboxPolicyBuilder};
 ///
-/// // Records the intended domains. No enforcer filters by domain: Seatbelt and
-/// // bubblewrap block all network access, and the Windows restricted token
-/// // leaves it open.
-/// let policy = SandboxPolicyBuilder::new()
-///     .allow_read("/usr/lib")
-///     .allow_domain("api.openai.com", &[443])
-///     .allow_domain("cdn.openai.com", &[443])
-///     .env("PATH", "/usr/bin")
-///     .build();
+/// let policy = SandboxPolicyBuilder::new().allow_read("/usr/lib").env("PATH", "/usr/bin").build();
+/// assert_eq!(policy.network, NetworkAccess::Denied);
 ///
-/// assert!(!policy.allow_network); // full network access is not requested
-/// assert_eq!(policy.network_rules.len(), 2); // 2 domains recorded, none enforced
+/// let legacy: SandboxPolicy = serde_json::from_str(
+///     r#"{"allowedPaths":[],"allowNetwork":true,"allowProcessSpawn":false,"env":{}}"#,
+/// )
+/// .unwrap();
+/// assert_eq!(legacy.network, NetworkAccess::Open);
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", from = "SandboxPolicyWire")]
 pub struct SandboxPolicy {
     /// Filesystem paths the process may access. Each path must exist; enforcers resolve
     /// them and fail with `PolicyViolation` otherwise.
@@ -167,18 +304,8 @@ pub struct SandboxPolicy {
     /// bubblewrap alike, and the writable directories above it cannot be renamed or removed.
     /// For the same path, `ReadWrite` wins.
     pub allowed_paths: Vec<AllowedPath>,
-    /// Whether the process may access the network (all domains/ports).
-    ///
-    /// `false` blocks all network access under Seatbelt and bubblewrap. The Windows
-    /// restricted-token enforcer does not enforce it: the process keeps full network
-    /// access and the enforcer logs a `tracing::warn` once per process.
-    pub allow_network: bool,
-    /// Per-domain network allowlist. Not enforced on any platform: with
-    /// `allow_network = false`, Seatbelt and bubblewrap ignore these rules and block
-    /// all network access, and the Windows restricted-token enforcer leaves the network
-    /// open and logs a `tracing::warn` once per process.
-    #[serde(default)]
-    pub network_rules: Vec<NetworkRule>,
+    /// What the process may reach on the network; see [Network Access](Self#network-access).
+    pub network: NetworkAccess,
     /// Whether the process may create child processes.
     ///
     /// When `false`, replacing the process image with `execve` remains allowed
@@ -195,6 +322,40 @@ pub struct SandboxPolicy {
     pub allow_process_spawn: bool,
     /// Environment variables passed to the sandboxed process.
     pub env: HashMap<String, String>,
+}
+
+/// The serialized form of [`SandboxPolicy`], which also reads the fields it had before 3.0.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SandboxPolicyWire {
+    #[serde(default)]
+    allowed_paths: Vec<AllowedPath>,
+    #[serde(default)]
+    network: Option<NetworkAccess>,
+    /// Before 3.0: `true` for all network access.
+    #[serde(default)]
+    allow_network: Option<bool>,
+    /// Before 3.0: domain rules no enforcer applied; read and dropped.
+    #[serde(default, rename = "networkRules")]
+    _network_rules: serde::de::IgnoredAny,
+    #[serde(default)]
+    allow_process_spawn: bool,
+    #[serde(default)]
+    env: HashMap<String, String>,
+}
+
+impl From<SandboxPolicyWire> for SandboxPolicy {
+    fn from(wire: SandboxPolicyWire) -> Self {
+        let legacy = wire
+            .allow_network
+            .map(|open| if open { NetworkAccess::Open } else { NetworkAccess::Denied });
+        Self {
+            allowed_paths: wire.allowed_paths,
+            network: wire.network.or(legacy).unwrap_or_default(),
+            allow_process_spawn: wire.allow_process_spawn,
+            env: wire.env,
+        }
+    }
 }
 
 /// The result of wrapping a command with sandbox enforcement.
@@ -228,7 +389,7 @@ pub struct WrappedCommand {
 ///     .build();
 ///
 /// assert_eq!(policy.allowed_paths.len(), 2);
-/// assert!(policy.allow_network);
+/// assert_eq!(policy.network, adk_sandbox::sandbox::NetworkAccess::Open);
 /// assert!(policy.allow_process_spawn);
 /// assert_eq!(policy.env.get("HOME").unwrap(), "/home/user");
 /// ```
@@ -242,8 +403,7 @@ impl SandboxPolicyBuilder {
         Self {
             policy: SandboxPolicy {
                 allowed_paths: Vec::new(),
-                allow_network: false,
-                network_rules: Vec::new(),
+                network: NetworkAccess::Denied,
                 allow_process_spawn: false,
                 env: HashMap::new(),
             },
@@ -266,40 +426,30 @@ impl SandboxPolicyBuilder {
         self
     }
 
-    /// Enables full network access (all domains, all ports).
-    ///
-    /// This overrides any domain-specific rules added via [`allow_domain`](Self::allow_domain).
-    pub fn allow_network(mut self) -> Self {
-        self.policy.allow_network = true;
+    /// Sets what the process may reach on the network.
+    pub fn network(mut self, network: NetworkAccess) -> Self {
+        self.policy.network = network;
         self
     }
 
-    /// Records a domain and ports the process is intended to reach.
-    ///
-    /// Pass an empty slice for `ports` to mean all ports on the domain.
-    ///
-    /// **Platform support:** not enforced on any platform. Seatbelt network
-    /// filters accept only `*` or `localhost` as the host, and bubblewrap and the
-    /// Windows restricted token have no domain-level control. If any rules are present but
-    /// `allow_network` is false, Seatbelt and bubblewrap block all network access; the
-    /// Windows restricted token leaves the network open and logs a `tracing::warn` once per
-    /// process.
+    /// Enables full network access: [`NetworkAccess::Open`].
+    pub fn allow_network(self) -> Self {
+        self.network(NetworkAccess::Open)
+    }
+
+    /// Lets the process reach only the egress proxy at `endpoint`: [`NetworkAccess::Proxied`].
     ///
     /// # Example
     ///
     /// ```rust
-    /// use adk_sandbox::sandbox::SandboxPolicyBuilder;
+    /// use adk_sandbox::sandbox::{NetworkAccess, ProxyEndpoint, SandboxPolicyBuilder};
     ///
-    /// let policy = SandboxPolicyBuilder::new()
-    ///     .allow_domain("api.openai.com", &[443])
-    ///     .allow_domain("huggingface.co", &[443, 80])
-    ///     .build();
+    /// let endpoint = ProxyEndpoint { port: 47811 };
+    /// let policy = SandboxPolicyBuilder::new().proxied(endpoint).build();
+    /// assert_eq!(policy.network, NetworkAccess::Proxied { endpoint });
     /// ```
-    pub fn allow_domain(mut self, domain: impl Into<String>, ports: &[u16]) -> Self {
-        self.policy
-            .network_rules
-            .push(NetworkRule { domain: domain.into(), ports: ports.to_vec() });
-        self
+    pub fn proxied(self, endpoint: ProxyEndpoint) -> Self {
+        self.network(NetworkAccess::Proxied { endpoint })
     }
 
     /// Enables child process spawning.
@@ -355,16 +505,30 @@ pub trait SandboxEnforcer: Send + Sync {
     /// Checks whether the enforcer is functional on the current system.
     fn probe(&self) -> Result<(), SandboxError>;
 
+    /// The restrictive [`NetworkAccess`] modes this enforcer enforces.
+    ///
+    /// [`wrap_command`](Self::wrap_command) refuses a policy whose mode is not among them with
+    /// [`SandboxError::Unenforceable`]; it never runs a command with more network access than
+    /// the policy asks for.
+    fn network_support(&self) -> NetworkSupport;
+
+    /// Where the egress proxy of a `Proxied` call listens; the default is the host's loopback.
+    /// A wrapper forwards its inner enforcer's.
+    fn proxy_listener(&self) -> ProxyListener {
+        ProxyListener::HostLoopback
+    }
+
     /// Wraps the original command with sandbox enforcement.
     ///
     /// Given the original program and its arguments, returns a [`WrappedCommand`]
     /// containing the sandbox wrapper program and the full argument list.
     ///
     /// This method:
-    /// 1. Canonicalizes all paths in the policy (logs `tracing::warn` if changed)
-    /// 2. Returns `SandboxError::PolicyViolation` if any path cannot be resolved
-    /// 3. Generates the platform-specific wrapper (Seatbelt profile, bwrap args, etc.)
-    /// 4. Returns the wrapped program and args
+    /// 1. Returns `SandboxError::Unenforceable` if the policy's network mode is not enforced
+    /// 2. Canonicalizes all paths in the policy (logs `tracing::warn` if changed)
+    /// 3. Returns `SandboxError::PolicyViolation` if any path cannot be resolved
+    /// 4. Generates the platform-specific wrapper (Seatbelt profile, bwrap args, etc.)
+    /// 5. Returns the wrapped program and args
     fn wrap_command(
         &self,
         program: &OsStr,

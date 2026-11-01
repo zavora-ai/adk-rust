@@ -44,6 +44,7 @@
 //! | `sandbox-macos`, `sandbox-linux`, `sandbox-windows` | OS enforcers for `ProcessBackend` (Seatbelt, bubblewrap; the Windows restricted-token enforcer confines only through `WindowsEnforcer::run_confined`) | ❌ |
 //! | `sandbox-native` | All three enforcers; only the target platform's compiles | ❌ |
 //! | `process-tree` | `process_tree::JobObject`, the Job Object that holds a process tree on Windows (implied by `sandbox-windows`), and `process_tree::ProcessGroup`, the session and process group that holds one on Unix | ❌ |
+//! | `egress-proxy` | `egress_proxy::EgressProxy`, the HTTP egress proxy that admits a `Proxied` sandbox's connections by an `adk_core::egress::EgressPolicy` | ❌ |
 //! | `workspace` | Workspace lifecycle and `LocalUnixClient` | ❌ |
 //! | `workspace-docker` | `DockerClient` (implies `workspace`) | ❌ |
 //!
@@ -66,6 +67,9 @@ pub mod process;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
+#[cfg(feature = "egress-proxy")]
+pub mod egress_proxy;
+
 #[cfg(feature = "workspace")]
 pub mod workspace;
 
@@ -80,8 +84,8 @@ pub mod process_tree;
 pub use backend::{BackendCapabilities, EnforcedLimits, SandboxBackend};
 pub use error::SandboxError;
 pub use sandbox::{
-    AccessMode, AllowedPath, NetworkRule, SandboxEnforcer, SandboxPolicy, SandboxPolicyBuilder,
-    WrappedCommand, get_enforcer,
+    AccessMode, AllowedPath, NetworkAccess, NetworkSupport, ProxyEndpoint, ProxyListener,
+    SandboxEnforcer, SandboxPolicy, SandboxPolicyBuilder, WrappedCommand, get_enforcer,
 };
 pub use tool::SandboxTool;
 pub use types::{ExecRequest, ExecResult, Language};

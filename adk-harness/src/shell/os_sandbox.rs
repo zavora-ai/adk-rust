@@ -17,8 +17,8 @@ use adk_core::ToolContext;
 use adk_devtools::{CommandLauncher, DEFAULT_ENV_ALLOWLIST, DevToolError, Workspace};
 use adk_sandbox::SandboxError;
 use adk_sandbox::sandbox::{
-    AccessMode, AllowedPath, SandboxEnforcer, SandboxPolicy, SandboxPolicyBuilder, WrappedCommand,
-    sandboxed_command,
+    AccessMode, AllowedPath, NetworkSupport, SandboxEnforcer, SandboxPolicy, SandboxPolicyBuilder,
+    WrappedCommand, sandboxed_command,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -206,8 +206,11 @@ impl SandboxLauncher {
                 enforcer.name() == adk_sandbox::sandbox::windows::ENFORCER_NAME
             });
         let enforcer = match &config.enforcer {
-            _ if contained => Ok(Arc::new(adk_sandbox::sandbox::windows::WindowsEnforcer::new())
-                as Arc<dyn SandboxEnforcer>),
+            // The harness reports that this sandbox leaves the network open
+            // (`denies_network`), so it acknowledges it to the enforcer.
+            _ if contained => Ok(Arc::new(
+                adk_sandbox::sandbox::windows::WindowsEnforcer::new().acknowledge_open_network(),
+            ) as Arc<dyn SandboxEnforcer>),
             Some(enforcer) => Ok(enforcer.clone()),
             None => adk_sandbox::sandbox::get_enforcer()
                 .map(Arc::from)
@@ -407,7 +410,7 @@ impl SandboxLauncher {
     /// let ws = adk_devtools::Workspace::new(".").allow_bash(true);
     /// let scratch = launcher.scratch_dir("app", "alice", "s1")?;
     /// let policy = launcher.policy(&ws, &scratch);
-    /// assert!(!policy.allow_network);
+    /// assert_eq!(policy.network, adk_sandbox::sandbox::NetworkAccess::Denied);
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn policy(&self, ws: &Workspace, scratch: &Path) -> SandboxPolicy {
@@ -648,6 +651,7 @@ impl SandboxLauncher {
             });
         }
         let child = adk_sandbox::sandbox::windows::WindowsEnforcer::new()
+            .acknowledge_open_network()
             .spawn_contained(
                 &policy,
                 shell.as_os_str(),
@@ -833,6 +837,14 @@ impl SandboxEnforcer for LinkingEnforcer {
         self.inner.probe()
     }
 
+    fn network_support(&self) -> NetworkSupport {
+        self.inner.network_support()
+    }
+
+    fn proxy_listener(&self) -> adk_sandbox::sandbox::ProxyListener {
+        self.inner.proxy_listener()
+    }
+
     fn wrap_command(
         &self,
         program: &OsStr,
@@ -875,6 +887,10 @@ mod tests {
         fn probe(&self) -> Result<(), SandboxError> {
             Ok(())
         }
+        fn network_support(&self) -> NetworkSupport {
+            NetworkSupport { denied: true, proxied: false }
+        }
+
         fn wrap_command(
             &self,
             program: &OsStr,

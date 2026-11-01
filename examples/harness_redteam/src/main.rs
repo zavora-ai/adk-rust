@@ -40,7 +40,7 @@ use adk_harness::{
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_runner::Runner;
 use adk_sandbox::SandboxError;
-use adk_sandbox::sandbox::{SandboxEnforcer, SandboxPolicy, WrappedCommand};
+use adk_sandbox::sandbox::{NetworkSupport, SandboxEnforcer, SandboxPolicy, WrappedCommand};
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use anyhow::{Result, bail};
 use futures::StreamExt;
@@ -122,6 +122,10 @@ impl SandboxEnforcer for Unavailable {
             message: "the enforcer's probe failed".into(),
         })
     }
+    fn network_support(&self) -> NetworkSupport {
+        NetworkSupport::NONE
+    }
+
     fn wrap_command(
         &self,
         _: &OsStr,

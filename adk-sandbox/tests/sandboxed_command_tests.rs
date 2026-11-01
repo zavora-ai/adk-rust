@@ -16,7 +16,10 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use adk_sandbox::sandbox::{SandboxEnforcer, SandboxPolicyBuilder, sandboxed_command};
+use adk_sandbox::SandboxError;
+use adk_sandbox::sandbox::{
+    ProxyEndpoint, SandboxEnforcer, SandboxPolicyBuilder, sandboxed_command,
+};
 
 #[cfg(target_os = "macos")]
 fn enforcer() -> Option<Box<dyn SandboxEnforcer>> {
@@ -197,6 +200,47 @@ async fn the_network_is_blocked_when_the_policy_denies_it() {
 async fn the_network_is_reachable_when_the_policy_allows_it() {
     let Some(output) = connect_to_host_loopback(true).await else { return };
     assert!(output.status.success(), "{output:?}");
+}
+
+/// Under `Proxied`, the proxy's loopback port is the one destination: another loopback
+/// listener is refused, and the proxy variables name the endpoint. An enforcer that cannot
+/// enforce `Proxied` refuses the policy before anything runs.
+#[tokio::test]
+async fn a_proxied_command_reaches_only_the_proxy_port() {
+    let Some(enforcer) = enforcer() else { return };
+    let (_guard, workspace) = canonical_tempdir();
+    let proxy = TcpListener::bind("127.0.0.1:0").expect("bind the proxy listener");
+    let other = TcpListener::bind("127.0.0.1:0").expect("bind another listener");
+    let endpoint = ProxyEndpoint { port: proxy.local_addr().expect("address").port() };
+    let other_port = other.local_addr().expect("address").port();
+    let policy = system_policy().allow_read(&workspace).proxied(endpoint).build();
+
+    if !enforcer.network_support().proxied {
+        let refused = sandboxed_command(
+            enforcer.as_ref(),
+            OsStr::new("sh"),
+            &[OsString::from("-c"), OsString::from("true")],
+            &policy,
+            &workspace,
+        );
+        assert!(matches!(refused, Err(SandboxError::Unenforceable { .. })), "{refused:?}");
+        return;
+    }
+    if !Path::new("/usr/bin/nc").exists() && !Path::new("/bin/nc").exists() {
+        eprintln!("nc is not installed, skipping");
+        return;
+    }
+    let script = format!(
+        "echo \"$HTTPS_PROXY\"; nc -z -w 3 127.0.0.1 {port} && echo proxy-reached; \
+         nc -z -w 3 127.0.0.1 {other_port} && echo other-reached; true",
+        port = endpoint.port
+    );
+
+    let output = run(enforcer.as_ref(), &policy, &workspace, &script).await;
+
+    assert!(output.status.success(), "{output:?}");
+    let lines: Vec<String> = text(&output.stdout).lines().map(str::to_string).collect();
+    assert_eq!(lines, [endpoint.url(), "proxy-reached".to_string()], "{output:?}");
 }
 
 /// The session id from a `/proc/<pid>/stat` line: the fourth field after the command name.
