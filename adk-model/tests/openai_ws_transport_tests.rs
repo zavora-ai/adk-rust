@@ -20,6 +20,8 @@ use tokio_tungstenite::tungstenite::Message;
 enum Step {
     Send(Value),
     Pause(u64),
+    /// Waits until a request with this input has arrived on any connection.
+    WaitFor(&'static str),
     Close,
 }
 
@@ -42,12 +44,13 @@ impl Server {
         let (count, log) = (handshakes.clone(), requests.clone());
         tokio::spawn(async move {
             while let Ok((socket, _)) = listener.accept().await {
-                let refusal = plan(count.fetch_add(1, Ordering::SeqCst));
+                let connection = count.fetch_add(1, Ordering::SeqCst);
+                let refusal = plan(connection);
                 let (script, log) = (script.clone(), log.clone());
                 tokio::spawn(async move {
                     match refusal {
                         Some(status) => refuse(socket, status).await,
-                        None => serve(socket, script, log).await,
+                        None => serve(socket, connection, script, log).await,
                     }
                 });
             }
@@ -83,17 +86,26 @@ async fn refuse(mut socket: TcpStream, status: u16) {
     let _ = socket.shutdown().await;
 }
 
-async fn serve(socket: TcpStream, script: Script, log: Arc<Mutex<Vec<Value>>>) {
+/// Serves one connection; each logged request carries the connection's number in `__conn`.
+async fn serve(socket: TcpStream, connection: usize, script: Script, log: Arc<Mutex<Vec<Value>>>) {
     let Ok(mut ws) = tokio_tungstenite::accept_async(socket).await else { return };
     while let Some(Ok(message)) = ws.next().await {
         let Message::Text(text) = message else { continue };
         let request: Value = serde_json::from_str(text.as_str()).unwrap();
-        log.lock().unwrap().push(request.clone());
+        let mut logged = request.clone();
+        logged["__conn"] = json!(connection);
+        log.lock().unwrap().push(logged);
         for step in script(&request) {
             let sent = match step {
                 Step::Send(event) => ws.send(Message::Text(event.to_string().into())).await,
                 Step::Pause(millis) => {
                     tokio::time::sleep(Duration::from_millis(millis)).await;
+                    Ok(())
+                }
+                Step::WaitFor(other) => {
+                    while !log.lock().unwrap().iter().any(|request| input(request) == other) {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
                     Ok(())
                 }
                 Step::Close => {
@@ -236,10 +248,13 @@ async fn abandoned_response_does_not_reach_the_next_request() {
 }
 
 #[tokio::test]
-async fn requests_wait_for_the_open_response() {
+async fn concurrent_requests_use_their_own_connections() {
+    // Each answer waits for the other request: on one shared connection neither would
+    // ever be sent, and `collect` would panic on the hang.
     let script: Script = Arc::new(|request| {
+        let other = if input(request) == "q1" { "q2" } else { "q1" };
         let reply = format!("answer-{}", input(request));
-        vec![Step::Pause(100), Step::Send(delta(&reply)), Step::Send(completed("resp", &reply))]
+        vec![Step::WaitFor(other), Step::Send(delta(&reply)), Step::Send(completed("resp", &reply))]
     });
     let server = Server::start(script, accept_all()).await;
     let transport = WsTransport::connect(&server.config()).await.unwrap();
@@ -251,8 +266,113 @@ async fn requests_wait_for_the_open_response() {
             first.1.is_none() && second.1.is_none(),
             server.handshakes()
         ),
-        ("answer-q1".to_string(), "answer-q2".to_string(), true, 1)
+        ("answer-q1".to_string(), "answer-q2".to_string(), true, 2)
     );
+}
+
+#[tokio::test]
+async fn a_full_pool_fails_without_sending_after_the_acquire_timeout() {
+    let script: Script = Arc::new(|_| {
+        vec![Step::Pause(1_000), Step::Send(delta("late")), Step::Send(completed("resp", "late"))]
+    });
+    let server = Server::start(script, accept_all()).await;
+    let transport = WsTransport::connect(&server.config())
+        .await
+        .unwrap()
+        .with_max_connections(1)
+        .with_acquire_timeout(Duration::from_millis(100));
+    let mut open = transport.send_request(request("q1")).await.unwrap();
+    let (_, error) = collect(&transport, "q2").await;
+    let error = error.expect("the second request must not wait past the acquire timeout");
+    assert_eq!(
+        (error.category, error.code, error.is_retryable()),
+        (ErrorCategory::Unavailable, "model.openai_responses.ws_pool_timeout", true)
+    );
+    assert!(server.requests.lock().unwrap().iter().all(|request| input(request) != "q2"));
+    while open.next().await.is_some() {}
+}
+
+#[tokio::test]
+async fn a_continuation_takes_the_connection_of_its_previous_response() {
+    let script: Script = Arc::new(|request| {
+        let id = format!("resp_{}", input(request));
+        let mut steps = vec![];
+        if let Some(other) = match input(request) {
+            "q1" => Some("q2"),
+            "q2" => Some("q1"),
+            _ => None,
+        } {
+            steps.push(Step::WaitFor(other));
+        }
+        steps.push(Step::Send(completed(&id, "ok")));
+        steps
+    });
+    let server = Server::start(script, accept_all()).await;
+    let transport = WsTransport::new(&server.config()).unwrap();
+    tokio::join!(collect(&transport, "q1"), collect(&transport, "q2"));
+
+    // Each continuation names a different earlier response, so no fixed choice of idle
+    // connection satisfies both.
+    for (text, previous) in [("q3", "resp_q1"), ("q4", "resp_q2")] {
+        let mut continuation = request(text);
+        continuation.previous_response_id = Some(previous.to_string());
+        continuation.store = Some(false);
+        let mut stream = transport.send_request(continuation).await.unwrap();
+        while stream.next().await.is_some() {}
+    }
+
+    let requests = server.requests.lock().unwrap();
+    let connection = |text: &str| {
+        requests
+            .iter()
+            .find(|request| input(request) == text)
+            .map(|request| request["__conn"].clone())
+    };
+    assert_eq!(
+        (connection("q3"), connection("q4"), server.handshakes()),
+        (connection("q1"), connection("q2"), 2)
+    );
+}
+
+#[tokio::test]
+async fn a_silent_server_fails_the_stream_at_the_read_timeout() {
+    let server = Server::start(Arc::new(|_| vec![Step::Pause(5_000)]), accept_all()).await;
+    let transport = WsTransport::connect(&server.config())
+        .await
+        .unwrap()
+        .with_read_timeout(Duration::from_millis(100));
+    let (_, error) = collect(&transport, "q1").await;
+    let error = error.expect("a silent server must fail the stream");
+    assert_eq!(
+        (error.category, error.code, error.is_retryable()),
+        (ErrorCategory::Timeout, "model.openai_responses.ws_timeout", false)
+    );
+    assert!(!transport.is_connected());
+}
+
+#[tokio::test]
+async fn a_request_made_while_holding_the_final_chunk_does_not_wait_on_itself() {
+    let server = Server::start(Arc::new(|request| answer(input(request))), accept_all()).await;
+    let transport = WsTransport::connect(&server.config())
+        .await
+        .unwrap()
+        .with_max_connections(1)
+        .with_acquire_timeout(Duration::from_secs(2));
+    let mut stream = transport.send_request(request("q1")).await.unwrap();
+    let mut last = None;
+    while let Some(item) = stream.next().await {
+        let item = item.unwrap();
+        if !item.partial {
+            last = Some(item);
+            break;
+        }
+    }
+    assert!(last.is_some());
+    // The stream is still alive, as when an after-model callback calls the same model.
+    let (responses, error) = collect(&transport, "q2").await;
+    assert!(error.is_none(), "{error:?}");
+    assert_eq!((text(&responses).as_str(), server.handshakes()), ("q2", 1));
+    drop(stream);
 }
 
 #[tokio::test]
@@ -400,4 +520,89 @@ async fn rejected_handshakes_are_not_retried() {
         (error.map(|e| e.category), server.handshakes()),
         (Some(ErrorCategory::Unauthorized), 2)
     );
+}
+
+mod client {
+    use super::*;
+    use adk_core::{Content, Llm, LlmRequest};
+    use adk_model::openai::OpenAIResponsesClient;
+    use futures::TryStreamExt;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// An HTTP Responses endpoint that streams one answer.
+    async fn http_answering(text: &str) -> MockServer {
+        let server = MockServer::start().await;
+        let body = format!("data: {}\n\ndata: {}\n\n", delta(text), completed("resp_http", text));
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    fn client(http: &MockServer, ws: &Server, fallback: bool) -> OpenAIResponsesClient {
+        let transport = WsTransport::new(&ws.config()).unwrap().with_retry_config(no_retry_delay());
+        OpenAIResponsesClient::new(
+            OpenAIResponsesConfig::new("sk-test", "test-model").with_base_url(http.uri()),
+        )
+        .unwrap()
+        .with_websocket(transport)
+        .with_websocket_fallback(fallback)
+    }
+
+    async fn generate(client: &OpenAIResponsesClient) -> Result<Vec<LlmResponse>, AdkError> {
+        let request = LlmRequest::new("test-model", vec![Content::new("user").with_text("q1")]);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            client.generate_content(request, true).await?.try_collect::<Vec<_>>().await
+        })
+        .await
+        .expect("the stream must end")
+    }
+
+    async fn http_requests(http: &MockServer) -> usize {
+        http.received_requests().await.unwrap().len()
+    }
+
+    #[tokio::test]
+    async fn streamed_generations_go_over_the_websocket() {
+        let http = http_answering("from-http").await;
+        let ws = Server::start(Arc::new(|_| answer("from-ws")), accept_all()).await;
+        let responses = generate(&client(&http, &ws, true)).await.unwrap();
+        assert_eq!((text(&responses).as_str(), http_requests(&http).await), ("from-ws", 0));
+    }
+
+    #[tokio::test]
+    async fn a_refused_handshake_falls_back_to_http_once() {
+        let http = http_answering("from-http").await;
+        let ws = Server::start(Arc::new(|_| answer("from-ws")), Arc::new(|_| Some(404))).await;
+        let responses = generate(&client(&http, &ws, true)).await.unwrap();
+        assert_eq!(
+            (text(&responses).as_str(), http_requests(&http).await, ws.handshakes()),
+            ("from-http", 1, 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn without_fallback_a_refused_handshake_is_the_error() {
+        let http = http_answering("from-http").await;
+        let ws = Server::start(Arc::new(|_| answer("from-ws")), Arc::new(|_| Some(404))).await;
+        let error = generate(&client(&http, &ws, false)).await.unwrap_err();
+        assert_eq!(
+            (error.category, error.code, http_requests(&http).await),
+            (ErrorCategory::NotFound, "model.openai_responses.ws_handshake", 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_request_the_server_received_never_falls_back() {
+        let http = http_answering("from-http").await;
+        let ws = Server::start(Arc::new(|_| vec![Step::Close]), accept_all()).await;
+        let error = generate(&client(&http, &ws, true)).await.unwrap_err();
+        assert_eq!(
+            (error.code, http_requests(&http).await, ws.requests.lock().unwrap().len()),
+            ("model.openai_responses.unfinished_stream", 0, 1)
+        );
+    }
 }
