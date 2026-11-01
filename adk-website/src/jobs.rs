@@ -19,11 +19,9 @@
 
 use std::fmt;
 
-use adk_core::{NewRun, Result};
+use adk_core::Result;
 use adk_harness::website::{JobBinding, WebsitePartition};
-use adk_kernel::PartitionId;
 use adk_kernel::charter::{AutonomyLadder, JobAutonomy, SiteProcessKind, ladder_rank};
-use adk_kernel::wake::Trigger;
 use awp_types::{AutonomyLevel, Charter, JobAuthority, JobLimits};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -653,8 +651,8 @@ pub struct SiteProcess {
     pub job: &'static str,
     /// The agent that does the work, or the workflow that runs it.
     pub target: String,
-    /// The standing trigger.
-    pub trigger: Trigger,
+    /// What each run starts with: the site, the job, its playbook and the turn's text.
+    pub input: serde_json::Value,
 }
 
 /// The workflow the Guardian's probe runs without a model: probe, drift, incident path
@@ -666,9 +664,10 @@ pub const DIGEST_WORKFLOW: &str = "website.steward.digest";
 /// edge's lockfile and the certificate's expiry, proposed to the owner (spec 3.5 §7.20).
 pub const WATCH_WORKFLOW: &str = "website.guardian.watch";
 
-/// The processes of `jobs` for `team`, in the back office `partition` of app `app` (spec 3.5
-/// §7.11, §7.20): the probe, the watch and the digest run as workflows; the other kinds run
-/// their job's agent with the playbook as its turn.
+/// The binding table of `jobs` for `team` (spec 3.5 §7.11, §7.20): each job's process kind
+/// with the target that does its work — the probe, the watch and the digest as workflows,
+/// the other kinds as their job's agent with the playbook as its turn — for a
+/// [`CharterKit`](adk_kernel::charter::CharterKit) to bind.
 ///
 /// # Example
 ///
@@ -681,17 +680,12 @@ pub const WATCH_WORKFLOW: &str = "website.guardian.watch";
 /// let site = SiteRef::new(uuid::Uuid::nil(), "notes", "https://notes.example");
 /// let personal = template(SiteKind::Personal);
 /// let team = SiteTeam::new(site, &personal);
-/// let processes = jobs::processes(&team, &personal.jobs(), "notes", &"notes.back-office".into());
+/// let processes = jobs::processes(&team, &personal.jobs());
 /// let kinds: Vec<SiteProcessKind> = processes.iter().map(|p| p.kind).collect();
 /// assert!(kinds.contains(&SiteProcessKind::Probe));
 /// assert!(!kinds.contains(&SiteProcessKind::Outreach), "no Revenue on a personal site");
 /// ```
-pub fn processes(
-    team: &SiteTeam,
-    jobs: &[&JobSpec],
-    app: &str,
-    partition: &PartitionId,
-) -> Vec<SiteProcess> {
+pub fn processes(team: &SiteTeam, jobs: &[&JobSpec]) -> Vec<SiteProcess> {
     jobs.iter()
         .filter_map(|job| {
             let kind = job.process?;
@@ -708,16 +702,7 @@ pub fn processes(
                 "playbook": job.playbook,
                 "text": format!("Run the {} playbook for job {}.", job.playbook, job.id),
             });
-            // `trigger` puts the run on the kind's queue.
-            let run = NewRun::new(
-                kind.queue().as_str(),
-                app,
-                format!("site:{}", team.site().name),
-                &target,
-                input,
-            );
-            let trigger = kind.trigger(kind.default_wake(partition), run, partition.clone());
-            Some(SiteProcess { kind, job: job.id, target, trigger })
+            Some(SiteProcess { kind, job: job.id, target, input })
         })
         .collect()
 }

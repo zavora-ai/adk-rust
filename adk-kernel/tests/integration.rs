@@ -32,6 +32,7 @@ mod channel_store_postgres;
 mod channel_store_redis;
 mod channel_store_sqlite;
 mod charter_invariants;
+mod charter_kit;
 mod charter_property_tests;
 mod charter_scenarios;
 mod charter_store_postgres;

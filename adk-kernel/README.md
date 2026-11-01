@@ -249,6 +249,7 @@ to it, in `adk_kernel::charter` ([the charter](../docs/official_docs/kernel/char
 | `AutonomyLadder` | Each job's level and history: promotion only by an owner's decision, demotion one level on a breach, two rejections in a row or an incident (A-I13); promotion offers after 20 unchanged approvals within 30 days |
 | `SignalSink` | Files typed signals in the back office's agenda as `AgendaOrigin::Signal { kind, count }` items, counts repeats of a kind and topic, rate-limits each source, wakes `Wake::Signal` sleepers and records `kernel.signal`; a signal is never a crossing, and `SignalSourceTool` puts a request for its raw text to the partition policy, which denies it |
 | `SiteProcessKind` | `site.probe`, `site.watch`, `site.content`, `site.reviews`, `site.outreach`, `site.support`, `site.digest` |
+| `CharterKit` | Installs a site on a kernel builder: each kind the product binds to its own target as a standing trigger, the KPI tracker as the `kernel.kpi` process (`KernelBuilder::kpi_tracker`), the signal sink (`KernelBuilder::signals`), and a `charter.job_unbound` inventory warning for each kind left unbound |
 
 The charter, KPI, autonomy and signal stores run in memory, on SQLite, PostgreSQL and Redis,
 each with a conformance suite.

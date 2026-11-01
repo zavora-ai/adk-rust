@@ -16,8 +16,11 @@
 //! source, and — with a model — the back office ([`super::back_office`]): the Steward leading
 //! the team, and each agent's jobs on their signals and schedules, under the owner's
 //! standing rules in `data/kernel.db`. Agent sessions are kept in `data/kernel/sessions.db`.
-//! At start, each job whose process is not scheduled is logged with the reason: no channel,
-//! no probe options or domain claim, no advisory or certificate source, or no model.
+//! Each site's jobs are bound through a `CharterKit`, which also runs the KPI tracker as the
+//! kernel's `kernel.kpi` process, hourly. A job whose process is not scheduled is a warning in
+//! the kernel's inventory, logged at start and at `GET /api/kernel/inventory`, with the
+//! reason: no channel, no probe options or domain claim, no advisory or certificate source,
+//! or no model.
 //!
 //! Every store of the kernel is in `data/kernel.db` beside the runs ([`SiteStores`]) — the
 //! process table, schedules, spend ledger, the kill switch and the control plane's settings
@@ -210,12 +213,8 @@ async fn start(
         .approval_service(stores.approvals.clone())
         .partitions(stores.partitions.clone());
     for site in &sites {
-        use adk_kernel::charter::SiteProcessKind;
+        use adk_kernel::charter::{CharterKit, SiteProcessKind};
         triggers.extend(site.triggers().iter().cloned());
-        builder = builder.signals(
-            stores.kernel.charter.signals.clone(),
-            site.partitions.back_office().id.clone(),
-        );
         let team = SiteTeam::new(site.site.clone(), &site.template);
         let partition = site.partitions.back_office().id.clone();
         // The runs of a site's processes are its own app's, so its agents act as
@@ -273,20 +272,27 @@ async fn start(
                 .map(|kind| (kind, "the site has no model")),
             );
         }
-        for process in crate::jobs::processes(&team, &site.template.jobs(), app, &partition) {
-            if runs.contains(&process.kind) {
-                triggers.push(process.trigger);
-            } else if let Some((_, reason)) = skipped.iter().find(|(kind, _)| *kind == process.kind)
-            {
-                tracing::info!(
-                    site = app,
-                    job = process.job,
-                    process = process.kind.as_str(),
-                    reason,
-                    "the job's process is not scheduled"
-                );
-            }
+        // The charter kit binds each job's process to its target, runs the KPI tracker as
+        // the kernel's `kernel.kpi` process and files the edge's signals in the back office;
+        // a kind the site does not run is named in the kernel's inventory with the reason.
+        let mut kit = CharterKit::new(
+            site.site.id,
+            app,
+            partition.clone(),
+            stores.kernel.charter.signals.clone(),
+        )
+        .with_user(format!("site:{}", site.site.name))
+        .tracker(site.tracker().clone());
+        for process in crate::jobs::processes(&team, &site.template.jobs()) {
+            kit = match skipped.iter().find(|(kind, _)| *kind == process.kind) {
+                Some((_, reason)) => kit.skip(process.kind, *reason),
+                None if runs.contains(&process.kind) => {
+                    kit.job(process.kind, process.target, process.input)
+                }
+                None => kit,
+            };
         }
+        builder = kit.install(builder);
     }
     // The kernel fires each standing trigger's cron expression through one watermarked
     // source of its own, its cursor in the project's store.
@@ -295,13 +301,21 @@ async fn start(
     }
     let workflows =
         ServedWorkflows::new(site_workflows, sites.iter().map(|site| site.experiments.clone()));
-    let kernel = builder.workflows(Arc::new(workflows)).build().map_err(config)?;
+    let kernel = builder.workflow(Arc::new(workflows)).build().map_err(config)?;
     // The edge's signals wake the back office's processes (spec 3.5 §7.10, §7.20), filed in
     // each site's trail.
     for site in &sites {
         let partition = site.partitions.back_office().id.clone();
         let sink = kernel.signal_sink(partition).map_err(config)?;
         site.signals.attach(sink.with_audit(site.audit.clone()));
+    }
+    // A guardrail breached before the restart pauses its jobs again before the kernel takes
+    // their work (A-I15).
+    for site in &sites {
+        let paused = site.tracker().restore_pauses().await.map_err(config)?;
+        if !paused.is_empty() {
+            tracing::info!(site = %site.site.name, jobs = ?paused, "jobs paused by a breached guardrail");
+        }
     }
     kernel.start().await.map_err(config)?;
     let kernel_addr = kernel

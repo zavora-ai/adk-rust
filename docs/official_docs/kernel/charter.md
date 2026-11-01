@@ -90,11 +90,12 @@ The fixtures come from the `conformance` feature:
 aggregates: one bucket per period, empty periods included. `KpiTracker::review(week)` gives
 each KPI's week against the week before, its baseline and its target for the weekly review.
 
-The tracker runs as the kernel's own maintenance process: register `KpiTrackerExecutor`
-with `KernelBuilder::workflows` and `KpiTracker::trigger(app, "0 0 3 * * *")` with
-`KernelBuilder::trigger`; the kernel fires the expression through a watermarked
-`CronWakeSource` of its own. Each run executes
-target `kernel.kpi`, makes no model call, and returns the `TrackerReport`.
+The tracker runs as the kernel's own maintenance process: `KernelBuilder::kpi_tracker(tracker,
+app, "0 0 3 * * *")` registers its trigger (`KpiTracker::trigger`) and one `KpiTrackerExecutor`
+over every tracker given, beside the kernel's other workflows; the kernel fires the expression
+through a watermarked `CronWakeSource` of its own. Each run executes target `kernel.kpi`, makes
+no model call, and returns the `TrackerReport`. As a process it shows in `ps`, fires a tick
+missed while the kernel was down once, and waits out a freeze.
 
 `JobPauses` implements `JobControl` and `ToolPolicy`: added to the job's harness policy, it
 denies every tool call of a paused job's agents until a person resumes the job with an
@@ -186,6 +187,47 @@ labelled `site.process`.
 | `site.outreach` | Nurture sequences and handoffs | daily at 09:00 UTC | `background` |
 | `site.support` | Support escalations | a `support_escalation` signal | `background` |
 | `site.digest` | The weekly review | Mondays at 07:00 UTC | `background` |
+
+## Installing a site: `CharterKit`
+
+`CharterKit` installs a site's charter machinery on a `KernelBuilder` in one call. The kernel
+recognises the site process kinds and the product does their work, so the product binds each
+kind it runs to its own target; the kit never picks one.
+
+```rust
+use std::sync::Arc;
+
+use adk_kernel::charter::{CharterKit, CharterStores, KpiTracker, SiteProcessKind};
+use adk_kernel::stores::KernelStores;
+use adk_kernel::{Kernel, KernelError};
+
+fn kernel(stores: &KernelStores, site: uuid::Uuid, has_channel: bool) -> Result<Kernel, KernelError> {
+    let CharterStores { charters, kpis, signals, .. } = stores.charter.clone();
+    let mut kit = CharterKit::new(site, "bakery", "bakery.back-office", signals)
+        .with_user("site:bakery")
+        .job(SiteProcessKind::Probe, "website.guardian.probe", serde_json::json!({ "site": site }))
+        .job(SiteProcessKind::Content, "growth", serde_json::json!({ "text": "Close the content gap." }))
+        .tracker(KpiTracker::new(site, charters, kpis));
+    kit = if has_channel {
+        kit.job(SiteProcessKind::Digest, "website.steward.digest", serde_json::json!({ "site": site }))
+    } else {
+        kit.skip(SiteProcessKind::Digest, "the owner has no channel")
+    };
+    kit.install(Kernel::builder().stores(stores).require_durable()).build()
+}
+```
+
+| `install` registers | How |
+|---|---|
+| Each bound kind | `SiteProcessKind::trigger` on the kind's default wake (`job`) or the one `job_on` names, in the back-office partition, on the kind's queue, running the bound target with the bound input for the kit's user (`with_user`; `site` by default) |
+| The KPI tracker (`tracker`) | `KernelBuilder::kpi_tracker` on the kit's cron: hourly by default (`CharterKit::DEFAULT_TRACKER_CRON`), `tracker_cron` to change it |
+| Signals | `KernelBuilder::signals` over the kit's signal store in the back-office partition: `Kernel::signal_sink` files the edge's signals there and they wake the signal kinds |
+| Each kind not bound | A `charter.job_unbound` warning in the kernel's [inventory](control-plane.md#inventory), with the reason `skip` gave, or "no job is bound to it" |
+
+The workflows a bound target names are the product's, added with `KernelBuilder::workflow`, which
+keeps every executor given beside the others; `KernelBuilder::workflows` replaces them.
+`adk-website serve` binds its jobs this way (`adk_website::jobs::processes` is its binding table)
+and calls `KpiTracker::restore_pauses` before its kernel starts.
 
 ## Events and urgency
 

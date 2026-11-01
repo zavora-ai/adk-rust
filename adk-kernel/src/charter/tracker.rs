@@ -434,8 +434,8 @@ impl KpiTracker {
 
     /// The standing trigger that starts the tracker's run on the cron expression `expr`
     /// (six fields, UTC; `"0 0 3 * * *"` is daily at 03:00), on the maintenance queue of
-    /// app `app_name`. Register a [`CronWakeSource`](crate::CronWakeSource) for the
-    /// expression beside it.
+    /// app `app_name`. `KernelBuilder::kpi_tracker` registers it with the tracker's executor;
+    /// the kernel ticks the expression through a watermarked cron source of its own.
     pub fn trigger(&self, app_name: &str, expr: &str) -> Trigger {
         let run = NewRun::new(
             QueueClass::MAINTENANCE,
@@ -781,9 +781,9 @@ fn cadence(cadence: Cadence) -> Duration {
 }
 
 /// Runs the tracker's maintenance runs (spec 3.5 §7.11): target [`KPI_TRACKER_TARGET`],
-/// input `{"site": <uuid>}`, output the [`TrackerReport`]. Register it with
-/// `KernelBuilder::workflows`, and the tracker's [`KpiTracker::trigger`] with
-/// `KernelBuilder::trigger`.
+/// input `{"site": <uuid>}`, output the [`TrackerReport`]. `KernelBuilder::kpi_tracker`
+/// registers one over every tracker it is given, beside the tracker's
+/// [`KpiTracker::trigger`]; [`CharterKit`](super::CharterKit) calls it.
 #[derive(Debug, Clone)]
 pub struct KpiTrackerExecutor {
     trackers: BTreeMap<Uuid, KpiTracker>,

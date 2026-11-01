@@ -1692,6 +1692,43 @@ impl WorkflowExecutor for KernelWorkflows {
     }
 }
 
+/// The workflow executors a builder was given, each run going to the first that has its id.
+struct WorkflowChain(Vec<Arc<dyn WorkflowExecutor>>);
+
+impl WorkflowChain {
+    fn find(&self, workflow_id: &str) -> std::result::Result<&Arc<dyn WorkflowExecutor>, String> {
+        self.0
+            .iter()
+            .find(|executor| executor.has_workflow(workflow_id))
+            .ok_or_else(|| format!("no workflow executor of the kernel has `{workflow_id}`"))
+    }
+}
+
+#[async_trait]
+impl WorkflowExecutor for WorkflowChain {
+    fn has_workflow(&self, workflow_id: &str) -> bool {
+        self.find(workflow_id).is_ok()
+    }
+
+    async fn execute(
+        &self,
+        workflow_id: &str,
+        input: WorkflowState,
+        cancel_token: CancellationToken,
+    ) -> std::result::Result<serde_json::Value, String> {
+        self.find(workflow_id)?.execute(workflow_id, input, cancel_token).await
+    }
+
+    async fn execute_durable(
+        &self,
+        workflow_id: &str,
+        input: WorkflowState,
+        run: WorkflowRunContext,
+    ) -> std::result::Result<serde_json::Value, String> {
+        self.find(workflow_id)?.execute_durable(workflow_id, input, run).await
+    }
+}
+
 /// Emits a finished run's model calls, tool calls and tool durations as the OTel GenAI
 /// histograms (spec 3.2 §7.10, §13 Q4).
 #[cfg(feature = "proc")]
@@ -1768,7 +1805,9 @@ pub struct KernelBuilder {
     spend: Option<Arc<dyn SpendLedger>>,
     audit: Option<AuditTrail>,
     agents: BTreeMap<String, Arc<Runner>>,
-    workflows: Option<Arc<dyn WorkflowExecutor>>,
+    workflows: Vec<Arc<dyn WorkflowExecutor>>,
+    #[cfg(feature = "charter")]
+    kpi_trackers: Vec<crate::charter::KpiTracker>,
     wake_sources: Vec<Arc<dyn WakeSource>>,
     triggers: Vec<Trigger>,
     sinks: Vec<Arc<dyn EventSink>>,
@@ -1896,10 +1935,91 @@ impl KernelBuilder {
         self
     }
 
-    /// Hosts workflow targets, as `DurableWorker::with_workflows` does.
+    /// Hosts workflow targets, as `DurableWorker::with_workflows` does, in place of every
+    /// executor given before; [`workflow`](Self::workflow) adds one beside them.
     #[must_use]
     pub fn workflows(mut self, workflows: Arc<dyn WorkflowExecutor>) -> Self {
-        self.workflows = Some(workflows);
+        self.workflows = vec![workflows];
+        self
+    }
+
+    /// Adds `executor` beside the workflow executors given before: a workflow run goes to the
+    /// first executor, in the order given, that has its workflow id. Products and kits each
+    /// add their own, such as a site's workflows beside its KPI tracker.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::InMemoryRunStore;
+    /// use adk_kernel::{Kernel, Trigger, Wake};
+    /// use adk_server::background::{WorkflowExecutor, WorkflowState};
+    /// use tokio_util::sync::CancellationToken;
+    ///
+    /// struct One(&'static str);
+    ///
+    /// #[async_trait::async_trait]
+    /// impl WorkflowExecutor for One {
+    ///     fn has_workflow(&self, id: &str) -> bool {
+    ///         id == self.0
+    ///     }
+    ///
+    ///     async fn execute(&self, _: &str, _: WorkflowState, _: CancellationToken) -> Result<serde_json::Value, String> {
+    ///         Ok(serde_json::json!(self.0))
+    ///     }
+    /// }
+    ///
+    /// let run = |target: &str| adk_core::NewRun::new("background", "ops", "kernel", target, serde_json::json!({}));
+    /// let kernel = Kernel::builder()
+    ///     .run_store(Arc::new(InMemoryRunStore::new()))
+    ///     .workflow(Arc::new(One("digest")))
+    ///     .workflow(Arc::new(One("probe")))
+    ///     .trigger(Trigger::new("weekly", Wake::Webhook { hook: "weekly".into() }, run("digest")))
+    ///     .trigger(Trigger::new("probe", Wake::Webhook { hook: "probe".into() }, run("probe")))
+    ///     .build()?;
+    /// assert!(kernel.inventory().triggers.iter().all(|trigger| trigger.served));
+    /// # Ok::<(), adk_kernel::KernelError>(())
+    /// ```
+    #[must_use]
+    pub fn workflow(mut self, executor: Arc<dyn WorkflowExecutor>) -> Self {
+        self.workflows.push(executor);
+        self
+    }
+
+    /// Runs `tracker`, a site's KPI tracker, as the kernel's `kernel.kpi` process (spec 3.5
+    /// §7.11; feature `charter`): its trigger ([`KpiTracker::trigger`](crate::charter::KpiTracker::trigger))
+    /// on the six-field UTC cron `expr` for app `app_name`, and one
+    /// [`KpiTrackerExecutor`](crate::charter::KpiTrackerExecutor) over every tracker registered,
+    /// beside the other workflows. The tracker then shows in `ps`, keeps a cron watermark and
+    /// waits out a freeze.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::InMemoryRunStore;
+    /// use adk_kernel::Kernel;
+    /// use adk_kernel::charter::{InMemoryCharterStore, InMemoryKpiStore, KpiTracker};
+    ///
+    /// let tracker = KpiTracker::new(uuid::Uuid::new_v4(), Arc::new(InMemoryCharterStore::new()), Arc::new(InMemoryKpiStore::new()));
+    /// let kernel = Kernel::builder()
+    ///     .run_store(Arc::new(InMemoryRunStore::new()))
+    ///     .kpi_tracker(tracker, "bakery", "0 0 * * * *")
+    ///     .build()?;
+    /// let trigger = &kernel.inventory().triggers[0];
+    /// assert_eq!((trigger.target.as_str(), trigger.served), ("kernel.kpi", true));
+    /// # Ok::<(), adk_kernel::KernelError>(())
+    /// ```
+    #[cfg(feature = "charter")]
+    #[must_use]
+    pub fn kpi_tracker(
+        mut self,
+        tracker: crate::charter::KpiTracker,
+        app_name: &str,
+        expr: &str,
+    ) -> Self {
+        self.triggers.push(tracker.trigger(app_name, expr));
+        self.kpi_trackers.push(tracker);
         self
     }
 
@@ -2429,16 +2549,25 @@ impl KernelBuilder {
         let run_finished = Arc::new(RunFinishedWakeSource::new());
         let hooks =
             Arc::new(KernelHooks { sup: Arc::clone(&sup), run_finished: run_finished.clone() });
+        let mut chain = self.workflows;
+        #[cfg(feature = "charter")]
+        if !self.kpi_trackers.is_empty() {
+            chain.push(Arc::new(crate::charter::KpiTrackerExecutor::new(self.kpi_trackers)));
+        }
+        let caller_workflows: Option<Arc<dyn WorkflowExecutor>> = match chain.len() {
+            0 | 1 => chain.pop(),
+            _ => Some(Arc::new(WorkflowChain(chain))),
+        };
         // The consolidation tick's workflow sits before the caller's (spec 3.2 §7.5).
         let consolidators = Arc::new(self.consolidators);
         let user_workflows = if consolidators.is_empty() {
-            self.workflows.clone()
+            caller_workflows.clone()
         } else {
             Some(Arc::new(ConsolidationExecutor::new(
                 Arc::clone(&sup),
                 Arc::clone(&consolidators),
                 kernel_agenda.clone(),
-                self.workflows.clone(),
+                caller_workflows.clone(),
             )) as Arc<dyn WorkflowExecutor>)
         };
         let workflows = Arc::new(KernelWorkflows {
@@ -2495,7 +2624,7 @@ impl KernelBuilder {
             approvals: self.approvals.clone(),
             statics: self.agents.keys().cloned().collect(),
             start_modes: config.control.start_modes.clone(),
-            workflows: self.workflows.clone(),
+            workflows: caller_workflows.clone(),
             #[cfg(feature = "drivers")]
             drivers: self.drivers.clone(),
             #[cfg(feature = "proc")]
@@ -2518,7 +2647,7 @@ impl KernelBuilder {
                 sessions: self.sessions,
                 agents: self.agents,
                 agent_table,
-                workflows: self.workflows,
+                workflows: caller_workflows,
                 wake_sources,
                 queue_ingresses: self.queue_ingresses,
                 adds_agents,
