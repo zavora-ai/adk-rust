@@ -9,7 +9,7 @@ use fred::prelude::{
 };
 use fred::types::Value;
 
-use super::{ProcessFilter, ProcessStore, SpendScope};
+use super::{ProcessFilter, ProcessStore, SpendScope, UsageTotals, counters, stored_amount};
 use crate::bus::SpendDelta;
 use crate::error::{KernelError, Result};
 use crate::partition::PartitionId;
@@ -114,10 +114,16 @@ end
 return out
 ";
 
-/// KEYS: the process's spend hash, the partition's spend hash. ARGV: day, micro-USD.
+/// KEYS: the process's spend hash, the partition's spend hash, the process's usage hash, the
+/// partition's usage hash. ARGV: day, micro-USD, then counter name and amount pairs.
 const ADD_SPEND_SCRIPT: &str = r"
 redis.call('HINCRBY', KEYS[1], ARGV[1], ARGV[2])
 redis.call('HINCRBY', KEYS[2], ARGV[1], ARGV[2])
+for i = 3, #ARGV, 2 do
+  local field = ARGV[1] .. ':' .. ARGV[i]
+  redis.call('HINCRBY', KEYS[3], field, ARGV[i + 1])
+  redis.call('HINCRBY', KEYS[4], field, ARGV[i + 1])
+end
 return 1
 ";
 
@@ -136,6 +142,7 @@ return 1
 /// | `{<ns>}:processes:partition:<partition>`, `:queue:<queue>`, `:parent:<pid>` | Sorted set | The pids of one partition, queue class or parent, scored 0 |
 /// | `{<ns>}:processes:suspend_requested` | Sorted set | The pids with a pending suspension request, scored 0 |
 /// | `{<ns>}:spend:process:<pid>`, `{<ns>}:spend:partition:<partition>` | Hash | Micro-USD per UTC day (days from the common era) of one process, and of every process of one partition |
+/// | `{<ns>}:usage:process:<pid>`, `{<ns>}:usage:partition:<partition>` | Hash | Model calls, total tokens and units, one field per `<day>:<counter>` |
 /// | `{<ns>}:layout` | String | The layout version [`migrate`](Self::migrate) recorded |
 ///
 /// Identifiers follow a fixed prefix and end the key, so no identifier can spill into
@@ -145,7 +152,7 @@ return 1
 /// the row and moves its index entries, `set_wake` and `set_queue` change their field
 /// only when the row exists, `delete` removes the row with its index entries, and `list`
 /// walks one index and filters on the others in a single consistent read. `add_spend`
-/// increments the process's and the partition's day totals in one script, so concurrent
+/// increments the process's and the partition's day totals and counters in one script, so concurrent
 /// additions all count; deleting a process keeps its spend, so a partition's totals for
 /// past days do not change when the run store prunes a finished run.
 ///
@@ -463,8 +470,14 @@ impl ProcessStore for RedisProcessStore {
         let keys = vec![
             self.key(&format!("spend:process:{pid}")),
             self.key(&format!("spend:partition:{partition}")),
+            self.key(&format!("usage:process:{pid}")),
+            self.key(&format!("usage:partition:{partition}")),
         ];
-        let args = vec![day.num_days_from_ce().to_string(), micro_usd.to_string()];
+        let mut args = vec![day.num_days_from_ce().to_string(), micro_usd.to_string()];
+        for (name, amount) in counters(&delta) {
+            args.push(name.to_string());
+            args.push(stored_amount("redis", name, amount)?.to_string());
+        }
         self.client
             .eval::<i64, _, _, _>(ADD_SPEND_SCRIPT, keys, args)
             .await
@@ -501,5 +514,42 @@ impl ProcessStore for RedisProcessStore {
             }
         }
         Ok(total)
+    }
+
+    async fn usage(
+        &self,
+        scope: &SpendScope,
+        from: NaiveDate,
+        to_inclusive: NaiveDate,
+    ) -> Result<UsageTotals> {
+        let key = match scope {
+            SpendScope::Process(pid) => self.key(&format!("usage:process:{pid}")),
+            SpendScope::Partition(partition) => self.key(&format!("usage:partition:{partition}")),
+        };
+        let mut totals = UsageTotals {
+            micro_usd: self.spend(scope, from, to_inclusive).await?,
+            ..UsageTotals::default()
+        };
+        let fields: HashMap<String, String> = self
+            .client
+            .hgetall(key)
+            .await
+            .map_err(|error| store_error("read the usage totals", &error))?;
+        let range = from.num_days_from_ce()..=to_inclusive.num_days_from_ce();
+        for (field, amount) in fields {
+            let parsed = field.split_once(':').and_then(|(day, name)| {
+                Some((day.parse::<i32>().ok()?, name, amount.parse::<u64>().ok()?))
+            });
+            let Some((number, name, amount)) = parsed else {
+                return Err(store_error(
+                    "read the usage totals",
+                    &format!("the usage total {field} = {amount} is corrupt"),
+                ));
+            };
+            if range.contains(&number) {
+                totals.add_counter(name, amount);
+            }
+        }
+        Ok(totals)
     }
 }

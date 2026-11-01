@@ -7,10 +7,10 @@ day's budget, and a human turn preempts background work when its partition is fu
 | Mechanism | What the kernel does |
 |---|---|
 | Priority classes | One `DurableWorker` per queue — `interactive` (500 ms fallback poll), `background` (2 s), `maintenance` (5 s) — so a human turn never queues behind background work; goals run on `background` (`Harness::with_goal_queue`) |
-| Quotas | Per partition: `max_running` and `max_queued` processes and a `daily_spend_cap`, enforced at admission |
+| Quotas | Per partition: `max_running` and `max_queued` processes, a `daily_spend_cap`, and `daily_caps` per usage unit, enforced at admission |
 | Preemption | An interactive process that finds its partition at `max_running` takes the slot of the youngest `background` process, which parks at its next model-call boundary and is requeued when the interactive one finishes |
 | Quiet hours | Proactive and maintenance processes never start inside the window; interactive and approval-woken runs always may |
-| Cost-aware admission | A background or proactive process starts only while the partition's spend today, plus its budget's cost cap, stays within the cap; otherwise it sleeps until `BudgetReplenished` |
+| Cost-aware admission | A background or proactive process starts only while the partition's spend today, plus its budget's cost cap, stays within the cap, and its usage of every capped unit today is below that unit's cap; otherwise it sleeps until `BudgetReplenished` |
 | Fairness | The quotas bound every partition within a queue, so none starves another; nothing orders claims across partitions |
 
 ## Admission
@@ -21,8 +21,8 @@ route wakes, are never counted or held.
 | Class | Processes | Held by |
 |---|---|---|
 | Interactive | `ProcessKind::Interactive`, or any run on the `interactive` queue | `max_running` (and then it preempts) |
-| Background | Goals, scheduled and triggered processes | `max_running`, `daily_spend_cap` |
-| Proactive | Agenda follow-ups (`Proposed`) and the kernel's maintenance processes | `max_running`, `daily_spend_cap`, the daily proactive budget, quiet hours |
+| Background | Goals, scheduled and triggered processes | `max_running`, `daily_spend_cap`, `daily_caps` |
+| Proactive | Agenda follow-ups (`Proposed`) and the kernel's maintenance processes | `max_running`, `daily_spend_cap`, `daily_caps`, the daily proactive budget, quiet hours |
 
 A process admission holds sleeps `Waiting`, with no lease and no model call, on a wake set
 that says why, and carries the label `kernel.admission`:
@@ -47,7 +47,7 @@ twice when it resumes. `unfreeze` never wakes it.
 ```rust
 use std::sync::Arc;
 
-use adk_core::{InMemoryRunStore, RunBudget};
+use adk_core::{InMemoryRunStore, RunBudget, UsageUnit};
 use adk_kernel::{Kernel, KernelConfig, ProactivityPolicy, QuietHours, Quotas};
 
 fn main() -> anyhow::Result<()> {
@@ -56,7 +56,8 @@ fn main() -> anyhow::Result<()> {
             Quotas::new()
                 .with_max_running(3)
                 .with_max_queued(20)
-                .with_daily_spend_cap(5_000_000), // micro-USD: 5 USD per partition per day
+                .with_daily_spend_cap(5_000_000) // micro-USD: 5 USD per partition per day
+                .with_daily_cap(UsageUnit::Images, 200), // generated images per partition per day
         )
         .with_quiet_hours("22:00-07:00".parse::<QuietHours>()?)
         .with_proactivity(
@@ -76,10 +77,15 @@ fn main() -> anyhow::Result<()> {
 | `KernelConfig::quotas` | none | Applies to each partition separately; partitions with their own quotas are phase 3 |
 | `KernelConfig::quiet_hours` | none | Applies beside `ProactivityPolicy::quiet_hours`; a process waits out both |
 | `QuietHours` | — | `HH:MM-HH:MM` in the host's time zone, or `with_utc_offset_minutes`; a start after the end wraps midnight; equal times make no window |
-| `ProactivityPolicy::daily_budget` | unlimited | Its `max_cost_micro_usd` caps the partition's proactive spend per UTC day |
+| `Quotas::daily_caps` | none | Per `UsageUnit` (`images`, `audioMillis`, `inputTokens`, …; `dailyCaps` in JSON): the partition's daily usage of the unit; reached means held |
+| `ProactivityPolicy::daily_budget` | unlimited | Its `max_cost_micro_usd`, `max_model_calls` and `max_total_tokens` cap the partition's proactive spend, model calls and tokens per UTC day |
 
-Spend comes from the kernel's own daily totals per process and partition (`ProcessStore::spend`),
-the same totals `adk-rust ps` shows, so admission needs no `SpendLedger`.
+Spend and usage come from the kernel's own daily totals per process and partition
+(`ProcessStore::usage`: cost, model calls, total tokens and units), the same totals
+`adk-rust ps` shows, so admission needs no `SpendLedger`. The kernel attributes them from the
+hosted agent's `RunUsage`, which the harness reads from each run's `BudgetTracker`, so media
+calls metered in a run ([Calls billed in units](../security/spend-ledger.md#calls-billed-in-units))
+count. A proposal is refused while any cap of the daily proactive budget is reached.
 
 ## Spawning past `max_queued`
 

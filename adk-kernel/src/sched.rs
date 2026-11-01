@@ -10,9 +10,12 @@
 //! admission against the partition's daily spend, and preemption of the youngest
 //! background run when an interactive one finds its partition at quota.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
+
+use adk_core::{UsageUnit, UsageVector};
 
 use chrono::{DateTime, FixedOffset, Local, NaiveTime, TimeZone, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -355,6 +358,7 @@ mod hh_mm {
 /// | `max_running` | A claimed process whose partition already runs this many waits for a slot; an interactive one preempts the youngest background run |
 /// | `max_queued` | [`ProcessTable::spawn`](crate::ProcessTable::spawn) and agenda scheduling refuse a process past it |
 /// | `daily_spend_cap` | A background process is admitted only while the partition's spend today plus its budget's cost cap stays within it; else it sleeps until `BudgetReplenished` |
+/// | `daily_caps` | Per [`UsageUnit`]: a background process is admitted only while the partition's usage of the unit today is below the cap; else it sleeps until `BudgetReplenished`, the next UTC day |
 ///
 /// The `kernel.wake` runs the kernel routes wakes with are never counted or held.
 /// The proactive limits — open proposals and the daily proactive budget — are the
@@ -365,9 +369,17 @@ mod hh_mm {
 /// ```rust
 /// use adk_kernel::Quotas;
 ///
-/// let quotas = Quotas::new().with_max_running(3).with_max_queued(20).with_daily_spend_cap(5_000_000);
+/// use adk_core::UsageUnit;
+///
+/// let quotas = Quotas::new()
+///     .with_max_running(3)
+///     .with_max_queued(20)
+///     .with_daily_spend_cap(5_000_000)
+///     .with_daily_cap(UsageUnit::Images, 200);
 /// assert_eq!(quotas.max_running, Some(3));
-/// assert_eq!(serde_json::to_value(&quotas).unwrap()["dailySpendCap"], 5_000_000);
+/// let json = serde_json::to_value(&quotas).unwrap();
+/// assert_eq!(json["dailySpendCap"], 5_000_000);
+/// assert_eq!(json["dailyCaps"]["images"], 200);
 /// assert_eq!(Quotas::default().max_running, None);
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -383,6 +395,9 @@ pub struct Quotas {
     /// Most micro-USD the partition spends per UTC day.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daily_spend_cap: Option<u64>,
+    /// Most of each unit the partition uses per UTC day.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub daily_caps: BTreeMap<UsageUnit, u64>,
 }
 
 impl Quotas {
@@ -412,6 +427,13 @@ impl Quotas {
         self
     }
 
+    /// Caps the partition's daily usage of `unit`.
+    #[must_use]
+    pub fn with_daily_cap(mut self, unit: UsageUnit, max: u64) -> Self {
+        self.daily_caps.insert(unit, max);
+        self
+    }
+
     /// Each limit the lower of `self`'s and `other`'s; a limit only one sets applies.
     pub(crate) fn stricter(&self, other: &Self) -> Self {
         fn lower<T: Ord + Copy>(a: Option<T>, b: Option<T>) -> Option<T> {
@@ -420,11 +442,22 @@ impl Quotas {
                 (a, b) => a.or(b),
             }
         }
+        let mut daily_caps = self.daily_caps.clone();
+        for (unit, max) in &other.daily_caps {
+            let cap = daily_caps.entry(*unit).or_insert(*max);
+            *cap = (*cap).min(*max);
+        }
         Self {
             max_running: lower(self.max_running, other.max_running),
             max_queued: lower(self.max_queued, other.max_queued),
             daily_spend_cap: lower(self.daily_spend_cap, other.daily_spend_cap),
+            daily_caps,
         }
+    }
+
+    /// Whether a daily limit of these quotas applies at admission.
+    pub(crate) fn caps_daily_usage(&self) -> bool {
+        self.daily_spend_cap.is_some() || !self.daily_caps.is_empty()
     }
 }
 
@@ -456,10 +489,16 @@ pub(crate) struct AdmissionInput<'a> {
     pub(crate) preemptible: bool,
     /// The partition's spend today, in micro-USD.
     pub(crate) partition_spent: u64,
+    /// The partition's usage today per unit.
+    pub(crate) partition_units: UsageVector,
     /// The partition's proactive spend today, in micro-USD.
     pub(crate) proactive_spent: u64,
+    /// The partition's proactive model calls and total tokens today.
+    pub(crate) proactive_calls_and_tokens: (u64, u64),
     /// The cost cap of the daily proactive budget.
     pub(crate) daily_budget: Option<u64>,
+    /// The model-call and token caps of the daily proactive budget.
+    pub(crate) daily_calls_and_tokens: (Option<u64>, Option<u64>),
     /// The cost cap of the process's own budget; 0 without one.
     pub(crate) need: u64,
 }
@@ -520,9 +559,18 @@ pub(crate) fn admit(input: &AdmissionInput<'_>) -> Admission {
         }
     }
     if input.class != ProcessClass::Interactive {
-        let within_cap = covers(input.quotas.daily_spend_cap, input.partition_spent, input.need);
+        let within_cap = covers(input.quotas.daily_spend_cap, input.partition_spent, input.need)
+            && input
+                .quotas
+                .daily_caps
+                .iter()
+                .all(|(unit, max)| input.partition_units.get(*unit) < *max);
+        let (calls, tokens) = input.proactive_calls_and_tokens;
+        let (max_calls, max_tokens) = input.daily_calls_and_tokens;
         let within_budget = input.class != ProcessClass::Proactive
-            || covers(input.daily_budget, input.proactive_spent, input.need);
+            || (covers(input.daily_budget, input.proactive_spent, input.need)
+                && max_calls.is_none_or(|max| calls < max)
+                && max_tokens.is_none_or(|max| tokens < max));
         if !within_cap || !within_budget {
             return Admission::Budget;
         }
@@ -571,10 +619,71 @@ mod admission_tests {
             running: 0,
             preemptible: false,
             partition_spent: 0,
+            partition_units: UsageVector::new(),
             proactive_spent: 0,
+            proactive_calls_and_tokens: (0, 0),
             daily_budget: None,
+            daily_calls_and_tokens: (None, None),
             need: 0,
         }
+    }
+
+    #[test]
+    fn daily_unit_caps_hold_background_and_proactive_work() {
+        let quotas = Quotas::new().with_daily_cap(UsageUnit::Images, 3);
+        for class in [ProcessClass::Background, ProcessClass::Proactive] {
+            let mut room = input(class, &[], &quotas);
+            room.partition_units = UsageVector::new().with(UsageUnit::Images, 2);
+            assert_eq!(admit(&room), Admission::Admit, "{class:?}");
+            room.partition_units = UsageVector::new().with(UsageUnit::Images, 3);
+            assert_eq!(admit(&room), Admission::Budget, "{class:?} at the cap");
+        }
+        let mut human = input(ProcessClass::Interactive, &[], &quotas);
+        human.partition_units = UsageVector::new().with(UsageUnit::Images, 30);
+        assert_eq!(admit(&human), Admission::Admit, "a human turn is never held");
+        // A cap on one unit ignores the others.
+        let mut other = input(ProcessClass::Background, &[], &quotas);
+        other.partition_units = UsageVector::new().with(UsageUnit::AudioMillis, 1 << 40);
+        assert_eq!(admit(&other), Admission::Admit);
+    }
+
+    #[test]
+    fn the_daily_proactive_budget_caps_model_calls_and_tokens() {
+        let quotas = Quotas::new();
+        let mut proactive = input(ProcessClass::Proactive, &[], &quotas);
+        proactive.daily_calls_and_tokens = (Some(10), Some(50_000));
+        proactive.proactive_calls_and_tokens = (9, 49_999);
+        assert_eq!(admit(&proactive), Admission::Admit);
+        proactive.proactive_calls_and_tokens = (10, 0);
+        assert_eq!(admit(&proactive), Admission::Budget, "model calls reached");
+        proactive.proactive_calls_and_tokens = (0, 50_000);
+        assert_eq!(admit(&proactive), Admission::Budget, "tokens reached");
+        let mut background = input(ProcessClass::Background, &[], &quotas);
+        background.daily_calls_and_tokens = (Some(10), Some(50_000));
+        background.proactive_calls_and_tokens = (10, 50_000);
+        assert_eq!(admit(&background), Admission::Admit, "the proactive budget is not the cap");
+    }
+
+    #[test]
+    fn stricter_quotas_take_the_lower_cap_per_unit() {
+        let kernel =
+            Quotas::new().with_daily_cap(UsageUnit::Images, 10).with_daily_cap(UsageUnit::Pages, 5);
+        let partition = Quotas::new()
+            .with_daily_cap(UsageUnit::Images, 3)
+            .with_daily_cap(UsageUnit::AudioMillis, 60_000);
+        assert_eq!(
+            kernel.stricter(&partition).daily_caps,
+            BTreeMap::from([
+                (UsageUnit::Images, 3),
+                (UsageUnit::AudioMillis, 60_000),
+                (UsageUnit::Pages, 5),
+            ])
+        );
+        let json = serde_json::json!({ "dailyCaps": { "images": 3 } });
+        assert_eq!(
+            serde_json::from_value::<Quotas>(json).unwrap(),
+            Quotas::new().with_daily_cap(UsageUnit::Images, 3)
+        );
     }
 
     fn night() -> QuietHours {
@@ -738,8 +847,11 @@ mod admission_tests {
                             running: running.len(),
                             preemptible: running.contains(&ProcessClass::Background),
                             partition_spent: background_spent + proactive_spent,
+                            partition_units: UsageVector::new(),
                             proactive_spent,
+                            proactive_calls_and_tokens: (0, 0),
                             daily_budget: Some(budget),
+                            daily_calls_and_tokens: (None, None),
                             need,
                         });
                         match decision {

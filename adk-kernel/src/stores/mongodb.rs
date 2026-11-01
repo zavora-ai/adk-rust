@@ -8,7 +8,10 @@ use mongodb::error::{ErrorKind, WriteFailure};
 use mongodb::options::{ClientOptions, FindOptions, IndexOptions};
 use mongodb::{Client, Collection, Cursor, Database, IndexModel};
 
-use super::{ProcessFilter, ProcessStore, SpendScope, day_number, stored_micro_usd, stored_total};
+use super::{
+    ProcessFilter, ProcessStore, SpendScope, UsageTotals, counters, day_number, stored_amount,
+    stored_micro_usd, stored_total,
+};
 use crate::bus::SpendDelta;
 use crate::error::{KernelError, Result};
 use crate::partition::PartitionId;
@@ -144,7 +147,7 @@ where
 /// | Collection | `_id` | Contents |
 /// |------------|-------|----------|
 /// | `adk_kernel_processes` | The pid | `partition`, `queue`, `suspend_requested` and, when set, `parent` and `agenda_item`, the fields `list` filters on; `kind`, `labels` and, when set, `wake` and `suspended_by` as JSON text |
-/// | `adk_kernel_spend` | `{pid, partition, day}` | `micro_usd`, with `pid`, `partition` and `day` (days from the common era) as the fields `spend` sums over |
+/// | `adk_kernel_spend` | `{pid, partition, day}` | `micro_usd`, with `pid`, `partition` and `day` (days from the common era) as the fields `spend` sums over, and `counters`: model calls, total tokens and units by name |
 ///
 /// `list` sorts by `_id` under MongoDB's binary string comparison, so pids order by their
 /// UTF-8 bytes, as on every backend. `set_wake`, `set_queue` and `set_suspend_requested` each
@@ -360,11 +363,14 @@ impl ProcessStore for MongoProcessStore {
         day: NaiveDate,
         delta: SpendDelta,
     ) -> Result<()> {
-        let amount = stored_micro_usd(BACKEND, delta)?;
+        let mut increments = doc! { "micro_usd": stored_micro_usd(BACKEND, &delta)? };
+        for (name, amount) in counters(&delta) {
+            increments.insert(format!("counters.{name}"), stored_amount(BACKEND, name, amount)?);
+        }
         let day = day_number(day);
         let key = doc! { "pid": pid, "partition": partition.as_str(), "day": day };
         let update = doc! {
-            "$inc": { "micro_usd": amount },
+            "$inc": increments,
             "$setOnInsert": { "pid": pid, "partition": partition.as_str(), "day": day },
         };
         let totals = self.spend_totals();
@@ -398,5 +404,34 @@ impl ProcessStore for MongoProcessStore {
         let rows = collect(cursor, "sum the spend totals").await?;
         let sum = rows.first().and_then(|row| read_i64(row, "total")).unwrap_or(0);
         stored_total(BACKEND, sum)
+    }
+
+    async fn usage(
+        &self,
+        scope: &SpendScope,
+        from: NaiveDate,
+        to_inclusive: NaiveDate,
+    ) -> Result<UsageTotals> {
+        let mut filter = match scope {
+            SpendScope::Process(pid) => doc! { "pid": pid },
+            SpendScope::Partition(partition) => doc! { "partition": partition.as_str() },
+        };
+        filter.insert("day", doc! { "$gte": day_number(from), "$lte": day_number(to_inclusive) });
+        let cursor = self
+            .spend_totals()
+            .find(filter)
+            .await
+            .map_err(|error| store_error("read the usage totals", &error))?;
+        let mut totals = UsageTotals::default();
+        for row in collect(cursor, "read the usage totals").await? {
+            let micro_usd = stored_total(BACKEND, read_i64(&row, "micro_usd").unwrap_or(0))?;
+            totals.micro_usd = totals.micro_usd.saturating_add(micro_usd);
+            let Ok(counters) = row.get_document("counters") else { continue };
+            for name in counters.keys() {
+                let amount = stored_total(BACKEND, read_i64(counters, name).unwrap_or(0))?;
+                totals.add_counter(name, amount);
+            }
+        }
+        Ok(totals)
     }
 }

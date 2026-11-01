@@ -119,7 +119,7 @@ async fn migrations_share_harness_db() {
     store.migrate().await.expect("migrate");
     store.migrate().await.expect("migrate again");
     assert_eq!(count(&pool, "_adk_kernel_ledger_migrations").await, 1);
-    assert_eq!(count(&pool, "_adk_kernel_process_migrations").await, 1);
+    assert_eq!(count(&pool, "_adk_kernel_process_migrations").await, 2);
     let ledger = Ledger::new(store.clone(), LedgerKey::from_bytes([1; 32]));
     ledger.record(Activity::new(LedgerKind::Intent, "harness")).await.expect("record");
     assert_eq!(count(&pool, "adk_kernel_ledger").await, 1);

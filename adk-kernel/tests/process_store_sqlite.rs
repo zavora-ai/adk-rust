@@ -116,7 +116,7 @@ async fn migrations_share_harness_db() {
     let store = SqliteProcessStore::new(pool.clone());
     store.migrate().await.expect("migrate");
     store.migrate().await.expect("migrate again");
-    assert_eq!(count(&pool, "_adk_kernel_process_migrations").await, 1);
+    assert_eq!(count(&pool, "_adk_kernel_process_migrations").await, 2);
     assert_eq!(count(&pool, "_adk_session_migrations").await, sessions_before);
     store
         .put(ProcessMeta::new("run-1", QueueClass::Background, ProcessKind::Goal))

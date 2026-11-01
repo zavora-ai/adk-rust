@@ -250,6 +250,15 @@ impl ProcessStore for SlowPuts {
     ) -> adk_kernel::Result<u64> {
         self.inner.spend(scope, from, to_inclusive).await
     }
+
+    async fn usage(
+        &self,
+        scope: &adk_kernel::stores::SpendScope,
+        from: chrono::NaiveDate,
+        to_inclusive: chrono::NaiveDate,
+    ) -> adk_kernel::Result<adk_kernel::UsageTotals> {
+        self.inner.usage(scope, from, to_inclusive).await
+    }
 }
 
 /// Whether the session of `pid` holds a model turn.

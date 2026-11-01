@@ -411,6 +411,64 @@ async fn spend_is_attributed_to_the_process_that_made_it() {
     kernel.stop().await.unwrap();
 }
 
+/// A session usage counter with tokens and units, as the harness reports a run's media calls.
+struct UnitMeter(std::sync::Mutex<RunUsage>);
+
+#[async_trait]
+impl ProgressSource for UnitMeter {
+    async fn usage(&self, _run: &RunRecord) -> adk_kernel::Result<Option<RunUsage>> {
+        Ok(Some(self.0.lock().unwrap().clone()))
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn model_calls_tokens_and_units_are_attributed_to_the_process_that_used_them() {
+    use adk_core::{UsageUnit, UsageVector};
+    use adk_kernel::stores::SpendScope;
+    use adk_kernel::{SpendDelta, UsageTotals};
+
+    let world = World::one_step();
+    let control = GovernanceControl::new();
+    let images = |count| UsageVector::new().with(UsageUnit::Images, count);
+    let meter = Arc::new(UnitMeter(std::sync::Mutex::new(
+        RunUsage::new(1, 0, 100).with_total_tokens(500).with_units(images(2)),
+    )));
+    let kernel = world.kernel_with("k1", &control, |builder| {
+        builder.progress_source(Arc::clone(&meter) as Arc<dyn ProgressSource>)
+    });
+    kernel.start().await.unwrap();
+    let pid = kernel
+        .processes()
+        .spawn(run_on(QueueClass::Interactive, "go"), ProcessSpec::new(ProcessKind::Interactive))
+        .await
+        .unwrap()
+        .meta
+        .pid;
+    tool_called(&world, 1).await;
+    *meter.0.lock().unwrap() = RunUsage::new(3, 0, 10_100)
+        .with_total_tokens(2_500)
+        .with_units(images(3).with(UsageUnit::AudioMillis, 90_000));
+
+    let mut expected = UsageTotals::default();
+    expected.add(
+        &SpendDelta::new(10_000)
+            .with_model_calls(2)
+            .with_total_tokens(2_000)
+            .with_units(images(1).with(UsageUnit::AudioMillis, 90_000)),
+    );
+    let today = chrono::Utc::now().date_naive();
+    let used = eventually("the process's usage", || async {
+        let used =
+            world.processes.usage(&SpendScope::Process(pid.clone()), today, today).await.ok()?;
+        (used.units.get(UsageUnit::AudioMillis) > 0).then_some(used)
+    })
+    .await;
+    assert_eq!(used, expected, "only what the process used since its claim is its own");
+    world.release.add_permits(1);
+    in_state(&world.runs, &pid, RunState::Completed).await;
+    kernel.stop().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_admin_freeze_delegate_parks_and_reports_the_running_process() {
     let world = World::one_step();

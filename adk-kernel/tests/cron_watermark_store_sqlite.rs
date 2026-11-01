@@ -136,7 +136,7 @@ mod sqlite {
         store.migrate().await.expect("migrate");
         store.migrate().await.expect("migrate again");
         assert_eq!(count(&pool, "_adk_kernel_cron_watermark_migrations").await, 1);
-        assert_eq!(count(&pool, "_adk_kernel_process_migrations").await, 1);
+        assert_eq!(count(&pool, "_adk_kernel_process_migrations").await, 2);
         assert_eq!(count(&pool, "_adk_session_migrations").await, sessions_before);
         store.advance("0_0_*_*_*_*", chrono::Utc::now()).await.expect("advance");
         assert_eq!(count(&pool, "adk_kernel_cron_watermarks").await, 1);

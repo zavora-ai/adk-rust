@@ -9,7 +9,9 @@
 //!
 //! Spend is one row per process, partition and UTC day in `adk_kernel_spend`, the day as its
 //! number of days from the common era, so a range compares as integers; an addition is one
-//! upsert that adds to the stored total, so concurrent additions all count. Deleting a
+//! upsert that adds to the stored total, so concurrent additions all count. Model calls,
+//! total tokens and units are one row per counter beside it in `adk_kernel_usage`, added in
+//! the same transaction. Deleting a
 //! process's row keeps its spend, so a partition's totals for past days do not change when
 //! the run store prunes a finished run.
 //!
@@ -61,6 +63,19 @@ INSERT INTO adk_kernel_spend (pid, partition_id, day, micro_usd) VALUES ($1, $2,
 ON CONFLICT (pid, partition_id, day) DO UPDATE SET \
     micro_usd = adk_kernel_spend.micro_usd + excluded.micro_usd";
 
+pub(crate) const ADD_USAGE: &str = "\
+INSERT INTO adk_kernel_usage (pid, partition_id, day, counter, amount) VALUES ($1, $2, $3, $4, $5) \
+ON CONFLICT (pid, partition_id, day, counter) DO UPDATE SET \
+    amount = adk_kernel_usage.amount + excluded.amount";
+
+pub(crate) const PROCESS_USAGE: &str = "\
+SELECT counter, CAST(SUM(amount) AS BIGINT) FROM adk_kernel_usage \
+WHERE pid = $1 AND day >= $2 AND day <= $3 GROUP BY counter";
+
+pub(crate) const PARTITION_USAGE: &str = "\
+SELECT counter, CAST(SUM(amount) AS BIGINT) FROM adk_kernel_usage \
+WHERE partition_id = $1 AND day >= $2 AND day <= $3 GROUP BY counter";
+
 pub(crate) const PROCESS_SPEND: &str = "\
 SELECT CAST(COALESCE(SUM(micro_usd), 0) AS BIGINT) FROM adk_kernel_spend \
 WHERE pid = $1 AND day >= $2 AND day <= $3";
@@ -75,7 +90,7 @@ pub(crate) fn day(day: chrono::NaiveDate) -> i64 {
 }
 
 /// A spend delta as stored.
-pub(crate) fn micro_usd(backend: &'static str, delta: crate::bus::SpendDelta) -> Result<i64> {
+pub(crate) fn micro_usd(backend: &'static str, delta: &crate::bus::SpendDelta) -> Result<i64> {
     i64::try_from(delta.micro_usd).map_err(|_| KernelError::Store {
         backend,
         reason: format!("a spend delta of {} micro-USD exceeds a BIGINT column", delta.micro_usd),
@@ -357,14 +372,30 @@ macro_rules! sql_process_store {
                 day: chrono::NaiveDate,
                 delta: $crate::bus::SpendDelta,
             ) -> $crate::error::Result<()> {
+                let failed =
+                    |e: sqlx::Error| $crate::stores::sql::spend_error($backend, "add to", &e);
+                let day = $crate::stores::sql::day(day);
+                let mut tx = self.pool.begin().await.map_err(failed)?;
                 sqlx::query($crate::stores::sql::ADD_SPEND)
                     .bind(pid)
                     .bind(partition.as_str())
-                    .bind($crate::stores::sql::day(day))
-                    .bind($crate::stores::sql::micro_usd($backend, delta)?)
-                    .execute(&self.pool)
+                    .bind(day)
+                    .bind($crate::stores::sql::micro_usd($backend, &delta)?)
+                    .execute(&mut *tx)
                     .await
-                    .map_err(|e| $crate::stores::sql::spend_error($backend, "add to", &e))?;
+                    .map_err(failed)?;
+                for (name, amount) in $crate::stores::counters(&delta) {
+                    sqlx::query($crate::stores::sql::ADD_USAGE)
+                        .bind(pid)
+                        .bind(partition.as_str())
+                        .bind(day)
+                        .bind(name)
+                        .bind($crate::stores::stored_amount($backend, name, amount)?)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(failed)?;
+                }
+                tx.commit().await.map_err(failed)?;
                 Ok(())
             }
 
@@ -390,6 +421,38 @@ macro_rules! sql_process_store {
                     .await
                     .map_err(|e| $crate::stores::sql::spend_error($backend, "sum", &e))?;
                 $crate::stores::sql::total($backend, total)
+            }
+
+            async fn usage(
+                &self,
+                scope: &$crate::stores::SpendScope,
+                from: chrono::NaiveDate,
+                to_inclusive: chrono::NaiveDate,
+            ) -> $crate::error::Result<$crate::stores::UsageTotals> {
+                let (sql, key) = match scope {
+                    $crate::stores::SpendScope::Process(pid) => {
+                        ($crate::stores::sql::PROCESS_USAGE, pid.as_str())
+                    }
+                    $crate::stores::SpendScope::Partition(partition) => {
+                        ($crate::stores::sql::PARTITION_USAGE, partition.as_str())
+                    }
+                };
+                let mut totals = $crate::stores::UsageTotals {
+                    micro_usd: $crate::stores::ProcessStore::spend(self, scope, from, to_inclusive)
+                        .await?,
+                    ..Default::default()
+                };
+                let counters: Vec<(String, i64)> = sqlx::query_as(sql)
+                    .bind(key)
+                    .bind($crate::stores::sql::day(from))
+                    .bind($crate::stores::sql::day(to_inclusive))
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|e| $crate::stores::sql::spend_error($backend, "sum", &e))?;
+                for (name, amount) in counters {
+                    totals.add_counter(&name, $crate::stores::sql::total($backend, amount)?);
+                }
+                Ok(totals)
             }
         }
     };

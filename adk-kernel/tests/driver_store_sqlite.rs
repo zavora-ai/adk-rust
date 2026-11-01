@@ -97,7 +97,7 @@ async fn migrations_share_harness_db_with_the_process_store() {
     store.migrate().await.expect("migrate");
     store.migrate().await.expect("migrate again");
     assert_eq!(count(&pool, "_adk_kernel_driver_migrations").await, 1);
-    assert_eq!(count(&pool, "_adk_kernel_process_migrations").await, 1);
+    assert_eq!(count(&pool, "_adk_kernel_process_migrations").await, 2);
     let manifest = DriverManifest::from_toml("id = \"fs\"\ncommand = \"mcp-fs\"\n").unwrap();
     store.put(DriverRecord::new(manifest, "alice", chrono::Utc::now())).await.expect("put");
     assert_eq!(count(&pool, "adk_kernel_drivers").await, 1);

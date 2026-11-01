@@ -499,7 +499,8 @@ impl ProcessSpec {
 }
 
 /// What a session's runs have used so far, as the hosted agent counts it (spec 3.2 §7.3,
-/// §7.10): model calls, tool calls and cost in micro-USD.
+/// §7.10): model calls, tool calls, cost in micro-USD, total tokens and the usage per
+/// [`UsageUnit`](adk_core::UsageUnit) (`BudgetTracker::units`).
 ///
 /// The counter is monotonic for the life of the agent: the kernel attributes the
 /// difference between two readings to the process running in the session, so a process
@@ -508,12 +509,16 @@ impl ProcessSpec {
 /// # Example
 ///
 /// ```rust
+/// use adk_core::{UsageUnit, UsageVector};
 /// use adk_kernel::RunUsage;
 ///
-/// let usage = RunUsage::new(3, 2, 12_500);
+/// let usage = RunUsage::new(3, 2, 12_500)
+///     .with_total_tokens(4_000)
+///     .with_units(UsageVector::new().with(UsageUnit::AudioMillis, 90_000));
 /// assert_eq!(usage.cost_micro_usd, 12_500);
+/// assert_eq!(usage.units.get(UsageUnit::AudioMillis), 90_000);
 /// ```
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct RunUsage {
@@ -523,12 +528,32 @@ pub struct RunUsage {
     pub tool_calls: u64,
     /// Cost, in micro-USD.
     pub cost_micro_usd: u64,
+    /// Input plus output tokens.
+    #[serde(default)]
+    pub total_tokens: u64,
+    /// Usage per unit.
+    #[serde(default)]
+    pub units: adk_core::UsageVector,
 }
 
 impl RunUsage {
     /// Usage of `model_calls`, `tool_calls` and `cost_micro_usd`.
     pub fn new(model_calls: u64, tool_calls: u64, cost_micro_usd: u64) -> Self {
-        Self { model_calls, tool_calls, cost_micro_usd }
+        Self { model_calls, tool_calls, cost_micro_usd, ..Self::default() }
+    }
+
+    /// Sets the total tokens.
+    #[must_use]
+    pub fn with_total_tokens(mut self, total_tokens: u64) -> Self {
+        self.total_tokens = total_tokens;
+        self
+    }
+
+    /// Sets the usage per unit.
+    #[must_use]
+    pub fn with_units(mut self, units: adk_core::UsageVector) -> Self {
+        self.units = units;
+        self
     }
 }
 
@@ -1257,9 +1282,9 @@ impl ProcessTable {
             view.model_calls = counts.model_calls;
             view.tool_calls = counts.tool_calls;
         } else if let Some(local) = &local
-            && let Some(last) = local.last
+            && let Some(last) = &local.last
         {
-            let base = local.baseline.unwrap_or_default();
+            let base = local.baseline.clone().unwrap_or_default();
             view.model_calls = last.model_calls.saturating_sub(base.model_calls);
             view.tool_calls = last.tool_calls.saturating_sub(base.tool_calls);
         }
