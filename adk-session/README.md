@@ -476,6 +476,14 @@ async fn main() -> adk_core::Result<()> {
 }
 ```
 
+## Consent-Gated Sessions
+
+`ConsentGatedSessionService` wraps any `SessionService` with an `adk_core::subject::ConsentGate`.
+For a gated user (a visitor id by default), sessions reach the durable service only with consent
+for `session_continuity`, and `user:` keys only with consent for `persistent_profile`; without
+it a session lives in process memory and the keys are dropped. A subject being erased can write
+nothing. See [Subject Rights](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/subject-rights.md#consent-gates).
+
 ## Rewind
 
 `rewind(&identity, event_id)` removes the events after `event_id`, and `rewind_steps(&identity, n)` removes the last `n`. Both address the session by its full `AdkIdentity` — app, user, and session — and rebuild the session-scoped state from the state the session was created with plus the remaining events' deltas; app and user state are shared with other sessions and are not rewound. The in-memory and SQLite backends and `EncryptedSession` implement rewind; every other backend returns `session.rewind.unsupported`.

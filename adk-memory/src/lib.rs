@@ -83,6 +83,7 @@
 //!   `adk_core::subject::SubjectRights`
 
 pub mod adapter;
+pub mod consent_gate;
 pub mod inmemory;
 pub mod migration;
 pub mod service;
@@ -114,6 +115,7 @@ pub mod sqlite;
 pub mod vertex;
 
 pub use adapter::MemoryServiceAdapter;
+pub use consent_gate::ConsentGatedMemoryService;
 pub use inmemory::InMemoryMemoryService;
 pub use service::{
     MemoryEntry, MemoryService, SearchRequest, SearchResponse, UserMemory, validate_project_id,
