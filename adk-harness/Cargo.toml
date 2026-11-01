@@ -41,7 +41,7 @@ kernel = ["runner", "dep:adk-kernel", "adk-kernel/proc"]
 # Plan graph and goal engine (spec 3.1 §7.11).
 graph = ["dep:adk-graph", "adk-graph/time-travel", "adk-graph/action"]
 # OS sandbox for the shell (spec 3.1 §7.9).
-sandbox = ["dep:adk-sandbox", "adk-sandbox/sandbox-native"]
+sandbox = ["dep:adk-sandbox", "adk-sandbox/sandbox-native", "adk-sandbox/egress-proxy"]
 # Container isolation for the shell.
 docker = ["sandbox", "adk-sandbox/workspace-docker"]
 # Spans, spend and the loop guard (spec 3.1 §7.13).

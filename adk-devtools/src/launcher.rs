@@ -1,6 +1,7 @@
 //! [`CommandLauncher`] — how `bash` turns a script into a process (spec 3.1 §10 D1).
 
 use adk_core::ToolContext;
+use adk_core::egress::ToolEgress;
 
 use crate::error::DevToolError;
 use crate::workspace::Workspace;
@@ -76,6 +77,31 @@ pub trait CommandLauncher: Send + Sync {
     /// A short label for the isolation this launcher provides, such as `"host"`.
     fn isolation(&self) -> &str;
 
+    /// Builds the command as [`command`](Self::command) does, with what must live until its
+    /// process has ended, such as the egress proxy the process reaches the network through.
+    /// [`BashTool`](crate::BashTool) holds the guard until the process exits. The default keeps
+    /// nothing; a wrapping launcher forwards its inner launcher's guard.
+    ///
+    /// # Errors
+    ///
+    /// As for [`command`](Self::command).
+    fn guarded_command(
+        &self,
+        ws: &Workspace,
+        script: &str,
+        ctx: &dyn ToolContext,
+    ) -> Result<(tokio::process::Command, Option<LaunchGuard>), DevToolError> {
+        Ok((self.command(ws, script, ctx)?, None))
+    }
+
+    /// What the commands this launcher builds reach on the network, which `bash` declares as
+    /// its [`Tool::egress`](adk_core::Tool::egress). The default,
+    /// [`ToolEgress::Undeclared`], is refused under a run egress policy; a wrapping launcher
+    /// forwards its inner launcher's.
+    fn egress(&self) -> ToolEgress {
+        ToolEgress::Undeclared
+    }
+
     /// Starts the process that runs `script` itself, for a launcher whose confinement is set
     /// when the process is created, such as a restricted token on Windows (spec 3.2 §10 W5).
     ///
@@ -104,6 +130,10 @@ pub trait CommandLauncher: Send + Sync {
         None
     }
 }
+
+/// What a [`CommandLauncher`] keeps alive until a command's process has ended
+/// ([`CommandLauncher::guarded_command`]).
+pub type LaunchGuard = Box<dyn std::any::Any + Send + Sync>;
 
 /// Runs a script on the host as `sh -c <script>`, the default [`CommandLauncher`].
 ///

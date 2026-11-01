@@ -538,6 +538,21 @@ impl Tool for HarnessBashTool {
         Some(&self.annotations)
     }
 
+    /// A sandboxed command declares what its launcher enforces; a command on the host, the
+    /// unsandboxed retry included, declares nothing, so a run egress policy refuses it.
+    fn egress(&self, args: &Value) -> adk_core::egress::ToolEgress {
+        let unsandboxed = args.get("unsandboxed").and_then(Value::as_bool) == Some(true);
+        #[cfg(feature = "sandbox")]
+        if !unsandboxed
+            && self.sandbox_active()
+            && let Some(sandbox) = &self.sandbox
+        {
+            return adk_devtools::CommandLauncher::egress(&sandbox.launcher);
+        }
+        let _ = unsandboxed;
+        adk_core::egress::ToolEgress::Undeclared
+    }
+
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let Some(config) = ctx.run_config() else {
             return Err(refuse("harness.bash.ungoverned", "bash runs only inside a harness run"));

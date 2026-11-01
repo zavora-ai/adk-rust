@@ -60,7 +60,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Field | Default | Meaning |
 |---|---|---|
-| `network` | `false` | Allow all network access; `adk-sandbox` cannot filter by domain |
+| `network` | `false` | Allow all network access when no egress policy applies |
+| `egress` | `None` | The hosts commands may reach, through one egress proxy per command (`Proxied` network access); narrowed by the run's egress policy, which applies alone when this is `None`. See [Network allowlist](#network-allowlist) |
 | `allow_process_spawn` | `true` | Allow forking; `sh -c` forks for every external command |
 | `extra_read`, `extra_write` | empty | Additional read-only and read-write paths |
 | `read_toolchains` | `true` | Read-only access to the toolchain directories below |
@@ -80,7 +81,7 @@ empty standard input, new session and process-group kill.
 | Toolchains (`read_toolchains`) | read-only | read-only |
 | System runtime (`/usr`, `/bin`, `/System`, …, as the enforcer grants it) | read-only | read-only |
 | Anything else, including the real home directory and `~/.ssh` | none | none |
-| Network | `network` | `network` |
+| Network | `egress` and the run's egress policy, else `network` | the same |
 
 **Git.** Of a `.git` directory the sandbox keeps `hooks`, `config` and `info` read-only, the
 entries that decide which commands git runs, and leaves the index, refs and objects
@@ -275,6 +276,33 @@ each such path. Create the missing ones (`.adk`, `.skills`, `.claude` and `.carg
 directories, the rest as files) to turn the setting on. If a protected path disappears
 later, the next sandboxed command needs approval again.
 
+## Network allowlist
+
+Under an egress policy each sandboxed command reaches the network only through its own
+egress proxy (`adk_sandbox::egress_proxy`), which admits the hosts the policy names and
+refuses the rest with `403`; see [Network Egress Policy](../security/egress.md). The policy is
+the run's (`Runner::builder().egress_policy`, `RunConfig::egress_policy`) narrowed by the
+shell's own:
+
+| Source | Sets |
+|---|---|
+| `OsSandboxConfig::egress` | The shell's policy, in code |
+| `.adk/harness.toml` `[network] allow = ["pypi.org:443", "*.pythonhosted.org:443"]` | Narrows the shell's policy and turns the OS sandbox on; the project file can only tighten |
+| The run's egress policy | Narrows the shell's; applies alone when the shell sets none |
+
+| Behaviour | Under an egress policy |
+|---|---|
+| Each command | `Proxied` network access, with `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` pointing at its own proxy; the proxy's records carry the call's id and go to `tracing` |
+| `bash`'s egress declaration (`Tool::egress`) | `Enforced` for a sandboxed command; nothing for the unsandboxed retry or a host shell, which a run egress policy refuses |
+| `auto_allow_sandboxed` | Refused at build when `OsSandboxConfig::egress` is set: an unapproved command could send the workspace to an admitted host |
+| The unsandboxed retry | Off when `OsSandboxConfig::egress` is set; under a run egress policy it declares nothing and is refused |
+| `profileDigest` | Covers the shell's policy, so a standing rule granted under one allowlist does not match another |
+| The Windows restricted token | Cannot place a proxy; `bash` declares nothing, so a run egress policy refuses it |
+
+> **Note:** with `auto_allow_sandboxed` on and only a run egress policy (none on the shell),
+> sandboxed commands stay unapproved and run through the proxy; set `OsSandboxConfig::egress`
+> to have them approved one by one.
+
 ## A failed command and the unsandboxed retry
 
 When a sandboxed command exits non-zero, its result carries a `sandbox` object:
@@ -442,7 +470,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | A background shell's group is killed after a crash only at the next start, and only where the OS reports process start times (macOS, Linux) | Documented; on Windows the Job Object ends the shell with the harness process |
 | A protected name that does not exist below the root (a new nested `AGENTS.md`, `.envrc` or `.git`) can be created by a sandboxed command | Root-level names gate `auto_allow_sandboxed`; nested files are listed, never inlined, by the instruction loader |
 | On a case-sensitive file system a differently cased protected name (`agents.md`) is a different file | File tools match protected names case-folded; the sandbox protects names that exist |
-| Network access is all or nothing | `network: false` is required for unapproved sandboxed commands |
+| An admitted host receives whatever a command sends it | Unapproved sandboxed commands need `network: false` and no egress policy |
 | Git runs code from places the sandbox leaves writable: a `core.hooksPath` inside the workspace (Husky's `.husky`), or a repository a command creates and registers as a submodule through the writable index, whose own `config` git honours when it recurses into it | Documented; the sandbox protects the gitdirs that exist when the command starts |
 | A protected name created inside the container after it started is not mounted read-only | The container's protected mounts are fixed when it starts; root-level names must exist for `auto_allow_sandboxed`, and the next container mounts new ones |
 | A container from a `client` of your own keeps a background process a command leaves, since the harness cannot tell that its sessions are isolated from the host | Containers the harness builds end them after each command; stop them in your client's `exec_command` |

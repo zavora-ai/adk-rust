@@ -403,6 +403,10 @@ fn auto_allow_refusal(launcher: &SandboxLauncher, root: &std::path::Path) -> Opt
     if launcher.config().network {
         return Some("the sandbox allows the network".to_string());
     }
+    // An unapproved command could send the workspace to a host the policy admits (#1281).
+    if launcher.config().egress.is_some() {
+        return Some("the sandbox reaches the network through an egress proxy".to_string());
+    }
     // An unapproved command must not reach the network or read outside the workspace.
     let mut open = Vec::new();
     if !launcher.denies_network() {
