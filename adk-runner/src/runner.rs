@@ -518,6 +518,10 @@ pub struct RunnerConfig {
     ///
     /// Installed on each run's [`RunConfig::tool_policy`] when the run carries none.
     pub tool_policy: Option<Arc<dyn adk_core::ToolPolicy>>,
+    /// Optional network egress ceiling for tool calls.
+    ///
+    /// Each run's [`RunConfig::egress_policy`] is narrowed by it, never widened.
+    pub egress_policy: Option<adk_core::egress::EgressPolicy>,
     /// Optional kill switch shared with other runners. Without one the runner creates
     /// its own; see [`Runner::governance`].
     pub governance: Option<adk_core::GovernanceControl>,
@@ -592,6 +596,7 @@ pub struct Runner {
     next_run_id: Arc<std::sync::atomic::AtomicU64>,
     /// Policy installed on runs that carry none.
     tool_policy: Option<Arc<dyn adk_core::ToolPolicy>>,
+    egress_policy: Option<adk_core::egress::EgressPolicy>,
     /// Kill switch checked at the start of every run and carried into it.
     governance: adk_core::GovernanceControl,
     /// Durable stores installed on runs that carry none.
@@ -691,6 +696,7 @@ impl Runner {
             active_runs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             next_run_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             tool_policy: config.tool_policy,
+            egress_policy: config.egress_policy,
             governance,
             action_ledger: config.action_ledger,
             approval_store: config.approval_store,
@@ -927,6 +933,13 @@ impl Runner {
         // its own config; the config travels into transfers and agent tools with them.
         if run_config.tool_policy.is_none() {
             run_config.tool_policy = self.tool_policy.clone();
+        }
+        // A run's own egress policy narrows the runner's ceiling; it never replaces it.
+        if let Some(ceiling) = &self.egress_policy {
+            run_config.egress_policy = Some(match run_config.egress_policy.take() {
+                Some(own) => ceiling.narrow(&own),
+                None => ceiling.clone(),
+            });
         }
         if run_config.action_ledger.is_none() {
             run_config.action_ledger = self.action_ledger.clone();

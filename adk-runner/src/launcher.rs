@@ -134,6 +134,7 @@ impl Launcher {
                 #[cfg(feature = "context-compaction")]
                 context_compaction: None,
                 tool_policy: None,
+                egress_policy: None,
                 governance: None,
                 action_ledger: None,
                 approval_store: None,

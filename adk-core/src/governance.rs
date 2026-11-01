@@ -1391,6 +1391,10 @@ pub struct GovernedCall {
     /// Whether a person asked for this call through something an agent drew. See
     /// [`requested`](Self::requested).
     pub requested: bool,
+    /// The network destinations the call declares ([`Tool::egress`]), checked against the
+    /// run's egress policy before anything else may run it. [`for_tool`](Self::for_tool) sets
+    /// it from the call's arguments as the agent built them.
+    pub egress: crate::egress::ToolEgress,
 }
 
 impl GovernedCall {
@@ -1409,14 +1413,17 @@ impl GovernedCall {
             origin: None,
             resumes: None,
             requested: false,
+            egress: crate::egress::ToolEgress::Undeclared,
         }
     }
 
     /// A call to `tool`, taking its name, declared [`Tool::effect`], and
     /// [`ToolOrigin`] from the tool.
     pub fn for_tool(tool: &dyn Tool, function_call_id: impl Into<String>, args: Value) -> Self {
+        let egress = tool.egress(&args);
         let mut call = Self::new(tool.name(), function_call_id, args).with_effect(tool.effect());
         call.origin = Some(ToolOrigin::of(tool));
+        call.egress = egress;
         call
     }
 
@@ -1521,6 +1528,13 @@ impl GovernedCall {
     #[must_use]
     pub fn with_effect(mut self, effect: ToolEffect) -> Self {
         self.effect = effect;
+        self
+    }
+
+    /// Sets the network destinations the call declares; see [`GovernedCall::egress`].
+    #[must_use]
+    pub fn with_egress(mut self, egress: crate::egress::ToolEgress) -> Self {
+        self.egress = egress;
         self
     }
 
@@ -2220,6 +2234,7 @@ pub async fn authorize_tool_call(
         origin,
         resumes,
         requested,
+        egress,
     } = call;
     let audited = AuditedCall {
         gate,
@@ -2282,6 +2297,26 @@ pub async fn authorize_tool_call(
                 "Tool '{tool_name}' was not run: {mismatch}. Call it again if it is still \
                  needed; the new call needs its own approval."
             ),
+            confirmation: None,
+        });
+    }
+
+    // The operator's egress ceiling refuses before the policy, a confirmation, or a person's
+    // request can admit the call: no approval widens it.
+    if let Some(egress_policy) = &config.egress_policy
+        && let Err(reason) = egress_policy.admits_tool(&egress)
+    {
+        tracing::info!(
+            tool.name = %tool_name,
+            agent.id = %gate.acting.agent.id,
+            egress.reason = %reason,
+            "tool call refused by the egress policy"
+        );
+        audited
+            .decision(&args, AuditDecision::Denied, Some(POLICY_REF_EGRESS), Some(&reason))
+            .await?;
+        return Ok(ToolAuthorization::Refuse {
+            reason: format!("Tool '{tool_name}' was not run: {reason}."),
             confirmation: None,
         });
     }
@@ -2857,6 +2892,8 @@ async fn authorize_edited_args(
 const POLICY_REF_GOVERNANCE: &str = "governance";
 /// `policy_ref` of a refusal by the run's consent gate ([`RunConfig::consent_gate`]).
 const POLICY_REF_CONSENT: &str = "consent";
+/// The run's egress policy refused the call's declared destinations.
+const POLICY_REF_EGRESS: &str = "egress";
 /// `policy_ref` of a decision made by the run's [`ToolPolicy`](crate::ToolPolicy), followed
 /// by `:<name>` when the policy names itself.
 const POLICY_REF_TOOL_POLICY: &str = "tool_policy";
@@ -4120,6 +4157,43 @@ mod tests {
         let error = authorize_tool_call(&gate(&config), call).await.unwrap_err();
         assert_eq!(error.code, "governance.frozen");
         assert!(!error.is_retryable());
+    }
+
+    /// The egress ceiling refuses an undeclared or uncovered call before the tool policy, a
+    /// confirmation or a standing approval could admit it, and admits a covered one.
+    #[tokio::test]
+    async fn the_egress_policy_refuses_calls_it_does_not_admit() {
+        use crate::egress::{EgressPolicy, ToolEgress};
+        let policy = EgressPolicy::allowlist(["api.github.com:443"]).unwrap();
+        let config = RunConfig::builder().egress_policy(policy).build();
+        let call = |egress: ToolEgress| {
+            GovernedCall::new("fetch", "c1", json!({}))
+                .requiring_confirmation(true)
+                .with_egress(egress)
+        };
+        for refused in [ToolEgress::Undeclared, ToolEgress::for_urls(["https://example.com/"])] {
+            let outcome = authorize_tool_call(&gate(&config), call(refused.clone())).await.unwrap();
+            let ToolAuthorization::Refuse { reason, confirmation: None } = outcome else {
+                panic!("{refused:?} must be refused before confirmation: {outcome:?}");
+            };
+            assert!(reason.contains("egress policy"), "{reason}");
+        }
+        let admitted = authorize_tool_call(
+            &gate(&config),
+            call(ToolEgress::for_urls(["https://api.github.com/zen"]))
+                .requiring_confirmation(false),
+        )
+        .await
+        .unwrap();
+        assert_eq!(admitted, ToolAuthorization::Execute { args: json!({}), confirmation: None });
+
+        // Without an egress policy no declaration is consulted.
+        let open = RunConfig::default();
+        let outcome =
+            authorize_tool_call(&gate(&open), GovernedCall::new("fetch", "c1", json!({})))
+                .await
+                .unwrap();
+        assert_eq!(outcome, ToolAuthorization::Execute { args: json!({}), confirmation: None });
     }
 
     #[tokio::test]

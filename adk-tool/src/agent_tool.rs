@@ -235,6 +235,7 @@ fn delegated_run_config(parent: RunConfig) -> RunConfig {
         budget_tracker,
         action_ledger,
         tool_policy,
+        egress_policy,
         governance,
         tool_approvals,
         approval_store,
@@ -276,6 +277,7 @@ fn delegated_run_config(parent: RunConfig) -> RunConfig {
         budget_tracker,
         action_ledger,
         tool_policy,
+        egress_policy,
         governance,
         tool_approvals,
         approval_store,
@@ -893,6 +895,12 @@ impl Tool for AgentTool {
 
     fn is_agent_delegation(&self) -> bool {
         true
+    }
+
+    // The delegate reaches its model through the client its builder configured; each of its
+    // own tool calls is checked against the egress policy the delegation carries.
+    fn egress(&self, _args: &Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::Configured
     }
 
     // The delegation's own timeout replaces the parent's generic tool timeout.

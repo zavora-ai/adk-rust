@@ -158,6 +158,10 @@ impl Tool for PublicCapability {
         self.inner.effect()
     }
 
+    fn egress(&self, args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        self.inner.egress(args)
+    }
+
     fn is_long_running(&self) -> bool {
         self.inner.is_long_running()
     }

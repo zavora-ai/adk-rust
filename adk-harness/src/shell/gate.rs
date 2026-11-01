@@ -109,6 +109,10 @@ impl Tool for GatedFileTool {
         self.inner.effect()
     }
 
+    fn egress(&self, args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        self.inner.egress(args)
+    }
+
     fn timeout_override(&self) -> Option<Option<Duration>> {
         self.inner.timeout_override()
     }

@@ -306,6 +306,48 @@ pub trait Tool: Send + Sync {
         false
     }
 
+    /// The network destinations a call with `args` reaches.
+    ///
+    /// Under a run egress policy ([`RunConfig::egress_policy`]),
+    /// [`authorize_tool_call`](crate::authorize_tool_call) refuses the call before it runs
+    /// unless the policy admits the declaration; the default,
+    /// [`ToolEgress::Undeclared`](crate::egress::ToolEgress::Undeclared), is refused. A wrapper
+    /// forwards its inner tool's declaration. See [`ToolEgress`](crate::egress::ToolEgress).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use adk_core::egress::ToolEgress;
+    /// use adk_core::{Result, Tool, ToolContext};
+    /// use serde_json::{Value, json};
+    ///
+    /// struct FetchIssue;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Tool for FetchIssue {
+    ///     fn name(&self) -> &str {
+    ///         "fetch_issue"
+    ///     }
+    ///     fn description(&self) -> &str {
+    ///         "Reads one GitHub issue"
+    ///     }
+    ///     fn egress(&self, _args: &Value) -> ToolEgress {
+    ///         ToolEgress::for_urls(["https://api.github.com/"])
+    ///     }
+    ///     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    ///         Ok(json!({ "issue": args["number"] }))
+    ///     }
+    /// }
+    ///
+    /// let declared = FetchIssue.egress(&json!({ "number": 7 }));
+    /// assert_eq!(declared, ToolEgress::for_urls(["https://api.github.com/"]));
+    /// ```
+    fn egress(&self, _args: &Value) -> crate::egress::ToolEgress {
+        crate::egress::ToolEgress::Undeclared
+    }
+
     /// Executes the tool with the given context and arguments.
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
 }
@@ -371,6 +413,14 @@ pub trait ToolContext: CallbackContext {
     /// Returns the parent run configuration, when exposed by the runtime.
     fn run_config(&self) -> Option<&RunConfig> {
         None
+    }
+
+    /// The run's egress policy ([`RunConfig::egress_policy`]), which a tool that opens its own
+    /// connections enforces, for example by building a
+    /// [`GuardedClient`](crate::egress::GuardedClient) from it. `None` when the run has none or
+    /// the runtime does not expose its configuration.
+    fn egress_policy(&self) -> Option<&crate::egress::EgressPolicy> {
+        self.run_config().and_then(|config| config.egress_policy.as_ref())
     }
 
     /// The names of the tools the agent making this call has, when its runtime says: a tool

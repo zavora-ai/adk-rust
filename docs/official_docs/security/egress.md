@@ -214,6 +214,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Tool declarations
+
+An operator sets the egress ceiling for a run on the runner or the run's configuration; every
+lower layer can only narrow it.
+
+| Where | Effect |
+|-------|--------|
+| `Runner::builder().egress_policy(policy)` | The ceiling of every run; a run's own policy is intersected with it |
+| `RunConfig::builder().egress_policy(policy)` | Sets the run's policy, or narrows the one already set |
+| `ToolContext::egress_policy()` | The run's policy, for a tool that opens its own connections, for example through a `GuardedClient` built from it |
+
+A tool declares the destinations of a call with `Tool::egress(&args)`. Under a run egress policy,
+`authorize_tool_call` checks the declaration before the tool policy, guardrails, or
+confirmation, and no approval admits a call it refuses:
+
+| `ToolEgress` | Under a run egress policy |
+|--------------|---------------------------|
+| `Undeclared` (the default) | Refused |
+| `None` | Admitted: the call opens no network connection |
+| `Configured` | Admitted: the call reaches only endpoints the operator fixed when building the tool, such as a database or a model provider (`AgentTool` declares this; the delegate's own calls are checked against the policy the delegation carries) |
+| `Enforced` | Admitted: every connection is checked when it is made, by a `GuardedClient` built from the run's policy or by a sandbox's egress proxy |
+| `Destinations(rules)` | Admitted when the policy covers every rule (`EgressPolicy::covers`); `ToolEgress::for_urls` builds the rules from URLs |
+
+`FunctionTool::with_egress` and `with_egress_fn` declare a function tool's destinations, the
+second from its arguments. A tool wrapper forwards its inner tool's declaration.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::egress::{EgressPolicy, ToolEgress};
+use adk_core::{RunConfig, Tool};
+use adk_tool::FunctionTool;
+use serde_json::json;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let fetch = Arc::new(
+        FunctionTool::new("fetch_page", "Fetches a page", |_ctx, args| async move { Ok(args) })
+            .with_egress_fn(|args| ToolEgress::for_urls([args["url"].as_str().unwrap_or_default()])),
+    );
+    let config = RunConfig::builder()
+        .egress_policy(EgressPolicy::allowlist(["docs.rs:443", "*.github.com:443"])?)
+        .build();
+    let policy = config.egress_policy.as_ref().expect("set above");
+
+    assert!(policy.admits_tool(&fetch.egress(&json!({ "url": "https://docs.rs/adk-core" }))).is_ok());
+    assert!(policy.admits_tool(&fetch.egress(&json!({ "url": "https://evil.test/" }))).is_err());
+    Ok(())
+}
+```
+
+What a declaration does not cover:
+
+- A declaration is the tool author's statement. Only connections made through a
+  `GuardedClient` or a sandbox's egress proxy are enforced when they are made.
+- The declaration is computed from the arguments the agent built; arguments a tool guardrail
+  rewrites or an approver edits are not declared again.
+- Provider-executed built-in tools (`GoogleSearchTool`, `OpenAIWebSearchTool`, …), model
+  providers, and stores the operator configures are outside the policy.
+- Governed graph nodes and native realtime handlers declare nothing, so a run egress policy
+  refuses them.
+
 ## Limits
 
 - **Not data-loss prevention.** An admitted host receives whatever is sent to it.

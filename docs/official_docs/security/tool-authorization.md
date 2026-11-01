@@ -1300,7 +1300,7 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
 5. The governed path (`adk_core::authorize_tool_call`) on the final arguments:
    1. Kill switch — a frozen run's call is answered `not run` and the run ends with a
       `governance.frozen` error at its next model call (`CodeActAgent`: at once). The switch
-      is also watched during step 6's wait for the handler, and a freeze there refuses the
+      is also watched during step 7's wait for the handler, and a freeze there refuses the
       call the same way
    2. Consent gate (`RunConfig::consent_gate`) — a tool the gate names with
       `ConsentGate::with_tool` runs only when the subject the agent acts for has live consent
@@ -1309,10 +1309,14 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
       [Subject Rights](subject-rights.md#consent-gates)
    3. Resume binding, for a held call being resumed — another acting agent or another tool
       origin answers the call as not run and spends its stored decision
-   4. `ToolPolicy` — a denial becomes the call's result
-   5. Tool guardrails (`ToolGuardrailSet`) — a denial becomes the call's result; a revision is
+   4. Egress policy (`RunConfig::egress_policy`), when the run has one — a call whose
+      `Tool::egress` declaration the policy does not admit, or that declares nothing, is
+      answered as not run; no policy decision, confirmation, or approval admits it (see
+      [Network Egress Policy](egress.md#tool-declarations))
+   5. `ToolPolicy` — a denial becomes the call's result
+   6. Tool guardrails (`ToolGuardrailSet`) — a denial becomes the call's result; a revision is
       checked against the policy again
-   6. Confirmation, when the agent or the policy requires it — a call-ID decision, a fingerprint
+   7. Confirmation, when the agent or the policy requires it — a call-ID decision, a fingerprint
       approval, the `ApprovalStore`, the `ToolConfirmationHandler`, or a hold
 6. Action ledger (`ToolEffect::NonIdempotent` tools, `RunConfig::action_ledger`) — a recorded
    call is answered from its record without executing (`CodeActAgent` raises the answer into
@@ -1361,12 +1365,13 @@ provider flags.
 | 3. A before-tool callback answers with text | `not_run` | — |
 | 3. A before-tool callback answers with a function response, or an enhanced plugin with a result | The callback's own | — |
 | 4. Circuit breaker open | `not_run` | — |
-| 5.1 Kill switch, including a freeze that ends step 5.5's wait for the handler or refuses a resumed held call | `not_run` | `governance.frozen` or `governance.stale` |
-| 5.2 Resume binding mismatch | `refused` | — |
-| 5.3 `ToolPolicy` denial | `refused` | — |
-| 5.4 Tool guardrail denial | `refused` | — |
-| 5.5 A declined or timed-out confirmation | `refused` | — |
-| 5.5 Held for confirmation | `held` | — |
+| 5.1 Kill switch, including a freeze that ends step 5.7's wait for the handler or refuses a resumed held call | `not_run` | `governance.frozen` or `governance.stale` |
+| 5.3 Resume binding mismatch | `refused` | — |
+| 5.4 Egress policy refusal | `refused` | — |
+| 5.5 `ToolPolicy` denial | `refused` | — |
+| 5.6 Tool guardrail denial | `refused` | — |
+| 5.7 A declined or timed-out confirmation | `refused` | — |
+| 5.7 Held for confirmation | `held` | — |
 | 6. Action ledger record: succeeded / failed / failed with a `not run` text / begun without an outcome | `succeeded` / `failed` / `not_run` / `outcome_unknown` | — |
 | 6. Action ledger cannot be read or written | `not_run` | The ledger's error |
 | 6. Kill switch after the ledger write | `not_run` | `governance.frozen` or `governance.stale` |

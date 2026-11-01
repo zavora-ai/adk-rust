@@ -757,6 +757,10 @@ impl Tool for CapabilityProxy {
         self.capability.effect()
     }
 
+    fn egress(&self, args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        self.capability.egress(args)
+    }
+
     fn is_read_only(&self) -> bool {
         self.capability.is_read_only()
     }
