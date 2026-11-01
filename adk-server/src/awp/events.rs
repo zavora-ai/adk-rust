@@ -28,7 +28,6 @@
 //! passes. A log that keeps none leaves them in the process, as before.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -36,8 +35,8 @@ use adk_awp::v2::response::awp_json;
 use adk_awp::v2::store::{
     StoreError, StoreResult, SubscriptionRecord, SubscriptionStore, SubscriptionUpdate,
 };
+use adk_core::egress::{EgressPolicy, GuardedClient};
 use adk_core::webhook::{WebhookSecret, WebhookSigner};
-use adk_core::webhook_delivery::{EgressPolicy, is_non_public};
 use async_trait::async_trait;
 use awp_types::{
     CatalogChanged, CatalogChangesPage, ContentId, ErrorBody, ErrorCode, EventCatalog,
@@ -360,25 +359,6 @@ impl EventLog for InMemoryEventLog {
     }
 }
 
-/// Resolves host names and refuses any answer holding a non-public address.
-struct PublicOnly;
-
-impl reqwest::dns::Resolve for PublicOnly {
-    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        let host = name.as_str().to_owned();
-        Box::pin(async move {
-            let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
-                .await
-                .map_err(|error| Box::new(error) as Box<dyn std::error::Error + Send + Sync>)?
-                .collect();
-            if addresses.iter().any(|address| is_non_public(address.ip())) {
-                return Err(format!("{host} resolves to a non-public address").into());
-            }
-            Ok(Box::new(addresses.into_iter()) as reqwest::dns::Addrs)
-        })
-    }
-}
-
 /// Who referenced which consent receipt, so `consent.revoked` reaches them (AWP 2.0 §9.2):
 /// in the event log when it keeps them, else in the process.
 #[derive(Clone)]
@@ -421,7 +401,7 @@ struct Inner {
     subscriptions: Arc<dyn SubscriptionStore>,
     log: Arc<dyn EventLog>,
     config: EventsConfig,
-    client: reqwest::Client,
+    client: GuardedClient,
     base_url: String,
     pages: Mutex<CatalogPages>,
     references: Arc<Mutex<HashMap<uuid::Uuid, BTreeSet<RequesterId>>>>,
@@ -463,25 +443,19 @@ impl EdgeEvents {
         config: EventsConfig,
         base_url: &str,
     ) -> adk_core::Result<Self> {
-        let mut builder = reqwest::Client::builder()
+        let client = GuardedClient::builder(config.egress.clone())
             .timeout(config.attempt_timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .user_agent(concat!("adk-awp-edge/", env!("CARGO_PKG_VERSION")));
-        if !config.egress.allow_private {
-            builder = builder.no_proxy().dns_resolver(Arc::new(PublicOnly));
-        }
-        let client = builder.build().map_err(|error| {
-            adk_core::AdkError::new(
-                adk_core::ErrorComponent::Server,
-                adk_core::ErrorCategory::Internal,
-                "awp.events.client_unavailable",
-                format!(
-                    "the AWP event delivery client could not be built ({error}); the edge does \
-                     not deliver events without its egress check. Fix the TLS setup the error \
-                     names, such as a native root certificate store with no valid certificate"
-                ),
-            )
-        })?;
+            .redirects(0)
+            .user_agent(concat!("adk-awp-edge/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|error| {
+                adk_core::AdkError::new(
+                    adk_core::ErrorComponent::Server,
+                    adk_core::ErrorCategory::Internal,
+                    "awp.events.client_unavailable",
+                    format!("AWP event delivery is unavailable: {error}"),
+                )
+            })?;
         Ok(Self {
             inner: Arc::new(Inner {
                 subscriptions,
@@ -699,7 +673,7 @@ impl EdgeEvents {
         subscription: &EventSubscription,
         event: &EventEnvelope,
     ) -> Result<(), String> {
-        let url = self.inner.config.egress.check_url(&subscription.url)?;
+        let request = self.inner.client.post(&subscription.url).map_err(|e| e.to_string())?;
         let secret = subscription
             .secret
             .as_deref()
@@ -712,10 +686,7 @@ impl EdgeEvents {
             return Err("the event is over 64 KiB".to_owned());
         }
         let signed = WebhookSigner::new(secret).sign_now(&event.id, &body);
-        let mut request = self
-            .inner
-            .client
-            .post(url)
+        let mut request = request
             .header(header::CONTENT_TYPE, "application/json")
             .header("awp-version", "2.0")
             .body(body);
@@ -975,7 +946,7 @@ impl EdgeEvents {
             .egress
             .check_url(url)
             .map(|_| ())
-            .map_err(|reason| refuse(ErrorCode::InvalidRequest, &reason))
+            .map_err(|denial| refuse(ErrorCode::InvalidRequest, &denial.to_string()))
     }
 
     pub(crate) fn router(&self) -> Router {

@@ -344,6 +344,8 @@
 6 adk-auth token-exchange
 # Web Bot Auth (spec 3.5 §7.3): RFC 9421 and draft test vectors, directory fetch and cache.
 6 adk-auth web-bot-auth doc
+# The egress-guarded HTTP client and its redirect and resolution tests (#1281).
+6 adk-core egress-client doc
 # The GCS artifact backend must keep blob-name parity with adk-python.
 6 adk-artifact gcs
 6 adk-telemetry gcp

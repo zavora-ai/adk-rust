@@ -11,7 +11,7 @@ use adk_auth::web_bot_auth::{
     HttpSignatureSigner, HttpSignatureVerifier, InMemoryKeyDirectorySource, KeyDirectory,
     RequestHead, SignatureInput, SigningParams, VerifiedRequester, WebBotAuthError,
 };
-use adk_core::webhook_delivery::EgressPolicy;
+use adk_core::egress::EgressPolicy;
 use adk_core::{AdkError, ErrorCategory, ManualClock};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;

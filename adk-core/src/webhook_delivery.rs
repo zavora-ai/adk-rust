@@ -4,7 +4,7 @@
 //!
 //! | Step | Behaviour |
 //! |------|-----------|
-//! | Egress check | The URL must pass the [`EgressPolicy`]: HTTPS, and a host that is not, and does not resolve to, a loopback, private, link-local, or other non-public address. Resolution happens inside the HTTP client, so the address checked is the address connected to; when that client cannot be built, every delivery is dead-lettered and none is sent |
+//! | Egress check | The URL must pass the [`EgressPolicy`] (default [`EgressPolicy::public_only`]: HTTPS, and a host that is not, and does not resolve to, a loopback, private, link-local, cloud metadata or other non-public address). Requests go through a [`GuardedClient`], so the address checked is the address connected to; when that client cannot be built, every delivery is dead-lettered and none is sent |
 //! | Signing | Every attempt is signed with [Standard Webhooks](crate::webhook) under the message's stable `webhook-id` and a fresh `webhook-timestamp` |
 //! | Success | Any `2xx` response |
 //! | Retry | Connection errors, timeouts, `408`, `425`, `429`, and `5xx`, with exponential backoff and full jitter, honouring `Retry-After` up to the backoff cap |
@@ -41,7 +41,6 @@
 //! # }
 //! ```
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -49,6 +48,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::egress::{EgressPolicy, GuardedClient, find_denial};
 use crate::webhook::{WebhookSecret, WebhookSigner};
 use crate::{Clock, SystemClock};
 
@@ -127,191 +127,6 @@ impl RetryPolicy {
         self.initial_backoff.saturating_mul(factor).min(self.max_backoff)
     }
 }
-
-/// Which destinations a delivery may reach.
-///
-/// The default allows HTTPS to public addresses only. Host names are resolved by the
-/// HTTP client through a resolver that refuses non-public answers, so a name that
-/// resolves to an internal address — including through DNS rebinding — is refused at
-/// connect time, not only at registration.
-///
-/// | Range | Purpose |
-/// |-------|---------|
-/// | `0.0.0.0/8`, `::` | "this network" / unspecified |
-/// | `127.0.0.0/8`, `::1`, `localhost` | loopback |
-/// | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` | private |
-/// | `100.64.0.0/10` | carrier-grade NAT shared space |
-/// | `169.254.0.0/16`, `fe80::/10` | link-local, including cloud metadata endpoints |
-/// | `fc00::/7`, `fec0::/10` | IPv6 unique-local and deprecated site-local |
-/// | `224.0.0.0/4`, `255.255.255.255`, `ff00::/8` | multicast and broadcast |
-/// | `::ffff:0:0/96`, `::/96`, `64:ff9b::/96` | IPv6 forms embedding any IPv4 address above |
-///
-/// # Example
-///
-/// ```rust
-/// use adk_core::webhook_delivery::EgressPolicy;
-///
-/// let policy = EgressPolicy::default();
-/// assert!(policy.check_url("https://hooks.example.com/a").is_ok());
-/// assert!(policy.check_url("http://hooks.example.com/a").is_err());
-/// assert!(policy.check_url("https://169.254.169.254/latest/meta-data").is_err());
-/// assert!(EgressPolicy::allow_private_networks().check_url("http://127.0.0.1:8080/hook").is_ok());
-/// ```
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct EgressPolicy {
-    /// Allow loopback, private, link-local, and other non-public addresses.
-    pub allow_private: bool,
-    /// Allow plain `http` URLs.
-    pub allow_http: bool,
-}
-
-impl EgressPolicy {
-    /// Allows any address and plain HTTP, for in-cluster receivers and tests.
-    ///
-    /// Use only when every endpoint is configured by an operator, never when callers
-    /// register their own URLs.
-    pub fn allow_private_networks() -> Self {
-        Self { allow_private: true, allow_http: true }
-    }
-
-    /// Checks a URL's scheme and, when its host is a literal address or `localhost`,
-    /// the address. Other host names are checked when the client resolves them.
-    ///
-    /// # Errors
-    ///
-    /// Returns the reason the URL is refused.
-    pub fn check_url(&self, url: &str) -> Result<reqwest::Url, String> {
-        let parsed = reqwest::Url::parse(url).map_err(|e| format!("invalid webhook URL: {e}"))?;
-        match parsed.scheme() {
-            "https" => {}
-            "http" if self.allow_http => {}
-            other => return Err(format!("webhook URL scheme `{other}` is not allowed; use https")),
-        }
-        if self.allow_private {
-            return Ok(parsed);
-        }
-        let host = parsed.host_str().ok_or_else(|| "webhook URL has no host".to_string())?;
-        // IPv6 hosts are serialized in brackets, e.g. `[::1]`.
-        let unbracketed = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
-        if let Ok(ip) = unbracketed.parse::<IpAddr>() {
-            if is_non_public(ip) {
-                return Err(format!("webhook URL must not target a non-public address: {ip}"));
-            }
-        } else {
-            let name = host.trim_end_matches('.').to_ascii_lowercase();
-            if name == "localhost" || name.ends_with(".localhost") {
-                return Err("webhook URL must not target localhost".to_string());
-            }
-        }
-        Ok(parsed)
-    }
-}
-
-/// Whether a delivery must not reach `ip` under the default [`EgressPolicy`].
-///
-/// # Example
-///
-/// ```rust
-/// use adk_core::webhook_delivery::is_non_public;
-///
-/// assert!(is_non_public("10.1.2.3".parse().unwrap()));
-/// assert!(is_non_public("::ffff:127.0.0.1".parse().unwrap()));
-/// assert!(!is_non_public("93.184.216.34".parse().unwrap()));
-/// ```
-pub fn is_non_public(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => is_non_public_v4(v4),
-        IpAddr::V6(v6) => is_non_public_v6(v6),
-    }
-}
-
-fn is_non_public_v4(v4: Ipv4Addr) -> bool {
-    let [a, b, ..] = v4.octets();
-    a == 0
-        || v4.is_loopback()
-        || v4.is_private()
-        || v4.is_link_local()
-        || (a == 100 && (64..=127).contains(&b))
-        || v4.is_multicast()
-        || v4.is_broadcast()
-}
-
-fn is_non_public_v6(v6: Ipv6Addr) -> bool {
-    let segments = v6.segments();
-    // NAT64 (64:ff9b::/96) carries an IPv4 address in its low 32 bits.
-    let nat64 = segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0];
-    // `to_ipv4` covers both IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible (::a.b.c.d).
-    let embedded = v6.to_ipv4().or_else(|| {
-        nat64.then(|| {
-            let [.., hi, lo] = segments;
-            Ipv4Addr::from((u32::from(hi) << 16) | u32::from(lo))
-        })
-    });
-    if let Some(v4) = embedded {
-        return is_non_public_v4(v4);
-    }
-    v6.is_unspecified()
-        || v6.is_loopback()
-        || (segments[0] & 0xfe00) == 0xfc00
-        || (segments[0] & 0xffc0) == 0xfe80
-        || (segments[0] & 0xffc0) == 0xfec0
-        || v6.is_multicast()
-}
-
-/// A `reqwest` resolver that refuses any answer containing a non-public address
-/// ([`is_non_public`]).
-///
-/// Set it with `ClientBuilder::dns_resolver` together with `ClientBuilder::no_proxy`, since a
-/// proxy resolves the host itself. It checks every host name the client connects to, each
-/// redirect included; a URL whose host is an IP address literal is not resolved, so check
-/// that address with [`is_non_public`] first.
-///
-/// # Example
-///
-/// ```rust
-/// use std::sync::Arc;
-///
-/// use adk_core::webhook_delivery::PublicOnlyResolver;
-///
-/// let client = reqwest::Client::builder()
-///     .no_proxy()
-///     .dns_resolver(Arc::new(PublicOnlyResolver))
-///     .build()
-///     .expect("the client builds");
-/// # drop(client);
-/// ```
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PublicOnlyResolver;
-
-impl reqwest::dns::Resolve for PublicOnlyResolver {
-    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        let host = name.as_str().to_string();
-        Box::pin(async move {
-            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
-                .await
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
-                .collect();
-            if let Some(blocked) = addrs.iter().find(|addr| is_non_public(addr.ip())) {
-                let message = format!("{host} resolves to the non-public address {}", blocked.ip());
-                return Err(
-                    Box::new(EgressRefused(message)) as Box<dyn std::error::Error + Send + Sync>
-                );
-            }
-            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
-        })
-    }
-}
-
-#[derive(Debug)]
-struct EgressRefused(String);
-
-impl std::fmt::Display for EgressRefused {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "egress refused: {}", self.0)
-    }
-}
-
-impl std::error::Error for EgressRefused {}
 
 /// One receiver of webhook deliveries.
 #[derive(Debug, Clone)]
@@ -451,7 +266,7 @@ enum Attempt {
 #[derive(Clone)]
 pub struct WebhookDelivery {
     /// The client that enforces the egress policy, or why it could not be built.
-    client: Result<reqwest::Client, String>,
+    client: Result<GuardedClient, String>,
     retry: RetryPolicy,
     egress: EgressPolicy,
     dead_letters: Option<Arc<dyn DeadLetterSink>>,
@@ -482,26 +297,18 @@ impl WebhookDelivery {
     }
 
     fn configured(retry: RetryPolicy, egress: EgressPolicy) -> Self {
-        let mut builder = reqwest::Client::builder()
+        // Never a default client in its place: it would skip the egress checks, use the
+        // system proxies and follow redirects.
+        let client = GuardedClient::builder(egress.clone())
             .timeout(retry.attempt_timeout)
             .connect_timeout(retry.attempt_timeout.min(Duration::from_secs(5)))
-            .redirect(reqwest::redirect::Policy::none())
-            .user_agent(concat!("adk-rust-webhooks/", env!("CARGO_PKG_VERSION")));
-        if !egress.allow_private {
-            // A proxy would resolve the host itself, out of the resolver's reach.
-            builder = builder.no_proxy().dns_resolver(Arc::new(PublicOnlyResolver));
-        }
-        // Never a default client in its place: it would skip the resolver's check, use the
-        // system proxies and follow redirects.
-        let client = builder.build().map_err(|error| {
-            tracing::error!(error = %error, "webhook client failed to build; every delivery is refused");
-            format!(
-                "the webhook HTTP client could not be built ({}), so no delivery is sent \
-                 without its egress guard; fix the TLS setup the error names, such as a native \
-                 root certificate store with no valid certificate, and restart",
-                full_error(&error)
-            )
-        });
+            .redirects(0)
+            .user_agent(concat!("adk-rust-webhooks/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|error| {
+                tracing::error!(error = %error, "webhook client failed to build; every delivery is refused");
+                error.to_string()
+            });
         Self { client, retry, egress, dead_letters: None, clock: Arc::new(SystemClock) }
     }
 
@@ -535,8 +342,8 @@ impl WebhookDelivery {
     }
 
     /// The egress policy.
-    pub fn egress_policy(&self) -> EgressPolicy {
-        self.egress
+    pub fn egress_policy(&self) -> &EgressPolicy {
+        &self.egress
     }
 
     /// Delivers `message` to `endpoint`, retrying until it succeeds, fails permanently,
@@ -549,10 +356,9 @@ impl WebhookDelivery {
         endpoint: &WebhookEndpoint,
         message: &WebhookMessage,
     ) -> DeliveryReport {
-        let url = match self.egress.check_url(&endpoint.url) {
-            Ok(url) => url,
-            Err(reason) => return self.dead_letter(endpoint, message, 0, None, reason).await,
-        };
+        if let Err(denial) = self.egress.check_url(&endpoint.url) {
+            return self.dead_letter(endpoint, message, 0, None, denial.to_string()).await;
+        }
         let client = match &self.client {
             Ok(client) => client,
             Err(reason) => {
@@ -562,10 +368,7 @@ impl WebhookDelivery {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            let (status, error, retry_after) = match self
-                .attempt(client, &url, endpoint, message)
-                .await
-            {
+            let (status, error, retry_after) = match self.attempt(client, endpoint, message).await {
                 Attempt::Delivered(status) => {
                     tracing::debug!(webhook.id = %message.id, http.status = status, attempt, "webhook delivered");
                     return DeliveryReport::Delivered { attempts: attempt, status };
@@ -594,14 +397,16 @@ impl WebhookDelivery {
 
     async fn attempt(
         &self,
-        client: &reqwest::Client,
-        url: &reqwest::Url,
+        client: &GuardedClient,
         endpoint: &WebhookEndpoint,
         message: &WebhookMessage,
     ) -> Attempt {
         let signed = endpoint.signer.sign(&message.id, self.clock.now().timestamp(), &message.body);
-        let mut request = client
-            .post(url.clone())
+        let mut request = match client.post(&endpoint.url) {
+            Ok(request) => request,
+            Err(denial) => return Attempt::Permanent { status: None, error: denial.to_string() },
+        };
+        request = request
             .header(reqwest::header::CONTENT_TYPE, &message.content_type)
             .body(message.body.clone());
         for (name, value) in signed.header_pairs() {
@@ -612,16 +417,7 @@ impl WebhookDelivery {
             Err(error) => {
                 // The URL's path or query may carry a token; the error is logged and kept.
                 let error = error.without_url();
-                let refused = std::error::Error::source(&error).is_some_and(|source| {
-                    let mut current = Some(source);
-                    while let Some(err) = current {
-                        if err.is::<EgressRefused>() {
-                            return true;
-                        }
-                        current = err.source();
-                    }
-                    false
-                });
+                let refused = find_denial(&error).is_some();
                 let text = full_error(&error);
                 return if refused {
                     Attempt::Permanent { status: None, error: text }
@@ -722,31 +518,38 @@ mod tests {
         }
     }
 
-    #[test]
-    fn egress_policy_refuses_non_public_literals_and_plain_http() {
-        let policy = EgressPolicy::default();
-        for url in [
-            "http://example.com/hook",
-            "https://127.0.0.1/hook",
-            "https://10.0.0.1/hook",
-            "https://169.254.169.254/latest",
-            "https://[::1]/hook",
-            "https://[::ffff:192.168.1.1]/hook",
-            "https://[64:ff9b::a00:1]/hook",
-            "https://localhost/hook",
-            "https://api.localhost/hook",
-            "https://0x7f.1/hook",
-            "ftp://example.com/hook",
-        ] {
-            assert!(policy.check_url(url).is_err(), "{url}");
-        }
-        for url in [
-            "https://example.com/hook",
-            "https://93.184.216.34/hook",
-            "https://[2606:4700::1111]/x",
-        ] {
-            assert!(policy.check_url(url).is_ok(), "{url}");
-        }
+    /// A name that resolves to an address the policy refuses is dead-lettered after one
+    /// attempt: the refusal is permanent, not retried.
+    #[tokio::test]
+    async fn a_resolution_refusal_is_not_retried() {
+        use crate::egress::StaticResolver;
+        let resolver =
+            StaticResolver::new().with_host("hooks.internal.test", ["10.0.0.9".parse().unwrap()]);
+        let client = GuardedClient::builder(EgressPolicy::public_only())
+            .resolver(Arc::new(resolver))
+            .redirects(0)
+            .build()
+            .unwrap();
+        let sink = Arc::new(InMemoryDeadLetterSink::new());
+        let delivery = WebhookDelivery {
+            client: Ok(client),
+            ..WebhookDelivery::new()
+                .with_retry_policy(RetryPolicy::default().with_max_attempts(5))
+                .with_dead_letter_sink(sink.clone())
+        };
+        let endpoint = WebhookEndpoint::new(
+            "https://hooks.internal.test/runs",
+            WebhookSecret::from_base64("whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw").unwrap(),
+        );
+        let message = WebhookMessage::json("msg_2", &serde_json::json!({ "ok": true })).unwrap();
+
+        let DeliveryReport::DeadLettered(letter) = delivery.deliver(&endpoint, &message).await
+        else {
+            panic!("a refused destination must not be delivered");
+        };
+        assert_eq!(letter.attempts, 1);
+        assert!(letter.last_error.contains("10.0.0.9"), "{}", letter.last_error);
+        assert_eq!(sink.letters().len(), 1);
     }
 
     /// A sender whose guarded client did not build sends nothing: no fallback client reaches
@@ -791,18 +594,6 @@ mod tests {
         match guarded.deliver(&public, &message).await {
             DeliveryReport::DeadLettered(letter) => assert_eq!(letter.attempts, 0),
             other => panic!("a delivery without its guarded client must not succeed: {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn the_resolver_refuses_names_that_resolve_to_non_public_addresses() {
-        use reqwest::dns::Resolve;
-        use std::str::FromStr;
-        for name in ["localhost", "127.0.0.1"] {
-            let resolved =
-                PublicOnlyResolver.resolve(reqwest::dns::Name::from_str(name).unwrap()).await;
-            let error = resolved.err().unwrap_or_else(|| panic!("{name} must be refused"));
-            assert!(error.to_string().contains("non-public"), "{name}: {error}");
         }
     }
 }

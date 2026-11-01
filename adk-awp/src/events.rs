@@ -8,9 +8,10 @@
 
 use std::sync::Arc;
 
+use adk_core::egress::EgressPolicy;
 use adk_core::webhook::WebhookSecret;
 use adk_core::webhook_delivery::{
-    DeliveryReport, EgressPolicy, WebhookDelivery, WebhookEndpoint, WebhookMessage,
+    DeliveryReport, WebhookDelivery, WebhookEndpoint, WebhookMessage,
 };
 use async_trait::async_trait;
 use awp_types::AwpError;
@@ -81,8 +82,8 @@ impl std::fmt::Debug for EventSubscription {
 impl EventSubscription {
     /// Validates the bounded subscription fields accepted by the built-in service.
     ///
-    /// Callback URLs require HTTPS and must not name a loopback, private, or
-    /// link-local address; see [`EgressPolicy`].
+    /// Callback URLs require HTTPS and must not name a loopback, private, link-local,
+    /// cloud metadata or other non-public address; see [`EgressPolicy`].
     ///
     /// # Errors
     ///
@@ -112,7 +113,7 @@ impl EventSubscription {
             AwpError::InvalidRequest("callbackUrl must be a valid absolute HTTPS URL".to_string())
         })?;
         let scheme_allowed = callback.scheme_str() == Some("https")
-            || (egress.allow_http && callback.scheme_str() == Some("http"));
+            || (egress.allows_plain_http() && callback.scheme_str() == Some("http"));
         if !scheme_allowed || callback.authority().is_none() {
             return Err(AwpError::InvalidRequest(
                 "callbackUrl must be a valid absolute HTTPS URL".to_string(),
@@ -259,7 +260,7 @@ impl Default for InMemoryEventSubscriptionService {
 #[async_trait]
 impl EventSubscriptionService for InMemoryEventSubscriptionService {
     async fn create(&self, subscription: EventSubscription) -> Result<Uuid, AwpError> {
-        subscription.validate_with(&self.delivery.egress_policy())?;
+        subscription.validate_with(self.delivery.egress_policy())?;
         let id = subscription.id;
         self.subscriptions.insert(id, subscription);
         Ok(id)

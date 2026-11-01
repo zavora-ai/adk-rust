@@ -12,12 +12,12 @@
 //! header: the private vantage point of a freeze or the loopback port of an isolated replay.
 
 use std::collections::{BTreeSet, HashMap};
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use adk_auth::web_bot_auth::HttpSignatureSigner;
-use adk_core::webhook_delivery::is_non_public;
+use adk_core::egress::{EgressPolicy, EgressResolver, is_non_public};
 use adk_core::{Clock, SystemClock};
 use bytes::{Bytes, BytesMut};
 use chrono::{DateTime, Utc};
@@ -275,7 +275,8 @@ impl HttpClientBuilder {
             .timeout(self.timeout)
             .connect_timeout(self.timeout.min(Duration::from_secs(10)));
         if self.egress == EgressScope::Public {
-            builder = builder.dns_resolver(Arc::new(PublicOnlyResolver));
+            builder =
+                builder.dns_resolver(Arc::new(EgressResolver::new(EgressPolicy::public_only())));
         }
         let client = builder.build().map_err(|e| MigrateError::http("client", e))?;
         Ok(HttpClient {
@@ -642,26 +643,6 @@ impl HttpClient {
             truncated,
             location,
             peer_certificate,
-        })
-    }
-}
-
-/// Resolves names and drops every non-public address, so a public name cannot be pointed at
-/// an internal service.
-struct PublicOnlyResolver;
-
-impl reqwest::dns::Resolve for PublicOnlyResolver {
-    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        let host = name.as_str().to_string();
-        Box::pin(async move {
-            let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
-                .await?
-                .filter(|address| !is_non_public(address.ip()))
-                .collect();
-            if addresses.is_empty() {
-                return Err(format!("'{host}' resolves to no public address").into());
-            }
-            Ok(Box::new(addresses.into_iter()) as reqwest::dns::Addrs)
         })
     }
 }

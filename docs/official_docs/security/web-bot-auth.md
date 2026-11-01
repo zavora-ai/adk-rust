@@ -173,8 +173,8 @@ server-side request forgery guidance (§6.7):
 | Body size | 64 KiB | `max_bytes` |
 | Keys | 64 | `max_keys` |
 
-`EgressPolicy::allow_private_networks()` admits loopback, private addresses and plain http,
-for tests and in-cluster directories. Directory entries that are not Ed25519 keys, carry
+`EgressPolicy::allow_private_networks()` (`adk_core::egress`) admits loopback, private
+addresses and plain http, never cloud metadata endpoints, for tests and in-cluster directories. Directory entries that are not Ed25519 keys, carry
 private material (`d`), have a `use` other than `sig` or an `alg` other than Ed25519 are
 skipped. `nbf` and `exp` are Unix seconds; values of 10^11 and above are read as
 milliseconds, which deployed directories publish.

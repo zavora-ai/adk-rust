@@ -4,10 +4,10 @@ use std::fmt;
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use adk_core::egress::EgressPolicy;
 use adk_core::webhook::WebhookSecret;
 use adk_core::webhook_delivery::{
-    DeadLetterSink, DeliveryReport, EgressPolicy, RetryPolicy, WebhookDelivery, WebhookEndpoint,
-    WebhookMessage,
+    DeadLetterSink, DeliveryReport, RetryPolicy, WebhookDelivery, WebhookEndpoint, WebhookMessage,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

@@ -19,8 +19,8 @@ use adk_awp::v2::capability::{
     CapabilityCall, CapabilityError, CapabilityHandler, CapabilityRegistry,
 };
 use adk_awp::v2::store::{Lead, LeadStore, MemoryEdgeStores};
+use adk_core::egress::EgressPolicy;
 use adk_core::webhook::{WebhookHeaders, WebhookSecret, WebhookVerifier};
-use adk_core::webhook_delivery::EgressPolicy;
 use adk_core::{GovernanceControl, Url};
 use adk_server::awp::{
     AwpEdge, ConsentConfig, ConsentPolicy, EdgeKeys, EdgeMode, EdgeStores, EdgeTiers, EventsConfig,
