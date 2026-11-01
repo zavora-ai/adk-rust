@@ -71,7 +71,7 @@ fred = { version = "10", optional = true, features = ["i-scripts"] }
 
 [features]
 default = []
-a2a-v1 = ["dep:a2a-protocol-types"]
+a2a-v1 = ["dep:a2a-protocol-types", "adk-core/egress-client"]
 # Enable YAML agent definition loading and hot reload
 yaml-agent = ["dep:serde_yaml", "dep:notify", "dep:regex"]
 # Enable Agent Registry REST API
