@@ -625,16 +625,15 @@ impl DriverManifest {
         }
         // A project allowlist narrows an open network; under the user's allowlist each of its
         // hosts must be one the user's admits.
-        if project.access.allow_network {
-            if let Some(mine) = self.access.egress_policy() {
-                if project.access.network_hosts.is_empty() {
-                    return refuse("opens the network the user's manifest limits to its hosts");
-                }
-                if let Some(host) =
-                    project.access.network_hosts.iter().find(|host| !mine.covers(host))
-                {
-                    return refuse(&format!("grants network access to {host}"));
-                }
+        if project.access.allow_network
+            && let Some(mine) = self.access.egress_policy()
+        {
+            if project.access.network_hosts.is_empty() {
+                return refuse("opens the network the user's manifest limits to its hosts");
+            }
+            if let Some(host) = project.access.network_hosts.iter().find(|host| !mine.covers(host))
+            {
+                return refuse(&format!("grants network access to {host}"));
             }
         }
         if project.sampling && !self.sampling {
