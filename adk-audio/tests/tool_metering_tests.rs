@@ -85,14 +85,6 @@ impl SttProvider for Stt {
         Ok(Transcript { text: "hello".to_string(), confidence: 1.0, ..Default::default() })
     }
 
-    async fn transcribe_stream(
-        &self,
-        _audio: Pin<Box<dyn Stream<Item = AudioFrame> + Send>>,
-        _opts: &SttOptions,
-    ) -> AudioResult<Pin<Box<dyn Stream<Item = AudioResult<Transcript>> + Send>>> {
-        Ok(Box::pin(futures::stream::empty()))
-    }
-
     fn billing(&self) -> Option<AudioBilling> {
         self.billing.clone()
     }

@@ -51,13 +51,6 @@ impl SttProvider for CountingStt {
         self.call_count.fetch_add(1, Ordering::SeqCst);
         Ok(Transcript { text: "hello".into(), ..Default::default() })
     }
-    async fn transcribe_stream(
-        &self,
-        _audio: Pin<Box<dyn Stream<Item = AudioFrame> + Send>>,
-        _opts: &SttOptions,
-    ) -> AudioResult<Pin<Box<dyn Stream<Item = AudioResult<Transcript>> + Send>>> {
-        Ok(Box::pin(futures::stream::empty()))
-    }
 }
 
 struct StubTts;

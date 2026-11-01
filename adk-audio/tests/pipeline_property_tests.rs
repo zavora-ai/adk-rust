@@ -42,13 +42,6 @@ impl SttProvider for MockStt {
     async fn transcribe(&self, _audio: &AudioFrame, _opts: &SttOptions) -> AudioResult<Transcript> {
         Ok(Transcript::default())
     }
-    async fn transcribe_stream(
-        &self,
-        _audio: Pin<Box<dyn Stream<Item = AudioFrame> + Send>>,
-        _opts: &SttOptions,
-    ) -> AudioResult<Pin<Box<dyn Stream<Item = AudioResult<Transcript>> + Send>>> {
-        Ok(Box::pin(futures::stream::empty()))
-    }
 }
 
 struct MockVad;

@@ -11,7 +11,7 @@ use tracing::{debug, warn};
 use crate::error::{AudioError, AudioResult};
 use crate::frame::AudioFrame;
 use crate::providers::stt::frame_to_wav_bytes;
-use crate::traits::{Speaker, SttOptions, SttProvider, Transcript, Word};
+use crate::traits::{Speaker, SttOptions, SttProvider, Transcript, TranscriptEvent, Word};
 
 /// Deepgram Nova STT provider.
 ///
@@ -57,6 +57,9 @@ impl DeepgramStt {
             "channels=1".to_string(),
             "smart_format=true".to_string(),
             "interim_results=true".to_string(),
+            // Speech-start and utterance-end events report turn boundaries.
+            "vad_events=true".to_string(),
+            "utterance_end_ms=1000".to_string(),
         ];
         if opts.diarize {
             params.push("diarize=true".to_string());
@@ -163,7 +166,7 @@ impl SttProvider for DeepgramStt {
         &self,
         audio: Pin<Box<dyn Stream<Item = AudioFrame> + Send>>,
         opts: &SttOptions,
-    ) -> AudioResult<Pin<Box<dyn Stream<Item = AudioResult<Transcript>> + Send>>> {
+    ) -> AudioResult<crate::TranscriptStream> {
         let ws_url = self.build_ws_url(opts);
         debug!(url = %ws_url, "connecting to Deepgram streaming STT");
 
@@ -206,7 +209,7 @@ impl SttProvider for DeepgramStt {
             let _ = ws_sink.send(Message::Text(close_msg.to_string().into())).await;
         }));
 
-        // Return a stream that reads WebSocket messages and yields Transcript values.
+        // Return a stream that reads WebSocket messages and yields their events.
         let transcript_stream = async_stream::stream! {
             let _sender = sender;
             while let Some(msg_result) = ws_source.next().await {
@@ -240,9 +243,8 @@ impl SttProvider for DeepgramStt {
                             break;
                         }
 
-                        // Parse transcript results.
-                        if let Some(transcript) = parse_streaming_response(&json) {
-                            yield Ok(transcript);
+                        for event in streaming_events(&json) {
+                            yield Ok(event);
                         }
                     }
                     Message::Close(_) => break,
@@ -264,6 +266,54 @@ impl Drop for AbortOnDrop {
     }
 }
 
+/// The events one Deepgram streaming message carries.
+///
+/// | Message | Events |
+/// |---------|--------|
+/// | `Results`, `is_final: false` | `Partial` |
+/// | `Results`, `is_final: true` | `Final`, then `SpeechEnded` when `speech_final` |
+/// | `SpeechStarted` | `SpeechStarted` |
+/// | `UtteranceEnd` | `SpeechEnded` |
+/// | `Metadata` | `Usage` with the audio duration |
+///
+/// Deepgram numbers no turns, so every `turn_id` is `None`; each `Final` is one finalized
+/// segment of an utterance.
+fn streaming_events(json: &serde_json::Value) -> Vec<TranscriptEvent> {
+    let millis = |seconds: Option<f64>| seconds.map(|seconds| (seconds * 1000.0).round() as u64);
+    match json.get("type").and_then(serde_json::Value::as_str) {
+        Some("SpeechStarted") => vec![TranscriptEvent::SpeechStarted {
+            turn_id: None,
+            offset_ms: millis(json["timestamp"].as_f64()),
+        }],
+        Some("UtteranceEnd") => vec![TranscriptEvent::SpeechEnded {
+            turn_id: None,
+            offset_ms: millis(json["last_word_end"].as_f64()),
+        }],
+        Some("Metadata") => millis(json["duration"].as_f64())
+            .map(|audio_ms| TranscriptEvent::Usage { audio_ms })
+            .into_iter()
+            .collect(),
+        _ => {
+            let mut events = Vec::new();
+            if let Some(transcript) = parse_streaming_response(json) {
+                events.push(if json["is_final"].as_bool() == Some(true) {
+                    TranscriptEvent::Final { turn_id: None, transcript }
+                } else {
+                    TranscriptEvent::Partial { turn_id: None, text: transcript.text }
+                });
+            }
+            if json["speech_final"].as_bool() == Some(true) {
+                let end = json["start"].as_f64().zip(json["duration"].as_f64());
+                events.push(TranscriptEvent::SpeechEnded {
+                    turn_id: None,
+                    offset_ms: millis(end.map(|(start, duration)| start + duration)),
+                });
+            }
+            events
+        }
+    }
+}
+
 /// Parse a Deepgram streaming WebSocket JSON response into a `Transcript`.
 ///
 /// Returns `None` for metadata-only messages (e.g. `UtteranceEnd`, `SpeechStarted`).
@@ -279,7 +329,6 @@ fn parse_streaming_response(json: &serde_json::Value) -> Option<Transcript> {
     }
 
     let confidence = alt["confidence"].as_f64().unwrap_or(0.0) as f32;
-    let is_final = json.get("is_final").and_then(|v| v.as_bool()).unwrap_or(false);
 
     let words: Vec<Word> = alt["words"]
         .as_array()
@@ -304,10 +353,6 @@ fn parse_streaming_response(json: &serde_json::Value) -> Option<Transcript> {
 
     let language_detected =
         json.get("metadata").and_then(|m| m["language"].as_str()).map(String::from);
-
-    // Encode finality in the transcript: final transcripts have full confidence,
-    // interim transcripts are partial results the caller can display/update.
-    let _ = is_final; // is_final is reflected by the presence of words/confidence
 
     Some(Transcript { text, words, speakers, confidence, language_detected })
 }
@@ -366,8 +411,15 @@ mod tests {
             )
             .await
             .expect("open stream");
-        let texts: Vec<String> =
-            stream.map(|transcript| transcript.expect("transcript").text).collect::<Vec<_>>().await;
+        let texts: Vec<String> = stream
+            .filter_map(|event| async move {
+                match event.expect("event") {
+                    TranscriptEvent::Final { transcript, .. } => Some(transcript.text),
+                    other => panic!("only a final result was sent: {other:?}"),
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
 
         assert_eq!(texts, ["hello world"]);
         assert_eq!(
@@ -418,6 +470,53 @@ mod tests {
             .await
             .expect("dropping the stream closes the socket")
             .expect("server");
+    }
+
+    /// The events of `messages`, by kind and text, for compact comparison.
+    fn kinds(messages: &[serde_json::Value]) -> Vec<String> {
+        messages
+            .iter()
+            .flat_map(streaming_events)
+            .map(|event| match event {
+                TranscriptEvent::Partial { text, .. } => format!("partial:{text}"),
+                TranscriptEvent::Final { transcript, .. } => format!("final:{}", transcript.text),
+                TranscriptEvent::SpeechStarted { offset_ms, .. } => {
+                    format!("started:{offset_ms:?}")
+                }
+                TranscriptEvent::SpeechEnded { offset_ms, .. } => format!("ended:{offset_ms:?}"),
+                TranscriptEvent::Usage { audio_ms } => format!("usage:{audio_ms}"),
+                other => format!("{other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn is_final_separates_partials_from_finals_and_speech_final_ends_the_turn() {
+        let alternative = |text: &str| serde_json::json!({ "alternatives": [{ "transcript": text, "confidence": 0.9 }] });
+        let messages = [
+            serde_json::json!({ "type": "SpeechStarted", "timestamp": 0.25 }),
+            serde_json::json!({ "type": "Results", "is_final": false, "channel": alternative("hel") }),
+            serde_json::json!({ "type": "Results", "is_final": false, "channel": alternative("hello wor") }),
+            serde_json::json!({
+                "type": "Results", "is_final": true, "speech_final": true,
+                "start": 0.25, "duration": 1.5, "channel": alternative("hello world")
+            }),
+            serde_json::json!({ "type": "Results", "is_final": true, "channel": alternative("") }),
+            serde_json::json!({ "type": "UtteranceEnd", "last_word_end": 1.75 }),
+            serde_json::json!({ "type": "Metadata", "duration": 2.0, "request_id": "r" }),
+        ];
+        assert_eq!(
+            kinds(&messages),
+            [
+                "started:Some(250)",
+                "partial:hel",
+                "partial:hello wor",
+                "final:hello world",
+                "ended:Some(1750)",
+                "ended:Some(1750)",
+                "usage:2000",
+            ]
+        );
     }
 
     #[test]
@@ -506,6 +605,8 @@ mod tests {
         assert!(url.contains("sample_rate=16000"));
         assert!(url.contains("channels=1"));
         assert!(url.contains("interim_results=true"));
+        assert!(url.contains("vad_events=true"));
+        assert!(url.contains("utterance_end_ms=1000"));
     }
 
     #[test]

@@ -110,14 +110,26 @@ with the API key and an optional base URL.
 
 ### STT
 
-Every STT provider implements `SttProvider` with `transcribe` and `transcribe_stream`. A provider
-without streaming support returns `AudioError::Stt` from `transcribe_stream` rather than an empty
-stream, and dropping a returned stream stops the provider's work for it.
+Every STT provider implements `SttProvider` with `transcribe`. `transcribe_stream` yields typed
+`TranscriptEvent`s; a provider without streaming support returns `AudioError::Stt` from it (the
+trait's default) rather than an empty stream, and dropping a returned stream stops the provider's
+work for it.
+
+| Event | Meaning |
+|-------|---------|
+| `Started { session_id }` | The provider accepted the session |
+| `SpeechStarted { turn_id, offset_ms }` | Speech began |
+| `Partial { turn_id, text }` | The current hypothesis for the turn, in full; replace, do not append |
+| `Final { turn_id, transcript }` | Text the provider will not revise |
+| `SpeechEnded { turn_id, offset_ms }` | Speech stopped |
+| `Speaker { label, offset_ms }` | The speaker changed (diarization) |
+| `Progress { processed_ms }` | Audio processed so far |
+| `Usage { audio_ms }` | The audio the session is billed for |
 
 | Provider | Default model | `transcribe_stream` | Environment variable |
 |----------|---------------|---------------------|----------------------|
 | `WhisperApiStt` | `whisper-1` | `AudioError::Stt` (not yet implemented) | `OPENAI_API_KEY` |
-| `DeepgramStt` | `nova-3`, with diarization | WebSocket streaming; dropping the stream closes the socket | `DEEPGRAM_API_KEY` |
+| `DeepgramStt` | `nova-3`, with diarization | WebSocket streaming: `Partial` for interim results, `Final` per finalized segment, `SpeechStarted`/`SpeechEnded` from voice activity, `Usage` from the closing metadata; dropping the stream closes the socket | `DEEPGRAM_API_KEY` |
 | `AssemblyAiStt` | asynchronous jobs | `AudioError::Stt` (not yet implemented) | `ASSEMBLYAI_API_KEY` |
 | `GeminiStt` | `gemini-3.7-flash` | `AudioError::Stt`; use the Gemini Live API through `adk-realtime` for live audio | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
 
@@ -126,9 +138,29 @@ use adk_audio::{AudioFrame, SttOptions, SttProvider, WhisperApiStt};
 
 async fn transcribe(audio: &AudioFrame) -> adk_audio::AudioResult<String> {
     let stt = WhisperApiStt::from_env()?;
-    let options = SttOptions { language: Some("en".into()), word_timestamps: true, ..Default::default() };
+    let options = SttOptions::default().with_language("en").with_word_timestamps(true);
     let transcript = stt.transcribe(audio, &options).await?;
     Ok(transcript.text)
+}
+```
+
+```rust
+use std::pin::Pin;
+
+use adk_audio::{AudioFrame, DeepgramStt, SttOptions, SttProvider, TranscriptEvent};
+use futures::{Stream, StreamExt};
+
+async fn live(audio: Pin<Box<dyn Stream<Item = AudioFrame> + Send>>) -> adk_audio::AudioResult<()> {
+    let stt = DeepgramStt::from_env()?;
+    let mut events = stt.transcribe_stream(audio, &SttOptions::default()).await?;
+    while let Some(event) = events.next().await {
+        match event? {
+            TranscriptEvent::Partial { text, .. } => tracing::debug!(partial = %text),
+            TranscriptEvent::Final { transcript, .. } => tracing::info!(text = %transcript.text),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 ```
 

@@ -167,7 +167,7 @@ impl SttProvider for AssemblyAiStt {
         &self,
         _audio: Pin<Box<dyn Stream<Item = AudioFrame> + Send>>,
         _opts: &SttOptions,
-    ) -> AudioResult<Pin<Box<dyn Stream<Item = AudioResult<Transcript>> + Send>>> {
+    ) -> AudioResult<crate::TranscriptStream> {
         Err(AudioError::Stt {
             provider: "assemblyai".into(),
             message: "streaming transcription not yet implemented; call `transcribe` with the \

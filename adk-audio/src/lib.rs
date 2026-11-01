@@ -86,7 +86,8 @@ pub use pipeline::{
 pub use tools::{ApplyFxTool, GenerateMusicTool, SpeakTool, TranscribeTool};
 pub use traits::{
     AudioProcessor, Emotion, FxChain, MusicProvider, MusicRequest, Speaker, SpeechSegment,
-    SttOptions, SttProvider, Transcript, TtsProvider, TtsRequest, VadProcessor, Voice, Word,
+    SttOptions, SttProvider, Transcript, TranscriptEvent, TranscriptStream, TtsProvider,
+    TtsRequest, VadProcessor, Voice, Word,
 };
 
 // Feature-gated re-exports

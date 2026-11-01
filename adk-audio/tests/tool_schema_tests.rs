@@ -40,13 +40,6 @@ impl SttProvider for StubStt {
     async fn transcribe(&self, _: &AudioFrame, _: &SttOptions) -> AudioResult<Transcript> {
         Ok(Transcript::default())
     }
-    async fn transcribe_stream(
-        &self,
-        _: Pin<Box<dyn Stream<Item = AudioFrame> + Send>>,
-        _: &SttOptions,
-    ) -> AudioResult<Pin<Box<dyn Stream<Item = AudioResult<Transcript>> + Send>>> {
-        Ok(Box::pin(futures::stream::empty()))
-    }
 }
 
 struct StubMusic;
