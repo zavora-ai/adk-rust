@@ -61,6 +61,11 @@ async fn memory_needs_consent_for_a_persistent_profile() {
         1,
         "revoking erases nothing"
     );
+    assert_eq!(
+        memory.export_user("shop", user).await.unwrap().len(),
+        1,
+        "export passes through the gate"
+    );
 
     registry.set_state(&visitor.subject(), SubjectState::Erasing).await.unwrap();
     let refused = memory.add_entry("shop", user, entry("more")).await.unwrap_err();

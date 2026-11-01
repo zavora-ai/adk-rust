@@ -309,7 +309,7 @@ let rights = SubjectRights::new(
 
 `ConsentGatedMemoryService` wraps any `MemoryService` with an `adk_core::subject::ConsentGate`:
 for a gated user (a visitor id by default) without consent for `persistent_profile`, adds are
-skipped and search returns nothing; deletes always pass through. See
+skipped and search returns nothing; deletes and exports always pass through. See
 [Subject Rights](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/subject-rights.md#consent-gates).
 
 ## Related Crates

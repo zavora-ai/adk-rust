@@ -6,7 +6,7 @@ use adk_core::Result;
 use adk_core::subject::{ConsentGate, ConsentPurpose};
 use async_trait::async_trait;
 
-use crate::service::{MemoryEntry, MemoryService, SearchRequest, SearchResponse};
+use crate::service::{MemoryEntry, MemoryService, SearchRequest, SearchResponse, UserMemory};
 
 /// A [`MemoryService`] that writes and searches a gated subject's memory only with its
 /// consent for a [persistent profile](ConsentPurpose::PersistentProfile).
@@ -110,6 +110,10 @@ impl MemoryService for ConsentGatedMemoryService {
 
     async fn delete_user(&self, app_name: &str, user_id: &str) -> Result<()> {
         self.inner.delete_user(app_name, user_id).await
+    }
+
+    async fn export_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserMemory>> {
+        self.inner.export_user(app_name, user_id).await
     }
 
     async fn delete_session(&self, app_name: &str, user_id: &str, session_id: &str) -> Result<()> {
