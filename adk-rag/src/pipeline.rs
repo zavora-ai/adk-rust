@@ -22,8 +22,10 @@
 //! let results = tenant.query("docs", "search query").await?;
 //! ```
 
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
+use tokio::sync::RwLock;
 use tracing::{error, info};
 
 use crate::chunking::Chunker;
@@ -31,6 +33,7 @@ use crate::config::RagConfig;
 use crate::document::{Chunk, Document, SearchResult};
 use crate::embedding::EmbeddingProvider;
 use crate::error::{RagError, Result};
+use crate::filter::{Field, Filter};
 use crate::reranker::Reranker;
 use crate::scope::Scope;
 use crate::vectorstore::{CollectionSpec, VectorQuery, VectorStore};
@@ -47,6 +50,8 @@ pub struct RagPipeline {
     vector_store: Arc<dyn VectorStore>,
     chunker: Arc<dyn Chunker>,
     reranker: Option<Arc<dyn Reranker>>,
+    /// Filterable metadata keys of each collection this pipeline created.
+    filterable: RwLock<HashMap<String, BTreeSet<String>>>,
 }
 
 impl RagPipeline {
@@ -79,11 +84,50 @@ impl RagPipeline {
     ///
     /// Returns [`RagError::PipelineError`] if the vector store operation fails.
     pub async fn create_collection(&self, name: &str) -> Result<()> {
-        let spec = CollectionSpec::new(self.embedding_provider.dimensions());
+        self.create_collection_with_filterable(name, Vec::<String>::new()).await
+    }
+
+    /// Create a named collection whose `filterable` metadata keys a [`Filter`] may name.
+    ///
+    /// The pipeline remembers the keys, and refuses a filter that names any other metadata
+    /// key with [`RagError::UnsupportedFilter`] before any I/O. Call this at startup for every
+    /// collection the pipeline filters, including one another process created: creation is
+    /// idempotent.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// pipeline.create_collection_with_filterable("docs", ["lang", "section"]).await?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RagError::PipelineError`] if the vector store operation fails, including
+    /// for a key outside the rule in [`CollectionSpec::with_filterable`].
+    pub async fn create_collection_with_filterable<I, S>(
+        &self,
+        name: &str,
+        filterable: I,
+    ) -> Result<()>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let spec =
+            CollectionSpec::new(self.embedding_provider.dimensions()).with_filterable(filterable);
         self.vector_store.create_collection(name, &spec).await.map_err(|e| {
             error!(collection = name, error = %e, "failed to create collection");
             RagError::PipelineError(format!("failed to create collection '{name}': {e}"))
-        })
+        })?;
+        self.filterable.write().await.insert(name.to_string(), spec.filterable);
+        Ok(())
+    }
+
+    /// Checks `filter`'s shape and that its metadata keys are declared on `collection`.
+    async fn check_filter(&self, collection: &str, filter: &Filter) -> Result<()> {
+        let filterable = self.filterable.read().await;
+        let declared = filterable.get(collection).cloned().unwrap_or_default();
+        filter.validate_declared(collection, &declared)
     }
 
     /// Delete a named collection from the vector store.
@@ -95,7 +139,9 @@ impl RagPipeline {
         self.vector_store.delete_collection(name).await.map_err(|e| {
             error!(collection = name, error = %e, "failed to delete collection");
             RagError::PipelineError(format!("failed to delete collection '{name}': {e}"))
-        })
+        })?;
+        self.filterable.write().await.remove(name);
+        Ok(())
     }
 
     /// A view of the pipeline that ingests into, searches, and deletes from one scope.
@@ -125,7 +171,11 @@ impl RagPipeline {
 /// ```rust
 /// use adk_rag::QueryOptions;
 ///
-/// let options = QueryOptions::new().with_top_k(3);
+/// use adk_rag::{Field, Filter};
+///
+/// let options = QueryOptions::new()
+///     .with_top_k(3)
+///     .with_filter(Filter::eq(Field::metadata("lang"), "en"));
 /// assert_eq!(options.top_k, Some(3));
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -133,6 +183,8 @@ impl RagPipeline {
 pub struct QueryOptions {
     /// The most results to retrieve; the pipeline's configured `top_k` when `None`.
     pub top_k: Option<usize>,
+    /// Only chunks the filter matches are candidates.
+    pub filter: Option<Filter>,
 }
 
 impl QueryOptions {
@@ -145,6 +197,14 @@ impl QueryOptions {
     #[must_use]
     pub fn with_top_k(mut self, top_k: usize) -> Self {
         self.top_k = Some(top_k);
+        self
+    }
+
+    /// Searches only the chunks `filter` matches; the vector store applies the filter before
+    /// the top `k` are chosen.
+    #[must_use]
+    pub fn with_filter(mut self, filter: Filter) -> Self {
+        self.filter = Some(filter);
         self
     }
 }
@@ -164,9 +224,14 @@ impl ScopedRag<'_> {
         &self.scope
     }
 
-    /// Ingest a single document into the scope: chunk → embed → store.
+    /// Ingest a single document into the scope: chunk → embed → store, replacing the
+    /// document's earlier chunks.
     ///
-    /// Returns the chunks that were stored (with embeddings attached).
+    /// The new chunks are upserted first, then the document's chunks in the scope that the
+    /// new version no longer has are deleted, so a search never finds the document without
+    /// chunks and a shorter version leaves no stale chunks. A document with empty text
+    /// removes the document's chunks. Returns the chunks that were stored (with embeddings
+    /// attached).
     ///
     /// # Errors
     ///
@@ -179,7 +244,8 @@ impl ScopedRag<'_> {
         // 1. Chunk the document
         let mut chunks = pipeline.chunker.chunk(document);
         if chunks.is_empty() {
-            info!(document.id = %document.id, scope, chunk_count = 0, "ingested document (empty)");
+            let removed = self.delete_document(collection, &document.id).await?;
+            info!(document.id = %document.id, scope, chunk_count = 0, removed, "ingested document (empty)");
             return Ok(chunks);
         }
 
@@ -218,8 +284,24 @@ impl ScopedRag<'_> {
             RagError::PipelineError(format!("upsert failed for document '{}': {e}", document.id))
         })?;
 
+        // 6. Remove the document's chunks the new version no longer has
+        let stale = Filter::and([
+            Filter::eq(Field::DocumentId, document.id.clone()),
+            !Filter::is_in(Field::ChunkId, chunks.iter().map(|chunk| chunk.id.clone())),
+        ]);
+        let removed =
+            pipeline.vector_store.delete_where(collection, &self.scope, &stale).await.map_err(
+                |e| {
+                    error!(document.id = %document.id, error = %e, "stale chunk removal failed");
+                    RagError::PipelineError(format!(
+                        "removing stale chunks of document '{}' failed: {e}",
+                        document.id
+                    ))
+                },
+            )?;
+
         let chunk_count = chunks.len();
-        info!(document.id = %document.id, scope, chunk_count, "ingested document");
+        info!(document.id = %document.id, scope, chunk_count, removed, "ingested document");
 
         Ok(chunks)
     }
@@ -273,8 +355,10 @@ impl ScopedRag<'_> {
     ///
     /// # Errors
     ///
-    /// Returns [`RagError::ConfigError`] if `options.top_k` is 0, and
-    /// [`RagError::PipelineError`] if embedding, search, or reranking fails.
+    /// Returns [`RagError::ConfigError`] if `options.top_k` is 0,
+    /// [`RagError::UnsupportedFilter`] before any I/O if `options.filter` is malformed or
+    /// names a metadata key the collection did not declare, and [`RagError::PipelineError`]
+    /// if embedding, search, or reranking fails.
     pub async fn query_with(
         &self,
         collection: &str,
@@ -286,6 +370,9 @@ impl ScopedRag<'_> {
         if top_k == 0 {
             return Err(RagError::ConfigError("top_k must be greater than 0".to_string()));
         }
+        if let Some(filter) = &options.filter {
+            pipeline.check_filter(collection, filter).await?;
+        }
 
         // 1. Embed the query
         let query_embedding = pipeline.embedding_provider.embed(query).await.map_err(|e| {
@@ -294,7 +381,10 @@ impl ScopedRag<'_> {
         })?;
 
         // 2. Search the scope
-        let vector_query = VectorQuery::new(&query_embedding, top_k);
+        let mut vector_query = VectorQuery::new(&query_embedding, top_k);
+        if let Some(filter) = &options.filter {
+            vector_query = vector_query.with_filter(filter);
+        }
         let results = pipeline
             .vector_store
             .search(collection, &self.scope, &vector_query)
@@ -330,10 +420,69 @@ impl ScopedRag<'_> {
     ///
     /// Returns [`RagError::PipelineError`] if the vector store operation fails.
     pub async fn count(&self, collection: &str) -> Result<u64> {
-        self.pipeline.vector_store.count(collection, &self.scope).await.map_err(|e| {
+        self.pipeline.vector_store.count(collection, &self.scope, None).await.map_err(|e| {
             error!(collection, error = %e, "count failed");
             RagError::PipelineError(format!("count failed in collection '{collection}': {e}"))
         })
+    }
+
+    /// The number of the scope's chunks in `collection` that `filter` matches.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RagError::UnsupportedFilter`] before any I/O for a malformed filter or an
+    /// undeclared metadata key, and [`RagError::PipelineError`] if the vector store fails.
+    pub async fn count_where(&self, collection: &str, filter: &Filter) -> Result<u64> {
+        self.pipeline.check_filter(collection, filter).await?;
+        self.pipeline.vector_store.count(collection, &self.scope, Some(filter)).await.map_err(|e| {
+            error!(collection, error = %e, "count failed");
+            RagError::PipelineError(format!("count failed in collection '{collection}': {e}"))
+        })
+    }
+
+    /// Delete the scope's chunks in `collection` that `filter` matches, returning how many
+    /// were deleted.
+    ///
+    /// Other scopes' chunks are untouched. [`purge_scope`](Self::purge_scope) deletes a
+    /// whole scope; an empty `And`, `Or`, or `In` is refused rather than read as "all".
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_rag::{Field, Filter};
+    ///
+    /// let retired = Filter::eq(Field::metadata("status"), "retired");
+    /// let deleted = pipeline.scoped(scope).delete_where("docs", &retired).await?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RagError::UnsupportedFilter`] before any I/O for a malformed filter or an
+    /// undeclared metadata key, and [`RagError::PipelineError`] if the vector store fails.
+    pub async fn delete_where(&self, collection: &str, filter: &Filter) -> Result<u64> {
+        self.pipeline.check_filter(collection, filter).await?;
+        let deleted = self
+            .pipeline
+            .vector_store
+            .delete_where(collection, &self.scope, filter)
+            .await
+            .map_err(|e| {
+                error!(collection, error = %e, "delete_where failed");
+                RagError::PipelineError(format!(
+                    "delete_where failed in collection '{collection}': {e}"
+                ))
+            })?;
+        info!(collection, scope = self.scope.as_str(), deleted, "deleted matching chunks");
+        Ok(deleted)
+    }
+
+    /// Delete every chunk of `document_id` in the scope, returning how many were deleted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RagError::PipelineError`] if the vector store fails.
+    pub async fn delete_document(&self, collection: &str, document_id: &str) -> Result<u64> {
+        self.delete_where(collection, &Filter::eq(Field::DocumentId, document_id)).await
     }
 
     /// Delete every chunk the scope holds in `collection`, returning how many it held.
@@ -433,6 +582,7 @@ impl RagPipelineBuilder {
             vector_store,
             chunker,
             reranker: self.reranker,
+            filterable: RwLock::new(HashMap::new()),
         })
     }
 }
@@ -505,7 +655,7 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        let stored = store.count("docs", &Scope::single_tenant()).await.expect("count");
+        let stored = store.count("docs", &Scope::single_tenant(), None).await.expect("count");
         assert_eq!(stored, 0, "no chunk may be stored without its embedding");
     }
 
@@ -545,5 +695,87 @@ mod tests {
         assert_eq!(tenant_b.purge_scope("docs").await.expect("purge b"), 2);
         assert_eq!(tenant_b.count("docs").await.expect("count b"), 0);
         assert_eq!(tenant_a.count("docs").await.expect("count a"), 1, "a is untouched");
+    }
+
+    /// Counts embed calls, to show a refused filter costs no embedding.
+    #[derive(Default)]
+    struct CountingEmbedder {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl EmbeddingProvider for CountingEmbedder {
+        async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(vec![text.len() as f32, 1.0])
+        }
+
+        fn dimensions(&self) -> usize {
+            2
+        }
+    }
+
+    #[tokio::test]
+    async fn a_filter_on_an_undeclared_key_fails_before_any_io() {
+        let embedder = Arc::new(CountingEmbedder::default());
+        let pipeline = pipeline(embedder.clone(), Arc::new(InMemoryVectorStore::new()));
+        pipeline.create_collection_with_filterable("docs", ["lang"]).await.expect("create");
+        let rag = pipeline.scoped(Scope::single_tenant());
+
+        let undeclared = Filter::eq(Field::metadata("tier"), "gold");
+        let options = QueryOptions::new().with_filter(undeclared.clone());
+        let err = rag.query_with("docs", "q", &options).await.expect_err("undeclared key");
+        assert!(
+            matches!(&err, RagError::UnsupportedFilter(message) if message.contains("`tier`")),
+            "unexpected error: {err}"
+        );
+        assert!(matches!(
+            rag.delete_where("docs", &undeclared).await,
+            Err(RagError::UnsupportedFilter(_))
+        ));
+        assert!(matches!(
+            rag.count_where("unknown_collection", &Filter::eq(Field::metadata("lang"), "en")).await,
+            Err(RagError::UnsupportedFilter(_))
+        ));
+        assert_eq!(embedder.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let declared = QueryOptions::new().with_filter(Filter::eq(Field::metadata("lang"), "en"));
+        rag.query_with("docs", "q", &declared).await.expect("a declared key is accepted");
+        let built_in = QueryOptions::new().with_filter(Filter::eq(Field::DocumentId, "doc"));
+        rag.query_with("docs", "q", &built_in).await.expect("built-in fields need no declaration");
+    }
+
+    #[tokio::test]
+    async fn ingest_replaces_the_documents_chunks_in_its_scope() {
+        let pipeline = pipeline(Arc::new(LengthEmbedder), Arc::new(InMemoryVectorStore::new()));
+        pipeline.create_collection("docs").await.expect("create collection");
+        let rag = pipeline.scoped(Scope::new("tenant").expect("scope"));
+        let other = pipeline.scoped(Scope::new("other").expect("scope"));
+
+        rag.ingest("docs", &Document::new("policy", "aaaabbbbcccc")).await.expect("ingest v1");
+        other.ingest("docs", &Document::new("policy", "aaaabbbbcccc")).await.expect("ingest");
+        rag.ingest("docs", &Document::new("other_doc", "zzzz")).await.expect("ingest");
+        assert_eq!(rag.count("docs").await.expect("count"), 4);
+
+        // A shorter version leaves no stale chunks.
+        let chunks = rag.ingest("docs", &Document::new("policy", "dddd")).await.expect("ingest v2");
+        assert_eq!(chunks.len(), 1);
+        let policy = Filter::eq(Field::DocumentId, "policy");
+        assert_eq!(rag.count_where("docs", &policy).await.expect("count"), 1);
+        let results = rag
+            .query_with("docs", "q", &QueryOptions::new().with_filter(policy.clone()))
+            .await
+            .expect("query");
+        assert_eq!(results.iter().map(|r| r.chunk.text.as_str()).collect::<Vec<_>>(), ["dddd"]);
+
+        // An empty version removes the document; another document and scope are untouched.
+        rag.ingest("docs", &Document::new("policy", "")).await.expect("ingest empty");
+        assert_eq!(rag.count_where("docs", &policy).await.expect("count"), 0);
+        assert_eq!(rag.count("docs").await.expect("count"), 1);
+        assert_eq!(other.count_where("docs", &policy).await.expect("count"), 3);
+
+        assert_eq!(other.delete_document("docs", "policy").await.expect("delete"), 3);
+        assert_eq!(other.count("docs").await.expect("count"), 0);
+        assert_eq!(rag.count("docs").await.expect("count"), 1);
     }
 }

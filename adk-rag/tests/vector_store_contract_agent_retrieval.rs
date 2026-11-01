@@ -408,7 +408,8 @@ async fn test_agent_retrieval_vector_store_contract() {
     let state = Shared::default();
     let endpoint = start_mock(state.clone()).await;
     let store = build_store(&endpoint);
-    assert_vector_store_contract(&store, ContractOptions::default()).await;
+    let options = ContractOptions { partial_filters: true, ..ContractOptions::default() };
+    assert_vector_store_contract(&store, options).await;
 }
 
 #[tokio::test]
@@ -564,10 +565,10 @@ async fn count_and_purge_page_through_every_object_of_the_scope() {
     store.upsert("paged", &scope, &chunks).await.expect("upsert");
     store.upsert("paged", &other, &chunks[..3]).await.expect("upsert");
 
-    assert_eq!(store.count("paged", &scope).await.expect("count"), 2_345);
+    assert_eq!(store.count("paged", &scope, None).await.expect("count"), 2_345);
     assert_eq!(store.purge_scope("paged", &scope).await.expect("purge"), 2_345);
-    assert_eq!(store.count("paged", &scope).await.expect("count"), 0);
-    assert_eq!(store.count("paged", &other).await.expect("count"), 3);
+    assert_eq!(store.count("paged", &scope, None).await.expect("count"), 0);
+    assert_eq!(store.count("paged", &other, None).await.expect("count"), 3);
 
     let state = state.lock().await;
     let first = &state.query_bodies[0];
@@ -606,6 +607,30 @@ mod prop_agent_retrieval_search_invariants {
                 let endpoint = start_mock(state).await;
                 let store = build_store(&endpoint);
                 check_search_invariants(&store, "contract", &chunks, &query, top_k).await
+            })?;
+        }
+    }
+}
+
+/// **VectorStore contract, filters (differential)**
+/// *For any* generated filter, search and count SHALL select exactly the chunks
+/// `Filter::matches` selects.
+mod prop_agent_retrieval_filters_match_the_reference {
+    use super::*;
+    use common::vector_store_contract::{arb_filter, check_generated_filters};
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(30))]
+
+        #[test]
+        fn generated_filters_match_the_reference(
+            filters in proptest::collection::vec(arb_filter(), 1..8),
+        ) {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let endpoint = start_mock(Shared::default()).await;
+                let store = build_store(&endpoint);
+                check_generated_filters(&store, &filters, true).await
             })?;
         }
     }

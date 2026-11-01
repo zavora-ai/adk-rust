@@ -193,7 +193,8 @@ This example also depends on `adk-agent`, `adk-model` (`gemini`), `adk-runner`, 
 | Name | `rag_search` |
 | Parameters | `query` (required), `top_k` (overrides the configured value; the reranker and similarity threshold still apply), and `collection` only when the tool has allowed collections (see [Multiple Collections](#multiple-collections)) |
 | Collections | The collection given to `RagTool::new`, plus any given to `with_allowed_collections`; the model cannot reach any other |
-| Scope | `Scope::single_tenant()` unless `with_scope(scope)` sets another; the model cannot name a scope (see [Scopes](#scopes)) |
+| Scope | `Scope::single_tenant()` unless `with_scope(scope)` fixes another, `with_scope_from(\|ctx\| ..)` resolves it from the call's context, or `with_scope_per_user()` uses `[app_name, user_id]`; the model cannot name a scope (see [Scopes](#scopes)) |
+| Filters | `with_policy_filter(filter)` applies to every call; `with_model_filterable([..])` adds a `filter` argument limited to the listed metadata keys, AND-ed with the policy (see [Filters and deletes](#filters-and-deletes)) |
 | Returns | An array of `{"id", "document_id", "text", "metadata", "score"}` results, best first, each with `source_uri` and `title` when its document had them; embedding vectors are not included |
 | Invalid arguments | A missing `query`, a `top_k` that is not a positive integer, or a `collection` the tool does not allow fails the call with `tool.invalid_arguments`, whose message the model receives |
 | Effect | `ToolEffect::ReadOnly` and concurrency-safe, so `DeclarativePolicy::allow_read_only()` admits it and `ToolExecutionStrategy::Auto` overlaps it with adjacent read-only calls |
@@ -497,6 +498,78 @@ were, leaving other scopes untouched.
 | `QdrantVectorStore` | A `scope` payload field indexed as Qdrant's tenant field; a `must` filter on search, count, and delete; the point ID is the UUID v5 of scope and chunk ID |
 | `SurrealVectorStore` | `scope` and `chunk_id` fields, an index on `scope`, and the condition beside the KNN operator; the record ID combines scope and chunk ID |
 | `AgentRetrievalStore` | A `scope` data field; the `filter` of every search and query; the Data Object ID is derived from scope and chunk ID |
+
+### Filters and deletes
+
+A `Filter` narrows a search, a count, or a delete to the chunks it matches, inside the scope.
+Every backend compiles it into its own query language with bound parameters or typed
+expressions and applies it before the top `k` are chosen, so a selective filter still returns
+its nearest matches. The metadata keys a filter may name are declared when the collection is
+created:
+
+```rust
+use adk_rag::{Document, Field, Filter, QueryOptions, RagPipeline, Scope};
+
+async fn retire_and_search(pipeline: &RagPipeline) -> adk_rag::Result<()> {
+    pipeline.create_collection_with_filterable("kb", ["lang", "status"]).await?;
+    let rag = pipeline.scoped(Scope::from_parts(["support-app", "tenant-42"])?);
+
+    rag.ingest(
+        "kb",
+        &Document::new("refunds", "Refunds take 30 days.")
+            .with_metadata("lang", "en")
+            .with_metadata("status", "live"),
+    )
+    .await?;
+
+    let english = Filter::and([
+        Filter::eq(Field::metadata("lang"), "en"),
+        !Filter::eq(Field::metadata("status"), "retired"),
+    ]);
+    let results = rag.query_with("kb", "refund window", &QueryOptions::new().with_filter(english)).await?;
+    println!("{} results", results.len());
+
+    let retired = Filter::eq(Field::metadata("status"), "retired");
+    let deleted = rag.delete_where("kb", &retired).await?;
+    let removed = rag.delete_document("kb", "refunds").await?;
+    println!("deleted {deleted} retired chunks and {removed} chunks of one document");
+    Ok(())
+}
+```
+
+| Operation | Behaviour |
+|-----------|-----------|
+| `query_with(.., QueryOptions::new().with_filter(f))` | Searches the scope's chunks `f` matches |
+| `count_where(collection, &f)` | Counts the scope's chunks `f` matches |
+| `delete_where(collection, &f)` | Deletes the scope's chunks `f` matches and returns how many; other scopes are untouched |
+| `delete_document(collection, id)` | `delete_where` on `Field::DocumentId` |
+| `purge_scope(collection)` | The only operation that deletes a whole scope; an empty `And`, `Or`, or `In` is refused, never read as "everything" |
+| `ingest(collection, &document)` | Replaces the document's chunks: upserts the new ones, then deletes those the new version no longer has |
+
+A filter that names an undeclared metadata key, is malformed, or has a shape the backend cannot
+express fails with `RagError::UnsupportedFilter` before any I/O. Agent Retrieval's filter language
+has no `$exists` or `$not` and nests two levels, so it refuses `Exists`, negations other than
+`!Eq` / `!In` on the document or chunk ID, and deeper nesting.
+
+`RagTool` applies the same filters for an agent: a policy filter the application sets, and a
+`filter` argument the model may use only on the keys the application lists:
+
+```rust
+use std::sync::Arc;
+
+use adk_rag::{Field, Filter, RagPipeline, RagTool};
+
+fn public_search(pipeline: Arc<RagPipeline>) -> RagTool {
+    RagTool::new(pipeline, "kb")
+        .with_scope_per_user()
+        .with_policy_filter(Filter::eq(Field::metadata("status"), "live"))
+        .with_model_filterable(["lang"])
+}
+```
+
+> **Note:** a LanceDB delete is logical: deleted rows stay in the table's files and older
+> versions. Erasure that must remove the bytes calls `LanceDBVectorStore::purge_deleted`
+> afterwards, while no other process writes to the collection.
 
 ### One collection per tenant
 

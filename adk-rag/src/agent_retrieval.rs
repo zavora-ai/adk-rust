@@ -49,6 +49,7 @@
 
 use crate::document::{Chunk, SearchResult};
 use crate::error::{RagError, Result};
+use crate::filter::{Field, Filter};
 use crate::scope::Scope;
 use crate::vectorstore::{CollectionSpec, VectorQuery, VectorStore};
 use adk_core::ErrorComponent;
@@ -57,13 +58,18 @@ use async_trait::async_trait;
 use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 const DEFAULT_ENDPOINT: &str = "https://vectorsearch.googleapis.com";
 const API_VERSION: &str = "v1";
 const VECTOR_FIELD: &str = "embedding";
 const BATCH_LIMIT: usize = 1000;
+/// Prefix of the data field that holds a filterable metadata key.
+const METADATA_FIELD_PREFIX: &str = "m_";
+/// The deepest nesting of `$and` and `$or` Agent Retrieval accepts.
+const MAX_FILTER_DEPTH: usize = 2;
 /// Namespace of the derived Data Object IDs: the v5 UUID of
 /// `https://github.com/zavora-ai/adk-rust/adk-rag/agent-retrieval/data-object-id` in the URL
 /// namespace. Changing it orphans every stored Data Object.
@@ -200,6 +206,8 @@ pub struct AgentRetrievalStore {
     location: String,
     collection_prefix: Option<String>,
     existing_collections_only: bool,
+    /// Filterable metadata keys per collection name, read from the data schema once.
+    filterable: RwLock<HashMap<String, BTreeSet<String>>>,
 }
 
 impl AgentRetrievalStore {
@@ -242,7 +250,64 @@ impl AgentRetrievalStore {
             location: config.location,
             collection_prefix: config.collection_prefix,
             existing_collections_only: config.existing_collections_only,
+            filterable: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// The filterable metadata keys of `collection`: the `m_` fields of its data schema.
+    async fn filterable_keys(&self, collection: &str) -> Result<BTreeSet<String>> {
+        if let Some(keys) = self.filterable.read().await.get(collection) {
+            return Ok(keys.clone());
+        }
+        let resource = self.collection_resource(collection)?;
+        let found =
+            self.get_collection(&resource).await?.ok_or_else(|| RagError::VectorStoreError {
+                backend: "agent_retrieval".to_string(),
+                message: format!("collection '{resource}' does not exist"),
+            })?;
+        let keys: BTreeSet<String> = found["dataSchema"]["properties"]
+            .as_object()
+            .into_iter()
+            .flat_map(|properties| properties.keys())
+            .filter_map(|field| field.strip_prefix(METADATA_FIELD_PREFIX).map(str::to_string))
+            .collect();
+        self.filterable.write().await.insert(collection.to_string(), keys.clone());
+        Ok(keys)
+    }
+
+    /// The scope's selector, joined with `filter`, as an Agent Retrieval filter expression.
+    async fn filter_value(
+        &self,
+        collection: &str,
+        scope: &Scope,
+        filter: Option<&Filter>,
+    ) -> Result<Value> {
+        let Some(filter) = filter else {
+            return Ok(scope_filter(scope));
+        };
+        filter.validate()?;
+        let mut names_metadata = false;
+        filter.visit_fields(&mut |field| names_metadata |= matches!(field, Field::Metadata(_)));
+        let declared =
+            if names_metadata { self.filterable_keys(collection).await? } else { BTreeSet::new() };
+        let compiled = compile_filter(collection, filter, &declared)?;
+        let mut clauses = vec![scope_filter(scope)];
+        match compiled {
+            Value::Object(mut object) if object.len() == 1 && object.contains_key("$and") => {
+                if let Some(Value::Array(children)) = object.remove("$and") {
+                    clauses.extend(children);
+                }
+            }
+            other => clauses.push(other),
+        }
+        let joined = json!({ "$and": clauses });
+        if filter_depth(&joined) > MAX_FILTER_DEPTH {
+            return Err(RagError::UnsupportedFilter(format!(
+                "Agent Retrieval nests `$and` and `$or` at most {MAX_FILTER_DEPTH} levels deep, \
+                 counting the scope's `$and`"
+            )));
+        }
+        Ok(joined)
     }
 
     fn parent(&self) -> String {
@@ -324,6 +389,7 @@ impl AgentRetrievalStore {
         collection: &str,
         scope: &Scope,
         chunks: &[Chunk],
+        filterable: &BTreeSet<String>,
     ) -> Result<()> {
         let parent = self.collection_resource(collection)?;
         let requests: Vec<Value> = chunks
@@ -332,7 +398,7 @@ impl AgentRetrievalStore {
                 json!({
                     "parent": parent,
                     "dataObjectId": data_object_id(scope, &chunk.id),
-                    "dataObject": data_object_body(scope, chunk),
+                    "dataObject": data_object_body(scope, chunk, filterable),
                 })
             })
             .collect();
@@ -348,7 +414,13 @@ impl AgentRetrievalStore {
 
     /// Last-write-wins upsert for one object: create, then patch on
     /// `ALREADY_EXISTS`.
-    async fn upsert_object(&self, collection: &str, scope: &Scope, chunk: &Chunk) -> Result<()> {
+    async fn upsert_object(
+        &self,
+        collection: &str,
+        scope: &Scope,
+        chunk: &Chunk,
+        filterable: &BTreeSet<String>,
+    ) -> Result<()> {
         let parent = self.collection_resource(collection)?;
         let request = self
             .client
@@ -356,7 +428,7 @@ impl AgentRetrievalStore {
             .await
             .map_err(store_error)?
             .query(&[("dataObjectId", data_object_id(scope, &chunk.id).as_str())])
-            .json(&data_object_body(scope, chunk));
+            .json(&data_object_body(scope, chunk, filterable));
         match self.client.send_value(request).await {
             Ok(_) => Ok(()),
             Err(error) if error.details.upstream_status_code == Some(409) => {
@@ -366,7 +438,7 @@ impl AgentRetrievalStore {
                     .request(Method::PATCH, &name)
                     .await
                     .map_err(store_error)?
-                    .json(&data_object_body(scope, chunk));
+                    .json(&data_object_body(scope, chunk, filterable));
                 self.client.send_value(request).await.map_err(store_error)?;
                 Ok(())
             }
@@ -403,15 +475,15 @@ impl AgentRetrievalStore {
         Ok(())
     }
 
-    /// The resource names of every Data Object a scope holds, through paged
-    /// `dataObjects:query` calls filtered by scope.
-    async fn scope_object_names(&self, collection: &str, scope: &Scope) -> Result<Vec<String>> {
+    /// The resource names of every Data Object `filter` selects, through paged
+    /// `dataObjects:query` calls.
+    async fn object_names(&self, collection: &str, filter: &Value) -> Result<Vec<String>> {
         let parent = self.collection_resource(collection)?;
         let mut names = Vec::new();
         let mut page_token = String::new();
         loop {
             let mut body = json!({
-                "filter": scope_filter(scope),
+                "filter": filter,
                 "pageSize": BATCH_LIMIT,
                 "outputFields": { "dataFields": ["chunkId"] },
             });
@@ -512,6 +584,7 @@ impl AgentRetrievalStore {
 impl VectorStore for AgentRetrievalStore {
     async fn create_collection(&self, name: &str, spec: &CollectionSpec) -> Result<()> {
         let resource = self.collection_resource(name)?;
+        spec.validate()?;
         if self.existing_collections_only {
             return match self.get_collection(&resource).await? {
                 Some(_) => Ok(()),
@@ -521,20 +594,21 @@ impl VectorStore for AgentRetrievalStore {
             };
         }
         let string = json!({ "type": "string" });
+        let mut properties = json!({
+            "scope": string,
+            "chunkId": string,
+            "documentId": string,
+            "text": string,
+            "metadataJson": string,
+            "sourceUri": string,
+            "title": string,
+        });
+        for key in &spec.filterable {
+            properties[format!("{METADATA_FIELD_PREFIX}{key}")] = string.clone();
+        }
         let body = json!({
             "displayName": name,
-            "dataSchema": {
-                "type": "object",
-                "properties": {
-                    "scope": string,
-                    "chunkId": string,
-                    "documentId": string,
-                    "text": string,
-                    "metadataJson": string,
-                    "sourceUri": string,
-                    "title": string,
-                },
-            },
+            "dataSchema": { "type": "object", "properties": properties },
             "vectorSchema": {
                 VECTOR_FIELD: { "denseVector": { "dimensions": spec.dimensions } },
             },
@@ -554,6 +628,7 @@ impl VectorStore for AgentRetrievalStore {
             Err(error) => return Err(store_error(error)),
         };
         self.wait_for_operation(operation, "collection create").await?;
+        self.filterable.write().await.insert(name.to_string(), spec.filterable.clone());
         Ok(())
     }
 
@@ -571,15 +646,19 @@ impl VectorStore for AgentRetrievalStore {
     }
 
     async fn upsert(&self, collection: &str, scope: &Scope, chunks: &[Chunk]) -> Result<()> {
+        if chunks.is_empty() {
+            return Ok(());
+        }
+        let filterable = self.filterable_keys(collection).await?;
         for batch in chunks.chunks(BATCH_LIMIT) {
             // Fast path: one atomic batchCreate per 1000. Batches are
             // atomic, so any ALREADY_EXISTS fails the whole batch; fall
             // back to per-object create-else-patch for last-write-wins.
-            match self.create_objects_batch(collection, scope, batch).await {
+            match self.create_objects_batch(collection, scope, batch, &filterable).await {
                 Ok(()) => {}
                 Err(_) => {
                     for chunk in batch {
-                        self.upsert_object(collection, scope, chunk).await?;
+                        self.upsert_object(collection, scope, chunk, &filterable).await?;
                     }
                 }
             }
@@ -602,11 +681,12 @@ impl VectorStore for AgentRetrievalStore {
         query: &VectorQuery<'_>,
     ) -> Result<Vec<SearchResult>> {
         let parent = self.collection_resource(collection)?;
+        let filter = self.filter_value(collection, scope, query.filter).await?;
         let body = json!({
             "vectorSearch": {
                 "searchField": VECTOR_FIELD,
                 "vector": { "values": query.embedding },
-                "filter": scope_filter(scope),
+                "filter": filter,
                 "topK": query.top_k,
                 "outputFields": output_fields(),
             },
@@ -626,12 +706,20 @@ impl VectorStore for AgentRetrievalStore {
         response.results.into_iter().map(search_result_from_wire).collect()
     }
 
-    async fn count(&self, collection: &str, scope: &Scope) -> Result<u64> {
-        Ok(self.scope_object_names(collection, scope).await?.len() as u64)
+    async fn count(&self, collection: &str, scope: &Scope, filter: Option<&Filter>) -> Result<u64> {
+        let filter = self.filter_value(collection, scope, filter).await?;
+        Ok(self.object_names(collection, &filter).await?.len() as u64)
+    }
+
+    async fn delete_where(&self, collection: &str, scope: &Scope, filter: &Filter) -> Result<u64> {
+        let filter = self.filter_value(collection, scope, Some(filter)).await?;
+        let names = self.object_names(collection, &filter).await?;
+        self.delete_objects(collection, &names).await?;
+        Ok(names.len() as u64)
     }
 
     async fn purge_scope(&self, collection: &str, scope: &Scope) -> Result<u64> {
-        let names = self.scope_object_names(collection, scope).await?;
+        let names = self.object_names(collection, &scope_filter(scope)).await?;
         self.delete_objects(collection, &names).await?;
         Ok(names.len() as u64)
     }
@@ -649,6 +737,71 @@ fn scope_filter(scope: &Scope) -> Value {
     json!({ "scope": { "$eq": scope.as_str() } })
 }
 
+/// The nesting depth of `$and` and `$or` in a filter expression.
+fn filter_depth(value: &Value) -> usize {
+    value.as_object().map_or(0, |object| {
+        object
+            .iter()
+            .filter(|(key, _)| matches!(key.as_str(), "$and" | "$or"))
+            .map(|(_, children)| {
+                1 + children.as_array().into_iter().flatten().map(filter_depth).max().unwrap_or(0)
+            })
+            .max()
+            .unwrap_or(0)
+    })
+}
+
+/// Compiles a validated filter to Agent Retrieval's filter language.
+///
+/// The language has no `$exists` or `$not`, and its `$ne` and `$nin` are documented only for
+/// fields a Data Object has, so `Exists` fails, and `Not` is accepted only around `Eq` or `In`
+/// on the document ID or chunk ID, which every chunk has.
+fn compile_filter(collection: &str, filter: &Filter, declared: &BTreeSet<String>) -> Result<Value> {
+    let unsupported =
+        |reason: &str| RagError::UnsupportedFilter(format!("Agent Retrieval: {reason}"));
+    let data_field = |field: &Field| -> Result<String> {
+        Ok(match field {
+            Field::Metadata(key) if declared.contains(key) => {
+                format!("{METADATA_FIELD_PREFIX}{key}")
+            }
+            Field::Metadata(key) => {
+                return Err(RagError::UnsupportedFilter(format!(
+                    "metadata key `{key}` is not declared filterable on collection \
+                     '{collection}'; create the collection with it in \
+                     `CollectionSpec::with_filterable`"
+                )));
+            }
+            Field::DocumentId => "documentId".to_string(),
+            Field::SourceUri => "sourceUri".to_string(),
+            Field::ChunkId => "chunkId".to_string(),
+        })
+    };
+    let children = |filters: &[Filter]| -> Result<Vec<Value>> {
+        filters.iter().map(|filter| compile_filter(collection, filter, declared)).collect()
+    };
+    Ok(match filter {
+        Filter::Eq(field, value) => json!({ data_field(field)?: { "$eq": value } }),
+        Filter::In(field, values) => json!({ data_field(field)?: { "$in": values } }),
+        Filter::Exists(_) => return Err(unsupported("the filter language has no `$exists`")),
+        Filter::And(filters) => json!({ "$and": children(filters)? }),
+        Filter::Or(filters) => json!({ "$or": children(filters)? }),
+        Filter::Not(inner) => match inner.as_ref() {
+            Filter::Not(filter) => compile_filter(collection, filter, declared)?,
+            Filter::Eq(field, value) if field.always_present() => {
+                json!({ data_field(field)?: { "$ne": value } })
+            }
+            Filter::In(field, values) if field.always_present() => {
+                json!({ data_field(field)?: { "$nin": values } })
+            }
+            _ => {
+                return Err(unsupported(
+                    "`Not` is supported only around `Eq` or `In` on the document ID or chunk ID",
+                ));
+            }
+        },
+    })
+}
+
 fn output_fields() -> Value {
     json!({
         "dataFields": ["chunkId", "text", "documentId", "metadataJson", "sourceUri", "title"],
@@ -656,7 +809,7 @@ fn output_fields() -> Value {
     })
 }
 
-fn data_object_body(scope: &Scope, chunk: &Chunk) -> Value {
+fn data_object_body(scope: &Scope, chunk: &Chunk, filterable: &BTreeSet<String>) -> Value {
     let metadata_json = serde_json::to_string(&chunk.metadata).unwrap_or_else(|_| "{}".into());
     let mut data = json!({
         "scope": scope.as_str(),
@@ -668,6 +821,11 @@ fn data_object_body(scope: &Scope, chunk: &Chunk) -> Value {
     for (field, value) in [("sourceUri", &chunk.source_uri), ("title", &chunk.title)] {
         if let Some(value) = value {
             data[field] = json!(value);
+        }
+    }
+    for key in filterable {
+        if let Some(value) = chunk.metadata.get(key) {
+            data[format!("{METADATA_FIELD_PREFIX}{key}")] = json!(value);
         }
     }
     json!({
@@ -853,7 +1011,7 @@ mod tests {
         let chunk =
             Chunk::new("c1", "d1", "hello").with_embedding(vec![0.1, 0.2]).with_metadata("k", "v");
         assert_eq!(
-            data_object_body(&scope, &chunk),
+            data_object_body(&scope, &chunk, &BTreeSet::new()),
             json!({
                 "data": {
                     "scope": "tenant-a",
@@ -867,7 +1025,7 @@ mod tests {
         );
         let cited = chunk.with_source_uri("https://example.com/a").with_title("A");
         assert_eq!(
-            data_object_body(&scope, &cited)["data"],
+            data_object_body(&scope, &cited, &BTreeSet::from(["k".to_string()]))["data"],
             json!({
                 "scope": "tenant-a",
                 "chunkId": "c1",
@@ -876,8 +1034,43 @@ mod tests {
                 "metadataJson": "{\"k\":\"v\"}",
                 "sourceUri": "https://example.com/a",
                 "title": "A",
+                "m_k": "v",
             }),
         );
+    }
+
+    #[test]
+    fn filters_compile_to_the_documented_operators_within_two_levels() {
+        let declared = BTreeSet::from(["lang".to_string()]);
+        let filter = Filter::or([
+            Filter::eq(Field::metadata("lang"), "en"),
+            !Filter::is_in(Field::DocumentId, ["a"]),
+            !Filter::eq(Field::ChunkId, "c"),
+        ]);
+        assert_eq!(
+            compile_filter("docs", &filter, &declared).unwrap(),
+            json!({ "$or": [
+                { "m_lang": { "$eq": "en" } },
+                { "documentId": { "$nin": ["a"] } },
+                { "chunkId": { "$ne": "c" } },
+            ]})
+        );
+        for refused in [
+            Filter::exists(Field::SourceUri),
+            !Filter::eq(Field::SourceUri, "x"),
+            !Filter::eq(Field::metadata("lang"), "en"),
+            Filter::eq(Field::metadata("tier"), "gold"),
+        ] {
+            assert!(
+                matches!(
+                    compile_filter("docs", &refused, &declared),
+                    Err(RagError::UnsupportedFilter(_))
+                ),
+                "{refused:?}"
+            );
+        }
+        let deep = json!({ "$and": [{ "$or": [{ "$and": [{ "a": { "$eq": "b" } }] }] }] });
+        assert_eq!(filter_depth(&deep), 3);
     }
 
     #[test]

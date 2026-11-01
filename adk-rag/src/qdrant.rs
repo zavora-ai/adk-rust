@@ -11,7 +11,10 @@
 //!
 //! The scope is kept in the `scope` payload field, which `create_collection` indexes as
 //! Qdrant's tenant field. Search, count, and purge filter on it inside Qdrant, so the scope
-//! applies before the nearest points are chosen.
+//! applies before the nearest points are chosen. A [`Filter`](crate::Filter) compiles to a
+//! nested Qdrant filter joined to the scope's, over the payload keys `metadata.<key>`,
+//! `document_id`, `source_uri`, and `chunk_id`; `create_collection` adds a keyword index for
+//! each declared filterable key.
 //!
 //! # Example
 //!
@@ -43,6 +46,7 @@ use uuid::Uuid;
 
 use crate::document::{Chunk, SearchResult};
 use crate::error::{RagError, Result};
+use crate::filter::{self, Filter as RagFilter};
 use crate::scope::Scope;
 use crate::vectorstore::{CollectionSpec, VectorQuery, VectorStore};
 
@@ -62,9 +66,41 @@ fn point_id(scope: &Scope, chunk_id: &str) -> PointId {
     Uuid::new_v5(&CHUNK_ID_NAMESPACE, scope.record_key(chunk_id).as_bytes()).to_string().into()
 }
 
-/// Selects a scope's points.
-fn scope_filter(scope: &Scope) -> Filter {
-    Filter::must([Condition::matches(SCOPE_FIELD, scope.as_str().to_string())])
+/// Selects a scope's points, or those of them `filter` matches.
+fn scope_filter(scope: &Scope, filter: Option<&RagFilter>) -> Result<Filter> {
+    let mut conditions = vec![Condition::matches(SCOPE_FIELD, scope.as_str().to_string())];
+    if let Some(filter) = filter {
+        filter.validate()?;
+        conditions.push(condition(filter));
+    }
+    Ok(Filter::must(conditions))
+}
+
+/// The payload key of a filter field.
+fn payload_key(field: &filter::Field) -> String {
+    match field {
+        filter::Field::Metadata(key) => format!("metadata.{key}"),
+        filter::Field::DocumentId => "document_id".to_string(),
+        filter::Field::SourceUri => "source_uri".to_string(),
+        filter::Field::ChunkId => CHUNK_ID_FIELD.to_string(),
+    }
+}
+
+/// Compiles a validated filter to a Qdrant condition.
+///
+/// A `match` on a missing payload key is false and `must_not` of it is true, so a point
+/// that lacks a field behaves as [`RagFilter::matches`] says.
+fn condition(filter: &RagFilter) -> Condition {
+    match filter {
+        RagFilter::Eq(field, value) => Condition::matches(payload_key(field), value.clone()),
+        RagFilter::In(field, values) => Condition::matches(payload_key(field), values.clone()),
+        RagFilter::Exists(field) => {
+            Filter::must_not([Condition::is_empty(payload_key(field))]).into()
+        }
+        RagFilter::And(filters) => Filter::must(filters.iter().map(condition)).into(),
+        RagFilter::Or(filters) => Filter::should(filters.iter().map(condition)).into(),
+        RagFilter::Not(filter) => Filter::must_not([condition(filter)]).into(),
+    }
 }
 
 /// A [`VectorStore`] backed by [Qdrant](https://qdrant.tech/).
@@ -110,6 +146,7 @@ impl QdrantVectorStore {
 #[async_trait]
 impl VectorStore for QdrantVectorStore {
     async fn create_collection(&self, name: &str, spec: &CollectionSpec) -> Result<()> {
+        spec.validate()?;
         let dimensions = spec.dimensions;
         let collections = self.client.list_collections().await.map_err(Self::map_err)?;
         let exists = collections.collections.iter().any(|c| c.name == name);
@@ -137,6 +174,16 @@ impl VectorStore for QdrantVectorStore {
             )
             .await
             .map_err(Self::map_err)?;
+        for key in &spec.filterable {
+            let field = payload_key(&filter::Field::metadata(key.clone()));
+            self.client
+                .create_field_index(
+                    CreateFieldIndexCollectionBuilder::new(name, field, FieldType::Keyword)
+                        .wait(true),
+                )
+                .await
+                .map_err(Self::map_err)?;
+        }
         Ok(())
     }
 
@@ -228,7 +275,7 @@ impl VectorStore for QdrantVectorStore {
             .client
             .search_points(
                 SearchPointsBuilder::new(collection, query.embedding.to_vec(), query.top_k as u64)
-                    .filter(scope_filter(scope))
+                    .filter(scope_filter(scope, query.filter)?)
                     .with_payload(true),
             )
             .await
@@ -289,21 +336,44 @@ impl VectorStore for QdrantVectorStore {
         Ok(results)
     }
 
-    async fn count(&self, collection: &str, scope: &Scope) -> Result<u64> {
+    async fn count(
+        &self,
+        collection: &str,
+        scope: &Scope,
+        filter: Option<&RagFilter>,
+    ) -> Result<u64> {
+        let selector = scope_filter(scope, filter)?;
         let response = self
             .client
-            .count(CountPointsBuilder::new(collection).filter(scope_filter(scope)).exact(true))
+            .count(CountPointsBuilder::new(collection).filter(selector).exact(true))
             .await
             .map_err(Self::map_err)?;
         Ok(response.result.map_or(0, |result| result.count))
     }
 
+    async fn delete_where(
+        &self,
+        collection: &str,
+        scope: &Scope,
+        filter: &RagFilter,
+    ) -> Result<u64> {
+        let selector = scope_filter(scope, Some(filter))?;
+        // Qdrant's delete reports no count, so the count is taken first.
+        let count = self.count(collection, scope, Some(filter)).await?;
+        self.client
+            .delete_points(DeletePointsBuilder::new(collection).points(selector).wait(true))
+            .await
+            .map_err(Self::map_err)?;
+        debug!(collection, deleted = count, "deleted matching points from qdrant");
+        Ok(count)
+    }
+
     async fn purge_scope(&self, collection: &str, scope: &Scope) -> Result<u64> {
         // Qdrant's delete reports no count, so the count is taken first.
-        let count = self.count(collection, scope).await?;
+        let count = self.count(collection, scope, None).await?;
         self.client
             .delete_points(
-                DeletePointsBuilder::new(collection).points(scope_filter(scope)).wait(true),
+                DeletePointsBuilder::new(collection).points(scope_filter(scope, None)?).wait(true),
             )
             .await
             .map_err(Self::map_err)?;
@@ -321,6 +391,32 @@ mod tests {
             Some(PointIdOptions::Uuid(uuid)) => Some(uuid),
             Some(PointIdOptions::Num(_)) | None => None,
         }
+    }
+
+    #[test]
+    fn filters_compile_to_nested_qdrant_conditions() {
+        let filter = RagFilter::and([
+            RagFilter::eq(filter::Field::metadata("lang"), "en"),
+            !RagFilter::exists(filter::Field::SourceUri),
+            RagFilter::is_in(filter::Field::DocumentId, ["a", "b"]),
+        ]);
+        let scope = Scope::new("tenant").unwrap();
+        assert_eq!(
+            scope_filter(&scope, Some(&filter)).unwrap(),
+            Filter::must([
+                Condition::matches(SCOPE_FIELD, "tenant".to_string()),
+                Filter::must([
+                    Condition::matches("metadata.lang", "en".to_string()),
+                    Filter::must_not(
+                        [Filter::must_not([Condition::is_empty("source_uri")]).into()]
+                    )
+                    .into(),
+                    Condition::matches("document_id", vec!["a".to_string(), "b".to_string()]),
+                ])
+                .into(),
+            ])
+        );
+        assert!(scope_filter(&scope, Some(&RagFilter::or([]))).is_err());
     }
 
     #[test]

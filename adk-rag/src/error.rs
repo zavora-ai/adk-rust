@@ -48,6 +48,11 @@ pub enum RagError {
     #[error("Invalid scope: {0}")]
     InvalidScope(String),
 
+    /// A [`Filter`](crate::Filter) that is malformed, names an undeclared metadata key, or
+    /// that the backend cannot express. Raised before any I/O.
+    #[error("Unsupported filter: {0}")]
+    UnsupportedFilter(String),
+
     /// An error propagated from `adk-core`.
     #[error(transparent)]
     AdkError(#[from] adk_core::AdkError),
@@ -71,6 +76,7 @@ impl From<RagError> for adk_core::AdkError {
             RagError::ConfigError(_) => (ErrorCategory::InvalidInput, "memory.rag_config"),
             RagError::PipelineError(_) => (ErrorCategory::Internal, "memory.rag_pipeline"),
             RagError::InvalidScope(_) => (ErrorCategory::InvalidInput, "memory.rag_scope"),
+            RagError::UnsupportedFilter(_) => (ErrorCategory::InvalidInput, "memory.rag_filter"),
             RagError::AdkError(_) => unreachable!(),
         };
         adk_core::AdkError::new(ErrorComponent::Memory, category, code, err.to_string())

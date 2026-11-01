@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use adk_rag::document::Chunk;
 use adk_rag::lancedb::LanceDBVectorStore;
-use adk_rag::{CollectionSpec, Scope, VectorQuery, VectorStore};
+use adk_rag::{CollectionSpec, Field, Filter, Scope, VectorQuery, VectorStore};
 use tempfile::TempDir;
 
 const DIM: usize = 4;
@@ -417,4 +417,50 @@ async fn test_lancedb_invalid_collection_names_are_errors_not_panics() {
             "collection name {name:?}"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn purge_deleted_removes_deleted_rows_from_every_version() {
+    let (dir, store) = store().await;
+    let scope = Scope::single_tenant();
+    let spec = CollectionSpec::new(DIM).with_filterable(["subject"]);
+    store.create_collection("docs", &spec).await.unwrap();
+    let marker = "erase-me-7f3a9c";
+    let mut rows: Vec<Chunk> = (0..20)
+        .map(|i| plain(&format!("keep_{i}"), "kept text", vec![1.0, i as f32, 0.0, 0.0]))
+        .collect();
+    rows.push(
+        plain("gone", marker, vec![0.0, 0.0, 1.0, 0.0]).with_metadata("subject", "visitor-42"),
+    );
+    store.upsert("docs", &scope, &rows).await.unwrap();
+
+    let subject = Filter::eq(Field::metadata("subject"), "visitor-42");
+    assert_eq!(store.delete_where("docs", &scope, &subject).await.unwrap(), 1);
+    let holds_marker = || {
+        walk(dir.path()).into_iter().any(|path| {
+            std::fs::read(&path).is_ok_and(|bytes| {
+                bytes.windows(marker.len()).any(|window| window == marker.as_bytes())
+            })
+        })
+    };
+    assert!(holds_marker(), "a logical delete leaves the bytes on disk");
+
+    let freed = store.purge_deleted("docs").await.unwrap();
+    assert!(freed > 0, "pruning frees the old versions");
+    assert!(!holds_marker(), "no file under the table still holds the deleted text");
+    assert_eq!(store.count("docs", &scope, None).await.unwrap(), 20);
+}
+
+/// Every file under `root`.
+fn walk(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(walk(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
 }
