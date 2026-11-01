@@ -264,6 +264,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+Framework tools declare:
+
+| Tool | Declaration |
+|------|-------------|
+| `AgentTool` | `Configured`; the delegate's calls are checked against the policy the delegation carries |
+| `FunctionTool` | What `with_egress` or `with_egress_fn` sets; otherwise `Undeclared` |
+| `adk-devtools` file tools (`read_file`, `write_file`, `edit_file`, `glob`, `grep`, `apply_patch`) | `None` |
+| `bash` (`adk-devtools`) | Its launcher's (`CommandLauncher::egress`): `Undeclared` on the host |
+| Harness `bash` | `Enforced` when sandboxed: under a run egress policy each command reaches the network only through its own egress proxy ([Harness Shell and Sandbox](../harness/shell-and-sandbox.md#network-allowlist)); `Undeclared` on the host, for the unsandboxed retry, and under the Windows restricted token |
+| Harness `web_fetch` | The URL's host and port; every redirect hop is checked against the run's policy too |
+| Harness `web_search` | `Configured` (the search provider the harness was built with) |
+| Harness to-dos, plan, help, shell output | `None`; memory and facts: `Configured` |
+| Kernel driver tools | `Enforced` under the driver's egress proxy (`network = { hosts = [...] }`), `None` sandboxed with `allow_network = false`, otherwise `Undeclared` |
+| MCP tools, browser tools, other harness tools | `Undeclared`: a run egress policy refuses them. The browser loads subresources and runs scripts no declaration can bound |
+
 What a declaration does not cover:
 
 - A declaration is the tool author's statement. Only connections made through a
