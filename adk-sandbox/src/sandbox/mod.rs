@@ -239,6 +239,26 @@ impl NetworkSupport {
     }
 }
 
+/// Where the egress proxy of a [`NetworkAccess::Proxied`] call must listen for the sandboxed
+/// process to reach it ([`SandboxEnforcer::proxy_listener`]).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_sandbox::sandbox::ProxyListener;
+///
+/// assert_ne!(ProxyListener::HostLoopback, ProxyListener::SandboxLoopback);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProxyListener {
+    /// The host's loopback interface, which the sandbox shares (Seatbelt).
+    HostLoopback,
+    /// The loopback interface of the sandbox's own network namespace, where the enforcer
+    /// places a listener the proxy serves (bubblewrap).
+    SandboxLoopback,
+}
+
 /// A declarative sandbox policy describing allowed operations.
 ///
 /// Constructed via [`SandboxPolicyBuilder`]. Defaults to deny-all when
@@ -491,6 +511,12 @@ pub trait SandboxEnforcer: Send + Sync {
     /// [`SandboxError::Unenforceable`]; it never runs a command with more network access than
     /// the policy asks for.
     fn network_support(&self) -> NetworkSupport;
+
+    /// Where the egress proxy of a `Proxied` call listens; the default is the host's loopback.
+    /// A wrapper forwards its inner enforcer's.
+    fn proxy_listener(&self) -> ProxyListener {
+        ProxyListener::HostLoopback
+    }
 
     /// Wraps the original command with sandbox enforcement.
     ///

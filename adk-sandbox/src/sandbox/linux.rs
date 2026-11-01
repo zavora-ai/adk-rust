@@ -44,8 +44,18 @@
 //! | A grant above them, such as `/` | Each is covered with an empty, read-only `tmpfs` before deeper grants are mounted, hiding the sockets of Docker, D-Bus, systemd, tmux, X11 and SSH agents |
 //!
 //! A socket elsewhere under a granted path, such as in a home directory, stays reachable;
-//! grant directories that hold none. `Proxied` is not enforced yet and is refused with
+//! grant directories that hold none.
+//!
+//! `Proxied` (feature `egress-proxy`) keeps `--unshare-net` and places the egress proxy's
+//! listener inside the call's network namespace: bubblewrap reports the sandbox's process id on
+//! [`INFO_FD`] and holds the program on [`BLOCK_FD`]; a short-lived helper joins the sandbox's
+//! user and network namespaces, brings up its loopback interface, opens the listening socket on
+//! `127.0.0.1:<port>` and passes it back; the call's [`CallProxy`] serves it, and only then is
+//! the program released. When any step fails the program is released with no listener, so it
+//! reaches nothing. Without `egress-proxy`, `Proxied` is refused with
 //! [`SandboxError::Unenforceable`].
+//!
+//! [`CallProxy`]: crate::egress_proxy::CallProxy
 //!
 //! ## Process Spawning
 //!
@@ -64,14 +74,22 @@ use std::ffi::{OsStr, OsString};
 use super::layering::Layering;
 use super::seccomp;
 use super::{
-    AccessMode, AllowedPath, NetworkAccess, NetworkSupport, SandboxEnforcer, SandboxPolicy,
-    WrappedCommand,
+    AccessMode, AllowedPath, NetworkAccess, NetworkSupport, ProxyListener, SandboxEnforcer,
+    SandboxPolicy, WrappedCommand,
 };
 use crate::error::SandboxError;
 
 /// Directories where host daemons and sessions keep Unix sockets. Under a restrictive network
 /// a grant of one of them is refused, and a grant above one covers it with an empty `tmpfs`.
 const SOCKET_DIRECTORIES: &[&str] = &["/run", "/tmp", "/var/tmp", "/dev/shm"];
+
+/// File descriptor bubblewrap writes its JSON information, the sandbox's process id among it,
+/// to under `Proxied` network access.
+pub const INFO_FD: i32 = 65;
+
+/// File descriptor bubblewrap waits on before it runs the program under `Proxied` network
+/// access, until the proxy's listener is in place.
+pub const BLOCK_FD: i32 = 66;
 
 /// File descriptor bubblewrap reads the process-creation seccomp program from.
 ///
@@ -170,6 +188,12 @@ impl LinuxEnforcer {
         if network.restricts() {
             args.push("--unshare-net".to_string());
         }
+        if let NetworkAccess::Proxied { .. } = network {
+            args.extend(
+                ["--info-fd", &INFO_FD.to_string(), "--block-fd", &BLOCK_FD.to_string()]
+                    .map(str::to_string),
+            );
+        }
 
         // Always: a new session with no controlling terminal, so the child cannot inject
         // input into the caller's terminal with `TIOCSTI` (spec 3.1 §10 S2).
@@ -237,7 +261,11 @@ impl SandboxEnforcer for LinuxEnforcer {
     }
 
     fn network_support(&self) -> NetworkSupport {
-        NetworkSupport { denied: true, proxied: false }
+        NetworkSupport { denied: true, proxied: cfg!(feature = "egress-proxy") }
+    }
+
+    fn proxy_listener(&self) -> ProxyListener {
+        ProxyListener::SandboxLoopback
     }
 
     fn probe(&self) -> Result<(), SandboxError> {
@@ -333,6 +361,28 @@ impl SandboxEnforcer for LinuxEnforcer {
         use std::io::Write;
         use std::os::fd::{AsRawFd, OwnedFd};
 
+        if let NetworkAccess::Proxied { endpoint } = policy.network {
+            let failed = |error: std::io::Error| SandboxError::EnforcerFailed {
+                enforcer: "bubblewrap".to_string(),
+                message: format!("failed to prepare the egress proxy's descriptors: {error}"),
+            };
+            let (info_reader, info_writer) = std::io::pipe().map_err(failed)?;
+            let (block_reader, block_writer) = std::io::pipe().map_err(failed)?;
+            let (info_fd, block_fd) = (OwnedFd::from(info_writer), OwnedFd::from(block_reader));
+            // SAFETY: the closure runs in the forked child before exec and calls only dup2(2)
+            // and fcntl(2), which are async-signal-safe; it owns both descriptors.
+            unsafe {
+                cmd.pre_exec(move || {
+                    install_fd(info_fd.as_raw_fd(), INFO_FD)?;
+                    install_fd(block_fd.as_raw_fd(), BLOCK_FD)
+                });
+            }
+            std::thread::Builder::new()
+                .name("adk-sandbox-egress-namespace".to_string())
+                .spawn(move || namespace::attach_listener(info_reader, block_writer, endpoint.port))
+                .map_err(failed)?;
+        }
+
         if policy.allow_process_spawn {
             return Ok(());
         }
@@ -362,22 +412,248 @@ impl SandboxEnforcer for LinuxEnforcer {
         // fcntl(2), which are async-signal-safe. `program_fd` is owned by the closure, so the
         // descriptor stays open until the command is dropped.
         unsafe {
-            cmd.pre_exec(move || {
-                let source = program_fd.as_raw_fd();
-                let result = if source == SECCOMP_FD {
-                    // dup2 onto itself leaves FD_CLOEXEC set, so clear the flag directly.
-                    libc::fcntl(source, libc::F_SETFD, 0)
-                } else {
-                    libc::dup2(source, SECCOMP_FD)
-                };
-                if result == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
-            });
+            cmd.pre_exec(move || install_fd(program_fd.as_raw_fd(), SECCOMP_FD));
         }
         Ok(())
     }
 }
 
 /// Canonicalizes all paths in the policy, logging warnings for changed paths.
+/// Makes `source` available to the program as `target`, inheritable across exec.
+///
+/// Runs in the forked child; dup2(2) and fcntl(2) are async-signal-safe.
+fn install_fd(source: i32, target: i32) -> std::io::Result<()> {
+    // SAFETY: plain descriptor syscalls on descriptors the caller owns.
+    let result = unsafe {
+        if source == target {
+            // dup2 onto itself leaves FD_CLOEXEC set, so clear the flag directly.
+            libc::fcntl(source, libc::F_SETFD, 0)
+        } else {
+            libc::dup2(source, target)
+        }
+    };
+    if result == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
+}
+
+/// The egress proxy's listener inside a sandbox's network namespace.
+#[cfg(feature = "egress-proxy")]
+mod namespace {
+    use std::fs::File;
+    use std::io::{Read, Write};
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::net::UnixStream;
+    use std::os::unix::process::CommandExt;
+
+    /// Waits for bubblewrap's process id, opens the listener in its namespace, hands it to the
+    /// call's proxy, and releases the program, which runs with no listener if a step failed.
+    pub(super) fn attach_listener(
+        info: std::io::PipeReader,
+        mut block: std::io::PipeWriter,
+        port: u16,
+    ) {
+        let attached =
+            child_pid(info).and_then(|pid| listen_in_namespace(pid, port)).and_then(|listener| {
+                if crate::egress_proxy::deliver_namespace_listener(port, listener) {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::other("no egress proxy waits for this call"))
+                }
+            });
+        if let Err(error) = attached {
+            tracing::warn!(
+                error = %error,
+                sandbox.proxy_port = port,
+                "the egress proxy listener could not be placed in the sandbox; the program \
+                 reaches no network"
+            );
+        }
+        let _ = block.write_all(b"1");
+    }
+
+    /// Reads bubblewrap's JSON information up to its closing brace and returns `child-pid`.
+    fn child_pid(mut info: std::io::PipeReader) -> std::io::Result<u32> {
+        let mut text = Vec::new();
+        let mut chunk = [0u8; 512];
+        while !text.contains(&b'}') {
+            match info.read(&mut chunk)? {
+                0 => break,
+                n => text.extend_from_slice(&chunk[..n]),
+            }
+            if text.len() > 64 * 1024 {
+                break;
+            }
+        }
+        let text = String::from_utf8_lossy(&text);
+        text.split("\"child-pid\"")
+            .nth(1)
+            .and_then(|rest| {
+                let digits: String = rest
+                    .trim_start_matches(|c: char| c == ':' || c.is_whitespace())
+                    .chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect();
+                digits.parse().ok()
+            })
+            .ok_or_else(|| {
+                std::io::Error::other(format!("bubblewrap reported no child-pid: {text}"))
+            })
+    }
+
+    /// Opens a listener on `127.0.0.1:<port>` inside the namespaces of process `pid`, through a
+    /// helper that joins them, since only a single-threaded process may join a user namespace.
+    fn listen_in_namespace(pid: u32, port: u16) -> std::io::Result<std::net::TcpListener> {
+        let user = File::open(format!("/proc/{pid}/ns/user"))?;
+        let net = File::open(format!("/proc/{pid}/ns/net"))?;
+        let (parent, child) = UnixStream::pair()?;
+        let (user_fd, net_fd, child_fd) = (user.as_raw_fd(), net.as_raw_fd(), child.as_raw_fd());
+        let mut helper = std::process::Command::new("true");
+        helper
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: the closure runs in the forked, single-threaded child before exec and makes
+        // only async-signal-safe system calls on stack data.
+        unsafe {
+            helper.pre_exec(move || {
+                if libc::setns(user_fd, libc::CLONE_NEWUSER) == -1
+                    || libc::setns(net_fd, libc::CLONE_NEWNET) == -1
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                loopback_up()?;
+                let listener = bind_loopback(port)?;
+                send_fd(child_fd, listener)
+            });
+        }
+        let status = helper.status()?;
+        if !status.success() {
+            return Err(std::io::Error::other(format!("the namespace helper ended with {status}")));
+        }
+        drop((user, net, child));
+        let fd = receive_fd(&parent)?;
+        Ok(std::net::TcpListener::from(fd))
+    }
+
+    /// Sets `lo` up in the current network namespace.
+    unsafe fn loopback_up() -> std::io::Result<()> {
+        // SAFETY: a zeroed `ifreq` is a valid value; the name is NUL-terminated.
+        unsafe {
+            let socket = libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0);
+            if socket == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let mut request: libc::ifreq = std::mem::zeroed();
+            for (slot, byte) in request.ifr_name.iter_mut().zip(b"lo\0") {
+                *slot = *byte as libc::c_char;
+            }
+            let mut result = libc::ioctl(socket, libc::SIOCGIFFLAGS as _, &mut request);
+            if result != -1 {
+                request.ifr_ifru.ifru_flags |= libc::IFF_UP as libc::c_short;
+                result = libc::ioctl(socket, libc::SIOCSIFFLAGS as _, &request);
+            }
+            let error = std::io::Error::last_os_error();
+            libc::close(socket);
+            if result == -1 { Err(error) } else { Ok(()) }
+        }
+    }
+
+    /// A listening TCP socket on `127.0.0.1:<port>`.
+    unsafe fn bind_loopback(port: u16) -> std::io::Result<libc::c_int> {
+        // SAFETY: `address` is a fully initialised `sockaddr_in` of the length passed.
+        unsafe {
+            let socket = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+            if socket == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let address = libc::sockaddr_in {
+                sin_family: libc::AF_INET as libc::sa_family_t,
+                sin_port: port.to_be(),
+                sin_addr: libc::in_addr {
+                    s_addr: u32::from(std::net::Ipv4Addr::LOCALHOST).to_be(),
+                },
+                sin_zero: [0; 8],
+            };
+            let length = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+            if libc::bind(socket, (&raw const address).cast(), length) == -1
+                || libc::listen(socket, 128) == -1
+            {
+                let error = std::io::Error::last_os_error();
+                libc::close(socket);
+                return Err(error);
+            }
+            Ok(socket)
+        }
+    }
+
+    /// Sends `fd` over the Unix socket `socket` (SCM_RIGHTS).
+    unsafe fn send_fd(socket: libc::c_int, fd: libc::c_int) -> std::io::Result<()> {
+        // SAFETY: the control buffer is aligned for `cmsghdr` and large enough for one
+        // descriptor; every pointer refers to stack data that outlives the call.
+        unsafe {
+            let mut byte = [0u8; 1];
+            let mut iov = libc::iovec { iov_base: byte.as_mut_ptr().cast(), iov_len: 1 };
+            let mut control = [0u64; 8];
+            let mut message: libc::msghdr = std::mem::zeroed();
+            message.msg_iov = &mut iov;
+            message.msg_iovlen = 1;
+            message.msg_control = control.as_mut_ptr().cast();
+            message.msg_controllen =
+                libc::CMSG_SPACE(std::mem::size_of::<libc::c_int>() as u32) as _;
+            let header = libc::CMSG_FIRSTHDR(&message);
+            (*header).cmsg_level = libc::SOL_SOCKET;
+            (*header).cmsg_type = libc::SCM_RIGHTS;
+            (*header).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<libc::c_int>() as u32) as _;
+            std::ptr::write_unaligned(libc::CMSG_DATA(header).cast::<libc::c_int>(), fd);
+            if libc::sendmsg(socket, &message, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        }
+    }
+
+    /// Receives one descriptor sent with SCM_RIGHTS.
+    fn receive_fd(socket: &UnixStream) -> std::io::Result<OwnedFd> {
+        // SAFETY: as in `send_fd`; the received descriptor is owned by the returned value.
+        unsafe {
+            let mut byte = [0u8; 1];
+            let mut iov = libc::iovec { iov_base: byte.as_mut_ptr().cast(), iov_len: 1 };
+            let mut control = [0u64; 8];
+            let mut message: libc::msghdr = std::mem::zeroed();
+            message.msg_iov = &mut iov;
+            message.msg_iovlen = 1;
+            message.msg_control = control.as_mut_ptr().cast();
+            message.msg_controllen = std::mem::size_of_val(&control) as _;
+            if libc::recvmsg(socket.as_raw_fd(), &mut message, libc::MSG_CMSG_CLOEXEC) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let header = libc::CMSG_FIRSTHDR(&message);
+            if header.is_null()
+                || (*header).cmsg_level != libc::SOL_SOCKET
+                || (*header).cmsg_type != libc::SCM_RIGHTS
+            {
+                return Err(std::io::Error::other("the namespace helper sent no listener"));
+            }
+            let fd = std::ptr::read_unaligned(libc::CMSG_DATA(header).cast::<libc::c_int>());
+            Ok(OwnedFd::from_raw_fd(fd))
+        }
+    }
+}
+
+/// Without `egress-proxy` there is no proxy to serve the listener; `Proxied` is refused before
+/// a command is built, so this only releases the program.
+#[cfg(not(feature = "egress-proxy"))]
+mod namespace {
+    use std::io::Write;
+
+    pub(super) fn attach_listener(
+        _info: std::io::PipeReader,
+        mut block: std::io::PipeWriter,
+        _port: u16,
+    ) {
+        let _ = block.write_all(b"1");
+    }
+}
+
 /// Refuses a grant of a shared socket directory, or of a path under `/run` that holds a Unix
 /// socket: a bind mount keeps its sockets reachable whatever the network namespace.
 fn refuse_socket_directories(
@@ -609,17 +885,35 @@ mod tests {
         assert_eq!(enforcer.name(), "bubblewrap");
     }
 
-    /// Proxied network access needs the proxy listener inside the sandbox's network namespace,
-    /// which this enforcer does not set up; it refuses rather than run with no network or an
-    /// open one.
+    /// `Proxied` keeps the empty network namespace and asks bubblewrap for its process id and
+    /// to wait for the listener; without `egress-proxy` there is no proxy, and it is refused.
     #[test]
-    fn proxied_network_access_is_refused() {
+    fn proxied_network_access_needs_the_egress_proxy() {
         let endpoint = super::super::ProxyEndpoint { port: 3128 };
         let policy = SandboxPolicyBuilder::new().proxied(endpoint).build();
 
         let result = LinuxEnforcer::new().wrap_command(OsStr::new("true"), &[], &policy);
 
-        assert!(matches!(result, Err(SandboxError::Unenforceable { .. })), "{result:?}");
+        if cfg!(feature = "egress-proxy") {
+            let args: Vec<String> = result
+                .expect("Proxied is enforced with the egress proxy")
+                .args
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+            for flag in [
+                vec!["--unshare-net".to_string()],
+                vec!["--info-fd".to_string(), INFO_FD.to_string()],
+                vec!["--block-fd".to_string(), BLOCK_FD.to_string()],
+            ] {
+                assert!(
+                    args.windows(flag.len()).any(|w| w == flag.as_slice()),
+                    "{flag:?} in {args:?}"
+                );
+            }
+        } else {
+            assert!(matches!(result, Err(SandboxError::Unenforceable { .. })), "{result:?}");
+        }
     }
 
     /// A read-only bind does not refuse `connect` on a Unix socket, so the shared socket

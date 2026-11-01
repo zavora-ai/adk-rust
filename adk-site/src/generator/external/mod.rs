@@ -958,6 +958,10 @@ impl adk_sandbox::SandboxEnforcer for SystemRoot {
         self.inner.network_support()
     }
 
+    fn proxy_listener(&self) -> adk_sandbox::sandbox::ProxyListener {
+        self.inner.proxy_listener()
+    }
+
     fn wrap_command(
         &self,
         program: &std::ffi::OsStr,

@@ -81,7 +81,7 @@ jobs:
 
     - name: Sandbox enforcement tests (adk-sandbox)
       run: |
-        cargo nextest run -p adk-sandbox --features sandbox-linux --no-fail-fast
+        cargo nextest run -p adk-sandbox --features sandbox-linux,egress-proxy --no-fail-fast
         cargo nextest run -p adk-sandbox --features sandbox-linux --run-ignored ignored-only \
           -E 'binary(sandbox_integration_tests)'
 

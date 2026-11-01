@@ -61,7 +61,7 @@ wasm = ["dep:wasmtime", "dep:wasmtime-wasi"]
 process = []  # no extra deps, uses tokio
 
 # The egress proxy a `Proxied` sandbox reaches the network through (`egress_proxy`).
-egress-proxy = ["dep:chrono", "adk-core/egress-dns", "tokio/net", "tokio/macros"]
+egress-proxy = ["dep:chrono", "adk-core/egress-dns", "tokio/net", "tokio/macros", "tokio/sync"]
 
 # Workspace lifecycle (sandbox-agent harness)
 workspace = ["dep:tar", "dep:uuid"]

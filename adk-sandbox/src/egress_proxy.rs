@@ -19,6 +19,11 @@
 //! again. It is not data-loss prevention (an admitted host receives whatever is sent to it) and
 //! not proof against domain fronting: a shared CDN can route an admitted name to another tenant.
 //!
+//! [`EgressProxyBuilder::start_for`] starts the proxy where a sandboxed call's enforcer needs it
+//! and returns the [`CallProxy`] whose [`network`](CallProxy::network) the call's policy runs
+//! under: on the host's loopback for Seatbelt, inside the call's network namespace for
+//! bubblewrap.
+//!
 //! # Example
 //!
 //! ```rust,no_run
@@ -41,15 +46,18 @@
 //! # }
 //! ```
 
+use std::collections::HashMap;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use adk_core::egress::{
     AddressClass, EgressDenial, EgressPolicy, EgressTarget, HostResolver, SystemResolver, classify,
 };
 use chrono::{DateTime, Utc};
+
+use crate::sandbox::{NetworkAccess, ProxyEndpoint, ProxyListener, SandboxEnforcer};
 use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -240,6 +248,87 @@ impl EgressProxyBuilder {
         self.start(TcpListener::from_std(listener)?)
     }
 
+    /// Starts the proxy of one sandboxed call where `enforcer` needs it
+    /// ([`SandboxEnforcer::proxy_listener`]) and returns it with the `Proxied` network access
+    /// for the call's policy.
+    ///
+    /// On the host's loopback the proxy listens at once. Inside a sandbox's network namespace
+    /// it starts when the enforcer hands over the listener it opened there, as the command
+    /// built under [`CallProxy::network`] starts.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error binding a host listener, or an error when no namespace port is free.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::ffi::{OsStr, OsString};
+    /// use std::path::Path;
+    ///
+    /// use adk_core::egress::EgressPolicy;
+    /// use adk_sandbox::egress_proxy::EgressProxy;
+    /// use adk_sandbox::sandbox::{SandboxPolicyBuilder, get_enforcer, sandboxed_command};
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let enforcer = get_enforcer()?;
+    /// let proxy = EgressProxy::builder(EgressPolicy::allowlist(["pypi.org:443"])?)
+    ///     .start_for(enforcer.as_ref())
+    ///     .await?;
+    /// let policy = SandboxPolicyBuilder::new()
+    ///     .allow_read("/usr")
+    ///     .network(proxy.network())
+    ///     .env("PATH", "/usr/bin:/bin")
+    ///     .build();
+    /// let output = sandboxed_command(
+    ///     enforcer.as_ref(),
+    ///     OsStr::new("curl"),
+    ///     &[OsString::from("-sI"), OsString::from("https://pypi.org/")],
+    ///     &policy,
+    ///     Path::new("/tmp"),
+    /// )?
+    /// .output()
+    /// .await?;
+    /// drop(proxy); // after the command ends
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn start_for(self, enforcer: &dyn SandboxEnforcer) -> std::io::Result<CallProxy> {
+        match enforcer.proxy_listener() {
+            ProxyListener::HostLoopback => {
+                let proxy = self.bind().await?;
+                let port = proxy.port();
+                Ok(CallProxy {
+                    network: NetworkAccess::Proxied { endpoint: ProxyEndpoint { port } },
+                    proxy: Arc::new(Mutex::new(Some(proxy))),
+                    reservation: None,
+                })
+            }
+            ProxyListener::SandboxLoopback => {
+                let (port, id, listener) = reserve_namespace_port()?;
+                let proxy = Arc::new(Mutex::new(None));
+                let slot = Arc::clone(&proxy);
+                tokio::spawn(async move {
+                    let Ok(listener) = listener.await else { return };
+                    match self.serve(listener) {
+                        Ok(started) => {
+                            *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(started)
+                        }
+                        Err(error) => tracing::warn!(
+                            error = %error,
+                            "the egress proxy could not serve the sandbox's listener"
+                        ),
+                    }
+                });
+                Ok(CallProxy {
+                    network: NetworkAccess::Proxied { endpoint: ProxyEndpoint { port } },
+                    proxy,
+                    reservation: Some((port, id)),
+                })
+            }
+        }
+    }
+
     fn start(self, listener: TcpListener) -> std::io::Result<EgressProxy> {
         let local = listener.local_addr()?;
         let shared = Arc::new(Shared {
@@ -310,6 +399,82 @@ impl Drop for EgressProxy {
     fn drop(&mut self) {
         self.task.abort();
     }
+}
+
+/// The egress proxy of one sandboxed call ([`EgressProxyBuilder::start_for`]); dropping it
+/// stops the proxy and every open connection.
+#[derive(Debug)]
+pub struct CallProxy {
+    network: NetworkAccess,
+    proxy: Arc<Mutex<Option<EgressProxy>>>,
+    // The namespace port and the id of this call's reservation of it.
+    reservation: Option<(u16, u64)>,
+}
+
+impl CallProxy {
+    /// The `Proxied` network access the call's [`SandboxPolicy`](crate::SandboxPolicy) runs
+    /// under.
+    pub fn network(&self) -> NetworkAccess {
+        self.network
+    }
+
+    /// Whether the proxy is listening: at once on the host's loopback, and inside a sandbox's
+    /// namespace once its command has started.
+    pub fn is_listening(&self) -> bool {
+        self.proxy.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+    }
+}
+
+impl Drop for CallProxy {
+    fn drop(&mut self) {
+        if let Some((port, id)) = self.reservation {
+            let mut ports = namespace_ports().lock().unwrap_or_else(|e| e.into_inner());
+            // A port delivered and reserved again belongs to another call by now.
+            if ports.get(&port).is_some_and(|(owner, _)| *owner == id) {
+                ports.remove(&port);
+            }
+        }
+    }
+}
+
+type NamespacePorts =
+    Mutex<HashMap<u16, (u64, tokio::sync::oneshot::Sender<std::net::TcpListener>)>>;
+
+/// The calls waiting for a listener inside their sandbox's namespace, by the port each one
+/// listens on there. Every sandbox has its own namespace; the ports only tell this process's
+/// waiting calls apart.
+fn namespace_ports() -> &'static NamespacePorts {
+    static PORTS: OnceLock<NamespacePorts> = OnceLock::new();
+    PORTS.get_or_init(NamespacePorts::default)
+}
+
+/// Reserves a namespace port; returns it, the reservation's id, and where the listener arrives.
+fn reserve_namespace_port()
+-> std::io::Result<(u16, u64, tokio::sync::oneshot::Receiver<std::net::TcpListener>)> {
+    use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+    const FIRST: u16 = 20_000;
+    const COUNT: u16 = 40_000;
+    static NEXT_PORT: AtomicU16 = AtomicU16::new(0);
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    let mut ports = namespace_ports().lock().unwrap_or_else(|e| e.into_inner());
+    for _ in 0..COUNT {
+        let port = FIRST + NEXT_PORT.fetch_add(1, Ordering::Relaxed) % COUNT;
+        if let std::collections::hash_map::Entry::Vacant(slot) = ports.entry(port) {
+            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            slot.insert((id, sender));
+            return Ok((port, id, receiver));
+        }
+    }
+    Err(std::io::Error::other("every egress proxy namespace port is in use"))
+}
+
+/// Hands the listener an enforcer opened inside a sandbox's namespace to the call waiting for
+/// `port`; `false` when none waits, and the listener is closed.
+#[cfg_attr(not(all(target_os = "linux", feature = "sandbox-linux")), allow(dead_code))]
+pub(crate) fn deliver_namespace_listener(port: u16, listener: std::net::TcpListener) -> bool {
+    let waiting = namespace_ports().lock().unwrap_or_else(|e| e.into_inner()).remove(&port);
+    waiting.is_some_and(|(_, sender)| sender.send(listener).is_ok())
 }
 
 struct Shared {
