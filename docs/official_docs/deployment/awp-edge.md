@@ -315,7 +315,9 @@ receipts and the leads as before, and every store of the edge's `SubjectRights`:
 | Memory, artifacts, or any other `SubjectDataStore` | `AwpEdgeBuilder::subject_store` |
 
 `AwpEdgeBuilder::subject_registry` sets the registry of pseudonyms, links, and erasure state; a
-visitor being erased can neither converse nor consent. The erase route's response adds
+visitor being erased can neither converse nor consent. The edge wraps the recorder of its `audit` trail in a
+`PseudonymousRecorder` over that registry, so its audit records name visitors by pseudonym
+(`psn:…`), never by visitor id; erasure deletes the pseudonym. The erase route's response adds
 `status` (`completed` or `partial`) and one line per store; export adds `stores`.
 
 A revocation takes effect at once: pending held calls that rely on the receipt end `rejected`

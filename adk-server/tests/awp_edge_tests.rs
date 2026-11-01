@@ -1256,7 +1256,19 @@ async fn visitor_sessions_persist_only_with_consent_and_erasure_reaches_them() {
     assert_eq!(status, StatusCode::ACCEPTED, "{erased}");
     assert_eq!(erased["status"], "completed", "{erased}");
     assert_eq!(erased["erased"]["receipts"], 1);
-    assert_eq!(durable_sessions(visitor).await, 0, "erasure reaches the durable sessions");
+    assert_eq!(durable_sessions(visitor.clone()).await, 0, "erasure reaches the durable sessions");
+
+    // The edge's audit records name the visitor by pseudonym, never by its id.
+    let records = site.audit.records();
+    let granted = records.iter().find(|record| record.action == "awp.consent.granted").unwrap();
+    let named = granted.actor.on_behalf_of.clone().unwrap();
+    assert_eq!(named.kind, adk_core::SubjectKind::Visitor);
+    assert!(named.id.starts_with("psn:"), "{named:?}");
+    let text = serde_json::to_string(
+        &records.iter().map(|record| (&record.actor, &record.ext)).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    assert!(!text.contains(&visitor), "no audit record names the visitor id");
 }
 
 /// A stateless MCP endpoint has no session, so a JSON-RPC id is no idempotency key: a
