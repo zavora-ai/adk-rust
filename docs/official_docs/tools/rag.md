@@ -46,7 +46,7 @@ A `RagPipeline` wires together four components: a chunker, an embedding provider
 use std::sync::Arc;
 use adk_rag::{
     Document, FixedSizeChunker, InMemoryVectorStore,
-    RagConfig, RagPipeline, EmbeddingProvider,
+    RagConfig, RagPipeline, EmbeddingProvider, Scope,
 };
 
 // Mock embedder for demos — no API key needed.
@@ -90,10 +90,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_source_uri("https://www.rust-lang.org/")
     .with_title("Rust")
     .with_metadata("topic", "rust");
-    pipeline.ingest("docs", &document).await?;
+
+    // Every read and write names a scope; an application with one tenant uses this one
+    let rag = pipeline.scoped(Scope::single_tenant());
+    rag.ingest("docs", &document).await?;
 
     // Query
-    let results = pipeline.query("docs", "safe programming").await?;
+    let results = rag.query("docs", "safe programming").await?;
     for r in &results {
         let source = r.chunk.source_uri.as_deref().unwrap_or("unknown source");
         println!("[{:.3}] {} ({source})", r.score, r.chunk.text);
@@ -107,8 +110,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
    chunker's own sizes decide chunking
 2. `MockEmbedder` converts each chunk into a 64-dimensional vector
 3. `InMemoryVectorStore` stores the vectors and searches by cosine similarity
-4. `query()` embeds the question, finds the closest chunks, and returns them ranked by score;
-   `query_with_top_k()` does the same with a result count of its own
+4. `pipeline.scoped(scope)` binds ingest and query to one [scope](#scopes)
+5. `query()` embeds the question, finds the closest chunks in the scope, and returns them ranked
+   by score; `query_with()` takes `QueryOptions`, such as `QueryOptions::new().with_top_k(3)`
 
 `Document` and `Chunk` are `#[non_exhaustive]`, so they are built with `Document::new(id, text)`
 and `Chunk::new(id, document_id, text)` plus the `with_*` builders rather than struct literals.
@@ -142,7 +146,7 @@ use adk_agent::LlmAgentBuilder;
 use adk_model::gemini::GeminiModel;
 use adk_rag::{
     Document, GeminiEmbeddingProvider, InMemoryVectorStore,
-    RagConfig, RagPipeline, RagTool, RecursiveChunker,
+    RagConfig, RagPipeline, RagTool, RecursiveChunker, Scope,
 };
 
 #[tokio::main]
@@ -161,7 +165,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Ingest documents
     pipeline.create_collection("kb").await?;
-    pipeline.ingest(
+    pipeline.scoped(Scope::single_tenant()).ingest(
         "kb",
         &Document::new("returns", "Our return policy allows returns within 30 days with a receipt.")
             .with_source_uri("https://example.com/help/returns")
@@ -189,6 +193,7 @@ This example also depends on `adk-agent`, `adk-model` (`gemini`), `adk-runner`, 
 | Name | `rag_search` |
 | Parameters | `query` (required), `top_k` (overrides the configured value; the reranker and similarity threshold still apply), and `collection` only when the tool has allowed collections (see [Multiple Collections](#multiple-collections)) |
 | Collections | The collection given to `RagTool::new`, plus any given to `with_allowed_collections`; the model cannot reach any other |
+| Scope | `Scope::single_tenant()` unless `with_scope(scope)` sets another; the model cannot name a scope (see [Scopes](#scopes)) |
 | Returns | An array of `{"id", "document_id", "text", "metadata", "score"}` results, best first, each with `source_uri` and `title` when its document had them; embedding vectors are not included |
 | Invalid arguments | A missing `query`, a `top_k` that is not a positive integer, or a `collection` the tool does not allow fails the call with `tool.invalid_arguments`, whose message the model receives |
 | Effect | `ToolEffect::ReadOnly` and concurrency-safe, so `DeclarativePolicy::allow_read_only()` admits it and `ToolExecutionStrategy::Auto` overlaps it with adjacent read-only calls |
@@ -445,10 +450,58 @@ async fn support_agent(
 }
 ```
 
+### Scopes
+
+Every `VectorStore` operation names a `Scope`, and a stored chunk is identified by its
+collection, its scope, and its chunk ID together. Tenants can share one collection:
+
+| Guarantee | What it means |
+|-----------|---------------|
+| Identity | The same document ID ingested in two scopes keeps two sets of chunks; neither overwrites the other |
+| Search | A search sees only its scope's chunks. Every backend applies the scope inside its search, before the top `k` are chosen, so a tenant with one chunk still finds it beside a tenant with millions of nearer ones |
+| Delete | `delete`, `count`, and `purge_scope` act on the scope's chunks only |
+| No bypass | `RagPipeline` has no unscoped `ingest` or `query`; they live on `ScopedRag`, from `pipeline.scoped(scope)` |
+
+`Scope::new(key)` takes an opaque key of 1 to 256 bytes without control characters.
+`Scope::from_parts(["support-app", tenant_id])` percent-encodes each part and joins them with
+`/`, so distinct part lists always give distinct scopes. `Scope::single_tenant()` is the scope
+of an application with one tenant.
+
+```rust
+use std::sync::Arc;
+
+use adk_rag::{Document, RagPipeline, RagTool, Scope};
+
+async fn tenant_rag(
+    pipeline: Arc<RagPipeline>,
+    tenant_id: &str,
+    document: &Document,
+) -> adk_rag::Result<RagTool> {
+    // The tenant comes from the authenticated request, never from the model.
+    let scope = Scope::from_parts(["support-app", tenant_id])?;
+    let rag = pipeline.scoped(scope.clone());
+    rag.ingest("kb", document).await?;
+    println!("tenant holds {} chunks", rag.count("kb").await?);
+    Ok(RagTool::new(pipeline, "kb").with_scope(scope))
+}
+```
+
+`ScopedRag::purge_scope(collection)` deletes every chunk of the scope and returns how many there
+were, leaving other scopes untouched.
+
+| Backend | How the scope is stored and applied |
+|---------|-------------------------------------|
+| `InMemoryVectorStore` | A map per scope |
+| `PgVectorStore` | A `scope` column; the primary key is `(scope, id)`, and `WHERE scope = $n` precedes `LIMIT` |
+| `LanceDBVectorStore` | A `scope` column; a typed prefilter, and a merge-insert keyed on `scope` and `id` |
+| `QdrantVectorStore` | A `scope` payload field indexed as Qdrant's tenant field; a `must` filter on search, count, and delete; the point ID is the UUID v5 of scope and chunk ID |
+| `SurrealVectorStore` | `scope` and `chunk_id` fields, an index on `scope`, and the condition beside the KNN operator; the record ID combines scope and chunk ID |
+| `AgentRetrievalStore` | A `scope` data field; the `filter` of every search and query; the Data Object ID is derived from scope and chunk ID |
+
 ### One collection per tenant
 
-When each tenant has its own collection, build the tool per request with that tenant's
-collection, and do not add other tenants' collections to `with_allowed_collections`:
+Collections still separate tenants when each has its own. Build the tool per request with that
+tenant's collection, and do not add other tenants' collections to `with_allowed_collections`:
 
 ```rust
 use std::sync::Arc;

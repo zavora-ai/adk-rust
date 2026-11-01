@@ -7,14 +7,26 @@
 //!
 //! | Trait operation | Agent Retrieval call |
 //! |-----------------|----------------------|
-//! | `create_collection` | `POST {parent}/collections` (LRO; `ALREADY_EXISTS` is a no-op) |
+//! | `create_collection` | `POST {parent}/collections` with a data schema (LRO; `ALREADY_EXISTS` is a no-op) |
 //! | `delete_collection` | `DELETE {collection}` (LRO; `NOT_FOUND` is a no-op) |
 //! | `upsert` | `dataObjects:batchCreate`, falling back to per-object create-else-patch when IDs already exist |
 //! | `delete` | `dataObjects:batchDelete`, falling back to per-object delete when IDs are missing |
-//! | `search` | `dataObjects:search` with a `vectorSearch` query (`DOT_PRODUCT`) |
+//! | `search` | `dataObjects:search` with a `vectorSearch` query (`DOT_PRODUCT`) filtered by scope |
+//! | `count` | `dataObjects:query` filtered by scope, paged |
+//! | `purge_scope` | `dataObjects:query` filtered by scope, then `dataObjects:batchDelete` |
 //!
-//! Chunk text, metadata, source URI, and title are stored **in** the Data Object
-//! alongside the vector, so no companion store is needed. The store operates in BYOE
+//! Chunk text, metadata, source URI, title, scope, and chunk ID are stored **in** the
+//! Data Object alongside the vector, so no companion store is needed. Agent Retrieval
+//! validates every Data Object against the collection's data schema and allows no
+//! undeclared field, so `create_collection` declares these fields and metadata is stored
+//! as one JSON string, `metadataJson`.
+//!
+//! Data Object IDs must be RFC 1035 labels, which chunk IDs such as `doc_0` are not, so
+//! each chunk is stored under `c` followed by the UUID v5 of its scope and chunk ID in
+//! hexadecimal. The chunk ID itself is kept in the `chunkId` field, which search returns.
+//! Search, count, and purge filter on the `scope` field inside the service, so the scope
+//! applies before the nearest objects are chosen. A collection written by an earlier
+//! release has no data schema; delete it, create it again, and re-ingest. The store operates in BYOE
 //! (bring-your-own-embeddings) mode — embeddings come from adk-rag's
 //! embedder pipeline, and auto-embedding is deliberately not enabled, to
 //! keep parity with the other backends. Scores are `DOT_PRODUCT` distances,
@@ -37,7 +49,8 @@
 
 use crate::document::{Chunk, SearchResult};
 use crate::error::{RagError, Result};
-use crate::vectorstore::VectorStore;
+use crate::scope::Scope;
+use crate::vectorstore::{CollectionSpec, VectorQuery, VectorStore};
 use adk_core::ErrorComponent;
 use adk_gcp::{GcpErrorCodes, GcpErrorContext, GcpHttpClient, LroPoller};
 use async_trait::async_trait;
@@ -45,11 +58,16 @@ use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use uuid::Uuid;
 
 const DEFAULT_ENDPOINT: &str = "https://vectorsearch.googleapis.com";
 const API_VERSION: &str = "v1";
 const VECTOR_FIELD: &str = "embedding";
 const BATCH_LIMIT: usize = 1000;
+/// Namespace of the derived Data Object IDs: the v5 UUID of
+/// `https://github.com/zavora-ai/adk-rust/adk-rag/agent-retrieval/data-object-id` in the URL
+/// namespace. Changing it orphans every stored Data Object.
+const DATA_OBJECT_ID_NAMESPACE: Uuid = Uuid::from_u128(0xd55e_0355_dcf7_5a46_be9f_65f7_1b09_575f);
 const ENV_GOOGLE_CLOUD_PROJECT: &str = "GOOGLE_CLOUD_PROJECT";
 const ENV_GOOGLE_CLOUD_LOCATION: &str = "GOOGLE_CLOUD_LOCATION";
 
@@ -164,14 +182,14 @@ impl AgentRetrievalConfig {
 /// # Example
 ///
 /// ```rust,no_run
-/// use adk_rag::VectorStore;
 /// use adk_rag::agent_retrieval::{AgentRetrievalConfig, AgentRetrievalStore};
+/// use adk_rag::{CollectionSpec, VectorStore};
 ///
 /// # async fn run() -> adk_rag::Result<()> {
 /// let store = AgentRetrievalStore::new_with_adc(
 ///     AgentRetrievalConfig::new("my-project", "us-central1"),
 /// )?;
-/// store.create_collection("docs", 768).await?;
+/// store.create_collection("docs", &CollectionSpec::new(768)).await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -293,19 +311,28 @@ impl AgentRetrievalStore {
         self.client.send_value_allow_not_found(request).await.map_err(store_error)
     }
 
-    fn data_object_name(&self, collection: &str, id: &str) -> Result<String> {
-        Ok(format!("{}/dataObjects/{id}", self.collection_resource(collection)?))
+    fn data_object_name(&self, collection: &str, scope: &Scope, chunk_id: &str) -> Result<String> {
+        Ok(format!(
+            "{}/dataObjects/{}",
+            self.collection_resource(collection)?,
+            data_object_id(scope, chunk_id)
+        ))
     }
 
-    async fn create_objects_batch(&self, collection: &str, chunks: &[Chunk]) -> Result<()> {
+    async fn create_objects_batch(
+        &self,
+        collection: &str,
+        scope: &Scope,
+        chunks: &[Chunk],
+    ) -> Result<()> {
         let parent = self.collection_resource(collection)?;
         let requests: Vec<Value> = chunks
             .iter()
             .map(|chunk| {
                 json!({
                     "parent": parent,
-                    "dataObjectId": chunk.id,
-                    "dataObject": data_object_body(chunk),
+                    "dataObjectId": data_object_id(scope, &chunk.id),
+                    "dataObject": data_object_body(scope, chunk),
                 })
             })
             .collect();
@@ -321,25 +348,25 @@ impl AgentRetrievalStore {
 
     /// Last-write-wins upsert for one object: create, then patch on
     /// `ALREADY_EXISTS`.
-    async fn upsert_object(&self, collection: &str, chunk: &Chunk) -> Result<()> {
+    async fn upsert_object(&self, collection: &str, scope: &Scope, chunk: &Chunk) -> Result<()> {
         let parent = self.collection_resource(collection)?;
         let request = self
             .client
             .request(Method::POST, &format!("{parent}/dataObjects"))
             .await
             .map_err(store_error)?
-            .query(&[("dataObjectId", chunk.id.as_str())])
-            .json(&data_object_body(chunk));
+            .query(&[("dataObjectId", data_object_id(scope, &chunk.id).as_str())])
+            .json(&data_object_body(scope, chunk));
         match self.client.send_value(request).await {
             Ok(_) => Ok(()),
             Err(error) if error.details.upstream_status_code == Some(409) => {
-                let name = self.data_object_name(collection, &chunk.id)?;
+                let name = self.data_object_name(collection, scope, &chunk.id)?;
                 let request = self
                     .client
                     .request(Method::PATCH, &name)
                     .await
                     .map_err(store_error)?
-                    .json(&data_object_body(chunk));
+                    .json(&data_object_body(scope, chunk));
                 self.client.send_value(request).await.map_err(store_error)?;
                 Ok(())
             }
@@ -347,10 +374,10 @@ impl AgentRetrievalStore {
         }
     }
 
-    async fn delete_objects_batch(&self, collection: &str, ids: &[&str]) -> Result<()> {
+    /// Deletes Data Objects by resource name in one atomic batch.
+    async fn delete_objects_batch(&self, collection: &str, names: &[String]) -> Result<()> {
         let parent = self.collection_resource(collection)?;
-        let requests: Vec<Value> =
-            ids.iter().map(|id| json!({ "name": format!("{parent}/dataObjects/{id}") })).collect();
+        let requests: Vec<Value> = names.iter().map(|name| json!({ "name": name })).collect();
         let request = self
             .client
             .request(Method::POST, &format!("{parent}/dataObjects:batchDelete"))
@@ -361,12 +388,71 @@ impl AgentRetrievalStore {
         Ok(())
     }
 
+    /// Deletes Data Objects by resource name, falling back to per-object deletes that
+    /// ignore `NOT_FOUND` when an atomic batch fails.
+    async fn delete_objects(&self, collection: &str, names: &[String]) -> Result<()> {
+        for batch in names.chunks(BATCH_LIMIT) {
+            if self.delete_objects_batch(collection, batch).await.is_err() {
+                for name in batch {
+                    let request =
+                        self.client.request(Method::DELETE, name).await.map_err(store_error)?;
+                    self.client.send_value_allow_not_found(request).await.map_err(store_error)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The resource names of every Data Object a scope holds, through paged
+    /// `dataObjects:query` calls filtered by scope.
+    async fn scope_object_names(&self, collection: &str, scope: &Scope) -> Result<Vec<String>> {
+        let parent = self.collection_resource(collection)?;
+        let mut names = Vec::new();
+        let mut page_token = String::new();
+        loop {
+            let mut body = json!({
+                "filter": scope_filter(scope),
+                "pageSize": BATCH_LIMIT,
+                "outputFields": { "dataFields": ["chunkId"] },
+            });
+            if !page_token.is_empty() {
+                body["pageToken"] = json!(page_token);
+            }
+            let request = self
+                .client
+                .request(Method::POST, &format!("{parent}/dataObjects:query"))
+                .await
+                .map_err(store_error)?
+                .json(&body);
+            let value = self.client.send_value(request).await.map_err(store_error)?;
+            let page: QueryResponse =
+                serde_json::from_value(value).map_err(|error| RagError::VectorStoreError {
+                    backend: "agent_retrieval".to_string(),
+                    message: format!("failed to parse query response: {error}"),
+                })?;
+            for object in page.data_objects {
+                let name = if object.name.is_empty() {
+                    let id = object.data_object_id.unwrap_or_default();
+                    format!("{parent}/dataObjects/{id}")
+                } else {
+                    object.name
+                };
+                names.push(name);
+            }
+            if page.next_page_token.is_empty() {
+                return Ok(names);
+            }
+            page_token = page.next_page_token;
+        }
+    }
+
     /// Semantic + text search fused with reciprocal rank fusion.
     ///
     /// A beyond-trait extra for callers holding the concrete type: runs a
     /// vector query and a keyword query over `text` in one `:batchSearch`
-    /// call and returns the fused ranked list. `weights` are the RRF
-    /// weights for the vector and text searches respectively.
+    /// call and returns the fused ranked list. Both searches are filtered by
+    /// `scope` inside the service. `weights` are the RRF weights for the
+    /// vector and text searches respectively.
     ///
     /// # Errors
     ///
@@ -375,6 +461,7 @@ impl AgentRetrievalStore {
     pub async fn hybrid_search(
         &self,
         collection: &str,
+        scope: &Scope,
         embedding: &[f32],
         query_text: &str,
         top_k: usize,
@@ -386,12 +473,14 @@ impl AgentRetrievalStore {
                 { "vectorSearch": {
                     "searchField": VECTOR_FIELD,
                     "vector": { "values": embedding },
+                    "filter": scope_filter(scope),
                     "topK": top_k,
                     "outputFields": output_fields(),
                 } },
                 { "textSearch": {
                     "searchText": query_text,
                     "dataFieldNames": ["text"],
+                    "filter": scope_filter(scope),
                     "topK": top_k,
                     "outputFields": output_fields(),
                 } },
@@ -421,7 +510,7 @@ impl AgentRetrievalStore {
 
 #[async_trait]
 impl VectorStore for AgentRetrievalStore {
-    async fn create_collection(&self, name: &str, dimensions: usize) -> Result<()> {
+    async fn create_collection(&self, name: &str, spec: &CollectionSpec) -> Result<()> {
         let resource = self.collection_resource(name)?;
         if self.existing_collections_only {
             return match self.get_collection(&resource).await? {
@@ -431,10 +520,23 @@ impl VectorStore for AgentRetrievalStore {
                 ))),
             };
         }
+        let string = json!({ "type": "string" });
         let body = json!({
             "displayName": name,
+            "dataSchema": {
+                "type": "object",
+                "properties": {
+                    "scope": string,
+                    "chunkId": string,
+                    "documentId": string,
+                    "text": string,
+                    "metadataJson": string,
+                    "sourceUri": string,
+                    "title": string,
+                },
+            },
             "vectorSchema": {
-                VECTOR_FIELD: { "denseVector": { "dimensions": dimensions } },
+                VECTOR_FIELD: { "denseVector": { "dimensions": spec.dimensions } },
             },
         });
         let request = self
@@ -468,16 +570,16 @@ impl VectorStore for AgentRetrievalStore {
         Ok(())
     }
 
-    async fn upsert(&self, collection: &str, chunks: &[Chunk]) -> Result<()> {
+    async fn upsert(&self, collection: &str, scope: &Scope, chunks: &[Chunk]) -> Result<()> {
         for batch in chunks.chunks(BATCH_LIMIT) {
             // Fast path: one atomic batchCreate per 1000. Batches are
             // atomic, so any ALREADY_EXISTS fails the whole batch; fall
             // back to per-object create-else-patch for last-write-wins.
-            match self.create_objects_batch(collection, batch).await {
+            match self.create_objects_batch(collection, scope, batch).await {
                 Ok(()) => {}
                 Err(_) => {
                     for chunk in batch {
-                        self.upsert_object(collection, chunk).await?;
+                        self.upsert_object(collection, scope, chunk).await?;
                     }
                 }
             }
@@ -485,34 +587,27 @@ impl VectorStore for AgentRetrievalStore {
         Ok(())
     }
 
-    async fn delete(&self, collection: &str, ids: &[&str]) -> Result<()> {
-        for batch in ids.chunks(BATCH_LIMIT) {
-            // Batches are atomic, so one missing ID fails the whole batch;
-            // fall back to per-object deletes that ignore NOT_FOUND.
-            if self.delete_objects_batch(collection, batch).await.is_err() {
-                for id in batch {
-                    let name = self.data_object_name(collection, id)?;
-                    let request =
-                        self.client.request(Method::DELETE, &name).await.map_err(store_error)?;
-                    self.client.send_value_allow_not_found(request).await.map_err(store_error)?;
-                }
-            }
-        }
-        Ok(())
+    async fn delete(&self, collection: &str, scope: &Scope, ids: &[&str]) -> Result<()> {
+        let names = ids
+            .iter()
+            .map(|id| self.data_object_name(collection, scope, id))
+            .collect::<Result<Vec<_>>>()?;
+        self.delete_objects(collection, &names).await
     }
 
     async fn search(
         &self,
         collection: &str,
-        embedding: &[f32],
-        top_k: usize,
+        scope: &Scope,
+        query: &VectorQuery<'_>,
     ) -> Result<Vec<SearchResult>> {
         let parent = self.collection_resource(collection)?;
         let body = json!({
             "vectorSearch": {
                 "searchField": VECTOR_FIELD,
-                "vector": { "values": embedding },
-                "topK": top_k,
+                "vector": { "values": query.embedding },
+                "filter": scope_filter(scope),
+                "topK": query.top_k,
                 "outputFields": output_fields(),
             },
         });
@@ -530,20 +625,45 @@ impl VectorStore for AgentRetrievalStore {
             })?;
         response.results.into_iter().map(search_result_from_wire).collect()
     }
+
+    async fn count(&self, collection: &str, scope: &Scope) -> Result<u64> {
+        Ok(self.scope_object_names(collection, scope).await?.len() as u64)
+    }
+
+    async fn purge_scope(&self, collection: &str, scope: &Scope) -> Result<u64> {
+        let names = self.scope_object_names(collection, scope).await?;
+        self.delete_objects(collection, &names).await?;
+        Ok(names.len() as u64)
+    }
+}
+
+/// The Data Object ID a scope's chunk is stored under: an RFC 1035 label whatever the chunk
+/// ID's characters.
+fn data_object_id(scope: &Scope, chunk_id: &str) -> String {
+    let uuid = Uuid::new_v5(&DATA_OBJECT_ID_NAMESPACE, scope.record_key(chunk_id).as_bytes());
+    format!("c{}", uuid.simple())
+}
+
+/// Selects a scope's Data Objects.
+fn scope_filter(scope: &Scope) -> Value {
+    json!({ "scope": { "$eq": scope.as_str() } })
 }
 
 fn output_fields() -> Value {
     json!({
-        "dataFields": ["text", "documentId", "metadata", "sourceUri", "title"],
+        "dataFields": ["chunkId", "text", "documentId", "metadataJson", "sourceUri", "title"],
         "vectorFields": [VECTOR_FIELD],
     })
 }
 
-fn data_object_body(chunk: &Chunk) -> Value {
+fn data_object_body(scope: &Scope, chunk: &Chunk) -> Value {
+    let metadata_json = serde_json::to_string(&chunk.metadata).unwrap_or_else(|_| "{}".into());
     let mut data = json!({
+        "scope": scope.as_str(),
+        "chunkId": chunk.id,
         "text": chunk.text,
         "documentId": chunk.document_id,
-        "metadata": chunk.metadata,
+        "metadataJson": metadata_json,
     });
     for (field, value) in [("sourceUri", &chunk.source_uri), ("title", &chunk.title)] {
         if let Some(value) = value {
@@ -562,6 +682,15 @@ fn data_object_body(chunk: &Chunk) -> Value {
 struct SearchResponse {
     #[serde(default)]
     results: Vec<WireSearchResult>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueryResponse {
+    #[serde(default)]
+    data_objects: Vec<WireDataObject>,
+    #[serde(default)]
+    next_page_token: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -596,11 +725,13 @@ struct WireDataObject {
 #[serde(rename_all = "camelCase")]
 struct WireData {
     #[serde(default)]
+    chunk_id: String,
+    #[serde(default)]
     text: String,
     #[serde(default)]
     document_id: String,
     #[serde(default)]
-    metadata: HashMap<String, String>,
+    metadata_json: String,
     #[serde(default)]
     source_uri: Option<String>,
     #[serde(default)]
@@ -620,16 +751,14 @@ struct WireDenseVector {
 }
 
 fn search_result_from_wire(wire: WireSearchResult) -> Result<SearchResult> {
-    let id = wire
-        .data_object
-        .data_object_id
-        .clone()
-        .or_else(|| wire.data_object.name.rsplit('/').next().map(str::to_string))
-        .filter(|id| !id.is_empty())
-        .ok_or_else(|| RagError::VectorStoreError {
+    let id = Some(wire.data_object.data.chunk_id.clone()).filter(|id| !id.is_empty()).ok_or_else(
+        || RagError::VectorStoreError {
             backend: "agent_retrieval".to_string(),
-            message: "search result data object carries no ID".to_string(),
-        })?;
+            message: "search result data object carries no chunkId; re-ingest a collection \
+                      written by an earlier release"
+                .to_string(),
+        },
+    )?;
     let embedding = wire
         .data_object
         .vectors
@@ -639,7 +768,7 @@ fn search_result_from_wire(wire: WireSearchResult) -> Result<SearchResult> {
         .unwrap_or_default();
     let data = wire.data_object.data;
     let mut chunk = Chunk::new(id, data.document_id, data.text).with_embedding(embedding);
-    chunk.metadata = data.metadata;
+    chunk.metadata = serde_json::from_str(&data.metadata_json).unwrap_or_default();
     chunk.source_uri = data.source_uri;
     chunk.title = data.title;
     Ok(SearchResult { chunk, score: wire.distance as f32 })
@@ -719,25 +848,56 @@ mod tests {
     }
 
     #[test]
-    fn data_object_body_stores_text_and_metadata_with_the_vector() {
+    fn data_object_body_stores_text_metadata_and_scope_with_the_vector() {
+        let scope = Scope::new("tenant-a").expect("valid scope");
         let chunk =
             Chunk::new("c1", "d1", "hello").with_embedding(vec![0.1, 0.2]).with_metadata("k", "v");
         assert_eq!(
-            data_object_body(&chunk),
+            data_object_body(&scope, &chunk),
             json!({
-                "data": { "text": "hello", "documentId": "d1", "metadata": { "k": "v" } },
+                "data": {
+                    "scope": "tenant-a",
+                    "chunkId": "c1",
+                    "text": "hello",
+                    "documentId": "d1",
+                    "metadataJson": "{\"k\":\"v\"}",
+                },
                 "vectors": { "embedding": { "dense": { "values": [0.1f32, 0.2f32] } } },
             }),
         );
+        let cited = chunk.with_source_uri("https://example.com/a").with_title("A");
         assert_eq!(
-            data_object_body(&chunk.with_source_uri("https://example.com/a").with_title("A"))["data"],
+            data_object_body(&scope, &cited)["data"],
             json!({
+                "scope": "tenant-a",
+                "chunkId": "c1",
                 "text": "hello",
                 "documentId": "d1",
-                "metadata": { "k": "v" },
+                "metadataJson": "{\"k\":\"v\"}",
                 "sourceUri": "https://example.com/a",
                 "title": "A",
             }),
         );
+    }
+
+    #[test]
+    fn data_object_ids_are_rfc_1035_labels_unique_per_scope_and_chunk() {
+        let single = Scope::single_tenant();
+        // Stored objects are addressed by this value; a change orphans them.
+        assert_eq!(data_object_id(&single, "doc_0"), "c0e6d271a29395745a14b97334b718e54");
+        let ids: std::collections::BTreeSet<String> = [
+            data_object_id(&single, "doc_0"),
+            data_object_id(&single, "doc_1"),
+            data_object_id(&Scope::new("a").unwrap(), "doc_0"),
+            data_object_id(&Scope::new("a/b").unwrap(), "Weird ID/../x"),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(ids.len(), 4);
+        for id in &ids {
+            assert_eq!(id.len(), 33);
+            assert!(id.starts_with('c'));
+            assert!(id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()), "{id}");
+        }
     }
 }

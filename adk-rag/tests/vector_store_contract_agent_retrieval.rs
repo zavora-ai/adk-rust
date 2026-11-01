@@ -2,15 +2,17 @@
 //! Agent Retrieval backend, run against an in-process mock of the
 //! `vectorsearch.googleapis.com` v1 surface (golden shapes per the REST
 //! reference): collection create/delete LROs, data-object CRUD and atomic
-//! batches, and `dataObjects:search`/`:batchSearch` with real dot-product
-//! scoring.
+//! batches, `dataObjects:search`/`:batchSearch` with real dot-product
+//! scoring, and `dataObjects:query` with paging. Every search and query applies
+//! its `filter` (`$eq`, `$ne`, `$in`, `$nin`, `$and`, `$or`) before ranking, as
+//! the service does.
 
 #![cfg(feature = "agent-retrieval")]
 
 mod common;
 
-use adk_rag::VectorStore;
 use adk_rag::agent_retrieval::{AgentRetrievalConfig, AgentRetrievalStore};
+use adk_rag::{CollectionSpec, Scope, VectorQuery, VectorStore};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -37,6 +39,41 @@ struct MockState {
     /// Captured wire bodies for golden assertions.
     create_collection_bodies: Vec<Value>,
     search_bodies: Vec<Value>,
+    query_bodies: Vec<Value>,
+}
+
+/// Evaluates an Agent Retrieval filter expression against a Data Object's `data`.
+fn filter_matches(filter: &Value, data: &Value) -> bool {
+    let Some(clauses) = filter.as_object() else {
+        return true;
+    };
+    clauses.iter().all(|(key, condition)| match key.as_str() {
+        "$and" => condition.as_array().into_iter().flatten().all(|f| filter_matches(f, data)),
+        "$or" => condition.as_array().into_iter().flatten().any(|f| filter_matches(f, data)),
+        field => {
+            let value = data.get(field);
+            condition.as_object().into_iter().flatten().all(|(op, operand)| match op.as_str() {
+                "$eq" => value == Some(operand),
+                "$ne" => value != Some(operand),
+                "$in" => {
+                    operand.as_array().is_some_and(|set| value.is_some_and(|v| set.contains(v)))
+                }
+                "$nin" => {
+                    operand.as_array().is_some_and(|set| !value.is_some_and(|v| set.contains(v)))
+                }
+                other => panic!("the mock does not implement filter operator {other}"),
+            })
+        }
+    })
+}
+
+/// The objects a filter admits; every object when there is no filter.
+fn filtered(objects: &BTreeMap<String, Value>, filter: &Value) -> BTreeMap<String, Value> {
+    objects
+        .iter()
+        .filter(|(_, object)| filter.is_null() || filter_matches(filter, &object["data"]))
+        .map(|(id, object)| (id.clone(), object.clone()))
+        .collect()
 }
 
 type Shared = Arc<Mutex<MockState>>;
@@ -237,8 +274,8 @@ async fn start_mock(state: Shared) -> String {
                         }
                         "dataObjects:search" => {
                             state.search_bodies.push(body.clone());
-                            let objects = &state.collections[&cid];
                             let search = &body["vectorSearch"];
+                            let objects = &filtered(&state.collections[&cid], &search["filter"]);
                             let query: Vec<f64> = search["vector"]["values"]
                                 .as_array()
                                 .map(|values| values.iter().filter_map(Value::as_f64).collect())
@@ -247,12 +284,42 @@ async fn start_mock(state: Shared) -> String {
                             let ranked = ranked_vector_results(objects, &query, top_k);
                             Json(results_json(objects, &ranked)).into_response()
                         }
+                        "dataObjects:query" => {
+                            state.query_bodies.push(body.clone());
+                            let objects = filtered(&state.collections[&cid], &body["filter"]);
+                            let page_size = body["pageSize"].as_u64().unwrap_or(100) as usize;
+                            let start: usize =
+                                body["pageToken"].as_str().and_then(|t| t.parse().ok()).unwrap_or(0);
+                            let page: Vec<Value> = objects
+                                .iter()
+                                .skip(start)
+                                .take(page_size)
+                                .map(|(id, object)| {
+                                    json!({
+                                        "name": format!(
+                                            "projects/{PROJECT}/locations/{LOCATION}/collections/{cid}/dataObjects/{id}"
+                                        ),
+                                        "dataObjectId": id,
+                                        "data": object["data"],
+                                    })
+                                })
+                                .collect();
+                            let next = start + page.len();
+                            let token =
+                                if next < objects.len() { next.to_string() } else { String::new() };
+                            Json(json!({ "dataObjects": page, "nextPageToken": token }))
+                                .into_response()
+                        }
                         "dataObjects:batchSearch" => {
-                            let objects = &state.collections[&cid];
+                            let all = &state.collections[&cid];
                             let searches = body["searches"].as_array().cloned().unwrap_or_default();
                             let rankings: Vec<Vec<(String, f64)>> = searches
                                 .iter()
                                 .map(|search| {
+                                    let kind = search
+                                        .get("vectorSearch")
+                                        .unwrap_or(&search["textSearch"]);
+                                    let objects = &filtered(all, &kind["filter"]);
                                     if let Some(vector_search) = search.get("vectorSearch") {
                                         let query: Vec<f64> = vector_search["vector"]["values"]
                                             .as_array()
@@ -280,7 +347,7 @@ async fn start_mock(state: Shared) -> String {
                                 .unwrap_or_default();
                             let top_k = combine["topK"].as_u64().unwrap_or(10) as usize;
                             let fused = rrf_fuse(&rankings, &weights, top_k);
-                            Json(json!({ "results": [results_json(objects, &fused)] }))
+                            Json(json!({ "results": [results_json(all, &fused)] }))
                                 .into_response()
                         }
                         _ => error_status(StatusCode::NOT_FOUND, "unknown action"),
@@ -350,14 +417,28 @@ async fn create_collection_declares_a_byoe_dense_vector_schema() {
     let endpoint = start_mock(state.clone()).await;
     let store = build_store(&endpoint);
 
-    store.create_collection("golden_wire", 768).await.expect("create");
+    store.create_collection("golden_wire", &CollectionSpec::new(768)).await.expect("create");
 
     let state = state.lock().await;
-    // BYOE: no vertexEmbeddingConfig — the embedder pipeline owns vectors.
+    // BYOE: no vertexEmbeddingConfig — the embedder pipeline owns vectors. The service
+    // admits no undeclared data field, so the schema lists every field the store writes.
+    let string = json!({ "type": "string" });
     assert_eq!(
         state.create_collection_bodies,
         vec![json!({
             "displayName": "golden_wire",
+            "dataSchema": {
+                "type": "object",
+                "properties": {
+                    "scope": string,
+                    "chunkId": string,
+                    "documentId": string,
+                    "text": string,
+                    "metadataJson": string,
+                    "sourceUri": string,
+                    "title": string,
+                },
+            },
             "vectorSchema": { "embedding": { "denseVector": { "dimensions": 768 } } },
         })],
     );
@@ -369,8 +450,11 @@ async fn search_sends_the_documented_vector_search_shape() {
     let endpoint = start_mock(state.clone()).await;
     let store = build_store(&endpoint);
 
-    store.create_collection("golden_search", 3).await.expect("create");
-    store.search("golden_search", &[0.5, 0.25, 0.25], 7).await.expect("search");
+    store.create_collection("golden_search", &CollectionSpec::new(3)).await.expect("create");
+    store
+        .search("golden_search", &Scope::single_tenant(), &VectorQuery::new(&[0.5, 0.25, 0.25], 7))
+        .await
+        .expect("search");
 
     let state = state.lock().await;
     assert_eq!(
@@ -379,9 +463,12 @@ async fn search_sends_the_documented_vector_search_shape() {
             "vectorSearch": {
                 "searchField": "embedding",
                 "vector": { "values": [0.5f32, 0.25f32, 0.25f32] },
+                "filter": { "scope": { "$eq": ":single-tenant" } },
                 "topK": 7,
                 "outputFields": {
-                    "dataFields": ["text", "documentId", "metadata", "sourceUri", "title"],
+                    "dataFields": [
+                        "chunkId", "text", "documentId", "metadataJson", "sourceUri", "title"
+                    ],
                     "vectorFields": ["embedding"],
                 },
             },
@@ -402,7 +489,7 @@ async fn existing_collections_only_validates_instead_of_creating() {
     .expect("build store");
 
     let error = store
-        .create_collection("never_provisioned", 4)
+        .create_collection("never_provisioned", &CollectionSpec::new(4))
         .await
         .expect_err("missing collection must fail in existing-only mode");
     assert!(error.to_string().contains("does not exist"), "{error}");
@@ -415,21 +502,84 @@ async fn hybrid_search_fuses_semantic_and_text_rankings() {
     let endpoint = start_mock(state.clone()).await;
     let store = build_store(&endpoint);
 
-    store.create_collection("hybrid", 2).await.expect("create");
+    store.create_collection("hybrid", &CollectionSpec::new(2)).await.expect("create");
     let chunks = vec![
         adk_rag::Chunk::new("vector-hit", "d", "unrelated words").with_embedding(vec![1.0, 0.0]),
         adk_rag::Chunk::new("text-hit", "d", "the searched phrase").with_embedding(vec![0.0, 1.0]),
     ];
-    store.upsert("hybrid", &chunks).await.expect("upsert");
+    store.upsert("hybrid", &Scope::single_tenant(), &chunks).await.expect("upsert");
 
     let results = store
-        .hybrid_search("hybrid", &[1.0, 0.0], "searched phrase", 2, (0.5, 0.5))
+        .hybrid_search(
+            "hybrid",
+            &Scope::single_tenant(),
+            &[1.0, 0.0],
+            "searched phrase",
+            2,
+            (0.5, 0.5),
+        )
         .await
         .expect("hybrid search");
 
     let mut ids: Vec<String> = results.iter().map(|result| result.chunk.id.clone()).collect();
     ids.sort();
     assert_eq!(ids, vec!["text-hit".to_string(), "vector-hit".to_string()]);
+}
+
+#[tokio::test]
+async fn hybrid_search_filters_both_searches_by_scope() {
+    let state = Shared::default();
+    let endpoint = start_mock(state.clone()).await;
+    let store = build_store(&endpoint);
+
+    store.create_collection("hybrid_scoped", &CollectionSpec::new(2)).await.expect("create");
+    let mine = Scope::new("mine").expect("valid scope");
+    let theirs = Scope::new("theirs").expect("valid scope");
+    let chunk = |id: &str| {
+        adk_rag::Chunk::new(id, "d", "the searched phrase").with_embedding(vec![1.0, 0.0])
+    };
+    store.upsert("hybrid_scoped", &mine, &[chunk("mine")]).await.expect("upsert");
+    store.upsert("hybrid_scoped", &theirs, &[chunk("theirs")]).await.expect("upsert");
+
+    let results = store
+        .hybrid_search("hybrid_scoped", &mine, &[1.0, 0.0], "searched phrase", 5, (0.5, 0.5))
+        .await
+        .expect("hybrid search");
+    let ids: Vec<String> = results.into_iter().map(|result| result.chunk.id).collect();
+    assert_eq!(ids, ["mine"]);
+}
+
+#[tokio::test]
+async fn count_and_purge_page_through_every_object_of_the_scope() {
+    let state = Shared::default();
+    let endpoint = start_mock(state.clone()).await;
+    let store = build_store(&endpoint);
+
+    store.create_collection("paged", &CollectionSpec::new(2)).await.expect("create");
+    let scope = Scope::new("big").expect("valid scope");
+    let other = Scope::new("small").expect("valid scope");
+    let chunks: Vec<adk_rag::Chunk> = (0..2_345)
+        .map(|i| adk_rag::Chunk::new(format!("doc_{i}"), "d", "t").with_embedding(vec![1.0, 0.0]))
+        .collect();
+    store.upsert("paged", &scope, &chunks).await.expect("upsert");
+    store.upsert("paged", &other, &chunks[..3]).await.expect("upsert");
+
+    assert_eq!(store.count("paged", &scope).await.expect("count"), 2_345);
+    assert_eq!(store.purge_scope("paged", &scope).await.expect("purge"), 2_345);
+    assert_eq!(store.count("paged", &scope).await.expect("count"), 0);
+    assert_eq!(store.count("paged", &other).await.expect("count"), 3);
+
+    let state = state.lock().await;
+    let first = &state.query_bodies[0];
+    assert_eq!(
+        *first,
+        json!({
+            "filter": { "scope": { "$eq": "big" } },
+            "pageSize": 1000,
+            "outputFields": { "dataFields": ["chunkId"] },
+        })
+    );
+    assert_eq!(state.query_bodies[1]["pageToken"], "1000", "the second page continues the first");
 }
 
 /// **VectorStore contract, search invariants (Agent Retrieval)**

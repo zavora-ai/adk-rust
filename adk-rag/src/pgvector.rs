@@ -21,11 +21,13 @@
 //!
 //! ```rust,ignore
 //! use adk_rag::pgvector::PgVectorStore;
+//! use adk_rag::{CollectionSpec, Scope, VectorQuery, VectorStore};
 //!
 //! let store = PgVectorStore::new("postgres://user:pass@localhost/mydb").await?;
-//! store.create_collection("docs", 384).await?;
-//! store.upsert("docs", &chunks).await?;
-//! let results = store.search("docs", &query_embedding, 5).await?;
+//! let scope = Scope::single_tenant();
+//! store.create_collection("docs", &CollectionSpec::new(384)).await?;
+//! store.upsert("docs", &scope, &chunks).await?;
+//! let results = store.search("docs", &scope, &VectorQuery::new(&query_embedding, 5)).await?;
 //! ```
 
 use std::collections::HashMap;
@@ -37,14 +39,16 @@ use tracing::debug;
 
 use crate::document::{Chunk, SearchResult};
 use crate::error::{RagError, Result};
-use crate::vectorstore::VectorStore;
+use crate::scope::Scope;
+use crate::vectorstore::{CollectionSpec, VectorQuery, VectorStore};
 
 /// A [`VectorStore`] backed by PostgreSQL with the pgvector extension.
 ///
 /// Each collection is stored as a separate table named `rag_<name>` with columns:
-/// `id`, `text`, `embedding` (vector), `metadata` (jsonb), `document_id`, `source_uri`,
-/// and `title`. `create_collection` adds `source_uri` and `title` to a table created
-/// before they existed, keeping its rows. See the
+/// `scope`, `id`, `text`, `embedding` (vector), `metadata` (jsonb), `document_id`,
+/// `source_uri`, and `title`, keyed by `(scope, id)`. `create_collection` migrates a table
+/// created by an earlier release in place: it adds the missing columns, assigns existing
+/// rows to [`Scope::single_tenant`], and re-keys the table by `(scope, id)`. See the
 /// [module documentation](self) for the collection naming rule.
 pub struct PgVectorStore {
     pool: PgPool,
@@ -110,8 +114,9 @@ impl PgVectorStore {
 
 #[async_trait]
 impl VectorStore for PgVectorStore {
-    async fn create_collection(&self, name: &str, dimensions: usize) -> Result<()> {
+    async fn create_collection(&self, name: &str, spec: &CollectionSpec) -> Result<()> {
         let table_name = Self::table_name(name)?;
+        let dimensions = spec.dimensions;
 
         // Ensure the pgvector extension exists
         sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
@@ -119,31 +124,64 @@ impl VectorStore for PgVectorStore {
             .await
             .map_err(Self::map_err)?;
 
-        // `table_name` passed `Self::table_name` and `dimensions` is an integer.
+        // `table_name` passed `Self::table_name`, `dimensions` is an integer, and the default
+        // scope is a constant.
+        let single_tenant = Scope::SINGLE_TENANT_KEY;
         let create_sql = format!(
             "CREATE TABLE IF NOT EXISTS {table_name} (\
-                id TEXT PRIMARY KEY, \
+                scope TEXT NOT NULL, \
+                id TEXT NOT NULL, \
                 text TEXT NOT NULL, \
                 embedding vector({dimensions}), \
                 metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb, \
                 document_id TEXT NOT NULL, \
                 source_uri TEXT, \
-                title TEXT\
+                title TEXT, \
+                PRIMARY KEY (scope, id)\
             )"
         );
-        // Tables created before provenance was stored gain the columns in place.
+        // Tables created by an earlier release gain the columns in place; their rows join
+        // the single-tenant scope.
         let migrate_sql = format!(
             "ALTER TABLE {table_name} \
                 ADD COLUMN IF NOT EXISTS source_uri TEXT, \
-                ADD COLUMN IF NOT EXISTS title TEXT"
+                ADD COLUMN IF NOT EXISTS title TEXT, \
+                ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT '{single_tenant}', \
+                ALTER COLUMN scope DROP DEFAULT"
         );
 
+        let mut tx = self.pool.begin().await.map_err(Self::map_err)?;
         for sql in [create_sql, migrate_sql] {
             sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(Self::map_err)?;
         }
+        // The ALTER above holds the table's lock, so a concurrent create sees the swapped key.
+        let primary_key: Option<(String, bool)> = sqlx::query_as(
+            "SELECT c.conname::text, bool_or(a.attname = 'scope') \
+             FROM pg_constraint c \
+             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey) \
+             WHERE c.conrelid = to_regclass($1::text) AND c.contype = 'p' \
+             GROUP BY c.conname",
+        )
+        .bind(&table_name)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(Self::map_err)?;
+        if let Some((constraint, false)) = primary_key {
+            let constraint = constraint.replace('"', "\"\"");
+            let swap_sql = format!(
+                "ALTER TABLE {table_name} DROP CONSTRAINT \"{constraint}\", \
+                 ADD PRIMARY KEY (scope, id)"
+            );
+            sqlx::query(sqlx::AssertSqlSafe(swap_sql.as_str()))
+                .execute(&mut *tx)
+                .await
+                .map_err(Self::map_err)?;
+            debug!(collection = name, table = %table_name, "keyed pgvector table by scope and id");
+        }
+        tx.commit().await.map_err(Self::map_err)?;
 
         debug!(collection = name, table = %table_name, dimensions, "created pgvector table");
         Ok(())
@@ -163,7 +201,7 @@ impl VectorStore for PgVectorStore {
         Ok(())
     }
 
-    async fn upsert(&self, collection: &str, chunks: &[Chunk]) -> Result<()> {
+    async fn upsert(&self, collection: &str, scope: &Scope, chunks: &[Chunk]) -> Result<()> {
         if chunks.is_empty() {
             return Ok(());
         }
@@ -173,9 +211,9 @@ impl VectorStore for PgVectorStore {
         // `table_name` passed `Self::table_name`; every value is a bound parameter.
         let upsert_sql = format!(
             "INSERT INTO {table_name} \
-                (id, text, embedding, metadata, document_id, source_uri, title) \
-             VALUES ($1, $2, $3::vector, $4::jsonb, $5, $6, $7) \
-             ON CONFLICT (id) DO UPDATE SET \
+                (scope, id, text, embedding, metadata, document_id, source_uri, title) \
+             VALUES ($1, $2, $3, $4::vector, $5::jsonb, $6, $7, $8) \
+             ON CONFLICT (scope, id) DO UPDATE SET \
                 text = EXCLUDED.text, \
                 embedding = EXCLUDED.embedding, \
                 metadata = EXCLUDED.metadata, \
@@ -195,6 +233,7 @@ impl VectorStore for PgVectorStore {
             );
 
             sqlx::query(sqlx::AssertSqlSafe(upsert_sql.as_str()))
+                .bind(scope.as_str())
                 .bind(&chunk.id)
                 .bind(&chunk.text)
                 .bind(&embedding_str)
@@ -211,18 +250,19 @@ impl VectorStore for PgVectorStore {
         Ok(())
     }
 
-    async fn delete(&self, collection: &str, ids: &[&str]) -> Result<()> {
+    async fn delete(&self, collection: &str, scope: &Scope, ids: &[&str]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
         }
 
         let table_name = Self::table_name(collection)?;
 
-        // `table_name` passed `Self::table_name`; the ids are a bound parameter.
-        let delete_sql = format!("DELETE FROM {table_name} WHERE id = ANY($1)");
+        // `table_name` passed `Self::table_name`; the scope and ids are bound parameters.
+        let delete_sql = format!("DELETE FROM {table_name} WHERE scope = $1 AND id = ANY($2)");
         let id_vec: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
 
         sqlx::query(sqlx::AssertSqlSafe(delete_sql.as_str()))
+            .bind(scope.as_str())
             .bind(&id_vec)
             .execute(&self.pool)
             .await
@@ -235,28 +275,33 @@ impl VectorStore for PgVectorStore {
     async fn search(
         &self,
         collection: &str,
-        embedding: &[f32],
-        top_k: usize,
+        scope: &Scope,
+        query: &VectorQuery<'_>,
     ) -> Result<Vec<SearchResult>> {
         let table_name = Self::table_name(collection)?;
 
         // pgvector cosine distance operator: <=>
-        // Returns distance (0 = identical), so score = 1 - distance.
-        // `table_name` passed `Self::table_name`; the query vector is a bound parameter.
+        // Returns distance (0 = identical), so score = 1 - distance. The scope is part of
+        // the WHERE clause, so it applies before LIMIT picks the nearest rows.
+        // `table_name` passed `Self::table_name`; every value is a bound parameter.
         let search_sql = format!(
             "SELECT id, text, metadata, document_id, source_uri, title, \
                     1 - (embedding <=> $1::vector) AS score \
              FROM {table_name} \
+             WHERE scope = $3 \
              ORDER BY embedding <=> $1::vector \
              LIMIT $2"
         );
 
-        let embedding_str =
-            format!("[{}]", embedding.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
+        let embedding_str = format!(
+            "[{}]",
+            query.embedding.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")
+        );
 
         let rows = sqlx::query(sqlx::AssertSqlSafe(search_sql.as_str()))
             .bind(&embedding_str)
-            .bind(top_k as i64)
+            .bind(query.top_k as i64)
+            .bind(scope.as_str())
             .fetch_all(&self.pool)
             .await
             .map_err(Self::map_err)?;
@@ -287,6 +332,34 @@ impl VectorStore for PgVectorStore {
             .collect();
 
         Ok(results)
+    }
+
+    async fn count(&self, collection: &str, scope: &Scope) -> Result<u64> {
+        let table_name = Self::table_name(collection)?;
+
+        // `table_name` passed `Self::table_name`; the scope is a bound parameter.
+        let count_sql = format!("SELECT count(*) FROM {table_name} WHERE scope = $1");
+        let (count,): (i64,) = sqlx::query_as(sqlx::AssertSqlSafe(count_sql.as_str()))
+            .bind(scope.as_str())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(Self::map_err)?;
+        Ok(count.unsigned_abs())
+    }
+
+    async fn purge_scope(&self, collection: &str, scope: &Scope) -> Result<u64> {
+        let table_name = Self::table_name(collection)?;
+
+        // `table_name` passed `Self::table_name`; the scope is a bound parameter.
+        let purge_sql = format!("DELETE FROM {table_name} WHERE scope = $1");
+        let result = sqlx::query(sqlx::AssertSqlSafe(purge_sql.as_str()))
+            .bind(scope.as_str())
+            .execute(&self.pool)
+            .await
+            .map_err(Self::map_err)?;
+
+        debug!(collection, purged = result.rows_affected(), "purged scope from pgvector");
+        Ok(result.rows_affected())
     }
 }
 

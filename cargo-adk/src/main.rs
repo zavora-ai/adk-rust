@@ -2090,7 +2090,7 @@ serde_json = "1"
 use adk_rust::Launcher;
 use adk_rag::{{
     Document, FixedSizeChunker, GeminiEmbeddingProvider, InMemoryVectorStore,
-    RagConfig, RagPipeline, RagTool,
+    RagConfig, RagPipeline, RagTool, Scope,
 }};
 use std::sync::Arc;
 
@@ -2110,7 +2110,8 @@ async fn main() -> anyhow::Result<()> {{
     );
 
     pipeline.create_collection("docs").await?;
-    pipeline.ingest("docs", &Document::new(
+    // An application with one tenant ingests and searches the single-tenant scope.
+    pipeline.scoped(Scope::single_tenant()).ingest("docs", &Document::new(
         "example",
         "ADK-Rust is a framework for building AI agents in Rust. \
          It supports multiple LLM providers, tool calling, RAG, and more.",

@@ -36,7 +36,8 @@ use serde_json::{Value, json};
 use tracing::{error, info, warn};
 
 use crate::document::SearchResult;
-use crate::pipeline::RagPipeline;
+use crate::pipeline::{QueryOptions, RagPipeline};
+use crate::scope::Scope;
 
 /// A retrieval tool that wraps a [`RagPipeline`] for agentic use.
 ///
@@ -58,10 +59,14 @@ use crate::pipeline::RagPipeline;
 /// vectors stay out of the result: they mean nothing to a model and would fill its
 /// context.
 ///
+/// The tool searches one [`Scope`]: [`Scope::single_tenant`] unless
+/// [`RagTool::with_scope`] sets another. The model cannot name a scope.
+///
 /// The tool is read-only and concurrency-safe, so `DeclarativePolicy::allow_read_only`
 /// admits it and `ToolExecutionStrategy::Auto` overlaps it with adjacent read-only calls.
 pub struct RagTool {
     pipeline: Arc<RagPipeline>,
+    scope: Scope,
     default_collection: String,
     /// Collections a call may name besides the default, in schema order.
     other_collections: Vec<String>,
@@ -83,7 +88,31 @@ impl RagTool {
     /// let tool = RagTool::new(Arc::clone(&pipeline), format!("kb_{tenant_id}"));
     /// ```
     pub fn new(pipeline: Arc<RagPipeline>, default_collection: impl Into<String>) -> Self {
-        Self { pipeline, default_collection: default_collection.into(), other_collections: vec![] }
+        Self {
+            pipeline,
+            scope: Scope::single_tenant(),
+            default_collection: default_collection.into(),
+            other_collections: vec![],
+        }
+    }
+
+    /// Searches `scope` instead of [`Scope::single_tenant`].
+    ///
+    /// The scope is configuration, never a model argument: build the tool with the
+    /// authenticated tenant's scope.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use adk_rag::{RagTool, Scope};
+    ///
+    /// let tool = RagTool::new(pipeline, "kb").with_scope(Scope::from_parts(["support", tenant_id])?);
+    /// ```
+    #[must_use]
+    pub fn with_scope(mut self, scope: Scope) -> Self {
+        self.scope = scope;
+        self
     }
 
     /// Replace the collections the model may name besides the default.
@@ -231,10 +260,15 @@ impl Tool for RagTool {
                 .ok_or_else(|| invalid_arguments("'top_k' must be a positive integer"))?,
         };
 
-        info!(query, collection, top_k, "rag_search tool called");
+        info!(query, collection, top_k, scope = self.scope.as_str(), "rag_search tool called");
 
-        let results =
-            self.pipeline.query_with_top_k(collection, query, top_k).await.map_err(|e| {
+        let options = QueryOptions::new().with_top_k(top_k);
+        let results = self
+            .pipeline
+            .scoped(self.scope.clone())
+            .query_with(collection, query, &options)
+            .await
+            .map_err(|e| {
                 error!(error = %e, "rag_search failed");
                 AdkError::tool(format!("RAG search failed: {e}"))
             })?;
@@ -334,7 +368,8 @@ mod tests {
     }
 
     /// A pipeline with three collections: "kb" holds documents a, b, and c, "faq" holds
-    /// "faq", and "tenant_b" holds "secret".
+    /// "faq", and "tenant_b" holds "secret", all in the single-tenant scope; "kb" also holds
+    /// another tenant's document "a".
     async fn pipeline(reranker: Option<Arc<ReversingReranker>>) -> Arc<RagPipeline> {
         let mut builder = RagPipeline::builder()
             .config(RagConfig::builder().top_k(3).build().expect("valid config"))
@@ -357,9 +392,23 @@ mod tests {
             if id == "a" {
                 document = document.with_source_uri("https://example.com/a").with_title("Returns");
             }
-            pipeline.ingest(collection, &document).await.expect("ingest");
+            pipeline
+                .scoped(Scope::single_tenant())
+                .ingest(collection, &document)
+                .await
+                .expect("ingest");
         }
+        // Another tenant's document in the shared "kb" collection, under the same ID as "a".
         pipeline
+            .scoped(other_tenant())
+            .ingest("kb", &Document::new("a", "returns for the other tenant"))
+            .await
+            .expect("ingest");
+        pipeline
+    }
+
+    fn other_tenant() -> Scope {
+        Scope::from_parts(["kb-test", "other"]).expect("valid scope")
     }
 
     async fn tool(reranker: Option<Arc<ReversingReranker>>) -> RagTool {
@@ -438,6 +487,36 @@ mod tests {
                 ("c".to_string(), Value::Null, Value::Null),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn the_tool_searches_only_its_configured_scope() {
+        let pipeline = pipeline(None).await;
+        let texts = |result: Value| -> Vec<String> {
+            let mut texts: Vec<String> = result
+                .as_array()
+                .expect("an array of results")
+                .iter()
+                .map(|item| item["text"].as_str().expect("text").to_string())
+                .collect();
+            texts.sort();
+            texts
+        };
+
+        let single = RagTool::new(pipeline.clone(), "kb");
+        let result = single
+            .execute(context(), json!({"query": "returns", "top_k": 10}))
+            .await
+            .expect("search");
+        assert_eq!(texts(result), ["returns within thirty days", "ships in two days", "warranty"]);
+
+        // A scope argument from the model is not a parameter and changes nothing.
+        let other = RagTool::new(pipeline, "kb").with_scope(other_tenant());
+        let result = other
+            .execute(context(), json!({"query": "returns", "top_k": 10, "scope": ":single-tenant"}))
+            .await
+            .expect("search");
+        assert_eq!(texts(result), ["returns for the other tenant"]);
     }
 
     #[tokio::test]

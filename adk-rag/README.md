@@ -51,9 +51,12 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     )
     .with_source_uri("https://www.rust-lang.org/")
     .with_title("Rust");
-    pipeline.ingest("docs", &document).await?;
 
-    let results = pipeline.query("docs", "safe programming language").await?;
+    // Every read and write names a scope; an application with one tenant uses this one.
+    let rag = pipeline.scoped(Scope::single_tenant());
+    rag.ingest("docs", &document).await?;
+
+    let results = rag.query("docs", "safe programming language").await?;
     for r in &results {
         let source = r.chunk.source_uri.as_deref().unwrap_or("unknown source");
         println!("[score: {:.3}] {} ({source})", r.score, r.chunk.text);
@@ -91,7 +94,7 @@ use adk_core::Content;
 use adk_model::GeminiModel;
 use adk_rag::{
     Document, GeminiEmbeddingProvider, InMemoryVectorStore, RagConfig, RagPipeline, RagTool,
-    RecursiveChunker,
+    RecursiveChunker, Scope,
 };
 use adk_runner::Runner;
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
@@ -111,6 +114,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     );
     pipeline.create_collection("kb").await?;
     pipeline
+        .scoped(Scope::single_tenant())
         .ingest(
             "kb",
             &Document::new("faq", "Our return policy allows returns within 30 days with a receipt.")
@@ -318,8 +322,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`upsert` replaces rows by chunk id, so re-ingesting a document updates its
-chunks instead of duplicating them. An embedding whose length differs from the
+`upsert` replaces rows by scope and chunk id, so re-ingesting a document updates
+its chunks instead of duplicating them. An embedding whose length differs from the
 collection's dimensions returns `RagError::VectorStoreError`.
 
 ### pgvector (PostgreSQL)
@@ -404,7 +408,10 @@ async fn main() -> adk_rag::Result<()> {
 }
 ```
 
-`AgentRetrievalStore::hybrid_search` fuses semantic and text search with reciprocal rank fusion.
+`AgentRetrievalStore::hybrid_search` fuses semantic and text search, both filtered by scope,
+with reciprocal rank fusion. Each chunk is stored under a Data Object ID derived from its scope
+and chunk ID, because Agent Retrieval accepts only RFC 1035 labels, and `create_collection`
+declares a data schema because the service admits no undeclared data field.
 
 ## Vertex AI RAG Engine (managed)
 
@@ -677,21 +684,52 @@ verbatim with no reserved keys, so provenance never collides with a metadata ent
 | SurrealDB | `source_uri` and `title` fields | `create_collection` defines the fields; old rows return `None` |
 | Agent Retrieval | `sourceUri` and `title` data fields | old data objects return `None` until re-ingested |
 
+### Scopes
+
+Every `VectorStore` operation names a `Scope`, and a stored chunk is identified by its
+collection, scope, and chunk ID together, so tenants can share a collection: the same
+document ID in two scopes keeps two sets of chunks, and a search sees only its scope's chunks.
+Every backend applies the scope inside its search, before the top `k` are chosen, so a small
+tenant keeps its recall beside a large one. The shared contract suite checks all of this on
+every backend, including a scope of one chunk beside 500 nearer chunks of another scope.
+
+| Constructor | Key |
+|-------------|-----|
+| `Scope::new("org-7")` | The opaque key itself: 1 to 256 bytes, no control characters |
+| `Scope::from_parts(["support", tenant_id])` | Each part percent-encoded, joined with `/` |
+| `Scope::single_tenant()` | `:single-tenant`, for an application with one tenant |
+
 ### Pipeline methods
 
 | Method | Does |
 |--------|------|
 | `create_collection(name)`, `delete_collection(name)` | Manage collections in the vector store |
+| `scoped(scope)` | A `ScopedRag` that ingests into, searches, and deletes from one scope |
+
+| `ScopedRag` method | Does |
+|--------------------|------|
 | `ingest(collection, &document)` | Chunk, embed, and store one document; returns its chunks |
 | `ingest_batch(collection, &documents)` | The same for several documents |
-| `query(collection, text)` | Embed, search, rerank, and drop results below `similarity_threshold` |
-| `query_with_top_k(collection, text, top_k)` | The same with a result count of its own |
+| `query(collection, text)` | Embed, search the scope, rerank, and drop results below `similarity_threshold` |
+| `query_with(collection, text, &options)` | The same with `QueryOptions`, such as `QueryOptions::new().with_top_k(3)` |
+| `count(collection)` | The number of chunks the scope holds |
+| `purge_scope(collection)` | Delete every chunk of the scope; returns how many it held |
+
+| Backend | Scope storage | Data stored before scopes |
+|---------|---------------|---------------------------|
+| In-memory | a map per scope | — |
+| pgvector | `scope` column, primary key `(scope, id)` | `create_collection` migrates in place; existing rows join `Scope::single_tenant()` |
+| LanceDB | `scope` column, merge-insert on `scope` and `id` | re-create and re-ingest; `upsert` fails with that guidance |
+| Qdrant | `scope` payload field, tenant index; point ID from scope and chunk ID | re-ingest |
+| SurrealDB | `scope` and `chunk_id` fields, index on `scope`; record ID from scope and chunk ID | re-ingest |
+| Agent Retrieval | `scope` data field; Data Object ID from scope and chunk ID; declared data schema | re-create and re-ingest |
 
 ### RagTool
 
 `RagTool::new(pipeline, default_collection)` exposes the pipeline as the `rag_search` tool,
-searching that one collection. `with_allowed_collections([...])` lets the model choose among
-further collections:
+searching that one collection in `Scope::single_tenant()`; `with_scope(scope)` sets another
+scope, which the model cannot change. `with_allowed_collections([...])` lets the model choose
+among further collections:
 
 | Configuration | Arguments | A call naming another collection |
 |---------------|-----------|----------------------------------|
