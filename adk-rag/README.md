@@ -814,6 +814,10 @@ let tool = RagTool::new(pipeline, "kb")
 // The model may call: {"query": "refund window", "filter": {"section": ["billing", "refunds"]}}
 ```
 
+Each result with a `source_uri` is recorded as an `adk_core::GroundingSource` on the call's
+event, so the agent binds the final answer's `[title](uri)` links to it and `adk-guardrail`'s
+`CitationRequired` can require a citation of a retrieved source.
+
 The tool returns the results best first, each as
 `{"id", "document_id", "text", "metadata", "score"}` plus `source_uri` and `title` when the
 chunk's document had them. Embedding vectors are left out, and a

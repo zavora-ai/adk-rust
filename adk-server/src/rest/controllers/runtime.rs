@@ -984,6 +984,8 @@ fn translate_ag_ui_event(
         tool_confirmation,
         tool_confirmation_decision: _,
         steering,
+        // AG-UI 1.0 has no event for retrieved sources; they stay in the session.
+        grounding_sources: _,
     } = &event.actions;
     // A steering message is the person's own input, which, like the run's message, this
     // translation does not echo; it stays in the session.

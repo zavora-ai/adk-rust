@@ -437,10 +437,9 @@ async fn the_retrieval_tool_runs_end_to_end_against_the_mock() {
         "query is the single required parameter",
     );
 
-    let output = tool
-        .execute(TestContext::arc(), json!({ "query": "what is the refund policy?" }))
-        .await
-        .unwrap();
+    let ctx = TestContext::arc();
+    let output =
+        tool.execute(ctx.clone(), json!({ "query": "what is the refund policy?" })).await.unwrap();
 
     assert_eq!(
         output,
@@ -453,6 +452,12 @@ async fn the_retrieval_tool_runs_end_to_end_against_the_mock() {
             },
             { "text": "Store credit is issued instantly." }
         ]),
+    );
+    // The context with a source URI is recorded as a source the answer may cite.
+    assert_eq!(
+        ctx.actions().grounding_sources,
+        [adk_core::GroundingSource::new("vertex_rag_retrieval", "gs://docs/refunds.md")
+            .with_title("refunds.md")]
     );
 
     let captured = state.lock().await;

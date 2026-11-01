@@ -93,6 +93,7 @@ pub mod codeact;
 
 pub mod compaction;
 mod custom_agent;
+mod grounding;
 pub mod guardrails;
 mod invocation_hooks;
 mod llm_agent;

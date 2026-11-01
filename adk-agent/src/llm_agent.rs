@@ -25,8 +25,9 @@ use adk_plugin::{
 #[cfg(feature = "skills")]
 use crate::skill_shim::load_skill_index;
 use crate::{
+    grounding::answer_citations,
     guardrails::{
-        GuardrailScreen, GuardrailSet, Phase, Screened, ToolGuardrailSet, Warnings,
+        Grounding, GuardrailScreen, GuardrailSet, Phase, Screened, ToolGuardrailSet, Warnings,
         enforce_guardrails, screen_model_output, screen_tool_result,
     },
     invocation_hooks::HookCallbacks,
@@ -3854,6 +3855,8 @@ impl Agent for LlmAgent {
                     }
                 }
             }
+            // Sources the run's tool calls recorded, which the final answer may cite.
+            let mut retrieved: Vec<adk_core::GroundingSource> = Vec::new();
             if !resumed_calls.is_empty() {
                 if ctx.is_cancelled() {
                     return;
@@ -3965,6 +3968,7 @@ impl Agent for LlmAgent {
                         break;
                     }
                     held_again.extend(result.pending);
+                    retrieved.extend(result.actions.grounding_sources);
                     // Each result takes the place of its call's pending response, matched by
                     // call ID, so the model sees one response per call.
                     let _ = adk_core::supersede_pending_responses(
@@ -4290,14 +4294,24 @@ impl Agent for LlmAgent {
                     // Text beside a tool call, or in a paused turn, reaches the client and the
                     // session as the final text does, so it is screened too.
                     let mut output_warnings = Warnings::default();
+                    let mut citations = cached_response.citation_metadata.clone();
                     if let Some(content) = accumulated_content.take() {
                         let preamble = content
                             .parts
                             .iter()
                             .any(|part| matches!(part, Part::FunctionCall { .. }))
                             || Self::continues_turn(final_provider_metadata.as_ref());
+                        let shown_citations = (!preamble)
+                            .then(|| answer_citations(&content, &retrieved, citations.as_ref()))
+                            .flatten();
+                        let grounding =
+                            Grounding { retrieved: &retrieved, citations: shown_citations.as_ref() };
                         let screened =
-                            screen_model_output(output_guardrails.as_ref(), content, preamble).await?;
+                            screen_model_output(output_guardrails.as_ref(), content, preamble, grounding).await?;
+                        if !preamble {
+                            citations =
+                                answer_citations(&screened.content, &retrieved, citations.as_ref());
+                        }
                         accumulated_content = Some(screened.content);
                         output_warnings = screened.warnings;
                     }
@@ -4307,7 +4321,7 @@ impl Agent for LlmAgent {
                     output_warnings.record_on(&mut cached_event);
                     cached_event.llm_response.content = accumulated_content.clone();
                     cached_event.llm_response.turn_complete = cached_response.turn_complete;
-                    cached_event.llm_response.citation_metadata = cached_response.citation_metadata.clone();
+                    cached_event.llm_response.citation_metadata = citations;
                     cached_event.llm_response.provider_metadata = cached_response.provider_metadata.clone();
                     // Surface and track the response id for provider-neutral continuity.
                     cached_event.llm_response.interaction_id = cached_response.interaction_id.clone();
@@ -4643,16 +4657,39 @@ impl Agent for LlmAgent {
                         // Text beside a tool call, or in a paused turn, reaches the client and
                         // the session as the final text does, so it is screened too.
                         let mut output_warnings = Warnings::default();
+                        let provider_citations =
+                            last_chunk.as_ref().and_then(|chunk| chunk.citation_metadata.clone());
+                        let mut citations = provider_citations.clone();
                         if let Some(content) = accumulated_content.take() {
                             let preamble = content
                                 .parts
                                 .iter()
                                 .any(|part| matches!(part, Part::FunctionCall { .. }))
                                 || Self::continues_turn(final_provider_metadata.as_ref());
-                            let screened =
-                                screen_model_output(output_guardrails.as_ref(), content, preamble)
-                                    .instrument(llm_span.clone())
-                                    .await?;
+                            let shown_citations = (!preamble)
+                                .then(|| {
+                                    answer_citations(&content, &retrieved, provider_citations.as_ref())
+                                })
+                                .flatten();
+                            let grounding = Grounding {
+                                retrieved: &retrieved,
+                                citations: shown_citations.as_ref(),
+                            };
+                            let screened = screen_model_output(
+                                output_guardrails.as_ref(),
+                                content,
+                                preamble,
+                                grounding,
+                            )
+                            .instrument(llm_span.clone())
+                            .await?;
+                            if !preamble {
+                                citations = answer_citations(
+                                    &screened.content,
+                                    &retrieved,
+                                    provider_citations.as_ref(),
+                                );
+                            }
                             accumulated_content = Some(screened.content);
                             output_warnings = screened.warnings;
                         }
@@ -4679,6 +4716,7 @@ impl Agent for LlmAgent {
                             long_running_tool_ids,
                         );
                         output_warnings.record_on(&mut final_event);
+                        final_event.llm_response.citation_metadata = citations;
                         if metered {
                             final_event.provider_metadata.insert(
                                 adk_core::BUDGET_RECORDED_KEY.to_string(),
@@ -5200,6 +5238,7 @@ impl Agent for LlmAgent {
                             return;
                         }
                         held_for_confirmation.extend(result.pending);
+                        retrieved.extend(result.actions.grounding_sources);
                         conversation_history.push(result.content);
                     }
 

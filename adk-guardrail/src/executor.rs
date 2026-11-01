@@ -1,5 +1,6 @@
 use crate::{
-    Guardrail, GuardrailError, GuardrailFailure, GuardrailPhase, GuardrailResult, Result, Severity,
+    Guardrail, GuardrailError, GuardrailFailure, GuardrailPhase, GuardrailResult, OutputEvidence,
+    Result, Severity,
 };
 use adk_core::Content;
 use futures::future::join_all;
@@ -67,13 +68,21 @@ pub struct Screening {
     pub warnings: Vec<GuardrailFailure>,
 }
 
+/// Which [`Guardrail`] method a run calls.
+#[derive(Clone, Copy)]
+enum Check<'a> {
+    Validate,
+    Preamble,
+    Output(&'a OutputEvidence<'a>),
+}
+
 /// Executor for running guardrails in parallel
 pub struct GuardrailExecutor;
 
 impl GuardrailExecutor {
     /// Run all guardrails in parallel, with early exit on critical failures
     pub async fn run(guardrails: &GuardrailSet, content: &Content) -> Result<ExecutionResult> {
-        Self::run_with(guardrails, content, false).await
+        Self::run_with(guardrails, content, Check::Validate).await
     }
 
     /// Runs every guardrail's [`validate_preamble`](Guardrail::validate_preamble) over the text
@@ -82,7 +91,7 @@ impl GuardrailExecutor {
         guardrails: &GuardrailSet,
         content: &Content,
     ) -> Result<ExecutionResult> {
-        Self::run_with(guardrails, content, true).await
+        Self::run_with(guardrails, content, Check::Preamble).await
     }
 
     /// Runs `guardrails` over `content` and turns a failing verdict into a block.
@@ -120,7 +129,50 @@ impl GuardrailExecutor {
         phase: GuardrailPhase,
         preamble: bool,
     ) -> Result<Screening> {
-        let result = match Self::run_with(guardrails, content, preamble).await {
+        let check = if preamble { Check::Preamble } else { Check::Validate };
+        Self::enforce_with(guardrails, content, phase, check).await
+    }
+
+    /// Screens an agent's final answer as [`enforce`](Self::enforce) does in the output
+    /// phase, through every guardrail's [`validate_output`](Guardrail::validate_output) with
+    /// `evidence`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GuardrailError::Blocked`] with every failure when a failure is above `Low`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Content, GroundingSource};
+    /// use adk_guardrail::{CitationRequired, GuardrailExecutor, GuardrailSet, OutputEvidence};
+    ///
+    /// # futures::executor::block_on(async {
+    /// let set = GuardrailSet::new().with(CitationRequired::new());
+    /// let answer = Content::new("model").with_text("Refunds take 30 days.");
+    /// let sources = [GroundingSource::new("rag_search", "https://example.com/refunds")];
+    /// let blocked =
+    ///     GuardrailExecutor::enforce_output(&set, &answer, &OutputEvidence::new(&sources, None))
+    ///         .await;
+    /// assert!(blocked.is_err(), "the answer cites none of the retrieved sources");
+    /// # });
+    /// ```
+    pub async fn enforce_output(
+        guardrails: &GuardrailSet,
+        content: &Content,
+        evidence: &OutputEvidence<'_>,
+    ) -> Result<Screening> {
+        Self::enforce_with(guardrails, content, GuardrailPhase::Output, Check::Output(evidence))
+            .await
+    }
+
+    async fn enforce_with(
+        guardrails: &GuardrailSet,
+        content: &Content,
+        phase: GuardrailPhase,
+        check: Check<'_>,
+    ) -> Result<Screening> {
+        let result = match Self::run_with(guardrails, content, check).await {
             Ok(result) => result,
             Err(GuardrailError::ValidationFailed { name, reason, severity }) => {
                 return Err(GuardrailError::Blocked {
@@ -155,7 +207,7 @@ impl GuardrailExecutor {
     async fn run_with(
         guardrails: &GuardrailSet,
         content: &Content,
-        preamble: bool,
+        check: Check<'_>,
     ) -> Result<ExecutionResult> {
         if guardrails.is_empty() {
             return Ok(ExecutionResult {
@@ -176,7 +228,7 @@ impl GuardrailExecutor {
         if !parallel.is_empty() {
             let futures: Vec<_> = parallel
                 .iter()
-                .map(|g| Self::run_single(Arc::clone(g), &current_content, preamble))
+                .map(|g| Self::run_single(Arc::clone(g), &current_content, check))
                 .collect();
 
             let results = join_all(futures).await;
@@ -206,7 +258,7 @@ impl GuardrailExecutor {
 
         // Run sequential guardrails
         for guardrail in sequential {
-            let result = Self::run_single(Arc::clone(guardrail), &current_content, preamble).await;
+            let result = Self::run_single(Arc::clone(guardrail), &current_content, check).await;
             match result {
                 GuardrailResult::Pass => {}
                 GuardrailResult::Fail { reason, severity } => {
@@ -240,12 +292,12 @@ impl GuardrailExecutor {
     async fn run_single(
         guardrail: Arc<dyn Guardrail>,
         content: &Content,
-        preamble: bool,
+        check: Check<'_>,
     ) -> GuardrailResult {
-        if preamble {
-            guardrail.validate_preamble(content).await
-        } else {
-            guardrail.validate(content).await
+        match check {
+            Check::Validate => guardrail.validate(content).await,
+            Check::Preamble => guardrail.validate_preamble(content).await,
+            Check::Output(evidence) => guardrail.validate_output(content, evidence).await,
         }
     }
 }

@@ -1,4 +1,4 @@
-use adk_core::Content;
+use adk_core::{CitationMetadata, Content, GroundingSource};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +41,36 @@ impl GuardrailResult {
 
     pub fn is_fail(&self) -> bool {
         matches!(self, Self::Fail { .. })
+    }
+}
+
+/// What an agent knows about its final answer's grounding, for
+/// [`Guardrail::validate_output`].
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::GroundingSource;
+/// use adk_guardrail::OutputEvidence;
+///
+/// let sources = [GroundingSource::new("rag_search", "https://example.com/refunds")];
+/// let evidence = OutputEvidence::new(&sources, None);
+/// assert_eq!(evidence.sources.len(), 1);
+/// ```
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct OutputEvidence<'a> {
+    /// The sources the agent's run recorded as retrieved, in the order recorded.
+    pub sources: &'a [GroundingSource],
+    /// The answer's citations: the provider's, and the answer's markdown links to a source in
+    /// `sources`.
+    pub citations: Option<&'a CitationMetadata>,
+}
+
+impl<'a> OutputEvidence<'a> {
+    /// Evidence of `sources` retrieved and `citations` made.
+    pub fn new(sources: &'a [GroundingSource], citations: Option<&'a CitationMetadata>) -> Self {
+        Self { sources, citations }
     }
 }
 
@@ -94,6 +124,55 @@ pub trait Guardrail: Send + Sync {
     /// }
     /// ```
     async fn validate_preamble(&self, content: &Content) -> GuardrailResult {
+        self.validate(content).await
+    }
+
+    /// Validates an agent's final answer with what the agent knows about its grounding: the
+    /// sources its run retrieved and the answer's citations.
+    ///
+    /// An agent's output guardrails screen its final answer through this method. Defaults to
+    /// [`validate`](Self::validate); override it when a check needs the evidence, as
+    /// [`CitationRequired`](crate::CitationRequired) does.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::Content;
+    /// use adk_guardrail::{Guardrail, GuardrailResult, OutputEvidence, Severity};
+    /// use async_trait::async_trait;
+    ///
+    /// /// Fails an answer given while nothing was retrieved.
+    /// struct Grounded;
+    ///
+    /// #[async_trait]
+    /// impl Guardrail for Grounded {
+    ///     fn name(&self) -> &str {
+    ///         "grounded"
+    ///     }
+    ///
+    ///     async fn validate(&self, _content: &Content) -> GuardrailResult {
+    ///         GuardrailResult::Pass
+    ///     }
+    ///
+    ///     async fn validate_output(
+    ///         &self,
+    ///         _content: &Content,
+    ///         evidence: &OutputEvidence<'_>,
+    ///     ) -> GuardrailResult {
+    ///         if evidence.sources.is_empty() {
+    ///             GuardrailResult::fail("nothing was retrieved", Severity::High)
+    ///         } else {
+    ///             GuardrailResult::Pass
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    async fn validate_output(
+        &self,
+        content: &Content,
+        evidence: &OutputEvidence<'_>,
+    ) -> GuardrailResult {
+        let _ = evidence;
         self.validate(content).await
     }
 

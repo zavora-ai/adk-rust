@@ -833,7 +833,7 @@ impl Tool for VertexAiRagRetrievalTool {
         true
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let query = args
             .get("query")
             .and_then(Value::as_str)
@@ -849,6 +849,18 @@ impl Tool for VertexAiRagRetrievalTool {
 
         let contexts = self.client.retrieve_contexts(&request).await?;
         debug!(rag.contexts = contexts.len(), "vertex_rag_retrieval returned contexts");
+        // Each source the model sees is one its final answer may cite.
+        adk_core::record_grounding_sources(
+            ctx.as_ref(),
+            contexts.iter().filter_map(|context| {
+                let uri = context.source_uri.as_ref()?;
+                let source = adk_core::GroundingSource::new(self.name(), uri.clone());
+                Some(match &context.source_display_name {
+                    Some(title) => source.with_title(title.clone()),
+                    None => source,
+                })
+            }),
+        );
         Ok(Value::Array(contexts.iter().map(context_to_tool_output).collect()))
     }
 }

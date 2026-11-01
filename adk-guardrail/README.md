@@ -211,6 +211,27 @@ fn validator() -> adk_guardrail::Result<SchemaValidator> {
 }
 ```
 
+### CitationRequired
+
+Blocks a final answer that cites none of the sources its run retrieved. An agent's output
+guardrails receive the sources (`GroundingSource`s that retrieval tools recorded) and the
+answer's citations (provider citations, plus the answer's markdown links to a retrieved source)
+as `OutputEvidence` through `Guardrail::validate_output`:
+
+```rust
+use adk_guardrail::{CitationRequired, GuardrailSet, WhenNothingRetrieved};
+
+let guardrails = GuardrailSet::new().with(
+    CitationRequired::new()
+        .min_citations(1)
+        .when_nothing_retrieved(WhenNothingRetrieved::Fail)
+        .trust_provider_citations(false),
+);
+```
+
+A citation counts only if its URI was retrieved in the same run. `validate_preamble` passes,
+so text beside a tool call is not checked, and `validate` without evidence fails.
+
 ## Execution
 
 - Guardrails whose `run_parallel()` is `true` (the default) run concurrently on the same input; when more than one of them transforms it, only the last transform in set order is kept. The rest run in order afterwards, each on the previous guardrail's output (`PiiRedactor` runs in this group).
@@ -226,6 +247,7 @@ fn validator() -> adk_guardrail::Result<SchemaValidator> {
 | `PathAllowList` checks the keys it names at any depth, not only at the top level | Scope it with `on_tools` when a key of the same name holds something other than a path |
 | `ContentFilter::new` and `ContentFilter::blocked_keywords` return `Result` | Handle `GuardrailError::Regex` |
 | `ToolGuardrail::validate_result`, `ResultTextGuardrail`, and `validate_preamble` are new; `validate_call` defaults to allowing | — |
+| `validate_output`, `OutputEvidence`, `GuardrailExecutor::enforce_output`, and `CitationRequired` are new; an agent screens its final answer through `validate_output`, which defaults to `validate` | — |
 | `Low` findings pass and are recorded as warnings | — |
 
 See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.

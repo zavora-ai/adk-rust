@@ -125,6 +125,13 @@ pub struct EventActions {
     /// not count it as an invocation. See [`steering`](crate::steering).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steering: Option<crate::SteeringMarker>,
+    /// Sources a tool call retrieved and gave the model, recorded with
+    /// [`record_grounding_sources`](crate::record_grounding_sources).
+    ///
+    /// An agent counts a citation in its final answer only if it names one of the sources
+    /// its run recorded. See [`grounding`](crate::grounding).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grounding_sources: Vec<crate::GroundingSource>,
 }
 
 /// Where a workflow agent was when a call held for confirmation stopped it.
