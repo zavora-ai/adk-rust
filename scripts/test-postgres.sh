@@ -61,6 +61,7 @@ suite "adk-memory" -p adk-memory --features sqlite-memory,database-memory \
     --test postgres_schema_detection_tests \
     --test postgres_memory_round_trip_tests \
     --test memory_service_conformance_tests \
+    --test memory_subject_data_tests \
     --test sqlx_migration_inputs_postgres \
     --test upgrade_from_sqlx_0_8
 

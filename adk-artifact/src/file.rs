@@ -369,6 +369,60 @@ impl FileArtifactService {
         Ok(names)
     }
 
+    /// Every version file of a user: its session (`None` for the `user:` scope), artifact
+    /// name, version, and path. An empty list when the user has no directory.
+    async fn user_version_files(
+        &self,
+        app_name: &str,
+        user_id: &str,
+    ) -> Result<Vec<(Option<String>, String, i64, PathBuf)>> {
+        Self::validate_path_component(app_name, "app name")?;
+        Self::validate_path_component(user_id, "user id")?;
+        let user_root = self.base_dir.join(app_name).join(user_id);
+        self.ensure_within_base_dir(&user_root)?;
+        let mut found = Vec::new();
+        for scope in Self::subdirectories(&user_root).await? {
+            let scope_dir = user_root.join(&scope);
+            for dir_name in Self::subdirectories(&scope_dir).await? {
+                let name = decode_name(&dir_name);
+                let session = match scope.as_str() {
+                    USER_SCOPE_DIR => None,
+                    LEGACY_USER_SCOPE_DIR if Self::is_user_scoped(&name) => None,
+                    _ => Some(scope.clone()),
+                };
+                let artifact_dir = scope_dir.join(&dir_name);
+                let mut versions = Self::versions_in(&artifact_dir).await?;
+                versions.sort_unstable();
+                for version in versions {
+                    let path = artifact_dir.join(version_file_name(version));
+                    found.push((session.clone(), name.clone(), version, path));
+                }
+            }
+        }
+        found.sort_by(|a, b| (&a.0, &a.1, a.2).cmp(&(&b.0, &b.1, b.2)));
+        Ok(found)
+    }
+
+    /// The names of the directories in `dir`; empty when `dir` does not exist.
+    async fn subdirectories(dir: &Path) -> Result<Vec<String>> {
+        let mut entries = match fs::read_dir(dir).await {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(io_error("read dir failed", error)),
+        };
+        let mut names = Vec::new();
+        while let Some(entry) =
+            entries.next_entry().await.map_err(|e| io_error("read dir entry failed", e))?
+        {
+            if entry.file_type().await.map_err(|e| io_error("file type check failed", e))?.is_dir()
+                && let Some(name) = entry.file_name().to_str()
+            {
+                names.push(name.to_string());
+            }
+        }
+        Ok(names)
+    }
+
     /// Writes `payload` to a new file and flushes it to disk.
     async fn write_synced(path: &Path, payload: &[u8]) -> std::io::Result<()> {
         let mut file = fs::OpenOptions::new().write(true).create_new(true).open(path).await?;
@@ -451,6 +505,29 @@ async fn sync_dir(dir: &Path) {
 
 #[async_trait]
 impl ArtifactService for FileArtifactService {
+    async fn list_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserArtifact>> {
+        let mut artifacts = Vec::new();
+        for (session_id, file_name, version, path) in
+            self.user_version_files(app_name, user_id).await?
+        {
+            let bytes = fs::read(&path).await.map_err(|e| io_error("read failed", e))?;
+            let part: Part = serde_json::from_slice(&bytes)
+                .map_err(|error| io_error("decode artifact failed", error))?;
+            let (mime_type, size) = part_summary(&part);
+            artifacts.push(UserArtifact { session_id, file_name, version, mime_type, size });
+        }
+        Ok(artifacts)
+    }
+
+    async fn delete_user(&self, app_name: &str, user_id: &str) -> Result<u64> {
+        let versions = self.user_version_files(app_name, user_id).await?.len() as u64;
+        match fs::remove_dir_all(self.base_dir.join(app_name).join(user_id)).await {
+            Ok(()) => Ok(versions),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(0),
+            Err(error) => Err(io_error("delete user dir failed", error)),
+        }
+    }
+
     async fn save(&self, req: SaveRequest) -> Result<SaveResponse> {
         let dirs =
             self.artifact_dirs(&req.app_name, &req.user_id, &req.session_id, &req.file_name)?;

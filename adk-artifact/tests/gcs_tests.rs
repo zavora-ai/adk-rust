@@ -28,7 +28,7 @@ struct StoredObject {
 type Store = Arc<Mutex<BTreeMap<String, StoredObject>>>;
 
 fn object_resource(name: &str, object: &StoredObject) -> Value {
-    let mut resource = json!({ "name": name });
+    let mut resource = json!({ "name": name, "size": object.data.len().to_string() });
     if let Some(content_type) = &object.content_type {
         resource["contentType"] = json!(content_type);
     }
@@ -472,4 +472,84 @@ async fn test_missing_artifacts_and_invalid_names_share_the_local_codes() {
     let error = service.load(bad_session).await.unwrap_err();
     assert_eq!(error.code, "artifact.invalid_identifier", "{error}");
     assert_eq!(store.lock().unwrap().len(), 1);
+}
+
+/// The GCS backend through `ArtifactSubjectData`, against the mock.
+struct GcsSubjectHarness {
+    service: Arc<GcsArtifactService>,
+}
+
+impl GcsSubjectHarness {
+    async fn start() -> Self {
+        let (endpoint, _store) = spawn_mock_gcs().await;
+        Self { service: Arc::new(mock_service(&endpoint)) }
+    }
+
+    async fn save(&self, app_name: &str, user_id: &str, file_name: &str, part: Part) {
+        let mut request = save_request(app_name, file_name, part);
+        request.user_id = user_id.to_string();
+        self.service.save(request).await.expect("save");
+    }
+}
+
+#[adk_core::async_trait]
+impl adk_core::conformance::SubjectDataStoreHarness for GcsSubjectHarness {
+    async fn open(&self) -> Arc<dyn adk_core::subject::SubjectDataStore> {
+        Arc::new(adk_artifact::ArtifactSubjectData::new(self.service.clone()))
+    }
+
+    async fn seed(&self, app_name: &str, user_id: &str) {
+        self.save(app_name, user_id, "reports/q1.txt", Part::Text { text: "paid".into() }).await;
+        self.save(app_name, user_id, "user:avatar.png", inline_part(&[1, 2, 3])).await;
+    }
+
+    async fn visible(&self, app_name: &str, user_id: &str) -> usize {
+        let listed = self
+            .service
+            .list(ListRequest {
+                app_name: app_name.to_string(),
+                user_id: user_id.to_string(),
+                session_id: "session456".to_string(),
+            })
+            .await
+            .expect("list")
+            .file_names
+            .len();
+        listed + self.service.list_user(app_name, user_id).await.expect("list user").len()
+    }
+}
+
+mod subject_data {
+    adk_core::subject_data_store_conformance_tests!(
+        harness = super::GcsSubjectHarness::start().await
+    );
+}
+
+#[tokio::test]
+async fn list_user_parses_nested_names_and_the_user_namespace() {
+    let harness = GcsSubjectHarness::start().await;
+    harness.save("app", "user123", "reports/q1.txt", Part::Text { text: "paid".into() }).await;
+    harness.save("app", "user123", "user:avatar.png", inline_part(&[1, 2, 3])).await;
+    let listed = harness.service.list_user("app", "user123").await.unwrap();
+    assert_eq!(
+        listed,
+        vec![
+            adk_artifact::UserArtifact {
+                session_id: None,
+                file_name: "user:avatar.png".into(),
+                version: 0,
+                mime_type: Some("image/png".into()),
+                size: 3,
+            },
+            adk_artifact::UserArtifact {
+                session_id: Some("session456".into()),
+                file_name: "reports/q1.txt".into(),
+                version: 0,
+                mime_type: Some("text/plain".into()),
+                size: 4,
+            },
+        ]
+    );
+    assert_eq!(harness.service.delete_user("app", "user123").await.unwrap(), 2);
+    assert!(harness.service.list_user("app", "user123").await.unwrap().is_empty());
 }

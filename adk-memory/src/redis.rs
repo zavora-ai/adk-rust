@@ -30,7 +30,7 @@
 //! let service = RedisMemoryService::new(config).await?;
 //! ```
 
-use crate::key::{encode_segment, escape_glob};
+use crate::key::{decode_segment, encode_segment, escape_glob};
 use crate::service::*;
 use adk_core::Result;
 use async_trait::async_trait;
@@ -301,6 +301,45 @@ impl MemoryService for RedisMemoryService {
         }
 
         Ok(SearchResponse { memories: crate::text::rank_matches(matches, limit) })
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
+    async fn export_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserMemory>> {
+        // Reads the keys `delete_user` removes: `{session}` or `p:{project}:{session}`
+        // after the user's prefix, each segment percent-encoded.
+        let prefix = format!("mem:{}:{}:", encode_segment(app_name), encode_segment(user_id));
+        let mut memories = Vec::new();
+        for key in self.scan_keys(&user_entries_pattern(app_name, user_id)).await? {
+            let Some(rest) = key.strip_prefix(&prefix) else { continue };
+            let segments: Vec<&str> = rest.split(':').collect();
+            let (project_id, session) = match segments.as_slice() {
+                [session] => (None, *session),
+                ["p", project, session] => (Some(decode_segment(project)), *session),
+                _ => continue,
+            };
+            let session = decode_segment(session);
+            let raw_entries: Vec<String> = self
+                .client
+                .lrange(&key, 0, -1)
+                .await
+                .map_err(|e| adk_core::AdkError::memory(format!("lrange failed: {e}")))?;
+            for raw in raw_entries {
+                let stored: StoredEntry = serde_json::from_str(&raw).map_err(|e| {
+                    adk_core::AdkError::memory(format!("stored entry is corrupt: {e}"))
+                })?;
+                memories.push(UserMemory {
+                    entry: MemoryEntry {
+                        content: stored.content,
+                        author: stored.author,
+                        timestamp: stored.timestamp,
+                    },
+                    session_id: (session != "__direct__").then(|| session.clone()),
+                    project_id: project_id.clone(),
+                });
+            }
+        }
+        memories.sort_by_key(|memory| memory.entry.timestamp);
+        Ok(memories)
     }
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]

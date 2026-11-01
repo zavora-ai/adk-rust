@@ -79,12 +79,14 @@
 //! - Backends: InMemory, SQLite, PostgreSQL, Redis, MongoDB, Neo4j, Vertex AI Memory Bank,
 //!   and the SQLite knowledge graph `GraphMemoryService`
 //! - Versioned schema migrations
-//! - GDPR `delete_user` across all projects
+//! - `delete_user` and `export_user` across all projects, and [`MemorySubjectData`] for
+//!   `adk_core::subject::SubjectRights`
 
 pub mod adapter;
 pub mod inmemory;
 pub mod migration;
 pub mod service;
+pub mod subject;
 pub mod text;
 
 #[cfg(any(
@@ -113,7 +115,10 @@ pub mod vertex;
 
 pub use adapter::MemoryServiceAdapter;
 pub use inmemory::InMemoryMemoryService;
-pub use service::{MemoryEntry, MemoryService, SearchRequest, SearchResponse, validate_project_id};
+pub use service::{
+    MemoryEntry, MemoryService, SearchRequest, SearchResponse, UserMemory, validate_project_id,
+};
+pub use subject::MemorySubjectData;
 
 #[cfg(any(
     feature = "database-memory",

@@ -847,6 +847,38 @@ impl MemoryService for Neo4jMemoryService {
     }
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
+    async fn export_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserMemory>> {
+        let failed =
+            |e: neo4rs::Error| adk_core::AdkError::memory(format!("export_user failed: {e}"));
+        let mut rows = self
+            .graph
+            .execute(
+                neo4rs::query(
+                    "MATCH (e:MemoryEntry {app_name: $app_name, user_id: $user_id}) \
+                     RETURN e.content AS content, e.author AS author, e.timestamp AS timestamp, \
+                            e.session_id AS session_id, e.project_id AS project_id \
+                     ORDER BY e.timestamp, e.id",
+                )
+                .param("app_name", app_name.to_string())
+                .param("user_id", user_id.to_string()),
+            )
+            .await
+            .map_err(failed)?;
+        let mut memories = Vec::new();
+        while let Some(row) = rows.next().await.map_err(failed)? {
+            let entry = row_to_memory_entry(&row).ok_or_else(|| {
+                adk_core::AdkError::memory("export_user found an entry with no content")
+            })?;
+            memories.push(UserMemory {
+                entry,
+                session_id: row.get::<String>("session_id").ok(),
+                project_id: row.get::<String>("project_id").ok(),
+            });
+        }
+        Ok(memories)
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
     async fn delete_user(&self, app_name: &str, user_id: &str) -> Result<()> {
         self.graph
             .run(

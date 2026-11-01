@@ -32,7 +32,7 @@
 //! [`MemoryServiceAdapter`](crate::MemoryServiceAdapter) to obtain an
 //! `adk_core::Memory`.
 
-use crate::{MemoryEntry, MemoryService, SearchRequest, SearchResponse};
+use crate::{MemoryEntry, MemoryService, SearchRequest, SearchResponse, UserMemory};
 use adk_core::{AdkError, Content, ErrorCategory, ErrorComponent, Event, Result};
 use adk_gcp::{
     GcpErrorCodes, GcpErrorContext, GcpHttpClient, LroPoller, VertexResourceName,
@@ -430,6 +430,36 @@ impl MemoryService for VertexAiMemoryBankService {
             .await?;
         let memories = response.retrieved_memories.into_iter().map(retrieved_to_entry).collect();
         Ok(SearchResponse { memories })
+    }
+
+    async fn export_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserMemory>> {
+        let parent = self.memories_parent(app_name)?;
+        let scope = memory_scope(app_name, user_id);
+        let mut memories = Vec::new();
+        let mut page_token: Option<String> = None;
+        for _ in 0..DELETE_MAX_PAGES {
+            let mut params = json!({ "pageSize": DELETE_PAGE_SIZE });
+            if let Some(token) = &page_token {
+                params["pageToken"] = json!(token);
+            }
+            let response =
+                self.retrieve_page(&parent, &scope, "simpleRetrievalParams", params).await?;
+            memories.extend(response.retrieved_memories.into_iter().map(|retrieved| UserMemory {
+                entry: retrieved_to_entry(retrieved),
+                session_id: None,
+                project_id: None,
+            }));
+            match response.next_page_token {
+                Some(token) if !token.is_empty() => page_token = Some(token),
+                _ => {
+                    memories.sort_by_key(|memory| memory.entry.timestamp);
+                    return Ok(memories);
+                }
+            }
+        }
+        Err(self.client.errors().invalid_response(format!(
+            "vertex memory listing did not end after {DELETE_MAX_PAGES} pages",
+        )))
     }
 
     async fn delete_user(&self, app_name: &str, user_id: &str) -> Result<()> {

@@ -360,6 +360,17 @@ jobs:
         --test store_conformance_firestore
         --test spend_ledger_postgres
 
+    # The memory services' subject data suite on the backends the PR tier does not reach
+    # (PostgreSQL's runs in the PR tier's postgres job).
+    - name: Run the memory subject data suite on every backend
+      if: ${{ !cancelled() }}
+      run: >-
+        cargo nextest run -p adk-memory
+        --features redis-memory,mongodb-memory,neo4j-memory
+        --run-ignored all --no-fail-fast
+        --test memory_subject_data_tests
+        -E 'test(/^(redis|mongodb|neo4j)::/)'
+
     # The session services' erasure contract and the subject data suite on the backends the
     # PR tier does not reach (PostgreSQL's run in the PR tier's postgres job); the Redis Cluster
     # case needs a cluster.

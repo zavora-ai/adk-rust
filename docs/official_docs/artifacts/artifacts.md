@@ -65,9 +65,16 @@ pub trait ArtifactService: Send + Sync {
     async fn delete(&self, req: DeleteRequest) -> Result<()>;
     async fn list(&self, req: ListRequest) -> Result<ListResponse>;
     async fn versions(&self, req: VersionsRequest) -> Result<VersionsResponse>;
+    async fn list_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserArtifact>>;
+    async fn delete_user(&self, app_name: &str, user_id: &str) -> Result<u64>;
     async fn health_check(&self) -> Result<()> { Ok(()) }
 }
 ```
+
+`list_user` and `delete_user` cover every session of the user and the `user:` scope; their
+defaults return `subject.unsupported`, and the in-memory, file, and GCS backends implement them.
+`ArtifactSubjectData` adapts any `ArtifactService` to `adk_core::subject::SubjectDataStore`; see
+[Subject Rights](../security/subject-rights.md).
 
 File names are logical keys: an empty name, `/`, `\`, and `..` are refused.
 

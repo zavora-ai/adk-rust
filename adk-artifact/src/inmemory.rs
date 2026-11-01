@@ -211,6 +211,35 @@ impl ArtifactService for InMemoryArtifactService {
         Ok(ListResponse { file_names: sorted })
     }
 
+    async fn list_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserArtifact>> {
+        let artifacts = self.artifacts.read().unwrap();
+        let mut found: Vec<(&ArtifactKey, &Part)> = artifacts
+            .iter()
+            .filter(|(key, _)| key.app_name == app_name && key.user_id == user_id)
+            .collect();
+        found.sort_by_key(|(key, _)| *key);
+        Ok(found
+            .into_iter()
+            .map(|(key, part)| {
+                let (mime_type, size) = part_summary(part);
+                UserArtifact {
+                    session_id: (key.session_id != USER_SCOPED_KEY).then(|| key.session_id.clone()),
+                    file_name: key.file_name.clone(),
+                    version: key.version,
+                    mime_type,
+                    size,
+                }
+            })
+            .collect())
+    }
+
+    async fn delete_user(&self, app_name: &str, user_id: &str) -> Result<u64> {
+        let mut artifacts = self.artifacts.write().unwrap();
+        let before = artifacts.len();
+        artifacts.retain(|key, _| !(key.app_name == app_name && key.user_id == user_id));
+        Ok((before - artifacts.len()) as u64)
+    }
+
     async fn versions(&self, req: VersionsRequest) -> Result<VersionsResponse> {
         Self::validate_file_name(&req.file_name)?;
         check_session_id(&req.session_id)?;

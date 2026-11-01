@@ -111,11 +111,10 @@ impl MongoMemoryService {
         // collection already exists, record v1 as applied.
         if max_applied == 0 {
             let existing = self.detect_existing_tables().await?;
-            if existing {
-                if let Some(&(version, description)) = Self::MONGO_MEMORY_MIGRATIONS.first() {
-                    self.record_migration(version, description).await?;
-                    max_applied = version;
-                }
+            if existing && let Some(&(version, description)) = Self::MONGO_MEMORY_MIGRATIONS.first()
+            {
+                self.record_migration(version, description).await?;
+                max_applied = version;
             }
         }
 
@@ -669,6 +668,51 @@ impl MemoryService for MongoMemoryService {
             .await
             .map_err(|e| adk_core::AdkError::memory(format!("delete_project failed: {e}")))?;
         Ok(result.deleted_count)
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
+    async fn export_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserMemory>> {
+        let failed = |e: mongodb::error::Error| {
+            adk_core::AdkError::memory(format!("export_user failed: {e}"))
+        };
+        let mut cursor = self
+            .db
+            .collection::<Document>("memory_entries")
+            .find(doc! { "app_name": app_name, "user_id": user_id })
+            .sort(doc! { "timestamp": 1, "_id": 1 })
+            .await
+            .map_err(failed)?;
+        let mut documents = Vec::new();
+        while cursor.advance().await.map_err(failed)? {
+            documents.push(cursor.deserialize_current().map_err(failed)?);
+        }
+        documents
+            .iter()
+            .map(|document| {
+                let corrupt =
+                    |field: &str| adk_core::AdkError::memory(format!("stored {field} is corrupt"));
+                let content = document.get("content").ok_or_else(|| corrupt("content"))?;
+                let content: serde_json::Value =
+                    mongodb::bson::from_bson(content.clone()).map_err(|_| corrupt("content"))?;
+                let timestamp =
+                    document.get_datetime("timestamp").map_err(|_| corrupt("timestamp"))?;
+                Ok(UserMemory {
+                    entry: MemoryEntry {
+                        content: serde_json::from_value(content).map_err(|_| corrupt("content"))?,
+                        author: document
+                            .get_str("author")
+                            .map_err(|_| corrupt("author"))?
+                            .to_string(),
+                        timestamp: chrono::DateTime::from_timestamp_millis(
+                            timestamp.timestamp_millis(),
+                        )
+                        .ok_or_else(|| corrupt("timestamp"))?,
+                    },
+                    session_id: document.get_str("session_id").ok().map(str::to_string),
+                    project_id: document.get_str("project_id").ok().map(str::to_string),
+                })
+            })
+            .collect()
     }
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]

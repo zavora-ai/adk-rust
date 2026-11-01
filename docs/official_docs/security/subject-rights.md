@@ -211,6 +211,16 @@ The registry and the consent store run on every session backend (`adk-session`):
 `SessionSubjectData::with_support(StoreSupport::Eventual { within })` declares a session
 service whose deletes complete asynchronously, such as Vertex AI's.
 
+### Memory and artifacts
+
+| Store family | Adapter | Crate | Exports through | Erases through |
+|--------------|---------|-------|-----------------|----------------|
+| Memory | `MemorySubjectData` | `adk-memory` | `MemoryService::export_user` | `MemoryService::delete_user` |
+| Artifacts | `ArtifactSubjectData` | `adk-artifact` | `ArtifactService::list_user` (names, versions, MIME types, sizes) | `ArtifactService::delete_user` |
+
+Both take `with_support` for a managed service whose deletes complete asynchronously, such as
+Vertex AI Memory Bank or a GCS bucket with object versioning or soft delete.
+
 ## Writing an adapter
 
 A store family implements `SubjectDataStore` once and proves it with the shared suite:
