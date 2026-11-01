@@ -1728,6 +1728,16 @@ pub struct RunConfig {
     /// `None` allows every call the agent's own confirmation settings allow. See
     /// [`ToolPolicy`](crate::ToolPolicy) and [`authorize_tool_call`](crate::authorize_tool_call).
     pub tool_policy: Option<Arc<dyn crate::ToolPolicy>>,
+    /// The operator's network egress ceiling for tool calls.
+    ///
+    /// When set, [`authorize_tool_call`](crate::authorize_tool_call) refuses a call whose
+    /// [`Tool::egress`](crate::Tool::egress) declaration the policy does not admit, and tools
+    /// that open their own connections read it through
+    /// [`ToolContext::egress_policy`](crate::ToolContext::egress_policy). `None` checks no
+    /// declaration. Set it with [`RunConfigBuilder::egress_policy`] or the runner's builder,
+    /// which narrow a policy already set rather than replace it. See
+    /// [`egress`](crate::egress).
+    pub egress_policy: Option<crate::egress::EgressPolicy>,
     /// Kill switches checked at run start, before each model call, and before each tool
     /// call, and watched while a call waits for a confirmation decision. The run stops when
     /// any of them is frozen.
@@ -1875,6 +1885,7 @@ impl Default for RunConfig {
             budget_tracker: None,
             action_ledger: None,
             tool_policy: None,
+            egress_policy: None,
             governance: Vec::new(),
             tool_approvals: HashMap::new(),
             approval_store: None,
@@ -2154,6 +2165,31 @@ impl RunConfigBuilder {
     /// Sets the policy evaluated for every tool call. See [`RunConfig::tool_policy`].
     pub fn tool_policy(mut self, policy: Arc<dyn crate::ToolPolicy>) -> Self {
         self.config.tool_policy = Some(policy);
+        self
+    }
+
+    /// Sets the run's egress policy, or narrows the one already set to the intersection of
+    /// both. See [`RunConfig::egress_policy`].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::RunConfig;
+    /// use adk_core::egress::EgressPolicy;
+    ///
+    /// let config = RunConfig::builder()
+    ///     .egress_policy(EgressPolicy::allowlist(["*.example.com:443"]).unwrap())
+    ///     .egress_policy(EgressPolicy::allowlist(["api.example.com"]).unwrap())
+    ///     .build();
+    /// let policy = config.egress_policy.unwrap();
+    /// assert!(policy.check_url("https://api.example.com/").is_ok());
+    /// assert!(policy.check_url("https://www.example.com/").is_err());
+    /// ```
+    pub fn egress_policy(mut self, policy: crate::egress::EgressPolicy) -> Self {
+        self.config.egress_policy = Some(match self.config.egress_policy.take() {
+            Some(existing) => existing.narrow(&policy),
+            None => policy,
+        });
         self
     }
 

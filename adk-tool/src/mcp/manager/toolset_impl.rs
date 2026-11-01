@@ -69,6 +69,10 @@ impl Tool for PrefixedTool {
         self.inner.effect()
     }
 
+    fn egress(&self, args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        self.inner.egress(args)
+    }
+
     fn annotations(&self) -> Option<&Value> {
         self.inner.annotations()
     }

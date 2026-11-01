@@ -77,6 +77,11 @@ macro_rules! impl_scoped_tool {
                 ($inner).effect()
             }
 
+            fn egress(&self, args: &Value) -> adk_core::egress::ToolEgress {
+                let $self_ident = self;
+                ($inner).egress(args)
+            }
+
             fn annotations(&self) -> Option<&Value> {
                 let $self_ident = self;
                 ($inner).annotations()
@@ -172,6 +177,11 @@ macro_rules! impl_scoped_tool {
             fn effect(&self) -> adk_core::ToolEffect {
                 let $self_ident = self;
                 ($inner).effect()
+            }
+
+            fn egress(&self, args: &Value) -> adk_core::egress::ToolEgress {
+                let $self_ident = self;
+                ($inner).egress(args)
             }
 
             fn annotations(&self) -> Option<&Value> {

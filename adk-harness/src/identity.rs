@@ -227,6 +227,10 @@ impl Tool for PermissionTool {
     fn effect(&self) -> ToolEffect {
         self.inner.effect()
     }
+
+    fn egress(&self, args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        self.inner.egress(args)
+    }
     fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
         self.inner.timeout_override()
     }
@@ -574,6 +578,10 @@ impl Tool for CredentialedTool {
     }
     fn effect(&self) -> ToolEffect {
         self.inner.effect()
+    }
+
+    fn egress(&self, args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        self.inner.egress(args)
     }
     fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
         self.inner.timeout_override()

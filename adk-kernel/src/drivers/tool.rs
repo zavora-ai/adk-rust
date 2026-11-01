@@ -449,6 +449,10 @@ impl Tool for DriverTool {
         self.class.tool_effect()
     }
 
+    fn egress(&self, args: &Value) -> adk_core::egress::ToolEgress {
+        self.inner.egress(args)
+    }
+
     fn is_read_only(&self) -> bool {
         self.class == EffectClass::Read
     }

@@ -78,6 +78,7 @@ pub struct RunnerConfigBuilder<A, G, S> {
     context_compaction: Option<crate::compaction::CompactionConfig>,
     budget: Option<RunBudget>,
     tool_policy: Option<Arc<dyn ToolPolicy>>,
+    egress_policy: Option<adk_core::egress::EgressPolicy>,
     governance: Option<GovernanceControl>,
     action_ledger: Option<Arc<dyn ActionLedger>>,
     approval_store: Option<Arc<dyn ApprovalStore>>,
@@ -114,6 +115,7 @@ impl RunnerConfigBuilder<NoAppName, NoAgent, NoSessionService> {
             context_compaction: None,
             budget: None,
             tool_policy: None,
+            egress_policy: None,
             governance: None,
             action_ledger: None,
             approval_store: None,
@@ -162,6 +164,7 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             context_compaction: self.context_compaction,
             budget: self.budget,
             tool_policy: self.tool_policy,
+            egress_policy: self.egress_policy,
             governance: self.governance,
             action_ledger: self.action_ledger,
             approval_store: self.approval_store,
@@ -198,6 +201,7 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             context_compaction: self.context_compaction,
             budget: self.budget,
             tool_policy: self.tool_policy,
+            egress_policy: self.egress_policy,
             governance: self.governance,
             action_ledger: self.action_ledger,
             approval_store: self.approval_store,
@@ -237,6 +241,7 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             context_compaction: self.context_compaction,
             budget: self.budget,
             tool_policy: self.tool_policy,
+            egress_policy: self.egress_policy,
             governance: self.governance,
             action_ledger: self.action_ledger,
             approval_store: self.approval_store,
@@ -375,6 +380,34 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
     /// ```
     pub fn tool_policy(mut self, policy: Arc<dyn ToolPolicy>) -> Self {
         self.tool_policy = Some(policy);
+        self
+    }
+
+    /// Set the operator's network egress ceiling for tool calls (optional).
+    ///
+    /// Every run is narrowed by it: a run whose [`RunConfig::egress_policy`] is set gets the
+    /// intersection of both, never more. A tool whose
+    /// [`Tool::egress`](adk_core::Tool::egress) declaration the ceiling does not admit is
+    /// refused before it runs. Calling it twice narrows to the intersection. See
+    /// [`adk_core::egress`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::egress::EgressPolicy;
+    ///
+    /// let runner = Runner::builder()
+    ///     .app_name("ops")
+    ///     .agent(agent)
+    ///     .session_service(sessions)
+    ///     .egress_policy(EgressPolicy::allowlist(["api.github.com:443"])?)
+    ///     .build()?;
+    /// ```
+    pub fn egress_policy(mut self, policy: adk_core::egress::EgressPolicy) -> Self {
+        self.egress_policy = Some(match self.egress_policy.take() {
+            Some(existing) => existing.narrow(&policy),
+            None => policy,
+        });
         self
     }
 
@@ -600,6 +633,7 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             #[cfg(feature = "context-compaction")]
             context_compaction: self.context_compaction,
             tool_policy: self.tool_policy,
+            egress_policy: self.egress_policy,
             governance: self.governance,
             action_ledger: self.action_ledger,
             approval_store: self.approval_store,
@@ -645,6 +679,7 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             #[cfg(feature = "context-compaction")]
             context_compaction: self.context_compaction,
             tool_policy: self.tool_policy,
+            egress_policy: self.egress_policy,
             governance: self.governance,
             action_ledger: self.action_ledger,
             approval_store: self.approval_store,

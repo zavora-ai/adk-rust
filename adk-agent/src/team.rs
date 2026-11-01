@@ -2442,6 +2442,10 @@ impl Tool for BoundedDelegateTool {
         self.inner.effect()
     }
 
+    fn egress(&self, args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        self.inner.egress(args)
+    }
+
     fn origin(&self) -> &str {
         self.inner.origin()
     }

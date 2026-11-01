@@ -1,4 +1,5 @@
 use crate::arguments::ArgumentCheck;
+use adk_core::egress::ToolEgress;
 use adk_core::{Result, Tool, ToolContext, ToolEffect};
 use async_trait::async_trait;
 use schemars::{
@@ -47,7 +48,11 @@ pub struct FunctionTool {
     lenient_args: bool,
     response_schema: Option<Value>,
     scopes: Vec<&'static str>,
+    egress: Option<EgressFn>,
 }
+
+/// What a [`FunctionTool`] declares about a call's network destinations, from its arguments.
+type EgressFn = Box<dyn Fn(&Value) -> ToolEgress + Send + Sync>;
 
 impl FunctionTool {
     /// Create a new `FunctionTool` from an async handler function.
@@ -69,6 +74,7 @@ impl FunctionTool {
             lenient_args: false,
             response_schema: None,
             scopes: Vec::new(),
+            egress: None,
         }
     }
 
@@ -111,6 +117,53 @@ impl FunctionTool {
     /// ```
     pub fn with_effect(mut self, effect: ToolEffect) -> Self {
         self.effect = Some(effect);
+        self
+    }
+
+    /// Declares the network destinations every call reaches ([`Tool::egress`]); without a
+    /// declaration a run with an egress policy refuses the tool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::Tool;
+    /// use adk_core::egress::ToolEgress;
+    /// use adk_tool::FunctionTool;
+    /// use serde_json::json;
+    ///
+    /// let add = FunctionTool::new("add", "Adds two numbers", |_ctx, args| async move {
+    ///     Ok(json!(args["a"].as_f64().unwrap_or(0.0) + args["b"].as_f64().unwrap_or(0.0)))
+    /// })
+    /// .with_egress(ToolEgress::None);
+    /// assert_eq!(add.egress(&json!({})), ToolEgress::None);
+    /// ```
+    pub fn with_egress(self, egress: ToolEgress) -> Self {
+        self.with_egress_fn(move |_args| egress.clone())
+    }
+
+    /// Declares the network destinations of each call from its arguments ([`Tool::egress`]),
+    /// for a tool whose destination is an argument.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::Tool;
+    /// use adk_core::egress::ToolEgress;
+    /// use adk_tool::FunctionTool;
+    /// use serde_json::json;
+    ///
+    /// let fetch = FunctionTool::new("fetch", "Fetches a URL", |_ctx, args| async move { Ok(args) })
+    ///     .with_egress_fn(|args| ToolEgress::for_urls([args["url"].as_str().unwrap_or_default()]));
+    /// assert_eq!(
+    ///     fetch.egress(&json!({ "url": "https://docs.rs/adk" })),
+    ///     ToolEgress::for_urls(["https://docs.rs/"])
+    /// );
+    /// ```
+    pub fn with_egress_fn(
+        mut self,
+        egress: impl Fn(&Value) -> ToolEgress + Send + Sync + 'static,
+    ) -> Self {
+        self.egress = Some(Box::new(egress));
         self
     }
 
@@ -243,6 +296,10 @@ impl Tool for FunctionTool {
             None if self.read_only => ToolEffect::ReadOnly,
             None => ToolEffect::NonIdempotent,
         }
+    }
+
+    fn egress(&self, args: &Value) -> ToolEgress {
+        self.egress.as_ref().map_or(ToolEgress::Undeclared, |egress| egress(args))
     }
 
     fn parameters_schema(&self) -> Option<Value> {

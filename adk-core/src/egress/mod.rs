@@ -935,6 +935,165 @@ fn is_numeric_host(host: &str) -> bool {
     (!last.is_empty() && last.bytes().all(|b| b.is_ascii_digit())) || hex == Some(true)
 }
 
+/// What a tool declares about the network destinations a call reaches ([`Tool::egress`]).
+///
+/// Under a run egress policy ([`RunConfig::egress_policy`](crate::RunConfig::egress_policy)),
+/// [`authorize_tool_call`](crate::authorize_tool_call) refuses a call before it runs unless
+/// [`EgressPolicy::admits_tool`] admits its declaration. Without a run egress policy the
+/// declaration is not consulted. A declaration is the tool author's statement; only the
+/// connections of a [`GuardedClient`] or a sandbox's egress proxy are enforced.
+///
+/// | Declaration | Under a run egress policy |
+/// |-------------|---------------------------|
+/// | `Undeclared` (the default) | Refused |
+/// | `None` | Admitted: the call opens no network connection |
+/// | `Configured` | Admitted: the call reaches only endpoints the operator fixed when building the tool (a database, a model provider), never one its arguments choose |
+/// | `Enforced` | Admitted: every connection the call makes is checked against the run's policy when it is made |
+/// | `Destinations(rules)` | Admitted when the policy covers every rule ([`EgressPolicy::covers`]) |
+///
+/// [`Tool::egress`]: crate::Tool::egress
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::egress::{EgressPolicy, ToolEgress};
+///
+/// let policy = EgressPolicy::allowlist(["api.github.com:443"]).unwrap();
+/// let call = ToolEgress::for_urls(["https://api.github.com/repos/a/b"]);
+/// assert!(policy.admits_tool(&call).is_ok());
+/// assert!(policy.admits_tool(&ToolEgress::for_urls(["https://example.com/"])).is_err());
+/// assert!(policy.admits_tool(&ToolEgress::Undeclared).is_err());
+/// assert!(policy.admits_tool(&ToolEgress::None).is_ok());
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ToolEgress {
+    /// The tool says nothing about its network use.
+    #[default]
+    Undeclared,
+    /// The call opens no network connection.
+    None,
+    /// The call reaches only endpoints the operator fixed when building the tool.
+    Configured,
+    /// Every connection the call makes is checked against the run's egress policy when it is
+    /// made, by a [`GuardedClient`] built from it or by a sandbox's egress proxy.
+    Enforced,
+    /// The call reaches only these destinations.
+    Destinations(Vec<EgressRule>),
+}
+
+impl ToolEgress {
+    /// The destinations of `urls`: each URL's host and port (`https` 443 and `http` 80 by
+    /// default). A URL that does not parse, has no host, or names a numeric host makes the
+    /// whole declaration [`Undeclared`](Self::Undeclared), which a run egress policy refuses.
+    pub fn for_urls<I, S>(urls: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut rules = Vec::new();
+        for url in urls {
+            let Ok(parsed) = url::Url::parse(url.as_ref()) else { return Self::Undeclared };
+            let Some(port) = parsed.port_or_known_default() else { return Self::Undeclared };
+            let rule = match parsed.host() {
+                Some(url::Host::Domain(host)) => match EgressRule::host(host) {
+                    Ok(rule) => rule,
+                    Err(_) => return Self::Undeclared,
+                },
+                Some(url::Host::Ipv4(ip)) => {
+                    EgressRule::cidr(IpCidr { network: ip.into(), prefix: 32 })
+                }
+                Some(url::Host::Ipv6(ip)) => {
+                    EgressRule::cidr(IpCidr { network: ip.into(), prefix: 128 })
+                }
+                None => return Self::Undeclared,
+            };
+            rules.push(rule.on_port(port));
+        }
+        Self::Destinations(rules)
+    }
+}
+
+impl EgressPolicy {
+    /// Whether every destination `rule` names passes the policy's host, port and literal
+    /// rules. Addresses are not checked here: a name in a covered rule is still refused at
+    /// connect time when it resolves to an address the policy refuses.
+    ///
+    /// Coverage is by a single rule of each layer: a declared `*.example.com` is covered by
+    /// `*.example.com` or `*`, not by a list of its subdomains; a declared CIDR only by a CIDR
+    /// rule containing it.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::egress::{EgressPolicy, EgressRule};
+    ///
+    /// let policy = EgressPolicy::allowlist(["*.example.com:443"]).unwrap();
+    /// assert!(policy.covers(&"api.example.com:443".parse().unwrap()));
+    /// assert!(policy.covers(&"*.eu.example.com:443".parse().unwrap()));
+    /// assert!(!policy.covers(&"api.example.com".parse().unwrap()));
+    /// assert!(!policy.covers(&EgressRule::any_host()));
+    /// ```
+    pub fn covers(&self, rule: &EgressRule) -> bool {
+        self.layers.iter().all(|layer| layer.rules.iter().any(|own| subsumes(own, rule)))
+    }
+
+    /// Admits or refuses a tool call by its declaration; see [`ToolEgress`].
+    ///
+    /// # Errors
+    ///
+    /// Returns why the declaration is refused.
+    pub fn admits_tool(&self, egress: &ToolEgress) -> Result<(), String> {
+        match egress {
+            ToolEgress::None | ToolEgress::Configured | ToolEgress::Enforced => Ok(()),
+            ToolEgress::Undeclared => {
+                Err("the run has an egress policy and the tool does not declare the network \
+                 destinations it reaches (Tool::egress); declare them, or run it without an \
+                 egress policy"
+                    .to_string())
+            }
+            ToolEgress::Destinations(rules) => match rules.iter().find(|rule| !self.covers(rule)) {
+                Some(rule) => Err(format!(
+                    "the call reaches {rule}, which the run's egress policy ({self}) does not \
+                     admit"
+                )),
+                None => Ok(()),
+            },
+        }
+    }
+}
+
+/// Whether `own` admits every destination `declared` names.
+fn subsumes(own: &EgressRule, declared: &EgressRule) -> bool {
+    let ports = |own: &Option<u16>, declared: &Option<u16>| match (own, declared) {
+        (None, _) => true,
+        (Some(own), Some(declared)) => own == declared,
+        (Some(_), None) => false,
+    };
+    match (own, declared) {
+        (
+            EgressRule::Host { pattern: own_pattern, port: own_port },
+            EgressRule::Host { pattern, port },
+        ) => {
+            let names = match (own_pattern, pattern) {
+                (HostPattern::Any, _) => true,
+                (HostPattern::Exact(own), HostPattern::Exact(name)) => own == name,
+                (HostPattern::Subdomains(_), HostPattern::Exact(name)) => own_pattern.matches(name),
+                (HostPattern::Subdomains(own), HostPattern::Subdomains(domain)) => {
+                    domain == own || own_pattern.matches(domain)
+                }
+                (HostPattern::Exact(_), HostPattern::Any | HostPattern::Subdomains(_))
+                | (HostPattern::Subdomains(_), HostPattern::Any) => false,
+            };
+            names && ports(own_port, port)
+        }
+        (EgressRule::Cidr { cidr: own, port: own_port }, EgressRule::Cidr { cidr, port }) => {
+            own.prefix <= cidr.prefix && own.contains(cidr.network) && ports(own_port, port)
+        }
+        (EgressRule::Host { .. }, EgressRule::Cidr { .. })
+        | (EgressRule::Cidr { .. }, EgressRule::Host { .. }) => false,
+    }
+}
+
 /// Resolves host names for an egress check, so tests and proxies can supply their own answers.
 ///
 /// # Example
@@ -1250,6 +1409,69 @@ mod tests {
         assert_eq!(denial.code(), "egress.plain_http");
         let io = std::io::Error::other("unrelated");
         assert_eq!(find_denial(&io), None);
+    }
+
+    #[test]
+    fn declarations_are_covered_rule_by_rule() {
+        let policy =
+            EgressPolicy::allowlist(["*.example.com:443", "api.github.com", "10.0.0.0/8:5432"])
+                .unwrap();
+        let rule = |text: &str| text.parse::<EgressRule>().unwrap();
+        for covered in [
+            "a.example.com:443",
+            "*.b.example.com:443",
+            "api.github.com:22",
+            "api.github.com",
+            "10.1.0.0/16:5432",
+            "10.1.2.3:5432",
+        ] {
+            assert!(policy.covers(&rule(covered)), "{covered}");
+        }
+        for refused in [
+            "example.com:443",
+            "*.example.com",
+            "a.example.com:80",
+            "*",
+            "github.com:443",
+            "10.0.0.0/8",
+            "11.0.0.1:5432",
+            "*.github.com:443",
+        ] {
+            assert!(!policy.covers(&rule(refused)), "{refused}");
+        }
+        let narrowed = policy.narrow(&EgressPolicy::allowlist(["api.github.com:443"]).unwrap());
+        assert!(narrowed.covers(&rule("api.github.com:443")));
+        assert!(!narrowed.covers(&rule("api.github.com:22")));
+    }
+
+    #[test]
+    fn tool_declarations_are_admitted_by_kind() {
+        let policy = EgressPolicy::allowlist(["docs.rs:443"]).unwrap();
+        for admitted in [
+            ToolEgress::None,
+            ToolEgress::Configured,
+            ToolEgress::Enforced,
+            ToolEgress::for_urls(["https://docs.rs/adk"]),
+        ] {
+            assert!(policy.admits_tool(&admitted).is_ok(), "{admitted:?}");
+        }
+        for refused in [
+            ToolEgress::Undeclared,
+            ToolEgress::for_urls(["https://docs.rs/a", "https://crates.io/b"]),
+            ToolEgress::for_urls(["http://docs.rs/"]),
+            ToolEgress::for_urls(["not a url"]),
+            ToolEgress::for_urls(["https://93.184.216.34/"]),
+        ] {
+            assert!(policy.admits_tool(&refused).is_err(), "{refused:?}");
+        }
+        assert_eq!(
+            ToolEgress::for_urls(["https://0x7f.1/"]),
+            ToolEgress::Destinations(vec!["127.0.0.1:443".parse().unwrap()])
+        );
+        assert_eq!(
+            ToolEgress::for_urls(["https://127.1/"]),
+            ToolEgress::Destinations(vec!["127.0.0.1:443".parse().unwrap()])
+        );
     }
 
     #[tokio::test]
