@@ -698,6 +698,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `deepseek` | `DeepSeekClient` |
 | `muse` | `MuseClient` and the Muse media, files and Responses clients |
 | `muse-responses` | `MuseApi::Responses` through the Open Responses engine (implies `muse`, `openai`) |
+| `muse-realtime` | `MuseRealtimeAsrClient`, live transcription over Meta's realtime WebSocket (implies `muse`) |
 | `groq` | `GroqClient` |
 | `ollama` | `OllamaModel` |
 | `openrouter` | `OpenRouterClient` |

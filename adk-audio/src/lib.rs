@@ -12,6 +12,7 @@
 //! |---------|---------|
 //! | `tts` (default) | Cloud TTS: ElevenLabs, OpenAI, Gemini, Cartesia |
 //! | `stt` (default) | Cloud STT: OpenAI Whisper API, Deepgram, AssemblyAI, Gemini |
+//! | `muse` | `MuseStt`: Meta Muse file and realtime transcription, over `adk-model` |
 //! | `fx` | DSP processors: normalizer, resampler, noise suppressor, compressor, trimmer, pitch shifter |
 //! | `mlx` | Local model loading with tokenizers and Hugging Face Hub |
 //! | `onnx` | ONNX Runtime local inference; `kokoro`, `chatterbox`, `whisper-onnx`, `distil-whisper`, and `moonshine` add models |
@@ -99,6 +100,8 @@ pub use providers::tts::{
 #[cfg(feature = "qwen3-tts")]
 pub use providers::tts::{Qwen3TtsNativeProvider, Qwen3TtsVariant};
 
+#[cfg(feature = "muse")]
+pub use providers::stt::MuseStt;
 #[cfg(feature = "stt")]
 pub use providers::stt::{AssemblyAiStt, DeepgramStt, GeminiStt, WhisperApiStt};
 

@@ -31,6 +31,7 @@ adk-rust = { version = "3.0.0", features = ["audio"] }
 |---------|---------|------------------|
 | `tts` (default) | Cloud TTS providers: ElevenLabs, OpenAI, Gemini, Cartesia | `reqwest`, `base64` |
 | `stt` (default) | Cloud STT providers: OpenAI Whisper API, Deepgram, AssemblyAI, Gemini | `reqwest`, `tokio-tungstenite` |
+| `muse` | `MuseStt`: Meta Muse file and realtime transcription | `adk-model` (`muse-realtime`) |
 | `fx` | DSP processors: normalizer, resampler, noise suppressor, compressor, trimmer, pitch shifter | none |
 | `mlx` | Local TTS and STT model loading with tokenizers and Hugging Face Hub | `tokenizers`, `hf-hub` |
 | `onnx` | ONNX Runtime local inference | `ort`, `tokenizers`, `hf-hub` |
@@ -131,6 +132,7 @@ work for it.
 | `WhisperApiStt` | `whisper-1` | `AudioError::Stt` (not yet implemented) | `OPENAI_API_KEY` |
 | `DeepgramStt` | `nova-3`, with diarization | WebSocket streaming: `Partial` for interim results, `Final` per finalized segment, `SpeechStarted`/`SpeechEnded` from voice activity, `Usage` from the closing metadata; dropping the stream closes the socket | `DEEPGRAM_API_KEY` |
 | `AssemblyAiStt` | asynchronous jobs | `AudioError::Stt` (not yet implemented) | `ASSEMBLYAI_API_KEY` |
+| `MuseStt` (`muse`) | `muse-voice-transcribe-1.0` | Realtime WebSocket: `Partial` per cumulative transcript, one `Final` per turn, `SpeechStarted`/`SpeechEnded`, `Speaker` with diarization, `Progress`, `Usage`; the 60-minute session limit ends the stream with `model.muse.session_limit` | `META_API_KEY` or `MODEL_API_KEY` |
 | `GeminiStt` | `gemini-3.7-flash` | `AudioError::Stt`; use the Gemini Live API through `adk-realtime` for live audio | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
 
 ```rust

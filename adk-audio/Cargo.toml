@@ -15,7 +15,7 @@ categories = ["multimedia::audio", "asynchronous"]
 
 [package.metadata.docs.rs]
 # kokoro needs a system espeak-ng and desktop-audio needs ALSA headers, so both are left out.
-features = ["tts", "stt", "music", "fx", "mlx", "onnx", "chatterbox", "whisper-onnx", "distil-whisper", "moonshine", "qwen3-tts", "livekit"]
+features = ["tts", "stt", "muse", "music", "fx", "mlx", "onnx", "chatterbox", "whisper-onnx", "distil-whisper", "moonshine", "qwen3-tts", "livekit"]
 
 [dependencies]
 # Core (always included)
@@ -35,6 +35,8 @@ pin-project-lite = "0.2"
 
 # Cloud providers (optional)
 reqwest = { workspace = true, features = ["multipart"], optional = true }
+# Meta Muse speech-to-text (`MuseStt`, feature `muse`) over the Muse clients.
+adk-model = { workspace = true, optional = true, features = ["muse-realtime"] }
 base64 = { version = "0.22", optional = true }
 
 # VAD
@@ -91,6 +93,8 @@ tokio = { version = "1", features = ["full", "test-util"] }
 default = ["tts", "stt"]
 tts = ["dep:reqwest", "dep:base64"]
 stt = ["dep:reqwest", "dep:tokio-tungstenite"]
+# `MuseStt`: Meta Muse file and realtime transcription.
+muse = ["stt", "dep:adk-model"]
 music = ["dep:reqwest"]
 # Built-in DSP processors use no external dependencies.
 fx = []
@@ -125,4 +129,4 @@ all-onnx = ["onnx", "kokoro", "chatterbox", "whisper-onnx", "distil-whisper", "m
 livekit = ["dep:livekit-api", "dep:adk-realtime", "dep:base64"]
 
 # All portable features — safe for `--all-features` and CI on any platform.
-all = ["tts", "stt", "music", "fx", "vad", "streaming", "mlx", "all-onnx", "livekit"]
+all = ["tts", "stt", "muse", "music", "fx", "vad", "streaming", "mlx", "all-onnx", "livekit"]
