@@ -27,13 +27,15 @@
 //! | Caller | Session user | `is_authenticated()` |
 //! |---|---|---|
 //! | Verified credential | Its requester id | `true` |
-//! | Anyone else | `public-{id}`, an HMAC of its limit key under a key derived from [`ConsentConfig::subject_key`](super::ConsentConfig::subject_key) | `false` |
+//! | Anyone else | Its visitor id: the [`VisitorId`] its `AWP-Subject` token, `subject` link or `__Host-adk_visitor` cookie carries, else a new random one handed back in `AWP-Subject` | `false` |
 //!
-//! A visitor's run carries the conversation's metadata as
-//! [`RunConfig::request_metadata`], which authenticates no one, so no standing approval, Auto
+//! A visitor's run acts for a [`SubjectKind::Visitor`] and carries the conversation's metadata
+//! as [`RunConfig::request_metadata`], which authenticates no one, so no standing approval, Auto
 //! mode, requested call or other privilege reserved for an authenticated user applies to it.
-//! The visitor id is stable for one limit key while the subject key is kept; visitors behind
-//! one address share it, and with it their `user:` state.
+//! Visitor ids are random, never derived from an address or a credential. The partition's
+//! sessions and runs go through the edge's [`ConsentGate`]: without consent for
+//! `session_continuity` a visitor's conversation stays in process memory, and without
+//! `persistent_profile` its `user:` state is not written.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -41,21 +43,20 @@ use std::time::{Duration, Instant};
 
 use adk_awp::v2::capability::{CapabilityTool, META_CONSENT, META_REQUESTER, META_TIER};
 use adk_awp::v2::executor::{Binding, Invocation, InvocationOutcome};
+use adk_core::subject::{ConsentGate, VisitorId};
 use adk_core::{
     AdkError, Agent, Content, ErrorCategory, ErrorComponent, PolicyCall, PolicyDecision,
-    RequestContext, Result, RunConfig, SessionId, Tool, ToolContext, ToolEffect, ToolPolicy,
-    ToolPolicyRequest, UserId,
+    RequestContext, Result, RunConfig, SessionId, SubjectKind, Tool, ToolContext, ToolEffect,
+    ToolPolicy, ToolPolicyRequest, UserId,
 };
 use adk_runner::Runner;
-use adk_session::{CreateRequest, GetRequest, SessionService};
+use adk_session::{ConsentGatedSessionService, CreateRequest, GetRequest, SessionService};
 use async_trait::async_trait;
 use awp_types::{
     AbuseKind, Channel, MessageCategory, RequesterId, Signal, SignalKind, ThreadRef, TrustTier,
 };
 use futures::StreamExt;
-use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
-use sha2::Sha256;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -776,6 +777,7 @@ impl Tool for CapabilityProxy {
             limit_key: meta(META_LIMIT_KEY).unwrap_or_else(|| "ip:unknown".to_owned()),
             rate_class: None,
             claimed_agent: None,
+            visitor: None,
         };
         let keys = KeySources {
             explicit: Some(ctx.idempotency_key()),
@@ -910,21 +912,13 @@ pub(crate) struct Watch {
     pub(crate) edge: String,
 }
 
-/// Derives the key visitor ids are made with from the edge's subject key, so a visitor id
-/// and a subject session token are never made with the same key.
-pub(crate) fn visitor_key(subject_key: &[u8]) -> Arc<[u8]> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(subject_key).expect("HMAC takes any key length");
-    mac.update(b"adk-awp public visitor id v1");
-    Arc::from(mac.finalize().into_bytes().as_slice())
-}
-
 /// The public agent the conversation endpoints run, under the public partition's policy.
 pub(crate) struct PublicPartition {
     runner: Runner,
     sessions: Arc<dyn SessionService>,
     app_name: String,
     watch: Watch,
-    visitor_key: Arc<[u8]>,
+    gate: ConsentGate,
 }
 
 impl PublicPartition {
@@ -935,8 +929,11 @@ impl PublicPartition {
         app_name: &str,
         audit: Option<&adk_core::audit_log::AuditTrail>,
         watch: Watch,
-        visitor_key: Arc<[u8]>,
+        gate: ConsentGate,
     ) -> Result<Self> {
+        // Nothing lasting is written for a visitor without consent for its purpose.
+        let sessions: Arc<dyn SessionService> =
+            Arc::new(ConsentGatedSessionService::new(sessions, gate.clone()));
         let policy = WatchedPolicy { inner: tools.policy(), watch: watch.turns.clone() };
         let mut builder = Runner::builder()
             .app_name(app_name)
@@ -948,21 +945,23 @@ impl PublicPartition {
             builder = builder.audit_log(Arc::clone(audit.recorder()));
         }
         let runner = builder.build()?;
-        Ok(Self { runner, sessions, app_name: app_name.to_owned(), watch, visitor_key })
+        Ok(Self { runner, sessions, app_name: app_name.to_owned(), watch, gate })
     }
 
-    /// The session user a caller converses as: its requester id, else an HMAC of its limit
-    /// key, so the id does not reveal the address or credential it was derived from.
-    fn user_for(&self, caller: &EdgeCaller) -> String {
-        caller.requester.as_ref().map_or_else(
-            || {
-                let mut mac = Hmac::<Sha256>::new_from_slice(&self.visitor_key)
-                    .expect("HMAC takes any key length");
-                mac.update(caller.limit_key.as_bytes());
-                format!("public-{}", hex::encode(&mac.finalize().into_bytes()[..16]))
-            },
-            |requester| requester.as_str().to_owned(),
-        )
+    /// The partition's sessions, gated on each visitor's consent.
+    pub(crate) fn sessions(&self) -> Arc<dyn SessionService> {
+        Arc::clone(&self.sessions)
+    }
+
+    /// The session user a caller converses as: its requester id, else its visitor id.
+    fn user_for(caller: &EdgeCaller) -> String {
+        match (&caller.requester, &caller.visitor) {
+            (Some(requester), _) => requester.as_str().to_owned(),
+            (None, Some(visitor)) => visitor.to_string(),
+            // The guard gives every public caller a visitor id; a caller built elsewhere
+            // without one converses as a new visitor.
+            (None, None) => VisitorId::generate().to_string(),
+        }
     }
 
     /// Runs one turn of the conversation `session` for `caller` and returns the agent's reply;
@@ -981,7 +980,7 @@ impl PublicPartition {
         consent: &[Uuid],
         governance: Option<adk_core::GovernanceControl>,
     ) -> Result<String> {
-        let user = self.user_for(caller);
+        let user = Self::user_for(caller);
         let flagged = self.watch.screen.flags(text);
         self.watch.turns.begin(&user, session);
         let reply =
@@ -1100,12 +1099,17 @@ impl PublicPartition {
             }
             None => (None, metadata),
         };
-        let run_config = RunConfig {
+        let mut run_config = RunConfig {
             request_context,
             request_metadata,
             governance: governance.into_iter().collect(),
+            consent_gate: Some(self.gate.clone()),
             ..RunConfig::default()
         };
+        // A visitor is never authenticated and its run is gated on its consent.
+        if caller.requester.is_none() {
+            run_config.acting.subject_kind = SubjectKind::Visitor;
+        }
         let mut events = self
             .runner
             .run_with_config(

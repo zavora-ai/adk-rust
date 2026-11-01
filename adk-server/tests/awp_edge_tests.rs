@@ -149,6 +149,8 @@ struct Options {
     agent: Option<AgentFactory>,
     governance: Option<GovernanceControl>,
     hold_expiry: Option<chrono::Duration>,
+    sessions: Option<Arc<dyn adk_session::SessionService>>,
+    consent: Option<adk_server::awp::ConsentConfig>,
 }
 
 struct Site {
@@ -261,6 +263,12 @@ async fn site(options: Options) -> Site {
     }
     if let Some(expiry) = options.hold_expiry {
         builder = builder.hold_expiry(expiry);
+    }
+    if let Some(sessions) = options.sessions {
+        builder = builder.sessions(sessions);
+    }
+    if let Some(consent) = options.consent {
+        builder = builder.consent(consent);
     }
     let edge = builder.build().unwrap();
     Site {
@@ -1128,9 +1136,7 @@ impl Agent for IdentityProbe {
 /// cannot be recovered from, with the conversation's metadata intact; a verified caller
 /// converses authenticated as its requester id.
 #[tokio::test]
-async fn a_visitor_converses_unauthenticated_under_a_keyed_id() {
-    use sha2::Digest as _;
-
+async fn a_visitor_converses_unauthenticated_under_a_random_id() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let model = Arc::new(ScriptedLlm::new(
         "scripted",
@@ -1151,32 +1157,106 @@ async fn a_visitor_converses_unauthenticated_under_a_keyed_id() {
         request.extensions_mut().insert(axum::extract::ConnectInfo(peer));
         request
     };
-    for (address, id) in [("203.0.113.7:40000", "v-1"), ("203.0.113.7:40001", "v-2")] {
-        let (_, _, reply) = site.send(from(address, id)).await;
-        assert_eq!(reply["result"]["task"]["status"]["state"], "TASK_STATE_COMPLETED", "{reply}");
-    }
-    site.send(from("198.51.100.9:40000", "v-3")).await;
+    let (_, headers, reply) = site.send(from("203.0.113.7:40000", "v-1")).await;
+    assert_eq!(reply["result"]["task"]["status"]["state"], "TASK_STATE_COMPLETED", "{reply}");
+    let token = headers["awp-subject"].to_str().unwrap().to_owned();
+    site.send(from("203.0.113.7:40000", "v-2")).await;
+    site.send(with_header(from("198.51.100.9:40000", "v-3"), "awp-subject", &token)).await;
     site.send(site.signed(post("/awp/v2/a2a", &a2a_message("v-4", "When are you open?")))).await;
 
     let seen = seen.lock().unwrap().clone();
     assert_eq!(seen.len(), 4, "{seen:?}");
     let visitor = &seen[0];
     assert!(!visitor.authenticated, "a visitor is not an authenticated user");
-    assert!(visitor.user.starts_with("public-"), "{}", visitor.user);
-    let unkeyed = hex::encode(&sha2::Sha256::digest(b"ip:203.0.113.7")[..8]);
-    assert!(!visitor.user.contains(&unkeyed), "the id is keyed, not a plain digest of the address");
+    assert!(visitor.user.parse::<adk_core::subject::VisitorId>().is_ok(), "{}", visitor.user);
     assert_eq!(visitor.metadata["awp.tier"], "public");
     assert_eq!(visitor.metadata["awp.binding"], "a2a");
     assert!(visitor.metadata["awp.thread"].as_str().unwrap().starts_with("a2a-"));
     assert!(!visitor.metadata.contains_key("awp.requester"));
-    assert_eq!(seen[1].user, visitor.user, "one address keeps its visitor id");
-    assert_ne!(seen[2].user, visitor.user, "another address is another visitor");
+    assert_ne!(seen[1].user, visitor.user, "an address is no identity: no token, a new visitor");
+    assert_eq!(seen[2].user, visitor.user, "the visitor's token keeps its id from anywhere");
     assert!(!seen[2].authenticated);
 
     let verified = &seen[3];
     assert_eq!(verified.user, site.buyer_id.as_str());
     assert!(verified.authenticated, "a verified credential authenticates its requester");
     assert_eq!(verified.metadata["awp.requester"], site.buyer_id.as_str());
+}
+
+/// A visitor's conversation reaches the durable session store only once it consents to
+/// session continuity, and erasure through the consent routes reaches those sessions.
+#[tokio::test]
+async fn visitor_sessions_persist_only_with_consent_and_erasure_reaches_them() {
+    use adk_session::{InMemorySessionService, ListRequest, SessionService};
+
+    let durable = Arc::new(InMemorySessionService::new());
+    let model = Arc::new(ScriptedLlm::new(
+        "scripted",
+        (0..4).map(|_| ScriptedResponse::text("We are open Monday to Friday.")),
+    ));
+    let policy =
+        adk_server::awp::ConsentPolicy { digest: Digest::from_sha256_bytes([4; 32]), ttl: None };
+    let consent = adk_server::awp::ConsentConfig::new(
+        vec![ConsentScope::SessionContinuity],
+        [("2026-10".to_string(), policy)].into(),
+        vec![3_u8; 32],
+    );
+    let site = site(Options {
+        agent: Some(concierge(model, Vec::new())),
+        sessions: Some(durable.clone() as Arc<dyn SessionService>),
+        consent: Some(consent),
+        ..Options::default()
+    })
+    .await;
+    let durable_sessions = |visitor: String| {
+        let durable = Arc::clone(&durable);
+        async move {
+            durable
+                .list(ListRequest {
+                    app_name: "awp-public".into(),
+                    user_id: visitor,
+                    limit: None,
+                    offset: None,
+                })
+                .await
+                .unwrap()
+                .len()
+        }
+    };
+
+    let (_, headers, _) = site.send(post("/awp/v2/a2a", &a2a_message("c-1", "Hours?"))).await;
+    let token = headers["awp-subject"].to_str().unwrap().to_owned();
+    let visitor = token.split('.').nth(1).unwrap().to_string();
+    assert_eq!(durable_sessions(visitor.clone()).await, 0, "no consent: nothing durable");
+
+    let grant =
+        json!({ "scope": "session_continuity", "policyVersion": "2026-10", "jurisdiction": "KE" });
+    let (status, _, receipt) =
+        site.send(with_header(post("/awp/v2/consent", &grant), "awp-subject", &token)).await;
+    assert_eq!(status, StatusCode::CREATED, "{receipt}");
+    assert_eq!(receipt["subjectRef"], visitor.as_str(), "the visitor that converses consents");
+    let ask =
+        with_header(post("/awp/v2/a2a", &a2a_message("c-2", "Hours?")), "awp-subject", &token);
+    site.send(ask).await;
+    assert_eq!(durable_sessions(visitor.clone()).await, 1, "with consent the conversation lasts");
+
+    let (_, _, exported) =
+        site.send(with_header(get("/awp/v2/consent/export"), "awp-subject", &token)).await;
+    let sessions = exported["stores"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|store| store["store"] == "sessions")
+        .expect("the export reaches the sessions");
+    // The conversation before consent, kept in memory, and the durable one after it.
+    assert_eq!(sessions["data"]["sessions"].as_array().unwrap().len(), 2, "{exported}");
+
+    let erase = with_header(post("/awp/v2/consent/erase", &json!({})), "awp-subject", &token);
+    let (status, _, erased) = site.send(erase).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{erased}");
+    assert_eq!(erased["status"], "completed", "{erased}");
+    assert_eq!(erased["erased"]["receipts"], 1);
+    assert_eq!(durable_sessions(visitor).await, 0, "erasure reaches the durable sessions");
 }
 
 /// A stateless MCP endpoint has no session, so a JSON-RPC id is no idempotency key: a

@@ -268,6 +268,23 @@ Vertex AI Memory Bank or a GCS bucket with object versioning or soft delete.
 Audit leaves are never removed; a redacted log still verifies. See
 [Audit Log](audit-log.md#subjects-in-records).
 
+## HTTP routes
+
+| Surface | Routes | Authenticates |
+|---------|--------|---------------|
+| AWP edge (`adk_server::awp`) | `GET /awp/v2/consent/export`, `POST /awp/v2/consent/erase` | The visitor's token |
+| `adk_server::subject_rights` (feature `awp`) | `GET /subject/export`, `POST /subject/erase`, `POST /subject/link` | The server's `RequestContextExtractor` |
+
+`subject_rights_router(SubjectRightsEndpoints::new(rights, tokens))` mounts with
+`ServerBuilder::add_api_routes`, so the routes sit under `/api`. A signed-in caller exports or
+erases its own data and its linked visitor ids. `POST /subject/link` needs the visitor's token
+(`AWP-Subject` or the `__Host-adk_visitor` cookie) and a fresh sign-in: the request context's
+`auth_time` metadata no older than ten minutes (`with_max_sign_in_age`). It answers `409` for a
+visitor id already linked, and clears the visitor cookie.
+
+`adk_auth::VisitorTokens` signs tokens as `v1.{visitor id}.{expiry}.{HMAC-SHA256}` with the
+first of its keys and verifies with all of them, so keys rotate without dropping visitors.
+
 ## Writing an adapter
 
 A store family implements `SubjectDataStore` once and proves it with the shared suite:

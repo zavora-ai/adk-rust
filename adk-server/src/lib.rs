@@ -70,6 +70,10 @@ pub mod background;
 #[cfg(feature = "approvals")]
 pub mod approvals;
 
+/// HTTP endpoints for a signed-in person's subject rights: export, erase, and link.
+#[cfg(feature = "awp")]
+pub mod subject_rights;
+
 #[cfg(feature = "agent-engine")]
 pub mod agent_engine;
 

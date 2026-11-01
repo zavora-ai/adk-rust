@@ -460,7 +460,7 @@ async fn consent_receipts_revocation_export_and_erasure() {
     let token = headers["awp-subject"].to_str().unwrap().to_owned();
     let parsed: ConsentReceipt = serde_json::from_value(receipt.clone()).unwrap();
     assert_eq!(parsed.jurisdiction, "KE");
-    assert!(parsed.subject_ref.starts_with("subj_"));
+    assert!(parsed.subject_ref.starts_with("v:"), "the subject is a random visitor id");
     verify(&parsed, &parsed.proof, &site.receipt_key.public_key())
         .expect("the receipt is signed by the receipt key");
     for bad in [
