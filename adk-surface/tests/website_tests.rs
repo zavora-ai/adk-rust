@@ -433,13 +433,26 @@ async fn a_public_body_launches_and_publishes_only_with_two_people() {
             json!({ "type": "approve", "draft": id, "role": "editor" }),
         )
         .await;
-    let done = client
-        .as_person("baraka")
-        .post(
-            "/api/surface/website/editor",
-            json!({ "type": "approve", "draft": id, "role": "publisher" }),
-        )
-        .await;
+    // Baraka approves the same request on another surface, such as the kernel's inbox or a
+    // chat card: the release's request is the one record every surface decides (#1280).
+    let runtime = site.desk.runtime().await;
+    let approvals = runtime.approvals();
+    let waiting = approvals
+        .list(adk_harness::website::SITE_RELEASE_TOOL, &[adk_core::ApprovalState::Pending])
+        .await
+        .unwrap();
+    let [request] = waiting.as_slice() else { panic!("one release waits: {waiting:?}") };
+    let view = editor.get(&format!("/api/surface/website/editor/drafts/{id}")).await;
+    assert_eq!(
+        view["approval"]["lines"][0]["signedBy"], "chebet",
+        "the desk shows the request's votes: {view}"
+    );
+    approvals
+        .approve(&request.id, request.version, &adk_core::principal::SubjectRef::human("baraka"))
+        .await
+        .unwrap();
+    let done =
+        editor.post("/api/surface/website/editor", json!({ "type": "publish", "draft": id })).await;
     assert!(done["note"].as_str().unwrap().starts_with("Live in release 2"), "{}", done["note"]);
 }
 

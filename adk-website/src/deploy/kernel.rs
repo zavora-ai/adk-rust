@@ -37,6 +37,10 @@ pub struct SiteStores {
     /// The owner's standing rules: a promotion grants them, and the back office's harnesses
     /// read them at every call (spec 3.5 §7.11, A-I13).
     pub rules: Arc<adk_harness::SqliteStandingRuleStore>,
+    /// The kill switch, mirrored over the kernel's governance store: the kernel and every
+    /// site share it, so a freeze stops agent runs and holds every release, a person's in
+    /// the desk included (#1280).
+    pub governance: adk_core::GovernanceControl,
 }
 
 impl std::fmt::Debug for SiteStores {
@@ -88,6 +92,7 @@ impl SiteStores {
         Ok(Self {
             approvals: Arc::new(service),
             partitions: Partitions::new(kernel.partitions.clone()),
+            governance: adk_kernel::KernelConfig::mirrored_governance(kernel.governance.clone()),
             kernel,
             rules,
         })

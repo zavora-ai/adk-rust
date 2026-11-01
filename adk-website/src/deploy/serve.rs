@@ -192,8 +192,11 @@ async fn start(
         }
         None => None,
     };
-    let mut kernel_config =
-        KernelConfig::default().with_app_name(name).with_home(home.clone()).with_control(control);
+    let mut kernel_config = KernelConfig::default()
+        .with_app_name(name)
+        .with_home(home.clone())
+        .with_control(control)
+        .with_governance(stores.governance.clone());
     // The site's proactive runs wait out the owner's quiet hours (spec 3.5 §7.21, §5 S10); an
     // agency's sites may keep different hours, and the kernel holds one set.
     if let [site] = sites.as_slice()

@@ -2,17 +2,19 @@
 //! §7.18 stage 5, §8.2 "charter cards", A-I14, A-I23).
 //!
 //! The draft is the kind template's, filled from the interview. The owner reads each section
-//! as a card and either says it looks right or changes it; a change clears any signature,
+//! as a card and either says it looks right or changes it; a change asks for signatures anew,
 //! because a signature is for the text that was read. Once every section has been read, each
 //! person the approval chain for charter changes requires signs in their role — each a
-//! distinct person, none an agent — and the version is committed through the kernel's audited
-//! commit (`website.approval_chain.satisfied`, `website.charter.committed`).
+//! distinct person, none an agent — on the charter's signing request in the site's approval
+//! service, which the back office, the kernel's inbox and chat cards sign too; the version is
+//! committed through the kernel's audited commit (`website.approval_chain.satisfied`,
+//! `website.charter.committed`) with the request as the decision.
 
 use std::collections::BTreeSet;
 
 use adk_core::Result;
 use adk_core::principal::SubjectRef;
-use adk_kernel::charter::{CHARTER_ACTION, CharterVersion, CommitDecision, RoleApproval};
+use adk_kernel::charter::{CHARTER_ACTION, CharterVersion, RoleApproval};
 use awp_types::{
     Charter, Direction, GuardrailAction, RedLine, RedLineKind, Role, RoleHolder, SpendCategory,
     Urgency,
@@ -32,7 +34,6 @@ impl WebsiteDesk {
         super::saved::SavedCharter {
             draft: state.draft.clone(),
             reviewed: state.reviewed.clone(),
-            signatures: state.signatures.clone(),
             committed: state.committed.clone(),
         }
     }
@@ -41,7 +42,6 @@ impl WebsiteDesk {
         let mut state = self.inner.charter.lock().await;
         state.draft = saved.draft;
         state.reviewed = saved.reviewed;
-        state.signatures = saved.signatures;
         state.committed = saved.committed;
     }
 }
@@ -65,7 +65,6 @@ pub const SECTIONS: [&str; 11] = [
 pub(crate) struct State {
     pub(crate) draft: Option<Charter>,
     pub(crate) reviewed: BTreeSet<String>,
-    pub(crate) signatures: Vec<RoleApproval>,
     pub(crate) committed: Option<CharterVersion>,
 }
 
@@ -825,9 +824,22 @@ impl WebsiteDesk {
         let state = self.inner.charter.lock().await;
         let Some(draft) = state.draft.clone() else { return Ok(None) };
         let reviewed = state.reviewed.clone();
-        let signatures = state.signatures.clone();
-        let committed = state.committed.clone();
+        let mut committed = state.committed.clone();
         drop(state);
+        let runtime = self.runtime().await;
+        let mut request = runtime.charter_request(&draft).await?;
+        // People may have signed on another surface — the back office, the kernel's inbox, a
+        // chat card — so a request they completed is committed now.
+        if committed.is_none() && request.is_some() {
+            for version in runtime.settle_charters().await? {
+                self.adopt_charter(&version).await?;
+            }
+            committed = self.inner.charter.lock().await.committed.clone();
+            if committed.is_none() {
+                request = runtime.charter_request(&draft).await?;
+            }
+        }
+        let signatures = request.map(|request| request.signatures).unwrap_or_default();
         let estimate = self.estimate(&draft).await;
         let sections = cards(&draft, &reviewed, estimate.as_ref());
         let governing = self.governing(&draft).await?;
@@ -910,8 +922,7 @@ impl WebsiteDesk {
         person: &str,
         command: CharterCommand,
     ) -> Result<Option<CharterVersion>> {
-        let charters =
-            self.inner.charters.clone().ok_or_else(|| unavailable("The charter store"))?;
+        self.inner.charters.as_ref().ok_or_else(|| unavailable("The charter store"))?;
         let mut state = self.inner.charter.lock().await;
         if state.committed.is_some() {
             return Err(invalid(
@@ -942,7 +953,6 @@ impl WebsiteDesk {
                 let mut draft = draft;
                 apply_edit(&mut draft, &section, &values)?;
                 state.draft = Some(draft);
-                state.signatures.clear();
                 state.reviewed.insert(section);
                 Ok(None)
             }
@@ -974,38 +984,29 @@ impl WebsiteDesk {
                         ),
                     ));
                 }
-                let now = self.now();
-                state.signatures.retain(|held| held.principal.id != person);
-                state.signatures.push(RoleApproval::new(role, SubjectRef::human(person), now));
-                if adk_kernel::charter::check_chain(
-                    &governing,
-                    &CHARTER_ACTION,
-                    &state.signatures,
-                    None,
-                )
-                .is_err()
-                {
+                let runtime = self.runtime().await;
+                // The Steward drafts the charter from the interview, so it asks; no agent signs.
+                let steward = self.inner.site.principal("steward");
+                let request = runtime.request_charter(&draft, None, &steward).await?;
+                let signature = RoleApproval::new(role, SubjectRef::human(person), self.now());
+                let Some(version) = runtime.sign_charter(&request.id, signature).await? else {
                     return Ok(None);
-                }
-                let mut decision = CommitDecision::new(self.next_id("charter-signed"), now);
-                for signature in &state.signatures {
-                    decision = decision.with_approval(signature.clone());
-                }
-                let version = adk_kernel::charter::commit_audited(
-                    charters.as_ref(),
-                    draft,
-                    decision,
-                    self.inner.audit.as_ref(),
-                )
-                .await
-                .map_err(kernel)?;
-                if let Some(ladder) = &self.inner.ladder {
-                    crate::jobs::register(ladder, &version.charter).await?;
-                }
-                state.committed = Some(version.clone());
+                };
+                drop(state);
+                self.adopt_charter(&version).await?;
                 Ok(Some(version))
             }
         }
+    }
+
+    /// Takes `version` as the committed charter: the desk shows it signed, and its jobs join
+    /// the autonomy ladder.
+    async fn adopt_charter(&self, version: &CharterVersion) -> Result<()> {
+        if let Some(ladder) = &self.inner.ladder {
+            crate::jobs::register(ladder, &version.charter).await?;
+        }
+        self.inner.charter.lock().await.committed = Some(version.clone());
+        Ok(())
     }
 
     /// The running-cost estimate of `charter`'s team, when the desk knows what a month

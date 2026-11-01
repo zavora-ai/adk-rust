@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use adk_core::{AdkError, Result};
-use adk_kernel::charter::{CharterVersion, RoleApproval};
+use adk_kernel::charter::CharterVersion;
 use adk_site::pipeline::EntryPoint;
 use async_trait::async_trait;
 use awp_types::{Charter, ContentId, ContentItem, SiteKind};
@@ -96,8 +96,6 @@ pub(crate) struct SavedCharter {
     #[serde(default)]
     pub(crate) reviewed: BTreeSet<String>,
     #[serde(default)]
-    pub(crate) signatures: Vec<RoleApproval>,
-    #[serde(default)]
     pub(crate) committed: Option<CharterVersion>,
 }
 
@@ -121,6 +119,9 @@ pub(crate) struct SavedDraft {
     pub(crate) done: bool,
     #[serde(default)]
     pub(crate) scheduled: bool,
+    /// The approval request a release of the draft waits on (#1280).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) request: Option<String>,
 }
 
 impl SavedDraft {

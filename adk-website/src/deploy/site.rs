@@ -516,6 +516,7 @@ impl RunningSite {
         // The site's decisions are the kernel's requests: one record for the desk, the back
         // office, the kernel's inbox and chat cards (spec 3.5 A-I23, #1280).
         .approvals(stores.approvals.clone())
+        .governance(stores.governance.clone())
         .require_durable()
         .audit(trail.clone())
         .gate(

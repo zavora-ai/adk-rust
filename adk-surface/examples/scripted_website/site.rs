@@ -227,6 +227,9 @@ struct Assembly {
     facts: Arc<InMemoryFactStore>,
     scope: FactScope,
     trail: AuditTrail,
+    /// The site's approval requests: one service across every runtime a theme rebuilds, as
+    /// a served site's kernel keeps them.
+    approvals: Arc<dyn adk_core::ApprovalService>,
 }
 
 impl SiteAssembly for Assembly {
@@ -249,6 +252,7 @@ impl SiteAssembly for Assembly {
         .facts(self.facts.clone(), self.scope.clone())
         .gate(self.template.gate(&self.site.origin))
         .audit(self.trail.clone())
+        .approvals(self.approvals.clone())
         .build()
         .expect("a runtime that need not be durable always builds")
     }
@@ -303,6 +307,12 @@ async fn parts(dir: &Path, kind: SiteKind) -> Parts {
         AutonomyLadder::new(Arc::new(InMemoryAutonomyStore::new())).with_charters(charters.clone());
     let facts = Arc::new(InMemoryFactStore::new());
     let audit = InMemoryAuditRecorder::new();
+    let approvals =
+        adk_core::StoreApprovalService::new(Arc::new(adk_core::InMemoryApprovalStore::new()))
+            .with_directory(Arc::new(
+                adk_kernel::charter::CharterDirectory::new(charters.clone()).for_site(site.id),
+            ))
+            .with_audit(AuditTrail::new(Arc::new(audit.clone())));
     let assembly = Arc::new(Assembly {
         site: site.clone(),
         template: template.clone(),
@@ -316,6 +326,7 @@ async fn parts(dir: &Path, kind: SiteKind) -> Parts {
         facts,
         scope: partitions.fact_scope(OWNER),
         trail: AuditTrail::new(Arc::new(audit.clone())),
+        approvals: Arc::new(approvals),
     });
     Parts {
         site,
