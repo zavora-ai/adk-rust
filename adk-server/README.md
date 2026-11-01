@@ -451,6 +451,8 @@ A stale `expectedVersion` returns `409` (`approval.version_conflict`). `spawn_ap
 
 Tiers come only from verified credentials (`WebBotAuthTrustAssigner`, `OAuthClientCredentials`, `MtlsCredentials`, `ApiKeyCredentials`, owner rules). Every binding enters `GovernedExecutor`: `adk_core::authorize_tool_call` under a policy compiled from the manifest, the owner's `ApprovalService` for held calls (`202` with `Location`), the action ledger and a full-body idempotency record. `EdgeStatusControl` switches the edge to read-only and back. Subscriptions get Standard Webhooks deliveries with retries, suspension and replay; consent receipts are signed and revocable by their subject; the beacon counts without cookies or identifiers. See [The AWP Agent Edge](../docs/official_docs/deployment/awp-edge.md).
 
+Public callers converse under random visitor ids carried by an `adk_auth::VisitorTokens` token, never derived from the address; their runs act for a visitor through a consent gate over the receipts (`ReceiptConsentStore`), and consent export and erasure reach every store of the edge's `SubjectRights` (`subject_registry`, `subject_store`). `subject_rights::subject_rights_router` serves export, erasure, and a one-time visitor link for signed-in callers. See [Subject Rights](../docs/official_docs/security/subject-rights.md).
+
 ## API Endpoints
 
 Every endpoint below is nested under `/api`.
