@@ -11,7 +11,6 @@ use std::collections::BTreeMap;
 
 use adk_core::Result;
 use adk_core::principal::SubjectRef;
-use adk_kernel::charter::RoleApproval;
 use adk_site::content::kind_directory;
 use adk_site::gate::{CheckStatus, GateReport};
 use adk_site::media::MediaUpload;
@@ -50,23 +49,32 @@ const KINDS: [ContentKind; 9] = [
     ContentKind::Collection,
 ];
 
-/// A release waiting for its approval chain (spec 3.5 §7.8.2 step 4, A-I23): its request
-/// in the site's approval service.
+/// A release waiting for its approval chain (spec 3.5 §7.8.2 step 4, A-I23): its request in
+/// the site's approval service holds the votes, so the desk keeps none of its own. A release
+/// restored after a restart has no preview until a person acts on it.
 #[derive(Clone)]
 pub(crate) struct PendingRelease {
     pub(crate) draft: Draft,
-    pub(crate) preview: Preview,
+    pub(crate) preview: Option<Preview>,
     pub(crate) request: String,
-    pub(crate) approvals: Vec<RoleApproval>,
 }
 
 /// How a release step ended.
 pub(crate) enum ReleaseStep {
-    Live { seq: u64 },
-    Scheduled { at: String },
+    Live {
+        seq: u64,
+    },
+    Scheduled {
+        at: String,
+    },
     Pending(Box<PendingRelease>),
     Held(String),
-    Rejected { by: String, reason: String },
+    /// Approved while the site is frozen: it publishes when published again after the freeze.
+    Frozen,
+    Rejected {
+        by: String,
+        reason: String,
+    },
 }
 
 /// Who has approved a release waiting for its chain, and who still must (A-I23).
@@ -406,6 +414,7 @@ impl WebsiteDesk {
                 outcome: draft.outcome.clone(),
                 done: draft.done,
                 scheduled: draft.scheduled,
+                request: draft.pending.as_ref().map(|pending| pending.request.clone()),
             })
             .collect()
     }
@@ -414,21 +423,31 @@ impl WebsiteDesk {
         let mut drafts = BTreeMap::new();
         for draft in saved {
             let media = draft.decode()?;
+            let change = Change {
+                items: draft.items,
+                media,
+                entry: draft.entry,
+                proposer: draft.proposer,
+                job: draft.job,
+                action_class: draft.action_class,
+            };
+            // A release that waited for its chain waits on the same request after a restart.
+            let pending = draft.request.map(|request| PendingRelease {
+                draft: Draft {
+                    ids: change.items.iter().map(|item| item.id.clone()).collect(),
+                    change: change.clone(),
+                },
+                preview: None,
+                request,
+            });
             drafts.insert(
                 draft.id.clone(),
                 EditorDraft {
-                    change: Change {
-                        items: draft.items,
-                        media,
-                        entry: draft.entry,
-                        proposer: draft.proposer,
-                        job: draft.job,
-                        action_class: draft.action_class,
-                    },
+                    change,
                     changes: draft.changes,
                     checks: None,
                     preview: None,
-                    pending: None,
+                    pending,
                     outcome: draft.outcome,
                     done: draft.done,
                     scheduled: draft.scheduled,
@@ -529,6 +548,9 @@ fn outcome_words(step: &ReleaseStep) -> String {
         ReleaseStep::Scheduled { at } => format!("Scheduled for {at}."),
         ReleaseStep::Pending(_) => "Waiting for the approval chain.".into(),
         ReleaseStep::Held(summary) => format!("Held by the checks: {summary}"),
+        ReleaseStep::Frozen => {
+            "Approved, but the site is frozen: publish it again once the freeze lifts.".into()
+        }
         ReleaseStep::Rejected { by, reason } => format!("{by} refused it: {reason}"),
     }
 }
@@ -581,9 +603,8 @@ impl WebsiteDesk {
             ApprovalDecision::Pending { ticket } => {
                 Ok(ReleaseStep::Pending(Box::new(PendingRelease {
                     draft,
-                    preview,
+                    preview: Some(preview),
                     request: ticket,
-                    approvals: Vec::new(),
                 })))
             }
             ApprovalDecision::Rejected { by, reason } => {
@@ -600,6 +621,11 @@ impl WebsiteDesk {
         decision: Option<String>,
     ) -> Result<ReleaseStep> {
         let runtime = self.runtime().await;
+        // A freeze holds publishing, a person's release included (#1280, D5).
+        if runtime.is_frozen() {
+            let _ = tokio::fs::remove_dir_all(&preview.staged.root).await;
+            return Ok(ReleaseStep::Frozen);
+        }
         let outcome = runtime.pipeline().complete(draft, decision).await.map_err(site);
         let _ = tokio::fs::remove_dir_all(&preview.staged.root).await;
         Ok(match outcome? {
@@ -637,8 +663,9 @@ impl WebsiteDesk {
         Ok(roles.map(|roles| (current.charter.governance, roles)))
     }
 
-    /// Records `person`'s approval in `role` of a release waiting for its chain (A-I23);
-    /// `Some` once the release completes or is refused.
+    /// Records `person`'s approval in `role` of a release waiting for its chain (A-I23) on
+    /// the release's request, which the kernel's inbox and chat cards decide too; `Some` once
+    /// the release completes or is refused.
     pub(crate) async fn approve_release(
         &self,
         pending: &mut PendingRelease,
@@ -663,20 +690,34 @@ impl WebsiteDesk {
                 "the person who proposed a change cannot approve it (spec 3.5 A-I23)",
             ));
         }
-        if pending.approvals.iter().any(|a| a.principal.id == person) {
-            return Err(invalid("website.editor.approved", "you have approved this already"));
-        }
-        let approval = RoleApproval::new(role, SubjectRef::human(person), self.now());
         let runtime = self.runtime().await;
+        // A release restored after a restart is previewed again; the same change on the same
+        // base reaches the same request, a new base a new one.
+        let preview = match pending.preview.take() {
+            Some(preview) => preview,
+            None => runtime.pipeline().preview(&pending.draft).await.map_err(site)?,
+        };
+        pending.preview = Some(preview.clone());
+        match runtime.pipeline().approve(&pending.draft, &preview).await.map_err(site)? {
+            ApprovalDecision::Approved { decision, .. } => {
+                return Ok(Some(self.finish(&pending.draft, &preview, decision).await?));
+            }
+            ApprovalDecision::Rejected { by, reason } => {
+                return Ok(Some(ReleaseStep::Rejected { by, reason }));
+            }
+            ApprovalDecision::Pending { ticket } => pending.request = ticket,
+        }
         let approvals = runtime.approvals();
         let request = approvals.get(&pending.request).await?.ok_or_else(|| {
             not_found("website.editor.request", "the release's approval request is gone")
         })?;
-        approvals.approve(&pending.request, request.version, &approval.principal).await?;
-        pending.approvals.push(approval);
-        match runtime.pipeline().approve(&pending.draft, &pending.preview).await.map_err(site)? {
+        if request.quorum_progress().0.iter().any(|approver| approver.id == person) {
+            return Err(invalid("website.editor.approved", "you have approved this already"));
+        }
+        approvals.approve(&pending.request, request.version, &SubjectRef::human(person)).await?;
+        match runtime.pipeline().approve(&pending.draft, &preview).await.map_err(site)? {
             ApprovalDecision::Approved { decision, .. } => {
-                Ok(Some(self.finish(&pending.draft, &pending.preview, decision).await?))
+                Ok(Some(self.finish(&pending.draft, &preview, decision).await?))
             }
             ApprovalDecision::Pending { .. } => Ok(None),
             ApprovalDecision::Rejected { by, reason } => {
@@ -685,7 +726,8 @@ impl WebsiteDesk {
         }
     }
 
-    /// Who approved `pending` and who still must, as `person` sees it.
+    /// Who approved `pending` and who still must, as `person` sees it, from the release's
+    /// request: whoever approved it, on whichever surface.
     pub(crate) async fn approval_view(
         &self,
         pending: &PendingRelease,
@@ -698,30 +740,31 @@ impl WebsiteDesk {
                     Vec::new(),
                 )
             });
-        let mut used: Vec<&str> = Vec::new();
+        let runtime = self.runtime().await;
+        let request = runtime.approvals().get(&pending.request).await?;
+        let holders: Vec<Option<&adk_core::ApprovalDecision>> = match &request {
+            Some(request) => request.slot_holders().into_iter().map(|(_, held)| held).collect(),
+            None => Vec::new(),
+        };
         let lines: Vec<SignerLine> = roles
             .iter()
-            .map(|role| {
-                let approval = pending
-                    .approvals
-                    .iter()
-                    .find(|a| a.role == *role && !used.contains(&a.principal.id.as_str()));
-                if let Some(approval) = approval {
-                    used.push(approval.principal.id.as_str());
-                }
+            .enumerate()
+            .map(|(slot, role)| {
+                let held = holders.get(slot).copied().flatten();
                 SignerLine {
                     role: words::role_id(*role).into(),
                     label: words::role(*role).into(),
                     holders: governance.holders(*role).map(str::to_string).collect(),
-                    signed_by: approval.map(|a| a.principal.id.clone()),
-                    signed_at: approval.map(|a| a.at),
+                    signed_by: held.map(|decision| decision.authority().id.clone()),
+                    signed_at: held.map(|decision| decision.decided_at),
                 }
             })
             .collect();
         let proposer = pending.draft.change.proposer.clone();
-        let mayapprove =
-            person != proposer && !pending.approvals.iter().any(|a| a.principal.id == person);
-        let can_approve: Vec<String> = if mayapprove {
+        let approved = request.as_ref().is_some_and(|request| {
+            request.quorum_progress().0.iter().any(|approver| approver.id == person)
+        });
+        let can_approve: Vec<String> = if person != proposer && !approved {
             let mut roles: Vec<String> = lines
                 .iter()
                 .filter(|line| line.signed_by.is_none() && line.holders.iter().any(|h| h == person))
@@ -1091,7 +1134,7 @@ impl WebsiteDesk {
                     Ok(Some(step)) => {
                         note = Some(outcome_words(&step));
                         held.outcome = note.clone();
-                        held.done = !matches!(step, ReleaseStep::Held(_));
+                        held.done = !matches!(step, ReleaseStep::Held(_) | ReleaseStep::Frozen);
                     }
                     Ok(None) => {
                         held.pending = Some(pending);
@@ -1135,7 +1178,9 @@ impl WebsiteDesk {
                 approvals
                     .reject(&pending.request, request.version, &SubjectRef::human(person), &reason)
                     .await?;
-                let _ = tokio::fs::remove_dir_all(&pending.preview.staged.root).await;
+                if let Some(preview) = &pending.preview {
+                    let _ = tokio::fs::remove_dir_all(&preview.staged.root).await;
+                }
                 held.pending = None;
                 held.outcome = Some(format!("{person} refused it: {reason}"));
                 note = held.outcome.clone();
@@ -1207,8 +1252,8 @@ impl WebsiteDesk {
                     if let Some((preview, _)) = removed.preview {
                         let _ = tokio::fs::remove_dir_all(&preview.staged.root).await;
                     }
-                    if let Some(pending) = removed.pending {
-                        let _ = tokio::fs::remove_dir_all(&pending.preview.staged.root).await;
+                    if let Some(preview) = removed.pending.and_then(|pending| pending.preview) {
+                        let _ = tokio::fs::remove_dir_all(&preview.staged.root).await;
                     }
                 }
                 note = Some("The draft is gone; nothing was published.".into());
@@ -1256,7 +1301,7 @@ impl WebsiteDesk {
                 let mut held = self.editor_draft(draft.change.items[0].clone(), person, changes);
                 held.change = draft.change.clone();
                 held.pending =
-                    Some(PendingRelease { draft, preview, request: ticket, approvals: Vec::new() });
+                    Some(PendingRelease { draft, preview: Some(preview), request: ticket });
                 self.inner.editor.lock().await.drafts.insert(id.clone(), held);
                 ("It waits for the approval chain.".into(), Some(id))
             }
@@ -1416,11 +1461,8 @@ impl WebsiteDesk {
         if draft.item().slug.is_empty() {
             return Err(invalid("website.editor.unsaved", "save the draft first"));
         }
-        if draft.pending.is_some() || draft.done {
-            return Err(invalid(
-                "website.editor.locked",
-                "this draft is waiting for approval or published",
-            ));
+        if draft.done {
+            return Err(invalid("website.editor.locked", "this draft is published"));
         }
         if draft.change.proposer != person {
             return Err(forbidden(
@@ -1428,14 +1470,21 @@ impl WebsiteDesk {
                 "someone else is writing this draft",
             ));
         }
-        let runtime = self.runtime().await;
-        let checked = runtime.pipeline().draft(draft.change.clone()).await.map_err(site)?;
-        let preview = draft.preview.take().map(|(preview, _)| preview);
-        let step = self.release(checked, preview).await?;
+        // A release waiting for its chain publishes once its request is approved, on this
+        // desk or another surface — the kernel's inbox, a chat card (#1280).
+        let step = match draft.pending.take() {
+            Some(pending) => self.release(pending.draft, pending.preview).await?,
+            None => {
+                let runtime = self.runtime().await;
+                let checked = runtime.pipeline().draft(draft.change.clone()).await.map_err(site)?;
+                let preview = draft.preview.take().map(|(preview, _)| preview);
+                self.release(checked, preview).await?
+            }
+        };
         let line = outcome_words(&step);
         match step {
             ReleaseStep::Pending(pending) => draft.pending = Some(*pending),
-            ReleaseStep::Held(_) => {}
+            ReleaseStep::Held(_) | ReleaseStep::Frozen => {}
             ReleaseStep::Scheduled { .. } => {
                 draft.done = true;
                 draft.scheduled = true;

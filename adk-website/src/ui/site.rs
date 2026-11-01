@@ -4,7 +4,7 @@
 //!
 //! | Decision | Who | What happens |
 //! |---|---|---|
-//! | Promote a job | An owner (A-I13) | The kernel's ladder raises it one rung by the owner's decision; the harness grants the standing rules the new level needs |
+//! | Promote a job | An owner (A-I13) | The kernel's ladder raises it one rung by the owner's decision, which answers the job's waiting promotion request; the harness grants the standing rules the new level needs |
 //! | Lower a job | An owner | The ladder lowers it one rung; the standing rules it no longer warrants are revoked |
 //! | Release or discard a held item | An owner, never the change's proposer (A-I23, A-I25) | The update engine publishes it at once, or drops it |
 //! | Release or discard a held feed delivery | An owner (A-I27) | The engine applies it whole, or drops it whole |
@@ -951,11 +951,26 @@ impl WebsiteDesk {
                         ),
                     ));
                 }
-                let decision = OwnerDecision::new(
-                    self.next_id("promote"),
-                    SubjectRef::human(person),
-                    self.now(),
-                );
+                // The owner's decision answers the job's waiting promotion request, the one the
+                // kernel's inbox and chat cards show, and names it (#1280).
+                let runtime = self.runtime().await;
+                let waiting = runtime
+                    .promotion_requests()
+                    .await
+                    .into_iter()
+                    .find(|request| request.job == job);
+                let decision_id = match waiting {
+                    Some(request) => {
+                        runtime
+                            .approvals()
+                            .approve(&request.id, request.version, &SubjectRef::human(person))
+                            .await?;
+                        request.id
+                    }
+                    None => self.next_id("promote"),
+                };
+                let decision =
+                    OwnerDecision::new(decision_id, SubjectRef::human(person), self.now());
                 let promotion =
                     promote_job(ladder, &compiler, rules.as_ref(), &job, &decision, person).await?;
                 crate::observability::record_autonomy_change(&job, None, promotion.job.level);

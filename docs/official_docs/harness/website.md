@@ -143,7 +143,15 @@ from the charter in force, so a surface cannot claim one.
 `charter_commit_request` or the web desk alike; `sign_charter` signs and, once the chain is
 satisfied, commits with the request as the decision; `settle_charters` commits a charter whose
 request people approved on another surface. `restore_drafts` converts the charter signing and promotion requests an earlier
-version kept in the draft store into approval requests, once. With
+version kept in the draft store into approval requests, once.
+
+`adk-website`'s desk decides the same requests: a release waiting for its chain shows the
+request's votes, keeps the request id across a restart, and publishes once its request is
+approved on any surface; a charter is signed through `request_charter` and `sign_charter`; a
+promotion answers the job's waiting request. `adk-harness`'s `website_replicas_tests` gate runs
+two runtimes over one database — SQLite on every pull request, PostgreSQL in the postgres job —
+and checks distinct draft ids, one winner of two votes on one version, a vote kept across a
+restart, one release from two concurrent publishes, and one charter commit. With
 `SiteRuntimeBuilder::audit`, the runtime's pipeline writes the `site.content.*` and
 `site.release.*` records beside the runtime's own.
 

@@ -2105,6 +2105,11 @@ impl WebsiteDesk {
                 "The launch waits for every role of the publication chain.".into()
             }
             ReleaseStep::Held(summary) => format!("The launch is held: {summary}"),
+            ReleaseStep::Frozen => {
+                "The launch is approved, but the site is frozen: go live again once the freeze \
+                 lifts."
+                    .into()
+            }
             ReleaseStep::Rejected { by, reason } => format!("{by} refused the launch: {reason}"),
             ReleaseStep::Scheduled { at } => format!("The launch is scheduled for {at}"),
         }
