@@ -413,6 +413,15 @@ with reciprocal rank fusion. Each chunk is stored under a Data Object ID derived
 and chunk ID, because Agent Retrieval accepts only RFC 1035 labels, and `create_collection`
 declares a data schema because the service admits no undeclared data field.
 
+### Erasing a person's chunks
+
+`RagSubjectData` adapts a `VectorStore` to `adk_core::subject::SubjectDataStore`, so
+`SubjectRights` exports and erases a person's chunks with the rest of their data: chunks tagged
+with `SUBJECT_METADATA_KEY` (`adk_subject`) are deleted with `delete_where`
+(`SubjectPartition::Tagged`), and a scope per user is purged with `purge_scope`
+(`SubjectPartition::ScopePerUser`). See
+[Subject Rights](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/subject-rights.md).
+
 ## Vertex AI RAG Engine (managed)
 
 Instead of running your own pipeline, retrieve from managed Vertex AI RAG

@@ -54,6 +54,7 @@ tokenizers = { version = "0.22", default-features = false, features = ["onig"], 
 hf-hub = { version = "0.5", optional = true, default-features = false, features = ["ureq"] }
 
 [dev-dependencies]
+adk-core = { path = "../adk-core", features = ["conformance"] }
 adk-tool = { path = "../adk-tool" }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 axum = "0.8"
