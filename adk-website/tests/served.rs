@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use adk_awp::signing::jws::Ed25519DocumentSigner;
 use adk_core::principal::SubjectRef;
-use adk_core::{ApprovalDecision, DurableRunStore, InboxQuery, RunFilter, RunState};
-use adk_kernel::charter::{CharterStore, CommitDecision, RoleApproval, SignalFilter, SignalStore};
+use adk_core::{ApprovalDecision, InboxQuery, RunFilter, RunState};
+use adk_kernel::charter::{CommitDecision, RoleApproval, SignalFilter};
 use adk_site::feed::{FeedMapping, FeedRecord, FieldMapping, FieldType};
 use adk_site::pipeline::{Change, EntryPoint, PipelineOutcome};
 use adk_website::contract::{ContractInputs, SiteKeys, site_documents};
@@ -158,7 +158,7 @@ async fn commit(served: &Served, dir: &Path) -> Charter {
     let decision = CommitDecision::new("dec-1", chrono::Utc::now()).with_approval(
         RoleApproval::new(Role::Owner, SubjectRef::human(OWNER), chrono::Utc::now()),
     );
-    served.stores.charters.commit(charter.clone(), decision).await.unwrap();
+    served.stores.kernel.charter.charters.commit(charter.clone(), decision).await.unwrap();
     adk_website::jobs::register(&served.sites[0].ladder, &charter).await.unwrap();
     charter
 }
@@ -299,10 +299,12 @@ async fn a_served_site_restarts_and_keeps_its_state() {
 
     let served = start(dir.path(), |_| {}).await;
     assert!(served.setup_code.is_none(), "the paired device stays paired; no second code");
-    let current = served.stores.charters.current(charter.site_id).await.unwrap().unwrap();
+    let current =
+        served.stores.kernel.charter.charters.current(charter.site_id).await.unwrap().unwrap();
     assert_eq!(current.version(), 1, "the committed charter survives");
     assert_eq!(served.sites[0].ladder.level(charter.site_id, &job).await.unwrap(), level);
-    let signals = served.stores.signals.list(&SignalFilter::default()).await.unwrap();
+    let signals =
+        served.stores.kernel.charter.signals.list(&SignalFilter::default()).await.unwrap();
     assert_eq!(signals.len(), 1, "the enquiry's signal survives");
     let (status, page) = http(served.edge_addr, "GET", "/", None).await;
     assert_eq!(status, 200);
@@ -442,7 +444,7 @@ async fn the_experiments_look_runs_on_its_trigger() {
     .await;
     let mut done = None;
     for _ in 0..80 {
-        let runs = served.stores.runs.list(RunFilter::default()).await.unwrap();
+        let runs = served.stores.kernel.runs.list(RunFilter::default()).await.unwrap();
         done = runs
             .into_iter()
             .find(|run| run.target == EXPERIMENTS_WORKFLOW && run.state == RunState::Completed);
@@ -451,7 +453,7 @@ async fn the_experiments_look_runs_on_its_trigger() {
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    let all = served.stores.runs.list(RunFilter::default()).await.unwrap();
+    let all = served.stores.kernel.runs.list(RunFilter::default()).await.unwrap();
     let run = done.unwrap_or_else(|| panic!("the daily look ran as a kernel run: {all:#?}"));
     assert_eq!(run.input["site"], json!(served.sites[0].site.id));
     served.shutdown().await.unwrap();
@@ -470,7 +472,7 @@ async fn cap_back_office(served: &Served, micro_usd: u64) {
 /// `data/kernel.db` beside the runs, so the kernel finds the sleeper and its wake set again.
 #[tokio::test]
 async fn a_budget_deferred_sleeper_wakes_after_a_restart() {
-    use adk_kernel::{ProcessStore as _, Wake};
+    use adk_kernel::Wake;
     use adk_model::{ScriptedLlm, ScriptedResponse};
     use adk_server::awp::SignalEmitter as _;
 
@@ -503,11 +505,11 @@ async fn a_budget_deferred_sleeper_wakes_after_a_restart() {
         .unwrap();
     let mut deferred = None;
     for _ in 0..120 {
-        for run in served.stores.runs.list(RunFilter::default()).await.unwrap() {
+        for run in served.stores.kernel.runs.list(RunFilter::default()).await.unwrap() {
             if run.target != "growth" || run.state != RunState::Waiting {
                 continue;
             }
-            let meta = served.stores.processes.get(&run.run_id).await.unwrap();
+            let meta = served.stores.kernel.processes.get(&run.run_id).await.unwrap();
             if meta.and_then(|meta| meta.wake).is_some_and(|wake| wake.any_of == [budget.clone()]) {
                 deferred = Some(run.run_id);
             }
@@ -517,25 +519,27 @@ async fn a_budget_deferred_sleeper_wakes_after_a_restart() {
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    let all = served.stores.runs.list(RunFilter::default()).await.unwrap();
+    let all = served.stores.kernel.runs.list(RunFilter::default()).await.unwrap();
     let pid = deferred
         .unwrap_or_else(|| panic!("the freshness job is deferred on the spent budget: {all:#?}"));
     served.shutdown().await.unwrap();
 
     let served = start(dir.path(), with_model).await;
-    let meta = served.stores.processes.get(&pid).await.unwrap().expect("the process row survives");
+    let meta =
+        served.stores.kernel.processes.get(&pid).await.unwrap().expect("the process row survives");
     assert_eq!(meta.wake.expect("the sleeper keeps its wake set").any_of, [budget]);
     // A raised cap gives the budget room: the kernel's next tick wakes the sleeper.
     cap_back_office(&served, 1_000_000).await;
     let mut woken = false;
     for _ in 0..120 {
-        if served.stores.runs.get(&pid).await.unwrap().unwrap().state == RunState::Completed {
+        if served.stores.kernel.runs.get(&pid).await.unwrap().unwrap().state == RunState::Completed
+        {
             woken = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    let run = served.stores.runs.get(&pid).await.unwrap().unwrap();
+    let run = served.stores.kernel.runs.get(&pid).await.unwrap().unwrap();
     assert!(woken, "the deferred job runs once the budget has room: {run:#?}");
     served.shutdown().await.unwrap();
 }
@@ -607,14 +611,14 @@ async fn a_signal_wakes_the_back_office_the_kernel_hosts() {
         .unwrap();
     let mut done = None;
     for _ in 0..120 {
-        let runs = served.stores.runs.list(RunFilter::default()).await.unwrap();
+        let runs = served.stores.kernel.runs.list(RunFilter::default()).await.unwrap();
         done = runs.into_iter().find(|run| run.target == "growth" && run.state.is_terminal());
         if done.is_some() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    let all = served.stores.runs.list(RunFilter::default()).await.unwrap();
+    let all = served.stores.kernel.runs.list(RunFilter::default()).await.unwrap();
     let run = done.unwrap_or_else(|| panic!("the freshness job ran Growth: {all:#?}"));
     assert_eq!(run.state, RunState::Completed, "{run:#?}");
     assert_eq!(run.input["job"], "freshness");
@@ -789,7 +793,7 @@ async fn finished_run(
     matches: impl Fn(&adk_core::RunRecord) -> bool,
 ) -> adk_core::RunRecord {
     for _ in 0..160 {
-        let runs = served.stores.runs.list(RunFilter::default()).await.unwrap();
+        let runs = served.stores.kernel.runs.list(RunFilter::default()).await.unwrap();
         if let Some(run) = runs
             .into_iter()
             .find(|run| run.target == target && matches(run) && run.state.is_terminal())
@@ -798,7 +802,7 @@ async fn finished_run(
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    let all = served.stores.runs.list(RunFilter::default()).await.unwrap();
+    let all = served.stores.kernel.runs.list(RunFilter::default()).await.unwrap();
     panic!("no finished {target} run: {all:#?}");
 }
 
@@ -866,7 +870,7 @@ async fn the_served_site_hosts_the_guardians_probe() {
             json!({ "site": site.id, "n": n }),
         )
     };
-    served.stores.runs.enqueue(probe_run(1)).await.unwrap();
+    served.stores.kernel.runs.enqueue(probe_run(1)).await.unwrap();
     let healthy = finished_run(&served, PROBE_WORKFLOW, |run| run.input["n"] == 1).await;
     assert_eq!(healthy.state, RunState::Completed, "{healthy:#?}");
     let output = healthy.result.clone().unwrap_or_default();
@@ -879,7 +883,7 @@ async fn the_served_site_hosts_the_guardians_probe() {
     let replacement = served_page.with_extension("tmp");
     std::fs::write(&replacement, b"<html><body>defaced</body></html>").unwrap();
     std::fs::rename(&replacement, &served_page).unwrap();
-    served.stores.runs.enqueue(probe_run(2)).await.unwrap();
+    served.stores.kernel.runs.enqueue(probe_run(2)).await.unwrap();
     let found = finished_run(&served, PROBE_WORKFLOW, |run| run.input["n"] == 2).await;
     assert_eq!(found.state, RunState::Completed, "{found:#?}");
     let output = found.result.clone().unwrap_or_default();

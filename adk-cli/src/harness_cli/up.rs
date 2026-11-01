@@ -14,14 +14,14 @@ use std::sync::Arc;
 use adk_cli::harness::{HarnessLauncher, KernelSettings, OPERATOR_SCOPE};
 use adk_core::audit_log::{AuditRecorder, AuditTrail};
 use adk_core::{
-    ApprovalPolicy, ApprovalService, ApproverSelector, GovernanceControl, GovernanceStateStore,
-    ScheduleStore, StoreApprovalService,
+    ApprovalPolicy, ApprovalService, ApproverSelector, GovernanceControl, StoreApprovalService,
 };
 use adk_harness::HarnessMode;
 use adk_kernel::control::ControlPlaneConfig;
 use adk_kernel::proc::baselines::LlmPhraser;
-use adk_kernel::proc::{Ledger, LedgerKey, LedgerStore};
-use adk_kernel::{KernelConfig, ProcessStore, QueueClass};
+use adk_kernel::proc::{Ledger, LedgerKey};
+use adk_kernel::stores::KernelStores;
+use adk_kernel::{KernelConfig, QueueClass};
 use adk_server::background::{BackgroundState, DurableWorkerConfig};
 use anyhow::{Context, Result, bail};
 
@@ -51,34 +51,6 @@ pub(super) const DEFAULT_BIND: &str = "127.0.0.1:8080";
 /// Why Go ahead is refused beyond loopback without a sandbox.
 const AUTO_REFUSED: &str = "edits would run unattended on this host";
 
-/// The kernel's own stores, in the backend the harness's stores are in.
-struct KernelStores {
-    processes: Arc<dyn ProcessStore>,
-    agenda: Arc<dyn adk_kernel::AgendaStore>,
-    /// The partition table and the crossing ledger (spec 3.2 §7.8).
-    partitions: Arc<dyn adk_kernel::PartitionStore>,
-    schedules: Arc<dyn ScheduleStore>,
-    /// Mounted drivers and their parked calls (spec 3.2 §7.7).
-    drivers: Arc<dyn adk_kernel::drivers::DriverStore>,
-    /// The activity ledger, its observations and pass state (spec 3.2 §7.10).
-    ledger: Arc<dyn LedgerStore>,
-    /// Paired devices and their waiting codes, hashed (spec 3.3 §10 K2).
-    devices: Arc<dyn adk_kernel::pairing::DeviceStore>,
-    /// Settings changed while the kernel runs and each device's place in "While you were
-    /// away" (spec 3.3 §10 K3, K4).
-    control: Arc<dyn adk_kernel::control::ControlStore>,
-    /// Where the cron wakes of sleepers left off (spec 3.2 §7.4).
-    watermarks: Arc<dyn adk_kernel::CronWatermarkStore>,
-    /// The agents a person added (spec 3.3 §5.7, §10 K7, L1).
-    agents: Arc<dyn adk_kernel::agents::AgentStore>,
-    /// Whether nothing outlives the kernel (`--ephemeral`).
-    ephemeral: bool,
-    /// The kill switch's shared state; `None` keeps it in this process.
-    governance: Option<Arc<dyn GovernanceStateStore>>,
-    /// Where they are, for the banner.
-    label: String,
-}
-
 /// `adk-rust up` (spec 3.2 §8.1): runs until Ctrl-C or `SIGTERM`, then drains and stops.
 pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -> Result<()> {
     #[cfg(feature = "mobile")]
@@ -90,6 +62,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     #[cfg(feature = "genui-apps")]
     let apps_origin = up.apps_origin.clone();
     let UpArgs { home, bind, auth_token, store, mut harness, .. } = up;
+    let ephemeral = harness.ephemeral;
     // The baseline pass's observations are worded by the harness's model (spec 3.2 §7.10).
     let phraser = Arc::new(LlmPhraser::new(model.llm.clone()));
     // The realtime models the home's voice view offers a harness marked for voice (spec 3.3
@@ -250,9 +223,10 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     let stores = kernel_stores(&setup, store.as_deref()).await?;
     // One kill switch for the runner, the kernel and the server, mirrored from the store
     // replicas share (K-I8).
-    let governance = match &stores.governance {
-        Some(state) => KernelConfig::mirrored_governance(state.clone()),
-        None => GovernanceControl::new(),
+    let governance = if stores.is_in_memory("governance") {
+        GovernanceControl::new()
+    } else {
+        KernelConfig::mirrored_governance(stores.governance.clone())
     };
     let audit = kernel_audit(&home, &setup, store.as_deref()).await?;
     // The web home records its commands, and how each answer was given, on the same signed
@@ -580,7 +554,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             .with_clock(Arc::new(adk_core::SystemClock)),
     );
     // The subject key stays in the home; an ephemeral kernel's ledger and key end with it.
-    let key = if stores.ephemeral {
+    let key = if !stores.is_durable() {
         LedgerKey::generate()?
     } else {
         let path = home.join(LedgerKey::FILE);
@@ -616,18 +590,19 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     if let Some(table) = &table {
         builder = builder.partitions(table.clone());
     }
+    // Every stateful store comes from the bundle unless the harness set its own; a kernel
+    // that is not `--ephemeral` refuses to keep one in memory (spec 3.2 §7.1).
     let mut kernel = builder
         .config(config)
-        .agent_store(stores.agents.clone())
+        .stores(&stores)
         .agent_factory(Arc::new(factory))
         .agents_handle(agents_handle.clone())
-        .process_store(stores.processes)
-        .agenda_store(stores.agenda)
-        .watermark_store(stores.watermarks)
-        .schedule_store(stores.schedules)
         .drivers(drivers)
-        .ledger(Ledger::new(stores.ledger, key))
+        .ledger(Ledger::new(stores.ledger.clone(), key))
         .observation_phraser(phraser);
+    if !ephemeral {
+        kernel = kernel.require_durable();
+    }
     #[cfg(feature = "verb-ui")]
     {
         kernel = kernel.agenda_handle(verb_agenda.clone());
@@ -655,7 +630,10 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             );
         }
     }
-    let kernel = kernel.build()?;
+    let kernel = kernel.build().context(
+        "adk-rust up keeps every kernel store in harness.db or the --store backend; pass \
+         --ephemeral to keep them in memory",
+    )?;
     held.attach(&kernel);
     // The inbox decides through the harness's approval service, which wakes the kernel's
     // approval sleepers; the service the builder was given would not.
@@ -768,7 +746,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     }
     println!(
         "  store {}: sessions, approvals, runs, processes, agenda, schedules, drivers, partitions, the activity ledger, paired devices",
-        stores.label
+        stores.label()
     );
     if !partitions_note.is_empty() {
         println!("  partitions {}", partitions_note.join(", "));
@@ -979,164 +957,23 @@ pub(super) fn run_and_approval_stores(
     (Arc::new(adk_core::InMemoryApprovalStore::new()), Arc::new(adk_core::InMemoryRunStore::new()))
 }
 
-/// The process, schedule and governance stores, beside the harness's (spec 3.2 §7.1, §13
-/// Q8): on `harness.db`'s pool with their own migration tables, in the `--store` backend,
-/// or in memory with `--ephemeral`.
+/// The kernel's stores, beside the harness's (spec 3.2 §7.1, §13 Q8): in the `--store`
+/// backend every replica shares, on `harness.db`'s pool with their own migration tables, or
+/// in memory with `--ephemeral`.
 async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStores> {
     if let Some(url) = store {
-        return shared_kernel_stores(url).await;
+        // `Setup::open` already refused a scheme this build cannot open.
+        let stores = KernelStores::open(url)
+            .await
+            .with_context(|| format!("--store {}", adk_harness::redact_store_url(url)))?;
+        return Ok(stores);
     }
     #[cfg(feature = "persist")]
     if let Some(db) = &setup.db {
-        let processes = adk_kernel::SqliteProcessStore::new(db.pool.clone());
-        processes.migrate().await?;
-        let agenda = adk_kernel::SqliteAgendaStore::new(db.pool.clone());
-        agenda.migrate().await?;
-        let partitions = adk_kernel::SqlitePartitionStore::new(db.pool.clone());
-        partitions.migrate().await?;
-        let schedules = adk_session::SqliteScheduleStore::from_pool(db.pool.clone());
-        schedules.migrate().await?;
-        let governance = adk_session::SqliteGovernanceStateStore::from_pool(db.pool.clone());
-        governance.migrate().await?;
-        let drivers = adk_kernel::stores::SqliteDriverStore::new(db.pool.clone());
-        drivers.migrate().await?;
-        let ledger = adk_kernel::proc::SqliteLedgerStore::new(db.pool.clone());
-        ledger.migrate().await?;
-        let devices = adk_kernel::pairing::SqliteDeviceStore::new(db.pool.clone());
-        devices.migrate().await?;
-        let control = adk_kernel::control::SqliteControlStore::new(db.pool.clone());
-        control.migrate().await?;
-        let watermarks = adk_kernel::SqliteCronWatermarkStore::new(db.pool.clone());
-        watermarks.migrate().await?;
-        let agents = adk_kernel::stores::SqliteAgentStore::new(db.pool.clone());
-        agents.migrate().await?;
-        return Ok(KernelStores {
-            agents: Arc::new(agents),
-            processes: Arc::new(processes),
-            agenda: Arc::new(agenda),
-            partitions: Arc::new(partitions),
-            schedules: Arc::new(schedules),
-            drivers: Arc::new(drivers),
-            ledger: Arc::new(ledger),
-            devices: Arc::new(devices),
-            control: Arc::new(control),
-            watermarks: Arc::new(watermarks),
-            ephemeral: false,
-            governance: Some(Arc::new(governance)),
-            label: "harness.db".into(),
-        });
+        return Ok(KernelStores::from_sqlite_pool(db.pool.clone()).await?.with_label("harness.db"));
     }
     let _ = setup;
-    Ok(KernelStores {
-        processes: Arc::new(adk_kernel::InMemoryProcessStore::new()),
-        agenda: Arc::new(adk_kernel::InMemoryAgendaStore::new()),
-        partitions: Arc::new(adk_kernel::InMemoryPartitionStore::new()),
-        schedules: Arc::new(adk_core::InMemoryScheduleStore::new()),
-        drivers: Arc::new(adk_kernel::stores::InMemoryDriverStore::new()),
-        ledger: Arc::new(adk_kernel::proc::InMemoryLedgerStore::new()),
-        devices: Arc::new(adk_kernel::pairing::InMemoryDeviceStore::new()),
-        control: Arc::new(adk_kernel::control::InMemoryControlStore::new()),
-        watermarks: Arc::new(adk_kernel::InMemoryCronWatermarkStore::new()),
-        agents: Arc::new(adk_kernel::stores::InMemoryAgentStore::new()),
-        ephemeral: true,
-        governance: None,
-        label: "memory (--ephemeral): nothing outlives the kernel".into(),
-    })
-}
-
-/// The kernel's stores in the `--store` backend every replica shares.
-async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
-    let label = adk_harness::redact_store_url(url);
-    match url.split_once("://").map(|(scheme, _)| scheme.to_ascii_lowercase()).as_deref() {
-        #[cfg(feature = "postgres")]
-        Some("postgres" | "postgresql") => {
-            let processes = adk_kernel::PostgresProcessStore::connect(url).await?;
-            processes.migrate().await?;
-            let agenda = adk_kernel::PostgresAgendaStore::new(processes.pool().clone());
-            agenda.migrate().await?;
-            let partitions = adk_kernel::PostgresPartitionStore::new(processes.pool().clone());
-            partitions.migrate().await?;
-            let schedules = adk_session::PostgresScheduleStore::new(url).await?;
-            schedules.migrate().await?;
-            let governance = adk_session::PostgresGovernanceStateStore::new(url).await?;
-            governance.migrate().await?;
-            let drivers = adk_kernel::stores::PostgresDriverStore::connect(url).await?;
-            drivers.migrate().await?;
-            let ledger = adk_kernel::proc::PostgresLedgerStore::new(processes.pool().clone());
-            ledger.migrate().await?;
-            let devices = adk_kernel::pairing::PostgresDeviceStore::new(processes.pool().clone());
-            devices.migrate().await?;
-            let control = adk_kernel::control::PostgresControlStore::new(processes.pool().clone());
-            control.migrate().await?;
-            let watermarks = adk_kernel::PostgresCronWatermarkStore::new(processes.pool().clone());
-            watermarks.migrate().await?;
-            let agents = adk_kernel::stores::PostgresAgentStore::new(processes.pool().clone());
-            agents.migrate().await?;
-            Ok(KernelStores {
-                agents: Arc::new(agents),
-                processes: Arc::new(processes),
-                agenda: Arc::new(agenda),
-                partitions: Arc::new(partitions),
-                schedules: Arc::new(schedules),
-                drivers: Arc::new(drivers),
-                ledger: Arc::new(ledger),
-                devices: Arc::new(devices),
-                control: Arc::new(control),
-                watermarks: Arc::new(watermarks),
-                ephemeral: false,
-                governance: Some(Arc::new(governance)),
-                label,
-            })
-        }
-        #[cfg(feature = "redis")]
-        Some("redis" | "rediss") => {
-            let processes = adk_kernel::RedisProcessStore::connect(url).await?;
-            processes.migrate().await?;
-            let agenda = adk_kernel::RedisAgendaStore::from_client(processes.client().clone());
-            agenda.migrate().await?;
-            let partitions =
-                adk_kernel::RedisPartitionStore::from_client(processes.client().clone());
-            partitions.migrate().await?;
-            let schedules = adk_session::RedisScheduleStore::new(url).await?;
-            schedules.migrate().await?;
-            let governance = adk_session::RedisGovernanceStateStore::new(url).await?;
-            governance.migrate().await?;
-            let drivers = adk_kernel::stores::RedisDriverStore::connect(url).await?;
-            drivers.migrate().await?;
-            let ledger =
-                adk_kernel::proc::RedisLedgerStore::from_client(processes.client().clone());
-            ledger.migrate().await?;
-            let devices =
-                adk_kernel::pairing::RedisDeviceStore::from_client(processes.client().clone());
-            devices.migrate().await?;
-            let control =
-                adk_kernel::control::RedisControlStore::from_client(processes.client().clone());
-            control.migrate().await?;
-            let watermarks =
-                adk_kernel::RedisCronWatermarkStore::from_client(processes.client().clone());
-            watermarks.migrate().await?;
-            let agents =
-                adk_kernel::stores::RedisAgentStore::from_client(processes.client().clone());
-            agents.migrate().await?;
-            Ok(KernelStores {
-                agents: Arc::new(agents),
-                processes: Arc::new(processes),
-                agenda: Arc::new(agenda),
-                partitions: Arc::new(partitions),
-                schedules: Arc::new(schedules),
-                drivers: Arc::new(drivers),
-                ledger: Arc::new(ledger),
-                devices: Arc::new(devices),
-                control: Arc::new(control),
-                watermarks: Arc::new(watermarks),
-                ephemeral: false,
-                governance: Some(Arc::new(governance)),
-                label,
-            })
-        }
-        // `Setup::open` already refused a scheme this build cannot open.
-        _ => bail!("--store {label}: no kernel store backend for it in this build"),
-    }
+    Ok(KernelStores::in_memory().with_label("memory (--ephemeral): nothing outlives the kernel"))
 }
 
 /// The kernel replica's audit recorder, the log store under it, and the record book the

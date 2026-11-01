@@ -67,10 +67,10 @@ use crate::partition::{PartitionId, Partitions};
 use crate::proc::{Ledger, LedgerEventSink};
 use crate::process::{ProcessHandle, ProcessTable, ProgressSource, Suspension};
 use crate::sched::{QueueClass, QuietHours, Quotas};
-use crate::stores::ProcessFilter;
 use crate::stores::{
     InMemoryAgendaStore, InMemoryCronWatermarkStore, InMemoryProcessStore, ProcessStore,
 };
+use crate::stores::{KernelStores, ProcessFilter, StoreOrigin, StoreUse};
 use crate::supervise::{KernelHooks, Supervision};
 use crate::wake::{
     CronWakeSource, FileWakeSource, KernelWakeExecutor, RunFinishedWakeSource, Trigger, Wake,
@@ -426,6 +426,8 @@ struct KernelInner {
     partitions: Partitions,
     router: WakeRouter,
     schedules: Option<Arc<dyn ScheduleStore>>,
+    /// Where each stateful store came from (spec 3.2 §7.1).
+    store_uses: Vec<StoreUse>,
     approvals: Option<Arc<dyn ApprovalService>>,
     sessions: Option<Arc<dyn SessionService>>,
     agents: BTreeMap<String, Arc<Runner>>,
@@ -485,6 +487,12 @@ impl Kernel {
     /// The configuration the kernel was built with.
     pub fn config(&self) -> &KernelConfig {
         &self.inner.config
+    }
+
+    /// Each stateful store of the kernel: where it came from and whether it is known to be
+    /// held in memory (spec 3.2 §7.1, [`KernelBuilder::require_durable`]).
+    pub fn store_uses(&self) -> &[StoreUse] {
+        &self.inner.store_uses
     }
 
     fn state(&self) -> KernelState {
@@ -1602,6 +1610,8 @@ pub struct KernelBuilder {
     partitions: Option<Partitions>,
     partition_targets: BTreeMap<String, PartitionId>,
     watermarks: Option<Arc<dyn CronWatermarkStore>>,
+    bundle: Option<KernelStores>,
+    require_durable: bool,
 }
 
 impl fmt::Debug for KernelBuilder {
@@ -1955,16 +1965,111 @@ impl KernelBuilder {
         self
     }
 
+    /// Takes every stateful store the builder has no other from `stores` (spec 3.2 §7.1): a
+    /// store set on the builder, before or after, wins.
+    ///
+    /// | Builder store | From `stores` |
+    /// |---|---|
+    /// | [`run_store`](Self::run_store), [`process_store`](Self::process_store), [`schedule_store`](Self::schedule_store), [`spend_ledger`](Self::spend_ledger), [`agenda_store`](Self::agenda_store), [`watermark_store`](Self::watermark_store), [`agent_store`](Self::agent_store) | the store of the same name |
+    /// | [`partitions`](Self::partitions) | a table over `partitions` |
+    /// | the kill switch | [`KernelConfig::mirrored_governance`] over `governance`, unless [`governance`](Self::governance) is set, the configuration's is mirrored, or the bundle keeps `governance` in memory |
+    /// | the control plane's settings store | `control`, unless the configuration names its own (`ControlPlaneConfig::with_control_store`) |
+    ///
+    /// The approval service, the drivers' supervisor and the activity ledger are built by the
+    /// host over `approvals`, `drivers` and `ledger`, with its own routing, home and key.
+    /// A runner built before the kernel shares the kernel's kill switch through
+    /// `kernel.config().governance`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_kernel::Kernel;
+    /// use adk_kernel::stores::{KernelStores, StoreOrigin};
+    ///
+    /// let kernel = Kernel::builder().stores(&KernelStores::in_memory()).build()?;
+    /// assert!(kernel.store_uses().iter().all(|used| used.origin == StoreOrigin::Bundle));
+    /// # Ok::<(), adk_kernel::KernelError>(())
+    /// ```
+    #[must_use]
+    pub fn stores(mut self, stores: &KernelStores) -> Self {
+        self.bundle = Some(stores.clone());
+        self
+    }
+
+    /// Refuses to build a kernel that would keep a stateful store in memory (spec 3.2
+    /// §7.1): one the builder defaulted, one its [`KernelStores`] keeps in memory, or a kill
+    /// switch that is not mirrored. Without it, the builder logs a warning for each store it
+    /// defaults. [`Kernel::store_uses`] reports each store either way.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::InMemoryRunStore;
+    /// use adk_kernel::Kernel;
+    ///
+    /// let refused = Kernel::builder()
+    ///     .run_store(Arc::new(InMemoryRunStore::new()))
+    ///     .require_durable()
+    ///     .build()
+    ///     .unwrap_err();
+    /// assert!(refused.to_string().contains("`process_store`"));
+    /// ```
+    #[must_use]
+    pub fn require_durable(mut self) -> Self {
+        self.require_durable = true;
+        self
+    }
+
     /// Builds the kernel. Nothing runs until [`Kernel::start`].
     ///
     /// # Errors
     ///
     /// Returns [`KernelError::Config`] when no run store is set, the control plane
-    /// configuration is refused (K-I18), or a partition has two progress sources.
+    /// configuration is refused (K-I18), a partition has two progress sources, or
+    /// [`require_durable`](Self::require_durable) is set and a stateful store would be kept
+    /// in memory, naming each.
     pub fn build(self) -> Result<Kernel> {
-        let runs = self.runs.ok_or_else(|| KernelError::Config {
-            reason: "a kernel needs a durable run store; call KernelBuilder::run_store".into(),
-        })?;
+        let mut slots = Slots { uses: Vec::new(), bundle: self.bundle.as_ref() };
+        let runs = slots.take("run_store", self.runs, "runs", |b| Arc::clone(&b.runs)).ok_or_else(
+            || KernelError::Config {
+                reason: "a kernel needs a durable run store; call KernelBuilder::run_store or \
+                         KernelBuilder::stores"
+                    .into(),
+            },
+        )?;
+        let processes: Arc<dyn ProcessStore> = slots
+            .take("process_store", self.processes, "processes", |b| Arc::clone(&b.processes))
+            .unwrap_or_else(|| {
+                slots.defaulted("process_store", Arc::new(InMemoryProcessStore::new()))
+            });
+        let schedules =
+            slots.take("schedule_store", self.schedules, "schedules", |b| Arc::clone(&b.schedules));
+        let spend = slots.take("spend_ledger", self.spend, "spend", |b| Arc::clone(&b.spend));
+        let agenda_store: Arc<dyn AgendaStore> = slots
+            .take("agenda_store", self.agenda, "agenda", |b| Arc::clone(&b.agenda))
+            .unwrap_or_else(|| {
+                slots.defaulted("agenda_store", Arc::new(InMemoryAgendaStore::new()))
+            });
+        let partitions = slots
+            .take("partitions", self.partitions, "partitions", |b| {
+                Partitions::new(Arc::clone(&b.partitions))
+            })
+            .unwrap_or_else(|| slots.defaulted("partitions", Partitions::in_memory()));
+        let watermarks: Arc<dyn CronWatermarkStore> = slots
+            .take("watermark_store", self.watermarks, "watermarks", |b| Arc::clone(&b.watermarks))
+            .unwrap_or_else(|| {
+                slots.defaulted("watermark_store", Arc::new(InMemoryCronWatermarkStore::new()))
+            });
+        let agent_store: Arc<dyn crate::agents::AgentStore> = slots
+            .take("agent_store", self.agent_store, "agents", |b| Arc::clone(&b.agents))
+            .unwrap_or_else(|| {
+                slots.defaulted("agent_store", Arc::new(crate::stores::InMemoryAgentStore::new()))
+            });
+        let mut config = self.config;
+        slots.governance(&mut config, self.governance);
+        slots.control_store(&mut config);
+        let store_uses = slots.finish(&config, self.require_durable)?;
         let mut partition_progress = BTreeMap::new();
         for (partition, source) in self.partition_progress {
             if partition_progress.contains_key(&partition) {
@@ -1976,10 +2081,6 @@ impl KernelBuilder {
                 });
             }
             partition_progress.insert(partition, source);
-        }
-        let mut config = self.config;
-        if let Some(governance) = self.governance {
-            config.governance = governance;
         }
         config.control.validate()?;
         let mut names = std::collections::BTreeSet::new();
@@ -1993,9 +2094,6 @@ impl KernelBuilder {
                 ),
             });
         }
-        let processes: Arc<dyn ProcessStore> =
-            self.processes.unwrap_or_else(|| Arc::new(InMemoryProcessStore::new()));
-        let partitions = self.partitions.unwrap_or_else(Partitions::in_memory);
         if let Some(trail) = &self.audit {
             partitions.attach_audit(trail.clone());
         }
@@ -2004,8 +2102,6 @@ impl KernelBuilder {
             bus.add_sink(sink);
         }
         let trigger_names = self.triggers.iter().map(|trigger| trigger.name.clone()).collect();
-        let watermarks: Arc<dyn CronWatermarkStore> =
-            self.watermarks.unwrap_or_else(|| Arc::new(InMemoryCronWatermarkStore::new()));
         let trigger_crons = trigger_cron_sources(&self.triggers, &self.wake_sources, &watermarks)?;
         #[cfg(feature = "proc")]
         let ledger = self.ledger.map(|ledger| ledger.with_clock(Arc::clone(&config.clock)));
@@ -2046,8 +2142,6 @@ impl KernelBuilder {
             .with_clock(Arc::clone(&config.clock));
         // The agents a person adds share one live target table with every worker (spec 3.3
         // §10 S4).
-        let agent_store: Arc<dyn crate::agents::AgentStore> =
-            self.agent_store.unwrap_or_else(|| Arc::new(crate::stores::InMemoryAgentStore::new()));
         let targets = Arc::new(crate::agents::Targets::new(
             self.partition_targets,
             Some(Arc::clone(&agent_store)),
@@ -2074,7 +2168,7 @@ impl KernelBuilder {
             proactivity: config.proactivity.clone(),
             quiet_hours: config.quiet_hours,
             quotas: config.quotas.clone(),
-            agenda: self.agenda.unwrap_or_else(|| Arc::new(InMemoryAgendaStore::new())),
+            agenda: agenda_store,
             admission: tokio::sync::Mutex::new(()),
             rule_source: self.rule_source,
             reviewed: std::sync::Mutex::new(None),
@@ -2134,7 +2228,7 @@ impl KernelBuilder {
         let mut wake_sources = self.wake_sources;
         wake_sources.extend(trigger_crons);
         wake_sources.push(run_finished);
-        let processes = ProcessTable::supervised(Arc::clone(&sup), self.spend);
+        let processes = ProcessTable::supervised(Arc::clone(&sup), spend);
         let agenda = Agenda::new(
             Arc::clone(&sup),
             processes.clone(),
@@ -2173,7 +2267,8 @@ impl KernelBuilder {
                 agenda,
                 partitions,
                 router,
-                schedules: self.schedules,
+                schedules,
+                store_uses,
                 approvals: self.approvals,
                 sessions: self.sessions,
                 agents: self.agents,
@@ -2190,6 +2285,144 @@ impl KernelBuilder {
                 ledger,
             }),
         })
+    }
+}
+
+/// The stateful stores a [`KernelBuilder`] resolves: each set one, else its bundle's, else
+/// one in memory, with where each came from.
+struct Slots<'a> {
+    uses: Vec<StoreUse>,
+    bundle: Option<&'a KernelStores>,
+}
+
+impl Slots<'_> {
+    /// `set`, else the bundle's store `field` picks, recording which; `None` with neither.
+    fn take<T>(
+        &mut self,
+        store: &str,
+        set: Option<T>,
+        field: &str,
+        pick: impl FnOnce(&KernelStores) -> T,
+    ) -> Option<T> {
+        if set.is_some() {
+            self.uses.push(StoreUse::new(store, StoreOrigin::Set, false));
+            return set;
+        }
+        let bundle = self.bundle?;
+        self.uses.push(self.bundled(store, field));
+        Some(pick(bundle))
+    }
+
+    /// `memory`, recorded as the store the builder defaulted.
+    fn defaulted<T>(&mut self, store: &str, memory: T) -> T {
+        self.uses.push(StoreUse::new(store, StoreOrigin::Defaulted, true));
+        memory
+    }
+
+    fn bundled(&self, store: &str, field: &str) -> StoreUse {
+        let bundle = self.bundle.expect("only called with a bundle");
+        let mut used = StoreUse::new(store, StoreOrigin::Bundle, bundle.is_in_memory(field));
+        used.bundle = Some(bundle.label().to_string());
+        used
+    }
+
+    /// The kill switch: the one set, a mirrored configuration's, else mirrored over the
+    /// bundle's governance store when it is durable; one held in this process otherwise.
+    fn governance(&mut self, config: &mut KernelConfig, set: Option<GovernanceControl>) {
+        let used = match (set, self.bundle) {
+            (Some(control), _) => {
+                config.governance = control;
+                StoreUse::new("governance", StoreOrigin::Set, !config.governance.is_mirrored())
+            }
+            (None, _) if config.governance.is_mirrored() => {
+                StoreUse::new("governance", StoreOrigin::Set, false)
+            }
+            (None, Some(bundle)) => {
+                if !bundle.is_in_memory("governance") {
+                    config.governance =
+                        KernelConfig::mirrored_governance(Arc::clone(&bundle.governance));
+                }
+                self.bundled("governance", "governance")
+            }
+            (None, None) => StoreUse::new("governance", StoreOrigin::Defaulted, true),
+        };
+        self.uses.push(used);
+    }
+
+    /// The control plane's settings store: the configuration's own, else the bundle's.
+    fn control_store(&mut self, config: &mut KernelConfig) {
+        let used = if !config.control.has_default_control_store() {
+            StoreUse::new("control_store", StoreOrigin::Set, false)
+        } else if let Some(bundle) = self.bundle {
+            config.control.control_store = Arc::clone(&bundle.control);
+            self.bundled("control_store", "control")
+        } else {
+            StoreUse::new("control_store", StoreOrigin::Defaulted, true)
+        };
+        self.uses.push(used);
+    }
+
+    /// The record of every store: refused when `require_durable` and one is held in memory,
+    /// else a warning for each the builder defaulted.
+    fn finish(self, config: &KernelConfig, require_durable: bool) -> Result<Vec<StoreUse>> {
+        let remedy = |store: &str| match store {
+            "governance" => "KernelBuilder::governance with KernelConfig::mirrored_governance",
+            "control_store" => "ControlPlaneConfig::with_control_store",
+            "partitions" => "KernelBuilder::partitions",
+            "process_store" => "KernelBuilder::process_store",
+            "agenda_store" => "KernelBuilder::agenda_store",
+            "watermark_store" => "KernelBuilder::watermark_store",
+            "agent_store" => "KernelBuilder::agent_store",
+            "schedule_store" => "KernelBuilder::schedule_store",
+            "spend_ledger" => "KernelBuilder::spend_ledger",
+            _ => "KernelBuilder::run_store",
+        };
+        if require_durable {
+            let held: Vec<String> = self
+                .uses
+                .iter()
+                .filter(|used| used.in_memory)
+                .map(|used| {
+                    let why = match (used.origin, &used.bundle) {
+                        (StoreOrigin::Bundle, Some(label)) => {
+                            format!("the stores `{label}` keep it in memory")
+                        }
+                        (StoreOrigin::Set, _) => "the kill switch is not mirrored".to_string(),
+                        _ => format!("defaulted; set it with {}", remedy(&used.store)),
+                    };
+                    format!("`{}` ({why})", used.store)
+                })
+                .collect();
+            if !held.is_empty() {
+                return Err(KernelError::Config {
+                    reason: format!(
+                        "the kernel requires durable stores, and these would lose their state \
+                         on a restart: {}; give the builder durable stores with \
+                         KernelBuilder::stores(&KernelStores::open(url)), or set each",
+                        held.join(", ")
+                    ),
+                });
+            }
+        }
+        let served = config.control.socket.is_some() || config.control.http.is_some();
+        for used in &self.uses {
+            if used.origin == StoreOrigin::Defaulted && (served || used.store != "control_store") {
+                tracing::warn!(
+                    kernel.store = %used.store,
+                    remedy = remedy(&used.store),
+                    "the kernel keeps this store in memory, so its state ends with the process; \
+                     give the builder durable stores (KernelBuilder::stores) or set it"
+                );
+            }
+        }
+        if let Some(bundle) = self.bundle.filter(|bundle| !bundle.is_durable()) {
+            tracing::info!(
+                kernel.stores = bundle.label(),
+                in_memory = ?bundle.in_memory_stores(),
+                "the kernel's stores keep these in memory"
+            );
+        }
+        Ok(self.uses)
     }
 }
 

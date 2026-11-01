@@ -85,6 +85,100 @@ pub use crate::stores::charter_sql::{
 pub use crate::stores::charter_sql::{
     SqliteAutonomyStore, SqliteCharterStore, SqliteKpiStore, SqliteSignalStore,
 };
+/// The four charter stores of one backend (spec 3.5 §7.6, §7.10, §7.11): the `charter`
+/// field of [`KernelStores`](crate::stores::KernelStores), so a site's charter, KPIs,
+/// autonomy and signals sit beside the kernel's other stores.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::charter::CharterStores;
+///
+/// let stores = CharterStores::in_memory();
+/// let _ = (&stores.charters, &stores.kpis, &stores.autonomy, &stores.signals);
+/// ```
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct CharterStores {
+    /// Charter versions with the decisions that committed them.
+    pub charters: std::sync::Arc<dyn CharterStore>,
+    /// KPI readings, aggregates and the tracker's state.
+    pub kpis: std::sync::Arc<dyn KpiStore>,
+    /// Each job's autonomy level and history.
+    pub autonomy: std::sync::Arc<dyn AutonomyStore>,
+    /// Signals filed in the back office.
+    pub signals: std::sync::Arc<dyn SignalStore>,
+}
+
+impl std::fmt::Debug for CharterStores {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CharterStores").finish_non_exhaustive()
+    }
+}
+
+impl CharterStores {
+    /// The four stores in memory.
+    pub fn in_memory() -> Self {
+        Self {
+            charters: std::sync::Arc::new(InMemoryCharterStore::new()),
+            kpis: std::sync::Arc::new(InMemoryKpiStore::new()),
+            autonomy: std::sync::Arc::new(InMemoryAutonomyStore::new()),
+            signals: std::sync::Arc::new(InMemorySignalStore::new()),
+        }
+    }
+
+    /// The four stores on `pool`, migrated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Store`](crate::KernelError::Store) when the migration fails.
+    #[cfg(feature = "sqlite")]
+    pub async fn sqlite(pool: sqlx::SqlitePool) -> crate::Result<Self> {
+        let charters = SqliteCharterStore::new(pool.clone());
+        charters.migrate().await?;
+        Ok(Self {
+            charters: std::sync::Arc::new(charters),
+            kpis: std::sync::Arc::new(SqliteKpiStore::new(pool.clone())),
+            autonomy: std::sync::Arc::new(SqliteAutonomyStore::new(pool.clone())),
+            signals: std::sync::Arc::new(SqliteSignalStore::new(pool)),
+        })
+    }
+
+    /// The four stores on `pool`, migrated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Store`](crate::KernelError::Store) when the migration fails.
+    #[cfg(feature = "postgres")]
+    pub async fn postgres(pool: sqlx::PgPool) -> crate::Result<Self> {
+        let charters = PostgresCharterStore::new(pool.clone());
+        charters.migrate().await?;
+        Ok(Self {
+            charters: std::sync::Arc::new(charters),
+            kpis: std::sync::Arc::new(PostgresKpiStore::new(pool.clone())),
+            autonomy: std::sync::Arc::new(PostgresAutonomyStore::new(pool.clone())),
+            signals: std::sync::Arc::new(PostgresSignalStore::new(pool)),
+        })
+    }
+
+    /// The four stores on `client`, an initialised Redis client, migrated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Store`](crate::KernelError::Store) when the migration fails.
+    #[cfg(feature = "redis")]
+    pub async fn redis(client: fred::prelude::Client) -> crate::Result<Self> {
+        let charters = RedisCharterStore::from_client(client.clone());
+        charters.migrate().await?;
+        Ok(Self {
+            charters: std::sync::Arc::new(charters),
+            kpis: std::sync::Arc::new(RedisKpiStore::from_client(client.clone())),
+            autonomy: std::sync::Arc::new(RedisAutonomyStore::from_client(client.clone())),
+            signals: std::sync::Arc::new(RedisSignalStore::from_client(client)),
+        })
+    }
+}
+
 /// How far back a store keeps signal rate windows: a day, in microseconds.
 pub(crate) const RATE_HORIZON_MICROS: i64 = 24 * 60 * 60 * 1_000_000;
 

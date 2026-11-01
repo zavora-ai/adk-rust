@@ -7,7 +7,7 @@
 //! | Edge | The agent edge's routes, the stream feed and the content: the signed release on the site's `DirectoryHost`, or the holding page until the launch; in agency mode, each site's by its host (A-I22) |
 //!
 //! Each site is a [`RunningSite`] over its project ([`ProjectPaths`]); the kernel's stores are
-//! durable in `data/kernel.db` ([`KernelStores`]). The setup code is issued while no device
+//! durable in `data/kernel.db` ([`SiteStores`]). The setup code is issued while no device
 //! is paired, so a restarted site does not offer a second one.
 //!
 //! The kernel runs each site's processes (spec 3.5 §7.20): the Guardian's probe when the site
@@ -19,9 +19,11 @@
 //! At start, each job whose process is not scheduled is logged with the reason: no channel,
 //! no probe options or domain claim, no advisory or certificate source, or no model.
 //!
-//! The kernel's process table, schedules and spend ledger are in `data/kernel.db` beside the
-//! runs, and it records into the site's audit trail, `data/audit.jsonl`; an agency's kernel
-//! records into the agency's own `data/audit.jsonl`.
+//! Every store of the kernel is in `data/kernel.db` beside the runs ([`SiteStores`]) — the
+//! process table, schedules, spend ledger, the kill switch and the control plane's settings
+//! among them — and the kernel refuses to start with one in memory
+//! (`KernelBuilder::require_durable`). It records into the site's audit trail,
+//! `data/audit.jsonl`; an agency's kernel records into the agency's own `data/audit.jsonl`.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -37,7 +39,7 @@ use serde::Deserialize;
 use tokio::task::JoinHandle;
 
 use super::agency::{Agency, AgencyRouter};
-use super::kernel::KernelStores;
+use super::kernel::SiteStores;
 use super::project::ProjectPaths;
 use super::site::{RunningSite, ServedWorkflows, SiteOptions};
 use crate::onboarding::SetupGate;
@@ -95,7 +97,7 @@ pub struct Served {
     /// The sites served.
     pub sites: Vec<RunningSite>,
     /// The kernel's durable stores.
-    pub stores: KernelStores,
+    pub stores: SiteStores,
     kernel: Kernel,
     edge_task: JoinHandle<()>,
     chat: Option<adk_kernel::channels::ChannelGateway>,
@@ -152,14 +154,14 @@ impl Drop for Served {
 async fn start(
     name: &str,
     home: PathBuf,
-    stores: KernelStores,
+    stores: SiteStores,
     audit: AuditTrail,
     mut sites: Vec<RunningSite>,
     options: &ServeOptions,
     app: axum::Router,
     doorbell: Option<Arc<adk_kernel::channels::ChannelDoorbell>>,
 ) -> Result<Served> {
-    let pairing = Pairing::new(stores.devices.clone());
+    let pairing = Pairing::new(stores.kernel.devices.clone());
     // `adk-rust pair accept` pairs a chat account that asked with `/pair` (spec 3.5 §10 X12).
     let pairing = match &options.site.channel_bindings {
         Some(bindings) => pairing.with_channel_bindings(bindings.clone()),
@@ -196,19 +198,17 @@ async fn start(
     {
         kernel_config = kernel_config.with_quiet_hours(quiet);
     }
-    // The process table is durable beside the runs: the wake router finds sleepers only
-    // through it, so a restart keeps every wake set, admission deferral and daily total.
+    // Every stateful store is durable in `data/kernel.db`: the process table, which the wake
+    // router finds sleepers through, so a restart keeps every wake set, admission deferral
+    // and daily total; the kill switch, mirrored; the control plane's settings. A store
+    // that would be kept in memory refuses the start.
     let mut builder = Kernel::builder()
         .config(kernel_config)
-        .run_store(stores.runs.clone())
-        .process_store(stores.processes.clone())
-        .schedule_store(stores.schedules.clone())
-        .spend_ledger(stores.spend.clone())
+        .stores(&stores.kernel)
+        .require_durable()
         .audit(audit)
         .approval_service(stores.approvals.clone())
-        .partitions(stores.partitions.clone())
-        .agenda_store(stores.agenda.clone())
-        .watermark_store(stores.watermarks.clone());
+        .partitions(stores.partitions.clone());
     for site in &sites {
         use adk_kernel::charter::SiteProcessKind;
         triggers.extend(site.triggers().iter().cloned());
@@ -311,7 +311,7 @@ async fn start(
         let bindings: Arc<dyn adk_kernel::channels::ChannelBindingStore> =
             match &options.site.channel_bindings {
                 Some(bindings) => bindings.clone(),
-                None => stores.channel_bindings.clone(),
+                None => stores.kernel.channel_bindings.clone(),
             };
         let (gateway, routes) =
             super::chat::start(adapters, &kernel, site, bindings, doorbell, sessions.clone())
@@ -348,14 +348,11 @@ pub async fn serve(mut options: ServeOptions) -> Result<Served> {
     let doorbell =
         options.site.chat.is_some().then(|| Arc::new(adk_kernel::channels::ChannelDoorbell::new()));
     let notifiers = doorbell.iter().map(|bell| bell.clone() as Arc<dyn adk_core::ApprovalNotifier>);
-    let stores = KernelStores::open_with(
-        &paths.database("kernel"),
-        &options.site.owner,
-        notifiers.collect(),
-    )
-    .await?;
+    let stores =
+        SiteStores::open_with(&paths.database("kernel"), &options.site.owner, notifiers.collect())
+            .await?;
     if options.site.chat.is_some() && options.site.channel_bindings.is_none() {
-        options.site.channel_bindings = Some(stores.channel_bindings.clone());
+        options.site.channel_bindings = Some(stores.kernel.channel_bindings.clone());
     }
     let site = RunningSite::open(paths.clone(), &stores, &options.site).await?;
     site.partitions.install(&stores.partitions, adk_core::audit_log::AuditActor::default()).await?;
@@ -397,7 +394,7 @@ pub async fn serve_agency(file: &Path, options: ServeOptions) -> Result<Served> 
     let root = file.parent().unwrap_or(Path::new("."));
     let agency_paths = ProjectPaths::new(root);
     std::fs::create_dir_all(agency_paths.data()).map_err(config)?;
-    let stores = KernelStores::open(&agency_paths.database("kernel"), &options.site.owner).await?;
+    let stores = SiteStores::open(&agency_paths.database("kernel"), &options.site.owner).await?;
     // The agency's kernel serves every site, so it records into the agency's own trail.
     let audit = AuditTrail::new(Arc::new(
         adk_core::audit_log::FileAuditRecorder::open(agency_paths.data().join("audit.jsonl"))?

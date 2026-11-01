@@ -24,20 +24,21 @@ use adk_drivers::Side;
 use adk_drivers::email::email_tools;
 use adk_harness::InstructionsConfig;
 use adk_harness::website::{BackOfficeKit, LadderCompiler, PublicKit, SiteSearch};
-use adk_kernel::charter::CharterStore as _;
 use adk_kernel::{KernelBuilder, PartitionId};
 
-use super::kernel::KernelStores;
+use super::kernel::SiteStores;
 use super::site::RunningSite;
 use crate::team::{AgentRole, BuiltTeam, SiteTeam, TeamKit};
 
 impl RunningSite {
     /// The ladder compiler of the site's jobs: under the charter in force when there is one,
     /// with the email tools' origins pinned for standing rules.
-    async fn compiler(&self, stores: &KernelStores) -> Result<LadderCompiler> {
+    async fn compiler(&self, stores: &SiteStores) -> Result<LadderCompiler> {
         let team = SiteTeam::new(self.site.clone(), &self.template);
         let bindings = crate::jobs::bindings(&team, &self.template.jobs());
         let current = stores
+            .kernel
+            .charter
             .charters
             .current(self.site.id)
             .await
@@ -63,25 +64,22 @@ impl RunningSite {
     /// # Errors
     ///
     /// A store's error, or a team that does not build.
-    pub async fn back_office(
-        &self,
-        stores: &KernelStores,
-        model: Arc<dyn Llm>,
-    ) -> Result<BuiltTeam> {
+    pub async fn back_office(&self, stores: &SiteStores, model: Arc<dyn Llm>) -> Result<BuiltTeam> {
         let compiler = self.compiler(stores).await?;
         let mut kit = BackOfficeKit::new(
             self.partitions.clone(),
             stores.partitions.clone(),
             self.runtime.clone(),
             compiler.clone(),
-            stores.autonomy.clone(),
+            stores.kernel.charter.autonomy.clone(),
         );
         // The KPI tracker's guardrails pause jobs through the same pauses (A-I15).
         kit.pauses = self.pauses.clone();
         let public = {
             let partitions = self.partitions.clone();
             let table = stores.partitions.clone();
-            let signals = partitions.signal_sink(stores.signals.clone(), stores.agenda.clone());
+            let signals = partitions
+                .signal_sink(stores.kernel.charter.signals.clone(), stores.kernel.agenda.clone());
             move || PublicKit {
                 partitions: partitions.clone(),
                 table: table.clone(),
@@ -107,7 +105,7 @@ impl RunningSite {
         let growth = crate::experiments::experiment_tools(self.experiments.clone());
         let guardian = vec![self.edge.read_only_tool()];
         let delay = crate::publish_delay::PublishDelay::new(self.publish_delay, compiler)
-            .with_charters(stores.charters.clone());
+            .with_charters(stores.kernel.charter.charters.clone());
         let delay: Arc<dyn adk_core::ToolPolicy> = Arc::new(delay);
         let approvals = stores.approvals.clone();
         let configure = move |role: AgentRole, builder: adk_harness::HarnessAgentBuilder| {

@@ -138,10 +138,18 @@ runtime instance of the tenant needs a `TenantKernel` over the same stores.
 | Targets | One per hosted definition, named like it: the agent the operator's resolver builds |
 | Triggers | The definitions' wake sets; one cron source per expression |
 | App name | The tenant: the `ManagedOwner::app_name` its sessions are created under |
-| Kill switch | Its own `GovernanceControl`, unless the builder is given one |
+| Kill switch | Its own `GovernanceControl`, unless the builder is given one, or mirrored over the governance store of `TenantKernelBuilder::stores` |
 | Agenda | The tenant's agenda store; `TenantKernel::agenda_handle` is bound to each kernel the tenant builds, and `HarnessAgentBuilder::agenda_handle` gives it to the tenant's harnesses for `propose_followup` |
 | Signals | With the `charter` feature, the tenant's signal store (`TenantKernelBuilder::signal_store`); `TenantKernel::signal_sink` files signals ([signal wakes](#signal-wakes)) |
 | Control plane | None of its own; mount `adk_kernel::control::router(kernel)` on the host's server |
+
+The tenant's own stateful stores — its process side table, schedules, spend and action
+ledgers, agenda, partition table, cron watermarks, agent table and, with `charter`, signal
+store — come from one [`KernelStores`](backends.md#every-store-at-once-kernelstores) with
+`TenantKernelBuilder::stores(&KernelStores::open(url).await?)`; a store set on the builder wins,
+and the kill switch is mirrored over the bundle's governance store unless the builder is given
+one. The run store and approvals stay the tenant's `ManagedStores`'. A store neither set nor in
+the bundle is kept in memory, and the builder logs a warning naming it.
 
 A definition hosted after `TenantKernel::start`, or hosted again changed, restarts the tenant's
 kernel over the same stores: its running processes park at their next model-call boundary and
@@ -282,8 +290,8 @@ fn tenant(stores: ManagedStores) -> adk_kernel::Result<TenantKernel> {
 ## Cron wakes missed while a tenant was down
 
 Each cron expression of a tenant's wake sets has one cron source, which keeps its cursor in the
-tenant's own `CronWatermarkStore` (`TenantKernelBuilder::watermark_store`; in memory by default,
-which keeps nothing across a restart). When a replica of the tenant starts after an outage, the
+tenant's own `CronWatermarkStore` (`TenantKernelBuilder::watermark_store` or `stores`; in memory by
+default, which keeps nothing across a restart). When a replica of the tenant starts after an outage, the
 ticks no replica watched fire once each, as the wake set's `missed` policy picks them (spec 3.2
 §7.4):
 

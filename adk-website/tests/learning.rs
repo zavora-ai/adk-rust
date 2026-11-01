@@ -337,7 +337,7 @@ async fn too_little_evidence_proposes_nothing() {
 /// review and answers with the proposals it drafted (spec 3.5 §7.15, §7.20).
 #[tokio::test]
 async fn a_served_site_runs_the_learning_job_in_its_kernel() {
-    use adk_core::{DurableRunStore, NewRun, RunFilter};
+    use adk_core::{NewRun, RunFilter};
     use adk_website::deploy::{ServeOptions, serve};
     use adk_website::learning::LEARNING_WORKFLOW;
     use adk_website::onboarding::scaffold::{ScaffoldOptions, scaffold};
@@ -365,13 +365,13 @@ async fn a_served_site_runs_the_learning_job_in_its_kernel() {
         LEARNING_WORKFLOW,
         json!({ "site": site.site.id }),
     );
-    let id = match served.stores.runs.enqueue(run).await.unwrap() {
+    let id = match served.stores.kernel.runs.enqueue(run).await.unwrap() {
         adk_core::run_store::Enqueued::Created(record) => record.run_id,
         other => panic!("{other:?}"),
     };
     let mut finished = None;
     for _ in 0..200 {
-        let runs = served.stores.runs.list(RunFilter::default()).await.unwrap();
+        let runs = served.stores.kernel.runs.list(RunFilter::default()).await.unwrap();
         finished = runs.into_iter().find(|r| r.run_id == id && r.state.is_terminal());
         if finished.is_some() {
             break;

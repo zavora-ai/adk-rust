@@ -46,7 +46,7 @@ use crate::onboarding::cost::{CostInputs, RunningCostEstimate, estimate};
 use crate::team::SiteTeam;
 
 pub use agency::{Agency, AgencyRouter};
-pub use kernel::KernelStores;
+pub use kernel::SiteStores;
 pub use project::ProjectPaths;
 pub use serve::{AgencyFile, AgencySite, ServeOptions, Served, serve, serve_agency};
 pub use site::{EmailOptions, ProbeOptions, RunningSite, ServedWorkflows, SiteOptions};

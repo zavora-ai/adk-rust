@@ -16,6 +16,79 @@ passes the store's conformance suite.
 | `PartitionStore` | `InMemoryPartitionStore` | `SqlitePartitionStore` | `PostgresPartitionStore` | `RedisPartitionStore` | `MongoPartitionStore` | `FirestorePartitionStore` | `Neo4jPartitionStore` |
 | `CronWatermarkStore` | `InMemoryCronWatermarkStore` | `SqliteCronWatermarkStore` | `PostgresCronWatermarkStore` | `RedisCronWatermarkStore` | `MongoCronWatermarkStore` | `FirestoreCronWatermarkStore` | `Neo4jCronWatermarkStore` |
 
+## Every store at once: `KernelStores`
+
+`adk_kernel::stores::KernelStores` holds every stateful store a kernel keeps, opened together
+on one backend: `adk-session`'s run, schedule, approval, action-ledger, spend-ledger and
+kill-switch stores; the kernel's process, agenda, partition, cron watermark and agent stores;
+devices, control-plane settings, drivers (`drivers`), the activity ledger (`proc`), chat
+pairings (`channels`) and the charter stores under `charter` (`charter`). `KernelBuilder::stores`
+and `TenantKernelBuilder::stores` take it.
+
+| Opened with | Backend |
+|---|---|
+| `KernelStores::in_memory()`, `open("memory:")` | Every store in memory |
+| `open("sqlite://<path>?mode=rwc")`, `from_sqlite_pool(pool)` | SQLite, one pool, a migration table per store |
+| `open("postgres://…")`, `from_postgres_pool(pool)` | PostgreSQL, one pool |
+| `open("redis://…")`, `from_redis_client(client)` | Redis, one client |
+| `open("mongodb://…/<database>")`, `from_mongo_database(db)` | MongoDB |
+| `open("neo4j://<user>:<password>@<host>")`, `from_neo4j_graph(graph)` | Neo4j |
+| `open("firestore://<project>")`, `from_firestore_db(db)` | Firestore |
+
+Devices, control-plane settings, chat pairings and the charter stores have no MongoDB,
+Firestore or Neo4j backend yet. A bundle on those backends keeps them in memory, logs a warning
+for each, and names them in `in_memory_stores()`.
+
+`KernelBuilder::stores` fills each store the builder was not given: a store set on the builder,
+before or after, wins. It mirrors the kill switch over the bundle's governance store unless the
+builder or its configuration already has one, and gives the control plane the bundle's
+settings store unless the configuration names its own. The approval service, the driver
+supervisor and the activity ledger stay the host's to build over `approvals`, `drivers` and
+`ledger`, with its own routing, home and key.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::{ApprovalPolicy, ApproverSelector, StoreApprovalService};
+use adk_kernel::stores::KernelStores;
+use adk_kernel::{Kernel, KernelConfig};
+use adk_runner::Runner;
+
+async fn kernel(runner: Arc<Runner>) -> Result<Kernel, Box<dyn std::error::Error>> {
+    let stores = KernelStores::open("sqlite://data/kernel.db?mode=rwc").await?;
+    let approvals = StoreApprovalService::new(stores.approvals.clone())
+        .with_run_store(stores.runs.clone())
+        .with_router(ApprovalPolicy::new([ApproverSelector::group("operator")]));
+    let kernel = Kernel::builder()
+        .config(KernelConfig::default().with_app_name("ops"))
+        .stores(&stores)
+        .require_durable()
+        .approval_service(Arc::new(approvals))
+        .agent("ops", runner)
+        .build()?;
+    Ok(kernel)
+}
+```
+
+### Requiring durable stores
+
+A store the builder is given neither directly nor through `KernelBuilder::stores` is kept in
+memory: the process table, agenda, partition table, cron watermarks, agent table, kill switch and
+control-plane settings. The builder logs a warning for each such store (the settings store only
+when the kernel serves a control plane), and `Kernel::store_uses()` reports every store with
+where it came from (`set`, `bundle` or `defaulted`) and whether it is held in memory.
+
+`KernelBuilder::require_durable()` turns the warnings into a refusal: `build` returns a
+configuration error naming each store that would be kept in memory — one the builder
+defaulted, one the bundle keeps in memory, or a kill switch that is not mirrored — with the
+setter that fixes it.
+
+| Host | Requires durable stores |
+|---|---|
+| `adk-rust up` | Yes, unless `--ephemeral`: on `harness.db` or the `--store` backend |
+| `adk-website serve`, `adk-website agency` | Yes: every store in `data/kernel.db` |
+| A kernel built in code | When the builder calls `require_durable()` |
+
 A [tenant kernel](managed.md#cron-wakes-missed-while-a-tenant-was-down) keeps its cron
 watermarks in the tenant's own store (`TenantKernelBuilder::watermark_store`).
 
@@ -54,7 +127,7 @@ There is no file backend: no durable store is file-backed, and the CLI keeps its
 |---|---|---|
 | One machine, `adk-rust up` | SQLite | `harness.db` in the kernel home, on the harness's pool with a migration table per store |
 | Replicas, `adk-rust up --store` | PostgreSQL or Redis | The `--store` URL, which also holds sessions, approvals, runs, modes, standing rules and plan checkpoints; on PostgreSQL, long-term memory too (`PostgresFactStore`, spec 3.3 §12 phase 3), which Redis does not keep |
-| A kernel built in code on MongoDB, Firestore or Neo4j | MongoDB, Firestore or Neo4j | `KernelBuilder` with the stores below |
+| A kernel built in code | Any | `KernelStores::open(url)` and `KernelBuilder::stores`, or each store on the builder as below |
 
 `--store` takes PostgreSQL and Redis URLs only: it also keeps the harness's modes and
 standing rules, which have no MongoDB, Firestore or Neo4j backend.

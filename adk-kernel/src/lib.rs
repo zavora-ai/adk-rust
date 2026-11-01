@@ -24,6 +24,7 @@
 //! |---|---|
 //! | [`Kernel`], [`KernelBuilder`], [`KernelConfig`], [`KernelHealth`], [`KernelState`] | §7.2 |
 //! | [`Process`], [`ProcessMeta`], [`ProcessView`], [`GoalProgress`], [`ProcessKind`], [`Suspension`], [`ProcessTable`], [`ProcessSpec`], [`ProgressSource`] | §7.3 |
+//! | [`stores::KernelStores`], [`stores::StoreUse`], [`stores::StoreOrigin`]: every stateful store on one backend, [`KernelBuilder::stores`], [`KernelBuilder::require_durable`], [`Kernel::store_uses`] | §7.1, §13 Q8 |
 //! | [`ProcessStore`], [`ProcessFilter`], [`SpendScope`], [`InMemoryProcessStore`], `SqliteProcessStore`, `PostgresProcessStore`, `RedisProcessStore`, `MongoProcessStore`, `FirestoreProcessStore`, `Neo4jProcessStore` | §7.3, §13 Q8 |
 //! | [`Wake`], [`WakeSet`], [`ExpiryAction`], [`WakeSource`], [`WakeEvent`], [`keys`], [`Trigger`], [`WakeRouter`], [`WakeOutcome`], [`KernelWakeExecutor`], the wake source adapters | §7.4 |
 //! | [`CronWatermarkStore`], [`SourceWatermark`], [`InMemoryCronWatermarkStore`], `SqliteCronWatermarkStore`, `PostgresCronWatermarkStore`, `RedisCronWatermarkStore`, `MongoCronWatermarkStore`, `FirestoreCronWatermarkStore`, `Neo4jCronWatermarkStore` | §7.4, §7.13, §13 Q8 |

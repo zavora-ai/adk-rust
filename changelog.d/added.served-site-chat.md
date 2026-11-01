@@ -7,7 +7,7 @@
   their turn makes through `channel::OwnerChannel`. The edge serves WhatsApp's webhook at
   `/channels/whatsapp`. `adk-rust website new` builds the adapters from the project's
   `channels.json` (`deploy::config::chat`), its secrets `env:` or `file:` references;
-  `KernelStores` keeps chat pairings (`channel_bindings`) and `KernelStores::open_with` takes
+  `SiteStores` keeps chat pairings (`kernel.channel_bindings`) and `SiteStores::open_with` takes
   approval notifiers. The kernel's gateway takes an `InboundRoute`
   (`ChannelGatewayBuilder::route`, `InboundOutcome::Routed`), `ChannelInbound` carries
   `attachments` (`ChannelAttachment`), and a paired message with no words starts no turn
