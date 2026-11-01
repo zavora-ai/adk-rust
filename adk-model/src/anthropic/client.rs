@@ -765,9 +765,14 @@ impl Llm for AnthropicClient {
     )]
     async fn generate_content(
         &self,
-        request: LlmRequest,
+        mut request: LlmRequest,
         stream: bool,
     ) -> Result<adk_core::LlmResponseStream, AdkError> {
+        // Native items reach this provider only from the turns its own origin marks.
+        adk_core::history::retain_replayable(
+            &mut request.contents,
+            &adk_core::history::ProviderOrigin::new("anthropic", &self.model),
+        );
         let usage_span = adk_telemetry::llm_generate_span("anthropic", &self.model, stream);
         let model = self.model.clone();
         let max_tokens = self.max_tokens;

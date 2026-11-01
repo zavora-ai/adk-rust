@@ -15,6 +15,13 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{Content, Event, Part};
 
+mod replay;
+
+pub use replay::{
+    ProviderOrigin, REPLAY_ONLY_KEY, REPLAY_ORIGIN_KEY, is_native, is_replay_only, mark_origin,
+    retain_replayable, strip_native,
+};
+
 /// Marks where a quoted payload from another agent starts.
 pub const QUOTED_CONTENT_BEGIN: &str = "<<<BEGIN_QUOTED_AGENT_CONTENT>>>";
 /// Marks where a quoted payload from another agent ends.
@@ -51,9 +58,11 @@ fn canonical(value: &serde_json::Value) -> String {
 /// [`QUOTED_CONTENT_BEGIN`] and [`QUOTED_CONTENT_END`]. The first part is
 /// [`OTHER_AGENT_CONTEXT_PREAMBLE`], which tells the model the quoted payloads are data. Call
 /// arguments and results are written with sorted keys, so the same call renders the same way
-/// every time. Thinking is left out. Inline and file data stay as parts.
+/// every time. Thinking and provider-native items (server-side tool calls and results, whose
+/// payloads can hold another provider's reasoning) are left out: they are private to the agent
+/// whose model produced them. Inline and file data stay as parts.
 ///
-/// Returns `None` when nothing but thinking remains.
+/// Returns `None` when nothing but thinking and provider-native items remains.
 ///
 /// # Example
 ///
@@ -77,7 +86,9 @@ pub fn other_agent_context(author: &str, content: &Content) -> Option<Content> {
     let mut parts = vec![Part::Text { text: OTHER_AGENT_CONTEXT_PREAMBLE.to_string() }];
     for part in &content.parts {
         match part {
-            Part::Thinking { .. } => {}
+            Part::Thinking { .. }
+            | Part::ServerToolCall { .. }
+            | Part::ServerToolResponse { .. } => {}
             Part::Text { text } => {
                 if !text.trim().is_empty() {
                     parts.push(Part::Text { text: format!("[{author}] said:\n{}", quote(text)) });
@@ -109,18 +120,6 @@ pub fn other_agent_context(author: &str, content: &Content) -> Option<Content> {
                     annotations: None,
                 }));
             }
-            Part::ServerToolCall { server_tool_call } => parts.push(Part::Text {
-                text: format!(
-                    "[{author}] called a provider tool:\n{}",
-                    quote(&canonical(server_tool_call))
-                ),
-            }),
-            Part::ServerToolResponse { server_tool_response } => parts.push(Part::Text {
-                text: format!(
-                    "[{author}] got a provider tool result:\n{}",
-                    quote(&canonical(server_tool_response))
-                ),
-            }),
             Part::EmbeddedResource { resource } => parts.push(Part::Text {
                 text: format!(
                     "[{author}] shared a resource:\n{}",

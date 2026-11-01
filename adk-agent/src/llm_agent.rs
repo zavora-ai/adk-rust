@@ -781,6 +781,12 @@ impl LlmAgent {
     ) -> Content {
         let mut augmented = content.clone();
         augmented.parts.extend(Self::history_parts_from_provider_metadata(provider_metadata));
+        // The next request of this loop may go to another provider (a fallback or router
+        // model); the turn's native items stay with the origin that produced them.
+        adk_core::history::mark_origin(
+            &mut augmented,
+            adk_core::history::ProviderOrigin::of_response(provider_metadata).as_ref(),
+        );
         augmented
     }
 }
@@ -4173,6 +4179,12 @@ impl Agent for LlmAgent {
                 // what the provider receives.
                 let mut contents = crate::requested_call::for_model(conversation_history.clone());
                 contents.iter_mut().for_each(Content::strip_generated_call_ids);
+                // Only the agent's own model turns carry provider-native items; a user turn
+                // (A2A input included) or a tool result never hands a provider one.
+                contents
+                    .iter_mut()
+                    .filter(|content| !matches!(content.role.as_str(), "model" | "assistant"))
+                    .for_each(adk_core::history::strip_native);
                 let mut request = LlmRequest {
                     model: model.name().to_string(),
                     contents,

@@ -5,7 +5,9 @@ use serde_json::{Map, Value};
 /// Converts ADK parts to A2A parts for a peer.
 ///
 /// `Part::Thinking` is dropped: a model's reasoning is private to the agent, and an A2A
-/// peer would read a text part as answer text.
+/// peer would read a text part as answer text. `Part::ServerToolCall` and
+/// `Part::ServerToolResponse` are dropped too: provider-native items are private to the
+/// provider that produced them, and a payload can hold its reasoning.
 pub fn adk_parts_to_a2a(
     parts: &[Part],
     long_running_ids: &[String],
@@ -63,16 +65,7 @@ pub fn adk_parts_to_a2a(
 
                     Ok(crate::a2a::Part::Data { data, metadata: None })
                 }
-                Part::ServerToolCall { server_tool_call } => {
-                    let mut data = Map::new();
-                    data.insert("server_tool_call".to_string(), server_tool_call.clone());
-                    Ok(crate::a2a::Part::Data { data, metadata: None })
-                }
-                Part::ServerToolResponse { server_tool_response } => {
-                    let mut data = Map::new();
-                    data.insert("server_tool_response".to_string(), server_tool_response.clone());
-                    Ok(crate::a2a::Part::Data { data, metadata: None })
-                }
+                Part::ServerToolCall { .. } | Part::ServerToolResponse { .. } => return None,
                 // Embedded resources: text → text part; blob → inline file bytes.
                 Part::EmbeddedResource { resource } => match resource {
                     adk_core::EmbeddedResource::Text(text) => {

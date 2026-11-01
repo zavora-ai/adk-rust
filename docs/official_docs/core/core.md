@@ -95,6 +95,51 @@ fn describe(content: &Content) {
 | `part.is_media()` | `true` for inline and file data |
 | `part.embedded_resource()` | The resource of an embedded-resource part |
 
+### Provider-native items
+
+`Thinking`, `ServerToolCall`, `ServerToolResponse` and a `FunctionCall`'s `thought_signature`
+are provider-native items: reasoning, signatures, encrypted reasoning, server-side tool calls and
+results, and preserved provider messages. They are meaningful only to the provider and model that
+produced them, and private to the agent whose model produced them.
+
+| Who | Receives native items |
+|-----|-----------------------|
+| The provider and model that produced them | Yes, in the agent's own model turns |
+| Another provider, or another model of the same provider | No |
+| Another agent's context (`history::other_agent_context`) | No |
+| A compaction summary (`intra_compaction::render_part_for_summary`) | No |
+| An A2A peer | No |
+| `AgentTool`'s caller | Provider tool results only, never a replay-only copy (`history::is_replay_only`) |
+| Any model, from a user turn, a tool result or A2A input | No |
+
+Ownership is recorded where a peer cannot write it:
+
+1. Every `adk-model` client records its `history::ProviderOrigin` — its client family and the
+   requested model — in each response's `provider_metadata` under `adk_replay_origin`, and
+   `LlmAgent` keeps it on the event.
+2. The runner and `LlmAgent` mark each of the agent's own model turns with that origin
+   (`history::mark_origin`), replacing any marker stored in or sent with the content, and remove
+   native items from every other turn (`history::strip_native`).
+3. Each client keeps native items only in turns its own origin marks
+   (`history::retain_replayable`). An unmarked model turn — history built outside the runner, or
+   a session written before origins were recorded — keeps them.
+
+```rust
+use adk_core::history::{ProviderOrigin, mark_origin, retain_replayable};
+use adk_core::{Content, Part};
+
+let anthropic = ProviderOrigin::new("anthropic", "claude-sonnet-5-5");
+let mut turn = Content {
+    role: "model".into(),
+    parts: vec![Part::Thinking { thinking: "plan".into(), signature: Some("sig".into()) }],
+};
+mark_origin(&mut turn, Some(&anthropic));
+
+let mut for_gemini = vec![turn];
+retain_replayable(&mut for_gemini, &ProviderOrigin::new("gemini", "gemini-3.7-flash"));
+assert!(for_gemini.is_empty());
+```
+
 ### Embedded resources
 
 ```rust

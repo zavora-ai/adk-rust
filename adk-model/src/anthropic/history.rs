@@ -24,8 +24,13 @@ pub(super) fn preserve(message: &Message) -> Option<Part> {
             }
             _ => false,
         });
+    // Flagged replay-only: the copy is not a tool result, and it holds the turn's thinking.
     needed.then(|| Part::ServerToolResponse {
-        server_tool_response: json!({"type": KIND, "content": message.content}),
+        server_tool_response: json!({
+            "type": KIND,
+            adk_core::history::REPLAY_ONLY_KEY: true,
+            "content": message.content,
+        }),
     })
 }
 

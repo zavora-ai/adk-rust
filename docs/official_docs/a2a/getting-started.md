@@ -225,7 +225,9 @@ Expected response (abbreviated):
 
 A task whose run ends on a tool call held for confirmation, or on a long-running call, ends in
 `input-required`, and one that ends on an `adk_request_credential` call in `auth-required`. Model
-thinking is not sent to the peer.
+thinking and provider-native server-tool parts are not sent to the peer. A peer's
+`server_tool_call` or `server_tool_response` data part stays in the session as input, and never
+reaches a model as a provider-native item.
 
 ### Stream a Response
 

@@ -696,7 +696,9 @@ impl AgentTool {
     /// The `ServerToolResponse` payloads of the delegation, each once.
     ///
     /// A streamed turn delivers each part in a partial event and may repeat it in the
-    /// aggregated final event, so complete events are read when they carry any.
+    /// aggregated final event, so complete events are read when they carry any. A provider's
+    /// replay-only copy of its turn ([`adk_core::history::is_replay_only`]) is not a tool
+    /// result and holds the sub-agent's reasoning, so it is left out.
     fn server_tool_responses(events: &[Event]) -> Vec<Value> {
         let collect = |partial: bool| -> Vec<Value> {
             events
@@ -704,6 +706,7 @@ impl AgentTool {
                 .filter(|event| event.llm_response.partial == partial)
                 .flat_map(|event| event.llm_response.content.iter())
                 .flat_map(|content| content.parts.iter())
+                .filter(|part| !adk_core::history::is_replay_only(part))
                 .filter_map(|part| match part {
                     Part::ServerToolResponse { server_tool_response } => {
                         Some(server_tool_response.clone())
@@ -2746,6 +2749,25 @@ mod tests {
             AgentTool::extract_response(&[code_only]),
             json!({"response": "", "server_tool_responses": [result]})
         );
+    }
+
+    #[test]
+    fn a_replay_only_copy_never_reaches_the_parent() {
+        let mut answer = Event::new("inv");
+        answer.llm_response.content = Some(Content {
+            role: "model".to_string(),
+            parts: vec![
+                Part::ServerToolResponse {
+                    server_tool_response: json!({
+                        "type": "anthropic_message",
+                        "adk_replay_only": true,
+                        "content": [{"type": "thinking", "thinking": "private", "signature": "s"}],
+                    }),
+                },
+                Part::Text { text: "Done.".to_string() },
+            ],
+        });
+        assert_eq!(AgentTool::extract_response(&[answer]), json!({"response": "Done."}));
     }
 
     #[test]

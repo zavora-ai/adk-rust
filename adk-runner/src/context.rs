@@ -135,10 +135,9 @@ impl MutableSession {
         let mut compaction_boundary = None;
         for event in events.iter().rev() {
             if let Some(ref compaction) = event.actions.compaction {
-                history.push(HistoryContent {
-                    content: compaction.compacted_content.clone(),
-                    invocation_id: None,
-                });
+                let mut content = compaction.compacted_content.clone();
+                adk_core::history::strip_native(&mut content);
+                history.push(HistoryContent { content, invocation_id: None });
                 compaction_boundary = Some(compaction.end_timestamp);
                 break;
             }
@@ -215,6 +214,20 @@ impl MutableSession {
                         _ => "model",
                     }
                     .to_string();
+                    // Native items replay only from a model turn, to the provider and model
+                    // whose origin the event recorded; user turns (A2A input included) never
+                    // carry them.
+                    if mapped_content.role == "model" {
+                        adk_core::history::mark_origin(
+                            &mut mapped_content,
+                            adk_core::history::ProviderOrigin::of_response(
+                                event.llm_response.provider_metadata.as_ref(),
+                            )
+                            .as_ref(),
+                        );
+                    } else {
+                        adk_core::history::strip_native(&mut mapped_content);
+                    }
                     mapped_content
                 }
             };

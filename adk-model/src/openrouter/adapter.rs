@@ -251,13 +251,18 @@ impl Llm for OpenRouterClient {
     )]
     async fn generate_content(
         &self,
-        request: LlmRequest,
+        mut request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream> {
         let request_options =
             OpenRouterRequestOptions::from_generate_config(request.config.as_ref())?
                 .unwrap_or_default();
         let model_name = effective_model_name(self, &request);
+        // Native items reach this provider only from the turns its own origin marks.
+        adk_core::history::retain_replayable(
+            &mut request.contents,
+            &adk_core::history::ProviderOrigin::new("openrouter", &model_name),
+        );
         let api_mode = request_options.api_mode.unwrap_or(self.config().default_api_mode);
         let usage_span = adk_telemetry::llm_generate_span("openrouter", &model_name, stream);
 

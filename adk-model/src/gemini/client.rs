@@ -520,6 +520,37 @@ impl GeminiModel {
         value.get("thoughtSignature").and_then(serde_json::Value::as_str).map(str::to_string)
     }
 
+    /// The Gemini part a stored server-tool payload replays as: a `toolCall`, `toolResponse`,
+    /// `executableCode` or `codeExecutionResult` part, or the code-execution shape the Vertex
+    /// AI session service restores (`vertexExecutableCode`, `vertexCodeExecutionResult`), with
+    /// its thought signature. `None` for any other payload.
+    fn native_server_part(payload: &serde_json::Value) -> Option<adk_gemini::Part> {
+        let thought_signature = Self::gemini_part_thought_signature(payload);
+        if let Some(executable_code) = payload.get("vertexExecutableCode") {
+            return Some(adk_gemini::Part::ExecutableCode {
+                executable_code: executable_code.clone(),
+                thought_signature,
+            });
+        }
+        if let Some(code_execution_result) = payload.get("vertexCodeExecutionResult") {
+            return Some(adk_gemini::Part::CodeExecutionResult {
+                code_execution_result: code_execution_result.clone(),
+                thought_signature,
+            });
+        }
+        match serde_json::from_value::<adk_gemini::Part>(payload.clone()).ok()? {
+            part @ (adk_gemini::Part::ToolCall { .. }
+            | adk_gemini::Part::ToolResponse { .. }
+            | adk_gemini::Part::ExecutableCode { .. }
+            | adk_gemini::Part::CodeExecutionResult { .. }) => Some(part),
+            adk_gemini::Part::Text { .. }
+            | adk_gemini::Part::InlineData { .. }
+            | adk_gemini::Part::FileData { .. }
+            | adk_gemini::Part::FunctionCall { .. }
+            | adk_gemini::Part::FunctionResponse { .. } => None,
+        }
+    }
+
     fn validate_request_contract(&self, req: &LlmRequest) -> Result<()> {
         // Server-side RAG grounding is a Vertex AI capability; reject it on
         // the AI Studio backend before any network IO (mirrors the request-
@@ -1477,13 +1508,6 @@ impl GeminiModel {
                                     thought_signature: None,
                                 });
                             }
-                            Part::Thinking { thinking, signature } => {
-                                gemini_parts.push(adk_gemini::Part::Text {
-                                    text: thinking.clone(),
-                                    thought: Some(true),
-                                    thought_signature: signature.clone(),
-                                });
-                            }
                             Part::InlineData { data, mime_type, .. } => {
                                 let encoded = attachment::encode_base64(data);
                                 gemini_parts.push(adk_gemini::Part::InlineData {
@@ -1544,47 +1568,17 @@ impl GeminiModel {
                                     thought_signature: thought_signature.clone(),
                                 });
                             }
-                            Part::ServerToolCall { server_tool_call } => {
-                                if let Ok(native_part) = serde_json::from_value::<adk_gemini::Part>(
-                                    server_tool_call.clone(),
-                                ) {
-                                    match native_part {
-                                        adk_gemini::Part::ToolCall { .. }
-                                        | adk_gemini::Part::ExecutableCode { .. } => {
-                                            gemini_parts.push(native_part);
-                                            continue;
-                                        }
-                                        _ => {}
-                                    }
-                                }
-
-                                gemini_parts.push(adk_gemini::Part::ToolCall {
-                                    tool_call: server_tool_call.clone(),
-                                    thought_signature: Self::gemini_part_thought_signature(
-                                        server_tool_call,
+                            // Only a payload that is a Gemini part replays: another
+                            // provider's payload (Anthropic's preserved message holds its
+                            // thinking) never reaches Gemini.
+                            Part::ServerToolCall { server_tool_call: payload }
+                            | Part::ServerToolResponse { server_tool_response: payload } => {
+                                match Self::native_server_part(payload) {
+                                    Some(native_part) => gemini_parts.push(native_part),
+                                    None => tracing::debug!(
+                                        "server tool payload is not a gemini part; left out"
                                     ),
-                                });
-                            }
-                            Part::ServerToolResponse { server_tool_response } => {
-                                if let Ok(native_part) = serde_json::from_value::<adk_gemini::Part>(
-                                    server_tool_response.clone(),
-                                ) {
-                                    match native_part {
-                                        adk_gemini::Part::ToolResponse { .. }
-                                        | adk_gemini::Part::CodeExecutionResult { .. } => {
-                                            gemini_parts.push(native_part);
-                                            continue;
-                                        }
-                                        _ => {}
-                                    }
                                 }
-
-                                gemini_parts.push(adk_gemini::Part::ToolResponse {
-                                    tool_response: server_tool_response.clone(),
-                                    thought_signature: Self::gemini_part_thought_signature(
-                                        server_tool_response,
-                                    ),
-                                });
                             }
                             _ => {}
                         }
@@ -2208,7 +2202,16 @@ impl Llm for GeminiModel {
             request.tools_count = %req.tools.len()
         )
     )]
-    async fn generate_content(&self, req: LlmRequest, stream: bool) -> Result<LlmResponseStream> {
+    async fn generate_content(
+        &self,
+        mut req: LlmRequest,
+        stream: bool,
+    ) -> Result<LlmResponseStream> {
+        // Native items reach this provider only from the turns its own origin marks.
+        adk_core::history::retain_replayable(
+            &mut req.contents,
+            &adk_core::history::ProviderOrigin::new("gemini", &self.model_name),
+        );
         adk_telemetry::info!("Generating content");
         self.validate_request_contract(&req)?;
         let usage_span = adk_telemetry::llm_generate_span("gemini", &self.model_name, stream);
