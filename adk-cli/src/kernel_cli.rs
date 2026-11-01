@@ -724,7 +724,14 @@ fn print_proposal(proposal: &DriverProposal) {
     let partitions: Vec<&str> = proposal.partitions.iter().map(PartitionId::as_str).collect();
     println!("  partitions  {}", partitions.join(", "));
     println!("  sandbox     {}", proposal.sandbox.as_str());
-    println!("  network     {}", if proposal.access.allow_network { "allowed" } else { "denied" });
+    let hosts: Vec<String> =
+        proposal.access.network_hosts.iter().map(ToString::to_string).collect();
+    let network = match (proposal.access.allow_network, hosts.is_empty()) {
+        (false, _) => "denied".to_string(),
+        (true, true) => "allowed".to_string(),
+        (true, false) => format!("only {} (through an egress proxy)", hosts.join(", ")),
+    };
+    println!("  network     {network}");
     for (name, reference) in &proposal.secrets {
         println!("  secret      {name} ← {reference} (through the credential broker)");
     }
@@ -776,6 +783,12 @@ fn restricted_toml(manifest: &DriverManifest) -> Result<String> {
     put("allow_read", paths(&manifest.access.allow_read));
     put("allow_write", paths(&manifest.access.allow_write));
     put("allow_network", toml::Value::Boolean(manifest.access.allow_network));
+    if !manifest.access.network_hosts.is_empty() {
+        let hosts = manifest.access.network_hosts.iter().map(ToString::to_string).collect();
+        let mut network = toml::Table::new();
+        network.insert("hosts".into(), strings(hosts));
+        put("network", toml::Value::Table(network));
+    }
     put("sampling", toml::Value::Boolean(manifest.sampling));
     put("data_classes", strings(manifest.data_classes.clone()));
     if let Some(restart) = &manifest.server.restart_policy {

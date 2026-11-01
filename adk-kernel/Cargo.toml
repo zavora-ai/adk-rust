@@ -41,6 +41,7 @@ drivers = [
     "adk-tool/mcp-sampling",
     "dep:adk-sandbox",
     "adk-sandbox/sandbox-native",
+    "adk-sandbox/egress-proxy",
     "dep:toml",
     "dep:url",
 ]

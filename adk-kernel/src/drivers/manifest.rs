@@ -103,11 +103,33 @@ pub struct DriverAccess {
     /// Whether the server may use the network; integrations usually must.
     #[serde(default = "default_true")]
     pub allow_network: bool,
+    /// With `allow_network`, the only hosts the server may reach (`[network] hosts` in the
+    /// manifest), through an egress proxy of its own: `Proxied` network access under the OS
+    /// sandbox. Empty leaves the network open.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub network_hosts: Vec<adk_core::egress::EgressRule>,
 }
 
 impl Default for DriverAccess {
     fn default() -> Self {
-        Self { allow_read: Vec::new(), allow_write: Vec::new(), allow_network: true }
+        Self {
+            allow_read: Vec::new(),
+            allow_write: Vec::new(),
+            allow_network: true,
+            network_hosts: Vec::new(),
+        }
+    }
+}
+
+impl DriverAccess {
+    /// The egress policy the server's connections pass, when `network_hosts` names any.
+    pub fn egress_policy(&self) -> Option<adk_core::egress::EgressPolicy> {
+        (self.allow_network && !self.network_hosts.is_empty()).then(|| {
+            self.network_hosts.iter().cloned().fold(
+                adk_core::egress::EgressPolicy::deny_all(),
+                adk_core::egress::EgressPolicy::allow,
+            )
+        })
     }
 }
 
@@ -128,6 +150,8 @@ fn default_true() -> bool {
 /// env         = { EMAIL_TOKEN = "secret://email/token" }
 /// partitions  = ["work"]
 /// lifecycle   = "lazy"          # lazy | eager
+/// # with allow_network, the only hosts the server reaches, through an egress proxy
+/// # network     = { hosts = ["imap.example.com:993", "smtp.example.com:465"] }
 /// sandbox     = "os"            # os | container | unsandboxed
 /// restart     = { max_attempts = 5, initial_delay_ms = 500, max_delay_ms = 30000, backoff_multiplier = 2.0 }
 ///
@@ -224,6 +248,8 @@ struct ManifestFile {
     #[serde(default = "default_true")]
     allow_network: bool,
     #[serde(default)]
+    network: Option<NetworkFile>,
+    #[serde(default)]
     restart: Option<RestartFile>,
     #[serde(default)]
     sampling: bool,
@@ -231,6 +257,14 @@ struct ManifestFile {
     data_classes: Vec<String>,
     #[serde(default)]
     tools: BTreeMap<String, String>,
+}
+
+/// The manifest's `network` table.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NetworkFile {
+    #[serde(default)]
+    hosts: Vec<adk_core::egress::EgressRule>,
 }
 
 /// The manifest's `restart` table, in the manifest's own key names.
@@ -352,6 +386,7 @@ impl DriverManifest {
             allow_read: file.allow_read,
             allow_write: file.allow_write,
             allow_network: file.allow_network,
+            network_hosts: file.network.map(|network| network.hosts).unwrap_or_default(),
         };
         manifest.sampling = file.sampling;
         manifest.validate()?;
@@ -387,6 +422,15 @@ impl DriverManifest {
         }
         if self.server.command.trim().is_empty() {
             return Err(invalid(&self.id, "the command is empty"));
+        }
+        if !self.access.network_hosts.is_empty()
+            && (!self.access.allow_network || self.sandbox != DriverSandbox::Os)
+        {
+            return Err(invalid(
+                &self.id,
+                "network hosts are enforced only by the OS sandbox's egress proxy: set \
+                 sandbox = \"os\" and leave allow_network on, or drop the hosts",
+            ));
         }
         if self.partitions.is_empty() {
             return Err(invalid(&self.id, "it serves no partition; list at least one"));
@@ -579,6 +623,20 @@ impl DriverManifest {
         if project.access.allow_network && !self.access.allow_network {
             return refuse("grants network access");
         }
+        // A project allowlist narrows an open network; under the user's allowlist each of its
+        // hosts must be one the user's admits.
+        if project.access.allow_network {
+            if let Some(mine) = self.access.egress_policy() {
+                if project.access.network_hosts.is_empty() {
+                    return refuse("opens the network the user's manifest limits to its hosts");
+                }
+                if let Some(host) =
+                    project.access.network_hosts.iter().find(|host| !mine.covers(host))
+                {
+                    return refuse(&format!("grants network access to {host}"));
+                }
+            }
+        }
         if project.sampling && !self.sampling {
             return refuse("lets the server sample");
         }
@@ -705,6 +763,43 @@ mod tests {
     use adk_core::ToolEffect;
 
     use super::*;
+
+    #[test]
+    fn network_hosts_limit_the_driver_and_a_project_can_only_narrow_them() {
+        let base = "id = \"mail\"\ncommand = \"mcp-mail\"\nsandbox = \"os\"\n";
+        let user = DriverManifest::from_toml(&format!(
+            "{base}network = {{ hosts = [\"imap.example.com:993\", \"*.example.com:443\"] }}\n"
+        ))
+        .unwrap();
+        let policy = user.access.egress_policy().expect("hosts make an egress policy");
+        assert!(policy.check_url("https://api.example.com/").is_ok());
+        assert!(policy.check_url("https://evil.test/").is_err());
+
+        let narrower = DriverManifest::from_toml(&format!(
+            "{base}network = {{ hosts = [\"api.example.com:443\"] }}\n"
+        ))
+        .unwrap();
+        let effective = user.restrict_with(&narrower).unwrap();
+        assert_eq!(effective.access.network_hosts, narrower.access.network_hosts);
+        for wider in
+            [format!("{base}network = {{ hosts = [\"evil.test:443\"] }}\n"), base.to_string()]
+        {
+            let project = DriverManifest::from_toml(&wider).unwrap();
+            assert!(user.restrict_with(&project).is_err(), "{wider}");
+        }
+        let denied = DriverManifest::from_toml(&format!("{base}allow_network = false\n")).unwrap();
+        assert!(user.restrict_with(&denied).is_ok());
+        assert_eq!(denied.access.egress_policy(), None);
+        for refused in [
+            format!("{base}network = {{ hosts = [\"https://x\"] }}\n"),
+            format!("{base}allow_network = false\nnetwork = {{ hosts = [\"x.example.com\"] }}\n"),
+            "id = \"mail\"\ncommand = \"mcp-mail\"\nsandbox = \"unsandboxed\"\n\
+             network = { hosts = [\"x.example.com\"] }\n"
+                .to_string(),
+        ] {
+            assert!(DriverManifest::from_toml(&refused).is_err(), "{refused}");
+        }
+    }
 
     const EMAIL: &str = r#"
         id          = "email"
