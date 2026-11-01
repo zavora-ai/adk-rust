@@ -546,10 +546,10 @@ mod namespace {
             for (slot, byte) in request.ifr_name.iter_mut().zip(b"lo\0") {
                 *slot = *byte as libc::c_char;
             }
-            let mut result = libc::ioctl(socket, libc::SIOCGIFFLAGS as _, &mut request);
+            let mut result = libc::ioctl(socket, libc::SIOCGIFFLAGS as _, &raw mut request);
             if result != -1 {
                 request.ifr_ifru.ifru_flags |= libc::IFF_UP as libc::c_short;
-                result = libc::ioctl(socket, libc::SIOCSIFFLAGS as _, &request);
+                result = libc::ioctl(socket, libc::SIOCSIFFLAGS as _, &raw const request);
             }
             let error = std::io::Error::last_os_error();
             libc::close(socket);

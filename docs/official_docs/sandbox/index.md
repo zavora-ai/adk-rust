@@ -280,8 +280,18 @@ than it asks for.
 | Mode | macOS Seatbelt | Linux bubblewrap | Windows restricted token |
 |------|----------------|------------------|--------------------------|
 | `Denied` | `(deny network*)`, Unix-domain sockets included | `--unshare-net`: no IP traffic and no abstract Unix sockets; see below for sockets on the filesystem | Refused, unless the enforcer is built with `acknowledge_open_network()`; then the network stays open and the first such policy in the process logs a `tracing::warn` |
-| `Proxied { endpoint }` | Only `network-outbound` to `localhost:<port>` of the proxy | Refused | Refused the same way as `Denied` |
+| `Proxied { endpoint }` | Only `network-outbound` to `localhost:<port>` of the proxy | `--unshare-net`, with the proxy's listener placed on `127.0.0.1:<port>` inside the sandbox's network namespace (feature `egress-proxy`; refused without it) | Refused the same way as `Denied` |
 | `Open` | `(allow network*)` with DNS and trust services | Host network namespace | Open |
+
+Start the proxy of a call with `EgressProxy::builder(policy).start_for(enforcer)` (feature
+`egress-proxy`; see [Network Egress Policy](../security/egress.md#egress-proxy-for-sandboxed-processes))
+and build the call's policy with the `CallProxy`'s `network()`; the proxy listens where the
+enforcer needs it (`SandboxEnforcer::proxy_listener`):
+
+| Enforcer | Where the proxy listens |
+|----------|-------------------------|
+| Seatbelt | The host's loopback, before the command starts |
+| bubblewrap | The sandbox's own loopback: bubblewrap reports the sandbox's process id (`--info-fd`) and holds the program (`--block-fd`) while a short-lived helper joins the sandbox's user and network namespaces, brings up its loopback interface, opens the listening socket and passes it back; the program is released once the proxy serves it, or with no listener if a step fails |
 
 A `Proxied` process runs with `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` (upper and lower
 case) set to `http://127.0.0.1:<port>` and `NO_PROXY` empty, applied after the policy's and the
