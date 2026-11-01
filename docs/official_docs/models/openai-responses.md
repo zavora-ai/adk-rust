@@ -547,11 +547,11 @@ fn describe(error: &AdkError) -> &'static str {
 
 ## WebSocket Transport
 
-With the `openai-ws` feature, `WsTransport` sends Responses requests over one persistent
-WebSocket connection ([WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode))
-instead of one HTTP request each. It is used directly, not as an `Llm`, and yields the same
-`LlmResponse` chunks as the HTTP stream: partial deltas, then one final chunk with the rest
-of the response.
+With the `openai-ws` feature, `WsTransport` sends Responses requests over a pool of persistent
+WebSocket connections ([WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode))
+instead of one HTTP request each. It is used directly, or behind `OpenAIResponsesClient` (below),
+and yields the same `LlmResponse` chunks as the HTTP stream: partial deltas, then one final
+chunk with the rest of the response.
 
 ```toml
 [dependencies]
@@ -591,25 +591,48 @@ async fn main() -> anyhow::Result<()> {
 | Situation | Behaviour |
 |-----------|-----------|
 | Request frame | Sent as a `response.create` event; `stream` and `background` are HTTP fields and are not sent |
-| Requests on one transport | One response at a time; a request waits until the previous stream ends or is dropped |
-| Stream dropped before its terminal event | The connection is discarded and the next request opens a new one, so no frame of the abandoned response reaches it |
-| Connection the server closed while idle | The next request reconnects |
+| Requests on one transport | Each response holds its own connection; up to `with_max_connections` (default 4) run at once, and a request beyond that waits up to `with_acquire_timeout` (default 30 s), then fails with `model.openai_responses.ws_pool_timeout`, `Unavailable`, having sent nothing |
+| Request with `previous_response_id` | Takes the idle connection that carried that response, which an unstored (`store = false`) response needs |
+| Terminal event | The connection returns to the pool before the final chunk is yielded |
+| Stream dropped before its terminal event | The connection is discarded, so no frame of the abandoned response reaches another request |
+| Connection the server closed while idle | Replaced before anything is written |
+| A failure after the request frame was written | `model.openai_responses.ws_send`, `Unavailable`, not retryable: the server may be generating it, so it is never resent |
+| No event within `with_read_timeout` (default 600 s) | `model.openai_responses.ws_timeout`, `Timeout`, not retryable; the connection is discarded |
 | Close or end of the connection before a terminal event | `model.openai_responses.unfinished_stream`, `Unavailable` |
 | `response.incomplete` at `max_output_tokens` or `content_filter` | A final chunk with `FinishReason::MaxTokens` or `FinishReason::Safety` |
 | Other `incomplete`, `response.cancelled`, or `response.failed` | The errors in [Failed and unfinished responses](#failed-and-unfinished-responses) |
 | An event, including a completed response, that does not match the Responses schema | `model.openai_responses.parse` |
 | `error` event | `model.openai_responses.ws_error`, categorized by the event's documented code or its `status` |
 | Event type this version does not know, carrying a terminal `response.status` | Ends the response by that status |
-| Handshake | Retried under `RetryConfig` for network errors, 408, 429, and 5xx; any other 4xx (for example 401) and an invalid URL fail at once with the status's category |
+| Handshake | Sends the API key, and the organization and project when set; retried under `RetryConfig` for network errors, 408, 429, and 5xx, each attempt bounded by `with_connect_timeout` (default 30 s); any other 4xx (for example 401) and an invalid URL fail at once with the status's category |
 
-`WsTransport::connect` retries handshakes under `RetryConfig::default()`;
-`WsTransport::connect_with_retry_config` takes the policy, which also governs reconnects.
-A response continued with `previous_response_id` after a reconnect needs `store = true`:
-the connection-local cache of an unstored response is lost with the old connection.
+`WsTransport::new` opens no connection until the first request; `WsTransport::connect` opens
+one now and retries handshakes under `RetryConfig::default()`;
+`WsTransport::connect_with_retry_config` takes the policy, which also governs later
+connections. A response continued with `previous_response_id` on another connection needs
+`store = true`: the connection-local cache of an unstored response is lost with its
+connection.
 
-`OpenAIResponsesClient` always uses HTTP. The former `OpenAIResponsesConfig::with_transport`
-option and the `ResponsesTransport` enum were never read and are removed; use `WsTransport`
-for WebSocket mode.
+### WebSocket mode in `OpenAIResponsesClient`
+
+`OpenAIResponsesClient::with_websocket` streams generations over a `WsTransport` built from
+the same config; non-streaming and `background` requests stay on HTTP.
+`with_websocket_fallback(true)` sends a generation over HTTP only when the WebSocket failed
+before any of it was written — a refused or failed handshake, a connect timeout, or a full
+pool. A failure after the request was written is returned as it is: a second request would
+generate, run hosted tools and bill twice. Fallback is off by default.
+
+```rust,ignore
+use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig, WsTransport};
+
+let config = OpenAIResponsesConfig::new(std::env::var("OPENAI_API_KEY")?, "gpt-5.6-terra");
+let model = OpenAIResponsesClient::new(config.clone())?
+    .with_websocket(WsTransport::new(&config)?.with_max_connections(8))
+    .with_websocket_fallback(true);
+```
+
+The former `OpenAIResponsesConfig::with_transport` option and the `ResponsesTransport` enum
+were never read and are removed.
 
 `examples/gemini_ws_outcomes` runs each WebSocket case against a scripted local server and,
 when `OPENAI_API_KEY` is set, against the live endpoint:

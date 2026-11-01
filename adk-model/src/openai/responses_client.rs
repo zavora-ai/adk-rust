@@ -66,6 +66,12 @@ pub struct OpenAIResponsesClient {
     timeouts: crate::HttpTimeouts,
     /// Provider that serves the endpoint, when not OpenAI; see [`Self::with_provider_name`].
     provider_name: Option<String>,
+    /// Streamed generations go over these WebSocket connections; see [`Self::with_websocket`].
+    #[cfg(feature = "openai-ws")]
+    websocket: Option<Arc<super::WsTransport>>,
+    /// Whether a generation the WebSocket could not send goes over HTTP.
+    #[cfg(feature = "openai-ws")]
+    websocket_fallback: bool,
 }
 
 impl OpenAIResponsesClient {
@@ -164,6 +170,10 @@ impl OpenAIResponsesClient {
             open_responses_mode,
             timeouts,
             provider_name: None,
+            #[cfg(feature = "openai-ws")]
+            websocket: None,
+            #[cfg(feature = "openai-ws")]
+            websocket_fallback: false,
         })
     }
 
@@ -189,6 +199,50 @@ impl OpenAIResponsesClient {
     #[must_use]
     pub fn with_provider_name(mut self, provider_name: impl Into<String>) -> Self {
         self.provider_name = Some(provider_name.into());
+        self
+    }
+
+    /// Streams generations over `transport`'s pooled WebSocket connections
+    /// (requires the `openai-ws` feature).
+    ///
+    /// Build the transport from the same [`OpenAIResponsesConfig`] as the client, so it uses
+    /// the same credentials and endpoint. Non-streaming and `background` requests stay on
+    /// HTTP. A WebSocket failure is returned as it is unless
+    /// [`with_websocket_fallback`](Self::with_websocket_fallback) is on.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig, WsTransport};
+    ///
+    /// let config = OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra");
+    /// let client = OpenAIResponsesClient::new(config.clone())?
+    ///     .with_websocket(WsTransport::new(&config)?)
+    ///     .with_websocket_fallback(true);
+    /// ```
+    #[cfg(feature = "openai-ws")]
+    #[must_use]
+    pub fn with_websocket(mut self, transport: super::WsTransport) -> Self {
+        self.websocket = Some(Arc::new(transport));
+        self
+    }
+
+    /// Sends a streamed generation over HTTP when the WebSocket failed before any of it was
+    /// written — a refused or failed handshake, a connect timeout, or every connection busy
+    /// past the acquire timeout (default off; requires the `openai-ws` feature).
+    ///
+    /// A failure after the request was written never falls back: the server may be
+    /// generating it, and a second request would generate, run hosted tools and bill twice.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let client = client.with_websocket(WsTransport::new(&config)?).with_websocket_fallback(true);
+    /// ```
+    #[cfg(feature = "openai-ws")]
+    #[must_use]
+    pub fn with_websocket_fallback(mut self, fallback: bool) -> Self {
+        self.websocket_fallback = fallback;
         self
     }
 
@@ -1063,6 +1117,34 @@ impl OpenAIResponsesClient {
         )?;
 
         let native_tools = responses_convert::request_uses_native_tools(&request);
+
+        #[cfg(feature = "openai-ws")]
+        if stream
+            && create_request.background != Some(true)
+            && let Some(websocket) = &self.websocket
+        {
+            match websocket.send_request(create_request.clone()).await {
+                Ok(response_stream) => {
+                    return Ok(crate::usage_tracking::with_priced_usage_tracking(
+                        response_stream,
+                        usage_span,
+                        billed_by,
+                        &self.model,
+                    ));
+                }
+                // Nothing reached the server, so the one request goes over HTTP instead.
+                Err(error)
+                    if self.websocket_fallback
+                        && error.code != super::ws_transport::SEND_OUTCOME_UNKNOWN =>
+                {
+                    tracing::debug!(
+                        error.code = error.code,
+                        "websocket could not send the request; sending it over http"
+                    );
+                }
+                Err(error) => return Err(error),
+            }
+        }
 
         if stream {
             // Explicitly set stream=true — async-openai's create_stream() does NOT

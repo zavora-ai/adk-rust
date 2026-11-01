@@ -1,27 +1,28 @@
 //! WebSocket transport for the OpenAI Responses API.
 //!
-//! Provides a persistent WebSocket connection to `/v1/responses` (WebSocket mode) for
+//! Provides persistent WebSocket connections to `/v1/responses` (WebSocket mode) for
 //! lower-latency agentic workflows. Each request is sent as a `response.create` event and
 //! its server events are read with the same projection and stream recovery as the HTTP
 //! SSE path, so a WebSocket stream ends with the same outcomes as an HTTP stream.
 //!
 //! Gated behind the `openai-ws` feature flag.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, PoisonError};
+use std::time::Duration;
 
-use adk_core::{AdkError, ErrorCategory, ErrorComponent, LlmResponseStream};
+use adk_core::{AdkError, ErrorCategory, ErrorComponent, LlmResponseStream, RetryHint};
 use async_openai::types::responses::{CreateResponse, Tool};
 use async_stream::try_stream;
 use futures::{FutureExt, SinkExt, StreamExt};
 use serde_json::Value;
-use tokio::sync::{Mutex, OwnedMutexGuard};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{
         self, Message,
         client::IntoClientRequest,
-        http::{HeaderValue, header},
+        http::{HeaderName, HeaderValue, header},
     },
 };
 
@@ -44,23 +45,42 @@ const WEBSOCKET_ERROR_CODES: &[&str] = &[
     "websocket_connection_limit_reached",
 ];
 
-/// Persistent WebSocket connection to the OpenAI Responses API.
+/// Code of the error for a request whose frame may have reached the server: its outcome is
+/// unknown, so it is neither resent nor retried.
+pub(super) const SEND_OUTCOME_UNKNOWN: &str = "model.openai_responses.ws_send";
+
+const DEFAULT_MAX_CONNECTIONS: usize = 4;
+const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Persistent WebSocket connections to the OpenAI Responses API.
 ///
-/// Maintains a single WebSocket connection that is reused across
-/// [`send_request`](Self::send_request) calls, reducing per-request connection overhead
-/// for latency-sensitive agentic workflows.
+/// Keeps a pool of up to [`with_max_connections`](Self::with_max_connections) connections
+/// (default 4), reused across [`send_request`](Self::send_request) calls to cut
+/// per-request connection overhead for latency-sensitive agentic workflows. Each
+/// connection carries one response at a time, so concurrent requests — from different
+/// sessions sharing one client — each take their own connection; a request beyond the
+/// limit waits up to [`with_acquire_timeout`](Self::with_acquire_timeout) for one.
 ///
-/// The connection carries one response at a time: a request waits until the previous
-/// response stream has ended or been dropped. A stream dropped before its terminal event
-/// discards the connection, so the rest of that response never reaches the next request;
-/// the next request opens a new connection. A connection the server closed while idle is
-/// replaced the same way. A response that continues with `previous_response_id` on a new
-/// connection needs `store = true`, because the connection-local cache of an unstored
-/// response is lost with the old connection.
+/// A request that continues with `previous_response_id` takes the connection that produced
+/// that response when it is idle, because an unstored (`store = false`) response is cached
+/// only on its connection; on another connection it needs `store = true`. A connection
+/// returns to the pool when its response's terminal event arrives, before the final chunk
+/// is yielded. A stream dropped or failed before its terminal event discards the
+/// connection, so the rest of that response never reaches another request. A connection
+/// the server closed while idle is replaced before anything is sent on it.
+///
+/// A request is sent at most once. Once its frame has been written, a failure means the
+/// server may be generating it: the stream fails without resending, and the error is not
+/// retryable.
 ///
 /// Handshakes are retried under the [`RetryConfig`] for transient failures (network
 /// errors, HTTP 408, 429, and 5xx); an invalid URL or an HTTP 4xx rejection such as 401
-/// fails at once.
+/// fails at once. Each attempt is bounded by
+/// [`with_connect_timeout`](Self::with_connect_timeout) (default 30 s), and the wait for
+/// each server event by [`with_read_timeout`](Self::with_read_timeout) (default 600 s, as
+/// the HTTP idle timeout).
 ///
 /// # Example
 ///
@@ -82,48 +102,159 @@ const WEBSOCKET_ERROR_CODES: &[&str] = &[
 /// }
 /// ```
 pub struct WsTransport {
-    /// The connection, held by the response stream that is reading from it.
-    connection: Arc<Mutex<Connection>>,
+    pool: Arc<Pool>,
     /// Connection URL (derived from base_url).
     url: String,
-    /// API key for reconnection.
-    api_key: String,
+    /// Handshake headers: the bearer token and the organization and project, when set.
+    headers: Vec<(HeaderName, HeaderValue)>,
     /// Retry configuration for handshakes.
     retry_config: RetryConfig,
-    /// Whether an open connection is held.
-    connected: Arc<AtomicBool>,
+    connect_timeout: Duration,
+    read_timeout: Duration,
+    acquire_timeout: Duration,
 }
 
-struct Connection {
-    socket: Option<WsStream>,
+/// The connections of one transport.
+struct Pool {
+    /// One permit per connection a response may hold.
+    permits: Arc<Semaphore>,
+    /// Open connections no response holds.
+    idle: std::sync::Mutex<Vec<Idle>>,
+    /// Open connections, idle or held.
+    open: AtomicUsize,
 }
 
-/// Exclusive use of the connection for one response.
+struct Idle {
+    socket: WsStream,
+    /// The id of the last response this connection carried.
+    last_response: Option<String>,
+}
+
+impl Pool {
+    fn new(max_connections: usize, idle: Vec<Idle>) -> Arc<Self> {
+        let open = AtomicUsize::new(idle.len());
+        Arc::new(Self {
+            permits: Arc::new(Semaphore::new(max_connections.max(1))),
+            idle: std::sync::Mutex::new(idle),
+            open,
+        })
+    }
+
+    /// An idle connection, preferring the one that carried `previous_response`.
+    fn take(&self, previous_response: Option<&str>) -> Option<WsStream> {
+        let mut idle = self.idle.lock().unwrap_or_else(PoisonError::into_inner);
+        let index = idle
+            .iter()
+            .position(|entry| {
+                previous_response.is_some() && entry.last_response.as_deref() == previous_response
+            })
+            .or_else(|| idle.len().checked_sub(1))?;
+        Some(idle.swap_remove(index).socket)
+    }
+
+    fn put(&self, socket: WsStream, last_response: Option<String>) {
+        self.idle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Idle { socket, last_response });
+    }
+
+    fn discard(&self) {
+        self.open.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// One response's use of one connection.
 ///
-/// Dropped before the response's terminal event, it discards the socket: frames of that
-/// response may still be in flight.
+/// Dropped before [`release`](Self::release) — the stream was dropped or failed before the
+/// response's terminal event — it discards the connection: frames of that response may
+/// still be in flight.
 struct Lease {
-    guard: OwnedMutexGuard<Connection>,
-    connected: Arc<AtomicBool>,
-    finished: bool,
+    socket: Option<WsStream>,
+    pool: Arc<Pool>,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl Lease {
+    /// Returns the connection to the pool, clean after the terminal event of `response`.
+    fn release(mut self, response: Option<String>) {
+        if let Some(socket) = self.socket.take() {
+            self.pool.put(socket, response);
+        }
+    }
 }
 
 impl Drop for Lease {
     fn drop(&mut self) {
-        if !self.finished {
-            self.guard.socket = None;
+        if self.socket.take().is_some() {
+            self.pool.discard();
         }
-        self.connected.store(self.guard.socket.is_some(), Ordering::Relaxed);
     }
 }
 
 impl WsTransport {
+    /// Creates a transport that opens its first connection with its first request.
+    ///
+    /// The WebSocket URL is derived from the configured base URL by replacing `https://`
+    /// with `wss://` and appending `/v1/responses`. The handshake sends the API key as a
+    /// bearer token, and the organization and project when the config sets them.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_model::openai::{OpenAIResponsesConfig, WsTransport};
+    /// use std::time::Duration;
+    ///
+    /// let config = OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra");
+    /// let transport = WsTransport::new(&config)?
+    ///     .with_max_connections(8)
+    ///     .with_read_timeout(Duration::from_secs(300));
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidInput` when the API key, organization or project is not a valid
+    /// HTTP header value.
+    pub fn new(config: &OpenAIResponsesConfig) -> Result<Self, AdkError> {
+        let base_url = config.base_url.as_deref().unwrap_or("https://api.openai.com/v1");
+        let header_value = |value: String| {
+            HeaderValue::from_str(&value).map_err(|_| {
+                AdkError::new(
+                    ErrorComponent::Model,
+                    ErrorCategory::InvalidInput,
+                    "model.openai_responses.ws_invalid_api_key",
+                    "OpenAI API key, organization or project is not a valid HTTP header value",
+                )
+                .with_provider("openai-responses")
+            })
+        };
+        let mut headers =
+            vec![(header::AUTHORIZATION, header_value(format!("Bearer {}", config.api_key))?)];
+        if let Some(organization) = &config.organization_id {
+            headers.push((
+                HeaderName::from_static("openai-organization"),
+                header_value(organization.clone())?,
+            ));
+        }
+        if let Some(project) = &config.project_id {
+            headers
+                .push((HeaderName::from_static("openai-project"), header_value(project.clone())?));
+        }
+        Ok(Self {
+            pool: Pool::new(DEFAULT_MAX_CONNECTIONS, Vec::new()),
+            url: derive_ws_url(base_url),
+            headers,
+            retry_config: RetryConfig::default(),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            read_timeout: DEFAULT_READ_TIMEOUT,
+            acquire_timeout: DEFAULT_ACQUIRE_TIMEOUT,
+        })
+    }
+
     /// Establish a new WebSocket connection to the OpenAI Responses API.
     ///
-    /// The WebSocket URL is derived from the configured base URL by replacing
-    /// `https://` with `wss://` and appending `/v1/responses`. The API key is
-    /// sent as a bearer token in the handshake headers. Transient handshake failures
-    /// are retried under [`RetryConfig::default`]; use
+    /// As [`new`](Self::new), with the first connection opened now. Transient handshake
+    /// failures are retried under [`RetryConfig::default`]; use
     /// [`connect_with_retry_config`](Self::connect_with_retry_config) to choose the policy.
     ///
     /// # Errors
@@ -136,7 +267,7 @@ impl WsTransport {
     }
 
     /// Establish a new WebSocket connection, retrying transient handshake failures under
-    /// `retry_config`, which also governs later reconnections.
+    /// `retry_config`, which also governs later connections.
     ///
     /// # Example
     ///
@@ -156,31 +287,86 @@ impl WsTransport {
         config: &OpenAIResponsesConfig,
         retry_config: RetryConfig,
     ) -> Result<Self, AdkError> {
-        let base_url = config.base_url.as_deref().unwrap_or("https://api.openai.com/v1");
-        let url = derive_ws_url(base_url);
-        let socket = handshake(&url, &config.api_key, &retry_config).await?;
-        Ok(Self {
-            connection: Arc::new(Mutex::new(Connection { socket: Some(socket) })),
-            url,
-            api_key: config.api_key.clone(),
-            retry_config,
-            connected: Arc::new(AtomicBool::new(true)),
-        })
+        let transport = Self::new(config)?.with_retry_config(retry_config);
+        let socket = transport.handshake().await?;
+        transport.pool.put(socket, None);
+        transport.pool.open.fetch_add(1, Ordering::Relaxed);
+        Ok(transport)
     }
 
-    /// Set the retry configuration for reconnection handshakes.
+    /// Set the retry configuration for handshakes.
     #[must_use]
     pub fn with_retry_config(mut self, retry_config: RetryConfig) -> Self {
         self.retry_config = retry_config;
         self
     }
 
+    /// Set how many connections the transport keeps, which bounds how many responses it
+    /// carries at once (default 4; at least 1).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let transport = WsTransport::new(&config)?.with_max_connections(16);
+    /// ```
+    #[must_use]
+    pub fn with_max_connections(mut self, max_connections: usize) -> Self {
+        let idle =
+            std::mem::take(&mut *self.pool.idle.lock().unwrap_or_else(PoisonError::into_inner));
+        self.pool = Pool::new(max_connections, idle);
+        self
+    }
+
+    /// Set how long a request waits for a connection while all are carrying responses
+    /// (default 30 s). It then fails with `model.openai_responses.ws_pool_timeout`
+    /// (`Unavailable`), having sent nothing.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let transport = WsTransport::new(&config)?.with_acquire_timeout(Duration::from_secs(5));
+    /// ```
+    #[must_use]
+    pub fn with_acquire_timeout(mut self, timeout: Duration) -> Self {
+        self.acquire_timeout = timeout;
+        self
+    }
+
+    /// Set the bound on each handshake attempt (default 30 s).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let transport = WsTransport::new(&config)?.with_connect_timeout(Duration::from_secs(10));
+    /// ```
+    #[must_use]
+    pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = timeout;
+        self
+    }
+
+    /// Set how long a response may go without a server event (default 600 s). The stream
+    /// then fails with `model.openai_responses.ws_timeout` (`Timeout`, not retryable: the
+    /// server may still be generating) and the connection is discarded.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let transport = WsTransport::new(&config)?.with_read_timeout(Duration::from_secs(120));
+    /// ```
+    #[must_use]
+    pub fn with_read_timeout(mut self, timeout: Duration) -> Self {
+        self.read_timeout = timeout;
+        self
+    }
+
     /// Returns whether the transport holds an open WebSocket connection.
     ///
-    /// `false` after the server closed the connection or a stream was dropped before its
-    /// terminal event; the next [`send_request`](Self::send_request) reconnects.
+    /// `false` before the first connection, and after the server closed every connection or
+    /// streams were dropped before their terminal events; the next
+    /// [`send_request`](Self::send_request) connects.
     pub fn is_connected(&self) -> bool {
-        self.connected.load(Ordering::Relaxed)
+        self.pool.open.load(Ordering::Relaxed) > 0
     }
 
     /// Send a request over the WebSocket and return a response stream.
@@ -190,13 +376,16 @@ impl WsTransport {
     /// one final chunk carrying the rest of the response, exactly as the HTTP SSE path
     /// does, and ends after the response's terminal event.
     ///
-    /// The call waits while a previous response stream from this transport is still
-    /// open. It reconnects first when the connection was closed or abandoned, and once
-    /// more if sending on a reused connection fails.
+    /// The call takes an idle connection — the one that carried the request's
+    /// `previous_response_id` when there is one — or opens a new one, and waits while every
+    /// connection carries a response. An idle connection the server closed is replaced
+    /// before anything is written.
     ///
     /// The stream fails with:
     /// - `model.openai_responses.unfinished_stream` (`Unavailable`) when the connection
     ///   closes before a terminal event;
+    /// - `model.openai_responses.ws_timeout` (`Timeout`, not retryable) when no event
+    ///   arrives within the read timeout;
     /// - `model.openai_responses.response_failed` for `response.failed`;
     /// - `model.openai_responses.ws_error` for an `error` event, categorized by its status;
     /// - `model.openai_responses.incomplete` or `model.openai_responses.cancelled` for a
@@ -206,8 +395,11 @@ impl WsTransport {
     ///
     /// # Errors
     ///
-    /// Returns `AdkError` with category `Unavailable` if the request cannot be sent after
-    /// reconnecting, or the handshake error when reconnecting fails.
+    /// Before anything is sent: `model.openai_responses.ws_pool_timeout` (`Unavailable`)
+    /// when no connection frees up within the acquire timeout, the handshake error when
+    /// connecting fails, or `model.openai_responses.ws_serialize` (`Internal`). After the
+    /// frame was written: `model.openai_responses.ws_send` (`Unavailable`, not retryable),
+    /// because the server may have received the request.
     pub async fn send_request(
         &self,
         request: CreateResponse,
@@ -219,43 +411,43 @@ impl WsTransport {
             .any(|tool| !matches!(tool, Tool::Function(_) | Tool::Custom(_)));
         let frame = create_event(&request)?;
 
-        let mut lease = Lease {
-            guard: Arc::clone(&self.connection).lock_owned().await,
-            connected: Arc::clone(&self.connected),
-            finished: true,
+        let permit = tokio::time::timeout(
+            self.acquire_timeout,
+            Arc::clone(&self.pool.permits).acquire_owned(),
+        )
+        .await
+        .map_err(|_| pool_timeout())?
+        .map_err(|_| pool_timeout())?;
+        let mut lease = Lease { socket: None, pool: Arc::clone(&self.pool), _permit: permit };
+        while let Some(mut socket) = self.pool.take(request.previous_response_id.as_deref()) {
+            if idle_and_open(&mut socket) {
+                lease.socket = Some(socket);
+                break;
+            }
+            self.pool.discard();
+        }
+        let socket = match lease.socket.take() {
+            Some(socket) => socket,
+            None => {
+                let socket = self.handshake().await?;
+                self.pool.open.fetch_add(1, Ordering::Relaxed);
+                socket
+            }
         };
-        if !lease.guard.socket.as_mut().is_some_and(idle_and_open) {
-            lease.guard.socket = None;
+        let socket = lease.socket.insert(socket);
+        // From here the server may have the request: it is never sent again.
+        if let Err(error) = socket.send(Message::Text(frame.into())).await {
+            return Err(send_failed(&error));
         }
-        // A failed send delivers no complete frame, so the request goes once more over a
-        // new connection.
-        let mut sent = match lease.guard.socket.as_mut() {
-            Some(socket) => send_frame(socket, &frame).await,
-            None => Err(not_connected()),
-        };
-        if sent.is_err() {
-            lease.guard.socket = None;
-            let socket = lease
-                .guard
-                .socket
-                .insert(handshake(&self.url, &self.api_key, &self.retry_config).await?);
-            sent = send_frame(socket, &frame).await;
-        }
-        if let Err(error) = sent {
-            lease.guard.socket = None;
-            return Err(error);
-        }
-        self.connected.store(true, Ordering::Relaxed);
-        lease.finished = false;
 
+        let read_timeout = self.read_timeout;
         let stream = try_stream! {
-            let mut lease = lease;
+            let mut lease = Some(lease);
             let mut state = StreamState::new(native_tools);
-            loop {
-                let frame = match lease.guard.socket.as_mut() {
-                    Some(socket) => socket.next().await,
-                    None => None,
-                };
+            while let Some(socket) = lease.as_mut().and_then(|lease| lease.socket.as_mut()) {
+                let frame = tokio::time::timeout(read_timeout, socket.next())
+                    .await
+                    .map_err(|_| read_timed_out())?;
                 let text = match frame {
                     Some(Ok(Message::Text(text))) => text,
                     Some(Ok(Message::Binary(_) | Message::Frame(_))) => continue,
@@ -271,8 +463,15 @@ impl WsTransport {
                     // frames of this response are still in flight.
                     Err(error_event(&value))?;
                 }
-                // After a terminal event the connection is clean, whatever its outcome.
-                lease.finished = is_terminal(&value);
+                // After a terminal event the connection is clean, whatever its outcome: it
+                // goes back to the pool before the final chunk is yielded, so a caller that
+                // sends another request while holding that chunk never waits on itself.
+                if is_terminal(&value)
+                    && let Some(lease) = lease.take()
+                {
+                    let id = value.pointer("/response/id").and_then(Value::as_str);
+                    lease.release(id.map(str::to_string));
+                }
                 match wire::event(value.clone())? {
                     wire::Event::Terminal(response) => {
                         yield state.finish(&response)?;
@@ -285,7 +484,7 @@ impl WsTransport {
                     }
                     // An event type this version does not know that carries a terminal
                     // response still ends the response.
-                    wire::Event::Activity if lease.finished => {
+                    wire::Event::Activity if lease.is_none() => {
                         let response = wire::response(
                             value.get("response").cloned().unwrap_or(Value::Null),
                             &value,
@@ -300,6 +499,22 @@ impl WsTransport {
         };
 
         Ok(Box::pin(stream))
+    }
+
+    /// Opens a connection, retrying transient failures and bounding each attempt.
+    async fn handshake(&self) -> Result<WsStream, AdkError> {
+        execute_with_retry(&self.retry_config, is_retryable_model_error, || async move {
+            let mut request =
+                self.url.as_str().into_client_request().map_err(|e| handshake_error(&e))?;
+            request.headers_mut().extend(self.headers.iter().cloned());
+            let (socket, _response) =
+                tokio::time::timeout(self.connect_timeout, connect_async(request))
+                    .await
+                    .map_err(|_| connect_timed_out())?
+                    .map_err(|e| handshake_error(&e))?;
+            Ok(socket)
+        })
+        .await
     }
 }
 
@@ -354,26 +569,46 @@ fn is_terminal(value: &Value) -> bool {
     )
 }
 
-async fn send_frame(socket: &mut WsStream, frame: &str) -> Result<(), AdkError> {
-    socket.send(Message::Text(frame.into())).await.map_err(|e| {
-        AdkError::new(
-            ErrorComponent::Model,
-            ErrorCategory::Unavailable,
-            "model.openai_responses.ws_send",
-            format!("Failed to send WebSocket message: {e}"),
-        )
-        .with_provider("openai-responses")
-    })
-}
-
-fn not_connected() -> AdkError {
+fn send_failed(error: &tungstenite::Error) -> AdkError {
     AdkError::new(
         ErrorComponent::Model,
         ErrorCategory::Unavailable,
-        "model.openai_responses.ws_send",
-        "WebSocket connection is closed",
+        SEND_OUTCOME_UNKNOWN,
+        format!("Failed to send WebSocket message; the server may have received it: {error}"),
     )
     .with_provider("openai-responses")
+    .with_retry(RetryHint { should_retry: false, ..Default::default() })
+}
+
+fn pool_timeout() -> AdkError {
+    AdkError::new(
+        ErrorComponent::Model,
+        ErrorCategory::Unavailable,
+        "model.openai_responses.ws_pool_timeout",
+        "every OpenAI Responses WebSocket connection stayed busy for the acquire timeout",
+    )
+    .with_provider("openai-responses")
+}
+
+fn connect_timed_out() -> AdkError {
+    AdkError::new(
+        ErrorComponent::Model,
+        ErrorCategory::Timeout,
+        "model.openai_responses.ws_connect",
+        "OpenAI Responses WebSocket handshake did not finish within the connect timeout",
+    )
+    .with_provider("openai-responses")
+}
+
+fn read_timed_out() -> AdkError {
+    AdkError::new(
+        ErrorComponent::Model,
+        ErrorCategory::Timeout,
+        "model.openai_responses.ws_timeout",
+        "OpenAI Responses WebSocket sent no event within the read timeout",
+    )
+    .with_provider("openai-responses")
+    .with_retry(RetryHint { should_retry: false, ..Default::default() })
 }
 
 fn closed_before_terminal() -> AdkError {
@@ -447,30 +682,6 @@ fn derive_ws_url(base_url: &str) -> String {
     } else {
         format!("{trimmed}/v1/responses")
     }
-}
-
-/// Opens a WebSocket connection with bearer authentication, retrying transient failures.
-async fn handshake(
-    url: &str,
-    api_key: &str,
-    retry_config: &RetryConfig,
-) -> Result<WsStream, AdkError> {
-    execute_with_retry(retry_config, is_retryable_model_error, || async move {
-        let mut request = url.into_client_request().map_err(|e| handshake_error(&e))?;
-        let token = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|_| {
-            AdkError::new(
-                ErrorComponent::Model,
-                ErrorCategory::InvalidInput,
-                "model.openai_responses.ws_invalid_api_key",
-                "OpenAI API key is not a valid HTTP header value",
-            )
-            .with_provider("openai-responses")
-        })?;
-        request.headers_mut().insert(header::AUTHORIZATION, token);
-        let (socket, _response) = connect_async(request).await.map_err(|e| handshake_error(&e))?;
-        Ok(socket)
-    })
-    .await
 }
 
 /// Classifies a handshake failure so only transient failures are retried.
@@ -617,6 +828,17 @@ mod tests {
             );
             assert!(!error.message.contains("secret"), "{}", error.message);
         }
+    }
+
+    #[test]
+    fn a_failed_send_is_never_retried() {
+        let error = send_failed(&tungstenite::Error::ConnectionClosed);
+        assert_eq!(
+            (error.category, error.code, error.is_retryable()),
+            (ErrorCategory::Unavailable, SEND_OUTCOME_UNKNOWN, false)
+        );
+        assert!(!read_timed_out().is_retryable());
+        assert!(pool_timeout().is_retryable());
     }
 
     #[test]

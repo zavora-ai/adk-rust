@@ -244,9 +244,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 accepts up to `XHigh`. `OpenAIResponsesConfig::with_reasoning_effort` takes the original
 three-value `ReasoningEffort` (`Low`, `Medium`, `High`).
 
-`OpenAIResponsesClient` always uses HTTP. For WebSocket mode, use `openai::WsTransport` from the
-`openai-ws` feature. `ResponsesTransport` and `OpenAIResponsesConfig::with_transport` were removed
-in 3.0: the option was never read.
+`OpenAIResponsesClient` uses HTTP unless `with_websocket` (feature `openai-ws`) gives it a
+pooled `openai::WsTransport` for streamed generations; `with_websocket_fallback(true)` sends over
+HTTP only when the WebSocket failed before writing the request. `ResponsesTransport` and
+`OpenAIResponsesConfig::with_transport` were removed in 3.0: the option was never read.
 
 #### Background mode
 
