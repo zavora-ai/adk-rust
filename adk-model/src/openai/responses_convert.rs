@@ -13,8 +13,8 @@ use async_openai::types::responses::{
     CreateResponse, CreateResponseArgs, EasyInputContent, EasyInputMessage, FunctionCallOutput,
     FunctionCallOutputItemParam, FunctionShellCallItemParam, FunctionShellCallOutputItemParam,
     FunctionTool, FunctionToolCall, IncludeEnum, InputContent, InputFileContent, InputImageContent,
-    InputItem, InputParam, Item, MessagePhase, OutputItem, OutputMessageContent, Prompt,
-    PromptCacheRetention as OaiPromptCacheRetention, Reasoning,
+    InputItem, InputParam, Item, MessageItem, MessagePhase, OutputItem, OutputMessageContent,
+    Prompt, PromptCacheRetention as OaiPromptCacheRetention, Reasoning,
     ReasoningEffort as OaiReasoningEffort, ReasoningItemContent,
     ReasoningSummary as OaiReasoningSummary, Response, ResponseTextParam, Role,
     ServiceTier as OaiServiceTier, Status, SummaryPart, TextResponseFormatConfiguration, Tool,
@@ -163,23 +163,25 @@ fn content_to_input_items(content: &Content) -> Vec<InputItem> {
                 // FileData is not directly mapped to Responses API input items.
                 // Could be extended in the future.
             }
-            Part::ServerToolCall { server_tool_call } => {
-                if let Ok(item) = serde_json::from_value::<Item>(server_tool_call.clone()) {
+            // Native items replay only from the model's own turns, and a native message only
+            // as the assistant's: in any other turn, or with a user, system or developer role,
+            // it would be input the model never produced, carrying instructions.
+            Part::ServerToolCall { server_tool_call: payload }
+            | Part::ServerToolResponse { server_tool_response: payload }
+                if matches!(role, "model" | "assistant") =>
+            {
+                match serde_json::from_value::<Item>(payload.clone()) {
+                    Ok(Item::Message(MessageItem::Input(_))) | Err(_) => {}
                     // The history keeps reasoning items after the turn's outputs, and the API
                     // takes each one ahead of the output it produced, as it returned them.
-                    if matches!(item, Item::Reasoning(_)) {
+                    Ok(item @ Item::Reasoning(_)) => {
                         items.insert(reasoning_items, InputItem::Item(item));
                         reasoning_items += 1;
-                    } else {
-                        items.push(InputItem::Item(item));
                     }
+                    Ok(item) => items.push(InputItem::Item(item)),
                 }
             }
-            Part::ServerToolResponse { server_tool_response } => {
-                if let Ok(item) = serde_json::from_value::<Item>(server_tool_response.clone()) {
-                    items.push(InputItem::Item(item));
-                }
-            }
+            Part::ServerToolCall { .. } | Part::ServerToolResponse { .. } => {}
             Part::EmbeddedResource { resource } => match resource {
                 // Text resource: include the text payload as a message.
                 adk_core::EmbeddedResource::Text(text) => {

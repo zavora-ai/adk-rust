@@ -208,9 +208,14 @@ impl Llm for BedrockClient {
     #[instrument(name = "model.generate_content", skip_all, fields(model_id = %self.model_id, region = %self.region, stream))]
     async fn generate_content(
         &self,
-        request: LlmRequest,
+        mut request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream, AdkError> {
+        // Native items reach this provider only from the turns its own origin marks.
+        adk_core::history::retain_replayable(
+            &mut request.contents,
+            &adk_core::history::ProviderOrigin::new("bedrock", &self.model_id),
+        );
         {
             use crate::generation_config::{Supports, reject_unsupported};
             let supports = Supports {

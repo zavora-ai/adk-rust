@@ -134,7 +134,8 @@ fn estimate_part_chars(part: &Part) -> usize {
     }
 }
 
-/// A one-line rendering of `part` for a summarizer prompt; `None` for thinking.
+/// A one-line rendering of `part` for a summarizer prompt; `None` for thinking and for
+/// provider-native items (server-side tool calls and results).
 ///
 /// Text is kept as it is. Function calls and responses keep their name and JSON payload,
 /// data and file parts their type and reference, and embedded resources their URI, so a
@@ -160,12 +161,18 @@ fn estimate_part_chars(part: &Part) -> usize {
 /// );
 /// let thought = Part::Thinking { thinking: "hmm".into(), signature: None };
 /// assert_eq!(render_part_for_summary(&thought), None);
+/// let native = Part::ServerToolResponse { server_tool_response: json!({"type": "anthropic_message"}) };
+/// assert_eq!(render_part_for_summary(&native), None);
 /// ```
 pub fn render_part_for_summary(part: &Part) -> Option<String> {
     let json = |value: &serde_json::Value| value.to_string();
     Some(match part {
         Part::Text { text } => text.clone(),
-        Part::Thinking { .. } => return None,
+        // Provider-native items are private to the provider that produced them; a payload can
+        // hold its reasoning, and the summary is sent to whichever model summarizes.
+        Part::Thinking { .. } | Part::ServerToolCall { .. } | Part::ServerToolResponse { .. } => {
+            return None;
+        }
         Part::FunctionCall { name, args, .. } => format!("[function call] {name}({})", json(args)),
         Part::FunctionResponse { function_response, .. } => {
             let mut rendered = format!(
@@ -185,12 +192,6 @@ pub fn render_part_for_summary(part: &Part) -> Option<String> {
             format!("[inline data: {mime_type}, {} bytes]", data.len())
         }
         Part::FileData { mime_type, file_uri, .. } => format!("[file: {file_uri} ({mime_type})]"),
-        Part::ServerToolCall { server_tool_call } => {
-            format!("[server tool call] {}", json(server_tool_call))
-        }
-        Part::ServerToolResponse { server_tool_response } => {
-            format!("[server tool response] {}", json(server_tool_response))
-        }
         Part::EmbeddedResource { resource } => match resource {
             crate::EmbeddedResource::Text(text) => format!("[resource {}] {}", text.uri, text.text),
             crate::EmbeddedResource::Blob(blob) => format!(

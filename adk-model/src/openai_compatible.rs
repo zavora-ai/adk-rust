@@ -944,9 +944,14 @@ impl Llm for OpenAICompatible {
     )]
     async fn generate_content(
         &self,
-        request: LlmRequest,
+        mut request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream, AdkError> {
+        // Native items reach this provider only from the turns its own origin marks.
+        adk_core::history::retain_replayable(
+            &mut request.contents,
+            &adk_core::history::ProviderOrigin::new(&self.provider_name, &self.model),
+        );
         let model = self.model.clone();
         let provider_name = self.provider_name.clone();
         let attribution = (self.provider_name.clone(), self.model.clone());

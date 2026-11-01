@@ -103,6 +103,9 @@ pub fn with_usage_tracking(stream: LlmResponseStream, span: Span) -> LlmResponse
 /// 2. `usage_metadata.cost` is filled from [`PricingCatalog::standard`] when
 ///    the provider did not report a cost. It stays `None` for unpriced models.
 /// 3. The usage is recorded on `span`, as by [`with_usage_tracking`].
+/// 4. `provider_metadata` records `provider` and `model` as the response's
+///    [`ProviderOrigin`](adk_core::history::ProviderOrigin), the owner of its
+///    native items when history is replayed.
 ///
 /// # Example
 ///
@@ -127,6 +130,10 @@ pub fn with_usage_tracking(stream: LlmResponseStream, span: Span) -> LlmResponse
 /// assert_eq!(response.provider.as_deref(), Some("openai"));
 /// assert_eq!(response.model.as_deref(), Some("gpt-4.1"));
 /// assert_eq!(response.usage_metadata.unwrap().cost, Some(2.0));
+/// assert_eq!(
+///     adk_core::history::ProviderOrigin::of_response(response.provider_metadata.as_ref()),
+///     Some(adk_core::history::ProviderOrigin::new("openai", "gpt-4.1"))
+/// );
 /// # });
 /// ```
 pub fn with_priced_usage_tracking(
@@ -147,8 +154,13 @@ pub fn with_priced_usage_tracking(
     Box::pin(tracked) as Pin<Box<_>>
 }
 
-/// Sets `provider`/`model` when absent and fills a missing cost from the catalog.
+/// Sets `provider`/`model` when absent, records the replay origin, and fills a missing cost
+/// from the catalog.
 pub(crate) fn attribute_and_price(response: &mut LlmResponse, provider: &str, model: &str) {
+    // The client's own family and requested model, which its `retain_replayable` call names:
+    // `response.provider` can be rewritten for billing (OpenCode) and `response.model` is the
+    // version the provider reports.
+    adk_core::history::ProviderOrigin::new(provider, model).record(&mut response.provider_metadata);
     if response.provider.is_none() {
         response.provider = Some(provider.to_string());
     }

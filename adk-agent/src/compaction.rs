@@ -29,7 +29,7 @@ The summary should be concise and capture the essence of the interaction.\n\n\
 /// summary in the window (an event carrying [`EventActions::compaction`]) replaces the events
 /// it covers, so its content carries into the new summary, and every later event contributes
 /// its text, function calls and responses, file and inline data references, and embedded
-/// resources. Thinking parts and streamed partial events are left out.
+/// resources. Thinking, provider-native parts and streamed partial events are left out.
 ///
 /// A summary replaces history only when it is complete and smaller. A stream error fails
 /// the summary, and so does a model that stops for any reason but `Stop` (for example

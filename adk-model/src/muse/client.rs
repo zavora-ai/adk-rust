@@ -385,9 +385,14 @@ impl Llm for MuseClient {
     )]
     async fn generate_content(
         &self,
-        request: LlmRequest,
+        mut request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream, AdkError> {
+        // Native items reach this provider only from the turns its own origin marks.
+        adk_core::history::retain_replayable(
+            &mut request.contents,
+            &adk_core::history::ProviderOrigin::new("muse", &self.config.model),
+        );
         #[cfg(feature = "muse-responses")]
         if let Some(responses) = &self.responses {
             let request = self.responses_request(request, stream)?;

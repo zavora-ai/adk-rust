@@ -285,9 +285,14 @@ impl Llm for OllamaModel {
     )]
     async fn generate_content(
         &self,
-        request: LlmRequest,
+        mut request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream> {
+        // Native items reach this provider only from the turns its own origin marks.
+        adk_core::history::retain_replayable(
+            &mut request.contents,
+            &adk_core::history::ProviderOrigin::new("ollama", &self.model_name),
+        );
         let usage_span = adk_telemetry::llm_generate_span("ollama", &self.model_name, stream);
         let model = self.model_name.clone();
         crate::generation_config::reject_unsupported(

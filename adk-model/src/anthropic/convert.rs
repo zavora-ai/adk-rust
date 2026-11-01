@@ -188,13 +188,17 @@ pub fn content_to_message(
             }
             Part::Thinking { .. } => None,
             // Server-side tool parts: convert back to Anthropic types when possible
-            Part::ServerToolCall { server_tool_call } => serde_json::from_value::<
-                adk_anthropic::ServerToolUseBlock,
-            >(server_tool_call.clone())
-            .ok()
-            .map(ContentBlock::ServerToolUse),
+            // Provider-executed blocks are assistant content; in any other turn they are input
+            // the model never produced.
+            Part::ServerToolCall { server_tool_call } if role == MessageRole::Assistant => {
+                serde_json::from_value::<adk_anthropic::ServerToolUseBlock>(
+                    server_tool_call.clone(),
+                )
+                .ok()
+                .map(ContentBlock::ServerToolUse)
+            }
             // Results keep their `type`, so every server tool result kind converts back.
-            Part::ServerToolResponse { server_tool_response } => {
+            Part::ServerToolResponse { server_tool_response } if role == MessageRole::Assistant => {
                 serde_json::from_value::<ContentBlock>(server_tool_response.clone()).ok().filter(
                     |block| {
                         matches!(
@@ -208,6 +212,7 @@ pub fn content_to_message(
                     },
                 )
             }
+            Part::ServerToolCall { .. } | Part::ServerToolResponse { .. } => None,
             // Embedded resources: text → text block; blob → inline bytes handling.
             Part::EmbeddedResource { resource } => match resource {
                 adk_core::EmbeddedResource::Text(text) => {

@@ -210,9 +210,14 @@ impl Llm for GroqClient {
     )]
     async fn generate_content(
         &self,
-        request: LlmRequest,
+        mut request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream, AdkError> {
+        // Native items reach this provider only from the turns its own origin marks.
+        adk_core::history::retain_replayable(
+            &mut request.contents,
+            &adk_core::history::ProviderOrigin::new("groq", &self.config.model),
+        );
         let usage_span = adk_telemetry::llm_generate_span("groq", &self.config.model, stream);
         let api_url = self.api_url();
         let api_key = self.config.api_key.clone();
