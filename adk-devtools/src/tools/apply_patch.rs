@@ -304,6 +304,11 @@ impl Tool for ApplyPatchTool {
         "apply_patch"
     }
 
+    /// Patches workspace files on disk.
+    fn egress(&self, _args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::None
+    }
+
     fn description(&self) -> &str {
         "Apply a patch that adds, deletes, updates or moves several files at once, all or \
          nothing. The patch starts with '*** Begin Patch' and ends with '*** End Patch'; each \

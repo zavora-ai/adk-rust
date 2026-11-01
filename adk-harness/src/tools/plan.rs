@@ -145,6 +145,11 @@ impl Tool for ExitPlanModeTool {
         "exit_plan_mode"
     }
 
+    /// Keeps the plan in the session.
+    fn egress(&self, _args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::None
+    }
+
     fn description(&self) -> &str {
         "Present your plan and ask the user to approve leaving plan mode. Call it only in \
          plan mode, once your investigation is complete; the user sees the plan and may \

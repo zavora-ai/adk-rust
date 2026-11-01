@@ -78,6 +78,8 @@ pub enum FetchRefusal {
         /// The mime type.
         content_type: String,
     },
+    /// The run's egress policy refuses the URL or a redirect hop (#1281).
+    Egress(adk_core::egress::EgressDenial),
 }
 
 impl FetchRefusal {
@@ -95,6 +97,7 @@ impl FetchRefusal {
             Self::TooManyRedirects { .. } => "harness.web.redirects",
             Self::RedirectWithoutLocation { .. } => "harness.web.redirects",
             Self::UnsupportedType { .. } => "harness.web.unsupported_type",
+            Self::Egress(_) => "harness.web.egress",
         }
     }
 
@@ -110,6 +113,7 @@ impl FetchRefusal {
             Self::Transport(_) => "transport",
             Self::TooManyRedirects { .. } | Self::RedirectWithoutLocation { .. } => "redirects",
             Self::UnsupportedType { .. } => "unsupportedType",
+            Self::Egress(_) => "egress",
         }
     }
 
@@ -123,6 +127,7 @@ impl FetchRefusal {
 impl fmt::Display for FetchRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Egress(denial) => write!(f, "{denial}"),
             Self::Url(refusal) => write!(f, "{refusal}"),
             Self::UrlTooLong { len, max } => {
                 write!(f, "the URL is {len} bytes long; the harness fetches URLs up to {max}")
@@ -352,7 +357,8 @@ impl Fetcher {
     }
 
     /// Fetches `url` with one `GET` per hop, following only same-host and allowlisted
-    /// redirects, reading at most `max_bytes` (never more than the configured cap).
+    /// redirects, reading at most `max_bytes` (never more than the configured cap). Under
+    /// `egress`, the run's egress policy, the URL and every redirect hop must pass it.
     ///
     /// # Errors
     ///
@@ -364,9 +370,17 @@ impl Fetcher {
         max_bytes: Option<usize>,
         shape: TextShape,
         allowlist: &[String],
+        egress: Option<&adk_core::egress::EgressPolicy>,
     ) -> Result<Fetched, FetchRefusal> {
         let wire_cap = max_bytes.unwrap_or(self.config.max_bytes).min(self.config.max_bytes).max(1);
+        let admits = |url: &ParsedUrl| match egress {
+            Some(policy) => {
+                policy.check_url(&url.as_string()).map(drop).map_err(FetchRefusal::Egress)
+            }
+            None => Ok(()),
+        };
         let requested = self.check_url(url)?;
+        admits(&requested)?;
         let mut current = requested.clone();
         let mut redirects = 0u8;
         loop {
@@ -381,6 +395,7 @@ impl Fetcher {
                     .ok_or(FetchRefusal::RedirectWithoutLocation { status })?;
                 let target = current.join(location)?;
                 self.check_url(&target.as_string())?;
+                admits(&target)?;
                 let allowlisted = host_allowlisted(&target.host, allowlist);
                 if target.host != current.host && !allowlisted {
                     return Ok(Fetched {

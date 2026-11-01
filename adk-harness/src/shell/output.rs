@@ -270,6 +270,11 @@ impl Tool for ShellOutputTool {
         SHELL_OUTPUT
     }
 
+    /// Reads output the harness kept.
+    fn egress(&self, _args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::None
+    }
+
     fn description(&self) -> &str {
         "Read the output of a background shell by its shell_id, or the whole output of a bash \
          call whose result was cut by its output_id. Returns the status, exit code, duration \

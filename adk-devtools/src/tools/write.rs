@@ -49,6 +49,11 @@ impl Tool for WriteFileTool {
         "write_file"
     }
 
+    /// Writes the workspace on disk.
+    fn egress(&self, _args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::None
+    }
+
     fn description(&self) -> &str {
         "Create a new file or overwrite an existing one with the given content. \
          Parent directories are created automatically."

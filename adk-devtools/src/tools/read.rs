@@ -110,6 +110,11 @@ impl Tool for ReadFileTool {
         "read_file"
     }
 
+    /// Reads a workspace file on disk.
+    fn egress(&self, _args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::None
+    }
+
     fn description(&self) -> &str {
         "Read a file from the workspace. Text comes back with line numbers, with optional \
          `offset` (1-based start line) and `limit` (number of lines). A PNG, JPEG, GIF, WebP \

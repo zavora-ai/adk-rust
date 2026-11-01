@@ -59,6 +59,11 @@ impl Tool for HarnessHelpTool {
         HARNESS_HELP
     }
 
+    /// Answers from the harness's own text.
+    fn egress(&self, _args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::None
+    }
+
     fn description(&self) -> &str {
         "Explain this harness: the commands the person can type, what each class of call does \
          in each mode, the packs, memory and what the safety mechanisms cover. Call it with no \

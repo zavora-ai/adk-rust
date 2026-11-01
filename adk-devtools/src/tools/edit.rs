@@ -158,6 +158,11 @@ impl Tool for EditFileTool {
         "edit_file"
     }
 
+    /// Edits a workspace file on disk.
+    fn egress(&self, _args: &serde_json::Value) -> adk_core::egress::ToolEgress {
+        adk_core::egress::ToolEgress::None
+    }
+
     fn description(&self) -> &str {
         "Replace exact strings in a file. The file must have been read with read_file first \
          and be unchanged since; if it changed, read it again. Give old_string and \
