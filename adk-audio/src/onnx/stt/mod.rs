@@ -560,17 +560,17 @@ impl SttProvider for OnnxSttProvider {
     /// Transcribe a stream of audio frames.
     ///
     /// For Whisper/Distil-Whisper: buffers audio into 30-second segments,
-    /// pads the final segment with silence, and yields one [`Transcript`]
-    /// per segment.
+    /// pads the final segment with silence, and yields one
+    /// [`TranscriptEvent::Final`](crate::TranscriptEvent::Final) per segment, numbered from 0.
     ///
     /// For Moonshine: buffers audio into variable-length chunks (also using
     /// 30-second segments for consistency) without silence padding, yielding
-    /// one [`Transcript`] per chunk.
+    /// one `Final` per chunk.
     async fn transcribe_stream(
         &self,
         audio: Pin<Box<dyn Stream<Item = AudioFrame> + Send>>,
         opts: &SttOptions,
-    ) -> AudioResult<Pin<Box<dyn Stream<Item = AudioResult<Transcript>> + Send>>> {
+    ) -> AudioResult<crate::TranscriptStream> {
         let config = self.config.clone();
         let tokenizer = self.tokenizer.clone();
         let opts = opts.clone();
@@ -656,6 +656,10 @@ impl SttProvider for OnnxSttProvider {
             }
         }
 
-        Ok(Box::pin(futures::stream::iter(transcripts)))
+        let events = transcripts.into_iter().zip(0_u32..).map(|(result, turn)| {
+            result
+                .map(|transcript| crate::TranscriptEvent::Final { turn_id: Some(turn), transcript })
+        });
+        Ok(Box::pin(futures::stream::iter(events.collect::<Vec<_>>())))
     }
 }

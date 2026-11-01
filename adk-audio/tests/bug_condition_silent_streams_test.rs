@@ -75,3 +75,27 @@ async fn bug_condition_mlx_transcribe_stream_returns_error() {
     let stt = adk_audio::MlxSttProvider::with_dummy();
     assert_streaming_unsupported(&stt, "MLX", UNSUPPORTED).await;
 }
+
+/// A provider that implements only batch transcription.
+struct BatchOnly;
+
+#[async_trait::async_trait]
+impl SttProvider for BatchOnly {
+    async fn transcribe(
+        &self,
+        _audio: &AudioFrame,
+        _opts: &SttOptions,
+    ) -> adk_audio::AudioResult<adk_audio::Transcript> {
+        Ok(adk_audio::Transcript::default())
+    }
+}
+
+#[tokio::test]
+async fn a_provider_without_streaming_fails_by_default() {
+    assert_streaming_unsupported(
+        &BatchOnly,
+        "stt",
+        "this provider does not support streaming transcription; use transcribe",
+    )
+    .await;
+}

@@ -93,7 +93,7 @@ impl SttProvider for MlxSttProvider {
         &self,
         _audio: Pin<Box<dyn Stream<Item = AudioFrame> + Send>>,
         _opts: &SttOptions,
-    ) -> AudioResult<Pin<Box<dyn Stream<Item = AudioResult<Transcript>> + Send>>> {
+    ) -> AudioResult<crate::TranscriptStream> {
         Err(AudioError::Stt {
             provider: "MLX".into(),
             message: "streaming transcription not yet implemented; call `transcribe` with the \

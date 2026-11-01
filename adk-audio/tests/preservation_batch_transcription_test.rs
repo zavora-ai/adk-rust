@@ -5,7 +5,8 @@
 //! Verifies the provider-facing structures used by batch transcription without
 //! contacting an external service:
 //!
-//! 1. The `SttProvider` trait still requires both `transcribe()` and `transcribe_stream()`
+//! 1. The `SttProvider` trait still requires `transcribe()`; `transcribe_stream()` defaults to
+//!    an explicit unsupported error
 //! 2. AudioFrame construction from arbitrary PCM-16 LE data is unchanged
 //!
 //! This confirms the batch transcription surface is untouched by the streaming
@@ -71,9 +72,8 @@ proptest! {
     }
 }
 
-/// Verify that SttProvider trait still requires both transcribe() and transcribe_stream().
-/// This is a compile-time structural check — if either method were removed from the
-/// trait, this test would fail to compile.
+/// Verify that the cloud providers still implement `SttProvider`. This is a compile-time
+/// structural check.
 #[tokio::test]
 async fn trait_requires_both_transcribe_methods() {
     // Construct providers — this verifies the struct and trait are intact
