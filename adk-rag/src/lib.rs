@@ -88,6 +88,7 @@ pub mod inmemory;
 pub mod pipeline;
 pub mod reranker;
 pub mod scope;
+pub mod subject;
 pub mod tool;
 pub mod vectorstore;
 
@@ -122,6 +123,7 @@ pub use inmemory::InMemoryVectorStore;
 pub use pipeline::{QueryOptions, RagPipeline, RagPipelineBuilder, ScopedRag};
 pub use reranker::{NoOpReranker, Reranker};
 pub use scope::Scope;
+pub use subject::{RagSubjectData, SUBJECT_METADATA_KEY, SubjectPartition};
 pub use tool::RagTool;
 pub use vectorstore::{CollectionSpec, VectorQuery, VectorStore};
 

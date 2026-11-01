@@ -268,6 +268,22 @@ Vertex AI Memory Bank or a GCS bucket with object versioning or soft delete.
 Audit leaves are never removed; a redacted log still verifies. See
 [Audit Log](audit-log.md#subjects-in-records).
 
+### RAG
+
+`adk_rag::RagSubjectData` reaches a subject's chunks in the listed collections of any
+`VectorStore`:
+
+| `SubjectPartition` | Finds the subject's chunks | Erases them with |
+|--------------------|----------------------------|------------------|
+| `Tagged { scopes }` | `adk_subject` metadata (`SUBJECT_METADATA_KEY`) equal to one of the subject's user ids, in each listed scope | `VectorStore::delete_where` |
+| `ScopePerUser` | The scope `Scope::from_parts([app, user])` of each application and user id | `VectorStore::purge_scope` |
+
+Declare `adk_subject` filterable on the collection and set it on every document ingested about a
+person. The export names each collection and scope with the number of the subject's chunks, since
+the vector store trait lists no chunk text. A backend whose deletes complete later, or keep
+earlier table versions until they are cleaned up, declares `StoreSupport::Eventual` with
+`with_support`.
+
 ## HTTP routes
 
 | Surface | Routes | Authenticates |
