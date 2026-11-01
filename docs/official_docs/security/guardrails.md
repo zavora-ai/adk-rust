@@ -175,6 +175,55 @@ The validator extracts JSON from:
 
 Content with no JSON fails with the validator's severity (`High` unless set).
 
+## Grounded Citations
+
+`CitationRequired` blocks a final answer that does not cite a source the agent's run retrieved.
+A retrieval tool records each source it gives the model as a `GroundingSource` on its event,
+with `adk_core::record_grounding_sources` — `adk-rag`'s `RagTool` and `VertexAiRagRetrievalTool` do — and the
+agent binds the final answer's markdown links `[title](uri)` whose URI is one of those sources
+into the answer's `CitationMetadata`, with character offsets. Output guardrails then screen the
+answer through `Guardrail::validate_output`, which receives the sources and the citations as
+`OutputEvidence`.
+
+```rust
+use std::sync::Arc;
+
+use adk_agent::LlmAgentBuilder;
+use adk_agent::guardrails::{CitationRequired, GuardrailSet, WhenNothingRetrieved};
+use adk_core::{Llm, Tool};
+
+fn grounded_agent(model: Arc<dyn Llm>, search: Arc<dyn Tool>) -> adk_core::Result<adk_agent::LlmAgent> {
+    let citations = CitationRequired::new()
+        .min_citations(1)
+        .when_nothing_retrieved(WhenNothingRetrieved::Fail);
+    LlmAgentBuilder::new("support")
+        .instruction("Answer from the search results and cite each source as [title](uri).")
+        .model(model)
+        .tool(search)
+        .output_guardrails(GuardrailSet::new().with(citations))
+        .build()
+}
+```
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `min_citations(n)` | 1 | Distinct retrieved sources the answer must cite |
+| `when_nothing_retrieved(..)` | `Fail` | An answer given while the run retrieved nothing fails; `Pass` admits it |
+| `trust_provider_citations(bool)` | `false` | Counts a provider citation of a URI the run did not retrieve, such as the provider's own web search |
+| `severity(..)` | `High` | `Low` records a warning and passes |
+
+| Rule | Why |
+|------|-----|
+| A citation counts only if its URI is a source recorded in the same run | A link the model invents, or copies from its training data, names nothing the agent retrieved |
+| URIs match exactly | `https://example.com/a/` is not `https://example.com/a` |
+| Only the final answer is checked | Text beside a tool call passes `validate_preamble` |
+| `validate` without evidence fails | The guardrail cannot check citations outside an agent's output screening |
+
+`LlmAgent` and `CodeActAgent` bind citations and supply the evidence. `LlmAgent` binds them
+for a final answer it emits whole: in `StreamingMode::None`, or in any mode when it has output
+guardrails, which turn off streaming to the client. The bound citations are kept beside the
+provider's on `LlmResponse::citation_metadata`, so clients see them too.
+
 ## GuardrailSet
 
 Combine multiple guardrails:

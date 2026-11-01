@@ -81,6 +81,7 @@
 //! `on_tools` limits a guardrail to the named tools, and a tool it does not name is not checked
 //! at all, so name every tool that takes a path.
 
+pub mod citation;
 pub mod content;
 pub mod error;
 pub mod executor;
@@ -90,6 +91,7 @@ pub mod schema;
 pub mod tool;
 pub mod traits;
 
+pub use citation::{CitationRequired, WhenNothingRetrieved};
 pub use content::{ContentFilter, ContentFilterConfig};
 pub use error::{
     GUARDRAIL_WARNINGS_KEY, GuardrailError, GuardrailFailure, GuardrailPhase, INPUT_BLOCKED_CODE,
@@ -103,4 +105,4 @@ pub use tool::{
     DeniedArgumentPattern, PathAllowList, ResultTextGuardrail, ToolCallDecision, ToolGuardrail,
     ToolGuardrailResult, ToolGuardrailSet, ToolResultDecision, ToolResultGuardrailResult,
 };
-pub use traits::{Guardrail, GuardrailResult, Severity};
+pub use traits::{Guardrail, GuardrailResult, OutputEvidence, Severity};

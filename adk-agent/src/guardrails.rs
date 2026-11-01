@@ -2,16 +2,17 @@
 //!
 //! This module provides guardrail support when the `guardrails` feature is enabled.
 
-use adk_core::{Content, Event, Result};
+use adk_core::{CitationMetadata, Content, Event, GroundingSource, Result};
 
 #[cfg(feature = "guardrails")]
 use adk_core::Part;
 
 #[cfg(feature = "guardrails")]
 pub use adk_guardrail::{
-    ContentFilter, ContentFilterConfig, GUARDRAIL_WARNINGS_KEY, Guardrail, GuardrailError,
-    GuardrailExecutor, GuardrailFailure, GuardrailPhase, GuardrailResult, GuardrailSet,
-    INPUT_BLOCKED_CODE, OUTPUT_BLOCKED_CODE, PiiRedactor, PiiType, Severity,
+    CitationRequired, ContentFilter, ContentFilterConfig, GUARDRAIL_WARNINGS_KEY, Guardrail,
+    GuardrailError, GuardrailExecutor, GuardrailFailure, GuardrailPhase, GuardrailResult,
+    GuardrailSet, INPUT_BLOCKED_CODE, OUTPUT_BLOCKED_CODE, OutputEvidence, PiiRedactor, PiiType,
+    Severity, WhenNothingRetrieved,
 };
 
 #[cfg(feature = "guardrails")]
@@ -57,6 +58,18 @@ impl From<Phase> for GuardrailPhase {
             Phase::Output => Self::Output,
         }
     }
+}
+
+/// What an agent knows about a final answer's grounding: the sources its run retrieved and
+/// the answer's citations.
+#[derive(Clone, Copy)]
+#[cfg_attr(
+    not(feature = "guardrails"),
+    expect(dead_code, reason = "only output guardrails read the evidence")
+)]
+pub(crate) struct Grounding<'a> {
+    pub(crate) retrieved: &'a [GroundingSource],
+    pub(crate) citations: Option<&'a CitationMetadata>,
 }
 
 /// Content a guardrail set let through, with the low-severity failures it passed.
@@ -118,6 +131,31 @@ pub(crate) async fn enforce_guardrails(
     Ok(Screened { content: screening.content, warnings: Warnings { failures: screening.warnings } })
 }
 
+/// Runs output `guardrails` over an agent's final answer with `grounding` as the evidence,
+/// failing with a structured block as [`enforce_guardrails`] does.
+#[cfg(all(feature = "guardrails", feature = "codeact"))]
+pub(crate) async fn enforce_final_output(
+    guardrails: &GuardrailSet,
+    content: &Content,
+    grounding: Grounding<'_>,
+) -> Result<Screened> {
+    if guardrails.is_empty() {
+        return Ok(Screened::unscreened(content.clone()));
+    }
+    let evidence = OutputEvidence::new(grounding.retrieved, grounding.citations);
+    let screening = GuardrailExecutor::enforce_output(guardrails, content, &evidence).await?;
+    Ok(Screened { content: screening.content, warnings: Warnings { failures: screening.warnings } })
+}
+
+#[cfg(all(not(feature = "guardrails"), feature = "codeact"))]
+pub(crate) async fn enforce_final_output(
+    _guardrails: &GuardrailSet,
+    content: &Content,
+    _grounding: Grounding<'_>,
+) -> Result<Screened> {
+    Ok(Screened::unscreened(content.clone()))
+}
+
 #[cfg(not(feature = "guardrails"))]
 pub(crate) async fn enforce_guardrails(
     _guardrails: &GuardrailSet,
@@ -164,7 +202,8 @@ fn native_message_texts(payload: &serde_json::Value) -> Vec<(usize, String)> {
 
 /// Screens a model turn with output guardrails before it reaches the client or the session.
 ///
-/// A final turn is shown to the guardrails whole and `validate` decides. A `preamble` turn —
+/// A final turn is shown to the guardrails whole and `validate_output` decides, with
+/// `grounding` as the evidence. A `preamble` turn —
 /// one that also calls tools, or that the provider paused — is screened with
 /// `validate_preamble`, and only its text is shown, so its function calls pass untouched. In
 /// both, the text of a provider-native assistant message carried for replay is shown as a text
@@ -175,6 +214,7 @@ pub(crate) async fn screen_model_output(
     guardrails: &GuardrailSet,
     mut content: Content,
     preamble: bool,
+    grounding: Grounding<'_>,
 ) -> Result<Screened> {
     if guardrails.is_empty() {
         return Ok(Screened::unscreened(content));
@@ -204,8 +244,12 @@ pub(crate) async fn screen_model_output(
     }
 
     let shown = Content { role: content.role.clone(), parts: view };
-    let screening =
-        GuardrailExecutor::enforce(guardrails, &shown, GuardrailPhase::Output, preamble).await?;
+    let screening = if preamble {
+        GuardrailExecutor::enforce(guardrails, &shown, GuardrailPhase::Output, true).await?
+    } else {
+        let evidence = OutputEvidence::new(grounding.retrieved, grounding.citations);
+        GuardrailExecutor::enforce_output(guardrails, &shown, &evidence).await?
+    };
     let mut screened = screening.content.parts;
 
     if screened.len() == slots.len() {
@@ -271,6 +315,7 @@ pub(crate) async fn screen_model_output(
     _guardrails: &GuardrailSet,
     content: Content,
     _preamble: bool,
+    _grounding: Grounding<'_>,
 ) -> Result<Screened> {
     Ok(Screened::unscreened(content))
 }

@@ -159,6 +159,8 @@ mod event_stream;
 pub mod governance;
 /// Durable freeze state for the kill switch, shared by every replica.
 pub mod governance_state;
+/// Sources a run retrieved, and the citations an answer makes to them.
+pub mod grounding;
 /// Building model history from session events: other agents' turns as context, tool
 /// branches, and balanced history cuts.
 pub mod history;
@@ -287,6 +289,7 @@ pub use governance::{
 pub use governance_state::{
     GovernanceScope, GovernanceState, GovernanceStateStore, InMemoryGovernanceStateStore,
 };
+pub use grounding::{GroundingSource, bind_markdown_citations, record_grounding_sources};
 pub use identity::{
     AdkIdentity, AppName, ExecutionIdentity, IdentityError, InvocationId, SessionId, UserId,
 };

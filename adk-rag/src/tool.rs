@@ -63,6 +63,10 @@ type ScopeResolver = dyn Fn(&dyn ToolContext) -> adk_core::Result<Scope> + Send 
 /// vectors stay out of the result: they mean nothing to a model and would fill its
 /// context.
 ///
+/// Every result with a source URI is recorded as an [`adk_core::GroundingSource`] on the
+/// call's actions, so an agent's final answer can cite it and
+/// `adk_guardrail::CitationRequired` can check the citation.
+///
 /// Each call searches one [`Scope`]: [`Scope::single_tenant`] unless
 /// [`RagTool::with_scope`] fixes another or [`RagTool::with_scope_from`] resolves it from the
 /// call's context. The model cannot name a scope. A policy filter
@@ -434,6 +438,22 @@ impl Tool for RagTool {
                 },
             )?;
 
+        // Each result with a source URI is a source the final answer may cite.
+        adk_core::record_grounding_sources(
+            ctx.as_ref(),
+            results.iter().filter_map(|result| {
+                let chunk = &result.chunk;
+                let mut source =
+                    adk_core::GroundingSource::new(self.name(), chunk.source_uri.clone()?)
+                        .with_document_id(chunk.document_id.clone())
+                        .with_chunk_id(chunk.id.clone());
+                if let Some(title) = &chunk.title {
+                    source = source.with_title(title.clone());
+                }
+                Some(source)
+            }),
+        );
+
         let retrieved: Vec<RetrievedChunk<'_>> = results.iter().map(RetrievedChunk::from).collect();
         serde_json::to_value(&retrieved).map_err(|e| {
             error!(error = %e, "failed to serialize search results");
@@ -619,6 +639,23 @@ mod tests {
             format!("{}.md", first["document_id"].as_str().unwrap())
         );
         assert!(!result.to_string().contains("embedding"));
+    }
+
+    #[tokio::test]
+    async fn results_with_a_source_uri_are_recorded_as_grounding_sources() {
+        let ctx = context();
+        tool(None)
+            .await
+            .execute(ctx.clone(), json!({"query": "returns", "top_k": 3}))
+            .await
+            .expect("search");
+        assert_eq!(
+            ctx.actions().grounding_sources,
+            [adk_core::GroundingSource::new("rag_search", "https://example.com/a")
+                .with_title("Returns")
+                .with_document_id("a")
+                .with_chunk_id("a_0")]
+        );
     }
 
     #[tokio::test]

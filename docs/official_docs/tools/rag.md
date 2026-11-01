@@ -196,6 +196,7 @@ This example also depends on `adk-agent`, `adk-model` (`gemini`), `adk-runner`, 
 | Scope | `Scope::single_tenant()` unless `with_scope(scope)` fixes another, `with_scope_from(\|ctx\| ..)` resolves it from the call's context, or `with_scope_per_user()` uses `[app_name, user_id]`; the model cannot name a scope (see [Scopes](#scopes)) |
 | Filters | `with_policy_filter(filter)` applies to every call; `with_model_filterable([..])` adds a `filter` argument limited to the listed metadata keys, AND-ed with the policy (see [Filters and deletes](#filters-and-deletes)) |
 | Returns | An array of `{"id", "document_id", "text", "metadata", "score"}` results, best first, each with `source_uri` and `title` when its document had them; embedding vectors are not included |
+| Grounding | Each result with a `source_uri` is recorded as a `GroundingSource` on the call's event, so the agent binds the answer's `[title](uri)` links to it and `CitationRequired` can check them (see [Guardrails](../security/guardrails.md#grounded-citations)) |
 | Invalid arguments | A missing `query`, a `top_k` that is not a positive integer, or a `collection` the tool does not allow fails the call with `tool.invalid_arguments`, whose message the model receives |
 | Effect | `ToolEffect::ReadOnly` and concurrency-safe, so `DeclarativePolicy::allow_read_only()` admits it and `ToolExecutionStrategy::Auto` overlaps it with adjacent read-only calls |
 

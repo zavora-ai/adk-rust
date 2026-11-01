@@ -31,9 +31,9 @@ use adk_core::{
     Agent, Artifacts, BeforeAgentCallback, BeforeModelCallback, BeforeModelResult,
     BeforeToolCallback, CallbackContext, Content, ErrorCategory, ErrorComponent, Event,
     EventActions, EventStream, GenerateContentConfig, GlobalInstructionProvider, GovernedCall,
-    IncludeContents, InstructionProvider, InvocationContext, Llm, LlmRequest, LlmResponse,
-    MemoryEntry, OnToolErrorCallback, Part, ReadonlyContext, RetryBudget, SharedState, Tool,
-    ToolAuthorization, ToolCallbackContext, ToolConfirmationDecision, ToolConfirmationPolicy,
+    GroundingSource, IncludeContents, InstructionProvider, InvocationContext, Llm, LlmRequest,
+    LlmResponse, MemoryEntry, OnToolErrorCallback, Part, ReadonlyContext, RetryBudget, SharedState,
+    Tool, ToolAuthorization, ToolCallbackContext, ToolConfirmationDecision, ToolConfirmationPolicy,
     ToolConfirmationRequest, ToolContext, ToolEffect, ToolGate, ToolOutcome, ToolResultStatus,
     Toolset, authorize_tool_call,
 };
@@ -50,7 +50,8 @@ use crate::codeact::error_map::{
 };
 use crate::codeact::output::ScriptOutput;
 use crate::codeact::runtime::{CodeRuntime, ResumeWith, RunStep, RuntimeError, bind_call_args};
-use crate::guardrails::{GuardrailSet, Phase, enforce_guardrails};
+use crate::grounding::answer_citations;
+use crate::guardrails::{Grounding, GuardrailSet, Phase, enforce_final_output, enforce_guardrails};
 use crate::invocation_hooks::HookCallbacks;
 use crate::skill_shim::{SelectionPolicy, SkillIndex, select_skill_prompt_block};
 #[cfg(feature = "enhanced-plugins")]
@@ -413,6 +414,9 @@ fn drive_codeact(
         // LlmAgent puts each tool's actions on its function-response event.
         let mut pending_actions = EventActions::default();
 
+        // Sources the run's tool calls recorded, which the final result may cite.
+        let mut retrieved: Vec<GroundingSource> = Vec::new();
+
         // Count of output-schema correction retries used so far.
         let mut schema_retries: usize = 0;
 
@@ -498,7 +502,7 @@ fn drive_codeact(
                         ));
                         match execute_for_resume(
                             &tool_map, tool_ctx, &cp.call, &mut pending_actions,
-                            &tool_policy, &mut circuit,
+                            &mut retrieved, &tool_policy, &mut circuit,
                         )
                         .await
                         {
@@ -741,7 +745,7 @@ fn drive_codeact(
                                     return;
                                 }
                             };
-                            let control = capture_actions(&mut pending_actions, tool_ctx.actions());
+                            let control = capture_actions(&mut pending_actions, &mut retrieved, tool_ctx.actions());
                             // A terminal signal (escalate / skip-summarization /
                             // transfer) ends the run before suspending, matching
                             // the inline path and LlmAgent's terminal actions.
@@ -845,7 +849,7 @@ fn drive_codeact(
                                     return;
                                 }
                             };
-                            let control = capture_actions(&mut pending_actions, tool_ctx.actions());
+                            let control = capture_actions(&mut pending_actions, &mut retrieved, tool_ctx.actions());
                             let resolution = match exec {
                                 Ok(v) => ResolutionRecord::Value(v),
                                 Err(msg) => ResolutionRecord::Raise(msg),
@@ -924,7 +928,7 @@ fn drive_codeact(
                                     return;
                                 }
                             };
-                            let control = capture_actions(&mut pending_actions, tool_ctx.actions());
+                            let control = capture_actions(&mut pending_actions, &mut retrieved, tool_ctx.actions());
                             if control.is_terminal() {
                                 let mut event =
                                     control_terminal_event(&invocation_id, &agent_name, &control);
@@ -989,11 +993,18 @@ fn drive_codeact(
                             // — not the raw value — is what gets stored under
                             // `output_key`, so nothing unredacted leaks into state.
                             let mut stored_value = value.clone();
+                            let rendered = Content::new("model").with_text(render_final(&value));
+                            event.llm_response.citation_metadata =
+                                answer_citations(&rendered, &retrieved, None);
                             if !output_guardrails.is_empty() {
                                 let original_text = render_final(&value);
                                 let content =
                                     Content::new("model").with_text(original_text.clone());
-                                match enforce_guardrails(&output_guardrails, &content, Phase::Output)
+                                let grounding = Grounding {
+                                    retrieved: &retrieved,
+                                    citations: event.llm_response.citation_metadata.as_ref(),
+                                };
+                                match enforce_final_output(&output_guardrails, &content, grounding)
                                     .await
                                 {
                                     Ok(screened) => {
@@ -1004,6 +1015,11 @@ fn drive_codeact(
                                             .filter_map(|p| p.text())
                                             .collect();
                                         if guarded_text != original_text {
+                                            event.llm_response.citation_metadata = answer_citations(
+                                                &screened.content,
+                                                &retrieved,
+                                                None,
+                                            );
                                             stored_value = Value::String(guarded_text);
                                         }
                                         screened.warnings.record_on(&mut event);
@@ -1080,6 +1096,7 @@ async fn execute_for_resume(
     tool_ctx: Arc<dyn ToolContext>,
     call: &PendingToolCall,
     pending: &mut EventActions,
+    retrieved: &mut Vec<GroundingSource>,
     policy: &ToolPolicy<'_>,
     circuit: &mut Option<CircuitBreaker>,
 ) -> Resumed {
@@ -1092,7 +1109,7 @@ async fn execute_for_resume(
                     ToolRun::Held(request) => return Resumed::Held(request),
                     ToolRun::Abort(error) => return Resumed::Abort(error),
                 };
-            let control = capture_actions(pending, tool_ctx.actions());
+            let control = capture_actions(pending, retrieved, tool_ctx.actions());
             Resumed::Ready(result, control, status)
         }
         None => Resumed::Ready(
@@ -1498,10 +1515,18 @@ impl ToolControl {
     }
 }
 
-/// Merge a tool's resulting data deltas (state, artifacts, route) into the
-/// pending accumulator and return the run-control signals it raised. Mirrors
-/// LlmAgent, which forwards the full tool `EventActions` onto the tool event.
-fn capture_actions(pending: &mut EventActions, actions: EventActions) -> ToolControl {
+/// Merge a tool's resulting data deltas (state, artifacts, route, grounding
+/// sources) into the pending accumulator and return the run-control signals it
+/// raised. Mirrors LlmAgent, which forwards the full tool `EventActions` onto the
+/// tool event. Grounding sources are also kept in `retrieved`, the run's
+/// evidence for the final result's citations.
+fn capture_actions(
+    pending: &mut EventActions,
+    retrieved: &mut Vec<GroundingSource>,
+    actions: EventActions,
+) -> ToolControl {
+    retrieved.extend(actions.grounding_sources.iter().cloned());
+    pending.grounding_sources.extend(actions.grounding_sources);
     for (key, value) in actions.state_delta {
         pending.state_delta.insert(key, value);
     }
@@ -1531,6 +1556,7 @@ fn flush_actions(event: &mut Event, pending: &mut EventActions) {
     if let Some(route) = pending.route.take() {
         event.actions.route = Some(route);
     }
+    event.actions.grounding_sources.append(&mut pending.grounding_sources);
 }
 
 /// A terminal event raised by a tool's control signals (escalation,
@@ -4303,6 +4329,78 @@ mod tests {
         let text = final_text(events.last().unwrap()).unwrap();
         assert!(!text.contains("alice@example.com"));
         assert!(text.contains("[EMAIL REDACTED]"));
+    }
+
+    /// Returns a passage and records its source.
+    #[cfg(feature = "guardrails")]
+    struct CitedSearch;
+
+    #[cfg(feature = "guardrails")]
+    #[async_trait]
+    impl Tool for CitedSearch {
+        fn name(&self) -> &str {
+            "search"
+        }
+        fn description(&self) -> &str {
+            "Searches the policies."
+        }
+        async fn execute(
+            &self,
+            ctx: Arc<dyn ToolContext>,
+            _args: Value,
+        ) -> adk_core::Result<Value> {
+            adk_core::record_grounding_sources(
+                ctx.as_ref(),
+                [GroundingSource::new("search", "https://example.com/refunds")],
+            );
+            Ok(json!("Refunds take 30 days."))
+        }
+    }
+
+    #[cfg(feature = "guardrails")]
+    fn cited_agent(answer: &str) -> CodeActAgent {
+        use crate::guardrails::{CitationRequired, GuardrailSet};
+        CodeActAgent::builder()
+            .model(FakeLlm::new("noop"))
+            .runtime(Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+                Planned::call("search", json!({}), 1),
+                Planned::Complete(json!({"type": "final_result", "value": answer})),
+            ]])))
+            .tool(Arc::new(CitedSearch))
+            .output_guardrails(GuardrailSet::new().with(CitationRequired::new()))
+            .build()
+            .unwrap()
+    }
+
+    #[cfg(feature = "guardrails")]
+    #[tokio::test]
+    async fn a_final_result_citing_a_retrieved_source_carries_the_citation() {
+        let agent = cited_agent("30 days ([policy](https://example.com/refunds))");
+        let events = run_collect(&agent, Arc::new(MockInvocationContext::new(user("go")))).await;
+        assert!(
+            events.iter().any(|event| event.actions.grounding_sources
+                == [GroundingSource::new("search", "https://example.com/refunds")]),
+            "the tool's source reaches an event"
+        );
+        let citations = events.last().unwrap().llm_response.citation_metadata.clone().unwrap();
+        let uris: Vec<_> =
+            citations.citation_sources.iter().filter_map(|c| c.uri.as_deref()).collect();
+        assert_eq!(uris, ["https://example.com/refunds"]);
+    }
+
+    #[cfg(feature = "guardrails")]
+    #[tokio::test]
+    async fn a_final_result_citing_nothing_retrieved_is_blocked() {
+        let agent = cited_agent("30 days ([policy](https://elsewhere.example/refunds))");
+        let mut stream = agent.run(Arc::new(MockInvocationContext::new(user("go")))).await.unwrap();
+        let mut blocked = None;
+        while let Some(item) = stream.next().await {
+            if let Err(error) = item {
+                blocked = Some(error);
+            }
+        }
+        let error = blocked.expect("the final result is blocked");
+        assert_eq!(error.code, crate::guardrails::OUTPUT_BLOCKED_CODE);
     }
 
     #[cfg(feature = "enhanced-plugins")]
