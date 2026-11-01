@@ -74,7 +74,7 @@ hex.workspace = true
 # The media pipeline: decoding and re-encoding drops every metadata block, location
 # included (spec 3.5 §7.8.2 "Media").
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-minijinja = "2"
+minijinja = "3"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 # CSS references in the third-party resource check.
 regex.workspace = true
