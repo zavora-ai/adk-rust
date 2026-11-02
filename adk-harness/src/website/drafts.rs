@@ -1001,12 +1001,12 @@ impl StoredDraft {
 ///
 /// | Case | Contract |
 /// |------|----------|
-/// | [`records_are_kept_apart_in_creation_order`] | Records are kept by site and kind, listed in creation order, read back by id, and removed idempotently |
-/// | [`ids_are_never_reused`] | A removed record's number, the highest one included, is never allocated again |
-/// | [`concurrent_creates_are_distinct`] | Records created at once across two handles get distinct ids |
-/// | [`replace_is_a_compare_and_swap`] | `replace` writes only at the expected version, raising it by one, and never revives a removed record |
-/// | [`concurrent_replace_has_one_winner`] | Of two replaces at one version across two handles, exactly one succeeds |
-/// | [`records_survive_a_restart`] | Records, versions and the id counter read back unchanged through a new handle |
+/// | [`records_are_kept_apart_in_creation_order`](conformance::records_are_kept_apart_in_creation_order) | Records are kept by site and kind, listed in creation order, read back by id, and removed idempotently |
+/// | [`ids_are_never_reused`](conformance::ids_are_never_reused) | A removed record's number, the highest one included, is never allocated again |
+/// | [`concurrent_creates_are_distinct`](conformance::concurrent_creates_are_distinct) | Records created at once across two handles get distinct ids |
+/// | [`replace_is_a_compare_and_swap`](conformance::replace_is_a_compare_and_swap) | `replace` writes only at the expected version, raising it by one, and never revives a removed record |
+/// | [`concurrent_replace_has_one_winner`](conformance::concurrent_replace_has_one_winner) | Of two replaces at one version across two handles, exactly one succeeds |
+/// | [`records_survive_a_restart`](conformance::records_survive_a_restart) | Records, versions and the id counter read back unchanged through a new handle |
 ///
 /// Every case uses sites of its own, so cases share one database.
 pub mod conformance {

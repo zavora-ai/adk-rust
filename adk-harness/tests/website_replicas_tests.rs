@@ -14,7 +14,8 @@
 //!   --test integration -E 'test(/^website_replicas_tests::/)'
 //! ```
 
-#![cfg(feature = "website")]
+// The shared helpers serve only the backend tests below.
+#![cfg(all(feature = "website", any(feature = "sqlite", feature = "postgres")))]
 
 use crate::website_common::{self, OWNER, PUBLISHER};
 
