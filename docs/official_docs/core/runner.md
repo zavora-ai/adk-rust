@@ -297,6 +297,47 @@ plugin events, and compaction events — is written through
 composite can therefore bind each event to its tenant, and can reject or ignore
 the raw-session-ID `append_event` path entirely.
 
+### The Run Reads What the Service Stored
+
+Within a run, the Runner keeps its own view of the session: the events it loaded (at most
+`history_max_events`) plus each event it persists. The user's message and the events of the
+agents (the main agent and transfer targets) are persisted through
+`SessionService::append_event_returning_stored`, and the event it returns replaces the
+Runner's copy in that view. A service that stores something other than what it was given
+(redacting content, filtering a state delta) overrides the method and returns the stored
+event, keeping its ID, and the rest of the run sees that event:
+
+- a workflow's next sub-agent and a transfer target read the stored version of earlier events;
+- when the user's message is stored differently, the stored message becomes the run's user
+  content, which is what an `LlmAgent` sends to its model.
+
+```rust
+#[async_trait]
+impl SessionService for RedactingService {
+    // ... create, get, list, delete, append_event ...
+
+    async fn append_event_for_identity(&self, req: AppendEventRequest) -> Result<()> {
+        self.append_event_returning_stored(req).await.map(|_| ())
+    }
+
+    async fn append_event_returning_stored(&self, mut req: AppendEventRequest) -> Result<Event> {
+        req.event = redact(req.event);
+        let stored = req.event.clone();
+        self.inner.append_event_for_identity(req).await?;
+        Ok(stored)
+    }
+}
+```
+
+The default implementation returns the event it was given, so a service that does not override
+it changes nothing. Only the event just written is replaced: the view keeps its history window,
+any compaction applied to it, and the screened content of earlier messages, and events other
+writers add to the session during the run stay out of it until the next run. The agent that
+produced an event keeps its own in-progress copy for the rest of its turn, and the caller's
+stream carries the event as the agent yielded it. A failed append ends the run with the
+service's error, and the event is not delivered. `ConsentGatedSessionService` returns the event
+without the profile keys it filtered out.
+
 ## Steering a Running Agent
 
 `steer(identity, content)` sends a user message to the run in flight for one exact identity,

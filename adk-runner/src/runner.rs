@@ -265,6 +265,26 @@ async fn screen_unscreened_messages(
     Ok(replacements)
 }
 
+/// Persists `event` and puts the event the service stored into `view` in its place, so the
+/// rest of the run sees what the session holds rather than the runner's copy. Only this
+/// event changes: the view keeps its history window, its compaction and its screened content.
+async fn persist_event(
+    service: &dyn SessionService,
+    identity: &adk_core::AdkIdentity,
+    view: &crate::context::MutableSession,
+    event: Event,
+) -> Result<Event> {
+    let id = event.id.clone();
+    let stored = service
+        .append_event_returning_stored(adk_session::AppendEventRequest {
+            identity: identity.clone(),
+            event,
+        })
+        .await?;
+    view.replace_event(&id, stored.clone());
+    Ok(stored)
+}
+
 /// Deregisters a run when its event stream is dropped, and returns the steering messages
 /// no safe point took.
 ///
@@ -1393,15 +1413,30 @@ impl Runner {
             // Note: adk_session::Event is a re-export of adk_core::Event, so we can use it directly
             ctx.mutable_session().append_event(user_event.clone());
 
-            if let Err(e) = session_service
-                .append_event_for_identity(adk_session::AppendEventRequest {
-                    identity: identity.clone(),
-                    event: user_event,
-                })
-                .await {
-                yield Err(e);
-                return;
-            }
+            let stored_user_event = match persist_event(
+                session_service.as_ref(),
+                &identity,
+                ctx.mutable_session(),
+                user_event,
+            )
+            .await
+            {
+                Ok(stored) => stored,
+                Err(e) => {
+                    yield Err(e);
+                    return;
+                }
+            };
+            // A model reads the user's message from the context, so a service that stored a
+            // different message (a redaction) is what the agents see.
+            let effective_user_content = match stored_user_event.llm_response.content {
+                Some(stored) if stored != effective_user_content => {
+                    ctx = Arc::new(ctx.with_user_content(stored.clone()));
+                    run_scope.set(&ctx);
+                    stored
+                }
+                Some(_) | None => effective_user_content,
+            };
 
             // ===== CONTEXT CACHE LIFECYCLE =====
             // If context caching is configured and a cache-capable model is available,
@@ -1731,14 +1766,16 @@ impl Runner {
                         // event. Streaming chunks share the same event ID, so
                         // persisting each one would violate the primary key
                         // constraint. The final chunk (partial=false) carries the
-                        // complete accumulated content.
+                        // complete accumulated content. The view takes the stored
+                        // event; the caller receives the event the agent yielded.
                         if !event.llm_response.partial
-                            && let Err(e) = session_service
-                                .append_event_for_identity(adk_session::AppendEventRequest {
-                                    identity: identity.clone(),
-                                    event: event.clone(),
-                                })
-                                .await {
+                            && let Err(e) = persist_event(
+                                session_service.as_ref(),
+                                &identity,
+                                ctx.mutable_session(),
+                                event.clone(),
+                            )
+                            .await {
                                 yield Err(e);
                                 return;
                             }
@@ -2005,12 +2042,13 @@ impl Runner {
                             transfer_ctx.mutable_session().append_event(event.clone());
 
                             if !event.llm_response.partial
-                                && let Err(e) = session_service
-                                    .append_event_for_identity(adk_session::AppendEventRequest {
-                                        identity: identity.clone(),
-                                        event: event.clone(),
-                                    })
-                                    .await {
+                                && let Err(e) = persist_event(
+                                    session_service.as_ref(),
+                                    &identity,
+                                    transfer_ctx.mutable_session(),
+                                    event.clone(),
+                                )
+                                .await {
                                     yield Err(e);
                                     return;
                                 }

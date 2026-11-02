@@ -83,6 +83,20 @@ impl MutableSession {
         *events = new_events;
     }
 
+    /// Replaces the most recent event with ID `id` by `event`, keeping its position.
+    ///
+    /// Returns `false`, changing nothing, when no event has that ID (compaction removed it).
+    pub fn replace_event(&self, id: &str, event: Event) -> bool {
+        let mut events = self.events.write().unwrap_or_else(PoisonError::into_inner);
+        match events.iter_mut().rev().find(|existing| existing.id == id) {
+            Some(existing) => {
+                *existing = event;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Return the number of accumulated events without cloning the full list.
     pub fn events_len(&self) -> usize {
         let events = self.events.read().unwrap_or_else(PoisonError::into_inner);
