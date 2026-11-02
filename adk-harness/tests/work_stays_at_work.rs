@@ -392,6 +392,19 @@ async fn scenario(stores: Stores, clock: ManualClock) {
         "the crossing is on record"
     );
 
+    // Home's two calls are counted before Friday, so its limit holds the errand however late
+    // the spending reaches the kernel.
+    eventually("Home's spending to be counted", || async {
+        let home = person
+            .settings()
+            .await
+            .ok()?
+            .into_iter()
+            .find(|area| area.partition.to_string() == "home")?;
+        (home.spent_today >= 2 * CALL).then_some(())
+    })
+    .await;
+
     // Work's weekday routine, and a Home errand at the same time.
     let routine = WakeSet::any_of([Wake::Cron {
         expr: ROUTINE.into(),
