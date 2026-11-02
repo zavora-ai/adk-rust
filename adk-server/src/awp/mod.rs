@@ -335,7 +335,7 @@ impl AwpEdgeBuilder {
 
     /// Records governed decisions, `awp.capability.*` records and verified discovery
     /// (`awp.request.verified`) on `audit`. The edge wraps its recorder in a
-    /// [`PseudonymousRecorder`](adk_core::subject::PseudonymousRecorder) over the subject
+    /// [`PseudonymousRecorder`] over the subject
     /// registry, so records name visitors by pseudonym, never by visitor id.
     #[must_use]
     pub fn audit(mut self, audit: AuditTrail) -> Self {

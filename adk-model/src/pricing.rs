@@ -1,4 +1,4 @@
-//! Token prices for every provider and cost calculation from [`UsageMetadata`](adk_core::UsageMetadata),
+//! Token prices for every provider and cost calculation from [`UsageMetadata`],
 //! plus per-unit prices for models billed per image, per second of audio or per character.
 //!
 //! [`PricingCatalog`] is the single table `adk-model` uses to fill
@@ -47,10 +47,10 @@
 //!   output is billed by modality are left out, so they resolve to `None`.
 //! - GPT-5.6 long-context rates are not applied: the threshold is unpublished.
 //! - Cache storage (Gemini per-hour storage) is not a per-request cost.
-//! - Built-in tool fees ([`BuiltinToolFee`](crate::pricing::BuiltinToolFee))
+//! - Built-in tool fees ([`BuiltinToolFee`])
 //!   apply on the vendor's own API only, ignore free allowances, and leave
 //!   container-billed tools unpriced.
-//! - DeepSeek's off-peak discount ([`OffPeak`](crate::pricing::OffPeak)) applies outside the published
+//! - DeepSeek's off-peak discount ([`OffPeak`]) applies outside the published
 //!   UTC peak hours on weekdays; Chinese public holidays, which are off-peak in
 //!   full, are billed at the peak rate, which over-estimates.
 //! - Models a vendor prices only on request ("Contact Sales") or at a
@@ -64,7 +64,7 @@
 //!
 //! Models billed in units rather than tokens carry a [`UnitPrice`]: an
 //! [`adk_core::UnitRate`] per [`adk_core::UsageUnit`]. [`PricingCatalog::unit_cost_micro_usd`]
-//! prices a [`UsageVector`](adk_core::UsageVector), both the most a call can use (its
+//! prices a [`UsageVector`], both the most a call can use (its
 //! spend hold) and what it used.
 //!
 //! | Model | Unit | Price |
