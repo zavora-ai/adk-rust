@@ -150,7 +150,7 @@ impl VisitorId {
         &self.0
     }
 
-    /// The subject this id names, of kind [`SubjectKind::Visitor`].
+    /// The subject this id names, of kind [`SubjectKind::Visitor`](crate::principal::SubjectKind::Visitor).
     pub fn subject(&self) -> SubjectRef {
         SubjectRef::visitor(self.0.clone())
     }
