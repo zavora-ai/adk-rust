@@ -524,6 +524,7 @@ pub mod v1_remote {
     //! `A2A-Version: 1.0` header on all requests.
 
     use crate::a2a::client::v1_client::A2aV1Client;
+    use a2a_protocol_types::responses::SendMessageResponse;
     use a2a_protocol_types::{AgentCard, AgentInterface};
     use adk_core::{Agent, Content, Event, EventStream, InvocationContext, Part, Result};
     use async_trait::async_trait;
@@ -709,7 +710,14 @@ pub mod v1_remote {
                 } else {
                     // Send non-streaming message
                     match client.send_message(message).await {
-                        Ok(task) => {
+                        Ok(SendMessageResponse::Message(reply)) => {
+                            // The agent answered directly, without a task.
+                            let resp = a2a_protocol_types::events::StreamResponse::Message(reply);
+                            if let Some(event) = convert_stream_response(&resp, &invocation_id, &agent_name) {
+                                yield Ok(event);
+                            }
+                        }
+                        Ok(SendMessageResponse::Task(task)) => {
                             // Yield events for artifacts
                             if let Some(artifacts) = task.artifacts {
                                 for artifact in artifacts {
@@ -764,6 +772,13 @@ pub mod v1_remote {
                             if let Some(event) = convert_stream_response(&resp, &invocation_id, &agent_name) {
                                 yield Ok(event);
                             }
+                        }
+                        Ok(_) => {
+                            yield Ok(create_v1_error_event(
+                                &invocation_id,
+                                &agent_name,
+                                "unsupported SendMessage result: neither a task nor a message",
+                            ));
                         }
                         Err(e) => {
                             yield Ok(create_v1_error_event(
@@ -853,7 +868,23 @@ pub mod v1_remote {
         )
     }
 
+    /// The text parts of `parts`, as ADK parts; other kinds are dropped.
+    fn text_parts(parts: &[a2a_protocol_types::Part]) -> Vec<Part> {
+        use a2a_protocol_types::PartContent;
+        parts
+            .iter()
+            .filter_map(|p| match &p.content {
+                PartContent::Text(text) => Some(Part::Text { text: text.clone() }),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Converts a `StreamResponse` into an ADK `Event`.
+    ///
+    /// A `Failed` status's message is the remote error, so its text becomes the
+    /// event's `error_message` rather than model content. A direct `Message`
+    /// reply ends the turn with its text.
     fn convert_stream_response(
         resp: &a2a_protocol_types::events::StreamResponse,
         invocation_id: &str,
@@ -896,15 +927,17 @@ pub mod v1_remote {
                 );
 
                 if let Some(ref msg) = status_event.status.message {
-                    use a2a_protocol_types::PartContent;
-                    let text_parts: Vec<Part> = msg
-                        .parts
-                        .iter()
-                        .filter_map(|p| match &p.content {
-                            PartContent::Text(text) => Some(Part::Text { text: text.clone() }),
-                            _ => None,
-                        })
-                        .collect();
+                    let text_parts = text_parts(&msg.parts);
+
+                    // A failed task's status message carries the error (A2A §3.1.2 ends the
+                    // stream there, so no separate error follows it).
+                    if status_event.status.state == a2a_protocol_types::task::TaskState::Failed
+                        && !text_parts.is_empty()
+                    {
+                        let error: String =
+                            text_parts.iter().filter_map(Part::text).collect::<Vec<_>>().join("\n");
+                        return Some(create_v1_error_event(invocation_id, agent_name, &error));
+                    }
 
                     if !text_parts.is_empty() {
                         let mut event = Event::new(invocation_id.to_string());
@@ -926,7 +959,17 @@ pub mod v1_remote {
 
                 None
             }
-            // Task and Message variants — emit text if available
+            StreamResponse::Message(msg) => {
+                let parts = text_parts(&msg.parts);
+                let mut event = Event::new(invocation_id.to_string());
+                event.author = agent_name.to_string();
+                if !parts.is_empty() {
+                    event.llm_response.content = Some(Content { role: "model".to_string(), parts });
+                }
+                event.llm_response.turn_complete = true;
+                Some(event)
+            }
+            // The initial Task snapshot carries nothing the later events do not.
             _ => None,
         }
     }
@@ -1176,6 +1219,67 @@ pub mod v1_remote {
 
             assert!(event.llm_response.turn_complete);
             assert!(event.llm_response.content.is_none());
+        }
+
+        #[test]
+        fn a_failed_status_message_is_the_remote_error() {
+            use a2a_protocol_types::events::TaskStatusUpdateEvent;
+            use a2a_protocol_types::task::{ContextId, TaskId, TaskState, TaskStatus};
+
+            let mut status = TaskStatus::new(TaskState::Failed);
+            status.message = Some(a2a_protocol_types::Message {
+                id: a2a_protocol_types::MessageId::new("status-msg-1"),
+                role: a2a_protocol_types::MessageRole::Agent,
+                parts: vec![a2a_protocol_types::Part::text("Internal error: agent error: boom")],
+                task_id: None,
+                context_id: None,
+                reference_task_ids: None,
+                extensions: None,
+                metadata: None,
+            });
+            let resp =
+                a2a_protocol_types::events::StreamResponse::StatusUpdate(TaskStatusUpdateEvent {
+                    task_id: TaskId::new("task-1"),
+                    context_id: ContextId::new("ctx-1"),
+                    status,
+                    metadata: None,
+                });
+
+            let event = convert_stream_response(&resp, "inv-1", "agent-1").unwrap();
+            assert_eq!(
+                event.llm_response.error_message.as_deref(),
+                Some("Internal error: agent error: boom")
+            );
+            assert!(event.llm_response.content.is_none(), "an error is not model output");
+            assert!(event.llm_response.turn_complete);
+        }
+
+        #[test]
+        fn a_direct_message_reply_ends_the_turn_with_its_text() {
+            let reply = a2a_protocol_types::Message {
+                id: a2a_protocol_types::MessageId::new("m-1"),
+                role: a2a_protocol_types::MessageRole::Agent,
+                parts: vec![a2a_protocol_types::Part::text("hello there")],
+                task_id: None,
+                context_id: None,
+                reference_task_ids: None,
+                extensions: None,
+                metadata: None,
+            };
+            let resp = a2a_protocol_types::events::StreamResponse::Message(reply);
+
+            let event = convert_stream_response(&resp, "inv-1", "agent-1").unwrap();
+            assert_eq!(event.author, "agent-1");
+            assert!(event.llm_response.turn_complete);
+            let text: String = event
+                .llm_response
+                .content
+                .expect("content")
+                .parts
+                .iter()
+                .filter_map(Part::text)
+                .collect();
+            assert_eq!(text, "hello there");
         }
 
         #[test]

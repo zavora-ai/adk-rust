@@ -629,7 +629,7 @@ impl CallerScope<'_> {
     /// | stream ends after a held or long-running call | `TaskStatusUpdateEvent` — `InputRequired` |
     /// | stream ends after a credential request | `TaskStatusUpdateEvent` — `AuthRequired` |
     /// | stream ends | `TaskStatusUpdateEvent` — `Completed` |
-    /// | stream errors | `TaskStatusUpdateEvent` — `Failed` |
+    /// | stream errors | `TaskStatusUpdateEvent` — `Failed`, with the error as its message |
     ///
     /// Chunks of one response share an artifact ID so a client can reassemble them, which is the
     /// same contract adk-python and adk-go implement over their A2A SDKs.
@@ -640,7 +640,10 @@ impl CallerScope<'_> {
     /// # Errors
     ///
     /// Returns an error if task creation fails. Failures once streaming has begun are reported
-    /// as a `Failed` status event, since the response has already started.
+    /// as a `Failed` status event whose message carries the error text, since the response has
+    /// already started. That status is the last item: the stream ends at a terminal state
+    /// (A2A §3.1.2), so no error item follows it. An `Err` item appears only when the task could
+    /// not be moved to a terminal state, and it is then the last item.
     pub async fn message_stream(
         &self,
         msg: Message,
@@ -720,13 +723,7 @@ impl CallerScope<'_> {
                     Err(e) => {
                         // The agent never started, so nothing partial was emitted. Report the
                         // task as failed rather than completing a task that did no work.
-                        if let Ok(event) = executor
-                            .transition_state(&tid, &cid, TaskState::Failed, None)
-                            .await
-                        {
-                            yield Ok(StreamResponse::StatusUpdate(event));
-                        }
-                        yield Err(e);
+                        yield fail_stream(&executor, &tid, &cid, e).await;
                         return;
                     }
                 };
@@ -758,15 +755,8 @@ impl CallerScope<'_> {
                             chunks_sent = true;
                         }
                         Err(e) => {
-                            if let Ok(event) = executor
-                                .transition_state(&tid, &cid, TaskState::Failed, None)
-                                .await
-                            {
-                                yield Ok(StreamResponse::StatusUpdate(event));
-                            }
-                            yield Err(A2aError::Internal {
-                                message: format!("agent error: {e}"),
-                            });
+                            let error = A2aError::Internal { message: format!("agent error: {e}") };
+                            yield fail_stream(&executor, &tid, &cid, error).await;
                             return;
                         }
                     }
@@ -781,7 +771,7 @@ impl CallerScope<'_> {
                         vec![a2a_protocol_types::Part::text(&full_text)],
                     );
                     if let Err(e) = executor.record_artifact(&tid, &cid, artifact).await {
-                        yield Err(e);
+                        yield fail_stream(&executor, &tid, &cid, e).await;
                         return;
                     }
                 }
@@ -1024,6 +1014,27 @@ impl CallerScope<'_> {
 }
 
 /// Returns `true` if the given task state is terminal.
+/// Ends a stream that failed with `error`: moves the task to `Failed` with the error text as
+/// the status message and returns that status event, which must be the stream's last item.
+///
+/// This matches the non-streaming path, which fails a task the same way. When the task cannot be
+/// moved to `Failed`, no terminal status was sent, so `error` itself is returned to end the
+/// stream instead.
+async fn fail_stream(
+    executor: &V1Executor,
+    task_id: &str,
+    context_id: &str,
+    error: A2aError,
+) -> Result<StreamResponse, A2aError> {
+    match executor.fail_task(task_id, context_id, &error.to_string()).await {
+        Ok(event) => Ok(StreamResponse::StatusUpdate(event)),
+        Err(fail_error) => {
+            tracing::warn!(task_id, error = %fail_error, "could not mark the failed stream's task as failed");
+            Err(error)
+        }
+    }
+}
+
 fn is_terminal_state(state: TaskState) -> bool {
     matches!(
         state,
@@ -1287,30 +1298,49 @@ mod tests {
         assert_eq!(text, "Earlier. Hello world");
     }
 
+    /// The text of a status message's parts.
+    fn status_text(status: &a2a_protocol_types::TaskStatus) -> String {
+        status.message.iter().flat_map(|m| m.parts.iter().filter_map(part_text)).collect()
+    }
+
     #[tokio::test]
-    async fn stream_failure_does_not_report_a_completed_task() {
-        let (handler, _store) = handler_with_agent(Arc::new(FailingAgent));
+    async fn stream_failure_ends_on_a_failed_status_that_carries_the_error() {
+        let (handler, store) = handler_with_agent(Arc::new(FailingAgent));
 
-        let mut stream = handler.message_stream(make_test_message()).await.expect("stream starts");
-        let mut states = Vec::new();
-        let mut saw_error = false;
-        while let Some(item) = stream.next().await {
-            match item {
-                Ok(StreamResponse::StatusUpdate(e)) => states.push(e.status.state),
-                Ok(_) => {}
-                Err(_) => saw_error = true,
-            }
-        }
+        let stream = handler.message_stream(make_test_message()).await.expect("stream starts");
+        let items: Vec<_> = stream.collect().await;
 
-        assert!(saw_error, "the agent error must surface to the caller");
         assert!(
-            states.contains(&TaskState::Failed),
-            "terminal state must be Failed, got {states:?}"
+            items.iter().all(Result::is_ok),
+            "the error rides on the terminal status, not on a separate error item: {items:?}"
         );
+        let states: Vec<_> = items
+            .iter()
+            .filter_map(|item| match item {
+                Ok(StreamResponse::StatusUpdate(e)) => Some(e.status.state),
+                _ => None,
+            })
+            .collect();
         assert!(
             !states.contains(&TaskState::Completed),
             "a failed run must never report Completed: {states:?}"
         );
+
+        // A2A §3.1.2: the stream closes at the terminal state, so the Failed status is last.
+        let Some(Ok(StreamResponse::StatusUpdate(last))) = items.last() else {
+            panic!("the stream must end on a status update: {items:?}");
+        };
+        assert_eq!(last.status.state, TaskState::Failed);
+        let text = status_text(&last.status);
+        assert!(text.contains("upstream exploded"), "the status message names the error: {text}");
+
+        // The stored task says the same, and so does a non-streaming send that fails.
+        let stored = store.get_task(&last.task_id.0).await.unwrap();
+        assert_eq!(status_text(&stored.status), text);
+        let (handler, _) = handler_with_agent(Arc::new(FailingAgent));
+        let sent = handler.message_send(make_test_message()).await.unwrap();
+        assert_eq!(sent.status.state, TaskState::Failed);
+        assert_eq!(status_text(&sent.status), text);
     }
 
     #[tokio::test]
