@@ -150,6 +150,7 @@ version = "3.0.0"
 dependencies = [
  "adk-core",
  "async-trait",
+ "chrono",
  "find-msvc-tools",
  "libc",
  "serde",
