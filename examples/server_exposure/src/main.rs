@@ -801,9 +801,14 @@ async fn group_c(keys: &Keys, model: &ScriptedModel, out: &mut Vec<Outcome>) {
             vec![],
             a2a_protocol_types::AgentCapabilities::none(),
         );
-        let task =
+        let reply =
             A2aV1Client::new(card).send_message(v1_text("Please delete record R-17.")).await?;
-        Ok::<_, anyhow::Error>(task.status.state)
+        match reply {
+            a2a_protocol_types::responses::SendMessageResponse::Task(task) => {
+                Ok::<_, anyhow::Error>(task.status.state)
+            }
+            other => anyhow::bail!("expected a task, got {other:?}"),
+        }
     }
     .await;
     out.push(match v1 {
