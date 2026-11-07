@@ -60,7 +60,7 @@ use async_trait::async_trait;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
-use adk_core::{RunState, UsageUnit, UsageVector};
+use adk_core::{RunState, UsageVector};
 
 use crate::bus::SpendDelta;
 use crate::error::Result;
@@ -440,7 +440,8 @@ impl UsageTotals {
             MODEL_CALLS_COUNTER => self.model_calls = self.model_calls.saturating_add(amount),
             TOTAL_TOKENS_COUNTER => self.total_tokens = self.total_tokens.saturating_add(amount),
             unit => {
-                if let Some(unit) = UsageUnit::ALL.into_iter().find(|known| known.as_str() == unit)
+                if let Some(unit) =
+                    adk_core::UsageUnit::ALL.into_iter().find(|known| known.as_str() == unit)
                 {
                     self.units.add(unit, amount);
                 }
