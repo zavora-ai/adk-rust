@@ -10,6 +10,8 @@ use adk_core::Llm;
 pub const ANTHROPIC_MODEL: &str = "claude-sonnet-5-5";
 /// The Gemini model examples default to.
 pub const GEMINI_MODEL: &str = "gemini-3.7-flash";
+/// The model live runs use on Vultr Serverless Inference unless `VULTR_MODEL` names another.
+pub const VULTR_MODEL: &str = "qwen3.8-27b";
 
 /// How a scenario's agents think.
 #[derive(Clone)]
@@ -57,7 +59,7 @@ pub fn load_env() {
     let _ = dotenvy::from_path_override(path);
 }
 
-/// The live model for `provider` (`anthropic` or `gemini`), or why there is none.
+/// The live model for `provider` (`anthropic`, `gemini` or `vultr`), or why there is none.
 ///
 /// # Errors
 ///
@@ -79,6 +81,15 @@ pub fn model_for(provider: &str) -> anyhow::Result<Mode> {
             let client = adk_model::GeminiModel::new(key, GEMINI_MODEL)?;
             Ok(Mode::Live { model: Arc::new(client), name: GEMINI_MODEL.into() })
         }
-        other => anyhow::bail!("unknown provider {other}: use anthropic or gemini"),
+        "vultr" => {
+            let key = std::env::var("VULTR_INFERENCE_API_KEY")
+                .map_err(|_| anyhow::anyhow!("VULTR_INFERENCE_API_KEY is not set"))?;
+            let name = std::env::var("VULTR_MODEL").unwrap_or_else(|_| VULTR_MODEL.into());
+            let client = adk_model::OpenAICompatible::new(
+                adk_model::OpenAICompatibleConfig::vultr(key, name.clone()),
+            )?;
+            Ok(Mode::Live { model: Arc::new(client), name })
+        }
+        other => anyhow::bail!("unknown provider {other}: use anthropic, gemini or vultr"),
     }
 }
