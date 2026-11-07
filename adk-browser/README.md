@@ -287,6 +287,34 @@ fn config() -> BrowserConfig {
 
 Then open `http://localhost:7900` to watch the browser in real-time.
 
+## Live Frames
+
+To show a person what the agent sees without a remote desktop, start a frame feed. It takes a
+WebDriver screenshot on an interval, only while the session runs, and keeps the latest frame
+that differs from the one before:
+
+```rust,no_run
+use std::sync::Arc;
+use std::time::Duration;
+
+use adk_browser::{BrowserConfig, BrowserSession};
+
+async fn watch() -> adk_core::Result<()> {
+    let session = Arc::new(BrowserSession::new(BrowserConfig::new()));
+    session.start().await?;
+    let mut feed = session.frames(Duration::from_secs(1));
+    while let Some(frame) = feed.next().await {
+        // Relay frame.png_base64 to the viewer, e.g. as a server-sent event.
+        let _ = (frame.seq, &frame.png_base64);
+    }
+    Ok(())
+}
+```
+
+It needs no port beyond WebDriver's and nothing the page can reach, so it suits a browser in a
+sealed sandbox, where `observable()` and noVNC should not be exposed. The feed ends when its
+session is dropped or its last handle is.
+
 ### Category Filtering
 
 Fine-tune which tool categories are included:

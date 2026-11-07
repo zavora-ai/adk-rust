@@ -164,6 +164,13 @@ impl BrowserSession {
         })
     }
 
+    /// The WebDriver handle of a running session, without starting one or checking it
+    /// responds. Watchers such as [`frames`](Self::frames) use it so that watching never
+    /// starts a browser.
+    pub(crate) async fn running_driver(&self) -> Option<WebDriver> {
+        self.driver.read().await.clone()
+    }
+
     /// Get a snapshot of the current page context (url, title, truncated body text).
     ///
     /// Useful for returning page state after interaction tools.

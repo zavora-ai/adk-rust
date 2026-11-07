@@ -165,6 +165,7 @@
 
 mod config;
 mod escape;
+pub mod frames;
 mod pool;
 mod session;
 pub mod tools;
@@ -173,6 +174,7 @@ mod toolset;
 // Re-export main types
 pub use config::{BrowserConfig, BrowserType};
 pub use escape::escape_js_string;
+pub use frames::{Frame, FrameFeed, MIN_FRAME_INTERVAL};
 pub use pool::BrowserSessionPool;
 pub use session::{BrowserSession, ElementState, shared_session};
 pub use toolset::{BrowserProfile, BrowserToolset, minimal_browser_tools, readonly_browser_tools};
