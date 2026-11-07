@@ -279,6 +279,9 @@ The `workspace` feature provides the `provision → session → exec → snapsho
 | Timeout | Kills the command's process group | Kills the command's process tree inside the container |
 | Host directories | The host filesystem | None by default; `with_bind_mount(host, container, read_only)` mounts one into every container |
 | User | Host user | The image's default (usually `root`, which without capabilities cannot write a host directory only its owner may write); `with_user("1000:1000")` runs commands as that user, so a bind-mounted workspace is writable and what the container writes belongs to the host user |
+| Runtime | Host kernel | The daemon's default (usually `runc`); `with_runtime("runsc")` runs containers under gVisor, which must be installed and registered with the daemon |
+| Root filesystem | Host filesystem | Writable image layer; `with_read_only_root(ReadOnlyRoot::default())` makes the image read-only with a 256 MiB `/workspace` tmpfs and a 64 MiB `noexec` `/tmp` (a bind mount at `/workspace` takes the tmpfs's place) |
+| Daemon | — | The local socket; `DockerClient::connect_with_defaults()` honours `DOCKER_HOST`, so the containers can run on a separate sandbox host |
 
 `DockerClient::with_bind_mount("/home/me/project", "/workspace", false)` gives commands in
 the container and file tools on the host one view of the workspace. A read-only mount

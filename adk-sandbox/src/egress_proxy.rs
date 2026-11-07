@@ -49,6 +49,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -93,8 +94,11 @@ pub enum ProxyProtocol {
 }
 
 /// What became of one connection.
+///
+/// New outcomes may be added, so a `match` needs a wildcard arm.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
+#[non_exhaustive]
 pub enum EgressOutcome {
     /// The connection was admitted and carried until it closed.
     Allowed,
@@ -109,6 +113,13 @@ pub enum EgressOutcome {
     /// did not answer.
     Failed {
         /// What failed.
+        reason: String,
+    },
+    /// It was admitted and carried until a cap set on the proxy
+    /// ([`EgressProxyBuilder::max_bytes_per_direction`],
+    /// [`EgressProxyBuilder::max_connection_lifetime`]) cut it short.
+    Capped {
+        /// Which cap was reached.
         reason: String,
     },
 }
@@ -181,8 +192,16 @@ pub struct EgressProxyBuilder {
     audit: Option<Arc<dyn EgressAudit>>,
     call: Option<String>,
     handshake_timeout: Duration,
+    limits: ConnectionLimits,
     #[cfg(test)]
     upstream: Option<SocketAddr>,
+}
+
+/// Caps on one admitted connection; both unset by default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ConnectionLimits {
+    max_bytes_per_direction: Option<u64>,
+    max_lifetime: Option<Duration>,
 }
 
 impl fmt::Debug for EgressProxyBuilder {
@@ -193,6 +212,7 @@ impl fmt::Debug for EgressProxyBuilder {
             .field("audit", &self.audit.is_some())
             .field("call", &self.call)
             .field("handshake_timeout", &self.handshake_timeout)
+            .field("limits", &self.limits)
             .finish()
     }
 }
@@ -224,6 +244,48 @@ impl EgressProxyBuilder {
     #[must_use]
     pub fn handshake_timeout(mut self, timeout: Duration) -> Self {
         self.handshake_timeout = timeout;
+        self
+    }
+
+    /// Caps the bytes one admitted connection may carry in each direction (unset by default).
+    ///
+    /// When either direction reaches the cap, the whole connection is closed and recorded
+    /// as [`EgressOutcome::Capped`], so a sandbox cannot turn an admitted host into a bulk
+    /// download or upload channel. The outbound count includes the TLS ClientHello or
+    /// request head the proxy reads before admitting the connection; that first message is
+    /// always forwarded whole.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_core::egress::EgressPolicy;
+    /// use adk_sandbox::egress_proxy::EgressProxy;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let proxy = EgressProxy::builder(EgressPolicy::allowlist(["kilele-bakery.example:443"])?)
+    ///     .max_bytes_per_direction(25 * 1024 * 1024)
+    ///     .max_connection_lifetime(std::time::Duration::from_secs(60))
+    ///     .bind()
+    ///     .await?;
+    /// # let _ = proxy;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn max_bytes_per_direction(mut self, bytes: u64) -> Self {
+        self.limits.max_bytes_per_direction = Some(bytes);
+        self
+    }
+
+    /// Caps how long one admitted connection may stay open after the handshake (unset by
+    /// default).
+    ///
+    /// A connection still open at the cap is closed and recorded as
+    /// [`EgressOutcome::Capped`], so a half-open or idle tunnel cannot outlive the call it
+    /// serves.
+    #[must_use]
+    pub fn max_connection_lifetime(mut self, lifetime: Duration) -> Self {
+        self.limits.max_lifetime = Some(lifetime);
         self
     }
 
@@ -338,6 +400,7 @@ impl EgressProxyBuilder {
             audit: self.audit,
             call: self.call,
             handshake_timeout: self.handshake_timeout,
+            limits: self.limits,
             #[cfg(test)]
             upstream: self.upstream,
         });
@@ -380,6 +443,7 @@ impl EgressProxy {
             audit: None,
             call: None,
             handshake_timeout: Duration::from_secs(10),
+            limits: ConnectionLimits::default(),
             #[cfg(test)]
             upstream: None,
         }
@@ -484,6 +548,7 @@ struct Shared {
     audit: Option<Arc<dyn EgressAudit>>,
     call: Option<String>,
     handshake_timeout: Duration,
+    limits: ConnectionLimits,
     // Tests run destinations on loopback, which the proxy refuses; this carries a checked
     // public address to the test's listener instead.
     #[cfg(test)]
@@ -535,7 +600,7 @@ impl Shared {
                 let (code, reason) = match &outcome {
                     EgressOutcome::Denied { code, reason } => (code.as_str(), reason.as_str()),
                     EgressOutcome::Failed { reason } => ("egress.upstream_failed", reason.as_str()),
-                    EgressOutcome::Allowed => ("", ""),
+                    EgressOutcome::Allowed | EgressOutcome::Capped { .. } => ("", ""),
                 };
                 let response = format!(
                     "HTTP/1.1 {status}\r\nX-Adk-Egress-Denied: {code}\r\nContent-Type: \
@@ -571,6 +636,15 @@ impl Shared {
                 egress.port = record.port,
                 reason = %reason,
                 "egress proxy connection failed"
+            ),
+            EgressOutcome::Capped { reason } => tracing::warn!(
+                egress.call = record.call.as_deref().unwrap_or_default(),
+                egress.host = %record.host,
+                egress.port = record.port,
+                egress.bytes_sent = record.bytes_sent,
+                egress.bytes_received = record.bytes_received,
+                reason = %reason,
+                "egress proxy connection cut at a cap"
             ),
         }
         if let Some(audit) = &self.audit {
@@ -745,20 +819,48 @@ impl Shared {
         Err(Refusal::Failed(format!("no address of {} answered ({last})", record.host)))
     }
 
+    /// Carries bytes both ways until both sides finish or a cap is reached.
+    ///
+    /// Bytes are counted as they flow, so the record stays exact when a cap, an error or the
+    /// proxy stopping ends the connection early. The first message, already forwarded and
+    /// counted in `record`, counts toward the outbound cap.
     async fn splice(
         &self,
         client: &mut TcpStream,
         upstream: &mut TcpStream,
         record: &mut EgressRecord,
     ) {
-        match tokio::io::copy_bidirectional(client, upstream).await {
-            Ok((sent, received)) => {
-                record.bytes_sent += sent;
-                record.bytes_received = received;
-            }
-            Err(error) => {
-                tracing::debug!(error = %error, "egress proxy connection ended with an error")
-            }
+        let cap = self.limits.max_bytes_per_direction.unwrap_or(u64::MAX);
+        let sent = AtomicU64::new(record.bytes_sent);
+        let received = AtomicU64::new(record.bytes_received);
+        let (mut client_read, mut client_write) = client.split();
+        let (mut upstream_read, mut upstream_write) = upstream.split();
+        // A direction that finishes half-closes its write side and lets the other carry on.
+        // A direction that reaches the cap fails the join, which drops the other direction
+        // too: the whole connection is cut, not one half of it.
+        let outbound = async {
+            relay(&mut client_read, &mut upstream_write, cap, &sent).await?;
+            let _ = upstream_write.shutdown().await;
+            Ok::<(), CapReached>(())
+        };
+        let inbound = async {
+            relay(&mut upstream_read, &mut client_write, cap, &received).await?;
+            let _ = client_write.shutdown().await;
+            Ok::<(), CapReached>(())
+        };
+        let both = async { tokio::try_join!(outbound, inbound).map(|_| ()) };
+        let byte_cap = || format!("the cap of {cap} bytes in one direction was reached");
+        let capped = match self.limits.max_lifetime {
+            Some(lifetime) => match tokio::time::timeout(lifetime, both).await {
+                Ok(result) => result.err().map(|CapReached| byte_cap()),
+                Err(_) => Some(format!("the connection lifetime cap of {lifetime:?} was reached")),
+            },
+            None => both.await.err().map(|CapReached| byte_cap()),
+        };
+        record.bytes_sent = sent.load(Ordering::Relaxed);
+        record.bytes_received = received.load(Ordering::Relaxed);
+        if let Some(reason) = capped {
+            record.outcome = EgressOutcome::Capped { reason };
         }
     }
 
@@ -771,6 +873,42 @@ impl Shared {
 
 fn denied(code: &'static str, reason: &str) -> Refusal {
     Refusal::Denied { code, reason: reason.to_string() }
+}
+
+/// One direction of a spliced connection tried to carry more than the byte cap.
+#[derive(Debug)]
+struct CapReached;
+
+/// Copies `reader` to `writer` until EOF or an error, counting into `counter`.
+///
+/// Returns `Err(CapReached)` once `counter` has reached `cap` and the reader still has more
+/// to send; a stream that ends exactly at the cap is not cut.
+async fn relay<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    cap: u64,
+    counter: &AtomicU64,
+) -> Result<(), CapReached>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let mut buffer = vec![0u8; 16 * 1024];
+    loop {
+        let carried = counter.load(Ordering::Relaxed);
+        let room = usize::try_from(cap.saturating_sub(carried)).unwrap_or(usize::MAX);
+        // At the cap, read one byte to tell a stream that has ended from one that has more.
+        let window = room.clamp(1, buffer.len());
+        let n = match reader.read(&mut buffer[..window]).await {
+            Ok(0) | Err(_) => return Ok(()),
+            Ok(_) if room == 0 => return Err(CapReached),
+            Ok(n) => n,
+        };
+        if writer.write_all(&buffer[..n]).await.is_err() {
+            return Ok(());
+        }
+        counter.fetch_add(n as u64, Ordering::Relaxed);
+    }
 }
 
 fn normalize(host: &str) -> String {
@@ -993,6 +1131,14 @@ mod tests {
     }
 
     async fn fixture(policy: EgressPolicy) -> Fixture {
+        fixture_with(policy, |builder| builder).await
+    }
+
+    /// A fixture whose builder `configure` adjusts before the proxy starts.
+    async fn fixture_with(
+        policy: EgressPolicy,
+        configure: impl FnOnce(EgressProxyBuilder) -> EgressProxyBuilder,
+    ) -> Fixture {
         let (upstream, received) = destination().await;
         let resolver = StaticResolver::new()
             .with_host("api.example.com", ["203.0.113.10".parse().unwrap()])
@@ -1009,6 +1155,7 @@ mod tests {
             .call_id("call-1")
             .handshake_timeout(Duration::from_secs(2));
         builder.upstream = Some(upstream);
+        let builder = configure(builder);
         Fixture { proxy: builder.bind().await.unwrap(), audit, received }
     }
 
@@ -1047,6 +1194,116 @@ mod tests {
         })
         .await;
         (head, rest)
+    }
+
+    #[tokio::test]
+    async fn a_byte_cap_counts_the_first_message_and_cuts_the_whole_connection() {
+        let hello = client_hello(Some("api.example.com"), false);
+        let cap = hello.len() as u64 + 4;
+        let f = fixture_with(EgressPolicy::allowlist(["api.example.com:443"]).unwrap(), |b| {
+            b.max_bytes_per_direction(cap)
+        })
+        .await;
+        let mut stream = TcpStream::connect(f.proxy.local_addr()).await.unwrap();
+        stream.write_all(connect_to("api.example.com:443").as_bytes()).await.unwrap();
+        let mut buffer = [0u8; 4096];
+        let n = stream.read(&mut buffer).await.unwrap();
+        assert!(String::from_utf8_lossy(&buffer[..n]).starts_with("HTTP/1.1 200"));
+        stream.write_all(&hello).await.unwrap();
+        received_at_least(&f.received, hello.len()).await;
+
+        // Four more bytes fit under the cap; the fifth cuts the tunnel both ways.
+        stream.write_all(b"abcdefgh").await.unwrap();
+        let ended = tokio::time::timeout(Duration::from_secs(2), async {
+            while let Ok(n) = stream.read(&mut buffer).await {
+                if n == 0 {
+                    break;
+                }
+            }
+        })
+        .await;
+
+        assert!(ended.is_ok(), "the proxy closed the client's side");
+        let records = records(&f.audit, 1).await;
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0].bytes_sent, cap, "the ClientHello counts toward the cap");
+        assert!(
+            matches!(&records[0].outcome, EgressOutcome::Capped { reason } if reason.contains(&format!("{cap} bytes"))),
+            "{:?}",
+            records[0].outcome
+        );
+        let mut expected = hello.clone();
+        expected.extend_from_slice(b"abcd");
+        received_at_least(&f.received, expected.len()).await;
+        assert_eq!(*f.received.lock().unwrap(), expected, "nothing past the cap reached it");
+    }
+
+    #[tokio::test]
+    async fn relay_cuts_only_a_stream_that_has_more_than_the_cap() {
+        let counter = AtomicU64::new(0);
+        let mut written = Vec::new();
+        let result = relay(&mut &b"hello world"[..], &mut written, 5, &counter).await;
+        assert!(result.is_err(), "more than five bytes were offered");
+        assert_eq!(written, b"hello");
+        assert_eq!(counter.load(Ordering::Relaxed), 5);
+
+        let counter = AtomicU64::new(0);
+        let mut written = Vec::new();
+        let result = relay(&mut &b"hello"[..], &mut written, 5, &counter).await;
+        assert!(result.is_ok(), "a stream that ends exactly at the cap is not cut");
+        assert_eq!(written, b"hello");
+
+        let counter = AtomicU64::new(3);
+        let mut written = Vec::new();
+        let result = relay(&mut &b"hello"[..], &mut written, 5, &counter).await;
+        assert!(result.is_err());
+        assert_eq!(written, b"he", "bytes already counted leave less room");
+        assert_eq!(counter.load(Ordering::Relaxed), 5);
+    }
+
+    /// Waits until the test destination has received at least `len` bytes.
+    async fn received_at_least(received: &Mutex<Vec<u8>>, len: usize) {
+        for _ in 0..100 {
+            if received.lock().unwrap().len() >= len {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_lifetime_cap_closes_an_idle_tunnel() {
+        let f = fixture_with(EgressPolicy::allowlist(["api.example.com:443"]).unwrap(), |b| {
+            b.max_connection_lifetime(Duration::from_millis(150))
+        })
+        .await;
+        let hello = client_hello(Some("api.example.com"), false);
+        let mut stream = TcpStream::connect(f.proxy.local_addr()).await.unwrap();
+        stream.write_all(connect_to("api.example.com:443").as_bytes()).await.unwrap();
+        let mut buffer = [0u8; 4096];
+        let n = stream.read(&mut buffer).await.unwrap();
+        assert!(String::from_utf8_lossy(&buffer[..n]).starts_with("HTTP/1.1 200"));
+        stream.write_all(&hello).await.unwrap();
+
+        // The client keeps its side open; the destination answers once and waits.
+        let started = std::time::Instant::now();
+        let mut rest = Vec::new();
+        while let Ok(n) = stream.read(&mut buffer).await {
+            if n == 0 {
+                break;
+            }
+            rest.extend_from_slice(&buffer[..n]);
+        }
+
+        assert_eq!(rest, b"pong");
+        assert!(started.elapsed() < Duration::from_secs(2), "the cap ended the tunnel");
+        let records = records(&f.audit, 1).await;
+        assert!(
+            matches!(&records[0].outcome, EgressOutcome::Capped { reason } if reason.contains("lifetime")),
+            "{:?}",
+            records[0].outcome
+        );
+        assert_eq!(records[0].bytes_received, 4);
     }
 
     fn connect_to(host: &str) -> String {

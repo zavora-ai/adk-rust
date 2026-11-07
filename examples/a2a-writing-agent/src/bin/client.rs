@@ -1,5 +1,6 @@
 //! A2A v1.0.0 client — exercises all 11 operations via the research-to-writing pipeline.
 
+use a2a_protocol_types::responses::SendMessageResponse;
 use a2a_protocol_types::{Message, MessageId, MessageRole, Part, TaskPushNotificationConfig};
 use adk_server::a2a::client::v1_client::{A2aV1Client, V1ClientError};
 use clap::Parser;
@@ -86,10 +87,11 @@ async fn main() {
     println!("\n--- SendMessage (Research) ---");
 
     let research_task = match research.send_message(build_message(&cli.topic)).await {
-        Ok(t) => {
+        Ok(SendMessageResponse::Task(t)) => {
             pass(&format!("Task {} → {:?}", t.id, t.status.state));
             t
         }
+        Ok(other) => { fail(&format!("SendMessage: expected a task, got {other:?}")); std::process::exit(1); }
         Err(e) => { fail(&format!("SendMessage: {e}")); std::process::exit(1); }
     };
 
@@ -104,10 +106,11 @@ async fn main() {
     println!("\n--- SendMessage (Writing) ---");
 
     let writing_task = match writing.send_message(build_message(&summary)).await {
-        Ok(t) => {
+        Ok(SendMessageResponse::Task(t)) => {
             pass(&format!("Task {} → {:?}", t.id, t.status.state));
             t
         }
+        Ok(other) => { fail(&format!("SendMessage: expected a task, got {other:?}")); std::process::exit(1); }
         Err(e) => { fail(&format!("SendMessage: {e}")); std::process::exit(1); }
     };
 
@@ -208,9 +211,13 @@ async fn main() {
         Err(e) => fail(&format!("{e}")),
     }
 
+    // On the JSON-RPC binding an unsupported version is a JSON-RPC error, -32009.
     match http.post(&jsonrpc_url).header("A2A-Version", "99.0").json(&body).send().await {
-        Ok(resp) if resp.status().as_u16() == 400 => pass("Version 99.0 → 400 ✓"),
-        Ok(resp) => fail(&format!("Expected 400, got {}", resp.status())),
+        Ok(resp) => match resp.json::<serde_json::Value>().await {
+            Ok(reply) if reply["error"]["code"] == -32009 => pass("Version 99.0 → -32009 ✓"),
+            Ok(reply) => fail(&format!("Expected -32009, got {reply}")),
+            Err(e) => fail(&format!("{e}")),
+        },
         Err(e) => fail(&format!("{e}")),
     }
 
