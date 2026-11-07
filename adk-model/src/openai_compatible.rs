@@ -220,6 +220,33 @@ impl OpenAICompatibleConfig {
             .with_base_url("https://api.orcarouter.ai/v1")
     }
 
+    /// Vultr Serverless Inference preset.
+    ///
+    /// Vultr serves open models (GLM, Qwen, DeepSeek, MiniMax, Nemotron and others) behind
+    /// one OpenAI-compatible endpoint with Bearer auth; `GET /v1/models` lists the IDs a
+    /// subscription can use, with each model's modalities and supported parameters. Rate
+    /// limits apply per subscription and per model.
+    ///
+    /// Default model suggestion: `qwen3.8-27b` (tool calling and vision)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_model::{OpenAICompatible, OpenAICompatibleConfig};
+    ///
+    /// let config = OpenAICompatibleConfig::vultr("vultr-inference-key", "qwen3.8-27b");
+    /// assert_eq!(config.base_url.as_deref(), Some("https://api.vultrinference.com/v1"));
+    ///
+    /// let model = OpenAICompatible::new(config)?;
+    /// # let _ = model;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    pub fn vultr(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::new(api_key, model)
+            .with_provider_name("vultr")
+            .with_base_url("https://api.vultrinference.com/v1")
+    }
+
     /// Cheaper Inference preset.
     ///
     /// Cheaper Inference serves models from several vendors behind one
@@ -1706,6 +1733,18 @@ mod tests {
 
         let client = OpenAICompatible::new(config).expect("client builds");
         assert_eq!(client.name(), "openai/gpt-5.6-terra");
+    }
+
+    #[test]
+    fn vultr_preset_sets_endpoint_and_provider() {
+        let config = OpenAICompatibleConfig::vultr("test-key", "qwen3.8-27b");
+        assert_eq!(config.provider_name, "vultr");
+        assert_eq!(config.model, "qwen3.8-27b");
+        assert_eq!(config.base_url.as_deref(), Some("https://api.vultrinference.com/v1"));
+        assert_eq!(config.api_key, "test-key");
+
+        let client = OpenAICompatible::new(config).expect("client builds");
+        assert_eq!(client.name(), "qwen3.8-27b");
     }
 
     #[test]
