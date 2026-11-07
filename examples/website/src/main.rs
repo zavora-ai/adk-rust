@@ -7,6 +7,7 @@
 //! cargo run --manifest-path examples/website/Cargo.toml -- S1 S5        # some scenarios
 //! cargo run --manifest-path examples/website/Cargo.toml -- --live       # agent turns on claude-sonnet-5-5
 //! cargo run --manifest-path examples/website/Cargo.toml -- --live --provider gemini
+//! cargo run --manifest-path examples/website/Cargo.toml -- --live --provider vultr   # VULTR_INFERENCE_API_KEY, optional VULTR_MODEL
 //! ```
 
 mod checks;

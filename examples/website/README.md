@@ -18,6 +18,9 @@ cargo run --manifest-path examples/website/Cargo.toml -- S1 S5 --report scenario
 cargo run --manifest-path examples/website/Cargo.toml -- --live
 cargo run --manifest-path examples/website/Cargo.toml -- --live --provider gemini
 
+# Agent turns on Vultr Serverless Inference (VULTR_INFERENCE_API_KEY; VULTR_MODEL defaults to qwen3.8-27b)
+cargo run --manifest-path examples/website/Cargo.toml -- --live --provider vultr
+
 # Without the reference CDN host (S18), which needs `adk-site`'s object-store host
 cargo run --manifest-path examples/website/Cargo.toml --no-default-features
 
