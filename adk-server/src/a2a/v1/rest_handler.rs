@@ -20,6 +20,7 @@ use futures::StreamExt;
 use serde::Deserialize;
 
 use a2a_protocol_types::TaskPushNotificationConfig;
+use a2a_protocol_types::responses::SendMessageResponse;
 
 use super::error::A2aError;
 use super::request_handler::RequestHandler;
@@ -83,7 +84,8 @@ struct TaskListQuery {
 
 // ── Route handlers ───────────────────────────────────────────────────────────
 
-/// `POST /message:send` — sends a message and returns a Task.
+/// `POST /message:send` — sends a message and returns the v1
+/// `SendMessageResponse` oneof, `{"task": …}` (A2A §11.4, §6.1).
 async fn handle_message_send(
     State(handler): State<Arc<RequestHandler>>,
     caller: AuthenticatedCaller,
@@ -95,7 +97,7 @@ async fn handle_message_send(
     };
 
     match handler.for_caller(caller.0).message_send(msg).await {
-        Ok(task) => a2a_json_response(&task),
+        Ok(task) => a2a_json_response(&SendMessageResponse::Task(task)),
         Err(e) => error_response(&e),
     }
 }
@@ -378,7 +380,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_message_send_returns_task() {
+    async fn post_message_send_returns_the_send_message_response_oneof() {
         let handler = make_handler();
         let app = make_router(handler);
 
@@ -392,9 +394,15 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
+        // A2A §6.1 and §11.4: the body is a SendMessageResponse, `{"task": …}`.
         let body = json_body(resp).await;
-        assert!(body["id"].is_string());
-        assert_eq!(body["status"]["state"], "TASK_STATE_COMPLETED");
+        let keys: Vec<_> = body.as_object().expect("object body").keys().collect();
+        assert_eq!(keys, ["task"], "got: {body}");
+        assert!(body["task"]["id"].is_string());
+        assert!(body["task"]["contextId"].is_string());
+        assert_eq!(body["task"]["status"]["state"], "TASK_STATE_COMPLETED");
+        let decoded: SendMessageResponse = serde_json::from_value(body).expect("oneof");
+        assert!(matches!(decoded, SendMessageResponse::Task(_)));
     }
 
     #[tokio::test]
@@ -448,7 +456,7 @@ mod tests {
             .unwrap();
         let create_resp = app.oneshot(create_req).await.unwrap();
         let create_body = json_body(create_resp).await;
-        let task_id = create_body["id"].as_str().unwrap();
+        let task_id = create_body["task"]["id"].as_str().unwrap();
 
         // Get the task
         let app = make_router(handler);
@@ -535,7 +543,7 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         let body = json_body(resp).await;
-        let task_id = body["id"].as_str().unwrap().to_string();
+        let task_id = body["task"]["id"].as_str().unwrap().to_string();
 
         // Create push config
         let app = make_router(handler.clone());
