@@ -520,6 +520,7 @@ pub mod v1_client {
     //! request headers.
 
     use a2a_protocol_types::jsonrpc::JsonRpcRequest;
+    use a2a_protocol_types::responses::SendMessageResponse;
     use a2a_protocol_types::task::{Task, TaskState};
     use a2a_protocol_types::{AgentCard, Message, TaskPushNotificationConfig};
     use reqwest::header::{HeaderMap, HeaderValue};
@@ -534,6 +535,24 @@ pub mod v1_client {
 
     /// Well-known path for v1 agent cards.
     const AGENT_CARD_PATH: &str = "/.well-known/agent-card.json";
+
+    /// JSON-RPC code of `VersionNotSupportedError` (A2A §5.4).
+    const VERSION_NOT_SUPPORTED: i64 = -32009;
+
+    /// Reads a `SendMessage` result: the v1 `SendMessageResponse` oneof
+    /// (`{"task": …}` or `{"message": …}`, A2A §9.4.1 and §11.4), or a bare
+    /// `Task`, which adk-server before 3.0 returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns the oneof's decoding error when `result` is neither shape.
+    fn parse_send_message_result(result: Value) -> Result<SendMessageResponse, serde_json::Error> {
+        serde_json::from_value::<SendMessageResponse>(result.clone()).or_else(|oneof_error| {
+            serde_json::from_value::<Task>(result)
+                .map(SendMessageResponse::Task)
+                .map_err(|_| oneof_error)
+        })
+    }
 
     /// Retry configuration for transient failures.
     #[derive(Debug, Clone)]
@@ -828,24 +847,15 @@ pub mod v1_client {
             );
 
             let response = self.send_with_retry(url, &request).await?;
-            let status = response.status();
-
-            // Check for version negotiation failure
-            if status == reqwest::StatusCode::BAD_REQUEST {
-                let body: Value = response.json().await?;
-                if let Some(err) = body.get("error") {
-                    let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(0) as i32;
-                    if code == -32009 {
-                        return Err(Self::parse_version_error(err));
-                    }
-                }
-                return Err(Self::parse_jsonrpc_error(&body));
-            }
-
             let body: Value = response.json().await?;
 
-            // Check for JSON-RPC error
-            if body.get("error").is_some() {
+            // A JSON-RPC error. A version negotiation failure (-32009) arrives as HTTP 200 from
+            // a conformant server, and as HTTP 400 from adk-server before 3.0, so the code
+            // decides, not the status.
+            if let Some(err) = body.get("error") {
+                if err.get("code").and_then(Value::as_i64) == Some(VERSION_NOT_SUPPORTED) {
+                    return Err(Self::parse_version_error(err));
+                }
                 return Err(Self::parse_jsonrpc_error(&body));
             }
 
@@ -1046,8 +1056,24 @@ pub mod v1_client {
         // ── 11 v1.0.0 Operations (JSON-RPC) ─────────────────────────────
 
         /// Sends a message to the remote agent (JSON-RPC `SendMessage`).
-        pub async fn send_message(&self, message: Message) -> Result<Task, V1ClientError> {
-            self.jsonrpc_call("SendMessage", serde_json::json!({ "message": message })).await
+        ///
+        /// Returns the v1 `SendMessageResponse`: the task the message created or
+        /// continued, or a message the agent answered with directly. A server that
+        /// returns a bare `Task` (adk-server before 3.0) is read as
+        /// [`SendMessageResponse::Task`].
+        ///
+        /// # Errors
+        ///
+        /// Returns [`V1ClientError::JsonRpc`] for a JSON-RPC error,
+        /// [`V1ClientError::VersionNotSupported`] when the server does not serve
+        /// A2A 1.0, and [`V1ClientError::Serde`] when the result is neither shape.
+        pub async fn send_message(
+            &self,
+            message: Message,
+        ) -> Result<SendMessageResponse, V1ClientError> {
+            let result: Value =
+                self.jsonrpc_call("SendMessage", serde_json::json!({ "message": message })).await?;
+            Ok(parse_send_message_result(result)?)
         }
 
         /// Sends a streaming message (JSON-RPC `SendStreamingMessage`).
@@ -1211,8 +1237,21 @@ pub mod v1_client {
         // ── REST binding operations ──────────────────────────────────────
 
         /// Sends a message via REST (`POST /message:send`).
-        pub async fn send_message_rest(&self, message: Message) -> Result<Task, V1ClientError> {
-            self.rest_post("/message:send", &serde_json::json!({ "message": message })).await
+        ///
+        /// Returns the v1 `SendMessageResponse`, read as
+        /// [`send_message`](Self::send_message) reads it.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`V1ClientError::UnexpectedStatus`] for a non-2xx answer and
+        /// [`V1ClientError::Serde`] when the body is neither shape.
+        pub async fn send_message_rest(
+            &self,
+            message: Message,
+        ) -> Result<SendMessageResponse, V1ClientError> {
+            let body: Value =
+                self.rest_post("/message:send", &serde_json::json!({ "message": message })).await?;
+            Ok(parse_send_message_result(body)?)
         }
 
         /// Gets a task via REST (`GET /tasks/{taskId}`).
@@ -1437,6 +1476,56 @@ pub mod v1_client {
                     assert_eq!(supported, vec!["0.3", "1.0"]);
                 }
                 other => panic!("expected VersionNotSupported, got: {other}"),
+            }
+        }
+
+        #[test]
+        fn send_message_results_read_the_v1_oneof() {
+            let task = serde_json::json!({
+                "id": "t-1",
+                "contextId": "c-1",
+                "status": { "state": "TASK_STATE_COMPLETED" }
+            });
+            match parse_send_message_result(serde_json::json!({ "task": task })).unwrap() {
+                SendMessageResponse::Task(task) => assert_eq!(task.id.0, "t-1"),
+                other => panic!("expected a task, got {other:?}"),
+            }
+
+            let message = serde_json::json!({
+                "messageId": "m-1",
+                "role": "ROLE_AGENT",
+                "parts": [{ "text": "hi" }]
+            });
+            match parse_send_message_result(serde_json::json!({ "message": message })).unwrap() {
+                SendMessageResponse::Message(message) => assert_eq!(message.id.0, "m-1"),
+                other => panic!("expected a message, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn send_message_results_accept_the_bare_task_older_servers_send() {
+            let bare = serde_json::json!({
+                "id": "t-2",
+                "contextId": "c-2",
+                "status": { "state": "TASK_STATE_WORKING" }
+            });
+            match parse_send_message_result(bare).unwrap() {
+                SendMessageResponse::Task(task) => {
+                    assert_eq!(task.id.0, "t-2");
+                    assert_eq!(task.status.state, TaskState::Working);
+                }
+                other => panic!("expected a task, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn send_message_results_of_another_shape_are_refused() {
+            for result in [
+                serde_json::json!(null),
+                serde_json::json!({ "status": "done" }),
+                serde_json::json!({ "task": { "id": "t-3" } }),
+            ] {
+                assert!(parse_send_message_result(result.clone()).is_err(), "{result}");
             }
         }
 

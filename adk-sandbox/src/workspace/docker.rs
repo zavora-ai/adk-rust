@@ -16,6 +16,9 @@
 //! | Memory, CPU | Unlimited | [`DockerClient::with_resource_limits`] |
 //! | Host directories | None mounted | [`DockerClient::with_bind_mount`] |
 //! | User | The image's default (usually `root`) | [`DockerClient::with_user`] |
+//! | OCI runtime | The daemon's default (usually `runc`) | [`DockerClient::with_runtime`] (for example `runsc` for gVisor) |
+//! | Root filesystem | Writable | [`DockerClient::with_read_only_root`]: read-only, with tmpfs for `/workspace` and `/tmp` |
+//! | Daemon | The local socket | [`DockerClient::connect_with_defaults`] honours `DOCKER_HOST`, so a separate sandbox host can run the containers |
 //!
 //! `GitRepo` manifest entries clone from inside the container, so they need a network mode
 //! other than `none`.
@@ -110,8 +113,13 @@ pub struct DockerClient {
     /// The user commands run as inside new containers (`uid`, `uid:gid`, or a name the
     /// image knows); `None` keeps the image's default.
     pub user: Option<String>,
+    /// The OCI runtime new containers run under (for example `runsc` for gVisor); `None`
+    /// keeps the daemon's default.
+    pub runtime: Option<String>,
     /// Host paths mounted into every new container, in the order they were added.
     bind_mounts: Vec<BindMount>,
+    /// A read-only root filesystem with writable tmpfs mounts, when set.
+    read_only_root: Option<ReadOnlyRoot>,
     /// Bollard Docker client for API communication.
     client: Docker,
     /// Active sessions mapping handle IDs to container IDs.
@@ -134,7 +142,42 @@ impl DockerClient {
             Docker::connect_with_local_defaults().map_err(|e| SandboxError::DockerUnavailable {
                 reason: format!("failed to connect to Docker daemon: {e}"),
             })?;
+        Self::from_docker(docker).await
+    }
 
+    /// Creates a new `DockerClient` connected to the daemon `DOCKER_HOST` names, or to the
+    /// local socket when it is unset.
+    ///
+    /// This lets the containers run on a separate sandbox host: the process that holds keys
+    /// and talks to models drives a daemon on a machine that holds neither. `DOCKER_HOST`
+    /// takes `unix://`, `tcp://` and `http://` addresses; with `DOCKER_TLS_VERIFY` and
+    /// `DOCKER_CERT_PATH` set, a `tcp://` address is reached over mutual TLS.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SandboxError::DockerUnavailable` if the daemon cannot be reached.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_sandbox::workspace::DockerClient;
+    ///
+    /// # async fn run() -> Result<(), adk_sandbox::SandboxError> {
+    /// // DOCKER_HOST=tcp://10.10.0.5:2376 DOCKER_TLS_VERIFY=1 DOCKER_CERT_PATH=/etc/adk/docker
+    /// let client = DockerClient::connect_with_defaults().await?.with_runtime("runsc");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn connect_with_defaults() -> Result<Self, SandboxError> {
+        let docker =
+            Docker::connect_with_defaults().map_err(|e| SandboxError::DockerUnavailable {
+                reason: format!("failed to connect to the Docker daemon DOCKER_HOST names: {e}"),
+            })?;
+        Self::from_docker(docker).await
+    }
+
+    /// A client over `docker` with the default settings, once the daemon answers a ping.
+    async fn from_docker(docker: Docker) -> Result<Self, SandboxError> {
         // Verify the connection by pinging the daemon
         docker.ping().await.map_err(|e| SandboxError::DockerUnavailable {
             reason: format!("Docker daemon not responding: {e}"),
@@ -147,7 +190,9 @@ impl DockerClient {
             network_mode: DEFAULT_NETWORK_MODE.to_string(),
             pids_limit: Some(DEFAULT_PIDS_LIMIT),
             user: None,
+            runtime: None,
             bind_mounts: Vec::new(),
+            read_only_root: None,
             client: docker,
             sessions: RwLock::new(HashMap::new()),
         })
@@ -232,6 +277,54 @@ impl DockerClient {
         self
     }
 
+    /// Runs every new container under the OCI runtime `runtime`, returning the modified
+    /// client.
+    ///
+    /// `runsc` runs containers under gVisor, whose user-space kernel stands between the
+    /// sandboxed code and the host kernel; it must be installed on the Docker host and
+    /// registered in the daemon's `runtimes` configuration, or provisioning fails. Any
+    /// runtime the daemon knows (for example `kata-runtime`) is accepted.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_sandbox::workspace::DockerClient;
+    ///
+    /// # async fn run() -> Result<(), adk_sandbox::SandboxError> {
+    /// let client = DockerClient::new().await?.with_runtime("runsc");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_runtime(mut self, runtime: impl Into<String>) -> Self {
+        self.runtime = Some(runtime.into());
+        self
+    }
+
+    /// Gives every new container a read-only root filesystem, returning the modified client.
+    ///
+    /// `/workspace` and `/tmp` become size-capped tmpfs mounts (`/tmp` also `noexec`), so a
+    /// command can write its work but cannot change the image: no planted binary in `/usr`,
+    /// no edited configuration, nothing that outlives the container. A bind mount at
+    /// `/workspace` takes precedence over its tmpfs. tmpfs contents are not captured by
+    /// [`SandboxClient::snapshot`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_sandbox::workspace::{DockerClient, ReadOnlyRoot};
+    ///
+    /// # async fn run() -> Result<(), adk_sandbox::SandboxError> {
+    /// let client = DockerClient::new()
+    ///     .await?
+    ///     .with_read_only_root(ReadOnlyRoot { workspace_mib: 512, tmp_mib: 64 });
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_read_only_root(mut self, root: ReadOnlyRoot) -> Self {
+        self.read_only_root = Some(root);
+        self
+    }
+
     /// Mounts the host path `host` at `container` in every container this client creates,
     /// returning the modified client.
     ///
@@ -280,13 +373,19 @@ impl DockerClient {
 
     /// Builds the `HostConfig` for a new container from this client's settings.
     fn build_host_config(&self) -> Result<HostConfig, SandboxError> {
-        host_config(
+        let config = host_config(
             self.memory_limit_bytes,
             self.cpu_limit,
             &self.network_mode,
             self.pids_limit,
             &self.bind_mounts,
-        )
+        )?;
+        Ok(apply_runtime_and_root(
+            config,
+            self.runtime.as_deref(),
+            self.read_only_root,
+            &self.bind_mounts,
+        ))
     }
 
     /// Executes a command inside a container and returns stdout/stderr.
@@ -313,6 +412,53 @@ struct BindMount {
     host: PathBuf,
     container: String,
     read_only: bool,
+}
+
+/// Sizes of the writable tmpfs mounts a read-only root keeps
+/// ([`DockerClient::with_read_only_root`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadOnlyRoot {
+    /// Size of the `/workspace` tmpfs, in MiB.
+    pub workspace_mib: u64,
+    /// Size of the `/tmp` tmpfs (mounted `noexec`), in MiB.
+    pub tmp_mib: u64,
+}
+
+impl Default for ReadOnlyRoot {
+    /// 256 MiB of workspace and 64 MiB of `/tmp`.
+    fn default() -> Self {
+        Self { workspace_mib: 256, tmp_mib: 64 }
+    }
+}
+
+/// Applies the OCI runtime and the read-only root to a container's `HostConfig`.
+///
+/// The tmpfs mounts are `nosuid,nodev` and world-writable (`mode=1777`), so a container run
+/// as a non-root user can still write its workspace; `/tmp` is also `noexec`. A bind mount
+/// at the workspace root replaces its tmpfs.
+fn apply_runtime_and_root(
+    mut config: HostConfig,
+    runtime: Option<&str>,
+    read_only_root: Option<ReadOnlyRoot>,
+    bind_mounts: &[BindMount],
+) -> HostConfig {
+    config.runtime = runtime.map(str::to_string);
+    if let Some(root) = read_only_root {
+        config.readonly_rootfs = Some(true);
+        let mut tmpfs = HashMap::new();
+        if !bind_mounts.iter().any(|mount| mount.container == CONTAINER_WORKSPACE_ROOT) {
+            tmpfs.insert(
+                CONTAINER_WORKSPACE_ROOT.to_string(),
+                format!("rw,nosuid,nodev,mode=1777,size={}m", root.workspace_mib),
+            );
+        }
+        tmpfs.insert(
+            "/tmp".to_string(),
+            format!("rw,nosuid,nodev,noexec,mode=1777,size={}m", root.tmp_mib),
+        );
+        config.tmpfs = Some(tmpfs);
+    }
+    config
 }
 
 /// Builds the `HostConfig` for a sandbox container.
@@ -986,7 +1132,9 @@ impl std::fmt::Debug for DockerClient {
             .field("memory_limit_bytes", &self.memory_limit_bytes)
             .field("cpu_limit", &self.cpu_limit)
             .field("user", &self.user)
+            .field("runtime", &self.runtime)
             .field("bind_mounts", &self.bind_mounts)
+            .field("read_only_root", &self.read_only_root)
             .finish_non_exhaustive()
     }
 }
@@ -1037,6 +1185,54 @@ mod tests {
     #[test]
     fn container_workspace_root_is_absolute() {
         assert!(CONTAINER_WORKSPACE_ROOT.starts_with('/'));
+    }
+
+    #[test]
+    fn runtime_and_root_are_untouched_by_default() {
+        let base = host_config(None, None, DEFAULT_NETWORK_MODE, None, &[]).unwrap();
+        let config = apply_runtime_and_root(base, None, None, &[]);
+
+        assert_eq!(config.runtime, None, "the daemon's default runtime applies");
+        assert_eq!(config.readonly_rootfs, None);
+        assert_eq!(config.tmpfs, None);
+    }
+
+    #[test]
+    fn runtime_is_passed_to_the_daemon() {
+        let base = host_config(None, None, DEFAULT_NETWORK_MODE, None, &[]).unwrap();
+        let config = apply_runtime_and_root(base, Some("runsc"), None, &[]);
+
+        assert_eq!(config.runtime.as_deref(), Some("runsc"));
+        assert_eq!(config.cap_drop, Some(owned(&["ALL"])), "hardening is kept");
+    }
+
+    #[test]
+    fn read_only_root_keeps_writable_capped_workspace_and_tmp() {
+        let base = host_config(None, None, DEFAULT_NETWORK_MODE, None, &[]).unwrap();
+        let root = ReadOnlyRoot { workspace_mib: 512, tmp_mib: 32 };
+        let config = apply_runtime_and_root(base, Some("runsc"), Some(root), &[]);
+
+        assert_eq!(config.readonly_rootfs, Some(true));
+        let tmpfs = config.tmpfs.expect("tmpfs mounts");
+        assert_eq!(tmpfs.len(), 2);
+        assert_eq!(tmpfs[CONTAINER_WORKSPACE_ROOT], "rw,nosuid,nodev,mode=1777,size=512m");
+        assert_eq!(tmpfs["/tmp"], "rw,nosuid,nodev,noexec,mode=1777,size=32m");
+    }
+
+    #[test]
+    fn a_workspace_bind_mount_replaces_the_workspace_tmpfs() {
+        let mounts = [BindMount {
+            host: PathBuf::from("/srv/job-42"),
+            container: CONTAINER_WORKSPACE_ROOT.to_string(),
+            read_only: false,
+        }];
+        let base = host_config(None, None, DEFAULT_NETWORK_MODE, None, &mounts).unwrap();
+        let config = apply_runtime_and_root(base, None, Some(ReadOnlyRoot::default()), &mounts);
+
+        let tmpfs = config.tmpfs.expect("tmpfs mounts");
+        assert!(!tmpfs.contains_key(CONTAINER_WORKSPACE_ROOT), "the bind mount wins");
+        assert_eq!(tmpfs["/tmp"], "rw,nosuid,nodev,noexec,mode=1777,size=64m");
+        assert_eq!(config.mounts.map(|m| m.len()), Some(1));
     }
 
     fn owned(args: &[&str]) -> Vec<String> {

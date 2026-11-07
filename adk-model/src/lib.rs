@@ -11,7 +11,7 @@
 //! | `OpenAIClient` | OpenAI Chat Completions | `openai` |
 //! | `openai::OpenAIResponsesClient` | OpenAI Responses API | `openai` |
 //! | `AzureOpenAIClient` | Azure OpenAI | `openai` |
-//! | `OpenAICompatible` | Any OpenAI-compatible endpoint, with presets for xAI, Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova, OrcaRouter, Cheaper Inference, API Route, MiniMax, Zhipu AI, Baidu, Cohere, ByteDance, and Gemini | `openai` |
+//! | `OpenAICompatible` | Any OpenAI-compatible endpoint, with presets for xAI, Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova, OrcaRouter, Vultr Serverless Inference, Cheaper Inference, API Route, MiniMax, Zhipu AI, Baidu, Cohere, ByteDance, and Gemini | `openai` |
 //! | `AnthropicClient` | Anthropic Claude | `anthropic` |
 //! | `DeepSeekClient` | DeepSeek | `deepseek` |
 //! | `GroqClient` | Groq | `groq` |
@@ -169,7 +169,6 @@ pub mod opencode;
 pub mod openrouter;
 /// Conversion outcomes for content parts sent to a provider.
 pub mod part_conversion;
-/// Token prices for every provider and cost calculation from usage.
 pub mod pricing;
 
 /// Canonical provider identifiers and metadata.
