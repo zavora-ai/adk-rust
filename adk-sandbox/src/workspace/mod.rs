@@ -34,4 +34,4 @@ pub use session::SandboxSession;
 pub use types::{DirEntry, EntryType, ExecOutput, SessionHandle, SnapshotId};
 
 #[cfg(feature = "workspace-docker")]
-pub use docker::{DockerClient, DockerSession};
+pub use docker::{DockerClient, DockerSession, ReadOnlyRoot};
