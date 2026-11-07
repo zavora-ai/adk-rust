@@ -148,7 +148,6 @@ pub mod conformance;
 pub mod context;
 /// Agent credentials, identity sources, and resource-scoped token brokers.
 pub mod credential;
-/// Network egress policy, the shared address classifier, and the egress-guarded HTTP client.
 pub mod egress;
 /// Unified structured error type and result alias.
 pub mod error;
@@ -200,7 +199,6 @@ pub mod spend;
 /// User messages that reach a run while it runs: the run's inbox, the receipt and the
 /// event marker.
 pub mod steering;
-/// Data subjects: visitor ids, consent, and export, erasure, and linking across stores.
 pub mod subject;
 /// Tool trait, toolset, execution strategy, and registry.
 pub mod tool;

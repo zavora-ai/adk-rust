@@ -90,7 +90,6 @@ pub mod session;
 pub mod state;
 /// Shared utilities for extracting and merging state deltas across backends.
 pub mod state_utils;
-/// The session family's adapter for subject export and erasure.
 pub mod subject;
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 /// SQL-backed subject registries and consent stores.

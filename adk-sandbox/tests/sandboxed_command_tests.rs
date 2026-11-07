@@ -18,7 +18,7 @@ use std::process::Output;
 
 use adk_sandbox::SandboxError;
 use adk_sandbox::sandbox::{
-    ProxyEndpoint, SandboxEnforcer, SandboxPolicyBuilder, sandboxed_command,
+    ProxyEndpoint, ProxyListener, SandboxEnforcer, SandboxPolicyBuilder, sandboxed_command,
 };
 
 #[cfg(target_os = "macos")]
@@ -205,6 +205,11 @@ async fn the_network_is_reachable_when_the_policy_allows_it() {
 /// Under `Proxied`, the proxy's loopback port is the one destination: another loopback
 /// listener is refused, and the proxy variables name the endpoint. An enforcer that cannot
 /// enforce `Proxied` refuses the policy before anything runs.
+///
+/// Where the proxy listens on the host's loopback (Seatbelt), the host listener at the proxy
+/// port is reached. Where it listens inside the sandbox's own network namespace (bubblewrap),
+/// only a call's `EgressProxy` gets a listener placed there (`proxied_sandbox_tests`), so
+/// neither host listener is reached.
 #[tokio::test]
 async fn a_proxied_command_reaches_only_the_proxy_port() {
     let Some(enforcer) = enforcer() else { return };
@@ -240,7 +245,11 @@ async fn a_proxied_command_reaches_only_the_proxy_port() {
 
     assert!(output.status.success(), "{output:?}");
     let lines: Vec<String> = text(&output.stdout).lines().map(str::to_string).collect();
-    assert_eq!(lines, [endpoint.url(), "proxy-reached".to_string()], "{output:?}");
+    let expected = match enforcer.proxy_listener() {
+        ProxyListener::HostLoopback => vec![endpoint.url(), "proxy-reached".to_string()],
+        ProxyListener::SandboxLoopback => vec![endpoint.url()],
+    };
+    assert_eq!(lines, expected, "{output:?}");
 }
 
 /// The session id from a `/proc/<pid>/stat` line: the fourth field after the command name.
