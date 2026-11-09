@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use a2a_protocol_types::artifact::{Artifact, ArtifactId};
 use a2a_protocol_types::events::{StreamResponse, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
 use a2a_protocol_types::params::SendMessageConfiguration;
+use a2a_protocol_types::responses::TaskListResponse;
 use a2a_protocol_types::task::{ContextId, Task, TaskId, TaskState};
 use a2a_protocol_types::{AgentCard, Message, TaskPushNotificationConfig};
 use futures::StreamExt;
@@ -233,8 +234,8 @@ impl RequestHandler {
     ///
     /// # Errors
     ///
-    /// Returns an error if the task store fails.
-    pub async fn tasks_list(&self, params: ListTasksParams) -> Result<Vec<Task>, A2aError> {
+    /// See [`CallerScope::tasks_list`].
+    pub async fn tasks_list(&self, params: ListTasksParams) -> Result<TaskListResponse, A2aError> {
         self.for_caller(None).tasks_list(params).await
     }
 
@@ -920,17 +921,51 @@ impl CallerScope<'_> {
         internal_task_to_wire(&updated)
     }
 
-    /// Lists this caller's tasks matching the given parameters.
+    /// Lists this caller's tasks, one page at a time (A2A §3.1.4).
     ///
-    /// Supports filtering by context_id, state, and pagination via page_size.
-    /// `page_size` applies after the owner filter.
+    /// - **Filters:** `context_id`, `state`, and `status_timestamp_after` (RFC 3339; tasks
+    ///   updated at or after it).
+    /// - **Order:** most recently updated first.
+    /// - **Page size:** `page_size` tasks per page, 50 when unset, between 1 and 100.
+    ///   `next_page_token` continues the list, and is empty on the last page.
+    /// - **Task contents:** each task keeps its last `history_length` messages (all when
+    ///   unset). It keeps its artifacts only with `include_artifacts`.
     ///
     /// # Errors
     ///
-    /// Returns an error if the task store fails.
-    pub async fn tasks_list(&self, params: ListTasksParams) -> Result<Vec<Task>, A2aError> {
-        let page_size = params.page_size;
-        let unpaged = ListTasksParams { page_size: None, ..params };
+    /// Returns [`A2aError::InvalidParams`] for a page size out of range, a malformed
+    /// timestamp or page token, and an error if the task store fails.
+    pub async fn tasks_list(&self, params: ListTasksParams) -> Result<TaskListResponse, A2aError> {
+        let page_size = match params.page_size {
+            None => DEFAULT_PAGE_SIZE,
+            Some(size @ 1..=MAX_PAGE_SIZE) => size,
+            Some(size) => {
+                return Err(A2aError::InvalidParams {
+                    message: format!("pageSize must be between 1 and {MAX_PAGE_SIZE}, got {size}"),
+                });
+            }
+        };
+        let updated_after = params
+            .status_timestamp_after
+            .as_deref()
+            .map(|timestamp| {
+                chrono::DateTime::parse_from_rfc3339(timestamp)
+                    .map(|time| time.with_timezone(&chrono::Utc))
+                    .map_err(|e| A2aError::InvalidParams {
+                        message: format!("statusTimestampAfter {timestamp:?}: {e}"),
+                    })
+            })
+            .transpose()?;
+        let after = params
+            .page_token
+            .as_deref()
+            .filter(|t| !t.is_empty())
+            .map(PageCursor::decode)
+            .transpose()?;
+        let history_length = params.history_length;
+        let include_artifacts = params.include_artifacts.unwrap_or(false);
+
+        let unpaged = ListTasksParams { page_size: None, page_token: None, ..params };
         let mut entries: Vec<TaskStoreEntry> = self
             .handler
             .task_store
@@ -938,11 +973,41 @@ impl CallerScope<'_> {
             .await?
             .into_iter()
             .filter(|entry| entry.owner() == self.owner())
+            .filter(|entry| updated_after.is_none_or(|after| entry.updated_at >= after))
             .collect();
-        if let Some(page_size) = page_size {
-            entries.truncate(page_size as usize);
-        }
-        entries.iter().map(internal_task_to_wire).collect()
+        entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.id.cmp(&b.id)));
+
+        let total_size = entries.len();
+        let start = after.map_or(0, |cursor| {
+            entries.iter().position(|entry| cursor.precedes(entry)).unwrap_or(entries.len())
+        });
+        let end = (start + page_size as usize).min(entries.len());
+        let next_page_token = if end < entries.len() {
+            PageCursor::after(&entries[end - 1]).encode()
+        } else {
+            String::new()
+        };
+
+        let tasks = entries[start..end]
+            .iter()
+            .cloned()
+            .map(|mut entry| {
+                if let Some(len) = history_length {
+                    let keep = entry.history.len().saturating_sub(len as usize);
+                    entry.history.drain(..keep);
+                }
+                if !include_artifacts {
+                    entry.artifacts.clear();
+                }
+                internal_task_to_wire(&entry)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(TaskListResponse {
+            tasks,
+            next_page_token,
+            page_size,
+            total_size: u32::try_from(total_size).unwrap_or(u32::MAX),
+        })
     }
 
     /// Subscribes to one of this caller's tasks (A2A §3.1.6): the stream starts with the
@@ -1116,6 +1181,53 @@ impl CallerScope<'_> {
         self.handler.task_store.create_task(entry).await?;
 
         Ok(())
+    }
+}
+
+/// `ListTasks` page size when the request sets none (A2A §3.1.4).
+const DEFAULT_PAGE_SIZE: u32 = 50;
+
+/// The largest `ListTasks` page size a request may ask for (A2A §3.1.4).
+const MAX_PAGE_SIZE: u32 = 100;
+
+/// Where a `ListTasks` page ended: the last task listed, in the list's order (most recently
+/// updated first, then by ID). Its page token is opaque to the client.
+struct PageCursor {
+    updated_at: chrono::DateTime<chrono::Utc>,
+    id: String,
+}
+
+impl PageCursor {
+    fn after(entry: &TaskStoreEntry) -> Self {
+        Self { updated_at: entry.updated_at, id: entry.id.clone() }
+    }
+
+    /// Whether `entry` comes after this cursor in the list's order.
+    fn precedes(&self, entry: &TaskStoreEntry) -> bool {
+        entry.updated_at < self.updated_at
+            || (entry.updated_at == self.updated_at && entry.id > self.id)
+    }
+
+    fn encode(&self) -> String {
+        use base64::Engine as _;
+        let raw = format!("{}|{}", self.updated_at.to_rfc3339(), self.id);
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw)
+    }
+
+    fn decode(token: &str) -> Result<Self, A2aError> {
+        use base64::Engine as _;
+        let invalid =
+            || A2aError::InvalidParams { message: format!("invalid pageToken {token:?}") };
+        let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(token)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .ok_or_else(invalid)?;
+        let (time, id) = raw.split_once('|').ok_or_else(invalid)?;
+        let updated_at = chrono::DateTime::parse_from_rfc3339(time)
+            .map_err(|_| invalid())?
+            .with_timezone(&chrono::Utc);
+        Ok(Self { updated_at, id: id.to_string() })
     }
 }
 
@@ -1976,6 +2088,70 @@ mod tests {
         assert!(!answered.load(Ordering::SeqCst));
     }
 
+    // ── ListTasks pages ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_tasks_pages_through_every_task_once_newest_first() {
+        let handler = make_handler();
+        for i in 0..5 {
+            let mut msg = make_test_message();
+            msg.id = MessageId::new(format!("msg-{i}"));
+            handler.message_send(msg).await.unwrap();
+        }
+
+        let mut seen = Vec::new();
+        let mut token = None;
+        loop {
+            let page = handler
+                .tasks_list(ListTasksParams {
+                    page_size: Some(2),
+                    page_token: token.clone(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            assert_eq!(page.total_size, 5);
+            assert_eq!(page.page_size, 2);
+            assert!(page.tasks.len() <= 2);
+            assert!(
+                page.tasks.iter().all(|task| task.artifacts.is_none()),
+                "no artifacts unless asked"
+            );
+            seen.extend(page.tasks.into_iter().map(|task| task.id.0));
+            if page.next_page_token.is_empty() {
+                break;
+            }
+            token = Some(page.next_page_token);
+        }
+        let mut unique = seen.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!((seen.len(), unique.len()), (5, 5), "every task once: {seen:?}");
+
+        for bad in [
+            ListTasksParams { page_size: Some(0), ..Default::default() },
+            ListTasksParams { page_size: Some(101), ..Default::default() },
+            ListTasksParams { page_token: Some("not a token".into()), ..Default::default() },
+            ListTasksParams {
+                status_timestamp_after: Some("yesterday".into()),
+                ..Default::default()
+            },
+        ] {
+            assert!(matches!(handler.tasks_list(bad).await, Err(A2aError::InvalidParams { .. })));
+        }
+
+        // Tasks updated before the cutoff are left out.
+        let later = (chrono::Utc::now() + chrono::Duration::minutes(1)).to_rfc3339();
+        let none = handler
+            .tasks_list(ListTasksParams {
+                status_timestamp_after: Some(later),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(none.total_size, 0);
+    }
+
     // ── SubscribeToTask follows a running task ──────────────────────────────
 
     /// Collects a subscription, which must end within two seconds.
@@ -2354,7 +2530,7 @@ mod tests {
         handler.message_send(msg2).await.unwrap();
 
         let tasks = handler.tasks_list(ListTasksParams::default()).await.unwrap();
-        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks.tasks.len(), 2);
     }
 
     #[tokio::test]
@@ -2377,8 +2553,8 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].context_id.0, "ctx-a");
+        assert_eq!(tasks.tasks.len(), 1);
+        assert_eq!(tasks.tasks[0].context_id.0, "ctx-a");
     }
 
     #[tokio::test]
@@ -2397,14 +2573,14 @@ mod tests {
             .tasks_list(ListTasksParams { page_size: Some(2), ..Default::default() })
             .await
             .unwrap();
-        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks.tasks.len(), 2);
     }
 
     #[tokio::test]
     async fn tasks_list_empty() {
         let handler = make_handler();
         let tasks = handler.tasks_list(ListTasksParams::default()).await.unwrap();
-        assert!(tasks.is_empty());
+        assert!(tasks.tasks.is_empty());
     }
 
     // ── push_config_create / get / list / delete ─────────────────────────
@@ -2739,12 +2915,12 @@ mod tests {
             assert!(is_not_found(scope.tasks_subscribe("bob-task").await));
             assert!(is_not_found(scope.push_config_create("bob-task", hook.clone()).await));
             assert!(is_not_found(scope.push_config_list("bob-task").await));
-            assert!(scope.tasks_list(ListTasksParams::default()).await.unwrap().is_empty());
+            assert!(scope.tasks_list(ListTasksParams::default()).await.unwrap().tasks.is_empty());
         }
 
         let bob = handler.for_caller(caller("bob"));
         assert_eq!(bob.tasks_get("bob-task", None).await.unwrap().status.state, TaskState::Working);
-        assert_eq!(bob.tasks_list(ListTasksParams::default()).await.unwrap().len(), 1);
+        assert_eq!(bob.tasks_list(ListTasksParams::default()).await.unwrap().tasks.len(), 1);
         assert_eq!(bob.tasks_cancel("bob-task").await.unwrap().status.state, TaskState::Canceled);
     }
 

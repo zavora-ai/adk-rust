@@ -30,7 +30,7 @@ use a2a_protocol_types::params::{
     CancelTaskParams, DeletePushConfigParams, GetExtendedAgentCardParams, GetPushConfigParams,
     ListPushConfigsParams, MessageSendParams, TaskIdParams, TaskQueryParams,
 };
-use a2a_protocol_types::responses::SendMessageResponse;
+use a2a_protocol_types::responses::{ListPushConfigsResponse, SendMessageResponse};
 
 use super::error::A2aError;
 use super::request_handler::{CallerScope, RequestHandler};
@@ -390,7 +390,10 @@ async fn handle_push_config_list(handler: &CallerScope<'_>, request: JsonRpcRequ
     };
 
     match handler.push_config_list(&params.task_id).await {
-        Ok(configs) => json_response(make_success_response(id, &configs)),
+        Ok(configs) => {
+            let page = ListPushConfigsResponse { configs, next_page_token: None };
+            json_response(make_success_response(id, &page))
+        }
         Err(e) => json_response(make_error_response(id, &e)),
     }
 }
@@ -693,9 +696,12 @@ mod tests {
         let handler = make_handler();
         let resp = call_handler(handler, "ListTasks", serde_json::json!({})).await;
 
+        // A2A §3.1.4: a ListTasksResponse, not a bare array.
         assert_eq!(resp["jsonrpc"], "2.0");
-        assert!(resp["result"].is_array());
-        assert_eq!(resp["result"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            resp["result"],
+            serde_json::json!({"tasks": [], "nextPageToken": "", "pageSize": 50, "totalSize": 0})
+        );
     }
 
     #[tokio::test]
@@ -802,7 +808,7 @@ mod tests {
             serde_json::json!({ "taskId": &task_id }),
         )
         .await;
-        assert_eq!(list_resp["result"].as_array().unwrap().len(), 1);
+        assert_eq!(list_resp["result"]["configs"].as_array().unwrap().len(), 1);
 
         // Delete push config
         let delete_resp = call_handler(
@@ -824,6 +830,6 @@ mod tests {
             serde_json::json!({ "taskId": &task_id }),
         )
         .await;
-        assert_eq!(list_resp2["result"].as_array().unwrap().len(), 0);
+        assert_eq!(list_resp2["result"]["configs"].as_array().unwrap().len(), 0);
     }
 }

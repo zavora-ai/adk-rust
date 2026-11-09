@@ -20,7 +20,7 @@ use futures::StreamExt;
 use serde::Deserialize;
 
 use a2a_protocol_types::TaskPushNotificationConfig;
-use a2a_protocol_types::responses::SendMessageResponse;
+use a2a_protocol_types::responses::{ListPushConfigsResponse, SendMessageResponse};
 
 use super::error::A2aError;
 use super::request_handler::RequestHandler;
@@ -172,7 +172,15 @@ async fn handle_tasks_list(
     caller: AuthenticatedCaller,
     Query(query): Query<TaskListQuery>,
 ) -> Response {
-    let state = query.status.and_then(|s| parse_task_state(&s));
+    let state = match query.status.as_deref().map(|s| (s, parse_task_state(s))) {
+        None => None,
+        Some((_, Some(state))) => Some(state),
+        Some((status, None)) => {
+            return error_response(&A2aError::InvalidParams {
+                message: format!("unknown task state {status:?}"),
+            });
+        }
+    };
 
     let params = ListTasksParams {
         context_id: query.context_id,
@@ -253,7 +261,9 @@ async fn handle_push_config_list(
     Path(task_id): Path<String>,
 ) -> Response {
     match handler.for_caller(caller.0).push_config_list(&task_id).await {
-        Ok(configs) => a2a_json_response(&configs),
+        Ok(configs) => {
+            a2a_json_response(&ListPushConfigsResponse { configs, next_page_token: None })
+        }
         Err(e) => error_response(&e),
     }
 }
@@ -505,7 +515,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_tasks_list_returns_array() {
+    async fn get_tasks_list_returns_a_list_tasks_response() {
         let handler = make_handler();
 
         // Create a task
@@ -524,9 +534,11 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
+        // A2A §3.1.4: a ListTasksResponse, not a bare array.
         let body = json_body(resp).await;
-        assert!(body.is_array());
-        assert_eq!(body.as_array().unwrap().len(), 1);
+        assert_eq!(body["tasks"].as_array().unwrap().len(), 1);
+        assert_eq!(body["totalSize"], 1);
+        assert_eq!(body["nextPageToken"], "");
     }
 
     #[tokio::test]
@@ -601,7 +613,7 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = json_body(resp).await;
-        assert_eq!(body.as_array().unwrap().len(), 1);
+        assert_eq!(body["configs"].as_array().unwrap().len(), 1);
 
         // Delete push config
         let app = make_router(handler.clone());
@@ -622,7 +634,7 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         let body = json_body(resp).await;
-        assert_eq!(body.as_array().unwrap().len(), 0);
+        assert_eq!(body["configs"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]

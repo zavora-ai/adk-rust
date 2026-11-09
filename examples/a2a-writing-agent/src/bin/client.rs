@@ -134,7 +134,7 @@ async fn main() {
     // ── 5. ListTasks ─────────────────────────────────────────────────
     println!("\n--- ListTasks ---");
     match research.list_tasks(None, None, None, None).await {
-        Ok(tasks) => pass(&format!("{} task(s)", tasks.len())),
+        Ok(page) => pass(&format!("{} task(s)", page.tasks.len())),
         Err(e) => fail(&format!("{e}")),
     }
 

@@ -543,7 +543,9 @@ pub mod v1_client {
     //! request headers.
 
     use a2a_protocol_types::jsonrpc::JsonRpcRequest;
-    use a2a_protocol_types::responses::SendMessageResponse;
+    use a2a_protocol_types::responses::{
+        ListPushConfigsResponse, SendMessageResponse, TaskListResponse,
+    };
     use a2a_protocol_types::task::{Task, TaskState};
     use a2a_protocol_types::{AgentCard, AgentInterface, Message, TaskPushNotificationConfig};
     use reqwest::header::{HeaderMap, HeaderValue};
@@ -587,6 +589,41 @@ pub mod v1_client {
                 .map(SendMessageResponse::Task)
                 .map_err(|_| oneof_error)
         })
+    }
+
+    /// Reads a `ListTasks` result: the v1 `ListTasksResponse` (A2A §3.1.4), or the bare
+    /// task array adk-server before 3.0 returned, read as one complete page.
+    ///
+    /// # Errors
+    ///
+    /// Returns the response's decoding error when `result` is neither shape.
+    fn parse_task_list(result: Value) -> Result<TaskListResponse, serde_json::Error> {
+        if result.is_array() {
+            let tasks: Vec<Task> = serde_json::from_value(result)?;
+            let count = u32::try_from(tasks.len()).unwrap_or(u32::MAX);
+            return Ok(TaskListResponse {
+                tasks,
+                next_page_token: String::new(),
+                page_size: count,
+                total_size: count,
+            });
+        }
+        serde_json::from_value(result)
+    }
+
+    /// Reads a `ListTaskPushNotificationConfigs` result: the v1 `{configs, nextPageToken}`
+    /// object, or the bare array adk-server before 3.0 returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns the decoding error when `result` is neither shape.
+    fn parse_push_config_list(
+        result: Value,
+    ) -> Result<Vec<TaskPushNotificationConfig>, serde_json::Error> {
+        if result.is_array() {
+            return serde_json::from_value(result);
+        }
+        serde_json::from_value::<ListPushConfigsResponse>(result).map(|page| page.configs)
     }
 
     /// Retry configuration for transient failures.
@@ -1157,7 +1194,7 @@ pub mod v1_client {
             status: Option<TaskState>,
             page_size: Option<u32>,
             page_token: Option<&str>,
-        ) -> Result<Vec<Task>, V1ClientError> {
+        ) -> Result<TaskListResponse, V1ClientError> {
             let mut params = serde_json::json!({});
             if let Some(cid) = context_id {
                 params["contextId"] = serde_json::json!(cid);
@@ -1171,7 +1208,8 @@ pub mod v1_client {
             if let Some(pt) = page_token {
                 params["pageToken"] = serde_json::json!(pt);
             }
-            self.jsonrpc_call("ListTasks", params).await
+            let result: Value = self.jsonrpc_call("ListTasks", params).await?;
+            Ok(parse_task_list(result)?)
         }
 
         /// Subscribes to task updates (JSON-RPC `SubscribeToTask`).
@@ -1233,11 +1271,13 @@ pub mod v1_client {
             &self,
             task_id: &str,
         ) -> Result<Vec<TaskPushNotificationConfig>, V1ClientError> {
-            self.jsonrpc_call(
-                "ListTaskPushNotificationConfigs",
-                serde_json::json!({ "taskId": task_id }),
-            )
-            .await
+            let result: Value = self
+                .jsonrpc_call(
+                    "ListTaskPushNotificationConfigs",
+                    serde_json::json!({ "taskId": task_id }),
+                )
+                .await?;
+            Ok(parse_push_config_list(result)?)
         }
 
         /// Deletes a push notification config (JSON-RPC
@@ -1292,8 +1332,9 @@ pub mod v1_client {
         }
 
         /// Lists tasks via REST (`GET /tasks`).
-        pub async fn list_tasks_rest(&self) -> Result<Vec<Task>, V1ClientError> {
-            self.rest_get("/tasks").await
+        pub async fn list_tasks_rest(&self) -> Result<TaskListResponse, V1ClientError> {
+            let body: Value = self.rest_get("/tasks").await?;
+            Ok(parse_task_list(body)?)
         }
 
         /// Creates a push notification config via REST
@@ -1326,7 +1367,9 @@ pub mod v1_client {
             &self,
             task_id: &str,
         ) -> Result<Vec<TaskPushNotificationConfig>, V1ClientError> {
-            self.rest_get(&format!("/tasks/{task_id}/pushNotificationConfigs")).await
+            let body: Value =
+                self.rest_get(&format!("/tasks/{task_id}/pushNotificationConfigs")).await?;
+            Ok(parse_push_config_list(body)?)
         }
 
         /// Deletes a push notification config via REST
