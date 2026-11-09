@@ -22,6 +22,31 @@ pub const ADK_TYPE_METADATA_KEY: &str = "adk_type";
 /// the caller to send its result.
 pub const ADK_LONG_RUNNING_METADATA_KEY: &str = "adk_is_long_running";
 
+/// Task and event metadata key: the ADK app that runs the task.
+pub const ADK_APP_NAME_METADATA_KEY: &str = "adk_app_name";
+
+/// Task and event metadata key: the ADK user whose session runs the task.
+pub const ADK_USER_ID_METADATA_KEY: &str = "adk_user_id";
+
+/// Task and event metadata key: the ADK session that runs the task, the task's context.
+pub const ADK_SESSION_ID_METADATA_KEY: &str = "adk_session_id";
+
+/// Part metadata key that marks the text of a `FAILED` status as the error.
+pub const ADK_ERROR_MESSAGE_METADATA_KEY: &str = "adk_is_error_message";
+
+/// The ADK A2A extension that adk-python and adk-go declare. A card that declares it
+/// tells a client that tasks carry the `adk_*` metadata. The extension's URI, set to
+/// `true`, marks each task it shapes.
+pub const ADK_EXTENSION_URI: &str = "https://google.github.io/adk-docs/a2a/a2a-extension/";
+
+/// The text of a `FAILED` status: `error`, marked with
+/// [`ADK_ERROR_MESSAGE_METADATA_KEY`].
+pub fn error_message_part(error: impl Into<String>) -> a2a_protocol_types::Part {
+    let mut part = a2a_protocol_types::Part::text(error.into());
+    part.metadata = Some(json!({ ADK_ERROR_MESSAGE_METADATA_KEY: true }));
+    part
+}
+
 /// Convert an `a2a_protocol_types::Part` to an `adk_core::Part`.
 ///
 /// Mapping:

@@ -105,15 +105,30 @@ impl V1Executor {
         context_id: &str,
         owner: Option<&str>,
     ) -> Result<TaskStoreEntry, A2aError> {
+        self.create_task_with_metadata(task_id, context_id, owner, HashMap::new()).await
+    }
+
+    /// Creates a new task owned by `owner`, as [`create_task_for`](Self::create_task_for)
+    /// does, with `metadata` on the task. Status and artifact updates carry the task's
+    /// metadata too.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task store fails to persist the entry.
+    pub async fn create_task_with_metadata(
+        &self,
+        task_id: &str,
+        context_id: &str,
+        owner: Option<&str>,
+        mut metadata: HashMap<String, serde_json::Value>,
+    ) -> Result<TaskStoreEntry, A2aError> {
         let now = Utc::now();
-        let metadata = owner
-            .map(|owner| {
-                HashMap::from([(
-                    OWNER_METADATA_KEY.to_string(),
-                    serde_json::Value::String(owner.to_string()),
-                )])
-            })
-            .unwrap_or_default();
+        if let Some(owner) = owner {
+            metadata.insert(
+                OWNER_METADATA_KEY.to_string(),
+                serde_json::Value::String(owner.to_string()),
+            );
+        }
         let entry = TaskStoreEntry {
             id: task_id.to_string(),
             context_id: context_id.to_string(),
@@ -266,11 +281,11 @@ impl V1Executor {
         context_id: &str,
         error_message: &str,
     ) -> Result<TaskStatusUpdateEvent, A2aError> {
-        self.transition_state(
+        self.transition_state_with_parts(
             task_id,
             context_id,
             TaskState::Failed,
-            Some(error_message.to_string()),
+            vec![super::convert::error_message_part(error_message)],
         )
         .await
     }

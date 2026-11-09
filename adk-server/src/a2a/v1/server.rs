@@ -15,12 +15,14 @@
 
 use std::sync::Arc;
 
+use a2a_protocol_types::extensions::AgentExtension;
 use a2a_protocol_types::{AgentCapabilities, AgentInterface, AgentSkill};
 use axum::Router;
 use axum::routing::{get, post};
 use tokio::sync::RwLock;
 
 use super::card::{CachedAgentCard, build_v1_agent_card, serve_agent_card, v1_agent_skills};
+use super::convert::ADK_EXTENSION_URI;
 use super::executor::V1Executor;
 use super::jsonrpc_handler::jsonrpc_handler;
 use super::push::{NoOpPushNotificationSender, PushNotificationSender};
@@ -207,10 +209,18 @@ impl A2aV1ServerBuilder {
         let mut skills = v1_agent_skills(agent.as_ref());
         skills.extend(self.extra_skills);
         // Every capability is stated, so the handlers refuse what the card does not offer.
-        let capabilities = AgentCapabilities::none()
+        let mut capabilities = AgentCapabilities::none()
             .with_streaming(self.streaming)
             .with_push_notifications(self.push_sender.is_some())
             .with_extended_agent_card(false);
+        capabilities.extensions = Some(vec![AgentExtension {
+            uri: ADK_EXTENSION_URI.to_string(),
+            description: Some(
+                "Tasks carry ADK metadata: adk_app_name, adk_user_id, adk_session_id.".to_string(),
+            ),
+            required: Some(false),
+            params: None,
+        }]);
         let mut card = build_v1_agent_card(
             self.name.as_deref().unwrap_or_else(|| agent.name()),
             self.description.as_deref().unwrap_or_else(|| agent.description()),

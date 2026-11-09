@@ -201,6 +201,11 @@ async fn a2a_v1_server_mounts_its_bindings_where_its_card_says() {
         "push is declared only with a sender"
     );
     assert!(!card.skills.is_empty(), "skills come from the agent");
+    assert_eq!(
+        card.capabilities.extensions.as_ref().map(|extensions| extensions[0].uri.as_str()),
+        Some(adk_server::a2a::v1::convert::ADK_EXTENSION_URI),
+        "the card declares the ADK extension"
+    );
 
     let client = A2aV1Client::new(card);
     assert!(matches!(

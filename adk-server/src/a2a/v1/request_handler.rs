@@ -320,8 +320,7 @@ impl RequestHandler {
         let app_name = &runner_config.app_name;
         // The context ID is chosen by the client, so it only names the session user when
         // no authentication is configured.
-        let user_id =
-            caller.map_or_else(|| format!("a2a-{context_id}"), |context| context.user_id.clone());
+        let user_id = session_user_id(caller, context_id);
         let session_id = context_id.to_string();
 
         // Only a missing session is created: a read that fails for another reason must not
@@ -680,7 +679,15 @@ impl CallerScope<'_> {
                     .as_ref()
                     .map(|c| c.0.clone())
                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-                handler.executor.create_task_for(&task_id, &context_id, self.owner()).await?;
+                let metadata = handler
+                    .runner_config
+                    .as_ref()
+                    .map(|config| adk_task_metadata(config, self.caller.as_ref(), &context_id))
+                    .unwrap_or_default();
+                handler
+                    .executor
+                    .create_task_with_metadata(&task_id, &context_id, self.owner(), metadata)
+                    .await?;
                 (task_id, context_id)
             }
         };
@@ -759,6 +766,8 @@ impl CallerScope<'_> {
         // Get the task entry for the first SSE event
         let task_entry = handler.task_store.get_task(&task_id).await?;
         let first_task = internal_task_to_wire(&task_entry)?;
+        // Each update carries the task's metadata, as the executor's do.
+        let update_metadata = first_task.metadata.clone();
 
         let executor = handler.executor.clone();
         let tid = task_id.clone();
@@ -829,7 +838,7 @@ impl CallerScope<'_> {
                                 artifact,
                                 append: Some(chunks_sent && append),
                                 last_chunk: Some(!partial),
-                                metadata: None,
+                                metadata: update_metadata.clone(),
                             });
                             executor.publish(&tid, update.clone());
                             yield Ok(update);
@@ -1217,6 +1226,32 @@ impl CallerScope<'_> {
     }
 }
 
+/// The ADK user whose session runs a task in `context_id`: the authenticated caller, or
+/// `a2a-{context_id}` without authentication.
+fn session_user_id(caller: Option<&RequestContext>, context_id: &str) -> String {
+    caller.map_or_else(|| format!("a2a-{context_id}"), |context| context.user_id.clone())
+}
+
+/// The metadata of a task the agent of `runner_config` runs in `context_id`. It names the
+/// ADK app, user and session (`adk_app_name`, `adk_user_id`, `adk_session_id`), and marks
+/// the task with the ADK extension, as adk-python and adk-go do.
+fn adk_task_metadata(
+    runner_config: &adk_runner::RunnerConfig,
+    caller: Option<&RequestContext>,
+    context_id: &str,
+) -> HashMap<String, serde_json::Value> {
+    use super::convert::{
+        ADK_APP_NAME_METADATA_KEY, ADK_EXTENSION_URI, ADK_SESSION_ID_METADATA_KEY,
+        ADK_USER_ID_METADATA_KEY,
+    };
+    HashMap::from([
+        (ADK_APP_NAME_METADATA_KEY.to_string(), runner_config.app_name.clone().into()),
+        (ADK_USER_ID_METADATA_KEY.to_string(), session_user_id(caller, context_id).into()),
+        (ADK_SESSION_ID_METADATA_KEY.to_string(), context_id.into()),
+        (ADK_EXTENSION_URI.to_string(), true.into()),
+    ])
+}
+
 /// An optional A2A operation the agent card can say the agent does not offer.
 enum Capability {
     /// `SendStreamingMessage` or `SubscribeToTask`, named for the error.
@@ -1387,7 +1422,7 @@ async fn drive(
             settle(&run.executor, &task_id, &context_id, finished.state, finished.pending).await?;
         }
         Err(error) => {
-            let text = vec![a2a_protocol_types::Part::text(error.to_string())];
+            let text = vec![super::convert::error_message_part(error.to_string())];
             settle(&run.executor, &task_id, &context_id, TaskState::Failed, text).await?;
         }
     }
@@ -2127,6 +2162,43 @@ mod tests {
         };
         assert_eq!(last.status.state, TaskState::Canceled);
         assert!(!answered.load(Ordering::SeqCst));
+    }
+
+    // ── ADK metadata ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn tasks_and_their_updates_name_the_adk_app_user_and_session() {
+        use super::super::convert::{ADK_ERROR_MESSAGE_METADATA_KEY, ADK_EXTENSION_URI};
+
+        let (handler, _) =
+            handler_with_agent(Arc::new(ChunkingAgent { chunks: vec!["hi".into()] }));
+        let mut stream = handler.message_stream(make_test_message()).await.unwrap();
+        let Some(Ok(StreamResponse::Task(task))) = stream.next().await else {
+            panic!("the stream starts with the task");
+        };
+        let context = task.context_id.0.clone();
+        let metadata = task.metadata.clone().expect("the task carries ADK metadata");
+        assert_eq!(metadata["adk_app_name"], "a2a-stream-test");
+        assert_eq!(metadata["adk_session_id"], context.as_str());
+        assert_eq!(metadata["adk_user_id"], format!("a2a-{context}"));
+        assert_eq!(metadata[ADK_EXTENSION_URI], true);
+        for update in stream.collect::<Vec<_>>().await {
+            let metadata = match update.unwrap() {
+                StreamResponse::StatusUpdate(event) => event.metadata,
+                StreamResponse::ArtifactUpdate(event) => event.metadata,
+                _ => continue,
+            };
+            assert_eq!(
+                metadata.expect("every update carries it")["adk_session_id"],
+                context.as_str()
+            );
+        }
+
+        // A failed run marks its error text.
+        let (handler, _) = handler_with_agent(Arc::new(FailingAgent));
+        let failed = handler.message_send(make_test_message()).await.unwrap();
+        let error_part = &failed.status.message.expect("the error").parts[0];
+        assert_eq!(error_part.metadata.as_ref().unwrap()[ADK_ERROR_MESSAGE_METADATA_KEY], true);
     }
 
     // ── Capabilities the card states ────────────────────────────────────────
