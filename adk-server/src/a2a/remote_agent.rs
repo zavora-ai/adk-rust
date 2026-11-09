@@ -565,13 +565,13 @@ pub mod v1_remote {
             Self { config }
         }
 
-        /// Selects the best interface from the agent card.
+        /// Selects the best A2A v1 interface from the agent card.
         ///
-        /// Prefers JSONRPC, falls back to HTTP+JSON.
+        /// Prefers JSONRPC, falls back to HTTP+JSON, and never picks an interface for an
+        /// earlier protocol version; see [`v1_interface`](crate::a2a::client::v1_client::v1_interface).
         pub fn select_interface(card: &AgentCard) -> Option<&AgentInterface> {
-            card.supported_interfaces.iter().find(|i| i.protocol_binding == "JSONRPC").or_else(
-                || card.supported_interfaces.iter().find(|i| i.protocol_binding == "HTTP+JSON"),
-            )
+            use crate::a2a::client::v1_client::v1_interface;
+            v1_interface(card, "JSONRPC").or_else(|| v1_interface(card, "HTTP+JSON"))
         }
     }
 

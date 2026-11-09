@@ -405,15 +405,21 @@ impl crate::yaml_agent::ModelFactory for NoOpModelFactory {
     }
 }
 
-/// Public A2A discovery routes.
-///
-/// The card is served at `/.well-known/agent-card.json`, the well-known path since
-/// A2A 0.3.0 and the one the bundled v1 client fetches, and at the earlier
-/// `/.well-known/agent.json` that existing peers use.
-fn a2a_discovery_router(controller: A2aController) -> Router {
-    Router::new()
-        .route("/.well-known/agent-card.json", get(controllers::a2a::get_agent_card))
-        .route("/.well-known/agent.json", get(controllers::a2a::get_agent_card))
+/// The A2A 0.3 card path that predates `/.well-known/agent-card.json`.
+const A2A_LEGACY_CARD_PATH: &str = "/.well-known/agent.json";
+
+/// Where the A2A 0.3 card is served when it is the only A2A version: the well-known path
+/// since A2A 0.3.0, and the earlier path that existing peers use.
+#[cfg(not(feature = "a2a-v1"))]
+const A2A_CARD_PATHS: &[&str] = &["/.well-known/agent-card.json", A2A_LEGACY_CARD_PATH];
+
+/// Public routes serving the A2A 0.3 card at each of `paths`.
+fn a2a_card_routes(controller: A2aController, paths: &[&str]) -> Router {
+    paths
+        .iter()
+        .fold(Router::new(), |router, path| {
+            router.route(path, get(controllers::a2a::get_agent_card))
+        })
         .with_state(controller)
 }
 
@@ -591,7 +597,20 @@ impl ServerBuilder {
 
     /// Enable A2A protocol support at the specified base URL.
     ///
-    /// The base URL is used to construct the agent card's endpoint URL.
+    /// The base URL is used to construct the agent card's endpoint URLs.
+    ///
+    /// With the `a2a-v1` feature, the root agent is served over A2A v1
+    /// ([`A2aV1Server`](crate::a2a::v1::server::A2aV1Server)):
+    ///
+    /// - the JSON-RPC binding at `/a2a/v1`;
+    /// - the HTTP+JSON binding under `/a2a/v1/rest`;
+    /// - the v1 card at `/.well-known/agent-card.json`.
+    ///
+    /// The A2A 0.3 endpoint stays at `/a2a` (and `/a2a/stream`), with its card at
+    /// `/.well-known/agent.json`. The v1 card also names it, as its top-level `url` and
+    /// last interface, so a 0.3 peer that reads `agent-card.json` still finds it.
+    ///
+    /// Without `a2a-v1`, only A2A 0.3 is served, and its card is at both paths.
     pub fn with_a2a(mut self, base_url: impl Into<String>) -> Self {
         self.a2a_base_url = Some(base_url.into());
         self
@@ -1134,15 +1153,44 @@ impl ServerBuilder {
                 None => a2a_controller,
             };
             // Same split as `create_app_with_a2a`: discovery is public, RPC is authenticated.
-            let a2a_discovery = a2a_discovery_router(a2a_controller.clone());
-            // The AWP edge serves the site's signed card at the same path.
-            #[cfg(feature = "awp")]
-            let a2a_discovery = if self.awp_edge { Router::new() } else { a2a_discovery };
             let a2a_rpc = Router::new()
                 .route("/a2a", post(controllers::a2a::handle_jsonrpc_for_caller))
                 .route("/a2a/stream", post(controllers::a2a::handle_jsonrpc_stream_for_caller))
-                .with_state(a2a_controller)
+                .with_state(a2a_controller.clone())
                 .layer(auth_layer.clone());
+
+            #[cfg(not(feature = "a2a-v1"))]
+            let a2a_discovery = a2a_card_routes(a2a_controller, A2A_CARD_PATHS);
+
+            // A2A v1 is the protocol `/.well-known/agent-card.json` advertises. 0.3 keeps its
+            // `/a2a` endpoint and `/.well-known/agent.json` card, and the v1 card lists the
+            // 0.3 endpoint too, so peers on either version find theirs.
+            #[cfg(feature = "a2a-v1")]
+            let (a2a_discovery, a2a_rpc) = {
+                let root_agent = config.agent_loader.root_agent();
+                let runner_config =
+                    controllers::a2a::runner_config_for(config, root_agent, None, None);
+                let base = base_url.trim_end_matches('/');
+                let mut v1 = crate::a2a::v1::server::A2aV1Server::builder(runner_config, base)
+                    .legacy_jsonrpc_url(format!("{base}/a2a"));
+                if let Some(skill_index) = &self.skill_index {
+                    v1 = v1.skills(
+                        crate::a2a::agent_skills_from_index(skill_index)
+                            .into_iter()
+                            .map(crate::a2a::v1::card::v1_skill),
+                    );
+                }
+                let v1 = v1.build();
+                (
+                    a2a_card_routes(a2a_controller, &[A2A_LEGACY_CARD_PATH])
+                        .merge(v1.card_router()),
+                    a2a_rpc.merge(v1.rpc_router().layer(auth_layer.clone())),
+                )
+            };
+
+            // The AWP edge serves the site's signed card at the same path.
+            #[cfg(feature = "awp")]
+            let a2a_discovery = if self.awp_edge { Router::new() } else { a2a_discovery };
             app = app.merge(a2a_discovery).merge(a2a_rpc);
         }
 

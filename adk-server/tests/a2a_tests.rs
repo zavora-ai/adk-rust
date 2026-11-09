@@ -137,8 +137,33 @@ async fn agent_card_is_served_at_both_well_known_paths() {
     for (label, app) in routers {
         let [card, legacy] = AGENT_CARD_PATHS;
         let card_json = get_json(app.clone(), card).await;
+        let legacy_json = get_json(app, legacy).await;
         assert_eq!(card_json["name"], "test_agent", "{label}");
-        assert_eq!(card_json, get_json(app, legacy).await, "{label}: both paths serve one card");
+        assert_eq!(legacy_json["url"], "http://localhost:8080/a2a", "{label}: the 0.3 card");
+
+        // Without A2A v1, both paths serve the 0.3 card.
+        #[cfg(not(feature = "a2a-v1"))]
+        assert_eq!(card_json, legacy_json, "{label}: both paths serve one card");
+
+        // With it, `agent-card.json` serves the v1 card, which also lists the 0.3 endpoint.
+        #[cfg(feature = "a2a-v1")]
+        {
+            let interfaces: Vec<(&str, &str)> = card_json["supportedInterfaces"]
+                .as_array()
+                .expect("a v1 card")
+                .iter()
+                .map(|i| (i["url"].as_str().unwrap(), i["protocolVersion"].as_str().unwrap()))
+                .collect();
+            assert_eq!(
+                interfaces,
+                vec![
+                    ("http://localhost:8080/a2a/v1", "1.0"),
+                    ("http://localhost:8080/a2a/v1/rest", "1.0"),
+                    ("http://localhost:8080/a2a", "0.3"),
+                ],
+                "{label}"
+            );
+        }
     }
 }
 
@@ -235,29 +260,26 @@ async fn client_does_not_fall_back_on_other_errors() {
     assert!(error.to_string().contains("HTTP 500"), "{error}");
 }
 
-/// The bundled v1 client fetches and parses the served card, but the card
-/// advertises no `supportedInterfaces`, so the client has no endpoint to call.
+/// The bundled v1 client finds the v1 JSON-RPC interface on the card `with_a2a` serves,
+/// and passes over the 0.3 endpoint the card also lists.
 #[cfg(feature = "a2a-v1")]
 #[tokio::test]
-async fn bundled_v1_client_finds_no_v1_interface_on_the_served_card() {
-    use adk_server::a2a::client::v1_client::{A2aV1Client, V1ClientError};
+async fn bundled_v1_client_finds_the_v1_interface_on_the_served_card() {
+    use adk_server::a2a::client::v1_client::{A2aV1Client, V1ClientError, v1_interface};
 
     let base_url =
         serve(|base| ServerBuilder::new(create_test_config()).with_a2a(base).build()).await;
 
     let card = A2aV1Client::resolve_agent_card(&base_url).await.expect("resolve agent card");
     assert_eq!(card.name, "test_agent");
-    assert!(card.supported_interfaces.is_empty());
-
-    let error = A2aV1Client::new(card).cancel_task("task-1").await.expect_err("no endpoint");
-    assert!(
-        matches!(
-            &error,
-            V1ClientError::UnexpectedStatus { status: 0, body }
-                if body == "no JSONRPC interface in agent card"
-        ),
-        "{error}"
+    assert_eq!(
+        v1_interface(&card, "JSONRPC").map(|i| i.url.clone()),
+        Some(format!("{base_url}/a2a/v1"))
     );
+
+    // The endpoint answers: an unknown task is a JSON-RPC error, not a missing interface.
+    let error = A2aV1Client::new(card).cancel_task("task-1").await.expect_err("no such task");
+    assert!(matches!(&error, V1ClientError::JsonRpc { code: -32001, .. }), "{error}");
 }
 
 #[cfg(feature = "a2a-v1")]
