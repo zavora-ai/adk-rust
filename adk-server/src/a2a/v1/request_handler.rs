@@ -238,7 +238,7 @@ impl RequestHandler {
         self.for_caller(None).tasks_list(params).await
     }
 
-    /// Snapshots an ownerless task; see [`CallerScope::tasks_subscribe`].
+    /// Subscribes to an ownerless task; see [`CallerScope::tasks_subscribe`].
     ///
     /// # Errors
     ///
@@ -794,14 +794,16 @@ impl CallerScope<'_> {
                                 ArtifactId::new(artifact_id.clone()),
                                 vec![a2a_protocol_types::Part::text(&text)],
                             );
-                            yield Ok(wrap_artifact_event(TaskArtifactUpdateEvent {
+                            let update = wrap_artifact_event(TaskArtifactUpdateEvent {
                                 task_id: a2a_protocol_types::TaskId::new(tid.clone()),
                                 context_id: a2a_protocol_types::ContextId::new(cid.clone()),
                                 artifact,
                                 append: Some(chunks_sent && append),
                                 last_chunk: Some(!partial),
                                 metadata: None,
-                            }));
+                            });
+                            executor.publish(&tid, update.clone());
+                            yield Ok(update);
                             chunks_sent = true;
                         }
                         Err(e) => {
@@ -828,7 +830,7 @@ impl CallerScope<'_> {
                         ArtifactId::new(artifact_id),
                         vec![a2a_protocol_types::Part::text(&full_text)],
                     );
-                    if let Err(e) = executor.record_artifact(&tid, &cid, artifact).await {
+                    if let Err(e) = executor.persist_artifact(&tid, &cid, artifact).await {
                         yield fail_stream(&executor, &tid, &cid, e).await;
                         return;
                     }
@@ -943,48 +945,81 @@ impl CallerScope<'_> {
         entries.iter().map(internal_task_to_wire).collect()
     }
 
-    /// Returns the current state of one of this caller's tasks as a short stream,
-    /// then closes.
+    /// Subscribes to one of this caller's tasks (A2A §3.1.6): the stream starts with the
+    /// task as it is now, then carries its updates as they happen, whichever request runs
+    /// it. A send with `returnImmediately`, a stream another client opened, or a resumed
+    /// task all qualify.
     ///
-    /// > **Important:** this is a point-in-time snapshot, not a live subscription. It emits the
-    /// > task and its current status and then ends; it does not deliver subsequent updates. A
-    /// > client that needs live updates should use `message/stream`, which streams the agent's
-    /// > events as they are produced.
-    ///
-    /// A real re-attach would require a per-task event queue that outlives the request, which
-    /// the A2A SDKs in adk-python and adk-go provide and this hand-rolled server does not yet.
+    /// The stream ends when the task reaches a terminal state or stops for its caller
+    /// (`INPUT_REQUIRED`, `AUTH_REQUIRED`). When no run of the task is in progress, nothing
+    /// will change it until a message continues it, so the stream holds the task and its
+    /// status and ends.
     ///
     /// # Errors
     ///
     /// Returns [`A2aError::TaskNotFound`] if the task does not exist or belongs to
-    /// another caller, or [`A2aError::TaskNotCancelable`] if the task already
-    /// reached a terminal state.
+    /// another caller, or [`A2aError::UnsupportedOperation`] if the task already reached a
+    /// terminal state.
     pub async fn tasks_subscribe(
         &self,
         task_id: &str,
     ) -> Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError> {
         let entry = self.owned_task(task_id).await?;
-
-        // For terminal tasks, return an error — can't subscribe to completed tasks
         if is_terminal_state(entry.status.state) {
-            return Err(A2aError::TaskNotCancelable {
-                task_id: task_id.to_string(),
-                current_state: format!("{:?}", entry.status.state),
+            return Err(A2aError::UnsupportedOperation {
+                method: format!(
+                    "subscribing to task {task_id} in terminal state {:?}",
+                    entry.status.state
+                ),
             });
         }
 
-        let task = internal_task_to_wire(&entry)?;
-        let status_event = TaskStatusUpdateEvent {
-            task_id: a2a_protocol_types::TaskId::new(task_id),
-            context_id: a2a_protocol_types::ContextId::new(&entry.context_id),
-            status: entry.status.clone(),
-            metadata: None,
-        };
+        if !self.handler.running.contains(task_id) {
+            let task = internal_task_to_wire(&entry)?;
+            let status_event = TaskStatusUpdateEvent {
+                task_id: TaskId::new(task_id),
+                context_id: ContextId::new(&entry.context_id),
+                status: entry.status.clone(),
+                metadata: None,
+            };
+            let stream = futures::stream::iter(vec![
+                Ok(StreamResponse::Task(task)),
+                Ok(StreamResponse::StatusUpdate(status_event)),
+            ]);
+            return Ok(stream.boxed());
+        }
 
-        let stream = futures::stream::iter(vec![
-            Ok(StreamResponse::Task(task)),
-            Ok(StreamResponse::StatusUpdate(status_event)),
-        ]);
+        // Subscribe before reading the task, so no update falls between the snapshot and the
+        // first live one. One that arrives twice only repeats a state the client has.
+        let mut updates = self.handler.executor.subscribe(task_id);
+        let snapshot = self.owned_task(task_id).await?;
+        let task = internal_task_to_wire(&snapshot)?;
+        let settled = ends_subscription(snapshot.status.state);
+
+        let stream = async_stream::stream! {
+            yield Ok(StreamResponse::Task(task));
+            if settled {
+                return;
+            }
+            loop {
+                match updates.recv().await {
+                    Ok(update) => {
+                        let ends = matches!(
+                            &update,
+                            StreamResponse::StatusUpdate(event)
+                                if ends_subscription(event.status.state)
+                        );
+                        yield Ok(update);
+                        if ends {
+                            return;
+                        }
+                    }
+                    // A subscriber that fell behind misses updates, not the end.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                }
+            }
+        };
         Ok(stream.boxed())
     }
 
@@ -1100,6 +1135,11 @@ impl RunningTasks {
         let run = self.next_run.fetch_add(1, Ordering::Relaxed);
         self.runs().insert(task_id.to_string(), (run, token.clone()));
         RunGuard { running: Arc::clone(self), task_id: task_id.to_string(), run, token }
+    }
+
+    /// Whether a run of `task_id` is in progress.
+    fn contains(&self, task_id: &str) -> bool {
+        self.runs().contains_key(task_id)
     }
 
     /// Cancels the run of `task_id`, if one is in progress.
@@ -1293,6 +1333,12 @@ async fn fail_stream(
             Err(error)
         }
     }
+}
+
+/// Whether a task in `state` has nothing more for a subscriber until a message continues
+/// it: it ended, or it waits on its caller.
+fn ends_subscription(state: TaskState) -> bool {
+    is_terminal_state(state) || matches!(state, TaskState::InputRequired | TaskState::AuthRequired)
 }
 
 /// Returns `true` if the given task state is terminal.
@@ -1928,6 +1974,89 @@ mod tests {
         };
         assert_eq!(last.status.state, TaskState::Canceled);
         assert!(!answered.load(Ordering::SeqCst));
+    }
+
+    // ── SubscribeToTask follows a running task ──────────────────────────────
+
+    /// Collects a subscription, which must end within two seconds.
+    async fn collect_subscription(
+        stream: BoxStream<'static, Result<StreamResponse, A2aError>>,
+    ) -> Vec<StreamResponse> {
+        tokio::time::timeout(std::time::Duration::from_secs(2), stream.collect::<Vec<_>>())
+            .await
+            .expect("the subscription ends")
+            .into_iter()
+            .map(|item| item.expect("no stream error"))
+            .collect()
+    }
+
+    fn last_state(updates: &[StreamResponse]) -> Option<TaskState> {
+        updates.iter().rev().find_map(|update| match update {
+            StreamResponse::StatusUpdate(event) => Some(event.status.state),
+            _ => None,
+        })
+    }
+
+    fn streamed_text(updates: &[StreamResponse]) -> String {
+        updates
+            .iter()
+            .filter_map(|update| match update {
+                StreamResponse::ArtifactUpdate(event) => Some(&event.artifact),
+                _ => None,
+            })
+            .flat_map(|artifact| artifact.parts.iter().filter_map(part_text))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_subscriber_follows_a_background_run_to_its_end() {
+        let (handler, _, _) = slow_handler(200);
+        let started = handler
+            .message_send_with(make_test_message(), Some(&return_immediately()))
+            .await
+            .unwrap();
+
+        let updates =
+            collect_subscription(handler.tasks_subscribe(&started.id.0).await.unwrap()).await;
+        let Some(StreamResponse::Task(first)) = updates.first() else {
+            panic!("the subscription starts with the task: {updates:?}");
+        };
+        assert_eq!(first.status.state, TaskState::Working);
+        assert_eq!(streamed_text(&updates), "Too late.", "the run's output reaches the subscriber");
+        assert_eq!(last_state(&updates), Some(TaskState::Completed));
+    }
+
+    #[tokio::test]
+    async fn a_subscriber_follows_a_task_another_client_streams() {
+        let (handler, _, _) = slow_handler(200);
+        let mut stream = handler.message_stream(make_test_message()).await.unwrap();
+        let Some(Ok(StreamResponse::Task(task))) = stream.next().await else {
+            panic!("the stream starts with the task");
+        };
+        let streaming = tokio::spawn(stream.collect::<Vec<_>>());
+
+        let updates =
+            collect_subscription(handler.tasks_subscribe(&task.id.0).await.unwrap()).await;
+        assert_eq!(streamed_text(&updates), "Too late.");
+        assert_eq!(last_state(&updates), Some(TaskState::Completed));
+        streaming.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_task_waiting_on_its_caller_is_a_snapshot_and_a_finished_one_is_refused() {
+        let (handler, _) = handler_with_agent(Arc::new(ApprovalAgent));
+        let waiting = handler.message_send(make_test_message()).await.unwrap();
+
+        let updates =
+            collect_subscription(handler.tasks_subscribe(&waiting.id.0).await.unwrap()).await;
+        assert!(matches!(updates.first(), Some(StreamResponse::Task(_))));
+        assert_eq!(last_state(&updates), Some(TaskState::InputRequired));
+
+        handler.message_send(approval_for(&waiting.id, None)).await.unwrap();
+        assert!(matches!(
+            handler.tasks_subscribe(&waiting.id.0).await,
+            Err(A2aError::UnsupportedOperation { .. })
+        ));
     }
 
     fn make_handler() -> RequestHandler {
