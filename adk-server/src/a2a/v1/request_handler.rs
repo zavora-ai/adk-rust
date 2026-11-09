@@ -434,10 +434,34 @@ impl RequestHandler {
     ///
     /// # Errors
     ///
-    /// Returns [`A2aError::ExtendedAgentCardNotConfigured`] if no card is set.
+    /// Returns [`A2aError::ExtendedAgentCardNotConfigured`] when the agent card says the
+    /// agent offers none (`capabilities.extendedAgentCard: false`).
     pub async fn agent_card_extended(&self) -> Result<AgentCard, A2aError> {
         let cached = self.agent_card.read().await;
+        if cached.card.capabilities.extended_agent_card == Some(false) {
+            return Err(A2aError::ExtendedAgentCardNotConfigured);
+        }
         Ok(cached.card.clone())
+    }
+
+    /// Refuses `operation` when the agent card says the agent does not offer it.
+    ///
+    /// A capability the card leaves unstated is not checked, so a hand-assembled card that
+    /// states none keeps serving everything.
+    /// [`A2aV1Server`](super::server::A2aV1Server) states every capability.
+    async fn require(&self, operation: Capability) -> Result<(), A2aError> {
+        let capabilities = self.agent_card.read().await.card.capabilities.clone();
+        match operation {
+            Capability::Streaming(method) if capabilities.streaming == Some(false) => {
+                Err(A2aError::UnsupportedOperation {
+                    method: format!("{method}: the agent card does not declare streaming"),
+                })
+            }
+            Capability::PushNotifications if capabilities.push_notifications == Some(false) => {
+                Err(A2aError::PushNotificationNotSupported)
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Returns a reference to the underlying executor.
@@ -533,6 +557,9 @@ impl CallerScope<'_> {
     ) -> Result<Task, A2aError> {
         validate_message(&msg)?;
         let handler = self.handler;
+        if configuration.is_some_and(|c| c.task_push_notification_config.is_some()) {
+            handler.require(Capability::PushNotifications).await?;
+        }
 
         // Idempotency check
         let idempotency_key = self.idempotency_key(&msg.id.0);
@@ -698,6 +725,7 @@ impl CallerScope<'_> {
         &self,
         msg: Message,
     ) -> Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError> {
+        self.handler.require(Capability::Streaming("SendStreamingMessage")).await?;
         validate_message(&msg)?;
         let handler = self.handler;
 
@@ -1029,6 +1057,7 @@ impl CallerScope<'_> {
         &self,
         task_id: &str,
     ) -> Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError> {
+        self.handler.require(Capability::Streaming("SubscribeToTask")).await?;
         let entry = self.owned_task(task_id).await?;
         if is_terminal_state(entry.status.state) {
             return Err(A2aError::UnsupportedOperation {
@@ -1101,6 +1130,7 @@ impl CallerScope<'_> {
         task_id: &str,
         mut config: TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2aError> {
+        self.handler.require(Capability::PushNotifications).await?;
         // Verify task exists
         let mut entry = self.owned_task(task_id).await?;
 
@@ -1133,6 +1163,7 @@ impl CallerScope<'_> {
         task_id: &str,
         config_id: &str,
     ) -> Result<TaskPushNotificationConfig, A2aError> {
+        self.handler.require(Capability::PushNotifications).await?;
         let entry = self.owned_task(task_id).await?;
 
         entry.push_configs.iter().find(|c| c.id.as_deref() == Some(config_id)).cloned().ok_or_else(
@@ -1152,6 +1183,7 @@ impl CallerScope<'_> {
         &self,
         task_id: &str,
     ) -> Result<Vec<TaskPushNotificationConfig>, A2aError> {
+        self.handler.require(Capability::PushNotifications).await?;
         let entry = self.owned_task(task_id).await?;
         Ok(entry.push_configs)
     }
@@ -1163,6 +1195,7 @@ impl CallerScope<'_> {
     /// Returns [`A2aError::TaskNotFound`] if the task or config does not exist, or
     /// the task belongs to another caller.
     pub async fn push_config_delete(&self, task_id: &str, config_id: &str) -> Result<(), A2aError> {
+        self.handler.require(Capability::PushNotifications).await?;
         let mut entry = self.owned_task(task_id).await?;
 
         let original_len = entry.push_configs.len();
@@ -1182,6 +1215,14 @@ impl CallerScope<'_> {
 
         Ok(())
     }
+}
+
+/// An optional A2A operation the agent card can say the agent does not offer.
+enum Capability {
+    /// `SendStreamingMessage` or `SubscribeToTask`, named for the error.
+    Streaming(&'static str),
+    /// Push notification configuration.
+    PushNotifications,
 }
 
 /// `ListTasks` page size when the request sets none (A2A §3.1.4).
@@ -2086,6 +2127,52 @@ mod tests {
         };
         assert_eq!(last.status.state, TaskState::Canceled);
         assert!(!answered.load(Ordering::SeqCst));
+    }
+
+    // ── Capabilities the card states ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn operations_the_card_says_are_off_are_refused() {
+        let store = Arc::new(InMemoryTaskStore::new());
+        let mut card = make_test_agent_card();
+        card.capabilities = AgentCapabilities::none()
+            .with_streaming(false)
+            .with_push_notifications(false)
+            .with_extended_agent_card(false);
+        let handler = RequestHandler::new(
+            Arc::new(V1Executor::new(store.clone())),
+            store,
+            Arc::new(NoOpPushNotificationSender),
+            Arc::new(RwLock::new(CachedAgentCard::new(card))),
+        );
+
+        let task = handler.message_send(make_test_message()).await.unwrap();
+        assert!(matches!(
+            handler.message_stream(make_test_message()).await,
+            Err(A2aError::UnsupportedOperation { .. })
+        ));
+        assert!(matches!(
+            handler.tasks_subscribe(&task.id.0).await,
+            Err(A2aError::UnsupportedOperation { .. })
+        ));
+        assert!(matches!(
+            handler.push_config_list(&task.id.0).await,
+            Err(A2aError::PushNotificationNotSupported)
+        ));
+        let with_push: SendMessageConfiguration = serde_json::from_value(serde_json::json!({
+            "taskPushNotificationConfig": {"url": "https://hooks.example.com/a2a"}
+        }))
+        .unwrap();
+        let mut msg = make_test_message();
+        msg.id = MessageId::new("msg-push");
+        assert!(matches!(
+            handler.message_send_with(msg, Some(&with_push)).await,
+            Err(A2aError::PushNotificationNotSupported)
+        ));
+        assert!(matches!(
+            handler.agent_card_extended().await,
+            Err(A2aError::ExtendedAgentCardNotConfigured)
+        ));
     }
 
     // ── ListTasks pages ─────────────────────────────────────────────────────

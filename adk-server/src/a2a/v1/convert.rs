@@ -100,6 +100,18 @@ fn function_response_from(resp: &Value) -> Result<adk_core::Part, A2aError> {
     })
 }
 
+/// Opening tag around an A2A data part carried as text.
+pub const DATAPART_OPEN_TAG: &str = "<a2a_datapart_json>";
+
+/// Closing tag around an A2A data part carried as text.
+pub const DATAPART_CLOSE_TAG: &str = "</a2a_datapart_json>";
+
+/// An untyped A2A data part as text an agent reads: its JSON between
+/// [`DATAPART_OPEN_TAG`] and [`DATAPART_CLOSE_TAG`].
+pub fn datapart_text(data: &Value) -> String {
+    format!("{DATAPART_OPEN_TAG}{data}{DATAPART_CLOSE_TAG}")
+}
+
 /// Parse a `PartContent::Data` JSON value into the appropriate ADK Part.
 ///
 /// A part tagged with [`ADK_TYPE_METADATA_KEY`] is read in the flat shape that tag names.
@@ -119,9 +131,9 @@ fn wire_data_to_adk(data: &Value, metadata: Option<&Value>) -> Result<adk_core::
     } else if let Some(str_val) = data.get("server_tool_response") {
         Ok(adk_core::Part::ServerToolResponse { server_tool_response: str_val.clone() })
     } else {
-        Err(A2aError::InvalidParams {
-            message: "data part does not contain a recognized key (function_call, function_response, server_tool_call, server_tool_response)".to_string(),
-        })
+        // Structured data an agent should read: text it can see, marked as A2A data, as
+        // adk-go does (`<a2a_datapart_json>`).
+        Ok(adk_core::Part::Text { text: datapart_text(data) })
     }
 }
 
@@ -507,6 +519,22 @@ mod tests {
     }
 
     #[test]
+    fn an_untyped_data_part_reaches_the_agent_as_marked_text() {
+        let wire = a2a_protocol_types::Part::data(json!({"order": 42, "items": ["tea"]}));
+        match wire_part_to_adk(&wire).unwrap() {
+            adk_core::Part::Text { text } => {
+                assert!(text.starts_with(DATAPART_OPEN_TAG) && text.ends_with(DATAPART_CLOSE_TAG));
+                let inner = &text[DATAPART_OPEN_TAG.len()..text.len() - DATAPART_CLOSE_TAG.len()];
+                assert_eq!(
+                    serde_json::from_str::<Value>(inner).unwrap(),
+                    json!({"order": 42, "items": ["tea"]})
+                );
+            }
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn tagged_parts_carry_the_adk_type_and_read_back() {
         let call = tagged_function_call_part(
             "request_approval",
@@ -641,13 +669,6 @@ mod tests {
             }
             _ => panic!("expected ServerToolResponse"),
         }
-    }
-
-    #[test]
-    fn data_unknown_key_returns_error() {
-        let data = json!({ "unknown_key": "value" });
-        let wire = a2a_protocol_types::Part::data(data);
-        assert!(wire_part_to_adk(&wire).is_err());
     }
 
     #[test]

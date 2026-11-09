@@ -206,9 +206,11 @@ impl A2aV1ServerBuilder {
 
         let mut skills = v1_agent_skills(agent.as_ref());
         skills.extend(self.extra_skills);
+        // Every capability is stated, so the handlers refuse what the card does not offer.
         let capabilities = AgentCapabilities::none()
             .with_streaming(self.streaming)
-            .with_push_notifications(self.push_sender.is_some());
+            .with_push_notifications(self.push_sender.is_some())
+            .with_extended_agent_card(false);
         let mut card = build_v1_agent_card(
             self.name.as_deref().unwrap_or_else(|| agent.name()),
             self.description.as_deref().unwrap_or_else(|| agent.description()),
