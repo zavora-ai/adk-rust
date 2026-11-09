@@ -245,3 +245,152 @@ fn a_client_never_picks_an_interface_for_an_earlier_protocol_version() {
     card.supported_interfaces = vec![interface("http://h/a2a", "0.3.0")];
     assert!(v1_interface(&card, "JSONRPC").is_none());
 }
+
+/// A runner-backed v1 server for [`WeatherAgent`], optionally serving only its HTTP+JSON
+/// binding on the card.
+async fn serve_weather(rest_only: bool) -> String {
+    listen(|base| {
+        let runner_config = Arc::new(
+            adk_runner::Runner::builder()
+                .app_name("weather")
+                .agent(Arc::new(WeatherAgent))
+                .session_service(Arc::new(InMemorySessionService::new()))
+                .build_config(),
+        );
+        let server = A2aV1Server::builder(runner_config, base).build();
+        if rest_only {
+            let card = server.card().clone();
+            let mut cached = card.try_write().unwrap();
+            let mut rest = cached.card.clone();
+            rest.supported_interfaces.retain(|i| i.protocol_binding == "HTTP+JSON");
+            cached.update(rest);
+        }
+        server.router()
+    })
+    .await
+}
+
+fn texts(updates: &[a2a_protocol_types::events::StreamResponse]) -> String {
+    updates
+        .iter()
+        .filter_map(|update| match update {
+            a2a_protocol_types::events::StreamResponse::ArtifactUpdate(event) => {
+                Some(&event.artifact)
+            }
+            _ => None,
+        })
+        .flat_map(|artifact| &artifact.parts)
+        .filter_map(|part| part.text_content().map(str::to_string))
+        .collect()
+}
+
+#[tokio::test]
+async fn the_client_streams_parsed_updates_over_either_binding() {
+    use futures::StreamExt;
+
+    for rest_only in [false, true] {
+        let base = serve_weather(rest_only).await;
+        let client = A2aV1Client::new(A2aV1Client::resolve_agent_card(&base).await.unwrap());
+        let updates: Vec<_> = client
+            .stream_message(user_message("weather?"))
+            .await
+            .unwrap()
+            .map(|update| update.unwrap())
+            .collect()
+            .await;
+        assert_eq!(texts(&updates), ANSWER, "rest_only={rest_only}");
+        assert!(matches!(
+            updates.last(),
+            Some(a2a_protocol_types::events::StreamResponse::StatusUpdate(event))
+                if event.status.state == TaskState::Completed
+        ));
+    }
+}
+
+#[tokio::test]
+async fn the_client_subscribes_to_a_task_it_started_with_return_immediately() {
+    use futures::StreamExt;
+
+    let base = serve_weather(false).await;
+    let client = A2aV1Client::new(A2aV1Client::resolve_agent_card(&base).await.unwrap());
+    let configuration: a2a_protocol_types::params::SendMessageConfiguration =
+        serde_json::from_value(json!({"returnImmediately": true})).unwrap();
+    let task = match client
+        .send_message_with(user_message("weather?"), Some(&configuration))
+        .await
+        .unwrap()
+    {
+        SendMessageResponse::Task(task) => task,
+        other => panic!("expected a task, got {other:?}"),
+    };
+    // The run may already be over: then the task is finished, and subscribing is refused.
+    match client.subscribe(&task.id.0).await {
+        Ok(updates) => {
+            let updates: Vec<_> = updates.map(|update| update.unwrap()).collect().await;
+            assert!(!updates.is_empty());
+        }
+        Err(adk_server::a2a::client::v1_client::V1ClientError::JsonRpc { code, .. }) => {
+            assert_eq!(code, -32004, "a finished task");
+        }
+        Err(other) => panic!("unexpected error: {other}"),
+    }
+    let done = client.get_task(&task.id.0, None).await.unwrap();
+    assert_eq!(done.status.state, TaskState::Completed);
+}
+
+#[tokio::test]
+async fn a_remote_agent_from_a_url_continues_one_remote_conversation() {
+    use adk_session::{CreateRequest, SessionService};
+    use futures::StreamExt;
+
+    let base = serve_weather(false).await;
+    let remote = adk_server::a2a::remote_agent::v1_remote::RemoteA2aV1Agent::from_url(
+        "weather_remote",
+        &base,
+    )
+    .await
+    .unwrap();
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "caller".to_string(),
+            user_id: "u1".to_string(),
+            session_id: Some("s1".to_string()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let runner = adk_runner::Runner::builder()
+        .app_name("caller")
+        .agent(Arc::new(remote))
+        .session_service(sessions)
+        .build()
+        .unwrap();
+
+    for turn in ["weather today?", "and tomorrow?"] {
+        let events: Vec<_> = runner
+            .run(
+                adk_core::UserId::new("u1").unwrap(),
+                adk_core::SessionId::new("s1").unwrap(),
+                Content::new("user").with_text(turn),
+            )
+            .await
+            .unwrap()
+            .map(|event| event.unwrap())
+            .collect()
+            .await;
+        let said: String = events
+            .iter()
+            .filter_map(|event| event.llm_response.content.as_ref())
+            .flat_map(|content| &content.parts)
+            .filter_map(|part| part.text())
+            .collect();
+        assert!(said.contains(ANSWER), "turn {turn:?}: {said}");
+    }
+
+    // Both turns ran in one remote context.
+    let client = A2aV1Client::new(A2aV1Client::resolve_agent_card(&base).await.unwrap());
+    let tasks = client.list_tasks(None, None, None, None).await.unwrap().tasks;
+    assert_eq!(tasks.len(), 2);
+    assert_eq!(tasks[0].context_id, tasks[1].context_id, "the second turn continued the first");
+}

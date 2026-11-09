@@ -395,8 +395,9 @@ pub(crate) fn truncated_stream_error() -> adk_core::AdkError {
 /// Splits an SSE byte stream into the data of each event.
 ///
 /// Bytes are buffered until a whole line has arrived, so a multi-byte character split
-/// across reads is decoded intact. Lines end in `\n` or `\r\n`; an event's `data:` lines
-/// are joined with `\n`; other fields and comments are ignored.
+/// across reads is decoded intact. Lines end in `\n`, `\r\n` or a lone `\r`, as the SSE
+/// specification allows; an event's `data:` lines are joined with `\n`; other fields and
+/// comments are ignored.
 #[derive(Default)]
 pub(crate) struct SseDecoder {
     buffer: Vec<u8>,
@@ -412,12 +413,18 @@ impl SseDecoder {
     pub(crate) fn push(&mut self, chunk: &[u8]) -> Result<Vec<String>> {
         self.buffer.extend_from_slice(chunk);
         let mut events = Vec::new();
-        while let Some(end) = self.buffer.iter().position(|&byte| byte == b'\n') {
-            let line: Vec<u8> = self.buffer.drain(..=end).collect();
+        while let Some(end) = self.buffer.iter().position(|&byte| byte == b'\n' || byte == b'\r') {
+            // A line ends in LF, CRLF or a lone CR. A CR that ends the buffer may start a CRLF
+            // whose LF has not arrived yet.
+            let consumed = match (self.buffer[end], self.buffer.get(end + 1)) {
+                (b'\r', Some(b'\n')) => end + 2,
+                (b'\r', None) => break,
+                _ => end + 1,
+            };
+            let line: Vec<u8> = self.buffer.drain(..consumed).collect();
             let line = std::str::from_utf8(&line[..end]).map_err(|error| {
                 adk_core::AdkError::agent(format!("the A2A stream is not valid UTF-8: {error}"))
             })?;
-            let line = line.strip_suffix('\r').unwrap_or(line);
             if line.is_empty() {
                 if !self.data.is_empty() {
                     events.push(self.data.join("\n"));
@@ -434,6 +441,20 @@ impl SseDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sse_lines_may_end_in_a_lone_cr_even_across_reads() {
+        let mut decoder = SseDecoder::default();
+        // Lone CRs end lines; the blank line ends the event.
+        assert_eq!(
+            decoder.push(b"data: a\rdata: b\r\r:comment").unwrap(),
+            vec!["a\nb".to_string()]
+        );
+        // A CR that ends one read may be the start of a CRLF, so it waits for the next byte.
+        assert!(decoder.push(b"\rdata: c\r").unwrap().is_empty());
+        assert!(decoder.push(b"\n").unwrap().is_empty());
+        assert_eq!(decoder.push(b"\r\n").unwrap(), vec!["c".to_string()]);
+    }
 
     #[test]
     fn a_card_endpoint_on_the_card_origin_is_accepted() {
@@ -542,7 +563,9 @@ pub mod v1_client {
     //! parsing, configurable retry, and agent card caching with conditional
     //! request headers.
 
+    use a2a_protocol_types::events::StreamResponse;
     use a2a_protocol_types::jsonrpc::JsonRpcRequest;
+    use a2a_protocol_types::params::SendMessageConfiguration;
     use a2a_protocol_types::responses::{
         ListPushConfigsResponse, SendMessageResponse, TaskListResponse,
     };
@@ -589,6 +612,39 @@ pub mod v1_client {
                 .map(SendMessageResponse::Task)
                 .map_err(|_| oneof_error)
         })
+    }
+
+    /// The updates of a streamed message or a task subscription, as they arrive.
+    pub type UpdateStream =
+        futures::stream::BoxStream<'static, Result<StreamResponse, V1ClientError>>;
+
+    /// Reads one SSE payload: a `StreamResponse`, bare (HTTP+JSON binding) or as a JSON-RPC
+    /// result, or a JSON-RPC error. `None` when it is neither, or empty.
+    pub(crate) fn parse_stream_payload(
+        data: &str,
+    ) -> Option<Result<StreamResponse, V1ClientError>> {
+        if data.trim().is_empty() {
+            return None;
+        }
+        if let Ok(update) = serde_json::from_str::<StreamResponse>(data) {
+            return Some(Ok(update));
+        }
+        let value = serde_json::from_str::<Value>(data).ok()?;
+        if let Some(result) = value.get("result")
+            && let Ok(update) = serde_json::from_value::<StreamResponse>(result.clone())
+        {
+            return Some(Ok(update));
+        }
+        let error = value.get("error")?;
+        Some(Err(V1ClientError::JsonRpc {
+            code: error.get("code").and_then(Value::as_i64).unwrap_or(0) as i32,
+            message: error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+                .to_string(),
+            data: error.get("data").cloned(),
+        }))
     }
 
     /// Reads a `ListTasks` result: the v1 `ListTasksResponse` (A2A §3.1.4), or the bare
@@ -1135,8 +1191,25 @@ pub mod v1_client {
             &self,
             message: Message,
         ) -> Result<SendMessageResponse, V1ClientError> {
-            let result: Value =
-                self.jsonrpc_call("SendMessage", serde_json::json!({ "message": message })).await?;
+            self.send_message_with(message, None).await
+        }
+
+        /// Sends a message with a `SendMessageConfiguration` (JSON-RPC `SendMessage`):
+        /// `returnImmediately`, `historyLength`, accepted output modes, or a push config.
+        ///
+        /// # Errors
+        ///
+        /// See [`send_message`](Self::send_message).
+        pub async fn send_message_with(
+            &self,
+            message: Message,
+            configuration: Option<&SendMessageConfiguration>,
+        ) -> Result<SendMessageResponse, V1ClientError> {
+            let mut params = serde_json::json!({ "message": message });
+            if let Some(configuration) = configuration {
+                params["configuration"] = serde_json::to_value(configuration)?;
+            }
+            let result: Value = self.jsonrpc_call("SendMessage", params).await?;
             Ok(parse_send_message_result(result)?)
         }
 
@@ -1239,6 +1312,145 @@ pub mod v1_client {
                 .await?;
 
             Ok(response)
+        }
+
+        /// Sends a streaming message and returns its updates as they arrive: the task,
+        /// then status and artifact updates, until the task ends or stops for its caller.
+        ///
+        /// Uses the JSON-RPC binding (`SendStreamingMessage`), or the HTTP+JSON binding
+        /// (`POST /message:stream`) when the card offers no JSON-RPC interface.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when the request fails or the server answers with an error
+        /// instead of a stream. An error the stream carries ends it as its last item.
+        pub async fn stream_message(
+            &self,
+            message: Message,
+        ) -> Result<UpdateStream, V1ClientError> {
+            let body = serde_json::json!({ "message": message });
+            match self.jsonrpc_url() {
+                Some(url) => {
+                    let request = JsonRpcRequest::with_params(
+                        serde_json::json!(uuid::Uuid::new_v4().to_string()),
+                        "SendStreamingMessage",
+                        body,
+                    );
+                    let builder =
+                        self.http_client.post(url).headers(self.headers_for(url)?).json(&request);
+                    Self::open_stream(builder).await
+                }
+                None => {
+                    let url = self.rest_endpoint("/message:stream")?;
+                    let builder = self
+                        .http_client
+                        .post(&url)
+                        .headers(self.headers_for(&url)?)
+                        .header("content-type", "application/a2a+json")
+                        .json(&body);
+                    Self::open_stream(builder).await
+                }
+            }
+        }
+
+        /// Subscribes to a task and returns its updates as they arrive (A2A §3.1.6).
+        ///
+        /// Uses the JSON-RPC binding (`SubscribeToTask`), or the HTTP+JSON binding
+        /// (`GET /tasks/{id}:subscribe`) when the card offers no JSON-RPC interface.
+        ///
+        /// # Errors
+        ///
+        /// See [`stream_message`](Self::stream_message).
+        pub async fn subscribe(&self, task_id: &str) -> Result<UpdateStream, V1ClientError> {
+            match self.jsonrpc_url() {
+                Some(url) => {
+                    let request = JsonRpcRequest::with_params(
+                        serde_json::json!(uuid::Uuid::new_v4().to_string()),
+                        "SubscribeToTask",
+                        serde_json::json!({ "id": task_id }),
+                    );
+                    let builder =
+                        self.http_client.post(url).headers(self.headers_for(url)?).json(&request);
+                    Self::open_stream(builder).await
+                }
+                None => {
+                    let url = self.rest_endpoint(&format!("/tasks/{task_id}:subscribe"))?;
+                    let builder = self.http_client.get(&url).headers(self.headers_for(&url)?);
+                    Self::open_stream(builder).await
+                }
+            }
+        }
+
+        /// The full URL of `path` on the card's HTTP+JSON interface.
+        fn rest_endpoint(&self, path: &str) -> Result<String, V1ClientError> {
+            let base = self.rest_url().ok_or_else(|| V1ClientError::UnexpectedStatus {
+                status: 0,
+                body: "no JSONRPC or HTTP+JSON interface in agent card".to_string(),
+            })?;
+            Ok(format!("{}{path}", base.trim_end_matches('/')))
+        }
+
+        /// Sends a streaming request and reads its SSE answer as updates.
+        async fn open_stream(
+            request: reqwest::RequestBuilder,
+        ) -> Result<UpdateStream, V1ClientError> {
+            use futures::StreamExt;
+
+            let response = request.send().await?;
+            let status = response.status().as_u16();
+            let is_sse = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.starts_with("text/event-stream"));
+            if !is_sse {
+                // A JSON answer to a streaming call is an error: the method's, or the
+                // version negotiation's.
+                let body = response.text().await.unwrap_or_default();
+                if let Ok(value) = serde_json::from_str::<Value>(&body)
+                    && let Some(error) = value.get("error")
+                {
+                    if error.get("code").and_then(Value::as_i64) == Some(VERSION_NOT_SUPPORTED) {
+                        return Err(Self::parse_version_error(error));
+                    }
+                    if error.get("code").and_then(Value::as_i64).is_some() {
+                        return Err(Self::parse_jsonrpc_error(&value));
+                    }
+                }
+                return Err(V1ClientError::UnexpectedStatus { status, body });
+            }
+
+            let mut bytes = response.bytes_stream();
+            let updates = async_stream::stream! {
+                let mut decoder = super::SseDecoder::default();
+                while let Some(chunk) = bytes.next().await {
+                    let chunk = match chunk {
+                        Ok(chunk) => chunk,
+                        Err(error) => {
+                            yield Err(V1ClientError::Http(error));
+                            return;
+                        }
+                    };
+                    let payloads = match decoder.push(&chunk) {
+                        Ok(payloads) => payloads,
+                        Err(error) => {
+                            yield Err(V1ClientError::UnexpectedStatus { status, body: error.to_string() });
+                            return;
+                        }
+                    };
+                    for data in payloads {
+                        match parse_stream_payload(&data) {
+                            Some(Ok(update)) => yield Ok(update),
+                            Some(Err(error)) => {
+                                yield Err(error);
+                                return;
+                            }
+                            None => tracing::debug!("SSE data that is no A2A update: {data}"),
+                        }
+                    }
+                }
+            };
+            Ok(Box::pin(updates))
         }
 
         /// Creates a push notification config (JSON-RPC

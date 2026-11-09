@@ -565,6 +565,29 @@ pub mod v1_remote {
             Self { config }
         }
 
+        /// Creates a remote agent named `name` for the A2A v1 agent at `base_url`, from the
+        /// card it serves at `/.well-known/agent-card.json`. The card's description becomes
+        /// the agent's, and streaming follows the card.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when the card cannot be fetched or names an endpoint on
+        /// another origin; see [`A2aV1Client::resolve_agent_card`].
+        pub async fn from_url(
+            name: impl Into<String>,
+            base_url: &str,
+        ) -> std::result::Result<Self, crate::a2a::client::v1_client::V1ClientError> {
+            let agent_card = A2aV1Client::resolve_agent_card(base_url).await?;
+            Ok(Self::new(RemoteA2aV1Config {
+                name: name.into(),
+                description: agent_card.description.clone(),
+                agent_card,
+                streaming: None,
+                credential_broker: None,
+                credential_scopes: Vec::new(),
+            }))
+        }
+
         /// Selects the best A2A v1 interface from the agent card.
         ///
         /// Prefers JSONRPC, falls back to HTTP+JSON, and never picks an interface for an
@@ -637,62 +660,34 @@ pub mod v1_remote {
                 let message = build_v1_message(parts, remote_context, remote_task);
 
                 if use_streaming {
-                    // Send streaming message and process the SSE response. Bytes are decoded
-                    // only once a whole SSE line has arrived, and a stream that stops before a
-                    // final status is reported as an error.
-                    match client.send_streaming_message(message).await {
-                        Ok(response) => {
+                    // The remote's updates as they arrive. A stream that stops before a final
+                    // status is reported as an error.
+                    match client.stream_message(message).await {
+                        Ok(mut updates) => {
                             use futures::StreamExt;
 
-                            let mut bytes_stream = response.bytes_stream();
-                            let mut decoder = crate::a2a::client::SseDecoder::default();
                             let mut finished = false;
-
-                            while let Some(chunk_result) = bytes_stream.next().await {
-                                let chunk = match chunk_result {
-                                    Ok(c) => c,
-                                    Err(e) => {
-                                        yield Ok(create_v1_error_event(
-                                            &invocation_id,
-                                            &agent_name,
-                                            &format!("stream error: {e}"),
-                                        ));
-                                        return;
-                                    }
-                                };
-                                let payloads = match decoder.push(&chunk) {
-                                    Ok(payloads) => payloads,
+                            while let Some(update) = updates.next().await {
+                                let stream_response = match update {
+                                    Ok(update) => update,
                                     Err(e) => {
                                         yield Ok(create_v1_error_event(&invocation_id, &agent_name, &e.to_string()));
                                         return;
                                     }
                                 };
-
-                                for data in payloads {
-                                    if data.trim().is_empty() {
-                                        continue;
-                                    }
-                                    match parse_stream_payload(&data) {
-                                        Some(Ok(stream_response)) => {
-                                            if ends_stream(&stream_response) {
-                                                finished = true;
-                                                yield Ok(final_event(&stream_response, &invocation_id, &agent_name, &keys));
-                                            } else if let Some(event) = convert_stream_response(
-                                                &stream_response,
-                                                &invocation_id,
-                                                &agent_name,
-                                            ) {
-                                                yield Ok(event);
-                                            }
-                                        }
-                                        Some(Err(error)) => {
-                                            yield Ok(create_v1_error_event(&invocation_id, &agent_name, &error));
-                                            return;
-                                        }
-                                        None => {
-                                            tracing::debug!("failed to parse SSE data as StreamResponse: {data}");
-                                        }
-                                    }
+                                if ends_stream(&stream_response) {
+                                    finished = true;
+                                    yield Ok(final_event(&stream_response, &invocation_id, &agent_name, &keys));
+                                    // The server closes the stream here (A2A §3.1.2). Read to its
+                                    // end so the connection closes cleanly, but not for long.
+                                    let drain = async { while updates.next().await.is_some() {} };
+                                    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), drain).await;
+                                    break;
+                                }
+                                if let Some(event) =
+                                    convert_stream_response(&stream_response, &invocation_id, &agent_name)
+                                {
+                                    yield Ok(event);
                                 }
                             }
 
@@ -713,8 +708,13 @@ pub mod v1_remote {
                         }
                     }
                 } else {
-                    // Send non-streaming message
-                    match client.send_message(message).await {
+                    // Send non-streaming message, over the binding the card offers.
+                    let sent = if interface.protocol_binding == "HTTP+JSON" {
+                        client.send_message_rest(message).await
+                    } else {
+                        client.send_message(message).await
+                    };
+                    match sent {
                         Ok(SendMessageResponse::Message(reply)) => {
                             // The agent answered directly, without a task.
                             let resp = a2a_protocol_types::events::StreamResponse::Message(reply);
@@ -784,8 +784,6 @@ pub mod v1_remote {
                         }
                     }
                 }
-
-                let _ = interface;
             };
 
             Ok(Box::pin(stream))
@@ -944,28 +942,6 @@ pub mod v1_remote {
             task_id.map_or(serde_json::Value::Null, serde_json::Value::String),
         );
         event
-    }
-
-    /// Parses one SSE payload: a `StreamResponse`, bare (REST binding) or as a JSON-RPC
-    /// result, or a JSON-RPC error as its message. `None` when it is neither.
-    fn parse_stream_payload(
-        data: &str,
-    ) -> Option<std::result::Result<a2a_protocol_types::events::StreamResponse, String>> {
-        use a2a_protocol_types::events::StreamResponse;
-
-        if let Ok(stream_resp) = serde_json::from_str::<StreamResponse>(data) {
-            return Some(Ok(stream_resp));
-        }
-        let rpc_value = serde_json::from_str::<serde_json::Value>(data).ok()?;
-        if let Some(result) = rpc_value.get("result")
-            && let Ok(stream_resp) = serde_json::from_value::<StreamResponse>(result.clone())
-        {
-            return Some(Ok(stream_resp));
-        }
-        let error = rpc_value.get("error")?;
-        let message = error.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
-        let code = error.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
-        Some(Err(format!("RPC error {code}: {message}")))
     }
 
     /// Whether `response` is the last of its stream: a direct message, or a task or status
@@ -1359,13 +1335,17 @@ pub mod v1_remote {
             let bare = serde_json::to_string(&update).unwrap();
             let wrapped =
                 serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": update}).to_string();
+            use crate::a2a::client::v1_client::{V1ClientError, parse_stream_payload};
             for data in [bare, wrapped] {
                 let parsed = parse_stream_payload(&data).unwrap().unwrap();
                 assert!(ends_stream(&parsed));
             }
 
             let error = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"boom"}}"#;
-            assert_eq!(parse_stream_payload(error).unwrap().unwrap_err(), "RPC error -32603: boom");
+            assert!(matches!(
+                parse_stream_payload(error).unwrap(),
+                Err(V1ClientError::JsonRpc { code: -32603, ref message, .. }) if message == "boom"
+            ));
             assert!(parse_stream_payload("not json").is_none());
         }
 
