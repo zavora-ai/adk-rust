@@ -463,18 +463,31 @@ impl PromptConfig {
             .parts
             .iter()
             .all(|part| matches!(part, Part::Text { text } if text.trim().is_empty()));
+        // A turn of function responses alone answers calls, as a caller resuming a
+        // long-running call sends. The session history already holds those responses after
+        // their calls, so the turn never stands in for the person's message.
+        let answers_only = !current_user_content.parts.is_empty()
+            && current_user_content
+                .parts
+                .iter()
+                .all(|part| matches!(part, Part::FunctionResponse { .. }));
         if !empty_turn {
             // The run's own message, never a steering message a run-mate took after it.
             let own = session_history.iter().rposition(|content| content == ctx.user_content());
-            match own.or_else(|| {
+            let last_message = || {
                 session_history.iter().rposition(|content| {
                     content.role == "user"
                         && !adk_core::history::is_other_agent_context(content)
                         && !adk_core::history::is_system_notice(content)
                 })
-            }) {
+            };
+            match own {
                 Some(index) => session_history[index] = current_user_content.clone(),
-                None => session_history.push(current_user_content.clone()),
+                None if answers_only => {}
+                None => match last_message() {
+                    Some(index) => session_history[index] = current_user_content.clone(),
+                    None => session_history.push(current_user_content.clone()),
+                },
             }
         }
         // An empty user turn adds nothing to the conversation, and providers such as

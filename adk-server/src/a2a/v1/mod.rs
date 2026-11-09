@@ -3,6 +3,7 @@ pub mod convert;
 pub mod error;
 pub mod executor;
 pub mod jsonrpc_handler;
+mod pending;
 pub mod push;
 pub mod request_handler;
 pub mod rest_handler;

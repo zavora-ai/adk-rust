@@ -91,12 +91,16 @@ async fn handle_message_send(
     caller: AuthenticatedCaller,
     Json(params): Json<serde_json::Value>,
 ) -> Response {
+    let configuration = match extract_configuration(&params) {
+        Ok(configuration) => configuration,
+        Err(e) => return error_response(&e),
+    };
     let msg = match extract_message(params) {
         Ok(m) => m,
         Err(e) => return error_response(&e),
     };
 
-    match handler.for_caller(caller.0).message_send(msg).await {
+    match handler.for_caller(caller.0).message_send_with(msg, configuration.as_ref()).await {
         Ok(task) => a2a_json_response(&SendMessageResponse::Task(task)),
         Err(e) => error_response(&e),
     }
@@ -286,6 +290,18 @@ fn extract_message(value: serde_json::Value) -> Result<a2a_protocol_types::Messa
     }
     // Fall back to direct Message shape
     serde_json::from_value(value).map_err(|e| A2aError::InvalidParams { message: e.to_string() })
+}
+
+/// Reads the `configuration` of a `SendMessageRequest` body (A2A §3.2.2), if it has one.
+fn extract_configuration(
+    value: &serde_json::Value,
+) -> Result<Option<a2a_protocol_types::params::SendMessageConfiguration>, A2aError> {
+    value
+        .get("configuration")
+        .filter(|configuration| !configuration.is_null())
+        .map(|configuration| serde_json::from_value(configuration.clone()))
+        .transpose()
+        .map_err(|e| A2aError::InvalidParams { message: format!("configuration: {e}") })
 }
 
 /// Parses a task state string (e.g., `"TASK_STATE_WORKING"`) into a `TaskState`.

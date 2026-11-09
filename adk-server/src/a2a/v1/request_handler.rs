@@ -16,20 +16,24 @@
 //! [`RunnerConfig`]: adk_runner::RunnerConfig
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use a2a_protocol_types::artifact::{Artifact, ArtifactId};
 use a2a_protocol_types::events::{StreamResponse, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
-use a2a_protocol_types::task::{Task, TaskState};
+use a2a_protocol_types::params::SendMessageConfiguration;
+use a2a_protocol_types::task::{ContextId, Task, TaskId, TaskState};
 use a2a_protocol_types::{AgentCard, Message, TaskPushNotificationConfig};
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 
 use super::card::CachedAgentCard;
 use super::convert::internal_task_to_wire;
 use super::error::A2aError;
 use super::executor::V1Executor;
+use super::pending::PendingCalls;
 use super::push::PushNotificationSender;
 use super::stream::wrap_artifact_event;
 use super::task_store::{ListTasksParams, TaskStore, TaskStoreEntry};
@@ -108,6 +112,8 @@ pub struct RequestHandler {
     runner_config: Option<Arc<adk_runner::RunnerConfig>>,
     /// (owner, messageId) → taskId mapping for idempotent request handling.
     idempotency_map: RwLock<HashMap<IdempotencyKey, String>>,
+    /// The agent runs in progress, so `tasks_cancel` can stop them.
+    running: Arc<RunningTasks>,
 }
 
 impl RequestHandler {
@@ -125,6 +131,7 @@ impl RequestHandler {
             agent_card,
             runner_config: None,
             idempotency_map: RwLock::new(HashMap::new()),
+            running: Arc::default(),
         }
     }
 
@@ -143,6 +150,7 @@ impl RequestHandler {
             agent_card,
             runner_config: Some(runner_config),
             idempotency_map: RwLock::new(HashMap::new()),
+            running: Arc::default(),
         }
     }
 
@@ -170,6 +178,20 @@ impl RequestHandler {
     /// See [`CallerScope::message_send`].
     pub async fn message_send(&self, msg: Message) -> Result<Task, A2aError> {
         self.for_caller(None).message_send(msg).await
+    }
+
+    /// Sends a message with the request's configuration as an unauthenticated caller; see
+    /// [`CallerScope::message_send_with`].
+    ///
+    /// # Errors
+    ///
+    /// See [`CallerScope::message_send_with`].
+    pub async fn message_send_with(
+        &self,
+        msg: Message,
+        configuration: Option<&SendMessageConfiguration>,
+    ) -> Result<Task, A2aError> {
+        self.for_caller(None).message_send_with(msg, configuration).await
     }
 
     /// Sends a streaming message as an unauthenticated caller; see
@@ -283,11 +305,13 @@ impl RequestHandler {
     ///
     /// Both the buffered (`message/send`) and streaming (`message/stream`) paths use this, so
     /// they cannot drift: streaming yields from the same stream the buffered path drains.
+    /// Cancelling `cancellation` ends the run, including a model call in flight.
     async fn start_agent(
         runner_config: &Arc<adk_runner::RunnerConfig>,
         caller: Option<&RequestContext>,
         context_id: &str,
         msg: &Message,
+        cancellation: CancellationToken,
     ) -> Result<adk_core::EventStream, A2aError> {
         use adk_core::{SessionId, UserId};
         use adk_session::{CreateRequest, GetRequest};
@@ -387,9 +411,9 @@ impl RequestHandler {
         {
             runner_builder = runner_builder.request_context(request_context);
         }
-        if let Some(ref cancellation_token) = runner_config.cancellation_token {
-            runner_builder = runner_builder.cancellation_token(cancellation_token.clone());
-        }
+        // A child of the configuration's own token (see `RunningTasks::start`), so that token
+        // still stops the run.
+        runner_builder = runner_builder.cancellation_token(cancellation);
         let runner = runner_builder
             .build()
             .map_err(|e| A2aError::Internal { message: format!("runner create: {e}") })?;
@@ -457,21 +481,55 @@ impl CallerScope<'_> {
         (self.owner().map(str::to_string), message_id.to_string())
     }
 
-    /// Sends a message, creating a task and processing it through the executor.
+    /// Sends a message and waits for the task to finish or to stop for the caller.
+    ///
+    /// The same as [`message_send_with`](Self::message_send_with) without a configuration.
+    ///
+    /// # Errors
+    ///
+    /// See [`message_send_with`](Self::message_send_with).
+    pub async fn message_send(&self, msg: Message) -> Result<Task, A2aError> {
+        self.message_send_with(msg, None).await
+    }
+
+    /// Sends a message, creating a task or continuing one, and processes it through the
+    /// executor.
     ///
     /// When a runner config is present, invokes the agent through the ADK
     /// Runner for real LLM generation. The LLM response is recorded as an
     /// artifact on the task. Without a runner, performs state transitions only.
     ///
-    /// A message whose `contextId` matches one of this caller's `INPUT_REQUIRED`
-    /// tasks resumes that task; another caller's task with the same `contextId` is
-    /// never resumed.
+    /// The message continues a task (A2A §3.4):
+    /// - a message with a `taskId` continues that task, which must be one of this
+    ///   caller's and must be waiting on the caller (`INPUT_REQUIRED` or
+    ///   `AUTH_REQUIRED`);
+    /// - a message without one, whose `contextId` matches one of this caller's
+    ///   `INPUT_REQUIRED` tasks, continues that task. Another caller's task with the
+    ///   same `contextId` is never continued.
+    ///
+    /// A task that stops for the caller names what it waits for in its status message:
+    /// each pending function call and its interim result, as data parts tagged with
+    /// [`ADK_TYPE_METADATA_KEY`](super::convert::ADK_TYPE_METADATA_KEY). The caller
+    /// answers with a `function_response` data part for the call's `id`.
+    ///
+    /// With `returnImmediately` set in `configuration`, the call returns as soon as the
+    /// task is `WORKING`, and the agent runs on in the background (A2A §3.2.2). Otherwise
+    /// it returns once the task finishes or stops for the caller. Either way,
+    /// [`tasks_cancel`](Self::tasks_cancel) stops the run.
     ///
     /// # Errors
     ///
-    /// Returns an error if task creation, state transitions, or store
-    /// operations fail.
-    pub async fn message_send(&self, msg: Message) -> Result<Task, A2aError> {
+    /// Returns [`A2aError::TaskNotFound`] for a `taskId` that names no task of this
+    /// caller's, [`A2aError::InvalidParams`] when the message's `contextId` is not that
+    /// task's, [`A2aError::UnsupportedOperation`] when that task has ended or is still
+    /// running, and an error if task creation, state transitions, or store operations
+    /// fail. A failed run is not an error: the task is returned `FAILED`, with the error
+    /// as its status message.
+    pub async fn message_send_with(
+        &self,
+        msg: Message,
+        configuration: Option<&SendMessageConfiguration>,
+    ) -> Result<Task, A2aError> {
         validate_message(&msg)?;
         let handler = self.handler;
 
@@ -494,127 +552,112 @@ impl CallerScope<'_> {
             }
         }
 
-        // Multi-turn resume: check if contextId matches one of this caller's INPUT_REQUIRED tasks
-        if let Some(ref ctx_id) = msg.context_id
-            && let Some(existing) = handler.task_store.find_task_by_context(&ctx_id.0).await?
-            && existing.status.state == TaskState::InputRequired
-            && existing.owner() == self.owner()
-        {
-            // Resume the existing task
-            let task_id = existing.id.clone();
-            let context_id = existing.context_id.clone();
-
-            // Transition from INPUT_REQUIRED to Working
-            handler
-                .executor
-                .transition_state(&task_id, &context_id, TaskState::Working, None)
-                .await?;
-
-            // Append the new message to history
-            handler.task_store.add_history_message(&task_id, msg.clone()).await?;
-
-            // Run the agent if a runner config is available
-            let mut state = TaskState::Completed;
-            if let Some(runner_config) = &handler.runner_config {
-                match self.run_agent(runner_config, &task_id, &context_id, &msg).await {
-                    Ok(finished) => state = finished,
-                    Err(e) => {
-                        let _ =
-                            handler.executor.fail_task(&task_id, &context_id, &e.to_string()).await;
-                        let entry = handler.task_store.get_task(&task_id).await?;
-                        return internal_task_to_wire(&entry);
-                    }
-                }
-            }
-
-            handler.executor.transition_state(&task_id, &context_id, state, None).await?;
-
-            // Record idempotency mapping
-            handler.idempotency_map.write().await.insert(idempotency_key, task_id.clone());
-
-            let entry = handler.task_store.get_task(&task_id).await?;
-            return internal_task_to_wire(&entry);
-        }
-        // If task is in a terminal state or other non-INPUT_REQUIRED state,
-        // fall through to create a new task (existing behavior)
-
-        let task_id = uuid::Uuid::new_v4().to_string();
-        let context_id = msg
-            .context_id
-            .as_ref()
-            .map(|c| c.0.clone())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-        // Create task in SUBMITTED state
-        handler.executor.create_task_for(&task_id, &context_id, self.owner()).await?;
-
-        // Add the incoming message to history
-        handler.task_store.add_history_message(&task_id, msg.clone()).await?;
-
-        // Transition to WORKING
+        let (task_id, context_id) = self.prepare_task(&msg).await?;
         handler.executor.transition_state(&task_id, &context_id, TaskState::Working, None).await?;
 
-        // Run the agent if a runner config is available
-        let mut state = TaskState::Completed;
         if let Some(runner_config) = &handler.runner_config {
-            match self.run_agent(runner_config, &task_id, &context_id, &msg).await {
-                Ok(finished) => state = finished,
-                Err(e) => {
-                    // Transition to FAILED on error
-                    let _ = handler.executor.fail_task(&task_id, &context_id, &e.to_string()).await;
-                    let entry = handler.task_store.get_task(&task_id).await?;
-                    return internal_task_to_wire(&entry);
-                }
+            let guard = handler.running.start(&task_id, runner_config.cancellation_token.as_ref());
+            let run = RunContext {
+                executor: handler.executor.clone(),
+                runner_config: runner_config.clone(),
+                caller: self.caller.clone(),
+            };
+            let drive = drive(run, task_id.clone(), context_id.clone(), msg, guard);
+            if configuration.and_then(|c| c.return_immediately).unwrap_or(false) {
+                let background_task_id = task_id.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = drive.await {
+                        tracing::warn!(
+                            task_id = %background_task_id,
+                            %error,
+                            "could not record the end of a background A2A run"
+                        );
+                    }
+                });
+            } else {
+                drive.await?;
             }
+        } else {
+            handler
+                .executor
+                .transition_state(&task_id, &context_id, TaskState::Completed, None)
+                .await?;
         }
-
-        handler.executor.transition_state(&task_id, &context_id, state, None).await?;
 
         // Record idempotency mapping
         handler.idempotency_map.write().await.insert(idempotency_key, task_id.clone());
 
-        // Retrieve and return the final task
         let entry = handler.task_store.get_task(&task_id).await?;
         internal_task_to_wire(&entry)
     }
 
-    /// Runs the agent to completion, records its output as a single artifact, and returns
-    /// the state the run leaves the task in.
-    async fn run_agent(
-        &self,
-        runner_config: &Arc<adk_runner::RunnerConfig>,
-        task_id: &str,
-        context_id: &str,
-        msg: &Message,
-    ) -> Result<TaskState, A2aError> {
-        let mut event_stream =
-            RequestHandler::start_agent(runner_config, self.caller.as_ref(), context_id, msg)
-                .await?;
-
-        let mut response_text = ResponseText::default();
-        let mut pending = None;
-        while let Some(result) = event_stream.next().await {
-            match result {
-                Ok(event) => {
-                    pending = pending.max(awaiting(&event));
-                    response_text.push(&event);
-                }
-                Err(e) => {
-                    return Err(A2aError::Internal { message: format!("agent error: {e}") });
-                }
+    /// The task `msg` continues, if any (see [`message_send_with`](Self::message_send_with)).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`A2aError::TaskNotFound`] for a `taskId` that names no task of this
+    /// caller's, [`A2aError::InvalidParams`] when the message's `contextId` is not that
+    /// task's, and [`A2aError::UnsupportedOperation`] when that task has ended or is still
+    /// running.
+    async fn task_to_continue(&self, msg: &Message) -> Result<Option<TaskStoreEntry>, A2aError> {
+        if let Some(task_id) = &msg.task_id {
+            validate_id(&task_id.0, "taskId")?;
+            let entry = self.owned_task(&task_id.0).await?;
+            if let Some(context_id) = &msg.context_id
+                && context_id.0 != entry.context_id
+            {
+                return Err(A2aError::InvalidParams {
+                    message: format!(
+                        "contextId {} is not the context of task {}",
+                        context_id.0, entry.id
+                    ),
+                });
             }
+            return match entry.status.state {
+                TaskState::InputRequired | TaskState::AuthRequired => Ok(Some(entry)),
+                state if is_terminal_state(state) => Err(A2aError::UnsupportedOperation {
+                    method: format!("a message to task {} in terminal state {state:?}", entry.id),
+                }),
+                state => Err(A2aError::UnsupportedOperation {
+                    method: format!("a message to task {} while it is {state:?}", entry.id),
+                }),
+            };
         }
 
-        let response_text = response_text.text();
-        if !response_text.is_empty() {
-            let artifact = Artifact::new(
-                ArtifactId::new(uuid::Uuid::new_v4().to_string()),
-                vec![a2a_protocol_types::Part::text(&response_text)],
-            );
-            self.handler.executor.record_artifact(task_id, context_id, artifact).await?;
+        if let Some(ctx_id) = &msg.context_id
+            && let Some(existing) = self.handler.task_store.find_task_by_context(&ctx_id.0).await?
+            && existing.status.state == TaskState::InputRequired
+            && existing.owner() == self.owner()
+        {
+            return Ok(Some(existing));
         }
+        Ok(None)
+    }
 
-        Ok(finished_state(pending))
+    /// Finds or creates the task `msg` runs on and adds `msg` to its history. Returns the
+    /// task's ID and context ID. The task keeps its state: a new task is `SUBMITTED`.
+    ///
+    /// # Errors
+    ///
+    /// See [`task_to_continue`](Self::task_to_continue); also returns an error if task
+    /// creation or the store fails.
+    async fn prepare_task(&self, msg: &Message) -> Result<(String, String), A2aError> {
+        let handler = self.handler;
+        let (task_id, context_id) = match self.task_to_continue(msg).await? {
+            Some(existing) => (existing.id, existing.context_id),
+            None => {
+                let task_id = uuid::Uuid::new_v4().to_string();
+                let context_id = msg
+                    .context_id
+                    .as_ref()
+                    .map(|c| c.0.clone())
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                handler.executor.create_task_for(&task_id, &context_id, self.owner()).await?;
+                (task_id, context_id)
+            }
+        };
+        handler.task_store.add_history_message(&task_id, msg.clone()).await?;
+        Ok((task_id, context_id))
     }
 
     /// Sends a streaming message, returning a stream of SSE events.
@@ -626,20 +669,26 @@ impl CallerScope<'_> {
     /// | first, before any output | `Task`, then `TaskStatusUpdateEvent` — `Working` |
     /// | content with `partial = true` | `TaskArtifactUpdateEvent` — `append`, not last chunk |
     /// | content with `partial = false` | `TaskArtifactUpdateEvent` — final chunk |
-    /// | stream ends after a held or long-running call | `TaskStatusUpdateEvent` — `InputRequired` |
+    /// | stream ends after a held or long-running call | `TaskStatusUpdateEvent` — `InputRequired`, with the pending calls as its message |
     /// | stream ends after a credential request | `TaskStatusUpdateEvent` — `AuthRequired` |
     /// | stream ends | `TaskStatusUpdateEvent` — `Completed` |
     /// | stream errors | `TaskStatusUpdateEvent` — `Failed`, with the error as its message |
+    /// | [`tasks_cancel`](Self::tasks_cancel) stops the run | `TaskStatusUpdateEvent` — `Canceled` |
     ///
     /// Chunks of one response share an artifact ID so a client can reassemble them, which is the
     /// same contract adk-python and adk-go implement over their A2A SDKs.
+    ///
+    /// The message continues a task as in [`message_send_with`](Self::message_send_with); the
+    /// stream then starts with that task.
     ///
     /// With no runner configured the task is created and completed without agent output, which
     /// keeps discovery-only deployments working.
     ///
     /// # Errors
     ///
-    /// Returns an error if task creation fails. Failures once streaming has begun are reported
+    /// Returns an error if the message cannot continue the task it names (see
+    /// [`message_send_with`](Self::message_send_with)) or task creation fails. Failures
+    /// once streaming has begun are reported
     /// as a `Failed` status event whose message carries the error text, since the response has
     /// already started. That status is the last item: the stream ends at a terminal state
     /// (A2A §3.1.2), so no error item follows it. An `Err` item appears only when the task could
@@ -673,21 +722,7 @@ impl CallerScope<'_> {
             }
         }
 
-        let task_id = uuid::Uuid::new_v4().to_string();
-        let context_id = msg
-            .context_id
-            .as_ref()
-            .map(|c| c.0.clone())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-        // Create task
-        handler.executor.create_task_for(&task_id, &context_id, self.owner()).await?;
-
-        // Keep a copy for the agent: `add_history_message` takes ownership.
-        let msg_for_agent = msg.clone();
-
-        // Add the incoming message to history
-        handler.task_store.add_history_message(&task_id, msg).await?;
+        let (task_id, context_id) = self.prepare_task(&msg).await?;
 
         // Record idempotency mapping
         handler.idempotency_map.write().await.insert(idempotency_key, task_id.clone());
@@ -701,11 +736,18 @@ impl CallerScope<'_> {
         let cid = context_id.clone();
         let runner_config = handler.runner_config.clone();
         let caller = self.caller.clone();
-        let stream_msg = msg_for_agent;
+        let stream_msg = msg;
+        // Registered before the stream is returned, so a cancel that races the first poll
+        // still stops the run. The stream owns it: the run stays cancelable until it ends.
+        let guard = runner_config
+            .as_ref()
+            .map(|config| handler.running.start(&task_id, config.cancellation_token.as_ref()));
 
         let stream = async_stream::stream! {
+            let guard = guard;
             yield Ok(StreamResponse::Task(first_task));
-            let mut pending = None;
+            let mut awaiting_caller = None;
+            let mut pending = PendingCalls::default();
 
             match executor.transition_state(&tid, &cid, TaskState::Working, None).await {
                 Ok(event) => yield Ok(StreamResponse::StatusUpdate(event)),
@@ -715,9 +757,16 @@ impl CallerScope<'_> {
                 }
             }
 
-            if let Some(config) = runner_config {
-                let started =
-                    RequestHandler::start_agent(&config, caller.as_ref(), &cid, &stream_msg).await;
+            if let (Some(config), Some(guard)) = (runner_config, guard.as_ref()) {
+                let cancellation = guard.token().clone();
+                let started = RequestHandler::start_agent(
+                    &config,
+                    caller.as_ref(),
+                    &cid,
+                    &stream_msg,
+                    cancellation.clone(),
+                )
+                .await;
                 let mut event_stream = match started {
                     Ok(stream) => stream,
                     Err(e) => {
@@ -736,7 +785,8 @@ impl CallerScope<'_> {
                 while let Some(result) = event_stream.next().await {
                     match result {
                         Ok(event) => {
-                            pending = pending.max(awaiting(&event));
+                            awaiting_caller = awaiting_caller.max(awaiting(&event));
+                            pending.observe(&event);
                             let Some((text, append)) = full_text.push(&event) else { continue };
 
                             let partial = event.llm_response.partial;
@@ -762,6 +812,14 @@ impl CallerScope<'_> {
                     }
                 }
 
+                // A cancelled run ends without its partial output, on the `Canceled` status.
+                if cancellation.is_cancelled() {
+                    yield settle(&executor, &tid, &cid, TaskState::Canceled, Vec::new())
+                        .await
+                        .map(StreamResponse::StatusUpdate);
+                    return;
+                }
+
                 // Persist the joined text so `tasks/get` returns the same artifact a
                 // non-streaming caller would have received.
                 let full_text = full_text.text();
@@ -777,10 +835,12 @@ impl CallerScope<'_> {
                 }
             }
 
-            match executor.transition_state(&tid, &cid, finished_state(pending), None).await {
+            let state = finished_state(awaiting_caller);
+            match settle(&executor, &tid, &cid, state, pending.into_parts()).await {
                 Ok(event) => yield Ok(StreamResponse::StatusUpdate(event)),
                 Err(e) => yield Err(e),
             }
+            drop(guard);
         };
 
         Ok(stream.boxed())
@@ -814,35 +874,46 @@ impl CallerScope<'_> {
         internal_task_to_wire(&entry)
     }
 
-    /// Cancels one of this caller's tasks by transitioning it to CANCELED state.
-    ///
-    /// Validates that the task is not already in a terminal state before
-    /// canceling.
+    /// Cancels one of this caller's tasks: stops its agent run, if one is in progress,
+    /// and moves it to `CANCELED`. The run ends without recording its partial output.
     ///
     /// # Errors
     ///
     /// Returns [`A2aError::TaskNotFound`] if the task does not exist or belongs to
     /// another caller, or [`A2aError::TaskNotCancelable`] if the task is in a
-    /// terminal state.
+    /// terminal state, including one its run reached while it was being cancelled.
     pub async fn tasks_cancel(&self, task_id: &str) -> Result<Task, A2aError> {
         validate_id(task_id, "taskId")?;
         let entry = self.owned_task(task_id).await?;
+        let not_cancelable = |state: TaskState| A2aError::TaskNotCancelable {
+            task_id: task_id.to_string(),
+            current_state: format!("{state:?}"),
+        };
 
-        // Check if task is in a terminal state
         if is_terminal_state(entry.status.state) {
-            return Err(A2aError::TaskNotCancelable {
-                task_id: task_id.to_string(),
-                current_state: format!("{:?}", entry.status.state),
-            });
+            return Err(not_cancelable(entry.status.state));
         }
 
-        // Transition to CANCELED via the executor (validates state machine)
-        self.handler
+        // Stop the run first. A run that ends in the meantime has already moved the task to
+        // its final state, and the transition below then reports it as not cancelable.
+        self.handler.running.cancel(task_id);
+        match self
+            .handler
             .executor
             .transition_state(task_id, &entry.context_id, TaskState::Canceled, None)
-            .await?;
+            .await
+        {
+            Ok(_) => {}
+            // The cancelled run may have recorded the cancellation first.
+            Err(A2aError::InvalidStateTransition { .. }) => {
+                let current = self.handler.task_store.get_task(task_id).await?;
+                if current.status.state != TaskState::Canceled {
+                    return Err(not_cancelable(current.status.state));
+                }
+            }
+            Err(error) => return Err(error),
+        }
 
-        // Return the updated task
         let updated = self.handler.task_store.get_task(task_id).await?;
         internal_task_to_wire(&updated)
     }
@@ -1013,7 +1084,196 @@ impl CallerScope<'_> {
     }
 }
 
-/// Returns `true` if the given task state is terminal.
+/// The agent runs in progress, by task ID, so cancelling a task stops its run.
+#[derive(Default)]
+struct RunningTasks {
+    next_run: AtomicU64,
+    runs: Mutex<HashMap<String, (u64, CancellationToken)>>,
+}
+
+impl RunningTasks {
+    /// Registers a run of `task_id`. Its token is a child of `parent`, the runner
+    /// configuration's own token, which therefore still stops it. The run stays registered
+    /// until the returned guard is dropped.
+    fn start(self: &Arc<Self>, task_id: &str, parent: Option<&CancellationToken>) -> RunGuard {
+        let token = parent.map_or_else(CancellationToken::new, CancellationToken::child_token);
+        let run = self.next_run.fetch_add(1, Ordering::Relaxed);
+        self.runs().insert(task_id.to_string(), (run, token.clone()));
+        RunGuard { running: Arc::clone(self), task_id: task_id.to_string(), run, token }
+    }
+
+    /// Cancels the run of `task_id`, if one is in progress.
+    fn cancel(&self, task_id: &str) {
+        if let Some((_, token)) = self.runs().get(task_id) {
+            token.cancel();
+        }
+    }
+
+    fn runs(&self) -> MutexGuard<'_, HashMap<String, (u64, CancellationToken)>> {
+        self.runs.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// A registered run. Dropping it unregisters the run, unless a later run of the same task,
+/// one that resumed it, has taken its place.
+struct RunGuard {
+    running: Arc<RunningTasks>,
+    task_id: String,
+    run: u64,
+    token: CancellationToken,
+}
+
+impl RunGuard {
+    /// The token that stops this run.
+    fn token(&self) -> &CancellationToken {
+        &self.token
+    }
+}
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        let mut runs = self.running.runs();
+        if runs.get(&self.task_id).is_some_and(|(run, _)| *run == self.run) {
+            runs.remove(&self.task_id);
+        }
+    }
+}
+
+/// What a run needs, owned, so a run started with `returnImmediately` can outlive the
+/// request that started it.
+struct RunContext {
+    executor: Arc<V1Executor>,
+    runner_config: Arc<adk_runner::RunnerConfig>,
+    caller: Option<RequestContext>,
+}
+
+/// What a finished run produced.
+struct Finished {
+    /// The response text, recorded as one artifact.
+    text: String,
+    /// The state the run leaves the task in.
+    state: TaskState,
+    /// The calls the task waits on, as tagged data parts.
+    pending: Vec<a2a_protocol_types::Part>,
+}
+
+/// Runs the agent on a `Working` task and leaves the task in the state the run ends in:
+/// - its text becomes one artifact;
+/// - a run that stops for the caller leaves the task waiting, with the pending calls as
+///   its status message;
+/// - a failed run fails the task, with the error as its status message;
+/// - a cancelled run leaves the task `Canceled`, without its partial output.
+///
+/// `guard` keeps the run cancelable until it ends.
+///
+/// # Errors
+///
+/// Returns an error only when the task store fails: a failed run is recorded on the task.
+async fn drive(
+    run: RunContext,
+    task_id: String,
+    context_id: String,
+    msg: Message,
+    guard: RunGuard,
+) -> Result<(), A2aError> {
+    let cancellation = guard.token().clone();
+    let outcome = run_agent(&run, &context_id, &msg, cancellation.clone()).await;
+    if cancellation.is_cancelled() {
+        settle(&run.executor, &task_id, &context_id, TaskState::Canceled, Vec::new()).await?;
+        return Ok(());
+    }
+    match outcome {
+        Ok(finished) => {
+            if !finished.text.is_empty() {
+                let artifact = Artifact::new(
+                    ArtifactId::new(uuid::Uuid::new_v4().to_string()),
+                    vec![a2a_protocol_types::Part::text(&finished.text)],
+                );
+                run.executor.record_artifact(&task_id, &context_id, artifact).await?;
+            }
+            settle(&run.executor, &task_id, &context_id, finished.state, finished.pending).await?;
+        }
+        Err(error) => {
+            let text = vec![a2a_protocol_types::Part::text(error.to_string())];
+            settle(&run.executor, &task_id, &context_id, TaskState::Failed, text).await?;
+        }
+    }
+    drop(guard);
+    Ok(())
+}
+
+/// Runs the agent to the end of its event stream and returns what it produced.
+///
+/// # Errors
+///
+/// Returns an error if the agent cannot start or its stream fails.
+async fn run_agent(
+    run: &RunContext,
+    context_id: &str,
+    msg: &Message,
+    cancellation: CancellationToken,
+) -> Result<Finished, A2aError> {
+    let mut event_stream = RequestHandler::start_agent(
+        &run.runner_config,
+        run.caller.as_ref(),
+        context_id,
+        msg,
+        cancellation,
+    )
+    .await?;
+
+    let mut response_text = ResponseText::default();
+    let mut awaiting_caller = None;
+    let mut pending = PendingCalls::default();
+    while let Some(result) = event_stream.next().await {
+        let event =
+            result.map_err(|e| A2aError::Internal { message: format!("agent error: {e}") })?;
+        awaiting_caller = awaiting_caller.max(awaiting(&event));
+        pending.observe(&event);
+        response_text.push(&event);
+    }
+
+    Ok(Finished {
+        text: response_text.text(),
+        state: finished_state(awaiting_caller),
+        pending: pending.into_parts(),
+    })
+}
+
+/// Moves a task to `state` with `parts` as its status message, unless the task already
+/// ended another way. A run that ends while it is being cancelled must not fail on the
+/// `Canceled` state the cancel recorded; the returned event then carries the state the task
+/// ended in.
+///
+/// # Errors
+///
+/// Returns an error if the task store fails, or the transition is not allowed from a
+/// state that is not terminal.
+async fn settle(
+    executor: &V1Executor,
+    task_id: &str,
+    context_id: &str,
+    state: TaskState,
+    parts: Vec<a2a_protocol_types::Part>,
+) -> Result<TaskStatusUpdateEvent, A2aError> {
+    match executor.transition_state_with_parts(task_id, context_id, state, parts).await {
+        Err(error @ A2aError::InvalidStateTransition { .. }) => {
+            let current = executor.task_store().get_task(task_id).await?;
+            if is_terminal_state(current.status.state) {
+                Ok(TaskStatusUpdateEvent {
+                    task_id: TaskId::new(task_id),
+                    context_id: ContextId::new(context_id),
+                    status: current.status,
+                    metadata: None,
+                })
+            } else {
+                Err(error)
+            }
+        }
+        other => other,
+    }
+}
+
 /// Ends a stream that failed with `error`: moves the task to `Failed` with the error text as
 /// the status message and returns that status event, which must be the stream's last item.
 ///
@@ -1035,6 +1295,7 @@ async fn fail_stream(
     }
 }
 
+/// Returns `true` if the given task state is terminal.
 fn is_terminal_state(state: TaskState) -> bool {
     matches!(
         state,
@@ -1361,6 +1622,312 @@ mod tests {
         let text: String =
             entry.artifacts.iter().flat_map(|a| a.parts.iter().filter_map(part_text)).collect();
         assert_eq!(text, "one two", "a later tasks/get must see what was streamed");
+    }
+
+    // ── Waiting on the caller, continuing a task, cancel and returnImmediately ──
+
+    /// Asks for approval with a long-running call, the way a human-in-the-loop tool does,
+    /// and answers once the caller sends the call's result.
+    struct ApprovalAgent;
+
+    #[async_trait::async_trait]
+    impl adk_core::Agent for ApprovalAgent {
+        fn name(&self) -> &str {
+            "approval_agent"
+        }
+
+        fn description(&self) -> &str {
+            "waits for an approval"
+        }
+
+        fn sub_agents(&self) -> &[Arc<dyn adk_core::Agent>] {
+            &[]
+        }
+
+        async fn run(
+            &self,
+            ctx: Arc<dyn adk_core::InvocationContext>,
+        ) -> adk_core::Result<adk_core::EventStream> {
+            let approved = ctx.user_content().parts.iter().any(|part| {
+                matches!(
+                    part,
+                    adk_core::Part::FunctionResponse { function_response, id: Some(id), .. }
+                        if id == "call-approve"
+                            && function_response.response["status"] == "approved"
+                )
+            });
+            if approved {
+                let mut done = adk_core::Event::new("inv");
+                done.set_content(adk_core::Content::new("model").with_text("Approved."));
+                return Ok(Box::pin(futures::stream::iter(vec![Ok(done)])));
+            }
+
+            let mut call = adk_core::Event::new("inv");
+            call.set_content(adk_core::Content {
+                role: "model".to_string(),
+                parts: vec![adk_core::Part::FunctionCall {
+                    name: "request_approval".to_string(),
+                    args: serde_json::json!({"amount": 500}),
+                    id: Some("call-approve".to_string()),
+                    thought_signature: None,
+                }],
+            });
+            call.long_running_tool_ids = vec!["call-approve".to_string()];
+            let mut interim = adk_core::Event::new("inv");
+            interim.set_content(adk_core::Content {
+                role: "user".to_string(),
+                parts: vec![adk_core::Part::FunctionResponse {
+                    function_response: adk_core::FunctionResponseData::new(
+                        "request_approval",
+                        serde_json::json!({"status": "pending"}),
+                    ),
+                    id: Some("call-approve".to_string()),
+                    annotations: None,
+                }],
+            });
+            let mut text = adk_core::Event::new("inv");
+            text.set_content(adk_core::Content::new("model").with_text("Approval pending."));
+            Ok(Box::pin(futures::stream::iter(vec![Ok(call), Ok(interim), Ok(text)])))
+        }
+    }
+
+    /// The caller's approval, a `function_response` data part tagged the way adk-python and
+    /// adk-go tag it, sent for `task_id`.
+    fn approval_for(task_id: &TaskId, context_id: Option<&ContextId>) -> Message {
+        let part: Part = serde_json::from_value(serde_json::json!({
+            "data": {"id": "call-approve", "name": "request_approval", "response": {"status": "approved"}},
+            "metadata": {"adk_type": "function_response"}
+        }))
+        .unwrap();
+        Message {
+            id: MessageId::new("msg-2"),
+            role: MessageRole::User,
+            parts: vec![part],
+            task_id: Some(task_id.clone()),
+            context_id: context_id.cloned(),
+            reference_task_ids: None,
+            extensions: None,
+            metadata: None,
+        }
+    }
+
+    fn artifact_texts(task: &Task) -> Vec<String> {
+        task.artifacts
+            .iter()
+            .flatten()
+            .flat_map(|artifact| artifact.parts.iter().filter_map(part_text).map(str::to_string))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_waiting_task_names_the_pending_call_and_the_answer_continues_it() {
+        let (handler, _) = handler_with_agent(Arc::new(ApprovalAgent));
+
+        let waiting = handler.message_send(make_test_message()).await.unwrap();
+        assert_eq!(waiting.status.state, TaskState::InputRequired);
+        let parts: Vec<_> = waiting
+            .status
+            .message
+            .as_ref()
+            .expect("the status names the pending call")
+            .parts
+            .iter()
+            .map(|part| serde_json::to_value(part).unwrap())
+            .collect();
+        assert_eq!(
+            parts,
+            vec![
+                serde_json::json!({
+                    "data": {"id": "call-approve", "name": "request_approval", "args": {"amount": 500}},
+                    "metadata": {"adk_type": "function_call", "adk_is_long_running": true}
+                }),
+                serde_json::json!({
+                    "data": {"id": "call-approve", "name": "request_approval", "response": {"status": "pending"}},
+                    "metadata": {"adk_type": "function_response"}
+                }),
+            ]
+        );
+
+        let answer = approval_for(&waiting.id, Some(&waiting.context_id));
+        let done = handler.message_send(answer).await.unwrap();
+        assert_eq!(done.id, waiting.id, "the answer continues the same task");
+        assert_eq!(done.status.state, TaskState::Completed);
+        assert!(artifact_texts(&done).contains(&"Approved.".to_string()), "{done:?}");
+    }
+
+    #[tokio::test]
+    async fn a_stream_names_the_pending_call_and_a_task_id_alone_continues_the_task() {
+        let (handler, _) = handler_with_agent(Arc::new(ApprovalAgent));
+
+        let items: Vec<_> =
+            handler.message_stream(make_test_message()).await.unwrap().collect().await;
+        let Some(Ok(StreamResponse::StatusUpdate(waiting))) = items.last() else {
+            panic!("the stream ends on a status: {items:?}");
+        };
+        assert_eq!(waiting.status.state, TaskState::InputRequired);
+        assert_eq!(waiting.status.message.as_ref().map(|m| m.parts.len()), Some(2));
+
+        // A2A §3.4: with only a taskId, the context is the task's.
+        let answer = approval_for(&waiting.task_id, None);
+        let items: Vec<_> = handler.message_stream(answer).await.unwrap().collect().await;
+        let Some(Ok(StreamResponse::Task(first))) = items.first() else {
+            panic!("the stream starts with the task: {items:?}");
+        };
+        assert_eq!(first.id, waiting.task_id, "the answer continues the same task");
+        let Some(Ok(StreamResponse::StatusUpdate(last))) = items.last() else {
+            panic!("the stream ends on a status: {items:?}");
+        };
+        assert_eq!(last.status.state, TaskState::Completed);
+    }
+
+    #[tokio::test]
+    async fn a_message_naming_a_task_it_cannot_continue_is_refused() {
+        let (handler, _) = handler_with_agent(Arc::new(ApprovalAgent));
+
+        let mut unknown = make_test_message();
+        unknown.task_id = Some(TaskId::new("no-such-task"));
+        assert!(matches!(handler.message_send(unknown).await, Err(A2aError::TaskNotFound { .. })));
+
+        let waiting = handler.message_send(make_test_message()).await.unwrap();
+        let elsewhere = approval_for(&waiting.id, Some(&ContextId::new("another-context")));
+        assert!(matches!(
+            handler.message_send(elsewhere).await,
+            Err(A2aError::InvalidParams { .. })
+        ));
+
+        let done = handler.message_send(approval_for(&waiting.id, None)).await.unwrap();
+        assert_eq!(done.status.state, TaskState::Completed);
+        let mut after_the_end = approval_for(&waiting.id, None);
+        after_the_end.id = MessageId::new("msg-3");
+        assert!(matches!(
+            handler.message_send(after_the_end).await,
+            Err(A2aError::UnsupportedOperation { .. })
+        ));
+    }
+
+    /// Answers after `delay` and records that it got that far.
+    struct SlowAgent {
+        delay: std::time::Duration,
+        answered: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[async_trait::async_trait]
+    impl adk_core::Agent for SlowAgent {
+        fn name(&self) -> &str {
+            "slow_agent"
+        }
+
+        fn description(&self) -> &str {
+            "answers late"
+        }
+
+        fn sub_agents(&self) -> &[Arc<dyn adk_core::Agent>] {
+            &[]
+        }
+
+        async fn run(
+            &self,
+            _ctx: Arc<dyn adk_core::InvocationContext>,
+        ) -> adk_core::Result<adk_core::EventStream> {
+            let delay = self.delay;
+            let answered = self.answered.clone();
+            Ok(Box::pin(async_stream::stream! {
+                tokio::time::sleep(delay).await;
+                answered.store(true, Ordering::SeqCst);
+                let mut event = adk_core::Event::new("inv");
+                event.set_content(adk_core::Content::new("model").with_text("Too late."));
+                yield Ok(event);
+            }))
+        }
+    }
+
+    fn slow_handler(
+        delay_ms: u64,
+    ) -> (RequestHandler, Arc<dyn TaskStore>, Arc<std::sync::atomic::AtomicBool>) {
+        let answered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (handler, store) = handler_with_agent(Arc::new(SlowAgent {
+            delay: std::time::Duration::from_millis(delay_ms),
+            answered: answered.clone(),
+        }));
+        (handler, store, answered)
+    }
+
+    fn return_immediately() -> SendMessageConfiguration {
+        serde_json::from_value(serde_json::json!({"returnImmediately": true})).unwrap()
+    }
+
+    #[tokio::test]
+    async fn return_immediately_answers_while_the_run_goes_on_in_the_background() {
+        let (handler, store, _) = slow_handler(50);
+
+        let started = handler
+            .message_send_with(make_test_message(), Some(&return_immediately()))
+            .await
+            .unwrap();
+        assert_eq!(started.status.state, TaskState::Working, "the send does not wait for the run");
+
+        let mut state = TaskState::Working;
+        for _ in 0..100 {
+            state = store.get_task(&started.id.0).await.unwrap().status.state;
+            if state != TaskState::Working {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(state, TaskState::Completed);
+        let done = handler.tasks_get(&started.id.0, None).await.unwrap();
+        assert_eq!(artifact_texts(&done), vec!["Too late.".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn cancel_stops_the_run_and_a_second_cancel_is_refused() {
+        let (handler, store, answered) = slow_handler(300);
+
+        let started = handler
+            .message_send_with(make_test_message(), Some(&return_immediately()))
+            .await
+            .unwrap();
+        let canceled = handler.tasks_cancel(&started.id.0).await.unwrap();
+        assert_eq!(canceled.status.state, TaskState::Canceled);
+        assert!(matches!(
+            handler.tasks_cancel(&started.id.0).await,
+            Err(A2aError::TaskNotCancelable { .. })
+        ));
+
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        assert!(
+            !answered.load(Ordering::SeqCst),
+            "cancelling stops the agent, not only the task's state"
+        );
+        let stored = store.get_task(&started.id.0).await.unwrap();
+        assert_eq!(stored.status.state, TaskState::Canceled);
+        assert!(stored.artifacts.is_empty(), "a cancelled run records no output");
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_streamed_task_ends_the_stream_on_canceled() {
+        let (handler, _, answered) = slow_handler(5_000);
+
+        let mut stream = handler.message_stream(make_test_message()).await.unwrap();
+        let Some(Ok(StreamResponse::Task(task))) = stream.next().await else {
+            panic!("the stream starts with the task");
+        };
+        let Some(Ok(StreamResponse::StatusUpdate(working))) = stream.next().await else {
+            panic!("then reports it working");
+        };
+        assert_eq!(working.status.state, TaskState::Working);
+
+        let canceled = handler.tasks_cancel(&task.id.0).await.unwrap();
+        assert_eq!(canceled.status.state, TaskState::Canceled);
+        let rest: Vec<_> =
+            tokio::time::timeout(std::time::Duration::from_secs(2), stream.collect::<Vec<_>>())
+                .await
+                .expect("a cancelled stream ends");
+        let Some(Ok(StreamResponse::StatusUpdate(last))) = rest.last() else {
+            panic!("the stream ends on a status: {rest:?}");
+        };
+        assert_eq!(last.status.state, TaskState::Canceled);
+        assert!(!answered.load(Ordering::SeqCst));
     }
 
     fn make_handler() -> RequestHandler {
