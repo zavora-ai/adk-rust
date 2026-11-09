@@ -819,12 +819,14 @@ impl CallerScope<'_> {
                 let artifact_id = uuid::Uuid::new_v4().to_string();
                 let mut chunks_sent = false;
                 let mut full_text = ResponseText::default();
+                let mut media = Vec::new();
 
                 while let Some(result) = event_stream.next().await {
                     match result {
                         Ok(event) => {
                             awaiting_caller = awaiting_caller.max(awaiting(&event));
                             pending.observe(&event);
+                            media.extend(media_parts(&event));
                             let Some((text, append)) = full_text.push(&event) else { continue };
 
                             let partial = event.llm_response.partial;
@@ -871,6 +873,22 @@ impl CallerScope<'_> {
                     if let Err(e) = executor.persist_artifact(&tid, &cid, artifact).await {
                         yield fail_stream(&executor, &tid, &cid, e).await;
                         return;
+                    }
+                }
+
+                // Files and inline data, as one more artifact.
+                if !media.is_empty() {
+                    let artifact =
+                        Artifact::new(ArtifactId::new(uuid::Uuid::new_v4().to_string()), media);
+                    match executor.record_artifact(&tid, &cid, artifact).await {
+                        Ok(mut event) => {
+                            event.last_chunk = Some(true);
+                            yield Ok(wrap_artifact_event(event));
+                        }
+                        Err(e) => {
+                            yield fail_stream(&executor, &tid, &cid, e).await;
+                            return;
+                        }
                     }
                 }
             }
@@ -1226,6 +1244,20 @@ impl CallerScope<'_> {
     }
 }
 
+/// The files and inline data a finished model turn produced, as A2A parts.
+fn media_parts(event: &adk_core::Event) -> Vec<a2a_protocol_types::Part> {
+    if event.llm_response.partial {
+        return Vec::new();
+    }
+    event
+        .content()
+        .into_iter()
+        .filter(|content| content.role == "model")
+        .flat_map(|content| &content.parts)
+        .filter_map(super::convert::media_part_to_wire)
+        .collect()
+}
+
 /// The ADK user whose session runs a task in `context_id`: the authenticated caller, or
 /// `a2a-{context_id}` without authentication.
 fn session_user_id(caller: Option<&RequestContext>, context_id: &str) -> String {
@@ -1379,6 +1411,8 @@ struct RunContext {
 struct Finished {
     /// The response text, recorded as one artifact.
     text: String,
+    /// Files and inline data the agent produced, recorded as a second artifact.
+    media: Vec<a2a_protocol_types::Part>,
     /// The state the run leaves the task in.
     state: TaskState,
     /// The calls the task waits on, as tagged data parts.
@@ -1419,6 +1453,13 @@ async fn drive(
                 );
                 run.executor.record_artifact(&task_id, &context_id, artifact).await?;
             }
+            if !finished.media.is_empty() {
+                let artifact = Artifact::new(
+                    ArtifactId::new(uuid::Uuid::new_v4().to_string()),
+                    finished.media,
+                );
+                run.executor.record_artifact(&task_id, &context_id, artifact).await?;
+            }
             settle(&run.executor, &task_id, &context_id, finished.state, finished.pending).await?;
         }
         Err(error) => {
@@ -1451,6 +1492,7 @@ async fn run_agent(
     .await?;
 
     let mut response_text = ResponseText::default();
+    let mut media = Vec::new();
     let mut awaiting_caller = None;
     let mut pending = PendingCalls::default();
     while let Some(result) = event_stream.next().await {
@@ -1459,10 +1501,12 @@ async fn run_agent(
         awaiting_caller = awaiting_caller.max(awaiting(&event));
         pending.observe(&event);
         response_text.push(&event);
+        media.extend(media_parts(&event));
     }
 
     Ok(Finished {
         text: response_text.text(),
+        media,
         state: finished_state(awaiting_caller),
         pending: pending.into_parts(),
     })
@@ -2162,6 +2206,75 @@ mod tests {
         };
         assert_eq!(last.status.state, TaskState::Canceled);
         assert!(!answered.load(Ordering::SeqCst));
+    }
+
+    // ── Media in artifacts ──────────────────────────────────────────────────
+
+    /// Answers with a caption and a PNG.
+    struct ImageAgent;
+
+    #[async_trait::async_trait]
+    impl adk_core::Agent for ImageAgent {
+        fn name(&self) -> &str {
+            "image_agent"
+        }
+
+        fn description(&self) -> &str {
+            "draws"
+        }
+
+        fn sub_agents(&self) -> &[Arc<dyn adk_core::Agent>] {
+            &[]
+        }
+
+        async fn run(
+            &self,
+            _ctx: Arc<dyn adk_core::InvocationContext>,
+        ) -> adk_core::Result<adk_core::EventStream> {
+            let mut event = adk_core::Event::new("inv");
+            event.set_content(
+                adk_core::Content::new("model")
+                    .with_text("A square.")
+                    .with_inline_data("image/png", vec![0x89, b'P', b'N', b'G']),
+            );
+            Ok(Box::pin(futures::stream::iter(vec![Ok(event)])))
+        }
+    }
+
+    fn image_parts(artifacts: &[Artifact]) -> Vec<&a2a_protocol_types::Part> {
+        artifacts
+            .iter()
+            .flat_map(|artifact| &artifact.parts)
+            .filter(|part| part.media_type.as_deref() == Some("image/png"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn files_and_inline_data_reach_the_client_beside_the_text() {
+        let (handler, store) = handler_with_agent(Arc::new(ImageAgent));
+        let sent = handler.message_send(make_test_message()).await.unwrap();
+        let artifacts = sent.artifacts.clone().unwrap_or_default();
+        assert_eq!(artifact_texts(&sent), vec!["A square.".to_string()]);
+        assert_eq!(image_parts(&artifacts).len(), 1, "{artifacts:?}");
+
+        let (handler, _) = handler_with_agent(Arc::new(ImageAgent));
+        let updates: Vec<_> = handler
+            .message_stream(make_test_message())
+            .await
+            .unwrap()
+            .map(|item| item.unwrap())
+            .collect()
+            .await;
+        let streamed: Vec<Artifact> = updates
+            .iter()
+            .filter_map(|update| match update {
+                StreamResponse::ArtifactUpdate(event) => Some(event.artifact.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(image_parts(&streamed).len(), 1, "the stream carries the image too");
+        let stored = store.get_task(&sent.id.0).await.unwrap();
+        assert_eq!(image_parts(&stored.artifacts).len(), 1);
     }
 
     // ── ADK metadata ────────────────────────────────────────────────────────

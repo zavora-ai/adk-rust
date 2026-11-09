@@ -205,6 +205,18 @@ pub fn tagged_function_response_part(
     part
 }
 
+/// An agent output part that A2A carries as media in an artifact: inline data as raw bytes
+/// with its media type, a file as its URL. Text goes in the text artifact. Function calls
+/// and responses, thinking and provider items stay inside the agent.
+pub fn media_part_to_wire(part: &adk_core::Part) -> Option<a2a_protocol_types::Part> {
+    match part {
+        adk_core::Part::InlineData { .. } | adk_core::Part::FileData { .. } => {
+            adk_part_to_wire(part).ok().flatten()
+        }
+        _ => None,
+    }
+}
+
 /// Convert an `adk_core::Part` to an `a2a_protocol_types::Part`.
 ///
 /// Mapping:
