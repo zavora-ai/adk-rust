@@ -34,9 +34,12 @@ pub fn rest_router(handler: Arc<RequestHandler>) -> Router {
     Router::new()
         .route("/message:send", post(handle_message_send))
         .route("/message:stream", post(handle_message_stream))
-        .route("/tasks/{taskId}", get(handle_tasks_get))
-        .route("/tasks/{taskId}/cancel", post(handle_tasks_cancel))
+        // `/tasks/{id}:cancel` and `/tasks/{id}:subscribe` (A2A §11.3) share this route with
+        // `GET /tasks/{id}`: the router cannot match a verb after a parameter.
+        .route("/tasks/{taskId}", get(handle_task_get_or_subscribe).post(handle_task_verb))
         .route("/tasks", get(handle_tasks_list))
+        // The paths adk-server served before 3.0.
+        .route("/tasks/{taskId}/cancel", post(handle_tasks_cancel))
         .route("/tasks/{taskId}/subscribe", post(handle_tasks_subscribe))
         .route(
             "/tasks/{taskId}/pushNotificationConfigs",
@@ -142,6 +145,49 @@ async fn handle_message_stream(
 }
 
 /// `GET /tasks/{taskId}` — retrieves a task by ID.
+/// The task ID and verb of a `/tasks/{taskId}:verb` segment, for a verb A2A defines.
+fn task_verb(segment: &str) -> Option<(&str, &str)> {
+    segment
+        .rsplit_once(':')
+        .filter(|(task_id, verb)| !task_id.is_empty() && matches!(*verb, "cancel" | "subscribe"))
+}
+
+/// `GET /tasks/{taskId}` gets a task; `GET /tasks/{taskId}:subscribe` subscribes to it
+/// (A2A §11.3).
+async fn handle_task_get_or_subscribe(
+    state: State<Arc<RequestHandler>>,
+    caller: AuthenticatedCaller,
+    Path(segment): Path<String>,
+    query: Query<TaskGetQuery>,
+) -> Response {
+    match task_verb(&segment) {
+        Some((task_id, "subscribe")) => {
+            handle_tasks_subscribe(state, caller, Path(task_id.to_string())).await
+        }
+        _ => handle_tasks_get(state, caller, Path(segment), query).await,
+    }
+}
+
+/// `POST /tasks/{taskId}:cancel` cancels a task (A2A §11.3). `POST /tasks/{taskId}:subscribe`
+/// also subscribes, for clients that post it.
+async fn handle_task_verb(
+    state: State<Arc<RequestHandler>>,
+    caller: AuthenticatedCaller,
+    Path(segment): Path<String>,
+) -> Response {
+    match task_verb(&segment) {
+        Some((task_id, "cancel")) => {
+            handle_tasks_cancel(state, caller, Path(task_id.to_string())).await
+        }
+        Some((task_id, _)) => {
+            handle_tasks_subscribe(state, caller, Path(task_id.to_string())).await
+        }
+        None => {
+            error_response(&A2aError::MethodNotFound { method: format!("POST /tasks/{segment}") })
+        }
+    }
+}
+
 async fn handle_tasks_get(
     State(handler): State<Arc<RequestHandler>>,
     caller: AuthenticatedCaller,
@@ -392,6 +438,50 @@ mod tests {
             .expect("body collection should succeed")
             .to_bytes();
         serde_json::from_slice(&bytes).expect("response should be valid JSON")
+    }
+
+    /// A `WORKING` task, so it can be cancelled.
+    async fn working_task(handler: &RequestHandler, task_id: &str) {
+        handler.executor().create_task(task_id, "ctx").await.unwrap();
+        handler
+            .executor()
+            .transition_state(task_id, "ctx", a2a_protocol_types::TaskState::Working, None)
+            .await
+            .unwrap();
+    }
+
+    async fn request(handler: &Arc<RequestHandler>, method: &str, uri: &str) -> Response {
+        let req = Request::builder().method(method).uri(uri).body(Body::empty()).unwrap();
+        make_router(handler.clone()).oneshot(req).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_spec_s_cancel_and_subscribe_paths_and_the_old_ones_all_route() {
+        let handler = make_handler();
+
+        // A2A §11.3: `POST /tasks/{id}:cancel`.
+        working_task(&handler, "t-1").await;
+        let resp = request(&handler, "POST", "/tasks/t-1:cancel").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(json_body(resp).await["status"]["state"], "TASK_STATE_CANCELED");
+
+        // `GET /tasks/{id}:subscribe` reaches subscribe: a finished task is refused there.
+        let resp = request(&handler, "GET", "/tasks/t-1:subscribe").await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(json_body(resp).await.to_string().contains("UNSUPPORTED_OPERATION"));
+
+        // `GET /tasks/{id}` still gets the task.
+        let resp = request(&handler, "GET", "/tasks/t-1").await;
+        assert_eq!(json_body(resp).await["id"], "t-1");
+
+        // The paths adk-server served before 3.0.
+        working_task(&handler, "t-2").await;
+        let resp = request(&handler, "POST", "/tasks/t-2/cancel").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // An unknown verb is not a task ID.
+        let resp = request(&handler, "POST", "/tasks/t-1:frobnicate").await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     fn send_message_body() -> String {
