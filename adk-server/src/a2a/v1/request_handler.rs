@@ -107,7 +107,8 @@ type IdempotencyKey = (Option<String>, String);
 pub struct RequestHandler {
     executor: Arc<V1Executor>,
     task_store: Arc<dyn TaskStore>,
-    #[allow(dead_code)] // Used by push notification delivery in task 7.3
+    /// Delivers task updates to push notification configs; see
+    /// [`CallerScope::message_send_with`].
     push_sender: Arc<dyn PushNotificationSender>,
     agent_card: Arc<RwLock<CachedAgentCard>>,
     runner_config: Option<Arc<adk_runner::RunnerConfig>>,
@@ -580,6 +581,10 @@ impl CallerScope<'_> {
         }
 
         let (task_id, context_id) = self.prepare_task(&msg).await?;
+        if let Some(config) = configuration.and_then(|c| c.task_push_notification_config.clone()) {
+            self.push_config_create(&task_id, config).await?;
+        }
+        self.forward_push_notifications(&task_id).await;
         handler.executor.transition_state(&task_id, &context_id, TaskState::Working, None).await?;
 
         if let Some(runner_config) = &handler.runner_config {
@@ -616,6 +621,59 @@ impl CallerScope<'_> {
 
         let entry = handler.task_store.get_task(&task_id).await?;
         internal_task_to_wire(&entry)
+    }
+
+    /// Starts delivering `task_id`'s updates to its push notification configs, when the
+    /// agent card offers push notifications. Every status and artifact update is delivered
+    /// until the task ends or stops for its caller, including configs added while the task
+    /// runs. A failed delivery is logged and does not fail the task.
+    async fn forward_push_notifications(&self, task_id: &str) {
+        let handler = self.handler;
+        if handler.agent_card.read().await.card.capabilities.push_notifications != Some(true) {
+            return;
+        }
+        let mut updates = handler.executor.subscribe(task_id);
+        let store = handler.task_store.clone();
+        let sender = handler.push_sender.clone();
+        let task_id = task_id.to_string();
+        tokio::spawn(async move {
+            use tokio::sync::broadcast::error::RecvError;
+            loop {
+                let update = match updates.recv().await {
+                    Ok(update) => update,
+                    Err(RecvError::Lagged(missed)) => {
+                        tracing::warn!(%task_id, missed, "push delivery fell behind; updates skipped");
+                        continue;
+                    }
+                    Err(RecvError::Closed) => return,
+                };
+                let ends = matches!(
+                    &update,
+                    StreamResponse::StatusUpdate(event) if ends_subscription(event.status.state)
+                );
+                let configs = match store.get_task(&task_id).await {
+                    Ok(entry) => entry.push_configs,
+                    Err(_) => return,
+                };
+                for config in &configs {
+                    let delivered = match &update {
+                        StreamResponse::StatusUpdate(event) => {
+                            sender.send_status_update(&config.url, event, config).await
+                        }
+                        StreamResponse::ArtifactUpdate(event) => {
+                            sender.send_artifact_update(&config.url, event, config).await
+                        }
+                        _ => Ok(()),
+                    };
+                    if let Err(error) = delivered {
+                        tracing::warn!(%task_id, url = %config.url, %error, "push notification not delivered");
+                    }
+                }
+                if ends {
+                    return;
+                }
+            }
+        });
     }
 
     /// The task `msg` continues, if any (see [`message_send_with`](Self::message_send_with)).
@@ -759,6 +817,7 @@ impl CallerScope<'_> {
         }
 
         let (task_id, context_id) = self.prepare_task(&msg).await?;
+        self.forward_push_notifications(&task_id).await;
 
         // Record idempotency mapping
         handler.idempotency_map.write().await.insert(idempotency_key, task_id.clone());
@@ -2206,6 +2265,77 @@ mod tests {
         };
         assert_eq!(last.status.state, TaskState::Canceled);
         assert!(!answered.load(Ordering::SeqCst));
+    }
+
+    // ── Push notifications ──────────────────────────────────────────────────
+
+    /// Records what it would deliver: the URL and the update.
+    #[derive(Default)]
+    struct RecordingSender(std::sync::Mutex<Vec<(String, String)>>);
+
+    #[async_trait::async_trait]
+    impl super::super::push::PushNotificationSender for RecordingSender {
+        async fn send_status_update(
+            &self,
+            url: &str,
+            event: &TaskStatusUpdateEvent,
+            _config: &TaskPushNotificationConfig,
+        ) -> Result<(), A2aError> {
+            self.0.lock().unwrap().push((url.to_string(), format!("{:?}", event.status.state)));
+            Ok(())
+        }
+
+        async fn send_artifact_update(
+            &self,
+            url: &str,
+            _event: &TaskArtifactUpdateEvent,
+            _config: &TaskPushNotificationConfig,
+        ) -> Result<(), A2aError> {
+            self.0.lock().unwrap().push((url.to_string(), "artifact".to_string()));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_push_config_sent_with_the_message_gets_every_update() {
+        let sender = Arc::new(RecordingSender::default());
+        let store: Arc<dyn TaskStore> = Arc::new(InMemoryTaskStore::new());
+        let mut card = make_test_agent_card();
+        card.capabilities = AgentCapabilities::none().with_push_notifications(true);
+        let handler = RequestHandler::with_runner(
+            Arc::new(V1Executor::new(store.clone())),
+            store,
+            sender.clone(),
+            Arc::new(RwLock::new(CachedAgentCard::new(card))),
+            Arc::new(
+                adk_runner::Runner::builder()
+                    .app_name("push")
+                    .agent(Arc::new(ChunkingAgent { chunks: vec!["done".into()] }))
+                    .session_service(Arc::new(adk_session::InMemorySessionService::new()))
+                    .build_config(),
+            ),
+        );
+        let configuration: SendMessageConfiguration = serde_json::from_value(serde_json::json!({
+            "taskPushNotificationConfig": {"url": "https://hooks.example.com/a2a"}
+        }))
+        .unwrap();
+
+        let task =
+            handler.message_send_with(make_test_message(), Some(&configuration)).await.unwrap();
+        assert_eq!(handler.push_config_list(&task.id.0).await.unwrap().len(), 1);
+
+        // Delivery runs beside the task; wait for the last update.
+        let mut delivered = Vec::new();
+        for _ in 0..100 {
+            delivered = sender.0.lock().unwrap().clone();
+            if delivered.iter().any(|(_, what)| what == "Completed") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let what: Vec<&str> = delivered.iter().map(|(_, what)| what.as_str()).collect();
+        assert_eq!(what, vec!["Working", "artifact", "Completed"]);
+        assert!(delivered.iter().all(|(url, _)| url == "https://hooks.example.com/a2a"));
     }
 
     // ── Media in artifacts ──────────────────────────────────────────────────
