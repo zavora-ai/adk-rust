@@ -613,3 +613,32 @@ async fn a_get_to_the_json_rpc_endpoint_is_a_json_rpc_error() {
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["error"]["code"], -32600);
 }
+
+#[tokio::test]
+async fn any_page_may_read_the_agent_card() {
+    let http = reqwest::Client::new();
+    for base in [serve_with_a2a().await, serve_weather(false).await] {
+        let url = format!("{base}/.well-known/agent-card.json");
+        // As a2a-go: the requesting page's origin is echoed, whatever it is.
+        let card =
+            http.get(&url).header("Origin", "https://elsewhere.example").send().await.unwrap();
+        assert_eq!(card.status(), 200, "{base}");
+        assert_eq!(card.headers()["access-control-allow-origin"], "https://elsewhere.example");
+        assert_eq!(card.headers()["access-control-allow-credentials"], "true");
+
+        let preflight = http
+            .request(reqwest::Method::OPTIONS, &url)
+            .header("Origin", "https://elsewhere.example")
+            .header("Access-Control-Request-Method", "GET")
+            .header("Access-Control-Request-Headers", "content-type")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(preflight.status(), 200, "{base}");
+        assert_eq!(preflight.headers()["access-control-allow-methods"], "GET, OPTIONS");
+        assert_eq!(preflight.headers()["access-control-max-age"], "86400");
+
+        let anonymous = http.get(&url).send().await.unwrap();
+        assert_eq!(anonymous.headers()["access-control-allow-origin"], "*");
+    }
+}

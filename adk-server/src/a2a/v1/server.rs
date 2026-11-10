@@ -103,7 +103,12 @@ impl A2aV1Server {
     /// The agent card route. Discovery needs no credentials, so this router takes no
     /// authentication.
     pub fn card_router(&self) -> Router {
-        Router::new().route(AGENT_CARD_PATH, get(serve_agent_card)).with_state(self.card.clone())
+        Router::new()
+            .route(
+                AGENT_CARD_PATH,
+                get(serve_agent_card).options(super::card::agent_card_preflight),
+            )
+            .with_state(self.card.clone())
     }
 
     /// The JSON-RPC and HTTP+JSON bindings, behind `A2A-Version` negotiation. Put
