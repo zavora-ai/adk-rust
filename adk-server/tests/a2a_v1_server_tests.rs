@@ -753,3 +753,77 @@ async fn remote_agent_hooks_shape_a_turn_as_adk_gos_callbacks_do() {
     assert_eq!(cards.load(Ordering::SeqCst), 1, "the card is read for the turn");
     assert_eq!(tasks().await, 1);
 }
+
+/// Pays an amount, counting how often it ran.
+struct PayTool(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait]
+impl adk_core::Tool for PayTool {
+    fn name(&self) -> &str {
+        "pay"
+    }
+
+    fn description(&self) -> &str {
+        "Pays an amount."
+    }
+
+    async fn execute(
+        &self,
+        _ctx: Arc<dyn adk_core::ToolContext>,
+        _args: Value,
+    ) -> AdkResult<Value> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(json!({"paid": true}))
+    }
+}
+
+#[tokio::test]
+async fn a_held_call_is_confirmed_over_a2a_as_adk_go_asks() {
+    use adk_model::{ScriptedLlm, ScriptedResponse};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let paid = Arc::new(AtomicUsize::new(0));
+    let model = Arc::new(ScriptedLlm::new(
+        "claude-sonnet-5-5",
+        [
+            ScriptedResponse::function_call("pay", json!({"amount": 5})),
+            ScriptedResponse::text("Paid."),
+        ],
+    ));
+    let agent = adk_agent::LlmAgentBuilder::new("payer")
+        .model(model)
+        .tool(Arc::new(PayTool(paid.clone())))
+        .require_tool_confirmation("pay")
+        .build()
+        .unwrap();
+    let base = serve_agent(Arc::new(agent)).await;
+    let client = A2aV1Client::new(A2aV1Client::resolve_agent_card(&base).await.unwrap());
+
+    let task = match client.send_message(user_message("pay 5")).await.unwrap() {
+        SendMessageResponse::Task(task) => task,
+        other => panic!("expected a task, got {other:?}"),
+    };
+    assert_eq!(task.status.state, TaskState::InputRequired);
+    assert_eq!(paid.load(Ordering::SeqCst), 0, "nothing runs before the caller confirms");
+    let ask = &task.status.message.as_ref().expect("the confirmation request").parts[0];
+    let ask_json = serde_json::to_value(ask).unwrap();
+    assert_eq!(ask_json["data"]["name"], "adk_request_confirmation");
+    assert_eq!(ask_json["data"]["args"]["originalFunctionCall"]["name"], "pay");
+    assert_eq!(ask_json["metadata"]["adk_is_long_running"], true);
+    let call_id = ask_json["data"]["id"].as_str().unwrap().to_string();
+
+    let answer: Part = serde_json::from_value(json!({
+        "data": {"id": call_id, "name": "adk_request_confirmation", "response": {"confirmed": true}},
+        "metadata": {"adk_type": "function_response"}
+    }))
+    .unwrap();
+    let mut message = user_message("");
+    message.parts = vec![answer];
+    message.task_id = Some(task.id.clone());
+    let done = match client.send_message(message).await.unwrap() {
+        SendMessageResponse::Task(task) => task,
+        other => panic!("expected a task, got {other:?}"),
+    };
+    assert_eq!(done.status.state, TaskState::Completed, "{:?}", done.status);
+    assert_eq!(paid.load(Ordering::SeqCst), 1, "the confirmed call ran once");
+}

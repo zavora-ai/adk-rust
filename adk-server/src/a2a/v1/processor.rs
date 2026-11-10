@@ -21,6 +21,9 @@ use super::convert::{
 };
 use crate::a2a::processor::{Awaiting, awaiting};
 
+/// The function a held call's confirmation is asked and answered with, as adk-go names it.
+pub const REQUEST_CONFIRMATION_FUNCTION: &str = "adk_request_confirmation";
+
 /// `adk_invocation_id`: the invocation an update came from.
 pub const ADK_INVOCATION_ID_METADATA_KEY: &str = "adk_invocation_id";
 /// `adk_author`: the agent that wrote the event.
@@ -242,14 +245,28 @@ impl EventProcessor {
     /// pending status message; returns the parts that stay in the artifact. A tool
     /// confirmation request is pending too.
     fn take_pending(&mut self, event: &Event) -> Vec<Part> {
+        // A held call asks its caller to confirm it, as adk-go asks: a long-running
+        // `adk_request_confirmation` call that names the original call. It takes the held
+        // call's ID, so the answer decides that call.
         if let Some(request) = &event.actions.tool_confirmation {
-            let id = request.function_call_id.as_deref();
-            if id.is_none_or(|id| self.pending_call_ids.insert(id.to_string())) {
+            let id = request
+                .function_call_id
+                .clone()
+                .unwrap_or_else(|| format!("adk-confirm-{}", uuid::Uuid::new_v4()));
+            if self.pending_call_ids.insert(id.clone()) {
+                let args = json!({
+                    "originalFunctionCall": {
+                        "id": request.function_call_id,
+                        "name": request.tool_name,
+                        "args": request.args,
+                    },
+                    "toolConfirmation": { "hint": "", "confirmed": false },
+                });
                 self.pending.push(tagged_function_call_part(
-                    &request.tool_name,
-                    &request.args,
-                    id,
-                    false,
+                    REQUEST_CONFIRMATION_FUNCTION,
+                    &args,
+                    Some(&id),
+                    true,
                 ));
             }
         }

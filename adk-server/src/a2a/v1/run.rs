@@ -437,6 +437,26 @@ async fn start_agent(
             None => adk_parts.push(super::convert::wire_part_to_adk(part)?),
         }
     }
+    // An answer to `adk_request_confirmation` decides the held call it names: approved
+    // (`{"confirmed": true}`) or denied. It is not shown to the agent.
+    let mut decisions = std::collections::HashMap::new();
+    adk_parts.retain(|part| match part {
+        adk_core::Part::FunctionResponse { function_response, id: Some(id), .. }
+            if function_response.name == super::processor::REQUEST_CONFIRMATION_FUNCTION =>
+        {
+            let confirmed =
+                function_response.response.get("confirmed").and_then(serde_json::Value::as_bool)
+                    == Some(true);
+            let decision = if confirmed {
+                adk_core::ToolConfirmationDecision::Approve
+            } else {
+                adk_core::ToolConfirmationDecision::Deny
+            };
+            decisions.insert(id.clone(), decision);
+            false
+        }
+        _ => true,
+    });
     let content = adk_core::Content { role: "user".to_string(), parts: adk_parts };
 
     let mut runner_builder = adk_runner::Runner::builder()
@@ -458,10 +478,11 @@ async fn start_agent(
     if let Some(ref plugin_manager) = runner_config.plugin_manager {
         runner_builder = runner_builder.plugin_manager(plugin_manager.clone());
     }
-    let run_config = runner_config.run_config.clone().unwrap_or_else(|| adk_core::RunConfig {
+    let mut run_config = runner_config.run_config.clone().unwrap_or_else(|| adk_core::RunConfig {
         streaming_mode: adk_core::StreamingMode::None,
         ..adk_core::RunConfig::default()
     });
+    run_config.tool_confirmation_decisions.extend(decisions);
     runner_builder = runner_builder.run_config(run_config);
     if let Some(ref compaction_config) = runner_config.compaction_config {
         runner_builder = runner_builder.compaction_config(compaction_config.clone());

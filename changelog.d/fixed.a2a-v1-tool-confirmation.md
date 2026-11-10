@@ -1,0 +1,4 @@
+- **A held tool call is confirmed over A2A as adk-go asks** (`adk-server`, `a2a-v1`):
+  - **The `INPUT_REQUIRED` message asks with a long-running `adk_request_confirmation` call.** Its args carry `originalFunctionCall` and `toolConfirmation`, and it takes the held call's ID. The original call stays in the artifact.
+  - **The caller answers with an `adk_request_confirmation` function response** for that ID: `{"confirmed": true}` approves the held call and anything else denies it. The run resumes with that decision (`RunConfig::tool_confirmation_decisions`), and the answer is not shown to the agent.
+  - **Before, a held call was named after the tool, and an answer to it did not decide the call.**
