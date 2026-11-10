@@ -1491,11 +1491,27 @@ impl GeminiModel {
             }
         }
 
+        // System contents become Gemini's `systemInstruction`, as adk-python and adk-go send
+        // the agent's instruction. A request on a context cache keeps them as leading user
+        // turns: the cache already carries a system instruction, and Gemini takes only one.
+        let on_cache = req.config.as_ref().is_some_and(|config| config.cached_content.is_some());
+        if !on_cache {
+            let instruction: Vec<&str> = req
+                .contents
+                .iter()
+                .filter(|content| content.role == "system")
+                .flat_map(|content| content.parts.iter().filter_map(Part::text))
+                .filter(|text| !text.trim().is_empty())
+                .collect();
+            if !instruction.is_empty() {
+                builder = builder.with_system_instruction(instruction.join("\n\n"));
+            }
+        }
+
         // Add contents using proper builder methods
         for content in &req.contents {
             match content.role.as_str() {
-                // System contents stay leading user turns: a `system_instruction` would
-                // conflict with the context cache, which already carries one.
+                "system" if !on_cache => {}
                 "user" | "system" => {
                     // For user messages, build gemini Content with potentially multiple parts
                     let mut gemini_parts = Vec::new();

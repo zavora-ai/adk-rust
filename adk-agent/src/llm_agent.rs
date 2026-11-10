@@ -4429,9 +4429,13 @@ impl Agent for LlmAgent {
                     // Kept for the run's `on_model_error` hooks, which see what the model was sent.
                     let failed_request = (!ctx.run_config().invocation_hooks.is_empty())
                         .then(|| request.clone());
-                    // Always use streaming internally for LLM calls
+                    // A run without streaming asks the model for one complete response
+                    // (Gemini's `generateContent`, as adk-python and adk-go do); otherwise
+                    // the model streams, even when output guardrails hold the chunks back.
+                    let stream_model =
+                        matches!(streaming_mode, StreamingMode::SSE | StreamingMode::Bidi);
                     let mut response_stream = match call_scope
-                        .generate(model.as_ref(), request, true)
+                        .generate(model.as_ref(), request, stream_model)
                         .instrument(llm_span.clone())
                         .await
                     {
