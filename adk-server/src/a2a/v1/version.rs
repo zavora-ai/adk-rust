@@ -283,7 +283,7 @@ mod tests {
         assert_eq!(parts.status, StatusCode::BAD_REQUEST);
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["error"]["code"], 400);
-        assert_eq!(body["error"]["status"], "BAD_REQUEST");
+        assert_eq!(body["error"]["status"], "FAILED_PRECONDITION");
         assert!(body.get("jsonrpc").is_none());
     }
 

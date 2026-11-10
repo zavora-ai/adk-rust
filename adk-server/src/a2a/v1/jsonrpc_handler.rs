@@ -129,7 +129,22 @@ fn parse_request(body: &[u8]) -> Result<JsonRpcRequest, Value> {
             return Err(invalid(None, "`id` must be a string, a number or null".to_string()));
         }
     };
+    if object.get("method").and_then(Value::as_str).is_some_and(str::is_empty) {
+        return Err(invalid(id, "`method` must not be empty".to_string()));
+    }
     serde_json::from_value(value).map_err(|e| invalid(id, e.to_string()))
+}
+
+/// Any request to the JSON-RPC endpoint that is not a `POST`: a JSON-RPC invalid request,
+/// as a2a-go answers it, rather than a bare `405`.
+pub async fn jsonrpc_not_post() -> Response {
+    json_response(envelope_error(
+        None,
+        INVALID_REQUEST,
+        "Request payload validation error",
+        "INVALID_REQUEST",
+        "JSON-RPC requests are sent with POST".to_string(),
+    ))
 }
 
 /// Returns the `id` to answer a JSON-RPC request with, when `body` is a
@@ -439,9 +454,16 @@ async fn handle_get_extended_agent_card(
     request: JsonRpcRequest,
 ) -> Response {
     let id = request.id.clone();
-    // GetExtendedAgentCard params are optional
-    let _params: Option<GetExtendedAgentCardParams> =
-        request.params.and_then(|v| serde_json::from_value(v).ok());
+    // GetExtendedAgentCard params are optional, but must be its params when present.
+    if let Some(params) = request.params.filter(|params| !params.is_null())
+        && (!params.is_object()
+            || serde_json::from_value::<GetExtendedAgentCardParams>(params).is_err())
+    {
+        let error = A2aError::InvalidParams {
+            message: "GetExtendedAgentCard params must be an object".to_string(),
+        };
+        return json_response(make_error_response(id, &error));
+    }
 
     match handler.agent_card_extended_for(caller).await {
         Ok(card) => json_response(make_success_response(id, &card)),
@@ -753,6 +775,28 @@ mod tests {
         let resp = call_handler(handler, "SendMessage", serde_json::json!({})).await;
 
         assert!(resp["error"].is_object());
+        assert_eq!(resp["error"]["code"], -32602);
+    }
+
+    #[tokio::test]
+    async fn an_empty_method_and_bad_card_params_are_refused_as_a2a_go_does() {
+        let body =
+            serde_json::to_vec(&serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": ""}))
+                .unwrap();
+        let resp = jsonrpc_handler(
+            State(make_handler()),
+            AuthenticatedCaller::default(),
+            axum::body::Bytes::from(body),
+        )
+        .await;
+        let resp: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap(),
+        )
+        .unwrap();
+        assert_eq!(resp["error"]["code"], -32600);
+
+        let resp =
+            call_handler(make_handler(), "GetExtendedAgentCard", serde_json::json!(["x"])).await;
         assert_eq!(resp["error"]["code"], -32602);
     }
 

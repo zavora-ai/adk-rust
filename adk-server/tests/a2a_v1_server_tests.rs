@@ -600,3 +600,16 @@ async fn cancelling_a_task_cancels_the_remote_task_it_waits_on() {
     let child_task = child_client.get_task(&child_tasks[0].id.0, None).await.unwrap();
     assert_eq!(child_task.status.state, TaskState::Canceled);
 }
+
+#[tokio::test]
+async fn a_get_to_the_json_rpc_endpoint_is_a_json_rpc_error() {
+    let base = serve_weather(false).await;
+    let card = A2aV1Client::resolve_agent_card(&base).await.unwrap();
+    let url = v1_interface(&card, "JSONRPC").unwrap().url.clone();
+    let response =
+        reqwest::Client::new().get(&url).header("A2A-Version", "1.0").send().await.unwrap();
+    // As a2a-go: a JSON-RPC invalid request, not a bare 405.
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["error"]["code"], -32600);
+}

@@ -179,7 +179,7 @@ impl A2aError {
             Self::ExtensionSupportRequired { .. } => "EXTENSION_SUPPORT_REQUIRED",
             Self::VersionNotSupported { .. } => "VERSION_NOT_SUPPORTED",
             Self::InvalidParams { .. } => "INVALID_PARAMS",
-            Self::Internal { .. } => "INTERNAL",
+            Self::Internal { .. } => "INTERNAL_ERROR",
             Self::MethodNotFound { .. } => "METHOD_NOT_FOUND",
             Self::InvalidStateTransition { .. } => "INVALID_STATE_TRANSITION",
             Self::PushDeliveryFailed { .. } => "PUSH_DELIVERY_FAILED",
@@ -192,9 +192,11 @@ impl A2aError {
         match self {
             Self::TaskNotFound { task_id } => {
                 map.insert("task_id".to_string(), Value::String(task_id.clone()));
+                map.insert("taskId".to_string(), Value::String(task_id.clone()));
             }
             Self::TaskNotCancelable { task_id, current_state } => {
                 map.insert("task_id".to_string(), Value::String(task_id.clone()));
+                map.insert("taskId".to_string(), Value::String(task_id.clone()));
                 map.insert("current_state".to_string(), Value::String(current_state.clone()));
             }
             Self::UnsupportedOperation { method } => {
@@ -233,19 +235,30 @@ impl A2aError {
                 // No variant-specific metadata
             }
         }
+        // When the error happened, as a2a-go stamps every ErrorInfo.
+        map.insert(
+            "timestamp".to_string(),
+            Value::String(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        );
         map
     }
 
     /// Map HTTP status code to a canonical status string for AIP-193 responses.
+    /// The AIP-193 `status`: the `google.rpc.Code` name of the error, as a2a-go names it.
     fn http_status_string(&self) -> &'static str {
-        match self.http_status() {
-            400 => "BAD_REQUEST",
-            404 => "NOT_FOUND",
-            409 => "CONFLICT",
-            415 => "UNSUPPORTED_MEDIA_TYPE",
-            500 => "INTERNAL_SERVER_ERROR",
-            502 => "BAD_GATEWAY",
-            _ => "UNKNOWN",
+        match self {
+            Self::TaskNotFound { .. } | Self::MethodNotFound { .. } => "NOT_FOUND",
+            Self::InvalidParams { .. } | Self::ContentTypeNotSupported { .. } => "INVALID_ARGUMENT",
+            Self::TaskNotCancelable { .. }
+            | Self::InvalidStateTransition { .. }
+            | Self::PushNotificationNotSupported
+            | Self::UnsupportedOperation { .. }
+            | Self::ExtendedAgentCardNotConfigured
+            | Self::ExtensionSupportRequired { .. }
+            | Self::VersionNotSupported { .. } => "FAILED_PRECONDITION",
+            Self::Internal { .. }
+            | Self::PushDeliveryFailed { .. }
+            | Self::InvalidAgentResponse { .. } => "INTERNAL",
         }
     }
 }
@@ -329,7 +342,8 @@ mod tests {
         assert_eq!(err.http_status(), 400);
         let info = err.to_error_info();
         assert_eq!(info[0]["reason"], "PUSH_NOTIFICATION_NOT_SUPPORTED");
-        assert!(info[0]["metadata"].as_object().unwrap().is_empty());
+        let metadata = info[0]["metadata"].as_object().unwrap();
+        assert_eq!(metadata.keys().collect::<Vec<_>>(), ["timestamp"], "only when it happened");
     }
 
     #[test]

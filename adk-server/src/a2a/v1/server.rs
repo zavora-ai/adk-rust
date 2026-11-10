@@ -110,7 +110,10 @@ impl A2aV1Server {
     /// authentication on this router: the handlers act for the caller it identifies.
     pub fn rpc_router(&self) -> Router {
         Router::new()
-            .route(&self.jsonrpc_path, post(jsonrpc_handler))
+            .route(
+                &self.jsonrpc_path,
+                post(jsonrpc_handler).fallback(super::jsonrpc_handler::jsonrpc_not_post),
+            )
             .with_state(self.handler.clone())
             .nest(&self.rest_path, rest_router(self.handler.clone()))
             .layer(axum::middleware::from_fn(version_negotiation))

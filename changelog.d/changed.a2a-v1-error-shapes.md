@@ -1,0 +1,8 @@
+- **A2A v1 errors carry what a2a-go clients read** (`adk-server`, `a2a-v1`):
+  - **HTTP+JSON errors name their `google.rpc.Code`** in `status`: `NOT_FOUND`, `INVALID_ARGUMENT`, `FAILED_PRECONDITION` or `INTERNAL`. They used to give HTTP phrases such as `BAD_REQUEST`. The HTTP status codes still follow the A2A spec (409, 415, 502).
+  - **Every `google.rpc.ErrorInfo` has a `timestamp`.** Task errors also give `taskId`.
+  - **An internal error's reason is `INTERNAL_ERROR`.**
+  - **JSON-RPC envelope errors:**
+    - An empty `method` is -32600.
+    - A request to the JSON-RPC endpoint that is not a `POST` is a JSON-RPC -32600, not a bare 405.
+    - `GetExtendedAgentCard` params that are not an object are -32602.

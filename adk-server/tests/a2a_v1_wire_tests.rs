@@ -280,7 +280,7 @@ async fn an_unsupported_or_missing_version_gets_the_binding_s_version_error() {
     let reply =
         post_raw(&format!("{base}/rest/message:send"), Some("99.0"), r#"{"message":{}}"#).await;
     assert_eq!(reply.status, 400);
-    assert_eq!(reply.json()["error"]["status"], "BAD_REQUEST");
+    assert_eq!(reply.json()["error"]["status"], "FAILED_PRECONDITION");
 }
 
 #[tokio::test]
