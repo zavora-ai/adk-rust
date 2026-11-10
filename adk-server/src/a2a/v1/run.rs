@@ -35,6 +35,76 @@ pub(super) struct RunContext {
     pub output_mode: OutputMode,
     pub hooks: super::hooks::ExecutorHooks,
     pub extensions: Vec<String>,
+    /// Fails the run when the agent produces nothing for this long.
+    pub inactivity_timeout: Option<std::time::Duration>,
+}
+
+/// The most runs at once for one session user; 0 for no limit.
+pub type RunsForUser = Arc<dyn Fn(&str) -> usize + Send + Sync>;
+
+/// How many runs may go at once, as a2a-go's `ConcurrencyConfig`: at most `max_runs` in all
+/// (0 for no limit), and at most `max_runs_for(user)` for one session user.
+#[derive(Clone, Default)]
+pub struct ConcurrencyLimits {
+    /// The most runs at once in all; 0 for no limit.
+    pub max_runs: usize,
+    /// The most runs at once for one session user; 0 for no limit.
+    pub max_runs_for: Option<RunsForUser>,
+}
+
+/// Counts the runs in progress against [`ConcurrencyLimits`].
+#[derive(Default)]
+pub(super) struct RunLimiter {
+    limits: ConcurrencyLimits,
+    running: std::sync::Mutex<(usize, std::collections::HashMap<String, usize>)>,
+}
+
+impl RunLimiter {
+    pub(super) fn new(limits: ConcurrencyLimits) -> Arc<Self> {
+        Arc::new(Self { limits, running: std::sync::Mutex::default() })
+    }
+
+    /// Takes a place for a run of `user`, or refuses it when a limit is reached.
+    pub(super) fn acquire(self: &Arc<Self>, user: &str) -> Result<RunPermit, A2aError> {
+        let mut running = self.running.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.limits.max_runs > 0 && running.0 >= self.limits.max_runs {
+            return Err(A2aError::Internal {
+                message: "max concurrency limit reached".to_string(),
+            });
+        }
+        if let Some(limit_for) = &self.limits.max_runs_for {
+            let limit = limit_for(user);
+            let active = running.1.get(user).copied().unwrap_or(0);
+            if limit > 0 && active >= limit {
+                return Err(A2aError::Internal {
+                    message: format!("max scope concurrency limit reached for {user:?}"),
+                });
+            }
+            running.1.insert(user.to_string(), active + 1);
+        }
+        running.0 += 1;
+        Ok(RunPermit { limiter: self.clone(), user: user.to_string() })
+    }
+}
+
+/// A run's place under the [`RunLimiter`], given back when the run ends.
+pub(super) struct RunPermit {
+    limiter: Arc<RunLimiter>,
+    user: String,
+}
+
+impl Drop for RunPermit {
+    fn drop(&mut self) {
+        let mut running =
+            self.limiter.running.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        running.0 = running.0.saturating_sub(1);
+        if let Some(active) = running.1.get_mut(&self.user) {
+            *active = active.saturating_sub(1);
+            if *active == 0 {
+                running.1.remove(&self.user);
+            }
+        }
+    }
 }
 
 /// Starts the run of `message` for `task_id` on its own task and returns its handle.
@@ -140,7 +210,20 @@ async fn execute(
         };
 
         let mut run_error = None;
-        while let Some(result) = events.next().await {
+        loop {
+            let next = match run.inactivity_timeout {
+                Some(limit) => match tokio::time::timeout(limit, events.next()).await {
+                    Ok(next) => next,
+                    Err(_) => {
+                        // As a2a-go: an agent that goes quiet fails its task.
+                        cancellation.cancel();
+                        run_error = Some("agent inactivity timeout".to_string());
+                        break;
+                    }
+                },
+                None => events.next().await,
+            };
+            let Some(result) = next else { break };
             match result {
                 Ok(event) => {
                     let Some(mut update) = processor.process(&event) else { continue };
@@ -161,7 +244,7 @@ async fn execute(
         drop(events);
 
         // A cancelled run ends on the `CANCELED` status its cancel recorded.
-        if cancellation.is_cancelled() {
+        if cancellation.is_cancelled() && run_error.is_none() {
             let event = settle(
                 executor,
                 task_id,

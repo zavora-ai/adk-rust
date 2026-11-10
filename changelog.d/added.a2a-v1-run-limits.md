@@ -1,0 +1,3 @@
+- **A2A v1 run limits, as a2a-go offers them** (`adk-server`, `a2a-v1`):
+  - **`inactivity_timeout`** (`A2aV1ServerBuilder::inactivity_timeout`, `RequestHandler::with_inactivity_timeout`) stops an agent that produces nothing for that long and fails its task with `agent inactivity timeout`.
+  - **`concurrency_limits`** (`ConcurrencyLimits`: `max_runs` in all, `max_runs_for(user)` per caller) refuses a message while that many runs are going (`max concurrency limit reached`), before any task is created.

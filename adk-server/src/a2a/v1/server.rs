@@ -88,6 +88,8 @@ impl A2aV1Server {
             output_mode: OutputMode::default(),
             extended_card: None,
             hooks: super::hooks::ExecutorHooks::default(),
+            inactivity_timeout: None,
+            limits: None,
         }
     }
 
@@ -148,6 +150,8 @@ pub struct A2aV1ServerBuilder {
     output_mode: OutputMode,
     extended_card: Option<super::request_handler::ExtendedCardProducer>,
     hooks: super::hooks::ExecutorHooks,
+    inactivity_timeout: Option<std::time::Duration>,
+    limits: Option<super::run::ConcurrencyLimits>,
 }
 
 impl A2aV1ServerBuilder {
@@ -166,6 +170,19 @@ impl A2aV1ServerBuilder {
     /// Keeps tasks in `store` instead of a new [`InMemoryTaskStore`].
     pub fn task_store(mut self, store: Arc<dyn TaskStore>) -> Self {
         self.task_store = Some(store);
+        self
+    }
+
+    /// Fails a run whose agent produces nothing for `timeout`; see
+    /// [`RequestHandler::with_inactivity_timeout`].
+    pub fn inactivity_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.inactivity_timeout = Some(timeout);
+        self
+    }
+
+    /// Limits how many runs go at once; see [`RequestHandler::with_concurrency_limits`].
+    pub fn concurrency_limits(mut self, limits: super::run::ConcurrencyLimits) -> Self {
+        self.limits = Some(limits);
         self
     }
 
@@ -299,6 +316,12 @@ impl A2aV1ServerBuilder {
         .with_hooks(self.hooks);
         if let Some(producer) = self.extended_card {
             handler = handler.with_extended_card(producer);
+        }
+        if let Some(timeout) = self.inactivity_timeout {
+            handler = handler.with_inactivity_timeout(timeout);
+        }
+        if let Some(limits) = self.limits {
+            handler = handler.with_concurrency_limits(limits);
         }
         let handler = Arc::new(handler);
         A2aV1Server { handler, card, jsonrpc_path: self.jsonrpc_path, rest_path: self.rest_path }

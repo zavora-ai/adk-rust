@@ -187,6 +187,10 @@ pub struct RequestHandler {
     extended_card: Option<ExtendedCardProducer>,
     /// Hooks into each run.
     hooks: super::hooks::ExecutorHooks,
+    /// Fails a run whose agent produces nothing for this long.
+    inactivity_timeout: Option<std::time::Duration>,
+    /// Limits how many runs go at once.
+    limiter: Option<Arc<super::run::RunLimiter>>,
 }
 
 impl RequestHandler {
@@ -208,6 +212,8 @@ impl RequestHandler {
             output_mode: OutputMode::default(),
             extended_card: None,
             hooks: super::hooks::ExecutorHooks::default(),
+            inactivity_timeout: None,
+            limiter: None,
         }
     }
 
@@ -230,7 +236,25 @@ impl RequestHandler {
             output_mode: OutputMode::default(),
             extended_card: None,
             hooks: super::hooks::ExecutorHooks::default(),
+            inactivity_timeout: None,
+            limiter: None,
         }
+    }
+
+    /// Fails a run whose agent produces nothing for `timeout`, as a2a-go's inactivity
+    /// timeout does: the agent is stopped and the task fails with `agent inactivity timeout`.
+    #[must_use]
+    pub fn with_inactivity_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.inactivity_timeout = Some(timeout);
+        self
+    }
+
+    /// Refuses a message when `limits` already has as many runs going, as a2a-go's
+    /// concurrency limits do (`max concurrency limit reached`).
+    #[must_use]
+    pub fn with_concurrency_limits(mut self, limits: super::run::ConcurrencyLimits) -> Self {
+        self.limiter = Some(super::run::RunLimiter::new(limits));
+        self
     }
 
     /// Calls `hooks` at their points in each run; see [`ExecutorHooks`](super::hooks::ExecutorHooks).
@@ -594,6 +618,8 @@ impl CallerScope<'_> {
             return self.tasks_get(&existing_task_id, None).await;
         }
 
+        // Refused before a task exists when the run limit is reached.
+        let permit = self.acquire_run()?;
         let prepared = self.prepare_task(&msg).await?;
         let task_id = prepared.task_id.clone();
         if let Some(config) = configuration.and_then(|c| c.task_push_notification_config.clone()) {
@@ -605,7 +631,7 @@ impl CallerScope<'_> {
             let return_immediately =
                 configuration.and_then(|c| c.return_immediately).unwrap_or(false);
             let submitted = handler.task_store.get_task(&task_id).await?;
-            let run = self.start_run(&prepared, msg).await?;
+            let run = self.start_run(&prepared, msg, permit).await?;
             if return_immediately {
                 return internal_task_to_wire(&submitted);
             }
@@ -638,10 +664,19 @@ impl CallerScope<'_> {
 
     /// Starts the run of a prepared task: the agent when the handler has one, otherwise
     /// the `WORKING` and `COMPLETED` transitions alone. Returns the run's handle.
+    /// A place for one more run under the handler's concurrency limits, scoped by the
+    /// caller; `None` without limits.
+    fn acquire_run(&self) -> Result<Option<super::run::RunPermit>, A2aError> {
+        let Some(limiter) = &self.handler.limiter else { return Ok(None) };
+        let scope = self.caller.as_ref().map_or("anonymous", |caller| caller.user_id.as_str());
+        limiter.acquire(scope).map(Some)
+    }
+
     async fn start_run(
         &self,
         prepared: &PreparedTask,
         msg: Message,
+        permit: Option<super::run::RunPermit>,
     ) -> Result<tokio::task::JoinHandle<()>, A2aError> {
         let handler = self.handler;
         let (task_id, context_id) = (prepared.task_id.clone(), prepared.context_id.clone());
@@ -661,8 +696,9 @@ impl CallerScope<'_> {
             output_mode: handler.output_mode,
             hooks: handler.hooks.clone(),
             extensions: self.extensions.clone(),
+            inactivity_timeout: handler.inactivity_timeout,
         };
-        Ok(super::run::spawn(run, task_id, context_id, msg, cancellation, guard))
+        Ok(super::run::spawn(run, task_id, context_id, msg, cancellation, (guard, permit)))
     }
 
     /// The `INPUT_REQUIRED` or `AUTH_REQUIRED` task `msg` continues, if any (see
@@ -812,6 +848,8 @@ impl CallerScope<'_> {
             return Ok(futures::stream::once(async move { Ok(StreamResponse::Task(task)) }).boxed());
         }
 
+        // Refused before a task exists when the run limit is reached.
+        let permit = self.acquire_run()?;
         let prepared = self.prepare_task(&msg).await?;
         let task_id = prepared.task_id.clone();
         if let Some(config) = configuration.and_then(|c| c.task_push_notification_config.clone()) {
@@ -825,7 +863,7 @@ impl CallerScope<'_> {
         let settled = ends_subscription(first.status.state);
         if prepared.runs {
             // Detached: the handle is not awaited, so dropping the stream leaves the run.
-            drop(self.start_run(&prepared, msg).await?);
+            drop(self.start_run(&prepared, msg, permit).await?);
         }
 
         let stream = async_stream::stream! {
@@ -2571,6 +2609,48 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(*seen.lock().unwrap(), vec![required.to_string()]);
+    }
+
+    #[tokio::test]
+    async fn an_agent_that_goes_quiet_fails_its_task() {
+        let (handler, _, _) = slow_handler(2_000);
+        let handler = handler.with_inactivity_timeout(std::time::Duration::from_millis(100));
+        let task = handler.message_send(make_test_message()).await.unwrap();
+        assert_eq!(task.status.state, TaskState::Failed);
+        assert!(
+            status_text(&task.status).contains("agent inactivity timeout"),
+            "{}",
+            status_text(&task.status)
+        );
+    }
+
+    #[tokio::test]
+    async fn runs_over_the_concurrency_limit_are_refused() {
+        let (handler, store, _) = slow_handler(300);
+        let handler = handler.with_concurrency_limits(super::super::run::ConcurrencyLimits {
+            max_runs: 1,
+            max_runs_for: None,
+        });
+        let first = handler
+            .message_send_with(make_test_message(), Some(&return_immediately()))
+            .await
+            .unwrap();
+        let mut second = make_test_message();
+        second.id = MessageId::new("msg-second");
+        let refused = handler.message_send(second).await.unwrap_err();
+        assert!(refused.to_string().contains("max concurrency limit reached"), "{refused}");
+
+        for _ in 0..100 {
+            if is_terminal_state(store.get_task(&first.id.0).await.unwrap().status.state) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        // The first run's place is given back when it ends.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let mut third = make_test_message();
+        third.id = MessageId::new("msg-third");
+        assert_eq!(handler.message_send(third).await.unwrap().status.state, TaskState::Completed);
     }
 
     fn make_handler() -> RequestHandler {
