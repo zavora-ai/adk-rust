@@ -50,9 +50,12 @@ ADK-Rust kernel up on http://127.0.0.1:8080
   mode auto · shell none
 ```
 
-A message to the kernel then works in that folder, wherever the kernel was started:
+A message to the kernel then works in that folder, wherever the kernel was started. Create the
+session once, then run turns in it:
 
 ```bash
+curl -s -X POST "localhost:8080/api/apps/adk-rust/users/$USER/sessions/s1" \
+  -H 'content-type: application/json' -d '{}'
 curl -s localhost:8080/api/run -H 'content-type: application/json' -d '{
   "appName": "adk-rust", "userId": "'"$USER"'", "sessionId": "s1",
   "newMessage": {"role": "user", "parts": [{"text": "Start a grocery list for me with tea and oats."}]}}'

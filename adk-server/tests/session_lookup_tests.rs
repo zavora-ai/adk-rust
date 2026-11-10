@@ -1,7 +1,7 @@
-//! The REST and legacy A2A run endpoints create a session only when it does not exist: a
-//! transient lookup failure fails the request and leaves the stored session as it was, two
-//! first requests racing to create a session both run, and session errors map to their HTTP
-//! status.
+//! The REST and legacy A2A run endpoints and their sessions: an ADK run needs an existing
+//! session, a UI protocol's run creates its session only when it does not exist, a transient
+//! lookup failure fails the request and leaves the stored session as it was, two first
+//! requests racing to create a session both run, and session errors map to their HTTP status.
 
 use adk_core::identity::AdkIdentity;
 use adk_core::{AdkError, Content, ErrorComponent, Event};
@@ -237,10 +237,12 @@ async fn racing_first_requests_both_run_on_one_session() {
     let app = app(sessions.clone());
     *sessions.create_gate.lock().unwrap() = Some(Arc::new(tokio::sync::Barrier::new(2)));
 
-    let (first, second) = tokio::join!(
-        post(&app, "/api/run", run_body("u1", "new")),
-        post(&app, "/api/run", run_body("u1", "new"))
-    );
+    // A UI protocol's run starts the session it names, so two first requests race to create
+    // it. (An ADK run needs the session to exist.)
+    let mut body = run_body("u1", "new");
+    body["uiProtocol"] = json!("a2ui");
+    let (first, second) =
+        tokio::join!(post(&app, "/api/run_sse", body.clone()), post(&app, "/api/run_sse", body));
     assert_eq!((first.0, second.0), (StatusCode::OK, StatusCode::OK));
 
     let session = sessions
@@ -256,6 +258,38 @@ async fn racing_first_requests_both_run_on_one_session() {
         .unwrap();
     let user_turns = session.events().all().iter().filter(|e| e.author == "user").count();
     assert_eq!(user_turns, 2);
+}
+
+#[tokio::test]
+async fn an_adk_run_on_an_unknown_session_is_not_found() {
+    let sessions = faults();
+    let app = app(sessions.clone());
+
+    for uri in ["/api/run", "/api/run_sse"] {
+        let (status, body) = post(&app, uri, run_body("u1", "missing")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}: {body}");
+        assert_eq!(body["error"]["code"], "session.not_found", "{uri}: {body}");
+    }
+    let missing = sessions
+        .inner
+        .get(GetRequest {
+            app_name: APP.to_string(),
+            user_id: "u1".to_string(),
+            session_id: "missing".to_string(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await;
+    assert!(missing.is_err(), "a refused run creates no session");
+
+    // A UI protocol's thread still starts its session.
+    for protocol in ["a2ui", "ag_ui"] {
+        let mut body = run_body("u1", protocol);
+        body["uiProtocol"] = json!(protocol);
+        let (status, response) = post(&app, "/api/run_sse", body).await;
+        assert_eq!(status, StatusCode::OK, "{protocol}: {response}");
+        assert_eq!(stored(&sessions, APP, "u1", protocol).await.0, 2, "{protocol}");
+    }
 }
 
 #[tokio::test]

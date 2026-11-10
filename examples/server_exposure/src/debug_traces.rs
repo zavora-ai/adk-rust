@@ -102,7 +102,19 @@ async fn scenarios(key: String, exporter: Arc<AdkSpanExporter>) -> anyhow::Resul
     .await?;
     let client = http();
 
-    // alice runs one turn; her `agent.execute` span is recorded under the invocation ID.
+    // alice runs one turn; her `agent.execute` span is recorded under the invocation ID. An
+    // ADK run needs an existing session.
+    let created = client
+        .post(format!("{base}/api/apps/{APP}/users/alice/sessions/s-alice"))
+        .header("x-user", "alice")
+        .json(&serde_json::json!({}))
+        .send()
+        .await?;
+    anyhow::ensure!(
+        created.status().is_success(),
+        "creating alice's session: {}",
+        created.status()
+    );
     let response = client
         .post(format!("{base}/api/run"))
         .header("x-user", "alice")

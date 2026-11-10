@@ -484,7 +484,7 @@ Session errors map to their status: `404` not found, `409` already exists, `400`
 | `/api/run_sse` | POST | adk-go compatible SSE runtime |
 | `/api/run` | POST | Run to completion and return every event as a JSON array |
 
-`/api/run_sse` and `/api/run` create the session only when it does not exist; any other read failure fails the request.
+`/api/run_sse` and `/api/run` run on an existing session, as in adk-python and adk-go: a missing one answers `404` with code `session.not_found`, so create it first with `POST /api/apps/{app_name}/users/{user_id}/sessions`. A run with a UI protocol (`a2ui`, `ag_ui`, `mcp_apps`) starts its thread's session when it does not exist. Any other read failure fails the request.
 
 ### Artifacts
 

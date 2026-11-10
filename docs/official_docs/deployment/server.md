@@ -179,10 +179,10 @@ POST /api/run_sse
 
 | Field | Meaning |
 |-------|---------|
-| `appName`, `userId`, `sessionId` | The agent and session to run. A session that does not exist is created. |
+| `appName`, `userId`, `sessionId` | The agent and session to run. The session must exist: a missing one answers `404` with code `session.not_found`. Create it first with `POST /api/apps/{app}/users/{user}/sessions`. A run with a UI protocol (`uiProtocol` or the `x-adk-ui-protocol` header set to `a2ui`, `ag_ui` or `mcp_apps`) starts its thread's session when it does not exist. |
 | `newMessage` | The user message: `role` and `parts`, each `{"text"}` or `{"inlineData": {"mimeType", "data"}}` with base64 `data`. |
 | `streaming` | Default `true`: the model streams partial events. `false` produces one event per model response. |
-| `stateDelta` | Optional object merged into the session state before the run; the initial state of a new session. |
+| `stateDelta` | Optional object merged into the session state before the run; the initial state of a session a UI protocol's run starts. |
 
 **Response:** `Content-Type: text/event-stream`, one `data:` line per event:
 
@@ -492,6 +492,13 @@ A browser page served from another origin cannot call the server until that orig
 Using the Fetch API with SSE:
 
 ```javascript
+// The session must exist before a run.
+await fetch('http://localhost:8080/api/apps/my_agent/users/user123/sessions/session456', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: '{}'
+});
+
 async function runAgent(message) {
   const response = await fetch('http://localhost:8080/api/run_sse', {
     method: 'POST',
@@ -562,6 +569,10 @@ def run_agent(message):
                 event = json.loads(line_str[6:])
                 print('Event:', event)
 
+# The session must exist before a run.
+requests.post(
+    'http://localhost:8080/api/apps/my_agent/users/user123/sessions/session456', json={}
+)
 run_agent('What is the capital of France?')
 ```
 
@@ -874,9 +885,9 @@ RUST_LOG=debug cargo run -- serve
 
 ## Best Practices
 
-1. **Sessions**: `/api/run` and `/api/run_sse` create a missing session, and the path-style
-   run route requires one; create it first with `POST /api/sessions` to choose its ID or detect
-   a conflict
+1. **Sessions**: `/api/run`, `/api/run_sse` and the path-style run route need an existing
+   session; create it first with `POST /api/apps/{app}/users/{user}/sessions`. Only a UI
+   protocol's run starts its thread's session
 2. **Error Handling**: Check HTTP status codes, and the `error_code` of the last SSE event
 3. **Streaming**: Use SSE for real-time responses; parse events line by line
 4. **Security**: Configure authentication, and list only the hosts and origins that reach the

@@ -128,6 +128,21 @@ async fn live(key: &str) -> anyhow::Result<Vec<Outcome>> {
     })
     .await?;
     let client = http();
+    // An ADK run needs an existing session; mia's are created before any freeze.
+    for session in ["s-before", "s-frozen", "s-after"] {
+        let (status, body) = send(
+            &client,
+            reqwest::Method::POST,
+            format!("{base}/api/apps/{APP}/users/mia/sessions/{session}"),
+            Some(MEMBER),
+            Some(json!({})),
+        )
+        .await?;
+        anyhow::ensure!(
+            (200..300).contains(&status),
+            "creating mia's session {session}: HTTP {status} {body}"
+        );
+    }
     let freeze = |token: &'static str, reason: &str| {
         send(
             &client,
