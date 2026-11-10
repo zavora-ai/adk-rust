@@ -86,6 +86,7 @@ impl A2aV1Server {
             extra_skills: Vec::new(),
             legacy_jsonrpc_url: None,
             output_mode: OutputMode::default(),
+            extended_card: None,
         }
     }
 
@@ -136,6 +137,7 @@ pub struct A2aV1ServerBuilder {
     extra_skills: Vec<AgentSkill>,
     legacy_jsonrpc_url: Option<String>,
     output_mode: OutputMode,
+    extended_card: Option<super::request_handler::ExtendedCardProducer>,
 }
 
 impl A2aV1ServerBuilder {
@@ -154,6 +156,16 @@ impl A2aV1ServerBuilder {
     /// Keeps tasks in `store` instead of a new [`InMemoryTaskStore`].
     pub fn task_store(mut self, store: Arc<dyn TaskStore>) -> Self {
         self.task_store = Some(store);
+        self
+    }
+
+    /// Serves an extended agent card, built for each caller by `producer`, and says so on
+    /// the public card (`capabilities.extendedAgentCard`).
+    pub fn extended_agent_card(
+        mut self,
+        producer: super::request_handler::ExtendedCardProducer,
+    ) -> Self {
+        self.extended_card = Some(producer);
         self
     }
 
@@ -222,7 +234,7 @@ impl A2aV1ServerBuilder {
         let mut capabilities = AgentCapabilities::none()
             .with_streaming(self.streaming)
             .with_push_notifications(self.push_sender.is_some())
-            .with_extended_agent_card(false);
+            .with_extended_agent_card(self.extended_card.is_some());
         capabilities.extensions = Some(vec![AgentExtension {
             uri: ADK_EXTENSION_URI.to_string(),
             description: Some(
@@ -259,16 +271,18 @@ impl A2aV1ServerBuilder {
             self.task_store.unwrap_or_else(|| Arc::new(InMemoryTaskStore::new()));
         let push_sender: Arc<dyn PushNotificationSender> =
             self.push_sender.unwrap_or_else(|| Arc::new(NoOpPushNotificationSender));
-        let handler = Arc::new(
-            RequestHandler::with_runner(
-                Arc::new(V1Executor::new(task_store.clone())),
-                task_store,
-                push_sender,
-                card.clone(),
-                self.runner_config,
-            )
-            .with_output_mode(self.output_mode),
-        );
+        let mut handler = RequestHandler::with_runner(
+            Arc::new(V1Executor::new(task_store.clone())),
+            task_store,
+            push_sender,
+            card.clone(),
+            self.runner_config,
+        )
+        .with_output_mode(self.output_mode);
+        if let Some(producer) = self.extended_card {
+            handler = handler.with_extended_card(producer);
+        }
+        let handler = Arc::new(handler);
         A2aV1Server { handler, card, jsonrpc_path: self.jsonrpc_path, rest_path: self.rest_path }
     }
 }

@@ -39,6 +39,17 @@ use super::run::{RunContext, adk_task_metadata};
 use super::task_store::{ListTasksParams, TaskStore, TaskStoreEntry};
 use crate::auth_bridge::RequestContext;
 
+/// When the task's status last changed: its status timestamp, or the entry's update time
+/// when the status has none. `statusTimestampAfter` filters on it, as a2a-go does.
+fn status_time(entry: &TaskStoreEntry) -> chrono::DateTime<chrono::Utc> {
+    entry
+        .status
+        .timestamp
+        .as_deref()
+        .and_then(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).ok())
+        .map_or(entry.updated_at, |time| time.with_timezone(&chrono::Utc))
+}
+
 /// The task a message runs on, and whether the agent runs: a waiting task asked again for
 /// a missing answer does not run.
 struct PreparedTask {
@@ -138,6 +149,16 @@ fn validate_message(msg: &Message) -> Result<(), A2aError> {
 /// return another caller's task.
 type IdempotencyKey = (Option<String>, String);
 
+/// Builds the extended agent card for a caller (`GetExtendedAgentCard`), as a2a-go's
+/// extended card producer: `None` is an unauthenticated caller.
+pub type ExtendedCardProducer = Arc<
+    dyn Fn(
+            Option<RequestContext>,
+        ) -> futures::future::BoxFuture<'static, Result<AgentCard, A2aError>>
+        + Send
+        + Sync,
+>;
+
 /// Shared dispatch layer for A2A v1.0.0 operations.
 ///
 /// Maps operation names to executor/store calls. Used by both the JSON-RPC
@@ -162,6 +183,8 @@ pub struct RequestHandler {
     running: Arc<RunningTasks>,
     /// How a run's output is laid out in artifacts.
     output_mode: OutputMode,
+    /// Builds the extended agent card, when the agent offers one.
+    extended_card: Option<ExtendedCardProducer>,
 }
 
 impl RequestHandler {
@@ -181,6 +204,7 @@ impl RequestHandler {
             idempotency_map: RwLock::new(HashMap::new()),
             running: Arc::default(),
             output_mode: OutputMode::default(),
+            extended_card: None,
         }
     }
 
@@ -201,7 +225,16 @@ impl RequestHandler {
             idempotency_map: RwLock::new(HashMap::new()),
             running: Arc::default(),
             output_mode: OutputMode::default(),
+            extended_card: None,
         }
+    }
+
+    /// Serves `producer`'s card for `GetExtendedAgentCard`, built for each caller. Without
+    /// one, the method answers `ExtendedAgentCardNotConfigured`.
+    #[must_use]
+    pub fn with_extended_card(mut self, producer: ExtendedCardProducer) -> Self {
+        self.extended_card = Some(producer);
+        self
     }
 
     /// Lays each run's output out in artifacts as `mode` says, as adk-go's executor option
@@ -373,18 +406,38 @@ impl RequestHandler {
         self.for_caller(None).push_config_delete(task_id, config_id).await
     }
 
-    /// Returns the extended agent card.
+    /// Returns the extended agent card for an unauthenticated caller; see
+    /// [`agent_card_extended_for`](Self::agent_card_extended_for).
     ///
     /// # Errors
     ///
-    /// Returns [`A2aError::ExtendedAgentCardNotConfigured`] when the agent card says the
-    /// agent offers none (`capabilities.extendedAgentCard: false`).
+    /// See [`agent_card_extended_for`](Self::agent_card_extended_for).
     pub async fn agent_card_extended(&self) -> Result<AgentCard, A2aError> {
-        let cached = self.agent_card.read().await;
-        if cached.card.capabilities.extended_agent_card == Some(false) {
-            return Err(A2aError::ExtendedAgentCardNotConfigured);
+        self.agent_card_extended_for(None).await
+    }
+
+    /// Returns the extended agent card for `caller`, from the handler's
+    /// [`ExtendedCardProducer`], as a2a-go serves it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`A2aError::UnsupportedOperation`] when the agent card says the agent offers
+    /// no extended card (`capabilities.extendedAgentCard: false`),
+    /// [`A2aError::ExtendedAgentCardNotConfigured`] when the handler has no producer, and
+    /// the producer's own error.
+    pub async fn agent_card_extended_for(
+        &self,
+        caller: Option<RequestContext>,
+    ) -> Result<AgentCard, A2aError> {
+        if self.agent_card.read().await.card.capabilities.extended_agent_card == Some(false) {
+            return Err(A2aError::UnsupportedOperation {
+                method: "GetExtendedAgentCard: the agent card declares no extended card"
+                    .to_string(),
+            });
         }
-        Ok(cached.card.clone())
+        let producer =
+            self.extended_card.as_ref().ok_or(A2aError::ExtendedAgentCardNotConfigured)?;
+        producer(caller).await
     }
 
     /// Refuses `operation` when the agent card says the agent does not offer it.
@@ -430,6 +483,11 @@ pub struct CallerScope<'a> {
 }
 
 impl CallerScope<'_> {
+    /// The caller this scope acts for; `None` without authentication.
+    pub fn caller(&self) -> Option<&RequestContext> {
+        self.caller.as_ref()
+    }
+
     /// The authenticated user this scope acts for, or `None` without authentication.
     pub fn owner(&self) -> Option<&str> {
         self.caller.as_ref().map(|context| context.user_id.as_str())
@@ -847,8 +905,9 @@ impl CallerScope<'_> {
     /// Returns [`A2aError::InvalidParams`] for a page size out of range, a malformed
     /// timestamp or page token, and an error if the task store fails.
     pub async fn tasks_list(&self, params: ListTasksParams) -> Result<TaskListResponse, A2aError> {
+        // As a2a-go: a page size of 0 is no page size.
         let page_size = match params.page_size {
-            None => DEFAULT_PAGE_SIZE,
+            None | Some(0) => DEFAULT_PAGE_SIZE,
             Some(size @ 1..=MAX_PAGE_SIZE) => size,
             Some(size) => {
                 return Err(A2aError::InvalidParams {
@@ -884,7 +943,7 @@ impl CallerScope<'_> {
             .await?
             .into_iter()
             .filter(|entry| entry.owner() == self.owner())
-            .filter(|entry| updated_after.is_none_or(|after| entry.updated_at >= after))
+            .filter(|entry| updated_after.is_none_or(|after| status_time(entry) >= after))
             .collect();
         entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.id.cmp(&b.id)));
 
@@ -2023,9 +2082,10 @@ mod tests {
             handler.message_send_with(msg, Some(&with_push)).await,
             Err(A2aError::PushNotificationNotSupported)
         ));
+        // As a2a-go: a card that says there is no extended card refuses the method.
         assert!(matches!(
             handler.agent_card_extended().await,
-            Err(A2aError::ExtendedAgentCardNotConfigured)
+            Err(A2aError::UnsupportedOperation { .. })
         ));
     }
 
@@ -2069,8 +2129,14 @@ mod tests {
         unique.dedup();
         assert_eq!((seen.len(), unique.len()), (5, 5), "every task once: {seen:?}");
 
+        // As a2a-go: a page size of 0 is the default page size.
+        let default_page = handler
+            .tasks_list(ListTasksParams { page_size: Some(0), ..Default::default() })
+            .await
+            .unwrap();
+        assert_eq!(default_page.page_size, DEFAULT_PAGE_SIZE);
+
         for bad in [
-            ListTasksParams { page_size: Some(0), ..Default::default() },
             ListTasksParams { page_size: Some(101), ..Default::default() },
             ListTasksParams { page_token: Some("not a token".into()), ..Default::default() },
             ListTasksParams {
@@ -2710,12 +2776,32 @@ mod tests {
     // ── agent_card_extended ──────────────────────────────────────────────
 
     #[tokio::test]
-    async fn agent_card_extended_returns_card() {
-        let handler = make_handler();
-        let card = handler.agent_card_extended().await.unwrap();
-        assert_eq!(card.name, "test-agent");
-        assert_eq!(card.version, "1.0.0");
-        assert_eq!(card.supported_interfaces.len(), 1);
+    async fn the_extended_card_is_built_for_each_caller() {
+        // Without a producer there is no extended card to serve.
+        assert!(matches!(
+            make_handler().agent_card_extended().await,
+            Err(A2aError::ExtendedAgentCardNotConfigured)
+        ));
+
+        let producer: ExtendedCardProducer = Arc::new(|caller: Option<RequestContext>| {
+            Box::pin(async move {
+                let mut card = make_test_agent_card();
+                card.description = match caller {
+                    Some(caller) => format!("for {}", caller.user_id),
+                    None => "for anyone".to_string(),
+                };
+                Ok(card)
+            })
+        });
+        let handler = make_handler().with_extended_card(producer);
+        assert_eq!(handler.agent_card_extended().await.unwrap().description, "for anyone");
+        let alice = RequestContext {
+            user_id: "alice".to_string(),
+            scopes: Vec::new(),
+            metadata: HashMap::new(),
+        };
+        let card = handler.agent_card_extended_for(Some(alice)).await.unwrap();
+        assert_eq!(card.description, "for alice");
     }
 
     // ── message_stream ───────────────────────────────────────────────────

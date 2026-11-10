@@ -88,7 +88,9 @@ pub async fn jsonrpc_handler(
         "GetTaskPushNotificationConfig" => handle_push_config_get(&scope, request).await,
         "ListTaskPushNotificationConfigs" => handle_push_config_list(&scope, request).await,
         "DeleteTaskPushNotificationConfig" => handle_push_config_delete(&scope, request).await,
-        "GetExtendedAgentCard" => handle_get_extended_agent_card(&handler, request).await,
+        "GetExtendedAgentCard" => {
+            handle_get_extended_agent_card(&handler, scope.caller().cloned(), request).await
+        }
         _ => {
             let err = A2aError::MethodNotFound { method: request.method.clone() };
             json_response(make_error_response(request_id, &err))
@@ -433,6 +435,7 @@ async fn handle_push_config_delete(handler: &CallerScope<'_>, request: JsonRpcRe
 
 async fn handle_get_extended_agent_card(
     handler: &RequestHandler,
+    caller: Option<crate::auth_bridge::RequestContext>,
     request: JsonRpcRequest,
 ) -> Response {
     let id = request.id.clone();
@@ -440,7 +443,7 @@ async fn handle_get_extended_agent_card(
     let _params: Option<GetExtendedAgentCardParams> =
         request.params.and_then(|v| serde_json::from_value(v).ok());
 
-    match handler.agent_card_extended().await {
+    match handler.agent_card_extended_for(caller).await {
         Ok(card) => json_response(make_success_response(id, &card)),
         Err(e) => json_response(make_error_response(id, &e)),
     }
@@ -493,8 +496,17 @@ mod tests {
             security_requirements: None,
             signatures: None,
         };
+        // The extended card the handler serves: the public card, for any caller.
+        let extended = card.clone();
+        let producer: super::super::request_handler::ExtendedCardProducer =
+            Arc::new(move |_caller| {
+                let card = extended.clone();
+                Box::pin(async move { Ok(card) })
+            });
         let cached = Arc::new(RwLock::new(CachedAgentCard::new(card)));
-        Arc::new(RequestHandler::new(executor, store, push_sender, cached))
+        Arc::new(
+            RequestHandler::new(executor, store, push_sender, cached).with_extended_card(producer),
+        )
     }
 
     /// Calls the handler directly with a JSON-RPC request and returns the

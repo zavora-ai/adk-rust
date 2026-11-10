@@ -1,0 +1,7 @@
+- **A2A v1 extended agent card and `ListTasks` follow a2a-go** (`adk-server`, `a2a-v1`):
+  - **`GetExtendedAgentCard` serves a card built for each caller** by an `ExtendedCardProducer`, set with `A2aV1ServerBuilder::extended_agent_card` or `RequestHandler::with_extended_card`. The public card then says `extendedAgentCard: true`.
+    - Without a producer, the method answers `ExtendedAgentCardNotConfigured` (-32007).
+    - When the card says there is no extended card, it answers `UnsupportedOperation` (-32004).
+    - The public card is no longer served in its place.
+  - **`ListTasks` with `pageSize: 0` uses the default page size.**
+  - **`statusTimestampAfter` compares each task's status timestamp.**

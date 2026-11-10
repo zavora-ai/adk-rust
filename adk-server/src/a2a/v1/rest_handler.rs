@@ -332,8 +332,11 @@ async fn handle_push_config_delete(
 }
 
 /// `GET /extendedAgentCard` — returns the extended agent card.
-async fn handle_extended_agent_card(State(handler): State<Arc<RequestHandler>>) -> Response {
-    match handler.agent_card_extended().await {
+async fn handle_extended_agent_card(
+    State(handler): State<Arc<RequestHandler>>,
+    caller: AuthenticatedCaller,
+) -> Response {
+    match handler.agent_card_extended_for(caller.0).await {
         Ok(card) => a2a_json_response(&card),
         Err(e) => error_response(&e),
     }
@@ -427,8 +430,17 @@ mod tests {
             security_requirements: None,
             signatures: None,
         };
+        // The extended card the handler serves: the public card, for any caller.
+        let extended = card.clone();
+        let producer: super::super::request_handler::ExtendedCardProducer =
+            Arc::new(move |_caller| {
+                let card = extended.clone();
+                Box::pin(async move { Ok(card) })
+            });
         let cached = Arc::new(RwLock::new(CachedAgentCard::new(card)));
-        Arc::new(RequestHandler::new(executor, store, push_sender, cached))
+        Arc::new(
+            RequestHandler::new(executor, store, push_sender, cached).with_extended_card(producer),
+        )
     }
 
     fn make_router(handler: Arc<RequestHandler>) -> Router {
