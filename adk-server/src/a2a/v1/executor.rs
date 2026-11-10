@@ -6,12 +6,13 @@
 //! artifacts throughout the task lifecycle.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use a2a_protocol_types::artifact::Artifact;
-use a2a_protocol_types::events::{TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
+use a2a_protocol_types::events::{StreamResponse, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
 use a2a_protocol_types::task::{ContextId, TaskId, TaskState, TaskStatus};
 use chrono::Utc;
+use tokio::sync::broadcast;
 
 use super::error::A2aError;
 use super::state_machine::can_transition_to;
@@ -35,12 +36,46 @@ use super::task_store::{OWNER_METADATA_KEY, TaskStore, TaskStoreEntry};
 /// ```
 pub struct V1Executor {
     task_store: Arc<dyn TaskStore>,
+    /// Live updates by task ID, kept only for tasks that have subscribers.
+    subscribers: Mutex<HashMap<String, broadcast::Sender<StreamResponse>>>,
 }
+
+/// How many updates a subscriber may fall behind before it misses some.
+const SUBSCRIBER_BUFFER: usize = 256;
 
 impl V1Executor {
     /// Creates a new V1 executor backed by the given task store.
     pub fn new(task_store: Arc<dyn TaskStore>) -> Self {
-        Self { task_store }
+        Self { task_store, subscribers: Mutex::default() }
+    }
+
+    /// Subscribes to the live updates of `task_id`: every status change and artifact this
+    /// executor records from now on, and every update a stream
+    /// [`publish`](Self::publish)es. A terminal status is the last update the receiver
+    /// gets; the channel closes after it.
+    pub fn subscribe(&self, task_id: &str) -> broadcast::Receiver<StreamResponse> {
+        self.subscribers()
+            .entry(task_id.to_string())
+            .or_insert_with(|| broadcast::channel(SUBSCRIBER_BUFFER).0)
+            .subscribe()
+    }
+
+    /// Sends `update` to the subscribers of `task_id`, if it has any.
+    pub fn publish(&self, task_id: &str, update: StreamResponse) {
+        let mut subscribers = self.subscribers();
+        let Some(sender) = subscribers.get(task_id) else { return };
+        let terminal = matches!(
+            &update,
+            StreamResponse::StatusUpdate(event) if is_terminal(event.status.state)
+        );
+        let delivered = sender.send(update).is_ok();
+        if terminal || !delivered {
+            subscribers.remove(task_id);
+        }
+    }
+
+    fn subscribers(&self) -> MutexGuard<'_, HashMap<String, broadcast::Sender<StreamResponse>>> {
+        self.subscribers.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Creates a new task in the store with `TaskState::Submitted`.
@@ -70,15 +105,30 @@ impl V1Executor {
         context_id: &str,
         owner: Option<&str>,
     ) -> Result<TaskStoreEntry, A2aError> {
+        self.create_task_with_metadata(task_id, context_id, owner, HashMap::new()).await
+    }
+
+    /// Creates a new task owned by `owner`, as [`create_task_for`](Self::create_task_for)
+    /// does, with `metadata` on the task. Status and artifact updates carry the task's
+    /// metadata too.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task store fails to persist the entry.
+    pub async fn create_task_with_metadata(
+        &self,
+        task_id: &str,
+        context_id: &str,
+        owner: Option<&str>,
+        mut metadata: HashMap<String, serde_json::Value>,
+    ) -> Result<TaskStoreEntry, A2aError> {
         let now = Utc::now();
-        let metadata = owner
-            .map(|owner| {
-                HashMap::from([(
-                    OWNER_METADATA_KEY.to_string(),
-                    serde_json::Value::String(owner.to_string()),
-                )])
-            })
-            .unwrap_or_default();
+        if let Some(owner) = owner {
+            metadata.insert(
+                OWNER_METADATA_KEY.to_string(),
+                serde_json::Value::String(owner.to_string()),
+            );
+        }
         let entry = TaskStoreEntry {
             id: task_id.to_string(),
             context_id: context_id.to_string(),
@@ -156,23 +206,42 @@ impl V1Executor {
             current.metadata.into_iter().filter(|(key, _)| key != OWNER_METADATA_KEY).collect();
         let metadata = (!obj.is_empty()).then_some(serde_json::Value::Object(obj));
 
-        Ok(TaskStatusUpdateEvent {
+        let event = TaskStatusUpdateEvent {
             task_id: TaskId::new(task_id),
             context_id: ContextId::new(context_id),
             status,
             metadata,
-        })
+        };
+        self.publish(task_id, StreamResponse::StatusUpdate(event.clone()));
+        Ok(event)
     }
 
     /// Records an artifact for a task.
     ///
-    /// Persists the artifact to the task store and returns a
-    /// [`TaskArtifactUpdateEvent`] with `contextId` and `metadata`.
+    /// Persists the artifact to the task store, sends it to the task's subscribers, and
+    /// returns a [`TaskArtifactUpdateEvent`] with `contextId` and `metadata`.
     ///
     /// # Errors
     ///
     /// Returns [`A2aError::TaskNotFound`] if the task does not exist.
     pub async fn record_artifact(
+        &self,
+        task_id: &str,
+        context_id: &str,
+        artifact: Artifact,
+    ) -> Result<TaskArtifactUpdateEvent, A2aError> {
+        let event = self.persist_artifact(task_id, context_id, artifact).await?;
+        self.publish(task_id, StreamResponse::ArtifactUpdate(event.clone()));
+        Ok(event)
+    }
+
+    /// Records an artifact for a task without sending it to the task's subscribers: the
+    /// whole of an artifact whose chunks a stream already [`publish`](Self::publish)ed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`A2aError::TaskNotFound`] if the task does not exist.
+    pub async fn persist_artifact(
         &self,
         task_id: &str,
         context_id: &str,
@@ -185,14 +254,15 @@ impl V1Executor {
             current.metadata.into_iter().filter(|(key, _)| key != OWNER_METADATA_KEY).collect();
         let metadata = (!obj.is_empty()).then_some(serde_json::Value::Object(obj));
 
-        Ok(TaskArtifactUpdateEvent {
+        let event = TaskArtifactUpdateEvent {
             task_id: TaskId::new(task_id),
             context_id: ContextId::new(context_id),
             artifact,
             append: None,
             last_chunk: None,
             metadata,
-        })
+        };
+        Ok(event)
     }
 
     /// Marks a task as failed with error details.
@@ -211,11 +281,11 @@ impl V1Executor {
         context_id: &str,
         error_message: &str,
     ) -> Result<TaskStatusUpdateEvent, A2aError> {
-        self.transition_state(
+        self.transition_state_with_parts(
             task_id,
             context_id,
             TaskState::Failed,
-            Some(error_message.to_string()),
+            vec![super::convert::error_message_part(error_message)],
         )
         .await
     }
@@ -224,6 +294,14 @@ impl V1Executor {
     pub fn task_store(&self) -> &Arc<dyn TaskStore> {
         &self.task_store
     }
+}
+
+/// Whether a task in `state` has ended for good.
+fn is_terminal(state: TaskState) -> bool {
+    matches!(
+        state,
+        TaskState::Completed | TaskState::Failed | TaskState::Canceled | TaskState::Rejected
+    )
 }
 
 #[cfg(test)]

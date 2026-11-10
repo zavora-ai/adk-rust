@@ -7,6 +7,7 @@ mod pending;
 pub mod push;
 pub mod request_handler;
 pub mod rest_handler;
+pub mod server;
 pub mod state_machine;
 pub mod stream;
 pub mod task_store;

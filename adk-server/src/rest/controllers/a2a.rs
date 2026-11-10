@@ -298,24 +298,36 @@ fn build_runner_config(
     cancellation_token: Option<CancellationToken>,
     request_context: Option<RequestContext>,
 ) -> Arc<RunnerConfig> {
+    runner_config_for(&controller.config, root_agent, cancellation_token, request_context)
+}
+
+/// The runner configuration for `root_agent` with the services `config` provides:
+/// sessions, governance, artifacts, memory, compaction and context caching. Both A2A
+/// versions run their agent with this.
+pub(crate) fn runner_config_for(
+    config: &ServerConfig,
+    root_agent: Arc<dyn adk_core::Agent>,
+    cancellation_token: Option<CancellationToken>,
+    request_context: Option<RequestContext>,
+) -> Arc<RunnerConfig> {
     let mut builder = Runner::builder()
         .app_name(root_agent.name())
         .agent(root_agent)
-        .session_service(controller.config.session_service.clone())
-        .governance(controller.config.governance.clone());
-    if let Some(ref artifact_service) = controller.config.artifact_service {
+        .session_service(config.session_service.clone())
+        .governance(config.governance.clone());
+    if let Some(ref artifact_service) = config.artifact_service {
         builder = builder.artifact_service(artifact_service.clone());
     }
-    if let Some(ref memory_service) = controller.config.memory_service {
+    if let Some(ref memory_service) = config.memory_service {
         builder = builder.memory_service(memory_service.clone());
     }
-    if let Some(ref compaction_config) = controller.config.compaction_config {
+    if let Some(ref compaction_config) = config.compaction_config {
         builder = builder.compaction_config(compaction_config.clone());
     }
-    if let Some(ref context_cache_config) = controller.config.context_cache_config {
+    if let Some(ref context_cache_config) = config.context_cache_config {
         builder = builder.context_cache_config(context_cache_config.clone());
     }
-    if let Some(ref cache_capable) = controller.config.cache_capable {
+    if let Some(ref cache_capable) = config.cache_capable {
         builder = builder.cache_capable(cache_capable.clone());
     }
     if let Some(cancellation_token) = cancellation_token {

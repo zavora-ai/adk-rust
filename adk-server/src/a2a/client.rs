@@ -143,17 +143,20 @@ impl A2aClient {
 
     /// Resolves an agent card from a base URL.
     ///
-    /// Fetches `/.well-known/agent-card.json`, the path A2A 0.3.0 and later define,
-    /// and falls back to `/.well-known/agent.json` when that path returns 404, so
-    /// servers that predate A2A 0.3.0 still resolve.
+    /// Fetches `/.well-known/agent-card.json`, the path A2A 0.3.0 and later define. Falls
+    /// back to `/.well-known/agent.json` when that path returns 404, so servers that
+    /// predate A2A 0.3.0 still resolve. It also falls back when that path holds a card
+    /// that is not a 0.3 card, such as the v1 card a server that speaks both versions
+    /// serves there; adk-server's [`with_a2a`](crate::ServerBuilder::with_a2a) keeps its
+    /// 0.3 card at `agent.json`.
     ///
     /// The card's endpoint must be on `base_url`'s origin; see [`check_card_endpoint`].
     ///
     /// # Errors
     ///
-    /// Returns an error when the request fails, when the card path answers with a
-    /// non-success status other than the 404 that triggers the fallback, when the
-    /// body is not an agent card, or when the card names an endpoint on another origin
+    /// Returns an error when the request fails, when a card path answers with a
+    /// non-success status other than the 404 that triggers the fallback, when neither
+    /// path holds a 0.3 agent card, or when the card names an endpoint on another origin
     /// (`a2a.card_endpoint_refused`).
     pub async fn resolve_agent_card(base_url: &str) -> Result<AgentCard> {
         Self::resolve_agent_card_allowing(base_url, &[]).await
@@ -186,22 +189,42 @@ impl A2aClient {
             adk_core::AdkError::agent(format!("Failed to fetch agent card: {e}"))
         };
 
-        let mut response = fetch("/.well-known/agent-card.json").await.map_err(fetch_error)?;
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            response = fetch("/.well-known/agent.json").await.map_err(fetch_error)?;
-        }
+        // `None` when the path does not exist; otherwise the body, if it is a 0.3 card.
+        let read = |response: reqwest::Response| async move {
+            if response.status() == reqwest::StatusCode::NOT_FOUND {
+                return Ok(None);
+            }
+            if !response.status().is_success() {
+                return Err(adk_core::AdkError::agent(format!(
+                    "Failed to fetch agent card: HTTP {}",
+                    response.status()
+                )));
+            }
+            let body = response.bytes().await.map_err(fetch_error)?;
+            Ok(Some(serde_json::from_slice::<AgentCard>(&body)))
+        };
 
-        if !response.status().is_success() {
-            return Err(adk_core::AdkError::agent(format!(
-                "Failed to fetch agent card: HTTP {}",
-                response.status()
-            )));
-        }
-
-        let card: AgentCard = response
-            .json()
-            .await
-            .map_err(|e| adk_core::AdkError::agent(format!("Failed to parse agent card: {e}")))?;
+        let current =
+            read(fetch("/.well-known/agent-card.json").await.map_err(fetch_error)?).await?;
+        let card = match current {
+            Some(Ok(card)) => card,
+            not_a_0_3_card => {
+                match read(fetch("/.well-known/agent.json").await.map_err(fetch_error)?).await? {
+                    Some(Ok(card)) => card,
+                    Some(Err(e)) => {
+                        return Err(adk_core::AdkError::agent(format!(
+                            "Failed to parse agent card: {e}"
+                        )));
+                    }
+                    None => {
+                        return Err(adk_core::AdkError::agent(match not_a_0_3_card {
+                            Some(Err(e)) => format!("Failed to parse agent card: {e}"),
+                            _ => "Failed to fetch agent card: HTTP 404 Not Found".to_string(),
+                        }));
+                    }
+                }
+            }
+        };
 
         check_card_endpoint(base_url, &card.url, allowed_origins)?;
         Ok(card)
@@ -520,9 +543,11 @@ pub mod v1_client {
     //! request headers.
 
     use a2a_protocol_types::jsonrpc::JsonRpcRequest;
-    use a2a_protocol_types::responses::SendMessageResponse;
+    use a2a_protocol_types::responses::{
+        ListPushConfigsResponse, SendMessageResponse, TaskListResponse,
+    };
     use a2a_protocol_types::task::{Task, TaskState};
-    use a2a_protocol_types::{AgentCard, Message, TaskPushNotificationConfig};
+    use a2a_protocol_types::{AgentCard, AgentInterface, Message, TaskPushNotificationConfig};
     use reqwest::header::{HeaderMap, HeaderValue};
     use serde_json::Value;
     use std::time::Duration;
@@ -539,6 +564,18 @@ pub mod v1_client {
     /// JSON-RPC code of `VersionNotSupportedError` (A2A §5.4).
     const VERSION_NOT_SUPPORTED: i64 = -32009;
 
+    /// The card's A2A v1 interface for `binding` (`JSONRPC` or `HTTP+JSON`): the first
+    /// with a `1.x` protocol version, else the first that states none. An interface for an
+    /// earlier protocol version, such as the 0.3 endpoint a card may also list, is never
+    /// chosen.
+    pub fn v1_interface<'a>(card: &'a AgentCard, binding: &str) -> Option<&'a AgentInterface> {
+        let of_binding =
+            || card.supported_interfaces.iter().filter(move |i| i.protocol_binding == binding);
+        of_binding()
+            .find(|i| i.protocol_version.split('.').next() == Some("1"))
+            .or_else(|| of_binding().find(|i| i.protocol_version.trim().is_empty()))
+    }
+
     /// Reads a `SendMessage` result: the v1 `SendMessageResponse` oneof
     /// (`{"task": …}` or `{"message": …}`, A2A §9.4.1 and §11.4), or a bare
     /// `Task`, which adk-server before 3.0 returned.
@@ -552,6 +589,41 @@ pub mod v1_client {
                 .map(SendMessageResponse::Task)
                 .map_err(|_| oneof_error)
         })
+    }
+
+    /// Reads a `ListTasks` result: the v1 `ListTasksResponse` (A2A §3.1.4), or the bare
+    /// task array adk-server before 3.0 returned, read as one complete page.
+    ///
+    /// # Errors
+    ///
+    /// Returns the response's decoding error when `result` is neither shape.
+    fn parse_task_list(result: Value) -> Result<TaskListResponse, serde_json::Error> {
+        if result.is_array() {
+            let tasks: Vec<Task> = serde_json::from_value(result)?;
+            let count = u32::try_from(tasks.len()).unwrap_or(u32::MAX);
+            return Ok(TaskListResponse {
+                tasks,
+                next_page_token: String::new(),
+                page_size: count,
+                total_size: count,
+            });
+        }
+        serde_json::from_value(result)
+    }
+
+    /// Reads a `ListTaskPushNotificationConfigs` result: the v1 `{configs, nextPageToken}`
+    /// object, or the bare array adk-server before 3.0 returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns the decoding error when `result` is neither shape.
+    fn parse_push_config_list(
+        result: Value,
+    ) -> Result<Vec<TaskPushNotificationConfig>, serde_json::Error> {
+        if result.is_array() {
+            return serde_json::from_value(result);
+        }
+        serde_json::from_value::<ListPushConfigsResponse>(result).map(|page| page.configs)
     }
 
     /// Retry configuration for transient failures.
@@ -702,23 +774,15 @@ pub mod v1_client {
         }
 
         /// Returns the JSON-RPC endpoint URL from the agent card's
-        /// `supportedInterfaces`.
+        /// `supportedInterfaces`; see [`v1_interface`].
         fn jsonrpc_url(&self) -> Option<&str> {
-            self.agent_card
-                .supported_interfaces
-                .iter()
-                .find(|i| i.protocol_binding == "JSONRPC")
-                .map(|i| i.url.as_str())
+            v1_interface(&self.agent_card, "JSONRPC").map(|i| i.url.as_str())
         }
 
         /// Returns the REST endpoint URL from the agent card's
-        /// `supportedInterfaces`, if available.
+        /// `supportedInterfaces`, if available; see [`v1_interface`].
         fn rest_url(&self) -> Option<&str> {
-            self.agent_card
-                .supported_interfaces
-                .iter()
-                .find(|i| i.protocol_binding == "HTTP+JSON")
-                .map(|i| i.url.as_str())
+            v1_interface(&self.agent_card, "HTTP+JSON").map(|i| i.url.as_str())
         }
 
         /// Builds default headers including `A2A-Version: 1.0`.
@@ -1130,7 +1194,7 @@ pub mod v1_client {
             status: Option<TaskState>,
             page_size: Option<u32>,
             page_token: Option<&str>,
-        ) -> Result<Vec<Task>, V1ClientError> {
+        ) -> Result<TaskListResponse, V1ClientError> {
             let mut params = serde_json::json!({});
             if let Some(cid) = context_id {
                 params["contextId"] = serde_json::json!(cid);
@@ -1144,7 +1208,8 @@ pub mod v1_client {
             if let Some(pt) = page_token {
                 params["pageToken"] = serde_json::json!(pt);
             }
-            self.jsonrpc_call("ListTasks", params).await
+            let result: Value = self.jsonrpc_call("ListTasks", params).await?;
+            Ok(parse_task_list(result)?)
         }
 
         /// Subscribes to task updates (JSON-RPC `SubscribeToTask`).
@@ -1206,11 +1271,13 @@ pub mod v1_client {
             &self,
             task_id: &str,
         ) -> Result<Vec<TaskPushNotificationConfig>, V1ClientError> {
-            self.jsonrpc_call(
-                "ListTaskPushNotificationConfigs",
-                serde_json::json!({ "taskId": task_id }),
-            )
-            .await
+            let result: Value = self
+                .jsonrpc_call(
+                    "ListTaskPushNotificationConfigs",
+                    serde_json::json!({ "taskId": task_id }),
+                )
+                .await?;
+            Ok(parse_push_config_list(result)?)
         }
 
         /// Deletes a push notification config (JSON-RPC
@@ -1265,8 +1332,9 @@ pub mod v1_client {
         }
 
         /// Lists tasks via REST (`GET /tasks`).
-        pub async fn list_tasks_rest(&self) -> Result<Vec<Task>, V1ClientError> {
-            self.rest_get("/tasks").await
+        pub async fn list_tasks_rest(&self) -> Result<TaskListResponse, V1ClientError> {
+            let body: Value = self.rest_get("/tasks").await?;
+            Ok(parse_task_list(body)?)
         }
 
         /// Creates a push notification config via REST
@@ -1299,7 +1367,9 @@ pub mod v1_client {
             &self,
             task_id: &str,
         ) -> Result<Vec<TaskPushNotificationConfig>, V1ClientError> {
-            self.rest_get(&format!("/tasks/{task_id}/pushNotificationConfigs")).await
+            let body: Value =
+                self.rest_get(&format!("/tasks/{task_id}/pushNotificationConfigs")).await?;
+            Ok(parse_push_config_list(body)?)
         }
 
         /// Deletes a push notification config via REST

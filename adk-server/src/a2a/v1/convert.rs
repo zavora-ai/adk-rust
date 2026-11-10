@@ -22,6 +22,31 @@ pub const ADK_TYPE_METADATA_KEY: &str = "adk_type";
 /// the caller to send its result.
 pub const ADK_LONG_RUNNING_METADATA_KEY: &str = "adk_is_long_running";
 
+/// Task and event metadata key: the ADK app that runs the task.
+pub const ADK_APP_NAME_METADATA_KEY: &str = "adk_app_name";
+
+/// Task and event metadata key: the ADK user whose session runs the task.
+pub const ADK_USER_ID_METADATA_KEY: &str = "adk_user_id";
+
+/// Task and event metadata key: the ADK session that runs the task, the task's context.
+pub const ADK_SESSION_ID_METADATA_KEY: &str = "adk_session_id";
+
+/// Part metadata key that marks the text of a `FAILED` status as the error.
+pub const ADK_ERROR_MESSAGE_METADATA_KEY: &str = "adk_is_error_message";
+
+/// The ADK A2A extension that adk-python and adk-go declare. A card that declares it
+/// tells a client that tasks carry the `adk_*` metadata. The extension's URI, set to
+/// `true`, marks each task it shapes.
+pub const ADK_EXTENSION_URI: &str = "https://google.github.io/adk-docs/a2a/a2a-extension/";
+
+/// The text of a `FAILED` status: `error`, marked with
+/// [`ADK_ERROR_MESSAGE_METADATA_KEY`].
+pub fn error_message_part(error: impl Into<String>) -> a2a_protocol_types::Part {
+    let mut part = a2a_protocol_types::Part::text(error.into());
+    part.metadata = Some(json!({ ADK_ERROR_MESSAGE_METADATA_KEY: true }));
+    part
+}
+
 /// Convert an `a2a_protocol_types::Part` to an `adk_core::Part`.
 ///
 /// Mapping:
@@ -100,6 +125,18 @@ fn function_response_from(resp: &Value) -> Result<adk_core::Part, A2aError> {
     })
 }
 
+/// Opening tag around an A2A data part carried as text.
+pub const DATAPART_OPEN_TAG: &str = "<a2a_datapart_json>";
+
+/// Closing tag around an A2A data part carried as text.
+pub const DATAPART_CLOSE_TAG: &str = "</a2a_datapart_json>";
+
+/// An untyped A2A data part as text an agent reads: its JSON between
+/// [`DATAPART_OPEN_TAG`] and [`DATAPART_CLOSE_TAG`].
+pub fn datapart_text(data: &Value) -> String {
+    format!("{DATAPART_OPEN_TAG}{data}{DATAPART_CLOSE_TAG}")
+}
+
 /// Parse a `PartContent::Data` JSON value into the appropriate ADK Part.
 ///
 /// A part tagged with [`ADK_TYPE_METADATA_KEY`] is read in the flat shape that tag names.
@@ -119,9 +156,9 @@ fn wire_data_to_adk(data: &Value, metadata: Option<&Value>) -> Result<adk_core::
     } else if let Some(str_val) = data.get("server_tool_response") {
         Ok(adk_core::Part::ServerToolResponse { server_tool_response: str_val.clone() })
     } else {
-        Err(A2aError::InvalidParams {
-            message: "data part does not contain a recognized key (function_call, function_response, server_tool_call, server_tool_response)".to_string(),
-        })
+        // Structured data an agent should read: text it can see, marked as A2A data, as
+        // adk-go does (`<a2a_datapart_json>`).
+        Ok(adk_core::Part::Text { text: datapart_text(data) })
     }
 }
 
@@ -166,6 +203,18 @@ pub fn tagged_function_response_part(
     let mut part = a2a_protocol_types::Part::data(Value::Object(data));
     part.metadata = Some(json!({ ADK_TYPE_METADATA_KEY: "function_response" }));
     part
+}
+
+/// An agent output part that A2A carries as media in an artifact: inline data as raw bytes
+/// with its media type, a file as its URL. Text goes in the text artifact. Function calls
+/// and responses, thinking and provider items stay inside the agent.
+pub fn media_part_to_wire(part: &adk_core::Part) -> Option<a2a_protocol_types::Part> {
+    match part {
+        adk_core::Part::InlineData { .. } | adk_core::Part::FileData { .. } => {
+            adk_part_to_wire(part).ok().flatten()
+        }
+        _ => None,
+    }
 }
 
 /// Convert an `adk_core::Part` to an `a2a_protocol_types::Part`.
@@ -507,6 +556,22 @@ mod tests {
     }
 
     #[test]
+    fn an_untyped_data_part_reaches_the_agent_as_marked_text() {
+        let wire = a2a_protocol_types::Part::data(json!({"order": 42, "items": ["tea"]}));
+        match wire_part_to_adk(&wire).unwrap() {
+            adk_core::Part::Text { text } => {
+                assert!(text.starts_with(DATAPART_OPEN_TAG) && text.ends_with(DATAPART_CLOSE_TAG));
+                let inner = &text[DATAPART_OPEN_TAG.len()..text.len() - DATAPART_CLOSE_TAG.len()];
+                assert_eq!(
+                    serde_json::from_str::<Value>(inner).unwrap(),
+                    json!({"order": 42, "items": ["tea"]})
+                );
+            }
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn tagged_parts_carry_the_adk_type_and_read_back() {
         let call = tagged_function_call_part(
             "request_approval",
@@ -641,13 +706,6 @@ mod tests {
             }
             _ => panic!("expected ServerToolResponse"),
         }
-    }
-
-    #[test]
-    fn data_unknown_key_returns_error() {
-        let data = json!({ "unknown_key": "value" });
-        let wire = a2a_protocol_types::Part::data(data);
-        assert!(wire_part_to_adk(&wire).is_err());
     }
 
     #[test]
