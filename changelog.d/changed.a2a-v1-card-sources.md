@@ -1,0 +1,6 @@
+- **`A2aV1Client::resolve_agent_card` reads card sources as adk-go does** (`adk-server`, `a2a-v1`):
+  - An `http(s)` URL whose path ends in `.json` is the card's own URL.
+  - Any other URL is the agent's base, under which the card is at `/.well-known/agent-card.json`, as before.
+  - A file path, or a `file://` URL, is read as a card file. Any other scheme is refused.
+  - A card fetch takes at most 30 seconds.
+  - `RemoteA2aV1Agent::from_url` takes the same sources.

@@ -763,6 +763,46 @@ pub mod v1_client {
     /// via JSON-RPC (and optionally REST), parses structured error responses,
     /// caches agent cards with conditional headers, and retries transient
     /// failures.
+    /// How long a card fetch may take, as adk-go's card resolver allows.
+    const CARD_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// Where an agent card comes from.
+    enum CardSource {
+        Url(String),
+        File(std::path::PathBuf),
+    }
+
+    /// Reads a card source as adk-go's card provider does: an `http(s)` URL whose path ends
+    /// in `.json` is the card's own URL; any other URL is the agent's base, under which the
+    /// card is at `/.well-known/agent-card.json`; a path (or `file://` URL) is a card file.
+    /// Any other scheme is refused.
+    fn card_source(source: &str) -> Result<CardSource, V1ClientError> {
+        let unsupported = || V1ClientError::UnexpectedStatus {
+            status: 0,
+            body: format!(
+                "unsupported agent card source {source:?}: use an http(s) URL or a file path"
+            ),
+        };
+        match source.split_once("://") {
+            None => Ok(CardSource::File(std::path::PathBuf::from(source))),
+            Some(("file", path)) => Ok(CardSource::File(std::path::PathBuf::from(path))),
+            Some((scheme, _))
+                if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") =>
+            {
+                let url = adk_core::Url::parse(source).map_err(|_| unsupported())?;
+                if url.path().ends_with(".json") {
+                    Ok(CardSource::Url(source.to_string()))
+                } else {
+                    Ok(CardSource::Url(format!(
+                        "{}{AGENT_CARD_PATH}",
+                        source.trim_end_matches('/')
+                    )))
+                }
+            }
+            Some(_) => Err(unsupported()),
+        }
+    }
+
     pub struct A2aV1Client {
         http_client: reqwest::Client,
         agent_card: AgentCard,
@@ -874,8 +914,24 @@ pub mod v1_client {
             base_url: &str,
             allowed_origins: &[String],
         ) -> Result<AgentCard, V1ClientError> {
-            let url = format!("{}{AGENT_CARD_PATH}", base_url.trim_end_matches('/'));
-            let client = reqwest::Client::new();
+            let url = match card_source(base_url)? {
+                CardSource::File(path) => {
+                    let json =
+                        std::fs::read(&path).map_err(|error| V1ClientError::UnexpectedStatus {
+                            status: 0,
+                            body: format!(
+                                "cannot read the agent card file {}: {error}",
+                                path.display()
+                            ),
+                        })?;
+                    return Ok(serde_json::from_slice(&json)?);
+                }
+                CardSource::Url(url) => url,
+            };
+            let client = reqwest::Client::builder()
+                .timeout(CARD_FETCH_TIMEOUT)
+                .build()
+                .map_err(V1ClientError::from)?;
             let response = client.get(&url).headers(Self::default_headers()).send().await?;
 
             if !response.status().is_success() {
@@ -1636,6 +1692,61 @@ pub mod v1_client {
 
     #[cfg(test)]
     mod tests {
+        #[test]
+        fn card_sources_read_as_adk_go_reads_them() {
+            let url = |source: &str| match super::card_source(source).unwrap() {
+                super::CardSource::Url(url) => url,
+                super::CardSource::File(path) => panic!("{source} is a file: {path:?}"),
+            };
+            assert_eq!(
+                url("https://agents.example.com"),
+                "https://agents.example.com/.well-known/agent-card.json"
+            );
+            assert_eq!(
+                url("https://agents.example.com/billing/"),
+                "https://agents.example.com/billing/.well-known/agent-card.json"
+            );
+            assert_eq!(
+                url("https://agents.example.com/cards/billing.json"),
+                "https://agents.example.com/cards/billing.json"
+            );
+            assert!(matches!(
+                super::card_source("./cards/billing.json").unwrap(),
+                super::CardSource::File(_)
+            ));
+            assert!(matches!(
+                super::card_source("file:///etc/card.json").unwrap(),
+                super::CardSource::File(_)
+            ));
+            assert!(super::card_source("ftp://agents.example.com/card.json").is_err());
+        }
+
+        #[tokio::test]
+        async fn a_card_file_is_read() {
+            let dir = std::env::temp_dir().join(format!("a2a-card-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("card.json");
+            std::fs::write(
+                &path,
+                serde_json::json!({
+                    "name": "file-agent",
+                    "description": "from a file",
+                    "version": "1.0.0",
+                    "supportedInterfaces": [{"url": "https://a.example/a2a/v1", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
+                    "capabilities": {},
+                    "defaultInputModes": ["text/plain"],
+                    "defaultOutputModes": ["text/plain"],
+                    "skills": []
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let card =
+                super::A2aV1Client::resolve_agent_card(path.to_str().unwrap()).await.unwrap();
+            assert_eq!(card.name, "file-agent");
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+
         use super::*;
         use a2a_protocol_types::{AgentCapabilities, AgentCard, AgentInterface, AgentSkill};
 
