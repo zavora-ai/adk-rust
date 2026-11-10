@@ -1384,3 +1384,73 @@ async fn test_history_processor_sees_the_agents_own_call_ids() {
     assert_eq!(ids(&run.requests.last().unwrap().contents), (0, 6));
     assert!(run.requests.iter().all(|request| orphaned_responses(request).is_empty()));
 }
+
+/// The system contents of `request`, joined.
+fn system_text(request: &adk_core::LlmRequest) -> String {
+    request
+        .contents
+        .iter()
+        .filter(|content| content.role == "system")
+        .flat_map(|content| content.parts.iter().filter_map(Part::text))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tokio::test]
+async fn an_agent_with_sub_agents_is_told_what_each_one_does() {
+    use futures::StreamExt;
+
+    let model = SpyLlm::new("ok");
+    let captured = model.last_request.clone();
+    let billing = LlmAgentBuilder::new("billing")
+        .description("Answers questions about invoices and refunds.")
+        .model(Arc::new(SpyLlm::new("ok")))
+        .build()
+        .unwrap();
+    let support = LlmAgentBuilder::new("support")
+        .description("Fixes login and account problems.")
+        .model(Arc::new(SpyLlm::new("ok")))
+        .build()
+        .unwrap();
+    let router = LlmAgentBuilder::new("router")
+        .model(Arc::new(model))
+        .instruction("Route the customer.")
+        .sub_agent(Arc::new(billing))
+        .sub_agent(Arc::new(support))
+        .build()
+        .unwrap();
+
+    let mut stream = router.run(Arc::new(TestContext::new("my refund is late"))).await.unwrap();
+    while let Some(result) = stream.next().await {
+        result.unwrap();
+    }
+
+    let request = captured.lock().unwrap().clone().expect("a request");
+    let system = system_text(&request);
+    assert!(system.starts_with("Route the customer."), "the instruction comes first: {system}");
+    for line in [
+        "Agent name: billing\nAgent description: Answers questions about invoices and refunds.",
+        "Agent name: support\nAgent description: Fixes login and account problems.",
+        "call `transfer_to_agent` with its name",
+    ] {
+        assert!(system.contains(line), "missing {line:?} in {system}");
+    }
+    assert!(request.tools.contains_key("transfer_to_agent"));
+    // The guidance is a system content before the conversation.
+    assert_eq!(request.contents.last().unwrap().role, "user");
+}
+
+#[tokio::test]
+async fn an_agent_with_nowhere_to_transfer_gets_no_transfer_guidance() {
+    use futures::StreamExt;
+
+    let model = SpyLlm::new("ok");
+    let captured = model.last_request.clone();
+    let agent = LlmAgentBuilder::new("solo").model(Arc::new(model)).build().unwrap();
+    let mut stream = agent.run(Arc::new(TestContext::new("hello"))).await.unwrap();
+    while let Some(result) = stream.next().await {
+        result.unwrap();
+    }
+    let request = captured.lock().unwrap().clone().expect("a request");
+    assert!(!system_text(&request).contains("transfer"));
+}

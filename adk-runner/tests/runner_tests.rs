@@ -1553,3 +1553,55 @@ async fn runner_installs_its_durable_stores_on_runs_that_carry_none() {
     assert!(Arc::ptr_eq(action.as_ref().unwrap(), &own_ledger), "a run's own ledger is kept");
     assert!(Arc::ptr_eq(approval.as_ref().unwrap(), &approvals), "missing stores are filled");
 }
+
+/// An agent with a description and children, for walking agent trees.
+struct TreeAgent {
+    name: &'static str,
+    description: &'static str,
+    children: Vec<Arc<dyn Agent>>,
+}
+
+#[async_trait]
+impl Agent for TreeAgent {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn description(&self) -> &str {
+        self.description
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &self.children
+    }
+
+    async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+}
+
+#[test]
+fn transfer_targets_are_described_from_the_agent_tree() {
+    let leaf = |name, description| -> Arc<dyn Agent> {
+        Arc::new(TreeAgent { name, description, children: Vec::new() })
+    };
+    let root: Arc<dyn Agent> = Arc::new(TreeAgent {
+        name: "root",
+        description: "Routes requests.",
+        children: vec![
+            leaf("billing", "Invoices and refunds."),
+            Arc::new(TreeAgent {
+                name: "support",
+                description: "Account problems.",
+                children: vec![leaf("silent", "  ")],
+            }),
+        ],
+    });
+
+    let names = ["root", "support", "silent", "absent"].map(String::from);
+    let described = Runner::describe_agents(&root, &names);
+    assert_eq!(described.len(), 2, "{described:?}");
+    assert_eq!(described["root"], "Routes requests.");
+    assert_eq!(described["support"], "Account problems.");
+    assert!(Runner::describe_agents(&root, &[]).is_empty());
+}

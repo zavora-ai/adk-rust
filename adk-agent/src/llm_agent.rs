@@ -570,6 +570,32 @@ impl PromptConfig {
     }
 }
 
+/// The system text that tells the model when to hand the conversation to another agent:
+/// each agent it can transfer to, with that agent's description, the rule to answer itself
+/// or transfer, and the parent to fall back to. adk-python gives its models the same
+/// guidance; without the descriptions a model chooses a target by its name alone.
+fn transfer_instruction(targets: &[(&str, &str)], parent: Option<&str>) -> String {
+    let mut text = String::from("You can transfer the conversation to these agents:\n");
+    for (name, description) in targets {
+        text.push_str(&format!("\nAgent name: {name}\n"));
+        if !description.trim().is_empty() {
+            text.push_str(&format!("Agent description: {description}\n"));
+        }
+    }
+    text.push_str(
+        "\nIf you are the best agent to answer according to your own description, answer. If \
+         another agent fits the request better according to its description, call \
+         `transfer_to_agent` with its name, and write no text other than the function call.",
+    );
+    if let Some(parent) = parent {
+        text.push_str(&format!(
+            "\n\nYour parent agent is {parent}. If neither you nor the other agents fit the \
+             request, transfer to {parent}."
+        ));
+    }
+    text
+}
+
 /// The user turn a run without user input sends when the conversation would otherwise
 /// end on a model message.
 const RESUMED_TURN_NOTE: &str =
@@ -592,6 +618,8 @@ struct ResolvedTools {
     map: HashMap<String, Arc<dyn Tool>>,
     declarations: HashMap<String, serde_json::Value>,
     transfer_targets: Vec<String>,
+    /// When to transfer and to whom, for the system instruction; see [`transfer_instruction`].
+    transfer_guidance: Option<String>,
 }
 
 impl ToolSetup {
@@ -703,7 +731,26 @@ impl ToolSetup {
             );
         }
 
-        Ok(ResolvedTools { map, declarations, transfer_targets })
+        let transfer_guidance = (!transfer_targets.is_empty()).then(|| {
+            let descriptions = &ctx.run_config().transfer_target_descriptions;
+            let described: Vec<(&str, &str)> = transfer_targets
+                .iter()
+                .map(|name| {
+                    let description = self
+                        .sub_agents
+                        .iter()
+                        .find(|agent| agent.name() == name)
+                        .map(|agent| agent.description())
+                        .or_else(|| descriptions.get(name).map(String::as_str))
+                        .unwrap_or("");
+                    (name.as_str(), description)
+                })
+                .collect();
+            let parent = parent_name.filter(|parent| transfer_targets.iter().any(|t| t == parent));
+            transfer_instruction(&described, parent)
+        });
+
+        Ok(ResolvedTools { map, declarations, transfer_targets, transfer_guidance })
     }
 
     /// Lets static and invocation-scoped toolsets enrich each LLM request.
@@ -3822,6 +3869,14 @@ impl Agent for LlmAgent {
             let mut tool_map = resolved_tools.map;
             let mut tool_declarations = resolved_tools.declarations;
             let mut valid_transfer_targets = resolved_tools.transfer_targets;
+            // The transfer guidance joins the instructions, after the leading system contents.
+            if let Some(guidance) = resolved_tools.transfer_guidance {
+                let at = conversation_history
+                    .iter()
+                    .position(|content| content.role != "system")
+                    .unwrap_or(conversation_history.len());
+                conversation_history.insert(at, Content::new("system").with_text(guidance));
+            }
 
             // ===== CIRCUIT BREAKER STATE =====
             // Created fresh per invocation so it resets between runs.

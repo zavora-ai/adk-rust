@@ -223,6 +223,7 @@ fn delegated_run_config(parent: RunConfig) -> RunConfig {
         runtime_toolsets: _,
         cached_content: _,
         transfer_targets: _,
+        transfer_target_descriptions: _,
         parent_agent: _,
         auto_cache,
         history_max_events,
@@ -263,6 +264,7 @@ fn delegated_run_config(parent: RunConfig) -> RunConfig {
         runtime_toolsets: Vec::new(),
         cached_content: None,
         transfer_targets: Vec::new(),
+        transfer_target_descriptions: std::collections::HashMap::new(),
         parent_agent: None,
         // Limits, governance, approvals, ledgers and identity span the whole invocation.
         tool_confirmation_handler,
