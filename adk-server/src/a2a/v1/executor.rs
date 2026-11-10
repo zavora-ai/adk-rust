@@ -111,15 +111,37 @@ impl V1Executor {
         new_state: TaskState,
         message: Option<String>,
     ) -> Result<TaskStatusUpdateEvent, A2aError> {
+        let parts = message.map(a2a_protocol_types::Part::text).into_iter().collect();
+        self.transition_state_with_parts(task_id, context_id, new_state, parts).await
+    }
+
+    /// Transitions a task to a new state whose status message carries `parts`, as
+    /// [`transition_state`](Self::transition_state) does for a text message. No parts
+    /// means no status message.
+    ///
+    /// A task waiting on its caller uses this to name what it waits for: the pending
+    /// function calls, as data parts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`A2aError::TaskNotFound`] if the task does not exist, or
+    /// [`A2aError::InvalidStateTransition`] if the transition is not allowed.
+    pub async fn transition_state_with_parts(
+        &self,
+        task_id: &str,
+        context_id: &str,
+        new_state: TaskState,
+        parts: Vec<a2a_protocol_types::Part>,
+    ) -> Result<TaskStatusUpdateEvent, A2aError> {
         let current = self.task_store.get_task(task_id).await?;
         can_transition_to(current.status.state, new_state)?;
 
         let mut status = TaskStatus::with_timestamp(new_state);
-        if let Some(msg_text) = message {
+        if !parts.is_empty() {
             status.message = Some(a2a_protocol_types::Message {
                 id: a2a_protocol_types::MessageId::new(format!("status-msg-{task_id}")),
                 role: a2a_protocol_types::MessageRole::Agent,
-                parts: vec![a2a_protocol_types::Part::text(msg_text)],
+                parts,
                 task_id: None,
                 context_id: None,
                 reference_task_ids: None,

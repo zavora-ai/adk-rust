@@ -1453,3 +1453,127 @@ fn history_marks_own_native_items_and_strips_them_from_user_turns() {
         ]
     );
 }
+
+/// An event authored by `author` with one content.
+fn authored(author: &str, role: &str, parts: Vec<Part>) -> Event {
+    let mut event = Event::new("inv-1");
+    event.author = author.to_string();
+    event.llm_response.content = Some(Content { role: role.to_string(), parts });
+    event
+}
+
+fn call(name: &str, id: &str) -> Part {
+    Part::FunctionCall {
+        name: name.to_string(),
+        args: serde_json::json!({}),
+        id: Some(id.to_string()),
+        thought_signature: None,
+    }
+}
+
+fn response(name: &str, id: &str, response: serde_json::Value) -> Part {
+    Part::FunctionResponse {
+        function_response: FunctionResponseData::new(name, response),
+        id: Some(id.to_string()),
+        annotations: None,
+    }
+}
+
+#[test]
+fn a_late_answer_to_a_long_running_call_ends_the_history_after_the_call() {
+    let session = Arc::new(MockSessionWithState::new());
+    let mutable = MutableSession::new(session);
+    mutable.append_event(authored(
+        "user",
+        "user",
+        vec![Part::Text { text: "Reimburse 500 EUR".into() }],
+    ));
+    // `LlmAgent` lists a long-running call by its tool's name.
+    let mut long_running = authored("agent", "model", vec![call("request_approval", "call-1")]);
+    long_running.long_running_tool_ids = vec!["request_approval".to_string()];
+    mutable.append_event(long_running);
+    // The long-running tool's interim result, and the model's reply to it.
+    mutable.append_event(authored(
+        "agent",
+        "function",
+        vec![response("request_approval", "call-1", serde_json::json!({"status": "pending"}))],
+    ));
+    mutable.append_event(authored(
+        "agent",
+        "model",
+        vec![Part::Text { text: "Approval pending.".into() }],
+    ));
+    // The caller's answer, in a later run.
+    mutable.append_event(authored(
+        "user",
+        "user",
+        vec![response("request_approval", "call-1", serde_json::json!({"status": "approved"}))],
+    ));
+
+    let history = mutable.conversation_history();
+    assert_eq!(history.len(), 3, "{history:?}");
+    assert_eq!(history[0].parts, vec![Part::Text { text: "Reimburse 500 EUR".into() }]);
+    assert_eq!(history[1].parts, vec![call("request_approval", "call-1")]);
+    assert_eq!(history[2].role, "function", "a tool result, which model clients carry");
+    assert_eq!(
+        history[2].parts,
+        vec![response("request_approval", "call-1", serde_json::json!({"status": "approved"}))],
+        "the caller's answer replaces the interim result"
+    );
+}
+
+#[test]
+fn responses_to_parallel_calls_keep_their_turns() {
+    let session = Arc::new(MockSessionWithState::new());
+    let mutable = MutableSession::new(session);
+    mutable.append_event(authored(
+        "user",
+        "user",
+        vec![Part::Text { text: "look both up".into() }],
+    ));
+    mutable.append_event(authored(
+        "agent",
+        "model",
+        vec![call("a", "call-a"), call("b", "call-b")],
+    ));
+    mutable.append_event(authored(
+        "agent",
+        "function",
+        vec![response("a", "call-a", serde_json::json!({"ok": 1}))],
+    ));
+    mutable.append_event(authored(
+        "agent",
+        "function",
+        vec![response("b", "call-b", serde_json::json!({"ok": 2}))],
+    ));
+
+    let history = mutable.conversation_history();
+    assert_eq!(history.len(), 4, "nothing moved on, so nothing is rearranged: {history:?}");
+    assert_eq!(history[2].role, "function");
+    assert_eq!(history[3].parts, vec![response("b", "call-b", serde_json::json!({"ok": 2}))]);
+}
+
+#[test]
+fn a_late_second_response_to_an_ordinary_call_is_still_left_out() {
+    // The same turns as a resumed long-running call, but the call was never marked
+    // long-running: the second response answers an answered call.
+    let session = Arc::new(MockSessionWithState::new());
+    let mutable = MutableSession::new(session);
+    mutable.append_event(authored("user", "user", vec![Part::Text { text: "go".into() }]));
+    mutable.append_event(authored("agent", "model", vec![call("lookup", "call-1")]));
+    mutable.append_event(authored(
+        "agent",
+        "function",
+        vec![response("lookup", "call-1", serde_json::json!({"hit": 1}))],
+    ));
+    mutable.append_event(authored("agent", "model", vec![Part::Text { text: "Found it.".into() }]));
+    mutable.append_event(authored(
+        "user",
+        "user",
+        vec![response("lookup", "call-1", serde_json::json!({"hit": 2}))],
+    ));
+
+    let history = mutable.conversation_history();
+    assert_eq!(history.len(), 4, "{history:?}");
+    assert_eq!(history[3].parts, vec![Part::Text { text: "Found it.".into() }]);
+}

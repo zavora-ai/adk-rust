@@ -237,8 +237,25 @@ impl MutableSession {
             });
         }
 
-        close_interrupted_tool_calls(history)
+        let long_running = long_running_call_ids(&events);
+        close_interrupted_tool_calls(answer_resumed_calls(history, &long_running))
     }
+}
+
+/// The ids of the calls `events` mark long-running. An agent lists a long-running call in
+/// [`Event::long_running_tool_ids`] by its id or, as `LlmAgent` does, by its tool's name.
+fn long_running_call_ids(events: &[Event]) -> std::collections::HashSet<String> {
+    let mut ids = std::collections::HashSet::new();
+    for event in events.iter().filter(|event| !event.long_running_tool_ids.is_empty()) {
+        for part in event.llm_response.content.iter().flat_map(|content| &content.parts) {
+            if let Part::FunctionCall { name, id: Some(id), .. } = part
+                && event.long_running_tool_ids.iter().any(|listed| listed == id || listed == name)
+            {
+                ids.insert(id.clone());
+            }
+        }
+    }
+    ids
 }
 
 /// How a history view presents events other agents authored.
@@ -449,6 +466,98 @@ fn close_interrupted_tool_calls(history: Vec<HistoryContent>) -> Vec<Content> {
     }
 
     normalized
+}
+
+/// Rearranges a history whose newest turn answers long-running calls after something else
+/// followed them, the way a caller resumes such a call: the call's interim response and
+/// the model's reply to it sit between the call and the caller's answer.
+///
+/// The history then ends on the turn with the calls and one response per call, the
+/// newest; what came between is left out, so the model answers the caller's result.
+/// Without this, the caller's answer reads as a second response to its call, which every
+/// provider rejects, and [`close_interrupted_tool_calls`] drops it. ADK Python and ADK Go
+/// rearrange the same way (`_rearrange_events_for_latest_function_response`).
+///
+/// Only calls in `long_running` are answered this way: a second response to an ordinary
+/// call is still left out, and an ordinary late response still keeps the turns around it.
+/// The history is also returned unchanged when its newest turn is not only function
+/// responses with ids, when those responses follow their calls directly, or when they
+/// answer calls from more than one turn.
+fn answer_resumed_calls(
+    mut history: Vec<HistoryContent>,
+    long_running: &std::collections::HashSet<String>,
+) -> Vec<HistoryContent> {
+    let Some(newest) = history.len().checked_sub(1) else { return history };
+    let mut answered = std::collections::HashSet::new();
+    for part in &history[newest].content.parts {
+        match part {
+            Part::FunctionResponse { id: Some(id), .. } => {
+                answered.insert(id.clone());
+            }
+            _ => return history,
+        }
+    }
+    if answered.is_empty() || !answered.iter().all(|id| long_running.contains(id)) {
+        return history;
+    }
+
+    let Some(call_turn) = history[..newest].iter().rposition(|entry| {
+        entry.content.parts.iter().any(
+            |part| matches!(part, Part::FunctionCall { id: Some(id), .. } if answered.contains(id)),
+        )
+    }) else {
+        return history;
+    };
+    let call_ids: Vec<String> = history[call_turn]
+        .content
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            Part::FunctionCall { id: Some(id), .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    if !answered.iter().all(|id| call_ids.contains(id)) {
+        return history;
+    }
+
+    // Responses to the turn's other calls may sit in between, as parallel calls answer
+    // one at a time. Anything else, or an earlier response to a call answered now, means
+    // the run moved on before this answer came.
+    let moved_on = history[call_turn + 1..newest]
+        .iter()
+        .flat_map(|entry| &entry.content.parts)
+        .any(|part| match part {
+            Part::FunctionResponse { id: Some(id), .. } => {
+                answered.contains(id) || !call_ids.contains(id)
+            }
+            _ => true,
+        });
+    if !moved_on {
+        return history;
+    }
+
+    // One response per call, the newest, in the order of the calls.
+    let mut responses: Vec<Option<Part>> = vec![None; call_ids.len()];
+    for part in history[call_turn + 1..].iter().flat_map(|entry| &entry.content.parts) {
+        if let Part::FunctionResponse { id: Some(id), .. } = part
+            && let Some(position) = call_ids.iter().position(|call_id| call_id == id)
+        {
+            responses[position] = Some(part.clone());
+        }
+    }
+    let answer = history.swap_remove(newest);
+    history.truncate(call_turn + 1);
+    // A tool-result turn, whoever sent the result: model clients carry function responses
+    // in the `function` role, and a user turn holds only the person's input.
+    history.push(HistoryContent {
+        content: Content {
+            role: "function".to_string(),
+            parts: responses.into_iter().flatten().collect(),
+        },
+        invocation_id: answer.invocation_id,
+    });
+    history
 }
 
 impl adk_core::Session for MutableSession {

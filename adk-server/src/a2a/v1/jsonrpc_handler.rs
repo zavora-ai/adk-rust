@@ -208,7 +208,7 @@ async fn handle_send_message(handler: &CallerScope<'_>, request: JsonRpcRequest)
         Err(e) => return json_response(make_error_response(id, &e)),
     };
 
-    match handler.message_send(params.message).await {
+    match handler.message_send_with(params.message, params.configuration.as_ref()).await {
         Ok(task) => json_response(make_success_response(id, &SendMessageResponse::Task(task))),
         Err(e) => json_response(make_error_response(id, &e)),
     }
