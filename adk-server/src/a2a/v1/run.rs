@@ -357,3 +357,82 @@ async fn start_agent(
         .await
         .map_err(|e| A2aError::Internal { message: format!("runner run: {e}") })
 }
+
+/// Cancels the remote tasks a cancelled `INPUT_REQUIRED` task waited on, as adk-go's
+/// executor does: the calls in the task's status message came from remote agents, whose
+/// events in the task's session name the remote task (`a2a:task_id`). Each remote agent of
+/// the agent tree cancels its own task, for the session's user. Failures are logged.
+pub(super) async fn cancel_waiting_remote_tasks(
+    runner_config: &adk_runner::RunnerConfig,
+    caller: Option<&RequestContext>,
+    entry: &super::task_store::TaskStoreEntry,
+) {
+    use crate::a2a::remote_agent::v1_remote::A2A_TASK_ID_KEY;
+    let Some(message) = &entry.status.message else { return };
+    let pending: std::collections::HashSet<String> = message
+        .parts
+        .iter()
+        .filter_map(|part| super::convert::wire_part_to_adk(part).ok())
+        .filter_map(|part| match part {
+            adk_core::Part::FunctionCall { id: Some(id), .. } => Some(id),
+            _ => None,
+        })
+        .collect();
+    if pending.is_empty() {
+        return;
+    }
+    let user_id = session_user_id(caller, &entry.context_id);
+    let session = match runner_config
+        .session_service
+        .get(adk_session::GetRequest {
+            app_name: runner_config.app_name.clone(),
+            user_id: user_id.clone(),
+            session_id: entry.context_id.clone(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+    {
+        Ok(session) => session,
+        Err(error) => {
+            tracing::warn!(task_id = %entry.id, %error, "cannot read the session to cancel remote tasks");
+            return;
+        }
+    };
+    let mut remote_tasks: Vec<(String, String)> = Vec::new();
+    for event in session.events().all().iter().rev() {
+        let calls_pending = event.content().into_iter().flat_map(|content| &content.parts).any(
+            |part| matches!(part, adk_core::Part::FunctionCall { id: Some(id), .. } if pending.contains(id)),
+        );
+        if let (true, Some(task_id)) = (calls_pending, event.provider_metadata.get(A2A_TASK_ID_KEY))
+            && !remote_tasks.iter().any(|(_, known)| known == task_id)
+        {
+            remote_tasks.push((event.author.clone(), task_id.clone()));
+        }
+    }
+    for (author, task_id) in remote_tasks {
+        let Some(agent) = find_agent(&runner_config.agent, &author) else { continue };
+        let acting = adk_core::ActingContext::derived(
+            &runner_config.app_name,
+            &author,
+            &user_id,
+            adk_core::SubjectKind::Human,
+        );
+        let cancel = agent.cancel_remote_task(&task_id, &acting);
+        match tokio::time::timeout(std::time::Duration::from_secs(10), cancel).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(%task_id, agent = %author, %error, "cancellation failed")
+            }
+            Err(_) => tracing::warn!(%task_id, agent = %author, "cancellation failed: timed out"),
+        }
+    }
+}
+
+/// The agent named `name` in the tree under `root`.
+fn find_agent(root: &Arc<dyn adk_core::Agent>, name: &str) -> Option<Arc<dyn adk_core::Agent>> {
+    if root.name() == name {
+        return Some(root.clone());
+    }
+    root.sub_agents().iter().find_map(|sub| find_agent(sub, name))
+}

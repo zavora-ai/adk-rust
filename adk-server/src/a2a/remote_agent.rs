@@ -625,6 +625,39 @@ pub mod v1_remote {
             &[]
         }
 
+        async fn cancel_remote_task(
+            &self,
+            task_id: &str,
+            acting: &adk_core::ActingContext,
+        ) -> Result<()> {
+            let card = &self.config.agent_card;
+            let interface = Self::select_interface(card).ok_or_else(|| {
+                adk_core::AdkError::agent("no supported interface found in agent card")
+            })?;
+            let mut client = A2aV1Client::with_retry(
+                card.clone(),
+                crate::a2a::client::v1_client::RetryConfig { max_retries: 0, ..Default::default() },
+            );
+            if let Some(broker) = self.config.credential_broker.as_deref() {
+                let token = super::brokered_token(
+                    broker,
+                    acting,
+                    &interface.url,
+                    &self.config.credential_scopes,
+                )
+                .await?;
+                client = client.with_credential(token);
+            }
+            let cancelled = if interface.protocol_binding == "HTTP+JSON" {
+                client.cancel_task_rest(task_id).await
+            } else {
+                client.cancel_task(task_id).await
+            };
+            cancelled.map(drop).map_err(|error| {
+                adk_core::AdkError::agent(format!("cancel remote task {task_id}: {error}"))
+            })
+        }
+
         async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
             let card = self.config.agent_card.clone();
             let invocation_id = ctx.invocation_id().to_string();

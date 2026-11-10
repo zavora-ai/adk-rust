@@ -231,6 +231,23 @@ pub trait Agent: Send + Sync {
         }
     }
 
+    /// Cancels `task_id`, a task this agent started on another agent, for `acting`: the
+    /// task that waited on it was cancelled, so the input it waits for will never come.
+    ///
+    /// The default does nothing: only an agent that starts tasks elsewhere, such as an A2A
+    /// remote agent, has any to cancel.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the other agent cannot be reached or refuses the cancel.
+    async fn cancel_remote_task(
+        &self,
+        _task_id: &str,
+        _acting: &crate::ActingContext,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// What the agent tells callers about itself when they list its skills, such as an A2A
     /// agent card: its kind, its fixed instructions and its tools.
     ///

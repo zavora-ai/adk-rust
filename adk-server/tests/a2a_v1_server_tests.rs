@@ -526,3 +526,77 @@ async fn a_remote_agent_cancels_the_remote_task_when_its_caller_stops_reading() 
     }
     assert_eq!(state, Some(TaskState::Canceled));
 }
+
+/// Asks its caller to approve with a long-running call.
+struct AskingAgent;
+
+#[async_trait]
+impl Agent for AskingAgent {
+    fn name(&self) -> &str {
+        "asking"
+    }
+
+    fn description(&self) -> &str {
+        "asks for approval"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> AdkResult<EventStream> {
+        let mut event = Event::new("asking");
+        event.llm_response.content = Some(Content {
+            role: "model".to_string(),
+            parts: vec![adk_core::Part::FunctionCall {
+                name: "approve".to_string(),
+                args: json!({"amount": 5}),
+                id: Some("call-1".to_string()),
+                thought_signature: None,
+            }],
+        });
+        event.long_running_tool_ids = vec!["call-1".to_string()];
+        Ok(Box::pin(futures::stream::iter(vec![Ok(event)])))
+    }
+}
+
+/// Serves `agent` over A2A v1 at a new address; returns the address.
+async fn serve_agent(agent: Arc<dyn Agent>) -> String {
+    listen(|base| {
+        let runner_config = Arc::new(
+            adk_runner::Runner::builder()
+                .app_name(agent.name())
+                .agent(agent.clone())
+                .session_service(Arc::new(InMemorySessionService::new()))
+                .build_config(),
+        );
+        A2aV1Server::builder(runner_config, base).build().router()
+    })
+    .await
+}
+
+#[tokio::test]
+async fn cancelling_a_task_cancels_the_remote_task_it_waits_on() {
+    let child = serve_agent(Arc::new(AskingAgent)).await;
+    let remote =
+        adk_server::a2a::remote_agent::v1_remote::RemoteA2aV1Agent::from_url("approver", &child)
+            .await
+            .unwrap();
+    let parent = serve_agent(Arc::new(remote)).await;
+    let parent_client = A2aV1Client::new(A2aV1Client::resolve_agent_card(&parent).await.unwrap());
+    let child_client = A2aV1Client::new(A2aV1Client::resolve_agent_card(&child).await.unwrap());
+
+    let task = match parent_client.send_message(user_message("pay 5")).await.unwrap() {
+        SendMessageResponse::Task(task) => task,
+        other => panic!("expected a task, got {other:?}"),
+    };
+    assert_eq!(task.status.state, TaskState::InputRequired, "the parent waits on the child's call");
+    let child_tasks = child_client.list_tasks(None, None, None, None).await.unwrap().tasks;
+    assert_eq!(child_tasks[0].status.state, TaskState::InputRequired);
+
+    parent_client.cancel_task(&task.id.0).await.unwrap();
+
+    // As adk-go's executor: the child's waiting task is cancelled too.
+    let child_task = child_client.get_task(&child_tasks[0].id.0, None).await.unwrap();
+    assert_eq!(child_task.status.state, TaskState::Canceled);
+}

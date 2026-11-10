@@ -820,6 +820,14 @@ impl CallerScope<'_> {
             Err(error) => return Err(error),
         }
 
+        // The remote tasks the waiting task waited on will get no answer now.
+        if entry.status.state == TaskState::InputRequired
+            && let Some(runner_config) = &self.handler.runner_config
+        {
+            super::run::cancel_waiting_remote_tasks(runner_config, self.caller.as_ref(), &entry)
+                .await;
+        }
+
         let updated = self.handler.task_store.get_task(task_id).await?;
         internal_task_to_wire(&updated)
     }
