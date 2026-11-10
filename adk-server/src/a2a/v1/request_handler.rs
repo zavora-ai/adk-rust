@@ -953,11 +953,8 @@ impl CallerScope<'_> {
             .as_ref()
             .map(|c| c.0.clone())
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let metadata = handler
-            .runner_config
-            .as_ref()
-            .map(|config| adk_task_metadata(config, self.caller.as_ref(), &context_id))
-            .unwrap_or_default();
+        let metadata =
+            handler.runner_config.as_ref().map(|_| adk_task_metadata()).unwrap_or_default();
         handler
             .executor
             .create_task_with_metadata(&task_id, &context_id, self.owner(), metadata)
@@ -2373,18 +2370,18 @@ mod tests {
     async fn tasks_and_their_updates_name_the_adk_app_user_and_session() {
         use super::super::convert::{ADK_ERROR_MESSAGE_METADATA_KEY, ADK_EXTENSION_URI};
 
-        let (handler, _) =
+        let (handler, store) =
             handler_with_agent(Arc::new(ChunkingAgent { chunks: vec!["hi".into()] }));
         let mut stream = handler.message_stream(make_test_message()).await.unwrap();
         let Some(Ok(StreamResponse::Task(task))) = stream.next().await else {
             panic!("the stream starts with the task");
         };
         let context = task.context_id.0.clone();
-        let metadata = task.metadata.clone().expect("the task carries ADK metadata");
-        assert_eq!(metadata["adk_app_name"], "a2a-stream-test");
-        assert_eq!(metadata["adk_session_id"], context.as_str());
-        assert_eq!(metadata["adk_user_id"], format!("A2A_USER_{context}"));
-        assert_eq!(metadata[ADK_EXTENSION_URI], true);
+        // A new task carries only the extension marker; the run's first status update
+        // names the app, user and session, and the task takes them on (as adk-go).
+        let metadata = task.metadata.clone().expect("the task carries the ADK marker");
+        assert_eq!(metadata, serde_json::json!({ ADK_EXTENSION_URI: true }));
+        let task_id = task.id.0.clone();
         for update in stream.collect::<Vec<_>>().await {
             let metadata = match update.unwrap() {
                 StreamResponse::StatusUpdate(event) => event.metadata,
@@ -2396,6 +2393,11 @@ mod tests {
                 context.as_str()
             );
         }
+        let stored = store.get_task(&task_id).await.unwrap().metadata;
+        assert_eq!(stored["adk_app_name"], "a2a-stream-test");
+        assert_eq!(stored["adk_session_id"], context.as_str());
+        assert_eq!(stored["adk_user_id"], format!("A2A_USER_{context}"));
+        assert_eq!(stored[ADK_EXTENSION_URI], true);
 
         // A failed run marks its error text.
         let (handler, _) = handler_with_agent(Arc::new(FailingAgent));

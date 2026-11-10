@@ -224,8 +224,9 @@ impl V1Executor {
     /// Transitions a task to `new_state` with `parts` (if any) as its status message, and
     /// sends the update with `metadata`, or the task's own metadata when `None`.
     ///
-    /// The previous status message moves into the task's history, as A2A task managers
-    /// do. A task an ADK agent runs marks the update with the ADK extension.
+    /// The previous status message moves into the task's history, and `metadata` joins the
+    /// task's own, as A2A task managers do. A task an ADK agent runs marks the update with
+    /// the ADK extension.
     ///
     /// # Errors
     ///
@@ -262,6 +263,12 @@ impl V1Executor {
         }
         entry.status = status.clone();
         entry.updated_at = Utc::now();
+        // The task takes on what each status update says about it, as a2a-go applies one.
+        if let Some(metadata) = &metadata {
+            for (key, value) in metadata.iter().filter(|(key, _)| *key != OWNER_METADATA_KEY) {
+                entry.metadata.insert(key.clone(), value.clone());
+            }
+        }
         let adk_task = entry.metadata.contains_key(ADK_EXTENSION_URI);
         let mut metadata = metadata.unwrap_or_else(|| task_metadata(&entry));
         self.save_versioned(entry, version).await?;

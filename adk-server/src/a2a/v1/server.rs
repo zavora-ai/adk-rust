@@ -283,10 +283,13 @@ impl A2aV1ServerBuilder {
             .with_extended_agent_card(self.extended_card.is_some());
         capabilities.extensions = Some(vec![AgentExtension {
             uri: ADK_EXTENSION_URI.to_string(),
+            // adk-go's wording; `required` is left out, as false is its default.
             description: Some(
-                "Tasks carry ADK metadata: adk_app_name, adk_user_id, adk_session_id.".to_string(),
+                "Content is spread across task artifacts and the status message, which carries \
+                 long-running function calls."
+                    .to_string(),
             ),
-            required: Some(false),
+            required: None,
             params: None,
         }]);
         let mut card = build_v1_agent_card(

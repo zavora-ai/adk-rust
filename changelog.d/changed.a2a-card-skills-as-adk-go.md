@@ -7,3 +7,4 @@
     - A `sub-agents` skill tagged with the workflow's kind and `orchestration`.
   - **Any other agent:** a `custom` skill tagged `custom_agent`.
   - **`Agent::profile`, new and defaulted, reports what a card needs:** the agent's kind (`AgentKind`), fixed instructions and tools (`AgentProfile`, `ToolProfile`). `LlmAgent` and the workflow agents implement it. An agent that does not reports `AgentKind::Custom`.
+  - **The card's ADK extension entry reads as adk-go's:** it says the content is spread across task artifacts and the status message, and leaves `required` out.

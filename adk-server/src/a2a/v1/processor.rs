@@ -46,10 +46,10 @@ pub const ADK_TRANSFER_TO_AGENT_METADATA_KEY: &str = "adk_transfer_to_agent";
 /// How a run's output is laid out in artifacts, as adk-go's `OutputMode`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OutputMode {
-    /// One artifact holds the run's answer: each non-partial event appends to it.
-    /// Streamed partial events replace a separate artifact marked `adk_partial`, which is
-    /// emptied (`{}`, `lastChunk`) when the run ends. adk-go's default
-    /// (`artifact-per-run`).
+    /// One artifact holds the run's answer: each non-partial event appends to it, with
+    /// `lastChunk` set as adk-python reads it. Streamed partial events replace a separate
+    /// artifact marked `adk_partial`, which is emptied (`{}`, `lastChunk`) when the run
+    /// ends. adk-go's default (`artifact-per-run`).
     #[default]
     ArtifactPerRun,
     /// Each event starts a new artifact; an author's partial events build one artifact up
@@ -420,7 +420,9 @@ impl ArtifactMaker {
                     artifact,
                     // A partial update replaces the temporary artifact; the answer grows.
                     append: !partial && existing.is_some(),
-                    last_chunk: false,
+                    // A finished event's chunk is complete: adk-python reads `lastChunk`
+                    // to tell answers from streamed chunks (adk-go reads `adk_partial`).
+                    last_chunk: !partial,
                     metadata: Some(metadata),
                 }
             }
@@ -535,7 +537,8 @@ mod tests {
         assert_ne!(answer.artifact.id, first.artifact.id);
         assert!(!answer.append && more.append, "the answer grows from its first update");
         assert_eq!(answer.artifact.id, more.artifact.id);
-        assert!(!answer.last_chunk && !more.last_chunk);
+        assert!(answer.last_chunk && more.last_chunk, "a finished event's chunk is complete");
+        assert!(!first.last_chunk && !second.last_chunk);
         assert_eq!(answer.metadata.as_ref().unwrap()[ADK_PARTIAL_METADATA_KEY], false);
         assert_eq!(texts(&answer), ["Hello"]);
         assert_eq!(reset.artifact.id, first.artifact.id);

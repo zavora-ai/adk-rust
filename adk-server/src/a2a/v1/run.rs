@@ -353,17 +353,11 @@ pub(super) fn base_metadata(
     meta
 }
 
-/// The metadata of a task the agent of `runner_config` runs in `context_id`: the run's
-/// [`base_metadata`], and the ADK extension marker, as adk-python and adk-go set it.
-pub(super) fn adk_task_metadata(
-    runner_config: &adk_runner::RunnerConfig,
-    caller: Option<&RequestContext>,
-    context_id: &str,
-) -> std::collections::HashMap<String, Value> {
-    let mut meta: std::collections::HashMap<String, Value> =
-        base_metadata(runner_config, caller, context_id).into_iter().collect();
-    meta.insert(ADK_EXTENSION_URI.to_string(), true.into());
-    meta
+/// The metadata of a task an ADK agent runs, when the task is created: the ADK extension
+/// marker, as adk-go sets it. The run's [`base_metadata`] joins it with the first status
+/// update, whose metadata the task takes on.
+pub(super) fn adk_task_metadata() -> std::collections::HashMap<String, Value> {
+    std::collections::HashMap::from([(ADK_EXTENSION_URI.to_string(), Value::Bool(true))])
 }
 
 /// Starts the agent on `message` in the session of `context_id`, creating the session when
