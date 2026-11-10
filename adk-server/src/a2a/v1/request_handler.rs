@@ -270,7 +270,29 @@ impl RequestHandler {
     /// let task = handler.for_caller(Some(request_context)).message_send(msg).await?;
     /// ```
     pub fn for_caller(&self, caller: Option<RequestContext>) -> CallerScope<'_> {
-        CallerScope { handler: self, caller }
+        CallerScope { handler: self, caller, extensions: Vec::new() }
+    }
+
+    /// Refuses a call that leaves out an extension the agent card marks `required`, with
+    /// `ExtensionSupportRequired` (-32008), as a2a-go does.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`A2aError::ExtensionSupportRequired`] naming the first missing extension.
+    pub async fn require_extensions(
+        &self,
+        requested: &super::extensions::RequestedExtensions,
+    ) -> Result<(), A2aError> {
+        let card = self.agent_card.read().await;
+        let missing = card.card.capabilities.extensions.iter().flatten().find(|extension| {
+            extension.required == Some(true) && !requested.contains(&extension.uri)
+        });
+        match missing {
+            Some(extension) => {
+                Err(A2aError::ExtensionSupportRequired { uri: extension.uri.clone() })
+            }
+            None => Ok(()),
+        }
     }
 
     /// Sends a message as an unauthenticated caller; see [`CallerScope::message_send`].
@@ -491,12 +513,20 @@ impl RequestHandler {
 pub struct CallerScope<'a> {
     handler: &'a RequestHandler,
     caller: Option<RequestContext>,
+    extensions: Vec<String>,
 }
 
 impl CallerScope<'_> {
     /// The caller this scope acts for; `None` without authentication.
     pub fn caller(&self) -> Option<&RequestContext> {
         self.caller.as_ref()
+    }
+
+    /// Acts with the extensions the caller asked for, which each run's hooks see.
+    #[must_use]
+    pub fn with_extensions(mut self, requested: super::extensions::RequestedExtensions) -> Self {
+        self.extensions = requested.0;
+        self
     }
 
     /// The authenticated user this scope acts for, or `None` without authentication.
@@ -630,6 +660,7 @@ impl CallerScope<'_> {
             caller: self.caller.clone(),
             output_mode: handler.output_mode,
             hooks: handler.hooks.clone(),
+            extensions: self.extensions.clone(),
         };
         Ok(super::run::spawn(run, task_id, context_id, msg, cancellation, guard))
     }
@@ -2499,6 +2530,47 @@ mod tests {
         let texts = artifact_texts(&task);
         assert_eq!(texts.len(), 1);
         assert!(texts[0].starts_with("[echo: "), "{texts:?}");
+    }
+
+    #[tokio::test]
+    async fn a_required_extension_must_be_asked_for_and_reaches_the_run() {
+        use super::super::extensions::RequestedExtensions;
+        use super::super::hooks::ExecutorHooks;
+        let required = "https://example.com/ext/billing";
+        let (handler, _) = handler_with_agent(Arc::new(EchoAgent));
+        {
+            let mut card = handler.agent_card.write().await;
+            let mut updated = card.card.clone();
+            updated.capabilities.extensions =
+                Some(vec![a2a_protocol_types::extensions::AgentExtension {
+                    uri: required.to_string(),
+                    description: None,
+                    required: Some(true),
+                    params: None,
+                }]);
+            card.update(updated);
+        }
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = seen.clone();
+        let handler =
+            handler.with_hooks(ExecutorHooks::default().on_cleanup(Arc::new(move |run, _| {
+                record.lock().unwrap().extend(run.extensions.clone());
+            })));
+
+        let err = handler.require_extensions(&RequestedExtensions::default()).await.unwrap_err();
+        assert!(
+            matches!(err, A2aError::ExtensionSupportRequired { ref uri } if uri == required),
+            "{err}"
+        );
+        let asked = RequestedExtensions(vec![required.to_string()]);
+        handler.require_extensions(&asked).await.unwrap();
+        handler
+            .for_caller(None)
+            .with_extensions(asked)
+            .message_send(make_test_message())
+            .await
+            .unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec![required.to_string()]);
     }
 
     fn make_handler() -> RequestHandler {

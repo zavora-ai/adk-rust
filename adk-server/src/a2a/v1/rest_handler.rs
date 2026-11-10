@@ -50,7 +50,22 @@ pub fn rest_router(handler: Arc<RequestHandler>) -> Router {
             get(handle_push_config_get).delete(handle_push_config_delete),
         )
         .route("/extendedAgentCard", get(handle_extended_agent_card))
+        .layer(axum::middleware::from_fn_with_state(handler.clone(), require_extensions))
         .with_state(handler)
+}
+
+/// Refuses a request that leaves out an extension the agent card requires (400
+/// `FAILED_PRECONDITION`, reason `EXTENSION_SUPPORT_REQUIRED`), as a2a-go does.
+async fn require_extensions(
+    State(handler): State<Arc<RequestHandler>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let requested = super::extensions::RequestedExtensions::from_headers(request.headers());
+    match handler.require_extensions(&requested).await {
+        Ok(()) => next.run(request).await,
+        Err(error) => error_response(&error),
+    }
 }
 
 // ── Error response helpers ───────────────────────────────────────────────────
@@ -92,6 +107,7 @@ struct TaskListQuery {
 async fn handle_message_send(
     State(handler): State<Arc<RequestHandler>>,
     caller: AuthenticatedCaller,
+    extensions: super::extensions::RequestedExtensions,
     Json(params): Json<serde_json::Value>,
 ) -> Response {
     let configuration = match extract_configuration(&params) {
@@ -103,7 +119,12 @@ async fn handle_message_send(
         Err(e) => return error_response(&e),
     };
 
-    match handler.for_caller(caller.0).message_send_with(msg, configuration.as_ref()).await {
+    match handler
+        .for_caller(caller.0)
+        .with_extensions(extensions)
+        .message_send_with(msg, configuration.as_ref())
+        .await
+    {
         Ok(task) => a2a_json_response(&SendMessageResponse::Task(task)),
         Err(e) => error_response(&e),
     }
@@ -113,6 +134,7 @@ async fn handle_message_send(
 async fn handle_message_stream(
     State(handler): State<Arc<RequestHandler>>,
     caller: AuthenticatedCaller,
+    extensions: super::extensions::RequestedExtensions,
     Json(params): Json<serde_json::Value>,
 ) -> Response {
     let configuration = match extract_configuration(&params) {
@@ -124,11 +146,15 @@ async fn handle_message_stream(
         Err(e) => return error_response(&e),
     };
 
-    let event_stream =
-        match handler.for_caller(caller.0).message_stream_with(msg, configuration.as_ref()).await {
-            Ok(s) => s,
-            Err(e) => return error_response(&e),
-        };
+    let event_stream = match handler
+        .for_caller(caller.0)
+        .with_extensions(extensions)
+        .message_stream_with(msg, configuration.as_ref())
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => return error_response(&e),
+    };
 
     let sse_stream = event_stream.map(|result| -> Result<Event, Infallible> {
         match result {

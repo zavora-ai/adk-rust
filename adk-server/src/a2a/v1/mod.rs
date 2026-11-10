@@ -2,6 +2,7 @@ pub mod card;
 pub mod convert;
 pub mod error;
 pub mod executor;
+pub mod extensions;
 pub mod hooks;
 pub mod jsonrpc_handler;
 pub mod processor;

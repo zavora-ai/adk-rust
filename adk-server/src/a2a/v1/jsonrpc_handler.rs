@@ -68,6 +68,7 @@ const INVALID_REQUEST: i32 = -32600;
 pub async fn jsonrpc_handler(
     State(handler): State<Arc<RequestHandler>>,
     caller: AuthenticatedCaller,
+    extensions: super::extensions::RequestedExtensions,
     body: Bytes,
 ) -> Response {
     let request = match parse_request(&body) {
@@ -75,7 +76,13 @@ pub async fn jsonrpc_handler(
         Err(error) => return json_response(error),
     };
     let request_id = request.id.clone();
-    let scope = handler.for_caller(caller.0);
+    if let Err(error) = handler.require_extensions(&extensions).await {
+        return match request.method.as_str() {
+            "SendStreamingMessage" | "SubscribeToTask" => sse_error_response(request_id, &error),
+            _ => json_response(make_error_response(request_id, &error)),
+        };
+    }
+    let scope = handler.for_caller(caller.0).with_extensions(extensions);
 
     match request.method.as_str() {
         "SendMessage" => handle_send_message(&scope, request).await,
@@ -561,7 +568,8 @@ mod tests {
         caller: AuthenticatedCaller,
         body: impl Into<Bytes>,
     ) -> (axum::http::response::Parts, serde_json::Value) {
-        let response = jsonrpc_handler(State(handler), caller, body.into()).await;
+        let response =
+            jsonrpc_handler(State(handler), caller, Default::default(), body.into()).await;
         let (parts, body) = response.into_parts();
         let bytes = body.collect().await.expect("body collection should succeed").to_bytes();
         (parts, serde_json::from_slice(&bytes).expect("response should be valid JSON"))
@@ -786,6 +794,7 @@ mod tests {
         let resp = jsonrpc_handler(
             State(make_handler()),
             AuthenticatedCaller::default(),
+            Default::default(),
             axum::body::Bytes::from(body),
         )
         .await;

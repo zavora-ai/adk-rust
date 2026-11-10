@@ -34,6 +34,7 @@ pub(super) struct RunContext {
     pub caller: Option<RequestContext>,
     pub output_mode: OutputMode,
     pub hooks: super::hooks::ExecutorHooks,
+    pub extensions: Vec<String>,
 }
 
 /// Starts the run of `message` for `task_id` on its own task and returns its handle.
@@ -98,6 +99,7 @@ async fn execute(
         session_id: context_id.to_string(),
         caller: run.caller.clone(),
         message: message.clone(),
+        extensions: run.extensions.clone(),
     });
     let failed = |text: String, metadata: &Map<String, Value>| FinalStatus {
         state: TaskState::Failed,

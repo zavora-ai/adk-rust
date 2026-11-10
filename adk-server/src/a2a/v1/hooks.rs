@@ -46,6 +46,8 @@ pub struct ExecutionContext {
     pub caller: Option<RequestContext>,
     /// The message the run answers.
     pub message: Message,
+    /// The extensions the caller asked for (`A2A-Extensions`).
+    pub extensions: Vec<String>,
 }
 
 /// Called before the agent runs. An error fails the task with
