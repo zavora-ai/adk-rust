@@ -123,6 +123,10 @@ impl Agent for ParallelAgent {
         &self.description
     }
 
+    fn profile(&self) -> adk_core::AgentProfile {
+        adk_core::AgentProfile { kind: adk_core::AgentKind::Parallel, ..Default::default() }
+    }
+
     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
         &self.sub_agents
     }

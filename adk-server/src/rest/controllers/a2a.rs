@@ -938,9 +938,9 @@ mod tests {
         let expected = serde_json::json!([
             {
                 "id": "card_agent",
-                "name": "card_agent",
+                "name": "custom",
                 "description": "A card test agent",
-                "tags": ["agent"],
+                "tags": ["custom_agent"],
             },
             {
                 "id": "skill-one",
@@ -965,9 +965,9 @@ mod tests {
         let expected = serde_json::json!([
             {
                 "id": "card_agent",
-                "name": "card_agent",
+                "name": "custom",
                 "description": "A card test agent",
-                "tags": ["agent"],
+                "tags": ["custom_agent"],
             },
         ]);
         assert_eq!(serde_json::to_value(&controller.agent_card.skills).unwrap(), expected);

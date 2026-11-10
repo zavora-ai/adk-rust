@@ -3665,6 +3665,22 @@ impl Agent for LlmAgent {
         &self.description
     }
 
+    fn profile(&self) -> adk_core::AgentProfile {
+        adk_core::AgentProfile {
+            kind: adk_core::AgentKind::Llm,
+            instruction: self.instruction.clone().filter(|text| !text.is_empty()),
+            global_instruction: self.global_instruction.clone().filter(|text| !text.is_empty()),
+            tools: self
+                .tools
+                .iter()
+                .map(|tool| adk_core::ToolProfile {
+                    name: tool.name().to_string(),
+                    description: tool.description().to_string(),
+                })
+                .collect(),
+        }
+    }
+
     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
         &self.sub_agents
     }

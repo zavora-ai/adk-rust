@@ -81,6 +81,10 @@ impl Agent for SequentialAgent {
         self.loop_agent.description()
     }
 
+    fn profile(&self) -> adk_core::AgentProfile {
+        adk_core::AgentProfile { kind: adk_core::AgentKind::Sequential, ..Default::default() }
+    }
+
     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
         self.loop_agent.sub_agents()
     }
