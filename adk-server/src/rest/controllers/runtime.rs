@@ -320,12 +320,45 @@ pub struct NewMessage {
     pub parts: Vec<MessagePart>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct MessagePart {
     #[serde(default)]
     pub text: Option<String>,
     #[serde(default, rename = "inlineData")]
     pub inline_data: Option<InlineData>,
+    /// A function call, in Gemini's shape.
+    #[serde(default, rename = "functionCall", skip_serializing_if = "Option::is_none")]
+    pub function_call: Option<FunctionCallPart>,
+    /// A function's result, in Gemini's shape. Sent with the call's `id`, it answers a
+    /// long-running call, as adk-python and adk-go accept.
+    #[serde(default, rename = "functionResponse", skip_serializing_if = "Option::is_none")]
+    pub function_response: Option<FunctionResponsePart>,
+}
+
+/// A function call in a message part: `{id, name, args}`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FunctionCallPart {
+    /// The call id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// The function's name.
+    pub name: String,
+    /// The call's arguments.
+    #[serde(default)]
+    pub args: serde_json::Value,
+}
+
+/// A function's result in a message part: `{id, name, response}`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FunctionResponsePart {
+    /// The id of the call this answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// The function's name.
+    pub name: String,
+    /// The result.
+    #[serde(default)]
+    pub response: serde_json::Value,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -577,7 +610,7 @@ fn new_message_from_ag_ui_input(input: &AgUiRunInput) -> Option<NewMessage> {
     let content = selected.content.as_ref()?;
     let parts: Vec<MessagePart> = extract_text_segments(content)
         .into_iter()
-        .map(|text| MessagePart { text: Some(text), inline_data: None })
+        .map(|text| MessagePart { text: Some(text), ..MessagePart::default() })
         .collect();
     if parts.is_empty() {
         return None;
@@ -808,6 +841,26 @@ fn build_content_from_parts(parts: &[MessagePart]) -> Result<adk_core::Content, 
                     ));
                 }
             }
+        }
+
+        if let Some(call) = &part.function_call {
+            content.parts.push(adk_core::Part::FunctionCall {
+                name: call.name.clone(),
+                args: call.args.clone(),
+                id: call.id.clone(),
+                thought_signature: None,
+            });
+        }
+
+        if let Some(response) = &part.function_response {
+            content.parts.push(adk_core::Part::FunctionResponse {
+                function_response: adk_core::FunctionResponseData::new(
+                    response.name.clone(),
+                    response.response.clone(),
+                ),
+                id: response.id.clone(),
+                annotations: None,
+            });
         }
     }
 
@@ -2242,5 +2295,33 @@ mod error_status_tests {
         let body: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(body["error"]["category"], "conflict");
         assert_eq!(body["error"]["code"], "run_store.stale_epoch");
+    }
+}
+
+#[cfg(test)]
+mod message_part_tests {
+    use super::*;
+
+    #[test]
+    fn a_function_response_part_answers_its_call_by_id() {
+        // The shape adk-python and adk-go clients send to resume a long-running call.
+        let message: NewMessage = serde_json::from_value(serde_json::json!({
+            "role": "user",
+            "parts": [{"functionResponse": {
+                "id": "call-approve",
+                "name": "request_approval",
+                "response": {"status": "approved"}
+            }}]
+        }))
+        .unwrap();
+        let content = build_content_from_parts(&message.parts).unwrap();
+        match content.parts.as_slice() {
+            [adk_core::Part::FunctionResponse { function_response, id, .. }] => {
+                assert_eq!(id.as_deref(), Some("call-approve"));
+                assert_eq!(function_response.name, "request_approval");
+                assert_eq!(function_response.response, serde_json::json!({"status": "approved"}));
+            }
+            other => panic!("expected one function response, got {other:?}"),
+        }
     }
 }

@@ -175,6 +175,8 @@ fn collect_function_calls(content: &Content, invocation_id: &str) -> Vec<Pending
         .collect()
 }
 
+/// The calls in `content` to long-running tools, by call id, as adk-python and adk-go list
+/// them; a call without an id is listed by its tool's name.
 fn collect_long_running_tool_ids(
     tool_map: &HashMap<String, Arc<dyn Tool>>,
     content: &Content,
@@ -183,10 +185,10 @@ fn collect_long_running_tool_ids(
         .parts
         .iter()
         .filter_map(|part| {
-            if let Part::FunctionCall { name, .. } = part
+            if let Part::FunctionCall { name, id, .. } = part
                 && tool_map.get(name).is_some_and(|tool| tool.is_long_running())
             {
-                return Some(name.clone());
+                return Some(id.clone().unwrap_or_else(|| name.clone()));
             }
             None
         })

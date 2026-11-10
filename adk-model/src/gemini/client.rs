@@ -1509,7 +1509,7 @@ impl GeminiModel {
         }
 
         // Add contents using proper builder methods
-        for content in &req.contents {
+        for content in &join_function_responses(&req.contents) {
             match content.role.as_str() {
                 "system" if !on_cache => {}
                 "user" | "system" => {
@@ -2519,8 +2519,49 @@ impl CacheCapable for GeminiModel {
     }
 }
 
+/// Joins adjacent `function` contents into one. Gemini expects the responses to a turn of
+/// parallel calls in a single content, one function response per call, as adk-python and
+/// adk-go send them; the history holds one content per tool result.
+fn join_function_responses(contents: &[Content]) -> Vec<Content> {
+    let mut joined: Vec<Content> = Vec::with_capacity(contents.len());
+    for content in contents {
+        if content.role == "function"
+            && let Some(last) = joined.last_mut()
+            && last.role == "function"
+        {
+            last.parts.extend(content.parts.iter().cloned());
+            continue;
+        }
+        joined.push(content.clone());
+    }
+    joined
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn parallel_function_responses_travel_in_one_content() {
+        let response = |id: &str| Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new(
+                "tool",
+                serde_json::json!({"ok": id}),
+            ),
+            id: Some(id.to_string()),
+            annotations: None,
+        };
+        let contents = vec![
+            Content::new("user").with_text("both"),
+            Content { role: "function".to_string(), parts: vec![response("c1")] },
+            Content { role: "function".to_string(), parts: vec![response("c2")] },
+            Content::new("model").with_text("done"),
+            Content { role: "function".to_string(), parts: vec![response("c3")] },
+        ];
+        let joined = join_function_responses(&contents);
+        let shape: Vec<(&str, usize)> =
+            joined.iter().map(|content| (content.role.as_str(), content.parts.len())).collect();
+        assert_eq!(shape, vec![("user", 1), ("function", 2), ("model", 1), ("function", 1)]);
+    }
     use super::*;
     use adk_core::AdkError;
     use std::{
