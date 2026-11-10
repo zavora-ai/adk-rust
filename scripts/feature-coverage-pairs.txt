@@ -348,6 +348,9 @@
 6 adk-auth token-exchange
 # Web Bot Auth (spec 3.5 §7.3): RFC 9421 and draft test vectors, directory fetch and cache.
 6 adk-auth web-bot-auth doc
+# Agent identity federation: the OIDC issuer, the AWS, Google Cloud and Entra exchanges
+# against mock servers, the SigV4 test vector, and inbound Entra agent tokens.
+6 adk-auth agent-federation doc
 # The egress-guarded HTTP client and its redirect and resolution tests (#1281).
 6 adk-core egress-client doc
 # The GCS artifact backend must keep blob-name parity with adk-python.

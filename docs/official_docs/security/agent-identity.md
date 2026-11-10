@@ -260,6 +260,8 @@ host, and port and a path at or below the audience path; any other URL fails wit
 |--------|-------------------|---------------------|
 | `SecretCredentialBroker` | `adk-auth` | A `SecretProvider` secret bound to an exact `(AgentId, resource)` pair with its granted scopes |
 | `TokenExchangeBroker` | `adk-auth`, `token-exchange` | An RFC 8693 token exchange at an authorization server — of the identity source's credential, or, in on-behalf-of mode, of the subject's token with the agent's credential as the actor; optional RFC 7009 revocation |
+| `federation::GoogleWorkloadIdentity` | `adk-auth`, `agent-federation` | A Google Cloud federated access token for the agent's own token, for `https` resources on `googleapis.com` — see [Identity federation](#identity-federation) |
+| `federation::EntraAgentIdentity` | `adk-auth`, `agent-federation` | A Microsoft Entra agent identity's token for the resource's `.default` scope |
 
 `TokenExchangeBroker` caches each token per subject (`ActingContext::on_behalf_of`),
 delegation chain, agent, resource, and scope set until shortly before it expires, so a token
@@ -345,6 +347,130 @@ let broker = SecretCredentialBroker::new(secret_provider)
 | A2A remote agent | `RemoteA2aAgent::builder(name).credential_broker(broker, scopes)` | The run's acting context, at the configured agent URL |
 | A2A client | `A2aClient::with_credential(token)`, `A2aV1Client::with_credential(token)` | The token's audience; requests outside it fail without being sent |
 
+## Identity federation
+
+`adk_auth::federation` (feature `agent-federation`, which implies `sso`) lets an agent prove its
+`AgentId` to a cloud with a token its own issuer signs, and lets a service name the agent behind
+a cloud's token. Each cloud is told once to trust the issuer URL and the agent's id as the
+subject; it then fetches the issuer's keys itself, so the agent holds no secret of the cloud.
+
+```toml
+[dependencies]
+adk-auth = { version = "3.0.0", features = ["agent-federation"] }
+```
+
+### The issuer
+
+`AgentTokenIssuer` is an OpenID Connect issuer for agents. Serve `discovery_document()` at
+`{issuer}/.well-known/openid-configuration` and `jwks()` at `{issuer}/jwks.json`, over HTTPS
+and without authentication.
+
+| Claim | Value |
+|-------|-------|
+| `iss` | The issuer URL, without a trailing slash |
+| `sub` | The agent's `AgentId` |
+| `aud` | The audience the exchange names |
+| `iat`, `nbf`, `exp` | The time of issue, five seconds before it, and `iat` plus the lifetime — 10 minutes by default, 1 hour at most (`with_token_ttl`) |
+| `jti` | A random UUID |
+
+Tokens are signed with RS256 through `AgentTokenSigner`. `RsaTokenSigner` holds a PKCS#8 RSA
+key in memory (`from_pkcs8_pem`, `from_pkcs8_der`) and never prints it; implement the trait
+over a key service to keep the key out of the process. The exchanges take any
+`AgentTokenSource`, which the issuer implements, so a token another system issues works too.
+
+### Exchanges
+
+| Cloud | Client | Audience of the agent's token | Returns |
+|-------|--------|-------------------------------|---------|
+| AWS IAM | `AwsWebIdentity::assume_role(agent)` | `sts.amazonaws.com` | `AwsSessionCredentials`: access key id, secret access key, session token, expiry, the assumed role ARN and the subject AWS read |
+| Amazon Bedrock AgentCore Identity | `AgentCoreIdentity::workload_access_token(credentials, workload, token)` | Not checked by AgentCore | `WorkloadAccessToken`, an opaque token; the request is signed with Signature Version 4 under the role's credentials |
+| Google Cloud | `GoogleWorkloadIdentity::access_token(agent)` | `https://iam.googleapis.com/projects/{number}/locations/global/workloadIdentityPools/{pool}/providers/{provider}` | `GoogleAccessToken` with its expiry |
+| Microsoft Entra Agent ID | `EntraAgentIdentity::access_token(agent, resource)` | `api://AzureADTokenExchange` | `EntraAccessToken` of the agent identity for `{resource}/.default`, after the blueprint exchange with `fmi_path` |
+
+Every secret is a `CredentialSecret`, redacted in `Debug`. Requests give up after 30 seconds
+(connect timeout 5 seconds); `with_http_client` replaces the client.
+
+```rust
+use std::sync::Arc;
+
+use adk_auth::federation::{
+    AgentCoreIdentity, AgentTokenIssuer, AwsWebIdentity, EntraAgentIdentity, FederationError,
+    GoogleWorkloadIdentity,
+};
+use adk_core::{AgentId, AgentPrincipal};
+
+async fn federate(issuer_key_pem: &str) -> Result<(), FederationError> {
+    let issuer = Arc::new(AgentTokenIssuer::from_rsa_pem(
+        "https://agents.acme.example",
+        "agents-2026-11",
+        issuer_key_pem,
+    )?);
+    let cashier = AgentPrincipal::new(
+        AgentId::new("did:web:shop.acme.example:agents:cashier").expect("a valid agent id"),
+    );
+
+    // AWS: temporary credentials of a role, then an AgentCore workload access token.
+    let sts =
+        AwsWebIdentity::new("us-east-1", "arn:aws:iam::111122223333:role/cashier", issuer.clone());
+    let credentials = sts.assume_role(&cashier).await?;
+    let own_token = issuer.issue(&cashier, AwsWebIdentity::AUDIENCE).await?;
+    let _workload = AgentCoreIdentity::new("us-east-1")
+        .workload_access_token(&credentials, "cashier", &own_token.secret)
+        .await?;
+
+    // Google Cloud: a federated access token.
+    let google =
+        GoogleWorkloadIdentity::new("123456789012", "agents-pool", "agents-issuer", issuer.clone());
+    let _google_token = google.access_token(&cashier).await?;
+
+    // Microsoft Entra: the agent identity's token for Microsoft Graph.
+    let entra = EntraAgentIdentity::new(
+        "8f2c6a1e-0000-4000-8000-000000000001", // tenant
+        "8f2c6a1e-0000-4000-8000-000000000002", // agent identity blueprint
+        "8f2c6a1e-0000-4000-8000-000000000003", // agent identity
+        issuer,
+    );
+    let _entra_token = entra.access_token(&cashier, "https://graph.microsoft.com").await?;
+    Ok(())
+}
+```
+
+`GoogleWorkloadIdentity` and `EntraAgentIdentity` are `CredentialBroker`s: `token_for` exchanges
+the acting agent's token and caches the result per agent, resource and scopes until shortly
+before it expires. The Google broker serves `https` resources on `googleapis.com` only; the
+Entra broker takes no scopes, because an application token covers the resource's `.default`
+scope. AWS credentials sign requests rather than travel as a bearer, so `AwsWebIdentity` is
+not a broker.
+
+### Inbound agent tokens
+
+`InboundAgentVerifier` validates a cloud's agent token — signature, issuer, audience and
+lifetime, with the `sso` validators — and an `AgentClaimsProfile` names the agent as an
+`AgentPrincipal`. Implement the trait for a further identity system.
+
+| Constructor | Tokens | `id` | `tenant` | `class` | `attributes` |
+|-------------|--------|------|----------|---------|--------------|
+| `InboundAgentVerifier::entra(tenant, audience)` | Microsoft Entra v2.0 access tokens | `urn:entra:{tid}:agent:{azp}` (`appid` on v1.0) | `tid` | `xms_par_app_azp`, the blueprint, when present | `entra.tenant_id`, `entra.agent_identity_id`, and when present `entra.object_id`, `entra.blueprint_app_id`, `entra.token_version`, `entra.identity_type`, `entra.actor_facets`, `entra.subject_facets`, `entra.agent_identity_facet` |
+| `InboundAgentVerifier::google(issuer, audience)` | Identity tokens of agents hosted on Google Cloud | `sub`, the agent's SPIFFE id | The SPIFFE trust domain, which must be the issuing workload identity pool | — | `google.service`, `google.project_number`, `google.location`, `google.resource_type`, `google.resource_id`, `google.bound_token`, and `google.cnf_x5t_s256` on a bound token |
+
+> **Note:** Entra adds the agent-marking claims (`xms_act_fct`, `xms_sub_fct`, `xms_par_app_azp`,
+> `idtyp`) to a token for a custom audience only when optional claims are configured. The
+> profile records them when present and never requires them: authorize by the principal's `id`.
+
+```rust
+use adk_auth::federation::{FederationError, InboundAgentVerifier};
+use adk_core::AgentPrincipal;
+
+/// Names the Entra agent identity behind a bearer token addressed to this service.
+async fn caller(bearer: &str) -> Result<AgentPrincipal, FederationError> {
+    let verifier = InboundAgentVerifier::entra(
+        "8f2c6a1e-0000-4000-8000-000000000001", // tenant
+        "8f2c6a1e-0000-4000-8000-000000000002", // this service's application id
+    )?;
+    verifier.verify(bearer).await
+}
+```
+
 ## Error codes
 
 | Code | Category | Meaning |
@@ -365,6 +491,14 @@ let broker = SecretCredentialBroker::new(secret_provider)
 | `credential.exchange_unsupported` | `Unsupported` | `TokenExchangeBroker` cannot exchange an `X509` credential |
 | `credential.exchange_failed` | `Unavailable` or `Internal` | The authorization server refused the exchange or returned an unreadable response; the error carries the upstream status |
 | `credential.revocation_failed` | `Unavailable` | The RFC 7009 revocation endpoint refused a token |
+| `identity.federation.invalid_config` | `InvalidInput` | The issuer URL is not `https`, a token audience is empty, or a verifier names no single tenant |
+| `identity.federation.invalid_key` | `InvalidInput` | The issuer's signing key is not an unencrypted PKCS#8 RSA key |
+| `identity.federation.signing_failed` | `Internal` | The signer or token source produced no token; nothing was sent |
+| `identity.federation.exchange_failed` | `Unavailable` | A cloud's endpoint could not be reached |
+| `identity.federation.exchange_refused` | `Unauthorized`, `Forbidden`, `RateLimited` or `Unavailable` | A cloud refused the exchange; the message carries its error code and the error the upstream status |
+| `identity.federation.invalid_response` | `Internal` | A cloud accepted the exchange and its response could not be read |
+| `identity.federation.request_unsupported` | `Forbidden` | A federation broker was asked for a resource or scopes its cloud's token does not cover |
+| `identity.federation.claim_invalid` | `Unauthorized` | A validated inbound token lacks a claim its profile needs; validation failures keep their `auth.*` codes |
 
 ## Related
 
