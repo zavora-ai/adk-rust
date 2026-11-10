@@ -199,6 +199,25 @@ fn json_response(value: Value) -> Response {
     ([(axum::http::header::CONTENT_TYPE, "application/json")], body).into_response()
 }
 
+/// An SSE response for `events`, with keep-alive comments and `X-Accel-Buffering: no` so
+/// a proxy passes each event on as it comes.
+pub(super) fn sse_response(
+    events: impl futures::Stream<Item = Result<Event, Infallible>> + Send + 'static,
+) -> Response {
+    let mut response = Sse::new(events).keep_alive(KeepAlive::default()).into_response();
+    response.headers_mut().insert("x-accel-buffering", axum::http::HeaderValue::from_static("no"));
+    response
+}
+
+/// A streaming method's error before its stream starts, as the stream's one event: an SSE
+/// `data:` line holding the JSON-RPC error response, as a2a-go answers. A client that reads
+/// only `data:` lines from a streaming method sees the error.
+fn sse_error_response(id: JsonRpcRequestId, error: &A2aError) -> Response {
+    let json = serde_json::to_string(&make_error_response(id, error))
+        .expect("error response serialization should not fail");
+    sse_response(futures::stream::once(async move { Ok(Event::default().data(json)) }))
+}
+
 // ── Method handlers ──────────────────────────────────────────────────────────
 
 async fn handle_send_message(handler: &CallerScope<'_>, request: JsonRpcRequest) -> Response {
@@ -221,13 +240,14 @@ async fn handle_send_streaming_message(
     let id = request.id.clone();
     let params: MessageSendParams = match parse_params(request.params) {
         Ok(p) => p,
-        Err(e) => return json_response(make_error_response(id, &e)),
+        Err(e) => return sse_error_response(id, &e),
     };
 
-    let event_stream = match handler.message_stream(params.message).await {
-        Ok(s) => s,
-        Err(e) => return json_response(make_error_response(id, &e)),
-    };
+    let event_stream =
+        match handler.message_stream_with(params.message, params.configuration.as_ref()).await {
+            Ok(s) => s,
+            Err(e) => return sse_error_response(id, &e),
+        };
 
     let request_id = id.clone();
     let sse_stream = event_stream.map(move |result| -> Result<Event, Infallible> {
@@ -254,7 +274,7 @@ async fn handle_send_streaming_message(
         }
     });
 
-    Sse::new(sse_stream).keep_alive(KeepAlive::default()).into_response()
+    sse_response(sse_stream)
 }
 
 async fn handle_get_task(handler: &CallerScope<'_>, request: JsonRpcRequest) -> Response {
@@ -311,12 +331,12 @@ async fn handle_subscribe_to_task(handler: &CallerScope<'_>, request: JsonRpcReq
     let id = request.id.clone();
     let params: TaskIdParams = match parse_params(request.params) {
         Ok(p) => p,
-        Err(e) => return json_response(make_error_response(id, &e)),
+        Err(e) => return sse_error_response(id, &e),
     };
 
     let event_stream = match handler.tasks_subscribe(&params.id).await {
         Ok(s) => s,
-        Err(e) => return json_response(make_error_response(id, &e)),
+        Err(e) => return sse_error_response(id, &e),
     };
 
     let request_id = id.clone();
@@ -344,7 +364,7 @@ async fn handle_subscribe_to_task(handler: &CallerScope<'_>, request: JsonRpcReq
         }
     });
 
-    Sse::new(sse_stream).keep_alive(KeepAlive::default()).into_response()
+    sse_response(sse_stream)
 }
 
 async fn handle_push_config_create(handler: &CallerScope<'_>, request: JsonRpcRequest) -> Response {

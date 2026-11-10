@@ -12,8 +12,8 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
-use axum::response::sse::{Event, KeepAlive};
-use axum::response::{IntoResponse, Response, Sse};
+use axum::response::sse::Event;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::StreamExt;
@@ -115,15 +115,20 @@ async fn handle_message_stream(
     caller: AuthenticatedCaller,
     Json(params): Json<serde_json::Value>,
 ) -> Response {
+    let configuration = match extract_configuration(&params) {
+        Ok(configuration) => configuration,
+        Err(e) => return error_response(&e),
+    };
     let msg = match extract_message(params) {
         Ok(m) => m,
         Err(e) => return error_response(&e),
     };
 
-    let event_stream = match handler.for_caller(caller.0).message_stream(msg).await {
-        Ok(s) => s,
-        Err(e) => return error_response(&e),
-    };
+    let event_stream =
+        match handler.for_caller(caller.0).message_stream_with(msg, configuration.as_ref()).await {
+            Ok(s) => s,
+            Err(e) => return error_response(&e),
+        };
 
     let sse_stream = event_stream.map(|result| -> Result<Event, Infallible> {
         match result {
@@ -141,7 +146,7 @@ async fn handle_message_stream(
         }
     });
 
-    Sse::new(sse_stream).keep_alive(KeepAlive::default()).into_response()
+    super::jsonrpc_handler::sse_response(sse_stream)
 }
 
 /// `GET /tasks/{taskId}` — retrieves a task by ID.
@@ -271,7 +276,7 @@ async fn handle_tasks_subscribe(
         }
     });
 
-    Sse::new(sse_stream).keep_alive(KeepAlive::default()).into_response()
+    super::jsonrpc_handler::sse_response(sse_stream)
 }
 
 /// `POST /tasks/{taskId}/pushNotificationConfigs` — creates a push config.

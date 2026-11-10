@@ -1,0 +1,10 @@
+- **`RemoteA2aV1Agent` stores streamed replies correctly** (`adk-server`, `a2a-v1`):
+  - **Missing `lastChunk` means false,** as a2a-go writes it. Each chunk from an adk-go server used to be stored as a finished answer.
+  - **`adk_partial` wins over `append` and `lastChunk`.** The server's reset of its temporary artifact is dropped, where it used to become the answer text `<a2a_datapart_json>{}</a2a_datapart_json>`.
+  - **Chunks without `adk_partial` join into one complete answer per artifact** when the last chunk or the terminal status arrives, as adk-go's remote agent does. The session keeps the whole reply once.
+  - **Progress messages are reasoning.** A remote's status message before the task ends becomes partial thoughts.
+  - **A `Task` snapshot in a stream is read.**
+  - **A non-streaming task reply is one event:** its artifacts and status message.
+  - **ADK metadata is read back:** `adk_escalate`, `adk_error_code`, usage, citations and custom metadata. Every event records the remote `a2a:task_id` and `a2a:context_id`.
+  - **A `FAILED` status takes its first text as the error** and keeps the rest as content. Text marked `adk_is_error_message` is not content.
+  - **Thoughts marked `adk_thought` stay thoughts.**

@@ -1,0 +1,24 @@
+- **A2A v1 task updates follow adk-go's executor** (`adk-server`, `a2a-v1`):
+  - **Every event becomes one artifact update with all of its parts.** That covers text, thoughts (`adk_thought`), files, function calls and responses (tagged `adk_type`, with `adk_is_long_running` on every call), and any other part as JSON data. Before, a run produced one joined text artifact plus one media artifact.
+  - **Each update carries the event's metadata:** `adk_invocation_id`, `adk_author`, `adk_branch`, `adk_usage_metadata`, `adk_citation_metadata`, `adk_custom_metadata` and `adk_error_code`. The final status carries `adk_escalate` and `adk_transfer_to_agent`.
+  - **`OutputMode` lays the output out** (`A2aV1ServerBuilder::output_mode`, `RequestHandler::with_output_mode`):
+    - `ArtifactPerRun`, the default, puts the answer in one artifact. Streamed partial events replace a separate artifact marked `adk_partial`, which is emptied (`{}`, `lastChunk`) before the final status.
+    - `ArtifactPerEvent` starts a new artifact for each event.
+  - **Without a `run_config`, runs over A2A no longer stream model output token by token.** Each model response is one event, as in adk-go and adk-python. Set a `RunConfig` with `StreamingMode::SSE` to stream.
+  - **`returnImmediately` returns the `SUBMITTED` task.**
+  - **Long-running calls leave the artifact for the `INPUT_REQUIRED` status message.**
+  - **A message naming an `INPUT_REQUIRED` task must answer every call the task waits on.** Otherwise the task asks again with `no input provided for function call ID "…"` (`validation_error`), and the agent does not run.
+  - **A message naming only a context continues that context's waiting task only when it answers one of the task's calls.** Any other message starts a new task in the context.
+  - **The first model error of a run fails the task** with `llm error response (code …): "…"`. A run error reads `agent run failed: …`.
+  - **The session user without authentication is `A2A_USER_{contextId}`.** It was `a2a-{contextId}`.
+  - **Each status update moves the previous status message into the task's history.**
+  - **Deleting a push config the task does not have succeeds.**
+  - **API changes:**
+    - `V1Executor::subscribe` returns an unbounded receiver that never misses an update.
+    - `PushNotificationSender` gains `send_update`; its default implementation calls the old methods.
+    - `TaskStore` gains `save_task`, which defaults to `create_task`.
+
+  **Migration:**
+  - Read the answer from the artifacts that are not marked `adk_partial`.
+  - Set `run_config` to stream tokens.
+  - Answer every pending call when continuing a task.

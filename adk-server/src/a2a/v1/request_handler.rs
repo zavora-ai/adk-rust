@@ -19,11 +19,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use a2a_protocol_types::artifact::{Artifact, ArtifactId};
-use a2a_protocol_types::events::{StreamResponse, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
+use a2a_protocol_types::events::StreamResponse;
 use a2a_protocol_types::params::SendMessageConfiguration;
 use a2a_protocol_types::responses::TaskListResponse;
-use a2a_protocol_types::task::{ContextId, Task, TaskId, TaskState};
+use a2a_protocol_types::task::{Task, TaskState};
 use a2a_protocol_types::{AgentCard, Message, TaskPushNotificationConfig};
 use futures::StreamExt;
 use futures::stream::BoxStream;
@@ -34,21 +33,69 @@ use super::card::CachedAgentCard;
 use super::convert::internal_task_to_wire;
 use super::error::A2aError;
 use super::executor::V1Executor;
-use super::pending::PendingCalls;
+use super::processor::OutputMode;
 use super::push::PushNotificationSender;
-use super::stream::wrap_artifact_event;
+use super::run::{RunContext, adk_task_metadata};
 use super::task_store::{ListTasksParams, TaskStore, TaskStoreEntry};
-use super::text::ResponseText;
-use crate::a2a::processor::{Awaiting, awaiting};
 use crate::auth_bridge::RequestContext;
 
-/// The state a finished run leaves its task in: waiting on the caller when an event
-/// stopped the run for input or credentials, completed otherwise.
-fn finished_state(pending: Option<Awaiting>) -> TaskState {
-    match pending {
-        Some(Awaiting::Auth) => TaskState::AuthRequired,
-        Some(Awaiting::Input) => TaskState::InputRequired,
-        None => TaskState::Completed,
+/// The task a message runs on, and whether the agent runs: a waiting task asked again for
+/// a missing answer does not run.
+struct PreparedTask {
+    task_id: String,
+    context_id: String,
+    runs: bool,
+}
+
+/// The IDs of the calls a waiting task's status message asks its caller to answer.
+fn pending_call_ids(entry: &TaskStoreEntry) -> Vec<String> {
+    let Some(message) = &entry.status.message else { return Vec::new() };
+    message
+        .parts
+        .iter()
+        .filter(|part| {
+            part.metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get(super::convert::ADK_TYPE_METADATA_KEY))
+                .and_then(serde_json::Value::as_str)
+                == Some("function_call")
+        })
+        .filter_map(|part| match &part.content {
+            a2a_protocol_types::PartContent::Data(data) => {
+                data.get("id").and_then(serde_json::Value::as_str)
+            }
+            _ => None,
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The pending call IDs among `pending` that `msg` answers with a function response.
+fn answered_calls(msg: &Message, pending: &[String]) -> Vec<String> {
+    msg.parts
+        .iter()
+        .filter_map(|part| super::convert::wire_part_to_adk(part).ok())
+        .filter_map(|part| match part {
+            adk_core::Part::FunctionResponse { id: Some(id), .. } if pending.contains(&id) => {
+                Some(id)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A push notification config's URL must be an absolute `http` or `https` URL with a host.
+fn validate_push_url(url: &str) -> Result<(), A2aError> {
+    let valid = reqwest::Url::parse(url).is_ok_and(|parsed| {
+        matches!(parsed.scheme(), "http" | "https")
+            && parsed.host_str().is_some_and(|host| !host.is_empty())
+    });
+    if valid {
+        Ok(())
+    } else {
+        Err(A2aError::InvalidParams {
+            message: format!("push notification URL {url:?} is not an absolute http(s) URL"),
+        })
     }
 }
 
@@ -107,15 +154,14 @@ type IdempotencyKey = (Option<String>, String);
 pub struct RequestHandler {
     executor: Arc<V1Executor>,
     task_store: Arc<dyn TaskStore>,
-    /// Delivers task updates to push notification configs; see
-    /// [`CallerScope::message_send_with`].
-    push_sender: Arc<dyn PushNotificationSender>,
     agent_card: Arc<RwLock<CachedAgentCard>>,
     runner_config: Option<Arc<adk_runner::RunnerConfig>>,
     /// (owner, messageId) → taskId mapping for idempotent request handling.
     idempotency_map: RwLock<HashMap<IdempotencyKey, String>>,
     /// The agent runs in progress, so `tasks_cancel` can stop them.
     running: Arc<RunningTasks>,
+    /// How a run's output is laid out in artifacts.
+    output_mode: OutputMode,
 }
 
 impl RequestHandler {
@@ -126,14 +172,15 @@ impl RequestHandler {
         push_sender: Arc<dyn PushNotificationSender>,
         agent_card: Arc<RwLock<CachedAgentCard>>,
     ) -> Self {
+        executor.set_push_sender(push_sender);
         Self {
             executor,
             task_store,
-            push_sender,
             agent_card,
             runner_config: None,
             idempotency_map: RwLock::new(HashMap::new()),
             running: Arc::default(),
+            output_mode: OutputMode::default(),
         }
     }
 
@@ -145,15 +192,24 @@ impl RequestHandler {
         agent_card: Arc<RwLock<CachedAgentCard>>,
         runner_config: Arc<adk_runner::RunnerConfig>,
     ) -> Self {
+        executor.set_push_sender(push_sender);
         Self {
             executor,
             task_store,
-            push_sender,
             agent_card,
             runner_config: Some(runner_config),
             idempotency_map: RwLock::new(HashMap::new()),
             running: Arc::default(),
+            output_mode: OutputMode::default(),
         }
+    }
+
+    /// Lays each run's output out in artifacts as `mode` says, as adk-go's executor option
+    /// of the same name. The default is [`OutputMode::ArtifactPerRun`].
+    #[must_use]
+    pub fn with_output_mode(mut self, mode: OutputMode) -> Self {
+        self.output_mode = mode;
+        self
     }
 
     /// Returns a view of this handler that acts on behalf of `caller`.
@@ -161,7 +217,7 @@ impl RequestHandler {
     /// With `Some(caller)`, the agent session belongs to `caller.user_id`, every
     /// created task is owned by that user, and operations on tasks owned by anyone
     /// else fail with [`A2aError::TaskNotFound`]. With `None` — no authentication
-    /// configured — the session user is `a2a-{contextId}` and only ownerless tasks
+    /// configured — the session user is `A2A_USER_{contextId}` and only ownerless tasks
     /// are visible.
     ///
     /// # Example
@@ -207,6 +263,20 @@ impl RequestHandler {
         msg: Message,
     ) -> Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError> {
         self.for_caller(None).message_stream(msg).await
+    }
+
+    /// Streams a message with its `configuration` for an unauthenticated caller; see
+    /// [`CallerScope::message_stream_with`].
+    ///
+    /// # Errors
+    ///
+    /// See [`CallerScope::message_stream_with`].
+    pub async fn message_stream_with(
+        &self,
+        msg: Message,
+        configuration: Option<&SendMessageConfiguration>,
+    ) -> Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError> {
+        self.for_caller(None).message_stream_with(msg, configuration).await
     }
 
     /// Retrieves an ownerless task; see [`CallerScope::tasks_get`].
@@ -303,133 +373,6 @@ impl RequestHandler {
         self.for_caller(None).push_config_delete(task_id, config_id).await
     }
 
-    /// Builds the session, converts the inbound message, and starts the agent.
-    ///
-    /// Both the buffered (`message/send`) and streaming (`message/stream`) paths use this, so
-    /// they cannot drift: streaming yields from the same stream the buffered path drains.
-    /// Cancelling `cancellation` ends the run, including a model call in flight.
-    async fn start_agent(
-        runner_config: &Arc<adk_runner::RunnerConfig>,
-        caller: Option<&RequestContext>,
-        context_id: &str,
-        msg: &Message,
-        cancellation: CancellationToken,
-    ) -> Result<adk_core::EventStream, A2aError> {
-        use adk_core::{SessionId, UserId};
-        use adk_session::{CreateRequest, GetRequest};
-
-        let app_name = &runner_config.app_name;
-        // The context ID is chosen by the client, so it only names the session user when
-        // no authentication is configured.
-        let user_id = session_user_id(caller, context_id);
-        let session_id = context_id.to_string();
-
-        // Only a missing session is created: a read that fails for another reason must not
-        // replace the stored conversation. A create that loses a race finds the session.
-        let session_service = &runner_config.session_service;
-        let existing = session_service
-            .get(GetRequest {
-                app_name: app_name.clone(),
-                user_id: user_id.clone(),
-                session_id: session_id.clone(),
-                num_recent_events: None,
-                after: None,
-            })
-            .await;
-        match existing {
-            Ok(_) => {}
-            Err(error) if error.is_not_found() => {
-                let created = session_service
-                    .create(CreateRequest {
-                        app_name: app_name.clone(),
-                        user_id: user_id.clone(),
-                        session_id: Some(session_id.clone()),
-                        state: std::collections::HashMap::new(),
-                    })
-                    .await;
-                if let Err(error) = created
-                    && !error.is_conflict()
-                {
-                    return Err(A2aError::Internal { message: format!("session create: {error}") });
-                }
-            }
-            Err(error) => {
-                return Err(A2aError::Internal { message: format!("session lookup: {error}") });
-            }
-        }
-
-        // Convert v1 message parts to ADK Content
-        let mut adk_parts = Vec::new();
-        for part in &msg.parts {
-            let adk_part = super::convert::wire_part_to_adk(part)?;
-            adk_parts.push(adk_part);
-        }
-        let content = adk_core::Content { role: "user".to_string(), parts: adk_parts };
-
-        // Create runner and execute
-        let mut runner_builder = adk_runner::Runner::builder()
-            .app_name(runner_config.app_name.clone())
-            .agent(runner_config.agent.clone())
-            .session_service(runner_config.session_service.clone());
-        if let Some(control) = &runner_config.governance {
-            runner_builder = runner_builder.governance(control.clone());
-        }
-        if let Some(policy) = &runner_config.tool_policy {
-            runner_builder = runner_builder.tool_policy(policy.clone());
-        }
-        if let Some(ref artifact_service) = runner_config.artifact_service {
-            runner_builder = runner_builder.artifact_service(artifact_service.clone());
-        }
-        if let Some(ref memory_service) = runner_config.memory_service {
-            runner_builder = runner_builder.memory_service(memory_service.clone());
-        }
-        if let Some(ref plugin_manager) = runner_config.plugin_manager {
-            runner_builder = runner_builder.plugin_manager(plugin_manager.clone());
-        }
-        if let Some(ref run_config) = runner_config.run_config {
-            runner_builder = runner_builder.run_config(run_config.clone());
-        }
-        if let Some(ref compaction_config) = runner_config.compaction_config {
-            runner_builder = runner_builder.compaction_config(compaction_config.clone());
-        }
-        if let Some(ref context_cache_config) = runner_config.context_cache_config {
-            runner_builder = runner_builder.context_cache_config(context_cache_config.clone());
-        }
-        if let Some(ref cache_capable) = runner_config.cache_capable {
-            runner_builder = runner_builder.cache_capable(cache_capable.clone());
-        }
-        if let Some(ref intra_compaction_config) = runner_config.intra_compaction_config {
-            runner_builder =
-                runner_builder.intra_compaction_config(intra_compaction_config.clone());
-        }
-        if let Some(ref intra_compaction_summarizer) = runner_config.intra_compaction_summarizer {
-            runner_builder =
-                runner_builder.intra_compaction_summarizer(intra_compaction_summarizer.clone());
-        }
-        // The caller's own context wins over a context baked into the shared config.
-        if let Some(request_context) =
-            caller.cloned().or_else(|| runner_config.request_context.clone())
-        {
-            runner_builder = runner_builder.request_context(request_context);
-        }
-        // A child of the configuration's own token (see `RunningTasks::start`), so that token
-        // still stops the run.
-        runner_builder = runner_builder.cancellation_token(cancellation);
-        let runner = runner_builder
-            .build()
-            .map_err(|e| A2aError::Internal { message: format!("runner create: {e}") })?;
-
-        runner
-            .run(
-                UserId::new(&user_id).map_err(|e| A2aError::Internal { message: e.to_string() })?,
-                SessionId::new(&session_id)
-                    .map_err(|e| A2aError::Internal { message: e.to_string() })?,
-                content,
-            )
-            .await
-            .map_err(|e| A2aError::Internal { message: format!("runner run: {e}") })
-    }
-
     /// Returns the extended agent card.
     ///
     /// # Errors
@@ -517,39 +460,25 @@ impl CallerScope<'_> {
         self.message_send_with(msg, None).await
     }
 
-    /// Sends a message, creating a task or continuing one, and processes it through the
-    /// executor.
+    /// Sends a message, creating a task or continuing one, and runs the agent on it.
     ///
-    /// When a runner config is present, invokes the agent through the ADK
-    /// Runner for real LLM generation. The LLM response is recorded as an
-    /// artifact on the task. Without a runner, performs state transitions only.
+    /// The agent runs on its own, detached from this call: a caller that goes away, or a
+    /// request that times out, does not stop the run, and the run always settles the task.
+    /// With `returnImmediately` set in `configuration`, the call returns the `SUBMITTED`
+    /// task at once (A2A §3.2.2). Otherwise it returns once the task finishes or stops for
+    /// the caller. Either way, [`tasks_cancel`](Self::tasks_cancel) stops the run.
     ///
-    /// The message continues a task (A2A §3.4):
-    /// - a message with a `taskId` continues that task, which must be one of this
-    ///   caller's and must be waiting on the caller (`INPUT_REQUIRED` or
-    ///   `AUTH_REQUIRED`);
-    /// - a message without one, whose `contextId` matches one of this caller's
-    ///   `INPUT_REQUIRED` tasks, continues that task. Another caller's task with the
-    ///   same `contextId` is never continued.
-    ///
-    /// A task that stops for the caller names what it waits for in its status message:
-    /// each pending function call and its interim result, as data parts tagged with
-    /// [`ADK_TYPE_METADATA_KEY`](super::convert::ADK_TYPE_METADATA_KEY). The caller
-    /// answers with a `function_response` data part for the call's `id`.
-    ///
-    /// With `returnImmediately` set in `configuration`, the call returns as soon as the
-    /// task is `WORKING`, and the agent runs on in the background (A2A §3.2.2). Otherwise
-    /// it returns once the task finishes or stops for the caller. Either way,
-    /// [`tasks_cancel`](Self::tasks_cancel) stops the run.
+    /// A message that names an `INPUT_REQUIRED` task must answer every call the task
+    /// waits on; otherwise the task asks again, naming the call with no answer
+    /// (`no input provided for function call ID "…"`), and the agent does not run.
     ///
     /// # Errors
     ///
     /// Returns [`A2aError::TaskNotFound`] for a `taskId` that names no task of this
     /// caller's, [`A2aError::InvalidParams`] when the message's `contextId` is not that
     /// task's, [`A2aError::UnsupportedOperation`] when that task has ended or is still
-    /// running, and an error if task creation, state transitions, or store operations
-    /// fail. A failed run is not an error: the task is returned `FAILED`, with the error
-    /// as its status message.
+    /// running, and an error if task creation or the store fails. A failed run is not an
+    /// error: the task is returned `FAILED`, with the error as its status message.
     pub async fn message_send_with(
         &self,
         msg: Message,
@@ -561,122 +490,86 @@ impl CallerScope<'_> {
             handler.require(Capability::PushNotifications).await?;
         }
 
-        // Idempotency check
         let idempotency_key = self.idempotency_key(&msg.id.0);
-        {
-            let map = handler.idempotency_map.read().await;
-            if let Some(existing_task_id) = map.get(&idempotency_key) {
-                // Try to return the existing task
-                match self.tasks_get(existing_task_id, None).await {
-                    Ok(task) => return Ok(task),
-                    Err(A2aError::TaskNotFound { .. }) => {
-                        // Stale entry — will be removed below and processed as new
-                    }
-                    Err(e) => return Err(e),
-                }
-                // If we get here, the entry was stale — remove it
-                drop(map);
-                handler.idempotency_map.write().await.remove(&idempotency_key);
-            }
+        if let Some(existing_task_id) = self.idempotent_task(&idempotency_key).await? {
+            return self.tasks_get(&existing_task_id, None).await;
         }
 
-        let (task_id, context_id) = self.prepare_task(&msg).await?;
+        let prepared = self.prepare_task(&msg).await?;
+        let task_id = prepared.task_id.clone();
         if let Some(config) = configuration.and_then(|c| c.task_push_notification_config.clone()) {
             self.push_config_create(&task_id, config).await?;
         }
-        self.forward_push_notifications(&task_id).await;
-        handler.executor.transition_state(&task_id, &context_id, TaskState::Working, None).await?;
-
-        if let Some(runner_config) = &handler.runner_config {
-            let guard = handler.running.start(&task_id, runner_config.cancellation_token.as_ref());
-            let run = RunContext {
-                executor: handler.executor.clone(),
-                runner_config: runner_config.clone(),
-                caller: self.caller.clone(),
-            };
-            let drive = drive(run, task_id.clone(), context_id.clone(), msg, guard);
-            if configuration.and_then(|c| c.return_immediately).unwrap_or(false) {
-                let background_task_id = task_id.clone();
-                tokio::spawn(async move {
-                    if let Err(error) = drive.await {
-                        tracing::warn!(
-                            task_id = %background_task_id,
-                            %error,
-                            "could not record the end of a background A2A run"
-                        );
-                    }
-                });
-            } else {
-                drive.await?;
-            }
-        } else {
-            handler
-                .executor
-                .transition_state(&task_id, &context_id, TaskState::Completed, None)
-                .await?;
-        }
-
-        // Record idempotency mapping
         handler.idempotency_map.write().await.insert(idempotency_key, task_id.clone());
+
+        if prepared.runs {
+            let return_immediately =
+                configuration.and_then(|c| c.return_immediately).unwrap_or(false);
+            let submitted = handler.task_store.get_task(&task_id).await?;
+            let run = self.start_run(&prepared, msg).await?;
+            if return_immediately {
+                return internal_task_to_wire(&submitted);
+            }
+            // The run is its own task; waiting for it here does not tie it to this call.
+            if let Err(error) = run.await {
+                tracing::warn!(%task_id, %error, "A2A run did not finish");
+            }
+        }
 
         let entry = handler.task_store.get_task(&task_id).await?;
         internal_task_to_wire(&entry)
     }
 
-    /// Starts delivering `task_id`'s updates to its push notification configs, when the
-    /// agent card offers push notifications. Every status and artifact update is delivered
-    /// until the task ends or stops for its caller, including configs added while the task
-    /// runs. A failed delivery is logged and does not fail the task.
-    async fn forward_push_notifications(&self, task_id: &str) {
+    /// The task an earlier request with the same idempotency key created, if it still
+    /// exists.
+    async fn idempotent_task(&self, key: &IdempotencyKey) -> Result<Option<String>, A2aError> {
         let handler = self.handler;
-        if handler.agent_card.read().await.card.capabilities.push_notifications != Some(true) {
-            return;
-        }
-        let mut updates = handler.executor.subscribe(task_id);
-        let store = handler.task_store.clone();
-        let sender = handler.push_sender.clone();
-        let task_id = task_id.to_string();
-        tokio::spawn(async move {
-            use tokio::sync::broadcast::error::RecvError;
-            loop {
-                let update = match updates.recv().await {
-                    Ok(update) => update,
-                    Err(RecvError::Lagged(missed)) => {
-                        tracing::warn!(%task_id, missed, "push delivery fell behind; updates skipped");
-                        continue;
-                    }
-                    Err(RecvError::Closed) => return,
-                };
-                let ends = matches!(
-                    &update,
-                    StreamResponse::StatusUpdate(event) if ends_subscription(event.status.state)
-                );
-                let configs = match store.get_task(&task_id).await {
-                    Ok(entry) => entry.push_configs,
-                    Err(_) => return,
-                };
-                for config in &configs {
-                    let delivered = match &update {
-                        StreamResponse::StatusUpdate(event) => {
-                            sender.send_status_update(&config.url, event, config).await
-                        }
-                        StreamResponse::ArtifactUpdate(event) => {
-                            sender.send_artifact_update(&config.url, event, config).await
-                        }
-                        _ => Ok(()),
-                    };
-                    if let Err(error) = delivered {
-                        tracing::warn!(%task_id, url = %config.url, %error, "push notification not delivered");
-                    }
-                }
-                if ends {
-                    return;
-                }
+        let Some(existing) = handler.idempotency_map.read().await.get(key).cloned() else {
+            return Ok(None);
+        };
+        match self.owned_task(&existing).await {
+            Ok(_) => Ok(Some(existing)),
+            Err(A2aError::TaskNotFound { .. }) => {
+                handler.idempotency_map.write().await.remove(key);
+                Ok(None)
             }
-        });
+            Err(error) => Err(error),
+        }
     }
 
-    /// The task `msg` continues, if any (see [`message_send_with`](Self::message_send_with)).
+    /// Starts the run of a prepared task: the agent when the handler has one, otherwise
+    /// the `WORKING` and `COMPLETED` transitions alone. Returns the run's handle.
+    async fn start_run(
+        &self,
+        prepared: &PreparedTask,
+        msg: Message,
+    ) -> Result<tokio::task::JoinHandle<()>, A2aError> {
+        let handler = self.handler;
+        let (task_id, context_id) = (prepared.task_id.clone(), prepared.context_id.clone());
+        let Some(runner_config) = handler.runner_config.clone() else {
+            let executor = handler.executor.clone();
+            executor.transition_state(&task_id, &context_id, TaskState::Working, None).await?;
+            executor.transition_state(&task_id, &context_id, TaskState::Completed, None).await?;
+            return Ok(tokio::spawn(async {}));
+        };
+        // Registered before the run starts, so a cancel that races it still stops it.
+        let guard = handler.running.start(&task_id, runner_config.cancellation_token.as_ref());
+        let cancellation = guard.token().clone();
+        let run = RunContext {
+            executor: handler.executor.clone(),
+            runner_config,
+            caller: self.caller.clone(),
+            output_mode: handler.output_mode,
+        };
+        Ok(super::run::spawn(run, task_id, context_id, msg, cancellation, guard))
+    }
+
+    /// The `INPUT_REQUIRED` or `AUTH_REQUIRED` task `msg` continues, if any (see
+    /// [`message_send_with`](Self::message_send_with)).
+    ///
+    /// A message that names its task continues it. A message that names only a context
+    /// continues that context's `INPUT_REQUIRED` task when it answers one of the calls the
+    /// task waits on; any other such message starts a new task in the context.
     ///
     /// # Errors
     ///
@@ -713,253 +606,143 @@ impl CallerScope<'_> {
             && let Some(existing) = self.handler.task_store.find_task_by_context(&ctx_id.0).await?
             && existing.status.state == TaskState::InputRequired
             && existing.owner() == self.owner()
+            && !answered_calls(msg, &pending_call_ids(&existing)).is_empty()
         {
             return Ok(Some(existing));
         }
         Ok(None)
     }
 
-    /// Finds or creates the task `msg` runs on and adds `msg` to its history. Returns the
-    /// task's ID and context ID. The task keeps its state: a new task is `SUBMITTED`.
+    /// Finds or creates the task `msg` runs on and records `msg` in its history.
+    ///
+    /// A new task is `SUBMITTED`. A waiting task is taken back to `SUBMITTED` for its run,
+    /// unless `msg` leaves one of its calls unanswered: then it asks again and does not
+    /// run (see [`message_send_with`](Self::message_send_with)).
     ///
     /// # Errors
     ///
     /// See [`task_to_continue`](Self::task_to_continue); also returns an error if task
     /// creation or the store fails.
-    async fn prepare_task(&self, msg: &Message) -> Result<(String, String), A2aError> {
+    async fn prepare_task(&self, msg: &Message) -> Result<PreparedTask, A2aError> {
         let handler = self.handler;
-        let (task_id, context_id) = match self.task_to_continue(msg).await? {
-            Some(existing) => (existing.id, existing.context_id),
-            None => {
-                let task_id = uuid::Uuid::new_v4().to_string();
-                let context_id = msg
-                    .context_id
-                    .as_ref()
-                    .map(|c| c.0.clone())
-                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-                let metadata = handler
-                    .runner_config
-                    .as_ref()
-                    .map(|config| adk_task_metadata(config, self.caller.as_ref(), &context_id))
-                    .unwrap_or_default();
-                handler
-                    .executor
-                    .create_task_with_metadata(&task_id, &context_id, self.owner(), metadata)
-                    .await?;
-                (task_id, context_id)
+        if let Some(existing) = self.task_to_continue(msg).await? {
+            let pending = pending_call_ids(&existing);
+            let answered = answered_calls(msg, &pending);
+            if existing.status.state == TaskState::InputRequired
+                && let Some(missing) = pending.iter().find(|id| !answered.contains(*id))
+            {
+                handler.executor.ask_again(&existing.id, msg.clone(), missing).await?;
+                return Ok(PreparedTask {
+                    task_id: existing.id,
+                    context_id: existing.context_id,
+                    runs: false,
+                });
             }
-        };
-        handler.task_store.add_history_message(&task_id, msg.clone()).await?;
-        Ok((task_id, context_id))
+            let claimed = handler.executor.claim_waiting_task(&existing.id, msg.clone()).await?;
+            return Ok(PreparedTask {
+                task_id: claimed.id,
+                context_id: claimed.context_id,
+                runs: true,
+            });
+        }
+
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let context_id = msg
+            .context_id
+            .as_ref()
+            .map(|c| c.0.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let metadata = handler
+            .runner_config
+            .as_ref()
+            .map(|config| adk_task_metadata(config, self.caller.as_ref(), &context_id))
+            .unwrap_or_default();
+        handler
+            .executor
+            .create_task_with_metadata(&task_id, &context_id, self.owner(), metadata)
+            .await?;
+        handler.executor.add_history_message(&task_id, msg.clone()).await?;
+        Ok(PreparedTask { task_id, context_id, runs: true })
     }
 
-    /// Sends a streaming message, returning a stream of SSE events.
-    ///
-    /// Drives the agent and translates its events as they arrive:
-    ///
-    /// | Agent event | A2A event |
-    /// |-------------|-----------|
-    /// | first, before any output | `Task`, then `TaskStatusUpdateEvent` — `Working` |
-    /// | content with `partial = true` | `TaskArtifactUpdateEvent` — `append`, not last chunk |
-    /// | content with `partial = false` | `TaskArtifactUpdateEvent` — final chunk |
-    /// | stream ends after a held or long-running call | `TaskStatusUpdateEvent` — `InputRequired`, with the pending calls as its message |
-    /// | stream ends after a credential request | `TaskStatusUpdateEvent` — `AuthRequired` |
-    /// | stream ends | `TaskStatusUpdateEvent` — `Completed` |
-    /// | stream errors | `TaskStatusUpdateEvent` — `Failed`, with the error as its message |
-    /// | [`tasks_cancel`](Self::tasks_cancel) stops the run | `TaskStatusUpdateEvent` — `Canceled` |
-    ///
-    /// Chunks of one response share an artifact ID so a client can reassemble them, which is the
-    /// same contract adk-python and adk-go implement over their A2A SDKs.
-    ///
-    /// The message continues a task as in [`message_send_with`](Self::message_send_with); the
-    /// stream then starts with that task.
-    ///
-    /// With no runner configured the task is created and completed without agent output, which
-    /// keeps discovery-only deployments working.
+    /// Sends a streaming message; see [`message_stream_with`](Self::message_stream_with).
     ///
     /// # Errors
     ///
-    /// Returns an error if the message cannot continue the task it names (see
-    /// [`message_send_with`](Self::message_send_with)) or task creation fails. Failures
-    /// once streaming has begun are reported
-    /// as a `Failed` status event whose message carries the error text, since the response has
-    /// already started. That status is the last item: the stream ends at a terminal state
-    /// (A2A §3.1.2), so no error item follows it. An `Err` item appears only when the task could
-    /// not be moved to a terminal state, and it is then the last item.
+    /// See [`message_stream_with`](Self::message_stream_with).
     pub async fn message_stream(
         &self,
         msg: Message,
     ) -> Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError> {
+        self.message_stream_with(msg, None).await
+    }
+
+    /// Sends a message, as [`message_send_with`](Self::message_send_with) does, and
+    /// streams the task's updates: the `SUBMITTED` task first, then each status and
+    /// artifact update the run makes, until the task ends or stops for the caller.
+    ///
+    /// The run does not depend on the stream: a client that disconnects leaves it running,
+    /// and [`tasks_subscribe`](Self::tasks_subscribe) follows it again. Each event the
+    /// agent produces is one artifact update carrying every part of the event, laid out as
+    /// the handler's [`OutputMode`] says; a model error, a cancel and calls that wait on
+    /// the caller end the stream on the matching status. These are the updates adk-go's
+    /// A2A executor makes.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`message_send_with`](Self::message_send_with), and
+    /// [`A2aError::UnsupportedOperation`] when the agent card says the agent does not
+    /// stream.
+    pub async fn message_stream_with(
+        &self,
+        msg: Message,
+        configuration: Option<&SendMessageConfiguration>,
+    ) -> Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError> {
         self.handler.require(Capability::Streaming("SendStreamingMessage")).await?;
         validate_message(&msg)?;
         let handler = self.handler;
-
-        // Idempotency check — return existing task as single-element stream
-        let idempotency_key = self.idempotency_key(&msg.id.0);
-        {
-            let map = handler.idempotency_map.read().await;
-            if let Some(existing_task_id) = map.get(&idempotency_key) {
-                match self.owned_task(existing_task_id).await {
-                    Ok(entry) => {
-                        let task = internal_task_to_wire(&entry)?;
-                        let stream =
-                            futures::stream::once(async move { Ok(StreamResponse::Task(task)) });
-                        return Ok(stream.boxed());
-                    }
-                    Err(A2aError::TaskNotFound { .. }) => {
-                        // Stale entry — remove and process as new
-                        drop(map);
-                        handler.idempotency_map.write().await.remove(&idempotency_key);
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
+        if configuration.is_some_and(|c| c.task_push_notification_config.is_some()) {
+            handler.require(Capability::PushNotifications).await?;
         }
 
-        let (task_id, context_id) = self.prepare_task(&msg).await?;
-        self.forward_push_notifications(&task_id).await;
+        let idempotency_key = self.idempotency_key(&msg.id.0);
+        if let Some(existing_task_id) = self.idempotent_task(&idempotency_key).await? {
+            let task = self.tasks_get(&existing_task_id, None).await?;
+            return Ok(futures::stream::once(async move { Ok(StreamResponse::Task(task)) }).boxed());
+        }
 
-        // Record idempotency mapping
+        let prepared = self.prepare_task(&msg).await?;
+        let task_id = prepared.task_id.clone();
+        if let Some(config) = configuration.and_then(|c| c.task_push_notification_config.clone()) {
+            self.push_config_create(&task_id, config).await?;
+        }
         handler.idempotency_map.write().await.insert(idempotency_key, task_id.clone());
 
-        // Get the task entry for the first SSE event
-        let task_entry = handler.task_store.get_task(&task_id).await?;
-        let first_task = internal_task_to_wire(&task_entry)?;
-        // Each update carries the task's metadata, as the executor's do.
-        let update_metadata = first_task.metadata.clone();
-
-        let executor = handler.executor.clone();
-        let tid = task_id.clone();
-        let cid = context_id.clone();
-        let runner_config = handler.runner_config.clone();
-        let caller = self.caller.clone();
-        let stream_msg = msg;
-        // Registered before the stream is returned, so a cancel that races the first poll
-        // still stops the run. The stream owns it: the run stays cancelable until it ends.
-        let guard = runner_config
-            .as_ref()
-            .map(|config| handler.running.start(&task_id, config.cancellation_token.as_ref()));
+        // Subscribe before the run starts, so the stream sees every update it makes.
+        let mut updates = handler.executor.subscribe(&task_id);
+        let first = internal_task_to_wire(&handler.task_store.get_task(&task_id).await?)?;
+        let settled = ends_subscription(first.status.state);
+        if prepared.runs {
+            // Detached: the handle is not awaited, so dropping the stream leaves the run.
+            drop(self.start_run(&prepared, msg).await?);
+        }
 
         let stream = async_stream::stream! {
-            let guard = guard;
-            yield Ok(StreamResponse::Task(first_task));
-            let mut awaiting_caller = None;
-            let mut pending = PendingCalls::default();
-
-            match executor.transition_state(&tid, &cid, TaskState::Working, None).await {
-                Ok(event) => yield Ok(StreamResponse::StatusUpdate(event)),
-                Err(e) => {
-                    yield Err(e);
+            yield Ok(StreamResponse::Task(first));
+            if settled && !prepared.runs {
+                return;
+            }
+            while let Some(update) = updates.recv().await {
+                let ends = matches!(
+                    &update,
+                    StreamResponse::StatusUpdate(event) if ends_subscription(event.status.state)
+                );
+                yield Ok(update);
+                if ends {
                     return;
                 }
             }
-
-            if let (Some(config), Some(guard)) = (runner_config, guard.as_ref()) {
-                let cancellation = guard.token().clone();
-                let started = RequestHandler::start_agent(
-                    &config,
-                    caller.as_ref(),
-                    &cid,
-                    &stream_msg,
-                    cancellation.clone(),
-                )
-                .await;
-                let mut event_stream = match started {
-                    Ok(stream) => stream,
-                    Err(e) => {
-                        // The agent never started, so nothing partial was emitted. Report the
-                        // task as failed rather than completing a task that did no work.
-                        yield fail_stream(&executor, &tid, &cid, e).await;
-                        return;
-                    }
-                };
-
-                // One artifact ID for the whole response so a client can join the chunks.
-                let artifact_id = uuid::Uuid::new_v4().to_string();
-                let mut chunks_sent = false;
-                let mut full_text = ResponseText::default();
-                let mut media = Vec::new();
-
-                while let Some(result) = event_stream.next().await {
-                    match result {
-                        Ok(event) => {
-                            awaiting_caller = awaiting_caller.max(awaiting(&event));
-                            pending.observe(&event);
-                            media.extend(media_parts(&event));
-                            let Some((text, append)) = full_text.push(&event) else { continue };
-
-                            let partial = event.llm_response.partial;
-                            let artifact = Artifact::new(
-                                ArtifactId::new(artifact_id.clone()),
-                                vec![a2a_protocol_types::Part::text(&text)],
-                            );
-                            let update = wrap_artifact_event(TaskArtifactUpdateEvent {
-                                task_id: a2a_protocol_types::TaskId::new(tid.clone()),
-                                context_id: a2a_protocol_types::ContextId::new(cid.clone()),
-                                artifact,
-                                append: Some(chunks_sent && append),
-                                last_chunk: Some(!partial),
-                                metadata: update_metadata.clone(),
-                            });
-                            executor.publish(&tid, update.clone());
-                            yield Ok(update);
-                            chunks_sent = true;
-                        }
-                        Err(e) => {
-                            let error = A2aError::Internal { message: format!("agent error: {e}") };
-                            yield fail_stream(&executor, &tid, &cid, error).await;
-                            return;
-                        }
-                    }
-                }
-
-                // A cancelled run ends without its partial output, on the `Canceled` status.
-                if cancellation.is_cancelled() {
-                    yield settle(&executor, &tid, &cid, TaskState::Canceled, Vec::new())
-                        .await
-                        .map(StreamResponse::StatusUpdate);
-                    return;
-                }
-
-                // Persist the joined text so `tasks/get` returns the same artifact a
-                // non-streaming caller would have received.
-                let full_text = full_text.text();
-                if !full_text.is_empty() {
-                    let artifact = Artifact::new(
-                        ArtifactId::new(artifact_id),
-                        vec![a2a_protocol_types::Part::text(&full_text)],
-                    );
-                    if let Err(e) = executor.persist_artifact(&tid, &cid, artifact).await {
-                        yield fail_stream(&executor, &tid, &cid, e).await;
-                        return;
-                    }
-                }
-
-                // Files and inline data, as one more artifact.
-                if !media.is_empty() {
-                    let artifact =
-                        Artifact::new(ArtifactId::new(uuid::Uuid::new_v4().to_string()), media);
-                    match executor.record_artifact(&tid, &cid, artifact).await {
-                        Ok(mut event) => {
-                            event.last_chunk = Some(true);
-                            yield Ok(wrap_artifact_event(event));
-                        }
-                        Err(e) => {
-                            yield fail_stream(&executor, &tid, &cid, e).await;
-                            return;
-                        }
-                    }
-                }
-            }
-
-            let state = finished_state(awaiting_caller);
-            match settle(&executor, &tid, &cid, state, pending.into_parts()).await {
-                Ok(event) => yield Ok(StreamResponse::StatusUpdate(event)),
-                Err(e) => yield Err(e),
-            }
-            drop(guard);
         };
-
         Ok(stream.boxed())
     }
 
@@ -1017,7 +800,13 @@ impl CallerScope<'_> {
         match self
             .handler
             .executor
-            .transition_state(task_id, &entry.context_id, TaskState::Canceled, None)
+            .update_status(
+                task_id,
+                &entry.context_id,
+                TaskState::Canceled,
+                Vec::new(),
+                Some(serde_json::Map::new()),
+            )
             .await
         {
             Ok(_) => {}
@@ -1154,49 +943,28 @@ impl CallerScope<'_> {
             });
         }
 
-        if !self.handler.running.contains(task_id) {
-            let task = internal_task_to_wire(&entry)?;
-            let status_event = TaskStatusUpdateEvent {
-                task_id: TaskId::new(task_id),
-                context_id: ContextId::new(&entry.context_id),
-                status: entry.status.clone(),
-                metadata: None,
-            };
-            let stream = futures::stream::iter(vec![
-                Ok(StreamResponse::Task(task)),
-                Ok(StreamResponse::StatusUpdate(status_event)),
-            ]);
-            return Ok(stream.boxed());
-        }
-
         // Subscribe before reading the task, so no update falls between the snapshot and the
         // first live one. One that arrives twice only repeats a state the client has.
         let mut updates = self.handler.executor.subscribe(task_id);
         let snapshot = self.owned_task(task_id).await?;
         let task = internal_task_to_wire(&snapshot)?;
-        let settled = ends_subscription(snapshot.status.state);
+        // A task with no run in progress has nothing more to send: the snapshot is all.
+        let settled =
+            ends_subscription(snapshot.status.state) || !self.handler.running.contains(task_id);
 
         let stream = async_stream::stream! {
             yield Ok(StreamResponse::Task(task));
             if settled {
                 return;
             }
-            loop {
-                match updates.recv().await {
-                    Ok(update) => {
-                        let ends = matches!(
-                            &update,
-                            StreamResponse::StatusUpdate(event)
-                                if ends_subscription(event.status.state)
-                        );
-                        yield Ok(update);
-                        if ends {
-                            return;
-                        }
-                    }
-                    // A subscriber that fell behind misses updates, not the end.
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+            while let Some(update) = updates.recv().await {
+                let ends = matches!(
+                    &update,
+                    StreamResponse::StatusUpdate(event) if ends_subscription(event.status.state)
+                );
+                yield Ok(update);
+                if ends {
+                    return;
                 }
             }
         };
@@ -1205,37 +973,27 @@ impl CallerScope<'_> {
 
     /// Creates a push notification configuration for one of this caller's tasks.
     ///
-    /// Assigns a server-generated config ID and stores the config on the task.
+    /// Assigns a server-generated config ID when the config has none, and stores the
+    /// config on the task, replacing a config with the same ID.
     ///
     /// # Errors
     ///
-    /// Returns [`A2aError::TaskNotFound`] if the task does not exist or belongs to
-    /// another caller.
+    /// Returns [`A2aError::InvalidParams`] when the config's URL is not an absolute
+    /// `http` or `https` URL, and [`A2aError::TaskNotFound`] if the task does not exist or
+    /// belongs to another caller.
     pub async fn push_config_create(
         &self,
         task_id: &str,
         mut config: TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2aError> {
         self.handler.require(Capability::PushNotifications).await?;
-        // Verify task exists
-        let mut entry = self.owned_task(task_id).await?;
-
-        // Assign a server-generated config ID if not present
-        if config.id.is_none() {
+        validate_push_url(&config.url)?;
+        self.owned_task(task_id).await?;
+        if config.id.as_deref().is_none_or(str::is_empty) {
             config.id = Some(uuid::Uuid::new_v4().to_string());
         }
         config.task_id = Some(task_id.to_string());
-
-        // Add to the task's push configs
-        entry.push_configs.push(config.clone());
-        entry.updated_at = chrono::Utc::now();
-
-        // Re-persist the task with updated push configs
-        // (We delete and re-create since TaskStore doesn't have an update_push_configs method)
-        self.handler.task_store.delete_task(task_id).await?;
-        self.handler.task_store.create_task(entry).await?;
-
-        Ok(config)
+        self.handler.executor.save_push_config(task_id, config).await
     }
 
     /// Retrieves a push notification configuration by task ID and config ID.
@@ -1274,73 +1032,18 @@ impl CallerScope<'_> {
         Ok(entry.push_configs)
     }
 
-    /// Deletes a push notification configuration.
+    /// Deletes a push notification configuration. Deleting a config the task does not have
+    /// succeeds, as A2A config stores do.
     ///
     /// # Errors
     ///
-    /// Returns [`A2aError::TaskNotFound`] if the task or config does not exist, or
-    /// the task belongs to another caller.
+    /// Returns [`A2aError::TaskNotFound`] if the task does not exist or belongs to another
+    /// caller.
     pub async fn push_config_delete(&self, task_id: &str, config_id: &str) -> Result<(), A2aError> {
         self.handler.require(Capability::PushNotifications).await?;
-        let mut entry = self.owned_task(task_id).await?;
-
-        let original_len = entry.push_configs.len();
-        entry.push_configs.retain(|c| c.id.as_deref() != Some(config_id));
-
-        if entry.push_configs.len() == original_len {
-            return Err(A2aError::TaskNotFound {
-                task_id: format!("push config {config_id} on task {task_id}"),
-            });
-        }
-
-        entry.updated_at = chrono::Utc::now();
-
-        // Re-persist
-        self.handler.task_store.delete_task(task_id).await?;
-        self.handler.task_store.create_task(entry).await?;
-
-        Ok(())
+        self.owned_task(task_id).await?;
+        self.handler.executor.delete_push_config(task_id, config_id).await
     }
-}
-
-/// The files and inline data a finished model turn produced, as A2A parts.
-fn media_parts(event: &adk_core::Event) -> Vec<a2a_protocol_types::Part> {
-    if event.llm_response.partial {
-        return Vec::new();
-    }
-    event
-        .content()
-        .into_iter()
-        .filter(|content| content.role == "model")
-        .flat_map(|content| &content.parts)
-        .filter_map(super::convert::media_part_to_wire)
-        .collect()
-}
-
-/// The ADK user whose session runs a task in `context_id`: the authenticated caller, or
-/// `a2a-{context_id}` without authentication.
-fn session_user_id(caller: Option<&RequestContext>, context_id: &str) -> String {
-    caller.map_or_else(|| format!("a2a-{context_id}"), |context| context.user_id.clone())
-}
-
-/// The metadata of a task the agent of `runner_config` runs in `context_id`. It names the
-/// ADK app, user and session (`adk_app_name`, `adk_user_id`, `adk_session_id`), and marks
-/// the task with the ADK extension, as adk-python and adk-go do.
-fn adk_task_metadata(
-    runner_config: &adk_runner::RunnerConfig,
-    caller: Option<&RequestContext>,
-    context_id: &str,
-) -> HashMap<String, serde_json::Value> {
-    use super::convert::{
-        ADK_APP_NAME_METADATA_KEY, ADK_EXTENSION_URI, ADK_SESSION_ID_METADATA_KEY,
-        ADK_USER_ID_METADATA_KEY,
-    };
-    HashMap::from([
-        (ADK_APP_NAME_METADATA_KEY.to_string(), runner_config.app_name.clone().into()),
-        (ADK_USER_ID_METADATA_KEY.to_string(), session_user_id(caller, context_id).into()),
-        (ADK_SESSION_ID_METADATA_KEY.to_string(), context_id.into()),
-        (ADK_EXTENSION_URI.to_string(), true.into()),
-    ])
 }
 
 /// An optional A2A operation the agent card can say the agent does not offer.
@@ -1458,174 +1161,6 @@ impl Drop for RunGuard {
     }
 }
 
-/// What a run needs, owned, so a run started with `returnImmediately` can outlive the
-/// request that started it.
-struct RunContext {
-    executor: Arc<V1Executor>,
-    runner_config: Arc<adk_runner::RunnerConfig>,
-    caller: Option<RequestContext>,
-}
-
-/// What a finished run produced.
-struct Finished {
-    /// The response text, recorded as one artifact.
-    text: String,
-    /// Files and inline data the agent produced, recorded as a second artifact.
-    media: Vec<a2a_protocol_types::Part>,
-    /// The state the run leaves the task in.
-    state: TaskState,
-    /// The calls the task waits on, as tagged data parts.
-    pending: Vec<a2a_protocol_types::Part>,
-}
-
-/// Runs the agent on a `Working` task and leaves the task in the state the run ends in:
-/// - its text becomes one artifact;
-/// - a run that stops for the caller leaves the task waiting, with the pending calls as
-///   its status message;
-/// - a failed run fails the task, with the error as its status message;
-/// - a cancelled run leaves the task `Canceled`, without its partial output.
-///
-/// `guard` keeps the run cancelable until it ends.
-///
-/// # Errors
-///
-/// Returns an error only when the task store fails: a failed run is recorded on the task.
-async fn drive(
-    run: RunContext,
-    task_id: String,
-    context_id: String,
-    msg: Message,
-    guard: RunGuard,
-) -> Result<(), A2aError> {
-    let cancellation = guard.token().clone();
-    let outcome = run_agent(&run, &context_id, &msg, cancellation.clone()).await;
-    if cancellation.is_cancelled() {
-        settle(&run.executor, &task_id, &context_id, TaskState::Canceled, Vec::new()).await?;
-        return Ok(());
-    }
-    match outcome {
-        Ok(finished) => {
-            if !finished.text.is_empty() {
-                let artifact = Artifact::new(
-                    ArtifactId::new(uuid::Uuid::new_v4().to_string()),
-                    vec![a2a_protocol_types::Part::text(&finished.text)],
-                );
-                run.executor.record_artifact(&task_id, &context_id, artifact).await?;
-            }
-            if !finished.media.is_empty() {
-                let artifact = Artifact::new(
-                    ArtifactId::new(uuid::Uuid::new_v4().to_string()),
-                    finished.media,
-                );
-                run.executor.record_artifact(&task_id, &context_id, artifact).await?;
-            }
-            settle(&run.executor, &task_id, &context_id, finished.state, finished.pending).await?;
-        }
-        Err(error) => {
-            let text = vec![super::convert::error_message_part(error.to_string())];
-            settle(&run.executor, &task_id, &context_id, TaskState::Failed, text).await?;
-        }
-    }
-    drop(guard);
-    Ok(())
-}
-
-/// Runs the agent to the end of its event stream and returns what it produced.
-///
-/// # Errors
-///
-/// Returns an error if the agent cannot start or its stream fails.
-async fn run_agent(
-    run: &RunContext,
-    context_id: &str,
-    msg: &Message,
-    cancellation: CancellationToken,
-) -> Result<Finished, A2aError> {
-    let mut event_stream = RequestHandler::start_agent(
-        &run.runner_config,
-        run.caller.as_ref(),
-        context_id,
-        msg,
-        cancellation,
-    )
-    .await?;
-
-    let mut response_text = ResponseText::default();
-    let mut media = Vec::new();
-    let mut awaiting_caller = None;
-    let mut pending = PendingCalls::default();
-    while let Some(result) = event_stream.next().await {
-        let event =
-            result.map_err(|e| A2aError::Internal { message: format!("agent error: {e}") })?;
-        awaiting_caller = awaiting_caller.max(awaiting(&event));
-        pending.observe(&event);
-        response_text.push(&event);
-        media.extend(media_parts(&event));
-    }
-
-    Ok(Finished {
-        text: response_text.text(),
-        media,
-        state: finished_state(awaiting_caller),
-        pending: pending.into_parts(),
-    })
-}
-
-/// Moves a task to `state` with `parts` as its status message, unless the task already
-/// ended another way. A run that ends while it is being cancelled must not fail on the
-/// `Canceled` state the cancel recorded; the returned event then carries the state the task
-/// ended in.
-///
-/// # Errors
-///
-/// Returns an error if the task store fails, or the transition is not allowed from a
-/// state that is not terminal.
-async fn settle(
-    executor: &V1Executor,
-    task_id: &str,
-    context_id: &str,
-    state: TaskState,
-    parts: Vec<a2a_protocol_types::Part>,
-) -> Result<TaskStatusUpdateEvent, A2aError> {
-    match executor.transition_state_with_parts(task_id, context_id, state, parts).await {
-        Err(error @ A2aError::InvalidStateTransition { .. }) => {
-            let current = executor.task_store().get_task(task_id).await?;
-            if is_terminal_state(current.status.state) {
-                Ok(TaskStatusUpdateEvent {
-                    task_id: TaskId::new(task_id),
-                    context_id: ContextId::new(context_id),
-                    status: current.status,
-                    metadata: None,
-                })
-            } else {
-                Err(error)
-            }
-        }
-        other => other,
-    }
-}
-
-/// Ends a stream that failed with `error`: moves the task to `Failed` with the error text as
-/// the status message and returns that status event, which must be the stream's last item.
-///
-/// This matches the non-streaming path, which fails a task the same way. When the task cannot be
-/// moved to `Failed`, no terminal status was sent, so `error` itself is returned to end the
-/// stream instead.
-async fn fail_stream(
-    executor: &V1Executor,
-    task_id: &str,
-    context_id: &str,
-    error: A2aError,
-) -> Result<StreamResponse, A2aError> {
-    match executor.fail_task(task_id, context_id, &error.to_string()).await {
-        Ok(event) => Ok(StreamResponse::StatusUpdate(event)),
-        Err(fail_error) => {
-            tracing::warn!(task_id, error = %fail_error, "could not mark the failed stream's task as failed");
-            Err(error)
-        }
-    }
-}
-
 /// Whether a task in `state` has nothing more for a subscriber until a message continues
 /// it: it ended, or it waits on its caller.
 fn ends_subscription(state: TaskState) -> bool {
@@ -1645,6 +1180,9 @@ mod tests {
     use super::super::push::NoOpPushNotificationSender;
     use super::super::task_store::InMemoryTaskStore;
     use super::*;
+    use a2a_protocol_types::artifact::Artifact;
+    use a2a_protocol_types::events::{TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
+    use a2a_protocol_types::task::{ContextId, TaskId};
     use a2a_protocol_types::{
         AgentCapabilities, AgentCard, AgentInterface, AgentSkill, MessageId, MessageRole, Part,
         TaskPushNotificationConfig,
@@ -1789,111 +1327,120 @@ mod tests {
         (handler, store)
     }
 
-    #[tokio::test]
-    async fn stream_delivers_agent_text_as_artifact_chunks() {
-        let (handler, _store) = handler_with_agent(Arc::new(ChunkingAgent {
-            chunks: vec!["Hel".into(), "lo ".into(), "world".into()],
-        }));
+    /// Whether an update comes from streamed partial events (`adk_partial`).
+    fn is_partial(update: &TaskArtifactUpdateEvent) -> bool {
+        update.metadata.as_ref().and_then(|meta| meta.get("adk_partial"))
+            == Some(&serde_json::json!(true))
+    }
 
+    /// The answer a client builds from a stream's non-partial artifact updates.
+    fn answer_text(updates: &[TaskArtifactUpdateEvent]) -> String {
+        let mut text = String::new();
+        for update in updates.iter().filter(|update| !is_partial(update)) {
+            if update.append != Some(true) {
+                text.clear();
+            }
+            text.extend(update.artifact.parts.iter().filter_map(part_text));
+        }
+        text
+    }
+
+    /// The text of a stored task's artifacts, without the temporary partial one.
+    fn stored_answer(entry: &TaskStoreEntry) -> String {
+        entry
+            .artifacts
+            .iter()
+            .filter(|artifact| {
+                artifact.metadata.as_ref().and_then(|meta| meta.get("adk_partial")).is_none()
+            })
+            .flat_map(|artifact| artifact.parts.iter().filter_map(part_text))
+            .collect()
+    }
+
+    async fn stream_updates(
+        handler: &RequestHandler,
+    ) -> (String, Vec<TaskArtifactUpdateEvent>, Vec<TaskState>) {
         let mut stream = handler.message_stream(make_test_message()).await.expect("stream starts");
-        let mut artifacts = Vec::new();
-        let mut states = Vec::new();
+        let (mut task_id, mut artifacts, mut states) = (String::new(), Vec::new(), Vec::new());
         while let Some(item) = stream.next().await {
             match item.expect("no stream error") {
+                StreamResponse::Task(task) => task_id = task.id.0,
                 StreamResponse::ArtifactUpdate(e) => artifacts.push(e),
                 StreamResponse::StatusUpdate(e) => states.push(e.status.state),
                 _ => {}
             }
         }
-
-        assert_eq!(artifacts.len(), 3, "one artifact event per agent chunk");
-        let joined: String =
-            artifacts.iter().flat_map(|e| e.artifact.parts.iter().filter_map(part_text)).collect();
-        assert_eq!(joined, "Hello world", "the agent's text must reach the client");
-        assert_eq!(states, vec![TaskState::Working, TaskState::Completed]);
+        (task_id, artifacts, states)
     }
 
     #[tokio::test]
-    async fn stream_chunks_share_one_artifact_id_and_mark_the_last() {
-        let (handler, _store) =
-            handler_with_agent(Arc::new(ChunkingAgent { chunks: vec!["a".into(), "b".into()] }));
+    async fn streamed_chunks_fill_a_temporary_artifact_and_the_answer_has_its_own() {
+        let (handler, store) = handler_with_agent(Arc::new(ChunkingAgent {
+            chunks: vec!["Hel".into(), "lo ".into(), "world".into()],
+        }));
+        let (task_id, artifacts, states) = stream_updates(&handler).await;
 
-        let mut stream = handler.message_stream(make_test_message()).await.expect("stream starts");
-        let mut artifacts = Vec::new();
-        while let Some(item) = stream.next().await {
-            if let StreamResponse::ArtifactUpdate(e) = item.expect("no error") {
-                artifacts.push(e);
-            }
-        }
-
-        assert_eq!(artifacts.len(), 2);
+        // As adk-go's artifact-per-run layout: each chunk replaces a temporary artifact
+        // marked `adk_partial`, the answer goes to its own artifact, and the temporary one
+        // is emptied (`{}`, lastChunk) before the final status.
+        assert_eq!(artifacts.len(), 4, "two chunks, the answer, the reset: {artifacts:?}");
+        assert!(is_partial(&artifacts[0]) && is_partial(&artifacts[1]));
+        assert_eq!(artifacts[0].artifact.id, artifacts[1].artifact.id);
+        assert_eq!(artifacts[1].append, Some(false), "a chunk replaces the temporary artifact");
+        assert!(!is_partial(&artifacts[2]));
+        assert_ne!(artifacts[2].artifact.id, artifacts[0].artifact.id);
         assert_eq!(
-            artifacts[0].artifact.id, artifacts[1].artifact.id,
-            "a client joins chunks by artifact ID, so they must match"
+            answer_text(&artifacts),
+            "Hello world",
+            "the final event carries the whole answer"
         );
-        assert_eq!(artifacts[0].append, Some(false), "the first chunk starts the artifact");
-        assert_eq!(artifacts[1].append, Some(true), "later chunks append");
-        assert_eq!(artifacts[0].last_chunk, Some(false));
-        assert_eq!(artifacts[1].last_chunk, Some(true), "the final chunk must be marked");
+        let reset = &artifacts[3];
+        assert!(is_partial(reset) && reset.last_chunk == Some(true));
+        assert_eq!(reset.artifact.id, artifacts[0].artifact.id);
+        assert_eq!(states, vec![TaskState::Working, TaskState::Completed]);
+
+        let entry = store.get_task(&task_id).await.unwrap();
+        assert_eq!(stored_answer(&entry), "Hello world", "tasks/get sees the answer");
     }
 
     #[tokio::test]
-    async fn snapshots_replace_streamed_deltas_and_persist_the_same_text() {
+    async fn an_authoritative_final_event_is_the_answer() {
         for prefix in ["", "Earlier. "] {
             for snapshot in ["Hello world", "Corrected", ""] {
                 let (handler, store) = handler_with_agent(Arc::new(SnapshotAgent {
                     prefix: prefix.into(),
                     snapshot: snapshot.into(),
                 }));
-                let mut stream = handler.message_stream(make_test_message()).await.unwrap();
-                let mut task_id = None;
-                let mut received = String::new();
-                let mut last_update = None;
-                while let Some(item) = stream.next().await {
-                    match item.unwrap() {
-                        StreamResponse::Task(task) => task_id = Some(task.id.0),
-                        StreamResponse::ArtifactUpdate(update) => {
-                            if update.append != Some(true) {
-                                received.clear();
-                            }
-                            received.extend(update.artifact.parts.iter().filter_map(part_text));
-                            last_update = Some(update);
-                        }
-                        _ => {}
-                    }
-                }
+                let (task_id, artifacts, _) = stream_updates(&handler).await;
                 let expected = format!("{prefix}{snapshot}");
-                assert_eq!(received, expected);
-                let update = last_update.unwrap();
-                assert_eq!(
-                    (update.append, update.last_chunk),
-                    (Some(snapshot.starts_with("Hello")), Some(true))
-                );
-                let task = store.get_task(&task_id.unwrap()).await.unwrap();
-                let stored: String = task
-                    .artifacts
-                    .iter()
-                    .flat_map(|artifact| artifact.parts.iter().filter_map(part_text))
-                    .collect();
-                assert_eq!(stored, expected);
+                assert_eq!(answer_text(&artifacts), expected, "{prefix:?} {snapshot:?}");
+                let entry = store.get_task(&task_id).await.unwrap();
+                assert_eq!(stored_answer(&entry), expected, "{prefix:?} {snapshot:?}");
+
+                let (handler, _) = handler_with_agent(Arc::new(SnapshotAgent {
+                    prefix: prefix.into(),
+                    snapshot: snapshot.into(),
+                }));
+                let task = handler.message_send(make_test_message()).await.unwrap();
+                let entry = store_entry_of(&task);
+                assert_eq!(stored_answer(&entry), expected, "buffered {prefix:?} {snapshot:?}");
             }
         }
     }
 
-    #[tokio::test]
-    async fn buffered_send_replaces_deltas_with_the_snapshot() {
-        let (handler, _) = handler_with_agent(Arc::new(SnapshotAgent {
-            prefix: "Earlier. ".into(),
-            snapshot: "Hello world".into(),
-        }));
-        let task = handler.message_send(make_test_message()).await.unwrap();
-        let text: String = task
-            .artifacts
-            .unwrap()
-            .iter()
-            .flat_map(|artifact| artifact.parts.iter().filter_map(part_text))
-            .collect();
-        assert_eq!(text, "Earlier. Hello world");
+    /// A wire task as the store entry shape, for [`stored_answer`].
+    fn store_entry_of(task: &Task) -> TaskStoreEntry {
+        TaskStoreEntry {
+            id: task.id.0.clone(),
+            context_id: task.context_id.0.clone(),
+            status: task.status.clone(),
+            artifacts: task.artifacts.clone().unwrap_or_default(),
+            history: Vec::new(),
+            metadata: HashMap::new(),
+            push_configs: Vec::new(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
     }
 
     /// The text of a status message's parts.
@@ -1939,26 +1486,6 @@ mod tests {
         let sent = handler.message_send(make_test_message()).await.unwrap();
         assert_eq!(sent.status.state, TaskState::Failed);
         assert_eq!(status_text(&sent.status), text);
-    }
-
-    #[tokio::test]
-    async fn streamed_text_is_persisted_for_tasks_get() {
-        let (handler, store) = handler_with_agent(Arc::new(ChunkingAgent {
-            chunks: vec!["one ".into(), "two".into()],
-        }));
-
-        let mut stream = handler.message_stream(make_test_message()).await.expect("stream starts");
-        let mut task_id = None;
-        while let Some(item) = stream.next().await {
-            if let Ok(StreamResponse::Task(t)) = item {
-                task_id = Some(t.id.0.clone());
-            }
-        }
-
-        let entry = store.get_task(&task_id.expect("task event")).await.expect("task exists");
-        let text: String =
-            entry.artifacts.iter().flat_map(|a| a.parts.iter().filter_map(part_text)).collect();
-        assert_eq!(text, "one two", "a later tasks/get must see what was streamed");
     }
 
     // ── Waiting on the caller, continuing a task, cancel and returnImmediately ──
@@ -2201,12 +1728,16 @@ mod tests {
             .message_send_with(make_test_message(), Some(&return_immediately()))
             .await
             .unwrap();
-        assert_eq!(started.status.state, TaskState::Working, "the send does not wait for the run");
+        assert_eq!(
+            started.status.state,
+            TaskState::Submitted,
+            "the send returns the submitted task without waiting for the run"
+        );
 
-        let mut state = TaskState::Working;
+        let mut state = TaskState::Submitted;
         for _ in 0..100 {
             state = store.get_task(&started.id.0).await.unwrap().status.state;
-            if state != TaskState::Working {
+            if is_terminal_state(state) {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -2423,7 +1954,7 @@ mod tests {
         let metadata = task.metadata.clone().expect("the task carries ADK metadata");
         assert_eq!(metadata["adk_app_name"], "a2a-stream-test");
         assert_eq!(metadata["adk_session_id"], context.as_str());
-        assert_eq!(metadata["adk_user_id"], format!("a2a-{context}"));
+        assert_eq!(metadata["adk_user_id"], format!("A2A_USER_{context}"));
         assert_eq!(metadata[ADK_EXTENSION_URI], true);
         for update in stream.collect::<Vec<_>>().await {
             let metadata = match update.unwrap() {
@@ -2599,7 +2130,11 @@ mod tests {
         let Some(StreamResponse::Task(first)) = updates.first() else {
             panic!("the subscription starts with the task: {updates:?}");
         };
-        assert_eq!(first.status.state, TaskState::Working);
+        assert!(
+            matches!(first.status.state, TaskState::Submitted | TaskState::Working),
+            "the snapshot is the task as it stands: {:?}",
+            first.status.state
+        );
         assert_eq!(streamed_text(&updates), "Too late.", "the run's output reaches the subscriber");
         assert_eq!(last_state(&updates), Some(TaskState::Completed));
     }
@@ -2625,16 +2160,131 @@ mod tests {
         let (handler, _) = handler_with_agent(Arc::new(ApprovalAgent));
         let waiting = handler.message_send(make_test_message()).await.unwrap();
 
+        // As a2a-go: a task with no run in progress answers with its snapshot alone.
         let updates =
             collect_subscription(handler.tasks_subscribe(&waiting.id.0).await.unwrap()).await;
-        assert!(matches!(updates.first(), Some(StreamResponse::Task(_))));
-        assert_eq!(last_state(&updates), Some(TaskState::InputRequired));
+        let [StreamResponse::Task(snapshot)] = updates.as_slice() else {
+            panic!("the subscription is the snapshot alone: {updates:?}");
+        };
+        assert_eq!(snapshot.status.state, TaskState::InputRequired);
 
         handler.message_send(approval_for(&waiting.id, None)).await.unwrap();
         assert!(matches!(
             handler.tasks_subscribe(&waiting.id.0).await,
             Err(A2aError::UnsupportedOperation { .. })
         ));
+    }
+
+    // ── Runs detached from their request ────────────────────────────────────
+
+    #[tokio::test]
+    async fn a_run_outlives_the_stream_that_started_it() {
+        let (handler, store, answered) = slow_handler(100);
+        let mut stream = handler.message_stream(make_test_message()).await.unwrap();
+        let Some(Ok(StreamResponse::Task(task))) = stream.next().await else {
+            panic!("the stream starts with the task");
+        };
+        drop(stream);
+
+        let mut state = TaskState::Submitted;
+        for _ in 0..100 {
+            state = store.get_task(&task.id.0).await.unwrap().status.state;
+            if is_terminal_state(state) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(state, TaskState::Completed, "the client left; the run did not");
+        assert!(answered.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    /// Panics as soon as its run is polled.
+    struct PanickingAgent;
+
+    #[async_trait::async_trait]
+    impl adk_core::Agent for PanickingAgent {
+        fn name(&self) -> &str {
+            "panicking_agent"
+        }
+
+        fn description(&self) -> &str {
+            "panics"
+        }
+
+        fn sub_agents(&self) -> &[Arc<dyn adk_core::Agent>] {
+            &[]
+        }
+
+        async fn run(
+            &self,
+            _ctx: Arc<dyn adk_core::InvocationContext>,
+        ) -> adk_core::Result<adk_core::EventStream> {
+            Ok(Box::pin(async_stream::stream! {
+                if true {
+                    panic!("boom");
+                }
+                yield Ok(adk_core::Event::new("never"));
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_panicking_agent_fails_its_task() {
+        let (handler, _) = handler_with_agent(Arc::new(PanickingAgent));
+        let task = handler.message_send(make_test_message()).await.unwrap();
+        assert_eq!(task.status.state, TaskState::Failed);
+        let text = status_text(&task.status);
+        assert!(text.contains("agent run panicked: boom"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn the_waiting_message_moves_into_history_when_the_task_goes_on() {
+        let (handler, _) = handler_with_agent(Arc::new(ApprovalAgent));
+        let waiting = handler.message_send(make_test_message()).await.unwrap();
+        assert_eq!(waiting.status.state, TaskState::InputRequired);
+
+        let done = handler.message_send(approval_for(&waiting.id, None)).await.unwrap();
+        let roles: Vec<MessageRole> =
+            done.history.unwrap_or_default().iter().map(|message| message.role).collect();
+        assert_eq!(
+            roles,
+            vec![MessageRole::User, MessageRole::Agent, MessageRole::User],
+            "the question, the agent's waiting message, the answer"
+        );
+    }
+
+    #[tokio::test]
+    async fn push_configs_are_validated_and_replaced_by_id() {
+        let handler = make_handler();
+        let task = handler.message_send(make_test_message()).await.unwrap();
+        let config = |value: serde_json::Value| -> TaskPushNotificationConfig {
+            serde_json::from_value(value).unwrap()
+        };
+
+        for url in ["not a url", "ftp://hooks.example.com/a2a", "/relative"] {
+            let err = handler
+                .push_config_create(&task.id.0, config(serde_json::json!({"url": url})))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, A2aError::InvalidParams { .. }), "{url}: {err}");
+        }
+        handler
+            .push_config_create(
+                &task.id.0,
+                config(serde_json::json!({"id": "c1", "url": "https://a.example/1"})),
+            )
+            .await
+            .unwrap();
+        handler
+            .push_config_create(
+                &task.id.0,
+                config(serde_json::json!({"id": "c1", "url": "https://a.example/2"})),
+            )
+            .await
+            .unwrap();
+        let configs = handler.push_config_list(&task.id.0).await.unwrap();
+        assert_eq!(configs.len(), 1, "a config with the same ID replaces the old one");
+        assert_eq!(configs[0].url, "https://a.example/2");
     }
 
     fn make_handler() -> RequestHandler {
@@ -3030,13 +2680,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn push_config_delete_not_found() {
+    async fn deleting_a_push_config_the_task_lacks_succeeds() {
         let handler = make_handler();
         let msg = make_test_message();
         let task = handler.message_send(msg).await.unwrap();
 
-        let err = handler.push_config_delete(&task.id.0, "nonexistent").await.unwrap_err();
-        assert!(err.to_string().contains("nonexistent"));
+        // As A2A config stores do: a delete leaves the config absent either way.
+        handler.push_config_delete(&task.id.0, "nonexistent").await.unwrap();
+        let err = handler.push_config_delete("no-such-task", "nonexistent").await.unwrap_err();
+        assert!(matches!(err, A2aError::TaskNotFound { .. }), "{err}");
     }
 
     #[tokio::test]
@@ -3218,30 +2870,91 @@ mod tests {
     // ── multi-turn resume ────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn message_send_resumes_input_required_task() {
+    async fn a_context_message_continues_the_waiting_task_only_when_it_answers_its_call() {
         let handler = make_handler();
-
-        // Create a task and transition it to INPUT_REQUIRED
         let task_id = "resume-test";
         let ctx_id = "ctx-resume";
         handler.executor.create_task(task_id, ctx_id).await.unwrap();
         handler.executor.transition_state(task_id, ctx_id, TaskState::Working, None).await.unwrap();
+        let call = super::super::convert::tagged_function_call_part(
+            "approve",
+            &serde_json::json!({}),
+            Some("c1"),
+            true,
+        );
         handler
             .executor
-            .transition_state(task_id, ctx_id, TaskState::InputRequired, None)
+            .transition_state_with_parts(task_id, ctx_id, TaskState::InputRequired, vec![call])
             .await
             .unwrap();
 
-        // Send a follow-up message with the same contextId
-        let mut msg = make_test_message();
-        msg.id = MessageId::new("msg-resume");
-        msg.context_id = Some(a2a_protocol_types::ContextId::new(ctx_id));
+        // A plain follow-up in the context starts a new task there, as adk-go does.
+        let mut follow_up = make_test_message();
+        follow_up.id = MessageId::new("msg-follow-up");
+        follow_up.context_id = Some(a2a_protocol_types::ContextId::new(ctx_id));
+        let new_task = handler.message_send(follow_up).await.unwrap();
+        assert_ne!(new_task.id.0, task_id);
+        assert_eq!(new_task.context_id.0, ctx_id);
+        let waiting = handler.tasks_get(task_id, None).await.unwrap();
+        assert_eq!(waiting.status.state, TaskState::InputRequired);
 
-        let task = handler.message_send(msg).await.unwrap();
+        // An answer to the pending call continues the waiting task.
+        let mut answer = make_test_message();
+        answer.id = MessageId::new("msg-answer");
+        answer.context_id = Some(a2a_protocol_types::ContextId::new(ctx_id));
+        answer.parts = vec![super::super::convert::tagged_function_response_part(
+            "approve",
+            &serde_json::json!({"approved": true}),
+            Some("c1"),
+        )];
+        let resumed = handler.message_send(answer).await.unwrap();
+        assert_eq!(resumed.id.0, task_id);
+        assert_eq!(resumed.status.state, TaskState::Completed);
+    }
 
-        // Should resume the existing task (same task ID)
-        assert_eq!(task.id.0, task_id);
-        assert_eq!(task.status.state, TaskState::Completed);
+    #[tokio::test]
+    async fn an_answer_that_misses_a_pending_call_is_asked_again_without_running() {
+        let handler = make_handler();
+        let (task_id, ctx_id) = ("ask-again", "ctx-ask-again");
+        handler.executor.create_task(task_id, ctx_id).await.unwrap();
+        handler.executor.transition_state(task_id, ctx_id, TaskState::Working, None).await.unwrap();
+        let calls = vec![
+            super::super::convert::tagged_function_call_part(
+                "approve",
+                &serde_json::json!({}),
+                Some("c1"),
+                true,
+            ),
+            super::super::convert::tagged_function_call_part(
+                "approve",
+                &serde_json::json!({}),
+                Some("c2"),
+                true,
+            ),
+        ];
+        handler
+            .executor
+            .transition_state_with_parts(task_id, ctx_id, TaskState::InputRequired, calls)
+            .await
+            .unwrap();
+
+        let mut partial_answer = make_test_message();
+        partial_answer.id = MessageId::new("msg-partial-answer");
+        partial_answer.task_id = Some(TaskId::new(task_id));
+        partial_answer.parts = vec![super::super::convert::tagged_function_response_part(
+            "approve",
+            &serde_json::json!({"approved": true}),
+            Some("c1"),
+        )];
+        let task = handler.message_send(partial_answer).await.unwrap();
+
+        assert_eq!(task.status.state, TaskState::InputRequired);
+        let parts = task.status.message.expect("the task asks again").parts;
+        assert_eq!(parts.len(), 3, "both pending calls, then the notice");
+        assert_eq!(parts[2].text_content(), Some(r#"no input provided for function call ID "c2""#));
+        assert_eq!(parts[2].metadata.as_ref().unwrap()["validation_error"], true);
+        let history = task.history.expect("history");
+        assert_eq!(history.last().unwrap().id.0, "msg-partial-answer");
     }
 
     #[tokio::test]

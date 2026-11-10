@@ -140,8 +140,9 @@ fn forbidden(error: &str, hint: &str) -> Response {
 /// Whether `path` names a route that runs an agent, which takes
 /// [`SecurityConfig::run_timeout`] instead of the request timeout.
 fn runs_an_agent(path: &str) -> bool {
-    matches!(path, "/api/run" | "/api/run_sse" | "/a2a" | "/a2a/stream")
+    matches!(path, "/api/run" | "/api/run_sse" | "/a2a" | "/a2a/stream" | "/a2a/v1")
         || path.starts_with("/api/run/")
+        || path.starts_with("/a2a/v1/rest/message:")
 }
 
 /// Answers `408` when the response has not started within the route's timeout: the run

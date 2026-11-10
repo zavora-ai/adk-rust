@@ -323,16 +323,24 @@ async fn the_client_subscribes_to_a_task_it_started_with_return_immediately() {
         SendMessageResponse::Task(task) => task,
         other => panic!("expected a task, got {other:?}"),
     };
-    // The run may already be over: then the task is finished, and subscribing is refused.
+    // The run may already be over: then the task is finished, and subscribing is refused,
+    // as the stream's one event (an a2a-go client reads only `data:` lines).
+    let refused = |error: &adk_server::a2a::client::v1_client::V1ClientError| {
+        matches!(
+            error,
+            adk_server::a2a::client::v1_client::V1ClientError::JsonRpc { code: -32004, .. }
+        )
+    };
     match client.subscribe(&task.id.0).await {
         Ok(updates) => {
-            let updates: Vec<_> = updates.map(|update| update.unwrap()).collect().await;
+            let updates: Vec<_> = updates.collect().await;
             assert!(!updates.is_empty());
+            match &updates[0] {
+                Ok(_) => assert!(updates.iter().all(Result::is_ok), "{updates:?}"),
+                Err(error) => assert!(refused(error) && updates.len() == 1, "{updates:?}"),
+            }
         }
-        Err(adk_server::a2a::client::v1_client::V1ClientError::JsonRpc { code, .. }) => {
-            assert_eq!(code, -32004, "a finished task");
-        }
-        Err(other) => panic!("unexpected error: {other}"),
+        Err(error) => assert!(refused(&error), "unexpected error: {error}"),
     }
     let done = client.get_task(&task.id.0, None).await.unwrap();
     assert_eq!(done.status.state, TaskState::Completed);
@@ -393,4 +401,35 @@ async fn a_remote_agent_from_a_url_continues_one_remote_conversation() {
     let tasks = client.list_tasks(None, None, None, None).await.unwrap().tasks;
     assert_eq!(tasks.len(), 2);
     assert_eq!(tasks[0].context_id, tasks[1].context_id, "the second turn continued the first");
+}
+
+#[tokio::test]
+async fn a_streaming_methods_early_error_is_the_streams_one_event() {
+    let base = serve_weather(false).await;
+    let card = A2aV1Client::resolve_agent_card(&base).await.unwrap();
+    let url = card
+        .supported_interfaces
+        .iter()
+        .find(|interface| interface.protocol_binding == "JSONRPC")
+        .unwrap()
+        .url
+        .clone();
+    let response = reqwest::Client::new()
+        .post(&url)
+        .header("A2A-Version", "1.0")
+        .json(&json!({"jsonrpc": "2.0", "id": 7, "method": "SubscribeToTask", "params": {"id": "no-such-task"}}))
+        .send()
+        .await
+        .unwrap();
+
+    // As a2a-go answers: SSE, with the JSON-RPC error as the `data:` event, so a client that
+    // reads only `data:` lines from a streaming method sees it.
+    assert_eq!(response.status(), 200);
+    let content_type = response.headers()["content-type"].to_str().unwrap().to_string();
+    assert!(content_type.starts_with("text/event-stream"), "{content_type}");
+    let body = response.text().await.unwrap();
+    let data = body.lines().find_map(|line| line.strip_prefix("data:")).expect("a data line");
+    let error: serde_json::Value = serde_json::from_str(data.trim()).unwrap();
+    assert_eq!(error["id"], 7);
+    assert_eq!(error["error"]["code"], -32001);
 }

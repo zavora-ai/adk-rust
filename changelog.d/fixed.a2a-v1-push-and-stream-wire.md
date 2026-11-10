@@ -1,0 +1,9 @@
+- **A2A v1 push notifications and stream errors match a2a-go** (`adk-server`, `a2a-v1`):
+  - **Push payloads are the `StreamResponse` a streaming client receives** (`{"statusUpdate": …}`, `{"artifactUpdate": …}`). They used to be the bare event.
+  - **Every update of a task with push configs is delivered, in order.** This includes a cancel of a waiting task.
+  - **`Authorization` follows the config's scheme** (`Bearer` or `Basic`).
+  - **Push config creation is checked and keyed by ID.**
+    - A URL that is not an absolute `http(s)` URL is refused with -32602.
+    - A config with an existing ID replaces the old one.
+  - **Early stream errors arrive as SSE.** An error before a JSON-RPC stream starts (unknown task, finished task, unsupported version) comes as the stream's one `data:` event, which a2a-go clients read. It used to be a plain JSON body. SSE responses also send `X-Accel-Buffering: no`.
+  - **`SendStreamingMessage` reads its `configuration`,** including an inline push config, on both bindings.

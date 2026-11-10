@@ -25,6 +25,7 @@ use super::card::{CachedAgentCard, build_v1_agent_card, serve_agent_card, v1_age
 use super::convert::ADK_EXTENSION_URI;
 use super::executor::V1Executor;
 use super::jsonrpc_handler::jsonrpc_handler;
+use super::processor::OutputMode;
 use super::push::{NoOpPushNotificationSender, PushNotificationSender};
 use super::request_handler::RequestHandler;
 use super::rest_handler::rest_router;
@@ -84,6 +85,7 @@ impl A2aV1Server {
             streaming: true,
             extra_skills: Vec::new(),
             legacy_jsonrpc_url: None,
+            output_mode: OutputMode::default(),
         }
     }
 
@@ -133,6 +135,7 @@ pub struct A2aV1ServerBuilder {
     streaming: bool,
     extra_skills: Vec<AgentSkill>,
     legacy_jsonrpc_url: Option<String>,
+    output_mode: OutputMode,
 }
 
 impl A2aV1ServerBuilder {
@@ -151,6 +154,13 @@ impl A2aV1ServerBuilder {
     /// Keeps tasks in `store` instead of a new [`InMemoryTaskStore`].
     pub fn task_store(mut self, store: Arc<dyn TaskStore>) -> Self {
         self.task_store = Some(store);
+        self
+    }
+
+    /// Lays each run's output out in artifacts as `mode` says; see [`OutputMode`]. The
+    /// default is [`OutputMode::ArtifactPerRun`], as adk-go's.
+    pub fn output_mode(mut self, mode: OutputMode) -> Self {
+        self.output_mode = mode;
         self
     }
 
@@ -249,13 +259,16 @@ impl A2aV1ServerBuilder {
             self.task_store.unwrap_or_else(|| Arc::new(InMemoryTaskStore::new()));
         let push_sender: Arc<dyn PushNotificationSender> =
             self.push_sender.unwrap_or_else(|| Arc::new(NoOpPushNotificationSender));
-        let handler = Arc::new(RequestHandler::with_runner(
-            Arc::new(V1Executor::new(task_store.clone())),
-            task_store,
-            push_sender,
-            card.clone(),
-            self.runner_config,
-        ));
+        let handler = Arc::new(
+            RequestHandler::with_runner(
+                Arc::new(V1Executor::new(task_store.clone())),
+                task_store,
+                push_sender,
+                card.clone(),
+                self.runner_config,
+            )
+            .with_output_mode(self.output_mode),
+        );
         A2aV1Server { handler, card, jsonrpc_path: self.jsonrpc_path, rest_path: self.rest_path }
     }
 }

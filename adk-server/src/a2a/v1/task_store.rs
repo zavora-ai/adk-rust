@@ -133,6 +133,20 @@ pub trait TaskStore: Send + Sync {
     ///
     /// Returns [`A2aError::TaskNotFound`] if the task does not exist.
     async fn delete_task(&self, task_id: &str) -> Result<(), A2aError>;
+
+    /// Writes `entry` over the stored task with the same ID: its status, history,
+    /// artifacts, metadata and push configs together. The executor calls it while it holds
+    /// the task's lock, so a read and write-back is never interleaved with another.
+    ///
+    /// The default implementation calls [`create_task`](Self::create_task), which
+    /// overwrites a task with the same ID in the in-memory store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store fails to persist the task.
+    async fn save_task(&self, entry: TaskStoreEntry) -> Result<(), A2aError> {
+        self.create_task(entry).await
+    }
 }
 
 /// In-memory task store for development and testing.
