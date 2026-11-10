@@ -433,3 +433,96 @@ async fn a_streaming_methods_early_error_is_the_streams_one_event() {
     assert_eq!(error["id"], 7);
     assert_eq!(error["error"]["code"], -32001);
 }
+
+/// Says it started, then takes a while to answer.
+struct SlowAgent;
+
+#[async_trait]
+impl Agent for SlowAgent {
+    fn name(&self) -> &str {
+        "slow"
+    }
+
+    fn description(&self) -> &str {
+        "answers slowly"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> AdkResult<EventStream> {
+        Ok(Box::pin(async_stream::stream! {
+            let mut started = Event::new("slow");
+            started.llm_response.content = Some(Content::new("model").with_text("Working on it."));
+            yield Ok(started);
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            let mut done = Event::new("slow");
+            done.llm_response.content = Some(Content::new("model").with_text("Done."));
+            yield Ok(done);
+        }))
+    }
+}
+
+#[tokio::test]
+async fn a_remote_agent_cancels_the_remote_task_when_its_caller_stops_reading() {
+    use adk_session::{CreateRequest, SessionService};
+    use futures::StreamExt;
+
+    let base = listen(|base| {
+        let runner_config = Arc::new(
+            adk_runner::Runner::builder()
+                .app_name("slow")
+                .agent(Arc::new(SlowAgent))
+                .session_service(Arc::new(InMemorySessionService::new()))
+                .build_config(),
+        );
+        A2aV1Server::builder(runner_config, base).build().router()
+    })
+    .await;
+    let remote =
+        adk_server::a2a::remote_agent::v1_remote::RemoteA2aV1Agent::from_url("slow_remote", &base)
+            .await
+            .unwrap();
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "caller".to_string(),
+            user_id: "u1".to_string(),
+            session_id: Some("s1".to_string()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let runner = adk_runner::Runner::builder()
+        .app_name("caller")
+        .agent(Arc::new(remote))
+        .session_service(sessions)
+        .build()
+        .unwrap();
+
+    let mut events = runner
+        .run(
+            adk_core::UserId::new("u1").unwrap(),
+            adk_core::SessionId::new("s1").unwrap(),
+            Content::new("user").with_text("start"),
+        )
+        .await
+        .unwrap();
+    let first = events.next().await.expect("the remote's first update").unwrap();
+    assert!(first.llm_response.content.is_some());
+    drop(events);
+
+    // As adk-go's remote agent: the remote task is cancelled, not left running.
+    let client = A2aV1Client::new(A2aV1Client::resolve_agent_card(&base).await.unwrap());
+    let mut state = None;
+    for _ in 0..100 {
+        let tasks = client.list_tasks(None, None, None, None).await.unwrap().tasks;
+        state = tasks.first().map(|task| task.status.state);
+        if state == Some(TaskState::Canceled) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(state, Some(TaskState::Canceled));
+}

@@ -1,7 +1,7 @@
 use crate::a2a::{AgentCapabilities, AgentCard, AgentSkill};
 use adk_core::{Agent, AgentKind};
-use std::sync::Arc;
 use adk_skill::SkillIndex;
+use std::sync::Arc;
 
 /// The skills an agent card lists for `agent`, as adk-go's `BuildAgentSkills` builds them:
 /// the agent's own skills, then each sub-agent's, named after the sub-agent.

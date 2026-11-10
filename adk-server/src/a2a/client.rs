@@ -1328,7 +1328,24 @@ pub mod v1_client {
             &self,
             message: Message,
         ) -> Result<UpdateStream, V1ClientError> {
-            let body = serde_json::json!({ "message": message });
+            self.stream_message_with(message, None).await
+        }
+
+        /// Streams a message with a `SendMessageConfiguration`, as
+        /// [`stream_message`](Self::stream_message) does.
+        ///
+        /// # Errors
+        ///
+        /// See [`stream_message`](Self::stream_message).
+        pub async fn stream_message_with(
+            &self,
+            message: Message,
+            configuration: Option<&SendMessageConfiguration>,
+        ) -> Result<UpdateStream, V1ClientError> {
+            let mut body = serde_json::json!({ "message": message });
+            if let Some(configuration) = configuration {
+                body["configuration"] = serde_json::to_value(configuration)?;
+            }
             match self.jsonrpc_url() {
                 Some(url) => {
                     let request = JsonRpcRequest::with_params(
@@ -1528,8 +1545,25 @@ pub mod v1_client {
             &self,
             message: Message,
         ) -> Result<SendMessageResponse, V1ClientError> {
-            let body: Value =
-                self.rest_post("/message:send", &serde_json::json!({ "message": message })).await?;
+            self.send_message_rest_with(message, None).await
+        }
+
+        /// Sends a message with a `SendMessageConfiguration` via REST, as
+        /// [`send_message_rest`](Self::send_message_rest) does.
+        ///
+        /// # Errors
+        ///
+        /// See [`send_message_rest`](Self::send_message_rest).
+        pub async fn send_message_rest_with(
+            &self,
+            message: Message,
+            configuration: Option<&SendMessageConfiguration>,
+        ) -> Result<SendMessageResponse, V1ClientError> {
+            let mut request = serde_json::json!({ "message": message });
+            if let Some(configuration) = configuration {
+                request["configuration"] = serde_json::to_value(configuration)?;
+            }
+            let body: Value = self.rest_post("/message:send", &request).await?;
             Ok(parse_send_message_result(body)?)
         }
 

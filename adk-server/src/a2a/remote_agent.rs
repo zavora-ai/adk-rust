@@ -539,8 +539,9 @@ pub mod v1_remote {
         pub description: String,
         /// The v1.0.0 agent card describing the remote agent.
         pub agent_card: AgentCard,
-        /// Whether to use streaming for communication.
-        /// If `None`, auto-detects from the agent card capabilities.
+        /// Whether to stream the remote's replies. `None` streams when the run does
+        /// (`RunConfig::streaming_mode` is not `None`); either way, only when the card says
+        /// the agent streams.
         pub streaming: Option<bool>,
         /// Mints the bearer token sent to the remote agent, for the running agent's
         /// [`ActingContext`](adk_core::ActingContext) and with the selected interface
@@ -548,6 +549,25 @@ pub mod v1_remote {
         pub credential_broker: Option<Arc<dyn adk_core::CredentialBroker>>,
         /// Scopes requested from the [`credential_broker`](Self::credential_broker).
         pub credential_scopes: Vec<String>,
+        /// Sent with every message: `historyLength`, accepted output modes, a push config
+        /// (adk-go's `MessageSendConfig`).
+        pub send_configuration: Option<a2a_protocol_types::params::SendMessageConfiguration>,
+    }
+
+    impl RemoteA2aV1Config {
+        /// A config for the agent `name` behind `agent_card`, described by the card, that
+        /// streams when the run does and the card allows it.
+        pub fn new(name: impl Into<String>, agent_card: AgentCard) -> Self {
+            Self {
+                name: name.into(),
+                description: agent_card.description.clone(),
+                agent_card,
+                streaming: None,
+                credential_broker: None,
+                credential_scopes: Vec::new(),
+                send_configuration: None,
+            }
+        }
     }
 
     /// An agent that communicates with a remote A2A v1.0.0 agent.
@@ -578,14 +598,7 @@ pub mod v1_remote {
             base_url: &str,
         ) -> std::result::Result<Self, crate::a2a::client::v1_client::V1ClientError> {
             let agent_card = A2aV1Client::resolve_agent_card(base_url).await?;
-            Ok(Self::new(RemoteA2aV1Config {
-                name: name.into(),
-                description: agent_card.description.clone(),
-                agent_card,
-                streaming: None,
-                credential_broker: None,
-                credential_scopes: Vec::new(),
-            }))
+            Ok(Self::new(RemoteA2aV1Config::new(name, agent_card)))
         }
 
         /// Selects the best A2A v1 interface from the agent card.
@@ -616,19 +629,34 @@ pub mod v1_remote {
             let card = self.config.agent_card.clone();
             let invocation_id = ctx.invocation_id().to_string();
             let agent_name = self.config.name.clone();
-            let config_streaming = self.config.streaming;
+            let branch = ctx.branch().to_string();
             let broker = self.config.credential_broker.clone();
             let scopes = self.config.credential_scopes.clone();
+            let send_configuration = self.config.send_configuration.clone();
             let acting = ctx.acting_context();
+            // As adk-go: stream when the run streams and the card says the agent can; a
+            // configured `streaming` overrides the run, never the card.
+            let run_streams = ctx.run_config().streaming_mode != adk_core::StreamingMode::None;
+            let use_streaming = self.config.streaming.unwrap_or(run_streams)
+                && card.capabilities.streaming == Some(true);
 
             // The remote conversation this agent continues, and a remote task waiting on it.
             let keys = RemoteKeys::for_agent(&agent_name);
             let state = ctx.session().state();
             let remote_context = state.get(&keys.context_id).and_then(string_value);
             let remote_task = state.get(&keys.task_id).and_then(string_value);
-            let parts = outgoing_parts(ctx.as_ref(), &agent_name);
+            let outgoing = outgoing_turn(ctx.as_ref(), &agent_name);
 
             let stream = async_stream::stream! {
+                // Nothing new for the remote since its last reply: no request, as adk-go.
+                if outgoing.parts.is_empty() {
+                    let mut event = Event::new(invocation_id.clone());
+                    event.author = agent_name.clone();
+                    event.branch = branch.clone();
+                    yield Ok(event);
+                    return;
+                }
+
                 // Verify we have a usable interface
                 let interface = match Self::select_interface(&card) {
                     Some(i) => i.clone(),
@@ -642,8 +670,15 @@ pub mod v1_remote {
                     }
                 };
 
-                // Build a card with the selected interface for the client
-                let mut client = A2aV1Client::new(card.clone());
+                // A SendMessage that times out may still have started a task, so it is never
+                // sent twice: no automatic retries, as adk-go.
+                let mut client = A2aV1Client::with_retry(
+                    card.clone(),
+                    crate::a2a::client::v1_client::RetryConfig {
+                        max_retries: 0,
+                        ..Default::default()
+                    },
+                );
                 if let Some(broker) = broker.as_deref() {
                     match super::brokered_token(broker, &acting, &interface.url, &scopes).await {
                         Ok(token) => client = client.with_credential(token),
@@ -654,15 +689,20 @@ pub mod v1_remote {
                     }
                 }
 
-                // Determine if we should use streaming
-                let use_streaming = config_streaming.unwrap_or(card.capabilities.streaming.unwrap_or(false));
+                let client = Arc::new(client);
+                let rest = interface.protocol_binding == "HTTP+JSON";
+                // Cancels the remote task if the turn ends before the task does.
+                let mut cleanup = RemoteTaskCleanup::new(client.clone(), rest);
 
-                let message = build_v1_message(parts, remote_context, remote_task);
+                // The waiting remote task continues only with an answer to one of its calls;
+                // any other message starts a new task in the same context.
+                let task_id = remote_task.filter(|_| outgoing.answers_own_call);
+                let message = build_v1_message(outgoing.parts, remote_context, task_id);
 
                 if use_streaming {
                     // The remote's updates as they arrive. A stream that stops before a final
                     // status is reported as an error.
-                    match client.stream_message(message).await {
+                    match client.stream_message_with(message, send_configuration.as_ref()).await {
                         Ok(mut updates) => {
                             use futures::StreamExt;
 
@@ -676,6 +716,7 @@ pub mod v1_remote {
                                         return;
                                     }
                                 };
+                                cleanup.observe(&stream_response);
                                 if ends_stream(&stream_response) {
                                     finished = true;
                                     let mut events = remote.handle(&stream_response);
@@ -713,15 +754,16 @@ pub mod v1_remote {
                     }
                 } else {
                     // Send non-streaming message, over the binding the card offers.
-                    let sent = if interface.protocol_binding == "HTTP+JSON" {
-                        client.send_message_rest(message).await
+                    let sent = if rest {
+                        client.send_message_rest_with(message, send_configuration.as_ref()).await
                     } else {
-                        client.send_message(message).await
+                        client.send_message_with(message, send_configuration.as_ref()).await
                     };
                     match sent {
                         Ok(SendMessageResponse::Message(reply)) => {
                             // The agent answered directly, without a task.
                             let resp = a2a_protocol_types::events::StreamResponse::Message(reply);
+                            cleanup.observe(&resp);
                             let mut remote = RemoteEvents::new(&invocation_id, &agent_name);
                             let event = remote.handle(&resp).pop().unwrap_or_else(|| remote.new_event());
                             yield Ok(end_turn(event, &resp, &keys));
@@ -729,6 +771,7 @@ pub mod v1_remote {
                         Ok(SendMessageResponse::Task(task)) => {
                             // One event for the task: its artifacts and status message.
                             let resp = a2a_protocol_types::events::StreamResponse::Task(task);
+                            cleanup.observe(&resp);
                             let mut remote = RemoteEvents::new(&invocation_id, &agent_name);
                             let event = remote.handle(&resp).pop().unwrap_or_else(|| remote.new_event());
                             yield Ok(end_turn(event, &resp, &keys));
@@ -776,26 +819,131 @@ pub mod v1_remote {
         value.as_str().filter(|s| !s.is_empty()).map(str::to_string)
     }
 
-    /// What this turn sends: the session since this agent's last reply (the person's
-    /// messages, and other agents' turns as the context the session renders them as), or
-    /// the turn's own user content when the session holds none. Each part goes out in the
-    /// shape every A2A v1 SDK reads; see [`outgoing_part`].
-    fn outgoing_parts(
-        ctx: &dyn InvocationContext,
-        agent_name: &str,
-    ) -> Vec<a2a_protocol_types::Part> {
+    /// What one turn sends the remote agent.
+    struct OutgoingTurn {
+        parts: Vec<a2a_protocol_types::Part>,
+        /// Whether the turn answers a call the remote made through this agent, which
+        /// continues the remote task waiting on it.
+        answers_own_call: bool,
+    }
+
+    /// What this turn sends, as adk-go's remote agent builds it: the session since this
+    /// agent's last reply (the person's messages, and other agents' turns as the context the
+    /// session renders them as). An answer to a call the remote made through this agent goes
+    /// as a function response; any other function response goes as the text
+    /// `Tool <name> returned: <json>`, since the remote never asked for it. With nothing new
+    /// since the last reply the turn is empty, and the turn's own user content seeds it only
+    /// when the session holds nothing for this agent yet. Each part goes out in the shape
+    /// every A2A v1 SDK reads; see [`outgoing_part`].
+    fn outgoing_turn(ctx: &dyn InvocationContext, agent_name: &str) -> OutgoingTurn {
         let history = ctx.session().conversation_history_with_context(agent_name, ctx.branch());
         let since_reply =
             history.iter().rposition(|content| content.role == "model").map_or(0, |i| i + 1);
-        let mut parts: Vec<_> = history[since_reply..]
+        // This agent's own turns are the history's model contents (other agents' turns are
+        // rendered as context): the calls in them are the ones the remote made.
+        let own_calls: std::collections::HashSet<String> = history
             .iter()
+            .filter(|content| content.role == "model")
             .flat_map(|content| &content.parts)
-            .filter_map(outgoing_part)
+            .filter_map(|part| match part {
+                Part::FunctionCall { id: Some(id), .. } => Some(id.clone()),
+                _ => None,
+            })
             .collect();
-        if parts.is_empty() {
+        let mut answers_own_call = false;
+        let mut parts = Vec::new();
+        for part in history[since_reply..].iter().flat_map(|content| &content.parts) {
+            match part {
+                Part::FunctionResponse { function_response, id, .. }
+                    if !id.as_ref().is_some_and(|id| own_calls.contains(id)) =>
+                {
+                    let result = serde_json::to_string(&function_response.response)
+                        .unwrap_or_else(|_| "<unserializable>".to_string());
+                    let name = if function_response.name.is_empty() {
+                        "<unnamed>"
+                    } else {
+                        function_response.name.as_str()
+                    };
+                    parts.push(a2a_protocol_types::Part::text(format!(
+                        "Tool {name} returned: {result}"
+                    )));
+                }
+                Part::FunctionResponse { .. } => {
+                    answers_own_call = true;
+                    parts.extend(outgoing_part(part));
+                }
+                other => parts.extend(outgoing_part(other)),
+            }
+        }
+        if parts.is_empty() && history.is_empty() {
             parts = ctx.user_content().parts.iter().filter_map(outgoing_part).collect();
         }
-        parts
+        OutgoingTurn { parts, answers_own_call }
+    }
+
+    /// Cancels the remote task a turn started when the turn ends before the task does: the
+    /// caller stopped reading, the stream broke, or the remote returned a task still at work.
+    /// A task that ended, or waits on this side, is left alone. The cancel runs on its own
+    /// for at most 5 seconds, as adk-go's remote agent sends it.
+    struct RemoteTaskCleanup {
+        client: Arc<A2aV1Client>,
+        rest: bool,
+        task_id: Option<String>,
+        settled: bool,
+    }
+
+    impl RemoteTaskCleanup {
+        fn new(client: Arc<A2aV1Client>, rest: bool) -> Self {
+            Self { client, rest, task_id: None, settled: false }
+        }
+
+        /// Records the remote task an update names, and whether it ended or waits.
+        fn observe(&mut self, response: &a2a_protocol_types::events::StreamResponse) {
+            use a2a_protocol_types::events::StreamResponse;
+            let (task_id, state) = match response {
+                StreamResponse::Task(task) => (Some(&task.id.0), Some(task.status.state)),
+                StreamResponse::StatusUpdate(update) => {
+                    (Some(&update.task_id.0), Some(update.status.state))
+                }
+                StreamResponse::ArtifactUpdate(update) => (Some(&update.task_id.0), None),
+                StreamResponse::Message(_) => {
+                    self.settled = true;
+                    (None, None)
+                }
+                _ => (None, None),
+            };
+            if let Some(task_id) = task_id {
+                self.task_id = Some(task_id.clone());
+            }
+            if state.is_some_and(is_final_state) {
+                self.settled = true;
+            }
+        }
+    }
+
+    impl Drop for RemoteTaskCleanup {
+        fn drop(&mut self) {
+            if self.settled {
+                return;
+            }
+            let Some(task_id) = self.task_id.take() else { return };
+            let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
+            let (client, rest) = (self.client.clone(), self.rest);
+            runtime.spawn(async move {
+                let cancel = async {
+                    if rest {
+                        client.cancel_task_rest(&task_id).await.map(drop)
+                    } else {
+                        client.cancel_task(&task_id).await.map(drop)
+                    }
+                };
+                match tokio::time::timeout(std::time::Duration::from_secs(5), cancel).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => tracing::warn!(%task_id, %error, "failed to cancel task"),
+                    Err(_) => tracing::warn!(%task_id, "failed to cancel task: timed out"),
+                }
+            });
+        }
     }
 
     /// An ADK part as A2A sends it:
@@ -813,6 +961,13 @@ pub mod v1_remote {
         match part {
             Part::Text { text } if !text.trim().is_empty() => {
                 Some(a2a_protocol_types::Part::text(text.clone()))
+            }
+            Part::Thinking { thinking, .. } if !thinking.trim().is_empty() => {
+                let mut wire = a2a_protocol_types::Part::text(thinking.clone());
+                wire.metadata = Some(
+                    serde_json::json!({ crate::a2a::v1::convert::ADK_THOUGHT_METADATA_KEY: true }),
+                );
+                Some(wire)
             }
             Part::FunctionCall { name, args, id, .. } => {
                 Some(tagged_function_call_part(name, args, id.as_deref(), false))
@@ -1468,6 +1623,7 @@ pub mod v1_remote {
                 streaming: None,
                 credential_broker: None,
                 credential_scopes: Vec::new(),
+                send_configuration: None,
             });
             assert_eq!(agent.name(), "my-agent");
             assert_eq!(agent.description(), "My remote agent");
@@ -1484,6 +1640,7 @@ pub mod v1_remote {
                 streaming: None,
                 credential_broker: None,
                 credential_scopes: Vec::new(),
+                send_configuration: None,
             });
             assert!(agent.sub_agents().is_empty());
         }
@@ -1540,9 +1697,10 @@ pub mod v1_remote {
             })
             .unwrap();
             assert_eq!(image.media_type.as_deref(), Some("image/png"));
-            assert!(
-                outgoing_part(&Part::Thinking { thinking: "hm".into(), signature: None }).is_none()
-            );
+            let thought =
+                outgoing_part(&Part::Thinking { thinking: "hm".into(), signature: None }).unwrap();
+            assert_eq!(thought.text_content(), Some("hm"));
+            assert_eq!(thought.metadata.unwrap()["adk_thought"], true, "a thought stays a thought");
         }
 
         #[test]
