@@ -238,6 +238,7 @@ async fn the_v1_remote_agent_reports_a_truncated_stream_and_keeps_split_characte
         credential_broker: None,
         credential_scopes: vec![],
         send_configuration: None,
+        hooks: Default::default(),
     });
     let sessions = Arc::new(InMemorySessionService::new());
     adk_session::SessionService::create(

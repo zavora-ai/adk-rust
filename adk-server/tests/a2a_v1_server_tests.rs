@@ -642,3 +642,114 @@ async fn any_page_may_read_the_agent_card() {
         assert_eq!(anonymous.headers()["access-control-allow-origin"], "*");
     }
 }
+
+/// Runs a remote agent with `hooks` against `base` for one turn; returns the turn's texts.
+async fn remote_turn(
+    base: &str,
+    hooks: adk_server::a2a::remote_agent::v1_remote::RemoteAgentHooks,
+) -> Vec<String> {
+    use adk_server::a2a::remote_agent::v1_remote::{RemoteA2aV1Agent, RemoteA2aV1Config};
+    use adk_session::{CreateRequest, SessionService};
+    use futures::StreamExt;
+
+    let card = A2aV1Client::resolve_agent_card(base).await.unwrap();
+    let mut config = RemoteA2aV1Config::new("weather_remote", card);
+    config.hooks = hooks;
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "caller".to_string(),
+            user_id: "u1".to_string(),
+            session_id: Some("s1".to_string()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let runner = adk_runner::Runner::builder()
+        .app_name("caller")
+        .agent(Arc::new(RemoteA2aV1Agent::new(config)))
+        .session_service(sessions)
+        .build()
+        .unwrap();
+    runner
+        .run(
+            adk_core::UserId::new("u1").unwrap(),
+            adk_core::SessionId::new("s1").unwrap(),
+            Content::new("user").with_text("weather?"),
+        )
+        .await
+        .unwrap()
+        .map(|event| event.unwrap())
+        .filter_map(|event| async move {
+            let text: String =
+                event.content()?.parts.iter().filter_map(|part| part.text()).collect();
+            (!text.is_empty()).then_some(text)
+        })
+        .collect()
+        .await
+}
+
+#[tokio::test]
+async fn remote_agent_hooks_shape_a_turn_as_adk_gos_callbacks_do() {
+    use adk_server::a2a::remote_agent::v1_remote::RemoteAgentHooks;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let base = serve_weather(false).await;
+    let client = A2aV1Client::new(A2aV1Client::resolve_agent_card(&base).await.unwrap());
+    let tasks = || async { client.list_tasks(None, None, None, None).await.unwrap().tasks.len() };
+
+    // A before-agent answer is the turn: no request.
+    let hooks = RemoteAgentHooks::default().before_agent(Arc::new(|_ctx| {
+        Box::pin(async { Ok(Some(Content::new("model").with_text("cached answer"))) })
+    }));
+    assert_eq!(remote_turn(&base, hooks).await, ["cached answer"]);
+    assert_eq!(tasks().await, 0);
+
+    // A before-request answer replaces the remote's, and no request is made.
+    let hooks = RemoteAgentHooks::default().before_request(Arc::new(|_ctx, message| {
+        assert!(!message.parts.is_empty(), "the callback sees the message");
+        let mut event = Event::new("inv");
+        event.author = "weather_remote".to_string();
+        event.llm_response.content = Some(Content::new("model").with_text("refused locally"));
+        Ok(Some(event))
+    }));
+    assert_eq!(remote_turn(&base, hooks).await, ["refused locally"]);
+    assert_eq!(tasks().await, 0);
+
+    // After-request callbacks replace events; after-agent callbacks add one.
+    let cards = Arc::new(AtomicUsize::new(0));
+    let card_calls = cards.clone();
+    let card_base = base.clone();
+    let hooks = RemoteAgentHooks::default()
+        .card_provider(Arc::new(move || {
+            card_calls.fetch_add(1, Ordering::SeqCst);
+            let base = card_base.clone();
+            Box::pin(async move {
+                A2aV1Client::resolve_agent_card(&base)
+                    .await
+                    .map_err(|e| adk_core::AdkError::agent(e.to_string()))
+            })
+        }))
+        .after_request(Arc::new(|_ctx, event| {
+            let text: String = event
+                .content()
+                .into_iter()
+                .flat_map(|c| &c.parts)
+                .filter_map(|p| p.text())
+                .collect();
+            Ok((!text.is_empty()).then(|| {
+                let mut replaced = event.clone();
+                replaced.llm_response.content =
+                    Some(Content::new("model").with_text(text.to_uppercase()));
+                replaced
+            }))
+        }))
+        .after_agent(Arc::new(|_ctx| {
+            Box::pin(async { Ok(Some(Content::new("model").with_text("signed off"))) })
+        }));
+    let texts = remote_turn(&base, hooks).await;
+    assert_eq!(texts.last().map(String::as_str), Some("signed off"));
+    assert!(texts.iter().any(|text| text == &ANSWER.to_uppercase()), "{texts:?}");
+    assert_eq!(cards.load(Ordering::SeqCst), 1, "the card is read for the turn");
+    assert_eq!(tasks().await, 1);
+}

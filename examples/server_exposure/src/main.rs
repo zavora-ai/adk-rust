@@ -1007,6 +1007,7 @@ async fn group_e(keys: &Keys, out: &mut Vec<Outcome>) {
             credential_broker: None,
             credential_scopes: vec![],
             send_configuration: None,
+            hooks: Default::default(),
         });
         run_client(Arc::new(agent), "Greet me.").await
     }
@@ -1111,6 +1112,7 @@ async fn group_f(out: &mut Vec<Outcome>) {
             credential_broker: None,
             credential_scopes: vec![],
             send_configuration: None,
+            hooks: Default::default(),
         });
         run_client(Arc::new(agent), "my account number is 12345").await?;
         Ok((sink.received(), format!("the message was sent to {}", sink.peer.base_url)))

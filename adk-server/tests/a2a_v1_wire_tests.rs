@@ -383,6 +383,7 @@ async fn run_remote(base: &str, streaming: bool) -> Vec<Event> {
         credential_broker: None,
         credential_scopes: vec![],
         send_configuration: None,
+        hooks: Default::default(),
     });
     let sessions = Arc::new(InMemorySessionService::new());
     adk_session::SessionService::create(

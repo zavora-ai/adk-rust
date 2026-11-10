@@ -552,6 +552,143 @@ pub mod v1_remote {
         /// Sent with every message: `historyLength`, accepted output modes, a push config
         /// (adk-go's `MessageSendConfig`).
         pub send_configuration: Option<a2a_protocol_types::params::SendMessageConfiguration>,
+        /// Callbacks, converters and options around each turn; see [`RemoteAgentHooks`].
+        pub hooks: RemoteAgentHooks,
+    }
+
+    /// Runs before or after the agent's turn, as an `LlmAgent`'s agent callbacks do: content
+    /// it returns is the turn's answer (before) or one more event (after).
+    pub type AgentCallback = Arc<
+        dyn Fn(
+                Arc<dyn adk_core::CallbackContext>,
+            ) -> futures::future::BoxFuture<'static, Result<Option<Content>>>
+            + Send
+            + Sync,
+    >;
+
+    /// May change the message before it is sent; an event it returns is the turn's answer
+    /// instead of the remote's, and no request is made.
+    pub type BeforeRequestCallback = Arc<
+        dyn Fn(&dyn InvocationContext, &mut a2a_protocol_types::Message) -> Result<Option<Event>>
+            + Send
+            + Sync,
+    >;
+
+    /// Sees each event of the turn; an event it returns replaces it. An error ends the turn.
+    pub type AfterRequestCallback =
+        Arc<dyn Fn(&dyn InvocationContext, &Event) -> Result<Option<Event>> + Send + Sync>;
+
+    /// Turns one of the remote's updates into the event it stands for, replacing the default
+    /// conversion; `None` produces no event.
+    pub type EventConverter = Arc<
+        dyn Fn(&a2a_protocol_types::events::StreamResponse) -> Result<Option<Event>> + Send + Sync,
+    >;
+
+    /// Turns one of the remote's parts into an ADK part; `None` leaves it out.
+    pub type FromWirePart =
+        Arc<dyn Fn(&a2a_protocol_types::Part) -> Result<Option<Part>> + Send + Sync>;
+
+    /// Turns one of the session's parts into the part sent to the remote; `None` leaves it
+    /// out.
+    pub type ToWirePart =
+        Arc<dyn Fn(&Part) -> Result<Option<a2a_protocol_types::Part>> + Send + Sync>;
+
+    /// Ends a remote task the turn left unfinished, instead of the default cancel.
+    pub type RemoteTaskCleanup =
+        Arc<dyn Fn(String) -> futures::future::BoxFuture<'static, ()> + Send + Sync>;
+
+    /// Gives the remote's agent card for each turn, instead of the config's fixed card.
+    pub type CardProvider =
+        Arc<dyn Fn() -> futures::future::BoxFuture<'static, Result<AgentCard>> + Send + Sync>;
+
+    /// Callbacks, converters and options around a remote agent's turns, as adk-go's remote
+    /// agent config offers them. All are optional.
+    #[derive(Clone, Default)]
+    pub struct RemoteAgentHooks {
+        before_agent: Vec<AgentCallback>,
+        after_agent: Vec<AgentCallback>,
+        before_request: Vec<BeforeRequestCallback>,
+        after_request: Vec<AfterRequestCallback>,
+        event_converter: Option<EventConverter>,
+        from_wire_part: Option<FromWirePart>,
+        to_wire_part: Option<ToWirePart>,
+        remote_task_cleanup: Option<RemoteTaskCleanup>,
+        card_provider: Option<CardProvider>,
+        allow_transfer_to_agent: bool,
+    }
+
+    impl RemoteAgentHooks {
+        /// Runs `callback` before each turn, after the run's plugins; see [`AgentCallback`].
+        #[must_use]
+        pub fn before_agent(mut self, callback: AgentCallback) -> Self {
+            self.before_agent.push(callback);
+            self
+        }
+
+        /// Runs `callback` after each turn, after the run's plugins; see [`AgentCallback`].
+        #[must_use]
+        pub fn after_agent(mut self, callback: AgentCallback) -> Self {
+            self.after_agent.push(callback);
+            self
+        }
+
+        /// Runs `callback` before each request; see [`BeforeRequestCallback`].
+        #[must_use]
+        pub fn before_request(mut self, callback: BeforeRequestCallback) -> Self {
+            self.before_request.push(callback);
+            self
+        }
+
+        /// Runs `callback` on each event of a turn; see [`AfterRequestCallback`].
+        #[must_use]
+        pub fn after_request(mut self, callback: AfterRequestCallback) -> Self {
+            self.after_request.push(callback);
+            self
+        }
+
+        /// Converts the remote's updates with `converter`; see [`EventConverter`].
+        #[must_use]
+        pub fn event_converter(mut self, converter: EventConverter) -> Self {
+            self.event_converter = Some(converter);
+            self
+        }
+
+        /// Converts the remote's parts with `converter`; see [`FromWirePart`].
+        #[must_use]
+        pub fn from_wire_part(mut self, converter: FromWirePart) -> Self {
+            self.from_wire_part = Some(converter);
+            self
+        }
+
+        /// Converts the parts sent to the remote with `converter`; see [`ToWirePart`].
+        #[must_use]
+        pub fn to_wire_part(mut self, converter: ToWirePart) -> Self {
+            self.to_wire_part = Some(converter);
+            self
+        }
+
+        /// Ends unfinished remote tasks with `cleanup` instead of cancelling them.
+        #[must_use]
+        pub fn remote_task_cleanup(mut self, cleanup: RemoteTaskCleanup) -> Self {
+            self.remote_task_cleanup = Some(cleanup);
+            self
+        }
+
+        /// Reads the agent card from `provider` for each turn.
+        #[must_use]
+        pub fn card_provider(mut self, provider: CardProvider) -> Self {
+            self.card_provider = Some(provider);
+            self
+        }
+
+        /// Follows the remote's `adk_transfer_to_agent`: an update that names an agent
+        /// transfers the conversation to it, as adk-go's `AllowTransferToAgent` does. Off by
+        /// default.
+        #[must_use]
+        pub fn allow_transfer_to_agent(mut self, allow: bool) -> Self {
+            self.allow_transfer_to_agent = allow;
+            self
+        }
     }
 
     impl RemoteA2aV1Config {
@@ -566,6 +703,7 @@ pub mod v1_remote {
                 credential_broker: None,
                 credential_scopes: Vec::new(),
                 send_configuration: None,
+                hooks: RemoteAgentHooks::default(),
             }
         }
     }
@@ -659,7 +797,89 @@ pub mod v1_remote {
         }
 
         async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+            let turn = self.turn(ctx.clone());
+            let hooks = self.config.hooks.clone();
+            let plugins = ctx.run_config().invocation_hooks.clone();
+            let invocation_id = ctx.invocation_id().to_string();
+            let agent_name = self.config.name.clone();
+            let stream = async_stream::stream! {
+                use futures::StreamExt;
+                let answer = |content: Content| {
+                    let mut event = Event::new(invocation_id.clone());
+                    event.author = agent_name.clone();
+                    event.llm_response.content = Some(content);
+                    event
+                };
+                let callback_ctx = ctx.clone() as Arc<dyn adk_core::CallbackContext>;
+
+                // Before the turn: the run's plugins, then the agent's own callbacks.
+                let mut early = None;
+                for plugin in &plugins {
+                    match plugin.before_agent(callback_ctx.clone()).await {
+                        Ok(Some(content)) => { early = Some(content); break; }
+                        Ok(None) => {}
+                        Err(error) => { yield Err(error); return; }
+                    }
+                }
+                if early.is_none() {
+                    for callback in &hooks.before_agent {
+                        match callback(callback_ctx.clone()).await {
+                            Ok(Some(content)) => { early = Some(content); break; }
+                            Ok(None) => {}
+                            Err(error) => { yield Err(error); return; }
+                        }
+                    }
+                }
+
+                if let Some(content) = early {
+                    yield Ok(answer(content));
+                } else {
+                    let mut turn = turn;
+                    'events: while let Some(item) = turn.next().await {
+                        let mut event = match item {
+                            Ok(event) => event,
+                            Err(error) => { yield Err(error); return; }
+                        };
+                        for callback in &hooks.after_request {
+                            match callback(ctx.as_ref(), &event) {
+                                Ok(Some(replacement)) => { event = replacement; break; }
+                                Ok(None) => {}
+                                Err(error) => {
+                                    yield Ok(create_v1_error_event(&invocation_id, &agent_name, &error.to_string()));
+                                    break 'events;
+                                }
+                            }
+                        }
+                        yield Ok(event);
+                    }
+                }
+
+                // After the turn: the run's plugins, then the agent's own callbacks.
+                for plugin in &plugins {
+                    match plugin.after_agent(callback_ctx.clone()).await {
+                        Ok(Some(content)) => { yield Ok(answer(content)); return; }
+                        Ok(None) => {}
+                        Err(error) => { yield Err(error); return; }
+                    }
+                }
+                for callback in &hooks.after_agent {
+                    match callback(callback_ctx.clone()).await {
+                        Ok(Some(content)) => { yield Ok(answer(content)); return; }
+                        Ok(None) => {}
+                        Err(error) => { yield Err(error); return; }
+                    }
+                }
+            };
+            Ok(Box::pin(stream))
+        }
+    }
+
+    impl RemoteA2aV1Agent {
+        /// The agent's turn with the remote, without its agent callbacks: see
+        /// [`Agent::run`].
+        fn turn(&self, ctx: Arc<dyn InvocationContext>) -> EventStream {
             let card = self.config.agent_card.clone();
+            let hooks = self.config.hooks.clone();
             let invocation_id = ctx.invocation_id().to_string();
             let agent_name = self.config.name.clone();
             let branch = ctx.branch().to_string();
@@ -670,17 +890,30 @@ pub mod v1_remote {
             // As adk-go: stream when the run streams and the card says the agent can; a
             // configured `streaming` overrides the run, never the card.
             let run_streams = ctx.run_config().streaming_mode != adk_core::StreamingMode::None;
-            let use_streaming = self.config.streaming.unwrap_or(run_streams)
-                && card.capabilities.streaming == Some(true);
+            let streaming = self.config.streaming.unwrap_or(run_streams);
 
             // The remote conversation this agent continues, and a remote task waiting on it.
             let keys = RemoteKeys::for_agent(&agent_name);
             let state = ctx.session().state();
             let remote_context = state.get(&keys.context_id).and_then(string_value);
             let remote_task = state.get(&keys.task_id).and_then(string_value);
-            let outgoing = outgoing_turn(ctx.as_ref(), &agent_name);
+            let outgoing = outgoing_turn(ctx.as_ref(), &agent_name, hooks.to_wire_part.as_ref());
+            let turn_ctx = ctx.clone();
 
             let stream = async_stream::stream! {
+                // The card for this turn: from the provider, when the agent has one.
+                let card = match &hooks.card_provider {
+                    Some(provider) => match provider().await {
+                        Ok(card) => card,
+                        Err(e) => {
+                            yield Ok(create_v1_error_event(&invocation_id, &agent_name, &format!("agent card resolution failed: {e}")));
+                            return;
+                        }
+                    },
+                    None => card,
+                };
+                let use_streaming = streaming && card.capabilities.streaming == Some(true);
+
                 // Nothing new for the remote since its last reply: no request, as adk-go.
                 if outgoing.parts.is_empty() {
                     let mut event = Event::new(invocation_id.clone());
@@ -725,12 +958,26 @@ pub mod v1_remote {
                 let client = Arc::new(client);
                 let rest = interface.protocol_binding == "HTTP+JSON";
                 // Cancels the remote task if the turn ends before the task does.
-                let mut cleanup = RemoteTaskCleanup::new(client.clone(), rest);
+                let mut cleanup =
+                    RemoteTaskCleanupGuard::new(client.clone(), rest, hooks.remote_task_cleanup.clone());
 
                 // The waiting remote task continues only with an answer to one of its calls;
                 // any other message starts a new task in the same context.
                 let task_id = remote_task.filter(|_| outgoing.answers_own_call);
-                let message = build_v1_message(outgoing.parts, remote_context, task_id);
+                let mut message = build_v1_message(outgoing.parts, remote_context, task_id);
+                for callback in &hooks.before_request {
+                    match callback(turn_ctx.as_ref(), &mut message) {
+                        Ok(Some(event)) => {
+                            yield Ok(event);
+                            return;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            yield Ok(create_v1_error_event(&invocation_id, &agent_name, &e.to_string()));
+                            return;
+                        }
+                    }
+                }
 
                 if use_streaming {
                     // The remote's updates as they arrive. A stream that stops before a final
@@ -740,7 +987,7 @@ pub mod v1_remote {
                             use futures::StreamExt;
 
                             let mut finished = false;
-                            let mut remote = RemoteEvents::new(&invocation_id, &agent_name);
+                            let mut remote = RemoteEvents::new(&invocation_id, &agent_name).with_hooks(&hooks);
                             while let Some(update) = updates.next().await {
                                 let stream_response = match update {
                                     Ok(update) => update,
@@ -797,7 +1044,7 @@ pub mod v1_remote {
                             // The agent answered directly, without a task.
                             let resp = a2a_protocol_types::events::StreamResponse::Message(reply);
                             cleanup.observe(&resp);
-                            let mut remote = RemoteEvents::new(&invocation_id, &agent_name);
+                            let mut remote = RemoteEvents::new(&invocation_id, &agent_name).with_hooks(&hooks);
                             let event = remote.handle(&resp).pop().unwrap_or_else(|| remote.new_event());
                             yield Ok(end_turn(event, &resp, &keys));
                         }
@@ -805,7 +1052,7 @@ pub mod v1_remote {
                             // One event for the task: its artifacts and status message.
                             let resp = a2a_protocol_types::events::StreamResponse::Task(task);
                             cleanup.observe(&resp);
-                            let mut remote = RemoteEvents::new(&invocation_id, &agent_name);
+                            let mut remote = RemoteEvents::new(&invocation_id, &agent_name).with_hooks(&hooks);
                             let event = remote.handle(&resp).pop().unwrap_or_else(|| remote.new_event());
                             yield Ok(end_turn(event, &resp, &keys));
                         }
@@ -827,7 +1074,7 @@ pub mod v1_remote {
                 }
             };
 
-            Ok(Box::pin(stream))
+            Box::pin(stream)
         }
     }
 
@@ -868,7 +1115,15 @@ pub mod v1_remote {
     /// since the last reply the turn is empty, and the turn's own user content seeds it only
     /// when the session holds nothing for this agent yet. Each part goes out in the shape
     /// every A2A v1 SDK reads; see [`outgoing_part`].
-    fn outgoing_turn(ctx: &dyn InvocationContext, agent_name: &str) -> OutgoingTurn {
+    fn outgoing_turn(
+        ctx: &dyn InvocationContext,
+        agent_name: &str,
+        to_wire: Option<&ToWirePart>,
+    ) -> OutgoingTurn {
+        let outgoing_part = |part: &Part| match to_wire {
+            Some(convert) => convert(part).ok().flatten(),
+            None => outgoing_part(part),
+        };
         let history = ctx.session().conversation_history_with_context(agent_name, ctx.branch());
         let since_reply =
             history.iter().rposition(|content| content.role == "model").map_or(0, |i| i + 1);
@@ -918,16 +1173,17 @@ pub mod v1_remote {
     /// caller stopped reading, the stream broke, or the remote returned a task still at work.
     /// A task that ended, or waits on this side, is left alone. The cancel runs on its own
     /// for at most 5 seconds, as adk-go's remote agent sends it.
-    struct RemoteTaskCleanup {
+    struct RemoteTaskCleanupGuard {
         client: Arc<A2aV1Client>,
         rest: bool,
         task_id: Option<String>,
         settled: bool,
+        custom: Option<RemoteTaskCleanup>,
     }
 
-    impl RemoteTaskCleanup {
-        fn new(client: Arc<A2aV1Client>, rest: bool) -> Self {
-            Self { client, rest, task_id: None, settled: false }
+    impl RemoteTaskCleanupGuard {
+        fn new(client: Arc<A2aV1Client>, rest: bool, custom: Option<RemoteTaskCleanup>) -> Self {
+            Self { client, rest, task_id: None, settled: false, custom }
         }
 
         /// Records the remote task an update names, and whether it ended or waits.
@@ -954,13 +1210,17 @@ pub mod v1_remote {
         }
     }
 
-    impl Drop for RemoteTaskCleanup {
+    impl Drop for RemoteTaskCleanupGuard {
         fn drop(&mut self) {
             if self.settled {
                 return;
             }
             let Some(task_id) = self.task_id.take() else { return };
             let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
+            if let Some(custom) = self.custom.clone() {
+                runtime.spawn(custom(task_id));
+                return;
+            }
             let (client, rest) = (self.client.clone(), self.rest);
             runtime.spawn(async move {
                 let cancel = async {
@@ -1058,6 +1318,9 @@ pub mod v1_remote {
         agent_name: String,
         /// Chunks joined by artifact ID, in the order they were last updated.
         aggregations: Vec<(String, Aggregation)>,
+        converter: Option<EventConverter>,
+        from_wire: Option<FromWirePart>,
+        allow_transfer: bool,
     }
 
     #[derive(Default)]
@@ -1074,13 +1337,42 @@ pub mod v1_remote {
                 invocation_id: invocation_id.to_string(),
                 agent_name: agent_name.to_string(),
                 aggregations: Vec::new(),
+                converter: None,
+                from_wire: None,
+                allow_transfer: false,
             }
+        }
+
+        /// Converts as `hooks` say: their event and part converters, and transfers.
+        fn with_hooks(mut self, hooks: &RemoteAgentHooks) -> Self {
+            self.converter = hooks.event_converter.clone();
+            self.from_wire = hooks.from_wire_part.clone();
+            self.allow_transfer = hooks.allow_transfer_to_agent;
+            self
         }
 
         /// The ADK events `response` produces, in order.
         fn handle(&mut self, response: &a2a_protocol_types::events::StreamResponse) -> Vec<Event> {
             use a2a_protocol_types::events::StreamResponse;
-            let event = self.to_event(response);
+            let event = match &self.converter {
+                Some(convert) => match convert(response) {
+                    Ok(event) => event,
+                    Err(error) => Some(create_v1_error_event(
+                        &self.invocation_id,
+                        &self.agent_name,
+                        &format!("failed to convert a2aEvent: {error}"),
+                    )),
+                },
+                None => self.to_event(response),
+            };
+            let event = event.map(|mut event| {
+                if self.allow_transfer
+                    && let Some(agent) = transfer_target(response)
+                {
+                    event.actions.transfer_to_agent = Some(agent);
+                }
+                event
+            });
             if partial_flag(response).is_some() {
                 return event.into_iter().collect();
             }
@@ -1153,9 +1445,13 @@ pub mod v1_remote {
                 StreamResponse::Task(task) => {
                     let mut parts = Vec::new();
                     for artifact in task.artifacts.iter().flatten() {
-                        parts.extend(adk_parts(&artifact.parts));
+                        parts.extend(adk_parts(&artifact.parts, self.from_wire.as_ref()));
                     }
-                    let status = status_message(task.status.state, task.status.message.as_ref());
+                    let status = status_message(
+                        task.status.state,
+                        task.status.message.as_ref(),
+                        self.from_wire.as_ref(),
+                    );
                     parts.extend(status.parts);
                     let final_state = is_final_state(task.status.state);
                     if parts.is_empty() && !final_state {
@@ -1181,7 +1477,7 @@ pub mod v1_remote {
                     Some(event)
                 }
                 StreamResponse::Message(message) => {
-                    let parts = adk_parts(&message.parts);
+                    let parts = adk_parts(&message.parts, self.from_wire.as_ref());
                     let mut event = self.new_event();
                     if !parts.is_empty() {
                         let role = if message.role == a2a_protocol_types::MessageRole::User {
@@ -1209,7 +1505,7 @@ pub mod v1_remote {
                     {
                         return None;
                     }
-                    let parts = adk_parts(&update.artifact.parts);
+                    let parts = adk_parts(&update.artifact.parts, self.from_wire.as_ref());
                     if parts.is_empty() {
                         return None;
                     }
@@ -1229,8 +1525,11 @@ pub mod v1_remote {
                 StreamResponse::StatusUpdate(update) => {
                     let ids = Some((update.task_id.0.as_str(), update.context_id.0.as_str()));
                     if is_final_state(update.status.state) {
-                        let status =
-                            status_message(update.status.state, update.status.message.as_ref());
+                        let status = status_message(
+                            update.status.state,
+                            update.status.message.as_ref(),
+                            self.from_wire.as_ref(),
+                        );
                         let mut event = self.new_event();
                         let wire_parts = update
                             .status
@@ -1249,7 +1548,7 @@ pub mod v1_remote {
                         return Some(event);
                     }
                     let message = update.status.message.as_ref()?;
-                    let mut parts = adk_parts(&message.parts);
+                    let mut parts = adk_parts(&message.parts, self.from_wire.as_ref());
                     if parts.is_empty() {
                         return None;
                     }
@@ -1309,6 +1608,25 @@ pub mod v1_remote {
         }
     }
 
+    /// The agent an update transfers to (`adk_transfer_to_agent` in its own metadata).
+    fn transfer_target(response: &a2a_protocol_types::events::StreamResponse) -> Option<String> {
+        use a2a_protocol_types::events::StreamResponse;
+        let metadata = match response {
+            StreamResponse::ArtifactUpdate(update) => update.metadata.as_ref(),
+            StreamResponse::StatusUpdate(update) => update.metadata.as_ref(),
+            StreamResponse::Task(task) => task.metadata.as_ref(),
+            StreamResponse::Message(message) => message.metadata.as_ref(),
+            _ => None,
+        };
+        metadata
+            .and_then(|meta| {
+                meta.get(crate::a2a::v1::processor::ADK_TRANSFER_TO_AGENT_METADATA_KEY)
+            })
+            .and_then(serde_json::Value::as_str)
+            .filter(|agent| !agent.is_empty())
+            .map(str::to_owned)
+    }
+
     /// Whether a task in `state` ends the remote turn: it ended, or it waits on its caller.
     fn is_final_state(state: a2a_protocol_types::task::TaskState) -> bool {
         use a2a_protocol_types::task::TaskState;
@@ -1332,10 +1650,16 @@ pub mod v1_remote {
     }
 
     /// The ADK parts of A2A parts, without the ones that cannot be read and empty text.
-    fn adk_parts(parts: &[a2a_protocol_types::Part]) -> Vec<Part> {
+    fn adk_parts(
+        parts: &[a2a_protocol_types::Part],
+        from_wire: Option<&FromWirePart>,
+    ) -> Vec<Part> {
         parts
             .iter()
-            .filter_map(|part| crate::a2a::v1::convert::wire_part_to_adk(part).ok())
+            .filter_map(|part| match from_wire {
+                Some(convert) => convert(part).ok().flatten(),
+                None => crate::a2a::v1::convert::wire_part_to_adk(part).ok(),
+            })
             .filter(|part| !matches!(part, Part::Text { text } if text.is_empty()))
             .collect()
     }
@@ -1387,6 +1711,7 @@ pub mod v1_remote {
     fn status_message(
         state: a2a_protocol_types::task::TaskState,
         message: Option<&a2a_protocol_types::Message>,
+        from_wire: Option<&FromWirePart>,
     ) -> StatusMessage {
         let failed = state == a2a_protocol_types::task::TaskState::Failed;
         let Some(message) = message else {
@@ -1415,7 +1740,7 @@ pub mod v1_remote {
         if failed && error.is_none() {
             error = Some("a2a task failed".to_string());
         }
-        StatusMessage { parts: adk_parts(wire), error }
+        StatusMessage { parts: adk_parts(wire, from_wire), error }
     }
 
     /// Reads an update's ADK metadata into `event`, as adk-go's `processA2AMeta`: the
@@ -1657,6 +1982,7 @@ pub mod v1_remote {
                 credential_broker: None,
                 credential_scopes: Vec::new(),
                 send_configuration: None,
+                hooks: Default::default(),
             });
             assert_eq!(agent.name(), "my-agent");
             assert_eq!(agent.description(), "My remote agent");
@@ -1674,6 +2000,7 @@ pub mod v1_remote {
                 credential_broker: None,
                 credential_scopes: Vec::new(),
                 send_configuration: None,
+                hooks: Default::default(),
             });
             assert!(agent.sub_agents().is_empty());
         }
@@ -2077,6 +2404,27 @@ pub mod v1_remote {
             assert!(remote.handle(&reset).is_empty(), "the reset is dropped");
             events.extend(remote.handle(&completed()));
             assert_eq!(stored_text(&events), ["Hello"]);
+        }
+
+        #[test]
+        fn a_transfer_the_remote_names_is_followed_only_when_allowed() {
+            use a2a_protocol_types::task::{TaskState, TaskStatus};
+            let done = a2a_protocol_types::events::StreamResponse::StatusUpdate(
+                a2a_protocol_types::events::TaskStatusUpdateEvent {
+                    task_id: a2a_protocol_types::TaskId::new("task-1"),
+                    context_id: a2a_protocol_types::ContextId::new("ctx-1"),
+                    status: TaskStatus::new(TaskState::Completed),
+                    metadata: Some(serde_json::json!({"adk_transfer_to_agent": "billing"})),
+                },
+            );
+            let ignored = RemoteEvents::new("inv", "remote").handle(&done);
+            assert_eq!(ignored.last().unwrap().actions.transfer_to_agent, None, "off by default");
+            let hooks = RemoteAgentHooks::default().allow_transfer_to_agent(true);
+            let followed = RemoteEvents::new("inv", "remote").with_hooks(&hooks).handle(&done);
+            assert_eq!(
+                followed.last().unwrap().actions.transfer_to_agent.as_deref(),
+                Some("billing")
+            );
         }
 
         #[test]
