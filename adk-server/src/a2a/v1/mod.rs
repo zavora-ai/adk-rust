@@ -4,6 +4,7 @@ pub mod error;
 pub mod executor;
 pub mod extensions;
 pub mod hooks;
+pub mod interceptor;
 pub mod jsonrpc_handler;
 pub mod processor;
 pub mod push;

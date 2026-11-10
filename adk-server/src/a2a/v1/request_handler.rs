@@ -50,6 +50,55 @@ fn status_time(entry: &TaskStoreEntry) -> chrono::DateTime<chrono::Utc> {
         .map_or(entry.updated_at, |time| time.with_timezone(&chrono::Utc))
 }
 
+/// `SendMessage` and `SendStreamingMessage` params, as interceptors see them.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SendParams {
+    message: Message,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    configuration: Option<SendMessageConfiguration>,
+}
+
+/// `GetTask` params, as interceptors see them.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskQuery {
+    id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    history_length: Option<u32>,
+}
+
+/// Params that name one task, as interceptors see them.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct TaskIdOnly {
+    id: String,
+}
+
+/// `CreateTaskPushNotificationConfig` params, as interceptors see them.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PushConfigCreate {
+    task_id: String,
+    config: TaskPushNotificationConfig,
+}
+
+/// Params that name one push config, as interceptors see them.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PushConfigRef {
+    task_id: String,
+    id: String,
+}
+
+fn to_json<T: serde::Serialize>(value: &T) -> Result<serde_json::Value, A2aError> {
+    serde_json::to_value(value)
+        .map_err(|e| A2aError::Internal { message: format!("interceptor JSON: {e}") })
+}
+
+fn from_json<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> Result<T, A2aError> {
+    serde_json::from_value(value)
+        .map_err(|e| A2aError::InvalidParams { message: format!("interceptor JSON: {e}") })
+}
+
 /// The task a message runs on, and whether the agent runs: a waiting task asked again for
 /// a missing answer does not run.
 struct PreparedTask {
@@ -191,6 +240,8 @@ pub struct RequestHandler {
     inactivity_timeout: Option<std::time::Duration>,
     /// Limits how many runs go at once.
     limiter: Option<Arc<super::run::RunLimiter>>,
+    /// Run around each operation.
+    interceptors: Vec<Arc<dyn super::interceptor::CallInterceptor>>,
 }
 
 impl RequestHandler {
@@ -214,6 +265,7 @@ impl RequestHandler {
             hooks: super::hooks::ExecutorHooks::default(),
             inactivity_timeout: None,
             limiter: None,
+            interceptors: Vec::new(),
         }
     }
 
@@ -238,7 +290,19 @@ impl RequestHandler {
             hooks: super::hooks::ExecutorHooks::default(),
             inactivity_timeout: None,
             limiter: None,
+            interceptors: Vec::new(),
         }
+    }
+
+    /// Runs `interceptor` around each operation, after the ones added before it; see
+    /// [`CallInterceptor`](super::interceptor::CallInterceptor).
+    #[must_use]
+    pub fn with_interceptor(
+        mut self,
+        interceptor: Arc<dyn super::interceptor::CallInterceptor>,
+    ) -> Self {
+        self.interceptors.push(interceptor);
+        self
     }
 
     /// Fails a run whose agent produces nothing for `timeout`, as a2a-go's inactivity
@@ -541,6 +605,90 @@ pub struct CallerScope<'a> {
 }
 
 impl CallerScope<'_> {
+    /// Runs `call` with `params` through the handler's call interceptors; see
+    /// [`CallInterceptor`](super::interceptor::CallInterceptor).
+    async fn intercepted<P, R, F, Fut>(
+        &self,
+        method: &'static str,
+        params: P,
+        call: F,
+    ) -> Result<R, A2aError>
+    where
+        P: serde::Serialize + serde::de::DeserializeOwned,
+        R: serde::Serialize + serde::de::DeserializeOwned,
+        F: FnOnce(P) -> Fut,
+        Fut: std::future::Future<Output = Result<R, A2aError>>,
+    {
+        let interceptors = &self.handler.interceptors;
+        if interceptors.is_empty() {
+            return call(params).await;
+        }
+        let context = self.call_context(method);
+        let mut value = to_json(&params)?;
+        for interceptor in interceptors {
+            if let Some(answer) = interceptor.before(&context, &mut value).await? {
+                return from_json(answer);
+            }
+        }
+        let result = call(from_json(value)?).await?;
+        let mut value = to_json(&result)?;
+        for interceptor in interceptors.iter().rev() {
+            interceptor.after(&context, &mut value).await?;
+        }
+        from_json(value)
+    }
+
+    /// [`intercepted`](Self::intercepted) for a streaming operation: `after` runs on each
+    /// event, and an answer from `before` is the stream's one event.
+    async fn intercepted_stream<P, F, Fut>(
+        &self,
+        method: &'static str,
+        params: P,
+        call: F,
+    ) -> Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError>
+    where
+        P: serde::Serialize + serde::de::DeserializeOwned,
+        F: FnOnce(P) -> Fut,
+        Fut: std::future::Future<
+                Output = Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError>,
+            >,
+    {
+        let interceptors = self.handler.interceptors.clone();
+        if interceptors.is_empty() {
+            return call(params).await;
+        }
+        let context = Arc::new(self.call_context(method));
+        let mut value = to_json(&params)?;
+        for interceptor in &interceptors {
+            if let Some(answer) = interceptor.before(&context, &mut value).await? {
+                let event: StreamResponse = from_json(answer)?;
+                return Ok(futures::stream::once(async move { Ok(event) }).boxed());
+            }
+        }
+        let stream = call(from_json(value)?).await?;
+        Ok(stream
+            .then(move |item| {
+                let interceptors = interceptors.clone();
+                let context = context.clone();
+                async move {
+                    let mut value = to_json(&item?)?;
+                    for interceptor in interceptors.iter().rev() {
+                        interceptor.after(&context, &mut value).await?;
+                    }
+                    from_json(value)
+                }
+            })
+            .boxed())
+    }
+
+    fn call_context(&self, method: &'static str) -> super::interceptor::CallContext {
+        super::interceptor::CallContext {
+            method,
+            caller: self.caller.clone(),
+            extensions: self.extensions.clone(),
+        }
+    }
+
     /// The caller this scope acts for; `None` without authentication.
     pub fn caller(&self) -> Option<&RequestContext> {
         self.caller.as_ref()
@@ -607,6 +755,22 @@ impl CallerScope<'_> {
         msg: Message,
         configuration: Option<&SendMessageConfiguration>,
     ) -> Result<Task, A2aError> {
+        self.intercepted(
+            "SendMessage",
+            SendParams { message: msg, configuration: configuration.cloned() },
+            |p: SendParams| async move {
+                self.message_send_with_direct(p.message, p.configuration.as_ref()).await
+            },
+        )
+        .await
+    }
+
+    /// [`message_send_with`](Self::message_send_with) without the call interceptors.
+    async fn message_send_with_direct(
+        &self,
+        msg: Message,
+        configuration: Option<&SendMessageConfiguration>,
+    ) -> Result<Task, A2aError> {
         validate_message(&msg)?;
         let handler = self.handler;
         if configuration.is_some_and(|c| c.task_push_notification_config.is_some()) {
@@ -615,7 +779,7 @@ impl CallerScope<'_> {
 
         let idempotency_key = self.idempotency_key(&msg.id.0);
         if let Some(existing_task_id) = self.idempotent_task(&idempotency_key).await? {
-            return self.tasks_get(&existing_task_id, None).await;
+            return self.tasks_get_direct(&existing_task_id, None).await;
         }
 
         // Refused before a task exists when the run limit is reached.
@@ -623,7 +787,7 @@ impl CallerScope<'_> {
         let prepared = self.prepare_task(&msg).await?;
         let task_id = prepared.task_id.clone();
         if let Some(config) = configuration.and_then(|c| c.task_push_notification_config.clone()) {
-            self.push_config_create(&task_id, config).await?;
+            self.push_config_create_direct(&task_id, config).await?;
         }
         handler.idempotency_map.write().await.insert(idempotency_key, task_id.clone());
 
@@ -835,6 +999,22 @@ impl CallerScope<'_> {
         msg: Message,
         configuration: Option<&SendMessageConfiguration>,
     ) -> Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError> {
+        self.intercepted_stream(
+            "SendStreamingMessage",
+            SendParams { message: msg, configuration: configuration.cloned() },
+            |p: SendParams| async move {
+                self.message_stream_with_direct(p.message, p.configuration.as_ref()).await
+            },
+        )
+        .await
+    }
+
+    /// [`message_stream_with`](Self::message_stream_with) without the call interceptors.
+    async fn message_stream_with_direct(
+        &self,
+        msg: Message,
+        configuration: Option<&SendMessageConfiguration>,
+    ) -> Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError> {
         self.handler.require(Capability::Streaming("SendStreamingMessage")).await?;
         validate_message(&msg)?;
         let handler = self.handler;
@@ -844,7 +1024,7 @@ impl CallerScope<'_> {
 
         let idempotency_key = self.idempotency_key(&msg.id.0);
         if let Some(existing_task_id) = self.idempotent_task(&idempotency_key).await? {
-            let task = self.tasks_get(&existing_task_id, None).await?;
+            let task = self.tasks_get_direct(&existing_task_id, None).await?;
             return Ok(futures::stream::once(async move { Ok(StreamResponse::Task(task)) }).boxed());
         }
 
@@ -853,7 +1033,7 @@ impl CallerScope<'_> {
         let prepared = self.prepare_task(&msg).await?;
         let task_id = prepared.task_id.clone();
         if let Some(config) = configuration.and_then(|c| c.task_push_notification_config.clone()) {
-            self.push_config_create(&task_id, config).await?;
+            self.push_config_create_direct(&task_id, config).await?;
         }
         handler.idempotency_map.write().await.insert(idempotency_key, task_id.clone());
 
@@ -898,6 +1078,20 @@ impl CallerScope<'_> {
         task_id: &str,
         history_len: Option<u32>,
     ) -> Result<Task, A2aError> {
+        self.intercepted(
+            "GetTask",
+            TaskQuery { id: task_id.to_string(), history_length: history_len },
+            |p: TaskQuery| async move { self.tasks_get_direct(&p.id, p.history_length).await },
+        )
+        .await
+    }
+
+    /// [`tasks_get`](Self::tasks_get) without the call interceptors.
+    async fn tasks_get_direct(
+        &self,
+        task_id: &str,
+        history_len: Option<u32>,
+    ) -> Result<Task, A2aError> {
         validate_id(task_id, "taskId")?;
         let mut entry = self.owned_task(task_id).await?;
 
@@ -922,6 +1116,16 @@ impl CallerScope<'_> {
     /// another caller, or [`A2aError::TaskNotCancelable`] if the task is in a
     /// terminal state, including one its run reached while it was being cancelled.
     pub async fn tasks_cancel(&self, task_id: &str) -> Result<Task, A2aError> {
+        self.intercepted(
+            "CancelTask",
+            TaskIdOnly { id: task_id.to_string() },
+            |p: TaskIdOnly| async move { self.tasks_cancel_direct(&p.id).await },
+        )
+        .await
+    }
+
+    /// [`tasks_cancel`](Self::tasks_cancel) without the call interceptors.
+    async fn tasks_cancel_direct(&self, task_id: &str) -> Result<Task, A2aError> {
         validate_id(task_id, "taskId")?;
         let entry = self.owned_task(task_id).await?;
         let not_cancelable = |state: TaskState| A2aError::TaskNotCancelable {
@@ -986,6 +1190,17 @@ impl CallerScope<'_> {
     /// Returns [`A2aError::InvalidParams`] for a page size out of range, a malformed
     /// timestamp or page token, and an error if the task store fails.
     pub async fn tasks_list(&self, params: ListTasksParams) -> Result<TaskListResponse, A2aError> {
+        self.intercepted("ListTasks", params, |p: ListTasksParams| async move {
+            self.tasks_list_direct(p).await
+        })
+        .await
+    }
+
+    /// [`tasks_list`](Self::tasks_list) without the call interceptors.
+    async fn tasks_list_direct(
+        &self,
+        params: ListTasksParams,
+    ) -> Result<TaskListResponse, A2aError> {
         // As a2a-go: a page size of 0 is no page size.
         let page_size = match params.page_size {
             None | Some(0) => DEFAULT_PAGE_SIZE,
@@ -1080,6 +1295,19 @@ impl CallerScope<'_> {
         &self,
         task_id: &str,
     ) -> Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError> {
+        self.intercepted_stream(
+            "SubscribeToTask",
+            TaskIdOnly { id: task_id.to_string() },
+            |p: TaskIdOnly| async move { self.tasks_subscribe_direct(&p.id).await },
+        )
+        .await
+    }
+
+    /// [`tasks_subscribe`](Self::tasks_subscribe) without the call interceptors.
+    async fn tasks_subscribe_direct(
+        &self,
+        task_id: &str,
+    ) -> Result<BoxStream<'static, Result<StreamResponse, A2aError>>, A2aError> {
         self.handler.require(Capability::Streaming("SubscribeToTask")).await?;
         let entry = self.owned_task(task_id).await?;
         if is_terminal_state(entry.status.state) {
@@ -1132,6 +1360,22 @@ impl CallerScope<'_> {
     pub async fn push_config_create(
         &self,
         task_id: &str,
+        config: TaskPushNotificationConfig,
+    ) -> Result<TaskPushNotificationConfig, A2aError> {
+        self.intercepted(
+            "CreateTaskPushNotificationConfig",
+            PushConfigCreate { task_id: task_id.to_string(), config },
+            |p: PushConfigCreate| async move {
+                self.push_config_create_direct(&p.task_id, p.config).await
+            },
+        )
+        .await
+    }
+
+    /// [`push_config_create`](Self::push_config_create) without the call interceptors.
+    async fn push_config_create_direct(
+        &self,
+        task_id: &str,
         mut config: TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2aError> {
         self.handler.require(Capability::PushNotifications).await?;
@@ -1151,6 +1395,20 @@ impl CallerScope<'_> {
     /// Returns [`A2aError::TaskNotFound`] if the task or config does not exist, or
     /// the task belongs to another caller.
     pub async fn push_config_get(
+        &self,
+        task_id: &str,
+        config_id: &str,
+    ) -> Result<TaskPushNotificationConfig, A2aError> {
+        self.intercepted(
+            "GetTaskPushNotificationConfig",
+            PushConfigRef { task_id: task_id.to_string(), id: config_id.to_string() },
+            |p: PushConfigRef| async move { self.push_config_get_direct(&p.task_id, &p.id).await },
+        )
+        .await
+    }
+
+    /// [`push_config_get`](Self::push_config_get) without the call interceptors.
+    async fn push_config_get_direct(
         &self,
         task_id: &str,
         config_id: &str,
@@ -1175,6 +1433,19 @@ impl CallerScope<'_> {
         &self,
         task_id: &str,
     ) -> Result<Vec<TaskPushNotificationConfig>, A2aError> {
+        self.intercepted(
+            "ListTaskPushNotificationConfigs",
+            TaskIdOnly { id: task_id.to_string() },
+            |p: TaskIdOnly| async move { self.push_config_list_direct(&p.id).await },
+        )
+        .await
+    }
+
+    /// [`push_config_list`](Self::push_config_list) without the call interceptors.
+    async fn push_config_list_direct(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<TaskPushNotificationConfig>, A2aError> {
         self.handler.require(Capability::PushNotifications).await?;
         let entry = self.owned_task(task_id).await?;
         Ok(entry.push_configs)
@@ -1188,6 +1459,15 @@ impl CallerScope<'_> {
     /// Returns [`A2aError::TaskNotFound`] if the task does not exist or belongs to another
     /// caller.
     pub async fn push_config_delete(&self, task_id: &str, config_id: &str) -> Result<(), A2aError> {
+        self.intercepted("DeleteTaskPushNotificationConfig", PushConfigRef { task_id: task_id.to_string(), id: config_id.to_string() }, |p: PushConfigRef| async move { self.push_config_delete_direct(&p.task_id, &p.id).await }).await
+    }
+
+    /// [`push_config_delete`](Self::push_config_delete) without the call interceptors.
+    async fn push_config_delete_direct(
+        &self,
+        task_id: &str,
+        config_id: &str,
+    ) -> Result<(), A2aError> {
         self.handler.require(Capability::PushNotifications).await?;
         self.owned_task(task_id).await?;
         self.handler.executor.delete_push_config(task_id, config_id).await
@@ -2652,6 +2932,88 @@ mod tests {
         let mut third = make_test_message();
         third.id = MessageId::new("msg-third");
         assert_eq!(handler.message_send(third).await.unwrap().status.state, TaskState::Completed);
+    }
+
+    /// Uppercases sent text, tags results, refuses cancels, answers lookups of `canned`,
+    /// and counts stream events, as a2a-go call interceptors can.
+    struct TestInterceptor {
+        stream_events: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl super::super::interceptor::CallInterceptor for TestInterceptor {
+        async fn before(
+            &self,
+            call: &super::super::interceptor::CallContext,
+            params: &mut serde_json::Value,
+        ) -> Result<Option<serde_json::Value>, A2aError> {
+            match call.method {
+                "SendMessage" | "SendStreamingMessage" => {
+                    for part in params["message"]["parts"].as_array_mut().into_iter().flatten() {
+                        if let Some(text) = part["text"].as_str() {
+                            part["text"] = text.to_uppercase().into();
+                        }
+                    }
+                    Ok(None)
+                }
+                "CancelTask" => {
+                    Err(A2aError::UnsupportedOperation { method: "cancel is off".to_string() })
+                }
+                "GetTask" if params["id"] == "canned" => Ok(Some(serde_json::json!({
+                    "id": "canned",
+                    "contextId": "ctx",
+                    "status": {"state": "TASK_STATE_COMPLETED"},
+                }))),
+                _ => Ok(None),
+            }
+        }
+
+        async fn after(
+            &self,
+            call: &super::super::interceptor::CallContext,
+            result: &mut serde_json::Value,
+        ) -> Result<(), A2aError> {
+            if call.method == "SendStreamingMessage" {
+                self.stream_events.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            if call.method == "SendMessage" {
+                result["metadata"]["intercepted"] = true.into();
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn call_interceptors_run_around_every_operation() {
+        let stream_events = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (handler, _) = handler_with_agent(Arc::new(EchoAgent));
+        let handler = handler
+            .with_interceptor(Arc::new(TestInterceptor { stream_events: stream_events.clone() }));
+
+        let mut msg = make_test_message();
+        msg.parts = vec![Part::text("quiet")];
+        let task = handler.message_send(msg).await.unwrap();
+        assert_eq!(artifact_texts(&task), vec!["echo: QUIET".to_string()], "params rewritten");
+        assert_eq!(task.metadata.unwrap()["intercepted"], true, "result rewritten");
+
+        assert!(matches!(
+            handler.tasks_cancel(&task.id.0).await,
+            Err(A2aError::UnsupportedOperation { .. })
+        ));
+        assert_eq!(
+            handler.tasks_get("canned", None).await.unwrap().id.0,
+            "canned",
+            "answered early"
+        );
+
+        let mut msg = make_test_message();
+        msg.id = MessageId::new("msg-stream");
+        let events = handler.message_stream(msg).await.unwrap().collect::<Vec<_>>().await;
+        assert_eq!(
+            stream_events.load(std::sync::atomic::Ordering::SeqCst),
+            events.len(),
+            "after sees each event"
+        );
     }
 
     fn make_handler() -> RequestHandler {

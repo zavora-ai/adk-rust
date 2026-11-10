@@ -54,7 +54,8 @@ impl TaskStoreEntry {
 }
 
 /// Parameters for listing tasks with optional filtering and pagination.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct ListTasksParams {
     /// Filter by conversation context ID.
     pub context_id: Option<String>,

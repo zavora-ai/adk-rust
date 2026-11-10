@@ -90,6 +90,7 @@ impl A2aV1Server {
             hooks: super::hooks::ExecutorHooks::default(),
             inactivity_timeout: None,
             limits: None,
+            interceptors: Vec::new(),
         }
     }
 
@@ -152,6 +153,7 @@ pub struct A2aV1ServerBuilder {
     hooks: super::hooks::ExecutorHooks,
     inactivity_timeout: Option<std::time::Duration>,
     limits: Option<super::run::ConcurrencyLimits>,
+    interceptors: Vec<Arc<dyn super::interceptor::CallInterceptor>>,
 }
 
 impl A2aV1ServerBuilder {
@@ -177,6 +179,16 @@ impl A2aV1ServerBuilder {
     /// [`RequestHandler::with_inactivity_timeout`].
     pub fn inactivity_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.inactivity_timeout = Some(timeout);
+        self
+    }
+
+    /// Runs `interceptor` around each operation; see
+    /// [`CallInterceptor`](super::interceptor::CallInterceptor).
+    pub fn interceptor(
+        mut self,
+        interceptor: Arc<dyn super::interceptor::CallInterceptor>,
+    ) -> Self {
+        self.interceptors.push(interceptor);
         self
     }
 
@@ -322,6 +334,9 @@ impl A2aV1ServerBuilder {
         }
         if let Some(limits) = self.limits {
             handler = handler.with_concurrency_limits(limits);
+        }
+        for interceptor in self.interceptors {
+            handler = handler.with_interceptor(interceptor);
         }
         let handler = Arc::new(handler);
         A2aV1Server { handler, card, jsonrpc_path: self.jsonrpc_path, rest_path: self.rest_path }
