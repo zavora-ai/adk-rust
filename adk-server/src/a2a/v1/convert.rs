@@ -551,6 +551,7 @@ pub fn wire_task_to_internal(task: &a2a_protocol_types::Task) -> Result<TaskStor
         push_configs: Vec::new(),
         created_at: now,
         updated_at: now,
+        version: 0,
     })
 }
 
@@ -1110,6 +1111,7 @@ mod tests {
             push_configs: Vec::new(),
             created_at: now,
             updated_at: now,
+            version: 0,
         };
         let wire = internal_task_to_wire(&entry).unwrap();
         assert_eq!(wire.id.0, "task-2");

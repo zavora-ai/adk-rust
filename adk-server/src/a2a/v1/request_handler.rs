@@ -1588,6 +1588,7 @@ mod tests {
             push_configs: Vec::new(),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
+            version: 0,
         }
     }
 

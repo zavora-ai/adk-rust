@@ -80,6 +80,11 @@ pub enum A2aError {
     /// JSON-RPC: -32603, HTTP: 500
     #[error("Push notification delivery failed: {message}")]
     PushDeliveryFailed { message: String },
+
+    /// Another writer saved the task since it was read (its version moved on).
+    /// JSON-RPC: -32603, HTTP: 500
+    #[error("Task {task_id} was changed concurrently")]
+    ConcurrentModification { task_id: String },
 }
 
 impl A2aError {
@@ -98,7 +103,8 @@ impl A2aError {
             Self::InvalidParams { .. } => -32602,
             Self::Internal { .. }
             | Self::InvalidStateTransition { .. }
-            | Self::PushDeliveryFailed { .. } => -32603,
+            | Self::PushDeliveryFailed { .. }
+            | Self::ConcurrentModification { .. } => -32603,
             Self::MethodNotFound { .. } => -32601,
         }
     }
@@ -110,7 +116,9 @@ impl A2aError {
             Self::TaskNotCancelable { .. } | Self::InvalidStateTransition { .. } => 409,
             Self::ContentTypeNotSupported { .. } => 415,
             Self::InvalidAgentResponse { .. } => 502,
-            Self::Internal { .. } | Self::PushDeliveryFailed { .. } => 500,
+            Self::Internal { .. }
+            | Self::PushDeliveryFailed { .. }
+            | Self::ConcurrentModification { .. } => 500,
             Self::PushNotificationNotSupported
             | Self::UnsupportedOperation { .. }
             | Self::ExtendedAgentCardNotConfigured
@@ -183,6 +191,7 @@ impl A2aError {
             Self::MethodNotFound { .. } => "METHOD_NOT_FOUND",
             Self::InvalidStateTransition { .. } => "INVALID_STATE_TRANSITION",
             Self::PushDeliveryFailed { .. } => "PUSH_DELIVERY_FAILED",
+            Self::ConcurrentModification { .. } => "CONCURRENT_MODIFICATION",
         }
     }
 
@@ -228,6 +237,10 @@ impl A2aError {
                 map.insert("from".to_string(), Value::String(from.clone()));
                 map.insert("to".to_string(), Value::String(to.clone()));
             }
+            Self::ConcurrentModification { task_id } => {
+                map.insert("task_id".to_string(), Value::String(task_id.clone()));
+                map.insert("taskId".to_string(), Value::String(task_id.clone()));
+            }
             Self::PushDeliveryFailed { message } => {
                 map.insert("message".to_string(), Value::String(message.clone()));
             }
@@ -258,6 +271,7 @@ impl A2aError {
             | Self::VersionNotSupported { .. } => "FAILED_PRECONDITION",
             Self::Internal { .. }
             | Self::PushDeliveryFailed { .. }
+            | Self::ConcurrentModification { .. }
             | Self::InvalidAgentResponse { .. } => "INTERNAL",
         }
     }
@@ -386,6 +400,7 @@ mod tests {
             A2aError::MethodNotFound { method: "m".into() },
             A2aError::InvalidStateTransition { from: "a".into(), to: "b".into() },
             A2aError::PushDeliveryFailed { message: "m".into() },
+            A2aError::ConcurrentModification { task_id: "t".into() },
         ];
 
         for err in &variants {

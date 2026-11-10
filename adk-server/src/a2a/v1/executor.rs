@@ -109,6 +109,16 @@ impl V1Executor {
         }
     }
 
+    /// Saves `entry` over the version it was read at, one version later.
+    async fn save_versioned(
+        &self,
+        mut entry: TaskStoreEntry,
+        version: u64,
+    ) -> Result<(), A2aError> {
+        entry.version = version + 1;
+        self.task_store.save_task_if_version(entry, version).await
+    }
+
     /// Holds `task_id`'s lock until the guard drops.
     async fn lock_task(&self, task_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
         let task_lock = lock(&self.locks).entry(task_id.to_string()).or_default().clone();
@@ -172,6 +182,7 @@ impl V1Executor {
             push_configs: Vec::new(),
             created_at: now,
             updated_at: now,
+            version: 0,
         };
         self.task_store.create_task(entry.clone()).await?;
         Ok(entry)
@@ -230,6 +241,7 @@ impl V1Executor {
     ) -> Result<TaskStatusUpdateEvent, A2aError> {
         let _guard = self.lock_task(task_id).await;
         let mut entry = self.task_store.get_task(task_id).await?;
+        let version = entry.version;
         can_transition_to(entry.status.state, new_state)?;
 
         let mut status = TaskStatus::with_timestamp(new_state);
@@ -252,7 +264,7 @@ impl V1Executor {
         entry.updated_at = Utc::now();
         let adk_task = entry.metadata.contains_key(ADK_EXTENSION_URI);
         let mut metadata = metadata.unwrap_or_else(|| task_metadata(&entry));
-        self.task_store.save_task(entry).await?;
+        self.save_versioned(entry, version).await?;
         if adk_task {
             metadata.insert(ADK_EXTENSION_URI.to_string(), Value::Bool(true));
         }
@@ -299,10 +311,11 @@ impl V1Executor {
     ) -> Result<TaskArtifactUpdateEvent, A2aError> {
         let _guard = self.lock_task(task_id).await;
         let mut entry = self.task_store.get_task(task_id).await?;
+        let version = entry.version;
         merge_artifact(&mut entry.artifacts, artifact.clone(), false);
         entry.updated_at = Utc::now();
         let metadata = task_metadata(&entry);
-        self.task_store.save_task(entry).await?;
+        self.save_versioned(entry, version).await?;
 
         let event = TaskArtifactUpdateEvent {
             task_id: TaskId::new(task_id),
@@ -331,9 +344,10 @@ impl V1Executor {
         {
             let _guard = self.lock_task(task_id).await;
             let mut entry = self.task_store.get_task(task_id).await?;
+            let version = entry.version;
             merge_artifact(&mut entry.artifacts, update.artifact.clone(), update.append);
             entry.updated_at = Utc::now();
-            self.task_store.save_task(entry).await?;
+            self.save_versioned(entry, version).await?;
         }
         let event = TaskArtifactUpdateEvent {
             task_id: TaskId::new(task_id),
@@ -359,12 +373,13 @@ impl V1Executor {
     ) -> Result<TaskPushNotificationConfig, A2aError> {
         let _guard = self.lock_task(task_id).await;
         let mut entry = self.task_store.get_task(task_id).await?;
+        let version = entry.version;
         match entry.push_configs.iter_mut().find(|existing| existing.id == config.id) {
             Some(existing) => *existing = config.clone(),
             None => entry.push_configs.push(config.clone()),
         }
         entry.updated_at = Utc::now();
-        self.task_store.save_task(entry).await?;
+        self.save_versioned(entry, version).await?;
         lock(&self.push_tasks).insert(task_id.to_string());
         Ok(config)
     }
@@ -378,10 +393,11 @@ impl V1Executor {
     pub async fn delete_push_config(&self, task_id: &str, config_id: &str) -> Result<(), A2aError> {
         let _guard = self.lock_task(task_id).await;
         let mut entry = self.task_store.get_task(task_id).await?;
+        let version = entry.version;
         entry.push_configs.retain(|config| config.id.as_deref() != Some(config_id));
         let empty = entry.push_configs.is_empty();
         entry.updated_at = Utc::now();
-        self.task_store.save_task(entry).await?;
+        self.save_versioned(entry, version).await?;
         if empty {
             lock(&self.push_tasks).remove(task_id);
         }
@@ -400,9 +416,10 @@ impl V1Executor {
     ) -> Result<(), A2aError> {
         let _guard = self.lock_task(task_id).await;
         let mut entry = self.task_store.get_task(task_id).await?;
+        let version = entry.version;
         entry.history.push(message);
         entry.updated_at = Utc::now();
-        self.task_store.save_task(entry).await
+        self.save_versioned(entry, version).await
     }
 
     /// Takes a task that waits on its caller for a run: moves it from `INPUT_REQUIRED` or
@@ -420,6 +437,7 @@ impl V1Executor {
     ) -> Result<TaskStoreEntry, A2aError> {
         let _guard = self.lock_task(task_id).await;
         let mut entry = self.task_store.get_task(task_id).await?;
+        let version = entry.version;
         if !matches!(entry.status.state, TaskState::InputRequired | TaskState::AuthRequired) {
             return Err(A2aError::UnsupportedOperation {
                 method: format!("a message to task {task_id} while it is {:?}", entry.status.state),
@@ -431,7 +449,8 @@ impl V1Executor {
         entry.history.push(message);
         entry.status = TaskStatus::with_timestamp(TaskState::Submitted);
         entry.updated_at = Utc::now();
-        self.task_store.save_task(entry.clone()).await?;
+        entry.version = version + 1;
+        self.task_store.save_task_if_version(entry.clone(), version).await?;
         Ok(entry)
     }
 
@@ -451,6 +470,7 @@ impl V1Executor {
     ) -> Result<TaskStatusUpdateEvent, A2aError> {
         let _guard = self.lock_task(task_id).await;
         let mut entry = self.task_store.get_task(task_id).await?;
+        let version = entry.version;
         let previous = entry.status.message.take();
         let mut parts: Vec<a2a_protocol_types::Part> = previous
             .as_ref()
@@ -492,7 +512,7 @@ impl V1Executor {
         entry.status = status.clone();
         entry.updated_at = Utc::now();
         let adk_task = entry.metadata.contains_key(ADK_EXTENSION_URI);
-        self.task_store.save_task(entry).await?;
+        self.save_versioned(entry, version).await?;
         let event = TaskStatusUpdateEvent {
             task_id: TaskId::new(task_id),
             context_id: ContextId::new(&context_id),
@@ -820,6 +840,7 @@ mod tests {
             push_configs: Vec::new(),
             created_at: now,
             updated_at: now,
+            version: 0,
         };
         store.create_task(entry).await.unwrap();
 
