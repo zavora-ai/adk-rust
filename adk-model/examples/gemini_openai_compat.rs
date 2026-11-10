@@ -174,7 +174,7 @@ async fn main() -> anyhow::Result<()> {
     // ---------------------------------------------------------------
     println!("--- 5. Function calling ---");
     let model = OpenAICompatible::new(OpenAICompatibleConfig::gemini(&key, MODEL))?;
-    let mut tools = std::collections::HashMap::new();
+    let mut tools = adk_core::ToolDeclarations::new();
     tools.insert(
         "get_weather".to_string(),
         json!({

@@ -35,7 +35,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 /// Agent-facing OpenRouter options serialized into `GenerateContentConfig::extensions["openrouter"]`.
 ///
@@ -708,7 +708,7 @@ fn effective_model_name(client: &OpenRouterClient, request: &LlmRequest) -> Stri
     if request.model.trim().is_empty() { client.model().to_string() } else { request.model.clone() }
 }
 
-fn chat_tools_from_llm_request(tools: &HashMap<String, Value>) -> Option<Vec<OpenRouterTool>> {
+fn chat_tools_from_llm_request(tools: &adk_core::ToolDeclarations) -> Option<Vec<OpenRouterTool>> {
     (!tools.is_empty()).then_some(
         tools
             .iter()
@@ -730,7 +730,7 @@ fn chat_tools_from_llm_request(tools: &HashMap<String, Value>) -> Option<Vec<Ope
 }
 
 fn responses_tools_from_llm_request(
-    tools: &HashMap<String, Value>,
+    tools: &adk_core::ToolDeclarations,
     request_options: &OpenRouterRequestOptions,
 ) -> Option<Vec<OpenRouterResponseTool>> {
     let mut response_tools = tools

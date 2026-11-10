@@ -416,7 +416,7 @@ pub fn final_chunk_parts(
 ///
 /// When `strict` is `true`, each tool definition includes `"strict": true`
 /// for the beta strict tool mode.
-pub fn convert_tools(tools: &std::collections::HashMap<String, Value>, strict: bool) -> Vec<Tool> {
+pub fn convert_tools(tools: &adk_core::ToolDeclarations, strict: bool) -> Vec<Tool> {
     tools
         .values()
         .filter_map(|tool| {

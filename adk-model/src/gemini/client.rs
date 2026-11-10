@@ -1310,7 +1310,7 @@ impl GeminiModel {
     }
 
     fn build_gemini_tools(
-        tools: &std::collections::HashMap<String, serde_json::Value>,
+        tools: &adk_core::ToolDeclarations,
         adapter: &dyn SchemaAdapter,
         cache: &SchemaCache,
     ) -> Result<(Vec<adk_gemini::Tool>, adk_gemini::ToolConfig)> {
@@ -1842,7 +1842,7 @@ impl GeminiModel {
     pub async fn create_cached_content(
         &self,
         system_instruction: &str,
-        tools: &std::collections::HashMap<String, serde_json::Value>,
+        tools: &adk_core::ToolDeclarations,
         ttl_seconds: u32,
     ) -> Result<String> {
         let mut cache_builder = self
@@ -2304,7 +2304,7 @@ mod native_tool_tests {
 
     #[test]
     fn test_build_gemini_tools_supports_native_tool_metadata() {
-        let mut tools = std::collections::HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         tools.insert(
             "google_search".to_string(),
             serde_json::json!({
@@ -2338,7 +2338,7 @@ mod native_tool_tests {
 
     #[test]
     fn test_build_gemini_tools_sets_flag_for_builtin_only() {
-        let mut tools = std::collections::HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         tools.insert(
             "google_search".to_string(),
             serde_json::json!({
@@ -2363,7 +2363,7 @@ mod native_tool_tests {
 
     #[test]
     fn test_build_gemini_tools_no_flag_for_function_only() {
-        let mut tools = std::collections::HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         tools.insert(
             "lookup_weather".to_string(),
             serde_json::json!({
@@ -2392,7 +2392,7 @@ mod native_tool_tests {
 
     #[test]
     fn test_build_gemini_tools_merges_native_tool_config() {
-        let mut tools = std::collections::HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         tools.insert(
             "google_maps".to_string(),
             serde_json::json!({
@@ -2436,7 +2436,7 @@ mod native_tool_tests {
         // dialect fields ($schema, additionalProperties) in the response schema.
         // This test verifies that the response schema is normalized the same way
         // parameters are — stripping unsupported keywords.
-        let mut tools = std::collections::HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         tools.insert(
             "read_file".to_string(),
             serde_json::json!({
@@ -2508,7 +2508,7 @@ impl CacheCapable for GeminiModel {
     async fn create_cache(
         &self,
         system_instruction: &str,
-        tools: &std::collections::HashMap<String, serde_json::Value>,
+        tools: &adk_core::ToolDeclarations,
         ttl_seconds: u32,
     ) -> Result<String> {
         self.create_cached_content(system_instruction, tools, ttl_seconds).await

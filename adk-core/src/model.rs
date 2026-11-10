@@ -3,7 +3,6 @@ use crate::{Result, types::Content};
 use async_trait::async_trait;
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::pin::Pin;
 
 /// A pinned, boxed stream of [`LlmResponse`] results from a model.
@@ -97,6 +96,152 @@ pub trait Llm: Send + Sync {
     }
 }
 
+/// Tool declarations keyed by tool name, in the order the agent declares them.
+///
+/// Providers send the tools in this order, so a request is the same on every run, as in
+/// adk-python and adk-go. Inserting a name already present replaces its declaration in place.
+///
+/// ```rust
+/// use adk_core::ToolDeclarations;
+/// use serde_json::json;
+///
+/// let mut tools = ToolDeclarations::new();
+/// tools.insert("search".into(), json!({"name": "search"}));
+/// tools.insert("add".into(), json!({"name": "add"}));
+/// tools.insert("search".into(), json!({"name": "search", "description": "Find pages"}));
+///
+/// let names: Vec<&str> = tools.keys().map(String::as_str).collect();
+/// assert_eq!(names, ["search", "add"]);
+/// assert_eq!(tools["search"]["description"], "Find pages");
+/// ```
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ToolDeclarations {
+    entries: Vec<(String, serde_json::Value)>,
+}
+
+impl ToolDeclarations {
+    /// No declarations.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The number of declarations.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether there are no declarations.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Declares `name`, at the end, or in its place when it is already declared. Returns the
+    /// declaration it replaced.
+    pub fn insert(
+        &mut self,
+        name: String,
+        declaration: serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        match self.entries.iter_mut().find(|(existing, _)| *existing == name) {
+            Some((_, slot)) => Some(std::mem::replace(slot, declaration)),
+            None => {
+                self.entries.push((name, declaration));
+                None
+            }
+        }
+    }
+
+    /// The declaration of `name`.
+    pub fn get(&self, name: &str) -> Option<&serde_json::Value> {
+        self.entries.iter().find(|(existing, _)| existing == name).map(|(_, value)| value)
+    }
+
+    /// The declaration of `name`, to change.
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut serde_json::Value> {
+        self.entries.iter_mut().find(|(existing, _)| existing == name).map(|(_, value)| value)
+    }
+
+    /// Whether `name` is declared.
+    pub fn contains_key(&self, name: &str) -> bool {
+        self.get(name).is_some()
+    }
+
+    /// Removes `name`, keeping the order of the rest. Returns its declaration.
+    pub fn remove(&mut self, name: &str) -> Option<serde_json::Value> {
+        let index = self.entries.iter().position(|(existing, _)| existing == name)?;
+        Some(self.entries.remove(index).1)
+    }
+
+    /// Keeps the declarations `keep` accepts, in order.
+    pub fn retain(&mut self, mut keep: impl FnMut(&String, &mut serde_json::Value) -> bool) {
+        self.entries.retain_mut(|(name, value)| keep(name, value));
+    }
+
+    /// Names and declarations, in declaration order.
+    pub fn iter(&self) -> ToolDeclarationsIter<'_> {
+        self.entries.iter().map(|(name, value)| (name, value))
+    }
+
+    /// Names, in declaration order.
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.entries.iter().map(|(name, _)| name)
+    }
+
+    /// Declarations, in declaration order.
+    pub fn values(&self) -> impl Iterator<Item = &serde_json::Value> {
+        self.entries.iter().map(|(_, value)| value)
+    }
+}
+
+/// An iterator over [`ToolDeclarations`], in declaration order.
+pub type ToolDeclarationsIter<'a> = std::iter::Map<
+    std::slice::Iter<'a, (String, serde_json::Value)>,
+    fn(&'a (String, serde_json::Value)) -> (&'a String, &'a serde_json::Value),
+>;
+
+impl std::ops::Index<&str> for ToolDeclarations {
+    type Output = serde_json::Value;
+
+    /// The declaration of `name`; panics when it is not declared.
+    fn index(&self, name: &str) -> &serde_json::Value {
+        self.get(name).unwrap_or_else(|| panic!("tool {name} is not declared"))
+    }
+}
+
+impl<'a> IntoIterator for &'a ToolDeclarations {
+    type Item = (&'a String, &'a serde_json::Value);
+    type IntoIter = ToolDeclarationsIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl IntoIterator for ToolDeclarations {
+    type Item = (String, serde_json::Value);
+    type IntoIter = std::vec::IntoIter<(String, serde_json::Value)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.into_iter()
+    }
+}
+
+impl<K: Into<String>> FromIterator<(K, serde_json::Value)> for ToolDeclarations {
+    fn from_iter<I: IntoIterator<Item = (K, serde_json::Value)>>(iter: I) -> Self {
+        let mut tools = Self::new();
+        tools.extend(iter);
+        tools
+    }
+}
+
+impl<K: Into<String>> Extend<(K, serde_json::Value)> for ToolDeclarations {
+    fn extend<I: IntoIterator<Item = (K, serde_json::Value)>>(&mut self, iter: I) {
+        for (name, declaration) in iter {
+            self.insert(name.into(), declaration);
+        }
+    }
+}
+
 /// A request to an LLM provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmRequest {
@@ -106,9 +251,9 @@ pub struct LlmRequest {
     pub contents: Vec<Content>,
     /// Optional generation configuration (temperature, tokens, etc.).
     pub config: Option<GenerateContentConfig>,
-    /// Tool declarations keyed by tool name.
+    /// Tool declarations keyed by tool name, in declaration order.
     #[serde(skip)]
-    pub tools: HashMap<String, serde_json::Value>,
+    pub tools: ToolDeclarations,
     /// Provider-neutral identifier of the previous response to continue from.
     /// The agent populates this from the most recent event's `interaction_id`.
     /// Maps to `previous_interaction_id` for the Gemini Interactions transport;
@@ -335,7 +480,7 @@ pub trait CacheCapable: Send + Sync {
     async fn create_cache(
         &self,
         system_instruction: &str,
-        tools: &HashMap<String, serde_json::Value>,
+        tools: &ToolDeclarations,
         ttl_seconds: u32,
     ) -> Result<String>;
 
@@ -638,7 +783,7 @@ impl LlmRequest {
             model: model.into(),
             contents,
             config: None,
-            tools: HashMap::new(),
+            tools: ToolDeclarations::new(),
             previous_response_id: None,
         }
     }

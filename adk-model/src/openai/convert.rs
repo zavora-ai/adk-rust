@@ -15,7 +15,7 @@ use async_openai::types::chat::{
     CreateChatCompletionResponse, FinishReason as OaiFinishReason, FunctionCall, FunctionObject,
     ImageDetail, ImageUrl, InputAudio, InputAudioFormat,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// Convert one ADK content to the Chat Completions messages that carry it.
 ///
@@ -303,16 +303,14 @@ pub(crate) fn json_schema_format(
     }
 }
 
-/// Convert ADK tools to OpenAI ChatCompletionTools.
+/// Convert ADK tools to OpenAI ChatCompletionTools, in declaration order.
 pub fn convert_tools(
-    tools: &HashMap<String, serde_json::Value>,
+    tools: &adk_core::ToolDeclarations,
     adapter: &dyn SchemaAdapter,
     cache: &SchemaCache,
 ) -> Vec<ChatCompletionTools> {
-    let mut tools = tools.iter().collect::<Vec<_>>();
-    tools.sort_unstable_by_key(|(name, _)| *name);
     tools
-        .into_iter()
+        .iter()
         .map(|(name, decl)| {
             let description = decl.get("description").and_then(|d| d.as_str()).map(String::from);
 
@@ -1200,7 +1198,7 @@ mod tests {
     fn test_convert_tools() {
         use super::super::schema_adapter::OpenAiSchemaAdapter;
 
-        let mut tools = HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         tools.insert(
             "get_weather".to_string(),
             serde_json::json!({
@@ -1232,7 +1230,7 @@ mod tests {
         let adapter = OpenAiSchemaAdapter;
         let cache = SchemaCache::for_adapter(std::sync::Arc::new(OpenAiSchemaAdapter));
         for _ in 0..32 {
-            let tools = HashMap::from([
+            let tools = adk_core::ToolDeclarations::from_iter([
                 ("zeta".to_string(), serde_json::json!({})),
                 ("alpha".to_string(), serde_json::json!({})),
                 ("middle".to_string(), serde_json::json!({})),

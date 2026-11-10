@@ -417,7 +417,7 @@ impl AnthropicClient {
                     .iter()
                     .filter(|(name, _)| tool_search.matches(name).unwrap_or(false))
                     .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect::<std::collections::HashMap<_, _>>()
+                    .collect::<adk_core::ToolDeclarations>()
             } else {
                 request.tools.clone()
             };
@@ -896,7 +896,7 @@ mod tests {
         LlmRequest {
             model: "claude-sonnet-4-5-20250929".to_string(),
             contents,
-            tools: std::collections::HashMap::new(),
+            tools: adk_core::ToolDeclarations::new(),
             config: None,
             previous_response_id: None,
         }

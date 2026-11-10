@@ -1454,3 +1454,34 @@ async fn an_agent_with_nowhere_to_transfer_gets_no_transfer_guidance() {
     let request = captured.lock().unwrap().clone().expect("a request");
     assert!(!system_text(&request).contains("transfer"));
 }
+
+#[tokio::test]
+async fn tools_reach_the_model_in_declaration_order() {
+    use futures::StreamExt;
+
+    let tool = |name: &'static str| -> Arc<dyn adk_core::Tool> {
+        Arc::new(FunctionTool::new(
+            name,
+            "A tool",
+            |_ctx: Arc<dyn ToolContext>, _args: Value| async move { Ok(serde_json::json!({})) },
+        ))
+    };
+    let model = SpyLlm::new("ok");
+    let captured = model.last_request.clone();
+    let agent = LlmAgentBuilder::new("ordered")
+        .model(Arc::new(model))
+        .tool(tool("zeta"))
+        .tool(tool("alpha"))
+        .tool(tool("mid"))
+        .build()
+        .unwrap();
+
+    let mut stream = agent.run(Arc::new(TestContext::new("hi"))).await.unwrap();
+    while let Some(result) = stream.next().await {
+        result.unwrap();
+    }
+
+    let request = captured.lock().unwrap().clone().expect("a request");
+    let names: Vec<&str> = request.tools.keys().map(String::as_str).collect();
+    assert_eq!(names, ["zeta", "alpha", "mid"]);
+}

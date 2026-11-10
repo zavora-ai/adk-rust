@@ -696,7 +696,7 @@ async fn the_delegate_gets_its_own_topology_not_its_callers() {
     harness.run(Some("summarise the report"), None).await;
 
     let helper_request = helper_model.requests().pop().expect("the helper ran");
-    assert!(helper_request.tools.is_empty(), "{:?}", helper_request.tools.keys());
+    assert!(helper_request.tools.is_empty(), "{:?}", helper_request.tools);
     assert_eq!(helper_request.config.and_then(|config| config.cached_content), None);
     let specialist_request = specialist_model.requests().pop().expect("the specialist ran");
     assert!(specialist_request.tools.contains_key("transfer_to_agent"));

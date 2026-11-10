@@ -1619,7 +1619,7 @@ mod tests {
             model: crate::catalog::OPENAI_DEFAULT.to_string(),
             contents: Vec::new(),
             config: None,
-            tools: HashMap::new(),
+            tools: adk_core::ToolDeclarations::new(),
             previous_response_id: None,
         };
         request.tools.insert(
@@ -1658,7 +1658,7 @@ mod tests {
             model: crate::catalog::OPENAI_DEFAULT.to_string(),
             contents: Vec::new(),
             config: None,
-            tools: HashMap::new(),
+            tools: adk_core::ToolDeclarations::new(),
             previous_response_id: None,
         };
 
@@ -1684,7 +1684,7 @@ mod tests {
             model: crate::catalog::OPENAI_DEFAULT.to_string(),
             contents: Vec::new(),
             config: None,
-            tools: HashMap::new(),
+            tools: adk_core::ToolDeclarations::new(),
             previous_response_id: None,
         };
 

@@ -9,7 +9,6 @@
 
 use crate::common;
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use adk_core::{CacheCapable, LlmRequest, Part, UsageMetadata};
@@ -250,7 +249,7 @@ impl CacheCapable for RecordingCache {
     async fn create_cache(
         &self,
         system_instruction: &str,
-        _tools: &HashMap<String, Value>,
+        _tools: &adk_core::ToolDeclarations,
         ttl_seconds: u32,
     ) -> adk_core::Result<String> {
         self.created.lock().unwrap().push((system_instruction.to_string(), ttl_seconds));

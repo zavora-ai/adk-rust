@@ -616,7 +616,7 @@ struct ToolSetup {
 
 struct ResolvedTools {
     map: HashMap<String, Arc<dyn Tool>>,
-    declarations: HashMap<String, serde_json::Value>,
+    declarations: adk_core::ToolDeclarations,
     transfer_targets: Vec<String>,
     /// When to transfer and to whom, for the system instruction; see [`transfer_instruction`].
     transfer_guidance: Option<String>,
@@ -684,7 +684,7 @@ impl ToolSetup {
         let mut declarations = tools
             .iter()
             .map(|tool| (tool.name().to_string(), tool.declaration()))
-            .collect::<std::collections::HashMap<_, _>>();
+            .collect::<adk_core::ToolDeclarations>();
         let mut transfer_targets: Vec<String> = if ctx.authoritative_transfer_targets() {
             Vec::new()
         } else {

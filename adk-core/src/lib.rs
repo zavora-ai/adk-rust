@@ -302,7 +302,7 @@ pub use metering::{
 pub use model::{
     BuiltinToolUse, CacheCapable, CitationMetadata, CitationSource, ContextCacheConfig, Effort,
     FinishReason, GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream,
-    UsageMetadata, nullable_count,
+    ToolDeclarations, ToolDeclarationsIter, UsageMetadata, nullable_count,
 };
 pub use model::{NativeWebSearch, NativeWebSearchTool};
 pub use policy::{

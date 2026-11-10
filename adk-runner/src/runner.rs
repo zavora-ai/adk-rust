@@ -1420,7 +1420,7 @@ impl Runner {
                     // (the full instruction is resolved inside the agent, but the
                     // description provides a reasonable proxy for cache keying).
                     let system_instruction = agent_to_run.description().to_string();
-                    let tools = std::collections::HashMap::new();
+                    let tools = adk_core::ToolDeclarations::new();
                     let ttl = context_cache_config.as_ref().map_or(600, |c| c.ttl_seconds);
 
                     match cache_model.create_cache(&system_instruction, &tools, ttl).await {

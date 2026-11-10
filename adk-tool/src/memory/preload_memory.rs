@@ -390,7 +390,7 @@ mod tests {
             model: "test-model".to_string(),
             contents: vec![Content::new("user").with_text("What about dark mode?")],
             config: None,
-            tools: HashMap::new(),
+            tools: adk_core::ToolDeclarations::new(),
             previous_response_id: None,
         };
 
@@ -426,7 +426,7 @@ mod tests {
             model: "test-model".to_string(),
             contents: vec![Content::new("user").with_text("hello")],
             config: None,
-            tools: HashMap::new(),
+            tools: adk_core::ToolDeclarations::new(),
             previous_response_id: None,
         };
 
