@@ -185,6 +185,8 @@ pub struct RequestHandler {
     output_mode: OutputMode,
     /// Builds the extended agent card, when the agent offers one.
     extended_card: Option<ExtendedCardProducer>,
+    /// Hooks into each run.
+    hooks: super::hooks::ExecutorHooks,
 }
 
 impl RequestHandler {
@@ -205,6 +207,7 @@ impl RequestHandler {
             running: Arc::default(),
             output_mode: OutputMode::default(),
             extended_card: None,
+            hooks: super::hooks::ExecutorHooks::default(),
         }
     }
 
@@ -226,7 +229,15 @@ impl RequestHandler {
             running: Arc::default(),
             output_mode: OutputMode::default(),
             extended_card: None,
+            hooks: super::hooks::ExecutorHooks::default(),
         }
+    }
+
+    /// Calls `hooks` at their points in each run; see [`ExecutorHooks`](super::hooks::ExecutorHooks).
+    #[must_use]
+    pub fn with_hooks(mut self, hooks: super::hooks::ExecutorHooks) -> Self {
+        self.hooks = hooks;
+        self
     }
 
     /// Serves `producer`'s card for `GetExtendedAgentCard`, built for each caller. Without
@@ -618,6 +629,7 @@ impl CallerScope<'_> {
             runner_config,
             caller: self.caller.clone(),
             output_mode: handler.output_mode,
+            hooks: handler.hooks.clone(),
         };
         Ok(super::run::spawn(run, task_id, context_id, msg, cancellation, guard))
     }
@@ -2359,6 +2371,134 @@ mod tests {
         let configs = handler.push_config_list(&task.id.0).await.unwrap();
         assert_eq!(configs.len(), 1, "a config with the same ID replaces the old one");
         assert_eq!(configs[0].url, "https://a.example/2");
+    }
+
+    // ── Executor hooks ──────────────────────────────────────────────────────
+
+    /// Repeats the user's text.
+    struct EchoAgent;
+
+    #[async_trait::async_trait]
+    impl adk_core::Agent for EchoAgent {
+        fn name(&self) -> &str {
+            "echo_agent"
+        }
+
+        fn description(&self) -> &str {
+            "repeats"
+        }
+
+        fn sub_agents(&self) -> &[Arc<dyn adk_core::Agent>] {
+            &[]
+        }
+
+        async fn run(
+            &self,
+            ctx: Arc<dyn adk_core::InvocationContext>,
+        ) -> adk_core::Result<adk_core::EventStream> {
+            let text: String =
+                ctx.user_content().parts.iter().filter_map(adk_core::Part::text).collect();
+            let mut event = adk_core::Event::new("echo");
+            event.llm_response.content =
+                Some(adk_core::Content::new("model").with_text(format!("echo: {text}")));
+            Ok(Box::pin(futures::stream::iter(vec![Ok(event)])))
+        }
+    }
+
+    #[tokio::test]
+    async fn executor_hooks_shape_a_run_as_adk_go_callbacks_do() {
+        use super::super::hooks::ExecutorHooks;
+        let cleaned = Arc::new(Mutex::new(Vec::new()));
+        let cleanup_log = cleaned.clone();
+        let hooks = ExecutorHooks::default()
+            .before_execute(Arc::new(|run| {
+                Box::pin(async move {
+                    let text: String =
+                        run.message.parts.iter().filter_map(|p| p.text_content()).collect();
+                    if text.contains("forbidden") {
+                        Err(A2aError::InvalidParams { message: "not allowed".to_string() })
+                    } else {
+                        Ok(())
+                    }
+                })
+            }))
+            .from_wire_part(Arc::new(|part| {
+                Ok(part
+                    .text_content()
+                    .map(|text| adk_core::Part::Text { text: text.to_uppercase() }))
+            }))
+            .after_event(Arc::new(|run, _event, update| {
+                update
+                    .metadata
+                    .get_or_insert_with(Default::default)
+                    .insert("tenant".into(), run.user_id.clone().into());
+                Ok(())
+            }))
+            .after_execute(Arc::new(|_run, status| {
+                status.metadata.insert("audited".into(), true.into());
+                Ok(())
+            }))
+            .on_cleanup(Arc::new(move |run, event| {
+                cleanup_log.lock().unwrap().push((run.task_id.clone(), event.status.state));
+            }));
+        let (handler, _) = handler_with_agent(Arc::new(EchoAgent));
+        let handler = handler.with_hooks(hooks);
+
+        let mut msg = make_test_message();
+        msg.parts = vec![Part::text("hello")];
+        let mut stream = handler.message_stream(msg).await.unwrap();
+        let mut updates = Vec::new();
+        while let Some(update) = stream.next().await {
+            updates.push(update.unwrap());
+        }
+        let artifact = updates
+            .iter()
+            .find_map(|u| match u {
+                StreamResponse::ArtifactUpdate(e) => Some(e),
+                _ => None,
+            })
+            .expect("an artifact update");
+        assert_eq!(
+            artifact.artifact.parts[0].text_content(),
+            Some("echo: HELLO"),
+            "inbound converter"
+        );
+        assert_eq!(
+            artifact.metadata.as_ref().unwrap()["tenant"],
+            "A2A_USER_".to_string() + artifact.context_id.0.as_str()
+        );
+        let StreamResponse::StatusUpdate(last) = updates.last().unwrap() else {
+            panic!("ends on a status")
+        };
+        assert_eq!(last.status.state, TaskState::Completed);
+        assert_eq!(last.metadata.as_ref().unwrap()["audited"], true);
+        assert_eq!(cleaned.lock().unwrap().len(), 1);
+
+        // A refused run fails its task, and the agent does not run.
+        let mut msg = make_test_message();
+        msg.id = MessageId::new("msg-forbidden");
+        msg.parts = vec![Part::text("forbidden")];
+        let task = handler.message_send(msg).await.unwrap();
+        assert_eq!(task.status.state, TaskState::Failed);
+        assert!(
+            status_text(&task.status).starts_with("before execute: "),
+            "{}",
+            status_text(&task.status)
+        );
+        assert!(task.artifacts.unwrap_or_default().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_outbound_part_converter_replaces_the_default_conversion() {
+        use super::super::hooks::ExecutorHooks;
+        let hooks = ExecutorHooks::default().to_wire_part(Arc::new(|_event, part| {
+            Ok(part.text().map(|text| Part::text(format!("[{text}]"))))
+        }));
+        let (handler, _) = handler_with_agent(Arc::new(EchoAgent));
+        let task = handler.with_hooks(hooks).message_send(make_test_message()).await.unwrap();
+        let texts = artifact_texts(&task);
+        assert_eq!(texts.len(), 1);
+        assert!(texts[0].starts_with("[echo: "), "{texts:?}");
     }
 
     fn make_handler() -> RequestHandler {

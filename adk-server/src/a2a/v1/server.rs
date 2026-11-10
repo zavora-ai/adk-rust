@@ -87,6 +87,7 @@ impl A2aV1Server {
             legacy_jsonrpc_url: None,
             output_mode: OutputMode::default(),
             extended_card: None,
+            hooks: super::hooks::ExecutorHooks::default(),
         }
     }
 
@@ -146,6 +147,7 @@ pub struct A2aV1ServerBuilder {
     legacy_jsonrpc_url: Option<String>,
     output_mode: OutputMode,
     extended_card: Option<super::request_handler::ExtendedCardProducer>,
+    hooks: super::hooks::ExecutorHooks,
 }
 
 impl A2aV1ServerBuilder {
@@ -164,6 +166,13 @@ impl A2aV1ServerBuilder {
     /// Keeps tasks in `store` instead of a new [`InMemoryTaskStore`].
     pub fn task_store(mut self, store: Arc<dyn TaskStore>) -> Self {
         self.task_store = Some(store);
+        self
+    }
+
+    /// Calls `hooks` at their points in each run; see
+    /// [`ExecutorHooks`](super::hooks::ExecutorHooks).
+    pub fn hooks(mut self, hooks: super::hooks::ExecutorHooks) -> Self {
+        self.hooks = hooks;
         self
     }
 
@@ -286,7 +295,8 @@ impl A2aV1ServerBuilder {
             card.clone(),
             self.runner_config,
         )
-        .with_output_mode(self.output_mode);
+        .with_output_mode(self.output_mode)
+        .with_hooks(self.hooks);
         if let Some(producer) = self.extended_card {
             handler = handler.with_extended_card(producer);
         }

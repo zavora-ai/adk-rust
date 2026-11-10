@@ -1,0 +1,6 @@
+- **Hooks into A2A v1 runs, as adk-go's executor offers them** (`adk-server`, `a2a-v1`): `ExecutorHooks`, set with `A2aV1ServerBuilder::hooks` or `RequestHandler::with_hooks`. Each hook gets an `ExecutionContext` with the task, context, ADK app, user, session, caller and message.
+  - **`before_execute`** may refuse a run. The task then fails with `before execute: …`, and the agent does not run.
+  - **`after_event`** may change each `ArtifactUpdate` before it is stored and sent. An error ends the run with `processor failed: …`.
+  - **`after_execute`** may change the `FinalStatus` a run ends on. An error fails the task with `after execute: …`.
+  - **`to_wire_part` and `from_wire_part`** replace the part conversion each way. The outbound converter covers the parts of `INPUT_REQUIRED` messages too.
+  - **`on_cleanup`** sees the status each run ended on, a cancelled run included.

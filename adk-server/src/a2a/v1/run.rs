@@ -33,6 +33,7 @@ pub(super) struct RunContext {
     pub runner_config: Arc<adk_runner::RunnerConfig>,
     pub caller: Option<RequestContext>,
     pub output_mode: OutputMode,
+    pub hooks: super::hooks::ExecutorHooks,
 }
 
 /// Starts the run of `message` for `task_id` on its own task and returns its handle.
@@ -74,7 +75,8 @@ pub(super) fn spawn<G: Send + 'static>(
 }
 
 /// Runs the agent and settles the task. Errors are store failures: a failed agent run is
-/// recorded on the task.
+/// recorded on the task. The run's [`ExecutorHooks`](super::hooks::ExecutorHooks) are
+/// called at their points.
 async fn execute(
     run: &RunContext,
     task_id: &str,
@@ -82,64 +84,117 @@ async fn execute(
     message: &Message,
     cancellation: CancellationToken,
 ) -> Result<(), A2aError> {
-    let executor = &run.executor;
-    let base_meta = base_metadata(&run.runner_config, run.caller.as_ref(), context_id);
-    executor
-        .update_status(task_id, context_id, TaskState::Working, Vec::new(), Some(base_meta.clone()))
-        .await?;
+    use super::hooks::ExecutionContext;
+    use super::processor::FinalStatus;
 
-    let mut processor = EventProcessor::new(run.output_mode, base_meta.clone());
-    let started = start_agent(
-        &run.runner_config,
-        run.caller.as_ref(),
-        context_id,
-        message,
-        cancellation.clone(),
-    )
-    .await;
-    let mut events = match started {
-        Ok(events) => events,
-        Err(error) => {
-            let parts = vec![error_message_part(error.to_string())];
-            settle(executor, task_id, context_id, TaskState::Failed, parts, Some(base_meta))
-                .await?;
+    let executor = &run.executor;
+    let hooks = &run.hooks;
+    let base_meta = base_metadata(&run.runner_config, run.caller.as_ref(), context_id);
+    let context = Arc::new(ExecutionContext {
+        task_id: task_id.to_string(),
+        context_id: context_id.to_string(),
+        app_name: run.runner_config.app_name.clone(),
+        user_id: session_user_id(run.caller.as_ref(), context_id),
+        session_id: context_id.to_string(),
+        caller: run.caller.clone(),
+        message: message.clone(),
+    });
+    let failed = |text: String, metadata: &Map<String, Value>| FinalStatus {
+        state: TaskState::Failed,
+        parts: vec![error_message_part(text)],
+        metadata: metadata.clone(),
+    };
+
+    let status = 'run: {
+        if let Some(before) = &hooks.before_execute
+            && let Err(error) = before(context.clone()).await
+        {
+            break 'run failed(format!("before execute: {error}"), &base_meta);
+        }
+        executor
+            .update_status(
+                task_id,
+                context_id,
+                TaskState::Working,
+                Vec::new(),
+                Some(base_meta.clone()),
+            )
+            .await?;
+
+        let mut processor = EventProcessor::new(run.output_mode, base_meta.clone())
+            .with_to_wire_part(hooks.to_wire_part.clone());
+        let started = start_agent(
+            &run.runner_config,
+            run.caller.as_ref(),
+            context_id,
+            message,
+            cancellation.clone(),
+            hooks.from_wire_part.as_ref(),
+        )
+        .await;
+        let mut events = match started {
+            Ok(events) => events,
+            Err(error) => break 'run failed(error.to_string(), &base_meta),
+        };
+
+        let mut run_error = None;
+        while let Some(result) = events.next().await {
+            match result {
+                Ok(event) => {
+                    let Some(mut update) = processor.process(&event) else { continue };
+                    if let Some(after) = &hooks.after_event
+                        && let Err(error) = after(&context, &event, &mut update)
+                    {
+                        run_error = Some(format!("processor failed: {error}"));
+                        break;
+                    }
+                    executor.apply_artifact_update(task_id, context_id, update).await?;
+                }
+                Err(error) => {
+                    run_error = Some(format!("agent run failed: {error}"));
+                    break;
+                }
+            }
+        }
+        drop(events);
+
+        // A cancelled run ends on the `CANCELED` status its cancel recorded.
+        if cancellation.is_cancelled() {
+            let event = settle(
+                executor,
+                task_id,
+                context_id,
+                TaskState::Canceled,
+                Vec::new(),
+                Some(Map::new()),
+            )
+            .await?;
+            if let Some(cleanup) = &hooks.on_cleanup {
+                cleanup(&context, &event);
+            }
             return Ok(());
+        }
+        if let Some(reset) = processor.final_artifact_update() {
+            executor.apply_artifact_update(task_id, context_id, reset).await?;
+        }
+        match run_error {
+            Some(error) => failed(error, &base_meta),
+            None => processor.final_status(),
         }
     };
 
-    let mut run_error = None;
-    while let Some(result) = events.next().await {
-        match result {
-            Ok(event) => {
-                if let Some(update) = processor.process(&event) {
-                    executor.apply_artifact_update(task_id, context_id, update).await?;
-                }
-            }
-            Err(error) => {
-                run_error = Some(error);
-                break;
-            }
-        }
+    let mut status = status;
+    if let Some(after) = &hooks.after_execute
+        && let Err(error) = after(&context, &mut status)
+    {
+        status = failed(format!("after execute: {error}"), &base_meta);
     }
-    drop(events);
-
-    // A cancelled run ends on the `CANCELED` status its cancel recorded.
-    if cancellation.is_cancelled() {
-        settle(executor, task_id, context_id, TaskState::Canceled, Vec::new(), Some(Map::new()))
+    let event =
+        settle(executor, task_id, context_id, status.state, status.parts, Some(status.metadata))
             .await?;
-        return Ok(());
+    if let Some(cleanup) = &hooks.on_cleanup {
+        cleanup(&context, &event);
     }
-    if let Some(reset) = processor.final_artifact_update() {
-        executor.apply_artifact_update(task_id, context_id, reset).await?;
-    }
-    if let Some(error) = run_error {
-        let parts = vec![error_message_part(format!("agent run failed: {error}"))];
-        settle(executor, task_id, context_id, TaskState::Failed, parts, Some(base_meta)).await?;
-        return Ok(());
-    }
-    let status = processor.final_status();
-    settle(executor, task_id, context_id, status.state, status.parts, Some(status.metadata))
-        .await?;
     Ok(())
 }
 
@@ -243,6 +298,7 @@ async fn start_agent(
     context_id: &str,
     msg: &Message,
     cancellation: CancellationToken,
+    from_wire_part: Option<&super::hooks::FromWirePart>,
 ) -> Result<adk_core::EventStream, A2aError> {
     use adk_core::{SessionId, UserId};
     use adk_session::{CreateRequest, GetRequest};
@@ -291,7 +347,10 @@ async fn start_agent(
 
     let mut adk_parts = Vec::new();
     for part in &msg.parts {
-        adk_parts.push(super::convert::wire_part_to_adk(part)?);
+        match from_wire_part {
+            Some(convert) => adk_parts.extend(convert(part)?),
+            None => adk_parts.push(super::convert::wire_part_to_adk(part)?),
+        }
     }
     let content = adk_core::Content { role: "user".to_string(), parts: adk_parts };
 

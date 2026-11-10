@@ -54,20 +54,27 @@ pub enum OutputMode {
     ArtifactPerEvent,
 }
 
-/// One artifact update the run produced.
+/// One artifact update a run produces, before it is stored and sent.
 #[derive(Debug, Clone)]
-pub(super) struct ArtifactUpdate {
+pub struct ArtifactUpdate {
+    /// The artifact, or the chunk of it, the update carries.
     pub artifact: Artifact,
+    /// Whether the parts go onto the artifact with the same ID instead of replacing it.
     pub append: bool,
+    /// Whether this is the artifact's last chunk.
     pub last_chunk: bool,
+    /// The update's metadata (`adk_*` keys).
     pub metadata: Option<Map<String, Value>>,
 }
 
-/// The status a run ends on, before the extension marker is added.
+/// The status a run ends on, before it is stored and sent.
 #[derive(Debug, Clone)]
-pub(super) struct FinalStatus {
+pub struct FinalStatus {
+    /// The state the task ends in.
     pub state: TaskState,
+    /// The status message's parts; none for no message.
     pub parts: Vec<WirePart>,
+    /// The update's metadata (`adk_*` keys).
     pub metadata: Map<String, Value>,
 }
 
@@ -83,6 +90,8 @@ pub(super) struct EventProcessor {
     awaiting_auth: bool,
     /// Each author's text streamed in partial events since its last non-partial one.
     streamed: HashMap<String, String>,
+    /// Converts parts instead of [`adk_parts_to_wire`], when set.
+    to_wire_part: Option<super::hooks::ToWirePart>,
 }
 
 impl EventProcessor {
@@ -99,7 +108,32 @@ impl EventProcessor {
             pending_call_ids: HashSet::new(),
             awaiting_auth: false,
             streamed: HashMap::new(),
+            to_wire_part: None,
         }
+    }
+
+    /// Converts each part with `converter` instead of the default conversion.
+    pub fn with_to_wire_part(mut self, converter: Option<super::hooks::ToWirePart>) -> Self {
+        self.to_wire_part = converter;
+        self
+    }
+
+    /// `parts` of `event` as A2A parts, through the converter when one is set. A converter
+    /// error leaves the part out and is logged.
+    fn to_wire(&self, event: &Event, parts: &[Part], long_running_ids: &[String]) -> Vec<WirePart> {
+        let Some(convert) = &self.to_wire_part else {
+            return adk_parts_to_wire(parts, long_running_ids);
+        };
+        parts
+            .iter()
+            .filter_map(|part| match convert(event, part) {
+                Ok(converted) => converted,
+                Err(error) => {
+                    tracing::warn!(%error, "A2A part converter failed; part left out");
+                    None
+                }
+            })
+            .collect()
     }
 
     /// The artifact update `event` produces, if it has content to show.
@@ -119,7 +153,7 @@ impl EventProcessor {
         let error_code = event.llm_response.error_code.as_deref().filter(|code| !code.is_empty());
         let error_message =
             event.llm_response.error_message.as_deref().filter(|message| !message.is_empty());
-        let parts = adk_parts_to_wire(&remaining, &event.long_running_tool_ids);
+        let parts = self.to_wire(event, &remaining, &event.long_running_tool_ids);
         if (error_code.is_some() || error_message.is_some()) && self.failed.is_none() {
             let message = error_message.unwrap_or_default();
             let text = match error_code {
@@ -228,9 +262,14 @@ impl EventProcessor {
         let mut remaining = Vec::with_capacity(content.parts.len());
         for part in &content.parts {
             match part {
-                Part::FunctionCall { name, args, id: Some(id), .. } if listed(name, id) => {
+                Part::FunctionCall { id: Some(id), name, .. } if listed(name, id) => {
                     if self.pending_call_ids.insert(id.clone()) {
-                        self.pending.push(tagged_function_call_part(name, args, Some(id), true));
+                        let wire = self.to_wire(
+                            event,
+                            std::slice::from_ref(part),
+                            std::slice::from_ref(id),
+                        );
+                        self.pending.extend(wire);
                     }
                 }
                 Part::FunctionResponse { function_response, id: Some(id), .. }
@@ -239,7 +278,8 @@ impl EventProcessor {
                 {
                     let response_key = format!("response:{id}");
                     if self.pending_call_ids.insert(response_key) {
-                        self.pending.extend(adk_parts_to_wire(std::slice::from_ref(part), &[]));
+                        let wire = self.to_wire(event, std::slice::from_ref(part), &[]);
+                        self.pending.extend(wire);
                     }
                 }
                 other => remaining.push(other.clone()),
