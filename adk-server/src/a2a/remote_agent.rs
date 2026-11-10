@@ -565,6 +565,29 @@ pub mod v1_remote {
             Self { config }
         }
 
+        /// Creates a remote agent named `name` for the A2A v1 agent at `base_url`, from the
+        /// card it serves at `/.well-known/agent-card.json`. The card's description becomes
+        /// the agent's, and streaming follows the card.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when the card cannot be fetched or names an endpoint on
+        /// another origin; see [`A2aV1Client::resolve_agent_card`].
+        pub async fn from_url(
+            name: impl Into<String>,
+            base_url: &str,
+        ) -> std::result::Result<Self, crate::a2a::client::v1_client::V1ClientError> {
+            let agent_card = A2aV1Client::resolve_agent_card(base_url).await?;
+            Ok(Self::new(RemoteA2aV1Config {
+                name: name.into(),
+                description: agent_card.description.clone(),
+                agent_card,
+                streaming: None,
+                credential_broker: None,
+                credential_scopes: Vec::new(),
+            }))
+        }
+
         /// Selects the best A2A v1 interface from the agent card.
         ///
         /// Prefers JSONRPC, falls back to HTTP+JSON, and never picks an interface for an
@@ -598,8 +621,12 @@ pub mod v1_remote {
             let scopes = self.config.credential_scopes.clone();
             let acting = ctx.acting_context();
 
-            // Get user content from context
-            let user_content = extract_user_text(ctx.as_ref());
+            // The remote conversation this agent continues, and a remote task waiting on it.
+            let keys = RemoteKeys::for_agent(&agent_name);
+            let state = ctx.session().state();
+            let remote_context = state.get(&keys.context_id).and_then(string_value);
+            let remote_task = state.get(&keys.task_id).and_then(string_value);
+            let parts = outgoing_parts(ctx.as_ref(), &agent_name);
 
             let stream = async_stream::stream! {
                 // Verify we have a usable interface
@@ -630,64 +657,37 @@ pub mod v1_remote {
                 // Determine if we should use streaming
                 let use_streaming = config_streaming.unwrap_or(card.capabilities.streaming.unwrap_or(false));
 
-                // Build a v1 Message from user content
-                let message = build_v1_message(user_content);
+                let message = build_v1_message(parts, remote_context, remote_task);
 
                 if use_streaming {
-                    // Send streaming message and process the SSE response. Bytes are decoded
-                    // only once a whole SSE line has arrived, and a stream that stops before a
-                    // final status is reported as an error.
-                    match client.send_streaming_message(message).await {
-                        Ok(response) => {
+                    // The remote's updates as they arrive. A stream that stops before a final
+                    // status is reported as an error.
+                    match client.stream_message(message).await {
+                        Ok(mut updates) => {
                             use futures::StreamExt;
 
-                            let mut bytes_stream = response.bytes_stream();
-                            let mut decoder = crate::a2a::client::SseDecoder::default();
                             let mut finished = false;
-
-                            while let Some(chunk_result) = bytes_stream.next().await {
-                                let chunk = match chunk_result {
-                                    Ok(c) => c,
-                                    Err(e) => {
-                                        yield Ok(create_v1_error_event(
-                                            &invocation_id,
-                                            &agent_name,
-                                            &format!("stream error: {e}"),
-                                        ));
-                                        return;
-                                    }
-                                };
-                                let payloads = match decoder.push(&chunk) {
-                                    Ok(payloads) => payloads,
+                            while let Some(update) = updates.next().await {
+                                let stream_response = match update {
+                                    Ok(update) => update,
                                     Err(e) => {
                                         yield Ok(create_v1_error_event(&invocation_id, &agent_name, &e.to_string()));
                                         return;
                                     }
                                 };
-
-                                for data in payloads {
-                                    if data.trim().is_empty() {
-                                        continue;
-                                    }
-                                    match parse_stream_payload(&data) {
-                                        Some(Ok(stream_response)) => {
-                                            finished |= ends_stream(&stream_response);
-                                            if let Some(event) = convert_stream_response(
-                                                &stream_response,
-                                                &invocation_id,
-                                                &agent_name,
-                                            ) {
-                                                yield Ok(event);
-                                            }
-                                        }
-                                        Some(Err(error)) => {
-                                            yield Ok(create_v1_error_event(&invocation_id, &agent_name, &error));
-                                            return;
-                                        }
-                                        None => {
-                                            tracing::debug!("failed to parse SSE data as StreamResponse: {data}");
-                                        }
-                                    }
+                                if ends_stream(&stream_response) {
+                                    finished = true;
+                                    yield Ok(final_event(&stream_response, &invocation_id, &agent_name, &keys));
+                                    // The server closes the stream here (A2A §3.1.2). Read to its
+                                    // end so the connection closes cleanly, but not for long.
+                                    let drain = async { while updates.next().await.is_some() {} };
+                                    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), drain).await;
+                                    break;
+                                }
+                                if let Some(event) =
+                                    convert_stream_response(&stream_response, &invocation_id, &agent_name)
+                                {
+                                    yield Ok(event);
                                 }
                             }
 
@@ -708,14 +708,17 @@ pub mod v1_remote {
                         }
                     }
                 } else {
-                    // Send non-streaming message
-                    match client.send_message(message).await {
+                    // Send non-streaming message, over the binding the card offers.
+                    let sent = if interface.protocol_binding == "HTTP+JSON" {
+                        client.send_message_rest(message).await
+                    } else {
+                        client.send_message(message).await
+                    };
+                    match sent {
                         Ok(SendMessageResponse::Message(reply)) => {
                             // The agent answered directly, without a task.
                             let resp = a2a_protocol_types::events::StreamResponse::Message(reply);
-                            if let Some(event) = convert_stream_response(&resp, &invocation_id, &agent_name) {
-                                yield Ok(event);
-                            }
+                            yield Ok(final_event(&resp, &invocation_id, &agent_name, &keys));
                         }
                         Ok(SendMessageResponse::Task(task)) => {
                             // Yield events for artifacts
@@ -741,13 +744,7 @@ pub mod v1_remote {
                             if let Some(history) = task.history {
                                 for msg in history {
                                     if msg.role == a2a_protocol_types::MessageRole::Agent {
-                                        use a2a_protocol_types::PartContent;
-                                        let text_parts: Vec<Part> = msg.parts.iter().filter_map(|p| {
-                                            match &p.content {
-                                                PartContent::Text(text) => Some(Part::Text { text: text.clone() }),
-                                                _ => None,
-                                            }
-                                        }).collect();
+                                        let text_parts = response_parts(&msg.parts, false);
 
                                         if !text_parts.is_empty() {
                                             let mut event = Event::new(invocation_id.clone());
@@ -769,9 +766,7 @@ pub mod v1_remote {
                                     metadata: None,
                                 }
                             );
-                            if let Some(event) = convert_stream_response(&resp, &invocation_id, &agent_name) {
-                                yield Ok(event);
-                            }
+                            yield Ok(final_event(&resp, &invocation_id, &agent_name, &keys));
                         }
                         Ok(_) => {
                             yield Ok(create_v1_error_event(
@@ -789,60 +784,164 @@ pub mod v1_remote {
                         }
                     }
                 }
-
-                let _ = interface;
             };
 
             Ok(Box::pin(stream))
         }
     }
 
-    /// Extracts user text from the invocation context.
-    fn extract_user_text(ctx: &dyn InvocationContext) -> Option<String> {
-        let content = ctx.user_content();
-        for part in &content.parts {
-            if let Part::Text { text } = part {
-                return Some(text.clone());
-            }
-        }
-        None
+    /// Session state keys under which an agent keeps its remote conversation.
+    struct RemoteKeys {
+        /// The remote `contextId` the agent continues.
+        context_id: String,
+        /// The remote task waiting on this side, while there is one.
+        task_id: String,
     }
 
-    /// Builds a v1 `Message` from user text content.
-    fn build_v1_message(content: Option<String>) -> a2a_protocol_types::Message {
-        let text = content.unwrap_or_default();
+    impl RemoteKeys {
+        fn for_agent(agent_name: &str) -> Self {
+            Self {
+                context_id: format!("a2a_remote:{agent_name}:context_id"),
+                task_id: format!("a2a_remote:{agent_name}:task_id"),
+            }
+        }
+    }
+
+    fn string_value(value: serde_json::Value) -> Option<String> {
+        value.as_str().filter(|s| !s.is_empty()).map(str::to_string)
+    }
+
+    /// What this turn sends: the session since this agent's last reply (the person's
+    /// messages, and other agents' turns as the context the session renders them as), or
+    /// the turn's own user content when the session holds none. Each part goes out in the
+    /// shape every A2A v1 SDK reads; see [`outgoing_part`].
+    fn outgoing_parts(
+        ctx: &dyn InvocationContext,
+        agent_name: &str,
+    ) -> Vec<a2a_protocol_types::Part> {
+        let history = ctx.session().conversation_history_with_context(agent_name, ctx.branch());
+        let since_reply =
+            history.iter().rposition(|content| content.role == "model").map_or(0, |i| i + 1);
+        let mut parts: Vec<_> = history[since_reply..]
+            .iter()
+            .flat_map(|content| &content.parts)
+            .filter_map(outgoing_part)
+            .collect();
+        if parts.is_empty() {
+            parts = ctx.user_content().parts.iter().filter_map(outgoing_part).collect();
+        }
+        parts
+    }
+
+    /// An ADK part as A2A sends it:
+    /// - text as text;
+    /// - inline data and files as raw bytes and URLs;
+    /// - function calls and responses as data parts tagged `adk_type`, the shape
+    ///   adk-python, adk-go and adk-server read, so an answer to a remote long-running call
+    ///   resumes it.
+    ///
+    /// Thinking and provider items stay here.
+    fn outgoing_part(part: &Part) -> Option<a2a_protocol_types::Part> {
+        use crate::a2a::v1::convert::{
+            media_part_to_wire, tagged_function_call_part, tagged_function_response_part,
+        };
+        match part {
+            Part::Text { text } if !text.trim().is_empty() => {
+                Some(a2a_protocol_types::Part::text(text.clone()))
+            }
+            Part::FunctionCall { name, args, id, .. } => {
+                Some(tagged_function_call_part(name, args, id.as_deref(), false))
+            }
+            Part::FunctionResponse { function_response, id, .. } => {
+                Some(tagged_function_response_part(
+                    &function_response.name,
+                    &function_response.response,
+                    id.as_deref(),
+                ))
+            }
+            other => media_part_to_wire(other),
+        }
+    }
+
+    /// Builds the v1 `Message` for a turn. `context_id` continues the remote conversation,
+    /// and `task_id` continues a remote task waiting on this side.
+    fn build_v1_message(
+        parts: Vec<a2a_protocol_types::Part>,
+        context_id: Option<String>,
+        task_id: Option<String>,
+    ) -> a2a_protocol_types::Message {
+        let parts = if parts.is_empty() { vec![a2a_protocol_types::Part::text("")] } else { parts };
         a2a_protocol_types::Message {
             id: a2a_protocol_types::MessageId::new(uuid::Uuid::new_v4().to_string()),
             role: a2a_protocol_types::MessageRole::User,
-            parts: vec![a2a_protocol_types::Part::text(text)],
-            task_id: None,
-            context_id: None,
+            parts,
+            task_id: task_id.map(a2a_protocol_types::TaskId::new),
+            context_id: context_id.map(a2a_protocol_types::ContextId::new),
             reference_task_ids: None,
             extensions: None,
             metadata: None,
         }
     }
 
-    /// Parses one SSE payload: a `StreamResponse`, bare (REST binding) or as a JSON-RPC
-    /// result, or a JSON-RPC error as its message. `None` when it is neither.
-    fn parse_stream_payload(
-        data: &str,
-    ) -> Option<std::result::Result<a2a_protocol_types::events::StreamResponse, String>> {
-        use a2a_protocol_types::events::StreamResponse;
+    /// The ADK parts of a remote reply: text, inline data, files, and untyped data as the
+    /// text the server marks it with. `with_calls` also keeps tagged function calls and
+    /// responses, which a remote names when it waits on a long-running call.
+    fn response_parts(parts: &[a2a_protocol_types::Part], with_calls: bool) -> Vec<Part> {
+        parts
+            .iter()
+            .filter_map(|part| crate::a2a::v1::convert::wire_part_to_adk(part).ok())
+            .filter(|part| {
+                with_calls
+                    || !matches!(part, Part::FunctionCall { .. } | Part::FunctionResponse { .. })
+            })
+            .filter(|part| !matches!(part, Part::Text { text } if text.is_empty()))
+            .collect()
+    }
 
-        if let Ok(stream_resp) = serde_json::from_str::<StreamResponse>(data) {
-            return Some(Ok(stream_resp));
+    /// The event for the response that ends a remote turn: its content, the remote calls
+    /// it waits on as long-running calls, and the remote conversation saved in session state
+    /// for the next turn. The remote task is kept only while it waits on this side.
+    fn final_event(
+        resp: &a2a_protocol_types::events::StreamResponse,
+        invocation_id: &str,
+        agent_name: &str,
+        keys: &RemoteKeys,
+    ) -> Event {
+        use a2a_protocol_types::events::StreamResponse;
+        use a2a_protocol_types::task::TaskState;
+
+        let mut event =
+            convert_stream_response(resp, invocation_id, agent_name).unwrap_or_else(|| {
+                let mut event = Event::new(invocation_id.to_string());
+                event.author = agent_name.to_string();
+                event
+            });
+        event.llm_response.turn_complete = true;
+
+        let (context_id, task_id, waiting) = match resp {
+            StreamResponse::StatusUpdate(update) => (
+                Some(update.context_id.0.clone()),
+                Some(update.task_id.0.clone()),
+                Some(update.status.state),
+            ),
+            StreamResponse::Task(task) => {
+                (Some(task.context_id.0.clone()), Some(task.id.0.clone()), Some(task.status.state))
+            }
+            StreamResponse::Message(message) => {
+                (message.context_id.as_ref().map(|c| c.0.clone()), None, None)
+            }
+            _ => (None, None, None),
+        };
+        let waiting = matches!(waiting, Some(TaskState::InputRequired | TaskState::AuthRequired));
+        if let Some(context_id) = context_id {
+            event.actions.state_delta.insert(keys.context_id.clone(), context_id.into());
         }
-        let rpc_value = serde_json::from_str::<serde_json::Value>(data).ok()?;
-        if let Some(result) = rpc_value.get("result")
-            && let Ok(stream_resp) = serde_json::from_value::<StreamResponse>(result.clone())
-        {
-            return Some(Ok(stream_resp));
-        }
-        let error = rpc_value.get("error")?;
-        let message = error.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
-        let code = error.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
-        Some(Err(format!("RPC error {code}: {message}")))
+        let task_id = task_id.filter(|_| waiting);
+        event.actions.state_delta.insert(
+            keys.task_id.clone(),
+            task_id.map_or(serde_json::Value::Null, serde_json::Value::String),
+        );
+        event
     }
 
     /// Whether `response` is the last of its stream: a direct message, or a task or status
@@ -894,16 +993,7 @@ pub mod v1_remote {
 
         match resp {
             StreamResponse::ArtifactUpdate(artifact_event) => {
-                use a2a_protocol_types::PartContent;
-                let parts: Vec<Part> = artifact_event
-                    .artifact
-                    .parts
-                    .iter()
-                    .filter_map(|p| match &p.content {
-                        PartContent::Text(text) => Some(Part::Text { text: text.clone() }),
-                        _ => None,
-                    })
-                    .collect();
+                let parts = response_parts(&artifact_event.artifact.parts, false);
 
                 if parts.is_empty() {
                     return None;
@@ -939,12 +1029,27 @@ pub mod v1_remote {
                         return Some(create_v1_error_event(invocation_id, agent_name, &error));
                     }
 
-                    if !text_parts.is_empty() {
+                    // A task waiting on its caller names the calls it waits on: they become
+                    // long-running calls the caller answers with their function responses.
+                    let waiting = matches!(
+                        status_event.status.state,
+                        a2a_protocol_types::task::TaskState::InputRequired
+                            | a2a_protocol_types::task::TaskState::AuthRequired
+                    );
+                    let parts = response_parts(&msg.parts, waiting);
+                    if !parts.is_empty() {
                         let mut event = Event::new(invocation_id.to_string());
                         event.author = agent_name.to_string();
+                        event.long_running_tool_ids = parts
+                            .iter()
+                            .filter_map(|part| match part {
+                                Part::FunctionCall { id: Some(id), .. } => Some(id.clone()),
+                                _ => None,
+                            })
+                            .collect();
                         event.llm_response.content =
-                            Some(Content { role: "model".to_string(), parts: text_parts });
-                        event.llm_response.turn_complete = is_terminal;
+                            Some(Content { role: "model".to_string(), parts });
+                        event.llm_response.turn_complete = is_terminal || waiting;
                         return Some(event);
                     }
                 }
@@ -960,7 +1065,7 @@ pub mod v1_remote {
                 None
             }
             StreamResponse::Message(msg) => {
-                let parts = text_parts(&msg.parts);
+                let parts = response_parts(&msg.parts, false);
                 let mut event = Event::new(invocation_id.to_string());
                 event.author = agent_name.to_string();
                 if !parts.is_empty() {
@@ -1099,16 +1204,120 @@ pub mod v1_remote {
 
         #[test]
         fn build_v1_message_with_content() {
-            let msg = build_v1_message(Some("hello".to_string()));
+            let msg = build_v1_message(vec![a2a_protocol_types::Part::text("hello")], None, None);
             assert_eq!(msg.role, a2a_protocol_types::MessageRole::User);
             assert_eq!(msg.parts.len(), 1);
             assert_eq!(msg.parts[0].text_content(), Some("hello"));
+            assert!(msg.context_id.is_none() && msg.task_id.is_none());
         }
 
         #[test]
         fn build_v1_message_without_content() {
-            let msg = build_v1_message(None);
+            let msg = build_v1_message(Vec::new(), None, None);
             assert_eq!(msg.parts[0].text_content(), Some(""));
+        }
+
+        #[test]
+        fn a_message_continues_the_remote_conversation_and_its_waiting_task() {
+            let msg = build_v1_message(
+                vec![a2a_protocol_types::Part::text("again")],
+                Some("ctx-7".to_string()),
+                Some("task-7".to_string()),
+            );
+            assert_eq!(msg.context_id.unwrap().0, "ctx-7");
+            assert_eq!(msg.task_id.unwrap().0, "task-7");
+        }
+
+        #[test]
+        fn answers_and_media_go_out_in_the_shape_every_sdk_reads() {
+            let answer = outgoing_part(&Part::FunctionResponse {
+                function_response: adk_core::FunctionResponseData::new(
+                    "request_approval",
+                    serde_json::json!({"status": "approved"}),
+                ),
+                id: Some("call-1".to_string()),
+                annotations: None,
+            })
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(&answer).unwrap(),
+                serde_json::json!({
+                    "data": {"id": "call-1", "name": "request_approval", "response": {"status": "approved"}},
+                    "metadata": {"adk_type": "function_response"}
+                })
+            );
+            let image = outgoing_part(&Part::InlineData {
+                mime_type: "image/png".to_string(),
+                data: vec![1, 2, 3],
+                uri: None,
+                annotations: None,
+            })
+            .unwrap();
+            assert_eq!(image.media_type.as_deref(), Some("image/png"));
+            assert!(
+                outgoing_part(&Part::Thinking { thinking: "hm".into(), signature: None }).is_none()
+            );
+        }
+
+        #[test]
+        fn a_waiting_remote_ends_the_turn_on_its_pending_call_and_keeps_its_task() {
+            use crate::a2a::v1::convert::{
+                tagged_function_call_part, tagged_function_response_part,
+            };
+            use a2a_protocol_types::events::{StreamResponse, TaskStatusUpdateEvent};
+            use a2a_protocol_types::task::{ContextId, TaskId, TaskState, TaskStatus};
+
+            let mut status = TaskStatus::new(TaskState::InputRequired);
+            status.message = Some(a2a_protocol_types::Message {
+                id: a2a_protocol_types::MessageId::new("m"),
+                role: a2a_protocol_types::MessageRole::Agent,
+                parts: vec![
+                    tagged_function_call_part(
+                        "request_approval",
+                        &serde_json::json!({"amount": 5}),
+                        Some("call-1"),
+                        true,
+                    ),
+                    tagged_function_response_part(
+                        "request_approval",
+                        &serde_json::json!({"status": "pending"}),
+                        Some("call-1"),
+                    ),
+                ],
+                task_id: None,
+                context_id: None,
+                reference_task_ids: None,
+                extensions: None,
+                metadata: None,
+            });
+            let resp = StreamResponse::StatusUpdate(TaskStatusUpdateEvent {
+                task_id: TaskId::new("task-1"),
+                context_id: ContextId::new("ctx-1"),
+                status,
+                metadata: None,
+            });
+            let keys = RemoteKeys::for_agent("remote");
+            let event = final_event(&resp, "inv", "remote", &keys);
+
+            assert!(event.llm_response.turn_complete);
+            assert_eq!(event.long_running_tool_ids, vec!["call-1".to_string()]);
+            let parts = &event.llm_response.content.as_ref().unwrap().parts;
+            assert!(
+                matches!(&parts[0], Part::FunctionCall { name, .. } if name == "request_approval")
+            );
+            assert_eq!(event.actions.state_delta[&keys.context_id], "ctx-1");
+            assert_eq!(event.actions.state_delta[&keys.task_id], "task-1");
+
+            // A finished remote task is not kept.
+            let done = StreamResponse::StatusUpdate(TaskStatusUpdateEvent {
+                task_id: TaskId::new("task-1"),
+                context_id: ContextId::new("ctx-1"),
+                status: TaskStatus::new(TaskState::Completed),
+                metadata: None,
+            });
+            let event = final_event(&done, "inv", "remote", &keys);
+            assert_eq!(event.actions.state_delta[&keys.context_id], "ctx-1");
+            assert!(event.actions.state_delta[&keys.task_id].is_null());
         }
 
         #[test]
@@ -1126,13 +1335,17 @@ pub mod v1_remote {
             let bare = serde_json::to_string(&update).unwrap();
             let wrapped =
                 serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": update}).to_string();
+            use crate::a2a::client::v1_client::{V1ClientError, parse_stream_payload};
             for data in [bare, wrapped] {
                 let parsed = parse_stream_payload(&data).unwrap().unwrap();
                 assert!(ends_stream(&parsed));
             }
 
             let error = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"boom"}}"#;
-            assert_eq!(parse_stream_payload(error).unwrap().unwrap_err(), "RPC error -32603: boom");
+            assert!(matches!(
+                parse_stream_payload(error).unwrap(),
+                Err(V1ClientError::JsonRpc { code: -32603, ref message, .. }) if message == "boom"
+            ));
             assert!(parse_stream_payload("not json").is_none());
         }
 
