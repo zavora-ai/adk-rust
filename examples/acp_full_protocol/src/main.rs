@@ -23,7 +23,9 @@
 
 use std::sync::Arc;
 
-use acp_full_protocol::{ScriptedAgent, build_delete_tool, build_session_service};
+use acp_full_protocol::{
+    ReferenceControls, ScriptedAgent, WorkspaceToken, build_delete_tool, build_session_service,
+};
 use adk_acp::server::{AcpServer, AcpServerConfigBuilder, TransportConfig};
 use adk_core::Agent;
 use tracing_subscriber::EnvFilter;
@@ -46,15 +48,21 @@ async fn main() -> anyhow::Result<()> {
     let agent: Arc<dyn Agent> = Arc::new(ScriptedAgent::new(delete_tool));
     let session_service = build_session_service();
 
-    let config = AcpServerConfigBuilder::new()
+    let mut config = AcpServerConfigBuilder::new()
         .agent(agent)
         .session_service(session_service)
         .agent_name(acp_full_protocol::AGENT_NAME)
         .agent_description(
             "Deterministic ADK-Rust agent exercising ACP v1 server-direction features",
         )
-        .transport(TransportConfig::Stdio)
-        .build()?;
+        .session_controls(Arc::new(ReferenceControls))
+        .transport(TransportConfig::Stdio);
+    // With a token configured, clients must authenticate with `workspace-token`.
+    let token = std::env::var("ACP_EXAMPLE_TOKEN").unwrap_or_default();
+    if !token.is_empty() {
+        config = config.authenticator(Arc::new(WorkspaceToken::new(token)));
+    }
+    let config = config.build()?;
 
     eprintln!("╔══════════════════════════════════════════════════════════════╗");
     eprintln!("║  ACP full-protocol reference server                          ║");
@@ -67,6 +75,9 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("  Exercises: embedded-resource prompts, image/audio prompts,");
     eprintln!("  the permission bridge (confirmation-gated delete_file),");
     eprintln!("  session/load replay, and usage / tool-call updates.");
+    eprintln!("  ACP v5: system prompts (send \"instructions?\"), end-of-turn usage,");
+    eprintln!("  session title / status / archive / options / fork / resume,");
+    eprintln!("  modes and config options, and auth when ACP_EXAMPLE_TOKEN is set.");
     eprintln!();
     eprintln!("  Press Ctrl+C or close stdin (Ctrl+D) to stop.");
     eprintln!("──────────────────────────────────────────────────────────────────");

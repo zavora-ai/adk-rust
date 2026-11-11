@@ -20,14 +20,14 @@
 //! options exist and their defaults; the session state records the *current*
 //! selection layered on top of those defaults.
 
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     SessionConfigId, SessionConfigKind, SessionConfigOption, SessionConfigOptionValue,
     SessionConfigSelectOptions, SessionModeId, SessionModeState,
 };
 
 // Re-export the SDK session-mode / config-option types so callers can build
 // them without reaching into the SDK's module path directly.
-pub use agent_client_protocol::schema::v1::{
+pub use agent_client_protocol::v1::schema::{
     AvailableCommand, AvailableCommandInput, SessionConfigBoolean, SessionConfigGroupId,
     SessionConfigOptionCategory, SessionConfigSelect, SessionConfigSelectGroup,
     SessionConfigSelectOption, SessionConfigValueId, SessionMode, UnstructuredCommandInput,
@@ -52,7 +52,7 @@ pub const CONFIG_STATE_KEY_PREFIX: &str = "acp:config:";
 /// # Example
 ///
 /// ```rust,ignore
-/// use agent_client_protocol::schema::v1::SessionConfigId;
+/// use agent_client_protocol::v1::schema::SessionConfigId;
 /// let key = adk_acp::server::modes::config_state_key(&SessionConfigId::new("model"));
 /// assert_eq!(key, "acp:config:model");
 /// ```
@@ -73,7 +73,7 @@ pub fn config_state_key(id: &SessionConfigId) -> String {
 ///
 /// ```rust,ignore
 /// use adk_acp::server::modes::SessionControls;
-/// use agent_client_protocol::schema::v1::{SessionMode, SessionModeState};
+/// use agent_client_protocol::v1::schema::{SessionMode, SessionModeState};
 ///
 /// struct AskOrCode;
 ///
@@ -118,8 +118,8 @@ pub trait SessionControls: Send + Sync {
     /// time a session becomes active (create / resume / load / fork). The same
     /// emission path is reused by any future command-set change trigger.
     ///
-    /// [`AvailableCommandsUpdate`]: agent_client_protocol::schema::v1::AvailableCommandsUpdate
-    /// [`SessionUpdate::AvailableCommandsUpdate`]: agent_client_protocol::schema::v1::SessionUpdate::AvailableCommandsUpdate
+    /// [`AvailableCommandsUpdate`]: agent_client_protocol::v1::schema::AvailableCommandsUpdate
+    /// [`SessionUpdate::AvailableCommandsUpdate`]: agent_client_protocol::v1::schema::SessionUpdate::AvailableCommandsUpdate
     ///
     /// # Example
     ///
@@ -204,7 +204,7 @@ pub(crate) fn option_with_current_value(
 
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::schema::v1::{SessionConfigOption, SessionMode, SessionModeState};
+    use agent_client_protocol::v1::schema::{SessionConfigOption, SessionMode, SessionModeState};
 
     use super::*;
 

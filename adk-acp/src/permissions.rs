@@ -4,7 +4,7 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
     SelectedPermissionOutcome, ToolKind,
 };

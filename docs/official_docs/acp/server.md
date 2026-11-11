@@ -81,7 +81,8 @@ translated to ACP `session/update` notifications while the prompt is active.
 
 | ACP operation | ADK-Rust behavior |
 |---|---|
-| `initialize` | Negotiates protocol v1 and returns exact implementation and capability metadata |
+| `initialize` | Answers with the version the SDK's v1 guard negotiated (v1 for a request for a newer version, and for v0), implementation and capability metadata, and the authenticator's `authMethods` |
+| `authenticate` / `logout` / `auth/status` | Through the configured `AcpAuthenticator`; see [Authentication](#authentication) |
 | `session/new` | Validates workspace paths and creates one persisted ADK session |
 | `session/prompt` | Converts supported content blocks (text, resource-link, embedded-resource, image, audio) and streams the Runner |
 | `session/load` | Reactivates a persisted session (validating `cwd`) and replays its stored conversation as ordered `session/update` notifications before completing |
@@ -94,6 +95,17 @@ translated to ACP `session/update` notifications while the prompt is active.
 | `session/set_mode` | Validates and records a session mode declared by the agent's `SessionControls`, emitting a `CurrentModeUpdate` |
 | `session/set_config_option` | Validates and records a configuration value declared by the agent's `SessionControls`, emitting a `ConfigOptionUpdate` |
 | `session/delete` | Removes persisted history and releases active resources |
+| `session/set_title` | Records the title, which `session/list` reports and load, resume and fork keep, and emits a `SessionInfoUpdate` |
+| `session/status` | `open` while the session is active on the connection, `saved` while it is only persisted |
+| `session/archive` / `session/unarchive` | Hides a session from `session/list` unless the request's `archived` filter includes it, keeping its history |
+| `session/options` | The modes and configuration options a session would start with, or a stored session's current ones |
+
+`session/new`, `session/load`, `session/resume` and `session/fork` accept a
+`systemPrompt`; see [System prompts](#system-prompts). `session/new`,
+`session/load` and `session/resume` also accept initial `configOptions`, validated
+like `session/set_config_option`. Each `PromptResponse` carries the turn's token
+`usage`, summed over the model calls that reported it. A request naming a missing
+session gets ACP's `session_not_found` error (`-32002` with the session id).
 
 Only one prompt may run in a session at a time. Different sessions may run
 concurrently up to `max_sessions`.
@@ -202,6 +214,70 @@ the turn.
 Invocation-scoped toolsets are currently resolved by `LlmAgent` and
 `CodeActAgent`. Optional HTTP and SSE MCP transports are not advertised by the
 server.
+
+## System prompts
+
+A client may send system-level instructions with a session request when the
+server advertises `sessionCapabilities.systemPrompt`. The server applies them to
+every model request of the session's turns through an invocation hook on the
+run: `append` places the prompt after the agent's own system instructions and
+`override` replaces them. The prompt lasts while the session is active on the
+connection; a later load or resume without one uses the agent's own instructions.
+Text and embedded text resources are accepted; other content, or a mode the server
+does not accept, fails the request rather than starting the session without it.
+
+```rust,ignore
+use adk_acp::server::{AcpServerConfigBuilder, SystemPromptSupport};
+
+let config = AcpServerConfigBuilder::new()
+    .agent(agent)
+    .session_service(sessions)
+    // The default accepts append and override.
+    .system_prompts(SystemPromptSupport::Append)
+    .build()?;
+```
+
+## Authentication
+
+Without an authenticator the server advertises no `authMethods`, `auth/status`
+reports `not_required`, and no request needs authentication. An
+`AcpAuthenticator` advertises its methods and answers `authenticate`, `logout`
+(advertised as `auth.logout` when it supports it) and `auth/status`. While
+`required()` is true, every session request on a connection gets
+`auth_required` (`-32000`) until the client authenticates on it, and the server
+sends `auth/status_update` when the state changes.
+
+```rust,ignore
+use adk_acp::agent_client_protocol::v1::schema::{AuthMethod, AuthMethodAgent, AuthenticateRequest};
+use adk_acp::server::{AcpAuthenticator, AcpServerConfigBuilder, AcpServerError};
+
+struct WorkspaceToken;
+
+#[async_trait::async_trait]
+impl AcpAuthenticator for WorkspaceToken {
+    fn methods(&self) -> Vec<AuthMethod> {
+        vec![AuthMethod::Agent(AuthMethodAgent::new("workspace-token", "Workspace token"))]
+    }
+
+    async fn authenticate(&self, request: &AuthenticateRequest) -> Result<(), AcpServerError> {
+        check_token(&request.method_id)
+    }
+}
+
+let config = AcpServerConfigBuilder::new()
+    .agent(agent)
+    .session_service(sessions)
+    .authenticator(std::sync::Arc::new(WorkspaceToken))
+    .build()?;
+```
+
+## Serve over another transport
+
+`AcpServer::run` serves stdio. `AcpServer::serve(config, transport)` serves one
+connection over any SDK transport — an in-process `Channel`, a socket wrapped in
+`ByteStreams` — until the client closes it, then releases the connection's
+sessions. The [`acp_full_protocol`](../../../examples/acp_full_protocol) example
+tests drive the real server this way.
 
 ## Persistence decisions
 

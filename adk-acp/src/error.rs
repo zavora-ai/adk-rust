@@ -28,6 +28,11 @@ pub enum AcpError {
     /// Invalid configuration for the ACP agent.
     #[error("invalid ACP agent config: {0}")]
     InvalidConfig(String),
+
+    /// The ACP agent does not advertise the capability a request needs, so
+    /// the client did not send it.
+    #[error("unsupported by the ACP agent: {0}")]
+    Unsupported(String),
 }
 
 impl From<AcpError> for adk_core::AdkError {

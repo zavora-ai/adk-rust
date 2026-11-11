@@ -1,52 +1,77 @@
 //! Builds the official ACP v1 capability declaration for the ADK-Rust agent.
 
-pub use agent_client_protocol::schema::v1::AgentCapabilities;
-use agent_client_protocol::schema::v1::{
-    PromptCapabilities, SessionAdditionalDirectoriesCapabilities, SessionCapabilities,
+pub use agent_client_protocol::v1::schema::AgentCapabilities;
+use agent_client_protocol::v1::schema::{
+    AgentAuthCapabilities, AuthStatusCapabilities, LogoutCapabilities, PromptCapabilities,
+    SessionAdditionalDirectoriesCapabilities, SessionArchiveCapabilities, SessionCapabilities,
     SessionCloseCapabilities, SessionDeleteCapabilities, SessionForkCapabilities,
-    SessionListCapabilities, SessionResumeCapabilities,
+    SessionListCapabilities, SessionOptionsCapabilities, SessionResumeCapabilities,
+    SessionStatusCapabilities, SessionSystemPromptCapabilities,
+    SessionSystemPromptModeCapabilities, SessionSystemPromptOverrideCapabilities,
+    SessionTitleCapabilities,
 };
 
-use super::config::AcpServerConfig;
+use super::config::{AcpServerConfig, SystemPromptSupport};
 
 /// Constructs capabilities that exactly match the registered server handlers.
 pub struct CapabilitiesBuilder;
 
 impl CapabilitiesBuilder {
-    /// Build the stable ACP v1 capability set implemented by the server.
+    /// Build the ACP v1 capability set implemented by the server.
     ///
-    /// Prompt capabilities are advertised only for content types the prompt
-    /// handler actually accepts (see [`crate::content::block_to_part`]). The
-    /// handler accepts text, image, audio, resource-link, and embedded-resource
-    /// content, so `embedded_context`, `image`, and `audio` are all advertised.
-    /// This keeps advertised capabilities in exact correspondence with what the
-    /// handler implements (Capability_Accuracy).
+    /// Every advertised capability has a registered handler (Capability_Accuracy):
     ///
-    /// The `load_session` capability is advertised because the server registers
-    /// a `session/load` handler that reactivates a persisted session and
-    /// replays its stored conversation (see
-    /// [`AcpSessionHandler::load_session`](crate::server::handler::AcpSessionHandler::load_session)).
-    ///
-    /// The `session.fork` capability is advertised because the server registers
-    /// a `session/fork` handler that branches a persisted session into a new
-    /// session, copying its history and relevant state while leaving the source
-    /// untouched (see
-    /// [`AcpSessionHandler::fork_session`](crate::server::handler::AcpSessionHandler::fork_session)).
-    pub fn build(_config: &AcpServerConfig) -> AgentCapabilities {
+    /// - `loadSession`, and the session `list`, `delete`, `resume`, `close`,
+    ///   `fork`, `additionalDirectories`, `archive`, `status`, `options` and
+    ///   `title` capabilities, each backed by its `session/*` handler;
+    /// - prompt `image`, `audio` and `embeddedContext`, the content the prompt
+    ///   handler accepts (see [`crate::content::block_to_part`]);
+    /// - `systemPrompt`, with `override` unless the configuration narrows it to
+    ///   `append` or disables it ([`SystemPromptSupport`]);
+    /// - `auth.status` always, because `auth/status` answers whether or not an
+    ///   authenticator is configured, and `auth.logout` only when the
+    ///   configured [`AcpAuthenticator`](super::AcpAuthenticator) supports it.
+    pub fn build(config: &AcpServerConfig) -> AgentCapabilities {
+        let mut session = SessionCapabilities::new()
+            .list(SessionListCapabilities::new())
+            .delete(SessionDeleteCapabilities::new())
+            .additional_directories(SessionAdditionalDirectoriesCapabilities::new())
+            .resume(SessionResumeCapabilities::new())
+            .fork(SessionForkCapabilities::new())
+            .close(SessionCloseCapabilities::new())
+            .archive(SessionArchiveCapabilities::new())
+            .status(SessionStatusCapabilities::new())
+            .options(SessionOptionsCapabilities::new())
+            .title(SessionTitleCapabilities::new());
+        session = match config.system_prompts {
+            SystemPromptSupport::Disabled => session,
+            SystemPromptSupport::Append => {
+                session.system_prompt(SessionSystemPromptCapabilities::new())
+            }
+            SystemPromptSupport::AppendAndOverride => session.system_prompt(
+                SessionSystemPromptCapabilities::new().mode(
+                    SessionSystemPromptModeCapabilities::new()
+                        .override_(SessionSystemPromptOverrideCapabilities::new()),
+                ),
+            ),
+        };
+
+        let mut auth = AgentAuthCapabilities::new().status(AuthStatusCapabilities::new());
+        if config
+            .authenticator
+            .as_ref()
+            .is_some_and(|authenticator| authenticator.supports_logout())
+        {
+            auth = auth.logout(LogoutCapabilities::new());
+        }
+
         AgentCapabilities::new()
             .load_session(true)
             .prompt_capabilities(
                 PromptCapabilities::new().embedded_context(true).image(true).audio(true),
             )
-            .session_capabilities(
-                SessionCapabilities::new()
-                    .list(SessionListCapabilities::new())
-                    .delete(SessionDeleteCapabilities::new())
-                    .additional_directories(SessionAdditionalDirectoriesCapabilities::new())
-                    .resume(SessionResumeCapabilities::new())
-                    .fork(SessionForkCapabilities::new())
-                    .close(SessionCloseCapabilities::new()),
-            )
+            .session_capabilities(session)
+            .auth(auth)
     }
 }
 
@@ -54,7 +79,7 @@ impl CapabilitiesBuilder {
 mod tests {
     use std::sync::Arc;
 
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         SessionConfigOption, SessionId, SessionMode, SessionModeState,
     };
     use tokio_util::sync::CancellationToken;
@@ -159,7 +184,7 @@ mod tests {
     /// **Validates: Requirements 13.1, 13.3**
     #[test]
     fn advertised_prompt_capabilities_match_content_mappings_bidirectionally() {
-        use agent_client_protocol::schema::v1::{
+        use agent_client_protocol::v1::schema::{
             AudioContent, ContentBlock, EmbeddedResource as AcpEmbeddedResource,
             EmbeddedResourceResource, ImageContent, TextContent,
             TextResourceContents as AcpTextResourceContents,

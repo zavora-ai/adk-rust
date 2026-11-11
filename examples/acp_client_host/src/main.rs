@@ -8,15 +8,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use adk_acp::agent_client_protocol::Error as ProtocolError;
-use adk_acp::agent_client_protocol::schema::v1::{
+use adk_acp::agent_client_protocol::v1::schema::{
     ReadTextFileRequest, ReadTextFileResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
-use adk_acp::agent_client_protocol::util::internal_error;
 use adk_acp::{
     AcpAgentConfig, AcpFileSystem, OutputChunk, PermissionDecision, PermissionPolicy,
     StatusTracker, stream_prompt,
 };
 use async_trait::async_trait;
+
+fn internal_error(message: impl Into<String>) -> ProtocolError {
+    ProtocolError::internal_error().data(message.into())
+}
 
 #[derive(Debug)]
 struct ReadOnlyWorkspace {
@@ -137,11 +140,33 @@ async fn main() -> anyhow::Result<()> {
                     if approved { "allowed once" } else { "denied" }
                 );
             }
-            OutputChunk::Done => {
-                println!("\n\nACP turn completed.");
+            OutputChunk::Plan(plan) => {
+                println!("\n[plan]");
+                for entry in plan.entries {
+                    println!("  - {} ({:?})", entry.content, entry.status);
+                }
+            }
+            OutputChunk::Notice { severity, title, description } => {
+                println!("\n[notice {severity:?}] {title}");
+                if let Some(description) = description {
+                    println!("  {description}");
+                }
+            }
+            OutputChunk::ModeChanged(mode) => println!("\n[mode] {mode}"),
+            OutputChunk::Done { stop_reason, usage } => {
+                print!("\n\nACP turn completed ({stop_reason:?})");
+                if let Some(usage) = usage {
+                    print!(
+                        ": {} input + {} output tokens",
+                        usage.input_tokens, usage.output_tokens
+                    );
+                }
+                println!(".");
                 break;
             }
             OutputChunk::Error(error) => return Err(anyhow::anyhow!(error)),
+            // Compactions, config and command changes, session info and subagent activity.
+            _ => {}
         }
     }
 

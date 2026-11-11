@@ -3,8 +3,9 @@
 //! official SDK `Client` over an in-process [`Channel::duplex`] — no subprocess
 //! and no API key.
 //!
-//! Each test pairs the SDK `Client` with the ADK server wiring built from the
-//! public `AcpSessionHandler`, exactly as an IDE would over stdio, and asserts:
+//! The first tests pair the SDK's v1 `Client` with the server that
+//! [`AcpServer::serve`] runs — the same wiring `AcpServer::run` serves over
+//! stdio — exactly as an IDE would, and assert:
 //!
 //! - embedded-resource prompts reach the agent as `Part::EmbeddedResource`;
 //! - image / audio prompts are accepted and reach the agent as
@@ -13,183 +14,56 @@
 //!   deny skips), and the outer prompt completes in both cases;
 //! - `session/load` replays stored updates in chronological order;
 //! - `UsageUpdate` and an enriched `ToolCallUpdate` are surfaced.
+//!
+//! The ACP v5 tests at the end drive the same server with adk-acp's own client,
+//! [`AcpConnection`], covering version negotiation, client system prompts,
+//! end-of-turn usage, session titles, status, archiving, options, modes and
+//! config, fork and resume, and authentication.
 
 use std::sync::{Arc, Mutex};
 
 use acp_full_protocol::{
-    AGENT_NAME, CONFIRM_CALL_ID, ScriptedAgent, build_delete_tool, build_session_service,
+    AGENT_INSTRUCTION, AGENT_NAME, CONFIRM_CALL_ID, ReferenceControls, ScriptedAgent, TOKEN_METHOD,
+    WorkspaceToken, build_delete_tool, build_session_service,
 };
-use adk_acp::server::{
-    AcpServerConfigBuilder, AcpServerError, AcpSessionHandler, AgentCapabilities,
-    CapabilitiesBuilder, ResponseStreamer,
-};
-use adk_core::Agent as AdkAgent;
-use adk_session::{GetRequest, SessionService};
-use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
-    AudioContent, CloseSessionRequest, CloseSessionResponse, ContentBlock,
+use adk_acp::agent_client_protocol::schema::ProtocolVersion;
+use adk_acp::agent_client_protocol::v1::schema::{
+    AudioContent, AuthState, CloseSessionRequest, ContentBlock,
     EmbeddedResource as AcpEmbeddedResource, EmbeddedResourceResource, ImageContent,
-    Implementation, InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
-    NewSessionRequest, NewSessionResponse, PermissionOptionKind, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionNotification, SessionUpdate, StopReason, TextContent,
+    InitializeRequest, ListSessionsRequest, LoadSessionRequest, NewSessionRequest,
+    PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SelectedPermissionOutcome, SessionArchiveFilter, SessionConfigKind,
+    SessionNotification, SessionStatus, SessionUpdate, StopReason, TextContent,
     TextResourceContents as AcpTextResourceContents,
 };
-use agent_client_protocol::{Agent, Channel, Client, ConnectTo, ConnectionTo, Error, Responder};
+use adk_acp::agent_client_protocol::v1::{ConnectionTo, Responder};
+use adk_acp::agent_client_protocol::{Agent, Channel, Client};
+use adk_acp::server::{AcpServer, AcpServerConfigBuilder, ResponseStreamer};
+use adk_acp::{AcpAgentConfig, AcpConnection, AcpError, OutputChunk, PermissionPolicy};
+use adk_core::Agent as AdkAgent;
+use adk_session::{GetRequest, SessionService};
 use base64::{Engine as _, engine::general_purpose};
-use tokio_util::sync::CancellationToken;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Server wiring — mirrors the crate-internal stdio transport, built entirely on
-// the public `AcpSessionHandler` API so it can serve over any SDK channel.
-// ─────────────────────────────────────────────────────────────────────────────
-
-async fn serve_over_channel<C>(
-    handler: Arc<AcpSessionHandler>,
-    capabilities: AgentCapabilities,
-    name: String,
-    title: String,
-    component: C,
-) -> Result<(), Error>
-where
-    C: ConnectTo<Agent> + 'static,
-{
-    let new_handler = handler.clone();
-    let prompt_handler = handler.clone();
-    let load_handler = handler.clone();
-    let close_handler = handler;
-
-    Agent
-        .builder()
-        .name(name.clone())
-        .on_receive_request(
-            move |request: InitializeRequest,
-                  responder: Responder<InitializeResponse>,
-                  _connection: ConnectionTo<Client>| {
-                let capabilities = capabilities.clone();
-                let name = name.clone();
-                let title = title.clone();
-                async move {
-                    let _ = request;
-                    let mut implementation = Implementation::new(name, env!("CARGO_PKG_VERSION"));
-                    if !title.is_empty() {
-                        implementation = implementation.title(title);
-                    }
-                    responder.respond(
-                        InitializeResponse::new(ProtocolVersion::V1)
-                            .agent_capabilities(capabilities)
-                            .agent_info(implementation),
-                    )
-                }
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            move |request: NewSessionRequest,
-                  responder: Responder<NewSessionResponse>,
-                  connection: ConnectionTo<Client>| {
-                let handler = new_handler.clone();
-                async move {
-                    let cancellation = responder.cancellation();
-                    connection.spawn(async move {
-                        responder.respond_with_result(
-                            handler
-                                .create_session(request, cancellation)
-                                .await
-                                .map(NewSessionResponse::new)
-                                .map_err(to_protocol_error),
-                        )
-                    })?;
-                    Ok(())
-                }
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            move |request: PromptRequest,
-                  responder: Responder<PromptResponse>,
-                  connection: ConnectionTo<Client>| {
-                let handler = prompt_handler.clone();
-                async move {
-                    let cancellation = responder.cancellation();
-                    let spawned_connection = connection.clone();
-                    connection.spawn(async move {
-                        let session_id = request.session_id.clone();
-                        let cancellation_handler = handler.clone();
-                        let work = handler.handle_prompt(request, spawned_connection);
-                        tokio::pin!(work);
-                        let result = tokio::select! {
-                            result = &mut work => result,
-                            _ = cancellation.cancelled() => {
-                                cancellation_handler.cancel_session(&session_id).await;
-                                work.await
-                            }
-                        };
-                        responder.respond_with_result(
-                            result.map(PromptResponse::new).map_err(to_protocol_error),
-                        )
-                    })?;
-                    Ok(())
-                }
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            move |request: LoadSessionRequest,
-                  responder: Responder<LoadSessionResponse>,
-                  connection: ConnectionTo<Client>| {
-                let handler = load_handler.clone();
-                async move {
-                    let cancellation = responder.cancellation();
-                    let spawned_connection = connection.clone();
-                    connection.spawn(async move {
-                        responder.respond_with_result(
-                            handler
-                                .load_session(
-                                    &request.session_id,
-                                    request.cwd,
-                                    request.additional_directories,
-                                    request.mcp_servers,
-                                    cancellation,
-                                    spawned_connection,
-                                )
-                                .await
-                                .map(|()| LoadSessionResponse::new())
-                                .map_err(to_protocol_error),
-                        )
-                    })?;
-                    Ok(())
-                }
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            async move |request: CloseSessionRequest,
-                        responder: Responder<CloseSessionResponse>,
-                        _connection: ConnectionTo<Client>| {
-                match close_handler.close_session(&request.session_id).await {
-                    Ok(()) => responder.respond(CloseSessionResponse::new()),
-                    Err(error) => responder.respond_with_error(to_protocol_error(error)),
-                }
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .connect_to(component)
-        .await
-}
-
-fn to_protocol_error(error: AcpServerError) -> Error {
-    match error {
-        AcpServerError::MalformedMessage(message)
-        | AcpServerError::SessionNotFound(message)
-        | AcpServerError::UnsupportedVersion { requested: message, .. } => {
-            Error::invalid_params().data(message)
-        }
-        AcpServerError::MaxSessionsReached(max) => {
-            Error::invalid_params().data(format!("maximum active sessions reached: {max}"))
-        }
-        other => Error::internal_error().data(other.to_string()),
-    }
+/// Serve the reference agent over one end of an in-process SDK channel —
+/// exactly as `AcpServer::run` serves stdio — and return the other end.
+fn serve(
+    agent: Arc<dyn AdkAgent>,
+    session_service: Arc<dyn SessionService>,
+    configure: impl FnOnce(AcpServerConfigBuilder) -> AcpServerConfigBuilder,
+) -> Channel {
+    let config = configure(
+        AcpServerConfigBuilder::new()
+            .agent(agent)
+            .session_service(session_service)
+            .agent_name(AGENT_NAME)
+            .agent_description("ACP full-protocol reference agent")
+            .session_controls(Arc::new(ReferenceControls)),
+    )
+    .build()
+    .expect("valid config");
+    let (server_channel, client_channel) = Channel::duplex();
+    tokio::spawn(AcpServer::serve(config, server_channel));
+    client_channel
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -222,24 +96,6 @@ fn message_chunk_text(update: &SessionUpdate) -> Option<String> {
     }
 }
 
-/// Build server config, handler, and capabilities for the given agent.
-fn build_server(
-    agent: Arc<dyn AdkAgent>,
-    session_service: Arc<dyn SessionService>,
-) -> (Arc<AcpSessionHandler>, AgentCapabilities) {
-    let config = AcpServerConfigBuilder::new()
-        .agent(agent)
-        .session_service(session_service)
-        .agent_name(AGENT_NAME)
-        .agent_description("ACP full-protocol reference agent")
-        .build()
-        .expect("valid config");
-    let capabilities = CapabilitiesBuilder::build(&config);
-    let handler =
-        Arc::new(AcpSessionHandler::new(&config, CancellationToken::new()).expect("handler"));
-    (handler, capabilities)
-}
-
 /// Drive `initialize` → `session/new` → `session/prompt` against the server,
 /// answering any `session/request_permission` with `answer`, and capture every
 /// `session/update` plus the stop reason.
@@ -249,29 +105,20 @@ async fn drive_prompt(
     prompt: Vec<ContentBlock>,
     answer: PermissionAnswer,
 ) -> DriveResult {
-    let (handler, capabilities) = build_server(agent, session_service);
+    let client_channel = serve(agent, session_service, |config| config);
     let updates = Arc::new(Mutex::new(Vec::new()));
     let updates_for_client = updates.clone();
     let permission_call_id = Arc::new(Mutex::new(None::<String>));
     let permission_for_client = permission_call_id.clone();
-    let (server_channel, client_channel) = Channel::duplex();
-
-    let server = serve_over_channel(
-        handler,
-        capabilities,
-        AGENT_NAME.into(),
-        "ACP full-protocol reference agent".into(),
-        server_channel,
-    );
 
     let client = Client
-        .builder()
+        .v1()
         .on_receive_notification(
             async move |notification: SessionNotification, _connection: ConnectionTo<Agent>| {
                 updates_for_client.lock().expect("updates lock").push(notification.update);
                 Ok(())
             },
-            agent_client_protocol::on_receive_notification!(),
+            adk_acp::agent_client_protocol::on_receive_notification!(),
         )
         .on_receive_request(
             move |request: RequestPermissionRequest,
@@ -307,13 +154,14 @@ async fn drive_prompt(
                     responder.respond(RequestPermissionResponse::new(outcome))
                 }
             },
-            agent_client_protocol::on_receive_request!(),
+            adk_acp::agent_client_protocol::on_receive_request!(),
         )
         .connect_with(client_channel, move |connection: ConnectionTo<Agent>| async move {
-            connection
+            let initialized = connection
                 .send_request(InitializeRequest::new(ProtocolVersion::V1))
                 .block_task()
                 .await?;
+            assert_eq!(initialized.protocol_version, ProtocolVersion::V1);
             let cwd = std::env::current_dir().expect("absolute cwd");
             let session = connection.send_request(NewSessionRequest::new(cwd)).block_task().await?;
             let prompt = connection
@@ -323,13 +171,10 @@ async fn drive_prompt(
             Ok(prompt.stop_reason)
         });
 
-    let server_task = tokio::spawn(server);
     let stop_reason = tokio::time::timeout(std::time::Duration::from_secs(5), client)
         .await
         .expect("prompt completed before timeout")
         .expect("official ACP client completed");
-    server_task.abort();
-    let _ = server_task.await;
 
     let updates = updates.lock().expect("updates lock").clone();
     let permission_call_id = permission_call_id.lock().expect("permission lock").clone();
@@ -490,28 +335,19 @@ async fn session_load_replays_history_in_chronological_order() {
     let session_service = build_session_service();
     let session_service_probe = session_service.clone();
     let agent: Arc<dyn AdkAgent> = Arc::new(ScriptedAgent::new(build_delete_tool()));
-    let (handler, capabilities) = build_server(agent, session_service);
+    let client_channel = serve(agent, session_service, |config| config);
 
     let updates = Arc::new(Mutex::new(Vec::new()));
     let updates_for_client = updates.clone();
-    let (server_channel, client_channel) = Channel::duplex();
-
-    let server = serve_over_channel(
-        handler,
-        capabilities,
-        AGENT_NAME.into(),
-        "ACP full-protocol reference agent".into(),
-        server_channel,
-    );
 
     let client = Client
-        .builder()
+        .v1()
         .on_receive_notification(
             async move |notification: SessionNotification, _connection: ConnectionTo<Agent>| {
                 updates_for_client.lock().expect("updates lock").push(notification.update);
                 Ok(())
             },
-            agent_client_protocol::on_receive_notification!(),
+            adk_acp::agent_client_protocol::on_receive_notification!(),
         )
         .connect_with(client_channel, move |connection: ConnectionTo<Agent>| {
             let updates = updates.clone();
@@ -587,11 +423,180 @@ async fn session_load_replays_history_in_chronological_order() {
             }
         });
 
-    let server_task = tokio::spawn(server);
     tokio::time::timeout(std::time::Duration::from_secs(5), client)
         .await
         .expect("session load completed before timeout")
         .expect("official ACP client completed");
-    server_task.abort();
-    let _ = server_task.await;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACP v5: adk-acp's client against the same server
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn connect(
+    client: AcpAgentConfig,
+    configure: impl FnOnce(AcpServerConfigBuilder) -> AcpServerConfigBuilder,
+) -> AcpConnection {
+    let agent: Arc<dyn AdkAgent> = Arc::new(ScriptedAgent::new(build_delete_tool()));
+    let channel = serve(agent, build_session_service(), configure);
+    AcpConnection::connect_to(channel, client, Arc::new(PermissionPolicy::DenyAll))
+        .await
+        .expect("ACP handshake")
+}
+
+fn client() -> AcpAgentConfig {
+    AcpAgentConfig::new("in-process").working_dir(std::env::current_dir().expect("absolute cwd"))
+}
+
+/// The handshake negotiates protocol v1 and reports the agent and the session
+/// capabilities the server implements.
+#[tokio::test]
+async fn v5_handshake_negotiates_the_protocol_version() {
+    let connection = connect(client(), |config| config).await;
+    let info = connection.agent_info();
+    assert_eq!(info.protocol_version, ProtocolVersion::V1);
+    assert_eq!(info.agent.as_ref().map(|agent| agent.name.as_str()), Some(AGENT_NAME));
+    let session = &info.capabilities.session_capabilities;
+    assert!(session.fork.is_some() && session.archive.is_some() && session.status.is_some());
+    assert!(
+        session.options.is_some() && session.title.is_some() && session.system_prompt.is_some()
+    );
+    connection.close().await.expect("close");
+}
+
+/// A client system prompt reaches the turn's model requests: `append` after the
+/// agent's instruction, `override` instead of it.
+#[tokio::test]
+async fn v5_system_prompts_reach_the_turn() {
+    let connection =
+        connect(client().append_system_prompt("Answer in French."), |config| config).await;
+    let mut session = connection.new_session().await.expect("session");
+    let reply = session.prompt("instructions?").await.expect("prompt");
+    assert_eq!(reply.text, format!("instructions: {AGENT_INSTRUCTION} | Answer in French."));
+    session.close().await.expect("close");
+
+    let connection = connect(client().override_system_prompt("Only this."), |config| config).await;
+    let mut session = connection.new_session().await.expect("session");
+    let reply = session.prompt("instructions?").await.expect("prompt");
+    assert_eq!(reply.text, "instructions: Only this.");
+    session.close().await.expect("close");
+}
+
+/// `PromptResponse.usage` carries the turn's token counts, and the stream
+/// reports the stop reason.
+#[tokio::test]
+async fn v5_prompt_responses_carry_usage() {
+    let connection = connect(client(), |config| config).await;
+    let mut session = connection.new_session().await.expect("session");
+    let mut chunks = Vec::new();
+    let reply = session
+        .prompt_blocks(vec![text_block("inspect")], |chunk| chunks.push(chunk))
+        .await
+        .expect("prompt");
+    assert_eq!(reply.stop_reason, StopReason::EndTurn);
+    let usage = reply.usage.expect("usage");
+    assert_eq!((usage.input_tokens, usage.output_tokens, usage.total_tokens), (42, 8, 50));
+    assert!(chunks.iter().any(|chunk| matches!(chunk, OutputChunk::ToolUpdate { .. })));
+    session.close().await.expect("close");
+}
+
+/// Titles, status, archiving, listing, fork, load and resume.
+#[tokio::test]
+async fn v5_session_lifecycle() {
+    let connection = connect(client(), |config| config).await;
+    let mut session = connection.new_session().await.expect("session");
+    session.prompt("inspect").await.expect("prompt");
+    session.set_title("Inspect the notes").await.expect("title");
+    assert_eq!(session.status().await.expect("status"), SessionStatus::Open);
+
+    let mut fork = session.fork().await.expect("fork");
+    assert_eq!(fork.status().await.expect("status"), SessionStatus::Open);
+    fork.archive().await.expect("archive");
+    let listed = connection.list_sessions(None).await.expect("list");
+    assert!(listed.iter().any(|info| info.title.as_deref() == Some("Inspect the notes")));
+    assert!(
+        listed.iter().all(|info| info.session_id != *fork.session_id()),
+        "archived fork hidden"
+    );
+    let archived = connection
+        .list_sessions_page(ListSessionsRequest::new().archived(SessionArchiveFilter::Only))
+        .await
+        .expect("archived list");
+    assert_eq!(archived.sessions.len(), 1);
+    fork.close().await.expect("close fork");
+
+    let id = session.session_id().clone();
+    session.close().await.expect("close");
+    assert_eq!(connection.session_status(id.clone()).await.expect("status"), SessionStatus::Saved);
+
+    let mut loaded = connection.load_session(id.clone()).await.expect("load");
+    assert!(
+        loaded
+            .pending_updates()
+            .iter()
+            .any(|chunk| matches!(chunk, OutputChunk::Text(text) if text == "turn complete"))
+    );
+    loaded.close().await.expect("close");
+    let mut resumed = connection.resume_session(id).await.expect("resume");
+    resumed.prompt("inspect").await.expect("prompt after resume");
+    resumed.close().await.expect("close");
+}
+
+/// Session options before creation, initial config values, modes and config.
+#[tokio::test]
+async fn v5_modes_and_config_options() {
+    let connection =
+        connect(client().initial_config_option("verbose", true), |config| config).await;
+    let options = connection.session_options(None).await.expect("options");
+    assert_eq!(options.modes.expect("modes").available_modes.len(), 2);
+
+    let mut session = connection.new_session().await.expect("session");
+    let verbose =
+        |options: &[adk_acp::agent_client_protocol::v1::schema::SessionConfigOption]| match &options
+            [0]
+        .kind
+        {
+            SessionConfigKind::Boolean(boolean) => boolean.current_value,
+            _ => panic!("boolean option"),
+        };
+    assert!(verbose(&session.config_options().expect("options")), "initial value applied");
+    session.set_mode("code").await.expect("mode");
+    assert_eq!(session.modes().expect("modes").current_mode_id.to_string(), "code");
+    assert!(!verbose(&session.set_config_option("verbose", false).await.expect("config")));
+    session.close().await.expect("close");
+}
+
+/// With an authenticator, sessions need `authenticate`; `auth/status` and
+/// `logout` follow the state.
+#[tokio::test]
+async fn v5_authentication() {
+    let authenticated = |config: AcpServerConfigBuilder| {
+        config.authenticator(Arc::new(WorkspaceToken::new("secret")))
+    };
+    let connection = connect(client(), authenticated).await;
+    assert!(connection.new_session().await.is_err(), "auth_required before authenticating");
+    assert_eq!(connection.auth_status().await.expect("status").state, AuthState::Unauthenticated);
+    connection.authenticate(TOKEN_METHOD).await.expect("authenticate");
+    assert_eq!(connection.auth_status().await.expect("status").state, AuthState::Authenticated);
+    let mut session = connection.new_session().await.expect("session");
+    session.close().await.expect("close");
+    connection.logout().await.expect("logout");
+    assert!(connection.new_session().await.is_err(), "logout ends the authenticated state");
+
+    let connection = connect(client().auth_method(TOKEN_METHOD), authenticated).await;
+    let mut session = connection.new_session().await.expect("session after handshake auth");
+    session.close().await.expect("close");
+
+    // A method the agent does not offer fails the handshake, and is refused
+    // locally on a live connection.
+    let agent: Arc<dyn AdkAgent> = Arc::new(ScriptedAgent::new(build_delete_tool()));
+    let channel = serve(agent, build_session_service(), authenticated);
+    let refused = AcpConnection::connect_to(
+        channel,
+        client().auth_method("unknown"),
+        Arc::new(PermissionPolicy::DenyAll),
+    )
+    .await;
+    assert!(refused.is_err(), "an unoffered auth method fails the handshake");
+    assert!(matches!(connection.authenticate("unknown").await, Err(AcpError::Unsupported(_))));
 }

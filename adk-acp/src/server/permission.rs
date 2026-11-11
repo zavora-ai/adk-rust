@@ -39,18 +39,19 @@
 //!
 //! `session/request_permission` is a nested, agent-to-client request issued
 //! *while* the server is still handling the outer `session/prompt` request. The
-//! SDK's [`block_task`](agent_client_protocol::ConnectionTo) is only safe to
+//! SDK's [`block_task`](agent_client_protocol::v1::ConnectionTo) is only safe to
 //! await inside a task spawned with `ConnectionTo::spawn`. The prompt handler
 //! runs inside exactly such a spawned task (see `transport/stdio.rs`), so the
 //! nested request does not block the connection's dispatch loop and the outer
 //! prompt response still completes.
 
 use adk_core::{ApprovalScope, ToolConfirmationDecision, ToolConfirmationRequest};
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::Client;
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::{
     PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
     SessionId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
-use agent_client_protocol::{Client, ConnectionTo};
 use async_trait::async_trait;
 
 use super::error::AcpServerError;
@@ -319,7 +320,7 @@ impl PermissionBridge {
 
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         PermissionOptionId, SelectedPermissionOutcome, ToolKind,
     };
 

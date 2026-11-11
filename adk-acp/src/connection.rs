@@ -8,23 +8,23 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use adk_core::Content;
-use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
-    ContentBlock, ContentChunk, InitializeRequest, InitializeResponse, McpServer,
-    NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SessionNotification, SessionUpdate,
+use agent_client_protocol::AcpAgent;
+use agent_client_protocol::v1::schema::{
+    ContentBlock, Implementation, InitialSessionConfigOption, McpServer, SessionConfigId,
+    SessionConfigOptionValue, SystemPrompt, SystemPromptMode,
 };
-use agent_client_protocol::util::MatchDispatch;
-use agent_client_protocol::{AcpAgent, Agent, Client, ConnectionTo, Responder, SessionMessage};
-use tracing::{debug, info};
+use tracing::info;
 
+use crate::client::AcpConnection;
 use crate::content::content_to_blocks;
+use crate::elicitation::AcpElicitation;
 use crate::error::{AcpError, Result};
-use crate::host::{AcpFileSystem, AcpHostHandler, AcpTerminal, capabilities};
-use crate::permissions::{PermissionPolicy, PermissionRequest, outcome_for};
+use crate::host::{AcpFileSystem, AcpTerminal};
+use crate::permissions::PermissionPolicy;
 
 /// Configuration for connecting to an ACP agent.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct AcpAgentConfig {
     /// Command to spawn the agent (e.g., "claude-code" or "codex --model o3").
     ///
@@ -46,6 +46,27 @@ pub struct AcpAgentConfig {
     pub filesystem: Option<Arc<dyn AcpFileSystem>>,
     /// Optional terminal host exposed to the external ACP agent.
     pub terminal: Option<Arc<dyn AcpTerminal>>,
+    /// Directories outside [`working_dir`](Self::working_dir) that sessions may
+    /// use, sent as `additionalDirectories` when the agent advertises them.
+    pub additional_directories: Vec<PathBuf>,
+    /// System-level instructions sent with each session request.
+    ///
+    /// ACP lets a client send one only when the agent advertises
+    /// `sessionCapabilities.systemPrompt`, and `override` only when it
+    /// advertises that mode; otherwise starting a session fails with
+    /// [`AcpError::Unsupported`].
+    pub system_prompt: Option<SystemPrompt>,
+    /// Initial configuration values sent with `session/new`, `session/load`
+    /// and `session/resume` when the agent advertises `session/options`.
+    pub initial_config_options: Vec<InitialSessionConfigOption>,
+    /// Authentication method to use right after `initialize`, from the
+    /// agent's advertised `authMethods`.
+    pub auth_method: Option<String>,
+    /// Handler for the agent's `elicitation/create` requests. Elicitation is
+    /// advertised only when one is set.
+    pub elicitation: Option<Arc<dyn AcpElicitation>>,
+    /// The client name and version sent as `clientInfo`.
+    pub client_info: Implementation,
 }
 
 impl std::fmt::Debug for AcpAgentConfig {
@@ -70,6 +91,12 @@ impl std::fmt::Debug for AcpAgentConfig {
             .field("mcp_servers", &mcp_servers)
             .field("filesystem_enabled", &self.filesystem.is_some())
             .field("terminal_enabled", &self.terminal.is_some())
+            .field("additional_directories", &self.additional_directories)
+            .field("system_prompt", &self.system_prompt.as_ref().map(|prompt| &prompt.mode))
+            .field("initial_config_options", &self.initial_config_options.len())
+            .field("auth_method", &self.auth_method)
+            .field("elicitation_enabled", &self.elicitation.is_some())
+            .field("client_info", &self.client_info)
             .finish()
     }
 }
@@ -85,6 +112,13 @@ impl AcpAgentConfig {
             mcp_servers: Vec::new(),
             filesystem: None,
             terminal: None,
+            additional_directories: Vec::new(),
+            system_prompt: None,
+            initial_config_options: Vec::new(),
+            auth_method: None,
+            elicitation: None,
+            client_info: Implementation::new("adk-rust", env!("CARGO_PKG_VERSION"))
+                .title("ADK-Rust".to_string()),
         }
     }
 
@@ -143,6 +177,67 @@ impl AcpAgentConfig {
         self.terminal = Some(terminal);
         self
     }
+
+    /// Let sessions use a directory outside the working directory.
+    pub fn additional_directory(mut self, path: impl Into<PathBuf>) -> Self {
+        self.additional_directories.push(path.into());
+        self
+    }
+
+    /// Add `text` to the agent's own system instructions for every session
+    /// (`systemPrompt` in `append` mode).
+    pub fn append_system_prompt(mut self, text: impl Into<String>) -> Self {
+        self.system_prompt = Some(SystemPrompt::new(vec![ContentBlock::from(text.into())]));
+        self
+    }
+
+    /// Replace the agent's own system instructions with `text` for every
+    /// session (`systemPrompt` in `override` mode).
+    ///
+    /// The client takes over any tool guidance or safety instructions the
+    /// agent's defaults provided.
+    pub fn override_system_prompt(mut self, text: impl Into<String>) -> Self {
+        self.system_prompt = Some(
+            SystemPrompt::new(vec![ContentBlock::from(text.into())])
+                .mode(SystemPromptMode::Override),
+        );
+        self
+    }
+
+    /// Send a fully built system prompt with every session request.
+    pub fn system_prompt(mut self, prompt: SystemPrompt) -> Self {
+        self.system_prompt = Some(prompt);
+        self
+    }
+
+    /// Start every session with a configuration option set to `value`.
+    pub fn initial_config_option(
+        mut self,
+        config_id: impl Into<SessionConfigId>,
+        value: impl Into<SessionConfigOptionValue>,
+    ) -> Self {
+        self.initial_config_options.push(InitialSessionConfigOption::new(config_id, value));
+        self
+    }
+
+    /// Authenticate with this method from the agent's `authMethods` right
+    /// after `initialize`.
+    pub fn auth_method(mut self, method_id: impl Into<String>) -> Self {
+        self.auth_method = Some(method_id.into());
+        self
+    }
+
+    /// Answer the agent's `elicitation/create` requests with `handler`.
+    pub fn elicitation(mut self, handler: Arc<dyn AcpElicitation>) -> Self {
+        self.elicitation = Some(handler);
+        self
+    }
+
+    /// Set the client name and version sent as `clientInfo`.
+    pub fn client_info(mut self, name: impl Into<String>, version: impl Into<String>) -> Self {
+        self.client_info = Implementation::new(name, version);
+        self
+    }
 }
 
 /// Send a single prompt to an ACP agent and return the response text.
@@ -184,75 +279,7 @@ pub async fn prompt_agent_with_policy(
     policy: Arc<PermissionPolicy>,
 ) -> Result<String> {
     info!(command = %config.command, cwd = %config.working_dir.display(), "spawning ACP agent");
-
-    let agent = build_agent(config)?;
-
-    let prompt_text = prompt.to_string();
-    let working_dir = config.working_dir.clone();
-    let mcp_servers = config.mcp_servers.clone();
-    let filesystem = config.filesystem.clone();
-    let terminal = config.terminal.clone();
-    let client_capabilities = capabilities(filesystem.as_ref(), terminal.as_ref());
-    let policy_clone = policy.clone();
-
-    let result: std::result::Result<String, agent_client_protocol::Error> = Client
-        .builder()
-        .on_receive_request(
-            move |request: RequestPermissionRequest,
-                  responder: Responder<RequestPermissionResponse>,
-                  cx: ConnectionTo<Agent>| {
-                let policy = policy_clone.clone();
-                async move {
-                cx.spawn(async move {
-                    let cancellation = responder.cancellation();
-                    let perm_request = PermissionRequest::from_acp(&request);
-                    let decision = tokio::select! {
-                        decision = policy.decide(&perm_request) => decision,
-                        _ = cancellation.cancelled() => {
-                            return responder.respond(RequestPermissionResponse::new(
-                                RequestPermissionOutcome::Cancelled,
-                            ));
-                        }
-                    };
-                    let outcome = outcome_for(&perm_request, &decision);
-                    debug!(title = %perm_request.title, decision = %decision, "ACP permission policy evaluated");
-                    responder.respond(RequestPermissionResponse::new(outcome))
-                })?;
-                Ok(())
-                }
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .with_handler(AcpHostHandler::new(filesystem, terminal))
-        .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
-            // Initialize
-            let initialization = connection
-                .send_request(
-                    InitializeRequest::new(ProtocolVersion::V1)
-                        .client_capabilities(client_capabilities),
-                )
-                .block_task()
-                .await?;
-            validate_initialization(&initialization, &mcp_servers)?;
-
-            // Create session, send prompt, and collect response
-            let response_text = connection
-                .build_session_from(
-                    NewSessionRequest::new(&working_dir).mcp_servers(mcp_servers),
-                )
-                .block_task()
-                .run_until(async |mut session| {
-                    session.send_prompt(&prompt_text)?;
-                    let text = session.read_to_string().await?;
-                    Ok(text)
-                })
-                .await?;
-
-            Ok(response_text)
-        })
-        .await;
-
-    result.map_err(|e| AcpError::Protocol(e.to_string()))
+    one_shot(config, policy, vec![ContentBlock::from(prompt.to_string())]).await
 }
 
 /// Send a single multimodal prompt to an ACP agent and return the response text.
@@ -309,151 +336,27 @@ pub async fn prompt_agent_content_with_policy(
         block_count = blocks.len(),
         "spawning ACP agent for multimodal prompt"
     );
-
-    let agent = build_agent(config)?;
-
-    let working_dir = config.working_dir.clone();
-    let mcp_servers = config.mcp_servers.clone();
-    let filesystem = config.filesystem.clone();
-    let terminal = config.terminal.clone();
-    let client_capabilities = capabilities(filesystem.as_ref(), terminal.as_ref());
-    let policy_clone = policy.clone();
-
-    let result: std::result::Result<String, agent_client_protocol::Error> = Client
-        .builder()
-        .on_receive_request(
-            move |request: RequestPermissionRequest,
-                  responder: Responder<RequestPermissionResponse>,
-                  cx: ConnectionTo<Agent>| {
-                let policy = policy_clone.clone();
-                async move {
-                cx.spawn(async move {
-                    let cancellation = responder.cancellation();
-                    let perm_request = PermissionRequest::from_acp(&request);
-                    let decision = tokio::select! {
-                        decision = policy.decide(&perm_request) => decision,
-                        _ = cancellation.cancelled() => {
-                            return responder.respond(RequestPermissionResponse::new(
-                                RequestPermissionOutcome::Cancelled,
-                            ));
-                        }
-                    };
-                    let outcome = outcome_for(&perm_request, &decision);
-                    debug!(title = %perm_request.title, decision = %decision, "ACP permission policy evaluated");
-                    responder.respond(RequestPermissionResponse::new(outcome))
-                })?;
-                Ok(())
-                }
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .with_handler(AcpHostHandler::new(filesystem, terminal))
-        .connect_with(agent, move |connection: ConnectionTo<Agent>| async move {
-            let initialization = connection
-                .send_request(
-                    InitializeRequest::new(ProtocolVersion::V1)
-                        .client_capabilities(client_capabilities),
-                )
-                .block_task()
-                .await?;
-            validate_initialization(&initialization, &mcp_servers)?;
-
-            let response_text = connection
-                .build_session_from(
-                    NewSessionRequest::new(&working_dir).mcp_servers(mcp_servers),
-                )
-                .block_task()
-                .run_until(async move |mut session| collect_prompt_blocks(&mut session, blocks).await)
-                .await?;
-
-            Ok(response_text)
-        })
-        .await;
-
-    result.map_err(|e| AcpError::Protocol(e.to_string()))
+    one_shot(config, policy, blocks).await
 }
 
-/// Send a prompt built from explicit content blocks and collect the agent's
-/// streamed text response.
-///
-/// The SDK's [`send_prompt`](agent_client_protocol::ActiveSession::send_prompt)
-/// convenience only carries a single text block, so multimodal prompts send the
-/// [`PromptRequest`] directly over the session connection. Agent message chunks
-/// are drained from the session update channel (a biased select keeps the
-/// channel ahead of the prompt future so no buffered chunk is missed) until the
-/// prompt turn completes.
-async fn collect_prompt_blocks(
-    session: &mut agent_client_protocol::ActiveSession<'_, Agent>,
+/// Start the agent, prompt one new session, and stop the agent.
+async fn one_shot(
+    config: &AcpAgentConfig,
+    policy: Arc<PermissionPolicy>,
     blocks: Vec<ContentBlock>,
-) -> std::result::Result<String, agent_client_protocol::Error> {
-    let connection = session.connection();
-    let session_id = session.session_id().clone();
-    let prompt_future =
-        connection.send_request(PromptRequest::new(session_id, blocks)).block_task();
-    tokio::pin!(prompt_future);
-
-    let mut text = String::new();
-    loop {
-        tokio::select! {
-            biased;
-            update = session.read_update() => {
-                match update? {
-                    SessionMessage::SessionMessage(dispatch) => {
-                        MatchDispatch::new(dispatch)
-                            .if_notification(async |notification: SessionNotification| {
-                                if let SessionUpdate::AgentMessageChunk(ContentChunk {
-                                    content: ContentBlock::Text(text_content),
-                                    ..
-                                }) = notification.update
-                                {
-                                    text.push_str(&text_content.text);
-                                }
-                                Ok(())
-                            })
-                            .await
-                            .otherwise_ignore()?;
-                    }
-                    SessionMessage::StopReason(_) => break,
-                    _ => {}
-                }
-            }
-            result = &mut prompt_future => {
-                result?;
-                break;
-            }
-        }
+) -> Result<String> {
+    let connection = AcpConnection::connect(config.clone(), policy).await?;
+    let result = async {
+        let mut session = connection.new_session().await?;
+        let result = session.prompt_blocks(blocks, |_| {}).await;
+        session.close().await?;
+        result
     }
-    Ok(text)
-}
-
-pub(crate) fn validate_initialization(
-    response: &InitializeResponse,
-    mcp_servers: &[McpServer],
-) -> std::result::Result<(), agent_client_protocol::Error> {
-    if response.protocol_version != ProtocolVersion::V1 {
-        return Err(agent_client_protocol::Error::invalid_params()
-            .data("the ACP agent did not negotiate protocol version 1"));
-    }
-    for server in mcp_servers {
-        match server {
-            McpServer::Stdio(_) => {}
-            McpServer::Http(_) if response.agent_capabilities.mcp_capabilities.http => {}
-            McpServer::Sse(_) if response.agent_capabilities.mcp_capabilities.sse => {}
-            McpServer::Http(_) => {
-                return Err(agent_client_protocol::Error::invalid_params()
-                    .data("the ACP agent did not advertise HTTP MCP support"));
-            }
-            McpServer::Sse(_) => {
-                return Err(agent_client_protocol::Error::invalid_params()
-                    .data("the ACP agent did not advertise SSE MCP support"));
-            }
-            _ => {
-                return Err(agent_client_protocol::Error::invalid_params()
-                    .data("the ACP agent did not advertise this MCP transport"));
-            }
-        }
-    }
-    Ok(())
+    .await;
+    let closed = connection.close().await;
+    let reply = result?;
+    closed?;
+    Ok(reply.text)
 }
 
 /// Build an SDK process component while preserving environment values exactly.
@@ -472,7 +375,7 @@ pub(crate) fn build_agent(config: &AcpAgentConfig) -> Result<AcpAgent> {
 
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::schema::v1::{EnvVariable, McpServerStdio};
+    use agent_client_protocol::v1::schema::{EnvVariable, McpServerStdio};
 
     use super::*;
 

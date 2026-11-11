@@ -6,14 +6,14 @@
 
 use std::sync::Arc;
 
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::util::MatchDispatch;
+use agent_client_protocol::v1::schema::{
     ClientCapabilities, CreateTerminalRequest, CreateTerminalResponse, FileSystemCapabilities,
     KillTerminalRequest, KillTerminalResponse, ReadTextFileRequest, ReadTextFileResponse,
     ReleaseTerminalRequest, ReleaseTerminalResponse, TerminalOutputRequest, TerminalOutputResponse,
     WaitForTerminalExitRequest, WaitForTerminalExitResponse, WriteTextFileRequest,
     WriteTextFileResponse,
 };
-use agent_client_protocol::util::MatchDispatch;
 use agent_client_protocol::{Agent, ConnectionTo, Dispatch, Error, HandleDispatchFrom, Handled};
 use async_trait::async_trait;
 

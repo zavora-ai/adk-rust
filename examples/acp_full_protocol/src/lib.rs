@@ -17,6 +17,11 @@
 //! - **`UsageUpdate`** and enriched **`ToolCallUpdate`** notifications surface
 //!   token usage and tool results.
 //!
+//! It also covers the ACP v5 surface `adk-acp` implements: protocol version
+//! negotiation, client system prompts, end-of-turn token usage, session titles,
+//! status, archiving, options, fork and resume, session modes and config
+//! options, and authentication with logout and `auth/status`.
+//!
 //! The [`ScriptedAgent`] is intentionally deterministic (it does not call an
 //! LLM) so the behavior above is reproducible in tests. It models the same
 //! pause/resume tool-confirmation flow an [`LlmAgent`](adk_agent) produces with
@@ -30,10 +35,15 @@
 
 use std::sync::{Arc, Mutex};
 
+use adk_acp::agent_client_protocol::v1::schema::{
+    AuthAccount, AuthMethod, AuthMethodAgent, AuthenticateRequest, SessionConfigOption,
+    SessionMode, SessionModeState,
+};
+use adk_acp::server::{AcpAuthenticator, AcpServerError, SessionControls};
 use adk_core::{
-    Agent, Content, EmbeddedResource, Event, EventStream, FunctionResponseData, InvocationContext,
-    Part, Result as AdkResult, ToolConfirmationDecision, ToolConfirmationRequest, ToolContext,
-    UsageMetadata,
+    Agent, BeforeModelResult, CallbackContext, Content, EmbeddedResource, Event, EventStream,
+    FunctionResponseData, InvocationContext, LlmRequest, Part, Result as AdkResult,
+    ToolConfirmationDecision, ToolConfirmationRequest, ToolContext, UsageMetadata,
 };
 use adk_session::{InMemorySessionService, SessionService};
 use adk_tool::{FunctionTool, SimpleToolContext};
@@ -53,6 +63,13 @@ pub const DELETE_TARGET: &str = "/workspace/report.csv";
 /// Stable function-call id used for the gated tool call, so the permission
 /// request correlates to the paused tool call.
 pub const CONFIRM_CALL_ID: &str = "call-1";
+
+/// The scripted agent's own system instruction, which a client system prompt
+/// appends to or overrides.
+pub const AGENT_INSTRUCTION: &str = "You are the scripted ACP reference agent.";
+
+/// The authentication method [`WorkspaceToken`] advertises.
+pub const TOKEN_METHOD: &str = "workspace-token";
 
 /// Build the confirmation-gated `delete_file` tool.
 ///
@@ -136,6 +153,8 @@ impl Agent for ScriptedAgent {
         let delete_tool = self.delete_tool.clone();
         let executed = self.executed.clone();
         let applied = self.applied_decision.clone();
+        let hooks = ctx.run_config().invocation_hooks.clone();
+        let callback_ctx = ctx.clone() as Arc<dyn CallbackContext>;
 
         let stream = async_stream::stream! {
             // ── Resume path: the client answered the permission request ──
@@ -183,6 +202,42 @@ impl Agent for ScriptedAgent {
                         yield Ok(done);
                     }
                 }
+                return;
+            }
+
+            // ── Instructions probe: show what a model request would carry ──
+            //
+            // The agent makes no model calls, so it shows the system
+            // instructions a model request of this turn would carry: its own
+            // instruction after the run's invocation hooks, which is where the
+            // ACP server applies a client's system prompt.
+            if user_content.parts.iter().any(|part| matches!(part, Part::Text { text } if text == "instructions?")) {
+                let mut probe = LlmRequest::new(
+                    "probe",
+                    vec![Content::new("system").with_text(AGENT_INSTRUCTION), user_content.clone()],
+                );
+                for hook in &hooks {
+                    match hook.before_model(callback_ctx.clone(), probe).await {
+                        Ok(BeforeModelResult::Continue(request)) => probe = request,
+                        Ok(BeforeModelResult::Skip(_)) => return,
+                        Err(error) => {
+                            yield Err(error);
+                            return;
+                        }
+                    }
+                }
+                let instructions: Vec<String> = probe
+                    .contents
+                    .iter()
+                    .filter(|content| content.role == "system")
+                    .map(|content| content.parts.iter().filter_map(Part::text).collect::<Vec<_>>().join(""))
+                    .collect();
+                let mut event = Event::new(&invocation);
+                event.author = AGENT_NAME.to_string();
+                event.set_content(
+                    Content::new("model").with_text(format!("instructions: {}", instructions.join(" | "))),
+                );
+                yield Ok(event);
                 return;
             }
 
@@ -296,4 +351,62 @@ fn describe_embedded(resource: &EmbeddedResource) -> String {
 /// Build a fresh in-memory session service.
 pub fn build_session_service() -> Arc<dyn SessionService> {
     Arc::new(InMemorySessionService::new())
+}
+
+/// Session controls for the reference agent: an `ask` and a `code` mode, and a
+/// `verbose` toggle.
+pub struct ReferenceControls;
+
+impl SessionControls for ReferenceControls {
+    fn modes(&self) -> Option<SessionModeState> {
+        Some(SessionModeState::new(
+            "ask",
+            vec![SessionMode::new("ask", "Ask"), SessionMode::new("code", "Code")],
+        ))
+    }
+
+    fn config_options(&self) -> Vec<SessionConfigOption> {
+        vec![SessionConfigOption::boolean("verbose", "Verbose", false)]
+    }
+}
+
+/// An authenticator that accepts the [`TOKEN_METHOD`] method when it holds a
+/// token, supports logout, and reports one account.
+///
+/// The reference server requires it when `ACP_EXAMPLE_TOKEN` is set.
+pub struct WorkspaceToken {
+    token: String,
+}
+
+impl WorkspaceToken {
+    /// Accept authentication while `token` is non-empty.
+    pub fn new(token: impl Into<String>) -> Self {
+        Self { token: token.into() }
+    }
+}
+
+#[async_trait]
+impl AcpAuthenticator for WorkspaceToken {
+    fn methods(&self) -> Vec<AuthMethod> {
+        vec![AuthMethod::Agent(
+            AuthMethodAgent::new(TOKEN_METHOD, "Workspace token")
+                .description("The token in ACP_EXAMPLE_TOKEN".to_string()),
+        )]
+    }
+
+    async fn authenticate(&self, request: &AuthenticateRequest) -> Result<(), AcpServerError> {
+        if &*request.method_id.0 == TOKEN_METHOD && !self.token.is_empty() {
+            Ok(())
+        } else {
+            Err(AcpServerError::MalformedMessage("no workspace token is configured".into()))
+        }
+    }
+
+    fn supports_logout(&self) -> bool {
+        true
+    }
+
+    async fn accounts(&self) -> Vec<AuthAccount> {
+        vec![AuthAccount::new("Reference workspace")]
+    }
 }

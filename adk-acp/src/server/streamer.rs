@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use adk_core::{Content, Event, FunctionResponseData, Part, UsageMetadata};
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     ContentBlock, ContentChunk, Cost, Plan, PlanEntry, SessionUpdate, TextContent, ToolCall,
     ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
     ToolKind, UsageUpdate,
@@ -195,9 +195,9 @@ fn tool_result_locations(response: &serde_json::Value) -> Vec<ToolCallLocation> 
 /// The mapping is pure: it preserves the entries and their order exactly and
 /// performs no I/O.
 ///
-/// [`PlanEntry`]: agent_client_protocol::schema::v1::PlanEntry
-/// [`PlanEntryPriority`]: agent_client_protocol::schema::v1::PlanEntryPriority
-/// [`PlanEntryStatus`]: agent_client_protocol::schema::v1::PlanEntryStatus
+/// [`PlanEntry`]: agent_client_protocol::v1::schema::PlanEntry
+/// [`PlanEntryPriority`]: agent_client_protocol::v1::schema::PlanEntryPriority
+/// [`PlanEntryStatus`]: agent_client_protocol::v1::schema::PlanEntryStatus
 pub fn map_plan(entries: Vec<PlanEntry>) -> SessionUpdate {
     SessionUpdate::Plan(Plan::new(entries))
 }
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn replays_inline_image_and_audio_with_exact_wire_payloads() {
-        use agent_client_protocol::schema::v1::{Annotations, AudioContent, ImageContent};
+        use agent_client_protocol::v1::schema::{Annotations, AudioContent, ImageContent};
 
         let annotations = Annotations::new().priority(Some(0.8));
         let annotation_value = serde_json::to_value(&annotations).unwrap();
@@ -331,7 +331,7 @@ mod tests {
     #[test]
     fn replays_embedded_resource_as_role_aware_message_content() {
         use adk_core::{EmbeddedResource, TextResourceContents};
-        use agent_client_protocol::schema::v1::{
+        use agent_client_protocol::v1::schema::{
             EmbeddedResource as AcpEmbeddedResource, EmbeddedResourceResource,
             TextResourceContents as AcpTextResourceContents,
         };
@@ -617,7 +617,7 @@ mod tests {
     /// **Validates: Requirements 11.3**
     #[test]
     fn map_plan_wraps_entries_preserving_order() {
-        use agent_client_protocol::schema::v1::{PlanEntryPriority, PlanEntryStatus};
+        use agent_client_protocol::v1::schema::{PlanEntryPriority, PlanEntryStatus};
 
         let entries = vec![
             PlanEntry::new(

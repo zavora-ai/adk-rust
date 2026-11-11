@@ -22,9 +22,30 @@ use std::time::Duration;
 use adk_core::Agent;
 use adk_session::SessionService;
 
+use super::auth::AcpAuthenticator;
 use super::error::AcpServerError;
 use super::modes::SessionControls;
 use super::permission::StandingPermissions;
+
+/// Which client-provided system prompts the server applies, advertised as the
+/// `sessionCapabilities.systemPrompt` capability.
+///
+/// The server applies a system prompt to every model request of the session's
+/// turns through a run invocation hook: `append` adds it after the agent's own
+/// system instructions, and `override` replaces them. Agents that make no model
+/// requests are unaffected.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SystemPromptSupport {
+    /// Advertise no system prompt support and reject `systemPrompt` on session
+    /// requests.
+    Disabled,
+    /// Accept `append` only.
+    Append,
+    /// Accept `append` and `override` (the default).
+    #[default]
+    AppendAndOverride,
+}
 
 /// Transport selection for the ACP Server.
 #[derive(Clone, Debug, Default)]
@@ -67,6 +88,13 @@ pub struct AcpServerConfig {
     /// When `None` (the default), every permission request offers allow once and deny
     /// only.
     pub standing_permissions: Option<Arc<dyn StandingPermissions>>,
+    /// Optional authentication for ACP connections.
+    ///
+    /// When `None` (the default), the server advertises no `authMethods` and
+    /// requires no authentication.
+    pub authenticator: Option<Arc<dyn AcpAuthenticator>>,
+    /// Which client-provided system prompts the server applies.
+    pub system_prompts: SystemPromptSupport,
 }
 
 /// Builder for [`AcpServerConfig`] with validation.
@@ -91,6 +119,8 @@ pub struct AcpServerConfigBuilder {
     transport: TransportConfig,
     session_controls: Option<Arc<dyn SessionControls>>,
     standing_permissions: Option<Arc<dyn StandingPermissions>>,
+    authenticator: Option<Arc<dyn AcpAuthenticator>>,
+    system_prompts: SystemPromptSupport,
 }
 
 impl Default for AcpServerConfigBuilder {
@@ -113,6 +143,8 @@ impl AcpServerConfigBuilder {
             transport: TransportConfig::Stdio,
             session_controls: None,
             standing_permissions: None,
+            authenticator: None,
+            system_prompts: SystemPromptSupport::default(),
         }
     }
 
@@ -192,6 +224,23 @@ impl AcpServerConfigBuilder {
         self
     }
 
+    /// Advertise `authenticator`'s methods and answer `authenticate`, `logout`
+    /// and `auth/status` through it.
+    ///
+    /// When the authenticator requires authentication, session requests on a
+    /// connection are refused with `auth_required` until the client
+    /// authenticates.
+    pub fn authenticator(mut self, authenticator: Arc<dyn AcpAuthenticator>) -> Self {
+        self.authenticator = Some(authenticator);
+        self
+    }
+
+    /// Choose which client-provided system prompts the server applies.
+    pub fn system_prompts(mut self, support: SystemPromptSupport) -> Self {
+        self.system_prompts = support;
+        self
+    }
+
     /// Build the configuration, validating all required fields.
     ///
     /// # Errors
@@ -232,6 +281,8 @@ impl AcpServerConfigBuilder {
             transport: self.transport,
             session_controls: self.session_controls,
             standing_permissions: self.standing_permissions,
+            authenticator: self.authenticator,
+            system_prompts: self.system_prompts,
         })
     }
 }

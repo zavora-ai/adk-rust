@@ -24,6 +24,7 @@ needed only when exposing an ADK-Rust agent.
 | A coding specialist available to an LLM agent | `AcpAgentTool` |
 | Several named coding specialists | `AcpToolset` |
 | A continuing project conversation | `AcpSession` |
+| Several sessions on one agent, or the agent's stored sessions | `AcpConnection` |
 | Text and tool progress rendered while the turn runs | `stream_prompt` |
 
 ## One-shot prompt
@@ -147,6 +148,64 @@ The cancellation handle sends the official `session/cancel` notification. The
 prompt should remain awaited until the cancelled stop reason arrives; this lets
 the same session accept another prompt without a stale response in its queue.
 
+Each `PromptResult` carries the turn's `stop_reason` and, when the agent reports
+it, its token `usage`. `AcpSession::start` returns once the agent has created the
+session, so a refused handshake or session fails there rather than at the first
+prompt.
+
+## Work with the agent's sessions
+
+`AcpConnection` keeps one agent process and opens any number of sessions on it.
+Its `agent_info()` reports the negotiated protocol version, the agent's name and
+version, its capabilities and its authentication methods. Each method below is
+checked against those capabilities; one the agent did not advertise returns
+`AcpError::Unsupported` without being sent.
+
+```rust,ignore
+use adk_acp::{AcpAgentConfig, AcpConnection, PermissionPolicy};
+use std::sync::Arc;
+
+let connection = AcpConnection::connect(
+    AcpAgentConfig::new("my-coding-agent --acp")
+        .working_dir("/absolute/path/to/project")
+        .append_system_prompt("Follow the repository's CONTRIBUTING.md.")
+        .initial_config_option("verbose", true)
+        .auth_method("api-key"),
+    Arc::new(PermissionPolicy::DenyAll),
+)
+.await?;
+
+// Stored sessions: list (archived ones only on request), load with replay,
+// resume without it, fork, archive, delete.
+let stored = connection.list_sessions(None).await?;
+let mut loaded = connection.load_session(stored[0].session_id.clone()).await?;
+let replay = loaded.pending_updates();
+
+// A new session, its controls, and a branch of it.
+let mut session = connection.new_session().await?;
+session.set_mode("code").await?;
+session.set_title("Release notes").await?;
+let branch = session.fork().await?;
+println!("{:?}", session.status().await?);
+
+connection.logout().await?;
+connection.close().await?;
+```
+
+| Configuration | Sent as | Sent only when the agent advertises |
+|---|---|---|
+| `append_system_prompt` / `override_system_prompt` | `systemPrompt` on new, load, resume and fork | `sessionCapabilities.systemPrompt` (and its `override` mode) |
+| `additional_directory` | `additionalDirectories` | `sessionCapabilities.additionalDirectories` |
+| `initial_config_option` | `configOptions` on new, load and resume | `sessionCapabilities.options` |
+| `auth_method` | `authenticate` right after `initialize` | the method in `authMethods` |
+| `elicitation` | the `elicitation` client capability | (always; the agent then asks) |
+| `client_info` | `clientInfo` (defaults to `adk-rust`) | (always) |
+
+An `AcpElicitation` answers the agent's `elicitation/create` questions with
+`accept` and the form's content, `decline` or `cancel`; `DeclineElicitation`
+declines them all. Without a handler the capability is not advertised and the
+agent does not ask.
+
 ## Stream a turn into a UI
 
 `stream_prompt(config, prompt, policy, status_tracker)` yields `OutputChunk`
@@ -162,6 +221,16 @@ richer views of the external agent's turn:
 - `OutputChunk::Usage` — the agent's `UsageUpdate`, carrying tokens `used` and
   context-window `size`, plus the cumulative `cost` and `currency` when the
   agent reports them, so a UI can display context-window consumption.
+- `OutputChunk::Plan`, `PlanUpdate`, `PlanRemoved`, `Notice`, `Compaction`,
+  `CompactionSummary`, `ModeChanged`, `ConfigOptions`, `AvailableCommands` and
+  `SessionInfo` — the other v1 session updates. The client advertises notices,
+  compactions and plan operations, so agents send them.
+- `OutputChunk::Subagent` and `SubagentOutput` — a child session the agent
+  announced, and that child's own updates, which arrive under its session id.
+- `OutputChunk::Done { stop_reason, usage }` — the end of the turn.
+
+`AcpSession::prompt_blocks(blocks, on_chunk)` reports the same chunks for a turn
+of a persistent session.
 
 The application may hide thought chunks, render tool activity separately, and
 expose the shared `StatusTracker` in its interface.
@@ -201,7 +270,7 @@ freeze permission or cancellation traffic.
 
 ```rust,ignore
 use adk_acp::AcpAgentConfig;
-use adk_acp::agent_client_protocol::schema::v1::{
+use adk_acp::agent_client_protocol::v1::schema::{
     McpServer, McpServerStdio,
 };
 
