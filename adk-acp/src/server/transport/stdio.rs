@@ -6,13 +6,14 @@ use agent_client_protocol::v1::schema::{
     ArchiveSessionRequest, ArchiveSessionResponse, AuthStatusRequest, AuthStatusResponse,
     AuthStatusUpdateNotification, AuthenticateRequest, AuthenticateResponse, CancelNotification,
     CloseSessionRequest, CloseSessionResponse, DeleteSessionRequest, DeleteSessionResponse,
-    ForkSessionRequest, ForkSessionResponse, Implementation, InitializeRequest, InitializeResponse,
-    ListSessionsRequest, ListSessionsResponse, LoadSessionRequest, LoadSessionResponse,
-    LogoutRequest, LogoutResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    ResumeSessionRequest, ResumeSessionResponse, SessionId, SessionOptionsRequest,
-    SessionOptionsResponse, SessionStatusRequest, SessionStatusResponse,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest,
-    SetSessionModeResponse, SetSessionTitleRequest, SetSessionTitleResponse,
+    DisableProviderRequest, DisableProviderResponse, ForkSessionRequest, ForkSessionResponse,
+    Implementation, InitializeRequest, InitializeResponse, ListProvidersRequest,
+    ListProvidersResponse, ListSessionsRequest, ListSessionsResponse, LoadSessionRequest,
+    LoadSessionResponse, LogoutRequest, LogoutResponse, NewSessionRequest, NewSessionResponse,
+    PromptRequest, ResumeSessionRequest, ResumeSessionResponse, SessionId, SessionOptionsRequest,
+    SessionOptionsResponse, SessionStatusRequest, SessionStatusResponse, SetProviderRequest,
+    SetProviderResponse, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+    SetSessionModeRequest, SetSessionModeResponse, SetSessionTitleRequest, SetSessionTitleResponse,
     UnarchiveSessionRequest, UnarchiveSessionResponse,
 };
 use agent_client_protocol::v1::{ConnectionTo, Responder};
@@ -26,6 +27,7 @@ use super::super::capabilities::{AgentCapabilities, CapabilitiesBuilder};
 use super::super::config::AcpServerConfig;
 use super::super::error::AcpServerError;
 use super::super::handler::AcpSessionHandler;
+use super::super::providers::{self, AcpProviders};
 use super::Transport;
 
 /// What every connection of a server answers `initialize` with, and how it
@@ -36,6 +38,7 @@ pub(crate) struct ConnectionSettings {
     name: String,
     title: String,
     authenticator: Option<Arc<dyn AcpAuthenticator>>,
+    providers: Option<Arc<dyn AcpProviders>>,
 }
 
 impl ConnectionSettings {
@@ -45,6 +48,7 @@ impl ConnectionSettings {
             name: config.agent_name.clone(),
             title: config.agent_description.clone(),
             authenticator: config.authenticator.clone(),
+            providers: config.providers.clone(),
         }
     }
 
@@ -55,7 +59,13 @@ impl ConnectionSettings {
         title: impl Into<String>,
         authenticator: Option<Arc<dyn AcpAuthenticator>>,
     ) -> Self {
-        Self { capabilities, name: name.into(), title: title.into(), authenticator }
+        Self {
+            capabilities,
+            name: name.into(),
+            title: title.into(),
+            authenticator,
+            providers: None,
+        }
     }
 
     fn initialize_response(&self, request: &InitializeRequest) -> InitializeResponse {
@@ -234,6 +244,7 @@ where
 {
     let auth = Arc::new(ConnectionAuth::default());
     let authenticator = settings.authenticator.clone();
+    let providers = settings.providers.clone();
     let name = settings.name.clone();
     let settings = Arc::new(settings);
 
@@ -359,6 +370,86 @@ where
         )
         .on_receive_request(
             {
+                let (providers, auth, authenticator) =
+                    (providers.clone(), auth.clone(), authenticator.clone());
+                move |_request: ListProvidersRequest,
+                      responder: Responder<ListProvidersResponse>,
+                      connection: ConnectionTo<Client>| {
+                    let (providers, auth, authenticator) =
+                        (providers.clone(), auth.clone(), authenticator.clone());
+                    async move {
+                        gated!(auth, authenticator, responder);
+                        let Some(providers) = providers else {
+                            return responder.respond_with_error(Error::method_not_found());
+                        };
+                        connection.spawn(async move {
+                            let result = providers
+                                .list()
+                                .await
+                                .map(ListProvidersResponse::new)
+                                .map_err(to_protocol_error);
+                            responder.respond_with_result(result)
+                        })
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let (providers, auth, authenticator) =
+                    (providers.clone(), auth.clone(), authenticator.clone());
+                move |request: SetProviderRequest,
+                      responder: Responder<SetProviderResponse>,
+                      connection: ConnectionTo<Client>| {
+                    let (providers, auth, authenticator) =
+                        (providers.clone(), auth.clone(), authenticator.clone());
+                    async move {
+                        gated!(auth, authenticator, responder);
+                        let Some(providers) = providers else {
+                            return responder.respond_with_error(Error::method_not_found());
+                        };
+                        connection.spawn(async move {
+                            // The request may carry credentials in its headers: never log it.
+                            let result = providers::set_provider(providers.as_ref(), request)
+                                .await
+                                .map(|()| SetProviderResponse::new())
+                                .map_err(to_protocol_error);
+                            responder.respond_with_result(result)
+                        })
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let (providers, auth, authenticator) =
+                    (providers.clone(), auth.clone(), authenticator.clone());
+                move |request: DisableProviderRequest,
+                      responder: Responder<DisableProviderResponse>,
+                      connection: ConnectionTo<Client>| {
+                    let (providers, auth, authenticator) =
+                        (providers.clone(), auth.clone(), authenticator.clone());
+                    async move {
+                        gated!(auth, authenticator, responder);
+                        let Some(providers) = providers else {
+                            return responder.respond_with_error(Error::method_not_found());
+                        };
+                        connection.spawn(async move {
+                            let result = providers::disable_provider(providers.as_ref(), request)
+                                .await
+                                .map(|()| DisableProviderResponse::new())
+                                .map_err(to_protocol_error);
+                            responder.respond_with_result(result)
+                        })
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
                 let (handler, auth, authenticator) =
                     (handler.clone(), auth.clone(), authenticator.clone());
                 move |request: NewSessionRequest,
@@ -371,7 +462,9 @@ where
                         let cancellation = responder.cancellation();
                         let spawned_connection = connection.clone();
                         connection.spawn(async move {
-                            let response = match handler.create_session(request, cancellation).await
+                            let response = match handler
+                                .create_session(request, cancellation, spawned_connection.clone())
+                                .await
                             {
                                 Ok(session_id) => {
                                     emit_activation_updates(
@@ -470,7 +563,9 @@ where
                         let spawned_connection = connection.clone();
                         connection.spawn(async move {
                             let session_id = request.session_id.clone();
-                            let response = match handler.resume_session(request, cancellation).await
+                            let response = match handler
+                                .resume_session(request, cancellation, spawned_connection.clone())
+                                .await
                             {
                                 Ok(()) => {
                                     emit_activation_updates(
@@ -552,7 +647,10 @@ where
                         let cancellation = responder.cancellation();
                         let spawned_connection = connection.clone();
                         connection.spawn(async move {
-                            let response = match handler.fork_session(request, cancellation).await {
+                            let response = match handler
+                                .fork_session(request, cancellation, spawned_connection.clone())
+                                .await
+                            {
                                 Ok(new_session_id) => {
                                     emit_activation_updates(
                                         &handler,

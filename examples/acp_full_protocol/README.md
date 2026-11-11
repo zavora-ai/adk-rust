@@ -41,6 +41,13 @@ The second half of the test drives the same server with adk-acp's own client,
 | Modes and config | `session/options` before a session exists, an initial `verbose` value, `set_mode` and `set_config_option`. |
 | Authentication | With `WorkspaceToken`, sessions need `authenticate`; `auth/status` and `logout` follow the state, and an unoffered method fails the handshake. |
 
+### Unstable surfaces
+
+| Feature | How |
+|---------|-----|
+| MCP over ACP | The client serves a `workspace_info` tool with an `AcpToolServer`. Prompting `client tools?` lists the tools the agent's turn receives from it, and `call workspace_info` runs the tool in the client over `mcp/message`. |
+| Configurable providers | `reference_providers` exposes a required `main` provider over the agent's `SwitchableModel`. `providers/list` reports its target, and after `providers/set` prompting `model?` names the new routing target. Disabling `main` is refused. |
+
 ## Why the agent is deterministic
 
 The [`ScriptedAgent`](src/lib.rs) does not call an LLM, so the protocol behavior

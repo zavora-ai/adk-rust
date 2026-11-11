@@ -26,6 +26,7 @@ use super::auth::AcpAuthenticator;
 use super::error::AcpServerError;
 use super::modes::SessionControls;
 use super::permission::StandingPermissions;
+use super::providers::AcpProviders;
 
 /// Which client-provided system prompts the server applies, advertised as the
 /// `sessionCapabilities.systemPrompt` capability.
@@ -95,6 +96,12 @@ pub struct AcpServerConfig {
     pub authenticator: Option<Arc<dyn AcpAuthenticator>>,
     /// Which client-provided system prompts the server applies.
     pub system_prompts: SystemPromptSupport,
+    /// Optional hook through which clients list and configure the agent's
+    /// model providers (`providers/*`).
+    ///
+    /// When `None` (the default), the server does not advertise the
+    /// `providers` capability.
+    pub providers: Option<Arc<dyn AcpProviders>>,
 }
 
 /// Builder for [`AcpServerConfig`] with validation.
@@ -121,6 +128,7 @@ pub struct AcpServerConfigBuilder {
     standing_permissions: Option<Arc<dyn StandingPermissions>>,
     authenticator: Option<Arc<dyn AcpAuthenticator>>,
     system_prompts: SystemPromptSupport,
+    providers: Option<Arc<dyn AcpProviders>>,
 }
 
 impl Default for AcpServerConfigBuilder {
@@ -145,6 +153,7 @@ impl AcpServerConfigBuilder {
             standing_permissions: None,
             authenticator: None,
             system_prompts: SystemPromptSupport::default(),
+            providers: None,
         }
     }
 
@@ -241,6 +250,16 @@ impl AcpServerConfigBuilder {
         self
     }
 
+    /// Let clients list and configure the agent's model providers through
+    /// `providers`, and advertise the `providers` capability.
+    ///
+    /// [`ModelProviders`](super::ModelProviders) is a ready-made hook over
+    /// [`SwitchableModel`](super::SwitchableModel)s.
+    pub fn providers(mut self, providers: Arc<dyn AcpProviders>) -> Self {
+        self.providers = Some(providers);
+        self
+    }
+
     /// Build the configuration, validating all required fields.
     ///
     /// # Errors
@@ -283,6 +302,7 @@ impl AcpServerConfigBuilder {
             standing_permissions: self.standing_permissions,
             authenticator: self.authenticator,
             system_prompts: self.system_prompts,
+            providers: self.providers,
         })
     }
 }

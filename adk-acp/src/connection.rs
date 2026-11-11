@@ -20,6 +20,7 @@ use crate::content::content_to_blocks;
 use crate::elicitation::AcpElicitation;
 use crate::error::{AcpError, Result};
 use crate::host::{AcpFileSystem, AcpTerminal};
+use crate::mcp::AcpToolServer;
 use crate::permissions::PermissionPolicy;
 
 /// Configuration for connecting to an ACP agent.
@@ -42,6 +43,12 @@ pub struct AcpAgentConfig {
     pub env: std::collections::HashMap<String, String>,
     /// MCP servers made available to the external agent for each new session.
     pub mcp_servers: Vec<McpServer>,
+    /// ADK-Rust tools served to the agent over the ACP connection itself
+    /// (MCP over ACP), declared on every session setup request.
+    ///
+    /// The agent must advertise `mcpCapabilities.acp`; otherwise starting a
+    /// session fails with [`AcpError::Unsupported`].
+    pub tool_servers: Vec<AcpToolServer>,
     /// Optional file host exposed to the external ACP agent.
     pub filesystem: Option<Arc<dyn AcpFileSystem>>,
     /// Optional terminal host exposed to the external ACP agent.
@@ -79,6 +86,7 @@ impl std::fmt::Debug for AcpAgentConfig {
                 McpServer::Stdio(config) => (config.name.as_str(), "stdio"),
                 McpServer::Http(config) => (config.name.as_str(), "http"),
                 McpServer::Sse(config) => (config.name.as_str(), "sse"),
+                McpServer::Acp(config) => (config.name.as_str(), "acp"),
                 _ => ("unknown", "unsupported"),
             })
             .collect();
@@ -89,6 +97,7 @@ impl std::fmt::Debug for AcpAgentConfig {
             .field("auto_approve", &self.auto_approve)
             .field("environment_keys", &environment_keys)
             .field("mcp_servers", &mcp_servers)
+            .field("tool_servers", &self.tool_servers)
             .field("filesystem_enabled", &self.filesystem.is_some())
             .field("terminal_enabled", &self.terminal.is_some())
             .field("additional_directories", &self.additional_directories)
@@ -110,6 +119,7 @@ impl AcpAgentConfig {
             auto_approve: false,
             env: std::collections::HashMap::new(),
             mcp_servers: Vec::new(),
+            tool_servers: Vec::new(),
             filesystem: None,
             terminal: None,
             additional_directories: Vec::new(),
@@ -163,6 +173,17 @@ impl AcpAgentConfig {
     /// Set all MCP servers supplied during ACP session creation.
     pub fn mcp_servers(mut self, servers: Vec<McpServer>) -> Self {
         self.mcp_servers = servers;
+        self
+    }
+
+    /// Serve `server`'s ADK-Rust tools to the agent over the ACP connection
+    /// (MCP over ACP) in every session.
+    ///
+    /// The tools run in this application. The agent must advertise
+    /// `mcpCapabilities.acp`; tool server names must be unique and must not
+    /// repeat the name of an entry in [`mcp_servers`](Self::mcp_servers).
+    pub fn tool_server(mut self, server: AcpToolServer) -> Self {
+        self.tool_servers.push(server);
         self
     }
 

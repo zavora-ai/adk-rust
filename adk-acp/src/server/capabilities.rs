@@ -2,13 +2,13 @@
 
 pub use agent_client_protocol::v1::schema::AgentCapabilities;
 use agent_client_protocol::v1::schema::{
-    AgentAuthCapabilities, AuthStatusCapabilities, LogoutCapabilities, PromptCapabilities,
-    SessionAdditionalDirectoriesCapabilities, SessionArchiveCapabilities, SessionCapabilities,
-    SessionCloseCapabilities, SessionDeleteCapabilities, SessionForkCapabilities,
-    SessionListCapabilities, SessionOptionsCapabilities, SessionResumeCapabilities,
-    SessionStatusCapabilities, SessionSystemPromptCapabilities,
-    SessionSystemPromptModeCapabilities, SessionSystemPromptOverrideCapabilities,
-    SessionTitleCapabilities,
+    AgentAuthCapabilities, AuthStatusCapabilities, LogoutCapabilities, McpCapabilities,
+    PromptCapabilities, ProvidersCapabilities, SessionAdditionalDirectoriesCapabilities,
+    SessionArchiveCapabilities, SessionCapabilities, SessionCloseCapabilities,
+    SessionDeleteCapabilities, SessionForkCapabilities, SessionListCapabilities,
+    SessionOptionsCapabilities, SessionResumeCapabilities, SessionStatusCapabilities,
+    SessionSystemPromptCapabilities, SessionSystemPromptModeCapabilities,
+    SessionSystemPromptOverrideCapabilities, SessionTitleCapabilities,
 };
 
 use super::config::{AcpServerConfig, SystemPromptSupport};
@@ -30,7 +30,12 @@ impl CapabilitiesBuilder {
     ///   `append` or disables it ([`SystemPromptSupport`]);
     /// - `auth.status` always, because `auth/status` answers whether or not an
     ///   authenticator is configured, and `auth.logout` only when the
-    ///   configured [`AcpAuthenticator`](super::AcpAuthenticator) supports it.
+    ///   configured [`AcpAuthenticator`](super::AcpAuthenticator) supports it;
+    /// - `mcp.acp`, because session setup accepts `acp` MCP servers and reaches
+    ///   their tools over the connection (stdio is required of every agent and
+    ///   is not advertised; HTTP and SSE are not supported);
+    /// - `providers` only when an [`AcpProviders`](super::AcpProviders) hook is
+    ///   configured.
     pub fn build(config: &AcpServerConfig) -> AgentCapabilities {
         let mut session = SessionCapabilities::new()
             .list(SessionListCapabilities::new())
@@ -70,8 +75,10 @@ impl CapabilitiesBuilder {
             .prompt_capabilities(
                 PromptCapabilities::new().embedded_context(true).image(true).audio(true),
             )
+            .mcp_capabilities(McpCapabilities::new().acp(true))
             .session_capabilities(session)
             .auth(auth)
+            .providers(config.providers.as_ref().map(|_| ProvidersCapabilities::new()))
     }
 }
 

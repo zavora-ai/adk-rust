@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 use acp_full_protocol::{
     ReferenceControls, ScriptedAgent, WorkspaceToken, build_delete_tool, build_session_service,
+    reference_model, reference_providers,
 };
 use adk_acp::server::{AcpServer, AcpServerConfigBuilder, TransportConfig};
 use adk_core::Agent;
@@ -45,7 +46,9 @@ async fn main() -> anyhow::Result<()> {
 
     // A real, confirmation-gated tool plus the deterministic agent that gates it.
     let delete_tool = build_delete_tool();
-    let agent: Arc<dyn Agent> = Arc::new(ScriptedAgent::new(delete_tool));
+    // The model clients switch with `providers/set`; `model?` reports it.
+    let model = reference_model();
+    let agent: Arc<dyn Agent> = Arc::new(ScriptedAgent::new(delete_tool).with_model(model.clone()));
     let session_service = build_session_service();
 
     let mut config = AcpServerConfigBuilder::new()
@@ -56,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
             "Deterministic ADK-Rust agent exercising ACP v1 server-direction features",
         )
         .session_controls(Arc::new(ReferenceControls))
+        .providers(Arc::new(reference_providers(&model)))
         .transport(TransportConfig::Stdio);
     // With a token configured, clients must authenticate with `workspace-token`.
     let token = std::env::var("ACP_EXAMPLE_TOKEN").unwrap_or_default();
@@ -78,6 +82,8 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("  ACP v5: system prompts (send \"instructions?\"), end-of-turn usage,");
     eprintln!("  session title / status / archive / options / fork / resume,");
     eprintln!("  modes and config options, and auth when ACP_EXAMPLE_TOKEN is set.");
+    eprintln!("  Unstable: MCP over ACP (send \"client tools?\" or \"call <tool>\")");
+    eprintln!("  and configurable providers (send \"model?\" after providers/set).");
     eprintln!();
     eprintln!("  Press Ctrl+C or close stdin (Ctrl+D) to stop.");
     eprintln!("──────────────────────────────────────────────────────────────────");

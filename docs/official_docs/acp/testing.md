@@ -39,6 +39,8 @@ Further tests cover:
 | Capabilities | The advertised capabilities match the registered handlers and content mappings; modes and options only with a `SessionControls` provider |
 | Process lifecycle | Every client entry point returns, rather than hangs, when the agent process exits (`tests/process_lifecycle_tests.rs`) |
 | Configuration | MCP configuration validation and secret-redacted debug output |
+| MCP over ACP | The server's agent calls a tool the adk-acp client serves, across new, fork and resume, with `isError` failures; the SDK's own `with_mcp_server` binding serves an `AcpToolServer` to the server (`tests/mcp_over_acp_providers_tests.rs`) |
+| LLM providers | List, set (the agent's next turn uses the new model; headers never listed), request checks, disable, and no capability without a hook |
 
 ## Run the gates
 
@@ -100,7 +102,8 @@ selects the model.
 | Client rich prompt content | Implemented | `prompt_agent_content_with_policy` transmits non-text ADK content as the matching ACP block |
 | Remote ACP HTTP/WebSocket | Not advertised | The stable implementation is local stdio |
 | Draft protocol v2 | Not implemented | Behind the SDK's `unstable_protocol_v2`; no shipping peer speaks it yet |
-| MCP over ACP, LLM providers | Not implemented | Unstable SDK features adk-acp does not enable |
+| MCP over ACP | Implemented | Unstable: the client serves `AcpToolServer`s declared on every session setup (also an SDK `McpService`); the server advertises `mcp.acp` and reaches `acp` servers' tools over `mcp/message` |
+| LLM providers | Implemented | Unstable: `providers/list`, `set`, `disable` through an `AcpProviders` hook (`ModelProviders` over `SwitchableModel`s), advertised only with a hook; client methods on `AcpConnection` |
 
 ## Manual editor test
 

@@ -29,6 +29,7 @@ use tracing::{info, warn};
 
 use super::config::{AcpServerConfig, SystemPromptSupport};
 use super::error::AcpServerError;
+use super::mcp_acp::AcpMcpToolset;
 use super::modes::{
     self, SessionControls, config_state_key, config_value_is_valid, mode_is_advertised,
     option_with_current_value,
@@ -152,11 +153,13 @@ impl AcpSessionHandler {
     ///
     /// Applies the request's `systemPrompt` to the session's turns and stores
     /// its initial `configOptions` values, rejecting the request when either
-    /// cannot be applied.
+    /// cannot be applied. The session's `acp` MCP servers are reached through
+    /// `connection`.
     pub async fn create_session(
         &self,
         request: NewSessionRequest,
         request_cancellation: RequestCancellation,
+        connection: ConnectionTo<Client>,
     ) -> Result<SessionId, AcpServerError> {
         self.ensure_running()?;
         validate_absolute(&request.cwd, "cwd")?;
@@ -179,8 +182,13 @@ impl AcpSessionHandler {
         );
 
         self.reserve(&session_id, system_prompt).await?;
-        let mcp = match start_mcp_servers(&request.mcp_servers, &request.cwd, &request_cancellation)
-            .await
+        let mcp = match start_mcp_servers(
+            &request.mcp_servers,
+            &request.cwd,
+            &request_cancellation,
+            &connection,
+        )
+        .await
         {
             Ok(resources) => resources,
             Err(error) => {
@@ -216,6 +224,7 @@ impl AcpSessionHandler {
         &self,
         request: ResumeSessionRequest,
         request_cancellation: RequestCancellation,
+        connection: ConnectionTo<Client>,
     ) -> Result<(), AcpServerError> {
         let ResumeSessionRequest {
             session_id,
@@ -234,6 +243,7 @@ impl AcpSessionHandler {
             system_prompt.as_ref(),
             &config_options,
             &request_cancellation,
+            &connection,
             "resumed",
         )
         .await?;
@@ -275,6 +285,7 @@ impl AcpSessionHandler {
                 system_prompt.as_ref(),
                 &config_options,
                 &request_cancellation,
+                &connection,
                 "loaded",
             )
             .await?;
@@ -311,6 +322,7 @@ impl AcpSessionHandler {
         &self,
         request: ForkSessionRequest,
         request_cancellation: RequestCancellation,
+        connection: ConnectionTo<Client>,
     ) -> Result<SessionId, AcpServerError> {
         self.ensure_running()?;
         let ForkSessionRequest {
@@ -356,13 +368,14 @@ impl AcpSessionHandler {
         let new_session_id = uuid::Uuid::new_v4().to_string();
         self.reserve(&new_session_id, system_prompt).await?;
 
-        let mcp = match start_mcp_servers(&mcp_servers, &cwd, &request_cancellation).await {
-            Ok(resources) => resources,
-            Err(error) => {
-                self.sessions.lock().await.remove(&new_session_id);
-                return Err(error);
-            }
-        };
+        let mcp =
+            match start_mcp_servers(&mcp_servers, &cwd, &request_cancellation, &connection).await {
+                Ok(resources) => resources,
+                Err(error) => {
+                    self.sessions.lock().await.remove(&new_session_id);
+                    return Err(error);
+                }
+            };
 
         if let Err(error) = self
             .session_service
@@ -651,6 +664,7 @@ impl AcpSessionHandler {
         system_prompt: Option<&agent_client_protocol::v1::schema::SystemPrompt>,
         config_options: &[InitialSessionConfigOption],
         request_cancellation: &RequestCancellation,
+        connection: &ConnectionTo<Client>,
         verb: &str,
     ) -> Result<Box<dyn adk_session::Session>, AcpServerError> {
         self.ensure_running()?;
@@ -674,7 +688,8 @@ impl AcpSessionHandler {
             )));
         }
         self.reserve(&id, system_prompt).await?;
-        let mcp = match start_mcp_servers(mcp_servers, cwd, request_cancellation).await {
+        let mcp = match start_mcp_servers(mcp_servers, cwd, request_cancellation, connection).await
+        {
             Ok(resources) => resources,
             Err(error) => {
                 self.sessions.lock().await.remove(&id);
@@ -1314,10 +1329,13 @@ impl AcpSessionHandler {
     }
 }
 
+/// Start the session's stdio MCP servers and connect its `acp` ones, whose
+/// tools the client serves over `connection`.
 async fn start_mcp_servers(
     servers: &[McpServer],
     cwd: &Path,
     cancellation: &RequestCancellation,
+    connection: &ConnectionTo<Client>,
 ) -> Result<McpSessionResources, AcpServerError> {
     validate_mcp_servers(servers)?;
     let mut resources = McpSessionResources {
@@ -1326,11 +1344,19 @@ async fn start_mcp_servers(
     };
     let mut names = Vec::with_capacity(servers.len());
     for server in servers {
-        let McpServer::Stdio(config) = server else {
-            return Err(AcpServerError::MalformedMessage(
-                "this ACP agent supports the required MCP stdio transport; HTTP and SSE were not advertised"
-                    .into(),
-            ));
+        let config = match server {
+            McpServer::Stdio(config) => config,
+            McpServer::Acp(config) => {
+                resources.cancellations.push(None);
+                resources.toolsets.push(Arc::new(AcpMcpToolset::new(
+                    &config.name,
+                    config.server_id.clone(),
+                    connection.clone(),
+                )));
+                names.push(config.name.as_str());
+                continue;
+            }
+            _ => return Err(unsupported_mcp_transport()),
         };
         if !config.command.is_absolute() {
             return Err(AcpServerError::MalformedMessage(format!(
@@ -1430,6 +1456,14 @@ async fn reject_tool_name_collisions(
     Ok(())
 }
 
+/// The error for an MCP server whose transport this agent does not advertise.
+fn unsupported_mcp_transport() -> AcpServerError {
+    AcpServerError::MalformedMessage(
+        "this ACP agent supports the MCP stdio and acp transports; HTTP and SSE were not advertised"
+            .into(),
+    )
+}
+
 fn validate_mcp_servers(servers: &[McpServer]) -> Result<(), AcpServerError> {
     const MAX_MCP_SERVERS: usize = 16;
     if servers.len() > MAX_MCP_SERVERS {
@@ -1439,11 +1473,29 @@ fn validate_mcp_servers(servers: &[McpServer]) -> Result<(), AcpServerError> {
     }
     let mut names = std::collections::HashSet::new();
     for server in servers {
-        let McpServer::Stdio(config) = server else {
-            return Err(AcpServerError::MalformedMessage(
-                "this ACP agent supports the required MCP stdio transport; HTTP and SSE were not advertised"
-                    .into(),
-            ));
+        let config = match server {
+            McpServer::Stdio(config) => config,
+            McpServer::Acp(config) => {
+                if config.name.trim().is_empty() {
+                    return Err(AcpServerError::MalformedMessage(
+                        "MCP server names cannot be empty".into(),
+                    ));
+                }
+                if config.server_id.0.is_empty() {
+                    return Err(AcpServerError::MalformedMessage(format!(
+                        "MCP server '{}' has an empty serverId",
+                        config.name
+                    )));
+                }
+                if !names.insert(config.name.as_str()) {
+                    return Err(AcpServerError::MalformedMessage(format!(
+                        "duplicate MCP server name: {}",
+                        config.name
+                    )));
+                }
+                continue;
+            }
+            _ => return Err(unsupported_mcp_transport()),
         };
         if config.name.trim().is_empty() {
             return Err(AcpServerError::MalformedMessage(

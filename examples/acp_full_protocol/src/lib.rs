@@ -20,7 +20,14 @@
 //! It also covers the ACP v5 surface `adk-acp` implements: protocol version
 //! negotiation, client system prompts, end-of-turn token usage, session titles,
 //! status, archiving, options, fork and resume, session modes and config
-//! options, and authentication with logout and `auth/status`.
+//! options, and authentication with logout and `auth/status`. Two unstable
+//! surfaces have probes of their own:
+//!
+//! - **MCP over ACP**: prompting `client tools?` lists the tools the client
+//!   serves over the ACP connection, and `call <tool>` runs one of them;
+//! - **Configurable providers**: prompting `model?` names the model behind the
+//!   agent's [`SwitchableModel`], which a client switches with `providers/set`
+//!   ([`reference_providers`]).
 //!
 //! The [`ScriptedAgent`] is intentionally deterministic (it does not call an
 //! LLM) so the behavior above is reproducible in tests. It models the same
@@ -39,11 +46,15 @@ use adk_acp::agent_client_protocol::v1::schema::{
     AuthAccount, AuthMethod, AuthMethodAgent, AuthenticateRequest, SessionConfigOption,
     SessionMode, SessionModeState,
 };
-use adk_acp::server::{AcpAuthenticator, AcpServerError, SessionControls};
+use adk_acp::server::{
+    AcpAuthenticator, AcpServerError, LlmProtocol, ModelProvider, ModelProviders, ProviderSettings,
+    SessionControls, SwitchableModel,
+};
 use adk_core::{
-    Agent, BeforeModelResult, CallbackContext, Content, EmbeddedResource, Event, EventStream,
-    FunctionResponseData, InvocationContext, LlmRequest, Part, Result as AdkResult,
-    ToolConfirmationDecision, ToolConfirmationRequest, ToolContext, UsageMetadata,
+    AdkError, Agent, BeforeModelResult, CallbackContext, Content, EmbeddedResource, Event,
+    EventStream, FunctionResponseData, InvocationContext, Llm, LlmRequest, LlmResponseStream, Part,
+    ReadonlyContext, Result as AdkResult, ToolConfirmationDecision, ToolConfirmationRequest,
+    ToolContext, UsageMetadata,
 };
 use adk_session::{InMemorySessionService, SessionService};
 use adk_tool::{FunctionTool, SimpleToolContext};
@@ -105,6 +116,7 @@ pub struct ScriptedAgent {
     delete_tool: Arc<dyn adk_core::Tool>,
     executed: Arc<Mutex<bool>>,
     applied_decision: Arc<Mutex<Option<ToolConfirmationDecision>>>,
+    model: Option<SwitchableModel>,
 }
 
 impl ScriptedAgent {
@@ -114,7 +126,14 @@ impl ScriptedAgent {
             delete_tool,
             executed: Arc::new(Mutex::new(false)),
             applied_decision: Arc::new(Mutex::new(None)),
+            model: None,
         }
+    }
+
+    /// Report `model`'s current backing model when prompted `model?`.
+    pub fn with_model(mut self, model: SwitchableModel) -> Self {
+        self.model = Some(model);
+        self
     }
 
     /// Shared flag recording whether the gated tool actually executed.
@@ -155,6 +174,15 @@ impl Agent for ScriptedAgent {
         let applied = self.applied_decision.clone();
         let hooks = ctx.run_config().invocation_hooks.clone();
         let callback_ctx = ctx.clone() as Arc<dyn CallbackContext>;
+        let readonly_ctx = ctx.clone() as Arc<dyn ReadonlyContext>;
+        let toolsets: Vec<_> = ctx
+            .run_config()
+            .runtime_toolsets
+            .iter()
+            .map(|toolset| toolset.toolset().clone())
+            .collect();
+        let model = self.model.clone();
+        let prompt_text: String = user_content.parts.iter().filter_map(Part::text).collect();
 
         let stream = async_stream::stream! {
             // ── Resume path: the client answered the permission request ──
@@ -237,6 +265,59 @@ impl Agent for ScriptedAgent {
                 event.set_content(
                     Content::new("model").with_text(format!("instructions: {}", instructions.join(" | "))),
                 );
+                yield Ok(event);
+                return;
+            }
+
+            // ── MCP over ACP: tools the client serves over the connection ──
+            //
+            // The ACP server turns each `acp` MCP server the client declared into
+            // a runtime toolset of the turn.
+            if prompt_text == "client tools?" || prompt_text.starts_with("call ") {
+                let mut tools = Vec::new();
+                for toolset in &toolsets {
+                    match toolset.tools(readonly_ctx.clone()).await {
+                        Ok(listed) => tools.extend(listed),
+                        Err(error) => {
+                            yield Err(error);
+                            return;
+                        }
+                    }
+                }
+                let text = match prompt_text.strip_prefix("call ") {
+                    None => {
+                        let names: Vec<&str> = tools.iter().map(|tool| tool.name()).collect();
+                        format!("client tools: {}", names.join(", "))
+                    }
+                    Some(name) => match tools.iter().find(|tool| tool.name() == name) {
+                        None => format!("no client tool named {name}"),
+                        Some(tool) => {
+                            let tool_ctx: Arc<dyn ToolContext> =
+                                Arc::new(SimpleToolContext::new(AGENT_NAME));
+                            match tool.execute(tool_ctx, json!({})).await {
+                                Ok(result) => format!("{name} returned {result}"),
+                                Err(error) => format!("{name} failed: {error}"),
+                            }
+                        }
+                    },
+                };
+                let mut event = Event::new(&invocation);
+                event.author = AGENT_NAME.to_string();
+                event.set_content(Content::new("model").with_text(text));
+                yield Ok(event);
+                return;
+            }
+
+            // ── Configurable providers: which model backs the agent now ──
+            if prompt_text == "model?" {
+                let text = match model.as_ref().map(SwitchableModel::current) {
+                    None => "model: none configured".to_string(),
+                    Some(None) => "model: disabled".to_string(),
+                    Some(Some(current)) => format!("model: {}", current.name()),
+                };
+                let mut event = Event::new(&invocation);
+                event.author = AGENT_NAME.to_string();
+                event.set_content(Content::new("model").with_text(text));
                 yield Ok(event);
                 return;
             }
@@ -409,4 +490,58 @@ impl AcpAuthenticator for WorkspaceToken {
     async fn accounts(&self) -> Vec<AuthAccount> {
         vec![AuthAccount::new("Reference workspace")]
     }
+}
+
+/// A stand-in for a model client, named by the protocol and base URL it would
+/// route to. The scripted agent never sends it requests.
+pub struct RoutedModel {
+    name: String,
+}
+
+impl RoutedModel {
+    /// A model routed by `api_type` to `base_url`.
+    pub fn new(api_type: &LlmProtocol, base_url: &str) -> Self {
+        Self { name: format!("{api_type:?} at {base_url}") }
+    }
+}
+
+#[async_trait]
+impl Llm for RoutedModel {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn generate_content(
+        &self,
+        _req: LlmRequest,
+        _stream: bool,
+    ) -> AdkResult<LlmResponseStream> {
+        Err(AdkError::model("the reference agent does not call models"))
+    }
+}
+
+/// The reference server's providers: a required `main` provider over
+/// `model`, speaking OpenAI or Anthropic. A client's `providers/set` replaces
+/// `model` with a [`RoutedModel`] for the new routing target; a real
+/// application would build a model client from the settings, headers
+/// included.
+pub fn reference_providers(model: &SwitchableModel) -> ModelProviders {
+    ModelProviders::new().provider(
+        ModelProvider::new("main", model.clone(), |settings: &ProviderSettings| {
+            Ok(Arc::new(RoutedModel::new(&settings.api_type, &settings.base_url)) as Arc<dyn Llm>)
+        })
+        .supports(LlmProtocol::OpenAi)
+        .supports(LlmProtocol::Anthropic)
+        .required(true)
+        .current(LlmProtocol::OpenAi, DEFAULT_PROVIDER_URL),
+    )
+}
+
+/// The routing target of the reference server's default model.
+pub const DEFAULT_PROVIDER_URL: &str = "https://api.openai.com/v1";
+
+/// The reference server's switchable model, starting at
+/// [`DEFAULT_PROVIDER_URL`].
+pub fn reference_model() -> SwitchableModel {
+    SwitchableModel::new(Arc::new(RoutedModel::new(&LlmProtocol::OpenAi, DEFAULT_PROVIDER_URL)))
 }
