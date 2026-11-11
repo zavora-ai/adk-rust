@@ -25,7 +25,7 @@ use adk_core::{
     BlobResourceContents, Content, EmbeddedResource, MAX_INLINE_DATA_SIZE, Part,
     TextResourceContents,
 };
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     Annotations, AudioContent, BlobResourceContents as AcpBlobResourceContents, ContentBlock,
     EmbeddedResource as AcpEmbeddedResource, EmbeddedResourceResource, ImageContent, ResourceLink,
     TextContent, TextResourceContents as AcpTextResourceContents,
@@ -53,7 +53,7 @@ const MAX_BASE64_ENCODED_SIZE: usize = MAX_INLINE_DATA_SIZE.div_ceil(3) * 4;
 /// ```rust
 /// use adk_acp::content::block_to_part;
 /// use adk_core::Part;
-/// use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
+/// use agent_client_protocol::v1::schema::{ContentBlock, TextContent};
 ///
 /// let block = ContentBlock::Text(TextContent::new("hello"));
 /// let part = block_to_part(&block).unwrap();
@@ -107,7 +107,7 @@ pub fn block_to_part(block: &ContentBlock) -> Result<Part, AcpError> {
 /// ```rust
 /// use adk_acp::content::part_to_block;
 /// use adk_core::Part;
-/// use agent_client_protocol::schema::v1::ContentBlock;
+/// use agent_client_protocol::v1::schema::ContentBlock;
 ///
 /// let part = Part::Text { text: "hi".into() };
 /// assert!(matches!(part_to_block(&part), Some(ContentBlock::Text(_))));
@@ -170,7 +170,7 @@ pub fn part_to_block(part: &Part) -> Option<ContentBlock> {
 /// ```rust
 /// use adk_acp::content::content_to_blocks;
 /// use adk_core::{Content, Part};
-/// use agent_client_protocol::schema::v1::ContentBlock;
+/// use agent_client_protocol::v1::schema::ContentBlock;
 ///
 /// let mut content = Content::new("user");
 /// content.parts.push(Part::Text { text: "describe this".into() });

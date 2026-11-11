@@ -40,6 +40,15 @@ pub enum AcpServerError {
 
     /// Agent execution error.
     Execution(String),
+
+    /// The connection must authenticate before this request.
+    ///
+    /// Sent to ACP clients as the `auth_required` error (`-32000`).
+    AuthRequired,
+
+    /// The client asked for something this agent does not support, such as a
+    /// system prompt mode or content type it cannot apply.
+    Unsupported(String),
 }
 
 impl AcpServerError {
@@ -61,6 +70,8 @@ impl AcpServerError {
             Self::Internal(_) => "internal_error",
             Self::Transport(_) => "transport_error",
             Self::Execution(_) => "execution_error",
+            Self::AuthRequired => "auth_required",
+            Self::Unsupported(_) => "unsupported",
         }
     }
 
@@ -82,6 +93,8 @@ impl AcpServerError {
             Self::Internal(_) => "internal server error".to_string(),
             Self::Transport(msg) => format!("transport error: {msg}"),
             Self::Execution(msg) => format!("execution error: {msg}"),
+            Self::AuthRequired => "authentication required".to_string(),
+            Self::Unsupported(msg) => format!("unsupported: {msg}"),
         }
     }
 
@@ -106,6 +119,8 @@ impl fmt::Display for AcpServerError {
             Self::Internal(msg) => write!(f, "internal server error: {msg}"),
             Self::Transport(msg) => write!(f, "transport error: {msg}"),
             Self::Execution(msg) => write!(f, "execution error: {msg}"),
+            Self::AuthRequired => write!(f, "authentication required"),
+            Self::Unsupported(msg) => write!(f, "unsupported: {msg}"),
         }
     }
 }

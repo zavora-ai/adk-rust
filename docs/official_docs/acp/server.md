@@ -81,7 +81,8 @@ translated to ACP `session/update` notifications while the prompt is active.
 
 | ACP operation | ADK-Rust behavior |
 |---|---|
-| `initialize` | Negotiates protocol v1 and returns exact implementation and capability metadata |
+| `initialize` | Answers with the version the SDK's v1 guard negotiated (v1 for a request for a newer version, and for v0), implementation and capability metadata, and the authenticator's `authMethods` |
+| `authenticate` / `logout` / `auth/status` | Through the configured `AcpAuthenticator`; see [Authentication](#authentication) |
 | `session/new` | Validates workspace paths and creates one persisted ADK session |
 | `session/prompt` | Converts supported content blocks (text, resource-link, embedded-resource, image, audio) and streams the Runner |
 | `session/load` | Reactivates a persisted session (validating `cwd`) and replays its stored conversation as ordered `session/update` notifications before completing |
@@ -94,6 +95,17 @@ translated to ACP `session/update` notifications while the prompt is active.
 | `session/set_mode` | Validates and records a session mode declared by the agent's `SessionControls`, emitting a `CurrentModeUpdate` |
 | `session/set_config_option` | Validates and records a configuration value declared by the agent's `SessionControls`, emitting a `ConfigOptionUpdate` |
 | `session/delete` | Removes persisted history and releases active resources |
+| `session/set_title` | Records the title, which `session/list` reports and load, resume and fork keep, and emits a `SessionInfoUpdate` |
+| `session/status` | `open` while the session is active on the connection, `saved` while it is only persisted |
+| `session/archive` / `session/unarchive` | Hides a session from `session/list` unless the request's `archived` filter includes it, keeping its history |
+| `session/options` | The modes and configuration options a session would start with, or a stored session's current ones |
+
+`session/new`, `session/load`, `session/resume` and `session/fork` accept a
+`systemPrompt`; see [System prompts](#system-prompts). `session/new`,
+`session/load` and `session/resume` also accept initial `configOptions`, validated
+like `session/set_config_option`. Each `PromptResponse` carries the turn's token
+`usage`, summed over the model calls that reported it. A request naming a missing
+session gets ACP's `session_not_found` error (`-32002` with the session id).
 
 Only one prompt may run in a session at a time. Different sessions may run
 concurrently up to `max_sessions`.
@@ -173,15 +185,25 @@ stays dormant until an ADK plan primitive surfaces plan entries.
 
 ## Client-supplied MCP servers
 
-The client may include stdio MCP servers in `session/new`, `session/load`,
-`session/resume`, or `session/fork`. Before starting a process the server
-rejects the request when:
+The client may include stdio and `acp` MCP servers in `session/new`,
+`session/load`, `session/resume`, or `session/fork`. The server advertises
+`mcpCapabilities.acp` (the unstable MCP-over-ACP surface). Before starting a
+process the server rejects the request when:
 
 - more than 16 servers are attached;
-- a server is not stdio (HTTP and SSE are not advertised);
-- a name is empty or repeated, or an environment variable name is empty or
-  repeated within one server; or
+- a server is neither stdio nor `acp` (HTTP and SSE are not advertised);
+- a name is empty or repeated, an `acp` server has an empty `serverId`, or an
+  environment variable name is empty or repeated within one server; or
 - a command is not an absolute path.
+
+An `acp` server runs in the client. The server reaches its tools by sending
+`mcp/message` requests over the ACP connection (MCP `2026-07-28`: no
+`initialize`, the protocol version and capabilities in `params._meta`, and a
+fresh logical request id per operation). It becomes a toolset named
+`acp:{server name}` like a stdio server, and steps 4 and 5 below apply to it.
+Its tool list is cached for the `ttlMs` the client returns. Tool results are
+mapped the way adk-tool's MCP toolset maps them, and an `isError` result
+reaches the model as `{"error": text}`.
 
 It then:
 
@@ -202,6 +224,107 @@ the turn.
 Invocation-scoped toolsets are currently resolved by `LlmAgent` and
 `CodeActAgent`. Optional HTTP and SSE MCP transports are not advertised by the
 server.
+
+## System prompts
+
+A client may send system-level instructions with a session request when the
+server advertises `sessionCapabilities.systemPrompt`. The server applies them to
+every model request of the session's turns through an invocation hook on the
+run: `append` places the prompt after the agent's own system instructions and
+`override` replaces them. The prompt lasts while the session is active on the
+connection; a later load or resume without one uses the agent's own instructions.
+Text and embedded text resources are accepted; other content, or a mode the server
+does not accept, fails the request rather than starting the session without it.
+
+```rust,ignore
+use adk_acp::server::{AcpServerConfigBuilder, SystemPromptSupport};
+
+let config = AcpServerConfigBuilder::new()
+    .agent(agent)
+    .session_service(sessions)
+    // The default accepts append and override.
+    .system_prompts(SystemPromptSupport::Append)
+    .build()?;
+```
+
+## Authentication
+
+Without an authenticator the server advertises no `authMethods`, `auth/status`
+reports `not_required`, and no request needs authentication. An
+`AcpAuthenticator` advertises its methods and answers `authenticate`, `logout`
+(advertised as `auth.logout` when it supports it) and `auth/status`. While
+`required()` is true, every session request on a connection gets
+`auth_required` (`-32000`) until the client authenticates on it, and the server
+sends `auth/status_update` when the state changes.
+
+```rust,ignore
+use adk_acp::agent_client_protocol::v1::schema::{AuthMethod, AuthMethodAgent, AuthenticateRequest};
+use adk_acp::server::{AcpAuthenticator, AcpServerConfigBuilder, AcpServerError};
+
+struct WorkspaceToken;
+
+#[async_trait::async_trait]
+impl AcpAuthenticator for WorkspaceToken {
+    fn methods(&self) -> Vec<AuthMethod> {
+        vec![AuthMethod::Agent(AuthMethodAgent::new("workspace-token", "Workspace token"))]
+    }
+
+    async fn authenticate(&self, request: &AuthenticateRequest) -> Result<(), AcpServerError> {
+        check_token(&request.method_id)
+    }
+}
+
+let config = AcpServerConfigBuilder::new()
+    .agent(agent)
+    .session_service(sessions)
+    .authenticator(std::sync::Arc::new(WorkspaceToken))
+    .build()?;
+```
+
+## Model providers
+
+With an `AcpProviders` hook configured, the server advertises `providers` (the
+unstable configurable-provider surface). It answers `providers/list`,
+`providers/set` and `providers/disable`, checking each request against the
+hook's own listing first. `providers/set` must name a listed provider and one
+of its supported protocols, with a base URL. Disabling an unlisted provider
+succeeds, and disabling a required one is refused. Without a hook, the
+capability is not advertised and the methods answer method-not-found.
+Provider settings last for the process and are never persisted, listed or
+logged with their headers.
+
+`ModelProviders` is a ready-made hook. Each provider pairs a `SwitchableModel`,
+an `Llm` the agent uses whose backing model can be replaced while it runs, with
+a factory that builds the new model from the client's settings:
+
+```rust,ignore
+use adk_acp::server::{LlmProtocol, ModelProvider, ModelProviders, SwitchableModel};
+
+let model = SwitchableModel::new(default_model);
+let agent = LlmAgentBuilder::new("coder").model(Arc::new(model.clone())).build()?;
+let providers = ModelProviders::new().provider(
+    ModelProvider::new("main", model, |settings| build_model(settings))
+        .supports(LlmProtocol::OpenAi)
+        .required(true)
+        .current(LlmProtocol::OpenAi, "https://api.openai.com/v1"),
+);
+let config = AcpServerConfigBuilder::new()
+    .agent(Arc::new(agent))
+    .session_service(sessions)
+    .providers(Arc::new(providers))
+    .build()?;
+```
+
+A request already running finishes on the model it started with. A disabled
+provider's `SwitchableModel` fails requests until a later `providers/set`.
+
+## Serve over another transport
+
+`AcpServer::run` serves stdio. `AcpServer::serve(config, transport)` serves one
+connection over any SDK transport — an in-process `Channel`, a socket wrapped in
+`ByteStreams` — until the client closes it, then releases the connection's
+sessions. The [`acp_full_protocol`](../../../examples/acp_full_protocol) example
+tests drive the real server this way.
 
 ## Persistence decisions
 

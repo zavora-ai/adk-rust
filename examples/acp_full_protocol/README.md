@@ -27,6 +27,27 @@ SDK Client  ──initialize · session/new · session/prompt · session/load─
 | `session/load` replay | After a turn, `session/load` replays the stored updates in chronological order before the response returns. |
 | Usage & tool updates | A rich turn emits a `UsageUpdate` and an enriched `ToolCallUpdate` (content + file location + kind). |
 
+### ACP v5 surface
+
+The second half of the test drives the same server with adk-acp's own client,
+`AcpConnection`, over the same in-process channel.
+
+| Feature | How |
+|---------|-----|
+| Version negotiation | The handshake reports protocol v1, the agent's identity, and the session capabilities the server implements. |
+| System prompts | Prompting `instructions?` makes the agent show the system instructions a model request of the turn would carry: the client's prompt appended after its own, or replacing it. |
+| End-of-turn usage | `PromptResponse.usage` carries the turn's token counts. |
+| Session lifecycle | Title, status (`open` / `saved`), fork, archive with the `archived` list filter, load with replay, and resume. |
+| Modes and config | `session/options` before a session exists, an initial `verbose` value, `set_mode` and `set_config_option`. |
+| Authentication | With `WorkspaceToken`, sessions need `authenticate`; `auth/status` and `logout` follow the state, and an unoffered method fails the handshake. |
+
+### Unstable surfaces
+
+| Feature | How |
+|---------|-----|
+| MCP over ACP | The client serves a `workspace_info` tool with an `AcpToolServer`. Prompting `client tools?` lists the tools the agent's turn receives from it, and `call workspace_info` runs the tool in the client over `mcp/message`. |
+| Configurable providers | `reference_providers` exposes a required `main` provider over the agent's `SwitchableModel`. `providers/list` reports its target, and after `providers/set` prompting `model?` names the new routing target. Disabling `main` is refused. |
+
 ## Why the agent is deterministic
 
 The [`ScriptedAgent`](src/lib.rs) does not call an LLM, so the protocol behavior
@@ -52,11 +73,14 @@ stdout. Diagnostics go to stderr. Connect an ACP client or SDK over stdio.
 cargo test --manifest-path examples/acp_full_protocol/Cargo.toml
 ```
 
-The test in [`tests/protocol.rs`](tests/protocol.rs) builds the server from the
-public `AcpSessionHandler`, pairs it with the SDK `Client` via
-`Channel::duplex()`, and asserts every feature above.
+The test in [`tests/protocol.rs`](tests/protocol.rs) serves the agent with
+`AcpServer::serve` over one end of `Channel::duplex()` — the same wiring
+`AcpServer::run` serves over stdio — and drives it with the SDK's v1 `Client`
+and with adk-acp's `AcpConnection`, asserting every feature above.
 
 ## No configuration required
 
 There are no environment variables to set — see [`.env.example`](.env.example).
-The agent is deterministic and never contacts a model provider.
+The agent is deterministic and never contacts a model provider. Set
+`ACP_EXAMPLE_TOKEN` to make the server require the `workspace-token`
+authentication method.

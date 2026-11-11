@@ -125,6 +125,10 @@ impl fmt::Debug for MemberSpec {
 /// ```
 #[derive(Clone)]
 #[non_exhaustive]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "built once per team member; boxing the ACP config would only change the public variant"
+)]
 pub enum MemberKind {
     /// An `LlmAgent` the harness builds.
     Local {
@@ -1192,7 +1196,7 @@ mod acp {
 
     /// The governed call an ACP permission request is decided as.
     pub(super) fn governed_call(member: &str, request: &PermissionRequest) -> GovernedCall {
-        use adk_acp::agent_client_protocol::schema::v1::ToolKind as AcpKind;
+        use adk_acp::agent_client_protocol::v1::schema::ToolKind as AcpKind;
         let kind = format!("{:?}", request.kind).to_lowercase();
         let path = request_path(request);
         let mut args =

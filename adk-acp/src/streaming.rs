@@ -6,29 +6,31 @@
 
 use std::sync::Arc;
 
-use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
-    ContentBlock, InitializeRequest, NewSessionRequest, PermissionOptionKind,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SessionNotification, SessionUpdate, ToolCallContent, ToolCallStatus, ToolCallUpdate, ToolKind,
+use agent_client_protocol::v1::schema::{
+    AvailableCommand, CompactionUpdate, ContentBlock, NoticeSeverity, Plan, PlanRemoved,
+    PlanUpdate, SessionConfigOption, SessionId, SessionInfoUpdate, SessionMessage,
+    SessionMessageChunk, SessionUpdate, StopReason, SubagentUpdate, ToolCallContent,
+    ToolCallStatus, ToolCallUpdate, ToolKind, Usage,
 };
-use agent_client_protocol::{Agent, Client, ConnectionTo, Responder};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+use crate::client::{AcpConnection, Observer, RoutedUpdate};
 use crate::connection::AcpAgentConfig;
 use crate::error::Result;
-use crate::host::{AcpHostHandler, capabilities};
-use crate::permissions::{PermissionPolicy, PermissionRequest, outcome_for};
+use crate::permissions::PermissionPolicy;
 use crate::status::{AgentStatus, StatusTracker};
 
 /// A chunk of output from the ACP agent.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum OutputChunk {
     /// A text chunk from the agent's response.
     Text(String),
     /// The agent is thinking (internal reasoning, not shown to user by default).
     Thought(String),
+    /// A chunk of a user message, as the agent replays history on `session/load`.
+    UserText(String),
     /// A tool call was initiated (e.g., "Creating file app.rs").
     ToolCall {
         /// Human-readable title of the operation.
@@ -70,6 +72,52 @@ pub enum OutputChunk {
         /// ISO 4217 currency code accompanying `cost`, if reported.
         currency: Option<String>,
     },
+    /// The agent's full execution plan, replacing any earlier one.
+    Plan(Plan),
+    /// One plan created or changed (unstable plan operations).
+    PlanUpdate(PlanUpdate),
+    /// One plan removed (unstable plan operations).
+    PlanRemoved(PlanRemoved),
+    /// Information for the user that is not part of the session history.
+    Notice {
+        /// How serious the notice is.
+        severity: NoticeSeverity,
+        /// Short summary.
+        title: String,
+        /// Optional detail.
+        description: Option<String>,
+    },
+    /// A context compaction was created or changed.
+    Compaction(CompactionUpdate),
+    /// Text appended to a context compaction's retained summary.
+    CompactionSummary {
+        /// The compaction the text belongs to.
+        compaction_id: String,
+        /// The appended text.
+        text: String,
+    },
+    /// The session switched to another mode.
+    ModeChanged(String),
+    /// The session's configuration options, with their current values.
+    ConfigOptions(Vec<SessionConfigOption>),
+    /// The slash commands the agent offers in the session.
+    AvailableCommands(Vec<AvailableCommand>),
+    /// The session's title or last-update time changed.
+    SessionInfo(SessionInfoUpdate),
+    /// A child session the agent created for this session, or a change to it
+    /// (unstable subagents).
+    Subagent(SubagentUpdate),
+    /// A message sent to or received from another session (unstable subagents).
+    SessionMessage(SessionMessage),
+    /// Content appended to a session message (unstable subagents).
+    SessionMessageChunk(SessionMessageChunk),
+    /// Output of a subagent session, addressed to the child's session id.
+    SubagentOutput {
+        /// The subagent's session id.
+        session_id: String,
+        /// What the subagent produced.
+        chunk: Box<OutputChunk>,
+    },
     /// The agent requested permission (informational — decision already made by policy).
     PermissionRequested {
         /// What the agent wanted to do.
@@ -78,7 +126,12 @@ pub enum OutputChunk {
         approved: bool,
     },
     /// The agent finished responding.
-    Done,
+    Done {
+        /// Why the agent ended the turn.
+        stop_reason: StopReason,
+        /// The tokens the turn used, when the agent reported them.
+        usage: Option<Usage>,
+    },
     /// An error occurred.
     Error(String),
 }
@@ -97,7 +150,7 @@ pub enum OutputChunk {
 ///     match chunk {
 ///         OutputChunk::Text(t) => print!("{t}"),
 ///         OutputChunk::ToolCall { title } => println!("\n[tool] {title}"),
-///         OutputChunk::Done => break,
+///         OutputChunk::Done { .. } => break,
 ///         _ => {}
 ///     }
 /// }
@@ -106,8 +159,9 @@ pub type OutputStream = mpsc::Receiver<OutputChunk>;
 
 /// Send a prompt and stream the response chunks.
 ///
-/// Returns a receiver that yields [`OutputChunk`]s as they arrive.
-/// The agent process is terminated when the stream completes.
+/// Returns a receiver that yields [`OutputChunk`]s as they arrive, ending with
+/// [`OutputChunk::Done`] (or [`OutputChunk::Error`]). The agent process is
+/// terminated when the stream completes.
 pub async fn stream_prompt(
     config: &AcpAgentConfig,
     prompt: &str,
@@ -117,135 +171,80 @@ pub async fn stream_prompt(
     info!(command = %config.command, "starting streaming ACP prompt");
 
     let agent = crate::connection::build_agent(config)?;
-
     let (chunk_tx, chunk_rx) = mpsc::channel::<OutputChunk>(64);
     let prompt_text = prompt.to_string();
-    let working_dir = config.working_dir.clone();
-    let mcp_servers = config.mcp_servers.clone();
-    let filesystem = config.filesystem.clone();
-    let terminal = config.terminal.clone();
-    let client_capabilities = capabilities(filesystem.as_ref(), terminal.as_ref());
+    let config = config.clone();
 
     status.set(AgentStatus::Starting);
 
     tokio::spawn(async move {
-        let chunk_tx_err = chunk_tx.clone();
-        let status_inner = status.clone();
-        let policy_clone = policy.clone();
-        let chunk_tx_perm = chunk_tx.clone();
-
-        let outcome = Client
-            .builder()
-            .on_receive_notification(
-                {
-                    let tx = chunk_tx.clone();
-                    async move |notif: SessionNotification, _cx: ConnectionTo<Agent>| {
-                        if let Some(chunk) = map_update(notif.update) {
-                            let _ = tx.send(chunk).await;
+        let observer = Observer { status: status.clone(), events: chunk_tx.clone() };
+        let outcome = async {
+            let connection = AcpConnection::open(agent, config, policy, Some(observer)).await?;
+            status.set(AgentStatus::Running);
+            let result = async {
+                let mut session = connection.new_session().await?;
+                // Forward each chunk as it arrives: a bounded channel would stall the
+                // prompt loop, so chunks go through an unbounded hop.
+                let (forward_tx, mut forward_rx) = mpsc::unbounded_channel::<OutputChunk>();
+                let forwarder = {
+                    let chunk_tx = chunk_tx.clone();
+                    tokio::spawn(async move {
+                        while let Some(chunk) = forward_rx.recv().await {
+                            if chunk_tx.send(chunk).await.is_err() {
+                                break;
+                            }
                         }
-                        Ok(())
-                    }
-                },
-                agent_client_protocol::on_receive_notification!(),
-            )
-            .on_receive_request(
-                {
-                    let status = status_inner.clone();
-                    move |request: RequestPermissionRequest,
-                          responder: Responder<RequestPermissionResponse>,
-                          cx: ConnectionTo<Agent>| {
-                        let status = status.clone();
-                        let policy = policy_clone.clone();
-                        let permission_tx = chunk_tx_perm.clone();
-                        async move {
-                            status.set(AgentStatus::WaitingPermission);
-                            cx.spawn(async move {
-                            let cancellation = responder.cancellation();
-                            let perm_request = PermissionRequest::from_acp(&request);
-                            let outcome = tokio::select! {
-                                decision = policy.decide(&perm_request) => {
-                                    outcome_for(&perm_request, &decision)
-                                }
-                                _ = cancellation.cancelled() => RequestPermissionOutcome::Cancelled,
-                            };
-                            let approved = match &outcome {
-                                RequestPermissionOutcome::Selected(selected) => perm_request
-                                    .options
-                                    .iter()
-                                    .find(|option| option.id == selected.option_id.to_string())
-                                    .is_some_and(|option| {
-                                        matches!(
-                                            option.kind,
-                                            PermissionOptionKind::AllowOnce
-                                                | PermissionOptionKind::AllowAlways
-                                        )
-                                    }),
-                                RequestPermissionOutcome::Cancelled => false,
-                                _ => false,
-                            };
-
-                            let _ = permission_tx
-                                .send(OutputChunk::PermissionRequested {
-                                    title: perm_request.title.clone(),
-                                    approved,
-                                })
-                                .await;
-                            status.set(AgentStatus::Running);
-                            responder.respond(RequestPermissionResponse::new(outcome))
-                        })?;
-                            Ok(())
-                        }
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .with_handler(AcpHostHandler::new(filesystem, terminal))
-            .connect_with(agent, {
-                let status = status_inner.clone();
-                let tx = chunk_tx.clone();
-                |connection: ConnectionTo<Agent>| async move {
-                    status.set(AgentStatus::Starting);
-
-                    let initialization = connection
-                        .send_request(
-                            InitializeRequest::new(ProtocolVersion::V1)
-                                .client_capabilities(client_capabilities),
-                        )
-                        .block_task()
-                        .await?;
-                    crate::connection::validate_initialization(&initialization, &mcp_servers)?;
-
-                    status.set(AgentStatus::Running);
-
-                    connection
-                        .build_session_from(
-                            NewSessionRequest::new(&working_dir).mcp_servers(mcp_servers),
-                        )
-                        .block_task()
-                        .run_until(async |mut session| {
-                            session.send_prompt(&prompt_text)?;
-                            // read_to_string collects internally; notifications stream via callback
-                            let _ = session.read_to_string().await?;
-                            let _ = tx.send(OutputChunk::Done).await;
-                            Ok(())
-                        })
-                        .await?;
-
-                    status.set(AgentStatus::Idle);
-                    Ok(())
-                }
-            })
+                    })
+                };
+                let reply = session
+                    .prompt_blocks(vec![ContentBlock::from(prompt_text)], move |chunk| {
+                        let _ = forward_tx.send(chunk);
+                    })
+                    .await;
+                let _ = forwarder.await;
+                let _ = session.close().await;
+                reply
+            }
             .await;
-
-        if let Err(e) = outcome {
-            warn!(error = %e, "streaming ACP session ended with error");
-            let _ = chunk_tx_err.send(OutputChunk::Error(e.to_string())).await;
+            let _ = connection.close().await;
+            result
         }
+        .await;
 
-        status_inner.set(AgentStatus::Stopped);
+        match outcome {
+            Ok(reply) => {
+                status.set(AgentStatus::Idle);
+                let _ = chunk_tx
+                    .send(OutputChunk::Done { stop_reason: reply.stop_reason, usage: reply.usage })
+                    .await;
+            }
+            Err(error) => {
+                warn!(%error, "streaming ACP session ended with error");
+                let _ = chunk_tx.send(OutputChunk::Error(error.to_string())).await;
+            }
+        }
+        status.set(AgentStatus::Stopped);
     });
 
     Ok(chunk_rx)
+}
+
+/// Map an update routed to `session_id`'s stream to an [`OutputChunk`],
+/// wrapping a subagent's output in [`OutputChunk::SubagentOutput`].
+pub(crate) fn map_routed_update(
+    session_id: &SessionId,
+    routed: RoutedUpdate,
+) -> Option<OutputChunk> {
+    let chunk = map_update(routed.update)?;
+    if routed.session_id == *session_id {
+        Some(chunk)
+    } else {
+        Some(OutputChunk::SubagentOutput {
+            session_id: routed.session_id.to_string(),
+            chunk: Box::new(chunk),
+        })
+    }
 }
 
 /// Map an incoming ACP [`SessionUpdate`] from an External_Agent to an
@@ -258,7 +257,7 @@ pub async fn stream_prompt(
 /// The text paths (`AgentMessageChunk` → [`OutputChunk::Text`],
 /// `AgentThoughtChunk` → [`OutputChunk::Thought`]) are preserved exactly as they
 /// were before richer updates were surfaced (see design property P12).
-fn map_update(update: SessionUpdate) -> Option<OutputChunk> {
+pub fn map_update(update: SessionUpdate) -> Option<OutputChunk> {
     match update {
         SessionUpdate::AgentMessageChunk(chunk) => match chunk.content {
             ContentBlock::Text(text_content) => {
@@ -272,6 +271,10 @@ fn map_update(update: SessionUpdate) -> Option<OutputChunk> {
             }
             _ => None,
         },
+        SessionUpdate::UserMessageChunk(chunk) => match chunk.content {
+            ContentBlock::Text(text_content) => Some(OutputChunk::UserText(text_content.text)),
+            _ => None,
+        },
         SessionUpdate::ToolCall(tool_call) => {
             Some(OutputChunk::ToolCall { title: tool_call.title.to_string() })
         }
@@ -282,6 +285,35 @@ fn map_update(update: SessionUpdate) -> Option<OutputChunk> {
             cost: usage.cost.as_ref().map(|cost| cost.amount),
             currency: usage.cost.as_ref().map(|cost| cost.currency.clone()),
         }),
+        SessionUpdate::Plan(plan) => Some(OutputChunk::Plan(plan)),
+        SessionUpdate::PlanUpdate(update) => Some(OutputChunk::PlanUpdate(update)),
+        SessionUpdate::PlanRemoved(removed) => Some(OutputChunk::PlanRemoved(removed)),
+        SessionUpdate::Notice(notice) => Some(OutputChunk::Notice {
+            severity: notice.severity,
+            title: notice.title,
+            description: notice.description,
+        }),
+        SessionUpdate::CompactionUpdate(update) => Some(OutputChunk::Compaction(update)),
+        SessionUpdate::CompactionSummaryChunk(chunk) => match chunk.content {
+            ContentBlock::Text(text_content) => Some(OutputChunk::CompactionSummary {
+                compaction_id: chunk.compaction_id.to_string(),
+                text: text_content.text,
+            }),
+            _ => None,
+        },
+        SessionUpdate::CurrentModeUpdate(update) => {
+            Some(OutputChunk::ModeChanged(update.current_mode_id.to_string()))
+        }
+        SessionUpdate::ConfigOptionUpdate(update) => {
+            Some(OutputChunk::ConfigOptions(update.config_options))
+        }
+        SessionUpdate::AvailableCommandsUpdate(update) => {
+            Some(OutputChunk::AvailableCommands(update.available_commands))
+        }
+        SessionUpdate::SessionInfoUpdate(update) => Some(OutputChunk::SessionInfo(update)),
+        SessionUpdate::SubagentUpdate(update) => Some(OutputChunk::Subagent(update)),
+        SessionUpdate::SessionMessage(message) => Some(OutputChunk::SessionMessage(message)),
+        SessionUpdate::SessionMessageChunk(chunk) => Some(OutputChunk::SessionMessageChunk(chunk)),
         _ => None,
     }
 }
@@ -357,10 +389,104 @@ fn tool_kind_str(kind: ToolKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         ContentChunk, Cost, ToolCall, ToolCallContent, ToolCallLocation, ToolCallUpdate,
         ToolCallUpdateFields, UsageUpdate,
     };
+
+    /// Every stable and unstable v1 session update adk-acp advertises reaches the
+    /// stream as its own chunk.
+    #[test]
+    fn session_updates_beyond_text_and_tools_are_surfaced() {
+        use agent_client_protocol::v1::schema::{
+            AvailableCommand, AvailableCommandsUpdate, CompactionStatus, CompactionSummaryChunk,
+            CompactionUpdate, ConfigOptionUpdate, CurrentModeUpdate, Notice, Plan, PlanEntry,
+            PlanEntryPriority, PlanEntryStatus, PlanRemoved, SessionConfigOption,
+            SessionInfoUpdate, SubagentUpdate,
+        };
+
+        let plan = Plan::new(vec![PlanEntry::new(
+            "write tests",
+            PlanEntryPriority::High,
+            PlanEntryStatus::Pending,
+        )]);
+        assert!(matches!(map_update(SessionUpdate::Plan(plan)), Some(OutputChunk::Plan(_))));
+        assert!(matches!(
+            map_update(SessionUpdate::PlanRemoved(PlanRemoved::new("plan-1"))),
+            Some(OutputChunk::PlanRemoved(_))
+        ));
+        assert!(matches!(
+            map_update(SessionUpdate::Notice(Notice::new(NoticeSeverity::Info, "fyi").description("more".to_string()))),
+            Some(OutputChunk::Notice { severity: NoticeSeverity::Info, title, description: Some(description) })
+                if title == "fyi" && description == "more"
+        ));
+        assert!(matches!(
+            map_update(SessionUpdate::CompactionUpdate(CompactionUpdate::new(
+                "c",
+                CompactionStatus::Failed
+            ))),
+            Some(OutputChunk::Compaction(_))
+        ));
+        assert!(matches!(
+            map_update(SessionUpdate::CompactionSummaryChunk(CompactionSummaryChunk::new(
+                "c",
+                ContentBlock::from("kept")
+            ))),
+            Some(OutputChunk::CompactionSummary { compaction_id, text }) if compaction_id == "c" && text == "kept"
+        ));
+        assert!(matches!(
+            map_update(SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new("code"))),
+            Some(OutputChunk::ModeChanged(mode)) if mode == "code"
+        ));
+        assert!(matches!(
+            map_update(SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(vec![
+                SessionConfigOption::boolean("verbose", "Verbose", true)
+            ]))),
+            Some(OutputChunk::ConfigOptions(options)) if options.len() == 1
+        ));
+        assert!(matches!(
+            map_update(SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(vec![
+                AvailableCommand::new("review", "Review")
+            ]))),
+            Some(OutputChunk::AvailableCommands(commands)) if commands.len() == 1
+        ));
+        assert!(matches!(
+            map_update(SessionUpdate::SessionInfoUpdate(
+                SessionInfoUpdate::new().title("t".to_string())
+            )),
+            Some(OutputChunk::SessionInfo(_))
+        ));
+        assert!(matches!(
+            map_update(SessionUpdate::SubagentUpdate(SubagentUpdate::new("child"))),
+            Some(OutputChunk::Subagent(_))
+        ));
+        assert!(matches!(
+            map_update(SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::from("hi")))),
+            Some(OutputChunk::UserText(text)) if text == "hi"
+        ));
+    }
+
+    /// A subagent's output is wrapped with the child's session id; the
+    /// session's own output is not.
+    #[test]
+    fn routed_updates_from_subagents_are_wrapped() {
+        let own = SessionId::new("parent");
+        let text = |value: &str| {
+            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::from(value)))
+        };
+        let mine =
+            map_routed_update(&own, RoutedUpdate { session_id: own.clone(), update: text("a") });
+        assert!(matches!(mine, Some(OutputChunk::Text(text)) if text == "a"));
+        let child = map_routed_update(
+            &own,
+            RoutedUpdate { session_id: SessionId::new("child"), update: text("b") },
+        );
+        assert!(matches!(
+            child,
+            Some(OutputChunk::SubagentOutput { session_id, chunk })
+                if session_id == "child" && matches!(chunk.as_ref(), OutputChunk::Text(text) if text == "b")
+        ));
+    }
 
     /// P12: agent message text must be surfaced exactly as before — the raw
     /// text payload of an `AgentMessageChunk`, byte-for-byte.
@@ -390,7 +516,7 @@ mod tests {
     /// A non-text agent message block produces no chunk (unchanged behavior).
     #[test]
     fn non_text_agent_message_is_ignored() {
-        use agent_client_protocol::schema::v1::ImageContent;
+        use agent_client_protocol::v1::schema::ImageContent;
         let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Image(
             ImageContent::new("AAAA", "image/png"),
         )));

@@ -31,13 +31,17 @@
 //! handle.wait().await?;
 //! ```
 
+pub mod auth;
 pub mod capabilities;
 pub mod config;
 pub mod error;
 pub mod handler;
+mod mcp_acp;
 pub mod modes;
 pub mod permission;
+pub mod providers;
 pub mod streamer;
+mod system_prompt;
 pub mod transport;
 
 #[cfg(test)]
@@ -45,16 +49,22 @@ pub(crate) mod test_helpers;
 
 use std::sync::Arc;
 
+use agent_client_protocol::{Agent, ConnectTo};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-pub use agent_client_protocol::schema::v1::SessionNotification;
+pub use agent_client_protocol::v1::schema::SessionNotification;
+pub use auth::AcpAuthenticator;
 pub use capabilities::{AgentCapabilities, CapabilitiesBuilder};
-pub use config::{AcpServerConfig, AcpServerConfigBuilder, TransportConfig};
+pub use config::{AcpServerConfig, AcpServerConfigBuilder, SystemPromptSupport, TransportConfig};
 pub use error::{AcpServerError, ErrorResponse};
 pub use handler::AcpSessionHandler;
 pub use modes::{SessionControls, config_state_key};
 pub use permission::{StandingOffer, StandingPermissions};
+pub use providers::{
+    AcpProviders, LlmProtocol, ModelFactory, ModelProvider, ModelProviders, ProviderSettings,
+    SwitchableModel,
+};
 pub use streamer::ResponseStreamer;
 pub use transport::{StdioTransport, Transport};
 
@@ -148,5 +158,41 @@ impl AcpServer {
         });
 
         Ok(AcpServerHandle { shutdown_token, join_handle })
+    }
+
+    /// Serve one ACP connection over any SDK transport until the client closes
+    /// it, then release the connection's sessions.
+    ///
+    /// The connection is served exactly as [`run`](Self::run) serves stdio, so
+    /// this is the way to expose an ADK-Rust agent over another transport, or
+    /// to drive the real server from an in-process client in tests:
+    ///
+    /// ```rust,ignore
+    /// use adk_acp::agent_client_protocol::Channel;
+    ///
+    /// let (server_end, client_end) = Channel::duplex();
+    /// tokio::spawn(AcpServer::serve(config, server_end));
+    /// // connect an ACP client to `client_end`
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the handler cannot be created or the transport fails.
+    pub async fn serve(
+        config: AcpServerConfig,
+        transport: impl ConnectTo<Agent> + 'static,
+    ) -> Result<(), AcpServerError> {
+        let handler = Arc::new(AcpSessionHandler::new(&config, CancellationToken::new())?);
+        let settings = transport::stdio::ConnectionSettings::from_config(&config);
+        let result = transport::stdio::serve_connection_until(
+            handler.clone(),
+            settings,
+            transport,
+            std::future::pending(),
+        )
+        .await
+        .map_err(|error| AcpServerError::Transport(error.to_string()));
+        handler.drain_sessions(config.shutdown_timeout).await;
+        result
     }
 }

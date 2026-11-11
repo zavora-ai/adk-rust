@@ -39,6 +39,8 @@ Further tests cover:
 | Capabilities | The advertised capabilities match the registered handlers and content mappings; modes and options only with a `SessionControls` provider |
 | Process lifecycle | Every client entry point returns, rather than hangs, when the agent process exits (`tests/process_lifecycle_tests.rs`) |
 | Configuration | MCP configuration validation and secret-redacted debug output |
+| MCP over ACP | The server's agent calls a tool the adk-acp client serves, across new, fork and resume, with `isError` failures; the SDK's own `with_mcp_server` binding serves an `AcpToolServer` to the server (`tests/mcp_over_acp_providers_tests.rs`) |
+| LLM providers | List, set (the agent's next turn uses the new model; headers never listed), request checks, disable, and no capability without a hook |
 
 ## Run the gates
 
@@ -72,13 +74,20 @@ selects the model.
 
 | Area | Status | Notes |
 |---|---|---|
-| Stable wire protocol v1 | Implemented | `agent-client-protocol` SDK 3.3 (ACP schema 1.11), re-exported as `adk_acp::agent_client_protocol`; the wire protocol version is negotiated separately |
+| Wire protocol v1 | Implemented | `agent-client-protocol` SDK 5.2 (ACP schema 1.17), re-exported as `adk_acp::agent_client_protocol`; the SDK's v1 guard negotiates the version on both sides |
 | Local stdio client transport | Implemented | One-shot, streaming, and persistent sessions |
 | Client permissions | Implemented | Deny by default, semantic matching, opaque IDs, sync or async policy |
 | Client filesystem callbacks | Implemented API | Read and write advertised independently |
 | Client terminal callbacks | Implemented API | Complete create/output/wait/kill/release trait |
 | Client-supplied MCP | Implemented | stdio required; HTTP/SSE capability-gated |
-| ADK-Rust ACP server | Implemented | New, prompt, load, cancel, close, list, resume, fork, set_mode, set_config_option, delete |
+| ADK-Rust ACP server | Implemented | New, prompt, load, cancel, close, list, resume, fork, set_mode, set_config_option, delete, set_title, status, archive, unarchive, options |
+| Server authentication | Implemented | `AcpAuthenticator`: `authMethods`, `authenticate`, `logout`, `auth/status`, `auth/status_update`; session requests get `auth_required` until authenticated |
+| Server system prompts | Implemented | `append` and `override`, applied to every model request of the session's turns; narrowed with `SystemPromptSupport` |
+| Server end-of-turn usage | Implemented | `PromptResponse.usage` sums the turn's reported model usage; absent when none was reported |
+| Client connection surface | Implemented | `AcpConnection`: list, load (replay), resume, fork, archive, delete, status, options, authenticate, logout, auth status |
+| Client system prompts, initial config, auth | Implemented | Checked against the agent's capabilities before sending |
+| Client elicitation | Implemented | `AcpElicitation` answers `elicitation/create`; advertised only with a handler |
+| Client notices, compactions, plans, subagents | Implemented | Advertised and surfaced as `OutputChunk`s; a subagent's updates route to the announcing session |
 | Server session load + replay | Implemented | Reactivates a persisted session and replays stored events in chronological order; `load_session` advertised |
 | Server session fork | Implemented | Copies history and relevant state into a new session id, leaving the source unchanged; `fork` advertised |
 | Server session modes + config options | Implemented | Provider-gated via `SessionControls`; `set_mode` / `set_config_option` validated and persisted across load/resume/fork; advertised only when declared |
@@ -92,7 +101,9 @@ selects the model.
 | Client tool-update and usage fidelity | Implemented | `OutputChunk::ToolUpdate` and `OutputChunk::Usage` surface the external agent's `ToolCallUpdate`/`UsageUpdate` |
 | Client rich prompt content | Implemented | `prompt_agent_content_with_policy` transmits non-text ADK content as the matching ACP block |
 | Remote ACP HTTP/WebSocket | Not advertised | The stable implementation is local stdio |
-| Experimental protocol features | Not advertised | Add only after implementation and interoperability tests |
+| Draft protocol v2 | Not implemented | Behind the SDK's `unstable_protocol_v2`; no shipping peer speaks it yet |
+| MCP over ACP | Implemented | Unstable: the client serves `AcpToolServer`s declared on every session setup (also an SDK `McpService`); the server advertises `mcp.acp` and reaches `acp` servers' tools over `mcp/message` |
+| LLM providers | Implemented | Unstable: `providers/list`, `set`, `disable` through an `AcpProviders` hook (`ModelProviders` over `SwitchableModel`s), advertised only with a hook; client methods on `AcpConnection` |
 
 ## Manual editor test
 

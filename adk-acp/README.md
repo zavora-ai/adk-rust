@@ -17,14 +17,27 @@ approval requests over JSON-RPC.
 
 | ADK-Rust role | Use it when | Entry point |
 |---|---|---|
-| ACP client/host | An ADK-Rust coordinator should delegate work to a local ACP coding-agent process | `AcpAgentTool`, `AcpToolset`, `AcpSession`, `stream_prompt` |
+| ACP client/host | An ADK-Rust coordinator should delegate work to a local ACP coding-agent process | `AcpAgentTool`, `AcpToolset`, `AcpConnection`, `AcpSession`, `stream_prompt` |
 | ACP agent/server | An editor or another ACP client should talk to an ADK-Rust agent | `AcpServer` with the `server` feature |
 
-Both directions implement stable ACP protocol version 1 using the official
-`agent-client-protocol` Rust SDK 3.3 (ACP schema 1.11), re-exported as
-`adk_acp::agent_client_protocol`. SDK version 3.3 is the Rust SDK release; it does
-not mean ACP protocol v3. Code that uses the re-export follows the SDK's
-[3.0 migration notes](https://github.com/agentclientprotocol/rust-sdk/blob/main/src/agent-client-protocol/CHANGELOG.md).
+Both directions implement ACP protocol version 1 using the official
+`agent-client-protocol` Rust SDK 5.2 (ACP schema 1.17), re-exported as
+`adk_acp::agent_client_protocol`. SDK version 5.2 is the Rust SDK release; it does
+not mean ACP protocol v5. The SDK's v1 connection guard negotiates the protocol
+version during `initialize` on both sides: the server answers with the negotiated
+version, and the client requests the highest version in
+`SUPPORTED_PROTOCOL_VERSIONS` and refuses an agent that selects another. Code that
+uses the re-export follows the SDK's
+[v5 migration guide](https://github.com/agentclientprotocol/rust-sdk/blob/main/md/migration-v5.md):
+protocol v1 messages are in `agent_client_protocol::v1::schema`, and connections
+start from `Client.v1()` and `Agent.v1()`.
+
+Besides the stable v1 surface, both directions implement these unstable ACP
+surfaces: session fork, archive, status, options and title, `auth/status`,
+end-of-turn token usage, plan operations and subagent updates. The SDK may change
+unstable surfaces in a minor release, so adk-acp depends on `~5.2` and takes patch
+releases only. The draft protocol v2, MCP-over-ACP and LLM provider methods are not
+implemented yet.
 
 ## Installation
 
@@ -94,9 +107,14 @@ or external policy service before returning the exact option to the agent.
 - `AcpToolset`: several named ACP specialists exposed to one coordinator.
 - `AcpSession`: keep one agent process and its conversation context across
   multiple prompts. Create an `AcpCancellationHandle` before a prompt when a UI,
-  timeout, or shutdown task must cancel that turn concurrently.
-- `stream_prompt`: receive text, thought, tool-call, permission, completion,
-  and error chunks while one prompt runs.
+  timeout, or shutdown task must cancel that turn concurrently. `prompt_blocks`
+  reports every update of a turn as an `OutputChunk`, and each `PromptResult`
+  carries the stop reason and the turn's token usage.
+- `AcpConnection`: one agent process shared by several sessions, with the
+  connection-level methods: list, load, resume, fork, archive and delete
+  sessions, session options and status, and authentication.
+- `stream_prompt`: receive text, thought, tool-call, plan, notice, permission,
+  completion, and error chunks while one prompt runs.
 - `prompt_agent_with_policy`: direct one-shot API without the ADK `Tool` adapter.
 
 The current client transport is a local subprocess over stdio. Remote ACP
@@ -111,7 +129,10 @@ AcpAgentConfig can attach the services that a normal editor supplies:
   operations implemented by the host;
 - terminal with an AcpTerminal advertises the complete ACP terminal
   lifecycle: create, output, wait, kill, and release;
-- mcp_server includes a typed MCP configuration in every new session.
+- mcp_server includes a typed MCP configuration in every new session;
+- tool_server serves an `AcpToolServer`, a named set of ADK-Rust tools, to the
+  agent over the ACP connection itself (unstable MCP over ACP). The tools run
+  in your application, and no MCP process is started.
 
 These callbacks are opt-in and run outside the JSON-RPC dispatch loop, so a
 long file operation or terminal wait does not freeze other ACP traffic. The
@@ -120,13 +141,64 @@ policy, limits, and cleanup. AcpAgentConfig debug output lists environment
 variable names and MCP server names without printing secret values.
 
 The client verifies the negotiated protocol version before creating a session.
-Stdio MCP is required by ACP v1. HTTP and SSE MCP configurations are rejected
-unless the external agent advertises those optional transports.
+Stdio MCP is required by ACP v1. HTTP, SSE and ACP MCP configurations, tool
+servers included, are rejected unless the external agent advertises those
+optional transports. Tool servers are declared on new, loaded, resumed and
+forked sessions, and the client answers the agent's `mcp/message` requests
+(`tools/list`, `tools/call`) for them.
+
+### Work with the agent's sessions
+
+`AcpConnection` exposes the rest of the protocol. Every request is checked against
+the capabilities the agent advertised; one it did not advertise returns
+`AcpError::Unsupported` without being sent.
+
+```rust,ignore
+use adk_acp::{AcpAgentConfig, AcpConnection, PermissionPolicy};
+use std::sync::Arc;
+
+let connection = AcpConnection::connect(
+    AcpAgentConfig::new("my-coding-agent --acp")
+        .working_dir("/absolute/path/to/project")
+        // Sent only when the agent advertises `sessionCapabilities.systemPrompt`.
+        .append_system_prompt("Follow the repository's CONTRIBUTING.md.")
+        // Authenticate during the handshake with one of the agent's `authMethods`.
+        .auth_method("api-key"),
+    Arc::new(PermissionPolicy::DenyAll),
+)
+.await?;
+println!("ACP v{}", connection.agent_info().protocol_version);
+
+for info in connection.list_sessions(None).await? {
+    println!("{} {:?}", info.session_id, info.title);
+}
+let mut session = connection.new_session().await?;
+session.set_title("Release notes").await?;
+let reply = session.prompt("Draft the release notes").await?;
+println!("{} ({:?}, {:?})", reply.text, reply.stop_reason, reply.usage);
+let mut branch = session.fork().await?;
+session.close().await?;
+branch.close().await?;
+connection.close().await?;
+```
+
+The client advertises the session updates it surfaces (config options, notices,
+compactions, plan operations and subagents), so agents send them. A subagent's
+own updates arrive under the child's session id; the client routes them to the
+session that announced it as `OutputChunk::SubagentOutput`. An `AcpElicitation`
+set with `AcpAgentConfig::elicitation` answers the agent's `elicitation/create`
+questions; without one, elicitation is not advertised.
+
+When the agent advertises `providers` (unstable), `list_providers`,
+`set_provider` and `disable_provider` show and change the model providers it
+routes to, for example to send its requests through a company gateway. Call them
+before creating sessions.
 
 ## Expose an ADK-Rust agent through ACP
 
-The server path uses the official SDK's `Agent.builder()` and `Stdio` transport.
-It does not maintain a parallel wire format.
+The server path uses the official SDK's `Agent.v1()` builder and stdio transport.
+It does not maintain a parallel wire format. `AcpServer::serve` serves one
+connection over any other SDK transport, such as an in-process `Channel`.
 
 Requires the `server` feature.
 
@@ -188,10 +260,31 @@ The server implements:
   a `CurrentModeUpdate` / `ConfigOptionUpdate`; the selection persists across
   load / resume / fork;
 - `session/close`, `session/resume`, `session/list`, and `session/delete`;
+- `systemPrompt` on `session/new`, `session/load`, `session/resume` and
+  `session/fork`, applied to every model request of the session's turns through a
+  run invocation hook: `append` after the agent's own instructions, `override`
+  instead of them (`AcpServerConfigBuilder::system_prompts` narrows or disables
+  this with `SystemPromptSupport`);
+- the token `usage` of each turn in its `PromptResponse`;
+- the unstable session methods: `session/set_title`, `session/status`,
+  `session/archive` and `session/unarchive` (an `archived` filter on
+  `session/list`, which also reports titles), and `session/options`, plus
+  initial `configOptions` on `session/new`, `session/load` and `session/resume`;
+- `authenticate`, `logout` and `auth/status` through an `AcpAuthenticator`
+  (`AcpServerConfigBuilder::authenticator`), whose methods are advertised as
+  `authMethods`. While it requires authentication, session requests get
+  `auth_required` (`-32000`) until the client authenticates, and the server sends
+  `auth/status_update` when the state changes;
 - client-supplied stdio MCP servers in `session/new`, `session/load`,
   `session/resume`, or `session/fork`, started per session and exposed to
   LlmAgent and CodeActAgent through invocation-scoped toolsets named
   `acp:{server name}`;
+- client-supplied `acp` MCP servers (unstable MCP over ACP) in the same
+  requests, whose tools the client serves: the server reaches them by sending
+  `mcp/message` back over the connection, as the same kind of toolset;
+- `providers/list`, `providers/set` and `providers/disable` (unstable) through
+  an `AcpProviders` hook (`AcpServerConfigBuilder::providers`). `ModelProviders`
+  switches `SwitchableModel`s, `Llm`s whose backing model a client can replace;
 - one ACP session mapped to one persisted ADK-Rust session and Runner context;
 - concurrent-session limits and one active prompt per session.
 
@@ -200,12 +293,15 @@ flag is needed for it. The server advertises `load_session`, the
 `embedded_context`, `image`, and `audio` prompt capabilities (because it accepts
 embedded-resource, image, and audio prompt content), and the session lifecycle
 capabilities (`list`, `delete`, `resume`, `close`, `fork`,
-`additional_directories`). Session modes and configuration options are advertised
+`additional_directories`, `archive`, `status`, `options`, `title` and
+`systemPrompt`), `auth.status`, `mcp.acp`, `auth.logout` when the authenticator
+supports it, and `providers` when a providers hook is configured. A request naming a missing session gets ACP's `session_not_found` error
+(`-32002` with the session id). Session modes and configuration options are advertised
 only when the agent supplies a `SessionControls` provider — an agent without one
 advertises no modes and no options, so advertised capabilities always match what
 the server implements. It does not advertise optional HTTP or SSE MCP support.
-Before starting a process the server rejects more than 16 servers, a non-stdio
-server, an empty or repeated name or environment variable name, and a command
+Before starting a process the server rejects more than 16 servers, a server that
+is neither stdio nor `acp`, an empty or repeated name or environment variable name, and a command
 that is not an absolute path. Each startup handshake is bounded to 15 seconds,
 session capacity is reserved before a process starts, servers that publish the
 same tool name are rejected at session setup with an error naming both servers
@@ -280,8 +376,26 @@ External_Agent. Beyond agent text (`Text`), reasoning (`Thought`), tool starts
   extracted content text, and affected file locations.
 - `OutputChunk::Usage` — an External_Agent's `UsageUpdate`, carrying tokens
   `used`/`size` and, when reported, the cumulative `cost` and `currency`.
+- `OutputChunk::Plan`, `PlanUpdate` and `PlanRemoved` — the agent's plan and,
+  with plan operations, changes to individual plans.
+- `OutputChunk::Notice`, `Compaction` and `CompactionSummary` — notices and
+  context compactions, which agents send only to clients that advertise them.
+- `OutputChunk::ModeChanged`, `ConfigOptions`, `AvailableCommands` and
+  `SessionInfo` — session control and metadata changes.
+- `OutputChunk::Subagent`, `SessionMessage`, `SessionMessageChunk` and
+  `SubagentOutput` — child sessions the agent creates and what they produce.
+- `OutputChunk::Done { stop_reason, usage }` — the end of the turn, with the
+  token usage the agent reported.
 
 ## Verified protocol flow
+
+`tests/protocol_v5_tests.rs` connects adk-acp's client to adk-acp's server
+through an in-process channel and covers version negotiation, system prompts
+(append and override, checked against the model request an `LlmAgent` sends),
+end-of-turn usage, titles, status, archiving, options, modes and initial config
+values, fork, load replay, resume, delete and authentication. A scripted SDK
+agent covers the agent-initiated surfaces: updates sent before `session/new`
+answers, notices, compactions, subagent output and elicitation.
 
 The crate test suite connects the official SDK `Client` to the ADK-Rust SDK
 `Agent` through an in-memory channel and executes:

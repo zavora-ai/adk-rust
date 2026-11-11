@@ -705,6 +705,8 @@ pub mod computer_use {
 /// - [`AcpAgentTool`](acp::AcpAgentTool) - An external ACP agent (Claude Code, Codex,
 ///   Kiro CLI) as a tool
 /// - [`AcpSession`](acp::AcpSession) - A persistent session with an external ACP agent
+/// - [`AcpConnection`](acp::AcpConnection) - One external ACP agent shared by several
+///   sessions, with listing, loading, forking, archiving and authentication
 /// - [`agent_client_protocol`](acp::agent_client_protocol) - The official ACP SDK
 ///
 /// Exposing an ADK agent over ACP needs `adk-acp`'s `server` feature.
