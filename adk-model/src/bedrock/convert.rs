@@ -43,7 +43,7 @@ pub(crate) struct BedrockConverseInput {
 /// system content and after tool definitions to enable Bedrock prompt caching.
 pub(crate) fn adk_request_to_bedrock(
     contents: &[Content],
-    tools: &HashMap<String, Value>,
+    tools: &adk_core::ToolDeclarations,
     config: Option<&GenerateContentConfig>,
     prompt_caching: Option<&BedrockCacheConfig>,
 ) -> Result<BedrockConverseInput, String> {
@@ -434,16 +434,14 @@ fn mime_to_bedrock_document_format(mime_type: &str) -> Option<DocumentFormat> {
 /// typically contains `description` and `parameters` fields.
 ///
 /// When `prompt_caching` is provided, a `CachePoint` block is appended after
-/// the tool definitions. Tools are sorted by name so the cached prefix is
-/// identical across requests built from the same `HashMap`.
+/// the tool definitions. Tools keep their declaration order, which is the same on every
+/// request, so the cached prefix is identical.
 fn adk_tools_to_bedrock(
-    tools: &HashMap<String, Value>,
+    tools: &adk_core::ToolDeclarations,
     prompt_caching: Option<&BedrockCacheConfig>,
 ) -> ToolConfiguration {
-    let mut sorted_tools = tools.iter().collect::<Vec<_>>();
-    sorted_tools.sort_unstable_by_key(|(name, _)| *name);
-    let mut bedrock_tools: Vec<Tool> = sorted_tools
-        .into_iter()
+    let mut bedrock_tools: Vec<Tool> = tools
+        .iter()
         .filter_map(|(name, decl)| {
             let description = decl.get("description").and_then(|d| d.as_str()).map(String::from);
 
@@ -828,7 +826,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_configuration_order_is_stable_across_maps() {
+    fn tool_configuration_keeps_declaration_order() {
         let names: Vec<String> = (0..12).map(|i| format!("tool_{i:02}")).collect();
         let declaration = |name: &str| {
             serde_json::json!({
@@ -836,24 +834,24 @@ mod tests {
                 "parameters": {"type": "object", "properties": {}}
             })
         };
-        let forward: HashMap<String, Value> =
+        let converted_names = |tools: &adk_core::ToolDeclarations| -> Vec<String> {
+            adk_tools_to_bedrock(tools, None)
+                .tools()
+                .iter()
+                .map(|tool| match tool {
+                    Tool::ToolSpec(spec) => spec.name().to_string(),
+                    other => panic!("unexpected tool entry {other:?}"),
+                })
+                .collect()
+        };
+        let forward: adk_core::ToolDeclarations =
             names.iter().map(|name| (name.clone(), declaration(name))).collect();
-        let reverse: HashMap<String, Value> =
-            names.iter().rev().map(|name| (name.clone(), declaration(name))).collect();
+        let reversed: Vec<String> = names.iter().rev().cloned().collect();
+        let reverse: adk_core::ToolDeclarations =
+            reversed.iter().map(|name| (name.clone(), declaration(name))).collect();
 
-        let from_forward = adk_tools_to_bedrock(&forward, None);
-        let from_reverse = adk_tools_to_bedrock(&reverse, None);
-
-        assert_eq!(from_forward, from_reverse);
-        let converted_names: Vec<String> = from_forward
-            .tools()
-            .iter()
-            .map(|tool| match tool {
-                Tool::ToolSpec(spec) => spec.name().to_string(),
-                other => panic!("unexpected tool entry {other:?}"),
-            })
-            .collect();
-        assert_eq!(converted_names, names);
+        assert_eq!(converted_names(&forward), names);
+        assert_eq!(converted_names(&reverse), reversed);
     }
 
     #[test]

@@ -141,8 +141,22 @@ async fn rest_run(base: &str, session: &str, text: Option<&str>) -> Result<Value
     Ok(events)
 }
 
+/// Creates `session` over REST: an ADK run needs an existing session.
+async fn rest_session(base: &str, session: &str) -> Result<()> {
+    let response = reqwest::Client::new()
+        .post(format!("{base}/api/apps/{NAME}/users/{USER}/sessions/{session}"))
+        .bearer_auth(TOKEN)
+        .json(&json!({}))
+        .send()
+        .await?;
+    let status = response.status();
+    anyhow::ensure!(status.is_success(), "creating session {session}: {status}");
+    Ok(())
+}
+
 /// Held over REST, decided through `/api/approvals`, resumed by an empty-message run.
 async fn rest_roundtrip(checks: &mut Checks, surface: &str, base: &str, session: &str, dir: &Path, before: &str) -> Result<()> {
+    rest_session(base, session).await?;
     let held = rest_run(base, session, Some("log the surface")).await?;
     checks.check(format!("{surface}: the call is held in the event stream"), held.to_string().contains("tool_confirmation"));
     checks.check(format!("{surface}: nothing ran while held"), read_log(dir) == before);

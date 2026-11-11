@@ -203,6 +203,9 @@ where
 /// Request body for creating session (optional, can be empty)
 #[derive(Serialize, Deserialize, Default)]
 pub struct CreateSessionBodyRequest {
+    /// The session id the client chooses, when the path names none.
+    #[serde(default, alias = "sessionId", skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_bounded_state")]
     pub state: std::collections::HashMap<String, serde_json::Value>,
     #[serde(default, deserialize_with = "deserialize_bounded_events")]
@@ -228,7 +231,13 @@ pub async fn create_session_from_path(
     body: Option<Json<CreateSessionBodyRequest>>,
 ) -> Result<Json<SessionResponse>, StatusCode> {
     let user_id = authorize_user_id(&request_context, &params.user_id)?;
-    let session_id = params.session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    // The path's id, else the one the body chooses (adk-python and adk-go accept both), else
+    // a new one.
+    let session_id = params
+        .session_id
+        .or_else(|| body.as_ref().and_then(|b| b.0.session_id.clone()))
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let session = controller
         .session_service

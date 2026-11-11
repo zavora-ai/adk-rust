@@ -113,7 +113,9 @@ an approval request in the inbox. Deciding it and sending an empty message resum
 session; the approved call runs once.
 
 ```bash
-# 1. A run holds its command.
+# 1. Create the session as the served user (the OS user), then a run holds its command.
+curl -s -X POST "localhost:8080/api/apps/adk-rust/users/$USER/sessions/s1" \
+  -H 'content-type: application/json' -d '{}'
 curl -s localhost:8080/api/run -H 'content-type: application/json' -d '{
   "appName": "adk-rust", "userId": "me", "sessionId": "s1",
   "newMessage": {"role": "user", "parts": [{"text": "Run: echo hi >> greeting.txt"}]}}'

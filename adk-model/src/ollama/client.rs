@@ -166,10 +166,7 @@ impl OllamaModel {
     }
 
     /// Convert ADK tool declarations to Ollama tools.
-    fn convert_tools(
-        &self,
-        tools: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Vec<ToolInfo> {
+    fn convert_tools(&self, tools: &adk_core::ToolDeclarations) -> Vec<ToolInfo> {
         tools
             .iter()
             .map(|(name, decl)| {

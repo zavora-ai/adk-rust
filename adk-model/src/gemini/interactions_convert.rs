@@ -605,7 +605,7 @@ fn is_builtin_declaration(decl: &Value) -> bool {
 /// Declarations are processed in name-sorted order so the produced request is
 /// deterministic (the source is a [`HashMap`], whose iteration order is
 /// unspecified).
-fn build_tools(tools: &HashMap<String, Value>) -> adk_core::Result<Vec<Tool>> {
+fn build_tools(tools: &adk_core::ToolDeclarations) -> adk_core::Result<Vec<Tool>> {
     let mut entries: Vec<(&String, &Value)> = tools.iter().collect();
     entries.sort_by(|a, b| a.0.cmp(b.0));
 
@@ -993,7 +993,7 @@ mod tests {
             model: "gemini-3.7-flash".to_string(),
             contents,
             config: None,
-            tools: HashMap::new(),
+            tools: adk_core::ToolDeclarations::new(),
             previous_response_id: None,
         }
     }
@@ -1312,7 +1312,7 @@ mod tests {
 
     #[test]
     fn tools_map_to_function_tools() {
-        let mut tools = HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         tools.insert(
             "get_weather".to_string(),
             serde_json::json!({
@@ -1358,7 +1358,7 @@ mod tests {
 
     #[test]
     fn tool_name_falls_back_to_map_key() {
-        let mut tools = HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         // Declaration with no explicit "name" field.
         tools.insert(
             "lookup".to_string(),
@@ -1401,7 +1401,7 @@ mod tests {
 
     #[test]
     fn mixing_builtin_and_function_tools_errors_invalid_input() {
-        let mut tools = HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         tools.insert("google_search".to_string(), builtin_search_declaration());
         tools.insert("get_weather".to_string(), function_declaration("get_weather"));
 
@@ -1427,7 +1427,7 @@ mod tests {
 
     #[test]
     fn all_function_tools_including_bypass_converted_succeed() {
-        let mut tools = HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         // A bypass-converted google_search declares `parameters` and no marker,
         // so it is indistinguishable from any other function tool.
         tools.insert(
@@ -1461,7 +1461,7 @@ mod tests {
 
     #[test]
     fn builtin_only_set_succeeds_and_maps_to_dedicated_variant() {
-        let mut tools = HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         tools.insert("google_search".to_string(), builtin_search_declaration());
 
         let mut request = request_with(vec![Content::new("user").with_text("Search only")]);
@@ -1480,7 +1480,7 @@ mod tests {
 
     #[test]
     fn unrecognized_builtin_only_set_maps_to_other() {
-        let mut tools = HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         tools.insert(
             "google_maps".to_string(),
             serde_json::json!({

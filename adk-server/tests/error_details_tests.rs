@@ -42,13 +42,23 @@ fn provider_error() -> AdkError {
 }
 
 /// A server whose agent's model fails every call with [`provider_error`].
-fn failing_model_app(expose_details: bool) -> Router {
+/// The app, with alice's session `s-1` created: an ADK run needs an existing session.
+async fn failing_model_app(expose_details: bool) -> Router {
     let model = Arc::new(ScriptedLlm::new(
         "claude-sonnet-5-5",
         [ScriptedResponse::error(provider_error())],
     ));
     let agent = LlmAgentBuilder::new(APP).model(model).build().unwrap();
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(adk_session::CreateRequest {
+            app_name: APP.to_string(),
+            user_id: "alice".to_string(),
+            session_id: Some("s-1".to_string()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap();
     let config = ServerConfig::new(Arc::new(SingleAgentLoader::new(Arc::new(agent))), sessions)
         .with_error_details(expose_details);
     ServerBuilder::new(config).build()
@@ -170,7 +180,7 @@ fn ag_ui_body() -> Value {
 #[tokio::test]
 async fn a_provider_message_stays_out_of_the_problem_json_and_is_logged_with_the_request_id() {
     let (logs, _guard) = Logs::capture();
-    let app = failing_model_app(false);
+    let app = failing_model_app(false).await;
 
     let (status, request_id, body) = post(&app, "/api/run", run_body()).await;
 
@@ -199,7 +209,7 @@ async fn a_provider_message_stays_out_of_the_problem_json_and_is_logged_with_the
 
 #[tokio::test]
 async fn exposed_details_keep_the_provider_message_in_the_problem_json() {
-    let app = failing_model_app(true);
+    let app = failing_model_app(true).await;
 
     let (status, _, body) = post(&app, "/api/run", run_body()).await;
 
@@ -214,7 +224,7 @@ async fn a_provider_message_stays_out_of_the_sse_error_event() {
         (false, "model.unauthorized: Authentication failed".to_string()),
         (true, provider_error().to_string()),
     ] {
-        let app = failing_model_app(expose_details);
+        let app = failing_model_app(expose_details).await;
 
         let (status, _, text) = post(&app, "/api/run_sse", run_body()).await;
 
@@ -234,7 +244,7 @@ async fn a_provider_message_stays_out_of_the_ag_ui_run_error() {
         (false, "model.unauthorized: Authentication failed".to_string()),
         (true, provider_error().to_string()),
     ] {
-        let app = failing_model_app(expose_details);
+        let app = failing_model_app(expose_details).await;
 
         let (status, _, text) = post(&app, "/api/run_sse", ag_ui_body()).await;
 
@@ -260,7 +270,7 @@ async fn a_provider_message_stays_out_of_the_ag_ui_run_error() {
 
 #[tokio::test]
 async fn a_message_the_server_wrote_about_the_request_is_kept() {
-    let app = failing_model_app(false);
+    let app = failing_model_app(false).await;
 
     let (status, _, body) =
         post(&app, &format!("/api/run/{APP}/alice/s-missing"), json!({ "new_message": "Hi" }))

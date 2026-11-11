@@ -1366,7 +1366,7 @@ async fn test_run_sse_adk_ui_emits_runtime_error_event() {
     let agent = Arc::new(ErrorStreamingTestAgent);
     let config = adk_server::ServerConfig::new(
         Arc::new(adk_core::SingleAgentLoader::new(agent)),
-        Arc::new(adk_session::InMemorySessionService::new()),
+        sessions_with("error-stream-test-agent", "user1", "session1").await,
     );
     let app = create_app(config);
 
@@ -1818,7 +1818,7 @@ async fn test_run_sse_compat_default_profile_emits_legacy_event_shape() {
     let agent = Arc::new(StreamingTestAgent);
     let config = adk_server::ServerConfig::new(
         Arc::new(adk_core::SingleAgentLoader::new(agent)),
-        Arc::new(adk_session::InMemorySessionService::new()),
+        sessions_with("stream-test-agent", "user1", "session1").await,
     );
     let app = create_app(config);
 
@@ -2262,4 +2262,24 @@ async fn ui_routes_stay_open_when_no_extractor_is_configured() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// A session service holding `(app, user, session)`: an ADK run needs an existing session.
+async fn sessions_with(
+    app: &str,
+    user: &str,
+    session: &str,
+) -> Arc<adk_session::InMemorySessionService> {
+    use adk_session::SessionService;
+    let sessions = Arc::new(adk_session::InMemorySessionService::new());
+    sessions
+        .create(adk_session::CreateRequest {
+            app_name: app.to_string(),
+            user_id: user.to_string(),
+            session_id: Some(session.to_string()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap();
+    sessions
 }

@@ -348,7 +348,7 @@ impl Agent for LlmConditionalAgent {
                     let request = LlmRequest {
                         model: model.name().to_string(),
                         contents: vec![Content::new("user").with_text(&classification_prompt)],
-                        tools: HashMap::new(),
+                        tools: adk_core::ToolDeclarations::new(),
                         config: None,
                         previous_response_id: None,
                     };

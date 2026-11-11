@@ -1152,6 +1152,8 @@ impl Runner {
                 run_config.transfer_targets = targets;
                 run_config.parent_agent = None;
             }
+            run_config.transfer_target_descriptions =
+                Self::describe_agents(&root_agent, &run_config.transfer_targets);
 
             // Clone services for potential reuse in transfer
             #[cfg(feature = "artifacts")]
@@ -1418,7 +1420,7 @@ impl Runner {
                     // (the full instruction is resolved inside the agent, but the
                     // description provides a reasonable proxy for cache keying).
                     let system_instruction = agent_to_run.description().to_string();
-                    let tools = std::collections::HashMap::new();
+                    let tools = adk_core::ToolDeclarations::new();
                     let ttl = context_cache_config.as_ref().map_or(600, |c| c.ttl_seconds);
 
                     match cache_model.create_cache(&system_instruction, &tools, ttl).await {
@@ -1859,6 +1861,8 @@ impl Runner {
                     transfer_run_config.parent_agent = parent_name;
                 }
                 root_agent.configure_run(&target_name, &mut transfer_run_config);
+                transfer_run_config.transfer_target_descriptions =
+                    Self::describe_agents(&root_agent, &transfer_run_config.transfer_targets);
 
                 // For transfers, we reuse the same mutable session to preserve state
                 let transfer_invocation_id = format!("inv-{}", uuid::Uuid::new_v4());
@@ -2777,6 +2781,33 @@ impl Runner {
         }
 
         None
+    }
+
+    /// The description of each agent named in `names`, found in the tree under `root`.
+    /// A name the tree does not hold, or an agent without a description, is left out.
+    pub fn describe_agents(
+        root: &Arc<dyn Agent>,
+        names: &[String],
+    ) -> std::collections::HashMap<String, String> {
+        fn visit(
+            agent: &Arc<dyn Agent>,
+            names: &[String],
+            found: &mut std::collections::HashMap<String, String>,
+        ) {
+            if names.iter().any(|name| name == agent.name())
+                && !agent.description().trim().is_empty()
+            {
+                found.insert(agent.name().to_string(), agent.description().to_string());
+            }
+            for sub in agent.sub_agents() {
+                visit(sub, names, found);
+            }
+        }
+        let mut found = std::collections::HashMap::new();
+        if !names.is_empty() {
+            visit(root, names, &mut found);
+        }
+        found
     }
 
     /// Compute the parent name and peer names for a given agent in the tree.

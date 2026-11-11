@@ -172,8 +172,9 @@ async fn get_or_create(
 }
 ```
 
-`adk-server`'s `/api/run` and `/api/run_sse`, both A2A executors, the background worker, and
-the runner's externally triggered invocations follow this pattern.
+`adk-server`'s `/api/run_sse` for a UI protocol's thread, both A2A executors, the background
+worker, and the runner's externally triggered invocations follow this pattern. An ADK run on
+`/api/run` or `/api/run_sse` does not create its session: a missing one answers `404`.
 
 ## Request Types
 

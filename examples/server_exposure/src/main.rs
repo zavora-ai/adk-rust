@@ -572,16 +572,20 @@ async fn group_b(keys: &Keys, model: &ScriptedModel, out: &mut Vec<Outcome>) {
 
     // B1: the same request from loopback reaches the agent.
     let control = async {
-        let seeded = client
-            .post(format!("{base}/api/apps/{app}/users/alice/sessions/s-alice"))
-            .json(&json!({}))
-            .send()
-            .await?;
-        anyhow::ensure!(
-            seeded.status().is_success(),
-            "seeding alice's session: {}",
-            seeded.status()
-        );
+        // An ADK run needs an existing session. mallory's is seeded too, so B2 is refused for
+        // its Host alone.
+        for (user, session) in [("alice", "s-alice"), ("bob", "s-bob"), ("mallory", "s-mallory")] {
+            let seeded = client
+                .post(format!("{base}/api/apps/{app}/users/{user}/sessions/{session}"))
+                .json(&json!({}))
+                .send()
+                .await?;
+            anyhow::ensure!(
+                seeded.status().is_success(),
+                "seeding {user}'s session: {}",
+                seeded.status()
+            );
+        }
         let response = client
             .post(format!("{base}/api/run"))
             .json(&run_body(app, "bob", "s-bob", "Say hello."))

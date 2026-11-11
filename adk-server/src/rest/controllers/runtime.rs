@@ -320,12 +320,45 @@ pub struct NewMessage {
     pub parts: Vec<MessagePart>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct MessagePart {
     #[serde(default)]
     pub text: Option<String>,
     #[serde(default, rename = "inlineData")]
     pub inline_data: Option<InlineData>,
+    /// A function call, in Gemini's shape.
+    #[serde(default, rename = "functionCall", skip_serializing_if = "Option::is_none")]
+    pub function_call: Option<FunctionCallPart>,
+    /// A function's result, in Gemini's shape. Sent with the call's `id`, it answers a
+    /// long-running call, as adk-python and adk-go accept.
+    #[serde(default, rename = "functionResponse", skip_serializing_if = "Option::is_none")]
+    pub function_response: Option<FunctionResponsePart>,
+}
+
+/// A function call in a message part: `{id, name, args}`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FunctionCallPart {
+    /// The call id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// The function's name.
+    pub name: String,
+    /// The call's arguments.
+    #[serde(default)]
+    pub args: serde_json::Value,
+}
+
+/// A function's result in a message part: `{id, name, response}`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FunctionResponsePart {
+    /// The id of the call this answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// The function's name.
+    pub name: String,
+    /// The result.
+    #[serde(default)]
+    pub response: serde_json::Value,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -577,7 +610,7 @@ fn new_message_from_ag_ui_input(input: &AgUiRunInput) -> Option<NewMessage> {
     let content = selected.content.as_ref()?;
     let parts: Vec<MessagePart> = extract_text_segments(content)
         .into_iter()
-        .map(|text| MessagePart { text: Some(text), inline_data: None })
+        .map(|text| MessagePart { text: Some(text), ..MessagePart::default() })
         .collect();
     if parts.is_empty() {
         return None;
@@ -809,6 +842,26 @@ fn build_content_from_parts(parts: &[MessagePart]) -> Result<adk_core::Content, 
                 }
             }
         }
+
+        if let Some(call) = &part.function_call {
+            content.parts.push(adk_core::Part::FunctionCall {
+                name: call.name.clone(),
+                args: call.args.clone(),
+                id: call.id.clone(),
+                thought_signature: None,
+            });
+        }
+
+        if let Some(response) = &part.function_response {
+            content.parts.push(adk_core::Part::FunctionResponse {
+                function_response: adk_core::FunctionResponseData::new(
+                    response.name.clone(),
+                    response.response.clone(),
+                ),
+                id: response.id.clone(),
+                annotations: None,
+            });
+        }
     }
 
     Ok(content)
@@ -856,12 +909,33 @@ async fn apply_state_delta_to_session(
         .map_err(|error| adk_err_to_runtime(error, expose_details))
 }
 
-/// Creates the session when it does not exist and applies `state_delta` to it when it does.
+/// Whether a run creates the session it names when that session does not exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MissingSession {
+    /// The run is refused with 404, as adk-python and adk-go refuse it: an ADK client
+    /// creates its session first (`POST /apps/{app}/users/{user}/sessions`).
+    Refuse,
+    /// The session is created. A UI protocol's host (AG-UI, A2UI, MCP Apps) names its
+    /// thread and expects the run to start it.
+    Create,
+}
+
+/// The [`MissingSession`] rule for a `/run_sse` request in `profile`.
+fn missing_session_rule(profile: UiProfile) -> MissingSession {
+    match profile {
+        UiProfile::AdkUi => MissingSession::Refuse,
+        UiProfile::A2ui | UiProfile::AgUi | UiProfile::McpApps => MissingSession::Create,
+    }
+}
+
+/// Applies `state_delta` to the session when it exists. When it does not, `missing` decides:
+/// the run is refused with 404, or the session is created with `state_delta` as its initial
+/// state.
 ///
-/// Only a `session.not_found` read creates the session, with `state_delta` as its initial
-/// state. Any other read failure is returned, so a transient backend error never replaces a
-/// stored session. A create that loses a race to a concurrent request finds the session that
-/// request created and applies `state_delta` to it.
+/// Only a `session.not_found` read counts as missing. Any other read failure is returned, so
+/// a transient backend error never replaces a stored session. A create that loses a race to
+/// a concurrent request finds the session that request created and applies `state_delta`
+/// to it.
 async fn ensure_session(
     session_service: &std::sync::Arc<dyn adk_session::SessionService>,
     app_name: &str,
@@ -869,6 +943,7 @@ async fn ensure_session(
     session_id: &str,
     state_delta: HashMap<String, Value>,
     expose_details: bool,
+    missing: MissingSession,
 ) -> Result<(), RuntimeError> {
     let existing = session_service
         .get(adk_session::GetRequest {
@@ -890,6 +965,10 @@ async fn ensure_session(
                 expose_details,
             )
             .await
+        }
+        // 404 with code `session.not_found`, as the path-style run answers.
+        Err(error) if error.is_not_found() && missing == MissingSession::Refuse => {
+            Err(adk_err_to_runtime(error, expose_details))
         }
         Err(error) if error.is_not_found() => {
             let created = session_service
@@ -1995,6 +2074,12 @@ pub(crate) async fn run_sse_compat_for_request(
         ag_ui_input.as_ref().map(ag_ui_state_delta).unwrap_or_default(),
     );
 
+    // The agent loads first, so an unknown app reports itself rather than a missing session.
+    let agent = match action_agent {
+        Some(agent) => agent,
+        None => controller.config.agent_loader.load_agent(&app_name).await.map_err(problem)?,
+    };
+
     ensure_session(
         &controller.config.session_service,
         &app_name,
@@ -2002,6 +2087,7 @@ pub(crate) async fn run_sse_compat_for_request(
         &session_id,
         merged_state_delta.clone(),
         expose_details,
+        missing_session_rule(ui_profile),
     )
     .await?;
 
@@ -2024,12 +2110,6 @@ pub(crate) async fn run_sse_compat_for_request(
             req.mcp_apps_initialized.as_ref(),
         )?;
     }
-
-    // Load agent
-    let agent = match action_agent {
-        Some(agent) => agent,
-        None => controller.config.agent_loader.load_agent(&app_name).await.map_err(problem)?,
-    };
 
     // Create runner with streaming config from request
     let streaming_mode =
@@ -2161,7 +2241,10 @@ pub(crate) async fn run_collect_for_request(
 
     let state_delta = body_state_delta(req.state_delta.as_ref())?;
 
-    // Same behavior as /run_sse.
+    // The agent loads first, so an unknown app reports itself rather than a missing session.
+    let agent = controller.config.agent_loader.load_agent(&app_name).await.map_err(problem)?;
+
+    // An ADK run, as /run_sse without a UI protocol: the session must exist.
     ensure_session(
         &controller.config.session_service,
         &app_name,
@@ -2169,11 +2252,9 @@ pub(crate) async fn run_collect_for_request(
         &session_id,
         state_delta,
         expose_details,
+        MissingSession::Refuse,
     )
     .await?;
-
-    // Load agent
-    let agent = controller.config.agent_loader.load_agent(&app_name).await.map_err(problem)?;
 
     // Create runner — always non-streaming for the plain-JSON endpoint
     let mut runner_builder = adk_runner::Runner::builder()
@@ -2242,5 +2323,33 @@ mod error_status_tests {
         let body: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(body["error"]["category"], "conflict");
         assert_eq!(body["error"]["code"], "run_store.stale_epoch");
+    }
+}
+
+#[cfg(test)]
+mod message_part_tests {
+    use super::*;
+
+    #[test]
+    fn a_function_response_part_answers_its_call_by_id() {
+        // The shape adk-python and adk-go clients send to resume a long-running call.
+        let message: NewMessage = serde_json::from_value(serde_json::json!({
+            "role": "user",
+            "parts": [{"functionResponse": {
+                "id": "call-approve",
+                "name": "request_approval",
+                "response": {"status": "approved"}
+            }}]
+        }))
+        .unwrap();
+        let content = build_content_from_parts(&message.parts).unwrap();
+        match content.parts.as_slice() {
+            [adk_core::Part::FunctionResponse { function_response, id, .. }] => {
+                assert_eq!(id.as_deref(), Some("call-approve"));
+                assert_eq!(function_response.name, "request_approval");
+                assert_eq!(function_response.response, serde_json::json!({"status": "approved"}));
+            }
+            other => panic!("expected one function response, got {other:?}"),
+        }
     }
 }

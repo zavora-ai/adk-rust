@@ -14,7 +14,7 @@ use adk_auth::sso::{JwtValidator, JwtValidatorBuilder, TokenClaims, TokenError, 
 use adk_core::{Agent, Event, SingleAgentLoader};
 use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
 use adk_server::{ServerBuilder, ServerConfig};
-use adk_session::{GetRequest, InMemorySessionService, SessionService};
+use adk_session::{CreateRequest, GetRequest, InMemorySessionService, SessionService};
 use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
 use axum::Router;
@@ -212,6 +212,16 @@ pub async fn live_jwt_claims_server_run() -> anyhow::Result<Verdict> {
     cases.push(("no-bearer", None, false));
     for (label, token, accept) in cases {
         let session_id = format!("claims-{label}");
+        // An ADK run needs an existing session: alice's is created empty, and holds the turn
+        // only when the run is hers.
+        sessions
+            .create(CreateRequest {
+                app_name: AGENT.to_string(),
+                user_id: "alice".to_string(),
+                session_id: Some(session_id.clone()),
+                state: Default::default(),
+            })
+            .await?;
         // The body names `mallory`; an authenticated run belongs to the token's subject.
         let body = json!({
             "appName": AGENT,
@@ -236,7 +246,7 @@ pub async fn live_jwt_claims_server_run() -> anyhow::Result<Verdict> {
                 after: None,
             })
             .await
-            .is_ok();
+            .is_ok_and(|session| session.events().len() > 0);
         let observed = match &reply {
             Some(reply) => format!("{status}, {LIVE_MODEL} answered {:?}", reply.trim()),
             None => format!("{status} {}", text.chars().take(120).collect::<String>()),
@@ -250,7 +260,7 @@ pub async fn live_jwt_claims_server_run() -> anyhow::Result<Verdict> {
         checks.push((
             holds,
             format!(
-                "{label}: {observed}; session under alice: {alice_session} (expected {expected})"
+                "{label}: {observed}; turn in alice's session: {alice_session} (expected {expected})"
             ),
         ));
     }

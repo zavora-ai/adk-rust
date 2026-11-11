@@ -1667,6 +1667,11 @@ pub struct RunConfig {
     /// When non-empty, the `transfer_to_agent` tool is injected and validation
     /// uses this list instead of only checking `sub_agents`.
     pub transfer_targets: Vec<String>,
+    /// The description of each agent in
+    /// [`transfer_targets`](Self::transfer_targets), by name, set by the runner from the
+    /// agent tree. An agent tells its model what each target does, so the model can choose
+    /// where to transfer.
+    pub transfer_target_descriptions: HashMap<String, String>,
     /// The name of the parent agent, if this agent was invoked via transfer.
     /// Used by the agent to apply `disallow_transfer_to_parent` filtering.
     pub parent_agent: Option<String>,
@@ -1873,6 +1878,7 @@ impl Default for RunConfig {
             runtime_toolsets: Vec::new(),
             cached_content: None,
             transfer_targets: Vec::new(),
+            transfer_target_descriptions: HashMap::new(),
             parent_agent: None,
             auto_cache: true,
             history_max_events: None,

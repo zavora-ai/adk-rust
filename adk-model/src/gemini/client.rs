@@ -1310,7 +1310,7 @@ impl GeminiModel {
     }
 
     fn build_gemini_tools(
-        tools: &std::collections::HashMap<String, serde_json::Value>,
+        tools: &adk_core::ToolDeclarations,
         adapter: &dyn SchemaAdapter,
         cache: &SchemaCache,
     ) -> Result<(Vec<adk_gemini::Tool>, adk_gemini::ToolConfig)> {
@@ -1491,11 +1491,27 @@ impl GeminiModel {
             }
         }
 
+        // System contents become Gemini's `systemInstruction`, as adk-python and adk-go send
+        // the agent's instruction. A request on a context cache keeps them as leading user
+        // turns: the cache already carries a system instruction, and Gemini takes only one.
+        let on_cache = req.config.as_ref().is_some_and(|config| config.cached_content.is_some());
+        if !on_cache {
+            let instruction: Vec<&str> = req
+                .contents
+                .iter()
+                .filter(|content| content.role == "system")
+                .flat_map(|content| content.parts.iter().filter_map(Part::text))
+                .filter(|text| !text.trim().is_empty())
+                .collect();
+            if !instruction.is_empty() {
+                builder = builder.with_system_instruction(instruction.join("\n\n"));
+            }
+        }
+
         // Add contents using proper builder methods
-        for content in &req.contents {
+        for content in &join_function_responses(&req.contents) {
             match content.role.as_str() {
-                // System contents stay leading user turns: a `system_instruction` would
-                // conflict with the context cache, which already carries one.
+                "system" if !on_cache => {}
                 "user" | "system" => {
                     // For user messages, build gemini Content with potentially multiple parts
                     let mut gemini_parts = Vec::new();
@@ -1826,7 +1842,7 @@ impl GeminiModel {
     pub async fn create_cached_content(
         &self,
         system_instruction: &str,
-        tools: &std::collections::HashMap<String, serde_json::Value>,
+        tools: &adk_core::ToolDeclarations,
         ttl_seconds: u32,
     ) -> Result<String> {
         let mut cache_builder = self
@@ -2288,7 +2304,7 @@ mod native_tool_tests {
 
     #[test]
     fn test_build_gemini_tools_supports_native_tool_metadata() {
-        let mut tools = std::collections::HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         tools.insert(
             "google_search".to_string(),
             serde_json::json!({
@@ -2322,7 +2338,7 @@ mod native_tool_tests {
 
     #[test]
     fn test_build_gemini_tools_sets_flag_for_builtin_only() {
-        let mut tools = std::collections::HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         tools.insert(
             "google_search".to_string(),
             serde_json::json!({
@@ -2347,7 +2363,7 @@ mod native_tool_tests {
 
     #[test]
     fn test_build_gemini_tools_no_flag_for_function_only() {
-        let mut tools = std::collections::HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         tools.insert(
             "lookup_weather".to_string(),
             serde_json::json!({
@@ -2376,7 +2392,7 @@ mod native_tool_tests {
 
     #[test]
     fn test_build_gemini_tools_merges_native_tool_config() {
-        let mut tools = std::collections::HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         tools.insert(
             "google_maps".to_string(),
             serde_json::json!({
@@ -2420,7 +2436,7 @@ mod native_tool_tests {
         // dialect fields ($schema, additionalProperties) in the response schema.
         // This test verifies that the response schema is normalized the same way
         // parameters are — stripping unsupported keywords.
-        let mut tools = std::collections::HashMap::new();
+        let mut tools = adk_core::ToolDeclarations::new();
         tools.insert(
             "read_file".to_string(),
             serde_json::json!({
@@ -2492,7 +2508,7 @@ impl CacheCapable for GeminiModel {
     async fn create_cache(
         &self,
         system_instruction: &str,
-        tools: &std::collections::HashMap<String, serde_json::Value>,
+        tools: &adk_core::ToolDeclarations,
         ttl_seconds: u32,
     ) -> Result<String> {
         self.create_cached_content(system_instruction, tools, ttl_seconds).await
@@ -2503,8 +2519,49 @@ impl CacheCapable for GeminiModel {
     }
 }
 
+/// Joins adjacent `function` contents into one. Gemini expects the responses to a turn of
+/// parallel calls in a single content, one function response per call, as adk-python and
+/// adk-go send them; the history holds one content per tool result.
+fn join_function_responses(contents: &[Content]) -> Vec<Content> {
+    let mut joined: Vec<Content> = Vec::with_capacity(contents.len());
+    for content in contents {
+        if content.role == "function"
+            && let Some(last) = joined.last_mut()
+            && last.role == "function"
+        {
+            last.parts.extend(content.parts.iter().cloned());
+            continue;
+        }
+        joined.push(content.clone());
+    }
+    joined
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn parallel_function_responses_travel_in_one_content() {
+        let response = |id: &str| Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new(
+                "tool",
+                serde_json::json!({"ok": id}),
+            ),
+            id: Some(id.to_string()),
+            annotations: None,
+        };
+        let contents = vec![
+            Content::new("user").with_text("both"),
+            Content { role: "function".to_string(), parts: vec![response("c1")] },
+            Content { role: "function".to_string(), parts: vec![response("c2")] },
+            Content::new("model").with_text("done"),
+            Content { role: "function".to_string(), parts: vec![response("c3")] },
+        ];
+        let joined = join_function_responses(&contents);
+        let shape: Vec<(&str, usize)> =
+            joined.iter().map(|content| (content.role.as_str(), content.parts.len())).collect();
+        assert_eq!(shape, vec![("user", 1), ("function", 2), ("model", 1), ("function", 1)]);
+    }
     use super::*;
     use adk_core::AdkError;
     use std::{

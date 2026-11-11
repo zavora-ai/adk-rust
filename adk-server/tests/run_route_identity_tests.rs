@@ -72,9 +72,23 @@ impl RequestContextExtractor for LoopbackPeer {
     }
 }
 
-fn app(config: impl FnOnce(ServerConfig) -> ServerConfig, agent: Recorder) -> Router {
+/// The app, with session `s1` created for each user the tests run as: an ADK run needs an
+/// existing session.
+async fn app(config: impl FnOnce(ServerConfig) -> ServerConfig, agent: Recorder) -> Router {
+    use adk_session::SessionService;
     let loader = Arc::new(SingleAgentLoader::new(Arc::new(agent)));
     let sessions = Arc::new(adk_session::InMemorySessionService::new());
+    for user in ["operator", "alice", "anyone"] {
+        sessions
+            .create(adk_session::CreateRequest {
+                app_name: "recorder".to_string(),
+                user_id: user.to_string(),
+                session_id: Some("s1".to_string()),
+                state: std::collections::HashMap::new(),
+            })
+            .await
+            .unwrap();
+    }
     ServerBuilder::new(config(ServerConfig::new(loader, sessions))).build()
 }
 
@@ -106,7 +120,8 @@ async fn the_run_routes_extractor_sees_the_peer_address() {
     let app = app(
         |config| config.with_request_context(Arc::new(LoopbackPeer)),
         Recorder { delay: Duration::ZERO, seen: Arc::clone(&seen) },
-    );
+    )
+    .await;
 
     let path_body = json!({ "new_message": "hi" });
     for (uri, body) in [
@@ -130,7 +145,8 @@ async fn an_agent_run_outlives_the_request_timeout() {
     let app = app(
         |config| config.with_request_timeout(Duration::from_millis(100)),
         Recorder { delay: Duration::from_millis(400), seen: Arc::clone(&seen) },
-    );
+    )
+    .await;
 
     let response = app.oneshot(post("/api/run", run_body("alice"), None)).await.unwrap();
 
@@ -143,7 +159,8 @@ async fn the_run_timeout_bounds_an_agent_run() {
     let app = app(
         |config| config.with_run_timeout(Duration::from_millis(100)),
         Recorder { delay: Duration::from_secs(5), seen: Arc::default() },
-    );
+    )
+    .await;
 
     let response = app.oneshot(post("/api/run", run_body("alice"), None)).await.unwrap();
 

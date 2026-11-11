@@ -457,7 +457,7 @@ fn file_part(mime_type: &str, file_uri: &str) -> Option<ContentPart> {
 }
 
 /// Convert ADK tools to Muse tools.
-pub fn convert_tools(tools: &std::collections::HashMap<String, Value>) -> Vec<Tool> {
+pub fn convert_tools(tools: &adk_core::ToolDeclarations) -> Vec<Tool> {
     tools
         .values()
         .filter_map(|tool| {

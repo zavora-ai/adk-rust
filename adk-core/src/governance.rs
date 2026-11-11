@@ -3799,7 +3799,7 @@ impl BuiltinToolGovernor {
     pub async fn govern(
         &mut self,
         gate: &ToolGate<'_>,
-        declarations: &mut HashMap<String, Value>,
+        declarations: &mut crate::ToolDeclarations,
         tools: &HashMap<String, Arc<dyn Tool>>,
     ) -> Result<Vec<WithheldBuiltinTool>> {
         let config = gate.run_config;
@@ -3970,8 +3970,8 @@ mod tests {
         }
     }
 
-    fn native_tools() -> (HashMap<String, Value>, HashMap<String, Arc<dyn Tool>>) {
-        let declarations = HashMap::from([
+    fn native_tools() -> (crate::ToolDeclarations, HashMap<String, Arc<dyn Tool>>) {
+        let declarations = crate::ToolDeclarations::from_iter([
             ("lookup".to_string(), json!({ "name": "lookup" })),
             (
                 "web_search".to_string(),
@@ -3998,7 +3998,7 @@ mod tests {
         (declarations, tools)
     }
 
-    fn names(declarations: &HashMap<String, Value>) -> Vec<&str> {
+    fn names(declarations: &crate::ToolDeclarations) -> Vec<&str> {
         let mut names: Vec<&str> = declarations.keys().map(String::as_str).collect();
         names.sort_unstable();
         names

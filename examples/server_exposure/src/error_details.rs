@@ -171,7 +171,21 @@ struct RunErrors {
     ag_ui_error: Value,
 }
 
+/// Creates alice's `session` over REST: an ADK run needs an existing session.
+async fn create_session(base: &str, session: &str) -> anyhow::Result<()> {
+    let (status, _, text) =
+        post(&format!("{base}/api/apps/{APP}/users/alice/sessions/{session}"), &json!({}), None)
+            .await?;
+    anyhow::ensure!(
+        (200..300).contains(&status),
+        "creating alice's session {session}: HTTP {status} {text}"
+    );
+    Ok(())
+}
+
 async fn run_errors(base: &str) -> anyhow::Result<RunErrors> {
+    create_session(base, "s-run").await?;
+    create_session(base, "s-sse").await?;
     let (run_status, run_request_id, text) =
         post(&format!("{base}/api/run"), &run_body(APP, "alice", "s-run", "Hello"), None).await?;
     let problem: Value = serde_json::from_str(&text).unwrap_or(Value::String(text));
@@ -414,6 +428,7 @@ pub async fn group_g(out: &mut Vec<Outcome>) {
             post(&format!("{base}/api/run"), &run_body("other_app", "alice", "s-1", "Hi"), None)
                 .await?;
         let unknown_app: Value = serde_json::from_str(&text)?;
+        create_session(&base, "s-2").await?;
         control.freeze("incident 7 under review");
         let (frozen_status, _, text) =
             post(&format!("{base}/api/run"), &run_body(APP, "alice", "s-2", "Hi"), None).await?;
@@ -456,6 +471,7 @@ pub async fn group_g(out: &mut Vec<Outcome>) {
     let happy = async {
         let (base, _) =
             serve_logged(ServerBuilder::new(server_config(agent(claude(&real_key)?)?)).build())?;
+        create_session(&base, "s-happy").await?;
         let (status, _, text) = post(
             &format!("{base}/api/run"),
             &run_body(APP, "alice", "s-happy", "Say hello in three words."),

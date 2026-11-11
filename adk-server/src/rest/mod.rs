@@ -327,6 +327,14 @@ async fn auth_middleware(
     next.run(Request::from_parts(parts, body)).await
 }
 
+/// `GET /api/version`: the server's version, as adk-python and adk-go serve it.
+async fn version() -> impl IntoResponse {
+    axum::Json(serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "language": "rust",
+    }))
+}
+
 async fn health_check(State(controller): State<HealthController>) -> impl IntoResponse {
     let session = match controller.session_service.health_check().await {
         Ok(()) => ComponentHealth::healthy(),
@@ -983,8 +991,10 @@ impl ServerBuilder {
             }
         });
 
-        let health_router =
-            Router::new().route("/health", get(health_check)).with_state(health_controller);
+        let health_router = Router::new()
+            .route("/health", get(health_check))
+            .with_state(health_controller)
+            .route("/version", get(version));
 
         let ui_api_router = Router::new()
             .route("/apps", get(controllers::apps::list_apps))

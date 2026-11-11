@@ -483,6 +483,21 @@ impl HttpServer {
         .await
     }
 
+    /// `POST /api/run_sse` as an A2UI thread, which starts the session it names.
+    async fn ui_run(&self, user: &str, session: &str, text: &str) -> anyhow::Result<(u16, String)> {
+        self.post(
+            "/api/run_sse",
+            json!({
+                "appName": APP,
+                "userId": user,
+                "sessionId": session,
+                "uiProtocol": "a2ui",
+                "newMessage": {"role": "user", "parts": [{"text": text}]},
+            }),
+        )
+        .await
+    }
+
     /// A legacy A2A `message/send` in `context_id`; returns the JSON-RPC response.
     async fn a2a_send(&self, context_id: &str, text: &str) -> anyhow::Result<Value> {
         let (_, body) = self
@@ -788,7 +803,8 @@ async fn transient_get_keeps_session(ctx: &Ctx<'_>) -> anyhow::Result<Verdict> {
     Ok(verdict(checks))
 }
 
-/// Two first requests for a new session race to create it; both run and both turns are stored.
+/// Two first requests of a UI thread race to create its session; both run and both turns are
+/// stored. (An ADK run needs an existing session, so the race is a UI protocol's.)
 async fn concurrent_first_requests(ctx: &Ctx<'_>) -> anyhow::Result<Verdict> {
     let sessions = open_or_skip!(ctx);
     let faults = Faults::wrap(sessions.clone());
@@ -800,8 +816,8 @@ async fn concurrent_first_requests(ctx: &Ctx<'_>) -> anyhow::Result<Verdict> {
 
     faults.gate_creates(Some(2));
     let (first, second) = tokio::join!(
-        http.run(false, user, &session, "First request."),
-        http.run(false, user, &session, "Second request."),
+        http.ui_run(user, &session, "First request."),
+        http.ui_run(user, &session, "Second request."),
     );
     faults.gate_creates(None);
     let (first, second) = (first?, second?);
@@ -814,7 +830,7 @@ async fn concurrent_first_requests(ctx: &Ctx<'_>) -> anyhow::Result<Verdict> {
     Ok(verdict(vec![
         (
             first.0 == 200 && second.0 == 200,
-            format!("both POST /api/run return 200: {} and {}", first.0, second.0),
+            format!("both POST /api/run_sse return 200: {} and {}", first.0, second.0),
         ),
         (user_turns == Ok(2), format!("both user turns are stored: {user_turns:?}")),
     ]))
@@ -850,11 +866,20 @@ async fn unknown_session_not_found(ctx: &Ctx<'_>) -> anyhow::Result<Verdict> {
     let (run_status, _) = http
         .post(&format!("/api/run/{APP}/{user}/{missing}"), json!({"new_message": "hi"}))
         .await?;
+    let (adk_run_status, _) = http.run(false, user, &missing, "hi").await?;
+    let (adk_sse_status, _) = http.run(true, user, &missing, "hi").await?;
     let (get_status, _) =
         http.get(&format!("/api/apps/{APP}/users/{user}/sessions/{missing}")).await?;
     checks.push((
         run_status == 404,
         format!("POST /api/run/{{app}}/{{user}}/{{missing}} returns {run_status}"),
+    ));
+    checks.push((
+        adk_run_status == 404 && adk_sse_status == 404,
+        format!(
+            "POST /api/run and /api/run_sse for a missing session return {adk_run_status} and \
+             {adk_sse_status}"
+        ),
     ));
     checks.push((
         get_status == 404,
