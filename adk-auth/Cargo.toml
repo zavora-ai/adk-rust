@@ -36,6 +36,9 @@ signed-audit = ["dep:aws-lc-rs", "base64", "dep:ryu-js", "serde_json/float_round
 token-exchange = ["reqwest"]
 # Web Bot Auth: RFC 9421 Ed25519 request signatures, key directories, signer and verifier (spec 3.5 §7.3)
 web-bot-auth = ["dep:aws-lc-rs", "base64", "reqwest", "dep:http", "dep:httpdate", "adk-core/webhook-delivery", "tokio/net"]
+# Agent identity federation: an OIDC issuer for agents, exchanges of its tokens at AWS, Google
+# Cloud and Microsoft Entra, and cloud agent tokens read as `AgentPrincipal`s
+agent-federation = ["sso", "dep:aws-lc-rs"]
 
 [dependencies]
 adk-core.workspace = true
