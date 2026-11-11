@@ -289,6 +289,59 @@ entries are sent only when the external agent advertises those optional
 transports. `AcpAgentConfig` debug output lists names and environment keys
 without printing secret values.
 
+## Serve ADK-Rust tools over the connection
+
+An agent that advertises `mcpCapabilities.acp` (the unstable MCP-over-ACP
+surface) can call tools that run in your application, with no MCP process or
+port. An `AcpToolServer` is a named set of ADK-Rust tools:
+
+```rust,ignore
+use adk_acp::{AcpAgentConfig, AcpToolServer};
+
+let config = AcpAgentConfig::new("my-coding-agent --acp")
+    .tool_server(AcpToolServer::new("app-tools").tool(lookup_order_tool));
+```
+
+`AcpConnection` declares each tool server as an `acp` MCP server, with a fresh
+`serverId`, on `session/new`, `session/load`, `session/resume` and
+`session/fork`. It answers the agent's `mcp/message` requests (`tools/list`,
+`tools/call`, `server/discover`, MCP `2026-07-28`) over the same connection.
+Starting a session fails with `AcpError::Unsupported` when the agent does not
+advertise `mcp.acp`. Tool server names must be unique among the session's MCP
+servers. A tool that fails comes back to the agent as an `isError` result, so
+its model can read the error. Tools run with a minimal `ToolContext`: no
+session state, artifacts or memory.
+
+`AcpToolServer` is also an SDK `McpService`. Code that drives the SDK directly
+can attach one with
+`McpServer::new_service(name, tools, NullRun)` and
+`SessionBuilder::with_mcp_server`.
+
+## Configure the agent's model providers
+
+When the agent advertises `providers` (the unstable configurable-provider
+surface), the client can see which model providers it routes to and point them
+elsewhere, for example at a company gateway. Do this before creating sessions:
+
+```rust,ignore
+use adk_acp::agent_client_protocol::v1::schema::{LlmProtocol, SetProviderRequest};
+
+for provider in connection.list_providers().await? {
+    println!("{} required={} {:?}", provider.provider_id, provider.required, provider.current);
+}
+connection
+    .set_provider(
+        SetProviderRequest::new("main", LlmProtocol::OpenAi, "https://gateway.example/v1")
+            .headers([("authorization".into(), format!("Bearer {token}"))].into()),
+    )
+    .await?;
+connection.disable_provider("helper").await?;
+```
+
+`providers/list` never returns headers. SDK trace logging of JSON-RPC bodies
+would record them, so keep body-level logging off when headers carry
+credentials.
+
 ## Permission policies
 
 Every permission request includes the session ID, exact tool-call ID, tool

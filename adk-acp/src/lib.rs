@@ -9,9 +9,10 @@
 //!
 //! Beyond the stable v1 surface, adk-acp implements these unstable ACP
 //! surfaces on both sides: session fork, archive, status, options and title,
-//! authentication status, end-of-turn token usage, plan operations and
-//! subagent updates. Unstable surfaces may change in any SDK minor release, so
-//! adk-acp depends on `agent-client-protocol` `~5.2`.
+//! authentication status, end-of-turn token usage, plan operations, subagent
+//! updates, MCP over ACP and configurable LLM providers. Unstable surfaces may
+//! change in any SDK minor release, so adk-acp depends on
+//! `agent-client-protocol` `~5.2`.
 //!
 //! ## Quick Start
 //!
@@ -37,7 +38,9 @@
 //!
 //! - **Sessions**: Multi-turn coding conversations rooted in a project
 //! - **Streaming**: Text, thoughts, tool progress, plans, notices, and completion updates
-//! - **Host services**: Opt-in filesystem, terminal, and MCP capabilities
+//! - **Host services**: Opt-in filesystem, terminal, and MCP capabilities,
+//!   including ADK-Rust tools served over the ACP connection ([`AcpToolServer`])
+//! - **Providers**: Clients can list and configure the agent's model providers
 //! - **Permissions**: Typed choices that a host policy or user can approve
 //! - **Elicitation**: Structured questions an agent asks its client
 //! - **Authentication**: Agent-advertised methods, logout, and status
@@ -69,6 +72,7 @@ pub mod content;
 pub mod elicitation;
 pub mod error;
 pub mod host;
+pub mod mcp;
 pub mod permissions;
 pub mod session;
 pub mod status;
@@ -90,6 +94,7 @@ pub use connection::{
 pub use elicitation::{AcpElicitation, DeclineElicitation};
 pub use error::{AcpError, Result};
 pub use host::{AcpFileSystem, AcpTerminal};
+pub use mcp::AcpToolServer;
 pub use permissions::{PermissionDecision, PermissionPolicy, PermissionRequest};
 pub use session::{AcpCancellationHandle, AcpSession, PromptResult};
 pub use status::{AgentStatus, StatusTracker};

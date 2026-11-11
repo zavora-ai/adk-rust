@@ -36,8 +36,10 @@ pub mod capabilities;
 pub mod config;
 pub mod error;
 pub mod handler;
+mod mcp_acp;
 pub mod modes;
 pub mod permission;
+pub mod providers;
 pub mod streamer;
 mod system_prompt;
 pub mod transport;
@@ -59,6 +61,10 @@ pub use error::{AcpServerError, ErrorResponse};
 pub use handler::AcpSessionHandler;
 pub use modes::{SessionControls, config_state_key};
 pub use permission::{StandingOffer, StandingPermissions};
+pub use providers::{
+    AcpProviders, LlmProtocol, ModelFactory, ModelProvider, ModelProviders, ProviderSettings,
+    SwitchableModel,
+};
 pub use streamer::ResponseStreamer;
 pub use transport::{StdioTransport, Transport};
 

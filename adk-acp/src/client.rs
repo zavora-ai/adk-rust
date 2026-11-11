@@ -41,16 +41,17 @@ use agent_client_protocol::v1::schema::{
     AgentCapabilities, ArchiveSessionRequest, AuthMethod, AuthStatusRequest, AuthStatusResponse,
     AuthStatusUpdateNotification, AuthenticateRequest, ClientCapabilities,
     ClientSessionCapabilities, CompactionCapabilities, CompleteElicitationNotification,
-    CreateElicitationRequest, CreateElicitationResponse, DeleteSessionRequest, ElicitationAction,
-    ElicitationCapabilities, ElicitationFormCapabilities, ElicitationUrlCapabilities,
-    ForkSessionRequest, Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest,
+    CreateElicitationRequest, CreateElicitationResponse, DeleteSessionRequest,
+    DisableProviderRequest, ElicitationAction, ElicitationCapabilities,
+    ElicitationFormCapabilities, ElicitationUrlCapabilities, ForkSessionRequest, Implementation,
+    InitializeRequest, InitializeResponse, ListProvidersRequest, ListSessionsRequest,
     ListSessionsResponse, LoadSessionRequest, LogoutRequest, McpServer, NewSessionRequest,
-    NoticeCapabilities, PermissionOptionKind, PlanCapabilities, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
-    SessionArchiveFilter, SessionConfigOptionsCapabilities, SessionId, SessionInfo,
-    SessionNotification, SessionOptionsRequest, SessionOptionsResponse, SessionStatus,
-    SessionStatusRequest, SessionUpdate, SubagentCapabilities, SystemPrompt, SystemPromptMode,
-    UnarchiveSessionRequest,
+    NoticeCapabilities, PermissionOptionKind, PlanCapabilities, ProviderId, ProviderInfo,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    ResumeSessionRequest, SessionArchiveFilter, SessionConfigOptionsCapabilities, SessionId,
+    SessionInfo, SessionNotification, SessionOptionsRequest, SessionOptionsResponse, SessionStatus,
+    SessionStatusRequest, SessionUpdate, SetProviderRequest, SubagentCapabilities, SystemPrompt,
+    SystemPromptMode, UnarchiveSessionRequest,
 };
 use agent_client_protocol::{
     Agent, Client, ConnectTo, ConnectionTo, Dispatch, Error, HandleDispatchFrom, Handled, v1,
@@ -62,6 +63,7 @@ use crate::connection::AcpAgentConfig;
 use crate::elicitation::AcpElicitation;
 use crate::error::{AcpError, Result};
 use crate::host::{AcpHostHandler, capabilities as host_capabilities};
+use crate::mcp::{ToolServerHost, ToolServers};
 use crate::permissions::{PermissionPolicy, PermissionRequest, outcome_for};
 use crate::session::AcpSession;
 use crate::status::{AgentStatus, StatusTracker};
@@ -114,6 +116,8 @@ pub(crate) struct ConnectionInner {
     pub(crate) routes: Routes,
     pub(crate) info: AcpAgentInfo,
     pub(crate) config: AcpAgentConfig,
+    /// The tool servers this connection serves, with their declared ids.
+    tool_servers: ToolServers,
     stop: Mutex<Option<oneshot::Sender<()>>>,
     task: Mutex<Option<tokio::task::JoinHandle<std::result::Result<(), Error>>>>,
 }
@@ -159,6 +163,9 @@ impl AcpConnection {
         policy: Arc<PermissionPolicy>,
         observer: Option<Observer>,
     ) -> Result<Self> {
+        validate_tool_servers(&config)?;
+        let tool_servers = ToolServers::new(&config.tool_servers);
+        let tool_host = ToolServerHost::new(tool_servers.clone());
         let routes = Routes::default();
         let handler = ClientHandler {
             policy,
@@ -180,6 +187,7 @@ impl AcpConnection {
                 .name("adk-acp")
                 .with_handler(handler)
                 .with_handler(host)
+                .with_handler(tool_host)
                 .connect_with(transport, async move |connection: v1::ConnectionTo<Agent>| {
                     match initialize(&connection, request, auth_method.as_deref()).await {
                         Ok(response) => {
@@ -229,6 +237,7 @@ impl AcpConnection {
                 routes,
                 info,
                 config,
+                tool_servers,
                 stop: Mutex::new(Some(stop_tx)),
                 task: Mutex::new(Some(task)),
             }),
@@ -259,14 +268,13 @@ impl AcpConnection {
 
     /// Create a session in the configured working directory (`session/new`).
     ///
-    /// The request carries the configured MCP servers, additional directories,
-    /// system prompt and initial configuration values; each is checked against
-    /// the agent's capabilities first.
+    /// The request carries the configured MCP servers and tool servers,
+    /// additional directories, system prompt and initial configuration values;
+    /// each is checked against the agent's capabilities first.
     pub async fn new_session(&self) -> Result<AcpSession> {
         let config = &self.inner.config;
-        self.check_mcp_servers(&config.mcp_servers)?;
         let mut request = NewSessionRequest::new(&config.working_dir)
-            .mcp_servers(config.mcp_servers.clone())
+            .mcp_servers(self.session_mcp_servers()?)
             .additional_directories(self.additional_directories()?)
             .system_prompt(self.system_prompt()?);
         if !config.initial_config_options.is_empty() {
@@ -296,10 +304,9 @@ impl AcpConnection {
     pub async fn load_session(&self, session_id: impl Into<SessionId>) -> Result<AcpSession> {
         self.require(self.capabilities().load_session, "session/load")?;
         let config = &self.inner.config;
-        self.check_mcp_servers(&config.mcp_servers)?;
         let session_id = session_id.into();
         let mut request = LoadSessionRequest::new(session_id.clone(), &config.working_dir)
-            .mcp_servers(config.mcp_servers.clone())
+            .mcp_servers(self.session_mcp_servers()?)
             .additional_directories(self.additional_directories()?)
             .system_prompt(self.system_prompt()?);
         if !config.initial_config_options.is_empty() {
@@ -327,10 +334,9 @@ impl AcpConnection {
     pub async fn resume_session(&self, session_id: impl Into<SessionId>) -> Result<AcpSession> {
         self.require(self.capabilities().session_capabilities.resume.is_some(), "session/resume")?;
         let config = &self.inner.config;
-        self.check_mcp_servers(&config.mcp_servers)?;
         let session_id = session_id.into();
         let mut request = ResumeSessionRequest::new(session_id.clone(), &config.working_dir)
-            .mcp_servers(config.mcp_servers.clone())
+            .mcp_servers(self.session_mcp_servers()?)
             .additional_directories(self.additional_directories()?)
             .system_prompt(self.system_prompt()?);
         if !config.initial_config_options.is_empty() {
@@ -356,9 +362,8 @@ impl AcpConnection {
     pub async fn fork_session(&self, session_id: impl Into<SessionId>) -> Result<AcpSession> {
         self.require(self.capabilities().session_capabilities.fork.is_some(), "session/fork")?;
         let config = &self.inner.config;
-        self.check_mcp_servers(&config.mcp_servers)?;
         let request = ForkSessionRequest::new(session_id.into(), &config.working_dir)
-            .mcp_servers(config.mcp_servers.clone())
+            .mcp_servers(self.session_mcp_servers()?)
             .additional_directories(self.additional_directories()?)
             .system_prompt(self.system_prompt()?);
         let response = self.request(request).await?;
@@ -484,6 +489,34 @@ impl AcpConnection {
         self.request(AuthStatusRequest::new()).await
     }
 
+    /// The model providers the agent lets the client configure, with each
+    /// one's current non-secret routing target (`providers/list`).
+    ///
+    /// Requires the agent's `providers` capability. Configure providers before
+    /// creating or loading sessions; the agent applies them to the sessions
+    /// that follow, for the life of its process.
+    pub async fn list_providers(&self) -> Result<Vec<ProviderInfo>> {
+        self.require(self.capabilities().providers.is_some(), "providers")?;
+        Ok(self.request(ListProvidersRequest::new()).await?.providers)
+    }
+
+    /// Replace one provider's API protocol, base URL and complete header map
+    /// (`providers/set`).
+    ///
+    /// Headers may carry credentials. The agent never echoes them back, but
+    /// SDK trace logging of JSON-RPC bodies would record them.
+    pub async fn set_provider(&self, request: SetProviderRequest) -> Result<()> {
+        self.require(self.capabilities().providers.is_some(), "providers")?;
+        self.request(request).await.map(drop)
+    }
+
+    /// Disable a provider that is not required (`providers/disable`).
+    /// Disabling an unknown provider succeeds.
+    pub async fn disable_provider(&self, provider_id: impl Into<ProviderId>) -> Result<()> {
+        self.require(self.capabilities().providers.is_some(), "providers")?;
+        self.request(DisableProviderRequest::new(provider_id)).await.map(drop)
+    }
+
     /// The most recent `auth/status_update` the agent sent, if any.
     pub fn last_auth_status(&self) -> Option<AuthStatusUpdateNotification> {
         self.inner.routes.last_auth_status()
@@ -538,10 +571,18 @@ impl AcpConnection {
         }
     }
 
-    fn check_mcp_servers(&self, servers: &[McpServer]) -> Result<()> {
-        check_mcp_servers(self.capabilities(), servers).map_err(|error| {
-            AcpError::Unsupported(error.data.map(|data| data.to_string()).unwrap_or_default())
-        })
+    /// The MCP servers to declare on a session setup request: the configured
+    /// ones, then the connection's tool servers, each checked against the
+    /// agent's MCP capabilities.
+    fn session_mcp_servers(&self) -> Result<Vec<McpServer>> {
+        let mut servers = self.inner.config.mcp_servers.clone();
+        servers.extend(self.inner.tool_servers.declarations());
+        check_mcp_servers(self.capabilities(), &servers).map_err(|error| {
+            AcpError::Unsupported(
+                error.data.and_then(|data| data.as_str().map(str::to_string)).unwrap_or_default(),
+            )
+        })?;
+        Ok(servers)
     }
 
     fn additional_directories(&self) -> Result<Vec<PathBuf>> {
@@ -655,8 +696,34 @@ pub(crate) fn check_protocol_version(version: ProtocolVersion) -> std::result::R
     }
 }
 
+/// Check the configured tool servers before connecting: each is valid, and
+/// every MCP server name in a session setup request is unique.
+fn validate_tool_servers(config: &AcpAgentConfig) -> Result<()> {
+    let mut names = std::collections::HashSet::new();
+    for server in &config.mcp_servers {
+        let name = match server {
+            McpServer::Stdio(server) => server.name.as_str(),
+            McpServer::Http(server) => server.name.as_str(),
+            McpServer::Sse(server) => server.name.as_str(),
+            McpServer::Acp(server) => server.name.as_str(),
+            _ => continue,
+        };
+        names.insert(name);
+    }
+    for server in &config.tool_servers {
+        server.validate().map_err(AcpError::InvalidConfig)?;
+        if !names.insert(server.name()) {
+            return Err(AcpError::InvalidConfig(format!(
+                "MCP server name '{}' is used twice; names must be unique within a session's MCP servers",
+                server.name()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Fail when an MCP server's transport is one the agent did not advertise.
-/// ACP agents must support stdio; HTTP and SSE are opt-in.
+/// ACP agents must support stdio; HTTP, SSE and ACP are opt-in.
 pub(crate) fn check_mcp_servers(
     capabilities: &AgentCapabilities,
     servers: &[McpServer],
@@ -666,6 +733,7 @@ pub(crate) fn check_mcp_servers(
             McpServer::Stdio(_) => {}
             McpServer::Http(_) if capabilities.mcp_capabilities.http => {}
             McpServer::Sse(_) if capabilities.mcp_capabilities.sse => {}
+            McpServer::Acp(_) if capabilities.mcp_capabilities.acp => {}
             McpServer::Http(_) => {
                 return Err(Error::invalid_params()
                     .data("the ACP agent did not advertise HTTP MCP support"));
@@ -674,6 +742,10 @@ pub(crate) fn check_mcp_servers(
                 return Err(
                     Error::invalid_params().data("the ACP agent did not advertise SSE MCP support")
                 );
+            }
+            McpServer::Acp(_) => {
+                return Err(Error::invalid_params()
+                    .data("the ACP agent did not advertise MCP over ACP (mcpCapabilities.acp)"));
             }
             _ => {
                 return Err(Error::invalid_params()

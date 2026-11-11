@@ -18,28 +18,32 @@
 //! The ACP v5 tests at the end drive the same server with adk-acp's own client,
 //! [`AcpConnection`], covering version negotiation, client system prompts,
 //! end-of-turn usage, session titles, status, archiving, options, modes and
-//! config, fork and resume, and authentication.
+//! config, fork and resume, and authentication, plus the unstable MCP-over-ACP
+//! and configurable-provider surfaces.
 
 use std::sync::{Arc, Mutex};
 
 use acp_full_protocol::{
-    AGENT_INSTRUCTION, AGENT_NAME, CONFIRM_CALL_ID, ReferenceControls, ScriptedAgent, TOKEN_METHOD,
-    WorkspaceToken, build_delete_tool, build_session_service,
+    AGENT_INSTRUCTION, AGENT_NAME, CONFIRM_CALL_ID, DEFAULT_PROVIDER_URL, ReferenceControls,
+    ScriptedAgent, TOKEN_METHOD, WorkspaceToken, build_delete_tool, build_session_service,
+    reference_model, reference_providers,
 };
 use adk_acp::agent_client_protocol::schema::ProtocolVersion;
 use adk_acp::agent_client_protocol::v1::schema::{
     AudioContent, AuthState, CloseSessionRequest, ContentBlock,
     EmbeddedResource as AcpEmbeddedResource, EmbeddedResourceResource, ImageContent,
-    InitializeRequest, ListSessionsRequest, LoadSessionRequest, NewSessionRequest,
+    InitializeRequest, ListSessionsRequest, LlmProtocol, LoadSessionRequest, NewSessionRequest,
     PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SelectedPermissionOutcome, SessionArchiveFilter, SessionConfigKind,
-    SessionNotification, SessionStatus, SessionUpdate, StopReason, TextContent,
+    SessionNotification, SessionStatus, SessionUpdate, SetProviderRequest, StopReason, TextContent,
     TextResourceContents as AcpTextResourceContents,
 };
 use adk_acp::agent_client_protocol::v1::{ConnectionTo, Responder};
 use adk_acp::agent_client_protocol::{Agent, Channel, Client};
 use adk_acp::server::{AcpServer, AcpServerConfigBuilder, ResponseStreamer};
-use adk_acp::{AcpAgentConfig, AcpConnection, AcpError, OutputChunk, PermissionPolicy};
+use adk_acp::{
+    AcpAgentConfig, AcpConnection, AcpError, AcpToolServer, OutputChunk, PermissionPolicy,
+};
 use adk_core::Agent as AdkAgent;
 use adk_session::{GetRequest, SessionService};
 use base64::{Engine as _, engine::general_purpose};
@@ -599,4 +603,67 @@ async fn v5_authentication() {
     .await;
     assert!(refused.is_err(), "an unoffered auth method fails the handshake");
     assert!(matches!(connection.authenticate("unknown").await, Err(AcpError::Unsupported(_))));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unstable surfaces: MCP over ACP and configurable providers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A tool the client serves over the ACP connection reaches the agent's turn
+/// as a runtime toolset, and runs in the client when the agent calls it.
+#[tokio::test]
+async fn unstable_client_tools_reach_the_agent_over_the_connection() {
+    let workspace_info: Arc<dyn adk_core::Tool> = Arc::new(adk_tool::FunctionTool::new(
+        "workspace_info",
+        "Report the client's workspace.",
+        |_ctx, _args| async move { Ok(serde_json::json!({ "branch": "main" })) },
+    ));
+    let tools = AcpToolServer::new("workspace").tool(workspace_info);
+    let connection = connect(client().tool_server(tools), |config| config).await;
+    assert!(connection.agent_info().capabilities.mcp_capabilities.acp);
+
+    let mut session = connection.new_session().await.expect("session");
+    let listed = session.prompt("client tools?").await.expect("prompt");
+    assert_eq!(listed.text, "client tools: workspace_info");
+    let called = session.prompt("call workspace_info").await.expect("prompt");
+    assert!(called.text.contains("\"branch\":\"main\""), "got {}", called.text);
+    session.close().await.expect("close");
+}
+
+/// A client lists the agent's providers and switches the model behind it.
+#[tokio::test]
+async fn unstable_providers_switch_the_agents_model() {
+    let model = reference_model();
+    let agent: Arc<dyn AdkAgent> =
+        Arc::new(ScriptedAgent::new(build_delete_tool()).with_model(model.clone()));
+    let providers = Arc::new(reference_providers(&model));
+    let channel = serve(agent, build_session_service(), |config| config.providers(providers));
+    let connection =
+        AcpConnection::connect_to(channel, client(), Arc::new(PermissionPolicy::DenyAll))
+            .await
+            .expect("ACP handshake");
+
+    let listed = connection.list_providers().await.expect("providers/list");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].current.as_ref().map(|current| current.base_url.as_str()),
+        Some(DEFAULT_PROVIDER_URL)
+    );
+
+    let mut session = connection.new_session().await.expect("session");
+    let before = session.prompt("model?").await.expect("prompt");
+    assert_eq!(before.text, format!("model: OpenAi at {DEFAULT_PROVIDER_URL}"));
+
+    connection
+        .set_provider(SetProviderRequest::new(
+            "main",
+            LlmProtocol::Anthropic,
+            "https://gateway.example",
+        ))
+        .await
+        .expect("providers/set");
+    let after = session.prompt("model?").await.expect("prompt");
+    assert_eq!(after.text, "model: Anthropic at https://gateway.example");
+    assert!(connection.disable_provider("main").await.is_err(), "main is required");
+    session.close().await.expect("close");
 }

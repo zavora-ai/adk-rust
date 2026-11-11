@@ -185,15 +185,25 @@ stays dormant until an ADK plan primitive surfaces plan entries.
 
 ## Client-supplied MCP servers
 
-The client may include stdio MCP servers in `session/new`, `session/load`,
-`session/resume`, or `session/fork`. Before starting a process the server
-rejects the request when:
+The client may include stdio and `acp` MCP servers in `session/new`,
+`session/load`, `session/resume`, or `session/fork`. The server advertises
+`mcpCapabilities.acp` (the unstable MCP-over-ACP surface). Before starting a
+process the server rejects the request when:
 
 - more than 16 servers are attached;
-- a server is not stdio (HTTP and SSE are not advertised);
-- a name is empty or repeated, or an environment variable name is empty or
-  repeated within one server; or
+- a server is neither stdio nor `acp` (HTTP and SSE are not advertised);
+- a name is empty or repeated, an `acp` server has an empty `serverId`, or an
+  environment variable name is empty or repeated within one server; or
 - a command is not an absolute path.
+
+An `acp` server runs in the client. The server reaches its tools by sending
+`mcp/message` requests over the ACP connection (MCP `2026-07-28`: no
+`initialize`, the protocol version and capabilities in `params._meta`, and a
+fresh logical request id per operation). It becomes a toolset named
+`acp:{server name}` like a stdio server, and steps 4 and 5 below apply to it.
+Its tool list is cached for the `ttlMs` the client returns. Tool results are
+mapped the way adk-tool's MCP toolset maps them, and an `isError` result
+reaches the model as `{"error": text}`.
 
 It then:
 
@@ -270,6 +280,43 @@ let config = AcpServerConfigBuilder::new()
     .authenticator(std::sync::Arc::new(WorkspaceToken))
     .build()?;
 ```
+
+## Model providers
+
+With an `AcpProviders` hook configured, the server advertises `providers` (the
+unstable configurable-provider surface). It answers `providers/list`,
+`providers/set` and `providers/disable`, checking each request against the
+hook's own listing first. `providers/set` must name a listed provider and one
+of its supported protocols, with a base URL. Disabling an unlisted provider
+succeeds, and disabling a required one is refused. Without a hook, the
+capability is not advertised and the methods answer method-not-found.
+Provider settings last for the process and are never persisted, listed or
+logged with their headers.
+
+`ModelProviders` is a ready-made hook. Each provider pairs a `SwitchableModel`,
+an `Llm` the agent uses whose backing model can be replaced while it runs, with
+a factory that builds the new model from the client's settings:
+
+```rust,ignore
+use adk_acp::server::{LlmProtocol, ModelProvider, ModelProviders, SwitchableModel};
+
+let model = SwitchableModel::new(default_model);
+let agent = LlmAgentBuilder::new("coder").model(Arc::new(model.clone())).build()?;
+let providers = ModelProviders::new().provider(
+    ModelProvider::new("main", model, |settings| build_model(settings))
+        .supports(LlmProtocol::OpenAi)
+        .required(true)
+        .current(LlmProtocol::OpenAi, "https://api.openai.com/v1"),
+);
+let config = AcpServerConfigBuilder::new()
+    .agent(Arc::new(agent))
+    .session_service(sessions)
+    .providers(Arc::new(providers))
+    .build()?;
+```
+
+A request already running finishes on the model it started with. A disabled
+provider's `SwitchableModel` fails requests until a later `providers/set`.
 
 ## Serve over another transport
 

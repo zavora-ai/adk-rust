@@ -129,7 +129,10 @@ AcpAgentConfig can attach the services that a normal editor supplies:
   operations implemented by the host;
 - terminal with an AcpTerminal advertises the complete ACP terminal
   lifecycle: create, output, wait, kill, and release;
-- mcp_server includes a typed MCP configuration in every new session.
+- mcp_server includes a typed MCP configuration in every new session;
+- tool_server serves an `AcpToolServer`, a named set of ADK-Rust tools, to the
+  agent over the ACP connection itself (unstable MCP over ACP). The tools run
+  in your application, and no MCP process is started.
 
 These callbacks are opt-in and run outside the JSON-RPC dispatch loop, so a
 long file operation or terminal wait does not freeze other ACP traffic. The
@@ -138,8 +141,11 @@ policy, limits, and cleanup. AcpAgentConfig debug output lists environment
 variable names and MCP server names without printing secret values.
 
 The client verifies the negotiated protocol version before creating a session.
-Stdio MCP is required by ACP v1. HTTP and SSE MCP configurations are rejected
-unless the external agent advertises those optional transports.
+Stdio MCP is required by ACP v1. HTTP, SSE and ACP MCP configurations, tool
+servers included, are rejected unless the external agent advertises those
+optional transports. Tool servers are declared on new, loaded, resumed and
+forked sessions, and the client answers the agent's `mcp/message` requests
+(`tools/list`, `tools/call`) for them.
 
 ### Work with the agent's sessions
 
@@ -182,6 +188,11 @@ own updates arrive under the child's session id; the client routes them to the
 session that announced it as `OutputChunk::SubagentOutput`. An `AcpElicitation`
 set with `AcpAgentConfig::elicitation` answers the agent's `elicitation/create`
 questions; without one, elicitation is not advertised.
+
+When the agent advertises `providers` (unstable), `list_providers`,
+`set_provider` and `disable_provider` show and change the model providers it
+routes to, for example to send its requests through a company gateway. Call them
+before creating sessions.
 
 ## Expose an ADK-Rust agent through ACP
 
@@ -268,6 +279,12 @@ The server implements:
   `session/resume`, or `session/fork`, started per session and exposed to
   LlmAgent and CodeActAgent through invocation-scoped toolsets named
   `acp:{server name}`;
+- client-supplied `acp` MCP servers (unstable MCP over ACP) in the same
+  requests, whose tools the client serves: the server reaches them by sending
+  `mcp/message` back over the connection, as the same kind of toolset;
+- `providers/list`, `providers/set` and `providers/disable` (unstable) through
+  an `AcpProviders` hook (`AcpServerConfigBuilder::providers`). `ModelProviders`
+  switches `SwitchableModel`s, `Llm`s whose backing model a client can replace;
 - one ACP session mapped to one persisted ADK-Rust session and Runner context;
 - concurrent-session limits and one active prompt per session.
 
@@ -277,14 +294,14 @@ flag is needed for it. The server advertises `load_session`, the
 embedded-resource, image, and audio prompt content), and the session lifecycle
 capabilities (`list`, `delete`, `resume`, `close`, `fork`,
 `additional_directories`, `archive`, `status`, `options`, `title` and
-`systemPrompt`), `auth.status`, and `auth.logout` when the authenticator supports
-it. A request naming a missing session gets ACP's `session_not_found` error
+`systemPrompt`), `auth.status`, `mcp.acp`, `auth.logout` when the authenticator
+supports it, and `providers` when a providers hook is configured. A request naming a missing session gets ACP's `session_not_found` error
 (`-32002` with the session id). Session modes and configuration options are advertised
 only when the agent supplies a `SessionControls` provider — an agent without one
 advertises no modes and no options, so advertised capabilities always match what
 the server implements. It does not advertise optional HTTP or SSE MCP support.
-Before starting a process the server rejects more than 16 servers, a non-stdio
-server, an empty or repeated name or environment variable name, and a command
+Before starting a process the server rejects more than 16 servers, a server that
+is neither stdio nor `acp`, an empty or repeated name or environment variable name, and a command
 that is not an absolute path. Each startup handshake is bounded to 15 seconds,
 session capacity is reserved before a process starts, servers that publish the
 same tool name are rejected at session setup with an error naming both servers
