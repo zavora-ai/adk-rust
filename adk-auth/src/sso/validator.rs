@@ -58,10 +58,10 @@ impl JwtValidator {
         JwtValidatorBuilder::default()
     }
 
-    fn validation(&self, _kid: Option<&str>) -> jsonwebtoken::Validation {
-        let mut validation = jsonwebtoken::Validation::new(
-            self.algorithms.first().copied().unwrap_or(jsonwebtoken::Algorithm::RS256),
-        );
+    /// The checks for a token signed with `algorithm`, which the caller has already found in
+    /// the allowed set.
+    fn validation(&self, algorithm: jsonwebtoken::Algorithm) -> jsonwebtoken::Validation {
+        let mut validation = jsonwebtoken::Validation::new(algorithm);
         validation.set_issuer(&[&self.issuer]);
         match &self.audience {
             Some(aud) => {
@@ -83,13 +83,25 @@ impl TokenValidator for JwtValidator {
     async fn validate(&self, token: &str) -> Result<TokenClaims, TokenError> {
         // Decode header to get key ID
         let header = jsonwebtoken::decode_header(token)?;
+
+        // The token's algorithm must be one this validator was built with. The check is made
+        // here, and the validation below names that one algorithm, because `jsonwebtoken`
+        // refuses a token unless every algorithm in its `Validation` belongs to the key's
+        // family: a list holding both RS256 and ES256 would refuse every token.
+        let algorithm = header.alg;
+        if !self.algorithms.contains(&algorithm) {
+            return Err(jsonwebtoken::errors::Error::from(
+                jsonwebtoken::errors::ErrorKind::InvalidAlgorithm,
+            )
+            .into());
+        }
         let kid = header.kid.ok_or_else(|| TokenError::MissingClaim("kid".into()))?;
 
         // Get decoding key from JWKS cache
         let key = self.jwks_cache.get_key(&kid).await?;
 
         // Validate and decode token
-        let validation = self.validation(Some(&kid));
+        let validation = self.validation(algorithm);
         let token_data = jsonwebtoken::decode::<TokenClaims>(token, &key, &validation)?;
 
         Ok(token_data.claims)
@@ -323,6 +335,35 @@ mod tests {
         assert!(matches!(&with_aud, Err(TokenError::ValidationError(_))), "{with_aud:?}");
         let no_iss = validator.validate(&token(None, None)).await;
         assert!(matches!(&no_iss, Err(TokenError::MissingClaim(c)) if c == "iss"), "{no_iss:?}");
+    }
+
+    /// The test issuer signs RS256. Listing it second, after an algorithm of another key
+    /// family, used to refuse the token: only the first configured algorithm was honoured.
+    #[tokio::test]
+    async fn every_configured_algorithm_is_accepted_not_only_the_first() {
+        let issuer = TestIssuer::start().await;
+        let validator = builder(&issuer)
+            .audience(AUDIENCE)
+            .algorithm(jsonwebtoken::Algorithm::ES256)
+            .algorithm(jsonwebtoken::Algorithm::RS256)
+            .build()
+            .unwrap();
+
+        let accepted = validator.validate(&token(Some(ISSUER), Some(AUDIENCE))).await;
+        assert!(accepted.as_ref().is_ok_and(|claims| claims.sub == "alice"), "{accepted:?}");
+    }
+
+    #[tokio::test]
+    async fn a_token_signed_with_an_algorithm_that_was_not_configured_is_refused() {
+        let issuer = TestIssuer::start().await;
+        let validator = builder(&issuer)
+            .audience(AUDIENCE)
+            .algorithm(jsonwebtoken::Algorithm::ES256)
+            .build()
+            .unwrap();
+
+        let refused = validator.validate(&token(Some(ISSUER), Some(AUDIENCE))).await;
+        assert!(matches!(&refused, Err(TokenError::DecodingError(_))), "{refused:?}");
     }
 
     #[tokio::test]
