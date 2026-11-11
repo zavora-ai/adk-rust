@@ -8,6 +8,48 @@ use std::sync::Arc;
 /// A pinned, boxed stream of [`Event`] results emitted by an agent during execution.
 pub type EventStream = Pin<Box<dyn Stream<Item = Result<Event>> + Send>>;
 
+/// What kind of agent an agent is, as [`Agent::profile`] reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AgentKind {
+    /// An agent that calls a model (`LlmAgent`).
+    Llm,
+    /// Runs its sub-agents one after another (`SequentialAgent`).
+    Sequential,
+    /// Runs its sub-agents at the same time (`ParallelAgent`).
+    Parallel,
+    /// Runs its sub-agents in a loop (`LoopAgent`), at most `max_iterations` times when set.
+    Loop {
+        /// The most iterations the loop runs; `None` for no limit.
+        max_iterations: Option<u32>,
+    },
+    /// Any other agent.
+    #[default]
+    Custom,
+}
+
+/// A tool an agent offers, as [`Agent::profile`] reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ToolProfile {
+    /// The tool's name.
+    pub name: String,
+    /// What the tool does.
+    pub description: String,
+}
+
+/// What an agent tells callers about itself when they list its skills, such as an A2A
+/// agent card ([`Agent::profile`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AgentProfile {
+    /// The kind of agent.
+    pub kind: AgentKind,
+    /// The agent's fixed instruction, when it has one.
+    pub instruction: Option<String>,
+    /// The agent's fixed global instruction, when it has one.
+    pub global_instruction: Option<String>,
+    /// The tools the agent always offers, in declaration order.
+    pub tools: Vec<ToolProfile>,
+}
+
 /// Runtime composition features an [`Agent`] can consume or enforce.
 ///
 /// The declaration is intentionally separate from an agent's domain-specific
@@ -187,6 +229,32 @@ pub trait Agent: Send + Sync {
             shared_state: true,
             invocation_metadata: true,
         }
+    }
+
+    /// Cancels `task_id`, a task this agent started on another agent, for `acting`: the
+    /// task that waited on it was cancelled, so the input it waits for will never come.
+    ///
+    /// The default does nothing: only an agent that starts tasks elsewhere, such as an A2A
+    /// remote agent, has any to cancel.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the other agent cannot be reached or refuses the cancel.
+    async fn cancel_remote_task(
+        &self,
+        _task_id: &str,
+        _acting: &crate::ActingContext,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// What the agent tells callers about itself when they list its skills, such as an A2A
+    /// agent card: its kind, its fixed instructions and its tools.
+    ///
+    /// The default is a [`AgentKind::Custom`] agent with nothing more to say. `LlmAgent`
+    /// and the workflow agents describe themselves.
+    fn profile(&self) -> AgentProfile {
+        AgentProfile::default()
     }
 
     /// Returns portable composition metadata when this agent owns an explicit topology.

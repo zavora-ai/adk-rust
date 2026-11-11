@@ -143,6 +143,42 @@ pub async fn serve_agent_card(
     State(card): State<Arc<RwLock<CachedAgentCard>>>,
     headers: HeaderMap,
 ) -> Response {
+    let mut response = card_response(&card, &headers).await;
+    add_card_cors(headers.get(header::ORIGIN), response.headers_mut());
+    response
+}
+
+/// Answers a CORS preflight for the agent card, as a2a-go does: `GET` and `OPTIONS` with
+/// `Content-Type`, for a day, from any origin. The card is public, so any page may read it.
+pub async fn agent_card_preflight(headers: HeaderMap) -> Response {
+    let mut response = StatusCode::OK.into_response();
+    let response_headers = response.headers_mut();
+    add_card_cors(headers.get(header::ORIGIN), response_headers);
+    response_headers
+        .insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("GET, OPTIONS"));
+    response_headers
+        .insert(header::ACCESS_CONTROL_ALLOW_HEADERS, HeaderValue::from_static("Content-Type"));
+    response_headers.insert(header::ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("86400"));
+    response
+}
+
+/// Lets any page read the agent card: the request's `Origin` echoed with credentials (and
+/// `Vary: Origin`), or `*` without one, as a2a-go's card handler answers.
+pub fn add_card_cors(origin: Option<&HeaderValue>, headers: &mut HeaderMap) {
+    match origin {
+        Some(origin) => {
+            headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.clone());
+            headers
+                .insert(header::ACCESS_CONTROL_ALLOW_CREDENTIALS, HeaderValue::from_static("true"));
+            headers.append(header::VARY, HeaderValue::from_static("Origin"));
+        }
+        None => {
+            headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+        }
+    }
+}
+
+async fn card_response(card: &Arc<RwLock<CachedAgentCard>>, headers: &HeaderMap) -> Response {
     let card = card.read().await;
     let not_modified = headers
         .get(header::IF_NONE_MATCH)

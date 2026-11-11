@@ -225,9 +225,9 @@ pub use action_ledger::{
     outcome_unknown_response,
 };
 pub use agent::{
-    Agent, AgentCapabilities, AgentInteractionMode, AgentRelationshipKind, AgentTopology,
-    AgentTopologyMember, AgentTopologyRelationship, AgentTransferDecision, AgentTransferRequest,
-    EventStream, ResolvedContext, screen_user_input_with,
+    Agent, AgentCapabilities, AgentInteractionMode, AgentKind, AgentProfile, AgentRelationshipKind,
+    AgentTopology, AgentTopologyMember, AgentTopologyRelationship, AgentTransferDecision,
+    AgentTransferRequest, EventStream, ResolvedContext, ToolProfile, screen_user_input_with,
 };
 pub use agent_invoker::AgentInvoker;
 pub use agent_loader::{AgentLoader, MultiAgentLoader, SingleAgentLoader};

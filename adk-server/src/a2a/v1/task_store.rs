@@ -40,6 +40,9 @@ pub struct TaskStoreEntry {
     pub created_at: chrono::DateTime<chrono::Utc>,
     /// Timestamp when the task was last updated.
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// Goes up by one with each save; a store refuses a write made from an older version
+    /// ([`TaskStore::save_task_if_version`]).
+    pub version: u64,
 }
 
 impl TaskStoreEntry {
@@ -51,7 +54,8 @@ impl TaskStoreEntry {
 }
 
 /// Parameters for listing tasks with optional filtering and pagination.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct ListTasksParams {
     /// Filter by conversation context ID.
     pub context_id: Option<String>,
@@ -133,6 +137,40 @@ pub trait TaskStore: Send + Sync {
     ///
     /// Returns [`A2aError::TaskNotFound`] if the task does not exist.
     async fn delete_task(&self, task_id: &str) -> Result<(), A2aError>;
+
+    /// Writes `entry` over the stored task with the same ID: its status, history,
+    /// artifacts, metadata and push configs together. The executor calls it while it holds
+    /// the task's lock, so a read and write-back is never interleaved with another.
+    ///
+    /// The default implementation calls [`create_task`](Self::create_task), which
+    /// overwrites a task with the same ID in the in-memory store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store fails to persist the task.
+    async fn save_task(&self, entry: TaskStoreEntry) -> Result<(), A2aError> {
+        self.create_task(entry).await
+    }
+
+    /// Writes `entry` only if the stored task is still at `expected` version, as a2a-go's
+    /// task store does, so two writers never overwrite each other unseen. The executor
+    /// saves every change this way, with `entry.version` one past `expected`.
+    ///
+    /// The default implementation does not check the version and calls
+    /// [`save_task`](Self::save_task); a store shared between processes should check it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`A2aError::ConcurrentModification`] when the stored version is not
+    /// `expected`, or a store error.
+    async fn save_task_if_version(
+        &self,
+        entry: TaskStoreEntry,
+        expected: u64,
+    ) -> Result<(), A2aError> {
+        let _ = expected;
+        self.save_task(entry).await
+    }
 }
 
 /// In-memory task store for development and testing.
@@ -159,6 +197,20 @@ impl Default for InMemoryTaskStore {
 
 #[async_trait]
 impl TaskStore for InMemoryTaskStore {
+    async fn save_task_if_version(
+        &self,
+        entry: TaskStoreEntry,
+        expected: u64,
+    ) -> Result<(), A2aError> {
+        let mut tasks = self.tasks.write().await;
+        let stored = tasks.get(&entry.id).map_or(0, |task| task.version);
+        if stored != expected {
+            return Err(A2aError::ConcurrentModification { task_id: entry.id });
+        }
+        tasks.insert(entry.id.clone(), entry);
+        Ok(())
+    }
+
     async fn create_task(&self, entry: TaskStoreEntry) -> Result<(), A2aError> {
         let mut tasks = self.tasks.write().await;
         tasks.insert(entry.id.clone(), entry);
@@ -283,6 +335,34 @@ mod tests {
         Artifact, ArtifactId, Message, MessageId, MessageRole, Part, TaskState, TaskStatus,
     };
 
+    #[tokio::test]
+    async fn a_write_from_an_older_version_is_refused() {
+        let store = InMemoryTaskStore::new();
+        store.create_task(make_entry("t-v", "ctx", TaskState::Submitted)).await.unwrap();
+        let mut first = store.get_task("t-v").await.unwrap();
+        let mut second = first.clone();
+
+        first.version = 1;
+        store.save_task_if_version(first, 0).await.unwrap();
+        second.version = 1;
+        let err = store.save_task_if_version(second, 0).await.unwrap_err();
+        assert!(
+            matches!(err, A2aError::ConcurrentModification { ref task_id } if task_id == "t-v"),
+            "{err}"
+        );
+        assert_eq!(store.get_task("t-v").await.unwrap().version, 1);
+    }
+
+    #[tokio::test]
+    async fn every_executor_change_moves_the_version_on() {
+        let store: std::sync::Arc<dyn TaskStore> = std::sync::Arc::new(InMemoryTaskStore::new());
+        let executor = super::super::executor::V1Executor::new(store.clone());
+        executor.create_task("t-e", "ctx").await.unwrap();
+        executor.transition_state("t-e", "ctx", TaskState::Working, None).await.unwrap();
+        executor.transition_state("t-e", "ctx", TaskState::Completed, None).await.unwrap();
+        assert_eq!(store.get_task("t-e").await.unwrap().version, 2);
+    }
+
     fn make_entry(id: &str, context_id: &str, state: TaskState) -> TaskStoreEntry {
         let now = Utc::now();
         TaskStoreEntry {
@@ -295,6 +375,7 @@ mod tests {
             push_configs: Vec::new(),
             created_at: now,
             updated_at: now,
+            version: 0,
         }
     }
 

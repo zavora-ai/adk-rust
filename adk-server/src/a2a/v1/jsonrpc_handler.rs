@@ -68,6 +68,7 @@ const INVALID_REQUEST: i32 = -32600;
 pub async fn jsonrpc_handler(
     State(handler): State<Arc<RequestHandler>>,
     caller: AuthenticatedCaller,
+    extensions: super::extensions::RequestedExtensions,
     body: Bytes,
 ) -> Response {
     let request = match parse_request(&body) {
@@ -75,7 +76,13 @@ pub async fn jsonrpc_handler(
         Err(error) => return json_response(error),
     };
     let request_id = request.id.clone();
-    let scope = handler.for_caller(caller.0);
+    if let Err(error) = handler.require_extensions(&extensions).await {
+        return match request.method.as_str() {
+            "SendStreamingMessage" | "SubscribeToTask" => sse_error_response(request_id, &error),
+            _ => json_response(make_error_response(request_id, &error)),
+        };
+    }
+    let scope = handler.for_caller(caller.0).with_extensions(extensions);
 
     match request.method.as_str() {
         "SendMessage" => handle_send_message(&scope, request).await,
@@ -88,7 +95,9 @@ pub async fn jsonrpc_handler(
         "GetTaskPushNotificationConfig" => handle_push_config_get(&scope, request).await,
         "ListTaskPushNotificationConfigs" => handle_push_config_list(&scope, request).await,
         "DeleteTaskPushNotificationConfig" => handle_push_config_delete(&scope, request).await,
-        "GetExtendedAgentCard" => handle_get_extended_agent_card(&handler, request).await,
+        "GetExtendedAgentCard" => {
+            handle_get_extended_agent_card(&handler, scope.caller().cloned(), request).await
+        }
         _ => {
             let err = A2aError::MethodNotFound { method: request.method.clone() };
             json_response(make_error_response(request_id, &err))
@@ -127,7 +136,22 @@ fn parse_request(body: &[u8]) -> Result<JsonRpcRequest, Value> {
             return Err(invalid(None, "`id` must be a string, a number or null".to_string()));
         }
     };
+    if object.get("method").and_then(Value::as_str).is_some_and(str::is_empty) {
+        return Err(invalid(id, "`method` must not be empty".to_string()));
+    }
     serde_json::from_value(value).map_err(|e| invalid(id, e.to_string()))
+}
+
+/// Any request to the JSON-RPC endpoint that is not a `POST`: a JSON-RPC invalid request,
+/// as a2a-go answers it, rather than a bare `405`.
+pub async fn jsonrpc_not_post() -> Response {
+    json_response(envelope_error(
+        None,
+        INVALID_REQUEST,
+        "Request payload validation error",
+        "INVALID_REQUEST",
+        "JSON-RPC requests are sent with POST".to_string(),
+    ))
 }
 
 /// Returns the `id` to answer a JSON-RPC request with, when `body` is a
@@ -199,6 +223,25 @@ fn json_response(value: Value) -> Response {
     ([(axum::http::header::CONTENT_TYPE, "application/json")], body).into_response()
 }
 
+/// An SSE response for `events`, with keep-alive comments and `X-Accel-Buffering: no` so
+/// a proxy passes each event on as it comes.
+pub(super) fn sse_response(
+    events: impl futures::Stream<Item = Result<Event, Infallible>> + Send + 'static,
+) -> Response {
+    let mut response = Sse::new(events).keep_alive(KeepAlive::default()).into_response();
+    response.headers_mut().insert("x-accel-buffering", axum::http::HeaderValue::from_static("no"));
+    response
+}
+
+/// A streaming method's error before its stream starts, as the stream's one event: an SSE
+/// `data:` line holding the JSON-RPC error response, as a2a-go answers. A client that reads
+/// only `data:` lines from a streaming method sees the error.
+fn sse_error_response(id: JsonRpcRequestId, error: &A2aError) -> Response {
+    let json = serde_json::to_string(&make_error_response(id, error))
+        .expect("error response serialization should not fail");
+    sse_response(futures::stream::once(async move { Ok(Event::default().data(json)) }))
+}
+
 // ── Method handlers ──────────────────────────────────────────────────────────
 
 async fn handle_send_message(handler: &CallerScope<'_>, request: JsonRpcRequest) -> Response {
@@ -221,13 +264,14 @@ async fn handle_send_streaming_message(
     let id = request.id.clone();
     let params: MessageSendParams = match parse_params(request.params) {
         Ok(p) => p,
-        Err(e) => return json_response(make_error_response(id, &e)),
+        Err(e) => return sse_error_response(id, &e),
     };
 
-    let event_stream = match handler.message_stream(params.message).await {
-        Ok(s) => s,
-        Err(e) => return json_response(make_error_response(id, &e)),
-    };
+    let event_stream =
+        match handler.message_stream_with(params.message, params.configuration.as_ref()).await {
+            Ok(s) => s,
+            Err(e) => return sse_error_response(id, &e),
+        };
 
     let request_id = id.clone();
     let sse_stream = event_stream.map(move |result| -> Result<Event, Infallible> {
@@ -254,7 +298,7 @@ async fn handle_send_streaming_message(
         }
     });
 
-    Sse::new(sse_stream).keep_alive(KeepAlive::default()).into_response()
+    sse_response(sse_stream)
 }
 
 async fn handle_get_task(handler: &CallerScope<'_>, request: JsonRpcRequest) -> Response {
@@ -311,12 +355,12 @@ async fn handle_subscribe_to_task(handler: &CallerScope<'_>, request: JsonRpcReq
     let id = request.id.clone();
     let params: TaskIdParams = match parse_params(request.params) {
         Ok(p) => p,
-        Err(e) => return json_response(make_error_response(id, &e)),
+        Err(e) => return sse_error_response(id, &e),
     };
 
     let event_stream = match handler.tasks_subscribe(&params.id).await {
         Ok(s) => s,
-        Err(e) => return json_response(make_error_response(id, &e)),
+        Err(e) => return sse_error_response(id, &e),
     };
 
     let request_id = id.clone();
@@ -344,7 +388,7 @@ async fn handle_subscribe_to_task(handler: &CallerScope<'_>, request: JsonRpcReq
         }
     });
 
-    Sse::new(sse_stream).keep_alive(KeepAlive::default()).into_response()
+    sse_response(sse_stream)
 }
 
 async fn handle_push_config_create(handler: &CallerScope<'_>, request: JsonRpcRequest) -> Response {
@@ -413,14 +457,22 @@ async fn handle_push_config_delete(handler: &CallerScope<'_>, request: JsonRpcRe
 
 async fn handle_get_extended_agent_card(
     handler: &RequestHandler,
+    caller: Option<crate::auth_bridge::RequestContext>,
     request: JsonRpcRequest,
 ) -> Response {
     let id = request.id.clone();
-    // GetExtendedAgentCard params are optional
-    let _params: Option<GetExtendedAgentCardParams> =
-        request.params.and_then(|v| serde_json::from_value(v).ok());
+    // GetExtendedAgentCard params are optional, but must be its params when present.
+    if let Some(params) = request.params.filter(|params| !params.is_null())
+        && (!params.is_object()
+            || serde_json::from_value::<GetExtendedAgentCardParams>(params).is_err())
+    {
+        let error = A2aError::InvalidParams {
+            message: "GetExtendedAgentCard params must be an object".to_string(),
+        };
+        return json_response(make_error_response(id, &error));
+    }
 
-    match handler.agent_card_extended().await {
+    match handler.agent_card_extended_for(caller).await {
         Ok(card) => json_response(make_success_response(id, &card)),
         Err(e) => json_response(make_error_response(id, &e)),
     }
@@ -473,8 +525,17 @@ mod tests {
             security_requirements: None,
             signatures: None,
         };
+        // The extended card the handler serves: the public card, for any caller.
+        let extended = card.clone();
+        let producer: super::super::request_handler::ExtendedCardProducer =
+            Arc::new(move |_caller| {
+                let card = extended.clone();
+                Box::pin(async move { Ok(card) })
+            });
         let cached = Arc::new(RwLock::new(CachedAgentCard::new(card)));
-        Arc::new(RequestHandler::new(executor, store, push_sender, cached))
+        Arc::new(
+            RequestHandler::new(executor, store, push_sender, cached).with_extended_card(producer),
+        )
     }
 
     /// Calls the handler directly with a JSON-RPC request and returns the
@@ -507,7 +568,8 @@ mod tests {
         caller: AuthenticatedCaller,
         body: impl Into<Bytes>,
     ) -> (axum::http::response::Parts, serde_json::Value) {
-        let response = jsonrpc_handler(State(handler), caller, body.into()).await;
+        let response =
+            jsonrpc_handler(State(handler), caller, Default::default(), body.into()).await;
         let (parts, body) = response.into_parts();
         let bytes = body.collect().await.expect("body collection should succeed").to_bytes();
         (parts, serde_json::from_slice(&bytes).expect("response should be valid JSON"))
@@ -721,6 +783,29 @@ mod tests {
         let resp = call_handler(handler, "SendMessage", serde_json::json!({})).await;
 
         assert!(resp["error"].is_object());
+        assert_eq!(resp["error"]["code"], -32602);
+    }
+
+    #[tokio::test]
+    async fn an_empty_method_and_bad_card_params_are_refused_as_a2a_go_does() {
+        let body =
+            serde_json::to_vec(&serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": ""}))
+                .unwrap();
+        let resp = jsonrpc_handler(
+            State(make_handler()),
+            AuthenticatedCaller::default(),
+            Default::default(),
+            axum::body::Bytes::from(body),
+        )
+        .await;
+        let resp: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap(),
+        )
+        .unwrap();
+        assert_eq!(resp["error"]["code"], -32600);
+
+        let resp =
+            call_handler(make_handler(), "GetExtendedAgentCard", serde_json::json!(["x"])).await;
         assert_eq!(resp["error"]["code"], -32602);
     }
 

@@ -25,6 +25,7 @@ use super::card::{CachedAgentCard, build_v1_agent_card, serve_agent_card, v1_age
 use super::convert::ADK_EXTENSION_URI;
 use super::executor::V1Executor;
 use super::jsonrpc_handler::jsonrpc_handler;
+use super::processor::OutputMode;
 use super::push::{NoOpPushNotificationSender, PushNotificationSender};
 use super::request_handler::RequestHandler;
 use super::rest_handler::rest_router;
@@ -84,6 +85,12 @@ impl A2aV1Server {
             streaming: true,
             extra_skills: Vec::new(),
             legacy_jsonrpc_url: None,
+            output_mode: OutputMode::default(),
+            extended_card: None,
+            hooks: super::hooks::ExecutorHooks::default(),
+            inactivity_timeout: None,
+            limits: None,
+            interceptors: Vec::new(),
         }
     }
 
@@ -100,14 +107,22 @@ impl A2aV1Server {
     /// The agent card route. Discovery needs no credentials, so this router takes no
     /// authentication.
     pub fn card_router(&self) -> Router {
-        Router::new().route(AGENT_CARD_PATH, get(serve_agent_card)).with_state(self.card.clone())
+        Router::new()
+            .route(
+                AGENT_CARD_PATH,
+                get(serve_agent_card).options(super::card::agent_card_preflight),
+            )
+            .with_state(self.card.clone())
     }
 
     /// The JSON-RPC and HTTP+JSON bindings, behind `A2A-Version` negotiation. Put
     /// authentication on this router: the handlers act for the caller it identifies.
     pub fn rpc_router(&self) -> Router {
         Router::new()
-            .route(&self.jsonrpc_path, post(jsonrpc_handler))
+            .route(
+                &self.jsonrpc_path,
+                post(jsonrpc_handler).fallback(super::jsonrpc_handler::jsonrpc_not_post),
+            )
             .with_state(self.handler.clone())
             .nest(&self.rest_path, rest_router(self.handler.clone()))
             .layer(axum::middleware::from_fn(version_negotiation))
@@ -133,6 +148,12 @@ pub struct A2aV1ServerBuilder {
     streaming: bool,
     extra_skills: Vec<AgentSkill>,
     legacy_jsonrpc_url: Option<String>,
+    output_mode: OutputMode,
+    extended_card: Option<super::request_handler::ExtendedCardProducer>,
+    hooks: super::hooks::ExecutorHooks,
+    inactivity_timeout: Option<std::time::Duration>,
+    limits: Option<super::run::ConcurrencyLimits>,
+    interceptors: Vec<Arc<dyn super::interceptor::CallInterceptor>>,
 }
 
 impl A2aV1ServerBuilder {
@@ -151,6 +172,53 @@ impl A2aV1ServerBuilder {
     /// Keeps tasks in `store` instead of a new [`InMemoryTaskStore`].
     pub fn task_store(mut self, store: Arc<dyn TaskStore>) -> Self {
         self.task_store = Some(store);
+        self
+    }
+
+    /// Fails a run whose agent produces nothing for `timeout`; see
+    /// [`RequestHandler::with_inactivity_timeout`].
+    pub fn inactivity_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.inactivity_timeout = Some(timeout);
+        self
+    }
+
+    /// Runs `interceptor` around each operation; see
+    /// [`CallInterceptor`](super::interceptor::CallInterceptor).
+    pub fn interceptor(
+        mut self,
+        interceptor: Arc<dyn super::interceptor::CallInterceptor>,
+    ) -> Self {
+        self.interceptors.push(interceptor);
+        self
+    }
+
+    /// Limits how many runs go at once; see [`RequestHandler::with_concurrency_limits`].
+    pub fn concurrency_limits(mut self, limits: super::run::ConcurrencyLimits) -> Self {
+        self.limits = Some(limits);
+        self
+    }
+
+    /// Calls `hooks` at their points in each run; see
+    /// [`ExecutorHooks`](super::hooks::ExecutorHooks).
+    pub fn hooks(mut self, hooks: super::hooks::ExecutorHooks) -> Self {
+        self.hooks = hooks;
+        self
+    }
+
+    /// Serves an extended agent card, built for each caller by `producer`, and says so on
+    /// the public card (`capabilities.extendedAgentCard`).
+    pub fn extended_agent_card(
+        mut self,
+        producer: super::request_handler::ExtendedCardProducer,
+    ) -> Self {
+        self.extended_card = Some(producer);
+        self
+    }
+
+    /// Lays each run's output out in artifacts as `mode` says; see [`OutputMode`]. The
+    /// default is [`OutputMode::ArtifactPerRun`], as adk-go's.
+    pub fn output_mode(mut self, mode: OutputMode) -> Self {
+        self.output_mode = mode;
         self
     }
 
@@ -212,13 +280,16 @@ impl A2aV1ServerBuilder {
         let mut capabilities = AgentCapabilities::none()
             .with_streaming(self.streaming)
             .with_push_notifications(self.push_sender.is_some())
-            .with_extended_agent_card(false);
+            .with_extended_agent_card(self.extended_card.is_some());
         capabilities.extensions = Some(vec![AgentExtension {
             uri: ADK_EXTENSION_URI.to_string(),
+            // adk-go's wording; `required` is left out, as false is its default.
             description: Some(
-                "Tasks carry ADK metadata: adk_app_name, adk_user_id, adk_session_id.".to_string(),
+                "Content is spread across task artifacts and the status message, which carries \
+                 long-running function calls."
+                    .to_string(),
             ),
-            required: Some(false),
+            required: None,
             params: None,
         }]);
         let mut card = build_v1_agent_card(
@@ -249,13 +320,28 @@ impl A2aV1ServerBuilder {
             self.task_store.unwrap_or_else(|| Arc::new(InMemoryTaskStore::new()));
         let push_sender: Arc<dyn PushNotificationSender> =
             self.push_sender.unwrap_or_else(|| Arc::new(NoOpPushNotificationSender));
-        let handler = Arc::new(RequestHandler::with_runner(
+        let mut handler = RequestHandler::with_runner(
             Arc::new(V1Executor::new(task_store.clone())),
             task_store,
             push_sender,
             card.clone(),
             self.runner_config,
-        ));
+        )
+        .with_output_mode(self.output_mode)
+        .with_hooks(self.hooks);
+        if let Some(producer) = self.extended_card {
+            handler = handler.with_extended_card(producer);
+        }
+        if let Some(timeout) = self.inactivity_timeout {
+            handler = handler.with_inactivity_timeout(timeout);
+        }
+        if let Some(limits) = self.limits {
+            handler = handler.with_concurrency_limits(limits);
+        }
+        for interceptor in self.interceptors {
+            handler = handler.with_interceptor(interceptor);
+        }
+        let handler = Arc::new(handler);
         A2aV1Server { handler, card, jsonrpc_path: self.jsonrpc_path, rest_path: self.rest_path }
     }
 }

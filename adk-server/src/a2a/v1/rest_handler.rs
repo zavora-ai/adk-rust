@@ -12,8 +12,8 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
-use axum::response::sse::{Event, KeepAlive};
-use axum::response::{IntoResponse, Response, Sse};
+use axum::response::sse::Event;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::StreamExt;
@@ -50,7 +50,22 @@ pub fn rest_router(handler: Arc<RequestHandler>) -> Router {
             get(handle_push_config_get).delete(handle_push_config_delete),
         )
         .route("/extendedAgentCard", get(handle_extended_agent_card))
+        .layer(axum::middleware::from_fn_with_state(handler.clone(), require_extensions))
         .with_state(handler)
+}
+
+/// Refuses a request that leaves out an extension the agent card requires (400
+/// `FAILED_PRECONDITION`, reason `EXTENSION_SUPPORT_REQUIRED`), as a2a-go does.
+async fn require_extensions(
+    State(handler): State<Arc<RequestHandler>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let requested = super::extensions::RequestedExtensions::from_headers(request.headers());
+    match handler.require_extensions(&requested).await {
+        Ok(()) => next.run(request).await,
+        Err(error) => error_response(&error),
+    }
 }
 
 // ── Error response helpers ───────────────────────────────────────────────────
@@ -92,6 +107,7 @@ struct TaskListQuery {
 async fn handle_message_send(
     State(handler): State<Arc<RequestHandler>>,
     caller: AuthenticatedCaller,
+    extensions: super::extensions::RequestedExtensions,
     Json(params): Json<serde_json::Value>,
 ) -> Response {
     let configuration = match extract_configuration(&params) {
@@ -103,7 +119,12 @@ async fn handle_message_send(
         Err(e) => return error_response(&e),
     };
 
-    match handler.for_caller(caller.0).message_send_with(msg, configuration.as_ref()).await {
+    match handler
+        .for_caller(caller.0)
+        .with_extensions(extensions)
+        .message_send_with(msg, configuration.as_ref())
+        .await
+    {
         Ok(task) => a2a_json_response(&SendMessageResponse::Task(task)),
         Err(e) => error_response(&e),
     }
@@ -113,14 +134,24 @@ async fn handle_message_send(
 async fn handle_message_stream(
     State(handler): State<Arc<RequestHandler>>,
     caller: AuthenticatedCaller,
+    extensions: super::extensions::RequestedExtensions,
     Json(params): Json<serde_json::Value>,
 ) -> Response {
+    let configuration = match extract_configuration(&params) {
+        Ok(configuration) => configuration,
+        Err(e) => return error_response(&e),
+    };
     let msg = match extract_message(params) {
         Ok(m) => m,
         Err(e) => return error_response(&e),
     };
 
-    let event_stream = match handler.for_caller(caller.0).message_stream(msg).await {
+    let event_stream = match handler
+        .for_caller(caller.0)
+        .with_extensions(extensions)
+        .message_stream_with(msg, configuration.as_ref())
+        .await
+    {
         Ok(s) => s,
         Err(e) => return error_response(&e),
     };
@@ -141,7 +172,7 @@ async fn handle_message_stream(
         }
     });
 
-    Sse::new(sse_stream).keep_alive(KeepAlive::default()).into_response()
+    super::jsonrpc_handler::sse_response(sse_stream)
 }
 
 /// `GET /tasks/{taskId}` — retrieves a task by ID.
@@ -271,7 +302,7 @@ async fn handle_tasks_subscribe(
         }
     });
 
-    Sse::new(sse_stream).keep_alive(KeepAlive::default()).into_response()
+    super::jsonrpc_handler::sse_response(sse_stream)
 }
 
 /// `POST /tasks/{taskId}/pushNotificationConfigs` — creates a push config.
@@ -327,8 +358,11 @@ async fn handle_push_config_delete(
 }
 
 /// `GET /extendedAgentCard` — returns the extended agent card.
-async fn handle_extended_agent_card(State(handler): State<Arc<RequestHandler>>) -> Response {
-    match handler.agent_card_extended().await {
+async fn handle_extended_agent_card(
+    State(handler): State<Arc<RequestHandler>>,
+    caller: AuthenticatedCaller,
+) -> Response {
+    match handler.agent_card_extended_for(caller.0).await {
         Ok(card) => a2a_json_response(&card),
         Err(e) => error_response(&e),
     }
@@ -422,8 +456,17 @@ mod tests {
             security_requirements: None,
             signatures: None,
         };
+        // The extended card the handler serves: the public card, for any caller.
+        let extended = card.clone();
+        let producer: super::super::request_handler::ExtendedCardProducer =
+            Arc::new(move |_caller| {
+                let card = extended.clone();
+                Box::pin(async move { Ok(card) })
+            });
         let cached = Arc::new(RwLock::new(CachedAgentCard::new(card)));
-        Arc::new(RequestHandler::new(executor, store, push_sender, cached))
+        Arc::new(
+            RequestHandler::new(executor, store, push_sender, cached).with_extended_card(producer),
+        )
     }
 
     fn make_router(handler: Arc<RequestHandler>) -> Router {

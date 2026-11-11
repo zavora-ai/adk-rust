@@ -1,0 +1,8 @@
+- **A2A v1 runs outlive their request** (`adk-server`, `a2a-v1`):
+  - **The run is independent of its request.** A run started by `SendMessage` or `SendStreamingMessage` is a task of its own, as a2a-go runs it. A client that disconnects, a dropped stream or a request timeout no longer stops the run halfway and leaves the task `WORKING` with hanging subscribers.
+  - **Blocking `SendMessage` gets the agent run timeout.** On `/a2a/v1` and `/a2a/v1/rest/message:*` it gets the 15-minute run timeout instead of the 30-second request timeout.
+  - **A panicking agent fails its task** (`agent run panicked: …`).
+  - **Output produced before a failure stays on the task.**
+  - **Every change to a task is made under that task's lock.** Two answers to one waiting task no longer both continue it, and a push config write no longer drops concurrent updates.
+  - **Subscribers no longer miss updates.** A slow subscriber used to skip updates (`broadcast` lag).
+  - **Same-ID artifact updates merge as A2A task managers do.** With `append` they add parts and metadata; without it they replace the artifact.

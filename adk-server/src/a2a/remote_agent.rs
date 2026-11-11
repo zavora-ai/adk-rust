@@ -539,8 +539,9 @@ pub mod v1_remote {
         pub description: String,
         /// The v1.0.0 agent card describing the remote agent.
         pub agent_card: AgentCard,
-        /// Whether to use streaming for communication.
-        /// If `None`, auto-detects from the agent card capabilities.
+        /// Whether to stream the remote's replies. `None` streams when the run does
+        /// (`RunConfig::streaming_mode` is not `None`); either way, only when the card says
+        /// the agent streams.
         pub streaming: Option<bool>,
         /// Mints the bearer token sent to the remote agent, for the running agent's
         /// [`ActingContext`](adk_core::ActingContext) and with the selected interface
@@ -548,6 +549,163 @@ pub mod v1_remote {
         pub credential_broker: Option<Arc<dyn adk_core::CredentialBroker>>,
         /// Scopes requested from the [`credential_broker`](Self::credential_broker).
         pub credential_scopes: Vec<String>,
+        /// Sent with every message: `historyLength`, accepted output modes, a push config
+        /// (adk-go's `MessageSendConfig`).
+        pub send_configuration: Option<a2a_protocol_types::params::SendMessageConfiguration>,
+        /// Callbacks, converters and options around each turn; see [`RemoteAgentHooks`].
+        pub hooks: RemoteAgentHooks,
+    }
+
+    /// Runs before or after the agent's turn, as an `LlmAgent`'s agent callbacks do: content
+    /// it returns is the turn's answer (before) or one more event (after).
+    pub type AgentCallback = Arc<
+        dyn Fn(
+                Arc<dyn adk_core::CallbackContext>,
+            ) -> futures::future::BoxFuture<'static, Result<Option<Content>>>
+            + Send
+            + Sync,
+    >;
+
+    /// May change the message before it is sent; an event it returns is the turn's answer
+    /// instead of the remote's, and no request is made.
+    pub type BeforeRequestCallback = Arc<
+        dyn Fn(&dyn InvocationContext, &mut a2a_protocol_types::Message) -> Result<Option<Event>>
+            + Send
+            + Sync,
+    >;
+
+    /// Sees each event of the turn; an event it returns replaces it. An error ends the turn.
+    pub type AfterRequestCallback =
+        Arc<dyn Fn(&dyn InvocationContext, &Event) -> Result<Option<Event>> + Send + Sync>;
+
+    /// Turns one of the remote's updates into the event it stands for, replacing the default
+    /// conversion; `None` produces no event.
+    pub type EventConverter = Arc<
+        dyn Fn(&a2a_protocol_types::events::StreamResponse) -> Result<Option<Event>> + Send + Sync,
+    >;
+
+    /// Turns one of the remote's parts into an ADK part; `None` leaves it out.
+    pub type FromWirePart =
+        Arc<dyn Fn(&a2a_protocol_types::Part) -> Result<Option<Part>> + Send + Sync>;
+
+    /// Turns one of the session's parts into the part sent to the remote; `None` leaves it
+    /// out.
+    pub type ToWirePart =
+        Arc<dyn Fn(&Part) -> Result<Option<a2a_protocol_types::Part>> + Send + Sync>;
+
+    /// Ends a remote task the turn left unfinished, instead of the default cancel.
+    pub type RemoteTaskCleanup =
+        Arc<dyn Fn(String) -> futures::future::BoxFuture<'static, ()> + Send + Sync>;
+
+    /// Gives the remote's agent card for each turn, instead of the config's fixed card.
+    pub type CardProvider =
+        Arc<dyn Fn() -> futures::future::BoxFuture<'static, Result<AgentCard>> + Send + Sync>;
+
+    /// Callbacks, converters and options around a remote agent's turns, as adk-go's remote
+    /// agent config offers them. All are optional.
+    #[derive(Clone, Default)]
+    pub struct RemoteAgentHooks {
+        before_agent: Vec<AgentCallback>,
+        after_agent: Vec<AgentCallback>,
+        before_request: Vec<BeforeRequestCallback>,
+        after_request: Vec<AfterRequestCallback>,
+        event_converter: Option<EventConverter>,
+        from_wire_part: Option<FromWirePart>,
+        to_wire_part: Option<ToWirePart>,
+        remote_task_cleanup: Option<RemoteTaskCleanup>,
+        card_provider: Option<CardProvider>,
+        allow_transfer_to_agent: bool,
+    }
+
+    impl RemoteAgentHooks {
+        /// Runs `callback` before each turn, after the run's plugins; see [`AgentCallback`].
+        #[must_use]
+        pub fn before_agent(mut self, callback: AgentCallback) -> Self {
+            self.before_agent.push(callback);
+            self
+        }
+
+        /// Runs `callback` after each turn, after the run's plugins; see [`AgentCallback`].
+        #[must_use]
+        pub fn after_agent(mut self, callback: AgentCallback) -> Self {
+            self.after_agent.push(callback);
+            self
+        }
+
+        /// Runs `callback` before each request; see [`BeforeRequestCallback`].
+        #[must_use]
+        pub fn before_request(mut self, callback: BeforeRequestCallback) -> Self {
+            self.before_request.push(callback);
+            self
+        }
+
+        /// Runs `callback` on each event of a turn; see [`AfterRequestCallback`].
+        #[must_use]
+        pub fn after_request(mut self, callback: AfterRequestCallback) -> Self {
+            self.after_request.push(callback);
+            self
+        }
+
+        /// Converts the remote's updates with `converter`; see [`EventConverter`].
+        #[must_use]
+        pub fn event_converter(mut self, converter: EventConverter) -> Self {
+            self.event_converter = Some(converter);
+            self
+        }
+
+        /// Converts the remote's parts with `converter`; see [`FromWirePart`].
+        #[must_use]
+        pub fn from_wire_part(mut self, converter: FromWirePart) -> Self {
+            self.from_wire_part = Some(converter);
+            self
+        }
+
+        /// Converts the parts sent to the remote with `converter`; see [`ToWirePart`].
+        #[must_use]
+        pub fn to_wire_part(mut self, converter: ToWirePart) -> Self {
+            self.to_wire_part = Some(converter);
+            self
+        }
+
+        /// Ends unfinished remote tasks with `cleanup` instead of cancelling them.
+        #[must_use]
+        pub fn remote_task_cleanup(mut self, cleanup: RemoteTaskCleanup) -> Self {
+            self.remote_task_cleanup = Some(cleanup);
+            self
+        }
+
+        /// Reads the agent card from `provider` for each turn.
+        #[must_use]
+        pub fn card_provider(mut self, provider: CardProvider) -> Self {
+            self.card_provider = Some(provider);
+            self
+        }
+
+        /// Follows the remote's `adk_transfer_to_agent`: an update that names an agent
+        /// transfers the conversation to it, as adk-go's `AllowTransferToAgent` does. Off by
+        /// default.
+        #[must_use]
+        pub fn allow_transfer_to_agent(mut self, allow: bool) -> Self {
+            self.allow_transfer_to_agent = allow;
+            self
+        }
+    }
+
+    impl RemoteA2aV1Config {
+        /// A config for the agent `name` behind `agent_card`, described by the card, that
+        /// streams when the run does and the card allows it.
+        pub fn new(name: impl Into<String>, agent_card: AgentCard) -> Self {
+            Self {
+                name: name.into(),
+                description: agent_card.description.clone(),
+                agent_card,
+                streaming: None,
+                credential_broker: None,
+                credential_scopes: Vec::new(),
+                send_configuration: None,
+                hooks: RemoteAgentHooks::default(),
+            }
+        }
     }
 
     /// An agent that communicates with a remote A2A v1.0.0 agent.
@@ -578,14 +736,7 @@ pub mod v1_remote {
             base_url: &str,
         ) -> std::result::Result<Self, crate::a2a::client::v1_client::V1ClientError> {
             let agent_card = A2aV1Client::resolve_agent_card(base_url).await?;
-            Ok(Self::new(RemoteA2aV1Config {
-                name: name.into(),
-                description: agent_card.description.clone(),
-                agent_card,
-                streaming: None,
-                credential_broker: None,
-                credential_scopes: Vec::new(),
-            }))
+            Ok(Self::new(RemoteA2aV1Config::new(name, agent_card)))
         }
 
         /// Selects the best A2A v1 interface from the agent card.
@@ -612,23 +763,166 @@ pub mod v1_remote {
             &[]
         }
 
+        async fn cancel_remote_task(
+            &self,
+            task_id: &str,
+            acting: &adk_core::ActingContext,
+        ) -> Result<()> {
+            let card = &self.config.agent_card;
+            let interface = Self::select_interface(card).ok_or_else(|| {
+                adk_core::AdkError::agent("no supported interface found in agent card")
+            })?;
+            let mut client = A2aV1Client::with_retry(
+                card.clone(),
+                crate::a2a::client::v1_client::RetryConfig { max_retries: 0, ..Default::default() },
+            );
+            if let Some(broker) = self.config.credential_broker.as_deref() {
+                let token = super::brokered_token(
+                    broker,
+                    acting,
+                    &interface.url,
+                    &self.config.credential_scopes,
+                )
+                .await?;
+                client = client.with_credential(token);
+            }
+            let cancelled = if interface.protocol_binding == "HTTP+JSON" {
+                client.cancel_task_rest(task_id).await
+            } else {
+                client.cancel_task(task_id).await
+            };
+            cancelled.map(drop).map_err(|error| {
+                adk_core::AdkError::agent(format!("cancel remote task {task_id}: {error}"))
+            })
+        }
+
         async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
-            let card = self.config.agent_card.clone();
+            let turn = self.turn(ctx.clone());
+            let hooks = self.config.hooks.clone();
+            let plugins = ctx.run_config().invocation_hooks.clone();
             let invocation_id = ctx.invocation_id().to_string();
             let agent_name = self.config.name.clone();
-            let config_streaming = self.config.streaming;
+            let stream = async_stream::stream! {
+                use futures::StreamExt;
+                let answer = |content: Content| {
+                    let mut event = Event::new(invocation_id.clone());
+                    event.author = agent_name.clone();
+                    event.llm_response.content = Some(content);
+                    event
+                };
+                let callback_ctx = ctx.clone() as Arc<dyn adk_core::CallbackContext>;
+
+                // Before the turn: the run's plugins, then the agent's own callbacks.
+                let mut early = None;
+                for plugin in &plugins {
+                    match plugin.before_agent(callback_ctx.clone()).await {
+                        Ok(Some(content)) => { early = Some(content); break; }
+                        Ok(None) => {}
+                        Err(error) => { yield Err(error); return; }
+                    }
+                }
+                if early.is_none() {
+                    for callback in &hooks.before_agent {
+                        match callback(callback_ctx.clone()).await {
+                            Ok(Some(content)) => { early = Some(content); break; }
+                            Ok(None) => {}
+                            Err(error) => { yield Err(error); return; }
+                        }
+                    }
+                }
+
+                if let Some(content) = early {
+                    yield Ok(answer(content));
+                } else {
+                    let mut turn = turn;
+                    'events: while let Some(item) = turn.next().await {
+                        let mut event = match item {
+                            Ok(event) => event,
+                            Err(error) => { yield Err(error); return; }
+                        };
+                        for callback in &hooks.after_request {
+                            match callback(ctx.as_ref(), &event) {
+                                Ok(Some(replacement)) => { event = replacement; break; }
+                                Ok(None) => {}
+                                Err(error) => {
+                                    yield Ok(create_v1_error_event(&invocation_id, &agent_name, &error.to_string()));
+                                    break 'events;
+                                }
+                            }
+                        }
+                        yield Ok(event);
+                    }
+                }
+
+                // After the turn: the run's plugins, then the agent's own callbacks.
+                for plugin in &plugins {
+                    match plugin.after_agent(callback_ctx.clone()).await {
+                        Ok(Some(content)) => { yield Ok(answer(content)); return; }
+                        Ok(None) => {}
+                        Err(error) => { yield Err(error); return; }
+                    }
+                }
+                for callback in &hooks.after_agent {
+                    match callback(callback_ctx.clone()).await {
+                        Ok(Some(content)) => { yield Ok(answer(content)); return; }
+                        Ok(None) => {}
+                        Err(error) => { yield Err(error); return; }
+                    }
+                }
+            };
+            Ok(Box::pin(stream))
+        }
+    }
+
+    impl RemoteA2aV1Agent {
+        /// The agent's turn with the remote, without its agent callbacks: see
+        /// [`Agent::run`].
+        fn turn(&self, ctx: Arc<dyn InvocationContext>) -> EventStream {
+            let card = self.config.agent_card.clone();
+            let hooks = self.config.hooks.clone();
+            let invocation_id = ctx.invocation_id().to_string();
+            let agent_name = self.config.name.clone();
+            let branch = ctx.branch().to_string();
             let broker = self.config.credential_broker.clone();
             let scopes = self.config.credential_scopes.clone();
+            let send_configuration = self.config.send_configuration.clone();
             let acting = ctx.acting_context();
+            // As adk-go: stream when the run streams and the card says the agent can; a
+            // configured `streaming` overrides the run, never the card.
+            let run_streams = ctx.run_config().streaming_mode != adk_core::StreamingMode::None;
+            let streaming = self.config.streaming.unwrap_or(run_streams);
 
             // The remote conversation this agent continues, and a remote task waiting on it.
             let keys = RemoteKeys::for_agent(&agent_name);
             let state = ctx.session().state();
             let remote_context = state.get(&keys.context_id).and_then(string_value);
             let remote_task = state.get(&keys.task_id).and_then(string_value);
-            let parts = outgoing_parts(ctx.as_ref(), &agent_name);
+            let outgoing = outgoing_turn(ctx.as_ref(), &agent_name, hooks.to_wire_part.as_ref());
+            let turn_ctx = ctx.clone();
 
             let stream = async_stream::stream! {
+                // The card for this turn: from the provider, when the agent has one.
+                let card = match &hooks.card_provider {
+                    Some(provider) => match provider().await {
+                        Ok(card) => card,
+                        Err(e) => {
+                            yield Ok(create_v1_error_event(&invocation_id, &agent_name, &format!("agent card resolution failed: {e}")));
+                            return;
+                        }
+                    },
+                    None => card,
+                };
+                let use_streaming = streaming && card.capabilities.streaming == Some(true);
+
+                // Nothing new for the remote since its last reply: no request, as adk-go.
+                if outgoing.parts.is_empty() {
+                    let mut event = Event::new(invocation_id.clone());
+                    event.author = agent_name.clone();
+                    event.branch = branch.clone();
+                    yield Ok(event);
+                    return;
+                }
+
                 // Verify we have a usable interface
                 let interface = match Self::select_interface(&card) {
                     Some(i) => i.clone(),
@@ -642,8 +936,15 @@ pub mod v1_remote {
                     }
                 };
 
-                // Build a card with the selected interface for the client
-                let mut client = A2aV1Client::new(card.clone());
+                // A SendMessage that times out may still have started a task, so it is never
+                // sent twice: no automatic retries, as adk-go.
+                let mut client = A2aV1Client::with_retry(
+                    card.clone(),
+                    crate::a2a::client::v1_client::RetryConfig {
+                        max_retries: 0,
+                        ..Default::default()
+                    },
+                );
                 if let Some(broker) = broker.as_deref() {
                     match super::brokered_token(broker, &acting, &interface.url, &scopes).await {
                         Ok(token) => client = client.with_credential(token),
@@ -654,19 +955,39 @@ pub mod v1_remote {
                     }
                 }
 
-                // Determine if we should use streaming
-                let use_streaming = config_streaming.unwrap_or(card.capabilities.streaming.unwrap_or(false));
+                let client = Arc::new(client);
+                let rest = interface.protocol_binding == "HTTP+JSON";
+                // Cancels the remote task if the turn ends before the task does.
+                let mut cleanup =
+                    RemoteTaskCleanupGuard::new(client.clone(), rest, hooks.remote_task_cleanup.clone());
 
-                let message = build_v1_message(parts, remote_context, remote_task);
+                // The waiting remote task continues only with an answer to one of its calls;
+                // any other message starts a new task in the same context.
+                let task_id = remote_task.filter(|_| outgoing.answers_own_call);
+                let mut message = build_v1_message(outgoing.parts, remote_context, task_id);
+                for callback in &hooks.before_request {
+                    match callback(turn_ctx.as_ref(), &mut message) {
+                        Ok(Some(event)) => {
+                            yield Ok(event);
+                            return;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            yield Ok(create_v1_error_event(&invocation_id, &agent_name, &e.to_string()));
+                            return;
+                        }
+                    }
+                }
 
                 if use_streaming {
                     // The remote's updates as they arrive. A stream that stops before a final
                     // status is reported as an error.
-                    match client.stream_message(message).await {
+                    match client.stream_message_with(message, send_configuration.as_ref()).await {
                         Ok(mut updates) => {
                             use futures::StreamExt;
 
                             let mut finished = false;
+                            let mut remote = RemoteEvents::new(&invocation_id, &agent_name).with_hooks(&hooks);
                             while let Some(update) = updates.next().await {
                                 let stream_response = match update {
                                     Ok(update) => update,
@@ -675,18 +996,22 @@ pub mod v1_remote {
                                         return;
                                     }
                                 };
+                                cleanup.observe(&stream_response);
                                 if ends_stream(&stream_response) {
                                     finished = true;
-                                    yield Ok(final_event(&stream_response, &invocation_id, &agent_name, &keys));
+                                    let mut events = remote.handle(&stream_response);
+                                    let last = events.pop().unwrap_or_else(|| remote.new_event());
+                                    for event in events {
+                                        yield Ok(event);
+                                    }
+                                    yield Ok(end_turn(last, &stream_response, &keys));
                                     // The server closes the stream here (A2A §3.1.2). Read to its
                                     // end so the connection closes cleanly, but not for long.
                                     let drain = async { while updates.next().await.is_some() {} };
                                     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), drain).await;
                                     break;
                                 }
-                                if let Some(event) =
-                                    convert_stream_response(&stream_response, &invocation_id, &agent_name)
-                                {
+                                for event in remote.handle(&stream_response) {
                                     yield Ok(event);
                                 }
                             }
@@ -709,64 +1034,27 @@ pub mod v1_remote {
                     }
                 } else {
                     // Send non-streaming message, over the binding the card offers.
-                    let sent = if interface.protocol_binding == "HTTP+JSON" {
-                        client.send_message_rest(message).await
+                    let sent = if rest {
+                        client.send_message_rest_with(message, send_configuration.as_ref()).await
                     } else {
-                        client.send_message(message).await
+                        client.send_message_with(message, send_configuration.as_ref()).await
                     };
                     match sent {
                         Ok(SendMessageResponse::Message(reply)) => {
                             // The agent answered directly, without a task.
                             let resp = a2a_protocol_types::events::StreamResponse::Message(reply);
-                            yield Ok(final_event(&resp, &invocation_id, &agent_name, &keys));
+                            cleanup.observe(&resp);
+                            let mut remote = RemoteEvents::new(&invocation_id, &agent_name).with_hooks(&hooks);
+                            let event = remote.handle(&resp).pop().unwrap_or_else(|| remote.new_event());
+                            yield Ok(end_turn(event, &resp, &keys));
                         }
                         Ok(SendMessageResponse::Task(task)) => {
-                            // Yield events for artifacts
-                            if let Some(artifacts) = task.artifacts {
-                                for artifact in artifacts {
-                                    let resp = a2a_protocol_types::events::StreamResponse::ArtifactUpdate(
-                                        a2a_protocol_types::events::TaskArtifactUpdateEvent {
-                                            task_id: task.id.clone(),
-                                            context_id: task.context_id.clone(),
-                                            artifact,
-                                            append: Some(false),
-                                            last_chunk: Some(true),
-                                            metadata: None,
-                                        }
-                                    );
-                                    if let Some(event) = convert_stream_response(&resp, &invocation_id, &agent_name) {
-                                        yield Ok(event);
-                                    }
-                                }
-                            }
-
-                            // Yield events for history (agent messages)
-                            if let Some(history) = task.history {
-                                for msg in history {
-                                    if msg.role == a2a_protocol_types::MessageRole::Agent {
-                                        let text_parts = response_parts(&msg.parts, false);
-
-                                        if !text_parts.is_empty() {
-                                            let mut event = Event::new(invocation_id.clone());
-                                            event.author = agent_name.clone();
-                                            event.llm_response.content = Some(Content { role: "model".to_string(), parts: text_parts });
-                                            event.llm_response.turn_complete = false;
-                                            yield Ok(event);
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Yield final status event
-                            let resp = a2a_protocol_types::events::StreamResponse::StatusUpdate(
-                                a2a_protocol_types::events::TaskStatusUpdateEvent {
-                                    task_id: task.id,
-                                    context_id: task.context_id,
-                                    status: task.status,
-                                    metadata: None,
-                                }
-                            );
-                            yield Ok(final_event(&resp, &invocation_id, &agent_name, &keys));
+                            // One event for the task: its artifacts and status message.
+                            let resp = a2a_protocol_types::events::StreamResponse::Task(task);
+                            cleanup.observe(&resp);
+                            let mut remote = RemoteEvents::new(&invocation_id, &agent_name).with_hooks(&hooks);
+                            let event = remote.handle(&resp).pop().unwrap_or_else(|| remote.new_event());
+                            yield Ok(end_turn(event, &resp, &keys));
                         }
                         Ok(_) => {
                             yield Ok(create_v1_error_event(
@@ -786,7 +1074,7 @@ pub mod v1_remote {
                 }
             };
 
-            Ok(Box::pin(stream))
+            Box::pin(stream)
         }
     }
 
@@ -811,26 +1099,144 @@ pub mod v1_remote {
         value.as_str().filter(|s| !s.is_empty()).map(str::to_string)
     }
 
-    /// What this turn sends: the session since this agent's last reply (the person's
-    /// messages, and other agents' turns as the context the session renders them as), or
-    /// the turn's own user content when the session holds none. Each part goes out in the
-    /// shape every A2A v1 SDK reads; see [`outgoing_part`].
-    fn outgoing_parts(
+    /// What one turn sends the remote agent.
+    struct OutgoingTurn {
+        parts: Vec<a2a_protocol_types::Part>,
+        /// Whether the turn answers a call the remote made through this agent, which
+        /// continues the remote task waiting on it.
+        answers_own_call: bool,
+    }
+
+    /// What this turn sends, as adk-go's remote agent builds it: the session since this
+    /// agent's last reply (the person's messages, and other agents' turns as the context the
+    /// session renders them as). An answer to a call the remote made through this agent goes
+    /// as a function response; any other function response goes as the text
+    /// `Tool <name> returned: <json>`, since the remote never asked for it. With nothing new
+    /// since the last reply the turn is empty, and the turn's own user content seeds it only
+    /// when the session holds nothing for this agent yet. Each part goes out in the shape
+    /// every A2A v1 SDK reads; see [`outgoing_part`].
+    fn outgoing_turn(
         ctx: &dyn InvocationContext,
         agent_name: &str,
-    ) -> Vec<a2a_protocol_types::Part> {
+        to_wire: Option<&ToWirePart>,
+    ) -> OutgoingTurn {
+        let outgoing_part = |part: &Part| match to_wire {
+            Some(convert) => convert(part).ok().flatten(),
+            None => outgoing_part(part),
+        };
         let history = ctx.session().conversation_history_with_context(agent_name, ctx.branch());
         let since_reply =
             history.iter().rposition(|content| content.role == "model").map_or(0, |i| i + 1);
-        let mut parts: Vec<_> = history[since_reply..]
+        // This agent's own turns are the history's model contents (other agents' turns are
+        // rendered as context): the calls in them are the ones the remote made.
+        let own_calls: std::collections::HashSet<String> = history
             .iter()
+            .filter(|content| content.role == "model")
             .flat_map(|content| &content.parts)
-            .filter_map(outgoing_part)
+            .filter_map(|part| match part {
+                Part::FunctionCall { id: Some(id), .. } => Some(id.clone()),
+                _ => None,
+            })
             .collect();
-        if parts.is_empty() {
+        let mut answers_own_call = false;
+        let mut parts = Vec::new();
+        for part in history[since_reply..].iter().flat_map(|content| &content.parts) {
+            match part {
+                Part::FunctionResponse { function_response, id, .. }
+                    if !id.as_ref().is_some_and(|id| own_calls.contains(id)) =>
+                {
+                    let result = serde_json::to_string(&function_response.response)
+                        .unwrap_or_else(|_| "<unserializable>".to_string());
+                    let name = if function_response.name.is_empty() {
+                        "<unnamed>"
+                    } else {
+                        function_response.name.as_str()
+                    };
+                    parts.push(a2a_protocol_types::Part::text(format!(
+                        "Tool {name} returned: {result}"
+                    )));
+                }
+                Part::FunctionResponse { .. } => {
+                    answers_own_call = true;
+                    parts.extend(outgoing_part(part));
+                }
+                other => parts.extend(outgoing_part(other)),
+            }
+        }
+        if parts.is_empty() && history.is_empty() {
             parts = ctx.user_content().parts.iter().filter_map(outgoing_part).collect();
         }
-        parts
+        OutgoingTurn { parts, answers_own_call }
+    }
+
+    /// Cancels the remote task a turn started when the turn ends before the task does: the
+    /// caller stopped reading, the stream broke, or the remote returned a task still at work.
+    /// A task that ended, or waits on this side, is left alone. The cancel runs on its own
+    /// for at most 5 seconds, as adk-go's remote agent sends it.
+    struct RemoteTaskCleanupGuard {
+        client: Arc<A2aV1Client>,
+        rest: bool,
+        task_id: Option<String>,
+        settled: bool,
+        custom: Option<RemoteTaskCleanup>,
+    }
+
+    impl RemoteTaskCleanupGuard {
+        fn new(client: Arc<A2aV1Client>, rest: bool, custom: Option<RemoteTaskCleanup>) -> Self {
+            Self { client, rest, task_id: None, settled: false, custom }
+        }
+
+        /// Records the remote task an update names, and whether it ended or waits.
+        fn observe(&mut self, response: &a2a_protocol_types::events::StreamResponse) {
+            use a2a_protocol_types::events::StreamResponse;
+            let (task_id, state) = match response {
+                StreamResponse::Task(task) => (Some(&task.id.0), Some(task.status.state)),
+                StreamResponse::StatusUpdate(update) => {
+                    (Some(&update.task_id.0), Some(update.status.state))
+                }
+                StreamResponse::ArtifactUpdate(update) => (Some(&update.task_id.0), None),
+                StreamResponse::Message(_) => {
+                    self.settled = true;
+                    (None, None)
+                }
+                _ => (None, None),
+            };
+            if let Some(task_id) = task_id {
+                self.task_id = Some(task_id.clone());
+            }
+            if state.is_some_and(is_final_state) {
+                self.settled = true;
+            }
+        }
+    }
+
+    impl Drop for RemoteTaskCleanupGuard {
+        fn drop(&mut self) {
+            if self.settled {
+                return;
+            }
+            let Some(task_id) = self.task_id.take() else { return };
+            let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
+            if let Some(custom) = self.custom.clone() {
+                runtime.spawn(custom(task_id));
+                return;
+            }
+            let (client, rest) = (self.client.clone(), self.rest);
+            runtime.spawn(async move {
+                let cancel = async {
+                    if rest {
+                        client.cancel_task_rest(&task_id).await.map(drop)
+                    } else {
+                        client.cancel_task(&task_id).await.map(drop)
+                    }
+                };
+                match tokio::time::timeout(std::time::Duration::from_secs(5), cancel).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => tracing::warn!(%task_id, %error, "failed to cancel task"),
+                    Err(_) => tracing::warn!(%task_id, "failed to cancel task: timed out"),
+                }
+            });
+        }
     }
 
     /// An ADK part as A2A sends it:
@@ -848,6 +1254,13 @@ pub mod v1_remote {
         match part {
             Part::Text { text } if !text.trim().is_empty() => {
                 Some(a2a_protocol_types::Part::text(text.clone()))
+            }
+            Part::Thinking { thinking, .. } if !thinking.trim().is_empty() => {
+                let mut wire = a2a_protocol_types::Part::text(thinking.clone());
+                wire.metadata = Some(
+                    serde_json::json!({ crate::a2a::v1::convert::ADK_THOUGHT_METADATA_KEY: true }),
+                );
+                Some(wire)
             }
             Part::FunctionCall { name, args, id, .. } => {
                 Some(tagged_function_call_part(name, args, id.as_deref(), false))
@@ -883,42 +1296,551 @@ pub mod v1_remote {
         }
     }
 
-    /// The ADK parts of a remote reply: text, inline data, files, and untyped data as the
-    /// text the server marks it with. `with_calls` also keeps tagged function calls and
-    /// responses, which a remote names when it waits on a long-running call.
-    fn response_parts(parts: &[a2a_protocol_types::Part], with_calls: bool) -> Vec<Part> {
+    /// Turns one remote turn's A2A events into ADK events, as adk-go's remote agent does
+    /// (`adka2a.ToSessionEvent` and its run processor):
+    ///
+    /// - an artifact update is a model event with every part of the artifact, partial when
+    ///   the server marks it `adk_partial`, otherwise when it appends or is not the last
+    ///   chunk (`lastChunk` absent means false, as A2A servers omit it); the server's reset
+    ///   of its temporary partial artifact (`adk_partial` with `lastChunk`) is dropped;
+    /// - chunks without `adk_partial` are joined per artifact into one complete event when
+    ///   their last chunk or the terminal status arrives, so the session keeps the whole
+    ///   answer; a `Task` snapshot starts over;
+    /// - a status message before the task ends is the remote's reasoning: partial thoughts;
+    /// - a final status carries its message, the calls the remote waits on as long-running
+    ///   calls, and for `FAILED` the error text (the first part, marked
+    ///   `adk_is_error_message`, or `a2a task failed`);
+    /// - every event carries the remote task and context (`a2a:task_id`,
+    ///   `a2a:context_id` in its metadata), and the update's `adk_escalate`,
+    ///   `adk_error_code`, usage, citations and custom metadata.
+    struct RemoteEvents {
+        invocation_id: String,
+        agent_name: String,
+        /// Chunks joined by artifact ID, in the order they were last updated.
+        aggregations: Vec<(String, Aggregation)>,
+        converter: Option<EventConverter>,
+        from_wire: Option<FromWirePart>,
+        allow_transfer: bool,
+    }
+
+    #[derive(Default)]
+    struct Aggregation {
+        parts: Vec<Part>,
+        citations: Vec<adk_core::CitationSource>,
+        custom: std::collections::HashMap<String, String>,
+        usage: Option<adk_core::UsageMetadata>,
+    }
+
+    impl RemoteEvents {
+        fn new(invocation_id: &str, agent_name: &str) -> Self {
+            Self {
+                invocation_id: invocation_id.to_string(),
+                agent_name: agent_name.to_string(),
+                aggregations: Vec::new(),
+                converter: None,
+                from_wire: None,
+                allow_transfer: false,
+            }
+        }
+
+        /// Converts as `hooks` say: their event and part converters, and transfers.
+        fn with_hooks(mut self, hooks: &RemoteAgentHooks) -> Self {
+            self.converter = hooks.event_converter.clone();
+            self.from_wire = hooks.from_wire_part.clone();
+            self.allow_transfer = hooks.allow_transfer_to_agent;
+            self
+        }
+
+        /// The ADK events `response` produces, in order.
+        fn handle(&mut self, response: &a2a_protocol_types::events::StreamResponse) -> Vec<Event> {
+            use a2a_protocol_types::events::StreamResponse;
+            let event = match &self.converter {
+                Some(convert) => match convert(response) {
+                    Ok(event) => event,
+                    Err(error) => Some(create_v1_error_event(
+                        &self.invocation_id,
+                        &self.agent_name,
+                        &format!("failed to convert a2aEvent: {error}"),
+                    )),
+                },
+                None => self.to_event(response),
+            };
+            let event = event.map(|mut event| {
+                if self.allow_transfer
+                    && let Some(agent) = transfer_target(response)
+                {
+                    event.actions.transfer_to_agent = Some(agent);
+                }
+                event
+            });
+            if partial_flag(response).is_some() {
+                return event.into_iter().collect();
+            }
+            match response {
+                StreamResponse::StatusUpdate(update) if is_final_state(update.status.state) => {
+                    let mut events: Vec<Event> = std::mem::take(&mut self.aggregations)
+                        .into_iter()
+                        .map(|(_, aggregation)| self.joined(aggregation))
+                        .collect();
+                    events.extend(event);
+                    events
+                }
+                StreamResponse::Task(_) => {
+                    self.aggregations.clear();
+                    event.into_iter().collect()
+                }
+                StreamResponse::ArtifactUpdate(update) => {
+                    let Some(mut event) = event else { return Vec::new() };
+                    let id = update.artifact.id.0.clone();
+                    let last_chunk = update.last_chunk.unwrap_or(false);
+                    if update.append != Some(true) {
+                        self.aggregations.retain(|(existing, _)| *existing != id);
+                        if last_chunk {
+                            event.llm_response.partial = false;
+                            return vec![event];
+                        }
+                    }
+                    let mut aggregation = self
+                        .aggregations
+                        .iter()
+                        .position(|(existing, _)| *existing == id)
+                        .map(|index| self.aggregations.remove(index).1)
+                        .unwrap_or_default();
+                    aggregate(&mut aggregation, &event);
+                    if !last_chunk {
+                        self.aggregations.push((id, aggregation));
+                        return vec![event];
+                    }
+                    let joined = self.joined(aggregation);
+                    vec![event, joined]
+                }
+                _ => event.into_iter().collect(),
+            }
+        }
+
+        fn joined(&self, aggregation: Aggregation) -> Event {
+            let mut event = self.new_event();
+            event.llm_response.content =
+                Some(Content { role: "model".to_string(), parts: aggregation.parts });
+            if !aggregation.citations.is_empty() {
+                event.llm_response.citation_metadata =
+                    Some(adk_core::CitationMetadata { citation_sources: aggregation.citations });
+            }
+            event.llm_response.usage_metadata = aggregation.usage;
+            event.provider_metadata = aggregation.custom;
+            event
+        }
+
+        fn new_event(&self) -> Event {
+            let mut event = Event::new(self.invocation_id.clone());
+            event.author = self.agent_name.clone();
+            event
+        }
+
+        /// The event one A2A update stands for, if any (adk-go's `ToSessionEvent`).
+        fn to_event(&self, response: &a2a_protocol_types::events::StreamResponse) -> Option<Event> {
+            use a2a_protocol_types::events::StreamResponse;
+            use a2a_protocol_types::task::TaskState;
+            match response {
+                StreamResponse::Task(task) => {
+                    let mut parts = Vec::new();
+                    for artifact in task.artifacts.iter().flatten() {
+                        parts.extend(adk_parts(&artifact.parts, self.from_wire.as_ref()));
+                    }
+                    let status = status_message(
+                        task.status.state,
+                        task.status.message.as_ref(),
+                        self.from_wire.as_ref(),
+                    );
+                    parts.extend(status.parts);
+                    let final_state = is_final_state(task.status.state);
+                    if parts.is_empty() && !final_state {
+                        return None;
+                    }
+                    let mut event = self.new_event();
+                    if !parts.is_empty() {
+                        if waits(task.status.state) {
+                            event.long_running_tool_ids =
+                                long_running_ids(&parts, &task_parts(task));
+                        }
+                        event.llm_response.content =
+                            Some(Content { role: "model".to_string(), parts });
+                    }
+                    event.llm_response.error_message = status.error;
+                    apply_metadata(
+                        &mut event,
+                        task.metadata.as_ref(),
+                        None,
+                        Some((&task.id.0, &task.context_id.0)),
+                    );
+                    event.llm_response.turn_complete = final_state;
+                    Some(event)
+                }
+                StreamResponse::Message(message) => {
+                    let parts = adk_parts(&message.parts, self.from_wire.as_ref());
+                    let mut event = self.new_event();
+                    if !parts.is_empty() {
+                        let role = if message.role == a2a_protocol_types::MessageRole::User {
+                            "user"
+                        } else {
+                            "model"
+                        };
+                        event.llm_response.content =
+                            Some(Content { role: role.to_string(), parts });
+                    }
+                    let ids = message
+                        .task_id
+                        .as_ref()
+                        .map(|t| t.0.as_str())
+                        .zip(message.context_id.as_ref().map(|c| c.0.as_str()));
+                    apply_metadata(&mut event, message.metadata.as_ref(), None, ids);
+                    event.llm_response.turn_complete = true;
+                    Some(event)
+                }
+                StreamResponse::ArtifactUpdate(update) => {
+                    let partial_flag = partial_flag(response);
+                    let last_chunk = update.last_chunk.unwrap_or(false);
+                    if update.artifact.parts.is_empty()
+                        || (partial_flag == Some(true) && last_chunk)
+                    {
+                        return None;
+                    }
+                    let parts = adk_parts(&update.artifact.parts, self.from_wire.as_ref());
+                    if parts.is_empty() {
+                        return None;
+                    }
+                    let mut event = self.new_event();
+                    event.long_running_tool_ids = long_running_ids(&parts, &update.artifact.parts);
+                    event.llm_response.content = Some(Content { role: "model".to_string(), parts });
+                    apply_metadata(
+                        &mut event,
+                        update.metadata.as_ref(),
+                        update.artifact.metadata.as_ref(),
+                        Some((&update.task_id.0, &update.context_id.0)),
+                    );
+                    event.llm_response.partial =
+                        partial_flag.unwrap_or(update.append == Some(true) || !last_chunk);
+                    Some(event)
+                }
+                StreamResponse::StatusUpdate(update) => {
+                    let ids = Some((update.task_id.0.as_str(), update.context_id.0.as_str()));
+                    if is_final_state(update.status.state) {
+                        let status = status_message(
+                            update.status.state,
+                            update.status.message.as_ref(),
+                            self.from_wire.as_ref(),
+                        );
+                        let mut event = self.new_event();
+                        let wire_parts = update
+                            .status
+                            .message
+                            .as_ref()
+                            .map(|m| m.parts.clone())
+                            .unwrap_or_default();
+                        event.long_running_tool_ids = long_running_ids(&status.parts, &wire_parts);
+                        if !status.parts.is_empty() {
+                            event.llm_response.content =
+                                Some(Content { role: "model".to_string(), parts: status.parts });
+                        }
+                        event.llm_response.error_message = status.error;
+                        apply_metadata(&mut event, update.metadata.as_ref(), None, ids);
+                        event.llm_response.turn_complete = true;
+                        return Some(event);
+                    }
+                    let message = update.status.message.as_ref()?;
+                    let mut parts = adk_parts(&message.parts, self.from_wire.as_ref());
+                    if parts.is_empty() {
+                        return None;
+                    }
+                    // Progress the remote reports while it works is its reasoning.
+                    for part in &mut parts {
+                        if let Part::Text { text } = part {
+                            *part =
+                                Part::Thinking { thinking: std::mem::take(text), signature: None };
+                        }
+                    }
+                    let mut event = self.new_event();
+                    event.llm_response.content = Some(Content { role: "model".to_string(), parts });
+                    apply_metadata(&mut event, update.metadata.as_ref(), None, ids);
+                    event.llm_response.partial = true;
+                    event.llm_response.turn_complete = false;
+                    let _ = TaskState::Working;
+                    Some(event)
+                }
+                _ => None,
+            }
+        }
+    }
+
+    /// The `adk_partial` flag of an update, when the server set one.
+    fn partial_flag(response: &a2a_protocol_types::events::StreamResponse) -> Option<bool> {
+        use a2a_protocol_types::events::StreamResponse;
+        let metadata = match response {
+            StreamResponse::ArtifactUpdate(update) => update.metadata.as_ref(),
+            StreamResponse::StatusUpdate(update) => update.metadata.as_ref(),
+            StreamResponse::Task(task) => task.metadata.as_ref(),
+            StreamResponse::Message(message) => message.metadata.as_ref(),
+            _ => None,
+        };
+        metadata
+            .and_then(|metadata| metadata.get(crate::a2a::v1::convert::ADK_PARTIAL_METADATA_KEY))
+            .and_then(serde_json::Value::as_bool)
+    }
+
+    /// Adds `event`'s content and metadata to a chunk aggregation: adjacent text of the same
+    /// kind (answer or thought) joins into one part.
+    fn aggregate(aggregation: &mut Aggregation, event: &Event) {
+        for part in event.content().into_iter().flat_map(|content| &content.parts) {
+            match (part, aggregation.parts.last_mut()) {
+                (Part::Text { text }, Some(Part::Text { text: last })) => last.push_str(text),
+                (Part::Thinking { thinking, .. }, Some(Part::Thinking { thinking: last, .. })) => {
+                    last.push_str(thinking);
+                }
+                (part, _) => aggregation.parts.push(part.clone()),
+            }
+        }
+        if let Some(citations) = &event.llm_response.citation_metadata {
+            aggregation.citations.extend(citations.citation_sources.iter().cloned());
+        }
+        aggregation.custom.extend(event.provider_metadata.clone());
+        if event.llm_response.usage_metadata.is_some() {
+            aggregation.usage = event.llm_response.usage_metadata.clone();
+        }
+    }
+
+    /// The agent an update transfers to (`adk_transfer_to_agent` in its own metadata).
+    fn transfer_target(response: &a2a_protocol_types::events::StreamResponse) -> Option<String> {
+        use a2a_protocol_types::events::StreamResponse;
+        let metadata = match response {
+            StreamResponse::ArtifactUpdate(update) => update.metadata.as_ref(),
+            StreamResponse::StatusUpdate(update) => update.metadata.as_ref(),
+            StreamResponse::Task(task) => task.metadata.as_ref(),
+            StreamResponse::Message(message) => message.metadata.as_ref(),
+            _ => None,
+        };
+        metadata
+            .and_then(|meta| {
+                meta.get(crate::a2a::v1::processor::ADK_TRANSFER_TO_AGENT_METADATA_KEY)
+            })
+            .and_then(serde_json::Value::as_str)
+            .filter(|agent| !agent.is_empty())
+            .map(str::to_owned)
+    }
+
+    /// Whether a task in `state` ends the remote turn: it ended, or it waits on its caller.
+    fn is_final_state(state: a2a_protocol_types::task::TaskState) -> bool {
+        use a2a_protocol_types::task::TaskState;
+        matches!(
+            state,
+            TaskState::Completed
+                | TaskState::Failed
+                | TaskState::Canceled
+                | TaskState::Rejected
+                | TaskState::InputRequired
+                | TaskState::AuthRequired
+        )
+    }
+
+    fn waits(state: a2a_protocol_types::task::TaskState) -> bool {
+        matches!(
+            state,
+            a2a_protocol_types::task::TaskState::InputRequired
+                | a2a_protocol_types::task::TaskState::AuthRequired
+        )
+    }
+
+    /// The ADK parts of A2A parts, without the ones that cannot be read and empty text.
+    fn adk_parts(
+        parts: &[a2a_protocol_types::Part],
+        from_wire: Option<&FromWirePart>,
+    ) -> Vec<Part> {
         parts
             .iter()
-            .filter_map(|part| crate::a2a::v1::convert::wire_part_to_adk(part).ok())
-            .filter(|part| {
-                with_calls
-                    || !matches!(part, Part::FunctionCall { .. } | Part::FunctionResponse { .. })
+            .filter_map(|part| match from_wire {
+                Some(convert) => convert(part).ok().flatten(),
+                None => crate::a2a::v1::convert::wire_part_to_adk(part).ok(),
             })
             .filter(|part| !matches!(part, Part::Text { text } if text.is_empty()))
             .collect()
     }
 
-    /// The event for the response that ends a remote turn: its content, the remote calls
-    /// it waits on as long-running calls, and the remote conversation saved in session state
-    /// for the next turn. The remote task is kept only while it waits on this side.
-    fn final_event(
+    /// The wire parts of a task's artifacts and status message, in the order
+    /// [`RemoteEvents::to_event`] converts them.
+    fn task_parts(task: &a2a_protocol_types::Task) -> Vec<a2a_protocol_types::Part> {
+        let mut parts: Vec<_> =
+            task.artifacts.iter().flatten().flat_map(|artifact| artifact.parts.clone()).collect();
+        parts.extend(task.status.message.iter().flat_map(|message| message.parts.clone()));
+        parts
+    }
+
+    /// The IDs of the calls among `parts` that the server marks `adk_is_long_running`.
+    fn long_running_ids(parts: &[Part], wire: &[a2a_protocol_types::Part]) -> Vec<String> {
+        let marked: std::collections::HashSet<String> = wire
+            .iter()
+            .filter(|part| {
+                part.metadata
+                    .as_ref()
+                    .and_then(|meta| {
+                        meta.get(crate::a2a::v1::convert::ADK_LONG_RUNNING_METADATA_KEY)
+                    })
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+            })
+            .filter_map(|part| match &part.content {
+                a2a_protocol_types::PartContent::Data(data) => {
+                    data.get("id").and_then(serde_json::Value::as_str).map(str::to_owned)
+                }
+                _ => None,
+            })
+            .collect();
+        parts
+            .iter()
+            .filter_map(|part| match part {
+                Part::FunctionCall { id: Some(id), .. } if marked.contains(id) => Some(id.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A status message's content, and the error text of a `FAILED` status.
+    struct StatusMessage {
+        parts: Vec<Part>,
+        error: Option<String>,
+    }
+
+    fn status_message(
+        state: a2a_protocol_types::task::TaskState,
+        message: Option<&a2a_protocol_types::Message>,
+        from_wire: Option<&FromWirePart>,
+    ) -> StatusMessage {
+        let failed = state == a2a_protocol_types::task::TaskState::Failed;
+        let Some(message) = message else {
+            return StatusMessage {
+                parts: Vec::new(),
+                error: failed.then(|| "a2a task failed".to_string()),
+            };
+        };
+        let mut wire = message.parts.as_slice();
+        let mut error = None;
+        if failed
+            && let Some(first) = wire.first()
+            && let Some(text) = first.text_content().filter(|t| !t.is_empty())
+        {
+            error = Some(text.to_string());
+            let marked = first
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get(crate::a2a::v1::convert::ADK_ERROR_MESSAGE_METADATA_KEY))
+                .and_then(serde_json::Value::as_bool)
+                == Some(true);
+            if marked {
+                wire = &wire[1..];
+            }
+        }
+        if failed && error.is_none() {
+            error = Some("a2a task failed".to_string());
+        }
+        StatusMessage { parts: adk_parts(wire, from_wire), error }
+    }
+
+    /// Reads an update's ADK metadata into `event`, as adk-go's `processA2AMeta`: the
+    /// artifact's metadata over the update's, then citations, usage, custom metadata (with
+    /// the remote task and context as `a2a:task_id` and `a2a:context_id`), the error code,
+    /// and escalation from the update's own metadata.
+    fn apply_metadata(
+        event: &mut Event,
+        update_meta: Option<&serde_json::Value>,
+        artifact_meta: Option<&serde_json::Value>,
+        ids: Option<(&str, &str)>,
+    ) {
+        use crate::a2a::v1::processor::{
+            ADK_CITATION_METADATA_KEY, ADK_CUSTOM_METADATA_KEY, ADK_ERROR_CODE_METADATA_KEY,
+            ADK_ESCALATE_METADATA_KEY, ADK_USAGE_METADATA_KEY,
+        };
+        let mut meta =
+            update_meta.and_then(serde_json::Value::as_object).cloned().unwrap_or_default();
+        if let Some(artifact) = artifact_meta.and_then(serde_json::Value::as_object) {
+            meta.extend(artifact.clone());
+        }
+        if let Some(citations) = meta
+            .get(ADK_CITATION_METADATA_KEY)
+            .and_then(|c| c.get("citations"))
+            .and_then(serde_json::Value::as_array)
+        {
+            let sources = citations
+                .iter()
+                .map(|citation| {
+                    let text = |key: &str| {
+                        citation.get(key).and_then(serde_json::Value::as_str).map(str::to_owned)
+                    };
+                    let index = |key: &str| {
+                        citation.get(key).and_then(serde_json::Value::as_i64).map(|v| v as i32)
+                    };
+                    adk_core::CitationSource {
+                        uri: text("uri"),
+                        title: text("title"),
+                        start_index: index("startIndex"),
+                        end_index: index("endIndex"),
+                        license: text("license"),
+                        publication_date: text("publicationDate"),
+                    }
+                })
+                .collect();
+            event.llm_response.citation_metadata =
+                Some(adk_core::CitationMetadata { citation_sources: sources });
+        }
+        if let Some(usage) = meta.get(ADK_USAGE_METADATA_KEY) {
+            let count =
+                |key: &str| usage.get(key).and_then(serde_json::Value::as_i64).map(|v| v as i32);
+            event.llm_response.usage_metadata = Some(adk_core::UsageMetadata {
+                prompt_token_count: count("promptTokenCount").unwrap_or_default(),
+                candidates_token_count: count("candidatesTokenCount").unwrap_or_default(),
+                total_token_count: count("totalTokenCount").unwrap_or_default(),
+                cache_read_input_token_count: count("cachedContentTokenCount"),
+                thinking_token_count: count("thoughtsTokenCount"),
+                ..Default::default()
+            });
+        }
+        if let Some((task_id, context_id)) = ids {
+            event.provider_metadata.insert(A2A_TASK_ID_KEY.to_string(), task_id.to_string());
+            event.provider_metadata.insert(A2A_CONTEXT_ID_KEY.to_string(), context_id.to_string());
+        }
+        if let Some(custom) =
+            meta.get(ADK_CUSTOM_METADATA_KEY).and_then(serde_json::Value::as_object)
+        {
+            for (key, value) in custom {
+                let value = value.as_str().map_or_else(|| value.to_string(), str::to_owned);
+                event.provider_metadata.insert(key.clone(), value);
+            }
+        }
+        if let Some(code) =
+            meta.get(ADK_ERROR_CODE_METADATA_KEY).and_then(serde_json::Value::as_str)
+        {
+            event.llm_response.error_code = Some(code.to_string());
+        }
+        let escalate = update_meta
+            .and_then(|meta| meta.get(ADK_ESCALATE_METADATA_KEY))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+        event.actions.escalate = escalate;
+    }
+
+    /// Event metadata key of the remote task an event came from, as adk-go names it.
+    pub const A2A_TASK_ID_KEY: &str = "a2a:task_id";
+    /// Event metadata key of the remote context an event came from, as adk-go names it.
+    pub const A2A_CONTEXT_ID_KEY: &str = "a2a:context_id";
+
+    /// Ends a remote turn on `event`: saves the remote conversation in session state for
+    /// the next turn. The remote task is kept only while it waits on this side.
+    fn end_turn(
+        mut event: Event,
         resp: &a2a_protocol_types::events::StreamResponse,
-        invocation_id: &str,
-        agent_name: &str,
         keys: &RemoteKeys,
     ) -> Event {
         use a2a_protocol_types::events::StreamResponse;
-        use a2a_protocol_types::task::TaskState;
 
-        let mut event =
-            convert_stream_response(resp, invocation_id, agent_name).unwrap_or_else(|| {
-                let mut event = Event::new(invocation_id.to_string());
-                event.author = agent_name.to_string();
-                event
-            });
         event.llm_response.turn_complete = true;
-
-        let (context_id, task_id, waiting) = match resp {
+        let (context_id, task_id, state) = match resp {
             StreamResponse::StatusUpdate(update) => (
                 Some(update.context_id.0.clone()),
                 Some(update.task_id.0.clone()),
@@ -932,7 +1854,7 @@ pub mod v1_remote {
             }
             _ => (None, None, None),
         };
-        let waiting = matches!(waiting, Some(TaskState::InputRequired | TaskState::AuthRequired));
+        let waiting = state.is_some_and(waits);
         if let Some(context_id) = context_id {
             event.actions.state_delta.insert(keys.context_id.clone(), context_id.into());
         }
@@ -948,134 +1870,11 @@ pub mod v1_remote {
     /// in a state the task stops in.
     fn ends_stream(response: &a2a_protocol_types::events::StreamResponse) -> bool {
         use a2a_protocol_types::events::StreamResponse;
-        use a2a_protocol_types::task::TaskState;
-
-        let state = match response {
-            StreamResponse::StatusUpdate(update) => update.status.state,
-            StreamResponse::Task(task) => task.status.state,
-            StreamResponse::Message(_) => return true,
-            _ => return false,
-        };
-        matches!(
-            state,
-            TaskState::Completed
-                | TaskState::Failed
-                | TaskState::Canceled
-                | TaskState::Rejected
-                | TaskState::InputRequired
-                | TaskState::AuthRequired
-        )
-    }
-
-    /// The text parts of `parts`, as ADK parts; other kinds are dropped.
-    fn text_parts(parts: &[a2a_protocol_types::Part]) -> Vec<Part> {
-        use a2a_protocol_types::PartContent;
-        parts
-            .iter()
-            .filter_map(|p| match &p.content {
-                PartContent::Text(text) => Some(Part::Text { text: text.clone() }),
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// Converts a `StreamResponse` into an ADK `Event`.
-    ///
-    /// A `Failed` status's message is the remote error, so its text becomes the
-    /// event's `error_message` rather than model content. A direct `Message`
-    /// reply ends the turn with its text.
-    fn convert_stream_response(
-        resp: &a2a_protocol_types::events::StreamResponse,
-        invocation_id: &str,
-        agent_name: &str,
-    ) -> Option<Event> {
-        use a2a_protocol_types::events::StreamResponse;
-
-        match resp {
-            StreamResponse::ArtifactUpdate(artifact_event) => {
-                let parts = response_parts(&artifact_event.artifact.parts, false);
-
-                if parts.is_empty() {
-                    return None;
-                }
-
-                let mut event = Event::new(invocation_id.to_string());
-                event.author = agent_name.to_string();
-                event.llm_response.content = Some(Content { role: "model".to_string(), parts });
-                event.llm_response.partial = !artifact_event.last_chunk.unwrap_or(true);
-                Some(event)
-            }
-            StreamResponse::StatusUpdate(status_event) => {
-                // In v1, the message field on TaskStatus is a Message object
-                // (not a String like in v0.3). Extract text from its parts.
-                let is_terminal = matches!(
-                    status_event.status.state,
-                    a2a_protocol_types::task::TaskState::Completed
-                        | a2a_protocol_types::task::TaskState::Failed
-                        | a2a_protocol_types::task::TaskState::Canceled
-                        | a2a_protocol_types::task::TaskState::Rejected
-                );
-
-                if let Some(ref msg) = status_event.status.message {
-                    let text_parts = text_parts(&msg.parts);
-
-                    // A failed task's status message carries the error (A2A §3.1.2 ends the
-                    // stream there, so no separate error follows it).
-                    if status_event.status.state == a2a_protocol_types::task::TaskState::Failed
-                        && !text_parts.is_empty()
-                    {
-                        let error: String =
-                            text_parts.iter().filter_map(Part::text).collect::<Vec<_>>().join("\n");
-                        return Some(create_v1_error_event(invocation_id, agent_name, &error));
-                    }
-
-                    // A task waiting on its caller names the calls it waits on: they become
-                    // long-running calls the caller answers with their function responses.
-                    let waiting = matches!(
-                        status_event.status.state,
-                        a2a_protocol_types::task::TaskState::InputRequired
-                            | a2a_protocol_types::task::TaskState::AuthRequired
-                    );
-                    let parts = response_parts(&msg.parts, waiting);
-                    if !parts.is_empty() {
-                        let mut event = Event::new(invocation_id.to_string());
-                        event.author = agent_name.to_string();
-                        event.long_running_tool_ids = parts
-                            .iter()
-                            .filter_map(|part| match part {
-                                Part::FunctionCall { id: Some(id), .. } => Some(id.clone()),
-                                _ => None,
-                            })
-                            .collect();
-                        event.llm_response.content =
-                            Some(Content { role: "model".to_string(), parts });
-                        event.llm_response.turn_complete = is_terminal || waiting;
-                        return Some(event);
-                    }
-                }
-
-                // For terminal states without a message, emit a turn-complete event
-                if is_terminal {
-                    let mut event = Event::new(invocation_id.to_string());
-                    event.author = agent_name.to_string();
-                    event.llm_response.turn_complete = true;
-                    return Some(event);
-                }
-
-                None
-            }
-            StreamResponse::Message(msg) => {
-                let parts = response_parts(&msg.parts, false);
-                let mut event = Event::new(invocation_id.to_string());
-                event.author = agent_name.to_string();
-                if !parts.is_empty() {
-                    event.llm_response.content = Some(Content { role: "model".to_string(), parts });
-                }
-                event.llm_response.turn_complete = true;
-                Some(event)
-            }
-            // The initial Task snapshot carries nothing the later events do not.
-            _ => None,
+        match response {
+            StreamResponse::StatusUpdate(update) => is_final_state(update.status.state),
+            StreamResponse::Task(task) => is_final_state(task.status.state),
+            StreamResponse::Message(_) => true,
+            _ => false,
         }
     }
 
@@ -1182,6 +1981,8 @@ pub mod v1_remote {
                 streaming: None,
                 credential_broker: None,
                 credential_scopes: Vec::new(),
+                send_configuration: None,
+                hooks: Default::default(),
             });
             assert_eq!(agent.name(), "my-agent");
             assert_eq!(agent.description(), "My remote agent");
@@ -1198,6 +1999,8 @@ pub mod v1_remote {
                 streaming: None,
                 credential_broker: None,
                 credential_scopes: Vec::new(),
+                send_configuration: None,
+                hooks: Default::default(),
             });
             assert!(agent.sub_agents().is_empty());
         }
@@ -1254,9 +2057,10 @@ pub mod v1_remote {
             })
             .unwrap();
             assert_eq!(image.media_type.as_deref(), Some("image/png"));
-            assert!(
-                outgoing_part(&Part::Thinking { thinking: "hm".into(), signature: None }).is_none()
-            );
+            let thought =
+                outgoing_part(&Part::Thinking { thinking: "hm".into(), signature: None }).unwrap();
+            assert_eq!(thought.text_content(), Some("hm"));
+            assert_eq!(thought.metadata.unwrap()["adk_thought"], true, "a thought stays a thought");
         }
 
         #[test]
@@ -1297,7 +2101,7 @@ pub mod v1_remote {
                 metadata: None,
             });
             let keys = RemoteKeys::for_agent("remote");
-            let event = final_event(&resp, "inv", "remote", &keys);
+            let event = finish(&resp, &keys);
 
             assert!(event.llm_response.turn_complete);
             assert_eq!(event.long_running_tool_ids, vec!["call-1".to_string()]);
@@ -1315,9 +2119,16 @@ pub mod v1_remote {
                 status: TaskStatus::new(TaskState::Completed),
                 metadata: None,
             });
-            let event = final_event(&done, "inv", "remote", &keys);
+            let event = finish(&done, &keys);
             assert_eq!(event.actions.state_delta[&keys.context_id], "ctx-1");
             assert!(event.actions.state_delta[&keys.task_id].is_null());
+        }
+
+        /// The event a remote turn ends on, as the agent's run builds it.
+        fn finish(resp: &a2a_protocol_types::events::StreamResponse, keys: &RemoteKeys) -> Event {
+            let mut remote = RemoteEvents::new("inv", "remote");
+            let event = remote.handle(resp).pop().unwrap_or_else(|| remote.new_event());
+            end_turn(event, resp, keys)
         }
 
         #[test]
@@ -1403,7 +2214,7 @@ pub mod v1_remote {
             };
 
             let resp = a2a_protocol_types::events::StreamResponse::StatusUpdate(status_event);
-            let event = convert_stream_response(&resp, "inv-1", "agent-1").unwrap();
+            let event = RemoteEvents::new("inv-1", "agent-1").to_event(&resp).unwrap();
 
             assert_eq!(event.author, "agent-1");
             assert!(event.llm_response.turn_complete);
@@ -1428,7 +2239,7 @@ pub mod v1_remote {
             };
 
             let resp = a2a_protocol_types::events::StreamResponse::StatusUpdate(status_event);
-            let event = convert_stream_response(&resp, "inv-1", "agent-1").unwrap();
+            let event = RemoteEvents::new("inv-1", "agent-1").to_event(&resp).unwrap();
 
             assert!(event.llm_response.turn_complete);
             assert!(event.llm_response.content.is_none());
@@ -1439,32 +2250,216 @@ pub mod v1_remote {
             use a2a_protocol_types::events::TaskStatusUpdateEvent;
             use a2a_protocol_types::task::{ContextId, TaskId, TaskState, TaskStatus};
 
-            let mut status = TaskStatus::new(TaskState::Failed);
+            let failed = |parts: Vec<a2a_protocol_types::Part>| {
+                let mut status = TaskStatus::new(TaskState::Failed);
+                status.message = Some(a2a_protocol_types::Message {
+                    id: a2a_protocol_types::MessageId::new("status-msg-1"),
+                    role: a2a_protocol_types::MessageRole::Agent,
+                    parts,
+                    task_id: None,
+                    context_id: None,
+                    reference_task_ids: None,
+                    extensions: None,
+                    metadata: None,
+                });
+                a2a_protocol_types::events::StreamResponse::StatusUpdate(TaskStatusUpdateEvent {
+                    task_id: TaskId::new("task-1"),
+                    context_id: ContextId::new("ctx-1"),
+                    status,
+                    metadata: None,
+                })
+            };
+
+            // An ADK server marks its error text: it is the error, not model output.
+            let marked = failed(vec![
+                crate::a2a::v1::convert::error_message_part("Internal error: agent error: boom"),
+                a2a_protocol_types::Part::text("partial answer"),
+            ]);
+            let event = RemoteEvents::new("inv-1", "agent-1").to_event(&marked).unwrap();
+            assert_eq!(
+                event.llm_response.error_message.as_deref(),
+                Some("Internal error: agent error: boom")
+            );
+            let texts: Vec<_> =
+                event.content().unwrap().parts.iter().filter_map(Part::text).collect();
+            assert_eq!(texts, ["partial answer"], "the rest of the message is content");
+            assert!(event.llm_response.turn_complete);
+
+            // Unmarked, the first text is still the error and stays in the content, as
+            // adk-go reads it; with no message the error is generic.
+            let unmarked = failed(vec![a2a_protocol_types::Part::text("boom")]);
+            let event = RemoteEvents::new("inv-1", "agent-1").to_event(&unmarked).unwrap();
+            assert_eq!(event.llm_response.error_message.as_deref(), Some("boom"));
+            assert_eq!(event.content().unwrap().parts.len(), 1);
+        }
+
+        fn artifact_update(
+            id: &str,
+            text: &str,
+            append: Option<bool>,
+            last_chunk: Option<bool>,
+            metadata: Option<serde_json::Value>,
+        ) -> a2a_protocol_types::events::StreamResponse {
+            a2a_protocol_types::events::StreamResponse::ArtifactUpdate(
+                a2a_protocol_types::events::TaskArtifactUpdateEvent {
+                    task_id: a2a_protocol_types::TaskId::new("task-1"),
+                    context_id: a2a_protocol_types::ContextId::new("ctx-1"),
+                    artifact: a2a_protocol_types::Artifact::new(
+                        a2a_protocol_types::ArtifactId::new(id),
+                        vec![a2a_protocol_types::Part::text(text)],
+                    ),
+                    append,
+                    last_chunk,
+                    metadata,
+                },
+            )
+        }
+
+        fn completed() -> a2a_protocol_types::events::StreamResponse {
+            a2a_protocol_types::events::StreamResponse::StatusUpdate(
+                a2a_protocol_types::events::TaskStatusUpdateEvent {
+                    task_id: a2a_protocol_types::TaskId::new("task-1"),
+                    context_id: a2a_protocol_types::ContextId::new("ctx-1"),
+                    status: a2a_protocol_types::TaskStatus::new(
+                        a2a_protocol_types::TaskState::Completed,
+                    ),
+                    metadata: None,
+                },
+            )
+        }
+
+        fn stored_text(events: &[Event]) -> Vec<String> {
+            events
+                .iter()
+                .filter(|event| !event.llm_response.partial)
+                .filter_map(|event| event.content())
+                .map(|content| content.parts.iter().filter_map(Part::text).collect())
+                .filter(|text: &String| !text.is_empty())
+                .collect()
+        }
+
+        #[test]
+        fn chunks_from_a_go_server_are_partial_and_join_into_one_answer() {
+            // a2a-go leaves `lastChunk` out when it is false.
+            let mut remote = RemoteEvents::new("inv", "remote");
+            let mut events = Vec::new();
+            events.extend(remote.handle(&artifact_update("a", "Hel", None, None, None)));
+            events.extend(remote.handle(&artifact_update("a", "lo", Some(true), None, None)));
+            events.extend(remote.handle(&completed()));
+
+            assert!(events[0].llm_response.partial && events[1].llm_response.partial);
+            assert_eq!(stored_text(&events), ["Hello"], "the session keeps the whole answer once");
+        }
+
+        #[test]
+        fn a_last_chunk_closes_its_artifacts_answer() {
+            let mut remote = RemoteEvents::new("inv", "remote");
+            let mut events = Vec::new();
+            events.extend(remote.handle(&artifact_update("a", "one ", None, Some(false), None)));
+            events.extend(remote.handle(&artifact_update(
+                "a",
+                "two",
+                Some(true),
+                Some(true),
+                None,
+            )));
+            events.extend(remote.handle(&completed()));
+            assert_eq!(stored_text(&events), ["one two"]);
+        }
+
+        #[test]
+        fn an_adk_servers_partial_artifact_and_its_reset_are_not_stored() {
+            let partial = Some(serde_json::json!({"adk_partial": true}));
+            let answer = Some(serde_json::json!({"adk_partial": false}));
+            let mut remote = RemoteEvents::new("inv", "remote");
+            let mut events = Vec::new();
+            events.extend(remote.handle(&artifact_update(
+                "tmp",
+                "Hel",
+                Some(false),
+                None,
+                partial.clone(),
+            )));
+            events.extend(remote.handle(&artifact_update(
+                "main",
+                "Hello",
+                Some(false),
+                None,
+                answer,
+            )));
+            // The server empties its temporary artifact before the final status.
+            let reset = a2a_protocol_types::events::StreamResponse::ArtifactUpdate(
+                a2a_protocol_types::events::TaskArtifactUpdateEvent {
+                    task_id: a2a_protocol_types::TaskId::new("task-1"),
+                    context_id: a2a_protocol_types::ContextId::new("ctx-1"),
+                    artifact: a2a_protocol_types::Artifact::new(
+                        a2a_protocol_types::ArtifactId::new("tmp"),
+                        vec![a2a_protocol_types::Part::data(serde_json::json!({}))],
+                    ),
+                    append: Some(false),
+                    last_chunk: Some(true),
+                    metadata: partial,
+                },
+            );
+            assert!(remote.handle(&reset).is_empty(), "the reset is dropped");
+            events.extend(remote.handle(&completed()));
+            assert_eq!(stored_text(&events), ["Hello"]);
+        }
+
+        #[test]
+        fn a_transfer_the_remote_names_is_followed_only_when_allowed() {
+            use a2a_protocol_types::task::{TaskState, TaskStatus};
+            let done = a2a_protocol_types::events::StreamResponse::StatusUpdate(
+                a2a_protocol_types::events::TaskStatusUpdateEvent {
+                    task_id: a2a_protocol_types::TaskId::new("task-1"),
+                    context_id: a2a_protocol_types::ContextId::new("ctx-1"),
+                    status: TaskStatus::new(TaskState::Completed),
+                    metadata: Some(serde_json::json!({"adk_transfer_to_agent": "billing"})),
+                },
+            );
+            let ignored = RemoteEvents::new("inv", "remote").handle(&done);
+            assert_eq!(ignored.last().unwrap().actions.transfer_to_agent, None, "off by default");
+            let hooks = RemoteAgentHooks::default().allow_transfer_to_agent(true);
+            let followed = RemoteEvents::new("inv", "remote").with_hooks(&hooks).handle(&done);
+            assert_eq!(
+                followed.last().unwrap().actions.transfer_to_agent.as_deref(),
+                Some("billing")
+            );
+        }
+
+        #[test]
+        fn progress_before_the_task_ends_is_the_remotes_reasoning() {
+            use a2a_protocol_types::task::{TaskState, TaskStatus};
+            let mut status = TaskStatus::new(TaskState::Working);
             status.message = Some(a2a_protocol_types::Message {
-                id: a2a_protocol_types::MessageId::new("status-msg-1"),
+                id: a2a_protocol_types::MessageId::new("m"),
                 role: a2a_protocol_types::MessageRole::Agent,
-                parts: vec![a2a_protocol_types::Part::text("Internal error: agent error: boom")],
+                parts: vec![a2a_protocol_types::Part::text("looking it up")],
                 task_id: None,
                 context_id: None,
                 reference_task_ids: None,
                 extensions: None,
                 metadata: None,
             });
-            let resp =
-                a2a_protocol_types::events::StreamResponse::StatusUpdate(TaskStatusUpdateEvent {
-                    task_id: TaskId::new("task-1"),
-                    context_id: ContextId::new("ctx-1"),
+            let working = a2a_protocol_types::events::StreamResponse::StatusUpdate(
+                a2a_protocol_types::events::TaskStatusUpdateEvent {
+                    task_id: a2a_protocol_types::TaskId::new("task-1"),
+                    context_id: a2a_protocol_types::ContextId::new("ctx-1"),
                     status,
-                    metadata: None,
-                });
-
-            let event = convert_stream_response(&resp, "inv-1", "agent-1").unwrap();
-            assert_eq!(
-                event.llm_response.error_message.as_deref(),
-                Some("Internal error: agent error: boom")
+                    metadata: Some(
+                        serde_json::json!({"adk_escalate": true, "adk_error_code": "E1"}),
+                    ),
+                },
             );
-            assert!(event.llm_response.content.is_none(), "an error is not model output");
-            assert!(event.llm_response.turn_complete);
+            let event = RemoteEvents::new("inv", "remote").to_event(&working).unwrap();
+            assert!(event.llm_response.partial && !event.llm_response.turn_complete);
+            assert!(
+                matches!(&event.content().unwrap().parts[0], Part::Thinking { thinking, .. } if thinking == "looking it up")
+            );
+            assert!(event.actions.escalate);
+            assert_eq!(event.llm_response.error_code.as_deref(), Some("E1"));
+            assert_eq!(event.provider_metadata[A2A_TASK_ID_KEY], "task-1");
+            assert_eq!(event.provider_metadata[A2A_CONTEXT_ID_KEY], "ctx-1");
         }
 
         #[test]
@@ -1481,7 +2476,7 @@ pub mod v1_remote {
             };
             let resp = a2a_protocol_types::events::StreamResponse::Message(reply);
 
-            let event = convert_stream_response(&resp, "inv-1", "agent-1").unwrap();
+            let event = RemoteEvents::new("inv-1", "agent-1").to_event(&resp).unwrap();
             assert_eq!(event.author, "agent-1");
             assert!(event.llm_response.turn_complete);
             let text: String = event
@@ -1508,7 +2503,7 @@ pub mod v1_remote {
             };
 
             let resp = a2a_protocol_types::events::StreamResponse::StatusUpdate(status_event);
-            let result = convert_stream_response(&resp, "inv-1", "agent-1");
+            let result = RemoteEvents::new("inv-1", "agent-1").to_event(&resp);
 
             // Non-terminal without message produces no event
             assert!(result.is_none());
@@ -1537,7 +2532,7 @@ pub mod v1_remote {
             };
 
             let resp = a2a_protocol_types::events::StreamResponse::ArtifactUpdate(artifact_event);
-            let event = convert_stream_response(&resp, "inv-1", "agent-1").unwrap();
+            let event = RemoteEvents::new("inv-1", "agent-1").to_event(&resp).unwrap();
 
             assert_eq!(event.author, "agent-1");
             let content = event.llm_response.content.unwrap();
@@ -1573,7 +2568,7 @@ pub mod v1_remote {
             };
 
             let resp = a2a_protocol_types::events::StreamResponse::ArtifactUpdate(artifact_event);
-            let event = convert_stream_response(&resp, "inv-1", "agent-1").unwrap();
+            let event = RemoteEvents::new("inv-1", "agent-1").to_event(&resp).unwrap();
 
             assert!(event.llm_response.partial);
         }

@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 
 use a2a_protocol_types::TaskPushNotificationConfig;
-use a2a_protocol_types::events::{TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
+use a2a_protocol_types::events::{StreamResponse, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
 
 use super::error::A2aError;
 
@@ -70,11 +70,52 @@ pub trait PushNotificationSender: Send + Sync {
         event: &TaskArtifactUpdateEvent,
         config: &TaskPushNotificationConfig,
     ) -> Result<(), A2aError>;
+
+    /// Delivers one of a task's updates to `config`, as the [`StreamResponse`] a streaming
+    /// client receives (`{"statusUpdate": …}` or `{"artifactUpdate": …}`).
+    ///
+    /// The default implementation calls [`send_status_update`](Self::send_status_update) or
+    /// [`send_artifact_update`](Self::send_artifact_update) with the bare event, so a
+    /// sender written for those keeps working.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update could not be delivered.
+    async fn send_update(
+        &self,
+        update: &StreamResponse,
+        config: &TaskPushNotificationConfig,
+    ) -> Result<(), A2aError> {
+        match update {
+            StreamResponse::StatusUpdate(event) => {
+                self.send_status_update(&config.url, event, config).await
+            }
+            StreamResponse::ArtifactUpdate(event) => {
+                self.send_artifact_update(&config.url, event, config).await
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 /// No-op push notification sender for development and testing.
 ///
 /// All delivery attempts succeed immediately without sending any HTTP requests.
+/// The `Authorization` header for a push config's authentication: `Bearer` or `Basic`
+/// with its credentials, as A2A push senders send it. No header for another scheme, or
+/// without credentials.
+fn authorization_header(auth: &a2a_protocol_types::push::AuthenticationInfo) -> Option<String> {
+    let credentials = auth.credentials.as_deref()?;
+    let scheme = if auth.scheme.eq_ignore_ascii_case("bearer") {
+        "Bearer"
+    } else if auth.scheme.eq_ignore_ascii_case("basic") {
+        "Basic"
+    } else {
+        return None;
+    };
+    Some(format!("{scheme} {credentials}"))
+}
+
 pub struct NoOpPushNotificationSender;
 
 #[async_trait]
@@ -150,13 +191,8 @@ impl HttpPushNotificationSender {
             };
             let mut request = request.json(body);
 
-            // Add Bearer auth if configured
-            if let Some(ref auth) = config.authentication {
-                // `credentials` became Option<String> in a2a-protocol-types 0.12:
-                // omit the header entirely rather than sending "Bearer None".
-                if let Some(ref credentials) = auth.credentials {
-                    request = request.header("Authorization", format!("Bearer {credentials}"));
-                }
+            if let Some(value) = config.authentication.as_ref().and_then(authorization_header) {
+                request = request.header("Authorization", value);
             }
 
             // Add notification token if configured
@@ -224,6 +260,14 @@ impl PushNotificationSender for HttpPushNotificationSender {
     ) -> Result<(), A2aError> {
         self.send_with_retry(url, event, config).await
     }
+
+    async fn send_update(
+        &self,
+        update: &StreamResponse,
+        config: &TaskPushNotificationConfig,
+    ) -> Result<(), A2aError> {
+        self.send_with_retry(&config.url, update, config).await
+    }
 }
 
 /// Validates a webhook URL to prevent SSRF attacks.
@@ -283,6 +327,35 @@ pub fn validate_webhook_url(url: &str) -> Result<(), A2aError> {
 mod tests {
     use super::*;
     use a2a_protocol_types::{AuthenticationInfo, TaskPushNotificationConfig};
+
+    #[test]
+    fn authorization_follows_the_configs_scheme() {
+        let auth = |scheme: &str, credentials: Option<&str>| AuthenticationInfo {
+            scheme: scheme.to_string(),
+            credentials: credentials.map(str::to_owned),
+        };
+        assert_eq!(authorization_header(&auth("Bearer", Some("t"))).as_deref(), Some("Bearer t"));
+        assert_eq!(
+            authorization_header(&auth("basic", Some("dTpw"))).as_deref(),
+            Some("Basic dTpw")
+        );
+        assert_eq!(authorization_header(&auth("ApiKey", Some("k"))), None);
+        assert_eq!(authorization_header(&auth("Bearer", None)), None);
+    }
+
+    #[test]
+    fn a_pushed_update_is_the_stream_response_a_streaming_client_gets() {
+        let event = TaskStatusUpdateEvent {
+            task_id: a2a_protocol_types::TaskId::new("t"),
+            context_id: a2a_protocol_types::ContextId::new("c"),
+            status: a2a_protocol_types::TaskStatus::with_timestamp(
+                a2a_protocol_types::TaskState::Working,
+            ),
+            metadata: None,
+        };
+        let body = serde_json::to_value(StreamResponse::StatusUpdate(event)).unwrap();
+        assert!(body.get("statusUpdate").is_some(), "{body}");
+    }
 
     #[test]
     fn test_validate_public_ip_accepted() {

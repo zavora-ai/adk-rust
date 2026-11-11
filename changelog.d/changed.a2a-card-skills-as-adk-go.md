@@ -1,0 +1,10 @@
+- **A2A agent card skills are built as adk-go builds them** (`adk-server`, `adk-core`, `adk-agent`):
+  - **`LlmAgent`:**
+    - A `model` skill tagged `llm`. Its description is the agent's description, followed by its fixed instruction and global instruction told in the first person ("you are" becomes "I am").
+    - One skill per tool, `<agent>-<tool>`, tagged `llm` and `tools`.
+  - **Workflow agents:**
+    - A `workflow` skill that says what they run: `First, … Then, … Finally, …` for a sequence, `… simultaneously.` in parallel, and `… in a loop (max N iterations).` for a loop. It is tagged `sequential_workflow`, `parallel_workflow` or `loop_workflow`.
+    - A `sub-agents` skill tagged with the workflow's kind and `orchestration`.
+  - **Any other agent:** a `custom` skill tagged `custom_agent`.
+  - **`Agent::profile`, new and defaulted, reports what a card needs:** the agent's kind (`AgentKind`), fixed instructions and tools (`AgentProfile`, `ToolProfile`). `LlmAgent` and the workflow agents implement it. An agent that does not reports `AgentKind::Custom`.
+  - **The card's ADK extension entry reads as adk-go's:** it says the content is spread across task artifacts and the status message, and leaves `required` out.

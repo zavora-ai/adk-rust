@@ -140,8 +140,9 @@ fn forbidden(error: &str, hint: &str) -> Response {
 /// Whether `path` names a route that runs an agent, which takes
 /// [`SecurityConfig::run_timeout`] instead of the request timeout.
 fn runs_an_agent(path: &str) -> bool {
-    matches!(path, "/api/run" | "/api/run_sse" | "/a2a" | "/a2a/stream")
+    matches!(path, "/api/run" | "/api/run_sse" | "/a2a" | "/a2a/stream" | "/a2a/v1")
         || path.starts_with("/api/run/")
+        || path.starts_with("/a2a/v1/rest/message:")
 }
 
 /// Answers `408` when the response has not started within the route's timeout: the run
@@ -184,12 +185,55 @@ async fn host_guard(
 ///
 /// CORS stops a browser from reading the response, but a simple cross-origin request still
 /// executes; this stops it before it reaches a handler.
+/// Whether `path` serves an A2A agent card, which any page may read.
+fn is_agent_card_path(path: &str) -> bool {
+    matches!(path, "/.well-known/agent-card.json" | "/.well-known/agent.json")
+}
+
+/// Serves the agent card to any origin, as a2a-go does: answers its CORS preflight
+/// (`GET`, `OPTIONS` with `Content-Type`, for a day) and lets the requesting page read the
+/// card (its `Origin` echoed with credentials, or `*`). The card is public metadata, and
+/// the host guard still refuses a rebinding `Host`.
+async fn agent_card_cors(request: Request<Body>, next: Next) -> Response {
+    if !is_agent_card_path(request.uri().path()) {
+        return next.run(request).await;
+    }
+    let origin = request.headers().get(header::ORIGIN).cloned();
+    let mut response = if request.method() == Method::OPTIONS {
+        let mut preflight = StatusCode::OK.into_response();
+        let headers = preflight.headers_mut();
+        headers
+            .insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("GET, OPTIONS"));
+        headers
+            .insert(header::ACCESS_CONTROL_ALLOW_HEADERS, HeaderValue::from_static("Content-Type"));
+        headers.insert(header::ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("86400"));
+        preflight
+    } else {
+        next.run(request).await
+    };
+    let headers = response.headers_mut();
+    match origin {
+        Some(origin) => {
+            headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+            headers
+                .insert(header::ACCESS_CONTROL_ALLOW_CREDENTIALS, HeaderValue::from_static("true"));
+            headers.append(header::VARY, HeaderValue::from_static("Origin"));
+        }
+        None => {
+            headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+        }
+    }
+    response
+}
+
 async fn origin_guard(
     State(security): State<Arc<SecurityConfig>>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if let Some(origin) = request.headers().get(header::ORIGIN) {
+    let reads_card = is_agent_card_path(request.uri().path())
+        && matches!(*request.method(), Method::GET | Method::HEAD | Method::OPTIONS);
+    if !reads_card && let Some(origin) = request.headers().get(header::ORIGIN) {
         let origin = String::from_utf8_lossy(origin.as_bytes());
         let same_origin = origin.split_once("://").is_some_and(|(_, authority)| {
             request_authority(&request)
@@ -1244,6 +1288,7 @@ impl ServerBuilder {
                     .layer(trace_layer)
                     .layer(middleware::from_fn_with_state(Arc::clone(&security), request_timeout))
                     .layer(DefaultBodyLimit::max(config.security.max_body_size))
+                    .layer(middleware::from_fn(agent_card_cors))
                     .layer(cors_layer)
                     .layer(middleware::from_fn_with_state(Arc::clone(&security), origin_guard))
                     .layer(SetResponseHeaderLayer::if_not_present(

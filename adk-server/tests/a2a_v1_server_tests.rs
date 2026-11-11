@@ -323,16 +323,24 @@ async fn the_client_subscribes_to_a_task_it_started_with_return_immediately() {
         SendMessageResponse::Task(task) => task,
         other => panic!("expected a task, got {other:?}"),
     };
-    // The run may already be over: then the task is finished, and subscribing is refused.
+    // The run may already be over: then the task is finished, and subscribing is refused,
+    // as the stream's one event (an a2a-go client reads only `data:` lines).
+    let refused = |error: &adk_server::a2a::client::v1_client::V1ClientError| {
+        matches!(
+            error,
+            adk_server::a2a::client::v1_client::V1ClientError::JsonRpc { code: -32004, .. }
+        )
+    };
     match client.subscribe(&task.id.0).await {
         Ok(updates) => {
-            let updates: Vec<_> = updates.map(|update| update.unwrap()).collect().await;
+            let updates: Vec<_> = updates.collect().await;
             assert!(!updates.is_empty());
+            match &updates[0] {
+                Ok(_) => assert!(updates.iter().all(Result::is_ok), "{updates:?}"),
+                Err(error) => assert!(refused(error) && updates.len() == 1, "{updates:?}"),
+            }
         }
-        Err(adk_server::a2a::client::v1_client::V1ClientError::JsonRpc { code, .. }) => {
-            assert_eq!(code, -32004, "a finished task");
-        }
-        Err(other) => panic!("unexpected error: {other}"),
+        Err(error) => assert!(refused(&error), "unexpected error: {error}"),
     }
     let done = client.get_task(&task.id.0, None).await.unwrap();
     assert_eq!(done.status.state, TaskState::Completed);
@@ -393,4 +401,429 @@ async fn a_remote_agent_from_a_url_continues_one_remote_conversation() {
     let tasks = client.list_tasks(None, None, None, None).await.unwrap().tasks;
     assert_eq!(tasks.len(), 2);
     assert_eq!(tasks[0].context_id, tasks[1].context_id, "the second turn continued the first");
+}
+
+#[tokio::test]
+async fn a_streaming_methods_early_error_is_the_streams_one_event() {
+    let base = serve_weather(false).await;
+    let card = A2aV1Client::resolve_agent_card(&base).await.unwrap();
+    let url = card
+        .supported_interfaces
+        .iter()
+        .find(|interface| interface.protocol_binding == "JSONRPC")
+        .unwrap()
+        .url
+        .clone();
+    let response = reqwest::Client::new()
+        .post(&url)
+        .header("A2A-Version", "1.0")
+        .json(&json!({"jsonrpc": "2.0", "id": 7, "method": "SubscribeToTask", "params": {"id": "no-such-task"}}))
+        .send()
+        .await
+        .unwrap();
+
+    // As a2a-go answers: SSE, with the JSON-RPC error as the `data:` event, so a client that
+    // reads only `data:` lines from a streaming method sees it.
+    assert_eq!(response.status(), 200);
+    let content_type = response.headers()["content-type"].to_str().unwrap().to_string();
+    assert!(content_type.starts_with("text/event-stream"), "{content_type}");
+    let body = response.text().await.unwrap();
+    let data = body.lines().find_map(|line| line.strip_prefix("data:")).expect("a data line");
+    let error: serde_json::Value = serde_json::from_str(data.trim()).unwrap();
+    assert_eq!(error["id"], 7);
+    assert_eq!(error["error"]["code"], -32001);
+}
+
+/// Says it started, then takes a while to answer.
+struct SlowAgent;
+
+#[async_trait]
+impl Agent for SlowAgent {
+    fn name(&self) -> &str {
+        "slow"
+    }
+
+    fn description(&self) -> &str {
+        "answers slowly"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> AdkResult<EventStream> {
+        Ok(Box::pin(async_stream::stream! {
+            let mut started = Event::new("slow");
+            started.llm_response.content = Some(Content::new("model").with_text("Working on it."));
+            yield Ok(started);
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            let mut done = Event::new("slow");
+            done.llm_response.content = Some(Content::new("model").with_text("Done."));
+            yield Ok(done);
+        }))
+    }
+}
+
+#[tokio::test]
+async fn a_remote_agent_cancels_the_remote_task_when_its_caller_stops_reading() {
+    use adk_session::{CreateRequest, SessionService};
+    use futures::StreamExt;
+
+    let base = listen(|base| {
+        let runner_config = Arc::new(
+            adk_runner::Runner::builder()
+                .app_name("slow")
+                .agent(Arc::new(SlowAgent))
+                .session_service(Arc::new(InMemorySessionService::new()))
+                .build_config(),
+        );
+        A2aV1Server::builder(runner_config, base).build().router()
+    })
+    .await;
+    let remote =
+        adk_server::a2a::remote_agent::v1_remote::RemoteA2aV1Agent::from_url("slow_remote", &base)
+            .await
+            .unwrap();
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "caller".to_string(),
+            user_id: "u1".to_string(),
+            session_id: Some("s1".to_string()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let runner = adk_runner::Runner::builder()
+        .app_name("caller")
+        .agent(Arc::new(remote))
+        .session_service(sessions)
+        .build()
+        .unwrap();
+
+    let mut events = runner
+        .run(
+            adk_core::UserId::new("u1").unwrap(),
+            adk_core::SessionId::new("s1").unwrap(),
+            Content::new("user").with_text("start"),
+        )
+        .await
+        .unwrap();
+    let first = events.next().await.expect("the remote's first update").unwrap();
+    assert!(first.llm_response.content.is_some());
+    drop(events);
+
+    // As adk-go's remote agent: the remote task is cancelled, not left running.
+    let client = A2aV1Client::new(A2aV1Client::resolve_agent_card(&base).await.unwrap());
+    let mut state = None;
+    for _ in 0..100 {
+        let tasks = client.list_tasks(None, None, None, None).await.unwrap().tasks;
+        state = tasks.first().map(|task| task.status.state);
+        if state == Some(TaskState::Canceled) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(state, Some(TaskState::Canceled));
+}
+
+/// Asks its caller to approve with a long-running call.
+struct AskingAgent;
+
+#[async_trait]
+impl Agent for AskingAgent {
+    fn name(&self) -> &str {
+        "asking"
+    }
+
+    fn description(&self) -> &str {
+        "asks for approval"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> AdkResult<EventStream> {
+        let mut event = Event::new("asking");
+        event.llm_response.content = Some(Content {
+            role: "model".to_string(),
+            parts: vec![adk_core::Part::FunctionCall {
+                name: "approve".to_string(),
+                args: json!({"amount": 5}),
+                id: Some("call-1".to_string()),
+                thought_signature: None,
+            }],
+        });
+        event.long_running_tool_ids = vec!["call-1".to_string()];
+        Ok(Box::pin(futures::stream::iter(vec![Ok(event)])))
+    }
+}
+
+/// Serves `agent` over A2A v1 at a new address; returns the address.
+async fn serve_agent(agent: Arc<dyn Agent>) -> String {
+    listen(|base| {
+        let runner_config = Arc::new(
+            adk_runner::Runner::builder()
+                .app_name(agent.name())
+                .agent(agent.clone())
+                .session_service(Arc::new(InMemorySessionService::new()))
+                .build_config(),
+        );
+        A2aV1Server::builder(runner_config, base).build().router()
+    })
+    .await
+}
+
+#[tokio::test]
+async fn cancelling_a_task_cancels_the_remote_task_it_waits_on() {
+    let child = serve_agent(Arc::new(AskingAgent)).await;
+    let remote =
+        adk_server::a2a::remote_agent::v1_remote::RemoteA2aV1Agent::from_url("approver", &child)
+            .await
+            .unwrap();
+    let parent = serve_agent(Arc::new(remote)).await;
+    let parent_client = A2aV1Client::new(A2aV1Client::resolve_agent_card(&parent).await.unwrap());
+    let child_client = A2aV1Client::new(A2aV1Client::resolve_agent_card(&child).await.unwrap());
+
+    let task = match parent_client.send_message(user_message("pay 5")).await.unwrap() {
+        SendMessageResponse::Task(task) => task,
+        other => panic!("expected a task, got {other:?}"),
+    };
+    assert_eq!(task.status.state, TaskState::InputRequired, "the parent waits on the child's call");
+    let child_tasks = child_client.list_tasks(None, None, None, None).await.unwrap().tasks;
+    assert_eq!(child_tasks[0].status.state, TaskState::InputRequired);
+
+    parent_client.cancel_task(&task.id.0).await.unwrap();
+
+    // As adk-go's executor: the child's waiting task is cancelled too.
+    let child_task = child_client.get_task(&child_tasks[0].id.0, None).await.unwrap();
+    assert_eq!(child_task.status.state, TaskState::Canceled);
+}
+
+#[tokio::test]
+async fn a_get_to_the_json_rpc_endpoint_is_a_json_rpc_error() {
+    let base = serve_weather(false).await;
+    let card = A2aV1Client::resolve_agent_card(&base).await.unwrap();
+    let url = v1_interface(&card, "JSONRPC").unwrap().url.clone();
+    let response =
+        reqwest::Client::new().get(&url).header("A2A-Version", "1.0").send().await.unwrap();
+    // As a2a-go: a JSON-RPC invalid request, not a bare 405.
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["error"]["code"], -32600);
+}
+
+#[tokio::test]
+async fn any_page_may_read_the_agent_card() {
+    let http = reqwest::Client::new();
+    for base in [serve_with_a2a().await, serve_weather(false).await] {
+        let url = format!("{base}/.well-known/agent-card.json");
+        // As a2a-go: the requesting page's origin is echoed, whatever it is.
+        let card =
+            http.get(&url).header("Origin", "https://elsewhere.example").send().await.unwrap();
+        assert_eq!(card.status(), 200, "{base}");
+        assert_eq!(card.headers()["access-control-allow-origin"], "https://elsewhere.example");
+        assert_eq!(card.headers()["access-control-allow-credentials"], "true");
+
+        let preflight = http
+            .request(reqwest::Method::OPTIONS, &url)
+            .header("Origin", "https://elsewhere.example")
+            .header("Access-Control-Request-Method", "GET")
+            .header("Access-Control-Request-Headers", "content-type")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(preflight.status(), 200, "{base}");
+        assert_eq!(preflight.headers()["access-control-allow-methods"], "GET, OPTIONS");
+        assert_eq!(preflight.headers()["access-control-max-age"], "86400");
+
+        let anonymous = http.get(&url).send().await.unwrap();
+        assert_eq!(anonymous.headers()["access-control-allow-origin"], "*");
+    }
+}
+
+/// Runs a remote agent with `hooks` against `base` for one turn; returns the turn's texts.
+async fn remote_turn(
+    base: &str,
+    hooks: adk_server::a2a::remote_agent::v1_remote::RemoteAgentHooks,
+) -> Vec<String> {
+    use adk_server::a2a::remote_agent::v1_remote::{RemoteA2aV1Agent, RemoteA2aV1Config};
+    use adk_session::{CreateRequest, SessionService};
+    use futures::StreamExt;
+
+    let card = A2aV1Client::resolve_agent_card(base).await.unwrap();
+    let mut config = RemoteA2aV1Config::new("weather_remote", card);
+    config.hooks = hooks;
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "caller".to_string(),
+            user_id: "u1".to_string(),
+            session_id: Some("s1".to_string()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let runner = adk_runner::Runner::builder()
+        .app_name("caller")
+        .agent(Arc::new(RemoteA2aV1Agent::new(config)))
+        .session_service(sessions)
+        .build()
+        .unwrap();
+    runner
+        .run(
+            adk_core::UserId::new("u1").unwrap(),
+            adk_core::SessionId::new("s1").unwrap(),
+            Content::new("user").with_text("weather?"),
+        )
+        .await
+        .unwrap()
+        .map(|event| event.unwrap())
+        .filter_map(|event| async move {
+            let text: String =
+                event.content()?.parts.iter().filter_map(|part| part.text()).collect();
+            (!text.is_empty()).then_some(text)
+        })
+        .collect()
+        .await
+}
+
+#[tokio::test]
+async fn remote_agent_hooks_shape_a_turn_as_adk_gos_callbacks_do() {
+    use adk_server::a2a::remote_agent::v1_remote::RemoteAgentHooks;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let base = serve_weather(false).await;
+    let client = A2aV1Client::new(A2aV1Client::resolve_agent_card(&base).await.unwrap());
+    let tasks = || async { client.list_tasks(None, None, None, None).await.unwrap().tasks.len() };
+
+    // A before-agent answer is the turn: no request.
+    let hooks = RemoteAgentHooks::default().before_agent(Arc::new(|_ctx| {
+        Box::pin(async { Ok(Some(Content::new("model").with_text("cached answer"))) })
+    }));
+    assert_eq!(remote_turn(&base, hooks).await, ["cached answer"]);
+    assert_eq!(tasks().await, 0);
+
+    // A before-request answer replaces the remote's, and no request is made.
+    let hooks = RemoteAgentHooks::default().before_request(Arc::new(|_ctx, message| {
+        assert!(!message.parts.is_empty(), "the callback sees the message");
+        let mut event = Event::new("inv");
+        event.author = "weather_remote".to_string();
+        event.llm_response.content = Some(Content::new("model").with_text("refused locally"));
+        Ok(Some(event))
+    }));
+    assert_eq!(remote_turn(&base, hooks).await, ["refused locally"]);
+    assert_eq!(tasks().await, 0);
+
+    // After-request callbacks replace events; after-agent callbacks add one.
+    let cards = Arc::new(AtomicUsize::new(0));
+    let card_calls = cards.clone();
+    let card_base = base.clone();
+    let hooks = RemoteAgentHooks::default()
+        .card_provider(Arc::new(move || {
+            card_calls.fetch_add(1, Ordering::SeqCst);
+            let base = card_base.clone();
+            Box::pin(async move {
+                A2aV1Client::resolve_agent_card(&base)
+                    .await
+                    .map_err(|e| adk_core::AdkError::agent(e.to_string()))
+            })
+        }))
+        .after_request(Arc::new(|_ctx, event| {
+            let text: String = event
+                .content()
+                .into_iter()
+                .flat_map(|c| &c.parts)
+                .filter_map(|p| p.text())
+                .collect();
+            Ok((!text.is_empty()).then(|| {
+                let mut replaced = event.clone();
+                replaced.llm_response.content =
+                    Some(Content::new("model").with_text(text.to_uppercase()));
+                replaced
+            }))
+        }))
+        .after_agent(Arc::new(|_ctx| {
+            Box::pin(async { Ok(Some(Content::new("model").with_text("signed off"))) })
+        }));
+    let texts = remote_turn(&base, hooks).await;
+    assert_eq!(texts.last().map(String::as_str), Some("signed off"));
+    assert!(texts.iter().any(|text| text == &ANSWER.to_uppercase()), "{texts:?}");
+    assert_eq!(cards.load(Ordering::SeqCst), 1, "the card is read for the turn");
+    assert_eq!(tasks().await, 1);
+}
+
+/// Pays an amount, counting how often it ran.
+struct PayTool(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait]
+impl adk_core::Tool for PayTool {
+    fn name(&self) -> &str {
+        "pay"
+    }
+
+    fn description(&self) -> &str {
+        "Pays an amount."
+    }
+
+    async fn execute(
+        &self,
+        _ctx: Arc<dyn adk_core::ToolContext>,
+        _args: Value,
+    ) -> AdkResult<Value> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(json!({"paid": true}))
+    }
+}
+
+#[tokio::test]
+async fn a_held_call_is_confirmed_over_a2a_as_adk_go_asks() {
+    use adk_model::{ScriptedLlm, ScriptedResponse};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let paid = Arc::new(AtomicUsize::new(0));
+    let model = Arc::new(ScriptedLlm::new(
+        "claude-sonnet-5-5",
+        [
+            ScriptedResponse::function_call("pay", json!({"amount": 5})),
+            ScriptedResponse::text("Paid."),
+        ],
+    ));
+    let agent = adk_agent::LlmAgentBuilder::new("payer")
+        .model(model)
+        .tool(Arc::new(PayTool(paid.clone())))
+        .require_tool_confirmation("pay")
+        .build()
+        .unwrap();
+    let base = serve_agent(Arc::new(agent)).await;
+    let client = A2aV1Client::new(A2aV1Client::resolve_agent_card(&base).await.unwrap());
+
+    let task = match client.send_message(user_message("pay 5")).await.unwrap() {
+        SendMessageResponse::Task(task) => task,
+        other => panic!("expected a task, got {other:?}"),
+    };
+    assert_eq!(task.status.state, TaskState::InputRequired);
+    assert_eq!(paid.load(Ordering::SeqCst), 0, "nothing runs before the caller confirms");
+    let ask = &task.status.message.as_ref().expect("the confirmation request").parts[0];
+    let ask_json = serde_json::to_value(ask).unwrap();
+    assert_eq!(ask_json["data"]["name"], "adk_request_confirmation");
+    assert_eq!(ask_json["data"]["args"]["originalFunctionCall"]["name"], "pay");
+    assert_eq!(ask_json["metadata"]["adk_is_long_running"], true);
+    let call_id = ask_json["data"]["id"].as_str().unwrap().to_string();
+
+    let answer: Part = serde_json::from_value(json!({
+        "data": {"id": call_id, "name": "adk_request_confirmation", "response": {"confirmed": true}},
+        "metadata": {"adk_type": "function_response"}
+    }))
+    .unwrap();
+    let mut message = user_message("");
+    message.parts = vec![answer];
+    message.task_id = Some(task.id.clone());
+    let done = match client.send_message(message).await.unwrap() {
+        SendMessageResponse::Task(task) => task,
+        other => panic!("expected a task, got {other:?}"),
+    };
+    assert_eq!(done.status.state, TaskState::Completed, "{:?}", done.status);
+    assert_eq!(paid.load(Ordering::SeqCst), 1, "the confirmed call ran once");
 }

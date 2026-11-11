@@ -1,0 +1,3 @@
+- **A2A v1 tasks carry a version, and stale writes are refused** (`adk-server`, `a2a-v1`): as a2a-go's task store does, `TaskStoreEntry::version` goes up with each save, and the executor saves each change with `TaskStore::save_task_if_version`, which `InMemoryTaskStore` refuses with `A2aError::ConcurrentModification` (-32603) when another writer saved the task first. The default implementation does not check the version, so an existing store keeps working; a store shared between processes should check it.
+
+  Migration: add `version: 0` to `TaskStoreEntry` struct literals, and a `ConcurrentModification` arm to exhaustive matches on `A2aError`.
