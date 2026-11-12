@@ -34,7 +34,7 @@ use super::modes::{
     self, SessionControls, config_state_key, config_value_is_valid, mode_is_advertised,
     option_with_current_value,
 };
-use super::permission::{PermissionBridge, StandingPermissions};
+use super::permission::{PermissionAnswer, PermissionBridge, StandingOffer, StandingPermissions};
 use super::streamer::ResponseStreamer;
 use super::system_prompt::SystemPromptHook;
 use agent_client_protocol::v1::schema::{
@@ -120,6 +120,56 @@ impl Drop for RunningPrompt<'_> {
     }
 }
 
+/// Where a prompt turn reports its progress: the protocol adapter serving the
+/// turn's connection.
+///
+/// The turn itself is protocol-neutral: it streams the updates the
+/// [`ResponseStreamer`] maps from the agent's events and asks for permissions,
+/// and each protocol version delivers them in its own wire form.
+#[async_trait::async_trait]
+pub(crate) trait TurnSink: Send + Sync {
+    /// The runner accepted the turn's prompt as invocation `invocation_id`,
+    /// before the turn's first event. Protocol v2 inserts the user message
+    /// here; v1 has nothing to do.
+    fn started(&self, _invocation_id: &str) -> Result<(), AcpServerError> {
+        Ok(())
+    }
+
+    /// Report one update of the turn.
+    fn update(&self, update: SessionUpdate) -> Result<(), AcpServerError>;
+
+    /// Ask the client to approve a tool call the agent paused on.
+    async fn request_permission(
+        &self,
+        confirmation: &ToolConfirmationRequest,
+        offer: Option<&StandingOffer>,
+    ) -> Result<PermissionAnswer, AcpServerError>;
+}
+
+/// A protocol v1 turn: `session/update` notifications and
+/// `session/request_permission` requests on the v1 connection.
+struct V1Turn<'a> {
+    connection: &'a ConnectionTo<Client>,
+    session_id: &'a SessionId,
+}
+
+#[async_trait::async_trait]
+impl TurnSink for V1Turn<'_> {
+    fn update(&self, update: SessionUpdate) -> Result<(), AcpServerError> {
+        self.connection
+            .send_notification(SessionNotification::new(self.session_id.clone(), update))
+            .map_err(|e| AcpServerError::Transport(e.to_string()))
+    }
+
+    async fn request_permission(
+        &self,
+        confirmation: &ToolConfirmationRequest,
+        offer: Option<&StandingOffer>,
+    ) -> Result<PermissionAnswer, AcpServerError> {
+        PermissionBridge::request(self.connection, self.session_id, confirmation, offer).await
+    }
+}
+
 /// Which sessions `session/list` reports, by archived flag.
 #[derive(Clone, Copy)]
 enum ArchivedFilter {
@@ -161,6 +211,18 @@ impl AcpSessionHandler {
         request_cancellation: RequestCancellation,
         connection: ConnectionTo<Client>,
     ) -> Result<SessionId, AcpServerError> {
+        self.create_session_on(request, request_cancellation, Some(&connection)).await
+    }
+
+    /// [`create_session`](Self::create_session) on a connection that may not reach the
+    /// client's tool servers, as on protocol v2: without `connection`, the session's
+    /// `acp` MCP servers are refused.
+    pub(crate) async fn create_session_on(
+        &self,
+        request: NewSessionRequest,
+        request_cancellation: RequestCancellation,
+        connection: Option<&ConnectionTo<Client>>,
+    ) -> Result<SessionId, AcpServerError> {
         self.ensure_running()?;
         validate_absolute(&request.cwd, "cwd")?;
         for directory in &request.additional_directories {
@@ -186,7 +248,7 @@ impl AcpSessionHandler {
             &request.mcp_servers,
             &request.cwd,
             &request_cancellation,
-            &connection,
+            connection,
         )
         .await
         {
@@ -226,6 +288,18 @@ impl AcpSessionHandler {
         request_cancellation: RequestCancellation,
         connection: ConnectionTo<Client>,
     ) -> Result<(), AcpServerError> {
+        self.resume_session_on(request, request_cancellation, Some(&connection)).await
+    }
+
+    /// [`resume_session`](Self::resume_session) on a connection that may not reach the
+    /// client's tool servers, as on protocol v2: without `connection`, the session's
+    /// `acp` MCP servers are refused.
+    pub(crate) async fn resume_session_on(
+        &self,
+        request: ResumeSessionRequest,
+        request_cancellation: RequestCancellation,
+        connection: Option<&ConnectionTo<Client>>,
+    ) -> Result<(), AcpServerError> {
         let ResumeSessionRequest {
             session_id,
             cwd,
@@ -243,7 +317,7 @@ impl AcpSessionHandler {
             system_prompt.as_ref(),
             &config_options,
             &request_cancellation,
-            &connection,
+            connection,
             "resumed",
         )
         .await?;
@@ -285,7 +359,7 @@ impl AcpSessionHandler {
                 system_prompt.as_ref(),
                 &config_options,
                 &request_cancellation,
-                &connection,
+                Some(&connection),
                 "loaded",
             )
             .await?;
@@ -369,7 +443,9 @@ impl AcpSessionHandler {
         self.reserve(&new_session_id, system_prompt).await?;
 
         let mcp =
-            match start_mcp_servers(&mcp_servers, &cwd, &request_cancellation, &connection).await {
+            match start_mcp_servers(&mcp_servers, &cwd, &request_cancellation, Some(&connection))
+                .await
+            {
                 Ok(resources) => resources,
                 Err(error) => {
                     self.sessions.lock().await.remove(&new_session_id);
@@ -664,7 +740,7 @@ impl AcpSessionHandler {
         system_prompt: Option<&agent_client_protocol::v1::schema::SystemPrompt>,
         config_options: &[InitialSessionConfigOption],
         request_cancellation: &RequestCancellation,
-        connection: &ConnectionTo<Client>,
+        connection: Option<&ConnectionTo<Client>>,
         verb: &str,
     ) -> Result<Box<dyn adk_session::Session>, AcpServerError> {
         self.ensure_running()?;
@@ -731,8 +807,23 @@ impl AcpSessionHandler {
         request: PromptRequest,
         connection: ConnectionTo<Client>,
     ) -> Result<PromptResponse, AcpServerError> {
+        let sink = V1Turn { connection: &connection, session_id: &request.session_id };
+        let (stop_reason, usage) =
+            self.run_turn(&request.session_id, &request.prompt, &sink).await?;
+        Ok(PromptResponse::new(stop_reason).usage(usage))
+    }
+
+    /// Run one prompt turn of an active session, reporting its updates and
+    /// permission requests through `sink`, and return how it ended with the
+    /// tokens its model calls used.
+    pub(crate) async fn run_turn(
+        &self,
+        session_id: &SessionId,
+        prompt: &[ContentBlock],
+        sink: &dyn TurnSink,
+    ) -> Result<(StopReason, Option<Usage>), AcpServerError> {
         self.ensure_running()?;
-        let id = request.session_id.to_string();
+        let id = session_id.to_string();
         let (cancellation_token, runtime_toolsets, system_prompt) = {
             let mut sessions = self.sessions.lock().await;
             let state =
@@ -751,8 +842,9 @@ impl AcpSessionHandler {
         let mut usage = TurnUsage::default();
         let result = self
             .execute_prompt(
-                &request,
-                connection,
+                session_id,
+                prompt,
+                sink,
                 cancellation_token.clone(),
                 runtime_toolsets,
                 system_prompt,
@@ -768,22 +860,24 @@ impl AcpSessionHandler {
 
         let stop_reason =
             if cancellation_token.is_cancelled() { StopReason::Cancelled } else { result? };
-        Ok(PromptResponse::new(stop_reason).usage(usage.into_acp()))
+        Ok((stop_reason, usage.into_acp()))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_prompt(
         &self,
-        request: &PromptRequest,
-        connection: ConnectionTo<Client>,
+        acp_session_id: &SessionId,
+        prompt: &[ContentBlock],
+        sink: &dyn TurnSink,
         cancellation_token: CancellationToken,
         runtime_toolsets: Vec<Arc<dyn Toolset>>,
         system_prompt: Option<Arc<SystemPromptHook>>,
         usage: &mut TurnUsage,
     ) -> Result<StopReason, AcpServerError> {
-        let content = prompt_content(&request.prompt)?;
+        let content = prompt_content(prompt)?;
         let user_id = UserId::new(self.user_id.clone())
             .map_err(|e| AcpServerError::Execution(e.to_string()))?;
-        let session_id = AdkSessionId::new(request.session_id.to_string())
+        let session_id = AdkSessionId::new(acp_session_id.to_string())
             .map_err(|e| AcpServerError::Execution(e.to_string()))?;
 
         // Accumulated tool-confirmation decisions, keyed by function-call ID (the
@@ -811,11 +905,8 @@ impl AcpSessionHandler {
         // call that already has a decision.
         const MAX_CONFIRMATION_ROUNDS: usize = 64;
 
-        let scope = adk_core::ApprovalScope::new(
-            &self.app_name,
-            &self.user_id,
-            request.session_id.to_string(),
-        );
+        let scope =
+            adk_core::ApprovalScope::new(&self.app_name, &self.user_id, acp_session_id.to_string());
         for _round in 0..MAX_CONFIRMATION_ROUNDS {
             let mut run_config = RunConfig::builder()
                 .runtime_toolsets(runtime_toolsets.clone())
@@ -836,10 +927,16 @@ impl AcpSessionHandler {
 
             let run_content =
                 if is_resume { Content::new("user").with_text("") } else { content.clone() };
-            let mut stream = runner
-                .run(user_id.clone(), session_id.clone(), run_content)
+            // `start_with_config` with no override runs with the runner's config, as
+            // `run` does, and names the invocation before its first event.
+            let invocation = runner
+                .start_with_config(user_id.clone(), session_id.clone(), run_content, None)
                 .await
                 .map_err(|e| AcpServerError::Execution(format!("runner.run failed: {e}")))?;
+            if !is_resume {
+                sink.started(invocation.invocation_id().as_ref())?;
+            }
+            let mut stream = invocation.into_events();
 
             // Confirmations surfaced during this run, awaiting a client decision.
             let mut pending: Vec<ToolConfirmationRequest> = Vec::new();
@@ -868,19 +965,14 @@ impl AcpSessionHandler {
                         }
                         let event = text_deltas.push(&event);
                         for update in ResponseStreamer::map_event(&event) {
-                            connection
-                                .send_notification(SessionNotification::new(
-                                    request.session_id.clone(),
-                                    update,
-                                ))
-                                .map_err(|e| AcpServerError::Transport(e.to_string()))?;
+                            sink.update(update)?;
                         }
                     }
                     Err(error) => {
                         if cancellation_token.is_cancelled() {
                             return Ok(StopReason::Cancelled);
                         }
-                        warn!(%error, session_id = %request.session_id, "ACP Runner event failed");
+                        warn!(%error, session_id = %acp_session_id, "ACP Runner event failed");
                         return Err(AcpServerError::Execution(error.to_string()));
                     }
                 }
@@ -928,13 +1020,7 @@ impl AcpSessionHandler {
                     Some(standing) => standing.offer(&scope, confirmation).await,
                     None => None,
                 };
-                let answer = PermissionBridge::request(
-                    &connection,
-                    &request.session_id,
-                    confirmation,
-                    offer.as_ref(),
-                )
-                .await?;
+                let answer = sink.request_permission(confirmation, offer.as_ref()).await?;
                 // A confirmation without a call ID cannot be bound to one call, so
                 // there is nothing safe to authorize.
                 let Some(call_id) = confirmation.function_call_id.clone() else {
@@ -1139,7 +1225,7 @@ impl AcpSessionHandler {
     ///
     /// Best-effort: an absent or unreadable session yields `None` rather than
     /// failing the surrounding request.
-    async fn session_title(&self, session_id: &SessionId) -> Option<String> {
+    pub(crate) async fn session_title(&self, session_id: &SessionId) -> Option<String> {
         let persisted = self
             .session_service
             .get(GetRequest {
@@ -1239,6 +1325,24 @@ impl AcpSessionHandler {
         value: SessionConfigOptionValue,
         connection: ConnectionTo<Client>,
     ) -> Result<(), AcpServerError> {
+        let config_options = self.store_config_option(session_id, config_id, value).await?;
+        connection
+            .send_notification(SessionNotification::new(
+                session_id.clone(),
+                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(config_options)),
+            ))
+            .map_err(|e| AcpServerError::Transport(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Validate and persist a configuration option value, returning the full
+    /// option set with the current values reflecting the write.
+    pub(crate) async fn store_config_option(
+        &self,
+        session_id: &SessionId,
+        config_id: &SessionConfigId,
+        value: SessionConfigOptionValue,
+    ) -> Result<Vec<SessionConfigOption>, AcpServerError> {
         self.ensure_running()?;
         let options = self
             .session_controls
@@ -1257,18 +1361,9 @@ impl AcpSessionHandler {
             serde_json::to_value(&value).map_err(|e| AcpServerError::Internal(e.to_string()))?;
         self.write_session_state(&session_id.to_string(), &config_state_key(config_id), encoded)
             .await?;
-        // Report the full option set with current values reflecting the write.
-        let (_, config_options) = self.session_controls_snapshot(session_id).await;
-        connection
-            .send_notification(SessionNotification::new(
-                session_id.clone(),
-                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(
-                    config_options.unwrap_or_default(),
-                )),
-            ))
-            .map_err(|e| AcpServerError::Transport(e.to_string()))?;
         info!(session_id = %session_id, config_id = %config_id, "set ACP session config option");
-        Ok(())
+        let (_, config_options) = self.session_controls_snapshot(session_id).await;
+        Ok(config_options.unwrap_or_default())
     }
 
     /// Persist a single session-state key by appending a state-delta event.
@@ -1288,6 +1383,32 @@ impl AcpSessionHandler {
             .append_event(session_id, event)
             .await
             .map_err(|e| AcpServerError::Internal(format!("failed to persist session state: {e}")))
+    }
+
+    /// The commands the agent's [`SessionControls`] declare, if any.
+    #[cfg(feature = "unstable-protocol-v2")]
+    pub(crate) fn declared_commands(
+        &self,
+    ) -> Vec<agent_client_protocol::v1::schema::AvailableCommand> {
+        self.session_controls
+            .as_ref()
+            .map(|controls| controls.available_commands())
+            .unwrap_or_default()
+    }
+
+    /// Whether a session is active on this connection.
+    #[cfg(feature = "unstable-protocol-v2")]
+    pub(crate) async fn is_active(&self, session_id: &SessionId) -> bool {
+        self.sessions.lock().await.contains_key(&session_id.to_string())
+    }
+
+    /// A persisted session's stored events, oldest first.
+    #[cfg(feature = "unstable-protocol-v2")]
+    pub(crate) async fn history(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<adk_core::Event>, AcpServerError> {
+        Ok(self.persisted(&session_id.to_string()).await?.events().all())
     }
 
     /// Counts a prompt as running, for [`drain_sessions`](Self::drain_sessions), until the
@@ -1330,12 +1451,13 @@ impl AcpSessionHandler {
 }
 
 /// Start the session's stdio MCP servers and connect its `acp` ones, whose
-/// tools the client serves over `connection`.
+/// tools the client serves over `connection`. Without a connection that reaches the
+/// client's tool servers, an `acp` server is refused.
 async fn start_mcp_servers(
     servers: &[McpServer],
     cwd: &Path,
     cancellation: &RequestCancellation,
-    connection: &ConnectionTo<Client>,
+    connection: Option<&ConnectionTo<Client>>,
 ) -> Result<McpSessionResources, AcpServerError> {
     validate_mcp_servers(servers)?;
     let mut resources = McpSessionResources {
@@ -1347,6 +1469,9 @@ async fn start_mcp_servers(
         let config = match server {
             McpServer::Stdio(config) => config,
             McpServer::Acp(config) => {
+                let Some(connection) = connection else {
+                    return Err(unsupported_mcp_transport());
+                };
                 resources.cancellations.push(None);
                 resources.toolsets.push(Arc::new(AcpMcpToolset::new(
                     &config.name,

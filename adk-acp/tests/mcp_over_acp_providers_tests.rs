@@ -413,6 +413,7 @@ async fn providers_are_advertised_only_with_a_hook() {
     // A client that skips the capability check is refused by the server.
     let refused = connection
         .sdk_connection()
+        .expect("a v1 connection")
         .send_request(adk_acp::agent_client_protocol::v1::schema::ListProvidersRequest::new())
         .block_task()
         .await;

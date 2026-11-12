@@ -33,15 +33,15 @@ use std::time::{Duration, Instant};
 
 use adk_core::Content;
 use agent_client_protocol::v1::schema::{
-    AvailableCommand, CancelNotification, CloseSessionRequest, ContentBlock, ContentChunk,
-    PromptRequest, SessionConfigId, SessionConfigOption, SessionConfigOptionValue, SessionId,
-    SessionModeId, SessionModeState, SessionStatus, SessionUpdate, SetSessionConfigOptionRequest,
+    AvailableCommand, CloseSessionRequest, ContentBlock, ContentChunk, PromptRequest,
+    SessionConfigId, SessionConfigOption, SessionConfigOptionValue, SessionId, SessionModeId,
+    SessionModeState, SessionStatus, SessionUpdate, SetSessionConfigOptionRequest,
     SetSessionModeRequest, SetSessionTitleRequest, StopReason, Usage,
 };
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::client::{AcpAgentInfo, AcpConnection, RoutedUpdate};
+use crate::client::{AcpAgentInfo, AcpConnection, RoutedUpdate, SdkConnection};
 use crate::connection::AcpAgentConfig;
 use crate::content::content_to_blocks;
 use crate::error::{AcpError, Result};
@@ -118,6 +118,9 @@ pub struct AcpSession {
     prompt_count: u32,
     started_at: Instant,
     closed: bool,
+    /// The session's protocol v2 foreground-state updates, which end its turns.
+    #[cfg(feature = "unstable-protocol-v2")]
+    states: Option<mpsc::UnboundedReceiver<agent_client_protocol::v2::schema::StateUpdate>>,
 }
 
 /// A cloneable handle that can cancel a prompt while another task awaits it.
@@ -135,11 +138,7 @@ pub struct AcpCancellationHandle {
 impl AcpCancellationHandle {
     /// Ask the external ACP agent to cancel its current prompt.
     pub async fn cancel(&self) -> Result<()> {
-        self.connection
-            .inner
-            .connection
-            .send_notification(CancelNotification::new(self.session_id.clone()))
-            .map_err(|error| AcpError::ConnectionLost(error.to_string()))
+        self.connection.send_cancel(&self.session_id)
     }
 }
 
@@ -189,7 +188,19 @@ impl AcpSession {
             prompt_count: 0,
             started_at: Instant::now(),
             closed: false,
+            #[cfg(feature = "unstable-protocol-v2")]
+            states: None,
         }
+    }
+
+    /// Route the session's protocol v2 foreground-state updates to it.
+    #[cfg(feature = "unstable-protocol-v2")]
+    pub(crate) fn with_states(
+        mut self,
+        states: mpsc::UnboundedReceiver<agent_client_protocol::v2::schema::StateUpdate>,
+    ) -> Self {
+        self.states = Some(states);
+        self
     }
 
     /// Send a prompt to the agent within the existing session.
@@ -245,7 +256,14 @@ impl AcpSession {
             self.observe(&update);
         }
 
-        let connection = self.connection.inner.connection.clone();
+        let connection = match &self.connection.inner.connection {
+            SdkConnection::V1(connection) => connection.clone(),
+            #[cfg(feature = "unstable-protocol-v2")]
+            SdkConnection::V2(connection) => {
+                let connection = connection.clone();
+                return self.prompt_v2(connection, blocks, &mut on_chunk, start).await;
+            }
+        };
         let prompt = connection
             .send_request(PromptRequest::new(self.session_id.clone(), blocks))
             .block_task();
@@ -331,20 +349,7 @@ impl AcpSession {
         }
         self.closed = true;
         self.connection.inner.routes.remove(&self.session_id);
-        let result = if self.connection.is_closed() {
-            Ok(())
-        } else if self.connection.capabilities().session_capabilities.close.is_some() {
-            self.connection
-                .request(CloseSessionRequest::new(self.session_id.clone()))
-                .await
-                .map(drop)
-        } else {
-            self.connection
-                .inner
-                .connection
-                .send_notification(CancelNotification::new(self.session_id.clone()))
-                .map_err(|error| AcpError::ConnectionLost(error.to_string()))
-        };
+        let result = if self.connection.is_closed() { Ok(()) } else { self.close_on_agent().await };
         if self.owns_connection {
             self.connection.close().await?;
         }
@@ -354,6 +359,119 @@ impl AcpSession {
             "ACP session closed"
         );
         result
+    }
+
+    /// Close the session on the agent: `session/close` where the agent
+    /// supports it, otherwise a `session/cancel` of its running work.
+    async fn close_on_agent(&self) -> Result<()> {
+        #[cfg(feature = "unstable-protocol-v2")]
+        if let SdkConnection::V2(connection) = &self.connection.inner.connection {
+            return crate::client_v2::close_session(&self.connection, connection, &self.session_id)
+                .await;
+        }
+        if self.connection.capabilities().session_capabilities.close.is_some() {
+            self.connection
+                .request(CloseSessionRequest::new(self.session_id.clone()))
+                .await
+                .map(drop)
+        } else {
+            self.connection.send_cancel(&self.session_id)
+        }
+    }
+
+    /// One protocol v2 turn. The prompt's response only acknowledges that the
+    /// agent inserted it; the turn ends with the `idle` state update that
+    /// follows the `running` one, which carries the stop reason and usage.
+    #[cfg(feature = "unstable-protocol-v2")]
+    async fn prompt_v2(
+        &mut self,
+        connection: agent_client_protocol::v2::ConnectionTo<agent_client_protocol::Agent>,
+        blocks: Vec<ContentBlock>,
+        on_chunk: &mut (impl FnMut(OutputChunk) + Send),
+        start: Instant,
+    ) -> Result<PromptResult> {
+        use agent_client_protocol::v2::schema as v2;
+
+        let Some(prompt) = crate::protocol_v2::blocks_to_v2(&blocks) else {
+            return Err(AcpError::InvalidConfig(
+                "prompt content has no ACP protocol v2 form".into(),
+            ));
+        };
+        let mut states = self.states.take().ok_or_else(|| {
+            AcpError::Protocol("the session has no protocol v2 state route".into())
+        })?;
+        // States queued before this prompt describe earlier work.
+        while states.try_recv().is_ok() {}
+
+        let sent = connection
+            .send_request(v2::PromptRequest::new(self.session_id.0.to_string(), prompt))
+            .block_task();
+        tokio::pin!(sent);
+        let mut text = String::new();
+        let mut accepted = false;
+        let mut started = false;
+        let mut idle: Option<v2::IdleStateUpdate> = None;
+        let outcome = loop {
+            if accepted && idle.is_some() {
+                break Ok(());
+            }
+            tokio::select! {
+                biased;
+                Some(update) = self.updates.recv() => {
+                    self.consume(update, &mut text, on_chunk);
+                }
+                Some(state) = states.recv() => match state {
+                    // An idle snapshot without a stop reason that precedes this
+                    // turn's work, such as a new session's, ends nothing.
+                    v2::StateUpdate::Idle(update) if started || update.stop_reason.is_some() => {
+                        idle = Some(update);
+                    }
+                    v2::StateUpdate::Idle(_) => {}
+                    // Running, requires-action and unknown states are all busy.
+                    _ => started = true,
+                },
+                response = &mut sent, if !accepted => match response {
+                    Ok(_) => accepted = true,
+                    Err(error) => break Err(self.connection.error(error)),
+                },
+                else => break Err(AcpError::ConnectionLost(
+                    "the agent closed the connection during the prompt".into(),
+                )),
+            }
+        };
+        self.states = Some(states);
+        outcome?;
+        // The idle update follows every update of the turn, so the updates still
+        // queued belong to it.
+        while let Ok(update) = self.updates.try_recv() {
+            self.consume(update, &mut text, on_chunk);
+        }
+
+        let idle = idle.unwrap_or_default();
+        let stop_reason = match &idle.stop_reason {
+            Some(v2::StopReason::Error(failure)) => {
+                let message = failure
+                    .error
+                    .as_ref()
+                    .map(|error| error.message.clone())
+                    .unwrap_or_else(|| "the agent reported an error".into());
+                return Err(AcpError::Protocol(message));
+            }
+            Some(v2::StopReason::Cancelled) => {
+                return Err(AcpError::ConnectionLost("prompt cancelled".into()));
+            }
+            Some(reason) => {
+                crate::protocol_v2::stop_reason_to_v1(reason).unwrap_or(StopReason::EndTurn)
+            }
+            None => StopReason::EndTurn,
+        };
+        Ok(PromptResult {
+            text,
+            duration: start.elapsed(),
+            prompt_count: self.prompt_count,
+            stop_reason,
+            usage: idle.usage.as_deref().map(crate::protocol_v2::usage_to_v1),
+        })
     }
 
     /// Cancel the currently running prompt (`session/cancel`).
@@ -406,6 +524,21 @@ impl AcpSession {
         value: impl Into<SessionConfigOptionValue>,
     ) -> Result<Vec<SessionConfigOption>> {
         self.ensure_open()?;
+        #[cfg(feature = "unstable-protocol-v2")]
+        if let SdkConnection::V2(connection) = &self.connection.inner.connection {
+            let options = crate::client_v2::set_config_option(
+                &self.connection,
+                connection,
+                &self.session_id,
+                config_id.into(),
+                value.into(),
+            )
+            .await?;
+            if let Ok(mut view) = self.view.lock() {
+                view.config_options = Some(options.clone());
+            }
+            return Ok(options);
+        }
         let response = self
             .connection
             .request(SetSessionConfigOptionRequest::new(self.session_id.clone(), config_id, value))
