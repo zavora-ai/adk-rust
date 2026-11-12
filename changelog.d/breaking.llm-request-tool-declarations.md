@@ -10,4 +10,6 @@
   Migration: build tools with `ToolDeclarations::new()` and `insert(name, declaration)`, or
   `collect()` an iterator of `(name, declaration)` pairs; `tools: Default::default()` still
   works in an `LlmRequest` literal. `get`, `contains_key`, `remove`, `iter`, `keys`,
-  `values`, `len` and `is_empty` work as on a `HashMap`.
+  `values`, `len` and `is_empty` work as on a `HashMap`; `keys()` and `values()` return
+  `ToolDeclarationsKeys` and `ToolDeclarationsValues`, which print with `{:?}` as a
+  `HashMap`'s keys and values do.
