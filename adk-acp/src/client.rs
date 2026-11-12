@@ -74,7 +74,17 @@ use crate::streaming::OutputChunk;
 /// The SDK's v1 connection guard sends `initialize` for protocol v1 and
 /// rejects an answer that selects another version; adk-acp checks the
 /// negotiated version against this list as well.
+#[cfg(not(feature = "unstable-protocol-v2"))]
 pub const SUPPORTED_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[ProtocolVersion::V1];
+
+/// The ACP protocol versions this client speaks.
+///
+/// With the `unstable-protocol-v2` feature, [`AcpConnection::connect`] asks
+/// for draft protocol v2 first and falls back to v1 when the agent selects it,
+/// through the SDK's client protocol connector.
+#[cfg(feature = "unstable-protocol-v2")]
+pub const SUPPORTED_PROTOCOL_VERSIONS: &[ProtocolVersion] =
+    &[ProtocolVersion::V1, ProtocolVersion::V2];
 
 /// What the agent reported about itself in `initialize`.
 #[derive(Debug, Clone)]
@@ -91,7 +101,7 @@ pub struct AcpAgentInfo {
 }
 
 impl AcpAgentInfo {
-    fn from_response(response: InitializeResponse) -> Self {
+    pub(crate) fn from_response(response: InitializeResponse) -> Self {
         Self {
             protocol_version: response.protocol_version,
             agent: response.agent_info,
@@ -112,14 +122,39 @@ pub struct AcpConnection {
 }
 
 pub(crate) struct ConnectionInner {
-    pub(crate) connection: v1::ConnectionTo<Agent>,
+    pub(crate) connection: SdkConnection,
     pub(crate) routes: Routes,
     pub(crate) info: AcpAgentInfo,
     pub(crate) config: AcpAgentConfig,
     /// The tool servers this connection serves, with their declared ids.
     tool_servers: ToolServers,
-    stop: Mutex<Option<oneshot::Sender<()>>>,
+    /// The capabilities a protocol v2 agent advertised, in their own form.
+    #[cfg(feature = "unstable-protocol-v2")]
+    pub(crate) v2_capabilities: Option<agent_client_protocol::v2::schema::AgentCapabilities>,
+    stop: Mutex<Option<StopSignal>>,
     task: Mutex<Option<tokio::task::JoinHandle<std::result::Result<(), Error>>>>,
+}
+
+/// Stops the connection task when called or dropped.
+pub(crate) type StopSignal = Box<dyn FnOnce() + Send>;
+
+/// The SDK connection, in the protocol version the agent selected.
+pub(crate) enum SdkConnection {
+    /// ACP protocol v1.
+    V1(v1::ConnectionTo<Agent>),
+    /// Draft ACP protocol v2.
+    #[cfg(feature = "unstable-protocol-v2")]
+    V2(agent_client_protocol::v2::ConnectionTo<Agent>),
+}
+
+impl SdkConnection {
+    fn is_incoming_closed(&self) -> bool {
+        match self {
+            Self::V1(connection) => connection.is_incoming_closed(),
+            #[cfg(feature = "unstable-protocol-v2")]
+            Self::V2(connection) => connection.is_incoming_closed(),
+        }
+    }
 }
 
 /// Watches a connection on behalf of [`stream_prompt`](crate::stream_prompt).
@@ -142,7 +177,29 @@ impl AcpConnection {
     /// selects an unsupported protocol version, or authentication fails.
     pub async fn connect(config: AcpAgentConfig, policy: Arc<PermissionPolicy>) -> Result<Self> {
         let agent = crate::connection::build_agent(&config)?;
-        Self::open(agent, config, policy, None).await
+        Self::open_agent(agent, config, policy, None).await
+    }
+
+    /// Open a connection to an agent process.
+    #[cfg(not(feature = "unstable-protocol-v2"))]
+    pub(crate) async fn open_agent(
+        agent: agent_client_protocol::AcpAgent,
+        config: AcpAgentConfig,
+        policy: Arc<PermissionPolicy>,
+        observer: Option<Observer>,
+    ) -> Result<Self> {
+        Self::open(agent, config, policy, observer).await
+    }
+
+    /// Open a connection to an agent process, preferring protocol v2.
+    #[cfg(feature = "unstable-protocol-v2")]
+    pub(crate) async fn open_agent(
+        agent: agent_client_protocol::AcpAgent,
+        config: AcpAgentConfig,
+        policy: Arc<PermissionPolicy>,
+        observer: Option<Observer>,
+    ) -> Result<Self> {
+        crate::client_v2::open_agent(agent, config, policy, observer).await
     }
 
     /// Connect to an agent over any SDK transport, such as an in-process
@@ -167,12 +224,8 @@ impl AcpConnection {
         let tool_servers = ToolServers::new(&config.tool_servers);
         let tool_host = ToolServerHost::new(tool_servers.clone());
         let routes = Routes::default();
-        let handler = ClientHandler {
-            policy,
-            routes: routes.clone(),
-            elicitation: config.elicitation.clone(),
-            observer,
-        };
+        let handler =
+            ClientHandler::new(policy, routes.clone(), config.elicitation.clone(), observer);
         let host = AcpHostHandler::new(config.filesystem.clone(), config.terminal.clone());
         let request = initialize_request(&config);
         let auth_method = config.auth_method.clone();
@@ -231,17 +284,41 @@ impl AcpConnection {
             agent = ?info.agent.as_ref().map(|agent| agent.name.as_str()),
             "ACP agent initialized"
         );
-        Ok(Self {
+        Ok(Self::from_parts(
+            SdkConnection::V1(connection),
+            routes,
+            info,
+            config,
+            tool_servers,
+            Box::new(move || {
+                let _ = stop_tx.send(());
+            }),
+            task,
+        ))
+    }
+
+    pub(crate) fn from_parts(
+        connection: SdkConnection,
+        routes: Routes,
+        info: AcpAgentInfo,
+        config: AcpAgentConfig,
+        tool_servers: ToolServers,
+        stop: StopSignal,
+        task: tokio::task::JoinHandle<std::result::Result<(), Error>>,
+    ) -> Self {
+        Self {
             inner: Arc::new(ConnectionInner {
                 connection,
                 routes,
                 info,
                 config,
                 tool_servers,
-                stop: Mutex::new(Some(stop_tx)),
+                #[cfg(feature = "unstable-protocol-v2")]
+                v2_capabilities: None,
+                stop: Mutex::new(Some(stop)),
                 task: Mutex::new(Some(task)),
             }),
-        })
+        }
     }
 
     /// What the agent reported in `initialize`: the negotiated protocol
@@ -261,9 +338,23 @@ impl AcpConnection {
     }
 
     /// The underlying SDK connection, for requests adk-acp does not wrap, such
-    /// as extension methods.
-    pub fn sdk_connection(&self) -> &v1::ConnectionTo<Agent> {
-        &self.inner.connection
+    /// as extension methods. `None` when the agent selected draft protocol v2
+    /// (`unstable-protocol-v2`); see `sdk_connection_v2`.
+    pub fn sdk_connection(&self) -> Option<&v1::ConnectionTo<Agent>> {
+        match &self.inner.connection {
+            SdkConnection::V1(connection) => Some(connection),
+            #[cfg(feature = "unstable-protocol-v2")]
+            SdkConnection::V2(_) => None,
+        }
+    }
+
+    /// The underlying SDK connection when the agent selected draft protocol v2.
+    #[cfg(feature = "unstable-protocol-v2")]
+    pub fn sdk_connection_v2(&self) -> Option<&agent_client_protocol::v2::ConnectionTo<Agent>> {
+        match &self.inner.connection {
+            SdkConnection::V2(connection) => Some(connection),
+            SdkConnection::V1(_) => None,
+        }
     }
 
     /// Create a session in the configured working directory (`session/new`).
@@ -272,6 +363,10 @@ impl AcpConnection {
     /// additional directories, system prompt and initial configuration values;
     /// each is checked against the agent's capabilities first.
     pub async fn new_session(&self) -> Result<AcpSession> {
+        #[cfg(feature = "unstable-protocol-v2")]
+        if let SdkConnection::V2(connection) = &self.inner.connection {
+            return crate::client_v2::new_session(self, connection).await;
+        }
         let config = &self.inner.config;
         let mut request = NewSessionRequest::new(&config.working_dir)
             .mcp_servers(self.session_mcp_servers()?)
@@ -332,6 +427,10 @@ impl AcpConnection {
 
     /// Resume a stored session without replaying its history (`session/resume`).
     pub async fn resume_session(&self, session_id: impl Into<SessionId>) -> Result<AcpSession> {
+        #[cfg(feature = "unstable-protocol-v2")]
+        if let SdkConnection::V2(connection) = &self.inner.connection {
+            return crate::client_v2::resume_session(self, connection, session_id.into()).await;
+        }
         self.require(self.capabilities().session_capabilities.resume.is_some(), "session/resume")?;
         let config = &self.inner.config;
         let session_id = session_id.into();
@@ -405,6 +504,10 @@ impl AcpConnection {
         request: ListSessionsRequest,
     ) -> Result<ListSessionsResponse> {
         self.require(self.capabilities().session_capabilities.list.is_some(), "session/list")?;
+        #[cfg(feature = "unstable-protocol-v2")]
+        if let SdkConnection::V2(connection) = &self.inner.connection {
+            return crate::client_v2::list_sessions_page(self, connection, request).await;
+        }
         if request.archived.as_ref().is_some_and(|filter| *filter != SessionArchiveFilter::Exclude)
         {
             self.require(
@@ -418,6 +521,10 @@ impl AcpConnection {
     /// Delete a stored session (`session/delete`).
     pub async fn delete_session(&self, session_id: impl Into<SessionId>) -> Result<()> {
         self.require(self.capabilities().session_capabilities.delete.is_some(), "session/delete")?;
+        #[cfg(feature = "unstable-protocol-v2")]
+        if let SdkConnection::V2(connection) = &self.inner.connection {
+            return crate::client_v2::delete_session(self, connection, session_id.into()).await;
+        }
         self.request(DeleteSessionRequest::new(session_id.into())).await.map(drop)
     }
 
@@ -525,7 +632,7 @@ impl AcpConnection {
     /// Close the connection and stop the agent process.
     pub async fn close(&self) -> Result<()> {
         if let Some(stop) = self.inner.stop.lock().ok().and_then(|mut stop| stop.take()) {
-            let _ = stop.send(());
+            stop();
         }
         let task = self.inner.task.lock().ok().and_then(|mut task| task.take());
         if let Some(task) = task {
@@ -542,17 +649,42 @@ impl AcpConnection {
         &self.inner.info.capabilities
     }
 
-    /// Send a request and wait for its response.
+    /// Send a protocol v1 request and wait for its response.
+    ///
+    /// Over draft protocol v2 a v1 request has no meaning, so it fails as
+    /// unsupported; the operations adk-acp maps to v2 send their v2 form.
     pub(crate) async fn request<Req: agent_client_protocol::JsonRpcRequest>(
         &self,
         request: Req,
     ) -> Result<Req::Response> {
-        self.inner
-            .connection
-            .send_request(request)
-            .block_task()
-            .await
-            .map_err(|error| self.error(error))
+        match &self.inner.connection {
+            SdkConnection::V1(connection) => connection
+                .send_request(request)
+                .block_task()
+                .await
+                .map_err(|error| self.error(error)),
+            #[cfg(feature = "unstable-protocol-v2")]
+            SdkConnection::V2(_) => Err(AcpError::Unsupported(format!(
+                "`{}` is not available over ACP protocol v2",
+                request.method()
+            ))),
+        }
+    }
+
+    /// Send `session/cancel` for a session.
+    pub(crate) fn send_cancel(&self, session_id: &SessionId) -> Result<()> {
+        let sent = match &self.inner.connection {
+            SdkConnection::V1(connection) => connection.send_notification(
+                agent_client_protocol::v1::schema::CancelNotification::new(session_id.clone()),
+            ),
+            #[cfg(feature = "unstable-protocol-v2")]
+            SdkConnection::V2(connection) => connection.send_notification(
+                agent_client_protocol::v2::schema::CancelSessionNotification::new(
+                    session_id.0.to_string(),
+                ),
+            ),
+        };
+        sent.map_err(|error| AcpError::ConnectionLost(error.to_string()))
     }
 
     pub(crate) fn error(&self, error: Error) -> AcpError {
@@ -585,7 +717,7 @@ impl AcpConnection {
         Ok(servers)
     }
 
-    fn additional_directories(&self) -> Result<Vec<PathBuf>> {
+    pub(crate) fn additional_directories(&self) -> Result<Vec<PathBuf>> {
         let directories = &self.inner.config.additional_directories;
         if !directories.is_empty() {
             self.require(
@@ -599,7 +731,7 @@ impl AcpConnection {
     /// The configured system prompt, checked against the agent's
     /// `sessionCapabilities.systemPrompt`: clients must not send one the agent
     /// did not advertise.
-    fn system_prompt(&self) -> Result<Option<SystemPrompt>> {
+    pub(crate) fn system_prompt(&self) -> Result<Option<SystemPrompt>> {
         let Some(prompt) = &self.inner.config.system_prompt else {
             return Ok(None);
         };
@@ -621,15 +753,16 @@ impl AcpConnection {
 
 /// The highest protocol version this client speaks, which it requests in
 /// `initialize`.
+#[cfg(any(test, feature = "unstable-protocol-v2"))]
 pub(crate) fn requested_protocol_version() -> ProtocolVersion {
     SUPPORTED_PROTOCOL_VERSIONS.iter().copied().max().unwrap_or(ProtocolVersion::V1)
 }
 
-/// The `initialize` request for `config`: the highest supported protocol
-/// version, the client's identity, and every client capability adk-acp
-/// implements.
-fn initialize_request(config: &AcpAgentConfig) -> InitializeRequest {
-    InitializeRequest::new(requested_protocol_version())
+/// The protocol v1 `initialize` request for `config`: the client's identity
+/// and every client capability adk-acp implements.
+pub(crate) fn initialize_request(config: &AcpAgentConfig) -> InitializeRequest {
+    // The v1 implementation always asks for v1; draft v2 has its own request.
+    InitializeRequest::new(ProtocolVersion::V1)
         .client_capabilities(client_capabilities(config))
         .client_info(config.client_info.clone())
 }
@@ -667,7 +800,7 @@ pub(crate) fn client_capabilities(config: &AcpAgentConfig) -> ClientCapabilities
 
 /// Run `initialize`, check the negotiated version, and authenticate with
 /// `auth_method` when one is configured.
-async fn initialize(
+pub(crate) async fn initialize(
     connection: &v1::ConnectionTo<Agent>,
     request: InitializeRequest,
     auth_method: Option<&str>,
@@ -698,7 +831,7 @@ pub(crate) fn check_protocol_version(version: ProtocolVersion) -> std::result::R
 
 /// Check the configured tool servers before connecting: each is valid, and
 /// every MCP server name in a session setup request is unique.
-fn validate_tool_servers(config: &AcpAgentConfig) -> Result<()> {
+pub(crate) fn validate_tool_servers(config: &AcpAgentConfig) -> Result<()> {
     let mut names = std::collections::HashSet::new();
     for server in &config.mcp_servers {
         let name = match server {
@@ -779,6 +912,10 @@ struct RouteTable {
     /// Updates for sessions without a route yet, oldest first.
     parked: VecDeque<RoutedUpdate>,
     last_auth_status: Option<AuthStatusUpdateNotification>,
+    /// Protocol v2 foreground-state updates, for the sessions that wait on them.
+    #[cfg(feature = "unstable-protocol-v2")]
+    states:
+        HashMap<SessionId, mpsc::UnboundedSender<agent_client_protocol::v2::schema::StateUpdate>>,
 }
 
 impl Routes {
@@ -803,15 +940,45 @@ impl Routes {
         receiver
     }
 
+    /// Route `session_id`'s protocol v2 foreground-state updates to a new
+    /// receiver. States sent before this are not kept: they describe work that
+    /// ended before anything waited on it.
+    #[cfg(feature = "unstable-protocol-v2")]
+    pub(crate) fn register_states(
+        &self,
+        session_id: &SessionId,
+    ) -> mpsc::UnboundedReceiver<agent_client_protocol::v2::schema::StateUpdate> {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        self.table().states.insert(session_id.clone(), sender);
+        receiver
+    }
+
+    /// Deliver a protocol v2 foreground-state update to the session waiting on it.
+    #[cfg(feature = "unstable-protocol-v2")]
+    pub(crate) fn deliver_state(
+        &self,
+        session_id: &SessionId,
+        state: agent_client_protocol::v2::schema::StateUpdate,
+    ) {
+        let mut table = self.table();
+        if let Some(sender) = table.states.get(session_id)
+            && sender.send(state).is_err()
+        {
+            table.states.remove(session_id);
+        }
+    }
+
     /// Stop routing `session_id` and every subagent session announced on it.
     pub(crate) fn remove(&self, session_id: &SessionId) {
         let mut table = self.table();
+        #[cfg(feature = "unstable-protocol-v2")]
+        table.states.remove(session_id);
         if let Some(sender) = table.sessions.remove(session_id) {
             table.sessions.retain(|_, other| !other.same_channel(&sender));
         }
     }
 
-    fn deliver(&self, notification: SessionNotification) {
+    pub(crate) fn deliver(&self, notification: SessionNotification) {
         let mut table = self.table();
         let SessionNotification { session_id, update, .. } = notification;
         let Some(sender) = table.sessions.get(&session_id).cloned() else {
@@ -857,6 +1024,17 @@ pub(crate) struct ClientHandler {
     routes: Routes,
     elicitation: Option<Arc<dyn AcpElicitation>>,
     observer: Option<Observer>,
+}
+
+impl ClientHandler {
+    pub(crate) fn new(
+        policy: Arc<PermissionPolicy>,
+        routes: Routes,
+        elicitation: Option<Arc<dyn AcpElicitation>>,
+        observer: Option<Observer>,
+    ) -> Self {
+        Self { policy, routes, elicitation, observer }
+    }
 }
 
 impl HandleDispatchFrom<Agent> for ClientHandler {
@@ -946,7 +1124,7 @@ impl HandleDispatchFrom<Agent> for ClientHandler {
 }
 
 /// Whether `outcome` selected an allow option of `request`.
-fn approved(request: &PermissionRequest, outcome: &RequestPermissionOutcome) -> bool {
+pub(crate) fn approved(request: &PermissionRequest, outcome: &RequestPermissionOutcome) -> bool {
     match outcome {
         RequestPermissionOutcome::Selected(selected) => request
             .options
@@ -1020,8 +1198,22 @@ mod tests {
     fn only_supported_protocol_versions_are_accepted() {
         assert!(check_protocol_version(ProtocolVersion::V1).is_ok());
         assert!(check_protocol_version(ProtocolVersion::V0).is_err());
-        assert!(check_protocol_version(ProtocolVersion::from(2u16)).is_err());
-        assert_eq!(requested_protocol_version(), ProtocolVersion::V1);
+        assert!(check_protocol_version(ProtocolVersion::from(3u16)).is_err());
+        #[cfg(not(feature = "unstable-protocol-v2"))]
+        {
+            assert!(check_protocol_version(ProtocolVersion::from(2u16)).is_err());
+            assert_eq!(requested_protocol_version(), ProtocolVersion::V1);
+        }
+        #[cfg(feature = "unstable-protocol-v2")]
+        {
+            assert!(check_protocol_version(ProtocolVersion::V2).is_ok());
+            assert_eq!(requested_protocol_version(), ProtocolVersion::V2);
+        }
+        assert_eq!(
+            initialize_request(&AcpAgentConfig::new("agent")).protocol_version,
+            ProtocolVersion::V1,
+            "the v1 implementation always asks for v1"
+        );
     }
 
     #[test]
