@@ -63,10 +63,16 @@
 //!
 //! - **`default`**: Client and host APIs for connecting to ACP agents
 //! - **`server`**: Server APIs for exposing ADK agents to ACP clients
+//! - **`unstable-protocol-v2`**: Draft ACP protocol v2 on both sides, through
+//!   the SDK's `unstable_protocol_v2`. The server serves v1 and v2 clients;
+//!   [`AcpConnection::connect`] prefers v2 and falls back to v1. The SDK may
+//!   change v2 in any 5.x minor release.
 
 #![warn(missing_docs)]
 
 pub mod client;
+#[cfg(feature = "unstable-protocol-v2")]
+mod client_v2;
 pub mod connection;
 pub mod content;
 pub mod elicitation;
@@ -80,6 +86,14 @@ pub mod streaming;
 pub mod tool;
 pub mod toolset;
 pub mod usage;
+
+/// Adapters between the v1 vocabulary and draft protocol v2 (`unstable-protocol-v2`).
+#[cfg(feature = "unstable-protocol-v2")]
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
+pub(crate) mod protocol_v2;
+#[cfg(feature = "unstable-protocol-v2")]
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
+pub(crate) mod relay;
 
 /// ACP Server: expose ADK agents as ACP-compatible agents for IDE connections.
 ///

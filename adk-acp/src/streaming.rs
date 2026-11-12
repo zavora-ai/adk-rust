@@ -180,7 +180,8 @@ pub async fn stream_prompt(
     tokio::spawn(async move {
         let observer = Observer { status: status.clone(), events: chunk_tx.clone() };
         let outcome = async {
-            let connection = AcpConnection::open(agent, config, policy, Some(observer)).await?;
+            let connection =
+                AcpConnection::open_agent(agent, config, policy, Some(observer)).await?;
             status.set(AgentStatus::Running);
             let result = async {
                 let mut session = connection.new_session().await?;

@@ -1,4 +1,5 @@
-//! Official ACP v1 JSON-RPC transport over stdin/stdout.
+//! Official ACP JSON-RPC transport over stdin/stdout: protocol v1, and draft protocol v2
+//! with the `unstable-protocol-v2` feature.
 
 use std::sync::Arc;
 
@@ -17,7 +18,7 @@ use agent_client_protocol::v1::schema::{
     UnarchiveSessionRequest, UnarchiveSessionResponse,
 };
 use agent_client_protocol::v1::{ConnectionTo, Responder};
-use agent_client_protocol::{Agent, ByteStreams, Client, ConnectTo, Error};
+use agent_client_protocol::{Agent, ByteStreams, Client, ConnectTo, Error, HandleDispatchFrom};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -29,6 +30,9 @@ use super::super::error::AcpServerError;
 use super::super::handler::AcpSessionHandler;
 use super::super::providers::{self, AcpProviders};
 use super::Transport;
+
+#[cfg(feature = "unstable-protocol-v2")]
+mod v2;
 
 /// What every connection of a server answers `initialize` with, and how it
 /// authenticates.
@@ -233,6 +237,10 @@ macro_rules! gated {
 
 /// Serves the connection until the client closes it or `stop` completes, then closes it
 /// once the answers already given are written.
+///
+/// With the `unstable-protocol-v2` feature, the SDK's agent protocol router serves a client
+/// that initializes with protocol v2 through the v2 agent, and every other client through
+/// the v1 agent exactly as without the feature.
 pub(crate) async fn serve_connection_until<C>(
     handler: Arc<AcpSessionHandler>,
     settings: ConnectionSettings,
@@ -242,15 +250,88 @@ pub(crate) async fn serve_connection_until<C>(
 where
     C: ConnectTo<Agent> + 'static,
 {
+    let settings = Arc::new(settings);
+    let agent = v1_agent(handler.clone(), settings.clone());
+    connect_agent(agent, handler, settings, component, stop).await
+}
+
+/// Serves the v1 agent until the client closes the connection or `stop` completes.
+#[cfg(not(feature = "unstable-protocol-v2"))]
+async fn connect_agent<H>(
+    agent: agent_client_protocol::v1::Builder<Agent, H>,
+    _handler: Arc<AcpSessionHandler>,
+    _settings: Arc<ConnectionSettings>,
+    component: impl ConnectTo<Agent> + 'static,
+    stop: impl std::future::Future<Output = ()>,
+) -> Result<(), Error>
+where
+    H: HandleDispatchFrom<Client> + 'static,
+{
+    agent
+        .connect_with(component, async move |connection: ConnectionTo<Client>| {
+            tokio::select! {
+                () = connection.incoming_closed() => {}
+                () = stop => {}
+            }
+            Ok(())
+        })
+        .await
+}
+
+/// Serves the v1 agent, and the v2 agent where the server supports it, behind the SDK's
+/// agent protocol router until the client closes the connection or `stop` completes.
+#[cfg(feature = "unstable-protocol-v2")]
+async fn connect_agent<H>(
+    agent: agent_client_protocol::v1::Builder<Agent, H>,
+    handler: Arc<AcpSessionHandler>,
+    settings: Arc<ConnectionSettings>,
+    component: impl ConnectTo<Agent> + 'static,
+    stop: impl std::future::Future<Output = ()>,
+) -> Result<(), Error>
+where
+    H: HandleDispatchFrom<Client> + 'static,
+{
+    let mut router = Agent.protocol_router().with_v1(agent);
+    if v2::serves_v2(&settings) {
+        router = router.with_v2(v2::v2_agent(handler, settings));
+    }
+    connect_until(router, component, stop).await
+}
+
+/// Connects `agent` to the client transport `component` until the client closes the
+/// connection, the agent ends, or `stop` completes.
+///
+/// The router owns the connection it serves, so `stop` cannot end it the way
+/// `connect_with` does for v1 alone. The client's frames reach the router through a relay
+/// instead: when `stop` completes the relay closes the router's input, the agent finishes
+/// the answers already given and closes as on a client's end of input, and the transport
+/// flushes them before this returns, without waiting for the client to close its side.
+#[cfg(feature = "unstable-protocol-v2")]
+async fn connect_until(
+    agent: impl ConnectTo<Client>,
+    component: impl ConnectTo<Agent> + 'static,
+    stop: impl std::future::Future<Output = ()>,
+) -> Result<(), Error> {
+    crate::relay::relay_until(
+        component.into_channel_and_future(),
+        agent.into_channel_and_future(),
+        stop,
+    )
+    .await
+}
+
+/// The protocol v1 agent for one connection.
+fn v1_agent(
+    handler: Arc<AcpSessionHandler>,
+    settings: Arc<ConnectionSettings>,
+) -> agent_client_protocol::v1::Builder<Agent, impl HandleDispatchFrom<Client> + 'static> {
     let auth = Arc::new(ConnectionAuth::default());
     let authenticator = settings.authenticator.clone();
     let providers = settings.providers.clone();
-    let name = settings.name.clone();
-    let settings = Arc::new(settings);
 
     Agent
         .v1()
-        .name(name)
+        .name(settings.name.clone())
         .on_receive_request(
             {
                 let settings = settings.clone();
@@ -924,14 +1005,6 @@ where
             },
             agent_client_protocol::on_receive_request!(),
         )
-        .connect_with(component, async move |connection: ConnectionTo<Client>| {
-            tokio::select! {
-                () = connection.incoming_closed() => {}
-                () = stop => {}
-            }
-            Ok(())
-        })
-        .await
 }
 
 /// Send `auth/status_update` when the connection's authentication state
@@ -2771,7 +2844,13 @@ mod tests {
     /// version this agent supports.
     #[tokio::test]
     async fn initialize_answers_with_the_negotiated_protocol_version() {
-        for requested in [0, 1, 2, 7] {
+        // Without `unstable-protocol-v2`, a request for v2 or later selects v1 too; with it,
+        // the router serves that request with v2 (see the test below).
+        #[cfg(not(feature = "unstable-protocol-v2"))]
+        let requests = [0, 1, 2, 7];
+        #[cfg(feature = "unstable-protocol-v2")]
+        let requests = [0, 1];
+        for requested in requests {
             let (agent, _) = mock_agent_and_session();
             let (in_tx, mut out, _server) = raw_server(agent);
             in_tx
@@ -2788,6 +2867,30 @@ mod tests {
             );
             assert_eq!(response["result"]["agentInfo"]["name"], "raw-agent");
             assert_eq!(response["result"]["authMethods"], serde_json::json!([]));
+        }
+    }
+
+    /// With `unstable-protocol-v2`, a request for v2 or later is served by the v2 agent.
+    #[cfg(feature = "unstable-protocol-v2")]
+    #[tokio::test]
+    async fn initialize_for_v2_or_later_selects_protocol_v2() {
+        for requested in [2, 7] {
+            let (agent, _) = mock_agent_and_session();
+            let (in_tx, mut out, _server) = raw_server(agent);
+            in_tx
+                .unbounded_send(Ok(serde_json::json!({"jsonrpc": "2.0", "id": 1,
+                    "method": "initialize",
+                    "params": {"protocolVersion": requested,
+                        "capabilities": {}, "info": {"name": "raw", "version": "1"}}})
+                .to_string()))
+                .expect("send");
+            let response = response_to(&mut out, 1).await;
+            assert_eq!(
+                response["result"]["protocolVersion"], 2,
+                "requested v{requested}: {response}"
+            );
+            assert_eq!(response["result"]["info"]["name"], "raw-agent");
+            assert!(response["result"]["capabilities"]["session"].is_object());
         }
     }
 

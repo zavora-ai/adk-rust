@@ -53,6 +53,7 @@ adk-acp = "3.0"
 |---------|-------------|
 | (default) | Client and host APIs for connecting to ACP agents |
 | `server` | `AcpServer` for exposing an ADK-Rust agent to ACP clients |
+| `unstable-protocol-v2` | Draft ACP protocol v2 on both sides, through the SDK's `unstable_protocol_v2`; see [Draft protocol v2](#draft-protocol-v2) |
 
 Or use the meta-crate's `acp` feature, which is not part of any tier:
 
@@ -474,6 +475,39 @@ cargo check --manifest-path examples/acp_server/Cargo.toml
 - `AcpServerConfigBuilder` takes no `ToolPolicy` or run budget. In-process
   controls belong on the agent: tool confirmation, callbacks, guardrails, and
   `adk-auth` wrappers.
+
+## Draft protocol v2
+
+The `unstable-protocol-v2` feature adds the draft ACP protocol v2. The SDK may
+change v2 in any 5.x minor release, and no shipping agent or editor speaks it
+yet, so treat it as experimental.
+
+- **Server.** `AcpServer` serves both versions through the SDK's agent protocol
+  router: a client that initializes with v1 sees the v1 server unchanged, and a
+  v2 client gets the baseline v2 session surface (`session/new`, `list`,
+  `resume` with replay from the start, `close`, `prompt`, `cancel`, `update`)
+  plus `session/delete` and `session/set_config_option`, over the same session
+  handler. A v2 prompt is answered when its user message is inserted, with that
+  message's id; a prompt sent during a turn is held and runs in order; each turn
+  reports `running`, then `idle` with the stop reason and token usage, or the
+  `error` stop reason when it fails after insertion. `tool_call/cancel` and
+  `terminal/cancel` are answered with `-32602`, since the server owns no
+  cancellable tool calls or terminals. A server with an `AcpAuthenticator`
+  serves v1 only until v2 `auth/login` is implemented.
+- **Client.** `AcpConnection::connect` asks for v2 through the SDK's client
+  protocol connector and falls back to v1 when the agent selects it.
+  `AcpConnection::connect_with_factory` does the same over a transport the
+  caller can open again. The v1 fallback advertises capabilities the v2 request
+  cannot carry, so against a v1-only agent process the connector starts the
+  process a second time. `AcpConnection::connect_to` takes a single transport,
+  which cannot be reopened, and speaks v1. Over v2 the API stays v1-typed:
+  `agent_info()` reports version 2 with the agent's capabilities in their v1
+  form, and sessions are created, resumed, listed, deleted, prompted,
+  cancelled, configured and closed as over v1. The operations v2 lacks or
+  adk-acp does not yet map (`load_session`, modes, fork, archive, status,
+  title, options, authentication) fail as unsupported. A v2 connection offers
+  no file system or terminal, since v2 has no client-side terminals, and no
+  elicitation. A connection configured with an `auth_method` speaks v1.
 
 ## Runnable examples
 
