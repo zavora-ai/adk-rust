@@ -183,13 +183,79 @@ impl ToolDeclarations {
     }
 
     /// Names, in declaration order.
-    pub fn keys(&self) -> impl Iterator<Item = &String> {
-        self.entries.iter().map(|(name, _)| name)
+    pub fn keys(&self) -> ToolDeclarationsKeys<'_> {
+        ToolDeclarationsKeys { entries: self.entries.iter() }
     }
 
     /// Declarations, in declaration order.
-    pub fn values(&self) -> impl Iterator<Item = &serde_json::Value> {
-        self.entries.iter().map(|(_, value)| value)
+    pub fn values(&self) -> ToolDeclarationsValues<'_> {
+        ToolDeclarationsValues { entries: self.entries.iter() }
+    }
+}
+
+/// The names in [`ToolDeclarations`], in declaration order. Prints as a list of the names,
+/// as a `HashMap`'s keys do.
+#[derive(Clone)]
+pub struct ToolDeclarationsKeys<'a> {
+    entries: std::slice::Iter<'a, (String, serde_json::Value)>,
+}
+
+impl<'a> Iterator for ToolDeclarationsKeys<'a> {
+    type Item = &'a String;
+
+    fn next(&mut self) -> Option<&'a String> {
+        self.entries.next().map(|(name, _)| name)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.entries.size_hint()
+    }
+}
+
+impl DoubleEndedIterator for ToolDeclarationsKeys<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.entries.next_back().map(|(name, _)| name)
+    }
+}
+
+impl ExactSizeIterator for ToolDeclarationsKeys<'_> {}
+
+impl std::fmt::Debug for ToolDeclarationsKeys<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.clone()).finish()
+    }
+}
+
+/// The declarations in [`ToolDeclarations`], in declaration order. Prints as a list of the
+/// declarations, as a `HashMap`'s values do.
+#[derive(Clone)]
+pub struct ToolDeclarationsValues<'a> {
+    entries: std::slice::Iter<'a, (String, serde_json::Value)>,
+}
+
+impl<'a> Iterator for ToolDeclarationsValues<'a> {
+    type Item = &'a serde_json::Value;
+
+    fn next(&mut self) -> Option<&'a serde_json::Value> {
+        self.entries.next().map(|(_, value)| value)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.entries.size_hint()
+    }
+}
+
+impl DoubleEndedIterator for ToolDeclarationsValues<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.entries.next_back().map(|(_, value)| value)
+    }
+}
+
+impl ExactSizeIterator for ToolDeclarationsValues<'_> {}
+
+impl std::fmt::Debug for ToolDeclarationsValues<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.clone()).finish()
     }
 }
 
@@ -826,6 +892,23 @@ impl LlmResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_names_and_declarations_print_as_lists() {
+        let tools: ToolDeclarations = [
+            ("search", serde_json::json!({"name": "search"})),
+            ("add", serde_json::json!({"name": "add"})),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(format!("{:?}", tools.keys()), r#"["search", "add"]"#);
+        assert_eq!(
+            format!("{:?}", tools.values()),
+            r#"[Object {"name": String("search")}, Object {"name": String("add")}]"#
+        );
+        assert_eq!(tools.keys().len(), 2);
+        assert_eq!(tools.keys().next_back().map(String::as_str), Some("add"));
+    }
 
     #[test]
     fn test_llm_request_creation() {
