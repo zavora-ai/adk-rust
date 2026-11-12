@@ -11937,6 +11937,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb2c55a318a87600ea870ff8c2012148b44bf18b74fad48d0f835c38c7d07c5f"
+dependencies = [
+ "logos-derive",
+]
+
+[[package]]
+name = "logos-codegen"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58b3ffaa284e1350d017a57d04ada118c4583cf260c8fb01e0fe28a2e9cf8970"
+dependencies = [
+ "fnv",
+ "proc-macro2",
+ "quote",
+ "regex-automata",
+ "regex-syntax",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "logos-derive"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52d3a9855747c17eaf4383823f135220716ab49bea5fbea7dd42cc9a92f8aa31"
+dependencies = [
+ "logos-codegen",
+]
+
+[[package]]
 name = "loom"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -18357,7 +18389,7 @@ dependencies = [
  "strsim 0.11.1",
  "subtle",
  "surrealdb-collections",
- "surrealdb-protocol",
+ "surrealdb-protocol 0.10.2",
  "surrealdb-rocksdb",
  "surrealdb-strand",
  "surrealdb-types",
@@ -18394,6 +18426,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "surrealdb-parse-common"
+version = "3.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e64b0e85a2ecaff42039870396269ec011c4373aa1a7907b89103f16122aa73e"
+dependencies = [
+ "chrono",
+ "logos",
+ "uuid 1.25.0",
+]
+
+[[package]]
 name = "surrealdb-protocol"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -18414,6 +18457,25 @@ dependencies = [
  "serde_json",
  "tonic 0.14.6",
  "tonic-prost",
+ "uuid 1.25.0",
+]
+
+[[package]]
+name = "surrealdb-protocol"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d53501c853fe88d5ead8e50612d310b43389f3c66fda7ef323a1af6c393809c6"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "flatbuffers",
+ "geo",
+ "rust_decimal",
+ "semver",
+ "serde",
+ "serde_json",
  "uuid 1.25.0",
 ]
 
@@ -18440,9 +18502,9 @@ dependencies = [
 
 [[package]]
 name = "surrealdb-types"
-version = "3.2.4"
+version = "3.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0d70c7f4dbf1198521282a171a03f2f77f38a1225a149f7c0175e758f773b8a"
+checksum = "906538b0ad676f448ce0a51a0608ea97242c6414108a740d7e3c4d24324008ce"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
@@ -18451,6 +18513,8 @@ dependencies = [
  "chrono",
  "flatbuffers",
  "geo",
+ "getrandom 0.2.17",
+ "getrandom 0.3.4",
  "hex",
  "http 1.5.0",
  "papaya",
@@ -18460,7 +18524,8 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "surrealdb-protocol",
+ "surrealdb-parse-common",
+ "surrealdb-protocol 0.13.1",
  "surrealdb-types-derive",
  "tracing",
  "ulid",
@@ -18470,9 +18535,9 @@ dependencies = [
 
 [[package]]
 name = "surrealdb-types-derive"
-version = "3.2.4"
+version = "3.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc11310bfc0ae3e546cd14788f8d36e7616dbe41fa68b4b265b29fea34a7d7e1"
+checksum = "8c6f354b15648f03db8818928f7d9e3986b8685a833b92ad2512a38b0f171891"
 dependencies = [
  "heck 0.4.1",
  "proc-macro2",
