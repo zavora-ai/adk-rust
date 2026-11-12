@@ -216,6 +216,7 @@ environment, among those you compiled in.
 | xAI (Grok) | `grok-4.6` | `openai` (preset) |
 | OrcaRouter | `openai/gpt-5.6-terra`, `anthropic/claude-sonnet-5` | `openai` (preset) |
 | Cheaper Inference | `gpt-5.4-mini`, `claude-sonnet-5` | `openai` (preset) |
+| UberLLM | `deepseek/deepseek-v4.1-flash`, `anthropic/claude-sonnet-5` | `openai` (preset) |
 | API Route | (listed by `GET /v1/models`) | `openai` (preset) |
 | Amazon Bedrock | `anthropic.claude-sonnet-4-20250514-v1:0` | `bedrock` |
 | Azure AI Inference | (endpoint-specific) | `azure-ai` |
@@ -338,7 +339,7 @@ checks an agent definition without building. `cargo adk templates` and
 | `adk-core` | Foundational traits and types | `Agent`, `Tool`, `Llm`, `Content`, `Event`, `AdkError`, the governed tool path, agent identity, budgets, and durable runtime contracts |
 | `adk-agent` | Agent implementations | `LlmAgent`, workflow agents, and portable `TeamSpec` / `CompiledTeam` composition |
 | `adk-skill` | AgentSkills parsing and selection | Skill markdown parser, `.skills` discovery/indexing, lexical matching, prompt injection helpers |
-| `adk-model` | LLM integrations | Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama, Bedrock, Azure AI + OpenAI-compatible presets (Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI, OrcaRouter, Cheaper Inference, API Route) |
+| `adk-model` | LLM integrations | Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama, Bedrock, Azure AI + OpenAI-compatible presets (Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI, OrcaRouter, Cheaper Inference, UberLLM, API Route) |
 | `adk-gemini` | Gemini client | Google Gemini API client with streaming and multimodal support |
 | `adk-gcp` | Shared Google Cloud plumbing | ADC credential caching, bounded REST transport, Vertex resource names, and LRO polling |
 | `adk-anthropic` | Anthropic client | Dedicated Anthropic API client with streaming, thinking, caching, citations, vision, PDF, pricing |

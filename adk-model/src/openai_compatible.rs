@@ -273,6 +273,33 @@ impl OpenAICompatibleConfig {
             .with_base_url("https://api.cheaperinference.com/v1")
     }
 
+    /// UberLLM preset.
+    ///
+    /// UberLLM serves models from many vendors behind one OpenAI-compatible
+    /// endpoint; model IDs carry a vendor prefix, such as
+    /// `deepseek/deepseek-v4.1-flash` or `anthropic/claude-sonnet-5`.
+    /// `GET /v1/models` lists the chat model IDs without a key.
+    ///
+    /// Default model suggestion: `deepseek/deepseek-v4.1-flash`
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_model::{OpenAICompatible, OpenAICompatibleConfig};
+    ///
+    /// let config = OpenAICompatibleConfig::uberllm("ull_...", "deepseek/deepseek-v4.1-flash");
+    /// assert_eq!(config.base_url.as_deref(), Some("https://api.uberllm.dev/v1"));
+    ///
+    /// let model = OpenAICompatible::new(config)?;
+    /// # let _ = model;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    pub fn uberllm(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::new(api_key, model)
+            .with_provider_name("uberllm")
+            .with_base_url("https://api.uberllm.dev/v1")
+    }
+
     /// API Route preset.
     ///
     /// API Route serves models from several vendors behind one OpenAI-compatible
@@ -1757,6 +1784,18 @@ mod tests {
 
         let client = OpenAICompatible::new(config).expect("client builds");
         assert_eq!(client.name(), "gpt-5.4-mini");
+    }
+
+    #[test]
+    fn uberllm_preset_sets_endpoint_and_provider() {
+        let config = OpenAICompatibleConfig::uberllm("test-key", "deepseek/deepseek-v4.1-flash");
+        assert_eq!(config.provider_name, "uberllm");
+        assert_eq!(config.model, "deepseek/deepseek-v4.1-flash");
+        assert_eq!(config.base_url.as_deref(), Some("https://api.uberllm.dev/v1"));
+        assert_eq!(config.api_key, "test-key");
+
+        let client = OpenAICompatible::new(config).expect("client builds");
+        assert_eq!(client.name(), "deepseek/deepseek-v4.1-flash");
     }
 
     #[test]

@@ -134,6 +134,12 @@ so it needs an interactive session with Accessibility and Screen Recording permi
 |---------|---------|-----|
 | `examples/cheaper_inference` | Cheaper Inference through the `OpenAICompatibleConfig::cheaper_inference` preset — chat, tool calling, and a second vendor on the same client | `cargo run --manifest-path examples/cheaper_inference/Cargo.toml` |
 
+**Requires `UBERLLM_API_KEY`:**
+
+| Example | Feature | Run |
+|---------|---------|-----|
+| `examples/uberllm` | UberLLM through the `OpenAICompatibleConfig::uberllm` preset — chat, tool calling, and a second vendor on the same client | `cargo run --manifest-path examples/uberllm/Cargo.toml` |
+
 **Requires Google Cloud ADC (`gcloud auth application-default login`):**
 
 | Example | Feature | Run |
