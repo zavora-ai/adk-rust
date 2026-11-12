@@ -1364,7 +1364,7 @@ dependencies = [
  "http 1.5.0",
  "image",
  "image-compare",
- "minijinja",
+ "minijinja 3.1.0",
  "proptest",
  "pulldown-cmark",
  "quick-xml 0.41.0",
@@ -12329,12 +12329,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "minijinja"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "509eeb2603a84eccabb4d75f6ec8ba23b46bbf441aaeb863d6b83a5887fd51e4"
+
+[[package]]
 name = "minijinja-contrib"
 version = "2.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd3e5f077bc2379f0f7d911e7cfdd921114ed99fc884533dca502944cb355b11"
 dependencies = [
- "minijinja",
+ "minijinja 2.24.0",
  "serde",
 ]
 
@@ -12464,7 +12470,7 @@ dependencies = [
  "libc",
  "llguidance",
  "lrtable",
- "minijinja",
+ "minijinja 2.24.0",
  "minijinja-contrib",
  "mistralrs-audio",
  "mistralrs-mcp",
