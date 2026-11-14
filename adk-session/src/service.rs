@@ -422,6 +422,41 @@ pub trait SessionService: Send + Sync {
         self.append_event(req.identity.session_id.as_ref(), req.event).await
     }
 
+    /// Appends an event as [`append_event_for_identity`](SessionService::append_event_for_identity)
+    /// does and returns the event as the session now holds it.
+    ///
+    /// The runner persists through this method and puts the returned event into its view of
+    /// the session in place of the one it was given, so the rest of the run (a workflow's next
+    /// sub-agent, a transfer target, the model's copy of the user's message) sees what the
+    /// service stored. A service that stores something other than what it receives (redacting
+    /// content, filtering a state delta) overrides this method and returns the stored event,
+    /// keeping its ID. A wrapper that forwards to another service forwards this method too.
+    ///
+    /// The default implementation calls `append_event_for_identity` and returns the event
+    /// unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors [`append_event_for_identity`](SessionService::append_event_for_identity)
+    /// returns. An error means the event was not stored.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_session::{AppendEventRequest, Event, SessionService};
+    ///
+    /// async fn persist(service: &dyn SessionService, req: AppendEventRequest) -> adk_core::Result<Event> {
+    ///     let stored = service.append_event_returning_stored(req).await?;
+    ///     // `stored` is what later reads of the session return for this event.
+    ///     Ok(stored)
+    /// }
+    /// ```
+    async fn append_event_returning_stored(&self, req: AppendEventRequest) -> Result<Event> {
+        let event = req.event.clone();
+        self.append_event_for_identity(req).await?;
+        Ok(event)
+    }
+
     /// Erases what the user `user_id` holds in the app `app_name`: every session with its
     /// events, and the user's `user:` state tier.
     ///

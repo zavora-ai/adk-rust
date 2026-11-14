@@ -203,3 +203,18 @@ async fn ungated_users_pass_straight_through() {
     fx.gated.append_event_for_identity(append("alice", "s1")).await.unwrap();
     assert_eq!(fx.durable_ids("alice").await, vec!["s1".to_string()]);
 }
+
+#[tokio::test]
+async fn the_stored_event_comes_back_without_the_filtered_profile_keys() {
+    let fx = fixture();
+    let visitor = VisitorId::generate();
+    let user = visitor.as_str();
+    fx.gated.create(create(user, "s1")).await.unwrap();
+
+    let stored = fx.gated.append_event_returning_stored(append(user, "s1")).await.unwrap();
+
+    assert_eq!(stored.actions.state_delta.get("user:city"), None, "no profile consent");
+    assert_eq!(stored.actions.state_delta.get("step"), Some(&json!(2)));
+    let read_back = read(&fx.gated, user, "s1").await;
+    assert_eq!(read_back.events().all()[0].actions.state_delta, stored.actions.state_delta);
+}

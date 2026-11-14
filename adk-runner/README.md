@@ -121,6 +121,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `request_context` | Auth middleware context |
 | `cancellation_token` | Cooperative cancellation of every run |
 
+The runner persists the user's message and agent events through `SessionService::append_event_returning_stored` and puts the returned event into its view, so a service that stores something other than what it was given (a redaction) is what later agents in the run see. See [The Run Reads What the Service Stored](../docs/official_docs/core/runner.md#the-run-reads-what-the-service-stored).
+
 `action_ledger`, `approval_store`, and `spend_ledger` accept any backend implementing the `adk-core` traits — in-memory, or SQLite, PostgreSQL, Redis, MongoDB, Neo4j, or Firestore from `adk-session`.
 
 ## Runner vs Direct Agent Execution

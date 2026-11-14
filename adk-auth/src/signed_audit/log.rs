@@ -13,7 +13,7 @@ use adk_core::{AdkError, Clock, ErrorCategory, ErrorComponent, Result, SystemClo
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use super::jcs::canonicalize;
 use super::merkle::{
@@ -197,7 +197,9 @@ pub struct AuditLog {
     checkpoint_every: u64,
     checkpoint_interval: Duration,
     anchors: Vec<Arc<dyn CheckpointAnchor>>,
-    state: Mutex<WriterState>,
+    // Shared with the task that finishes an append, so a dropped caller cannot leave the
+    // writer behind what the store holds.
+    state: Arc<Mutex<WriterState>>,
 }
 
 impl std::fmt::Debug for AuditLog {
@@ -294,13 +296,13 @@ impl AuditLogBuilder {
         }
         let now = self.clock.now();
         Ok(AuditLog {
-            state: Mutex::new(WriterState {
+            state: Arc::new(Mutex::new(WriterState {
                 frontier: Frontier { size, hashes },
                 last_leaf,
                 signer: self.signer,
                 checkpointed_size: latest.as_ref().map_or(0, |c| c.size),
                 checkpointed_at: latest.map_or(now, |c| c.created_at),
-            }),
+            })),
             store: self.store,
             log_id: self.log_id,
             origin,
@@ -405,8 +407,8 @@ impl AuditLog {
     ///
     /// As [`append`](Self::append).
     pub async fn append_batch(&self, drafts: Vec<AuditRecordDraft>) -> Result<Vec<AuditRecord>> {
-        let mut state = self.state.lock().await;
-        let records = self.append_locked(&mut state, drafts).await?;
+        let state = Arc::clone(&self.state).lock_owned().await;
+        let (mut state, records) = self.append_locked(state, drafts).await?;
         let due = state.frontier.size - state.checkpointed_size >= self.checkpoint_every
             || self.interval_elapsed(&state);
         if due && state.frontier.size > state.checkpointed_size {
@@ -424,13 +426,20 @@ impl AuditLog {
         elapsed.to_std().is_ok_and(|elapsed| elapsed >= self.checkpoint_interval)
     }
 
+    /// Appends `drafts` at the writer's frontier and returns the lock with the records.
+    ///
+    /// The store write and the frontier that records it run as one spawned task, so they
+    /// finish together even when the caller's future is dropped mid-write (a client that
+    /// disconnects from a request handler). Otherwise the store would hold records the
+    /// writer does not know of, and every later append would fail with
+    /// `audit_log.seq_conflict`.
     async fn append_locked(
         &self,
-        state: &mut WriterState,
+        mut state: OwnedMutexGuard<WriterState>,
         drafts: Vec<AuditRecordDraft>,
-    ) -> Result<Vec<AuditRecord>> {
+    ) -> Result<(OwnedMutexGuard<WriterState>, Vec<AuditRecord>)> {
         if drafts.is_empty() {
-            return Ok(Vec::new());
+            return Ok((state, Vec::new()));
         }
         let ts = self.clock.now();
         let mut frontier = state.frontier.clone();
@@ -456,10 +465,18 @@ impl AuditLog {
             prev = Some(leaf);
             records.push(record);
         }
-        self.store.append(AuditAppend { log_id: self.log_id.clone(), entries, nodes }).await?;
-        state.frontier = frontier;
-        state.last_leaf = prev;
-        Ok(records)
+        let store = Arc::clone(&self.store);
+        let append = AuditAppend { log_id: self.log_id.clone(), entries, nodes };
+        tokio::spawn(async move {
+            store.append(append).await?;
+            state.frontier = frontier;
+            state.last_leaf = prev;
+            Ok((state, records))
+        })
+        .await
+        .map_err(|error| {
+            audit_error(ErrorCategory::Internal, "audit_log.append_aborted", error.to_string())
+        })?
     }
 
     async fn checkpoint_locked(
@@ -557,13 +574,13 @@ impl AuditLog {
         next: Arc<dyn AuditSigner>,
         actor: AuditActor,
     ) -> Result<AuditCheckpoint> {
-        let mut state = self.state.lock().await;
+        let state = Arc::clone(&self.state).lock_owned().await;
         let previous = state.signer.clone();
         let draft = AuditRecordDraft::new(AuditRecordKind::KeyRotated, "rotate_checkpoint_key")
             .actor(actor)
             .ext("previousKey", serde_json::Value::String(previous.verifier_key()))
             .ext("nextKey", serde_json::Value::String(next.verifier_key()));
-        self.append_locked(&mut state, vec![draft]).await?;
+        let (mut state, _) = self.append_locked(state, vec![draft]).await?;
         let checkpoint = self.checkpoint_locked(&mut state, &[previous, next.clone()]).await?;
         state.signer = next;
         Ok(checkpoint)

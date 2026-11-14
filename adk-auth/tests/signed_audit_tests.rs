@@ -509,3 +509,92 @@ async fn erasing_a_subject_redacts_its_records_and_the_log_still_verifies() {
     assert!(report.is_valid(), "{report}");
     assert_eq!(report.pruned, 3, "only the subject's bodies are gone");
 }
+
+/// Commits an append, then, when `stall` is set, waits for `release` before replying, as a
+/// store does when its caller is dropped between the write and the reply.
+struct StallAfterCommit {
+    inner: InMemoryAuditLogStore,
+    stall: std::sync::atomic::AtomicBool,
+    release: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl AuditLogStore for StallAfterCommit {
+    async fn append(
+        &self,
+        batch: adk_core::audit_log::AuditAppend,
+    ) -> adk_core::Result<std::ops::Range<u64>> {
+        let range = self.inner.append(batch).await?;
+        if self.stall.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            self.release.notified().await;
+        }
+        Ok(range)
+    }
+    async fn size(&self, log_id: &str) -> adk_core::Result<u64> {
+        self.inner.size(log_id).await
+    }
+    async fn read(
+        &self,
+        log_id: &str,
+        range: std::ops::Range<u64>,
+    ) -> adk_core::Result<Vec<adk_core::audit_log::AuditLogEntry>> {
+        self.inner.read(log_id, range).await
+    }
+    async fn hash_at(
+        &self,
+        log_id: &str,
+        level: u8,
+        index: u64,
+    ) -> adk_core::Result<Option<adk_core::audit_log::AuditHash>> {
+        self.inner.hash_at(log_id, level, index).await
+    }
+    async fn put_checkpoint(
+        &self,
+        checkpoint: adk_core::audit_log::AuditCheckpoint,
+    ) -> adk_core::Result<()> {
+        self.inner.put_checkpoint(checkpoint).await
+    }
+    async fn latest_checkpoint(
+        &self,
+        log_id: &str,
+    ) -> adk_core::Result<Option<adk_core::audit_log::AuditCheckpoint>> {
+        self.inner.latest_checkpoint(log_id).await
+    }
+    async fn checkpoints(
+        &self,
+        log_id: &str,
+    ) -> adk_core::Result<Vec<adk_core::audit_log::AuditCheckpoint>> {
+        self.inner.checkpoints(log_id).await
+    }
+    async fn prune(&self, log_id: &str, before_seq: u64) -> adk_core::Result<u64> {
+        self.inner.prune(log_id, before_seq).await
+    }
+    async fn logs(&self) -> adk_core::Result<Vec<String>> {
+        self.inner.logs().await
+    }
+}
+
+#[tokio::test]
+async fn an_append_dropped_after_the_store_commits_does_not_strand_the_writer() {
+    let store = Arc::new(StallAfterCommit {
+        inner: InMemoryAuditLogStore::new(),
+        stall: std::sync::atomic::AtomicBool::new(false),
+        release: tokio::sync::Notify::new(),
+    });
+    let clock = clock();
+    let log = open(store.clone(), signer("audit.example.com", 1), &clock).await;
+    log.append(draft(0)).await.unwrap();
+
+    // The store commits the second record, then its caller gives up (a client hanging up on
+    // a request handler) before the store replies.
+    store.stall.store(true, std::sync::atomic::Ordering::SeqCst);
+    let dropped = tokio::time::timeout(Duration::from_millis(50), log.append(draft(1))).await;
+    assert!(dropped.is_err(), "the caller was dropped mid-write");
+    assert_eq!(store.inner.size(LOG_ID).await.unwrap(), 2, "the store holds the record");
+    store.release.notify_one();
+
+    // The writer counts the committed record, so the next append follows it.
+    let record = log.append(draft(2)).await.expect("the next append is not a seq conflict");
+    assert_eq!(record.seq, 2);
+    assert_eq!(log.size().await, 3);
+}

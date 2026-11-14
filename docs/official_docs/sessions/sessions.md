@@ -75,7 +75,11 @@ pub trait SessionService: Send + Sync {
 
 The trait also has identity-addressed methods (`get_for_identity`, `append_event_for_identity`,
 `delete_for_identity`), `delete_all_sessions`, and `health_check`; see
-[Typed Session Identity](#typed-session-identity).
+[Typed Session Identity](#typed-session-identity). `append_event_returning_stored` appends like
+`append_event_for_identity` and returns the event as stored; a backend that stores something
+other than what it receives overrides it so the running agents see the stored event (see
+[The Run Reads What the Service Stored](../core/runner.md#the-run-reads-what-the-service-stored)),
+and a wrapper forwards it.
 
 ### Behaviour Every Backend Follows
 

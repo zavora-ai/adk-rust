@@ -186,9 +186,13 @@ impl SessionService for ConsentGatedSessionService {
         }
     }
 
-    async fn append_event_for_identity(&self, mut req: AppendEventRequest) -> Result<()> {
+    async fn append_event_for_identity(&self, req: AppendEventRequest) -> Result<()> {
+        self.append_event_returning_stored(req).await.map(|_| ())
+    }
+
+    async fn append_event_returning_stored(&self, mut req: AppendEventRequest) -> Result<Event> {
         let Some(subject) = self.writable(req.identity.user_id.as_ref()).await? else {
-            return self.durable.append_event_for_identity(req).await;
+            return self.durable.append_event_returning_stored(req).await;
         };
         self.profile_filter(&subject, &mut req.event.actions.state_delta).await?;
         let holder = self.holder(&req.identity).await?;
@@ -197,7 +201,7 @@ impl SessionService for ConsentGatedSessionService {
         {
             return Err(consent_required_error(&ConsentPurpose::SessionContinuity));
         }
-        holder.append_event_for_identity(req).await
+        holder.append_event_returning_stored(req).await
     }
 
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
