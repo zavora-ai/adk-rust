@@ -935,6 +935,8 @@ pub(crate) struct ShellView {
     pub(crate) status: IsolationStatus,
     pub(crate) allow_unsandboxed_retry: bool,
     pub(crate) fail_if_unavailable: bool,
+    /// The enforcer refuses writes to root-level protected paths by name.
+    pub(crate) guards_protected_names: bool,
 }
 
 pub(crate) struct PolicyInner {
@@ -1323,9 +1325,11 @@ impl HarnessPolicy {
         let protected = protected_path.is_some();
         let row = TableRow::of(&kind, protected);
         let mut switches = self.inner.switches;
-        // Unapproved sandboxed commands need every protected path in place at this call (I26).
+        // Unapproved sandboxed commands need every protected path in place at this call (I26),
+        // unless the enforcer keeps a missing or symlinked one from being created or replaced.
         if matches!(row, TableRow::ShellOsSandbox | TableRow::ShellContainer)
             && switches.sandbox_protects_paths
+            && !(row == TableRow::ShellOsSandbox && self.inner.shell.guards_protected_names)
         {
             switches.sandbox_protects_paths =
                 crate::shell::protected_paths_hold(self.inner.workspace.root());

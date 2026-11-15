@@ -110,7 +110,7 @@ agent tool — and the harness refuses to run without it.
 | `exit_plan_mode` | Deny | Approval, non-waivable | Deny | Deny |
 | Edit | Deny | Deny | Approval | Allow |
 | Edit of a protected path | Deny | Deny | Approval, non-waivable | Approval, non-waivable |
-| Sandboxed shell | Deny | Allow, read-only workspace (active enforcer only) | Approval (Allow with `auto_allow_sandboxed`) | Allow when protected paths hold; Approval otherwise |
+| Sandboxed shell | Deny | Allow, read-only workspace (active enforcer only) | Approval (Allow with `auto_allow_sandboxed`) | Allow when the sandbox keeps the protected paths (always under Seatbelt; under bubblewrap while every root-level one exists); Approval otherwise |
 | Host shell (also a degraded sandbox) | Deny | Deny | Approval | Approval (Allow with `allow_host_shell_in_auto`) |
 | Unsandboxed retry | Deny | Deny | Approval, non-waivable | Approval, non-waivable |
 | Memory write (`memory_write`, `memory_delete`) | Deny | Deny | Approval, non-waivable | Approval, non-waivable |
