@@ -305,7 +305,6 @@ You can also implement `EmbeddingProvider` for any custom embedding service.
 | `QdrantVectorStore` | `qdrant` | Production with dedicated vector DB |
 | `LanceDBVectorStore` | `lancedb` | Embedded vector DB (no server needed) |
 | `PgVectorStore` | `pgvector` | When you already use PostgreSQL |
-| `SurrealVectorStore` | `surrealdb` | SurrealDB in memory, on RocksDB, or remote |
 | `AgentRetrievalStore` | `agent-retrieval` | Vertex AI Vector Search 2.0, with hybrid search |
 
 ```rust
@@ -324,10 +323,6 @@ let store = PgVectorStore::new("postgres://user:pass@localhost/db").await?;
 // LanceDB (a local directory)
 use adk_rag::LanceDBVectorStore;
 let store = LanceDBVectorStore::new("./lancedb").await?;
-
-// SurrealDB (embedded, in memory)
-use adk_rag::SurrealVectorStore;
-let store = SurrealVectorStore::in_memory().await?;
 ```
 
 The `vertex-rag` feature adds `VertexRagEngineClient` and `VertexAiRagRetrievalTool`, which
@@ -343,7 +338,6 @@ No backend rewrites a collection name onto another collection:
 | Backend | Collection names |
 |---------|------------------|
 | `PgVectorStore` | 1 to 59 ASCII lowercase letters, digits, and underscores |
-| `SurrealVectorStore` | One or more ASCII letters, digits, and underscores; case sensitive |
 | `AgentRetrievalStore` | ASCII lowercase letters, digits, and underscores, starting with a letter and ending with a letter or digit; each underscore becomes a hyphen in the collection ID |
 | `LanceDBVectorStore` | One or more ASCII letters, digits, underscores, hyphens, and periods; on a case-insensitive filesystem (the macOS and Windows defaults), names that differ only in case share a table |
 | `InMemoryVectorStore`, `QdrantVectorStore` | Passed through unchanged; Qdrant refuses names it does not support |
@@ -363,7 +357,6 @@ Every backend stores a chunk's `source_uri` and `title` as fields of their own:
 | `PgVectorStore` | `source_uri` and `title` columns | `create_collection` adds the columns in place; old rows return `None` |
 | `LanceDBVectorStore` | `source_uri` and `title` columns | `upsert` fails with guidance: delete the collection, create it again, and re-ingest |
 | `QdrantVectorStore` | `source_uri` and `title` payload fields | Old points return `None` until re-ingested |
-| `SurrealVectorStore` | `source_uri` and `title` fields | `create_collection` defines the fields; old rows return `None` |
 | `AgentRetrievalStore` | `sourceUri` and `title` data fields | Old data objects return `None` until re-ingested |
 
 ---
@@ -497,7 +490,6 @@ were, leaving other scopes untouched.
 | `PgVectorStore` | A `scope` column; the primary key is `(scope, id)`, and `WHERE scope = $n` precedes `LIMIT` |
 | `LanceDBVectorStore` | A `scope` column; a typed prefilter, and a merge-insert keyed on `scope` and `id` |
 | `QdrantVectorStore` | A `scope` payload field indexed as Qdrant's tenant field; a `must` filter on search, count, and delete; the point ID is the UUID v5 of scope and chunk ID |
-| `SurrealVectorStore` | `scope` and `chunk_id` fields, an index on `scope`, and the condition beside the KNN operator; the record ID combines scope and chunk ID |
 | `AgentRetrievalStore` | A `scope` data field; the `filter` of every search and query; the Data Object ID is derived from scope and chunk ID |
 
 ### Filters and deletes
@@ -604,10 +596,9 @@ Only pull the dependencies you need:
 | `qdrant` | `QdrantVectorStore` | `qdrant-client` |
 | `lancedb` | `LanceDBVectorStore` | `lancedb` |
 | `pgvector` | `PgVectorStore` | `sqlx` |
-| `surrealdb` | `SurrealVectorStore` | `surrealdb` |
 | `agent-retrieval` | `AgentRetrievalStore` | `adk-gcp`, Google Cloud auth |
 | `vertex-rag` | `VertexRagEngineClient`, `VertexAiRagRetrievalTool` | `adk-gcp`, Google Cloud auth |
-| `full` | `gemini`, `openai`, `qdrant`, `lancedb`, `pgvector`, `surrealdb` | all of those |
+| `full` | `gemini`, `openai`, `qdrant`, `lancedb`, `pgvector` | all of those |
 
 ```toml
 # Just core

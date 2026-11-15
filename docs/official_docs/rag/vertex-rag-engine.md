@@ -164,5 +164,5 @@ dedicated RAG component), provider `vertex_ai`, and machine-readable
 ## Self-hosted RAG instead?
 
 For a pipeline you run yourself — pluggable chunkers, embedding providers,
-and vector stores (Qdrant, LanceDB, pgvector, SurrealDB) — see
+and vector stores (Qdrant, LanceDB, pgvector) — see
 [RAG](../tools/rag.md).

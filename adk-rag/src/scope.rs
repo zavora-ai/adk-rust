@@ -133,7 +133,7 @@ impl Scope {
     ///
     /// The key length-prefixes the scope, so distinct scope and chunk ID pairs never share a
     /// key.
-    #[cfg(any(feature = "qdrant", feature = "surrealdb", feature = "agent-retrieval"))]
+    #[cfg(any(feature = "qdrant", feature = "agent-retrieval"))]
     pub(crate) fn record_key(&self, chunk_id: &str) -> String {
         format!("{}:{}{chunk_id}", self.0.len(), self.0)
     }
@@ -193,7 +193,7 @@ mod tests {
         assert!(Scope::from_parts(["app", ""]).is_err());
     }
 
-    #[cfg(any(feature = "qdrant", feature = "surrealdb", feature = "agent-retrieval"))]
+    #[cfg(any(feature = "qdrant", feature = "agent-retrieval"))]
     #[test]
     fn record_keys_of_distinct_pairs_differ() {
         let ab = Scope::new("ab").unwrap();
