@@ -580,6 +580,8 @@ async fn a_woken_turn_is_told_the_event_across_a_restart() {
     // The wake is routed with no kernel running: only the stores hold it.
     let order = sleep_on("handle the order", Wake::Queue { source: "orders".into() }).await;
     in_state(&stores.runs, &order, RunState::Waiting).await;
+    // The park's hook settles the row before the stop, which would record a drain on it.
+    tokio::time::sleep(Duration::from_millis(300)).await;
     first.stop().await.unwrap();
     let note = "n".repeat(2 * WAKE_PAYLOAD_LIMIT);
     let event =
