@@ -10,10 +10,26 @@
 # Every pair is linted on its own; a crate's tests run once with its pairs' features
 # combined (scripts/check-feature-coverage.sh). A pull request runs only the pairs of the
 # crates it can affect (scripts/ci-scope.py); the nightly tier runs every pair's tests alone.
-# To cover another feature-gated module, add ONE line and pick the shard whose crates it
-# already depends on. Shards are numbered 0 to 10.
+# To cover another feature-gated module, add ONE line with the shard its crate already has.
+# Shards are numbered 0 to 10. A crate's pairs share one shard, so its combined test build
+# runs once; adk-cli is the exception, split over three shards because its `solo` pairs each
+# build alone.
+#
+# | Shard | Crates |
+# |-------|--------|
+# | 0  | adk-rag |
+# | 1  | adk-rust, adk-payments, adk-realtime, adk-session, adk-memory, adk-eval, adk-bench, adk-deploy |
+# | 2  | adk-kernel, adk-drivers |
+# | 3  | adk-server, adk-durability-gates, adk-graph, adk-managed, adk-code |
+# | 4  | adk-tool, adk-agent, adk-model, adk-skill |
+# | 5  | adk-cli: voice, website and phone |
+# | 6  | small opt-in surfaces, adk-sandbox, adk-awp, adk-site |
+# | 7  | adk-harness |
+# | 8  | adk-cli: registries, stores, providers, agent-drawn UI |
+# | 9  | adk-surface |
+# | 10 | adk-cli: scripted scenarios and the terminal |
 
-# Shard 0 — adk-rag backends; LanceDB has shard 7 to itself.
+# adk-rag backends (shard 0).
 # sqlx-backed backend: a second sqlx major entering the graph through pgvector went unnoticed.
 0 adk-rag pgvector
 0 adk-rag vertex-rag
@@ -24,10 +40,10 @@
 0 adk-rag onnx
 # The encrypted store, its SQLite backends and the local embedder (spec 3.1 §7.12, §7.15.2);
 # the workspace build reaches adk-harness only through adk-cli's feature set.
-0 adk-harness encrypted,sqlite,memory-embeddings-local
+7 adk-harness encrypted,sqlite,memory-embeddings-local
 
-# Shard 1 — the adk-rust umbrella. `graph` alone gives adk-graph its default (empty)
-# features, so the umbrella forwards are built explicitly.
+# The adk-rust umbrella and adk-payments (shard 1), and adk-harness (shard 7). `graph` alone
+# gives adk-graph its default (empty) features, so the umbrella forwards are built explicitly.
 1 adk-rust graph-sqlite
 1 adk-rust graph-functional
 # Code-execution opt-ins outside every tier: embedded JS/Python, persistent Docker, and
@@ -44,9 +60,9 @@
 # The harness module re-exports the CLI's `HarnessLauncher`, `ConsolePrompter` and
 # `ConsoleIo` only under `cli`, which no tier includes, so `full` never compiles that path.
 1 adk-rust harness,cli
-1 adk-harness hooks
+7 adk-harness hooks
 # The payments pack (spec 3.1 §7.16) links adk-payments, which no other harness feature does.
-1 adk-harness payments
+7 adk-harness payments
 # The site wallet (spec 3.5 §7.14) on its own, and with the AP2 rail beside every protocol
 # feature (the AP2 test files import ACP and A2A helpers, so `ap2` alone leaves them unused).
 1 adk-payments wallet doc
@@ -58,65 +74,63 @@
 1 adk-payments postgres lib
 1 adk-payments redis lib
 # The voice surface (spec 3.1 §7.17): the harness over adk-realtime's integrated runner.
-1 adk-harness voice
+7 adk-harness voice
 # The harness's ACP standing permissions (spec 3.3 §10 A1): adk-acp's server enters only here.
-1 adk-harness acp-server
+7 adk-harness acp-server
 # The crate docs' examples under the default tier: an `artifacts` example once compiled only
 # with `full`, and nothing ran the doctests below it.
 1 adk-rust minimal doc
 # No model provider at all: `run()` once failed `unused_mut` with nothing to assign.
 1 adk-rust agents,sessions,runner no-default
 # adk-harness with only `auth`: the team's observer list once failed `vec_init_then_push`.
-1 adk-harness auth no-default
+7 adk-harness auth no-default
 # The container shell: compiled and its fake-runtime tests run here; the daemon tests run
 # in the sandbox-docker workflow.
-1 adk-harness docker,hooks
+7 adk-harness docker,hooks
 # The managed form: HarnessDef, HarnessResolver and the managed runtime round trips.
-1 adk-harness managed
+7 adk-harness managed
 # The kernel host (spec 3.2 §10 HK1, HK3): `Harness::kernel`, the approval wake and the goal
 # stall; no workspace member enables it until adk-cli's `harness` does.
-1 adk-harness kernel
+7 adk-harness kernel
 # A harness definition on a tenant kernel and one harness per partition (spec 3.2 §7.8,
 # §7.13): `managed` with `kernel`, which no workspace member enables.
-1 adk-harness kernel,managed
+7 adk-harness kernel,managed
 # The browser and computer-use packs (spec 3.1 §7.24): adk-browser and adk-computer-use enter
 # the harness only through them; `web-fixture` admits the loopback fixture page.
-1 adk-harness browser,computer-use,web-fixture doc
+7 adk-harness browser,computer-use,web-fixture doc
 # The website runtime (spec 3.5 §7.1): adk-site, adk-drivers and adk-awp's verifier enter the
 # harness only through it; `web-fixture` admits the loopback site its tests sign against.
-1 adk-harness website,web-fixture doc
+7 adk-harness website,web-fixture doc
 # The website draft store on PostgreSQL and Redis (spec 3.5 §7.8.2); the live-server suites run
 # in the postgres job.
-1 adk-harness website,postgres,redis
+7 adk-harness website,postgres,redis
 # Agent surfaces (spec 3.3 §6.1): `adk_rust::surface`, in no tier.
 1 adk-rust surface
 
-# Shards 2, 8, 9 and 10 — adk-server and adk-kernel (2), adk-cli (8; it links libdbus through
-# keyring), adk-surface with its generated-API check and the web home end to end (9), and
-# adk-cli's scripted scenarios and terminal (10); split so each finishes inside the job's
-# 90-minute limit.
+# adk-server (shard 3), adk-kernel (2), adk-cli (5, 8 and 10; it links libdbus through
+# keyring) and adk-surface (9).
 # The background run store and its persistence are behind `background`; nothing compiled
 # them when durable run records were added.
-2 adk-server background
+3 adk-server background
 # The multi-process durability gates on SQLite (crash, schedules, stalled worker, kill
 # switch); the server backends run nightly. Shares the `background` build above.
-2 adk-durability-gates sqlite
+3 adk-durability-gates sqlite
 # Approval inbox endpoints and the signed approval webhook notifier.
-2 adk-server approvals
+3 adk-server approvals
 # The local agent registry: its authentication and card-ownership tests need the feature.
-2 adk-server agent-registry
+3 adk-server agent-registry
 # Agent Engine dispatch surface; its wire-fixture and dispatch tests need the feature.
-2 adk-server agent-engine
-2 adk-server vertex-remote-engine
+3 adk-server agent-engine
+3 adk-server vertex-remote-engine
 # 11 clippy failures had accumulated unseen behind `a2a-v1`.
-2 adk-server a2a-v1
+3 adk-server a2a-v1
 # Signed inbound webhooks: `POST /hooks/{name}` and its idempotent run-store enqueue.
-2 adk-server webhook-ingress,background
+3 adk-server webhook-ingress,background
 # The AWP 2.0 agent edge (spec 3.5 §7.9): tiers, the governed path over HTTP, A2A and MCP,
 # held calls and the public partition.
-2 adk-server awp
+3 adk-server awp
 # The edge's SQLite stores and their conformance suite; PostgreSQL and Redis run in the postgres job.
-2 adk-server awp-sqlite
+3 adk-server awp-sqlite
 8 adk-cli vertex-agent-registry
 8 adk-cli vertex-skill-registry
 # The `deploy agent-engine` subcommand: arg-parse and mock create-contract tests.
@@ -131,10 +145,10 @@
 # `adk-rust --voice` (spec 3.1 §7.17) and `up --pack voice` (spec 3.3 §5.6) end to end on a
 # scripted realtime provider; `voice-desktop` implies `voice` and adds the microphone and the
 # speaker of the console voice and the terminal's voice mode.
-8 adk-cli voice-desktop,scripted-model solo
+5 adk-cli voice-desktop,scripted-model solo
 # `adk-rust site …` and `awp …` (spec 3.5 §8.1) on adk-site and adk-awp's verifier, with the
 # freeze test's DNS fixture.
-8 adk-cli website,scripted-model solo
+5 adk-cli website,scripted-model solo
 # adk-cli without the harness: the chat agent and the legacy `code`, `goal` and `ultracode`.
 8 adk-cli gemini no-default
 # adk-cli with no provider at all: every `--provider` reports that it is not compiled.
@@ -186,7 +200,7 @@
 9 adk-surface mobile doc
 # `adk-rust up --home-url` serving the phone on SQLite with a scripted model; with `voice`,
 # "Speak, glance, stop" (spec 3.3 §12 phase 5) on the same kernel.
-10 adk-cli mobile,voice,scripted-model solo
+5 adk-cli mobile,voice,scripted-model solo
 # Voice and video (spec 3.3 §5.6): spoken answers through the engine, the voice conversation on
 # a scripted realtime model, the camera and screen gate; with `web`, the voice routes and
 # socket; with `tui`, the terminal's voice line.
@@ -217,7 +231,7 @@
 9 adk-surface genui doc
 9 adk-surface web,genui
 9 adk-surface tui,genui
-10 adk-cli genui,scripted-model solo
+8 adk-cli genui,scripted-model solo
 # Apps from MCP servers (spec 3.3 §6.1 `genui-apps`): the host, its routes and the hostile app
 # legs, with the doctests.
 9 adk-surface genui-apps doc
@@ -231,7 +245,7 @@
 # without a reference adapter, with their conformance suites.
 2 adk-drivers conformance no-default
 
-# Shard 3 — adk-graph, adk-managed, adk-code.
+# adk-graph, adk-managed, adk-code (shard 3).
 # No workspace member enables these four; four clippy failures and two uncompilable doc
 # examples sat on main as a result. `time-travel` is absent on purpose: adk-cli already
 # enables it, so the workspace build reaches it.
@@ -247,12 +261,12 @@
 3 adk-graph action-http,time-travel
 # The harness's shared mode and rule stores and its plan checkpointer URLs over the same
 # backends (spec 3.1 §13 Q2, Q5); the live-server suites run in the postgres job.
-3 adk-harness postgres,redis,mongodb,neo4j,firestore
+7 adk-harness postgres,redis,mongodb,neo4j,firestore
 # The kernel's stores on MongoDB, Firestore and Neo4j (spec 3.2 §7.1, §13 Q8), one pair per backend so
 # each compiles alone; the live-server suites run in the nightly `durable-stores` job.
-3 adk-kernel mongodb
-3 adk-kernel firestore
-3 adk-kernel neo4j
+2 adk-kernel mongodb
+2 adk-kernel firestore
+2 adk-kernel neo4j
 # Two entries on purpose: `memory` alone left `sandbox` unbuilt, and a renamed
 # EnforcedLimits field kept its old name at a call site for two releases.
 3 adk-managed memory
@@ -263,7 +277,7 @@
 3 adk-code embedded-python
 3 adk-code vertex-sandbox
 
-# Shard 4 — adk-tool, adk-agent, adk-model, adk-skill.
+# adk-tool, adk-agent, adk-model, adk-skill (shard 4).
 4 adk-tool vertex-agent-registry
 # Example Store client (Vertex AI few-shot retrieval): wire contract and contract tests.
 4 adk-tool example-store
@@ -297,40 +311,40 @@
 4 adk-model muse-realtime
 4 adk-skill vertex-skill-registry
 
-# Shard 5 — adk-realtime, adk-session, adk-memory, adk-eval, adk-deploy, adk-bench.
-5 adk-realtime integration
+# adk-realtime, adk-session, adk-memory, adk-eval, adk-deploy, adk-bench (shard 1).
+1 adk-realtime integration
 # Held calls, metering and output guardrails on the integrated runner, and the scripted
 # provider the voice surface tests run on.
-5 adk-realtime integration,guardrails,scripted
+1 adk-realtime integration,guardrails,scripted
 # The OpenAI realtime session and its WebSocket transport: compiled by the nightly `full`
 # build but never tested anywhere else.
-5 adk-realtime openai
+1 adk-realtime openai
 # The Gemini Live session: setup, usage reports, the audio stream end on commit.
-5 adk-realtime gemini
-5 adk-session vertex-session
-5 adk-session postgres
+1 adk-realtime gemini
+1 adk-session vertex-session
+1 adk-session postgres
 # Durable stores on every backend: compiles them and runs the SQLite conformance suites;
 # the live-server suites run in the nightly `durable-stores` job.
-5 adk-session sqlite,redis,mongodb,neo4j,firestore
+1 adk-session sqlite,redis,mongodb,neo4j,firestore
 # The envelope, the encrypted approval store and SQLite key rotation (spec 3.1 §10 S5).
-5 adk-session encrypted-session,sqlite
+1 adk-session encrypted-session,sqlite
 # Memory Bank backend; its mock contract tests need the feature.
-5 adk-memory vertex-memory
+1 adk-memory vertex-memory
 # `adk-memory --features database-memory` once stopped compiling entirely while every
 # required check stayed green.
-5 adk-memory database-memory
+1 adk-memory database-memory
 # The graph memory backend over sqlx: default workspace builds never compile it.
-5 adk-memory graph-memory
-5 adk-eval vertex-eval
+1 adk-memory graph-memory
+1 adk-eval vertex-eval
 # Web experiment analysis (spec 3.5 §7.12): the simulation, S11 and property tests and the
 # doctests that state the method's numbers need it.
-5 adk-eval experiments doc
+1 adk-eval experiments doc
 # The tau2-bench and BFCL adapters: nothing in the workspace enables either feature.
-5 adk-bench tau2,bfcl
+1 adk-bench tau2,bfcl
 # Agent Engine deployment client: golden DTO and mock contract tests.
-5 adk-deploy gcp
+1 adk-deploy gcp
 
-# Shard 6 — small opt-in surfaces and adk-sandbox.
+# Small opt-in surfaces and adk-sandbox (shard 6).
 6 adk-audio fx
 # `MuseStt` over adk-model's Muse clients.
 6 adk-audio muse
@@ -392,9 +406,9 @@
 # `awp verify` against the preview in the launch gate (spec 3.5 §7.8.1), without `migrate`.
 6 adk-site verify doc
 
-# Shard 7 — adk-rag's LanceDB backend on its own: it pulls the whole lance/datafusion tree
-# and compiles for about fifteen minutes. It stays in the PR tier because an arrow version
+# adk-rag's LanceDB backend: it pulls the whole lance/datafusion tree and compiles for about
+# fifteen minutes. It stays in the PR tier because an arrow version
 # mismatch once sat broken on main for weeks with nothing compiling the LanceDB backend.
-7 adk-rag lancedb
-1 adk-harness mcp
+0 adk-rag lancedb
+7 adk-harness mcp
 4 adk-model gemini no-default
