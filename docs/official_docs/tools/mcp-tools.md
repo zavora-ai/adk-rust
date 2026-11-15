@@ -25,7 +25,8 @@ ADK-Rust uses `rmcp` 3, the official Rust SDK (`adk-tool` requires
 `rmcp = "3.1"`). A client connects with the `initialize` handshake by default,
 which servers of every protocol revision answer; `ClientLifecycleMode::Auto` and
 `ClientLifecycleMode::Discover` opt in to the `2026-07-28` `server/discover`
-lifecycle. `examples/mcp_protocol_revisions` demonstrates both and the SEP-2663
+lifecycle. The `mcp_protocol_revisions` example in
+[adk-playground](https://github.com/zavora-ai/adk-playground) demonstrates both and the SEP-2663
 tasks extension against a bundled server.
 
 ## Architecture
@@ -215,13 +216,8 @@ connection supervision, not an application-level health check: use a domain
 tool or a separate service probe when you need to verify the server's backing
 database or external API.
 
-Run the deterministic example:
-
-```bash
-cargo run --manifest-path examples/mcp_manager/Cargo.toml
-```
-
-It starts a real Rust MCP child server and exercises discovery, a tool call,
+The deterministic `mcp_manager` example in [adk-playground](https://github.com/zavora-ai/adk-playground)
+starts a real Rust MCP child server and exercises discovery, a tool call,
 runtime add/enable/update/disable/remove, config persistence, and shutdown. It
 does not download packages or require an API key.
 
@@ -271,7 +267,8 @@ converted into a decline so the MCP connection remains usable. Validate the
 returned values and apply consent rules in the application before accepting a
 consequential request.
 
-See `examples/mcp_elicitation` for a complete server and interactive client.
+See the `mcp_elicitation` example in [adk-playground](https://github.com/zavora-ai/adk-playground) for a complete
+server and interactive client.
 
 ## MCP Apps
 

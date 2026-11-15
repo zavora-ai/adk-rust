@@ -781,11 +781,11 @@ error's message only when its category is a rejection; a tool that ran and faile
 
 ### MCP examples and guides
 
-[`examples/mcp_manager`](https://github.com/zavora-ai/adk-rust/tree/main/examples/mcp_manager)
+The `mcp_manager` example in [adk-playground](https://github.com/zavora-ai/adk-playground)
 runs a real Rust stdio server locally and verifies
 discovery, tool execution, dynamic registry changes, persistence, and shutdown
 without a package download or network dependency.
-[`examples/mcp_elicitation`](https://github.com/zavora-ai/adk-rust/tree/main/examples/mcp_elicitation)
+The `mcp_elicitation` example there
 demonstrates a server asking its client application for additional information.
 
 The [MCP guide](https://github.com/zavora-ai/adk-rust/tree/main/docs/official_docs/mcp)

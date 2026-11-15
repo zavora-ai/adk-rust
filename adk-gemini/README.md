@@ -488,8 +488,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `cancel_interaction` manage stored interactions. The stream fails when it ends before
 `interaction.completed` or reports a `failed` or `budget_exceeded` status. The
 [`interactions_basic`](examples/interactions_basic.rs) example covers streaming and multi-turn
-continuation, and [`examples/gemini_managed_agents/`](../examples/gemini_managed_agents/) covers
-managed agents and environments.
+continuation, and the `gemini_managed_agents` example in
+[adk-playground](https://github.com/zavora-ai/adk-playground) covers managed agents and environments.
 
 ### Vertex AI
 

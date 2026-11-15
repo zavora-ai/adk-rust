@@ -735,14 +735,16 @@ cargo run --manifest-path examples/openai_responses/Cargo.toml
 
 ### Additional Examples
 
-| Example | Run Command | Feature |
-|---------|-------------|---------|
-| WebSocket transport | `cargo run --manifest-path examples/openai_ws_minimal/Cargo.toml` | Persistent connection |
-| Background mode | `cargo run --manifest-path examples/openai_background/Cargo.toml` | Submit and poll |
-| Conversations API | `cargo run --manifest-path examples/openai_conversations/Cargo.toml` | Server-managed multi-turn |
-| Built-in tools | `cargo run --manifest-path examples/openai_builtin_tools/Cargo.toml` | Image generation, web search |
-| Deep research | `cargo run --manifest-path examples/openai_deep_research/Cargo.toml` | Background research |
-| Open Responses | `cargo run --manifest-path examples/openai_open_responses/Cargo.toml` | Provider-agnostic endpoints |
+These examples live in [adk-playground](https://github.com/zavora-ai/adk-playground):
+
+| Example | Crate | Feature |
+|---------|-------|---------|
+| WebSocket transport | `openai_ws_minimal` | Persistent connection |
+| Background mode | `openai_background` | Submit and poll |
+| Conversations API | `openai_conversations` | Server-managed multi-turn |
+| Built-in tools | `openai_builtin_tools` | Image generation, web search |
+| Deep research | `openai_deep_research` | Background research |
+| Open Responses | `openai_open_responses` | Provider-agnostic endpoints |
 
 ---
 

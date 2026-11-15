@@ -456,18 +456,17 @@ start_cron_scheduler(cron_state);
 ## Examples
 
 ```bash
-# Functional API (TaskContext, ReducedValue, MessagesValue, etc.)
-cargo run --manifest-path examples/functional_workflow/Cargo.toml
-
 # A retried task that pauses, and a cancelled workflow, with LlmAgent tasks
 cargo run --manifest-path examples/graph_runtime/Cargo.toml -- --scenario suspension_skips_retry,cancellation_stops_workflow
-
-# Background Runs (REST API with Axum)
-cargo run --manifest-path examples/background_runs/Cargo.toml
-
-# Cron Scheduling (full lifecycle demo)
-cargo run --manifest-path examples/cron_scheduling/Cargo.toml
 ```
+
+Three more examples live in [adk-playground](https://github.com/zavora-ai/adk-playground):
+
+| Example | What it shows |
+|---------|---------------|
+| `functional_workflow` | The Functional API: `TaskContext`, `ReducedValue`, `MessagesValue` |
+| `background_runs` | Background runs over the REST API with Axum |
+| `cron_scheduling` | Cron scheduling, full lifecycle |
 
 ## Feature Flags
 

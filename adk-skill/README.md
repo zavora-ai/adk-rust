@@ -462,9 +462,7 @@ The selection engine uses weighted token matches, so metadata steers discovery:
 
 ## Related Examples
 
-From this repository:
-
-- [`examples/skills_multilingual`](https://github.com/zavora-ai/adk-rust/tree/main/examples/skills_multilingual) — Unicode-aware selection across Chinese, Russian, and English
+- `skills_multilingual` in [adk-playground](https://github.com/zavora-ai/adk-playground) — Unicode-aware selection across Chinese, Russian, and English
 - [`examples/skill_memory_improvements`](https://github.com/zavora-ai/adk-rust/tree/main/examples/skill_memory_improvements) — `.skills` indexing and lexical matching
 
 ## Development

@@ -441,12 +441,12 @@ jobs:
 
   # ── Standalone examples: compile every examples/* crate ────────
   # The standalone examples are separate workspaces, so the workspace build does
-  # not catch public-API breakage or stale example lockfiles. Run the four
+  # not catch public-API breakage or stale example lockfiles. Run the two
   # shards before merge; each shard shares one target directory across its
   # examples to avoid rebuilding common ADK crates. The examples the script lists
   # in LINTED_EXAMPLES run clippy with -D warnings instead of check.
   examples-compile:
-    name: examples-compile (${{ matrix.shard }}/4)
+    name: examples-compile (${{ matrix.shard }}/2)
     needs: scope
     if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push'
     runs-on: ubuntu-latest
@@ -454,7 +454,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1]
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -472,8 +472,8 @@ jobs:
       with:
         packages: protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
 
-    - name: Compile standalone examples (shard ${{ matrix.shard }} of 4)
-      run: bash scripts/check-examples-compile.sh ${{ matrix.shard }} 4
+    - name: Compile standalone examples (shard ${{ matrix.shard }} of 2)
+      run: bash scripts/check-examples-compile.sh ${{ matrix.shard }} 2
 
   # ── Agent kernel: the example's scripted scenarios run ─────────
   # examples/harness_kernel holds the scripted K1 and K4–K8 scenarios, the managed form and

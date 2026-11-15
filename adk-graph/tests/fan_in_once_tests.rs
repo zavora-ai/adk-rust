@@ -208,7 +208,7 @@ impl Runs {
 }
 
 /// `review` has two incoming edges, `implement` and the loop's `revise`, as in
-/// `examples/coding_graph`. Only one of them arrives in each pass, so waiting for
+/// adk-playground's `coding_graph` example. Only one of them arrives in each pass, so waiting for
 /// both stranded the node and the run returned `Ok` without reviewing anything.
 #[tokio::test]
 async fn a_node_re_entered_by_a_loop_back_edge_runs_on_every_pass() {
@@ -401,7 +401,7 @@ async fn a_join_waits_for_a_predecessor_behind_another_waiting_join() {
 }
 
 /// Three reviewers re-entered by a revise loop and joined by `synthesize`, wired
-/// as in `examples/coding_graph`. The reviewers run together in one step on each
+/// as in adk-playground's `coding_graph` example. The reviewers run together in one step on each
 /// pass, and `synthesize` runs once per pass.
 #[tokio::test]
 async fn parallel_reviewers_in_a_revise_loop_run_together_on_every_pass() {

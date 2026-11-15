@@ -124,12 +124,8 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-See [`examples/vertex_rag`](https://github.com/zavora-ai/adk-rust/tree/main/examples/vertex_rag)
-for the full runnable agent:
-
-```bash
-cargo run --manifest-path examples/vertex_rag/Cargo.toml
-```
+See the `vertex_rag` example in [adk-playground](https://github.com/zavora-ai/adk-playground)
+for the full runnable agent.
 
 ---
 
@@ -164,5 +160,5 @@ dedicated RAG component), provider `vertex_ai`, and machine-readable
 ## Self-hosted RAG instead?
 
 For a pipeline you run yourself — pluggable chunkers, embedding providers,
-and vector stores (Qdrant, LanceDB, pgvector, SurrealDB) — see
+and vector stores (Qdrant, LanceDB, pgvector) — see
 [RAG](../tools/rag.md).

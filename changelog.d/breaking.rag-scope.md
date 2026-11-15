@@ -8,8 +8,8 @@
   `ScopedRag` (from `RagPipeline::scoped`) as `ingest`, `ingest_batch`, `query`, and `query_with`
   (with `QueryOptions`), beside `count` and `purge_scope`. `RagTool` searches
   `Scope::single_tenant()` unless `with_scope` sets another. pgvector migrates tables in place,
-  assigning existing rows to `Scope::single_tenant()`; LanceDB, Qdrant, SurrealDB, and Agent
-  Retrieval collections need re-ingesting. Refs #1279.
+  assigning existing rows to `Scope::single_tenant()`; LanceDB, Qdrant, and Agent Retrieval
+  collections need re-ingesting. Refs #1279.
 - **Agent Retrieval stores chunks under derived IDs with a declared data schema** (`adk-rag`):
   `AgentRetrievalStore` used chunk IDs as Data Object IDs, which the service accepts only as
   RFC 1035 labels, so chunker IDs such as `doc_0` were refused, and it wrote fields no data schema

@@ -297,7 +297,7 @@ the agent card at `agent_url` and sends messages only to an endpoint on the card
 
 ## Next Steps
 
-- [A2A Quickstart Example](https://github.com/zavora-ai/adk-rust/tree/main/examples/a2a_quickstart) — minimal working example
+- `a2a_quickstart` in [adk-playground](https://github.com/zavora-ai/adk-playground) — minimal working example
 - [Tool Integration](../tools/function-tools.md) — add custom tools to your A2A agent
 - [Sessions](../sessions/sessions.md) — persist conversation state across requests
 - [Deployment](../deployment/server.md) — deploy your A2A agent to production

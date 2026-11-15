@@ -25,7 +25,7 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 # Only needed by the unit test that defines a sample `Tool`. The runnable
-# example lives in `examples/codeact_monty_agent` as a standalone crate.
+# example, `codeact_monty_agent`, is a standalone crate in adk-playground.
 async-trait = { workspace = true }
 # Temp directories for the filesystem-access integration tests.
 tempfile = "3"

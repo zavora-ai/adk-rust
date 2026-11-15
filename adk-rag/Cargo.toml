@@ -14,7 +14,7 @@ readme = "README.md"
 homepage.workspace = true
 
 [package.metadata.docs.rs]
-# lancedb needs protoc and surrealdb builds RocksDB from C++, so both are left out.
+# lancedb needs protoc, so it is left out.
 features = ["gemini", "openai", "qdrant", "pgvector", "agent-retrieval", "vertex-rag"]
 
 [dependencies]
@@ -43,8 +43,6 @@ uuid = { workspace = true, features = ["v5"], optional = true }
 lancedb = { version = "0.31", optional = true }
 futures = { version = "0.3", optional = true }
 sqlx = { workspace = true, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "json"], optional = true }
-surrealdb = { version = "3.0.1", features = ["kv-mem", "kv-rocksdb"], optional = true }
-surrealdb-types = { version = "3.0.1", optional = true }
 # `OnnxEmbeddingProvider` (feature `onnx`). The ort pin is adk-audio's: rc.12 renamed
 # `ort::execution_providers`, so a floating pre-release breaks every ONNX feature.
 ort = { version = "=2.0.0-rc.11", optional = true }
@@ -69,9 +67,8 @@ qdrant = ["dep:qdrant-client", "dep:uuid"]
 lancedb = ["dep:lancedb", "dep:futures"]
 pgvector = ["dep:sqlx"]
 agent-retrieval = ["dep:adk-gcp", "dep:google-cloud-auth", "dep:reqwest", "dep:uuid"]
-surrealdb = ["dep:surrealdb", "dep:surrealdb-types"]
 vertex-rag = ["dep:adk-gcp", "dep:google-cloud-auth", "dep:reqwest"]
 # A sentence-transformer ONNX model run in process on the `ort` runtime: no network and no
 # provider key after one download into the Hugging Face hub cache (spec 3.1 §10 R1).
 onnx = ["dep:ort", "dep:tokenizers", "dep:hf-hub"]
-full = ["gemini", "openai", "qdrant", "lancedb", "pgvector", "surrealdb"]
+full = ["gemini", "openai", "qdrant", "lancedb", "pgvector"]

@@ -235,7 +235,7 @@ of a persistent session.
 The application may hide thought chunks, render tool activity separately, and
 expose the shared `StatusTracker` in its interface.
 
-See the runnable [`acp_client_host`](../../../examples/acp_client_host) crate for
+See the runnable `acp_client_host` example in [adk-playground](https://github.com/zavora-ai/adk-playground) for
 the complete loop.
 
 ## Let the agent request files

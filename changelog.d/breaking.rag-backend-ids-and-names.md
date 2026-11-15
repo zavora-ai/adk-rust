@@ -1,13 +1,10 @@
-- **SurrealDB and Agent Retrieval collection names are validated** (`adk-rag`):
-  `SurrealVectorStore` replaced every character other than a letter, digit, or `_` with `_`,
-  and `AgentRetrievalStore` lowercased names, replaced other characters with `-`, and truncated
-  them to 63, so distinct names such as `docs-v1` and `docs_v1` shared one collection. Both now
-  return `RagError::VectorStoreError` for a name they would rewrite, as `PgVectorStore` does.
-  `SurrealVectorStore` accepts ASCII letters, digits, and underscores and quotes table names, so
-  keywords such as `select` are valid names. `AgentRetrievalStore` accepts ASCII lowercase
-  letters, digits, and underscores and maps each `_` to `-`, so `my_docs` still reaches the
-  collection 2.x named `my-docs`; a collection prefix uses lowercase letters, digits, and
-  hyphens. The shared `VectorStore` contract checks that distinct names never share a
+- **Agent Retrieval collection names are validated** (`adk-rag`): `AgentRetrievalStore`
+  lowercased names, replaced other characters with `-`, and truncated them to 63, so distinct
+  names such as `Docs`, `docs`, and `docs_` shared one collection. It now returns
+  `RagError::VectorStoreError` for a name it would rewrite, as `PgVectorStore` does. It accepts
+  ASCII lowercase letters, digits, and underscores and maps each `_` to `-`, so `my_docs` still
+  reaches the collection 2.x named `my-docs`; a collection prefix uses lowercase letters, digits,
+  and hyphens. The shared `VectorStore` contract checks that distinct names never share a
   collection.
 - **Qdrant point IDs are derived from chunk IDs** (`adk-rag`): `QdrantVectorStore` used the chunk
   ID as the point ID, which Qdrant refuses unless it is a UUID, so chunks from the built-in

@@ -237,7 +237,8 @@ fn server_event_to_client_json(event: ServerEvent) -> Option<serde_json::Value> 
 ```
 
 Mount `handle_ws` behind an Axum `WebSocketUpgrade` route such as `/ws?provider=openai`;
-`examples/customer_service/src/server.rs` is the complete server.
+`src/server.rs` of the [`customer_service`](examples.md#customer_service--aria) example is the
+complete server.
 
 Note the two input asymmetries:
 
