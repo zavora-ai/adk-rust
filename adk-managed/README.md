@@ -404,7 +404,7 @@ adk-managed/src/
 | Flag | Description |
 |------|-------------|
 | `sandbox` | Enable `adk-sandbox` integration for isolated tool execution |
-| `memory` | Enable `adk-memory` integration for cross-session memory |
+| `memory` | Cross-session memory through an `adk_core::Memory` service (`with_memory`); links no extra crate |
 | `full` | `sandbox` and `memory` |
 | `gemini`, `openai`, `anthropic`, `ollama` | Let `DefaultModelResolver` build that provider's models |
 | `all-providers` | Every provider feature |

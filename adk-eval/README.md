@@ -351,7 +351,7 @@ adk-eval = { version = "3.0.0", features = ["embedding", "ci-helpers", "statisti
 |---------|-----------|------------|
 | `embedding` | `adk-memory` | Embedding-based semantic similarity |
 | `ci-helpers` | `quick-xml` | JUnit XML report generation |
-| `statistics` | `statrs` | Wilcoxon signed-rank for A/B comparison |
+| `statistics` | `libm` | Wilcoxon signed-rank for A/B comparison |
 | `vertex-eval` | `adk-gcp` | Vertex AI Gen AI Evaluation Service bridge (`VertexEvalClient`, `VertexEvalJudge`) |
 | `personas` | none | The `personas` module: simulated users for multi-turn evaluation |
 | `experiments` | `libm` | `ExperimentAnalyzer`: sequential analysis of web experiments with guardrails |

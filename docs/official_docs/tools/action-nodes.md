@@ -30,7 +30,7 @@ adk-rust = { version = "3.0.0", features = ["action"] }
 | `action-http` | HTTP and Notification nodes |
 | `action-rss` | RSS node (implies `action-http`) |
 | `action-trigger` | `TriggerRuntime` for webhook, schedule, and event triggers |
-| `action-db`, `action-email`, `action-code` | Placeholders only; see below |
+| `action-db`, `action-email` | Placeholders only; see below |
 | `action-full` | All of the above |
 
 ## Node Types (14)
@@ -75,9 +75,9 @@ write `null`.
 Implement `Node::validate` on a custom node to take part in the same check.
 
 A node that bypasses the build-time check and executes anyway fails with an error
-saying its node type is not implemented. Enabling `action-db`, `action-email`, or
-`action-code` does not change that: those features compile the placeholders, not a
-backend.
+saying its node type is not implemented. Enabling `action-db` or `action-email` does not
+change that: those features compile the placeholders, not a backend. `adk-rust` keeps
+`action-code` as a deprecated alias of `action`.
 
 ## Untrusted Paths and URLs
 

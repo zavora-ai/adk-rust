@@ -26,7 +26,6 @@ syn = { version = "2", features = ["full", "extra-traits"] }
 # published manifest — they can never block or reorder a crates.io publish.
 adk-core = { path = "../adk-core" }
 adk-tool = { path = "../adk-tool" }
-async-trait.workspace = true
 schemars = "1.0"
 serde = { workspace = true }
 serde_json.workspace = true

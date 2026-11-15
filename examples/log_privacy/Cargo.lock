@@ -79,18 +79,14 @@ dependencies = [
  "adk-core",
  "async-stream",
  "async-trait",
- "base64",
  "eventsource-stream",
  "futures",
- "futures-util",
  "mime",
- "mime_guess",
  "reqwest 0.12.28",
  "schemars",
  "serde",
  "serde_json",
  "snafu",
- "strum",
  "strum_macros",
  "time",
  "tokio",
@@ -121,7 +117,6 @@ dependencies = [
  "adk-core",
  "adk-gemini",
  "adk-telemetry",
- "anyhow",
  "async-openai",
  "async-stream",
  "async-trait",
@@ -193,7 +188,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2405,15 +2400,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
-name = "strum"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9628de9b8791db39ceda2b119bbe13134770b56c138ec1d3af810d045c04f9bd"
-dependencies = [
- "strum_macros",
-]
-
-[[package]]
 name = "strum_macros"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3069,15 +3055,6 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
-dependencies = [
- "windows-targets",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.59.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets",
 ]

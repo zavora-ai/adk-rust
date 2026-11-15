@@ -114,7 +114,6 @@ sha2.workspace = true
 sqlx = { workspace = true, optional = true, features = ["runtime-tokio", "chrono", "json"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "net", "fs", "signal"] }
-tokio-stream.workspace = true
 tokio-util = { version = "0.7", features = ["rt"] }
 # Driver manifests (spec 3.2 §7.7).
 toml = { workspace = true, optional = true }
