@@ -729,7 +729,13 @@ async fn decide_or_list(
             for held in &held {
                 let at = held.entry.requested_at.format("held %Y-%m-%d %H:%M").to_string();
                 let request = &held.entry.request;
-                print_row(&held.id(), &held.scope.session_id, &request.tool_name, &request.args, &at);
+                print_row(
+                    &held.id(),
+                    &held.scope.session_id,
+                    &request.tool_name,
+                    &request.args,
+                    &at,
+                );
             }
             return Ok(());
         }
@@ -1081,11 +1087,13 @@ mod tests {
 
         let service = Arc::new(StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new())));
         let kernel = adk_kernel::Kernel::builder()
-            .config(adk_kernel::KernelConfig::default().with_app_name(APP_NAME).with_control(
-                ControlPlaneConfig::default()
-                    .without_socket()
-                    .with_http("127.0.0.1:0".parse().unwrap()),
-            ))
+            .config(
+                adk_kernel::KernelConfig::default().with_app_name(APP_NAME).with_control(
+                    ControlPlaneConfig::default()
+                        .without_socket()
+                        .with_http("127.0.0.1:0".parse().unwrap()),
+                ),
+            )
             .run_store(Arc::new(InMemoryRunStore::new()))
             .approval_service(service.clone())
             .build()
@@ -1093,7 +1101,8 @@ mod tests {
         let plane = ControlPlane::start(&kernel).await.unwrap();
         let client = ControlClient::http(format!("http://{}", plane.http_addr().unwrap()));
         let held = |id: &str, command: &str| {
-            let call = ToolConfirmationRequest::new("bash", serde_json::json!({ "command": command }));
+            let call =
+                ToolConfirmationRequest::new("bash", serde_json::json!({ "command": command }));
             ApprovalRequest::new(
                 id,
                 ApprovalScope::new(APP_NAME, "ana", "s-1"),
