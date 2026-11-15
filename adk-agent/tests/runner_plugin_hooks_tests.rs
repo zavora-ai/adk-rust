@@ -267,6 +267,67 @@ async fn a_runner_plugin_before_model_callback_can_skip_the_model() {
     assert_eq!(texts(&events), "served by plugin");
 }
 
+/// The event of a skipped model call records the request the callback skipped when the run
+/// records payloads, and a placeholder otherwise.
+#[tokio::test]
+async fn a_skipped_model_call_records_the_request_it_skipped() {
+    let mut recorded = Vec::new();
+    for record_payloads in [true, false] {
+        let plugin = Plugin::new(PluginConfig {
+            name: "canned".to_string(),
+            before_model: Some(Box::new(|_ctx, _request| {
+                Box::pin(async { Ok(BeforeModelResult::Skip(text_response("served by plugin"))) })
+            })),
+            ..Default::default()
+        });
+        let model = ScriptedModel::new(vec![]);
+        let sessions = Arc::new(InMemorySessionService::new());
+        sessions
+            .create(CreateRequest {
+                app_name: "plugins".to_string(),
+                user_id: "user".to_string(),
+                session_id: Some("session".to_string()),
+                state: HashMap::new(),
+            })
+            .await
+            .unwrap();
+        let runner = Runner::builder()
+            .app_name("plugins")
+            .agent(Arc::new(
+                LlmAgentBuilder::new("ops")
+                    .model(Arc::clone(&model) as Arc<dyn Llm>)
+                    .build()
+                    .unwrap(),
+            ))
+            .session_service(sessions as Arc<dyn SessionService>)
+            .plugin_manager(Arc::new(PluginManager::new(vec![plugin])))
+            .run_config(adk_core::RunConfig { record_payloads, ..Default::default() })
+            .build()
+            .unwrap();
+        let events: Vec<Event> = runner
+            .run(
+                UserId::new("user").unwrap(),
+                SessionId::new("session").unwrap(),
+                Content::new("user").with_text("delete it"),
+            )
+            .await
+            .unwrap()
+            .map(|event| event.unwrap())
+            .collect()
+            .await;
+        assert_eq!(model.calls.load(Ordering::SeqCst), 0, "the model must not be called");
+        let request = events
+            .iter()
+            .find_map(|event| event.llm_request.clone())
+            .expect("the skipped call's event records its request");
+        recorded.push((
+            request.contains("\"model\":\"scripted\"") && request.contains("delete it"),
+            request.starts_with("[omitted"),
+        ));
+    }
+    assert_eq!(recorded, [(true, false), (false, true)]);
+}
+
 #[tokio::test]
 async fn runner_plugin_agent_model_and_tool_callbacks_all_run() {
     let counts: Arc<Mutex<HashMap<&'static str, usize>>> = Arc::default();

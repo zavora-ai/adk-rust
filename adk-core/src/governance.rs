@@ -3254,13 +3254,17 @@ struct ScannedHold {
 }
 
 fn scan_held_calls(events: &[Event], agent_name: &str, branch: &str) -> Vec<ScannedHold> {
+    // Only an event carrying a request holds a call; every agent run asks, most hold nothing.
+    if !events.iter().any(|event| event.actions.tool_confirmation.is_some()) {
+        return Vec::new();
+    }
     let boundary = events
         .iter()
         .rev()
         .find_map(|event| event.actions.compaction.as_ref().map(|c| c.end_timestamp));
     // Calls the agent issued, by ID; calls saved without one by invocation and name.
-    let mut issued = HashMap::<String, (String, Value, usize)>::new();
-    let mut idless = Vec::<(String, String, Value, usize)>::new();
+    let mut issued = HashMap::<&str, (&str, &Value, usize)>::new();
+    let mut idless = Vec::<(&str, &str, &Value, usize)>::new();
     let mut held = Vec::<ScannedHold>::new();
 
     for (index, event) in events.iter().enumerate() {
@@ -3280,22 +3284,18 @@ fn scan_held_calls(events: &[Event], agent_name: &str, branch: &str) -> Vec<Scan
             match part {
                 Part::FunctionCall { name, args, id, .. } if own => match id {
                     Some(id) => {
-                        issued.insert(id.clone(), (name.clone(), args.clone(), index));
+                        issued.insert(id, (name, args, index));
                     }
-                    None => idless.push((
-                        event.invocation_id.clone(),
-                        name.clone(),
-                        args.clone(),
-                        index,
-                    )),
+                    None => idless.push((&event.invocation_id, name, args, index)),
                 },
                 Part::FunctionResponse { function_response, id, .. }
-                    if !is_confirmation_pending(&function_response.response) =>
+                    if !held.is_empty()
+                        && !is_confirmation_pending(&function_response.response) =>
                 {
                     match id {
                         Some(id) => {
                             let answered = issued
-                                .get(id)
+                                .get(id.as_str())
                                 .map(|(name, args, _)| tool_call_fingerprint(name, args));
                             held.retain(|hold| {
                                 let call = &hold.call;
@@ -3316,13 +3316,13 @@ fn scan_held_calls(events: &[Event], agent_name: &str, branch: &str) -> Vec<Scan
         if own && let Some(request) = &event.actions.tool_confirmation {
             let (id, name, args, issued_at) = match request.function_call_id.as_deref() {
                 Some(call_id) if issued.contains_key(call_id) => {
-                    let (name, args, at) = &issued[call_id];
-                    (Some(call_id.to_string()), name.clone(), args.clone(), *at)
+                    let (name, args, at) = issued[call_id];
+                    (Some(call_id.to_string()), name.to_string(), args.clone(), at)
                 }
                 _ => match idless.iter().rev().find(|(invocation, name, _, _)| {
                     *invocation == event.invocation_id && *name == request.tool_name
                 }) {
-                    Some((_, name, args, at)) => (None, name.clone(), args.clone(), *at),
+                    Some((_, name, args, at)) => (None, name.to_string(), Value::clone(args), *at),
                     None => (
                         request.function_call_id.clone(),
                         request.tool_name.clone(),
@@ -5453,6 +5453,25 @@ mod tests {
             vec![function_response("pay", json!({ "ok": 1 }), "c1")],
         ));
         assert!(held_tool_calls(&events, "ops", "").is_empty());
+    }
+
+    #[test]
+    fn answered_calls_hold_nothing_and_leave_a_later_hold_held() {
+        let answered: Vec<Event> = (0..50)
+            .flat_map(|index| {
+                let id = format!("done-{index}");
+                [
+                    event("ops", "inv-0", vec![function_call("pay", json!({ "amount": 5 }), &id)]),
+                    event("ops", "inv-0", vec![function_response("pay", json!({ "ok": 1 }), &id)]),
+                ]
+            })
+            .collect();
+        assert!(held_tool_calls(&answered, "ops", "").is_empty());
+
+        let events: Vec<Event> = answered.into_iter().chain(held_run()).collect();
+        let ids: Vec<Option<String>> =
+            held_tool_calls(&events, "ops", "").into_iter().map(|held| held.id).collect();
+        assert_eq!(ids, [Some("c1".to_string())]);
     }
 
     #[test]

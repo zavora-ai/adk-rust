@@ -4325,16 +4325,26 @@ impl Agent for LlmAgent {
                 let mut current_request = request;
                 let mut model_response_override = model_response_override_from_plugin;
                 if model_response_override.is_none() {
+                    // Each callback takes the request; the event of a skipped call records the
+                    // request it skipped only when the run records payloads, so only then is
+                    // the request copied before a callback sees it.
+                    let record_payloads = ctx.run_config().record_payloads;
                     for callback in
                         hook_callbacks.before_model.iter().chain(before_model_callbacks.iter())
                     {
-                        match callback(ctx.clone() as Arc<dyn CallbackContext>, current_request.clone()).await {
+                        let skipped_request = record_payloads.then(|| current_request.clone());
+                        let request =
+                            std::mem::replace(&mut current_request, LlmRequest::new("", vec![]));
+                        match callback(ctx.clone() as Arc<dyn CallbackContext>, request).await {
                             Ok(BeforeModelResult::Continue(modified_request)) => {
                                 // Callback may have modified the request, continue with it
                                 current_request = modified_request;
                             }
                             Ok(BeforeModelResult::Skip(response)) => {
                                 // Callback returned a response - skip model call
+                                if let Some(skipped_request) = skipped_request {
+                                    current_request = skipped_request;
+                                }
                                 model_response_override = Some(response);
                                 break;
                             }
@@ -4484,7 +4494,11 @@ impl Agent for LlmAgent {
                     );
                     let call_metered = call_scope.budget().is_some();
                     // Kept for the run's `on_model_error` hooks, which see what the model was sent.
-                    let failed_request = (!ctx.run_config().invocation_hooks.is_empty())
+                    let failed_request = ctx
+                        .run_config()
+                        .invocation_hooks
+                        .iter()
+                        .any(|hook| hook.handles_model_errors())
                         .then(|| request.clone());
                     // A run without streaming asks the model for one complete response
                     // (Gemini's `generateContent`, as adk-python and adk-go do); otherwise
