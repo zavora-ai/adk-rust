@@ -24,7 +24,7 @@ async fn fresh_db_migrate_creates_tables_and_registry() {
 
     // After migrate: schema_version is the latest version
     let v = svc.schema_version().await.unwrap();
-    assert_eq!(v, 2, "schema_version should be 2 after migrate");
+    assert_eq!(v, 3, "schema_version should be 3 after migrate");
 }
 
 /// Idempotence: calling migrate() twice is a no-op the second time.
@@ -40,7 +40,7 @@ async fn migrate_twice_is_idempotent() {
     let v2 = svc.schema_version().await.unwrap();
 
     assert_eq!(v1, v2, "schema_version should not change on second migrate");
-    assert_eq!(v2, 2);
+    assert_eq!(v2, 3);
 }
 
 /// After migration, full CRUD works: create session, get, list, delete.
@@ -110,9 +110,9 @@ async fn crud_works_after_migration() {
 /// migrate() should detect them and record v1 without re-creating.
 #[tokio::test]
 async fn baseline_detection_on_preexisting_tables() {
-    // Create a pool and manually create the sessions table (simulating old code)
+    // Create a pool and manually create the sessions and events tables (simulating old code)
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    sqlx::query(
+    sqlx::raw_sql(
         "CREATE TABLE sessions (\
             app_name TEXT NOT NULL, \
             user_id TEXT NOT NULL, \
@@ -121,7 +121,21 @@ async fn baseline_detection_on_preexisting_tables() {
             created_at TEXT NOT NULL, \
             updated_at TEXT NOT NULL, \
             PRIMARY KEY (app_name, user_id, session_id)\
-        )",
+        ); \
+        CREATE TABLE events (\
+            id TEXT NOT NULL, \
+            app_name TEXT NOT NULL, \
+            user_id TEXT NOT NULL, \
+            session_id TEXT NOT NULL, \
+            invocation_id TEXT NOT NULL, \
+            branch TEXT NOT NULL, \
+            author TEXT NOT NULL, \
+            timestamp TEXT NOT NULL, \
+            llm_response TEXT NOT NULL, \
+            actions TEXT NOT NULL, \
+            long_running_tool_ids TEXT NOT NULL, \
+            PRIMARY KEY (id, app_name, user_id, session_id)\
+        );",
     )
     .execute(&pool)
     .await
@@ -140,9 +154,9 @@ async fn baseline_detection_on_preexisting_tables() {
     let svc = SqliteSessionService::from_pool(pool);
     svc.migrate().await.unwrap();
 
-    // Should detect the baseline, record v1, then apply v2
+    // Should detect the baseline, record v1, then apply v2 and v3
     let v = svc.schema_version().await.unwrap();
-    assert_eq!(v, 2, "baseline should be recorded as v1 and v2 applied");
+    assert_eq!(v, 3, "baseline should be recorded as v1 and v2 and v3 applied");
 
     // The pre-existing row should still be there
     let row =

@@ -392,7 +392,7 @@ mod tests {
     async fn test_sqlite_rewind_of_a_session_without_recorded_initial_state() {
         let service = SqliteSessionService::new(":memory:").await.unwrap();
         service.migrate().await.unwrap();
-        assert_eq!(service.schema_version().await.unwrap(), 2);
+        assert_eq!(service.schema_version().await.unwrap(), 3);
         service
             .create(CreateRequest {
                 app_name: "app".to_string(),
@@ -484,5 +484,75 @@ mod tests {
         let kept: Vec<String> = rewound.events().all().into_iter().map(|e| e.id).collect();
         assert_eq!(kept, ids[..3]);
         assert_eq!(rewound.state().get("n"), Some(json!(2)));
+    }
+
+    /// Loading one session reads that session's rows through `idx_events_session_ts`, in read
+    /// order, instead of scanning and sorting every event in the file.
+    #[tokio::test]
+    async fn test_sqlite_loads_one_session_through_its_index() {
+        let service = SqliteSessionService::new(":memory:").await.unwrap();
+        service.migrate().await.unwrap();
+
+        let index: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'events' \
+             AND name = 'idx_events_session_ts'",
+        )
+        .fetch_all(service.pool())
+        .await
+        .unwrap();
+        assert_eq!(index, ["idx_events_session_ts"]);
+
+        let rows = sqlx::query(
+            "EXPLAIN QUERY PLAN SELECT * FROM (\
+                 SELECT *, rowid AS seq FROM events \
+                 WHERE app_name = ? AND user_id = ? AND session_id = ? \
+                   AND (? IS NULL OR timestamp >= ?) \
+                 ORDER BY timestamp DESC, rowid DESC LIMIT ?\
+             ) ORDER BY timestamp, seq",
+        )
+        .bind("app")
+        .bind("user")
+        .bind("session")
+        .bind(None::<String>)
+        .bind(None::<String>)
+        .bind(-1_i64)
+        .fetch_all(service.pool())
+        .await
+        .unwrap();
+        let details: Vec<String> = rows
+            .iter()
+            .map(|row| sqlx::Row::get::<String, _>(row, "detail"))
+            .filter(|detail| detail.contains("events"))
+            .collect();
+        assert_eq!(
+            details,
+            [
+                "SEARCH events USING INDEX idx_events_session_ts (app_name=? AND user_id=? AND session_id=?)"
+            ]
+        );
+    }
+
+    /// A file database opened with `new` runs in write-ahead-log mode and syncs every commit.
+    #[tokio::test]
+    async fn test_sqlite_file_database_uses_wal_and_full_sync() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}?mode=rwc", dir.path().join("sessions.db").display());
+        let service = SqliteSessionService::new(&url).await.unwrap();
+        service.migrate().await.unwrap();
+
+        let mut conn = service.pool().acquire().await.unwrap();
+        let journal: String =
+            sqlx::query_scalar("PRAGMA journal_mode").fetch_one(&mut *conn).await.unwrap();
+        let synchronous: i64 =
+            sqlx::query_scalar("PRAGMA synchronous").fetch_one(&mut *conn).await.unwrap();
+        assert_eq!((journal.as_str(), synchronous), ("wal", 2));
+        drop(conn);
+        service.pool().close().await;
+
+        // The mode is kept in the file, so the next process opens it in WAL mode too.
+        let reopened = SqliteSessionService::new(&url).await.unwrap();
+        let journal: String =
+            sqlx::query_scalar("PRAGMA journal_mode").fetch_one(reopened.pool()).await.unwrap();
+        assert_eq!(journal, "wal");
     }
 }
