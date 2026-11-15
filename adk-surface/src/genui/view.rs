@@ -2,19 +2,21 @@
 //! §7.4 rule 5): provenance by the reserved state key and the drawing's digest, the
 //! drawing checked again, its strings resolved on the server.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use adk_core::{DRAW_TOOL_NAMES, Event};
 use serde_json::{Map, Value};
 
 use super::a2ui::DataModel;
-use super::catalog::Catalog;
+use super::catalog::{Catalog, HomeNode};
 use super::draw::{DRAWN_STATE_KEY, DrawnEnvelope, DrawnRecord, REFUSED_STATE_KEY};
 use super::drawn::{
-    DrawnActionView, DrawnArg, DrawnCheck, DrawnField, DrawnInput, DrawnKind, DrawnNode,
-    DrawnOption, DrawnSurface, RefusalKind, RefusedDrawing,
+    DrawnActionView, DrawnArg, DrawnCheck, DrawnExtension, DrawnField, DrawnInput, DrawnKind,
+    DrawnNode, DrawnOption, DrawnSurface, RefusalKind, RefusedDrawing,
 };
-use super::validate::{ActionArg, Child, DrawRefusal, ValidatedSurface, Validator, children};
+use super::validate::{
+    ActionArg, Child, DrawRefusal, ExtensionView, ValidatedSurface, Validator, children,
+};
 use crate::model::ThreadItem;
 use crate::project::Projector;
 use crate::words;
@@ -214,6 +216,7 @@ pub(crate) fn tree(catalog: &'static Catalog, validated: &ValidatedSurface) -> D
         .collect();
     let builder = Builder {
         catalog,
+        extensions: &validated.extensions,
         texts,
         components,
         model: DataModel::new(validated.draft.data_model.clone()),
@@ -229,11 +232,15 @@ pub(crate) fn tree(catalog: &'static Catalog, validated: &ValidatedSurface) -> D
         tabs: Vec::new(),
         show_all_text: None,
         children: Vec::new(),
+        chart: None,
+        extension: None,
     })
 }
 
 struct Builder<'a> {
     catalog: &'static Catalog,
+    /// What each extension component shows, as the validator checked it.
+    extensions: &'a BTreeMap<(String, String), ExtensionView>,
     texts: Texts<'a>,
     components: HashMap<&'a str, (&'a str, &'a Map<String, Value>)>,
     model: DataModel,
@@ -268,7 +275,33 @@ impl Builder<'_> {
             tabs: Vec::new(),
             show_all_text: None,
             children: Vec::new(),
+            chart: None,
+            extension: None,
         };
+        // An extension component draws its home view as the validator checked it, and the
+        // components it holds where that view places them.
+        if let Some(view) = self.extensions.get(&(id.to_string(), scope.to_string())) {
+            let keys: Vec<String> = view
+                .children
+                .iter()
+                .map(
+                    |child| {
+                        if scope.is_empty() { child.clone() } else { format!("{child}@{scope}") }
+                    },
+                )
+                .collect();
+            let mut held: Vec<Option<DrawnNode>> =
+                view.children.iter().map(|child| self.node(child, scope, depth + 1)).collect();
+            let mut parts = 0;
+            node.children.extend(Self::home(&view.home, &node.key, &mut parts, &mut held));
+            node.extension = Some(DrawnExtension {
+                catalog: self.catalog.id().to_string(),
+                component: view.component.clone(),
+                props: view.props.clone(),
+                children: keys,
+            });
+            return Some(node);
+        }
         match component {
             "Text" => {
                 node.text = self.text(id, scope, "text");
@@ -340,6 +373,68 @@ impl Builder<'_> {
                     }
                 }
             }
+        }
+        Some(node)
+    }
+
+    /// An extension component's home view as nodes, keyed `{key}#{n}`; `held` are the nodes of
+    /// the components it holds, each taken where the view places it.
+    fn home(
+        view: &HomeNode,
+        key: &str,
+        parts: &mut usize,
+        held: &mut [Option<DrawnNode>],
+    ) -> Option<DrawnNode> {
+        if let HomeNode::Child(index) = view {
+            return held.get_mut(*index).and_then(Option::take);
+        }
+        *parts += 1;
+        let mut node = DrawnNode {
+            key: format!("{key}#{parts}"),
+            component: String::new(),
+            text: None,
+            variant: None,
+            field: None,
+            action: None,
+            tabs: Vec::new(),
+            show_all_text: None,
+            children: Vec::new(),
+            chart: None,
+            extension: None,
+        };
+        let mut nested = |children: &[HomeNode], parts: &mut usize| -> Vec<DrawnNode> {
+            children.iter().filter_map(|child| Self::home(child, key, parts, held)).collect()
+        };
+        match view {
+            HomeNode::Text { text, variant } => {
+                node.component = "Text".to_string();
+                node.text = Some(text.clone());
+                node.variant = Some(variant.variant().to_string());
+            }
+            HomeNode::Row(children) => {
+                node.component = "Row".to_string();
+                node.children = nested(children, parts);
+            }
+            HomeNode::Column(children) => {
+                node.component = "Column".to_string();
+                node.children = nested(children, parts);
+            }
+            HomeNode::Card(children) => {
+                node.component = "Card".to_string();
+                node.children = nested(children, parts);
+            }
+            HomeNode::Tabs(tabs) => {
+                node.component = "Tabs".to_string();
+                node.tabs = tabs.iter().map(|(title, _)| title.clone()).collect();
+                let views: Vec<HomeNode> = tabs.iter().map(|(_, view)| view.clone()).collect();
+                node.children = nested(&views, parts);
+            }
+            HomeNode::Divider => node.component = "Divider".to_string(),
+            HomeNode::Chart(chart) => {
+                node.component = "Chart".to_string();
+                node.chart = Some(chart.clone());
+            }
+            HomeNode::Child(_) => return None,
         }
         Some(node)
     }

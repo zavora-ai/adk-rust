@@ -120,6 +120,8 @@ pub struct DrawnSurface {
 /// | `Divider` | — | `axis` | — |
 /// | `Button` | Its label | `primary`, `default`, `borderless` | `action` |
 /// | `TextField`, `DateTimeInput`, `CheckBox`, `ChoicePicker`, `Slider` | The label | the catalog's variant | `field` |
+/// | `Chart` | — | — | `chart`: a chart an extension component's home view draws |
+/// | An extension component, such as `Metric` | — | — | `extension`, and one child: what the home shows for it |
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DrawnNode {
@@ -149,6 +151,32 @@ pub struct DrawnNode {
     /// Its children, in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<DrawnNode>,
+    /// A chart the home draws natively, from an extension component's home view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart: Option<DrawnChart>,
+    /// The extension component this node draws, for a host that draws it with its own
+    /// renderer; every other surface draws its one child, what the home shows for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<DrawnExtension>,
+}
+
+/// A component of an extension catalog as a host renderer reads it (spec 3.3 §6.1 `genui`,
+/// extension catalogs): its properties with every binding and text function resolved and
+/// every string already checked by rule 5. A renderer draws it from these and nothing else,
+/// and draws no control: the component only shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DrawnExtension {
+    /// The catalog's id.
+    pub catalog: String,
+    /// The component's type, such as `Metric`.
+    pub component: String,
+    /// Its properties, resolved and checked.
+    pub props: Value,
+    /// The keys of the nodes its slots hold, in slot order: each is in the subtree of the
+    /// node's child.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<String>,
 }
 
 /// A chart a component of an extension catalog shows in the home (spec 3.3 §6.1 `genui`,

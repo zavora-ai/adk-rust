@@ -23,8 +23,8 @@ use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use adk_surface::genui::{
     A2uiBody, A2uiMessage, Catalog, CatalogError, Catalogs, ChartAxis, ChartKind, ChartSeries,
     ChildSlot, DRAWN_STATE_KEY, DrawRefusal, DrawToolset, DrawnChart, DrawnEnvelope, DrawnKind,
-    DrawnRecord, ExtensionComponent, ExtensionSpec, FORMS_CATALOG_ID, GenuiAgUi, GenuiWiring,
-    HomeNode, MAX_DEPTH, RefusalKind, ResolvedComponent, SurfaceDraft, Validator,
+    DrawnNode, DrawnRecord, ExtensionComponent, ExtensionSpec, FORMS_CATALOG_ID, GenuiAgUi,
+    GenuiWiring, HomeNode, MAX_DEPTH, RefusalKind, ResolvedComponent, SurfaceDraft, Validator,
     capabilities_with,
 };
 use adk_surface::{
@@ -735,6 +735,10 @@ fn insight_envelope() -> DrawnEnvelope {
 }
 
 async fn thread_items(register: bool) -> Vec<ThreadItem> {
+    thread_items_of(&insight_envelope(), register).await
+}
+
+async fn thread_items_of(envelope: &DrawnEnvelope, register: bool) -> Vec<ThreadItem> {
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
     sessions
         .create(CreateRequest {
@@ -745,7 +749,7 @@ async fn thread_items(register: bool) -> Vec<ThreadItem> {
         })
         .await
         .unwrap();
-    sessions.append_event("s1", proven_result(&insight_envelope())).await.unwrap();
+    sessions.append_event("s1", proven_result(envelope)).await.unwrap();
     let source = LocalSource::builder(APP)
         .sessions(Arc::clone(&sessions))
         .approvals(Arc::new(StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))))
@@ -1004,4 +1008,78 @@ async fn a_form_inside_an_extension_container_sends_only_its_fields() {
         "{error:?}"
     );
     assert!(source.asked.lock().unwrap().is_empty());
+}
+
+fn drawn_root(items: &[ThreadItem]) -> &DrawnNode {
+    items
+        .iter()
+        .find_map(|item| match item {
+            ThreadItem::Drawn { surface } => surface.root.as_ref(),
+            _ => None,
+        })
+        .expect("the drawing is shown")
+}
+
+fn find<'a>(node: &'a DrawnNode, key: &str) -> Option<&'a DrawnNode> {
+    if node.key == key {
+        return Some(node);
+    }
+    node.children.iter().find_map(|child| find(child, key))
+}
+
+/// A home draws an extension component as its home view, checked, with the resolved
+/// properties a host renderer reads; a chart comes with the sentence the server wrote for it.
+#[tokio::test]
+async fn a_home_draws_an_extension_component_as_its_home_view() {
+    let items = thread_items(true).await;
+    let root = drawn_root(&items);
+    let extension = root.extension.as_ref().expect("the metric carries its resolved properties");
+    assert_eq!(extension.catalog, EXT_ID);
+    assert_eq!(extension.component, "Metric");
+    assert_eq!(extension.props["value"], 3, "the binding is resolved");
+    assert_eq!(root.children.len(), 1, "one child: what the home shows");
+    let view = &root.children[0];
+    assert_eq!(view.component, "Row");
+    assert_eq!(view.children[0].text.as_deref(), Some("Open incidents"));
+    assert_eq!(view.children[0].variant.as_deref(), Some("caption"));
+    assert_eq!(view.children[1].text.as_deref(), Some("3"));
+    assert_eq!(view.children[1].variant.as_deref(), Some("h3"));
+
+    let trend = envelope_in(
+        EXT_ID,
+        vec![
+            json!({ "id": "root", "component": "Trend", "label": "Latency", "values": { "path": "/v" } }),
+        ],
+        json!({ "v": [120, 98, 143] }),
+    );
+    let items = thread_items_of(&trend, true).await;
+    let chart = drawn_root(&items).children[0].chart.as_ref().expect("a native chart");
+    assert_eq!(chart.kind, ChartKind::Sparkline);
+    assert_eq!(chart.series[0].y.len(), 3);
+    assert_eq!(chart.summary, "Trend chart of Latency, 3 points, from 98 to 143");
+}
+
+/// The components an extension container holds are drawn where its home view puts them, so
+/// a form inside pages keeps its fields in the tree the send reads.
+#[tokio::test]
+async fn held_components_are_drawn_where_the_home_view_puts_them() {
+    let pages = envelope_in(
+        EXT_ID,
+        vec![
+            json!({ "id": "root", "component": "Pages",
+                    "pages": [{ "title": "Details", "child": "to" }, { "title": "Note", "child": "note" }] }),
+            json!({ "id": "to", "component": "TextField", "label": "To", "value": { "path": "/to" } }),
+            json!({ "id": "note", "component": "Text", "text": "Sent on the 10th" }),
+        ],
+        json!({ "to": "" }),
+    );
+    let items = thread_items_of(&pages, true).await;
+    let root = drawn_root(&items);
+    assert_eq!(root.extension.as_ref().unwrap().children, ["to", "note"]);
+    let tabs = &root.children[0];
+    assert_eq!(tabs.component, "Tabs");
+    assert_eq!(tabs.tabs, ["Details", "Note"]);
+    let to = find(root, "to").expect("the field is in the tree");
+    assert_eq!(to.field.as_ref().unwrap().path, "/to");
+    assert_eq!(find(root, "note").unwrap().text.as_deref(), Some("Sent on the 10th"));
 }
