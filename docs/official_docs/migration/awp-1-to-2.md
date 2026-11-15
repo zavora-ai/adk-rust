@@ -421,15 +421,9 @@ workspace executes a `PaymentIntent`; `adk-gateway`, a separate repository, uses
 
 ### The 1.x example
 
-`examples/awp_agent` loads a `business.toml`, builds an agent from it, installs authenticated
-A2A dispatch, mounts the management routes behind a separate credential and exercises every
-endpoint:
-
-```bash
-cd examples/awp_agent
-cp .env.example .env   # add your GOOGLE_API_KEY
-cargo run
-```
+The `awp_agent` example in [adk-playground](https://github.com/zavora-ai/adk-playground) loads a `business.toml`,
+builds an agent from it, installs authenticated A2A dispatch, mounts the management routes behind a
+separate credential and exercises every endpoint. It reads `GOOGLE_API_KEY`.
 
 ## Related
 

@@ -572,7 +572,7 @@ The full agent/model/tool callback surface is supported too: `before_callback` /
 
 With `RunConfig::action_ledger` set, `CodeActAgent` records each `NonIdempotent` call like `LlmAgent` does. The idempotency key is `{app}/{user}/{session}/codeact/{run_id}/{iteration}/{call_id}`, so two identical calls in one program both execute, and a call replayed from a checkpoint (crash recovery or a confirmed resume) is answered from the ledger instead of executing again. A ledger answer, and a non-idempotent call that times out or panics, is raised into the script as the same `already_succeeded` / `already_failed` / `outcome_unknown` payload `LlmAgent` returns.
 
-A runnable, dependency-free end-to-end demo (a self-contained `CodeRuntime` and a deterministic model) lives in [`examples/codeact_agent`](../examples/codeact_agent).
+A runnable, dependency-free end-to-end demo (a self-contained `CodeRuntime` and a deterministic model) is the `codeact_agent` example in [adk-playground](https://github.com/zavora-ai/adk-playground).
 
 ## Tool Call Markup Normalization
 

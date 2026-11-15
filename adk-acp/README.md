@@ -437,7 +437,6 @@ cargo test -p adk-tool --features mcp \
   --test mcp_server_lifecycle_integration_tests \
   test_tool_aggregation -- --ignored --exact
 cargo clippy -p adk-acp --all-features --all-targets -- -D warnings
-cargo check --manifest-path examples/acp_server/Cargo.toml
 ```
 
 ## Design boundaries
@@ -513,9 +512,9 @@ yet, so treat it as experimental.
 
 | Example | What it demonstrates |
 |---|---|
-| [`acp_client_host`](https://github.com/zavora-ai/adk-rust/tree/main/examples/acp_client_host) | A vendor-neutral ACP client with streamed events, a read-only filesystem host, and an async permission policy |
-| [`acp_kiro`](https://github.com/zavora-ai/adk-rust/tree/main/examples/acp_kiro) | Direct, delegated, persistent-session, environment, and cancellation flows against a real external coding agent |
-| [`acp_server`](https://github.com/zavora-ai/adk-rust/tree/main/examples/acp_server) | A real ADK-Rust LLM agent exposed to editors and other ACP clients through the official server SDK |
+| `acp_client_host` in [adk-playground](https://github.com/zavora-ai/adk-playground) | A vendor-neutral ACP client with streamed events, a read-only filesystem host, and an async permission policy |
+| `acp_kiro` in [adk-playground](https://github.com/zavora-ai/adk-playground) | Direct, delegated, persistent-session, environment, and cancellation flows against a real external coding agent |
+| `acp_server` in [adk-playground](https://github.com/zavora-ai/adk-playground) | A real ADK-Rust LLM agent exposed to editors and other ACP clients through the official server SDK |
 | [`acp_full_protocol`](https://github.com/zavora-ai/adk-rust/tree/main/examples/acp_full_protocol) | In-process, no-API-key `Runner`-backed reference exercising the server surface (embedded-resource and image/audio prompts, permission bridge, `session/load` replay, usage and tool-call updates) with a validating test |
 
 Read the [official ADK-Rust ACP guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/acp/index.md) for

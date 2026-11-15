@@ -171,7 +171,7 @@ expensive axes move to a later tier.
   `#[ignore]`d PostgreSQL suites, pgvector and TLS included, against a
   `pgvector/pgvector:pg17` service, driven by `scripts/test-postgres.sh`),
   `docs` (`cargo doc --workspace --no-deps` plus doctests), standalone examples
-  (4 shards), `kernel-scenarios` (the scripted scenarios of `examples/harness_kernel`, on Linux),
+  (2 shards), `kernel-scenarios` (the scripted scenarios of `examples/harness_kernel`, on Linux),
   `website-scenarios` (spec 3.5's scripted scenarios of `examples/website`),
   `templates`, a compile-only macOS build, a Windows build with the code only
   Windows has (the restricted-token enforcer, process trees, owner-only files, the
@@ -215,7 +215,7 @@ every `ci.yml` dependency succeeds or was skipped by the change scope. See CONTR
   shell scripts, and PSScriptAnalyzer on staged `*.ps1` via
   `scripts/lint-powershell.ps1` (skips itself when the module is not installed).
 - **pre-push** — `cargo check --workspace` (a fast compilation check, not the full
-  test suite), plus `scripts/check-examples-compile.sh` over all four shards when
+  test suite), plus `scripts/check-examples-compile.sh` over both shards when
   an example or a workspace crate it depends on has changed. The standalone
   examples are outside the workspace, so nothing else compiles them. CI is the
   full-suite safety net, so the local gate stays quick.
@@ -317,8 +317,9 @@ adk-ui/          Retired, for ADK-Rust 2 only (spec 3.3 decision 11): agent-draw
 ### Examples and docs
 
 ```
-examples/              Standalone example crates, each with its own Cargo.toml and outside the
-                       workspace. More examples live in the adk-playground repo.
+examples/              Standalone crates outside the workspace, each with its own Cargo.toml:
+                       the scenarios CI runs, spec scenarios, and release-validation crates.
+                       Teaching examples live in the adk-playground repo.
 docs/official_docs/    Comprehensive documentation site content
 ```
 
@@ -576,9 +577,9 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
 
 ### New example
 
-Examples live as standalone crates in `examples/` (each with their own `Cargo.toml` and `[workspace]` key). Additional examples go to the [adk-playground](https://github.com/zavora-ai/adk-playground) repo.
+Teaching examples go to the [adk-playground](https://github.com/zavora-ai/adk-playground) repo. `examples/` holds the standalone crates CI runs, spec scenarios, and release-validation crates (each with their own `Cargo.toml` and `[workspace]` key).
 
-Pattern for a new example crate:
+Pattern for a new crate in `examples/`:
 ```
 examples/my_example/
 ├── Cargo.toml          # [workspace] key, path deps to workspace crates

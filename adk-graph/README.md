@@ -723,22 +723,18 @@ and [Graph Agents](../docs/official_docs/agents/graph-agents.md#governed-nodes).
 
 ## Examples
 
-Standalone examples in this repository:
+Standalone examples, in this repository unless the row names adk-playground:
 
 | Example | Shows |
 |---------|-------|
 | [`graph_runtime`](https://github.com/zavora-ai/adk-rust/tree/main/examples/graph_runtime) | Dispatch, streaming, retries, pauses, and cancellation under a `Runner`, over memory, SQLite, and Redis checkpointers |
 | [`graph_correctness`](https://github.com/zavora-ai/adk-rust/tree/main/examples/graph_correctness) | Joins after conditional branches and loops, agent errors, subgraphs, `run_node` children, and graph tools |
-| [`coding_graph`](https://github.com/zavora-ai/adk-rust/tree/main/examples/coding_graph) | Implement, parallel reviewers, synthesize, and a revise loop |
-| [`graph_goto_routing`](https://github.com/zavora-ai/adk-rust/tree/main/examples/graph_goto_routing) | An `LlmAgent` classifier that names the next node |
-| [`graph_subgraph_claims`](https://github.com/zavora-ai/adk-rust/tree/main/examples/graph_subgraph_claims) | A claim pipeline built from nested graphs |
-| [`graph_resilient_research`](https://github.com/zavora-ai/adk-rust/tree/main/examples/graph_resilient_research) | A graph exposed to an `LlmAgent` as a tool |
+| `coding_graph` in [adk-playground](https://github.com/zavora-ai/adk-playground) | Implement, parallel reviewers, synthesize, and a revise loop |
+| `graph_goto_routing` in [adk-playground](https://github.com/zavora-ai/adk-playground) | An `LlmAgent` classifier that names the next node |
+| `graph_subgraph_claims` in [adk-playground](https://github.com/zavora-ai/adk-playground) | A claim pipeline built from nested graphs |
+| `graph_resilient_research` in [adk-playground](https://github.com/zavora-ai/adk-playground) | A graph exposed to an `LlmAgent` as a tool |
 | [`competitive_graph_resume`](https://github.com/zavora-ai/adk-rust/tree/main/examples/competitive_graph_resume) | Resume from a checkpoint |
-| [`functional_workflow`](https://github.com/zavora-ai/adk-rust/tree/main/examples/functional_workflow) | The Functional API, with no API key |
-
-```bash
-cargo run --manifest-path examples/functional_workflow/Cargo.toml
-```
+| `functional_workflow` in [adk-playground](https://github.com/zavora-ai/adk-playground) | The Functional API, with no API key |
 
 ## Comparison with LangGraph
 

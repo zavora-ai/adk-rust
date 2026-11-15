@@ -297,13 +297,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Example | Shows |
 |---------|-------|
 | [`examples/openai_responses/`](../examples/openai_responses/) | `OpenAIResponsesClient` through `Runner` and `LlmAgent`, with multi-turn sessions |
-| [`examples/openai_ws_minimal/`](../examples/openai_ws_minimal/) | WebSocket transport (`openai-ws`) |
 | [`examples/gemini_ws_outcomes/`](../examples/gemini_ws_outcomes/) | Gemini and Responses WebSocket stream outcomes: abandoned, incomplete, closed, and failed responses, handshake retry |
-| [`examples/openai_background/`](../examples/openai_background/) | Background mode, submit and poll |
-| [`examples/openai_conversations/`](../examples/openai_conversations/) | Conversations API lifecycle (`openai-conversations`) |
-| [`examples/openai_builtin_tools/`](../examples/openai_builtin_tools/) | Built-in tools such as image generation and web search |
-| [`examples/openai_deep_research/`](../examples/openai_deep_research/) | Deep research models |
-| [`examples/openai_open_responses/`](../examples/openai_open_responses/) | Open Responses mode for other Responses-compatible servers |
+
+These examples live in [adk-playground](https://github.com/zavora-ai/adk-playground):
+
+| Example | Shows |
+|---------|-------|
+| `openai_ws_minimal` | WebSocket transport (`openai-ws`) |
+| `openai_background` | Background mode, submit and poll |
+| `openai_conversations` | Conversations API lifecycle (`openai-conversations`) |
+| `openai_builtin_tools` | Built-in tools such as image generation and web search |
+| `openai_deep_research` | Deep research models |
+| `openai_open_responses` | Open Responses mode for other Responses-compatible servers |
 
 See the [Responses API guide](../docs/official_docs/models/openai-responses.md).
 `OpenAIResponsesClient::with_provider_name` attributes, prices and labels errors for another
@@ -491,8 +496,8 @@ Use the native `OpenRouterClient` methods for model discovery and credits, exact
 responses payloads, routing, fallback, provider preferences, plugins, and built-in tools such as
 web search. The `Llm` adapter supports streaming, tool calling, reasoning parts, and multimodal
 requests, takes OpenRouter-specific tuning through `OpenRouterRequestOptions`, and maps responses
-into the generic `LlmResponse` shape. The [`examples/openrouter/`](../examples/openrouter/) crate
-and the `adk-model` examples `openrouter_chat`, `openrouter_responses`, `openrouter_adapter`, and
+into the generic `LlmResponse` shape. The `openrouter` example in
+[adk-playground](https://github.com/zavora-ai/adk-playground) and the `adk-model` examples `openrouter_chat`, `openrouter_responses`, `openrouter_adapter`, and
 `openrouter_discovery` call the live API.
 
 ### OpenCode

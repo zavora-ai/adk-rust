@@ -3,7 +3,7 @@
 > **Note:** the [harness](../harness/index.md) supersedes `adk_agent::coding::CodingAgent` in 3.1;
 > see [Migrating from `CodingAgent`](../migration/coding-agent-to-harness.md).
 
-Three runnable example crates in [`examples/`](https://github.com/zavora-ai/adk-rust/tree/main/examples),
+Three runnable example crates in [adk-playground](https://github.com/zavora-ai/adk-playground),
 each a **real agent** (no mocks) that does the work and then **independently
 verifies** the result by running the produced code. All default to a Gemini 3
 model; set a key first:
@@ -17,21 +17,14 @@ export GOOGLE_API_KEY=…          # or GEMINI_API_KEY
 
 ## `coding_agent`
 
-The harness in action, with four modes:
+The harness in action, with four modes, selected by the example's arguments:
 
-```bash
-# Multi-language demo (Rust, Python, JavaScript) in a temp workspace:
-cargo run --manifest-path examples/coding_agent/Cargo.toml
-
-# Build a medium program over a persistent multi-turn session:
-cargo run --manifest-path examples/coding_agent/Cargo.toml -- multiturn
-
-# Scenario tour — increasing complexity, each independently verified:
-cargo run --manifest-path examples/coding_agent/Cargo.toml -- tour
-
-# A single task in your own directory:
-cargo run --manifest-path examples/coding_agent/Cargo.toml -- ./some/dir "make tests pass"
-```
+| Arguments | Mode |
+|-----------|------|
+| none | Multi-language demo (Rust, Python, JavaScript) in a temp workspace |
+| `multiturn` | Builds a medium program over a persistent multi-turn session |
+| `tour` | Scenario tour of increasing complexity, each scenario independently verified |
+| `./some/dir "make tests pass"` | A single task in your own directory |
 
 - **demo** — one-shot tasks across languages (writes & runs `rustc`/`python3`/`node`).
 - **tour** — five scenarios of rising complexity (`hello` → `multifile` →
@@ -51,10 +44,6 @@ The ultra-review [workflow](workflows.md) as an `adk-graph` `StateGraph`:
 implement → parallel correctness/edge-case/style reviewers → synthesize (deferred
 fan-in) → revise loop → finalize.
 
-```bash
-cargo run --manifest-path examples/coding_graph/Cargo.toml
-```
-
 Read it for: parallel agents in one super-step, deferred fan-in,
 conditional cyclic routing. Verifies by importing the produced function and
 asserting the spec + edge cases.
@@ -68,10 +57,6 @@ with **durable checkpointing**: seeds a buggy module + failing test, loops
 plan→act→verify until `python3 test_stats.py` passes, prints the persisted
 checkpoint, then demonstrates **resume** (a completed goal is a no-op).
 
-```bash
-cargo run --manifest-path examples/coding_goal/Cargo.toml
-```
-
 Read it for: the verifier-gated goal loop, atomic goal-state checkpointing, and
 resume-across-restart.
 
@@ -81,12 +66,8 @@ resume-across-restart.
 
 A web UI (Axum + WebSocket) that renders an `LlmAgent`'s tool activity live from
 a **single `EventStream`**: streaming `bash` stdout/stderr plus one-shot
-`read_file` / `grep` / `glob` results, each as its own card.
-
-```bash
-cargo run --manifest-path examples/streaming_bash/Cargo.toml      # web UI
-cargo run --manifest-path examples/streaming_bash/Cargo.toml -- cli
-```
+`read_file` / `grep` / `glob` results, each as its own card. It serves the web UI by
+default and prints to the terminal with the `cli` argument.
 
 Read it for: `ToolContext::emit_progress` streaming, and the first-class
 `Event::tool_calls()` / `Event::tool_results()` / `event.tool_progress_stream()`

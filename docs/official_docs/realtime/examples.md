@@ -1,7 +1,7 @@
 # Realtime Examples
 
-Four runnable examples in the [`examples/`](https://github.com/zavora-ai/adk-rust/tree/main/examples)
-directory. `realtime_tools` is a headless OpenAI console probe; the three web examples use
+Four runnable examples in [adk-playground](https://github.com/zavora-ai/adk-playground).
+`realtime_tools` is a headless OpenAI console probe; the three web examples use
 the [server-side bridge](building-web-apps.md) and run on OpenAI or Gemini. Set the
 relevant key first:
 
@@ -19,10 +19,6 @@ on `IntegratedRealtimeRunner` with weather, calculator, and time tools, with ses
 persistence, memory storage, and transcript aggregation wired in. Requires
 `OPENAI_API_KEY`.
 
-```bash
-cargo run --manifest-path examples/realtime_tools/Cargo.toml
-```
-
 ---
 
 ## `realtime_voice` — *Mindfulness with Mia*
@@ -38,10 +34,7 @@ also has a server-side `get_weather` tool.
 |-------|------|
 | ![Mindfulness with Mia — light theme](images/mia-light.png) | ![Mindfulness with Mia — dark theme](images/mia-dark.png) |
 
-```bash
-cargo run --manifest-path examples/realtime_voice/Cargo.toml
-# → http://localhost:3033
-```
+It serves on `http://localhost:3033`.
 
 Read it for: Web Audio capture and playback, knowledge-graph memory, agent-curated memory.
 
@@ -62,17 +55,11 @@ A customer-support agent on OpenAI or Gemini with a themed (system, light, dark)
 |-------|------|
 | ![Customer Service Agent — light theme](images/customer-service-light.png) | ![Customer Service Agent — dark theme](images/customer-service-dark.png) |
 
-```bash
-cargo run --manifest-path examples/customer_service/Cargo.toml
-# → http://localhost:3066
-
-# headless smoke test (asks for a refund by text and checks that process_refund runs):
-cargo run --manifest-path examples/customer_service/Cargo.toml -- probe openai
-cargo run --manifest-path examples/customer_service/Cargo.toml -- probe gemini
-
-# enable Gemini native affective dialogue:
-CS_AFFECTIVE=1 cargo run --manifest-path examples/customer_service/Cargo.toml
-```
+| Run with | Result |
+|----------|--------|
+| no arguments | The web app on `http://localhost:3066` |
+| `probe openai` or `probe gemini` | A headless smoke test: asks for a refund by text and checks that `process_refund` runs |
+| `CS_AFFECTIVE=1` in the environment | Gemini native affective dialogue |
 
 Read it for: video input, mixing multimodal + tools + affect in one agent.
 
@@ -89,13 +76,10 @@ target language in the UI, speak, and hear and read the translation.
 |-------|------|
 | ![Live Translation — light theme](images/translation-light.png) | ![Live Translation — dark theme](images/translation-dark.png) |
 
-```bash
-cargo run --manifest-path examples/live_translation/Cargo.toml
-# → http://localhost:3055
-# headless connectivity probe (validates endpoint, auth, and model):
-cargo run --manifest-path examples/live_translation/Cargo.toml -- probe openai
-cargo run --manifest-path examples/live_translation/Cargo.toml -- probe gemini
-```
+| Run with | Result |
+|----------|--------|
+| no arguments | The web app on `http://localhost:3055` |
+| `probe openai` or `probe gemini` | A headless connectivity probe that validates the endpoint, auth, and model |
 
 Read it for: using the dedicated translation models and a focused, minimal bridge.
 

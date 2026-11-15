@@ -46,21 +46,26 @@ carry MCP configurations.
 
 ## Standalone examples
 
-Each example is a standalone crate run with
+Each example in this repository is a standalone crate run with
 `cargo run --manifest-path examples/<name>/Cargo.toml`.
 
 | Example | What it runs | Needs |
 |---------|--------------|-------|
-| `mcp_manager` | A real Rust stdio server started from its own binary in fixture mode: discovery, a tool call, runtime add/enable/update/disable/remove, persistence, shutdown | Nothing |
 | `mcp_close` | `Runner::close` against stdio, Streamable HTTP, and manager-backed toolsets | Nothing; one live scenario uses `GOOGLE_API_KEY` |
 | `mcp_hardening` | `McpToolset` and `McpServerManager` against hostile servers, through `LlmAgent` and `Runner` | Nothing; one live scenario uses Gemini |
-| `mcp_protocol_revisions` | The default handshake, `server/discover`, and SEP-2663 tasks against a bundled server | `GOOGLE_API_KEY` for the agent section only |
 | `approval_scoping` | Approvals bound to the agent and the MCP server that held the call | Nothing; one live scenario uses OpenAI |
 | `tools_hardening` | Live-model scenarios for the tool, MCP, auth, and code-execution fixes | A model API key; the container scenario runs a shell script standing in for `docker` |
-| `mcp_resources` | Resources, prompts, and resource-update notifications (`--bin resources-client`) | `GOOGLE_API_KEY` |
+
+The teaching examples live in [adk-playground](https://github.com/zavora-ai/adk-playground):
+
+| Example | What it runs | Needs |
+|---------|--------------|-------|
+| `mcp_manager` | A real Rust stdio server started from its own binary in fixture mode: discovery, a tool call, runtime add/enable/update/disable/remove, persistence, shutdown | Nothing |
+| `mcp_protocol_revisions` | The default handshake, `server/discover`, and SEP-2663 tasks against a bundled server | `GOOGLE_API_KEY` for the agent section only |
+| `mcp_resources` | Resources, prompts, and resource-update notifications (the `resources-client` binary) | `GOOGLE_API_KEY` |
 | `mcp_elicitation`, `mcp_sampling` | Elicitation and sampling client/server pairs | `GOOGLE_API_KEY` |
 
-`examples/mcp_manager` is the deterministic live gate: it does not download a
+`mcp_manager` is the deterministic live example: it does not download a
 package or contact a remote endpoint.
 
 ## What the live example proves

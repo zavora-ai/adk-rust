@@ -124,12 +124,8 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-See [`examples/vertex_rag`](https://github.com/zavora-ai/adk-rust/tree/main/examples/vertex_rag)
-for the full runnable agent:
-
-```bash
-cargo run --manifest-path examples/vertex_rag/Cargo.toml
-```
+See the `vertex_rag` example in [adk-playground](https://github.com/zavora-ai/adk-playground)
+for the full runnable agent.
 
 ---
 

@@ -112,7 +112,7 @@ pre-push:
       fail_text: "Workspace failed to compile. Fix build errors before pushing."
 
     # The standalone examples are outside the workspace, so `cargo check
-    # --workspace` never compiles them and only CI's four example shards do. That
+    # --workspace` never compiles them and only CI's two example shards do. That
     # let two breakages reach CI: a DeferredNodeConfig field addition fixed in
     # seven places and missed in an eighth, and a lockfile that `--locked`
     # rejected. This runs the same script CI runs, over every shard, and only when
@@ -133,7 +133,7 @@ pre-push:
         - "Cargo.toml"
       run: |
         set -e
-        for shard in 0 1 2 3; do
-          bash scripts/check-examples-compile.sh "$shard" 4
+        for shard in 0 1; do
+          bash scripts/check-examples-compile.sh "$shard" 2
         done
       fail_text: "A standalone example failed to compile. CI's examples-compile job will fail too."

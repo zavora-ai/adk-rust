@@ -465,7 +465,7 @@ callbacks, guardrails, and `adk-auth` wrappers.
 - Use a durable `SessionService` when resume must survive process restart.
 - Set a finite session limit and close inactive sessions.
 
-The runnable [`acp_server`](../../../examples/acp_server) crate includes a
+The runnable `acp_server` example in [adk-playground](https://github.com/zavora-ai/adk-playground) includes a
 Gemini-backed agent, workspace-bounded read tools, stderr tracing, and editor
 process configuration.
 

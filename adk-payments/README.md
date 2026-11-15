@@ -426,7 +426,7 @@ Use these as the starting point for real implementations:
 - [`adk-payments/tests/ap2_integration_tests.rs`](https://github.com/zavora-ai/adk-rust/blob/main/adk-payments/tests/ap2_integration_tests.rs)
 - [`adk-payments/tests/ap2_governance_tests.rs`](https://github.com/zavora-ai/adk-rust/blob/main/adk-payments/tests/ap2_governance_tests.rs)
 - [`adk-payments/tests/cross_protocol_correlation_tests.rs`](https://github.com/zavora-ai/adk-rust/blob/main/adk-payments/tests/cross_protocol_correlation_tests.rs)
-- [`examples/payments/`](https://github.com/zavora-ai/adk-rust/tree/main/examples/payments)
+- the `payments` example in [adk-playground](https://github.com/zavora-ai/adk-playground)
 - [`docs/official_docs/security/payments.md`](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/payments.md)
 
 ## Related Modules

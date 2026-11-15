@@ -769,7 +769,7 @@ and every run is claimed exactly once. The nightly
 
 ## End-to-end example
 
-[`examples/durable_company`](https://github.com/zavora-ai/adk-rust/tree/main/examples/durable_company)
+The `durable_company` example in [adk-playground](https://github.com/zavora-ai/adk-playground)
 runs one accounts-payable day against a real model, with every piece of this page and the
 governance features working together. Replicas are separate OS processes on SQLite and
 PostgreSQL, and tasks in one process on the in-memory stores.
@@ -786,9 +786,7 @@ PostgreSQL, and tasks in one process on the in-memory stores.
 | Freeze | `GovernanceControl::mirrored`, `freeze_recorded` | No run is claimed and no schedule fires on any replica |
 | Audit | Signed audit log per process, `adk-rust audit export` / `verify` | Every log verifies; an edited record does not |
 
-```bash
-cargo run --manifest-path examples/durable_company/Cargo.toml -- --provider openai --store sqlite
-```
+The example takes `--provider` (for instance `openai`) and `--store` (for instance `sqlite`).
 
 ## Verified guarantees
 
