@@ -294,6 +294,33 @@ async fn drain_parks_running_processes_and_resume_wakes_them() {
     kernel.stop().await.unwrap();
 }
 
+/// A drain that timed out leaves nothing a second drain could wait for: `stop` after it
+/// stops at once rather than draining again for `SIGTERM_DRAIN` (30 s).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stop_after_a_timed_out_drain_does_not_drain_again() {
+    let world = World::one_step();
+    let control = GovernanceControl::new();
+    let kernel = world.kernel("k1", &control);
+    kernel.start().await.unwrap();
+    kernel
+        .processes()
+        .spawn(run_on(QueueClass::Interactive, "go"), ProcessSpec::new(ProcessKind::Interactive))
+        .await
+        .unwrap();
+    // The gated tool never returns, so the drain times out with the attempt still running.
+    tool_called(&world, 1).await;
+    kernel.drain(Duration::from_millis(200)).await.unwrap();
+    assert_eq!(kernel.health().state, KernelState::Paused);
+
+    let started = std::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(10), kernel.stop())
+        .await
+        .expect("stop drains no second time")
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(5), "stopped in {:?}", started.elapsed());
+    assert_eq!(kernel.health().state, KernelState::Stopped);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_suspension_reaches_the_replica_that_holds_the_lease() {
     let world = World::one_step();

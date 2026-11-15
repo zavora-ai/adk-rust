@@ -483,6 +483,9 @@ struct Runtime {
     control: Option<ControlPlane>,
     /// Claim loops a pause shut down, finishing their attempts.
     stopping: Vec<JoinHandle<()>>,
+    /// The kernel is paused by a drain, whose attempts are parked or abandoned, so `stop`
+    /// has nothing left to drain.
+    drained: bool,
 }
 
 /// The health the loops measure, read by [`Kernel::health`].
@@ -954,13 +957,14 @@ impl Kernel {
     ///
     /// Returns [`KernelError::Lifecycle`] when the kernel is not paused.
     pub async fn resume(&self) -> Result<()> {
-        let _runtime = self.inner.runtime.lock().await;
+        let mut runtime = self.inner.runtime.lock().await;
         let state = self.state();
         if state != KernelState::Paused {
             return Err(KernelError::Lifecycle { state, action: "resume" });
         }
         self.spawn_workers();
         self.inner.sup.wake_suspended(&Suspension::Drain).await;
+        runtime.drained = false;
         self.set_state(KernelState::Running);
         self.record_lifecycle(audit::KERNEL_RESUMED, None).await;
         Ok(())
@@ -1023,6 +1027,7 @@ impl Kernel {
                 stopping.abort();
             }
         }
+        runtime.drained = true;
         drop(runtime);
         sup.draining.store(false, Ordering::SeqCst);
         self.set_state(KernelState::Paused);
@@ -1031,16 +1036,22 @@ impl Kernel {
         Ok(())
     }
 
-    /// Drains, stops drivers and closes the control plane. Records `kernel.stopped`.
+    /// Drains for [`SIGTERM_DRAIN`](Self::SIGTERM_DRAIN), unless a [`drain`](Self::drain)
+    /// already paused the kernel, stops drivers and closes the control plane. Records
+    /// `kernel.stopped`.
     ///
     /// # Errors
     ///
     /// Returns a store or control-plane error; the kernel is stopped regardless.
     pub async fn stop(&self) -> Result<()> {
         let mut first_error = None;
-        if matches!(self.state(), KernelState::Running | KernelState::Paused)
-            && let Err(error) = self.drain(Self::SIGTERM_DRAIN).await
-        {
+        let drained = self.inner.runtime.lock().await.drained;
+        let drains = match self.state() {
+            KernelState::Running => true,
+            KernelState::Paused => !drained,
+            KernelState::Built | KernelState::Draining | KernelState::Stopped => false,
+        };
+        if drains && let Err(error) = self.drain(Self::SIGTERM_DRAIN).await {
             first_error = Some(error);
         }
         let mut runtime = self.inner.runtime.lock().await;
@@ -1076,6 +1087,7 @@ impl Kernel {
         }
         // The agents a person added close with the kernel (spec 3.3 §5.7).
         self.inner.agent_table.close_hosted().await;
+        runtime.drained = false;
         drop(runtime);
         let was = self.state();
         self.set_state(KernelState::Stopped);
@@ -1086,12 +1098,12 @@ impl Kernel {
     }
 
     /// Waits for `SIGTERM` or Ctrl-C — or, in a Windows service, the service manager's stop
-    /// (spec 3.2 §10 W3) — then [`drain`](Self::drain)s for
-    /// [`SIGTERM_DRAIN`](Self::SIGTERM_DRAIN) and [`stop`](Self::stop)s.
+    /// (spec 3.2 §10 W3) — then [`stop`](Self::stop)s, which drains once for
+    /// [`SIGTERM_DRAIN`](Self::SIGTERM_DRAIN).
     ///
     /// # Errors
     ///
-    /// Returns the error of `drain` or `stop`, or [`KernelError::Io`] when the signal
+    /// Returns the error of `stop`, or [`KernelError::Io`] when the signal
     /// handler cannot be installed.
     pub async fn shutdown_on_signal(&self) -> Result<()> {
         #[cfg(unix)]
@@ -1111,9 +1123,6 @@ impl Kernel {
         #[cfg(all(not(unix), not(feature = "service")))]
         tokio::signal::ctrl_c().await?;
         tracing::info!("shutdown signal received; draining the kernel");
-        if matches!(self.state(), KernelState::Running | KernelState::Paused) {
-            self.drain(Self::SIGTERM_DRAIN).await?;
-        }
         self.stop().await
     }
 
