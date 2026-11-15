@@ -3292,7 +3292,9 @@ mod tests {
             acting: None,
         };
         let operator = || -> Arc<dyn ApprovalRouter> {
-            Arc::new(ApprovalPolicy::new([ApproverSelector::group("operator")]))
+            Arc::new(
+                ApprovalPolicy::new([ApproverSelector::group("operator")]).allow_self_approval(),
+            )
         };
 
         let service = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()));
