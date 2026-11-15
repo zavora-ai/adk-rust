@@ -391,7 +391,14 @@ mod tests {
             command
                 .as_std()
                 .get_envs()
-                .filter(|(key, _)| *key == OsStr::new(name))
+                // Windows keeps one variable per name whatever its case, spelled as first set.
+                .filter(|(key, _)| {
+                    if cfg!(windows) {
+                        key.eq_ignore_ascii_case(name)
+                    } else {
+                        *key == OsStr::new(name)
+                    }
+                })
                 .last()
                 .and_then(|(_, value)| value.map(|value| value.to_string_lossy().into_owned()))
         };

@@ -575,7 +575,12 @@ impl Agent for LoopAgent {
     }
 
     fn profile(&self) -> adk_core::AgentProfile {
-        adk_core::AgentProfile { kind: adk_core::AgentKind::Loop { max_iterations: (self.max_iterations > 0).then_some(self.max_iterations) }, ..Default::default() }
+        adk_core::AgentProfile {
+            kind: adk_core::AgentKind::Loop {
+                max_iterations: (self.max_iterations > 0).then_some(self.max_iterations),
+            },
+            ..Default::default()
+        }
     }
 
     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
