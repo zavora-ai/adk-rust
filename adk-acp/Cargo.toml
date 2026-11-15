@@ -67,7 +67,7 @@ tracing = { workspace = true }
 adk-runner = { workspace = true, optional = true }
 adk-session = { workspace = true, optional = true }
 adk-tool = { workspace = true, features = ["mcp"], optional = true }
-rmcp = { version = "3.1", features = ["client", "transport-child-process"], optional = true }
+rmcp = { version = "3.9", features = ["client", "transport-child-process"], optional = true }
 tokio-util = { version = "0.7", features = ["rt"], optional = true }
 uuid = { workspace = true, optional = true }
 async-stream = { workspace = true, optional = true }
@@ -83,7 +83,7 @@ adk-session = { path = "../adk-session" }
 adk-runner = { path = "../adk-runner" }
 adk-agent = { path = "../adk-agent" }
 # Server side of rmcp, used only to serve in-process MCP catalogs in tests.
-rmcp = { version = "3.1", features = ["client", "server"] }
+rmcp = { version = "3.9", features = ["client", "server"] }
 
 # Document every feature-gated API on docs.rs.
 [package.metadata.docs.rs]

@@ -115,7 +115,7 @@ reqwest.workspace = true
 # A drawn field's `regex` check, evaluated again when the form is sent (`genui`).
 regex = { workspace = true, optional = true }
 # Agent messages as Markdown, code blocks highlighted (spec 3.3 §6.1 `tui`).
-pulldown-cmark = { version = "0.13", optional = true, default-features = false }
+pulldown-cmark = { version = "0.13.6", optional = true, default-features = false }
 ratatui = { version = "0.30", optional = true, default-features = false, features = ["crossterm"] }
 # The web home's built assets, embedded in the binary (spec 3.3 §6.1 `web`).
 rust-embed = { version = "8.9.0", optional = true }
@@ -182,7 +182,7 @@ tower = { version = "0.4", features = ["util"] }
 # Parses what the terminal surface writes, as a terminal would (spec 3.3 WP-E).
 vt100 = "0.16"
 # The in-process MCP server whose app the hostile-app tests show (`genui-apps`).
-rmcp = { version = "3.1", features = ["client", "server", "elicitation"] }
+rmcp = { version = "3.9", features = ["client", "server", "elicitation"] }
 # The voice view's socket, opened as a browser would (spec 3.3 §5.6).
 tokio-tungstenite = "0.29"
 # What the live voice test's provider says, with `RUST_LOG`.

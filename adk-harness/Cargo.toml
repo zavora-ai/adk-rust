@@ -211,7 +211,7 @@ adk-memory = { path = "../adk-memory", features = ["sqlite-memory", "database-me
 sqlx = { workspace = true, features = ["postgres", "sqlite"] }
 proptest = "1.5"
 # Scripted MCP servers for the elicitation, sampling and resource tests.
-rmcp = { version = "3.1", features = ["server", "client", "elicitation"] }
+rmcp = { version = "3.9", features = ["server", "client", "elicitation"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }
 # Captures the harness spans in the observability tests.

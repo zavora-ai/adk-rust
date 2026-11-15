@@ -71,7 +71,7 @@ serde.workspace = true
 serde_json.workspace = true
 schemars = "1.0"
 jsonschema = { workspace = true }
-rmcp = { version = "3.1", features = ["client", "transport-child-process", "elicitation"], optional = true }
+rmcp = { version = "3.9", features = ["client", "transport-child-process", "elicitation"], optional = true }
 tracing.workspace = true
 base64 = "0.22"
 uuid.workspace = true
@@ -125,7 +125,7 @@ adk-code = { path = "../adk-code" }
 adk-sandbox = { path = "../adk-sandbox" }
 # Server side of rmcp, used only to drive an in-process peer in the protocol
 # negotiation tests. Not a runtime dependency: adk-tool is an MCP client.
-rmcp = { version = "3.1", features = ["client", "server", "elicitation"] }
+rmcp = { version = "3.9", features = ["client", "server", "elicitation"] }
 # Mock upstream for the Example Store contract tests.
 axum = "0.8"
 # `Runner::close` reaching an agent's MCP toolset, in the MCP close tests.
