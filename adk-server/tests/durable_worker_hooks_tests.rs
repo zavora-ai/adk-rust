@@ -993,3 +993,72 @@ async fn suspend_reaches_only_agent_attempts_in_flight() {
     worker.shutdown().await;
     assert_eq!(hooks.take(), vec![Seen::claim(), Seen::finish(RunState::Completed)]);
 }
+
+/// Returns the same wake text for every claim.
+struct Woke(&'static str);
+
+#[async_trait]
+impl WorkerHooks for Woke {
+    async fn wake_input(&self, _run: &RunRecord) -> Option<String> {
+        Some(self.0.to_string())
+    }
+}
+
+/// `wake_input` joins the user content of the turn a claim starts, after the run's input,
+/// and a session that already holds the text's first line is not given it again.
+#[tokio::test]
+async fn wake_input_is_user_content_given_to_a_session_once() {
+    const NOTICE: &str = "[kernel wake \"hook:github:msg_1\"]\npayload: {\"action\":\"opened\"}";
+    let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+    let model = Arc::new(ScriptedLlm::new(
+        "scripted",
+        [ScriptedResponse::text("Triaged."), ScriptedResponse::text("Nothing new.")],
+    ));
+    let agent = LlmAgentBuilder::new("assistant")
+        .model(Arc::clone(&model) as Arc<dyn Llm>)
+        .instruction("Answer briefly.")
+        .build()
+        .unwrap();
+    let runner = Runner::builder()
+        .app_name("app")
+        .agent(Arc::new(agent))
+        .session_service(Arc::new(InMemorySessionService::new()) as Arc<dyn SessionService>)
+        .build()
+        .unwrap();
+    let worker = DurableWorker::new(Arc::clone(&runs))
+        .with_agent("assistant", Arc::new(runner))
+        .with_hooks(Arc::new(Woke(NOTICE)))
+        .with_config(worker_config("worker"));
+    let user_parts = |request: &adk_core::LlmRequest| -> Vec<String> {
+        request
+            .contents
+            .iter()
+            .filter(|content| content.role == "user")
+            .flat_map(|content| content.parts.iter().filter_map(Part::text))
+            .map(str::to_string)
+            .collect()
+    };
+
+    for text in ["triage the delivery", "anything else?"] {
+        let run = NewRun::new("default", "app", "alice", "assistant", json!({ "text": text }))
+            .with_session_id("triage");
+        runs.enqueue(run).await.unwrap();
+        let finished = worker.run_next().await.unwrap().expect("the run is claimed");
+        assert_eq!(finished.state, RunState::Completed, "{finished:?}");
+    }
+
+    let requests = model.requests();
+    assert_eq!(user_parts(&requests[0]), ["triage the delivery", NOTICE]);
+    assert_eq!(
+        user_parts(&requests[1]),
+        ["triage the delivery", NOTICE, "anything else?"],
+        "the session already holds the wake"
+    );
+    let instructions: Vec<_> = requests[0]
+        .contents
+        .iter()
+        .filter(|content| content.role != "user")
+        .flat_map(|content| content.parts.iter().filter_map(Part::text))
+        .collect();
+    assert!(instructions.iter().all(|text| !text.contains("kernel wake")), "{instructions:?}");
+}

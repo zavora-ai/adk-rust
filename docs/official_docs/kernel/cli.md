@@ -382,6 +382,10 @@ down it fires the missed occurrence once if it is no more than a minute late, th
 `skip` policy, and never one that already fired. A new series replays nothing from before it
 began.
 
+The woken turn reads why it woke, after its task: the source, the event's key, the time and
+the payload — the changed file's path, the webhook's body, the cron occurrence — as
+[data the agent does not take instructions from](index.md#what-a-woken-turn-is-told).
+
 ## `adk-rust partitions`
 
 ```text

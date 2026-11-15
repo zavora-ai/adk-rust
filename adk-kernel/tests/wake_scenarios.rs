@@ -12,7 +12,7 @@ use adk_agent::LlmAgentBuilder;
 use adk_core::{DurableRunStore, Llm, NewRun, RunFilter, RunState};
 use adk_kernel::{
     EventBus, FileWakeSource, InMemoryProcessStore, KernelEvent, KernelWakeExecutor, ProcessStore,
-    Wake, WakeOutcome, WakeRouter, WakeSet, WakeSource,
+    Wake, WakeOutcome, WakeReasonHooks, WakeRouter, WakeSet, WakeSource,
 };
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_runner::Runner;
@@ -24,7 +24,28 @@ use wake_support::{CountingRuns, eventually, sleeper};
 
 const POLL: Duration = Duration::from_millis(20);
 
-fn agent_worker(runs: &Arc<dyn DurableRunStore>, model: Arc<ScriptedLlm>) -> WorkerHandle {
+/// The user text of each request `model` received: what each turn was told.
+fn told(model: &ScriptedLlm) -> Vec<String> {
+    model
+        .requests()
+        .iter()
+        .map(|request| {
+            request
+                .contents
+                .iter()
+                .filter(|content| content.role == "user")
+                .flat_map(|content| content.parts.iter().filter_map(|part| part.text()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect()
+}
+
+fn agent_worker(
+    runs: &Arc<dyn DurableRunStore>,
+    processes: &Arc<dyn ProcessStore>,
+    model: Arc<ScriptedLlm>,
+) -> WorkerHandle {
     let agent = LlmAgentBuilder::new("assistant")
         .model(model as Arc<dyn Llm>)
         .instruction("Answer briefly.")
@@ -38,6 +59,7 @@ fn agent_worker(runs: &Arc<dyn DurableRunStore>, model: Arc<ScriptedLlm>) -> Wor
         .unwrap();
     DurableWorker::new(runs.clone())
         .with_agent("adk-rust", Arc::new(runner))
+        .with_hooks(Arc::new(WakeReasonHooks::new(processes.clone())))
         .with_config(
             DurableWorkerConfig::default()
                 .with_worker_id("background")
@@ -110,7 +132,7 @@ async fn a_file_save_wakes_a_sleeping_agent_turn_within_two_seconds() {
     };
     let maintenance = maintenance_worker(&runs, &router);
     let model = Arc::new(ScriptedLlm::new("notes", [ScriptedResponse::text("Read it.")]));
-    let worker = agent_worker(&runs, model.clone());
+    let worker = agent_worker(&runs, &processes, model.clone());
     let mut events = bus.subscribe();
 
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -135,6 +157,9 @@ async fn a_file_save_wakes_a_sleeping_agent_turn_within_two_seconds() {
     let latency = saved.elapsed();
     completed(&runs, &pid).await;
     assert_eq!(model.requests().len(), 1, "one save, one turn");
+    let told = told(&model);
+    assert!(told[0].starts_with("read notes.md\n[kernel wake \"file:"), "{told:#?}");
+    assert!(told[0].contains("notes.md\""), "the turn reads the changed path: {told:#?}");
     assert!(latency < Duration::from_secs(2), "woke {latency:?} after the save");
 
     worker.shutdown().await;
@@ -185,7 +210,7 @@ async fn a_webhook_wakes_its_sleeper_then_its_trigger_and_a_redelivery_wakes_not
         "triage",
         [ScriptedResponse::text("Resumed."), ScriptedResponse::text("Triaged.")],
     ));
-    let background = agent_worker(&runs, model.clone());
+    let background = agent_worker(&runs, &processes, model.clone());
 
     let signer = WebhookSigner::new(secret);
     let client = reqwest::Client::new();
@@ -230,6 +255,14 @@ async fn a_webhook_wakes_its_sleeper_then_its_trigger_and_a_redelivery_wakes_not
     assert_eq!(runs.list(RunFilter::default().queue("background")).await.unwrap().len(), 2);
     assert_eq!(counting.wakes_of(&sleeping), 1);
     assert_eq!(model.requests().len(), 2, "one turn for the sleeper, one for the trigger");
+    // Each turn reads the delivery that started it, and the redeliveries told no one.
+    let told = told(&model);
+    for (turn, input, id) in [(0, "go on", "msg_1"), (1, "triage", "msg_2")] {
+        let header = format!("{input}\n[kernel wake \"hook:github:{id}\"]\n");
+        assert!(told[turn].starts_with(&header), "{told:#?}");
+        assert!(told[turn].contains(&format!("\"delivery\":\"{id}\"")), "{told:#?}");
+        assert_eq!(told[turn].matches("[kernel wake").count(), 1, "{told:#?}");
+    }
     let mut outcomes = Vec::new();
     while let Ok(Some(record)) =
         tokio::time::timeout(Duration::from_millis(50), events.recv()).await

@@ -157,6 +157,10 @@
 //! | [`on_park`](WorkerHooks::on_park) | After [`wait`](DurableRunStore::wait) parked the run, with the [`ParkReason`] | `Waiting`, holding no lease |
 //! | [`on_finish`](WorkerHooks::on_finish) | After [`finish`](DurableRunStore::finish) wrote the attempt's outcome | `Completed`, `Failed`, or `Cancelled`; `Queued` when a retryable failure requeued it |
 //!
+//! [`wake_input`](WorkerHooks::wake_input) is the one hook that returns something: the
+//! reason an agent run was woken, which the worker gives the turn it starts as user
+//! content, once per session.
+//!
 //! A run the worker hands back at once, because its governance control refused work when
 //! the claim returned, is reported to `on_park` only: its target never started. An attempt
 //! that lost its lease writes nothing and calls no hook; the worker that recovers the run
@@ -470,6 +474,24 @@ pub trait WorkerHooks: Send + Sync {
     /// Called after the worker wrote the attempt's outcome. `run` is `Completed`, `Failed`,
     /// or `Cancelled`, or `Queued` when a retryable failure requeued it.
     async fn on_finish(&self, _run: &RunRecord) {}
+
+    /// Why `run` was woken, for the agent turn this claim starts; `None` by default. Called
+    /// after [`on_claim`](Self::on_claim), for agent runs only.
+    ///
+    /// The worker adds the text to the turn's user content: after the run's own input on a
+    /// turn that starts from it, and in place of the blank turn on one that continues a
+    /// parked run. It reaches the model as a user message, so the agent tree screens it as
+    /// one ([`Agent::screen_user_input`](adk_core::Agent::screen_user_input)), and it never
+    /// joins the agent's instructions.
+    ///
+    /// | Rule | Why |
+    /// |------|-----|
+    /// | The text's first line identifies the wake | A session that already holds a user message starting with that line is not given the text again, so a recovered attempt repeats nothing |
+    /// | A run parked on a held call (`RunCheckpointRef::AwaitingApproval`) is given none | Its turn stays blank so the held call resumes; the decision reaches it as that call's answer |
+    /// | The first hook that returns text wins | One wake starts one turn |
+    async fn wake_input(&self, _run: &RunRecord) -> Option<String> {
+        None
+    }
 }
 
 /// Claims runs from a [`DurableRunStore`] and executes them: agents through their
@@ -1409,12 +1431,36 @@ impl DurableWorker {
             ) => invocation_id.clone(),
             _ => None,
         };
+        let mut wake_input = None;
+        if !matches!(record.checkpoint, Some(RunCheckpointRef::AwaitingApproval { .. })) {
+            for hooks in &self.hooks {
+                wake_input = hooks.wake_input(record).await;
+                if wake_input.is_some() {
+                    break;
+                }
+            }
+        }
         let prepared = async {
             let session = ensure_session(runner, user_id, &session_id).await?;
+            let events = session.events().all();
+            // A recovered attempt finds the wake it already told the session and repeats nothing.
+            if let Some(header) = wake_input.as_deref().and_then(|text| text.lines().next())
+                && events.iter().any(|event| {
+                    event.author == "user"
+                        && event.llm_response.content.as_ref().is_some_and(|content| {
+                            content
+                                .parts
+                                .iter()
+                                .filter_map(Part::text)
+                                .any(|text| text.lines().next() == Some(header))
+                        })
+                })
+            {
+                wake_input = None;
+            }
             let Some(invocation_id) = resume_from else {
                 return Ok::<_, AdkError>(Prepared::Start);
             };
-            let events = session.events().all();
             if let Some(answer) = completed_answer(&events, &invocation_id) {
                 return Ok(Prepared::Done(answer));
             }
@@ -1478,7 +1524,9 @@ impl DurableWorker {
             Ok(Prepared::Done(text)) => {
                 return Ok(Ok(Attempt::Done(agent_result(&text, &session_id, None))));
             }
-            Ok(Prepared::Continue) => Content::new("user").with_text(""),
+            Ok(Prepared::Continue) => {
+                Content::new("user").with_text(wake_input.take().unwrap_or_default())
+            }
             Ok(Prepared::Start) => {
                 // The agent takes a call a person asked for once, so a woken run that starts
                 // from the same input never holds it again (spec 3.3 §7.4 rule 5).
@@ -1486,7 +1534,11 @@ impl DurableWorker {
                     Ok(call) => config.requested_call = call,
                     Err(error) => return Ok(Err(Failure { error, retryable: false })),
                 }
-                input_content(&record.input)
+                let content = input_content(&record.input);
+                match wake_input.take() {
+                    Some(text) => content.with_text(text),
+                    None => content,
+                }
             }
             Err(error) => return Ok(Err(error.into())),
         };
