@@ -210,9 +210,8 @@ let service = rmcp::ServiceExt::serve(
 service.waiting().await?;
 ```
 
-The deterministic `examples/mcp_manager` fixture uses this server shape. CI
-compiles it with the other standalone examples; run it with
-`cargo run --manifest-path examples/mcp_manager/Cargo.toml`. `ServerConfig` is the name
+The deterministic `mcp_manager` fixture in
+[adk-playground](https://github.com/zavora-ai/adk-playground) uses this server shape. `ServerConfig` is the name
 rmcp 3.4 gives the initialize result; earlier releases call it `ServerInfo`,
 which rmcp 3.4 and later keep as a deprecated alias.
 
@@ -226,8 +225,8 @@ To run a slow call as an SEP-2663 task, declare the
 `io.modelcontextprotocol/tasks` extension in the server's capabilities
 (`ServerCapabilities::builder().enable_tools().enable_tasks()`), and answer
 `tools/call` with a task only when the client declared the extension too
-(`ClientCapabilities::supports_tasks()`). `examples/mcp_protocol_revisions`
-contains a server that does both.
+(`ClientCapabilities::supports_tasks()`). The `mcp_protocol_revisions` example in
+[adk-playground](https://github.com/zavora-ai/adk-playground) contains a server that does both.
 
 ### Tools are security boundaries
 

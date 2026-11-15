@@ -73,7 +73,7 @@ Completions on Zen.
 
 ## Example
 
-The standalone [`examples/opencode`](../../../examples/opencode) crate streams one reply. Offline
+The `opencode` example in [adk-playground](https://github.com/zavora-ai/adk-playground) streams one reply. Offline
 HTTP tests in `adk-model/tests/opencode/` cover API routing, identity headers, usage conversion,
 tool continuations, redirects, and invalid configuration; they do not establish live account
 availability or quota.

@@ -460,15 +460,11 @@ runs, with HTTP `400` and the REST error body, on the JSON-RPC route as well:
 
 ## Running the Examples
 
-Two complete A2A v1.0.0 example agents are included. Each uses `gemini-3.7-flash` when
+Two complete A2A v1.0.0 example agents, `a2a-research-agent` and `a2a-writing-agent`, live in
+[adk-playground](https://github.com/zavora-ai/adk-playground). Each uses `gemini-3.7-flash` when
 `GOOGLE_API_KEY` is set, and OpenAI when only `OPENAI_API_KEY` is set. The research agent listens
-on port 3001 and the writing agent on 3002 (`PORT` overrides either):
-
-```bash
-cargo run --manifest-path examples/a2a-research-agent/Cargo.toml
-cargo run --manifest-path examples/a2a-writing-agent/Cargo.toml --bin a2a-writing-agent
-cargo run --manifest-path examples/a2a-writing-agent/Cargo.toml --bin client
-```
+on port 3001 and the writing agent on 3002 (`PORT` overrides either). The writing agent's crate
+also holds a `client` binary.
 
 The client exercises agent card discovery, SendMessage (both agents with real LLM), GetTask, ListTasks, CancelTask error path, SendStreamingMessage, push notification CRUD, GetExtendedAgentCard, version negotiation, and error paths.
 

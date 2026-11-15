@@ -49,9 +49,6 @@ cargo nextest run -p adk-acp --all-features
 cargo nextest run -p adk-agent --test tool_confirmation_tests
 cargo nextest run -p adk-tool --features mcp --test mcp_server_lifecycle_integration_tests --run-ignored only -E 'test(test_tool_aggregation)'
 
-cargo test --manifest-path examples/acp_client_host/Cargo.toml
-cargo check --manifest-path examples/acp_kiro/Cargo.toml
-cargo check --manifest-path examples/acp_server/Cargo.toml
 cargo test --manifest-path examples/acp_full_protocol/Cargo.toml
 ```
 
@@ -107,7 +104,7 @@ selects the model.
 
 ## Manual editor test
 
-Build `examples/acp_server`, then configure an ACP client to start that binary
+Build the `acp_server` example from [adk-playground](https://github.com/zavora-ai/adk-playground), then configure an ACP client to start that binary
 with an absolute manifest path and model credentials. Verify:
 
 1. the initialization response reports protocol version 1;
@@ -123,8 +120,6 @@ process and cannot preserve the connection or session.
 
 ## Related examples
 
-- [`acp_client_host`](../../../examples/acp_client_host)
-- [`acp_kiro`](../../../examples/acp_kiro)
-- [`acp_server`](../../../examples/acp_server)
 - [`acp_full_protocol`](../../../examples/acp_full_protocol) — no-API-key, `Runner`-backed server-direction reference with an end-to-end validating test
 - [`acp_openai_e2e`](../../../examples/acp_openai_e2e) — both directions against a live OpenAI model
+- `acp_client_host`, `acp_kiro` and `acp_server` in [adk-playground](https://github.com/zavora-ai/adk-playground) — a vendor-neutral client host, delegation to an external coding agent, and an ADK-Rust agent served to editors

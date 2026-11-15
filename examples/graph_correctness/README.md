@@ -13,7 +13,7 @@ Chat Completions server on `127.0.0.1`; two scenarios play a provider that answe
 
 | Scenario | Upstream | Passes when |
 |----------|----------|-------------|
-| `review_loop` | Scripted | Three reviewer agents re-entered by a revise loop, as in `examples/coding_graph`, run in both rounds (6 reviewer calls), `synthesize` runs once per round, and the turn answers `approved in round 2` |
+| `review_loop` | Scripted | Three reviewer agents re-entered by a revise loop, as in adk-playground's `coding_graph` example, run in both rounds (6 reviewer calls), `synthesize` runs once per round, and the turn answers `approved in round 2` |
 | `conditional_merge` | None | A merge after a conditional branch runs on each of two turns, once per turn, and the final SQLite checkpoint leaves no join waiting |
 | `builder_join` | None | A join built with `GraphAgentBuilder` on branches of unequal length runs once and sees both branches |
 | `agent_error_stops_the_graph` | Scripted, `429` | A rate-limited writer agent fails its node: the 2-attempt retry policy sends 2 requests, the turn ends with the error, and `publish` never runs |

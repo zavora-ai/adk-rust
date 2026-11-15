@@ -90,11 +90,6 @@ exclude = [
     # Extracted to standalone repo: https://github.com/zavora-ai/adk-studio
     "adk-studio",
 
-    # Standalone example crates (have their own [workspace] key)
-    "examples/enterprise_custom_tool",
-    "examples/enterprise_hello",
-    "examples/eval_showcase",
-
     # Local-only directories (gitignored, not part of CI)
     "learning",
 

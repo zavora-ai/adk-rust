@@ -637,7 +637,8 @@ tool_progress_stream()→  live stdout/stderr lines stream into the card
 tool_results()        →  finalize the card with the tool's output
 ```
 
-This is exactly the pattern the `streaming_bash` example uses to render both
+This is exactly the pattern the `streaming_bash` example in
+[adk-playground](https://github.com/zavora-ai/adk-playground) uses to render both
 streaming (`bash`) and one-shot (`read_file`, `grep`, `glob`) tools from a
 single web-socket feed.
 

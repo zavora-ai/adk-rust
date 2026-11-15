@@ -231,33 +231,34 @@ new releases; known retired IDs include an actionable replacement.
 
 ## What you can build
 
-Each row links to its guide and a runnable example.
+Each row links to its guide and names a runnable example. An example named without a path
+lives in [adk-playground](https://github.com/zavora-ai/adk-playground).
 
 | Capability | Guide | Example |
 |------------|-------|---------|
 | The web home — Threads, Today and Memory & rules: decisions with full detail, what happened while you were away, what your agents may do, and Stop all; a developer panel with topology, protocols, state and telemetry | [web home](docs/official_docs/surfaces/web-home.md) | `adk-rust serve`, `adk-rust up` |
-| Tools — `#[tool]` derives the JSON schema from your argument type | [tools](docs/official_docs/tools/function-tools.md) | [`examples/coding_agent`](examples/coding_agent) |
-| MCP clients and servers on `rmcp 3.1` — tools, resources, prompts, elicitation, tasks | [mcp](docs/official_docs/mcp/index.md) | [`examples/mcp_protocol_revisions`](examples/mcp_protocol_revisions) |
-| Workflow agents — sequential, parallel, loop | [agents](docs/official_docs/agents/workflow-agents.md) | [`examples/multi_perspective_analysis`](examples/multi_perspective_analysis) |
-| Portable teams — validated handoff, delegation, policies, receipts and shared state | [multi-agent](docs/official_docs/agents/multi-agent.md) | [`examples/team_architectures`](examples/team_architectures) |
-| Graph workflows — checkpoints, durable resume, human-in-the-loop, subgraphs | [graph-agents](docs/official_docs/agents/graph-agents.md) | [`examples/graph_subgraph_claims`](examples/graph_subgraph_claims) |
+| Tools — `#[tool]` derives the JSON schema from your argument type | [tools](docs/official_docs/tools/function-tools.md) | `coding_agent` |
+| MCP clients and servers on `rmcp 3.1` — tools, resources, prompts, elicitation, tasks | [mcp](docs/official_docs/mcp/index.md) | `mcp_protocol_revisions` |
+| Workflow agents — sequential, parallel, loop | [agents](docs/official_docs/agents/workflow-agents.md) | `multi_perspective_analysis` |
+| Portable teams — validated handoff, delegation, policies, receipts and shared state | [multi-agent](docs/official_docs/agents/multi-agent.md) | `team_architectures` |
+| Graph workflows — checkpoints, durable resume, human-in-the-loop, subgraphs | [graph-agents](docs/official_docs/agents/graph-agents.md) | `graph_subgraph_claims` |
 | The harness — a governed coding agent: modes, approvals remembered per user, a sandboxed shell, team members, plan graphs and durable goals | [harness](docs/official_docs/harness/index.md) | [`examples/harness_openai`](examples/harness_openai), [`examples/harness_anthropic`](examples/harness_anthropic) |
-| Coding agents — read, edit and run code in a confined workspace | [coding-agent](docs/official_docs/coding-agent/index.md) | [`examples/coding_goal`](examples/coding_goal) |
-| Realtime voice and video — OpenAI Realtime, Gemini Live, Vertex, LiveKit, WebRTC | [realtime](docs/official_docs/agents/realtime-agents.md) | [`examples/realtime_voice`](examples/realtime_voice) |
+| Coding agents — read, edit and run code in a confined workspace | [coding-agent](docs/official_docs/coding-agent/index.md) | `coding_goal` |
+| Realtime voice and video — OpenAI Realtime, Gemini Live, Vertex, LiveKit, WebRTC | [realtime](docs/official_docs/agents/realtime-agents.md) | `realtime_voice` |
 | Governed computer use — approval interrupts bound to a digest | [computer-use](docs/official_docs/computer-use/index.md) | — |
 | RAG — chunking, embeddings, vector search, 6 backends | [rag](docs/official_docs/tools/rag.md) | — |
 | Memory — semantic search, project isolation, a bi-temporal knowledge graph | [memory](docs/official_docs/tools/memory-tools.md) | [`examples/skill_memory_improvements`](examples/skill_memory_improvements) |
-| Servers — REST with SSE, A2A v1.0.0, durable background runs, cron, webhook wake-ups, approvals | [deployment](docs/official_docs/deployment/server.md) | [`examples/background_runs`](examples/background_runs) |
-| Governance — tool policies, a replicated kill switch, run budgets, a spend ledger, an action ledger, and signed audit logs | [tool authorization](docs/official_docs/security/tool-authorization.md) | [`examples/durable_company`](examples/durable_company) |
-| Gemini Enterprise Agent Platform — Agent Engine BYOC, managed state, memory, artifacts, telemetry and sandbox | [agent-engine](docs/official_docs/deployment/agent-engine.md) | [`examples/vertex_sandbox`](examples/vertex_sandbox) |
-| Agentic Web Protocol 2.0 — signed site contracts and releases, verified agent identity, capabilities over A2A, MCP and HTTP, `awp verify` | [awp](docs/official_docs/deployment/awp.md) | [`examples/awp_agent`](examples/awp_agent) (AWP 1.x) |
+| Servers — REST with SSE, A2A v1.0.0, durable background runs, cron, webhook wake-ups, approvals | [deployment](docs/official_docs/deployment/server.md) | `background_runs` |
+| Governance — tool policies, a replicated kill switch, run budgets, a spend ledger, an action ledger, and signed audit logs | [tool authorization](docs/official_docs/security/tool-authorization.md) | `durable_company` |
+| Gemini Enterprise Agent Platform — Agent Engine BYOC, managed state, memory, artifacts, telemetry and sandbox | [agent-engine](docs/official_docs/deployment/agent-engine.md) | `vertex_sandbox` |
+| Agentic Web Protocol 2.0 — signed site contracts and releases, verified agent identity, capabilities over A2A, MCP and HTTP, `awp verify` | [awp](docs/official_docs/deployment/awp.md) | `awp_agent` (AWP 1.x) |
 | AWP websites — a static, signed site with an agent edge, run by a team of agents inside its owner's charter; migration from WordPress | [website quickstart](docs/official_docs/deployment/website-quickstart.md) | [`examples/website`](examples/website) |
-| Agentic commerce — ACP and AP2 with durable journals | [payments](docs/official_docs/security/payments.md) | [`examples/payments`](examples/payments) |
+| Agentic commerce — ACP and AP2 with durable journals | [payments](docs/official_docs/security/payments.md) | `payments` |
 | Editor interop — use an ACP coding agent as a tool, or expose yours | [acp](docs/official_docs/acp/index.md) | — |
 | Browser automation — WebDriver tools for navigation, extraction, forms, and screenshots | [browser-tools](docs/official_docs/tools/browser-tools.md) | — |
-| Evaluation — trajectory, rubric, LLM-judge, A/B, CI output | [evaluation](docs/official_docs/evaluation/evaluation.md) | [`examples/eval_showcase`](examples/eval_showcase) |
+| Evaluation — trajectory, rubric, LLM-judge, A/B, CI output | [evaluation](docs/official_docs/evaluation/evaluation.md) | `eval_showcase` |
 | Guardrails, RBAC, SSO, audit logging | [security](docs/official_docs/security/access-control.md) | — |
-| Observability — OpenTelemetry tracing, structured logging | [observability](docs/official_docs/observability/telemetry.md) | [`examples/advanced_agents`](examples/advanced_agents) |
+| Observability — OpenTelemetry tracing, structured logging | [observability](docs/official_docs/observability/telemetry.md) | `advanced_agents` |
 
 ### Scaffold a project
 
@@ -419,8 +420,8 @@ per-platform tool matrix and the CI cost tiers.
 - [Official docs](docs/official_docs/) — guides for every capability above
 - [Wiki](https://github.com/zavora-ai/adk-rust/wiki) — tutorials and quickstarts
 - [docs.rs](https://docs.rs/adk-rust) — API reference
-- [Examples](examples/) — 148 standalone crates, plus more in the
-  [playground](https://github.com/zavora-ai/adk-playground)
+- [Examples](examples/) — the standalone scenario and validation crates; the teaching
+  examples live in the [playground](https://github.com/zavora-ai/adk-playground)
 
 ## Companion projects
 

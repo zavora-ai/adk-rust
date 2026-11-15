@@ -2,7 +2,7 @@
   several incoming edges counts an arrival only from a predecessor that routed to it, and is
   released once no missing predecessor can still run in the current pass. A merge after a
   conditional branch, and a node re-entered by a loop's back edge, such as the reviewers of
-  `examples/coding_graph`, run instead of being skipped while the run returned `Ok`. When
+  adk-playground's `coding_graph` example, run instead of being skipped while the run returned `Ok`. When
   nothing else can run, every waiting join is released, so a run never ends with one that did
   not fire. A `GraphAgentBuilder` graph defers a node with several incoming edges, as a
   `StateGraph` does.

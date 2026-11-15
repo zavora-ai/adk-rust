@@ -10,7 +10,7 @@
 #
 # Usage:
 #   scripts/check-examples-compile.sh              # every example
-#   scripts/check-examples-compile.sh 0 4          # shard 0 of 4 (CI matrix)
+#   scripts/check-examples-compile.sh 0 2          # shard 0 of 2 (CI matrix)
 #
 # A shared CARGO_TARGET_DIR is used so the ADK crates and common dependencies
 # are built once and reused across examples.

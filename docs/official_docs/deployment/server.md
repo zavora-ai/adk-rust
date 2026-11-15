@@ -467,8 +467,8 @@ A card belongs to the caller who registered it, recorded as its `owner`:
 - An `AgentRegistryStore` implements `replace_owned` and `delete_owned` with the owner check
   and the write in one atomic step.
 
-`examples/agent_registry` runs the routes in process, and group `H` of
-`examples/server_exposure` serves a registry beside a live agent.
+The `agent_registry` example in [adk-playground](https://github.com/zavora-ai/adk-playground) runs the routes in
+process, and group `H` of `examples/server_exposure` serves a registry beside a live agent.
 
 ## The web home
 

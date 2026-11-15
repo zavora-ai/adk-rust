@@ -127,12 +127,8 @@ dispatched.
 
 ## Example
 
-A runnable example lives in
-[`examples/codeact_monty_agent`](https://github.com/zavora-ai/adk-rust/tree/main/examples/codeact_monty_agent):
-
-```bash
-cargo run --manifest-path examples/codeact_monty_agent/Cargo.toml
-```
+The runnable `codeact_monty_agent` example lives in
+[adk-playground](https://github.com/zavora-ai/adk-playground).
 
 It runs offline with a deterministic model that writes one Python script: it
 calls two tools (`fetch_cart`, `tax_rate`) and does real work between them (a

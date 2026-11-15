@@ -782,7 +782,8 @@ therefore slows the tool briefly but can never stall it indefinitely or exhaust 
 These limits apply only to *progress*. A tool's final result is not affected, so
 truncate large results inside the tool if that matters to you.
 
-> See the `streaming_bash` example for a complete web UI that renders live
+> See the `streaming_bash` example in [adk-playground](https://github.com/zavora-ai/adk-playground)
+> for a complete web UI that renders live
 > `bash` output and one-shot tool results (`read_file`, `grep`, `glob`) from a
 > single event feed. The streaming `bash` tool itself lives in `adk-devtools`.
 
@@ -801,10 +802,10 @@ cargo run
 | Example | What it shows |
 |---------|---------------|
 | `examples/tool_schemas` | Argument validation with `LlmAgent` and `Runner`: unknown and out-of-range arguments rejected and corrected, the schema Gemini receives, duplicate tool names failing the build |
-| `examples/streaming_bash` | Live tool progress in a web UI |
-| `examples/multimodal_function_response` | A tool that returns an image to the model |
+| `streaming_bash` in [adk-playground](https://github.com/zavora-ai/adk-playground) | Live tool progress in a web UI |
+| `multimodal_function_response` in [adk-playground](https://github.com/zavora-ai/adk-playground) | A tool that returns an image to the model |
 
-Each example is a standalone crate:
+An example in this repository is a standalone crate:
 
 ```bash
 cargo run --manifest-path examples/tool_schemas/Cargo.toml
@@ -1046,7 +1047,8 @@ let frd = FunctionResponseData::with_multimodal(
 `with_inline_data` and `with_multimodal` panic when an inline part exceeds
 `adk_core::MAX_INLINE_DATA_SIZE` (10 MB).
 
-See `examples/multimodal_function_response/` for a complete working example.
+See the `multimodal_function_response` example in [adk-playground](https://github.com/zavora-ai/adk-playground) for
+a complete working example.
 
 ---
 
