@@ -352,7 +352,7 @@ A run claimed again past `expires_at` with the same calls still held fails with
 `DurableWorker::with_hooks` registers a `WorkerHooks` implementation; each call adds one, and
 hooks run in the order they were added. Every method has an empty default. A hook runs after the
 store write it reports, so the store already shows the state the hook receives, and it only
-observes: it cannot change what the worker does. The worker awaits each hook, so a hook hands
+observes, `wake_input` aside: it cannot change what the worker does. The worker awaits each hook, so a hook hands
 slow work, such as delivery to a remote sink, to another task.
 
 | Hook | Called | The run it receives |
@@ -360,6 +360,13 @@ slow work, such as delivery to a remote sink, to another task.
 | `on_claim(run)` | Once the worker starts the claimed run's target, before any model call or workflow step | `Running`, at the claim's epoch |
 | `on_park(run, reason)` | After `wait` parked the run | `Waiting`, holding no lease |
 | `on_finish(run)` | After `finish` wrote the attempt's outcome | `Completed`, `Failed`, or `Cancelled`; `Queued` when a retryable failure requeued it |
+| `wake_input(run)` | After `on_claim`, for an agent run; returns why the run was woken, or `None` | `Running`, at the claim's epoch |
+
+`wake_input` is the one hook that returns something. The worker adds its text to the user
+content of the turn the claim starts — after the run's input, or in place of the blank turn of
+a parked run — so the agent tree screens it as a user message. The first hook that returns text
+wins. A session that already holds a user message starting with the text's first line is not
+given it again, and a run parked on a held call is given none.
 
 | `ParkReason` | Parked by | Claimable |
 |--------------|-----------|-----------|

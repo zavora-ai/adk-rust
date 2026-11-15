@@ -13,8 +13,8 @@ use adk_core::{DurableRunStore, Enqueued, NewRun, RunFilter, RunState, SubjectRe
 use adk_kernel::{
     EventBus, EventSubscriber, ExpiryAction, InMemoryProcessStore, KERNEL_WAKE_TARGET, KernelEvent,
     KernelWakeExecutor, PartitionId, ProcessKind, ProcessMeta, ProcessStore, QueueClass,
-    RunFinishedWakeSource, Suspension, Trigger, Wake, WakeEvent, WakeOutcome, WakeRouter, WakeSet,
-    kernel_wake_run, keys,
+    RunFinishedWakeSource, Suspension, Trigger, Wake, WakeEvent, WakeOutcome, WakeReason,
+    WakeRouter, WakeSet, kernel_wake_run, keys,
 };
 use adk_server::background::{DurableWorker, DurableWorkerConfig, WorkflowExecutor, WorkflowState};
 use chrono::Utc;
@@ -188,14 +188,18 @@ async fn a_trigger_spawns_one_keyed_service_run_when_no_sleeper_matched() {
     );
     assert!(!run.authenticated, "an event with no verified subject never runs authenticated");
     assert_eq!(run.principal.unwrap().on_behalf_of, Some(SubjectRef::service("alice")));
+    let row = fx.processes.get(pid).await.unwrap().unwrap();
+    let reason = WakeReason::recorded(&row).expect("the row records why the trigger fired");
+    assert_eq!((reason.source.as_str(), reason.key.as_str()), ("hook:github", "hook:github:7"));
     assert_eq!(
-        fx.processes.get(pid).await.unwrap().unwrap(),
+        row,
         ProcessMeta::new(
             pid.clone(),
             QueueClass::Background,
             ProcessKind::Triggered { source: "triage".into() }
         )
         .with_partition("work")
+        .with_label("kernel.woke", serde_json::to_string(&reason).unwrap())
     );
 
     let again = router.route(webhook("github", "7")).await.unwrap();

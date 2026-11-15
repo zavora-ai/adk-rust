@@ -1919,6 +1919,10 @@ impl WorkerHooks for KernelHooks {
         });
     }
 
+    async fn wake_input(&self, run: &RunRecord) -> Option<String> {
+        crate::wake::wake_notice(self.sup.processes.as_ref(), run).await
+    }
+
     async fn on_park(&self, run: &RunRecord, reason: ParkReason) {
         let sup = &self.sup;
         sup.release(&run.run_id).await;
