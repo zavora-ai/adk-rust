@@ -145,7 +145,7 @@ adk-model = { path = "../adk-model", default-features = false }
 adk-session = { path = "../adk-session", features = ["sqlite"] }
 proptest = "1.5"
 # The stdio MCP server the driver tests run as their driver (spec 3.2 §7.7).
-rmcp = { version = "3.1", features = ["client", "server", "elicitation"] }
+rmcp = { version = "3.9", features = ["client", "server", "elicitation"] }
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["full", "test-util"] }
