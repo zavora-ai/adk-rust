@@ -20,7 +20,8 @@ own (spec 3.2 §8.1, K-I17).
 | `adk-rust freeze [--reason R]` / `unfreeze` | The kill switch, on every replica; `unfreeze` only over the kernel's socket or pipe, never `--server` (spec 3.3 S-I10) |
 | `adk-rust events [--follow] [--after CURSOR] [--json]` | The event bus |
 | `adk-rust proc [ledger\|baselines\|observations]` | The activity ledger (`--export FILE` for JSONL), each partition's baselines, the observations ([`/proc`](proc.md)) |
-| `adk-rust goal TEXT --until CMD` | With a kernel running, enqueues the goal on its `background` queue and follows it |
+| `adk-rust goal TEXT --until CMD` | With a kernel running, enqueues the goal on its `background` queue, as you, and follows it |
+| `adk-rust approvals list\|approve ID\|deny ID [--reason R]` | The kernel's approvals inbox, under the `apr_…` ids every surface shows (`ID` or a unique prefix of one); an approval resumes the parked process at once. Calls an in-process session holds in `harness.db` are listed beside them |
 | `adk-rust drivers list\|mount FILE [--yes]\|unmount ID\|restart ID\|reapprove ID` | The kernel's [drivers](drivers.md): MCP servers it supervises under the manifests you mounted |
 | `adk-rust pair [--name NAME] [--scope decide,read,stop] [--days 1-365]` | Issues a code that pairs one phone, tray or terminal ([pairing](pairing.md)) |
 | `adk-rust pair list\|revoke ID\|accept CODE` | The paired devices and chat accounts, and those waiting; remove one, or dismiss a waiting one; pair the chat account that was sent `CODE` |
@@ -317,7 +318,21 @@ current rate) and lists only unfinished processes, highest burn first.
 
 With a kernel running at the default home over `harness.db`, `goal` writes the goal to the
 session and enqueues it on the kernel's `background` queue instead of running a worker of its
-own, then follows it:
+own, then follows it. The goal runs as you, authenticated as a goal in this process is, so
+the session's `--mode` and your standing rules apply on the kernel: in Auto a call the mode
+allows runs without asking. Commands run in the kernel's shell, under the sandbox `up` was
+started with. The banner states the mode the goal runs in:
+
+```text
+$ adk-rust goal "add factorial with a test" --until "python3 -m unittest -q" --mode auto --yes
+goal mode on the kernel at unix:/Users/ana/Library/Application Support/adk-rust/kernel.sock
+mode auto as ana, in the kernel's shell; --yes approves held calls while this terminal follows
+```
+
+A call the goal holds waits in the kernel's inbox. A terminal asks for it; `--yes` approves it
+through the inbox while this terminal follows the goal, except an unsandboxed retry without
+`--allow-unsandboxed`; otherwise decide it with `adk-rust approvals approve ID` or from any
+surface, and the goal continues at once.
 
 | Outcome | Exit code |
 |---|---|

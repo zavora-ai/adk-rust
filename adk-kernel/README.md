@@ -31,7 +31,8 @@ adk-rust ps
 
 # 4. A command the agent wants to run waits in the approvals inbox. Decide it from any
 #    terminal, or from another machine with --server and --token against a kernel served
-#    with --auth-token.
+#    with --auth-token. The ids are the inbox's own (apr_…), the same on every surface, and
+#    an approval resumes the parked process at once.
 adk-rust approvals list
 adk-rust approvals approve <id>
 
@@ -509,6 +510,7 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 
 | Suite | Covers |
 |---|---|
+| `tests/approvals_wiring.rs` | A kernel over a `StoreApprovalService` built with a run store and no router, as `KernelBuilder::approval_service` documents it: a held call is filed in the inbox for the `operator` group, `held` and `decided` reach the bus, a decision over the control plane resumes the process and the call runs once; a service that takes neither the kernel's router nor its notifier is named in the inventory |
 | `tests/kernel_scenarios.rs` | K2: ten sleepers on ten kinds of wake set make no model call and hold no lease over a clock-controlled hour. K3: a file save, a signed webhook and a queue message each wake one run in under 2 s, and redeliveries wake nothing. K9: two replicas over one SQLite file, six running processes stopped within 1 s of a freeze on both (no model or tool call after it) and parked, resumed by the unfreeze with every tool call once. Chaos: a kernel process killed with `SIGKILL` mid-step, restarted, resumes from its checkpoint |
 | `tests/supervisor_tests.rs`, `tests/supervisor_property_tests.rs` | The process actions, lifecycle and spend attribution; sleepers never call the model and freezes stop everything within a second, with process-store writes delayed up to 120 ms |
 | `tests/wake_*.rs` | Matching, keys, expiry, reconciliation and each wake source |

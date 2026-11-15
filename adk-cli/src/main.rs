@@ -367,9 +367,9 @@ async fn run() -> Result<()> {
         #[cfg(all(feature = "harness", feature = "persist", feature = "encrypted"))]
         Some(Commands::Store { command, store_key }) => store::run(command, store_key).await,
         #[cfg(all(feature = "harness", feature = "persist"))]
-        Some(Commands::Approvals { command, server, token }) => {
+        Some(Commands::Approvals { command, server, token, home }) => {
             let token = token.or_else(|| std::env::var("ADK_SERVE_TOKEN").ok());
-            manage::approvals(command, server, token).await
+            manage::approvals(command, server, token, home).await
         }
         Some(Commands::Skills { command }) => skills::run(command).await,
         Some(Commands::Deploy { command }) => deploy::run(command).await,

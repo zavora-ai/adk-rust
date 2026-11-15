@@ -81,3 +81,49 @@ async fn goal_runs_and_served_runs_on_one_store_stay_with_their_own_workers() {
     assert_eq!(claimed.map(|claim| claim.record.run_id), Some(served.run_id));
     assert!(runs.claim("default", "serve", Duration::from_secs(5)).await.unwrap().is_none());
 }
+
+/// `adk-rust goal` on a running kernel enqueues the goal as the launcher's user, authenticated,
+/// so the kernel's served harness applies the session's mode and the user's standing rules as a
+/// goal in process does (H-4); a launcher that did not establish its user enqueues it
+/// unauthenticated. Fails on `origin/main`, where every enqueued goal is unauthenticated.
+#[tokio::test]
+async fn a_goal_enqueued_for_a_kernel_runs_as_its_authenticated_user() {
+    for authenticated in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+        let agent = HarnessAgent::builder("adk-rust")
+            .model(Arc::new(ScriptedLlm::new("scripted", Vec::<ScriptedResponse>::new())))
+            .workspace(adk_devtools::Workspace::new(dir.path()).allow_bash(true))
+            .project_instructions(InstructionsConfig {
+                user_file: None,
+                ..InstructionsConfig::default()
+            })
+            .mode(HarnessMode::Auto)
+            .without_default_members()
+            .build()
+            .unwrap();
+        let launcher = HarnessLauncher::new(agent)
+            .with_session_service(Arc::new(InMemorySessionService::new()))
+            .with_run_store(runs.clone())
+            .with_goal_queue("background")
+            .with_console(ConsoleIo::scripted([], false))
+            .quiet();
+        let mut launcher =
+            if authenticated { launcher.with_authenticated_goals() } else { launcher };
+        let pid = launcher
+            .enqueue_goal(GoalSpec {
+                goal: "create done.txt".into(),
+                until: "test -f done.txt".into(),
+                max_iterations: 2,
+                check_timeout: Duration::from_secs(30),
+            })
+            .await
+            .unwrap();
+        let run = runs.get(&pid).await.unwrap().unwrap();
+        assert_eq!(
+            (run.queue.as_str(), run.target.as_str(), run.authenticated),
+            ("background", GOAL_TARGET, authenticated)
+        );
+        assert_eq!(launcher.mode().await.unwrap(), HarnessMode::Auto, "the banner's mode");
+    }
+}

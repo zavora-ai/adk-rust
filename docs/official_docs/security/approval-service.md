@@ -103,6 +103,14 @@ async fn configure() -> adk_core::Result<RunConfig> {
 `RunConfigBuilder::approval_service` also installs the service's store as the run's
 `approval_store`, so decisions reach the governed path.
 
+Without a router, a held call stays in the store only. A host that decides calls in an inbox
+gives such a service a router of its own with `ApprovalService::route_unrouted`, and adds a
+notifier to a built service with `ApprovalService::add_notifier`: the
+[agent kernel](../kernel/index.md#using-the-kernel-from-code) routes every unrouted call to the
+`operator` group and publishes `held` and `decided` on its bus. A router the service was built
+with keeps deciding, including to leave a call in the store only. Both methods answer whether
+the service took what it was given; their defaults take nothing, so a wrapper forwards them.
+
 ## Policy
 
 | Field | Default | Meaning |

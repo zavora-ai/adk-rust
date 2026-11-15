@@ -17,6 +17,8 @@ use crate::wake::Wake;
 /// | [`SIGNAL_UNFILED`](InventoryWarning::SIGNAL_UNFILED) | A trigger wakes on a signal in a partition the kernel files no signals in (`KernelBuilder::signals`) |
 /// | [`STORE_IN_MEMORY`](InventoryWarning::STORE_IN_MEMORY) | A stateful store is held in memory: one per store the builder defaulted, one per bundle that keeps stores in memory |
 /// | [`KERNEL_IDLE`](InventoryWarning::KERNEL_IDLE) | The kernel has no agent, trigger, workflow, schedule store or agent factory |
+/// | [`APPROVALS_UNROUTED`](InventoryWarning::APPROVALS_UNROUTED) | The approval service takes no router from the kernel (`ApprovalService::route_unrouted`), so a call it holds with no route of its own reaches no inbox |
+/// | [`APPROVALS_UNHEARD`](InventoryWarning::APPROVALS_UNHEARD) | The approval service takes no notifier from the kernel (`ApprovalService::add_notifier`), so no `held` or `decided` event is published |
 /// | any other code | A warning the host or a kit added (`KernelBuilder::inventory_warning`), such as a job it does not schedule |
 ///
 /// # Example
@@ -108,6 +110,10 @@ impl InventoryWarning {
     pub const STORE_IN_MEMORY: &'static str = "kernel.store.in_memory";
     /// The kernel has nothing to run.
     pub const KERNEL_IDLE: &'static str = "kernel.idle";
+    /// Held calls the approval service routes nowhere reach no inbox.
+    pub const APPROVALS_UNROUTED: &'static str = "kernel.approvals.unrouted";
+    /// The approval service's requests are not published on the event bus.
+    pub const APPROVALS_UNHEARD: &'static str = "kernel.approvals.unheard";
 
     /// A warning of `code` saying `message`.
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {

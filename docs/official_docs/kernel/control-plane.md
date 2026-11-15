@@ -153,7 +153,7 @@ curl --unix-socket "$HOME/Library/Application Support/adk-rust/kernel.sock" \
 |---|---|---|
 | `target` | — | A target the kernel registered: `adk-rust` or `harness.goal`; another answers `404` naming them |
 | `input` | `null` | A string, `{"text": ...}` or `{"content": ...}` |
-| `sessionId` | A new session | The session an agent run continues |
+| `sessionId` | A new session, `run-{pid}` | The session an agent run continues; steer a process started without one at `run-{pid}` |
 | `queue` | `interactive` | `interactive`, `background`, `maintenance` or a named queue |
 | `kind` | `interactive` | `goal`, `scheduled`, `{"triggered": {"source": ...}}`, … |
 | `wake` | — | A wake set: the process starts asleep |
@@ -221,6 +221,8 @@ and serves it at `GET /api/kernel/inventory` to the `operator` scope
 | `kernel.trigger.signal_unfiled` | A trigger wakes on a `Wake::Signal` in a partition the kernel files no signals in (`KernelBuilder::signals`), so it never fires |
 | `kernel.store.in_memory` | A stateful store is held in memory: one warning per store the builder defaulted, naming its setter, and one per [`KernelStores`](backends.md#every-store-at-once-kernelstores) bundle that keeps stores in memory; the settings store only when the kernel serves a control plane |
 | `kernel.idle` | The kernel has no agent, trigger, workflow, schedule store or agent factory |
+| `kernel.approvals.unrouted` | The approval service takes no router from the kernel (`ApprovalService::route_unrouted`), so a call it holds with no route of its own reaches no inbox |
+| `kernel.approvals.unheard` | The approval service takes no notifier from the kernel (`ApprovalService::add_notifier`), so no `held` or `decided` event is published |
 | Any other code | A warning the host or a kit added with `KernelBuilder::inventory_warning`, such as a job it does not schedule and why |
 
 ## Audit records

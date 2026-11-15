@@ -1042,7 +1042,7 @@ pub fn item_session(item_id: &str) -> String {
 
 /// The approver group of the approvals inbox `adk-rust up` serves: the control plane's
 /// `operator` scope.
-const OPERATOR_GROUP: &str = "operator";
+pub(crate) const OPERATOR_GROUP: &str = "operator";
 
 /// The id of the inbox request of item `item_id`.
 fn request_id(item_id: &str) -> String {

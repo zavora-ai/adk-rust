@@ -252,6 +252,18 @@ impl HarnessLauncher {
         let shared = self.open().await?;
         shared.harness().goal(&shared.user, &shared.session).await
     }
+
+    /// The mode the session the launcher works in runs in, as the harness's mode store
+    /// records it: the mode a worker sharing the store, such as a kernel's, decides its goal
+    /// in.
+    ///
+    /// # Errors
+    ///
+    /// Returns the session's or the mode store's error.
+    pub async fn mode(&mut self) -> Result<adk_harness::HarnessMode> {
+        let shared = self.open().await?;
+        shared.harness().mode(&shared.user, &shared.session).await
+    }
 }
 
 /// Enqueues a run that continues the session's running goal, which no live run carries.

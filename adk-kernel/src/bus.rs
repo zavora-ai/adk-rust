@@ -885,6 +885,62 @@ impl EventSink for AuditSink {
     }
 }
 
+/// Publishes the approvals inbox's changes on a kernel's bus (`KernelBuilder::approval_service`):
+/// [`KernelEvent::Held`] when a call is filed, [`KernelEvent::Decided`] when a decision
+/// resolves it. Both carry the call's redacted arguments only, and the fingerprint of the
+/// redacted call, so a `held` and its `decided` share it.
+#[derive(Clone)]
+pub(crate) struct ApprovalEvents(EventBus);
+
+impl ApprovalEvents {
+    pub(crate) fn new(bus: EventBus) -> Self {
+        Self(bus)
+    }
+}
+
+impl fmt::Debug for ApprovalEvents {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ApprovalEvents").finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl adk_core::ApprovalNotifier for ApprovalEvents {
+    async fn notify(&self, notification: &adk_core::ApprovalNotification) -> adk_core::Result<()> {
+        use adk_core::{ApprovalEventKind, ApprovalState};
+
+        let request = &notification.request;
+        let mut call =
+            ToolConfirmationRequest::new(request.tool_name.clone(), request.args_redacted.clone());
+        call.origin = request.origin.clone();
+        call.acting = request.acting.clone().map(Box::new);
+        let pid = request.run_id.clone().unwrap_or_default();
+        match (notification.kind, &notification.decision) {
+            (ApprovalEventKind::Submitted, _) => {
+                self.0.publish(KernelEvent::Held { pid, request: call });
+            }
+            (ApprovalEventKind::Decided, Some(decision)) if request.state.is_terminal() => {
+                let decision_kind = match request.state {
+                    ApprovalState::Approved => ToolConfirmationDecision::Approve,
+                    ApprovalState::Pending
+                    | ApprovalState::Rejected
+                    | ApprovalState::Responded
+                    | ApprovalState::Expired
+                    | ApprovalState::Cancelled => ToolConfirmationDecision::Deny,
+                };
+                self.0.publish(KernelEvent::Decided {
+                    pid,
+                    fingerprint: call.fingerprint(),
+                    decision: decision_kind,
+                    by: decision.authority().clone(),
+                });
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

@@ -843,7 +843,7 @@ pub async fn repl(client: ControlClient, session: Option<String>) -> Result<()> 
             render(&attached.transcript, true);
             cursor = attached.cursor;
             if attached.process.is_some() {
-                report(follow(&client, Some(&console), &session, &mut cursor, None).await?);
+                report(follow(&client, Some(&console), None, &session, &mut cursor, None).await?);
             }
         }
         // A new session: the first turn creates it.
@@ -871,8 +871,8 @@ pub async fn repl(client: ControlClient, session: Option<String>) -> Result<()> 
             .with_session_id(&session);
         let process = client.spawn(&request).await?;
         println!();
-        let followed =
-            follow(&client, Some(&console), &session, &mut cursor, Some(&process.meta.pid)).await?;
+        let pid = Some(process.meta.pid.as_str());
+        let followed = follow(&client, Some(&console), None, &session, &mut cursor, pid).await?;
         report(followed);
     }
     println!(
@@ -903,7 +903,8 @@ fn report(followed: Followed) {
         }
         Followed::Done(_) => println!(),
         Followed::Held(calls) => println!(
-            "\n{calls} call(s) wait for a decision: `adk-rust approvals --server …` or the inbox.\n"
+            "\n{calls} call(s) wait for a decision: `adk-rust approvals list`, then `approve ID` \
+             or `deny ID`, or any other surface.\n"
         ),
         Followed::Detached => {
             println!("\nDetached from the turn; it carries on in the kernel.\n");
@@ -912,11 +913,14 @@ fn report(followed: Followed) {
 }
 
 /// Reads `session` from `cursor` until nothing runs in it, printing what it records and,
-/// with a terminal `console`, asking for each held call (spec 3.2 §7.11, K5). Without one,
-/// a held call ends the follow with [`Followed::Held`].
+/// with a terminal `console`, asking for each held call (spec 3.2 §7.11, K5). `unattended`
+/// is `--yes`, `Some(allow_unsandboxed)`: each held call of the session is approved through
+/// the inbox without asking, as in process. Without either, a held call ends the follow
+/// with [`Followed::Held`].
 pub async fn follow(
     client: &ControlClient,
     console: Option<&ConsoleIo>,
+    unattended: Option<bool>,
     session: &str,
     cursor: &mut Option<DateTime<Utc>>,
     pid: Option<&str>,
@@ -962,13 +966,15 @@ pub async fn follow(
                 said_frozen = true;
             }
             if !attached.pending.is_empty() {
-                let Some(console) = console.filter(|console| console.is_terminal()) else {
-                    return Ok(Followed::Held(attached.pending.len()));
+                let answer = match (unattended, console.filter(|console| console.is_terminal())) {
+                    (Some(allow_unsandboxed), _) => Answer::Unattended { allow_unsandboxed },
+                    (None, Some(console)) => Answer::Ask(console),
+                    (None, None) => return Ok(Followed::Held(attached.pending.len())),
                 };
-                if let Some(ended) = decide_pending(client, console, session, &mut asked).await? {
+                if let Some(ended) = decide_pending(client, answer, session, &mut asked).await? {
                     return Ok(ended);
                 }
-                if !said_waiting {
+                if !said_waiting && unattended.is_none() {
                     println!("(waiting for a decision; any surface may give it — Ctrl-C detaches)");
                     said_waiting = true;
                 }
@@ -987,11 +993,20 @@ async fn process_of(client: &ControlClient, pid: &str) -> Result<Option<Process>
     Ok(processes.into_iter().find(|process| process.meta.pid == pid))
 }
 
-/// Asks at `console` about each pending call of `session` not asked about yet, and decides
-/// it through the approvals inbox. `Some` when the follow ends here.
+/// Who answers a held call a following surface sees.
+enum Answer<'a> {
+    /// The person at this terminal.
+    Ask(&'a ConsoleIo),
+    /// `--yes`: approved without asking, except an unsandboxed retry without
+    /// `--allow-unsandboxed`.
+    Unattended { allow_unsandboxed: bool },
+}
+
+/// Answers each pending call of `session` not answered yet, as `answer` says, and decides it
+/// through the approvals inbox. `Some` when the follow ends here.
 async fn decide_pending(
     client: &ControlClient,
-    console: &ConsoleIo,
+    answer: Answer<'_>,
     session: &str,
     asked: &mut HashSet<String>,
 ) -> Result<Option<Followed>> {
@@ -1018,17 +1033,46 @@ async fn decide_pending(
         if !item.summary.trim().is_empty() {
             println!("  {}", escape_control(&item.summary));
         }
-        let answer = console.read_line("Approve? [y]es, [n]o, or a reason to refuse > ").await;
-        let (action, reason) = match answer {
-            ConsoleInput::Line(line) => match line.trim() {
-                "y" | "yes" => (ApprovalAction::Approve, None),
-                "" | "n" | "no" => (ApprovalAction::Reject, None),
-                reason => (ApprovalAction::Reject, Some(reason.to_string())),
-            },
-            ConsoleInput::Interrupted | ConsoleInput::Eof => return Ok(Some(Followed::Detached)),
+        let (action, reason) = match &answer {
+            Answer::Unattended { allow_unsandboxed } => {
+                let unsandboxed = item.tool_name == "bash"
+                    && item.args_redacted.get("unsandboxed").and_then(serde_json::Value::as_bool)
+                        == Some(true);
+                if unsandboxed && !allow_unsandboxed {
+                    let reason = "--yes does not approve unsandboxed retries without \
+                                  --allow-unsandboxed";
+                    (ApprovalAction::Reject, Some(reason.to_string()))
+                } else {
+                    (ApprovalAction::Approve, None)
+                }
+            }
+            Answer::Ask(console) => {
+                let line =
+                    console.read_line("Approve? [y]es, [n]o, or a reason to refuse > ").await;
+                match line {
+                    ConsoleInput::Line(line) => match line.trim() {
+                        "y" | "yes" => (ApprovalAction::Approve, None),
+                        "" | "n" | "no" => (ApprovalAction::Reject, None),
+                        reason => (ApprovalAction::Reject, Some(reason.to_string())),
+                    },
+                    ConsoleInput::Interrupted | ConsoleInput::Eof => {
+                        return Ok(Some(Followed::Detached));
+                    }
+                }
+            }
         };
         client.decide(&item.id, item.version, action, reason.as_deref()).await?;
-        println!("{}", if action == ApprovalAction::Approve { "approved" } else { "refused" });
+        println!(
+            "{}",
+            match (action, &answer) {
+                (ApprovalAction::Approve, Answer::Unattended { .. }) => "approved by --yes",
+                (ApprovalAction::Approve, Answer::Ask(_)) => "approved",
+                (_, Answer::Unattended { .. }) => {
+                    "refused: --yes does not approve an unsandboxed retry; add --allow-unsandboxed"
+                }
+                (_, Answer::Ask(_)) => "refused",
+            }
+        );
     }
     Ok(None)
 }

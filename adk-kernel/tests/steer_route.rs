@@ -185,6 +185,32 @@ async fn a_message_steered_over_the_control_plane_reaches_the_running_turn() {
     plane.stop().await;
 }
 
+/// A process spawned without a session runs in the `run-{pid}` session its worker names,
+/// and a message steered to that session reaches its turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turn_spawned_without_a_session_takes_a_message_steered_to_its_own() {
+    let plane = Plane::start().await;
+    let client = plane.client("owner");
+    let request = SpawnRequest::new(TARGET, json!({ "text": "convert the report" }));
+    let pid = client.spawn(&request).await.unwrap().meta.pid;
+    common::tool_called(&plane.world, 1).await;
+    let session = format!("run-{pid}");
+
+    let accepted = client.steer(&session, STEERED).await.unwrap();
+    let SteerResponse::Accepted { steer_id, pid: held_by, .. } = accepted else {
+        panic!("the running turn holds the message: {accepted:?}");
+    };
+    assert_eq!(held_by, pid);
+    plane.world.release.add_permits(1);
+    common::in_state(&plane.world.runs, &pid, RunState::Completed).await;
+
+    let after = client.attach(&session, &AttachRequest::default()).await.unwrap();
+    assert_eq!(carrying(&after.transcript, &steer_id).len(), 1, "the message is in the session");
+    let requests = plane.world.model.requests();
+    assert!(says(requests.last().expect("a second model call"), STEERED));
+    plane.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn only_the_person_steers_and_nothing_is_steered_while_stopped() {
     let plane = Plane::start().await;
