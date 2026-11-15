@@ -377,12 +377,8 @@ cargo clippy -p adk-awp -- -D warnings  # zero warnings
 
 ## Example
 
-```bash
-cp examples/awp_agent/.env.example examples/awp_agent/.env   # add your GOOGLE_API_KEY
-cargo run --manifest-path examples/awp_agent/Cargo.toml
-```
-
-The example loads `business.toml`, installs authenticated A2A dispatch to a real
+The `awp_agent` example in [adk-playground](https://github.com/zavora-ai/adk-playground) reads `GOOGLE_API_KEY`,
+loads `business.toml`, installs authenticated A2A dispatch to a real
 LLM agent, protects management routes separately, and exercises each endpoint.
 
 ## Documentation

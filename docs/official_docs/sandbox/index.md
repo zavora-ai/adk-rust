@@ -474,4 +474,4 @@ crate needs a wildcard arm.
 
 ### Example
 
-See [`examples/sandbox_agent/`](https://github.com/zavora-ai/adk-rust/tree/main/examples/sandbox_agent) for a full LLM-agent-driven example that executes Python code in a sandboxed environment with network access blocked by the OS kernel.
+See the `sandbox_agent` example in [adk-playground](https://github.com/zavora-ai/adk-playground) for a full LLM-agent-driven example that executes Python code in a sandboxed environment with network access blocked by the OS kernel.

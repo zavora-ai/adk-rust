@@ -21,9 +21,8 @@ All operations are rooted at a `Workspace` and rejected if they escape it.
 Mutations require a writable workspace; `bash` requires `Workspace::allow_bash(true)`.
 
 The `bash` tool emits its output incrementally as it runs, so UIs can display a
-live terminal (see the
-[`streaming_bash`](https://github.com/zavora-ai/adk-rust/tree/main/examples/streaming_bash)
-example). The framework forwards each chunk as a partial event on the agent's `EventStream`;
+live terminal (see the `streaming_bash` example in
+[adk-playground](https://github.com/zavora-ai/adk-playground)). The framework forwards each chunk as a partial event on the agent's `EventStream`;
 consumers detect them with `event.tool_progress_stream()`. The tool's final result for the
 model carries at most `INLINE_OUTPUT_CHARS` (30,000) characters of output: a longer stream
 keeps its first third and last two thirds around a marker naming the bytes left out, and the

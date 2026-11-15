@@ -297,13 +297,8 @@ impl SchemaAdapter for MyProviderAdapter {
 
 ## Example
 
-Run the schema normalization demo to see all adapters in action:
-
-```bash
-cargo run --manifest-path examples/schema_normalization/Cargo.toml
-```
-
-No API keys needed — demonstrates normalization logic locally.
+The `schema_normalization` example in [adk-playground](https://github.com/zavora-ai/adk-playground) runs every
+adapter. It needs no API key and demonstrates the normalization logic locally.
 
 ---
 

@@ -213,7 +213,7 @@ the plugin's context does not carry the run config, so set it to the run's
 - [Plugins](../core/plugins.md) — Plugin system architecture
 - [Function Tools](function-tools.md) — Creating tools
 - [Evaluation](../evaluation/evaluation.md) — Testing agent resilience
-- `examples/retry_reflect` — The plugin on a live agent
+- `retry_reflect` in [adk-playground](https://github.com/zavora-ai/adk-playground) — The plugin on a live agent
 
 ---
 

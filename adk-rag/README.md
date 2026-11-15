@@ -430,7 +430,7 @@ async fn main() -> adk_rag::Result<()> {
 ```
 
 See [docs/official_docs/rag/vertex-rag-engine.md](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/rag/vertex-rag-engine.md)
-and the [`examples/vertex_rag`](https://github.com/zavora-ai/adk-rust/tree/main/examples/vertex_rag) example.
+and the `vertex_rag` example in [adk-playground](https://github.com/zavora-ai/adk-playground).
 
 ## Choosing a Chunker
 
@@ -629,9 +629,9 @@ This produces stable vectors so your tests are reproducible, but the similarity 
 
 | Example | What it shows |
 |---------|---------------|
-| [`examples/vertex_rag`](https://github.com/zavora-ai/adk-rust/tree/main/examples/vertex_rag) | Vertex AI RAG Engine retrieval |
+| `vertex_rag` in [adk-playground](https://github.com/zavora-ai/adk-playground) | Vertex AI RAG Engine retrieval |
 
-The [adk-playground](https://github.com/zavora-ai/adk-playground) repository has more RAG
+The adk-playground repository has more RAG
 examples, such as a custom embedder and multi-collection search.
 
 ## API Reference

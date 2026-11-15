@@ -291,11 +291,9 @@ Each `*_server_*` method targets one running server by ID and returns
 For a single connection (rather than the manager registry), the same surface is
 available directly on `McpToolset` via `McpToolset::with_handlers`,
 `list_resources`, `read_resource`, `list_prompts`, `get_prompt`, and
-`subscribe_resource`. See the runnable agentic example:
-
-```bash
-cargo run --manifest-path examples/mcp_resources/Cargo.toml --bin resources-client
-```
+`subscribe_resource`. The `mcp_resources` example in
+[adk-playground](https://github.com/zavora-ai/adk-playground) is a runnable agent on this surface; its
+client is the `resources-client` binary.
 
 ## Tool-name collisions
 
@@ -366,11 +364,7 @@ await asynchronous cleanup.
 
 ## Verified example
 
-```bash
-cargo run --manifest-path examples/mcp_manager/Cargo.toml
-```
-
-The example starts a real Rust MCP child process, discovers and calls a tool,
+The `mcp_manager` example in [adk-playground](https://github.com/zavora-ai/adk-playground) starts a real Rust MCP child process, discovers and calls a tool,
 adds and enables a second server, updates it, saves the registry, disables and
 removes it, and closes all sessions. It requires no model, API key, package
 download, or network access.

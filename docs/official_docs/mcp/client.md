@@ -379,7 +379,8 @@ ADK-Rust advertises form and URL elicitation. A handler failure or panic becomes
 a decline, preserving the MCP session. The application must still validate
 accepted values and apply consent policy.
 
-See `examples/mcp_elicitation` for a complete client and server pair.
+See the `mcp_elicitation` example in [adk-playground](https://github.com/zavora-ai/adk-playground) for a complete
+client and server pair.
 
 ## Negotiated tasks
 

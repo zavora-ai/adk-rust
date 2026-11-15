@@ -218,7 +218,8 @@ CodeAct.
 
 ## Example
 
-`examples/monty_python_code_tool` runs an `LlmAgent` with a REPL-mode
+The `monty_python_code_tool` example in [adk-playground](https://github.com/zavora-ai/adk-playground) runs an
+`LlmAgent` with a REPL-mode
 `MontyPythonCodeTool` configured with a read-write mount, an environment
 variable, and a registered host function — demonstrating multi-turn variable
 persistence and host-function calls from model-written Python.

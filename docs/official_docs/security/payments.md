@@ -225,9 +225,9 @@ Reference files:
 - `adk-payments/tests/ap2_integration_tests.rs`
 - `adk-payments/tests/ap2_governance_tests.rs`
 - `adk-payments/tests/cross_protocol_correlation_tests.rs`
-- `examples/payments/README.md`
+- `README.md` of the `payments` example in [adk-playground](https://github.com/zavora-ai/adk-playground)
 
-The example crate under `examples/payments/` is the scenario index for the
+The `payments` example is the scenario index for the
 supported journeys, while the integration tests are the executable ground
 truth for protocol, journal, and evidence behavior.
 

@@ -886,13 +886,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Example
 
-A complete working example demonstrating all features is available:
-
-```bash
-cargo run --manifest-path examples/eval_showcase/Cargo.toml
-```
-
-See `examples/eval_showcase/` for the source code.
+The `eval_showcase` example in [adk-playground](https://github.com/zavora-ai/adk-playground) is a complete
+working example of every feature on this page.
 
 ---
 

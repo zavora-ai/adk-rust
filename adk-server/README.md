@@ -213,7 +213,7 @@ fn app(config: ServerConfig) -> Router {
 | `.build()` | Build the `axum::Router` |
 | `.build_with_shutdown()` | Build and return a `ShutdownHandle` |
 
-See [`examples/server_builder/`](../examples/server_builder/) for a complete working example.
+See the `server_builder` example in [adk-playground](https://github.com/zavora-ai/adk-playground) for a complete working example.
 
 ### Graceful Shutdown
 
@@ -259,7 +259,7 @@ fn governed(config: ServerConfig) -> axum::Router {
 
 With an auth bridge, A2A routes use the authenticated identity as the session user and the owner of every task they create, so `tasks/get` and `tasks/cancel` cannot reach another caller's task. Model thinking is never sent to a peer.
 
-The `a2a-v1` feature adds `adk_server::a2a::v1`: a `RequestHandler` with the A2A v1.0.0 JSON-RPC handler (`jsonrpc_handler`, all 11 operations from `SendMessage` to `GetExtendedAgentCard`) and REST router (`rest_router`), which an application mounts on its own routes, and `a2a::client::v1_client::A2aV1Client`. The v1 implementation covers RFC 3339 timestamps, capabilities declaration, message ID idempotency, push notification authentication, the `INPUT_REQUIRED` multi-turn flow, input validation, `application/a2a+json` responses, and the task as the first SSE event. See [`examples/a2a-research-agent`](../examples/a2a-research-agent) and [A2A docs](../docs/official_docs/deployment/a2a.md).
+The `a2a-v1` feature adds `adk_server::a2a::v1`: a `RequestHandler` with the A2A v1.0.0 JSON-RPC handler (`jsonrpc_handler`, all 11 operations from `SendMessage` to `GetExtendedAgentCard`) and REST router (`rest_router`), which an application mounts on its own routes, and `a2a::client::v1_client::A2aV1Client`. The v1 implementation covers RFC 3339 timestamps, capabilities declaration, message ID idempotency, push notification authentication, the `INPUT_REQUIRED` multi-turn flow, input validation, `application/a2a+json` responses, and the task as the first SSE event. See the `a2a-research-agent` example in [adk-playground](https://github.com/zavora-ai/adk-playground) and [A2A docs](../docs/official_docs/deployment/a2a.md).
 
 ### Remote Agent Client
 

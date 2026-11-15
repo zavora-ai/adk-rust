@@ -1,4 +1,0 @@
-# This standalone example keeps an explicit pin so its Monty dependency uses
-# the same supported toolchain as the root workspace.
-[toolchain]
-channel = "1.95.0"

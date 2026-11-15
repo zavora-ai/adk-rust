@@ -78,7 +78,7 @@ let remote = RemoteReasoningEngineAgent::builder("specialist")
 
 Engines can also be addressed by registry URN (`.urn(...)` plus `.registry(...)`); the resource name is resolved from the entry's runtime reference. The default class method is `streaming_agent_run_with_events` with a one-shot fallback to `stream_query` for non-ADK engines.
 
-See `examples/agent_orchestrator` for the full pattern — registry search plus remote delegation in one orchestrator.
+See the `agent_orchestrator` example in [adk-playground](https://github.com/zavora-ai/adk-playground) for the full pattern — registry search plus remote delegation in one orchestrator.
 
 ## Enabling everything
 

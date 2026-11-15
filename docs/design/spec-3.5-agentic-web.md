@@ -29,7 +29,7 @@ design label.
 | Phase | Item | Status | On `main`, or what is missing |
 |---|---|---|---|
 | 0 | X1–X5 AWP 1.x hygiene | Done | #1094: `build_manifest` carries `access_level` and both schemas; the `PaymentIntent` docs name `adk-gateway` and `evaluate` loses its redundant branch; `FileConsentService` writes atomically on a blocking thread; `AwpConfigError::Serialize`; `sign_payload` and `verify_signature` deprecated |
-| 0 | X6–X8 | Done | #1077: `examples/awp_agent` on `gemini-3.7-flash`; `ROADMAP.md` matches `STABILITY.md` for the AWP crates; spec 3.4 §1's timeline |
+| 0 | X6–X8 | Done | #1077: the `awp_agent` example (since moved to adk-playground) on `gemini-3.7-flash`; `ROADMAP.md` matches `STABILITY.md` for the AWP crates; spec 3.4 §1's timeline |
 | 0 | X9 | Done | Spec 3.2's implementation status already records `adk-kernel` |
 | 0 | X13 | Done | The protocol repository (`zavora-ai/agenticwebprotocol`, branch `awp-2.0`, private) marks the v1.0 draft and the v0.4 document superseded; no workspace file names `awp.dev` except this spec and the overview, which describe the problem |
 | 1 | AWP 2.0 wire types ([§7.2](#72-the-site-contract)–[§7.8.3](#783-constantly-updated-sites), [§7.10](#710-partitions-and-signals)) | Done | #1083: `awp_types::v2`, re-exported at the crate root; JSON Schemas in `awp-types/schemas/2.0/` (`json-schema`) |
@@ -1137,7 +1137,7 @@ Spans `website.onboarding.{stage}`, `site.release`, `site.probe`, `awp.request` 
 | X3 | `FileConsentService` writes atomically off the async executor | Whole-file blocking writes ([`consent.rs:163-190`](../../adk-awp/src/consent.rs)) |
 | X4 | `business_context_to_toml` gets its own error variant | It reports serialisation failures as `WatcherError` ([`config.rs:31-33`](../../adk-awp/src/config.rs)) |
 | X5 | The legacy `sign_payload`/`verify_signature` pair is deprecated for Standard Webhooks | Two schemes ([`events.rs:304-327`](../../adk-awp/src/events.rs)) |
-| X6 | `examples/awp_agent` moves to `gemini-3.7-flash` | It uses `gemini-2.5-flash` |
+| X6 | The `awp_agent` example moves to `gemini-3.7-flash` | It uses `gemini-2.5-flash` |
 | X7 | `ROADMAP.md` matches `STABILITY.md` for the AWP crates | Stable versus Beta |
 | X8 | Spec 3.4 §1: the OpenAI incident ran 8–19 July 2026, was attributed on 20 July and disclosed on 21 July | Public timeline |
 | X9 | Spec 3.2's implementation-status table reflects that `adk-kernel` exists | It says the crate does not exist |

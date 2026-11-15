@@ -4,4 +4,4 @@
   `PromptOptimizer::optimize` read `Agent::description` and re-evaluated the unchanged agent each
   round, so it never changed a prompt; it now scores the agent as given and fails with guidance when
   the baseline is below the threshold, since an `Arc<dyn Agent>` cannot be rebuilt.
-  `examples/prompt_optimizer` uses the new loop.
+  The `prompt_optimizer` example in adk-playground uses the new loop.
