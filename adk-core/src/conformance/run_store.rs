@@ -390,36 +390,59 @@ pub async fn stale_epoch_writes_are_refused<H: RunStoreHarness + ?Sized>(harness
     assert_code(store.request_cancel(&missing).await, RUN_NOT_FOUND_CODE, "request_cancel");
 }
 
-/// A retryable failure requeues the run while attempts remain, the next claim starts the
-/// next attempt, and the last attempt's failure is terminal; a non-retryable failure is
-/// terminal at once.
+/// A retryable failure requeues the run while attempts remain, claimable once its backoff
+/// has passed, the next claim starts the next attempt, and the last attempt's failure is
+/// terminal; a non-retryable failure is terminal at once.
 pub async fn retryable_failure_requeues_until_max_attempts<H: RunStoreHarness + ?Sized>(
     harness: &H,
 ) {
     let clock = ManualClock::new(base_time());
     let store = harness.open(Arc::new(clock.clone())).await;
     let queue = unique_unicode("queue");
-    let run = created(&*store, new_run(&queue).with_max_attempts(2)).await;
-    let failure = |error: &str, retryable| RunOutcome::Failed { error: error.into(), retryable };
+    let run = created(&*store, new_run(&queue).with_max_attempts(3)).await;
+    let failure = |error: &str, retryable, backoff: Option<Duration>| RunOutcome::Failed {
+        error: error.into(),
+        retryable,
+        backoff,
+    };
 
     let first = claim(&*store, &queue, "w1").await.expect("claim");
-    let requeued =
-        store.finish(&run.run_id, first.epoch, failure("timeout", true)).await.expect("finish");
+    let backoff = Duration::from_secs(30);
+    let requeued = store
+        .finish(&run.run_id, first.epoch, failure("rate limited", true, Some(backoff)))
+        .await
+        .expect("finish");
+    let due = clock.now() + backoff;
     assert_eq!(
-        (requeued.state, requeued.attempt, requeued.error.as_deref()),
-        (RunState::Queued, 1, Some("timeout"))
+        (requeued.state, requeued.attempt, requeued.error.as_deref(), requeued.not_before),
+        (RunState::Queued, 1, Some("rate limited"), Some(due))
     );
+    assert_eq!(get(&*store, &run.run_id).await.not_before, Some(due), "the backoff is stored");
+    clock.advance(Duration::from_secs(29));
+    assert!(claim(&*store, &queue, "w2").await.is_none(), "not claimable during its backoff");
+    clock.advance(Duration::from_secs(1));
+    let retried = claim(&*store, &queue, "w2").await.expect("claimable once the backoff passed");
+    assert_eq!((retried.record.attempt, retried.record.not_before), (2, None));
+    let requeued = store
+        .finish(&run.run_id, retried.epoch, failure("timeout", true, None))
+        .await
+        .expect("finish");
+    assert_eq!((requeued.state, requeued.not_before), (RunState::Queued, None));
     let second = claim(&*store, &queue, "w2").await.expect("the retry is claimable");
-    assert_eq!((second.record.attempt, second.epoch), (2, first.epoch + 1));
-    let failed =
-        store.finish(&run.run_id, second.epoch, failure("timeout", true)).await.expect("finish");
+    assert_eq!((second.record.attempt, second.epoch), (3, first.epoch + 2));
+    let failed = store
+        .finish(&run.run_id, second.epoch, failure("timeout", true, Some(backoff)))
+        .await
+        .expect("finish");
     assert_eq!(failed.state, RunState::Failed, "no attempts left");
     assert!(claim(&*store, &queue, "w3").await.is_none());
+    clock.advance(backoff);
+    assert!(claim(&*store, &queue, "w3").await.is_none(), "a failed run is never claimed");
 
     let fatal = created(&*store, new_run(&queue).with_max_attempts(5)).await;
     let claimed = claim(&*store, &queue, "w1").await.expect("claim");
     let failed = store
-        .finish(&fatal.run_id, claimed.epoch, failure("bad input", false))
+        .finish(&fatal.run_id, claimed.epoch, failure("bad input", false, None))
         .await
         .expect("finish");
     assert_eq!(failed.state, RunState::Failed, "non-retryable failures are terminal");
@@ -615,7 +638,7 @@ pub async fn cancel_is_visible_through_heartbeat<H: RunStoreHarness + ?Sized>(ha
         .finish(
             &running.run_id,
             claimed.epoch,
-            RunOutcome::Failed { error: "stopped".into(), retryable: true },
+            RunOutcome::Failed { error: "stopped".into(), retryable: true, backoff: None },
         )
         .await
         .expect("finish");

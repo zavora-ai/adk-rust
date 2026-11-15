@@ -156,6 +156,7 @@
 //! | [`on_claim`](WorkerHooks::on_claim) | Once the worker starts the claimed run's target, before any model call or workflow step | `Running`, at the claim's epoch |
 //! | [`on_park`](WorkerHooks::on_park) | After [`wait`](DurableRunStore::wait) parked the run, with the [`ParkReason`] | `Waiting`, holding no lease |
 //! | [`on_finish`](WorkerHooks::on_finish) | After [`finish`](DurableRunStore::finish) wrote the attempt's outcome | `Completed`, `Failed`, or `Cancelled`; `Queued` when a retryable failure requeued it |
+//! | [`on_event`](WorkerHooks::on_event) | For each event an agent turn yields, partial chunks included, as the worker reads it | `Running`, as claimed |
 //!
 //! [`wake_input`](WorkerHooks::wake_input) is the one hook that returns something: the
 //! reason an agent run was woken, which the worker gives the turn it starts as user
@@ -203,11 +204,11 @@ use adk_core::audit_log::{
 use adk_core::history::SYSTEM_NOTICE_PREFIX;
 use adk_core::{
     ActingConfig, AdkError, AgentId, AgentPrincipal, BeforeModelResult, CallbackContext,
-    ClaimedRun, Clock, Content, DurableRunStore, ErrorCategory, ErrorComponent,
+    ClaimedRun, Clock, Content, DurableRunStore, ErrorCategory, ErrorComponent, Event,
     GOVERNANCE_FROZEN_CODE, GOVERNANCE_STALE_CODE, GovernanceControl, InvocationHooks, LlmRequest,
     LlmResponse, PRINCIPAL_NOT_ALLOWED_CODE, Part, RequestedCall, RunCheckpointRef, RunFilter,
     RunOutcome, RunRecord, RunState, SessionId, SystemClock, UserId,
-    run_store::{RUN_NOT_FOUND_CODE, RUN_STALE_EPOCH_CODE},
+    run_store::{RUN_NOT_FOUND_CODE, RUN_STALE_EPOCH_CODE, RetryBackoff},
 };
 use adk_runner::Runner;
 use async_trait::async_trait;
@@ -293,6 +294,10 @@ pub struct DurableWorkerConfig {
     /// What happens to a run the governance control refuses after it made a model or tool
     /// call. Defaults to [`GovernanceRefusal::Park`]; see [Freeze parks](self#freeze-parks).
     pub on_governance_refusal: GovernanceRefusal,
+    /// How long a retryable failure waits before the run's next attempt. Defaults to
+    /// [`RetryBackoff::default`]: about 5, 10 and 20 seconds, at least the error's own
+    /// retry hint, at most 10 minutes.
+    pub retry_backoff: RetryBackoff,
 }
 
 impl Default for DurableWorkerConfig {
@@ -308,11 +313,31 @@ impl Default for DurableWorkerConfig {
             approval_timeout: None,
             allowed_principals: BTreeSet::new(),
             on_governance_refusal: GovernanceRefusal::Park,
+            retry_backoff: RetryBackoff::default(),
         }
     }
 }
 
 impl DurableWorkerConfig {
+    /// Sets how long a retryable failure waits before the run's next attempt;
+    /// [`RetryBackoff::none`] retries at once.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::time::Duration;
+    /// use adk_core::run_store::RetryBackoff;
+    /// use adk_server::background::DurableWorkerConfig;
+    ///
+    /// let config = DurableWorkerConfig::default()
+    ///     .with_retry_backoff(RetryBackoff::new(Duration::from_secs(1), Duration::from_secs(60)));
+    /// assert_eq!(config.retry_backoff.initial, Duration::from_secs(1));
+    /// ```
+    pub fn with_retry_backoff(mut self, backoff: RetryBackoff) -> Self {
+        self.retry_backoff = backoff;
+        self
+    }
+
     /// Sets the owner name written into every lease.
     pub fn with_worker_id(mut self, worker_id: impl Into<String>) -> Self {
         self.worker_id = worker_id.into();
@@ -475,6 +500,12 @@ pub trait WorkerHooks: Send + Sync {
     /// or `Cancelled`, or `Queued` when a retryable failure requeued it.
     async fn on_finish(&self, _run: &RunRecord) {}
 
+    /// Called with each event of an agent turn, partial chunks included, in the order the
+    /// runner yields them. The events carry each model response's usage
+    /// (`llm_response.usage_metadata`, its `cost` included), so a host can count what the
+    /// turn spent whatever agent the runner hosts; a kernel attributes its spend this way.
+    async fn on_event(&self, _run: &RunRecord, _event: &Event) {}
+
     /// Why `run` was woken, for the agent turn this claim starts; `None` by default. Called
     /// after [`on_claim`](Self::on_claim), for agent runs only.
     ///
@@ -582,11 +613,25 @@ enum Attempt {
 struct Failure {
     error: String,
     retryable: bool,
+    /// How long the error asked to wait before another attempt (`Retry-After`).
+    retry_after: Option<Duration>,
+}
+
+impl Failure {
+    /// A failure no later attempt can fix.
+    fn fatal(error: impl Into<String>) -> Self {
+        Self { error: error.into(), retryable: false, retry_after: None }
+    }
 }
 
 impl From<AdkError> for Failure {
     fn from(error: AdkError) -> Self {
-        Self { retryable: error.is_retryable(), error: error.to_string() }
+        let retryable = error.is_retryable();
+        Self {
+            retry_after: retryable.then(|| error.retry.retry_after()).flatten(),
+            retryable,
+            error: error.to_string(),
+        }
     }
 }
 
@@ -989,10 +1034,10 @@ impl DurableWorker {
             match self.config.run_timeout {
                 Some(timeout) => match tokio::time::timeout(timeout, attempt).await {
                     Ok(result) => result,
-                    Err(_) => Ok(Err(Failure {
-                        error: format!("run timed out after {}s", timeout.as_secs()),
-                        retryable: false,
-                    })),
+                    Err(_) => Ok(Err(Failure::fatal(format!(
+                        "run timed out after {}s",
+                        timeout.as_secs()
+                    )))),
                 },
                 None => attempt.await,
             }
@@ -1066,8 +1111,31 @@ impl DurableWorker {
                 };
             }
             Ok(Ok(Attempt::Done(value))) => RunOutcome::Completed(value),
+            Ok(Err(failure)) if failure.retryable && record.attempt >= record.max_attempts => {
+                // The last attempt: the run fails for good, and says so where `ps` shows it.
+                RunOutcome::Failed {
+                    error: format!(
+                        "{}; attempts exhausted ({} of {})",
+                        failure.error, record.attempt, record.max_attempts
+                    ),
+                    retryable: false,
+                    backoff: None,
+                }
+            }
             Ok(Err(failure)) => {
-                RunOutcome::Failed { error: failure.error, retryable: failure.retryable }
+                let backoff = failure
+                    .retryable
+                    .then(|| self.config.retry_backoff.delay(record.attempt, failure.retry_after));
+                if let Some(backoff) = backoff {
+                    tracing::info!(
+                        parent: &span,
+                        run.attempt = record.attempt,
+                        run.max_attempts = record.max_attempts,
+                        retry.after_ms = backoff.as_millis() as u64,
+                        "attempt failed; retrying after a backoff"
+                    );
+                }
+                RunOutcome::Failed { error: failure.error, retryable: failure.retryable, backoff }
             }
         };
         match self.runs.finish(&run_id, epoch, outcome).await {
@@ -1233,13 +1301,10 @@ impl DurableWorker {
         }
         let Some(workflows) = self.workflows.as_ref().filter(|w| w.has_workflow(&record.target))
         else {
-            return Ok(Err(Failure {
-                error: format!(
-                    "no agent or workflow named '{}' is registered on worker '{}'",
-                    record.target, self.config.worker_id
-                ),
-                retryable: false,
-            }));
+            return Ok(Err(Failure::fatal(format!(
+                "no agent or workflow named '{}' is registered on worker '{}'",
+                record.target, self.config.worker_id
+            ))));
         };
         let defaults = [AgentPrincipal::derived(&record.app_name, &record.target).id];
         let mut acting = ActingConfig::default();
@@ -1281,7 +1346,7 @@ impl DurableWorker {
             .execute_durable(&record.target, input, context)
             .await
             .map(Attempt::Done)
-            .map_err(|error| Failure { error, retryable: true }))
+            .map_err(|error| Failure { error, retryable: true, retry_after: None }))
     }
 
     /// Applies the run's stored principal to `acting` under the rules in
@@ -1364,7 +1429,7 @@ impl DurableWorker {
                 tracing::warn!(run.id = %record.run_id, error = %audit_error, "could not record the refused run");
             }
         }
-        Failure { error: error.to_string(), retryable: false }
+        Failure::fatal(error.to_string())
     }
 
     async fn checkpoint(
@@ -1532,7 +1597,7 @@ impl DurableWorker {
                 // from the same input never holds it again (spec 3.3 §7.4 rule 5).
                 match requested_call(&record.input, record.authenticated) {
                     Ok(call) => config.requested_call = call,
-                    Err(error) => return Ok(Err(Failure { error, retryable: false })),
+                    Err(error) => return Ok(Err(Failure::fatal(error))),
                 }
                 let content = input_content(&record.input);
                 match wake_input.take() {
@@ -1547,7 +1612,7 @@ impl DurableWorker {
             match (UserId::try_from(user_id), SessionId::try_from(session_id.as_str())) {
                 (Ok(user), Ok(session)) => (user, session),
                 (Err(error), _) | (_, Err(error)) => {
-                    return Ok(Err(Failure { error: error.to_string(), retryable: false }));
+                    return Ok(Err(Failure::fatal(error.to_string())));
                 }
             };
         let invocation = match runner.start_with_config(user, session, content, Some(config)).await
@@ -1596,6 +1661,9 @@ impl DurableWorker {
             match event {
                 Ok(event) => {
                     produced = true;
+                    for hooks in &self.hooks {
+                        hooks.on_event(record, &event).await;
+                    }
                     if !event.llm_response.partial
                         && event.author != "user"
                         && event.is_final_response()
@@ -1703,12 +1771,9 @@ impl DurableWorker {
         if let Some(Some(expired)) = previous
             && expired <= now
         {
-            return Ok(Err(Failure {
-                error: format!(
-                    "approval expired at {expired} for held tool calls {held:?}; no decision was recorded"
-                ),
-                retryable: false,
-            }));
+            return Ok(Err(Failure::fatal(format!(
+                "approval expired at {expired} for held tool calls {held:?}; no decision was recorded"
+            ))));
         }
         let until = previous.unwrap_or_else(|| {
             self.config

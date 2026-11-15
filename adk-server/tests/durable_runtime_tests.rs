@@ -17,7 +17,7 @@ use adk_core::governance_state::{
     GovernanceScope, GovernanceState, GovernanceStateStore, InMemoryGovernanceStateStore,
 };
 use adk_core::principal::SubjectRef;
-use adk_core::run_store::{RUN_STALE_EPOCH_CODE, RunCheckpointRef};
+use adk_core::run_store::{RUN_STALE_EPOCH_CODE, RetryBackoff, RunCheckpointRef};
 use adk_core::schedule::{MissedFirePolicy, Schedule, ScheduleSpec};
 use adk_core::{
     AdkError, ClaimedRun, Clock, Content, DurableRunStore, Enqueued, ErrorCategory, ErrorComponent,
@@ -635,14 +635,16 @@ async fn the_worker_prunes_finished_runs_on_the_store_clock() {
 
 // --- Workflows and graphs ---
 
+/// Each retry waits out its backoff, which doubles per attempt, and the last failure says the
+/// attempts ran out (K5).
 #[tokio::test]
-async fn a_failing_workflow_retries_until_its_attempts_run_out() {
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let counter = Arc::clone(&attempts);
+async fn a_failing_workflow_retries_with_backoff_until_its_attempts_run_out() {
+    let started = Arc::new(Mutex::new(Vec::new()));
+    let counter = Arc::clone(&started);
     let registry = WorkflowRegistry::new().register("flaky", move |_input, _cancel| {
         let counter = Arc::clone(&counter);
         async move {
-            counter.fetch_add(1, Ordering::SeqCst);
+            counter.lock().unwrap().push(tokio::time::Instant::now());
             Err("still failing".to_string())
         }
     });
@@ -654,16 +656,26 @@ async fn a_failing_workflow_retries_until_its_attempts_run_out() {
         .record()
         .cloned()
         .unwrap();
+    let backoff = RetryBackoff::new(Duration::from_millis(400), Duration::from_secs(5));
     let worker = DurableWorker::new(Arc::clone(&runs))
         .with_workflows(Arc::new(registry))
-        .with_config(worker_config("w"))
+        .with_config(worker_config("w").with_retry_backoff(backoff))
         .spawn();
     let finished = wait_terminal(&runs, &run.run_id).await;
     worker.shutdown().await;
     assert_eq!(finished.state, RunState::Failed);
     assert_eq!(finished.attempt, 3);
-    assert_eq!(attempts.load(Ordering::SeqCst), 3);
-    assert_eq!(finished.error.as_deref(), Some("still failing"));
+    assert_eq!(
+        finished.error.as_deref(),
+        Some("still failing; attempts exhausted (3 of 3)"),
+        "the dead run says why it stopped"
+    );
+    let started = started.lock().unwrap().clone();
+    assert_eq!(started.len(), 3);
+    // Jitter keeps at least half of each wait: 400 ms, then 800 ms.
+    let gaps: Vec<_> = started.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    assert!(gaps[0] >= Duration::from_millis(200), "{gaps:?}");
+    assert!(gaps[1] >= Duration::from_millis(400), "{gaps:?}");
 }
 
 /// A graph workflow recovered after a crash resumes from its checkpointer: the step

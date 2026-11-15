@@ -438,6 +438,142 @@ async fn spend_is_attributed_to_the_process_that_made_it() {
     kernel.stop().await.unwrap();
 }
 
+/// A kernel hosting a plain `Runner`, with no progress source, counts the spend its turns'
+/// model responses report, and the daily spend cap then holds the next background process
+/// (K3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_plain_runner_s_spend_is_counted_and_the_daily_cap_holds_the_next_run() {
+    use adk_core::{UsageMetadata, UsageUnit, UsageVector};
+    use adk_kernel::stores::SpendScope;
+    use adk_kernel::{Quotas, SpendDelta, UsageTotals};
+    use adk_model::ScriptedResponse;
+
+    let usage = UsageMetadata {
+        prompt_token_count: 120,
+        candidates_token_count: 30,
+        total_token_count: 150,
+        cost: Some(0.0125),
+        ..UsageMetadata::default()
+    };
+    let world = World::new(vec![
+        ScriptedResponse::text("done").with_usage(usage.clone()),
+        ScriptedResponse::text("again").with_usage(usage),
+    ]);
+    let control = GovernanceControl::new();
+    let kernel = world.kernel_configured(
+        "k1",
+        &control,
+        |config| config.with_quotas(Quotas::new().with_daily_spend_cap(10_000)),
+        |builder| builder,
+    );
+    kernel.start().await.unwrap();
+    let spawn = |text: &'static str| {
+        let kernel = kernel.clone();
+        async move {
+            kernel
+                .processes()
+                .spawn(
+                    run_on(QueueClass::Background, text),
+                    ProcessSpec::new(ProcessKind::Scheduled),
+                )
+                .await
+                .unwrap()
+                .meta
+                .pid
+        }
+    };
+    let first = spawn("go").await;
+    in_state(&world.runs, &first, RunState::Completed).await;
+
+    let mut expected = UsageTotals::default();
+    expected.add(&SpendDelta::new(12_500).with_model_calls(1).with_total_tokens(150).with_units(
+        UsageVector::new().with(UsageUnit::InputTokens, 120).with(UsageUnit::OutputTokens, 30),
+    ));
+    let today = chrono::Utc::now().date_naive();
+    let used = world.processes.usage(&SpendScope::Process(first.clone()), today, today).await;
+    assert_eq!(used.unwrap(), expected, "the response's cost, tokens and units are the process's");
+    let view = kernel.processes().get(&first).await.unwrap().unwrap().view;
+    assert_eq!(view.spend_today, 12_500, "ps shows what the process spent");
+
+    // 12,500 µUSD spent of a 10,000 µUSD cap: the next background process does not run.
+    let second = spawn("again").await;
+    let held = eventually("the budget to hold the second process", || async {
+        let meta = world.processes.get(&second).await.ok()??;
+        (meta.labels.get("kernel.admission").map(String::as_str) == Some("budget")).then_some(meta)
+    })
+    .await;
+    assert!(held.wake.is_some(), "a held process sleeps until the budget replenishes");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(world.model_calls(), 1, "the held process made no model call");
+    kernel.stop().await.unwrap();
+}
+
+/// A process an event woke whose model keeps refusing with a retryable error retries after
+/// a growing backoff, then fails for good, still recording the event that woke it, where
+/// `ps --state failed` lists it (K5).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_woken_process_backs_off_between_retries_and_fails_visibly() {
+    use adk_core::run_store::RetryBackoff;
+    use adk_core::{AdkError, ErrorCategory, ErrorComponent};
+    use adk_kernel::WakeReason;
+    use adk_model::ScriptedResponse;
+
+    let refused = || {
+        ScriptedResponse::error(AdkError::new(
+            ErrorComponent::Model,
+            ErrorCategory::RateLimited,
+            "model.rate_limited",
+            "429 Too Many Requests",
+        ))
+    };
+    let world = World::new(vec![refused(), refused(), refused()]);
+    let control = GovernanceControl::new();
+    let backoff = RetryBackoff::new(Duration::from_millis(400), Duration::from_secs(5));
+    let kernel = world.kernel_configured(
+        "k1",
+        &control,
+        |config| config.with_worker(World::worker("k1").with_retry_backoff(backoff)),
+        |builder| builder,
+    );
+    kernel.start().await.unwrap();
+    let wake = WakeSet::any_of([Wake::Queue { source: "orders".into() }]);
+    let pid = kernel
+        .processes()
+        .spawn(
+            run_on(QueueClass::Background, "handle the order"),
+            ProcessSpec::new(ProcessKind::Goal).with_wake(wake),
+        )
+        .await
+        .unwrap()
+        .meta
+        .pid;
+    in_state(&world.runs, &pid, RunState::Waiting).await;
+    let event =
+        WakeEvent::new("orders", keys::queue("orders", "m-1"), serde_json::json!({"id": 7}));
+    let outcomes = kernel.wake_router().route(event).await.unwrap();
+    assert_eq!(outcomes, [WakeOutcome::Woke { pid: pid.clone() }]);
+
+    let started = std::time::Instant::now();
+    let failed = eventually("the attempts to run out", || async {
+        let run = world.runs.get(&pid).await.ok()??;
+        (run.state == RunState::Failed).then_some(run)
+    })
+    .await;
+    // Jitter keeps at least half of each wait: 400 ms, then 800 ms.
+    assert!(started.elapsed() >= Duration::from_millis(600), "{:?}", started.elapsed());
+    let requests = world.model.requests().len();
+    assert_eq!((failed.attempt, requests), (3, 3), "three attempts, one model call each");
+    let error = failed.error.unwrap_or_default();
+    assert!(error.contains("attempts exhausted (3 of 3)"), "{error}");
+    let row = meta(&world, &pid).await;
+    let reason = WakeReason::recorded(&row).expect("the failed process still records its event");
+    assert_eq!(reason.key, keys::queue("orders", "m-1"));
+    let listed =
+        kernel.processes().ps(ProcessFilter::default().states([RunState::Failed])).await.unwrap();
+    assert_eq!(listed.iter().map(|process| &process.meta.pid).collect::<Vec<_>>(), [&pid]);
+    kernel.stop().await.unwrap();
+}
+
 /// A session usage counter with tokens and units, as the harness reports a run's media calls.
 struct UnitMeter(std::sync::Mutex<RunUsage>);
 

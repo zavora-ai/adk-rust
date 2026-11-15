@@ -78,7 +78,13 @@ async fn a_run_executes_its_workflow_and_returns_the_output() {
 
 #[tokio::test]
 async fn a_failing_workflow_fails_the_run_after_its_retries() {
-    let state = BackgroundState::new().with_executor(Arc::new(registry()));
+    let backoff = adk_core::run_store::RetryBackoff::new(
+        Duration::from_millis(50),
+        Duration::from_millis(200),
+    );
+    let state = BackgroundState::new().with_executor(Arc::new(registry())).with_worker_config(
+        adk_server::background::DurableWorkerConfig::default().with_retry_backoff(backoff),
+    );
     let (_, submitted) = call(
         background_runs_router_with_state(state.clone()),
         "POST",
@@ -88,7 +94,7 @@ async fn a_failing_workflow_fails_the_run_after_its_retries() {
     .await;
     let run = await_terminal(&state, submitted["runId"].as_str().unwrap()).await;
     assert_eq!(run["status"], "failed");
-    assert_eq!(run["error"], "exploded");
+    assert_eq!(run["error"], "exploded; attempts exhausted (2 of 2)");
     assert_eq!(run["attempt"], 2);
     assert_eq!(run["retriesRemaining"], 0);
     state.shutdown_worker().await;
