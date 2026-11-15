@@ -126,6 +126,31 @@ impl OnnxEmbeddingConfig {
         self
     }
 
+    /// Whether the model and tokenizer files are on this machine, in `local_dir` or the
+    /// Hugging Face hub cache, so [`OnnxEmbeddingProvider::new`] fetches nothing. A caller
+    /// that is about to wait on a first fetch (about 130 MB for the default model) can say
+    /// so first.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_rag::OnnxEmbeddingConfig;
+    ///
+    /// let config = OnnxEmbeddingConfig::default().with_local_dir("/nonexistent");
+    /// assert!(!config.is_fetched());
+    /// ```
+    pub fn is_fetched(&self) -> bool {
+        match &self.local_dir {
+            Some(dir) => {
+                dir.join(&self.model_file).is_file() && dir.join(&self.tokenizer_file).is_file()
+            }
+            None => {
+                let repo = hf_hub::Cache::from_env().model(self.model_id.clone());
+                repo.get(&self.model_file).is_some() && repo.get(&self.tokenizer_file).is_some()
+            }
+        }
+    }
+
     /// Sets the pooling.
     #[must_use]
     pub fn with_pooling(mut self, pooling: OnnxPooling) -> Self {

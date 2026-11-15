@@ -105,7 +105,21 @@ fn local(explicit: bool) -> Result<Option<(Arc<adk_harness::RagEmbedder>, String
     #[cfg(feature = "memory-local")]
     {
         let _ = explicit;
-        match adk_harness::RagEmbedder::local() {
+        // The first use downloads the model before anything else prints, for minutes on a
+        // slow link, so it is announced.
+        let fetching = !adk_harness::RagEmbedder::local_is_fetched();
+        let started = std::time::Instant::now();
+        if fetching {
+            println!(
+                "fetching the local embedding model BAAI/bge-small-en-v1.5 (about 130 MB, once) \
+                 into the Hugging Face cache; --embedder lexical skips it"
+            );
+        }
+        let loaded = adk_harness::RagEmbedder::local();
+        if fetching && loaded.is_ok() {
+            println!("fetched the local embedding model in {}s", started.elapsed().as_secs());
+        }
+        match loaded {
             Ok(embedder) => Ok(Some((Arc::new(embedder), LOCAL.to_string()))),
             Err(error) => {
                 println!(

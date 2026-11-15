@@ -69,6 +69,9 @@ pub struct TurnOutcome {
     pub ended_by_denial: bool,
     /// What the agent wrote.
     pub text: String,
+    /// The error that ended the run, as shown at the console, when it failed: a model
+    /// error, an exhausted budget, a refusal. `adk-rust code` exits `1` with one.
+    pub error: Option<String>,
 }
 
 /// Runs a [`HarnessAgent`] at the console or behind the HTTP server (spec 3.1 §8.1, §8.2).
@@ -1855,6 +1858,7 @@ impl Shared {
             interrupted: end.interrupted,
             ended_by_denial: end.ended_by_denial,
             text: end.text,
+            error: end.error,
         })
     }
 
