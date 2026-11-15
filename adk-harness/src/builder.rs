@@ -1051,9 +1051,11 @@ impl HarnessAgentBuilder {
     ///
     /// Turns on only under an active OS sandbox whose enforcer keeps protected paths
     /// read-only (adk-sandbox S3, checked by a conformance probe) or a container shell that
-    /// mounts them read-only, with the network denied and every root-level protected path
-    /// present; otherwise `build()` fails with `harness.auto_allow_sandboxed_unavailable`
-    /// naming the reason. No effect on the host or a degraded shell.
+    /// mounts them read-only, with the network denied. Seatbelt also keeps a root-level
+    /// protected path that does not exist or is a symbolic link from being created or
+    /// replaced; under bubblewrap and in a container every one must exist and none be a link.
+    /// Otherwise `build()` fails with `harness.auto_allow_sandboxed_unavailable` naming the
+    /// reason. No effect on the host or a degraded shell.
     pub fn auto_allow_sandboxed(mut self) -> Self {
         self.shell.auto_allow_sandboxed = true;
         self
@@ -2368,6 +2370,7 @@ impl HarnessAgentBuilder {
                 status: status.clone(),
                 allow_unsandboxed_retry,
                 fail_if_unavailable: self.shell.fail_if_unavailable,
+                guards_protected_names: shell.guards_protected_names,
             },
             switches,
             trust_mcp_read_only_hints: self.trust_mcp_read_only_hints,

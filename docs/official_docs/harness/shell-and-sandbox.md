@@ -77,8 +77,9 @@ empty standard input, new session and process-group kill.
 |---|---|---|
 | Workspace root | read-write | read-only |
 | Protected paths that exist (`.git`, `.adk`, `.skills`, `.claude`, `.cargo`, `AGENTS.md`, `AGENT.md`, `CLAUDE.md`, `MEMORY.md`, `.envrc`, `lefthook.yml`, `lefthook.yaml`, and the same names up to four levels below the root) | read-only | read-only |
+| Root-level protected paths that do not exist or are symbolic links | Seatbelt: cannot be created or replaced. bubblewrap: not guarded (see [`auto_allow_sandboxed`](#auto_allow_sandboxed)) | read-only |
 | Per-session scratch directory (`HOME`, `TMPDIR`) | read-write | read-write |
-| Toolchains (`read_toolchains`) | read-only | read-only |
+| Toolchains (`read_toolchains`), as listed below | read-only | read-only |
 | System runtime (`/usr`, `/bin`, `/System`, …, as the enforcer grants it) | read-only | read-only |
 | Anything else, including the real home directory and `~/.ssh` | none | none |
 | Network | `egress` and the run's egress policy, else `network` | the same |
@@ -97,11 +98,31 @@ repository's `.git` and for each submodule gitdir under `.git/modules`.
 The file tools keep all of `.git` protected, and rewriting history is reversible through the
 reflog.
 
-**Toolchains.** With `read_toolchains`, the sandbox can read the `PATH` directories, the
-Cargo, rustup, pyenv and nvm homes, `/opt/homebrew` and `/usr/local`, and on Linux `/usr`,
-`/bin`, `/lib`, `/lib64` and `/etc`. A `PATH` entry that is the home directory, a directory
-above it, or a directory that holds the workspace (a projects directory on `PATH`) is left
-out, since it would expose other projects' files.
+**Toolchains.** With `read_toolchains`, a sandboxed command can read exactly these paths:
+
+| Source | Readable |
+|---|---|
+| `CARGO_HOME` (default `~/.cargo`) | `bin`, `registry`, `git`, `.package-cache`, `.package-cache-mutate`, `.global-cache`, and `config.toml` or `config` when it holds no `token`. Never `credentials.toml` or `credentials`, which hold registry tokens |
+| `RUSTUP_HOME` (default `~/.rustup`) | `toolchains`, `settings.toml`, `update-hashes` |
+| `PYENV_ROOT` (default `~/.pyenv`) | `bin`, `libexec`, `plugins`, `pyenv.d`, `shims`, `versions`, `version` |
+| `NVM_DIR` (default `~/.nvm`) | `alias`, `nvm.sh`, `nvm-exec`, and every Node version under `versions` except its `etc`, where npm keeps its global `npmrc` |
+| A `PATH` directory under the home directory | Its executable files, and the file each executable link in it resolves to. Never the directory's tree, a file named like a credential (`.env*`, `credentials*`, `.netrc`, `_netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.pgpass`), or anything under `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.docker`, `~/.kube`, `~/.azure`, `~/.config/gh` or `~/.config/gcloud`. One inside a toolchain entry above (`~/.cargo/bin`) adds nothing |
+| A `PATH` directory outside the home directory | The directory |
+| System | `/opt/homebrew`, `/usr/local`; on Linux `/usr`, `/bin`, `/lib`, `/lib64` and `/etc` |
+
+A `PATH` entry that is the home directory, a directory above it, a directory that holds the
+workspace, or a directory inside the workspace is never granted. A program on a `PATH`
+directory under the home directory runs when it is one file; one that loads its own tree from
+elsewhere in the home directory, such as a `pipx` virtual environment, needs that tree in
+`extra_read`.
+
+> **Note:** cargo stops on a configuration file it can see but not read. Under Seatbelt a
+> `~/.cargo/config.toml` that holds a `token` stays visible and unreadable, so cargo fails
+> inside the sandbox; keep registry tokens in `credentials.toml` (`cargo login`). bubblewrap
+> leaves the file out, and cargo runs without it.
+
+On Windows, which does not confine reads (see [The Windows sandbox](#the-windows-sandbox)), a
+`PATH` directory in the profile is granted whole, since each grant is an ACL change.
 
 | Platform | Extra handling |
 |---|---|
@@ -150,7 +171,7 @@ What follows from that:
 | The `bash` declaration's `msys2Isolated` annotation, `harness.bash.begin`'s `msys2Isolated` and `IsolationStatus::isolates_msys2` | `false`: MSYS2 installations neither on `PATH` nor `sh`'s are not isolated | `true` |
 | Plan mode | `bash` is denied: a read-write grant from an earlier command stays in the workspace's ACL, so the sandbox cannot promise a read-only workspace | sandboxed commands run read-only without a prompt |
 | Ask and Auto mode | every sandboxed command is asked | as the mode table says |
-| `auto_allow_sandboxed` | `build()` fails: the sandbox does not restrict the network, does not confine reads to the workspace and does not isolate the MSYS2 installations off its `PATH` | needs every protected path |
+| `auto_allow_sandboxed` | `build()` fails: the sandbox does not restrict the network, does not confine reads to the workspace and does not isolate the MSYS2 installations off its `PATH` | macOS: no further condition; Linux: needs every protected path |
 | Hooks with `isolation = "inherit"` | `build()` fails: a hook needs a command it can spawn and feed; give it `isolation = "host"` | run in the sandbox |
 
 The first command of a process grants the workspace, and with `read_toolchains` the
@@ -262,7 +283,7 @@ when every condition holds:
 | An OS sandbox or a container shell is active (not `Host`, not `Degraded`) | At build; refused per call if it goes away |
 | `network` is `false` | At build |
 | The enforcer keeps a read-only path inside a read-write path read-only: a conformance script tries to write, create, remove, rename and link beneath one. For a container, each protected path is mounted read-only and a probe in the container tries to write it | At build; for a container, when its container starts |
-| Every root-level protected path exists and is not a symbolic link | At build and on every call |
+| Seatbelt: none further, since its rules name paths: a root-level protected path that does not exist cannot be created, which the conformance script also tries, and one that is a symbolic link cannot be replaced. bubblewrap and a container: every root-level protected path exists and is not a symbolic link | bubblewrap and a container: at build and on every call |
 
 While `auto_allow_sandboxed` is in effect, no host file tool (`read_file`, `glob`, `grep`,
 `write_file`, `edit_file`) runs at the same time as a sandboxed or container command, in any
@@ -270,9 +291,12 @@ session or team member of the harness: the file tools wait for the command to fi
 command waits for running file tools. A command cannot rearrange the workspace under a host
 file tool that is resolving a path in it.
 
-A protected path that does not exist cannot be protected from creation, and a symbolic link
-can be replaced, so `build()` fails with `harness.auto_allow_sandboxed_unavailable` naming
-each such path. Create the missing ones (`.adk`, `.skills`, `.claude` and `.cargo` as
+Under Seatbelt a workspace needs none of the protected paths: a command can neither create
+`.envrc` nor replace a `CLAUDE.md` link to `AGENTS.md`. bubblewrap and a container
+bind-mount paths, which must exist, so there a protected path that does not exist cannot be
+protected from creation, and a symbolic link can be replaced: `build()` fails with
+`harness.auto_allow_sandboxed_unavailable` naming each such path, and Auto asks for every
+sandboxed command. Create the missing ones (`.adk`, `.skills`, `.claude` and `.cargo` as
 directories, the rest as files) to turn the setting on. If a protected path disappears
 later, the next sandboxed command needs approval again.
 
@@ -468,13 +492,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 |---|---|
 | A process that calls `setsid` outlives the call on the host and under Seatbelt | Documented; bubblewrap ends it with the PID namespace |
 | A background shell's group is killed after a crash only at the next start, and only where the OS reports process start times (macOS, Linux) | Documented; on Windows the Job Object ends the shell with the harness process |
-| A protected name that does not exist below the root (a new nested `AGENTS.md`, `.envrc` or `.git`) can be created by a sandboxed command | Root-level names gate `auto_allow_sandboxed`; nested files are listed, never inlined, by the instruction loader |
+| A protected name that does not exist below the root (a new nested `AGENTS.md`, `.envrc` or `.git`) can be created by a sandboxed command | Root-level names are guarded under Seatbelt and gate unapproved commands under bubblewrap; nested files are listed, never inlined, by the instruction loader |
 | On a case-sensitive file system a differently cased protected name (`agents.md`) is a different file | File tools match protected names case-folded; the sandbox protects names that exist |
 | An admitted host receives whatever a command sends it | Unapproved sandboxed commands need `network: false` and no egress policy |
 | Git runs code from places the sandbox leaves writable: a `core.hooksPath` inside the workspace (Husky's `.husky`), or a repository a command creates and registers as a submodule through the writable index, whose own `config` git honours when it recurses into it | Documented; the sandbox protects the gitdirs that exist when the command starts |
 | A protected name created inside the container after it started is not mounted read-only | The container's protected mounts are fixed when it starts; root-level names must exist for `auto_allow_sandboxed`, and the next container mounts new ones |
 | A container from a `client` of your own keeps a background process a command leaves, since the harness cannot tell that its sessions are isolated from the host | Containers the harness builds end them after each command; stop them in your client's `exec_command` |
 | A sandboxed command can read the workspace's secret files (`.env`) | `grep` and `glob` skip them and `read_file` refuses them; `bash` needs approval unless `auto_allow_sandboxed` is on |
+| A sandboxed command can read what a tool keeps inside a granted toolchain entry, an executable file it keeps in a `PATH` directory, and a `PATH` directory outside the home directory | Toolchain homes are granted entry by entry and credential files are left out; keep secrets out of `PATH` directories |
 
 ## Red-team scenarios
 

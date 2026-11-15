@@ -9,9 +9,11 @@ use crate::approvals::matcher::is_protected_path;
 ///
 /// They are the protected names of spec 3.1 §9.1 as they appear at the root, with `.cargo`
 /// standing for `.cargo/config` and `.cargo/config.toml`. A sandboxed command cannot write,
-/// create, remove or rename anything beneath one that exists (adk-sandbox S3). One that does
-/// not exist cannot be protected from creation, so `auto_allow_sandboxed` turns on only when
-/// all of them exist.
+/// create, remove or rename anything beneath one that exists (adk-sandbox S3). Seatbelt also
+/// refuses writes to one that does not exist or is a symbolic link by its name, so the command
+/// cannot create the one or replace the other. bubblewrap and a container bind-mount what
+/// exists, so there `auto_allow_sandboxed` turns on only when all of them exist and none is a
+/// symbolic link.
 ///
 /// A `.git` directory stands for its `hooks`, `config` and `info` when all three exist and
 /// none is a symlink: they decide which commands git runs, and the index, refs and objects

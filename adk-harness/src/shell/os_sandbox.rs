@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::IsolationStatus;
-use super::protect::protected_paths;
+use super::protect::{SANDBOX_PROTECTED_PATHS, protected_paths};
 
 /// Configuration of the OS-sandbox shell (spec 3.1 §7.9).
 ///
@@ -48,7 +48,9 @@ pub struct OsSandboxConfig {
     pub extra_read: Vec<PathBuf>,
     /// Extra read-write paths.
     pub extra_write: Vec<PathBuf>,
-    /// Read-only bind of the toolchain directories (`PATH`, `~/.cargo`, `~/.rustup`, …).
+    /// Read-only access to the toolchains: the entries of `~/.cargo`, `~/.rustup`, pyenv and
+    /// nvm their tools run from (never `credentials.toml`), the programs of a `PATH` directory
+    /// under the home directory, and the other `PATH` directories.
     pub read_toolchains: bool,
     /// The enforcer; `None` uses `adk_sandbox::sandbox::get_enforcer()`.
     pub enforcer: Option<Arc<dyn SandboxEnforcer>>,
@@ -104,6 +106,9 @@ pub enum SandboxAccess {
     /// The workspace root read-only, for Plan and ReadOnly modes.
     ReadOnly,
 }
+
+/// The name of the macOS Seatbelt enforcer.
+const SEATBELT: &str = "seatbelt";
 
 /// Environment variables never passed into the sandbox, whatever the workspace allowlist
 /// says: agent sockets (spec 3.1 §9.2 I22).
@@ -494,23 +499,49 @@ impl SandboxLauncher {
         policy
     }
 
-    /// The enforcer that builds commands: on bubblewrap, one that also recreates
-    /// symlinked toolchain directories as symlinks and mounts `/dev` and `/proc`.
+    /// Whether the enforcer refuses writes to a path by its name, whether or not the path
+    /// exists, so a root-level protected path that does not exist cannot be created and one
+    /// that is a symbolic link cannot be replaced (spec 3.1 §9.2 I26). Seatbelt rules name
+    /// paths; bubblewrap and the restricted token act on paths that exist.
+    pub(crate) fn guards_protected_names(&self) -> bool {
+        !self.contained && self.enforcer.as_ref().is_ok_and(|enforcer| enforcer.name() == SEATBELT)
+    }
+
+    /// The enforcer that builds commands: on Seatbelt with a read-write workspace, one that
+    /// also refuses writes to the root-level protected paths that do not exist or are
+    /// symbolic links; on bubblewrap, one that also recreates symlinked toolchain directories
+    /// as symlinks and mounts `/dev` and `/proc`.
     fn command_enforcer(
         &self,
         enforcer: &Arc<dyn SandboxEnforcer>,
         policy: &SandboxPolicy,
         root: &Path,
     ) -> Arc<dyn SandboxEnforcer> {
-        if enforcer.name() != "bubblewrap" {
-            return enforcer.clone();
+        match enforcer.name() {
+            SEATBELT if self.access == SandboxAccess::ReadWrite => {
+                // Seatbelt matches resolved paths, and a name that does not exist resolves to
+                // itself under the resolved root.
+                let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+                let guarded = SANDBOX_PROTECTED_PATHS
+                    .iter()
+                    .map(|name| root.join(name))
+                    .filter(|path| {
+                        std::fs::symlink_metadata(path)
+                            .map_or(true, |metadata| metadata.file_type().is_symlink())
+                    })
+                    .collect();
+                Arc::new(NameGuardEnforcer { inner: enforcer.clone(), guarded })
+            }
+            "bubblewrap" => {
+                let links = if self.config.read_toolchains {
+                    Toolchains::detect(policy.env.get("PATH").map(String::as_str), root).links
+                } else {
+                    Vec::new()
+                };
+                Arc::new(LinkingEnforcer { inner: enforcer.clone(), links })
+            }
+            _ => enforcer.clone(),
         }
-        let links = if self.config.read_toolchains {
-            Toolchains::detect(policy.env.get("PATH").map(String::as_str), root).links
-        } else {
-            Vec::new()
-        };
-        Arc::new(LinkingEnforcer { inner: enforcer.clone(), links })
     }
 
     /// Whether the enforcer keeps a read-only path inside a read-write one read-only
@@ -550,14 +581,26 @@ impl SandboxLauncher {
             access: SandboxAccess::ReadWrite,
             ..self.clone()
         };
+        let mut attempts = String::from(
+            "'echo x > AGENTS.md' 'echo x > .git/config' 'touch .git/hooks/pre-commit' \
+             'mv .git .moved' 'rm AGENTS.md' 'mv sub sub2' 'echo x > sub/.git/config' \
+             'ln -s x .git/link'",
+        );
+        // Where the enforcer guards protected names, a missing one cannot be created.
+        if self.guards_protected_names() {
+            attempts.push_str(
+                " 'echo x > .envrc' 'mkdir .claude' 'ln -s AGENTS.md lefthook.yml' \
+                 'touch moved.txt && mv moved.txt MEMORY.md'",
+            );
+        }
         let policy = probe.policy(&workspace, &home);
-        let script = "\
-            for attempt in 'echo x > AGENTS.md' 'echo x > .git/config' 'touch .git/hooks/pre-commit' \
-              'mv .git .moved' 'rm AGENTS.md' 'mv sub sub2' 'echo x > sub/.git/config' 'ln -s x .git/link'; do \
-              if sh -c \"$attempt\" 2>/dev/null; then echo \"BREACH $attempt\"; fi; \
-            done; echo ok > beside.txt && echo DONE";
+        let script = format!(
+            "for attempt in {attempts}; do \
+               if sh -c \"$attempt\" 2>/dev/null; then echo \"BREACH $attempt\"; fi; \
+             done; echo ok > beside.txt && echo DONE"
+        );
         let command = sandboxed_command(
-            self.command_enforcer(&enforcer, &policy, &ws).as_ref(),
+            probe.command_enforcer(&enforcer, &policy, &ws).as_ref(),
             OsStr::new("sh"),
             &[OsString::from("-c"), OsString::from(script)],
             &policy,
@@ -760,7 +803,7 @@ fn find_program(name: &str, path: Option<&str>) -> Option<PathBuf> {
 /// The toolchain directories a sandboxed command may read (spec 3.1 §7.9 `read_toolchains`).
 #[derive(Debug, Default)]
 struct Toolchains {
-    /// Directories granted read-only.
+    /// Paths granted read-only.
     read: Vec<PathBuf>,
     /// Symlinked toolchain paths, as (link text, link path), for enforcers that rebuild the
     /// file system (bubblewrap).
@@ -771,31 +814,150 @@ struct Toolchains {
     path_prefix: Vec<PathBuf>,
 }
 
+/// The toolchain homes: the variable that names each, its default under the home directory,
+/// and the entries of it a sandboxed command may read, which are what rustup's proxies, cargo,
+/// pyenv's shims and nvm run from. Nothing else in a home is granted, so the registry tokens
+/// in `CARGO_HOME/credentials.toml` stay out. [`Toolchains::detect_in`] adds cargo's
+/// configuration files and nvm's Node versions.
+const TOOLCHAIN_HOMES: &[(&str, &str, &[&str])] = &[
+    (
+        "CARGO_HOME",
+        ".cargo",
+        &["bin", "registry", "git", ".package-cache", ".package-cache-mutate", ".global-cache"],
+    ),
+    ("RUSTUP_HOME", ".rustup", &["toolchains", "settings.toml", "update-hashes"]),
+    (
+        "PYENV_ROOT",
+        ".pyenv",
+        &["bin", "libexec", "plugins", "pyenv.d", "shims", "versions", "version"],
+    ),
+    ("NVM_DIR", ".nvm", &["alias", "nvm.sh", "nvm-exec"]),
+];
+
+/// File names never granted from a `PATH` directory under the home directory: the files tools
+/// keep credentials in.
+const SECRET_FILES: &[&str] =
+    &[".netrc", "_netrc", ".npmrc", ".pypirc", ".git-credentials", ".pgpass"];
+/// File name prefixes never granted from a `PATH` directory under the home directory: dotenv
+/// files and credential files.
+const SECRET_PREFIXES: &[&str] = &[".env", "credentials"];
+/// Directories under the home directory that hold credentials; nothing beneath one is granted,
+/// not even as the target of a link on `PATH`.
+const SECRET_DIRS: &[&str] =
+    &[".ssh", ".aws", ".gnupg", ".docker", ".kube", ".azure", ".config/gh", ".config/gcloud"];
+
+/// Whether `path`, under `home` or not, names a credential file or lies in a credential
+/// directory of `home`.
+fn holds_secret(path: &Path, home: &Path) -> bool {
+    let name = path.file_name().map(|name| name.to_string_lossy().to_ascii_lowercase());
+    let name = name.as_deref().unwrap_or_default();
+    SECRET_FILES.contains(&name)
+        || SECRET_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+        || SECRET_DIRS.iter().any(|dir| path.starts_with(home.join(dir)))
+}
+
 impl Toolchains {
     fn detect(path_var: Option<&str>, root: &Path) -> Self {
-        let home = dirs::home_dir();
+        Self::detect_in(path_var, root, dirs::home_dir().as_deref(), |var| std::env::var_os(var))
+    }
+
+    /// [`detect`](Self::detect) with the home directory and the toolchain variables given.
+    fn detect_in(
+        path_var: Option<&str>,
+        root: &Path,
+        home: Option<&Path>,
+        var: impl Fn(&str) -> Option<OsString>,
+    ) -> Self {
         let mut found = Self::default();
         let mut candidates: Vec<PathBuf> = Vec::new();
-        if let Some(path_var) = path_var {
-            candidates.extend(
-                std::env::split_paths(path_var)
-                    .filter(|dir| path_dir_is_grantable(dir, home.as_deref(), root)),
-            );
-        }
-        let home_dir = |var: &str, default: &str| {
-            std::env::var_os(var)
-                .map(PathBuf::from)
-                .or_else(|| home.as_ref().map(|home| home.join(default)))
+        let children = |dir: &Path| {
+            std::fs::read_dir(dir).into_iter().flatten().flatten().map(|entry| entry.path())
         };
-        for (var, default) in [
-            ("CARGO_HOME", ".cargo"),
-            ("RUSTUP_HOME", ".rustup"),
-            ("PYENV_ROOT", ".pyenv"),
-            ("NVM_DIR", ".nvm"),
-        ] {
-            if let Some(dir) = home_dir(var, default).filter(|dir| dir.is_dir()) {
-                found.env.push((var.to_string(), dir.display().to_string()));
-                candidates.push(dir);
+        // The granted toolchain entries as the home variable spells them, so a `PATH`
+        // directory inside one is not granted again file by file.
+        let mut covered: Vec<PathBuf> = Vec::new();
+        for (name, default, entries) in TOOLCHAIN_HOMES {
+            let Some(dir) = var(name)
+                .map(PathBuf::from)
+                .or_else(|| home.map(|home| home.join(default)))
+                .filter(|dir| dir.is_dir())
+            else {
+                continue;
+            };
+            found.env.push(((*name).to_string(), dir.display().to_string()));
+            // The entries of a symlinked home are granted at its target, and the link is
+            // recreated where the enforcer rebuilds the file system (bubblewrap).
+            let base = if std::fs::symlink_metadata(&dir)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink())
+            {
+                let (Ok(text), Ok(target)) =
+                    (std::fs::read_link(&dir), std::fs::canonicalize(&dir))
+                else {
+                    continue;
+                };
+                found.links.push((text.into_os_string(), dir.clone()));
+                target
+            } else {
+                dir.clone()
+            };
+            let mut granted: Vec<PathBuf> = entries.iter().map(|entry| base.join(entry)).collect();
+            if *name == "CARGO_HOME" {
+                // Cargo stops on a configuration file it can see but not read, so one that
+                // holds a registry token is left out of the grant rather than shown unreadable.
+                granted.extend(
+                    ["config.toml", "config"].map(|file| base.join(file)).into_iter().filter(
+                        |file| {
+                            std::fs::read_to_string(file)
+                                .is_ok_and(|text| !text.to_ascii_lowercase().contains("token"))
+                        },
+                    ),
+                );
+            }
+            if *name == "NVM_DIR" {
+                // Each Node version but its `etc`, where npm keeps its global `npmrc`.
+                for flavor in children(&base.join("versions")) {
+                    for version in children(&flavor) {
+                        granted.extend(children(&version).filter(|entry| !entry.ends_with("etc")));
+                    }
+                }
+            }
+            for entry in &granted {
+                if let Ok(relative) = entry.strip_prefix(&base) {
+                    covered.push(dir.join(relative));
+                }
+            }
+            candidates.extend(granted);
+        }
+        let grantable = std::env::split_paths(path_var.unwrap_or_default())
+            .filter(|dir| path_dir_is_grantable(dir, home, root));
+        for dir in grantable {
+            match home {
+                // A directory under the home directory can hold the user's own files — a
+                // projects directory on `PATH` — so only its programs are granted, never its
+                // tree. Windows does not confine reads (spec 3.2 §10 W5), and a grant there is
+                // an ACL change per path, so it keeps whole directories.
+                Some(home) if cfg!(not(windows)) && dir.starts_with(home) => {
+                    if covered.iter().any(|toolchain| dir.starts_with(toolchain)) {
+                        continue;
+                    }
+                    candidates.extend(children(&dir).filter(|entry| {
+                        let program = std::fs::metadata(entry).is_ok_and(|metadata| {
+                            #[cfg(unix)]
+                            let executable = {
+                                use std::os::unix::fs::PermissionsExt;
+                                metadata.permissions().mode() & 0o111 != 0
+                            };
+                            #[cfg(not(unix))]
+                            let executable = true;
+                            metadata.is_file() && executable
+                        });
+                        program
+                            && !holds_secret(entry, home)
+                            && std::fs::canonicalize(entry)
+                                .is_ok_and(|target| !holds_secret(&target, home))
+                    }));
+                }
+                _ => candidates.push(dir),
             }
         }
         candidates.extend(["/opt/homebrew", "/usr/local"].map(PathBuf::from));
@@ -832,7 +994,7 @@ impl Toolchains {
         // restricted token's restricting SIDs include; a grant there would rewrite their ACLs
         // and needs an administrator. Only toolchains in the user's profile are granted.
         #[cfg(windows)]
-        found.read.retain(|dir| home.as_deref().is_some_and(|home| dir.starts_with(home)));
+        found.read.retain(|dir| home.is_some_and(|home| dir.starts_with(home)));
         // A link inside a directory that is itself granted already exists there.
         let read = found.read.clone();
         let links: Vec<PathBuf> = found.links.iter().map(|(_, link)| link.clone()).collect();
@@ -943,6 +1105,84 @@ impl SandboxEnforcer for LinkingEnforcer {
             extra.push(link.clone().into_os_string());
         }
         wrapped.args.splice(separator..separator, extra);
+        Ok(wrapped)
+    }
+
+    fn configure_command(
+        &self,
+        cmd: &mut tokio::process::Command,
+        policy: &SandboxPolicy,
+    ) -> Result<(), SandboxError> {
+        self.inner.configure_command(cmd, policy)
+    }
+}
+
+/// Seatbelt with writes refused to each of `guarded` by name: root-level protected paths that
+/// do not exist, which a command then cannot create, or are symbolic links, which it then
+/// cannot replace (spec 3.1 §9.2 I26). Seatbelt applies the last rule that matches, so the
+/// rules end the profile.
+struct NameGuardEnforcer {
+    inner: Arc<dyn SandboxEnforcer>,
+    guarded: Vec<PathBuf>,
+}
+
+impl SandboxEnforcer for NameGuardEnforcer {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn probe(&self) -> Result<(), SandboxError> {
+        self.inner.probe()
+    }
+
+    fn network_support(&self) -> NetworkSupport {
+        self.inner.network_support()
+    }
+
+    fn proxy_listener(&self) -> adk_sandbox::sandbox::ProxyListener {
+        self.inner.proxy_listener()
+    }
+
+    fn wrap_command(
+        &self,
+        program: &OsStr,
+        args: &[OsString],
+        policy: &SandboxPolicy,
+    ) -> Result<WrappedCommand, SandboxError> {
+        let mut wrapped = self.inner.wrap_command(program, args, policy)?;
+        let flag = wrapped.args.iter().position(|arg| arg == "-p");
+        let Some(profile) = flag.and_then(|flag| wrapped.args.get_mut(flag + 1)) else {
+            return Err(SandboxError::PolicyViolation(
+                "the Seatbelt command carries no `-p` profile to add the protected-path rules to"
+                    .to_string(),
+            ));
+        };
+        let mut rules = profile.to_string_lossy().into_owned();
+        for path in &self.guarded {
+            let Some(path) = path.to_str() else {
+                return Err(SandboxError::PolicyViolation(format!(
+                    "protected path '{}' is not valid UTF-8 and cannot be named in a Seatbelt \
+                     profile; rename the workspace directory",
+                    path.display()
+                )));
+            };
+            // An SBPL string literal, escaped as adk-sandbox escapes the profile's own paths, so
+            // no directory name can end the literal and add a directive.
+            let mut literal = String::from("\"");
+            for ch in path.chars() {
+                match ch {
+                    '\\' => literal.push_str("\\\\"),
+                    '"' => literal.push_str("\\\""),
+                    control if control.is_ascii_control() => {
+                        literal.push_str(&format!("\\x{:02x}", u32::from(control)));
+                    }
+                    other => literal.push(other),
+                }
+            }
+            literal.push('"');
+            rules.push_str(&format!("(deny file-write* (subpath {literal}))\n"));
+        }
+        *profile = OsString::from(rules);
         Ok(wrapped)
     }
 
@@ -1072,5 +1312,192 @@ mod tests {
             launcher.environment(&Workspace::new(".").allow_bash(true), Path::new("/scratch"));
         assert_eq!(env.get("HOME").map(String::as_str), Some("/scratch"));
         assert_eq!(env.get("TMPDIR").map(String::as_str), Some("/scratch"));
+    }
+
+    /// A toolchain home grants what its tools run from and never its credentials; a `PATH`
+    /// directory under the home directory grants its programs, never its tree or a secret.
+    #[cfg(unix)]
+    #[test]
+    fn toolchain_grants_leave_credentials_and_home_trees_out() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(dir.path()).unwrap();
+        let file = |path: &str, text: &str, mode: u32| {
+            let path = home.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        file(".cargo/bin/cargo", "", 0o755);
+        file(".cargo/registry/index/entry", "", 0o644);
+        file(".cargo/credentials.toml", "[registry]\ntoken = \"t\"\n", 0o600);
+        file(".cargo/credentials", "[registry]\ntoken = \"t\"\n", 0o600);
+        file(".cargo/config.toml", "[net]\noffline = true\n", 0o644);
+        file(".cargo/advisory-db/entry", "", 0o644);
+        file(".rustup/toolchains/stable/bin/rustc", "", 0o755);
+        file(".rustup/settings.toml", "", 0o644);
+        file(".rustup/downloads/partial", "", 0o644);
+        file(".nvm/nvm.sh", "", 0o644);
+        file(".nvm/versions/node/v22.0.0/bin/node", "", 0o755);
+        file(".nvm/versions/node/v22.0.0/lib/entry", "", 0o644);
+        file(".nvm/versions/node/v22.0.0/etc/npmrc", "//registry.npmjs.org/:_authToken=t", 0o644);
+        file("Developer/project/.env", "KEY=1", 0o644);
+        file("Developer/notes.txt", "", 0o644);
+        file("Developer/build.sh", "", 0o755);
+        file(".local/bin/tool", "", 0o755);
+        file(".local/bin/.env", "KEY=1", 0o755);
+        file(".local/bin/credentials.json", "{}", 0o755);
+        file(".local/bin/data.json", "{}", 0o644);
+        file(".local/share/linked/tool", "", 0o755);
+        file(".ssh/id_ed25519", "", 0o755);
+        symlink(home.join(".local/share/linked/tool"), home.join(".local/bin/linked")).unwrap();
+        symlink(home.join(".ssh/id_ed25519"), home.join(".local/bin/key")).unwrap();
+        let root = home.join("work/project");
+        std::fs::create_dir_all(&root).unwrap();
+        let path_var = std::env::join_paths(
+            ["Developer", ".local/bin", ".cargo/bin"].map(|dir| home.join(dir)),
+        )
+        .unwrap();
+        let path_var = path_var.to_str().unwrap();
+        let under_home = |found: &Toolchains| -> Vec<PathBuf> {
+            found
+                .read
+                .iter()
+                .filter_map(|path| path.strip_prefix(&home).ok())
+                .map(Path::to_path_buf)
+                .collect()
+        };
+
+        let found = Toolchains::detect_in(Some(path_var), &root, Some(&home), |_| None);
+
+        let expected: Vec<PathBuf> = [
+            ".cargo/bin",
+            ".cargo/config.toml",
+            ".cargo/registry",
+            ".local/bin/tool",
+            ".local/share/linked/tool",
+            ".nvm/nvm.sh",
+            ".nvm/versions/node/v22.0.0/bin",
+            ".nvm/versions/node/v22.0.0/lib",
+            ".rustup/settings.toml",
+            ".rustup/toolchains",
+            "Developer/build.sh",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+        assert_eq!(under_home(&found), expected);
+        let links: Vec<&(OsString, PathBuf)> =
+            found.links.iter().filter(|(_, link)| link.starts_with(&home)).collect();
+        assert_eq!(
+            links,
+            [&(
+                home.join(".local/share/linked/tool").into_os_string(),
+                home.join(".local/bin/linked")
+            )]
+        );
+        let homes: Vec<(&str, PathBuf)> = found
+            .env
+            .iter()
+            .filter(|(key, _)| {
+                ["CARGO_HOME", "RUSTUP_HOME", "PYENV_ROOT", "NVM_DIR"].contains(&key.as_str())
+            })
+            .map(|(key, value)| (key.as_str(), PathBuf::from(value)))
+            .collect();
+        assert_eq!(
+            homes,
+            [
+                ("CARGO_HOME", home.join(".cargo")),
+                ("RUSTUP_HOME", home.join(".rustup")),
+                ("NVM_DIR", home.join(".nvm")),
+            ]
+        );
+
+        // Cargo stops on a configuration file it cannot read, so one with a token is left out.
+        file(".cargo/config.toml", "[registry]\ntoken = \"t\"\n", 0o644);
+        let found = Toolchains::detect_in(Some(path_var), &root, Some(&home), |_| None);
+        assert!(!under_home(&found).contains(&PathBuf::from(".cargo/config.toml")));
+    }
+
+    /// Seatbelt under its own name, recording the profile `NameGuardEnforcer` extends.
+    #[cfg(unix)]
+    struct FakeSeatbelt;
+
+    #[cfg(unix)]
+    impl SandboxEnforcer for FakeSeatbelt {
+        fn name(&self) -> &str {
+            SEATBELT
+        }
+        fn probe(&self) -> Result<(), SandboxError> {
+            Ok(())
+        }
+        fn network_support(&self) -> NetworkSupport {
+            NetworkSupport { denied: true, proxied: false }
+        }
+
+        fn wrap_command(
+            &self,
+            program: &OsStr,
+            args: &[OsString],
+            _policy: &SandboxPolicy,
+        ) -> Result<WrappedCommand, SandboxError> {
+            let mut wrapped: Vec<OsString> =
+                ["-p", "(version 1)\n(deny default)\n"].into_iter().map(OsString::from).collect();
+            wrapped.push(program.to_owned());
+            wrapped.extend_from_slice(args);
+            Ok(WrappedCommand { program: "sandbox-exec".into(), args: wrapped })
+        }
+    }
+
+    /// The root-level protected paths that do not exist or are links end the profile as write
+    /// denials, escaped as SBPL literals; a read-only launcher needs none.
+    #[cfg(unix)]
+    #[test]
+    fn seatbelt_refuses_writes_to_missing_and_symlinked_protected_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap().join("we\"ird");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join("AGENTS.md"), "a").unwrap();
+        std::os::unix::fs::symlink("AGENTS.md", root.join("CLAUDE.md")).unwrap();
+        let launcher = SandboxLauncher::new(OsSandboxConfig {
+            read_toolchains: false,
+            enforcer: Some(Arc::new(FakeSeatbelt)),
+            ..OsSandboxConfig::default()
+        });
+        assert!(launcher.guards_protected_names());
+        let enforcer: Arc<dyn SandboxEnforcer> = Arc::new(FakeSeatbelt);
+        let policy = SandboxPolicyBuilder::new().build();
+        let profile = |launcher: &SandboxLauncher| {
+            let wrapped = launcher
+                .command_enforcer(&enforcer, &policy, &root)
+                .wrap_command(OsStr::new("sh"), &[], &policy)
+                .unwrap();
+            wrapped.args[1].to_string_lossy().into_owned()
+        };
+
+        let escaped = root.display().to_string().replace('"', "\\\"");
+        let expected: String = [
+            ".adk",
+            ".skills",
+            ".claude",
+            ".cargo",
+            "AGENT.md",
+            "CLAUDE.md",
+            "MEMORY.md",
+            ".envrc",
+            "lefthook.yml",
+            "lefthook.yaml",
+        ]
+        .iter()
+        .map(|name| format!("(deny file-write* (subpath \"{escaped}/{name}\"))\n"))
+        .collect();
+        assert_eq!(profile(&launcher), format!("(version 1)\n(deny default)\n{expected}"));
+        assert_eq!(profile(&launcher.read_only()), "(version 1)\n(deny default)\n");
+        let bwrap = SandboxLauncher::new(OsSandboxConfig {
+            enforcer: Some(Arc::new(FakeBwrap)),
+            ..OsSandboxConfig::default()
+        });
+        assert!(!bwrap.guards_protected_names());
     }
 }

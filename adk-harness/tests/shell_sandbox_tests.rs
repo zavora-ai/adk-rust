@@ -8,6 +8,7 @@
 use crate::common;
 
 use std::ffi::{OsStr, OsString};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -631,9 +632,14 @@ async fn a_failed_sandboxed_call_is_retried_unsandboxed_once_after_approval() {
     assert_eq!(begins[1].ext["retryOf"], "call-a");
 }
 
+/// Under bubblewrap every root-level protected path must exist, and is re-checked per call; a
+/// missing one cannot be kept from creation there.
 #[tokio::test(flavor = "multi_thread")]
 async fn auto_allow_sandboxed_needs_every_protected_path_and_rechecks_per_call() {
     let Some(sandbox) = platform_sandbox() else { return };
+    if guards_protected_names(&sandbox) {
+        return;
+    }
     let model = Arc::new(adk_model::ScriptedLlm::new("scripted", Vec::<ScriptedResponse>::new()));
     let empty = tempfile::tempdir().unwrap();
     let error = adk_harness::HarnessAgent::builder("harness")
@@ -680,6 +686,147 @@ async fn auto_allow_sandboxed_needs_every_protected_path_and_rechecks_per_call()
     assert_eq!(prompter.count(), 1, "the second command was prompted once .envrc was gone");
     assert!(!f.path("two.txt").exists());
     assert_eq!(outcome(&bash_responses(&events)[0]), Outcome::Denied);
+}
+
+fn guards_protected_names(sandbox: &OsSandboxConfig) -> bool {
+    matches!(
+        SandboxLauncher::new(sandbox.clone()).status(),
+        IsolationStatus::OsSandbox { enforcer } if enforcer == "seatbelt"
+    )
+}
+
+/// Seatbelt refuses writes to a missing or symlinked root-level protected path by name, so
+/// sandboxed commands run unapproved in Auto and under `auto_allow_sandboxed` in an ordinary
+/// workspace, and still cannot create or replace one.
+#[tokio::test(flavor = "multi_thread")]
+async fn seatbelt_runs_unapproved_without_every_protected_path_and_keeps_them_uncreated() {
+    let Some(sandbox) = platform_sandbox() else { return };
+    if !guards_protected_names(&sandbox) {
+        return;
+    }
+    let model = Arc::new(adk_model::ScriptedLlm::new("scripted", Vec::<ScriptedResponse>::new()));
+    let empty = tempfile::tempdir().unwrap();
+    adk_harness::HarnessAgent::builder("harness")
+        .model(model)
+        .workspace(adk_devtools::Workspace::new(empty.path()).allow_bash(true))
+        .project_instructions(common::no_user_file())
+        .shell(ShellIsolation::OsSandbox(sandbox.clone()))
+        .auto_allow_sandboxed()
+        .build()
+        .expect("auto_allow_sandboxed turns on without the protected paths under Seatbelt");
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("AGENTS.md"), "rules\n").unwrap();
+    std::os::unix::fs::symlink("AGENTS.md", dir.path().join("CLAUDE.md")).unwrap();
+    let script = "echo one > one.txt; echo x > .envrc; mkdir .claude; mkdir -p .git/hooks; \
+                  ln -s AGENTS.md lefthook.yml; touch m.txt; mv m.txt MEMORY.md; rm -f CLAUDE.md; \
+                  ln -sf one.txt CLAUDE.md; echo two > two.txt";
+    for auto_allow in [false, true] {
+        let prompter = common::ScriptedPrompter::new();
+        let workspace = tempfile::tempdir().unwrap();
+        for entry in std::fs::read_dir(dir.path()).unwrap().flatten() {
+            let target = workspace.path().join(entry.file_name());
+            if entry.file_type().unwrap().is_symlink() {
+                std::os::unix::fs::symlink(std::fs::read_link(entry.path()).unwrap(), target)
+                    .unwrap();
+            } else {
+                std::fs::copy(entry.path(), target).unwrap();
+            }
+        }
+        let f = fixture_in(workspace, vec![call(json!({ "command": script })), done()], |b| {
+            let b = b.shell(ShellIsolation::OsSandbox(sandbox.clone())).prompter(prompter.clone());
+            if auto_allow { b.auto_allow_sandboxed() } else { b.mode(HarnessMode::Auto) }
+        })
+        .await;
+        f.send("go").await;
+        assert_eq!(prompter.count(), 0, "auto_allow {auto_allow}: a command was held");
+        assert!(f.path("one.txt").exists() && f.path("two.txt").exists(), "ordinary writes ran");
+        for name in [".envrc", ".claude", ".git", "lefthook.yml", "MEMORY.md"] {
+            assert!(std::fs::symlink_metadata(f.path(name)).is_err(), "{name} was created");
+        }
+        assert_eq!(std::fs::read_link(f.path("CLAUDE.md")).unwrap(), PathBuf::from("AGENTS.md"));
+    }
+}
+
+/// A sandboxed command reads the toolchains but not the home directory's credentials (H-1).
+/// The check runs in a child of this test binary whose `HOME`, `CARGO_HOME` and `PATH` point
+/// into a planted home: `credentials.toml`, another project's `.env` under a `PATH`
+/// directory, and a dotenv file beside a program on `PATH` stay unreadable while the program,
+/// the registry and the cargo configuration stay reachable.
+#[tokio::test(flavor = "multi_thread")]
+async fn sandboxed_commands_read_toolchains_but_not_the_secrets_of_the_home_directory() {
+    const PLANTED_HOME: &str = "ADK_HARNESS_TEST_PLANTED_HOME";
+    let Some(sandbox) = platform_sandbox() else { return };
+    let Some(home) = std::env::var_os(PLANTED_HOME).map(PathBuf::from) else {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(dir.path()).unwrap();
+        for (path, text, mode) in [
+            (".cargo/credentials.toml", "token = \"PLANTED-CARGO-TOKEN\"\n", 0o600),
+            (".cargo/config.toml", "[net]\nretry = 2\n", 0o644),
+            (".cargo/registry/marker", "registry-ok\n", 0o644),
+            ("Developer/other-project/.env", "PLANTED-PROJECT-ENV\n", 0o644),
+            (".local/bin/hello-tool", "#!/bin/sh\necho tool-ran\n", 0o755),
+            (".local/bin/.env", "PLANTED-BIN-ENV\n", 0o755),
+        ] {
+            let path = home.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+        let path = std::env::join_paths(
+            [home.join("Developer"), home.join(".local/bin")]
+                .into_iter()
+                .chain(["/usr/bin", "/bin", "/usr/sbin", "/sbin"].map(PathBuf::from)),
+        )
+        .unwrap();
+        let test = concat!(
+            module_path!(),
+            "::sandboxed_commands_read_toolchains_but_not_the_secrets_of_the_home_directory"
+        );
+        let test = test.split_once("::").map_or(test, |(_, test)| test);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture"])
+            .env(PLANTED_HOME, &home)
+            .env("HOME", &home)
+            .env("CARGO_HOME", home.join(".cargo"))
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        let report = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.status.success() && report.contains("1 passed"), "{report}");
+        return;
+    };
+    let script = format!(
+        "for f in '{0}/.cargo/credentials.toml' '{0}/Developer/other-project/.env' \
+           '{0}/.local/bin/.env'; do cat \"$f\" 2>/dev/null || echo denied; done; \
+         hello-tool; cat '{0}/.cargo/registry/marker' && test -r '{0}/.cargo/config.toml' && \
+         echo config-ok",
+        home.display()
+    );
+    let f = fixture_in(
+        tempfile::tempdir().unwrap(),
+        vec![call(json!({ "command": script })), done()],
+        |b| {
+            b.shell(ShellIsolation::OsSandbox(sandbox))
+                .mode(HarnessMode::Auto)
+                .confirmation_handler(Arc::new(ApproveAll))
+        },
+    )
+    .await;
+    let events = f.send("go").await;
+    let response = response_of(&events, "bash");
+    let stdout = response["stdout"].as_str().unwrap();
+    assert!(!stdout.contains("PLANTED"), "a planted secret was readable: {response}");
+    assert_eq!(stdout.matches("denied").count(), 3, "{response}");
+    for reached in ["tool-ran", "registry-ok", "config-ok"] {
+        assert!(stdout.contains(reached), "{reached} missing: {response}");
+    }
 }
 
 /// While a sandboxed command runs unapproved, a host file tool in another session waits for

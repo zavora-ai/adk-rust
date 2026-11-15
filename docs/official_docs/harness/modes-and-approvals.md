@@ -24,7 +24,7 @@ The mode decides each tool class:
 | Edit (`write_file`, `edit_file`, `apply_patch`) | Deny | Deny | Approval | Allow |
 | Edit of a protected path | Deny | Deny | Approval, non-waivable | Approval, non-waivable |
 | `bash` on the host | Deny | Deny | Approval | Approval (Allow with `allow_host_shell_in_auto`) |
-| `bash` in the OS sandbox | Deny | Allow, read-only workspace | Approval (Allow with `auto_allow_sandboxed`) | Allow when protected paths hold |
+| `bash` in the OS sandbox | Deny | Allow, read-only workspace | Approval (Allow with `auto_allow_sandboxed`) | Allow when the sandbox keeps the protected paths: always under Seatbelt, only while every root-level one exists under bubblewrap ([details](shell-and-sandbox.md#auto_allow_sandboxed)) |
 | Unsandboxed retry of a sandboxed command | Deny | Deny | Approval, non-waivable | Approval, non-waivable |
 | External tool, read-only, from a trusted origin | Allow | Allow | Allow | Allow |
 | Any other external tool | Deny | Deny | Approval | Approval |

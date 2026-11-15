@@ -279,9 +279,13 @@ pub(crate) struct ShellRuntime {
     #[cfg(feature = "docker")]
     pub(crate) container: Option<ContainerConfig>,
     /// The sandbox denies the network, keeps protected paths read-only (adk-sandbox S3, proven
-    /// by the enforcer conformance probe) and every root-level protected path exists, so
-    /// sandboxed commands may run without approval where the mode table allows it (I26).
+    /// by the enforcer conformance probe) and keeps every root-level protected path from being
+    /// created or replaced, so sandboxed commands may run without approval where the mode table
+    /// allows it (I26).
     pub(crate) protects_paths: bool,
+    /// The enforcer refuses writes to root-level protected paths by name (Seatbelt), so one
+    /// that does not exist or is a symbolic link needs no re-check per call.
+    pub(crate) guards_protected_names: bool,
     /// An active OS sandbox runs a read-only launcher's commands with the workspace read-only
     /// and no network, so Plan mode may run them without approval (spec 3.1 §7.4). The
     /// Windows restricted-token enforcer does neither (spec 3.2 §10 W5).
@@ -311,6 +315,7 @@ pub(crate) fn resolve_isolation(
             #[cfg(feature = "docker")]
             container: None,
             protects_paths: false,
+            guards_protected_names: false,
             read_only_runs: false,
             auto_allow_sandboxed: false,
         },
@@ -335,6 +340,7 @@ pub(crate) fn resolve_isolation(
             }
             ShellRuntime {
                 protects_paths: active && refusal.is_none(),
+                guards_protected_names: active && launcher.guards_protected_names(),
                 read_only_runs: active && launcher.keeps_read_only(),
                 auto_allow_sandboxed: config.auto_allow_sandboxed && active && refusal.is_none(),
                 launcher: active.then_some(launcher),
@@ -369,6 +375,7 @@ pub(crate) fn resolve_isolation(
             }
             ShellRuntime {
                 protects_paths: active && refusal.is_none(),
+                guards_protected_names: false,
                 read_only_runs: false,
                 auto_allow_sandboxed: config.auto_allow_sandboxed && active && refusal.is_none(),
                 #[cfg(feature = "sandbox")]
@@ -428,6 +435,11 @@ fn auto_allow_refusal(launcher: &SandboxLauncher, root: &std::path::Path) -> Opt
     if let Err(reason) = launcher.nested_read_only_conformance() {
         return Some(reason);
     }
+    // The conformance script proved that a missing or symlinked root-level protected path
+    // cannot be created or replaced.
+    if launcher.guards_protected_names() {
+        return None;
+    }
     let protected = protected_paths(root);
     (!protected.unprotectable.is_empty()).then(|| {
         format!(
@@ -440,7 +452,8 @@ fn auto_allow_refusal(launcher: &SandboxLauncher, root: &std::path::Path) -> Opt
 }
 
 /// Whether every root-level protected path of `root` still exists and can be kept
-/// read-only, re-checked per call while sandboxed commands run unapproved (I26).
+/// read-only, re-checked per call while sandboxed commands run unapproved under an enforcer
+/// that does not guard protected names (I26).
 pub(crate) fn protected_paths_hold(root: &std::path::Path) -> bool {
     protected_paths(root).unprotectable.is_empty()
 }
