@@ -498,6 +498,12 @@ exact private scalar presence.
 
 Stores sessions in memory. Ideal for development, testing, and single-instance deployments.
 
+A read shares the stored events with the session it returns instead of copying them, and
+`num_recent_events` (the runner's `RunConfig::history_max_events`) selects the window before
+anything leaves the store, so a windowed turn costs the same on the thousandth turn as on the
+tenth. The runner moves the loaded events into its invocation (`Session::take_events`) rather
+than copying them again.
+
 ```rust
 use adk_session::{InMemorySessionService, SessionService, CreateRequest};
 use std::collections::HashMap;
@@ -552,6 +558,14 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+`SqliteSessionService::new` switches a file database to write-ahead-log mode
+(`journal_mode = WAL`, kept in the file; SQLite creates `<file>-wal` and `<file>-shm` beside it
+while it is open) and keeps `synchronous = FULL` on every connection, so each committed event is
+synced to disk and survives power loss. A file another process holds in rollback mode keeps that
+mode, with a warning. `SqliteSessionService::from_pool` leaves both settings to the pool you
+build, for example `synchronous = NORMAL` to sync less often at the cost of the last commits
+before a power loss.
 
 > **Note**: The `SqliteSessionService` requires the `sqlite` feature flag:
 > ```toml
@@ -817,11 +831,11 @@ Every backend also ships a `SubjectRegistry` and a `ConsentStore`
 
 All database-backed session services (SQLite, PostgreSQL, MongoDB, Neo4j) include a versioned, forward-only migration system. Applied versions are recorded in the `_adk_session_migrations` table (SQLite, PostgreSQL) or collection (MongoDB), or as `_AdkSessionMigration` nodes (Neo4j).
 
-| Backend | Version 2 |
-|---------|-----------|
-| SQLite | Adds `sessions.initial_state`, the state a session was created with, which rewind rebuilds from. Sessions created before it rewind to their keys that no event has written |
-| PostgreSQL | Adds `events.seq`, an insertion sequence that orders events with equal timestamps; existing rows are numbered in their physical order |
-| MongoDB | Adds the `idx_events_read_order` index on the event read order (timestamp, then `seq`) |
+| Backend | Version 2 | Version 3 |
+|---------|-----------|-----------|
+| SQLite | Adds `sessions.initial_state`, the state a session was created with, which rewind rebuilds from. Sessions created before it rewind to their keys that no event has written | Adds the `idx_events_session_ts` index on `events (app_name, user_id, session_id, timestamp)`, so loading, rewinding or deleting one session reads only its rows |
+| PostgreSQL | Adds `events.seq`, an insertion sequence that orders events with equal timestamps; existing rows are numbered in their physical order | — |
+| MongoDB | Adds the `idx_events_read_order` index on the event read order (timestamp, then `seq`) | — |
 
 ### Encrypted Sessions
 

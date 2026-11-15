@@ -109,7 +109,7 @@ async fn a_2_3_sqlite_database_upgrades() {
     let service = SqliteSessionService::new(&url).await.expect("open");
     service.migrate().await.expect("migrate");
     service.migrate().await.expect("migrate is idempotent");
-    assert_eq!(service.schema_version().await.expect("schema version"), 2);
+    assert_eq!(service.schema_version().await.expect("schema version"), 3);
     assert_upgraded(&service).await;
 
     let mut conn = SqliteConnection::connect(&url).await.expect("connect");
@@ -118,7 +118,15 @@ async fn a_2_3_sqlite_database_upgrades() {
             .fetch_all(&mut conn)
             .await
             .expect("read registry");
-    assert_eq!(registry, [1, 2]);
+    assert_eq!(registry, [1, 2, 3]);
+    let index: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'events' \
+         AND name = 'idx_events_session_ts'",
+    )
+    .fetch_all(&mut conn)
+    .await
+    .expect("read indexes");
+    assert_eq!(index, ["idx_events_session_ts"]);
     conn.close().await.expect("close");
     for suffix in ["", "-wal", "-shm", "-journal"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));

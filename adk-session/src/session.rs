@@ -18,6 +18,39 @@ pub trait Session: Send + Sync {
     /// Returns the timestamp of the last update to this session.
     fn last_update_time(&self) -> DateTime<Utc>;
 
+    /// Moves the event history out of this session, leaving it empty.
+    ///
+    /// The runner calls it on the session it loaded for an invocation, which no one else
+    /// holds, so each turn moves the history instead of copying it. The default returns a
+    /// copy of [`events()`](Self::events) and leaves the session unchanged; every
+    /// `adk-session` backend moves its events instead.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_session::{CreateRequest, InMemorySessionService, SessionService};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> adk_core::Result<()> {
+    /// let service = InMemorySessionService::new();
+    /// let mut session = service
+    ///     .create(CreateRequest {
+    ///         app_name: "app".into(),
+    ///         user_id: "user".into(),
+    ///         session_id: None,
+    ///         state: Default::default(),
+    ///     })
+    ///     .await?;
+    /// let events = session.take_events();
+    /// assert!(events.is_empty());
+    /// assert_eq!(session.events().len(), 0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn take_events(&mut self) -> Vec<adk_core::Event> {
+        self.events().all()
+    }
+
     /// Returns the application name as a typed [`AppName`].
     ///
     /// Parses the value returned by [`app_name()`](Self::app_name). Returns an

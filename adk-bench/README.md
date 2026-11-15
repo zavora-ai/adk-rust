@@ -134,6 +134,34 @@ cargo adk bench --format table --confirm-cost                         # terminal
 | `parallel_tool_invocation` | Concurrent tool calls (stock price, news, rating) | 2 | 3 |
 | `multi_agent_delegation` | Coordinator delegates to specialist agents; needs `--experimental` | 5 | 2 |
 
+## Long history (no API key)
+
+`long_history` measures the framework's own cost as a session grows, with a scripted model
+that answers instantly, an in-memory session, and no API key. A step is one turn
+(`turns`: a user message, a tool call and the answer) or one tool iteration inside a single
+autonomous run (`loop`). Work that copies or rescans the whole history shows as a per-step cost
+that rises with the step number.
+
+```bash
+cargo run -p adk-bench --release --example long_history -- turns 1000
+cargo run -p adk-bench --release --example long_history -- turns 1000 --window 50
+cargo run -p adk-bench --release --example long_history -- loop 2000 --payload 4096 --json
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `turns` / `loop` | required | What a step is |
+| `<steps>` | required | Number of turns, or tool iterations of the one run |
+| `--window` | none | `RunConfig::history_max_events` |
+| `--payload` | `200` | Bytes of text each tool result carries |
+| `--json` | off | Print the `LongHistoryReport` as JSON |
+
+The report gives the mean, median and p95 process CPU time per step for the first and last
+tenth of the run, their ratio (`growth`), the total process CPU time, and the peak RSS.
+`tests/long_history_allocations.rs` runs it in every pull request's test suite: it counts the
+bytes each turn allocates, and fails when a `history_max_events` window stops bounding a turn's
+work or when a turn copies the history more often than it did.
+
 ## Library use
 
 ```rust

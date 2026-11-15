@@ -87,6 +87,13 @@ fails the turn, with the request the model was sent and the error message. A res
 callback returns answers the turn in the failed call's place: its text is the answer and its
 tool calls run. A refusal by the run's budget or spend ledger is not reported.
 
+To pass that request, the agent keeps a copy of each request it sends while one of the run's
+hooks can answer a failure (`InvocationHooks::handles_model_errors`). A `PluginManager` answers
+`true` only when one of its plugins sets `on_model_error`, so a run whose plugins only observe
+sends each request without copying the conversation first. A custom `InvocationHooks`
+implementation whose `on_model_error` never answers overrides `handles_model_errors` to return
+`false`.
+
 ```rust
 use adk_core::{Llm, LlmResponse};
 use adk_plugin::{Plugin, PluginConfig, PluginManager};

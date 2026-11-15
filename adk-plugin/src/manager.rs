@@ -249,10 +249,11 @@ impl PluginManager {
     ) -> Result<BeforeModelResult> {
         let mut current_request = request;
 
+        // Each callback takes the request: a skip or an error ends the chain without it.
         for plugin in &self.plugins {
             if let Some(callback) = plugin.before_model() {
                 debug!(plugin = plugin.name(), "Running before_model callback");
-                match callback(ctx.clone(), current_request.clone()).await {
+                match callback(ctx.clone(), current_request).await {
                     Ok(BeforeModelResult::Continue(modified)) => {
                         current_request = modified;
                     }
@@ -469,6 +470,10 @@ impl InvocationHooks for PluginManager {
         self.run_on_model_error(ctx, request, error.to_string()).await
     }
 
+    fn handles_model_errors(&self) -> bool {
+        self.plugins.iter().any(|plugin| plugin.on_model_error().is_some())
+    }
+
     async fn before_tool(&self, ctx: Arc<dyn CallbackContext>) -> Result<Option<Content>> {
         self.run_before_tool(ctx).await
     }
@@ -513,5 +518,29 @@ mod tests {
         let manager = PluginManager::new(plugins);
         assert_eq!(manager.plugin_count(), 2);
         assert_eq!(manager.plugin_names(), vec!["test1", "test2"]);
+    }
+
+    #[test]
+    fn handles_model_errors_only_with_an_on_model_error_plugin() {
+        let observer = || {
+            crate::PluginBuilder::new("observer")
+                .before_model(Box::new(|_ctx, request| {
+                    Box::pin(async move { Ok(BeforeModelResult::Continue(request)) })
+                }))
+                .build()
+        };
+        let fallback = crate::PluginBuilder::new("fallback")
+            .on_model_error(Box::new(|_ctx, _request, _error| Box::pin(async { Ok(None) })))
+            .build();
+
+        let without = PluginManager::new(vec![observer()]);
+        let with = PluginManager::new(vec![observer(), fallback]);
+        assert_eq!(
+            (
+                InvocationHooks::handles_model_errors(&without),
+                InvocationHooks::handles_model_errors(&with)
+            ),
+            (false, true)
+        );
     }
 }

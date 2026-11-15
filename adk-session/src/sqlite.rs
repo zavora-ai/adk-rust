@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::{
     Row,
-    sqlite::{SqliteConnectOptions, SqliteConnection, SqlitePool, SqliteRow},
+    sqlite::{SqliteConnectOptions, SqliteConnection, SqlitePool, SqliteRow, SqliteSynchronous},
 };
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -77,16 +77,57 @@ impl SqliteSessionService {
     /// Enables foreign keys via `PRAGMA foreign_keys = ON`. A writer waits up to 30 seconds
     /// for the database lock, so concurrent appends to a file database queue behind
     /// `BEGIN IMMEDIATE` instead of failing with `database is locked`.
+    ///
+    /// A file database is switched to write-ahead-log mode (`journal_mode = WAL`), which
+    /// persists in the file: SQLite creates `<file>-wal` and `<file>-shm` beside it while it
+    /// is open, readers never block the writer, and a commit appends to the log instead of
+    /// rewriting a rollback journal. Every connection keeps `synchronous = FULL`, so each
+    /// committed event is synced to disk and survives power loss, as the action ledger and
+    /// approval stores require when they share the file. A file another process holds in
+    /// rollback mode keeps that mode, and a warning is logged. To trade the last commits
+    /// before a power loss for fewer syncs (`synchronous = NORMAL`), or to stay in rollback
+    /// mode on a filesystem without shared memory, build the pool yourself and use
+    /// [`from_pool`](Self::from_pool).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the URL is invalid, the database cannot be opened, or foreign
+    /// keys cannot be enabled.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_session::SqliteSessionService;
+    ///
+    /// # async fn example() -> adk_core::Result<()> {
+    /// let service = SqliteSessionService::new("sqlite:sessions.db?mode=rwc").await?;
+    /// service.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn new(database_url: &str) -> Result<Self> {
         let options = SqliteConnectOptions::from_str(database_url)
             .map_err(|e| adk_core::AdkError::session(format!("invalid sqlite url: {e}")))?
-            .busy_timeout(BUSY_TIMEOUT);
+            .busy_timeout(BUSY_TIMEOUT)
+            .synchronous(SqliteSynchronous::Full);
         let pool = SqlitePool::connect_with(options)
             .await
             .map_err(|e| adk_core::AdkError::session(format!("database connection failed: {e}")))?;
         sqlx::query("PRAGMA foreign_keys = ON").execute(&pool).await.map_err(|e| {
             adk_core::AdkError::session(format!("failed to enable sqlite foreign keys: {}", e))
         })?;
+        // The switch needs the file to itself, so it is not a connect option: a file another
+        // process holds in rollback mode would fail every new connection instead of keeping
+        // its mode. An in-memory database reports `memory` and has no log.
+        match sqlx::query_scalar::<_, String>("PRAGMA journal_mode = WAL").fetch_one(&pool).await {
+            Ok(mode) if !matches!(mode.to_ascii_lowercase().as_str(), "wal" | "memory") => {
+                tracing::warn!(journal.mode = %mode, "sqlite session store stays out of WAL mode");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(error = %error, "sqlite session store keeps its journal mode");
+            }
+        }
         Ok(Self { pool })
     }
 
@@ -96,7 +137,30 @@ impl SqliteSessionService {
     /// services, or in tests where you need direct pool access.
     ///
     /// **Note:** The caller is responsible for enabling foreign keys
-    /// (`PRAGMA foreign_keys = ON`) on the pool if needed.
+    /// (`PRAGMA foreign_keys = ON`) on the pool if needed, and for its journal mode and
+    /// `synchronous` setting: unlike [`new`](Self::new), this does not switch the file to
+    /// write-ahead-log mode.
+    ///
+    /// # Example
+    ///
+    /// A pool in WAL mode with `synchronous = NORMAL`: a commit is not synced on its own, so a
+    /// power loss can drop the last commits, never the file's consistency.
+    ///
+    /// ```rust,no_run
+    /// use adk_session::SqliteSessionService;
+    /// use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqliteSynchronous};
+    /// use std::str::FromStr;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let options = SqliteConnectOptions::from_str("sqlite:sessions.db?mode=rwc")?
+    ///     .foreign_keys(true)
+    ///     .journal_mode(SqliteJournalMode::Wal)
+    ///     .synchronous(SqliteSynchronous::Normal);
+    /// let service = SqliteSessionService::from_pool(SqlitePool::connect_with(options).await?);
+    /// service.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn from_pool(pool: SqlitePool) -> Self {
         Self { pool }
     }
@@ -115,7 +179,8 @@ impl SqliteSessionService {
     /// that creates the initial schema matching the original `CREATE TABLE IF
     /// NOT EXISTS` statements. Version 2 adds `sessions.initial_state`, the session state a
     /// session was created with, which rewind rebuilds from; it is `NULL` for sessions created
-    /// before it.
+    /// before it. Version 3 indexes `events` by session in read order, so loading, rewinding
+    /// or deleting one session reads that session's rows instead of every event in the file.
     const SQLITE_SESSION_MIGRATIONS: &'static [(i64, &'static str, &'static str)] = &[
         (
             1,
@@ -164,6 +229,12 @@ CREATE TABLE IF NOT EXISTS user_states (\
             2,
             "record the session state each session was created with",
             "ALTER TABLE sessions ADD COLUMN initial_state TEXT;",
+        ),
+        (
+            3,
+            "index events by session in read order",
+            "CREATE INDEX IF NOT EXISTS idx_events_session_ts \
+             ON events (app_name, user_id, session_id, timestamp);",
         ),
     ];
 
@@ -875,6 +946,10 @@ impl Session for DatabaseSession {
 
     fn last_update_time(&self) -> DateTime<Utc> {
         self.updated_at
+    }
+
+    fn take_events(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.events)
     }
 }
 

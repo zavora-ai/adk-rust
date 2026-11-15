@@ -233,6 +233,34 @@ pub trait InvocationHooks: std::fmt::Debug + Send + Sync {
         Ok(None)
     }
 
+    /// Whether [`on_model_error`](Self::on_model_error) can answer a failed model call.
+    ///
+    /// An agent keeps a copy of every request it sends, for this hook, while any of the run's
+    /// hooks returns `true`. The default is `true`; an implementation whose `on_model_error`
+    /// always returns `Ok(None)` returns `false`, so the agent sends the request without
+    /// copying the conversation first.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::InvocationHooks;
+    ///
+    /// /// Observes tool calls only.
+    /// #[derive(Debug)]
+    /// struct ToolAudit;
+    ///
+    /// impl InvocationHooks for ToolAudit {
+    ///     fn handles_model_errors(&self) -> bool {
+    ///         false
+    ///     }
+    /// }
+    ///
+    /// assert!(!ToolAudit.handles_model_errors());
+    /// ```
+    fn handles_model_errors(&self) -> bool {
+        true
+    }
+
     /// Runs before each tool call. `ctx.tool_name()` and `ctx.tool_input()` describe the call.
     ///
     /// `Some(content)` skips the tool and reports `content` as its result.

@@ -451,9 +451,11 @@ impl<S: SessionService> EncryptedSession<S> {
         session: &dyn Session,
     ) -> Result<(DecryptedSession, OpenedState)> {
         let mut opened = self.open_state(id, &session.state().all())?;
-        let mut events = Vec::with_capacity(session.events().len());
-        for stored in session.events().all() {
-            let event = self.open_event(id, &stored)?;
+        let stored_events = session.events();
+        let mut events = Vec::with_capacity(stored_events.len());
+        // Read in place: each event is decrypted into a new one, so a copy would be dropped.
+        for stored in (0..stored_events.len()).filter_map(|index| stored_events.at(index)) {
+            let event = self.open_event(id, stored)?;
             if event.author != ROTATION_AUTHOR {
                 events.push(event);
             }
@@ -908,6 +910,10 @@ impl Session for DecryptedSession {
 
     fn last_update_time(&self) -> DateTime<Utc> {
         self.updated_at
+    }
+
+    fn take_events(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.events)
     }
 }
 

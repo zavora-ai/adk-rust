@@ -1785,10 +1785,12 @@ async fn next_script(
 
     let mut content: Option<Content> = None;
 
+    // Plugins and callbacks take the request: one that skips the call leaves nothing to send.
     // before-model plugins: modify the request or short-circuit.
     #[cfg(feature = "enhanced-plugins")]
     if let Some(epm) = hooks.plugins {
-        match epm.run_before_model_call(request.clone(), hooks.ctx.clone()).await? {
+        let taken = std::mem::replace(&mut request, LlmRequest::new("", vec![]));
+        match epm.run_before_model_call(taken, hooks.ctx.clone()).await? {
             BeforeModelCallResult::Continue(modified) => request = modified,
             BeforeModelCallResult::ShortCircuit(response) => content = response.content,
         }
@@ -1797,7 +1799,8 @@ async fn next_script(
     // before-model callbacks: rewrite the request or skip the call with a response.
     if content.is_none() {
         for callback in hooks.hooks.before_model.iter().chain(hooks.before) {
-            match callback(hooks.ctx.clone(), request.clone()).await? {
+            let taken = std::mem::replace(&mut request, LlmRequest::new("", vec![]));
+            match callback(hooks.ctx.clone(), taken).await? {
                 BeforeModelResult::Continue(modified) => request = modified,
                 BeforeModelResult::Skip(response) => {
                     content = response.content;

@@ -10,8 +10,8 @@ Session management and state persistence for Rust Agent Development Kit (ADK-Rus
 
 `adk-session` provides session and state management for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)):
 
-- **InMemorySessionService** - Simple in-memory session storage
-- **SqliteSessionService** - SQLite-backed persistence (`sqlite` feature)
+- **InMemorySessionService** - Simple in-memory session storage; a read shares the stored events instead of copying them, and copies only the `num_recent_events` window it returns
+- **SqliteSessionService** - SQLite-backed persistence (`sqlite` feature); `new` opens a file database in write-ahead-log mode with `synchronous = FULL`, and events are indexed by session
 - **Durable stores** - `SpendLedger`, `ActionLedger`, and `ApprovalStore` for SQLite, PostgreSQL, Redis, MongoDB, Neo4j, and Firestore, each behind its backend's feature and proven by the `adk-core` conformance suites; the approval stores also hold the requests and delegations of the `adk-core` approval service
 - **Durable runtime stores** - `LeaseStore`, `DurableRunStore`, `ScheduleStore`, and `GovernanceStateStore` for SQLite, PostgreSQL, Redis, MongoDB, Neo4j, and Firestore, each proven by the `adk-core` conformance suites
 - **PostgresSessionService** - PostgreSQL-backed persistence (`postgres` feature)
@@ -24,6 +24,7 @@ Session management and state persistence for Rust Agent Development Kit (ADK-Rus
 - **Identifier validation** - Every backend rejects an empty, oversized, or NUL-containing app name, user ID, or session ID with an `InvalidInput` error before it touches storage
 - **One session contract** - On every backend, `create` for an existing identity fails with `session.already_exists` and writes nothing, appends to a missing session fail with `session.not_found`, events with equal timestamps keep their append order, and `list` returns the most recently updated session first; the shared conformance suite checks each backend
 - **Rewind** - `rewind` and `rewind_steps` address a session by its full identity and keep the state it was created with (in-memory, SQLite, and `EncryptedSession`)
+- **Moved history** - `Session::take_events` moves a loaded session's events out instead of copying them; every backend implements it, and the runner uses it for each invocation
 
 ## Installation
 
@@ -350,6 +351,8 @@ async fn main() -> adk_core::Result<()> {
     Ok(())
 }
 ```
+
+SQLite version 3 adds the `idx_events_session_ts` index, so loading one session reads only its rows however many other sessions share the file.
 
 Each backend detects pre-existing tables (baseline detection) and registers them as already applied, so `migrate()` is safe to call on both fresh and existing databases. `schema_version()` returns 0 only when the registry table does not exist; a failed read is an error. PostgreSQL `migrate()` holds the advisory lock `PostgresSessionService::ADVISORY_LOCK_KEY` on one connection and closes that connection afterwards. The `migration::sqlite_runner` and `migration::pg_runner` runners take `&'static` migration steps and ASCII registry table names of at most 63 bytes.
 

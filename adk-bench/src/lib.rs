@@ -17,6 +17,8 @@
 //! - **Memory**: peak RSS during the measurement phase and its growth per agent (Linux, macOS)
 //! - **External comparison**: peak RSS and token overhead as reported by each harness
 //! - **Regression detection**: baselines compared with a configurable tolerance
+//! - **Long history** ([`long_history`]): per-turn and per-iteration framework cost as a
+//!   session grows to thousands of events, with a scripted model and no API key
 //!
 //! `cargo adk bench` is the command-line front end.
 //!
@@ -41,6 +43,7 @@ pub mod error;
 pub mod external;
 pub mod formatter;
 pub mod instrumented_llm;
+pub mod long_history;
 pub mod memory;
 pub mod metrics;
 pub mod runner;
@@ -59,6 +62,9 @@ pub use external::{
 };
 pub use formatter::{ComparisonResult, format_comparison, format_result};
 pub use instrumented_llm::{DeterministicConfig, InstrumentedLlm, LlmCallRecord};
+pub use long_history::{
+    LongHistoryBench, LongHistoryConfig, LongHistoryMode, LongHistoryReport, run_long_history,
+};
 pub use metrics::{
     BenchmarkResult, ConcurrencyLevel, DurationStats, MemoryMetrics, MetricCollector, RunMetadata,
     ThroughputMetrics, compute_stats,

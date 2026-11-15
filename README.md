@@ -30,7 +30,7 @@ and async, across 49 publishable crates for agent orchestration.
 **ADK-Rust v2.0.0 — Agents That Act.** Eight chapters on agents that run on their
 own and finish what they start: a workflow that resumes exactly where it stopped,
 a graph that changes course when the problem does, and approvals you can trust
-down to the digest. 42 crates, 4,300+ tests, sub-millisecond loop overhead.
+down to the digest. 42 crates, 4,300+ tests, sub-millisecond loop overhead on a fresh session.
 
 <a href="https://www.youtube.com/watch?v=RIh-M0W1CiQ">
   <img src="docs/podcast/episode-3-thumbnail.png" alt="▶ Watch Episode 3: ADK-Rust v2.0.0 — Agents That Act" width="100%">
@@ -399,8 +399,36 @@ framework.
 | LangGraph | 502 ms | 1,228 ms | 1,228 ms | 92.7 MB |
 
 Cold start is process launch to first API call. Overhead is turn time minus the LLM
-round trip. Apple M-series, macOS, June 2026. Run it yourself with
-`cargo adk bench --dry-run` to see the cost estimate first.
+round trip, for one tool call on a fresh session. Apple M-series, macOS, June 2026. Run it
+yourself with `cargo adk bench --dry-run` to see the cost estimate first.
+
+### Long sessions
+
+The framework's work per turn grows with the history a turn loads and sends the model: every
+model call carries the whole conversation, as stateless chat APIs require. `adk-bench`'s
+keyless long-history benchmark measures that cost with a scripted model that answers
+instantly, so the numbers below are the framework's own CPU time. A turn is a user message,
+one tool call and the answer, four events; an iteration is one tool call inside a single
+autonomous run.
+
+| Workload, 1,000 steps | Per step, first 100 | Per step, last 100 | Process CPU, whole run | Peak RSS |
+|-----------------------|---------------------|--------------------|------------------------|----------|
+| 1,000 turns, whole session (4,000 events at the end) | 0.18–0.26 ms | 4.7–6.2 ms | 2.3–2.7 s | 288–290 MB |
+| 1,000 turns, `history_max_events = 50` | 71–77 μs | 62–64 μs | 0.07 s | 20 MB |
+| One autonomous run, 1,000 tool calls (2,002 events) | 35–40 μs | 0.27–0.29 ms | 0.15–0.17 s | 27 MB |
+
+Release build, in-memory sessions, 200-byte tool results, Apple M4 (10 cores, 24 GB), macOS
+26.2, November 2026; process CPU time, ranges over three runs on a shared machine. Without a
+window, a turn stays under 1 ms until the session holds about 1,300 events (330 turns), then
+rises by about 1.5 ms per 1,000 more; `RunConfig::history_max_events` keeps it flat. The
+default SQLite store adds its own per-turn cost, decoding the stored session from JSON.
+Reproduce with:
+
+```bash
+cargo run -p adk-bench --release --example long_history -- turns 1000
+cargo run -p adk-bench --release --example long_history -- turns 1000 --window 50
+cargo run -p adk-bench --release --example long_history -- loop 1000
+```
 
 ## Develop
 

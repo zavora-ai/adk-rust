@@ -20,7 +20,9 @@ type StateMap = HashMap<String, Value>;
 #[derive(Clone)]
 struct SessionData {
     identity: AdkIdentity,
-    events: Vec<Event>,
+    /// Shared with the views `get` hands out, so a read copies pointers under the store lock
+    /// and never the events themselves.
+    events: Vec<Arc<Event>>,
     /// The session tier.
     state: StateMap,
     /// The session tier the session was created with; rewind rebuilds from it.
@@ -81,7 +83,7 @@ impl InMemorySessionService {
         &self,
         identity: AdkIdentity,
         session_state: &StateMap,
-        events: Vec<Event>,
+        events: Vec<Arc<Event>>,
         updated_at: DateTime<Utc>,
     ) -> Box<dyn Session> {
         let (app_state, user_state) =
@@ -105,7 +107,7 @@ impl InMemorySessionService {
             let data = sessions.get_mut(identity).ok_or_else(|| identity_not_found(identity))?;
             data.updated_at = event.timestamp;
             data.state.extend(session_delta);
-            data.events.push(event);
+            data.events.push(Arc::new(event));
         }
 
         let app_name = identity.app_name.as_ref();
@@ -130,14 +132,17 @@ impl InMemorySessionService {
     fn truncate(
         &self,
         identity: &AdkIdentity,
-        keep: impl FnOnce(&[Event]) -> Result<usize>,
+        keep: impl FnOnce(&[Arc<Event>]) -> Result<usize>,
     ) -> Result<Box<dyn Session>> {
         let (events, state, updated_at) = {
             let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
             let data = sessions.get_mut(identity).ok_or_else(|| identity_not_found(identity))?;
             let keep = keep(&data.events)?;
             data.events.truncate(keep);
-            data.state = state_utils::rebuild_session_state(&data.initial_state, &data.events);
+            data.state = state_utils::rebuild_session_state(
+                &data.initial_state,
+                data.events.iter().map(Arc::as_ref),
+            );
             data.updated_at = Utc::now();
             (data.events.clone(), data.state.clone(), data.updated_at)
         };
@@ -206,16 +211,15 @@ impl SessionService for InMemorySessionService {
     async fn get(&self, req: GetRequest) -> Result<Box<dyn Session>> {
         let identity = Self::make_identity(&req.app_name, &req.user_id, &req.session_id)?;
 
+        // Only the requested window leaves the lock, and only as pointers.
         let (mut events, state, updated_at) = {
             let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
             let data =
                 sessions.get(&identity).ok_or_else(|| crate::service::session_not_found(&req))?;
-            (data.events.clone(), data.state.clone(), data.updated_at)
+            let start =
+                req.num_recent_events.map_or(0, |num| data.events.len().saturating_sub(num));
+            (data.events[start..].to_vec(), data.state.clone(), data.updated_at)
         };
-        if let Some(num) = req.num_recent_events {
-            let start = events.len().saturating_sub(num);
-            events.drain(..start);
-        }
         if let Some(after) = req.after {
             events.retain(|e| e.timestamp >= after);
         }
@@ -349,7 +353,8 @@ impl SessionService for InMemorySessionService {
 struct InMemorySession {
     identity: AdkIdentity,
     state: StateMap,
-    events: Vec<Event>,
+    /// The store's own events: a view copies one only when a caller takes or clones it.
+    events: Vec<Arc<Event>>,
     updated_at: DateTime<Utc>,
 }
 
@@ -377,6 +382,10 @@ impl Session for InMemorySession {
     fn last_update_time(&self) -> DateTime<Utc> {
         self.updated_at
     }
+
+    fn take_events(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.events).into_iter().map(Arc::unwrap_or_clone).collect()
+    }
 }
 
 impl State for InMemorySession {
@@ -399,7 +408,7 @@ impl State for InMemorySession {
 
 impl Events for InMemorySession {
     fn all(&self) -> Vec<Event> {
-        self.events.clone()
+        self.events.iter().map(|event| Event::clone(event)).collect()
     }
 
     fn len(&self) -> usize {
@@ -407,6 +416,6 @@ impl Events for InMemorySession {
     }
 
     fn at(&self, index: usize) -> Option<&Event> {
-        self.events.get(index)
+        self.events.get(index).map(Arc::as_ref)
     }
 }
