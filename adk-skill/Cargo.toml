@@ -9,6 +9,7 @@ description = "AgentSkills parser, index, and runtime injection helpers for ADK-
 repository.workspace = true
 documentation = "https://docs.rs/adk-skill"
 readme = "README.md"
+exclude = ["tests/"]
 keywords = ["adk", "skills", "agent", "prompt"]
 categories = ["development-tools", "asynchronous"]
 

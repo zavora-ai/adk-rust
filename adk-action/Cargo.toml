@@ -9,6 +9,7 @@ description = "Shared action node types for ADK-Rust graph workflows"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-action"
 readme = "README.md"
+exclude = ["tests/"]
 keywords = ["ai", "agents", "workflow", "action", "nodes"]
 categories = ["science", "asynchronous"]
 

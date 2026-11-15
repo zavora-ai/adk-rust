@@ -12,6 +12,7 @@ documentation = "https://docs.rs/adk-rust-macros"
 keywords = ["adk", "agent", "macro", "tool", "ai"]
 categories = ["development-tools"]
 readme = "README.md"
+exclude = ["tests/"]
 
 [lib]
 proc-macro = true

@@ -10,6 +10,7 @@ homepage.workspace = true
 repository.workspace = true
 documentation = "https://docs.rs/adk-managed"
 readme = "README.md"
+exclude = ["tests/"]
 keywords = ["ai", "agents", "managed", "runtime", "durable"]
 categories = ["asynchronous", "development-tools"]
 

@@ -10,6 +10,7 @@ homepage.workspace = true
 repository.workspace = true
 documentation = "https://docs.rs/adk-sandbox"
 readme = "README.md"
+exclude = ["tests/"]
 keywords = ["adk", "sandbox", "code-execution", "wasm", "isolation"]
 categories = ["development-tools", "asynchronous"]
 

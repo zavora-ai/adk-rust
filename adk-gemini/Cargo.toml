@@ -12,6 +12,7 @@ autobenches = false
 description = "Rust client for Google Gemini API"
 documentation = "https://docs.rs/adk-gemini"
 readme = "README.md"
+exclude = ["tests/", "examples/", "test_data/", "AGENTS.md", ".gitignore"]
 keywords = [
     "gemini",
     "embed",

@@ -11,6 +11,7 @@ documentation = "https://docs.rs/adk-realtime"
 keywords = ["adk", "ai", "realtime", "voice", "audio"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+exclude = ["tests/", "examples/", "benches/", "AGENTS.md"]
 homepage.workspace = true
 
 [package.metadata.docs.rs]

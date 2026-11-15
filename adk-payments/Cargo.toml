@@ -12,6 +12,7 @@ documentation = "https://docs.rs/adk-payments"
 keywords = ["adk", "payments", "commerce", "agents", "protocols"]
 categories = ["api-bindings", "asynchronous", "web-programming"]
 readme = "README.md"
+exclude = ["tests/"]
 
 [features]
 default = []

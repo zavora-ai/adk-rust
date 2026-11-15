@@ -12,6 +12,7 @@ documentation = "https://docs.rs/cargo-adk"
 keywords = ["adk", "agent", "scaffold", "cli", "ai"]
 categories = ["development-tools::cargo-plugins", "command-line-utilities"]
 readme = "README.md"
+exclude = ["tests/"]
 
 [[bin]]
 name = "cargo-adk"

@@ -11,6 +11,7 @@ documentation = "https://docs.rs/adk-codeact-monty"
 keywords = ["ai", "agent", "adk", "python", "codeact"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+exclude = ["tests/"]
 
 [dependencies]
 adk-core = { workspace = true }

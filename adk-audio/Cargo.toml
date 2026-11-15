@@ -8,6 +8,7 @@ authors.workspace = true
 repository.workspace = true
 documentation = "https://docs.rs/adk-audio"
 readme = "README.md"
+exclude = ["tests/"]
 homepage.workspace = true
 description = "Audio intelligence and pipeline orchestration for ADK-Rust agents"
 keywords = ["adk", "audio", "tts", "stt", "speech"]

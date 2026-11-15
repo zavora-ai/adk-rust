@@ -10,6 +10,7 @@ repository.workspace = true
 documentation = "https://docs.rs/adk-enterprise"
 description = "Native Rust SDK for ADK-Rust Enterprise Managed Agent Service"
 readme = "README.md"
+exclude = ["tests/"]
 keywords = ["ai", "agent", "sdk", "enterprise", "llm"]
 categories = ["api-bindings", "asynchronous"]
 

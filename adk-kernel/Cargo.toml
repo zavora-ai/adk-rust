@@ -10,6 +10,7 @@ repository.workspace = true
 documentation = "https://docs.rs/adk-kernel"
 keywords = ["adk", "agent", "kernel", "durable", "supervisor"]
 categories = ["asynchronous", "development-tools"]
+exclude = ["tests/"]
 # Every file under `tests/` is a module of one test binary, so the dependencies link once.
 autotests = false
 

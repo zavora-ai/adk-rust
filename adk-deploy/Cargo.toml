@@ -9,6 +9,7 @@ homepage.workspace = true
 repository.workspace = true
 documentation = "https://docs.rs/adk-deploy"
 readme = "README.md"
+exclude = ["tests/"]
 description = "Deployment manifest, bundling, and control-plane client for ADK-Rust"
 keywords = ["adk", "deploy", "agents", "platform"]
 categories = ["development-tools", "config"]

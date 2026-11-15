@@ -11,6 +11,7 @@ documentation = "https://docs.rs/adk-tool"
 keywords = ["ai", "agent", "adk", "tools", "mcp"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+exclude = ["tests/"]
 
 [features]
 default = []

@@ -11,6 +11,7 @@ documentation = "https://docs.rs/adk-code"
 keywords = ["ai", "agent", "adk", "code-execution", "sandbox"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+exclude = ["tests/"]
 
 [dependencies]
 adk-core = { workspace = true }

@@ -12,6 +12,7 @@ documentation = "https://docs.rs/adk-auth"
 keywords = ["ai", "agent", "adk", "auth", "security"]
 categories = ["authentication", "api-bindings"]
 readme = "README.md"
+exclude = ["tests/"]
 
 [package.metadata.docs.rs]
 all-features = true

@@ -12,6 +12,7 @@ documentation = "https://docs.rs/adk-rust"
 keywords = ["ai", "agent", "llm", "adk", "framework"]
 categories = ["api-bindings", "asynchronous", "web-programming"]
 readme = "README.md"
+exclude = ["tests/", "examples/"]
 
 [features]
 default = ["minimal"]

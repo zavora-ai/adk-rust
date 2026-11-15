@@ -9,6 +9,7 @@ description = "Service drivers for ADK-Rust agents: DNS and registrar, email, an
 repository.workspace = true
 documentation = "https://docs.rs/adk-drivers"
 readme = "README.md"
+exclude = ["tests/"]
 keywords = ["adk", "agent", "dns", "email", "drivers"]
 categories = ["asynchronous", "network-programming"]
 

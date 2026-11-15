@@ -12,6 +12,7 @@ documentation = "https://docs.rs/adk-runner"
 keywords = ["ai", "agent", "adk", "runtime", "executor"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+exclude = ["tests/"]
 
 [package.metadata.docs.rs]
 features = ["context-compaction", "sandbox-runner"]

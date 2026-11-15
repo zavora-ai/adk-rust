@@ -9,6 +9,7 @@ homepage.workspace = true
 repository.workspace = true
 documentation = "https://docs.rs/adk-guardrail"
 readme = "README.md"
+exclude = ["tests/"]
 description = "Guardrails for ADK-Rust agents: input, output, and tool-call validation, content filtering, PII redaction"
 keywords = ["ai", "agents", "guardrails", "safety", "validation"]
 categories = ["development-tools", "asynchronous"]

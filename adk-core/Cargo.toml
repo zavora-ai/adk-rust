@@ -12,6 +12,7 @@ documentation = "https://docs.rs/adk-core"
 keywords = ["ai", "agent", "adk", "llm", "tools"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+exclude = ["tests/"]
 
 [package.metadata.docs.rs]
 all-features = true

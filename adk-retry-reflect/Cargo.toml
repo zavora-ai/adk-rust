@@ -10,6 +10,7 @@ repository.workspace = true
 documentation = "https://docs.rs/adk-retry-reflect"
 description = "Retry & Reflect plugin for ADK-Rust — intercepts tool failures and injects structured reflection prompts"
 readme = "README.md"
+exclude = ["tests/"]
 keywords = ["adk", "agent", "plugin", "retry", "reflection"]
 categories = ["development-tools", "asynchronous"]
 
