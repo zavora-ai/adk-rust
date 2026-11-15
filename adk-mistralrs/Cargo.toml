@@ -10,6 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/adk-mistralrs"
 readme = "README.md"
+exclude = ["tests/", "benches/", ".gitignore"]
 keywords = ["ai", "agent", "adk", "llm", "local-inference"]
 categories = ["api-bindings", "asynchronous"]
 

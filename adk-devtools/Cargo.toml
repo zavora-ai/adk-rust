@@ -9,6 +9,7 @@ description = "Developer tools (read/write/edit/grep/glob/bash) for ADK-Rust cod
 repository.workspace = true
 documentation = "https://docs.rs/adk-devtools"
 readme = "README.md"
+exclude = ["tests/"]
 keywords = ["adk", "agent", "coding", "tools", "filesystem"]
 categories = ["development-tools", "asynchronous"]
 

@@ -9,6 +9,7 @@ description = "Governed, durable harness agent for ADK-Rust: modes, standing app
 repository.workspace = true
 documentation = "https://docs.rs/adk-harness"
 readme = "README.md"
+exclude = ["tests/"]
 keywords = ["adk", "agent", "harness", "coding", "governance"]
 categories = ["development-tools", "asynchronous"]
 # The integration tests build as one binary, `tests/integration.rs`, so dependencies link once.

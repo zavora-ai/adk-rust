@@ -11,6 +11,7 @@ documentation = "https://docs.rs/adk-rag"
 keywords = ["ai", "agent", "adk", "rag", "retrieval"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+exclude = ["tests/"]
 homepage.workspace = true
 
 [package.metadata.docs.rs]

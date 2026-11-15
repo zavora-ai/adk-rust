@@ -12,6 +12,7 @@ documentation = "https://docs.rs/adk-artifact"
 keywords = ["ai", "agent", "adk", "artifact", "storage"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+exclude = ["tests/"]
 
 [package.metadata.docs.rs]
 all-features = true

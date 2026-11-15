@@ -12,6 +12,7 @@ documentation = "https://docs.rs/adk-memory"
 keywords = ["ai", "agent", "adk", "memory", "semantic"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+exclude = ["tests/"]
 
 [package.metadata.docs.rs]
 all-features = true

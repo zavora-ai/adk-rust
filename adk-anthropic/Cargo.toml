@@ -10,6 +10,7 @@ homepage.workspace = true
 repository.workspace = true
 documentation = "https://docs.rs/adk-anthropic"
 readme = "README.md"
+exclude = ["tests/", "examples/"]
 keywords = ["ai", "anthropic", "claude", "llm", "adk"]
 categories = ["api-bindings", "asynchronous"]
 autoexamples = false

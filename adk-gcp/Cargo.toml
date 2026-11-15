@@ -11,6 +11,7 @@ documentation = "https://docs.rs/adk-gcp"
 keywords = ["ai", "agent", "adk", "gcp", "vertex-ai"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+exclude = ["tests/"]
 
 [dependencies]
 adk-core.workspace = true

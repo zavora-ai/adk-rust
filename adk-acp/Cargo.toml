@@ -8,6 +8,7 @@ authors.workspace = true
 repository.workspace = true
 documentation = "https://docs.rs/adk-acp"
 readme = "README.md"
+exclude = ["tests/"]
 description = "Agent Client Protocol integration for ADK-Rust — use ACP coding agents or expose an ADK agent to editors"
 keywords = ["adk", "acp", "agent", "protocol", "ai"]
 categories = ["development-tools", "asynchronous"]

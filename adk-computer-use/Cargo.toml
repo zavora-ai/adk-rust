@@ -11,6 +11,7 @@ repository.workspace = true
 keywords = ["ai", "agent", "computer-use", "mcp", "automation"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
+exclude = ["tests/", "examples/", "fixtures/"]
 
 [dependencies]
 adk-core.workspace = true
