@@ -1,0 +1,25 @@
+# PR-tier jobs that run only when a change can affect what they build, and what each
+# builds (scripts/ci-scope.py). A job runs when one of its crates changed or depends,
+# directly or through other workspace crates, on one that did.
+#
+# Format: <job> <crate or standalone example directory>...
+# A crate is a workspace package the job builds with `-p`, or patches into a generated
+# project. An example directory stands for the files under it and the workspace crates its
+# manifest names by path. A job absent from this file runs on every change to code.
+# scripts/tests/test_ci_scope.py holds each row to the commands the job runs.
+
+# scripts/test-postgres.sh and the Redis and Qdrant steps of ci.yml's `postgres` job.
+postgres adk-session adk-memory adk-harness adk-graph adk-kernel adk-auth adk-rag adk-managed adk-payments adk-server
+
+# cargo-adk and the crates scripts/check-cargo-adk-templates.sh patches into each scaffold.
+templates cargo-adk adk-rust adk-tool adk-rag adk-core adk-agent adk-model adk-runner adk-session adk-telemetry adk-gemini adk-anthropic adk-rust-macros adk-graph adk-realtime adk-devtools awp-types
+
+kernel-scenarios examples/harness_kernel
+website-scenarios examples/website
+
+# The crates whose Windows-only code ci.yml's `windows` job tests or lints. Its workspace
+# build is repeated by the merge tier's Windows `nextest --workspace` for every other crate.
+windows adk-sandbox adk-harness adk-site adk-tool adk-kernel adk-cli
+
+# scripts/check-surface-api.sh and the servers adk-surface/web/playwright.config.ts builds.
+surface-e2e adk-surface adk-cli

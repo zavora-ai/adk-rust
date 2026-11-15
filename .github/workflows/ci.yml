@@ -54,8 +54,9 @@ jobs:
   # ── Scope: what can this change affect? ───────────────────────
   # A change under docs/ or to Markdown cannot alter a Rust build, so the Rust jobs
   # skip and `pr-gate` accepts the skip. Feature coverage runs only the shards that
-  # cover a crate the change can affect (scripts/ci-scope.py). Any doubt (an API
-  # failure, a truncated file list) runs the full tier. Merge-queue builds compare the
+  # cover a crate the change can affect, and the jobs of scripts/ci-job-crates.txt run
+  # only when the change can affect a crate they build (scripts/ci-scope.py). Any doubt
+  # (an API failure, a truncated file list) runs the full tier. Merge-queue builds compare the
   # group head against main, so a group is scoped the same way.
   scope:
     runs-on: ubuntu-latest
@@ -67,6 +68,7 @@ jobs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
       crates: ${{ steps.scope.outputs.crates }}
       shards: ${{ steps.scope.outputs.shards }}
+      jobs: ${{ steps.scope.outputs.jobs }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -199,12 +201,13 @@ jobs:
   # package/feature pair and the shard that covers it. A shard lints each pair on its
   # own and tests each crate once with its pairs' features combined, on one target
   # directory. Only the shards and crates the change can affect run; the nightly tier
-  # runs every pair's tests on its own build.
+  # runs every pair's tests on its own build. The shards compile from nothing, so they
+  # wait for `fmt` and `clippy`: a change that fails either spends no runner on them.
   #
   # To cover another feature-gated module, add ONE line to the pairs file.
   feature-coverage:
     name: feature-coverage (${{ matrix.shard }}/11)
-    needs: scope
+    needs: [scope, fmt, clippy]
     if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'push' && needs.scope.outputs.shards != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -246,10 +249,31 @@ jobs:
     - name: Clippy and test the shard's pairs
       run: bash scripts/check-feature-coverage.sh ${{ matrix.shard }}
 
+  # ── adk-surface: generated API and the web home end to end ─────
+  # Runs when a change can affect adk-surface or adk-cli, the crates it builds.
+  surface-e2e:
+    needs: [scope, fmt, clippy]
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'push' && contains(fromJSON(needs.scope.outputs.jobs), 'surface-e2e')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        enable-cache: 'false'
+
+    # libdbus for adk-cli's keyring dependency; the ALSA/udev headers as in feature-coverage.
+    - name: Install system dependencies
+      timeout-minutes: 10
+      uses: ./.github/actions/apt-install
+      with:
+        packages: protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
+
     # adk-surface's OpenAPI document and TypeScript types are generated from its Rust types
     # (spec 3.3 §6); the committed ones must match.
     - name: Require adk-surface's generated API to match its Rust types
-      if: matrix.shard == 9
       run: bash scripts/check-surface-api.sh
 
     # The web home end to end (spec 3.3 §5.1): Playwright opens the page a scripted kernel
@@ -257,7 +281,6 @@ jobs:
     # sees it run once. `npm run e2e:build` builds every server with its own features first,
     # so Playwright starts each in seconds rather than compiling one while the rest wait.
     - name: Setup Node.js for the web home end-to-end test
-      if: matrix.shard == 9
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
       with:
         node-version: '22'
@@ -265,7 +288,6 @@ jobs:
         cache-dependency-path: adk-surface/web/package-lock.json
 
     - name: Web home end to end
-      if: matrix.shard == 9
       working-directory: adk-surface/web
       run: |
         npm ci
@@ -274,7 +296,7 @@ jobs:
         npm run e2e
 
     - name: Keep the end-to-end report
-      if: failure() && matrix.shard == 9
+      if: failure()
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: web-home-e2e
@@ -290,8 +312,8 @@ jobs:
   # are the same suites' Redis leg, and the kernel's process store. The Qdrant service
   # serves adk-rag's Qdrant contract suite, the other service-backed vector store.
   postgres:
-    needs: scope
-    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'push'
+    needs: [scope, fmt, clippy]
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'push' && contains(fromJSON(needs.scope.outputs.jobs), 'postgres')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     services:
@@ -389,7 +411,7 @@ jobs:
 
   # ── Docs: documentation coverage for Stable-tier crates ──────
   docs:
-    needs: scope
+    needs: [scope, fmt, clippy]
     # Rustdoc and doctests cannot break through a merge that clippy and the tests
     # accept, so the queue build leaves them to the pull request run.
     if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push'
@@ -447,7 +469,7 @@ jobs:
   # in LINTED_EXAMPLES run clippy with -D warnings instead of check.
   examples-compile:
     name: examples-compile (${{ matrix.shard }}/2)
-    needs: scope
+    needs: [scope, fmt, clippy]
     if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -484,7 +506,7 @@ jobs:
   # tests, on Windows in the windows job below.
   kernel-scenarios:
     needs: scope
-    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push'
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push' && contains(fromJSON(needs.scope.outputs.jobs), 'kernel-scenarios')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -513,7 +535,7 @@ jobs:
   # WordPress-backed runs and the S19 soak are in the nightly tier (ci-nightly.yml).
   website-scenarios:
     needs: scope
-    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push'
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push' && contains(fromJSON(needs.scope.outputs.jobs), 'website-scenarios')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -539,11 +561,13 @@ jobs:
       shell: bash
       run: test -f website-scenarios.md && cat website-scenarios.md >> "$GITHUB_STEP_SUMMARY" || true
 
-  # ── Scaffolds: cargo-adk generated projects compile ────────────
-  templates:
+  # ── Repository gates: documentation, release and script checks ─
+  # Seconds of checks over Markdown, manifests and scripts; they run on every change,
+  # docs-only ones included.
+  doc-gates:
     if: github.event_name != 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -552,15 +576,7 @@ jobs:
       with:
         enable-cache: 'false'
 
-    - name: Install system dependencies
-      # A stalled apt mirror once held jobs for the full six-hour limit; the action bounds and
-      # retries each apt attempt, and the step timeout bounds the whole install.
-      timeout-minutes: 10
-      uses: ./.github/actions/apt-install
-      with:
-        packages: protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
-
-    - name: Check cargo-adk templates
+    - name: Check documentation, release and script gates
       run: |
         bash scripts/check-example-name-collisions.sh
         bash scripts/check-doc-examples.sh
@@ -587,16 +603,41 @@ jobs:
         # so a 144th alias for a runtime choice could land unremarked.
         bash scripts/check-feature-growth.sh
         python3 -m unittest discover -s scripts/tests
-        # Scaffold every advertised template — including addon combos and
-        # default-provider resolution — and cargo-check the generated projects.
-        bash scripts/check-cargo-adk-templates.sh
+
+  # ── Scaffolds: cargo-adk generated projects compile ────────────
+  # Scaffolds every advertised template — addon combos and default-provider resolution
+  # included — and cargo-checks the generated projects. Runs when a change can affect
+  # cargo-adk or a crate the scaffolds build from this checkout.
+  templates:
+    needs: [scope, fmt, clippy]
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'push' && contains(fromJSON(needs.scope.outputs.jobs), 'templates')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        enable-cache: 'false'
+
+    - name: Install system dependencies
+      # A stalled apt mirror once held jobs for the full six-hour limit; the action bounds and
+      # retries each apt attempt, and the step timeout bounds the whole install.
+      timeout-minutes: 10
+      uses: ./.github/actions/apt-install
+      with:
+        packages: protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
+
+    - name: Check cargo-adk templates
+      run: bash scripts/check-cargo-adk-templates.sh
 
   # ── Cross-platform: macOS compile-only build ───────────────────
   # PR tier is compile-only; the full nextest run moves to the merge tier
   # (ci-merge.yml). setup-rust supplies the toolchain + build cache;
   # neutralize-wild is false because the wild-linker strip is Linux-only.
   macos:
-    needs: scope
+    needs: [scope, fmt, clippy]
     if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push'
     runs-on: macos-latest
     timeout-minutes: 60
@@ -629,10 +670,12 @@ jobs:
 
   # ── Cross-platform: Windows build + Windows-only code ──────────
   # The pull request runs the code that exists only on Windows; the full nextest run,
-  # the kernel scenarios included, is in the merge tier (ci-merge.yml).
+  # the kernel scenarios included, is in the merge tier (ci-merge.yml). The job runs when
+  # a change can affect a crate it tests (scripts/ci-job-crates.txt); the merge tier's
+  # Windows run builds the workspace for every other change.
   windows:
-    needs: scope
-    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push'
+    needs: [scope, fmt, clippy]
+    if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push' && contains(fromJSON(needs.scope.outputs.jobs), 'windows')
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -719,8 +762,10 @@ jobs:
   # ── Stable branch-protection contract ──────────────────────────────────
   # Branch protection needs only this aggregate context (plus `semver`). A skipped
   # job passes the gate only when `scope` or the event skipped it: docs-only changes
-  # skip every Rust job, and merge-queue builds skip the jobs the pull request
-  # already passed and a merge cannot break on its own.
+  # skip every Rust job, a change skips the jobs whose crates it cannot affect, and
+  # merge-queue builds skip the jobs the pull request already passed and a merge cannot
+  # break on its own. A job skipped because `fmt` or `clippy` failed is none of these,
+  # and the failed job fails the gate itself.
   pr-gate:
     name: pr-gate
     if: always() && github.event_name != 'push'
@@ -731,11 +776,13 @@ jobs:
       - clippy
       - test
       - feature-coverage
+      - surface-e2e
       - postgres
       - docs
       - examples-compile
       - kernel-scenarios
       - website-scenarios
+      - doc-gates
       - templates
       - macos
       - windows
@@ -748,15 +795,23 @@ jobs:
         JOB_RESULTS: ${{ toJSON(needs) }}
         DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
         SHARDS: ${{ needs.scope.outputs.shards }}
+        SCOPED_JOBS: ${{ needs.scope.outputs.jobs }}
         EVENT: ${{ github.event_name }}
       run: |
         skippable=""
         if [[ "$DOCS_ONLY" == "true" ]]; then
-          skippable="clippy test feature-coverage postgres docs examples-compile kernel-scenarios website-scenarios macos windows"
+          skippable="clippy test feature-coverage surface-e2e postgres docs examples-compile kernel-scenarios website-scenarios templates macos windows"
         fi
         if [[ "$SHARDS" == "[]" ]]; then
           skippable="$skippable feature-coverage"
         fi
+        # The jobs scripts/ci-job-crates.txt scopes: skippable when `scope` left them out.
+        # An unreadable list leaves them required.
+        for job in surface-e2e postgres kernel-scenarios website-scenarios templates windows; do
+          if jq -e --arg job "$job" 'index($job) == null' <<<"$SCOPED_JOBS" >/dev/null 2>&1; then
+            skippable="$skippable $job"
+          fi
+        done
         if [[ "$EVENT" == "merge_group" ]]; then
           skippable="$skippable docs examples-compile kernel-scenarios website-scenarios macos windows"
         fi

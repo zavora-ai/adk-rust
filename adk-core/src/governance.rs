@@ -3747,7 +3747,8 @@ pub struct WithheldBuiltinTool {
 ///
 /// ```rust
 /// use adk_core::{
-///     ApprovalScope, BuiltinToolGovernor, DeclarativePolicy, RunConfig, Tool, ToolGate,
+///     ApprovalScope, BuiltinToolGovernor, DeclarativePolicy, RunConfig, Tool, ToolDeclarations,
+///     ToolGate,
 /// };
 /// use serde_json::json;
 /// use std::collections::HashMap;
@@ -3758,9 +3759,9 @@ pub struct WithheldBuiltinTool {
 ///     .tool_policy(Arc::new(DeclarativePolicy::builder().allow("lookup").build()))
 ///     .build();
 /// let gate = ToolGate::new(&config, "agent", "inv-1", ApprovalScope::new("app", "u", "s"));
-/// let mut declarations = HashMap::from([
-///     ("lookup".to_string(), json!({ "name": "lookup" })),
-///     ("google_search".to_string(), json!({ "x-adk-gemini-tool": { "google_search": {} } })),
+/// let mut declarations = ToolDeclarations::from_iter([
+///     ("lookup", json!({ "name": "lookup" })),
+///     ("google_search", json!({ "x-adk-gemini-tool": { "google_search": {} } })),
 /// ]);
 ///
 /// let tools: HashMap<String, Arc<dyn Tool>> = HashMap::new();
