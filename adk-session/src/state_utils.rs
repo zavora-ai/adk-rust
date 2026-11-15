@@ -71,9 +71,9 @@ pub(crate) fn merge_current_tiers(
 
 /// Rebuilds the session tier from the state a session was created with and the state deltas
 /// of `events`, applied in order.
-pub(crate) fn rebuild_session_state(
+pub(crate) fn rebuild_session_state<'a>(
     initial: &HashMap<String, Value>,
-    events: &[crate::Event],
+    events: impl IntoIterator<Item = &'a crate::Event>,
 ) -> HashMap<String, Value> {
     let (_, _, mut state) = extract_state_deltas(initial);
     for event in events {

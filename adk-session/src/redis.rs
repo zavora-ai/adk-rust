@@ -1274,6 +1274,10 @@ impl Session for RedisSession {
     fn last_update_time(&self) -> DateTime<Utc> {
         self.updated_at
     }
+
+    fn take_events(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.events)
+    }
 }
 
 impl State for RedisSession {

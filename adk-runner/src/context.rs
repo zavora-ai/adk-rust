@@ -19,8 +19,10 @@ use std::sync::{Arc, PoisonError, RwLock, atomic::AtomicBool};
 /// single insert, push or assignment, so the data stays whole, and reads and writes go on
 /// using it rather than seeing an empty history or dropping events.
 pub struct MutableSession {
-    /// The original session snapshot (for metadata like id, app_name, user_id)
-    inner: Arc<dyn AdkSession>,
+    /// The session's ID, app name and user ID, taken from the snapshot it was built from.
+    id: String,
+    app_name: String,
+    user_id: String,
     /// Shared mutable state - updated when events are processed
     /// This is the key difference from the old SessionAdapter which used immutable snapshots
     state: Arc<RwLock<HashMap<String, serde_json::Value>>>,
@@ -30,16 +32,22 @@ pub struct MutableSession {
 
 impl MutableSession {
     /// Create a new MutableSession from a session snapshot.
-    /// The state is copied from the session and becomes mutable.
-    pub fn new(session: Arc<dyn AdkSession>) -> Self {
-        // Clone the initial state from the session
-        let initial_state = session.state().all();
-        // Clone the initial events
-        let initial_events = session.events().all();
+    ///
+    /// The state is copied from the session and becomes mutable. The events are moved out of
+    /// the snapshot ([`Session::take_events`](AdkSession::take_events)) when this is its only
+    /// handle, as it is for the session the runner loads, and copied otherwise. The snapshot
+    /// is not kept.
+    pub fn new(mut session: Arc<dyn AdkSession>) -> Self {
+        let initial_events = match Arc::get_mut(&mut session) {
+            Some(owned) => owned.take_events(),
+            None => session.events().all(),
+        };
 
         Self {
-            inner: session,
-            state: Arc::new(RwLock::new(initial_state)),
+            id: session.id().to_string(),
+            app_name: session.app_name().to_string(),
+            user_id: session.user_id().to_string(),
+            state: Arc::new(RwLock::new(session.state().all())),
             events: Arc::new(RwLock::new(initial_events)),
         }
     }
@@ -562,15 +570,15 @@ fn answer_resumed_calls(
 
 impl adk_core::Session for MutableSession {
     fn id(&self) -> &str {
-        self.inner.id()
+        &self.id
     }
 
     fn app_name(&self) -> &str {
-        self.inner.app_name()
+        &self.app_name
     }
 
     fn user_id(&self) -> &str {
-        self.inner.user_id()
+        &self.user_id
     }
 
     fn state(&self) -> &dyn adk_core::State {
@@ -1098,5 +1106,126 @@ mod poisoned_lock_tests {
         later.llm_response.content = Some(Content::new("model").with_text("hi"));
         session.append_event(later);
         assert_eq!(session.events_len(), 2, "a write after the panic is kept");
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use adk_session::{Events, State};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A loaded session that counts how its history leaves it.
+    struct CountingSession {
+        events: Vec<Event>,
+        state: HashMap<String, serde_json::Value>,
+        copies: Arc<AtomicUsize>,
+        takes: Arc<AtomicUsize>,
+    }
+
+    impl CountingSession {
+        fn new(copies: &Arc<AtomicUsize>, takes: &Arc<AtomicUsize>) -> Self {
+            let events = ["first", "second"]
+                .into_iter()
+                .map(|text| {
+                    let mut event = Event::new("inv-1");
+                    event.author = "user".to_string();
+                    event.llm_response.content = Some(Content::new("user").with_text(text));
+                    event
+                })
+                .collect();
+            Self {
+                events,
+                state: HashMap::from([("topic".to_string(), serde_json::json!("billing"))]),
+                copies: Arc::clone(copies),
+                takes: Arc::clone(takes),
+            }
+        }
+    }
+
+    impl Events for CountingSession {
+        fn all(&self) -> Vec<Event> {
+            self.copies.fetch_add(1, Ordering::SeqCst);
+            self.events.clone()
+        }
+        fn len(&self) -> usize {
+            self.events.len()
+        }
+        fn at(&self, index: usize) -> Option<&Event> {
+            self.events.get(index)
+        }
+    }
+
+    impl State for CountingSession {
+        fn get(&self, key: &str) -> Option<serde_json::Value> {
+            self.state.get(key).cloned()
+        }
+        fn set(&mut self, key: String, value: serde_json::Value) {
+            self.state.insert(key, value);
+        }
+        fn all(&self) -> HashMap<String, serde_json::Value> {
+            self.state.clone()
+        }
+    }
+
+    impl AdkSession for CountingSession {
+        fn id(&self) -> &str {
+            "session"
+        }
+        fn app_name(&self) -> &str {
+            "app"
+        }
+        fn user_id(&self) -> &str {
+            "user"
+        }
+        fn state(&self) -> &dyn State {
+            self
+        }
+        fn events(&self) -> &dyn Events {
+            self
+        }
+        fn last_update_time(&self) -> chrono::DateTime<chrono::Utc> {
+            chrono::Utc::now()
+        }
+        fn take_events(&mut self) -> Vec<Event> {
+            self.takes.fetch_add(1, Ordering::SeqCst);
+            std::mem::take(&mut self.events)
+        }
+    }
+
+    fn texts(session: &MutableSession) -> Vec<String> {
+        session
+            .events_snapshot()
+            .iter()
+            .flat_map(|event| event.llm_response.content.iter().flat_map(|c| c.parts.iter()))
+            .filter_map(|part| part.text().map(str::to_string))
+            .collect()
+    }
+
+    #[test]
+    fn a_session_held_once_moves_its_history() {
+        let (copies, takes) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let session = MutableSession::new(Arc::new(CountingSession::new(&copies, &takes)));
+
+        assert_eq!((copies.load(Ordering::SeqCst), takes.load(Ordering::SeqCst)), (0, 1));
+        assert_eq!(texts(&session), ["first", "second"]);
+        let identity = (
+            adk_core::Session::id(&session),
+            adk_core::Session::app_name(&session),
+            adk_core::Session::user_id(&session),
+        );
+        assert_eq!(identity, ("session", "app", "user"));
+        assert_eq!(adk_core::State::get(&session, "topic"), Some(serde_json::json!("billing")));
+    }
+
+    #[test]
+    fn a_shared_session_keeps_its_history() {
+        let (copies, takes) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let shared: Arc<dyn AdkSession> = Arc::new(CountingSession::new(&copies, &takes));
+        let session = MutableSession::new(Arc::clone(&shared));
+
+        assert_eq!((copies.load(Ordering::SeqCst), takes.load(Ordering::SeqCst)), (1, 0));
+        assert_eq!(texts(&session), ["first", "second"]);
+        assert_eq!(shared.events().len(), 2, "the caller's handle keeps its events");
     }
 }
