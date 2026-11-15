@@ -17,9 +17,8 @@
 //! property test.
 //!
 //! The contract asserts relative score ordering only, never absolute score
-//! values: InMemory scores are cosine similarity, SurrealDB scores are
-//! `1 - cosine distance`, and LanceDB scores are `1 - L2 distance`, so absolute
-//! values are not comparable across backends.
+//! values: InMemory scores are cosine similarity and LanceDB scores are
+//! `1 - L2 distance`, so absolute values are not comparable across backends.
 
 // Each backend's test binary uses a subset of these helpers (e.g. the LanceDB
 // binary skips the proptest pieces), so the unused remainder is expected.
@@ -44,8 +43,8 @@ const DIM: usize = 4;
 pub struct ContractOptions {
     /// Whether `upsert` with an existing chunk ID replaces the stored row.
     ///
-    /// InMemory, SurrealDB, and LanceDB (through a merge-insert keyed on the
-    /// id) all replace by ID, so every current suite leaves this `true`.
+    /// InMemory and LanceDB (through a merge-insert keyed on the id) both
+    /// replace by ID, so every current suite leaves this `true`.
     pub upsert_replaces_by_id: bool,
     /// Whether the backend may refuse a well-formed filter shape with
     /// `RagError::UnsupportedFilter`.
@@ -240,8 +239,8 @@ fn chunk(id: &str, text: &str, embedding: Vec<f32>) -> Chunk {
 
 /// Mirror a chunk into the shape backends are allowed to return.
 ///
-/// Backends may omit the stored vector from search results (LanceDB and
-/// SurrealDB return an empty `embedding`; InMemory echoes the stored one), so
+/// Backends may omit the stored vector from search results (LanceDB returns
+/// an empty `embedding`; InMemory echoes the stored one), so
 /// whole-object comparisons clear the embedding on both sides. The embedding
 /// itself is checked separately by [`assert_round_trip`].
 fn without_embedding(c: &Chunk) -> Chunk {
@@ -642,8 +641,8 @@ pub async fn assert_vector_store_contract(store: &dyn VectorStore, options: Cont
     store.delete_collection("contract_drop").await.expect("delete collection");
 
     // Backends diverge on a dropped collection: InMemory and LanceDB fail the
-    // search, SurrealDB answers with no rows. The shared contract only requires
-    // that the data is gone, so an error is accepted as-is.
+    // search, and a backend may answer with no rows instead. The shared contract
+    // only requires that the data is gone, so an error is accepted as-is.
     if let Ok(results) =
         store.search("contract_drop", &scope, &VectorQuery::new(&[1.0, 0.0, 0.0, 0.0], 5)).await
     {

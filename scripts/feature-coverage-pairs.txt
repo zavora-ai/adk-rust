@@ -13,10 +13,7 @@
 # To cover another feature-gated module, add ONE line and pick the shard whose crates it
 # already depends on. Shards are numbered 0 to 10.
 
-# Shard 0 — adk-rag backends. lancedb pulls the whole lance/datafusion tree and is the
-# slowest pair; it stays in the PR tier because an arrow version mismatch once sat broken
-# on main for weeks with nothing compiling the LanceDB backend.
-0 adk-rag lancedb
+# Shard 0 — adk-rag backends; LanceDB has shard 7 to itself.
 # sqlx-backed backend: a second sqlx major entering the graph through pgvector went unnoticed.
 0 adk-rag pgvector
 0 adk-rag vertex-rag
@@ -395,10 +392,9 @@
 # `awp verify` against the preview in the launch gate (spec 3.5 §7.8.1), without `migrate`.
 6 adk-site verify doc
 
-# Shard 7 — adk-rag's SurrealDB backend on its own: it and lancedb each compile for about
-# fifteen minutes, and together they made shard 0 the longest job in the tier.
-# A surrealdb 3.2 parser change broke create_collection while every required check stayed
-# green; tests run on the embedded kv-mem engine.
-7 adk-rag surrealdb
+# Shard 7 — adk-rag's LanceDB backend on its own: it pulls the whole lance/datafusion tree
+# and compiles for about fifteen minutes. It stays in the PR tier because an arrow version
+# mismatch once sat broken on main for weeks with nothing compiling the LanceDB backend.
+7 adk-rag lancedb
 1 adk-harness mcp
 4 adk-model gemini no-default

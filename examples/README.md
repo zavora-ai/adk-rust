@@ -74,12 +74,6 @@ Standalone crates demonstrating current ADK-Rust features. Each has its own `Car
 |---------|---------|-----|
 | `examples/orcarouter` | OrcaRouter through the `OpenAICompatibleConfig::orcarouter` preset — chat, tool calling, and a second vendor on the same client | `cargo run --manifest-path examples/orcarouter/Cargo.toml` |
 
-**Requires `CHEAPER_INFERENCE_API_KEY`:**
-
-| Example | Feature | Run |
-|---------|---------|-----|
-| `examples/cheaper_inference` | Cheaper Inference through the `OpenAICompatibleConfig::cheaper_inference` preset — chat, tool calling, and a second vendor on the same client | `cargo run --manifest-path examples/cheaper_inference/Cargo.toml` |
-
 ## Quick Start
 
 ```bash

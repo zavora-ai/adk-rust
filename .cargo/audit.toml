@@ -8,8 +8,8 @@
 # new, unreviewed advisories still surface as failures.
 #
 # This list is wider than deny.toml's: cargo-audit scans the lockfile, so it
-# also reports crates that no resolved feature graph reaches (rkyv 0.7) and
-# transitive unmaintained crates that cargo-deny's `unmaintained = "workspace"`
+# also reports crates that no resolved feature graph reaches and transitive
+# unmaintained crates that cargo-deny's `unmaintained = "workspace"`
 # policy deliberately leaves to upstream.
 
 [advisories]
@@ -43,14 +43,6 @@ ignore = [
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
 
-    # rkyv 0.7 is present only as rust_decimal's disabled optional `rkyv`
-    # feature. No workspace feature activates it; active archive consumers use
-    # rkyv 0.8.18. See the security advisory review.
-    "RUSTSEC-2026-0235",
-
-    # rsa: Marvin timing side-channel (no upstream fix, accepted risk)
-    "RUSTSEC-2023-0071",
-
     # --- Unmaintained crates (no security impact) ---
 
     # async-std: Discontinued runtime, transitive shim only
@@ -61,7 +53,7 @@ ignore = [
     "RUSTSEC-2026-0150",
     # backoff: Pure-Rust retry logic, functional
     "RUSTSEC-2025-0012",
-    # bincode: Internal to SurrealDB
+    # bincode: syntect's packed syntax dumps (adk-surface)
     "RUSTSEC-2025-0141",
     # fxhash: Non-crypto hash for BM25 tables
     "RUSTSEC-2025-0057",
