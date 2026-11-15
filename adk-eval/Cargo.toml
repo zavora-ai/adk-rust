@@ -33,7 +33,6 @@ chrono.workspace = true
 futures.workspace = true
 tracing.workspace = true
 quick-xml = { version = "0.41", optional = true }
-statrs = { version = "0.18", optional = true }
 libm = { version = "0.2", optional = true }
 reqwest = { workspace = true, optional = true }
 google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
@@ -47,7 +46,7 @@ embedding = ["dep:adk-memory", "adk-memory/embedding-trait"]
 # JUnit XML generation for CI integration
 ci-helpers = ["dep:quick-xml"]
 # Statistical testing (Wilcoxon signed-rank) for A/B comparison
-statistics = ["dep:statrs"]
+statistics = ["dep:libm"]
 # Sequential and Bayesian analysis of web experiments with guardrails (spec 3.5 §7.12)
 experiments = ["dep:libm"]
 # Gen AI Evaluation Service bridge (Vertex AI projects.locations:evaluateInstances)
@@ -56,7 +55,6 @@ vertex-eval = ["adk-gcp", "google-cloud-auth", "reqwest"]
 [dev-dependencies]
 adk-agent = { path = "../adk-agent" }
 tokio = { workspace = true, features = ["rt", "macros"] }
-tokio-test = "0.4"
 tempfile = "3.0"
 proptest = "1.5"
 axum = "0.8"

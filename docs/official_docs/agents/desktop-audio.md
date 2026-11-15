@@ -20,7 +20,7 @@ All components use the `cpal` crate for cross-platform audio (CoreAudio on macOS
 adk-audio = { version = "3.0.0", features = ["desktop-audio"] }
 ```
 
-The `desktop-audio` feature adds `cpal` as a dependency (and enables the no-op `vad` feature; `VadProcessor` is always compiled). It is not part of the `all` feature, since it needs audio hardware. On Linux it links ALSA, so install `libasound2-dev`.
+The `desktop-audio` feature adds `cpal` as a dependency; `VadProcessor` is always compiled. It is not part of the `all` feature, since it needs audio hardware. On Linux it links ALSA, so install `libasound2-dev`.
 
 ### PipeWire Support
 

@@ -764,8 +764,8 @@ No feature is enabled by default.
 | `time-travel` | Step, fork, and state history |
 | `action` | `ActionNodeExecutor` for `adk-action` node configurations |
 | `action-http`, `action-rss`, `action-trigger` | HTTP and notification nodes, RSS feeds, cron/webhook trigger runtime |
-| `action-db`, `action-db-mongo`, `action-db-redis`, `action-email`, `action-code` | Placeholders only — see [Action Nodes](#action-nodes) |
-| `action-full` | `action`, `action-trigger`, `action-http`, `action-db`, `action-code`, `action-email`, `action-rss` |
+| `action-db`, `action-email` | Placeholders only — see [Action Nodes](#action-nodes) |
+| `action-full` | `action`, `action-trigger`, `action-http`, `action-db`, `action-email`, `action-rss` |
 | `full` | `sqlite` and `action-full` |
 
 ## Action Nodes

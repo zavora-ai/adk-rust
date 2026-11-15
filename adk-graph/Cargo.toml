@@ -79,12 +79,9 @@ action-trigger = ["action", "dep:tokio-cron-scheduler"]
 # `adk-core/egress-client` supplies the public-only address check and resolver.
 action-http = ["action", "dep:reqwest", "dep:sha2", "adk-core/egress-client"]
 action-db = ["action"]
-action-db-mongo = ["action"]
-action-db-redis = ["action"]
-action-code = ["action"]
 action-email = ["action"]
 action-rss = ["action-http"]
-action-full = ["action", "action-trigger", "action-http", "action-db", "action-code", "action-email", "action-rss"]
+action-full = ["action", "action-trigger", "action-http", "action-db", "action-email", "action-rss"]
 
 full = ["sqlite", "action-full"]
 

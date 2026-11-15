@@ -27,11 +27,9 @@ async-trait = { workspace = true }
 async-stream = { workspace = true }
 futures = { workspace = true }
 tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
-serde = { version = "1", features = ["derive"] }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
-pin-project-lite = "0.2"
 
 # Cloud providers (optional)
 reqwest = { workspace = true, features = ["multipart"], optional = true }
@@ -42,7 +40,7 @@ base64 = { version = "0.22", optional = true }
 # VAD
 #
 # There is deliberately no VAD backend dependency here. `webrtc-vad` used to be
-# declared under the `vad` feature but was never imported by a single line of
+# declared under a `vad` feature but was never imported by a single line of
 # this crate, so it only ever cost consumers a C toolchain and a linker hazard:
 # it builds libfvad, which exports the upstream WebRTC signal-processing symbols
 # (`WebRtcSpl_*`) unmangled. Any binary that also links LiveKit's `webrtc-sys`
@@ -80,13 +78,8 @@ cpal = { version = "0.15", optional = true }
 # Streaming (optional)
 tokio-tungstenite = { workspace = true, optional = true }
 
-# Bridge (optional)
-adk-realtime = { workspace = true, optional = true }
-livekit-api = { workspace = true, optional = true }
-
 [dev-dependencies]
 proptest = "1"
-rustls = { workspace = true }
 tokio = { version = "1", features = ["full", "test-util"] }
 
 [features]
@@ -98,15 +91,10 @@ muse = ["stt", "dep:adk-model"]
 music = ["dep:reqwest"]
 # Built-in DSP processors use no external dependencies.
 fx = []
-# The `VadProcessor` trait is compiled unconditionally, so this feature has
-# never gated any code (`#[cfg(feature = "vad")]` appears nowhere in the crate).
-# It is retained as a no-op so existing consumers and `desktop-audio` keep
-# building; it no longer drags a C VAD implementation into the graph.
-vad = []
 streaming = []
 
 # Desktop audio I/O (cpal-based, not included in `all` — requires audio hardware)
-desktop-audio = ["dep:cpal", "vad"]
+desktop-audio = ["dep:cpal"]
 
 # Cross-platform local inference
 onnx = ["dep:ort", "dep:tokenizers", "dep:hf-hub"]
@@ -126,7 +114,7 @@ qwen3-tts = ["dep:qwen_tts", "dep:hf-hub", "dep:candle-core"]
 all-onnx = ["onnx", "kokoro", "chatterbox", "whisper-onnx", "distil-whisper", "moonshine", "qwen3-tts"]
 
 # Bridge
-livekit = ["dep:livekit-api", "dep:adk-realtime", "dep:base64"]
+livekit = ["dep:base64"]
 
 # All portable features — safe for `--all-features` and CI on any platform.
-all = ["tts", "stt", "muse", "music", "fx", "vad", "streaming", "mlx", "all-onnx", "livekit"]
+all = ["tts", "stt", "muse", "music", "fx", "streaming", "mlx", "all-onnx", "livekit"]

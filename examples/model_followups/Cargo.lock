@@ -56,7 +56,6 @@ version = "3.0.0"
 dependencies = [
  "adk-core",
  "adk-telemetry",
- "anyhow",
  "async-openai",
  "async-stream",
  "async-trait",

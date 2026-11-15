@@ -50,8 +50,7 @@ fn execute_rust_code(
 
 /// JS/TS code execution: not implemented.
 ///
-/// No sandboxed JavaScript runtime is integrated, and the `action-code` feature
-/// does not add one.
+/// No sandboxed JavaScript runtime is integrated.
 fn execute_js_code(node_id: &str) -> Result<NodeOutput> {
     Err(GraphError::NodeExecutionFailed {
         node: node_id.to_string(),

@@ -69,8 +69,6 @@ base64 = "0.22"
 bytes = "1"
 getrandom = "0.3"
 zeroize = "1.8.2"
-# The third-party script check parses generated HTML, as the launch gate does.
-scraper = "0.25"
 # The CalDAV calendar driver: its HTTP client and its multistatus answers (spec 3.5 §7.5).
 quick-xml = "0.41"
 reqwest.workspace = true

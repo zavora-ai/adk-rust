@@ -237,7 +237,7 @@ See `docs/official_docs/harness/website.md`.
 | `team` | on | `adk-tool`, `adk-agent/team-tools` |
 | `graph` | on | `adk-graph`: the plan graph and the `Graph` goal engine, checkpointed in the store `plan_checkpoint_store(url)` names (`checkpointer_from_url`), in memory without one |
 | `sandbox` | on | `adk-sandbox/sandbox-native` |
-| `observe` | on | `adk-telemetry`, `adk-eval` |
+| `observe` | on | `adk-eval` |
 | `auth` | on | `adk-auth` |
 | `memory` | on | working notes and long-term facts (`adk-memory`, `adk-guardrail`) |
 | `memory-embeddings` | off | `RagEmbedder`: `adk-rag`'s OpenAI and Gemini embedders for long-term facts |

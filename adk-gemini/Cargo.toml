@@ -229,17 +229,11 @@ version = "0.3"
 [dependencies.async-trait]
 version = "^0.1"
 
-[dependencies.base64]
-version = "0.22"
-
 [dependencies.eventsource-stream]
 version = "0.2"
 
 [dependencies.futures]
 version = "^0.3.1"
-
-[dependencies.futures-util]
-version = "^0.3"
 
 [dependencies.google-cloud-aiplatform-v1]
 version = "1.9.0"
@@ -260,9 +254,6 @@ optional = true
 
 [dependencies.mime]
 version = "0.3"
-
-[dependencies.mime_guess]
-version = "2.0"
 
 [dependencies.reqwest]
 workspace = true
@@ -289,10 +280,6 @@ version = "^1.0"
 version = "0.8"
 default-features = false
 features = ["std", "rust_1_65"]
-
-[dependencies.strum]
-version = "0.28"
-features = ["derive"]
 
 [dependencies.strum_macros]
 version = "0.28"
@@ -347,6 +334,12 @@ path = "tests/interactions_tests.rs"
 [[test]]
 name = "vertex_cache_live_tests"
 path = "tests/vertex_cache_live_tests.rs"
+
+[dev-dependencies.base64]
+version = "0.22"
+
+[dev-dependencies.futures-util]
+version = "^0.3"
 
 [dev-dependencies.display-error-chain]
 version = "0.2"

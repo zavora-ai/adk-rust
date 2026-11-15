@@ -43,7 +43,7 @@ libc = "0.2"
 # restricted-token enforcer API (spec 3.2 §10 W5)
 [target.'cfg(windows)'.dependencies]
 find-msvc-tools = "0.1.9"
-windows-sys = { version = "0.59", optional = true, features = [
+windows-sys = { version = "0.61", optional = true, features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",

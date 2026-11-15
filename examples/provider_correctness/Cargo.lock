@@ -78,7 +78,6 @@ dependencies = [
  "adk-anthropic",
  "adk-core",
  "adk-telemetry",
- "anyhow",
  "async-openai",
  "async-stream",
  "async-trait",

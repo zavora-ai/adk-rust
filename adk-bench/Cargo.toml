@@ -41,5 +41,4 @@ bfcl = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
-proptest = "1.5"
 tempfile = "3"

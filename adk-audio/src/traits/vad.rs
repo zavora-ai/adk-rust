@@ -3,8 +3,7 @@
 //! # No backend ships with this crate
 //!
 //! `adk-audio` defines the [`VadProcessor`] boundary but implements it nowhere.
-//! Callers supply their own detector. The `vad` Cargo feature gates no code —
-//! it once pulled `webrtc-vad`, which this crate never imported.
+//! Callers supply their own detector; the trait compiles under every feature set.
 //!
 //! # `&self` is the constraint on any streaming backend
 //!

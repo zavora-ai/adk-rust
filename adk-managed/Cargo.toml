@@ -23,12 +23,9 @@ adk-model = { workspace = true }
 adk-runner = { workspace = true }
 adk-session.workspace = true
 adk-tool.workspace = true
-adk-skill.workspace = true
-adk-telemetry.workspace = true
 
 # Optional dependencies
 adk-sandbox = { workspace = true, optional = true }
-adk-memory = { workspace = true, optional = true }
 
 async-trait.workspace = true
 async-stream.workspace = true
@@ -46,7 +43,7 @@ tracing.workspace = true
 [features]
 default = []
 sandbox = ["dep:adk-sandbox"]
-memory = ["dep:adk-memory"]
+memory = []
 full = ["sandbox", "memory"]
 # Model providers `DefaultModelResolver` can construct.
 gemini = ["adk-model/gemini"]
@@ -57,6 +54,5 @@ all-providers = ["gemini", "openai", "anthropic", "ollama"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "test-util"] }
-proptest = "1.5"
 # Path-only, so the publish order is not constrained by a dev-dependency.
 adk-session = { path = "../adk-session", features = ["sqlite", "postgres"] }

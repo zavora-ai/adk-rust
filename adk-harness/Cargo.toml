@@ -45,7 +45,7 @@ sandbox = ["dep:adk-sandbox", "adk-sandbox/sandbox-native", "adk-sandbox/egress-
 # Container isolation for the shell.
 docker = ["sandbox", "adk-sandbox/workspace-docker"]
 # Spans, spend and the loop guard (spec 3.1 §7.13).
-observe = ["dep:adk-telemetry", "dep:adk-eval"]
+observe = ["dep:adk-eval"]
 # RBAC wrappers, credential broker and signed audit (spec 3.1 §7.14).
 auth = ["dep:adk-auth", "adk-auth/signed-audit"]
 # Working notes and long-term facts (spec 3.1 §7.15); adk-memory for `MemoryServiceIndex`.
@@ -129,7 +129,6 @@ adk-acp = { workspace = true, optional = true }
 adk-server = { workspace = true, optional = true }
 adk-graph = { workspace = true, optional = true }
 adk-sandbox = { workspace = true, optional = true }
-adk-telemetry = { workspace = true, optional = true }
 adk-eval = { workspace = true, optional = true }
 adk-auth = { workspace = true, optional = true }
 adk-memory = { workspace = true, optional = true }
@@ -195,6 +194,7 @@ windows-sys = { version = "0.61", features = ["Win32_Security_Authorization"] }
 keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"], optional = true }
 
 [dev-dependencies]
+adk-telemetry = { path = "../adk-telemetry" }
 # `anthropic` for the live confirmation-wait run (spec 3.3 §10 C2) and the live take-over
 # run (spec 3.3 §10 H2).
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic"] }

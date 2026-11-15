@@ -40,10 +40,10 @@ adk-rust = { version = "3.0.0", features = ["audio"] }
 | `whisper-onnx`, `distil-whisper`, `moonshine` | ONNX STT backends (imply `onnx`) | |
 | `qwen3-tts` | Qwen3-TTS on Candle (0.6B and 1.7B) | `qwen_tts`, `candle-core`, `hf-hub` |
 | `all-onnx` | `onnx`, `kokoro`, `chatterbox`, `whisper-onnx`, `distil-whisper`, `moonshine`, `qwen3-tts` | |
-| `livekit` | `RealtimeBridge` between `adk-realtime` audio and pipelines | `livekit-api`, `adk-realtime` |
-| `desktop-audio` | Microphone capture, speaker playback, and VAD turn-taking (implies `vad`) | `cpal` |
+| `livekit` | `RealtimeBridge` between `adk-realtime` audio and pipelines | `base64` |
+| `desktop-audio` | Microphone capture, speaker playback, and VAD turn-taking | `cpal` |
 | `music` | Adds `reqwest` for `MusicProvider` implementations | `reqwest` |
-| `vad`, `streaming` | Markers; the `VadProcessor` trait and streaming methods are always available | none |
+| `streaming` | Marker; the streaming methods are always available | none |
 | `all` | Every feature except `desktop-audio` | |
 
 ## Core types

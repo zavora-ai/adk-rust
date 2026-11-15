@@ -204,7 +204,7 @@ On the umbrella crate:
 | `harness-browser`, `harness-computer-use` | The browser and computer-use packs: `HarnessAgentBuilder::pack_browser`, `pack_computer_use`; see [Browser and computer use](packs.md) |
 | `harness-voice`, `harness-managed` | The voice pack, which the builder refuses with `not yet implemented` until it lands, and the managed form |
 | `harness-encrypted`, `harness-memory-local` | The encrypted store and the local ONNX embedder (spec 3.1 §7.12, §7.15.2) |
-| `mistralrs`, `cli-mistralrs` | `adk-mistralrs` in the umbrella, and `adk-rust --provider mistralrs`; a heavy build, in no tier |
+| `mistralrs`, `cli-mistralrs` | `adk_rust::mistralrs`, the `adk-mistralrs` re-export, and `adk-rust --provider mistralrs`; a heavy build, in no tier |
 
 ```toml
 [dependencies]

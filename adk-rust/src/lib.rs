@@ -958,6 +958,45 @@ pub mod anthropic_client {
     pub use adk_anthropic::*;
 }
 
+/// Local inference in process through mistral.rs, with no separate model server.
+///
+/// Everything `adk-mistralrs` exports:
+/// - [`MistralRsModel`](mistralrs::MistralRsModel) - Text models implementing [`Llm`]
+/// - [`MistralRsConfig`](mistralrs::MistralRsConfig), [`ModelSource`](mistralrs::ModelSource),
+///   [`QuantizationLevel`](mistralrs::QuantizationLevel) - Loading and in-situ quantization
+/// - [`MistralRsAdapterModel`](mistralrs::MistralRsAdapterModel) - LoRA and X-LoRA adapters
+/// - [`MistralRsVisionModel`](mistralrs::MistralRsVisionModel),
+///   [`MistralRsEmbeddingModel`](mistralrs::MistralRsEmbeddingModel),
+///   [`MistralRsSpeechModel`](mistralrs::MistralRsSpeechModel),
+///   [`MistralRsDiffusionModel`](mistralrs::MistralRsDiffusionModel) - Other modalities
+/// - [`MistralRsMultiModel`](mistralrs::MistralRsMultiModel) - Several models served by name
+///
+/// GPU support comes from `adk-mistralrs`'s own `cuda` and `metal` features.
+///
+/// Available with feature: `mistralrs`
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use adk_rust::mistralrs::{MistralRsConfig, MistralRsModel, ModelSource, QuantizationLevel};
+///
+/// # #[tokio::main]
+/// # async fn main() -> adk_rust::mistralrs::Result<()> {
+/// let config = MistralRsConfig::builder()
+///     .model_source(ModelSource::huggingface("Qwen/Qwen3-4B"))
+///     .isq(QuantizationLevel::Q4K)
+///     .build();
+/// let model = MistralRsModel::new(config).await?;
+/// # let _ = model;
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(feature = "mistralrs")]
+#[cfg_attr(docsrs, doc(cfg(feature = "mistralrs")))]
+pub mod mistralrs {
+    pub use adk_mistralrs::*;
+}
+
 // ============================================================================
 // v0.7.0 Competitive Parity Feature Re-exports (opt-in only)
 // ============================================================================

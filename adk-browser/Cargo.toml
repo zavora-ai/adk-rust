@@ -25,4 +25,3 @@ url = "2.5"
 
 [dev-dependencies]
 tempfile = "3"
-tokio-test = "0.4"

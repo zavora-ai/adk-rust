@@ -207,8 +207,6 @@ impl AbComparator {
 /// A p-value in \[0.0, 1.0\]. Returns 1.0 if all differences are zero
 /// (no evidence against the null hypothesis).
 pub fn wilcoxon_signed_rank(differences: &[f64]) -> f64 {
-    use statrs::distribution::{ContinuousCDF, Normal};
-
     // Filter out zero differences
     let non_zero: Vec<f64> = differences.iter().copied().filter(|d| d.abs() > 1e-10).collect();
 
@@ -259,9 +257,8 @@ pub fn wilcoxon_signed_rank(differences: &[f64]) -> f64 {
     let z = (w_plus - expected).abs() - 0.5;
     let z = if z < 0.0 { 0.0 } else { z / std_dev };
 
-    // Two-tailed p-value using normal approximation
-    let normal = Normal::new(0.0, 1.0).unwrap();
-    let p_value = 2.0 * (1.0 - normal.cdf(z));
+    // Two-tailed p-value from the normal approximation: 2·(1 − Φ(z)) = erfc(z/√2).
+    let p_value = libm::erfc(z / std::f64::consts::SQRT_2);
 
     p_value.clamp(0.0, 1.0)
 }
@@ -297,6 +294,20 @@ mod tests {
         let diffs = vec![0.1, -0.2, 0.05, -0.15, 0.3];
         let p = wilcoxon_signed_rank(&diffs);
         assert!((0.0..=1.0).contains(&p), "p-value {p} out of range");
+    }
+
+    // Reference p-values from the same statistic evaluated with CPython's `math.erfc`.
+    #[test]
+    fn test_wilcoxon_matches_reference_p_values() {
+        let cases = [
+            (vec![0.3, 0.25, 0.4, 0.35, 0.28, 0.32, 0.38, 0.27, 0.31, 0.29], 0.005921537024148712),
+            (vec![0.2, 0.2, -0.1, 0.4, 0.3, -0.05, 0.25, 0.15], 0.04231527490571399),
+            (vec![0.1, -0.2, 0.05, -0.15, 0.3], 1.0),
+        ];
+        for (diffs, expected) in cases {
+            let p = wilcoxon_signed_rank(&diffs);
+            assert!(((p - expected) / expected).abs() < 1e-12, "p = {p}, expected {expected}");
+        }
     }
 
     #[test]

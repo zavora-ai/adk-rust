@@ -113,9 +113,8 @@ fn execute_sql_placeholder(config: &DatabaseNodeConfig, node_id: &str) -> Result
 
 /// MongoDB placeholder.
 ///
-/// The `action-db-mongo` feature flag is defined but the `mongodb` driver
-/// is not yet wired. This placeholder validates the config and returns an
-/// error explaining what is needed.
+/// No `mongodb` driver is integrated. This placeholder validates the config and
+/// returns an error explaining what is needed.
 fn execute_mongo_placeholder(config: &DatabaseNodeConfig, node_id: &str) -> Result<NodeOutput> {
     let mongo = config.mongo.as_ref().expect("validated above");
 
@@ -136,9 +135,8 @@ fn execute_mongo_placeholder(config: &DatabaseNodeConfig, node_id: &str) -> Resu
 
 /// Redis placeholder.
 ///
-/// The `action-db-redis` feature flag is defined but the `redis` client
-/// is not yet wired. This placeholder validates the config and returns an
-/// error explaining what is needed.
+/// No `redis` client is integrated. This placeholder validates the config and
+/// returns an error explaining what is needed.
 fn execute_redis_placeholder(config: &DatabaseNodeConfig, node_id: &str) -> Result<NodeOutput> {
     let redis = config.redis.as_ref().expect("validated above");
 

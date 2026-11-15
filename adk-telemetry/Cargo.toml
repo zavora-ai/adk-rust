@@ -60,5 +60,4 @@ sqlite = ["dep:rusqlite", "dep:serde_json"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
-proptest = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry"] }
