@@ -145,7 +145,7 @@ impl Llm for ScriptedModel {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push((Instant::now(), process_cpu_time()));
         let calls_tool = match self.mode {
-            LongHistoryMode::Turns => call % 2 == 0,
+            LongHistoryMode::Turns => call.is_multiple_of(2),
             LongHistoryMode::Loop => call < self.steps,
         };
         let part = if calls_tool {

@@ -83,10 +83,10 @@ impl SqliteSessionService {
     /// is open, readers never block the writer, and a commit appends to the log instead of
     /// rewriting a rollback journal. Every connection keeps `synchronous = FULL`, so each
     /// committed event is synced to disk and survives power loss, as the action ledger and
-    /// approval stores sharing the pool require. A file another process holds in rollback mode
-    /// keeps that mode, and a warning is logged. To trade the last commits before a power
-    /// loss for fewer syncs (`synchronous = NORMAL`), or to stay in rollback mode on a
-    /// filesystem without shared memory, build the pool yourself and use
+    /// approval stores require when they share the file. A file another process holds in
+    /// rollback mode keeps that mode, and a warning is logged. To trade the last commits
+    /// before a power loss for fewer syncs (`synchronous = NORMAL`), or to stay in rollback
+    /// mode on a filesystem without shared memory, build the pool yourself and use
     /// [`from_pool`](Self::from_pool).
     ///
     /// # Errors
@@ -120,13 +120,12 @@ impl SqliteSessionService {
         // process holds in rollback mode would fail every new connection instead of keeping
         // its mode. An in-memory database reports `memory` and has no log.
         match sqlx::query_scalar::<_, String>("PRAGMA journal_mode = WAL").fetch_one(&pool).await {
-            Ok(mode) if mode.eq_ignore_ascii_case("wal") || mode.eq_ignore_ascii_case("memory") => {
+            Ok(mode) if !matches!(mode.to_ascii_lowercase().as_str(), "wal" | "memory") => {
+                tracing::warn!(journal.mode = %mode, "sqlite session store stays out of WAL mode");
             }
-            Ok(mode) => {
-                tracing::warn!(journal.mode = %mode, "sqlite session store stays out of WAL mode")
-            }
+            Ok(_) => {}
             Err(error) => {
-                tracing::warn!(error = %error, "sqlite session store keeps its journal mode")
+                tracing::warn!(error = %error, "sqlite session store keeps its journal mode");
             }
         }
         Ok(Self { pool })
