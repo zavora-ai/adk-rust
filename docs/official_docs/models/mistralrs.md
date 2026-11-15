@@ -49,6 +49,10 @@ adk-mistralrs = { version = "3.0.0", features = ["metal"] }
 adk-mistralrs = { version = "3.0.0", features = ["cuda"] }
 ```
 
+The umbrella crate re-exports the same API as `adk_rust::mistralrs` behind its `mistralrs`
+feature, so `adk-rust = { version = "3.0.0", features = ["mistralrs"] }` can replace the
+`adk-mistralrs` line when no GPU feature is needed.
+
 ---
 
 ## Step 2: Basic Example
