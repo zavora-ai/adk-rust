@@ -179,17 +179,48 @@ match outcome {
 |---|---|
 | `decide` | `ApprovalService::decide` at the version the surface saw. A version conflict becomes `alreadyDecided` with who, where and when ("You said yes in Telegram at 07:31") and is never retried (S-I2); a decision still open at a newer version comes back as `changed` |
 | `cancelAnswer` | Cancels a spoken "allow once" inside its cancel window |
-| `send` | Starts a turn; while a decision of the session is open (whoever may answer it), a turn runs, or earlier input waits, the message is queued instead and sent, oldest first, once the session is free, whichever surface answered the decision (S-I4) |
-| `queue` | Queues the message as the session's next |
+| `send` | Starts a turn; while a decision of the session is open (whoever may answer it), a turn runs, or earlier input waits, the message is queued instead and sent, oldest first, once the session is free, whichever surface answered the decision (S-I4). A message queued behind a running turn is offered to that turn; see [Steering a running turn](#steering-a-running-turn) |
+| `steer` | Sends a message to the running turn of the caller's own session and answers once it has a fate: `steered` when the turn took it, `queued` or `sent` when it goes as the session's next message |
+| `queue` | Queues the message as the session's next; never offered to a running turn |
 | `stopAll` | Freezes every agent, from any surface (S-I10) |
 | `resumeAll` | Unfreezes, only from the web home or a paired local terminal (S-I10) |
 | `setMode` | Changes the session's mode; making agents act more on their own is a standing permission, so only the web home, the phone and the terminal may loosen it |
 | `submitDrawn` | Sends a form an agent drew (`genui`): checks the version the person saw, the declared action and each value, then asks the drawing agent for the call, which it holds for the person; nothing runs until they decide. Only a person at a screen sends one. See [Agent-Drawn UI](genui.md#sending-a-form) |
 
-> **Note:** §6 also names "steer", a message that reaches a turn while it runs. The runtime
-> takes one through [`Runner::steer`](../core/runner.md#steering-a-running-agent), but surfaces
-> have no steer command yet: a message sent during a turn is queued as the session's next
-> message, and **Stop all** stops a turn that has gone wrong.
+### Steering a running turn
+
+A message sent while a turn of its session runs reaches that turn (§6 "steer"). The engine
+offers it through `Source::steer`, which ends in
+[`Runner::steer`](../core/runner.md#steering-a-running-agent): the runtime screens it as it
+screens a turn's own message — plugins, then every agent's input guardrails — and the agent
+takes it after its current tool step, before its next model call.
+
+| Step | What happens |
+|---|---|
+| Offered | The message joins the session's queue, marked as held by the turn. `GET /surface/sessions/{session}/queued` lists it, and it cannot be taken back |
+| Taken | The session holds it as a user event with a steering marker, the feed shows it in the thread, and it leaves the queue. `steer` answers `steered` with the event's id |
+| Handed back | The turn ended first: it answered in words, held a call, failed or was stopped. The message keeps its place in the queue and goes as the session's next message, once. `steer` answers `queued` |
+| Not offered | A decision of the session is open, earlier input waits that no turn holds, or no turn runs here: the message is queued or sent as `send` does it |
+
+`send` answers at once with `queued`; `steer` waits for one of the outcomes above. The engine
+follows each offered message on a task of its own, so a surface that disconnects loses
+nothing, and the session's queue holds the message exactly once until it is taken or sent.
+
+| Source | The turn that takes it |
+|---|---|
+| `LocalSource` with a harness or a runner | The run in flight in this process |
+| `LocalSource` with a kernel | The process this replica runs (`Kernel::steer`) |
+| `ControlSource` | The process the kernel that answers runs (`POST /api/kernel/sessions/{session}/steer`) |
+
+A turn another replica runs is not offered the message: it is handed back at once and goes as
+the session's next message.
+
+Governance is the turn's own. A steered message is a user message: input guardrails and
+plugins screen it, a refusal reaches the caller and is recorded, and nothing is offered while
+everything is stopped. It never answers a decision: while one is open the message is queued
+behind it (S-I4), and a held call ends the turn, which hands the message back. `steer` is a
+person's command on their own session; from an agent it is `surface.not_here`, and for a
+session that is not the caller's `surface.not_found` (S-I8).
 
 ### Error codes
 
@@ -199,7 +230,7 @@ match outcome {
 | `surface.answer_not_allowed` | The surface may not give this answer (§7.2) |
 | `surface.confirm_presence` | A high-risk approval without confirming it is you |
 | `surface.call_not_expanded` | A truncated call approved before it was expanded |
-| `surface.not_here` | An agent answering a decision, resuming outside the home, loosening the mode from chat or voice |
+| `surface.not_here` | An agent answering a decision or steering a turn, resuming outside the home, loosening the mode from chat or voice, a `steer` while everything is stopped |
 | `surface.unsupported` | The source cannot do it |
 | `surface.drawn_changed` | A drawn form sent at a version the agent has changed since (`409`) |
 | `surface.invalid` | A malformed command, such as a drawn form's undeclared action, a value that does not fit its field, or a form sent already |
@@ -214,7 +245,10 @@ suggestion adds, an agenda item, a driver to start — the record also carries t
 the card's `summary`, so "What your agents did" reads "You said yes to adding Finance" and never
 the kernel's tool name.
 `surface.send`, `surface.stop_all`, `surface.resume_all` and `surface.set_mode` record the
-other commands the same way. `surface.drawn.submitted` records a drawn form's send with
+other commands the same way. `surface.steer` records a message for a running turn with
+`sessionId` and `outcome`: `offered` before the turn holds a `steer`, `delivered` with the
+`eventId` once a turn took a message, `returned` when it handed a `steer` back, and `refused`
+with the `code` of the refusal. `surface.drawn.submitted` records a drawn form's send with
 `sessionId`, `surfaceId`, `version`, `actionId`, `tool`, `argsDigest` (the audit trail's
 digest of the call's arguments, as the call's approval records carry it), `valuesDigest`,
 `callId` and `drawnBy`, never the values.

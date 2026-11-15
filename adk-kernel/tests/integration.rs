@@ -91,6 +91,7 @@ mod process_store_redis;
 mod process_store_sqlite;
 mod run_finished_guard_tests;
 mod sleeper_cron_watermarks;
+mod steer_route;
 mod store_conformance_firestore;
 mod store_conformance_mongodb;
 mod store_conformance_neo4j;

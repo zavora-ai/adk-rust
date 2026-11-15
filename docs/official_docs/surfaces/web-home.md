@@ -313,6 +313,7 @@ Every card is drawn from its inbox entry (spec 3.3 §7.1, §11 S-I1) and answers
 | The exact call | A truncated call cannot be approved until **Show the whole call** expands it |
 | Enter and Esc | Neither ever decides; Esc closes **Edit** without deciding (§7.4) |
 | Typing while a decision is open | Queued as the next message and shown as "Sent after this card is answered", never an answer (S-I4); the page reads the queue back from `GET /surface/sessions/{session}/queued`, so a reload or a switch of threads still shows it |
+| Typing while a turn runs | The page sends `send` as always, and the engine offers the message to the running turn, which takes it after its current tool step: the thread shows it there and it leaves the queue. A turn that ends first leaves it queued as the next message, once. See [Steering a running turn](index.md#steering-a-running-turn) |
 | High risk | Offered as **Confirm it's you and approve**; the server, not the page, says the person confirmed it is them |
 
 | Take over (light) | Take over (dark) |

@@ -10,7 +10,9 @@
 //! - an answer that counts toward a quorum waits for the others, and never re-sends cards;
 //! - only a person the policy asks gets a card, and an answer from anyone else is told so;
 //! - concurrent messages from unpaired accounts keep the waiting limit and one code per
-//!   account.
+//!   account;
+//! - a message for a thread whose turn runs is handed to that turn and starts none; a turn
+//!   that ends first hands it back, and it starts the thread's next turn, once.
 
 #![cfg(all(feature = "channels", feature = "conformance"))]
 
@@ -52,6 +54,8 @@ struct Host {
     high: Vec<String>,
     /// Turns another replica ran, as the run store holds them.
     elsewhere: std::sync::Mutex<std::collections::BTreeMap<String, RunRecord>>,
+    /// The steering inbox of the turn that runs, while one does.
+    running: std::sync::Mutex<Option<adk_core::SteeringInbox>>,
 }
 
 impl Host {
@@ -73,7 +77,23 @@ impl Host {
             quiet: std::sync::Mutex::default(),
             high,
             elsewhere: std::sync::Mutex::default(),
+            running: std::sync::Mutex::default(),
         })
+    }
+
+    /// A turn of the person's thread runs from now on, taking messages through the inbox
+    /// returned.
+    fn run_turn(&self) -> adk_core::SteeringInbox {
+        let inbox = adk_core::SteeringInbox::new();
+        *self.running.lock().unwrap() = Some(inbox.clone());
+        inbox
+    }
+
+    /// The running turn ends: what it did not take is handed back.
+    fn end_turn(&self) {
+        if let Some(inbox) = self.running.lock().unwrap().take() {
+            inbox.close();
+        }
     }
 
     /// Submits a decision of the person calling `tool` at `risk` under `policy`.
@@ -124,6 +144,17 @@ impl ChannelHost for Host {
 
     async fn start_turn(&self, run: NewRun) -> adk_kernel::Result<String> {
         self.contract.start_turn(run).await
+    }
+
+    async fn steer(
+        &self,
+        user: &str,
+        _session: &str,
+        text: &str,
+    ) -> adk_kernel::Result<Option<adk_core::SteerReceipt>> {
+        let Some(inbox) = self.running.lock().unwrap().clone() else { return Ok(None) };
+        let message = adk_core::Content::new("user").with_text(text);
+        Ok(Some(inbox.push(message.clone(), message, user, false)?))
     }
 
     async fn finished_turns(&self) -> adk_kernel::Result<BoxStream<'static, RunRecord>> {
@@ -858,4 +889,66 @@ async fn chat_never_answers_another_persons_decision() {
     let still = host.approvals.get(&theirs.id).await.unwrap().unwrap();
     assert_eq!((still.state, still.version), (ApprovalState::Pending, theirs.version));
     assert_eq!(cards_for(&chat, "t-ana", &theirs.id), 0, "no card of bo's reached ana");
+}
+
+/// The thread's running turn takes a message that arrives meanwhile (spec 3.3 §6 "steer"):
+/// the message starts no turn, and its redelivery is handed to no turn again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_for_a_running_turn_is_handed_to_it() {
+    let host = Host::new(None);
+    let bindings: Arc<dyn ChannelBindingStore> = Arc::new(InMemoryChannelBindingStore::new());
+    let (gateway, chat) = paired(host.clone(), bindings, |builder| builder).await;
+
+    // No turn runs: a message starts one, as before.
+    let first = chat.text("ana-chat", "t-ana", "convert the report");
+    assert!(matches!(gateway.receive(first).await.unwrap(), InboundOutcome::TurnStarted { .. }));
+
+    let inbox = host.run_turn();
+    let message = chat.text("ana-chat", "t-ana", "use metric units");
+    assert_eq!(gateway.receive(message.clone()).await.unwrap(), InboundOutcome::Steered);
+    assert_eq!(gateway.receive(message).await.unwrap(), InboundOutcome::Steered);
+    let held = inbox.drain();
+    assert_eq!(held.len(), 1, "a redelivery is handed to no turn again");
+    assert_eq!(held[0].content, adk_core::Content::new("user").with_text("use metric units"));
+    assert_eq!(held[0].marker.sender, PERSON);
+
+    inbox.delivered(&held[0].marker.steer_id, "evt-1");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(host.contract.turns().len(), 1, "the message the turn took started no turn");
+    // Each arrival is on record, as a message is.
+    let messages =
+        host.contract.channel_actions().iter().filter(|action| *action == "message").count();
+    assert_eq!(messages, 3);
+}
+
+/// A turn that ends before it takes the message hands it back, and the message starts the
+/// thread's next turn, once, whose reply reaches the thread.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_the_running_turn_hands_back_starts_one_turn() {
+    let host = Host::new(None);
+    let bindings: Arc<dyn ChannelBindingStore> = Arc::new(InMemoryChannelBindingStore::new());
+    let (gateway, chat) = paired(host.clone(), bindings, |builder| builder).await;
+    gateway.start().await.unwrap();
+
+    host.run_turn();
+    let message = chat.text("ana-chat", "t-ana", "use metric units");
+    assert_eq!(gateway.receive(message.clone()).await.unwrap(), InboundOutcome::Steered);
+    assert!(host.contract.turns().is_empty(), "nothing starts while the turn holds it");
+
+    host.end_turn();
+    eventually("the next turn", || host.contract.turns().len() == 1).await;
+    let (pid, run) = host.contract.turns().remove(0);
+    assert_eq!(run.input["text"], "use metric units");
+    assert_eq!(run.user_id, PERSON);
+
+    // A redelivery after the hand-back starts nothing more.
+    assert_eq!(gateway.receive(message).await.unwrap(), InboundOutcome::Steered);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(host.contract.turns().len(), 1, "the message starts one turn");
+
+    host.contract.finish(&pid, "Now in metric units.");
+    eventually("the reply", || {
+        chat.messages("t-ana").contains(&"Now in metric units.".to_string())
+    })
+    .await;
 }

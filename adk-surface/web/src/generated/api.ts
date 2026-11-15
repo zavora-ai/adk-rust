@@ -584,10 +584,16 @@ export interface ColorChoice {
  * A command from a surface (spec 3.3 §6). Every command runs as an authenticated
  * `Caller`, whose subject, surface and `Origin` reach its audit record.
  * 
- * §6 also names "steer", a message that reaches a turn while it runs. The runtime takes one
- * through `Runner::steer`, but the engine has no steer command yet: a message sent during a
- * turn is the session's next message (`Send`), and
- * `StopAll` stops a turn that has gone wrong.
+ * A message sent while a turn of its session runs reaches that turn (§6 "steer"): the
+ * engine offers it through `Source::steer`, the runtime screens it as it screens a turn's
+ * own message, and the agent takes it at its next safe point. A turn that ends first hands
+ * the message back, and it goes as the session's next message, once.
+ * 
+ * | Command | A turn of the session runs | Answers |
+ * |---|---|---|
+ * | `Send` | Offered to the turn; it waits in the session's queue until the turn takes it or hands it back | At once: `Queued` |
+ * | `Steer` | The same | Once the message has a fate: `Steered`, or `Queued` when handed back |
+ * | `Queue` | Never offered: the session's next message | At once: `Queued` |
  */
 export type Command = {
   /** The answer. */
@@ -613,6 +619,12 @@ export type Command = {
   /** The message. */
   text: string;
   type: "send";
+} | {
+  /** The session. */
+  sessionId: string;
+  /** The message. */
+  text: string;
+  type: "steer";
 } | {
   /** The session. */
   sessionId: string;
@@ -724,6 +736,12 @@ export type CommandOutcome = {
   /** The session. */
   sessionId: string;
   type: "sent";
+} | {
+  /** The id of the session event that carries the message. */
+  eventId: string;
+  /** The session. */
+  sessionId: string;
+  type: "steered";
 } | {
   /** Its place in the queue, from 1. */
   position: number;
@@ -1405,8 +1423,9 @@ export interface QrRequest {
 /** `GET /surface/sessions/{session}/queued` answer (spec 3.3 §7.4 rule 2, S-I4). */
 export interface QueuedResponse {
   /**
-   * What the caller typed while a decision of the session was open, oldest first; each is
-   * sent once the session's decisions are answered.
+   * What the caller typed while a decision of the session was open or a turn ran, oldest
+   * first; each is sent once the session is free, or leaves the list when the running turn
+   * takes it.
    */
   queued: string[];
   /** The session. */

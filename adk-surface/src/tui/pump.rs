@@ -145,7 +145,7 @@ impl Commands {
             Command::StopAll { .. } => words::STOP_ALL,
             Command::ResumeAll => words::RESUME_ALL,
             Command::Decide { .. } => "your answer",
-            Command::Send { .. } => "your message",
+            Command::Send { .. } | Command::Steer { .. } => "your message",
             Command::SetMode { .. } => "the mode change",
             _ => "a command",
         };

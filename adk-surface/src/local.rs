@@ -26,7 +26,9 @@ use futures::StreamExt;
 
 use crate::error::{Result, SurfaceError};
 use crate::origin::Caller;
-use crate::source::{AgentState, AlwaysAllowOffer, RuleCommit, Source, SpendToday};
+use crate::source::{
+    AgentState, AlwaysAllowOffer, RuleCommit, Source, SpendToday, Steered, Steering,
+};
 use crate::words;
 
 /// How many inbox entries one page reads.
@@ -40,9 +42,9 @@ const INBOX_PAGE: usize = 200;
 /// |---|---|
 /// | [`sessions`](LocalSourceBuilder::sessions) | the feed (required; a harness or runner brings its own) |
 /// | [`approvals`](LocalSourceBuilder::approvals) | decisions: the inbox and `decide` (S-I2) |
-/// | [`kernel`](LocalSourceBuilder::kernel) | agents from the process table, turns as processes, stop and resume through the kernel's freeze, spend and its daily cap, quiet time, the `/proc` ledger |
-/// | [`harness`](LocalSourceBuilder::harness) | the mode and `set_mode`, "Always allow" as a standing rule, turns and resuming decided calls without a kernel |
-/// | [`runner`](LocalSourceBuilder::runner) | turns, resuming decided calls, and the runner's kill switch, for apps without a harness |
+/// | [`kernel`](LocalSourceBuilder::kernel) | agents from the process table, turns as processes, a message for the turn this replica runs (`Kernel::steer`), stop and resume through the kernel's freeze, spend and its daily cap, quiet time, the `/proc` ledger |
+/// | [`harness`](LocalSourceBuilder::harness) | the mode and `set_mode`, "Always allow" as a standing rule, turns, a message for a running turn and resuming decided calls without a kernel |
+/// | [`runner`](LocalSourceBuilder::runner) | turns, a message for a running turn (`Runner::steer`), resuming decided calls, and the runner's kill switch, for apps without a harness |
 ///
 /// # Example
 ///
@@ -515,6 +517,18 @@ fn always_allow_label(suggestion: &RuleSuggestion) -> String {
     )
 }
 
+/// What `events`, a session's, say became of the steering message `steer_id`: delivered as
+/// the event whose marker carries the id, else handed back.
+pub(crate) fn taken(events: &[Event], steer_id: &str) -> Steered {
+    let event = events.iter().find(|event| {
+        event.actions.steering.as_ref().is_some_and(|marker| marker.steer_id == steer_id)
+    });
+    match event {
+        Some(event) => Steered::Delivered { event_id: event.id.clone() },
+        None => Steered::Returned,
+    }
+}
+
 /// Runs a turn's stream to its end, so its events reach the session store.
 async fn drain(mut stream: adk_core::EventStream, session: &str) {
     while let Some(event) = stream.next().await {
@@ -830,6 +844,58 @@ impl Source for LocalSource {
             return Ok(());
         }
         self.run_turn(user, session, text, Some(caller)).await
+    }
+
+    /// The turn this process runs takes the message: a kernel's claim of the session on this
+    /// replica, else the harness's or the runner's run in flight.
+    async fn steer(&self, caller: &Caller, session: &str, text: &str) -> Result<Option<Steering>> {
+        let user = caller.user_id();
+        let receipt = if let Some((kernel, _)) = &self.kernel {
+            kernel.steer(user, session, text).await?.map(|steering| steering.receipt)
+        } else {
+            let runner: &Runner = match (&self.harness, &self.runner) {
+                (Some(harness), _) => harness.runner(),
+                (None, Some(runner)) => runner,
+                (None, None) => return Ok(None),
+            };
+            // Nothing reaches an agent while everything is stopped.
+            if let Some(governance) = &self.governance {
+                governance.check()?;
+            }
+            let (user_id, session_id) = Self::ids(user, session)?;
+            let app = adk_core::AppName::try_from(runner.app_name())
+                .map_err(|error| SurfaceError::Invalid(error.to_string()))?;
+            let identity = adk_core::AdkIdentity::new(app, user_id, session_id);
+            match runner.steer(&identity, Content::new("user").with_text(text)).await {
+                Ok(receipt) => Some(receipt),
+                // No run is in flight, or it has not reached its agent yet.
+                Err(error)
+                    if error.code == adk_core::STEER_NO_ACTIVE_RUN_CODE
+                        || error.code == "agent.steer.run_not_ready" =>
+                {
+                    None
+                }
+                Err(error) => return Err(SurfaceError::Source(error)),
+            }
+        };
+        let Some(receipt) = receipt else { return Ok(None) };
+        let source = self.clone();
+        let (user, session) = (user.to_string(), session.to_string());
+        Ok(Some(Box::pin(async move {
+            let steer_id = receipt.steer_id().to_string();
+            match receipt.outcome().await {
+                Ok(adk_core::SteerOutcome::Delivered { event_id }) => {
+                    Ok(Steered::Delivered { event_id })
+                }
+                Ok(adk_core::SteerOutcome::Returned(_)) => Ok(Steered::Returned),
+                // The run was dropped before it said: the session holds the message's event
+                // when the turn took it.
+                Err(_) => {
+                    let events = source.transcript(&user, &session).await?.unwrap_or_default();
+                    Ok(taken(&events, &steer_id))
+                }
+            }
+        })))
     }
 
     async fn request_call(

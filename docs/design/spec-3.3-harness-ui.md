@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft / RFC — rewritten 2026-10-24. Replaces the first draft ("one decision contract, five renderers", #936), which specified a contract-only crate and no surface a person could open. Amended 2026-10-25: agents you create ([§5.7](#57-your-agents), K7) |
+| **Status** | Draft / RFC — rewritten 2026-10-24. Replaces the first draft ("one decision contract, five renderers", #936), which specified a contract-only crate and no surface a person could open. Amended 2026-10-25: agents you create ([§5.7](#57-your-agents), K7). Amended 2026-11-15: steer is delivered ([§6](#6-architecture), [§7.4](#74-rules-on-every-surface) rule 2, K8) |
 | **Builds on** | [`spec-3.1-harness-agent.md`](spec-3.1-harness-agent.md) (the harness: modes, standing rules, approvals, memory, voice) and [`spec-3.2-agent-kernel.md`](spec-3.2-agent-kernel.md) (the always-on kernel: processes, wakes, agenda, quiet hours, event bus, control plane, `/proc`). Together they make an always-on personal agent; this spec is its interface |
 | **Target** | Design labels only: work from specs 3.1–3.4 ships in the unreleased 3.0.0 (owner, 2026-10-21) |
 | **Grounding commit** | `origin/main` @ `c5bdf4f1` for every file reference, except [§5.7](#57-your-agents) and its rows in §6–§14, which cite `origin/main` @ `c991dae3` |
@@ -298,6 +298,8 @@ The terminal changes agents through the kernel's `/agent` command, which `adk-ru
 
 Process events come from the kernel bus, which keeps a recent window in memory ([`bus.rs:270`](../../adk-kernel/src/bus.rs)) and can stay that way, because every state it reports can be re-read from its store. The per-session feed derives its sequence from the session store, so a reconnect after a restart loses at most an unfinished stream of tokens, never a decision.
 
+**Steer.** A message sent while a turn of its session runs reaches that turn. The engine offers it to the runtime (`Runner::steer`), which screens it as it screens a turn's own message; the agent takes it after its current tool step, before its next model call, and the thread shows it there. A turn that ends first hands it back, and it goes as the session's next message, once. `send` answers at once and the message waits in the session's queue until it is taken or sent; `steer` answers with what became of it. A message is offered only to a turn the answering process runs: a turn another kernel replica runs hands it back at once. A steered message is a user message under the same input screening and the same stop, and never an answer to a decision ([§7.4](#74-rules-on-every-surface) rule 2).
+
 Every decision has one write path: `ApprovalService::decide` with the version the surface saw ([`approval.rs:1381-1400`](../../adk-core/src/approval.rs)). A second answer gets `approval.version_conflict` and is shown as "already decided by …", never retried silently.
 
 The engine owns its stream (HTTP with server-sent events for reads, REST for commands, WebSocket only for a terminal pane and audio) and publishes OpenAPI generated from Rust, with TypeScript generated from it and a drift check in CI. AG-UI, ACP and MCP Apps are adapters over that stream, not its core.
@@ -358,7 +360,7 @@ A decision nobody answers waits through quiet time and restarts. When the confir
 ### 7.4 Rules on every surface
 
 1. Esc never decides.
-2. Typing while a decision is open is queued, never an answer.
+2. Typing while a decision is open is queued, never an answer. Typing while a turn runs reaches that turn as a message, at its next step, and answers nothing.
 3. An unanswered decision waits; it never becomes a yes or a no on its own.
 4. Voice and chat say yes once or no, never "always", never money.
 5. Agent-drawn UI never contains approval controls; a submit from it becomes a call that goes through approval like any other.
@@ -479,6 +481,7 @@ Text colours target WCAG AA contrast (4.5:1) against their background; the brigh
 | S4 | adk-server | `DurableWorker` reads a shared target table, so a target hosted after start runs on every queue; a run for a target the table expects but has not built yet is handed back for a later claim, not failed ([`worker.rs:1079`](../../adk-server/src/background/worker.rs)) | Your agents |
 | H3 | adk-harness | `propose_agent` (class `Todo`, only on the primary agent) with the suggesting agent's own limits as its ceiling; a harness built from an `AgentRecord`; the session stamp `harness:agent` on every harness the kernel hosts; an added agent applies only standing rules pinned to its own id, and "Always allow" on its cards pins the rule to it; `assess_agent` (risk and plain-words abilities) | Your agents |
 | L1 | adk-cli | `adk-rust up` opens the `AgentStore` beside the kernel's other stores and registers an agent factory over the composition the primary agent uses ([`harness_cli.rs:375`](../../adk-cli/src/harness_cli.rs)), each agent's model built from the providers whose keys it has; the `/agent` command in the REPL's command set, which the full-screen terminal runs and `up` serves over `GET /api/kernel/commands` and `POST /api/kernel/commands/run`; `adk-rust agents` | Your agents |
+| K8 | adk-kernel | Steer: `Kernel::steer` sends a person's message to the turn of their session that the replica runs, through `Runner::steer` on the process's target; `POST /kernel/sessions/{session}/steer` and `ControlClient::steer` answer `accepted` with the steer id, the process and its lease epoch, or `returned`; the channel gateway hands a message that arrives while its thread's turn runs to that turn, and starts the next turn with one handed back | Steer on every surface |
 
 The control plane has no route that changes an agent: changes come through the engine in `up`'s process and through the `/agent` command. The read routes stay under `/api/kernel/agents`, because `adk-server`'s agent registry already serves `/api/agents` ([`registry/routes.rs:10`](../../adk-server/src/registry/routes.rs)).
 

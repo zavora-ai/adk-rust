@@ -143,7 +143,9 @@ pub use consolidation::{
     TickInputs, TickMaterial, TickOutcome, TickProposal, TickRun, TickSpend, admit_tick,
 };
 pub use error::{KernelError, Result};
-pub use kernel::{Kernel, KernelBuilder, KernelConfig, KernelHealth, KernelState, WorkerHealth};
+pub use kernel::{
+    Kernel, KernelBuilder, KernelConfig, KernelHealth, KernelState, Steering, WorkerHealth,
+};
 pub use partition::{
     CROSSING_PARTITION_ARG, CrossPartition, Crossing, CrossingAccess, CrossingFilter,
     CrossingOutcome, CrossingRecord, CrossingResource, CrossingRoute, CrossingRun, CrossingTool,

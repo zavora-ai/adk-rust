@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -29,11 +30,14 @@ use crate::model::{
 use crate::origin::{Caller, Origin, SurfaceKind};
 use crate::project::{self, Place, Projector};
 use crate::rules::{self, Answer, Row};
-use crate::source::Source;
+use crate::source::{Source, Steered, Steering};
 use crate::words;
 
 /// The audit action of "Send" and "Queue" (spec 3.3 §11).
 pub const SURFACE_AUDIT_SEND: &str = "surface.send";
+/// The audit action of a message sent to a running turn (spec 3.3 §6 "steer", §11): what
+/// "Steer" was refused or offered, and how a message a turn held ended.
+pub const SURFACE_AUDIT_STEER: &str = "surface.steer";
 /// The audit action of "Stop all" (spec 3.3 §11).
 pub const SURFACE_AUDIT_STOP_ALL: &str = "surface.stop_all";
 /// The audit action of "Resume all" (spec 3.3 §11).
@@ -72,10 +76,16 @@ async fn with_digest<F: std::future::Future>(digest: Option<String>, future: F) 
 /// A command from a surface (spec 3.3 §6). Every command runs as an authenticated
 /// [`Caller`], whose subject, surface and [`Origin`] reach its audit record.
 ///
-/// §6 also names "steer", a message that reaches a turn while it runs. The runtime takes one
-/// through `Runner::steer`, but the engine has no steer command yet: a message sent during a
-/// turn is the session's next message ([`Send`](Self::Send)), and
-/// [`StopAll`](Self::StopAll) stops a turn that has gone wrong.
+/// A message sent while a turn of its session runs reaches that turn (§6 "steer"): the
+/// engine offers it through [`Source::steer`], the runtime screens it as it screens a turn's
+/// own message, and the agent takes it at its next safe point. A turn that ends first hands
+/// the message back, and it goes as the session's next message, once.
+///
+/// | Command | A turn of the session runs | Answers |
+/// |---|---|---|
+/// | [`Send`](Self::Send) | Offered to the turn; it waits in the session's queue until the turn takes it or hands it back | At once: [`Queued`](CommandOutcome::Queued) |
+/// | [`Steer`](Self::Steer) | The same | Once the message has a fate: [`Steered`](CommandOutcome::Steered), or [`Queued`](CommandOutcome::Queued) when handed back |
+/// | [`Queue`](Self::Queue) | Never offered: the session's next message | At once: [`Queued`](CommandOutcome::Queued) |
 ///
 /// # Example
 ///
@@ -119,7 +129,9 @@ pub enum Command {
         /// The decision.
         decision_id: String,
     },
-    /// Sends a message; queued instead while a decision of the session is open (S-I4).
+    /// Sends a message; queued instead while a decision of the session is open (S-I4). A
+    /// running turn of the session is offered it and takes it at its agent's next safe point;
+    /// a turn that ends first leaves it queued as the session's next message.
     #[serde(rename_all = "camelCase")]
     Send {
         /// The session.
@@ -127,7 +139,19 @@ pub enum Command {
         /// The message.
         text: String,
     },
-    /// Queues a message as the session's next, after its open decisions (S-I4).
+    /// Sends a message to the running turn of the caller's own session and waits for what
+    /// became of it (§6 "steer"): [`Steered`](CommandOutcome::Steered) when the turn took it,
+    /// [`Queued`](CommandOutcome::Queued) or [`Sent`](CommandOutcome::Sent) when it was handed
+    /// back and goes as the session's next message. A person sends it, never an agent.
+    #[serde(rename_all = "camelCase")]
+    Steer {
+        /// The session.
+        session_id: String,
+        /// The message.
+        text: String,
+    },
+    /// Queues a message as the session's next, after its open decisions (S-I4): never offered
+    /// to a running turn.
     #[serde(rename_all = "camelCase")]
     Queue {
         /// The session.
@@ -284,7 +308,18 @@ pub enum CommandOutcome {
         /// The session.
         session_id: String,
     },
-    /// The message waits until the session's open decisions are answered (S-I4).
+    /// The session's running turn took the message at its agent's next safe point (§6
+    /// "steer"): the session holds it as event `event_id`, and the turn's next model call
+    /// carries it.
+    #[serde(rename_all = "camelCase")]
+    Steered {
+        /// The session.
+        session_id: String,
+        /// The id of the session event that carries the message.
+        event_id: String,
+    },
+    /// The message waits: until the session's open decisions are answered (S-I4), or until its
+    /// running turn takes it or ends.
     #[serde(rename_all = "camelCase")]
     Queued {
         /// The session.
@@ -642,6 +677,7 @@ impl SurfaceEngineBuilder {
                 #[cfg(feature = "genui")]
                 drawn,
                 queues: Mutex::new(HashMap::new()),
+                next_input: AtomicU64::new(1),
                 draining: Mutex::new(HashSet::new()),
                 wake: Notify::new(),
                 spoken: Mutex::new(HashMap::new()),
@@ -657,7 +693,9 @@ impl SurfaceEngineBuilder {
 /// Surfaces hold no state a reconnect cannot rebuild: everything here is read from the
 /// source's stores, except input queued behind an open decision or a running turn, which
 /// waits in this process and is sent, oldest first, once the session is free — whichever
-/// surface answered the decision.
+/// surface answered the decision. A message queued behind a running turn is offered to that
+/// turn (§6 "steer"): it leaves the queue when the turn takes it, and stays in its place when
+/// the turn hands it back, so it reaches the agent exactly once.
 ///
 /// # Example
 ///
@@ -697,8 +735,11 @@ struct Inner {
     /// The cards of drawn forms this engine sent (spec 3.3 §7.4 rule 5).
     #[cfg(feature = "genui")]
     drawn: Arc<crate::genui::DrawnHints>,
-    /// Input queued behind an open decision, per (user, session), oldest first.
-    queues: Mutex<HashMap<(String, String), VecDeque<String>>>,
+    /// Input queued behind an open decision or a running turn, per (user, session), oldest
+    /// first.
+    queues: Mutex<HashMap<(String, String), VecDeque<QueuedInput>>>,
+    /// The id of the next queued message.
+    next_input: AtomicU64,
     /// Sessions with a delivery loop running. Changed only under the `queues` lock, so a
     /// message queued while a loop ends always finds a loop.
     draining: Mutex<HashSet<(String, String)>>,
@@ -706,6 +747,16 @@ struct Inner {
     wake: Notify,
     /// Spoken "allow once" answers inside their cancel window, by decision.
     spoken: Mutex<HashMap<String, Spoken>>,
+}
+
+/// One message of a session's queue.
+struct QueuedInput {
+    /// Names the message while it waits, whatever joins or leaves the queue.
+    id: u64,
+    text: String,
+    /// The session's running turn holds it (spec 3.3 §6 "steer"): it is sent as the next
+    /// message only once the turn hands it back.
+    offered: bool,
 }
 
 /// A spoken "allow once" waiting out its cancel window.
@@ -1300,11 +1351,11 @@ impl SurfaceEngine {
     ///
     /// | Code | When |
     /// |---|---|
-    /// | `surface.not_found` | No decision or session of the caller has that id (S-I8) |
+    /// | `surface.not_found` | No decision or session of the caller has that id (S-I8); a `Steer` to a session that is not the caller's |
     /// | `surface.answer_not_allowed` | The surface may not give this answer (§7.2) |
     /// | `surface.confirm_presence` | A high-risk approval without confirming it is you |
     /// | `surface.call_not_expanded` | A truncated call approved before it was expanded |
-    /// | `surface.not_here` | An agent answering, resuming outside the home, loosening the mode from chat or voice |
+    /// | `surface.not_here` | An agent answering or steering, resuming outside the home, loosening the mode from chat or voice, a `Steer` while everything is stopped |
     /// | `surface.operator_only` | Stop all or Resume all from a caller outside the group [`stops_need`](SurfaceEngineBuilder::stops_need) names |
     /// | `surface.invalid` | A spoken answer: it goes through `decide_spoken` with its transcript (feature `voice`) |
     /// | `surface.unsupported` | The source cannot do it |
@@ -1331,8 +1382,13 @@ impl SurfaceEngine {
                 .await
             }
             Command::CancelAnswer { decision_id } => self.cancel_answer(caller, &decision_id).await,
-            Command::Send { session_id, text } => self.send(caller, session_id, text, false).await,
-            Command::Queue { session_id, text } => self.send(caller, session_id, text, true).await,
+            Command::Send { session_id, text } => {
+                self.send(caller, session_id, text, false, true).await
+            }
+            Command::Steer { session_id, text } => self.steer(caller, session_id, text).await,
+            Command::Queue { session_id, text } => {
+                self.send(caller, session_id, text, true, false).await
+            }
             Command::StopAll { reason } => {
                 self.may_stop(caller)?;
                 self.stop_all(caller, reason).await
@@ -1854,12 +1910,16 @@ impl SurfaceEngine {
         Ok(CommandOutcome::AnswerCancelled { decision_id: id.to_string() })
     }
 
+    /// Sends `text` as a message of the session: a turn at once when the session is free,
+    /// queued otherwise, or always when `queue`. With `offer`, a message that waits behind a
+    /// running turn is offered to that turn (spec 3.3 §6 "steer").
     async fn send(
         &self,
         caller: &Caller,
         session: String,
         text: String,
         queue: bool,
+        offer: bool,
     ) -> Result<CommandOutcome> {
         if text.trim().is_empty() {
             return Err(SurfaceError::Invalid("the message is empty".into()));
@@ -1867,14 +1927,19 @@ impl SurfaceEngine {
         let key = (caller.user_id().to_string(), session.clone());
         let open = self.session_open(caller, &session).await?;
         // Earlier queued input goes first, including a message the delivery loop is starting
-        // a turn for right now: a new message never overtakes it (S-I4).
-        let earlier = {
+        // a turn for right now: a new message never overtakes it (S-I4). Input the running
+        // turn holds is no reason to wait: that turn takes its messages in order.
+        let (waiting, earlier) = {
             let queues = self.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
-            queues.get(&key).is_some_and(|queued| !queued.is_empty())
-                || self.inner.draining.lock().unwrap_or_else(|e| e.into_inner()).contains(&key)
+            let queued = queues.get(&key);
+            (
+                queued.is_some_and(|queued| queued.iter().any(|input| !input.offered)),
+                queued.is_some_and(|queued| !queued.is_empty())
+                    || self.inner.draining.lock().unwrap_or_else(|e| e.into_inner()).contains(&key),
+            )
         };
         // A running turn takes the message next, as an open decision does (S-I4).
-        let busy = !open && !earlier && self.inner.source.busy(caller.user_id(), &session).await?;
+        let busy = !open && !waiting && self.inner.source.busy(caller.user_id(), &session).await?;
         if open || earlier || busy || queue {
             // Recorded before it is queued: a message whose record failed is never sent.
             self.audit_command(
@@ -1883,12 +1948,14 @@ impl SurfaceEngine {
                 json!({ "sessionId": session, "queued": true }),
             )
             .await?;
-            let position = {
-                let mut queues = self.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
-                let entry = queues.entry(key).or_default();
-                entry.push_back(text);
-                u32::try_from(entry.len()).unwrap_or(u32::MAX)
+            let held = match busy && offer && !queue {
+                true => self.offer(caller, &session, &text).await?,
+                false => None,
             };
+            let (id, position) = self.enqueue(&key, text, held.is_some());
+            if let Some(held) = held {
+                self.settle_offer(caller.clone(), session.clone(), id, held, None);
+            }
             self.spawn_drain(caller.clone(), session.clone());
             let text = if open {
                 words::SENT_AFTER_THIS_CARD_IS_ANSWERED
@@ -1909,6 +1976,174 @@ impl SurfaceEngine {
         .await?;
         self.inner.source.start_turn(caller, &session, &text).await?;
         Ok(CommandOutcome::Sent { session_id: session })
+    }
+
+    /// Adds `text` to the end of the session's queue; returns its id and its place, from 1.
+    fn enqueue(&self, key: &(String, String), text: String, offered: bool) -> (u64, u32) {
+        let id = self.inner.next_input.fetch_add(1, Ordering::Relaxed);
+        let mut queues = self.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
+        let queued = queues.entry(key.clone()).or_default();
+        queued.push_back(QueuedInput { id, text, offered });
+        (id, u32::try_from(queued.len()).unwrap_or(u32::MAX))
+    }
+
+    /// Offers `text` to the session's running turn (spec 3.3 §6 "steer"). `None` when no turn
+    /// takes it, or the source cannot be asked just now: the message then waits its turn. A
+    /// message the runtime refuses is not queued, and the refusal is on record.
+    async fn offer(&self, caller: &Caller, session: &str, text: &str) -> Result<Option<Steering>> {
+        match self.inner.source.steer(caller, session, text).await {
+            Ok(held) => Ok(held),
+            Err(error) if transient(&error) => {
+                tracing::debug!(error = %error, session.id = %session, "a running turn could not be offered a message; it waits as the next message");
+                Ok(None)
+            }
+            Err(error) => {
+                let fields =
+                    json!({ "sessionId": session, "outcome": "refused", "code": error.code() });
+                if let Err(audit) = self.audit_command(caller, SURFACE_AUDIT_STEER, fields).await {
+                    tracing::warn!(error = %audit, session.id = %session, "a refused message's audit record failed");
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Follows the queued message `id`, which the session's running turn holds, to its end,
+    /// on a task of the engine's own, so a surface that goes away loses nothing. Taken by
+    /// the turn, the message leaves the queue; handed back, it stays in its place as the
+    /// session's next message. `done` hears which.
+    fn settle_offer(
+        &self,
+        caller: Caller,
+        session: String,
+        id: u64,
+        held: Steering,
+        done: Option<oneshot::Sender<Result<CommandOutcome>>>,
+    ) {
+        let engine = self.clone();
+        tokio::spawn(async move {
+            let key = (caller.user_id().to_string(), session.clone());
+            let settled = held.await;
+            let delivered = match &settled {
+                Ok(Steered::Delivered { event_id }) => Some(event_id.clone()),
+                Ok(Steered::Returned) => None,
+                // What became of it could not be read. A message is never dropped, so it
+                // goes as the next message.
+                Err(error) => {
+                    tracing::warn!(error = %error, session.id = %session, "what became of a message a running turn held could not be read; it goes as the next message");
+                    None
+                }
+            };
+            let position = {
+                let mut queues = engine.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
+                let queued = queues.entry(key).or_default();
+                let place = queued.iter().position(|input| input.id == id);
+                match (place, &delivered) {
+                    (Some(place), Some(_)) => {
+                        queued.remove(place);
+                    }
+                    (Some(place), None) => queued[place].offered = false,
+                    (None, _) => {}
+                }
+                place.map_or(1, |place| u32::try_from(place + 1).unwrap_or(u32::MAX))
+            };
+            let fields = match &delivered {
+                Some(event_id) => {
+                    json!({ "sessionId": session, "outcome": "delivered", "eventId": event_id })
+                }
+                None => json!({ "sessionId": session, "outcome": "returned" }),
+            };
+            // The message already has its fate: a record that fails does not change it.
+            if (delivered.is_some() || done.is_some())
+                && let Err(error) = engine.audit_command(&caller, SURFACE_AUDIT_STEER, fields).await
+            {
+                tracing::warn!(error = %error, session.id = %session, "a steered message's audit record failed");
+            }
+            // The delivery loop looks again: a message handed back is the session's next,
+            // and a queue the turn emptied ends the loop.
+            engine.inner.wake.notify_waiters();
+            engine.spawn_drain(caller, session.clone());
+            if let Some(done) = done {
+                let outcome = match delivered {
+                    Some(event_id) => CommandOutcome::Steered { session_id: session, event_id },
+                    None => CommandOutcome::Queued {
+                        session_id: session,
+                        position,
+                        text: words::SENT_WHEN_YOUR_AGENT_IS_FREE.to_string(),
+                    },
+                };
+                let _ = done.send(Ok(outcome));
+            }
+        });
+    }
+
+    /// "Steer" (spec 3.3 §6): sends `text` to the running turn of the caller's own session
+    /// and waits for what became of it. Refused, and recorded as refused, from an agent, for
+    /// a session that is not the caller's (S-I8), and while everything is stopped.
+    async fn steer(
+        &self,
+        caller: &Caller,
+        session: String,
+        text: String,
+    ) -> Result<CommandOutcome> {
+        if text.trim().is_empty() {
+            return Err(SurfaceError::Invalid("the message is empty".into()));
+        }
+        let refusal = if let Origin::Agent { agent } = &caller.origin {
+            Some(SurfaceError::NotHere(format!(
+                "an agent ({agent}) never sends a message to a person's running turn; a person \
+                 does (spec 3.3 §7.4)"
+            )))
+        } else if self.inner.source.transcript(caller.user_id(), &session).await?.is_none() {
+            Some(SurfaceError::not_found(format!("session '{session}'")))
+        } else if self.inner.source.stopped().await? {
+            Some(SurfaceError::NotHere(words::ALL_AGENTS_STOPPED.to_string()))
+        } else {
+            None
+        };
+        if let Some(error) = refusal {
+            self.audit_command(
+                caller,
+                SURFACE_AUDIT_STEER,
+                json!({ "sessionId": session, "outcome": "refused", "code": error.code() }),
+            )
+            .await?;
+            return Err(error);
+        }
+        let key = (caller.user_id().to_string(), session.clone());
+        // An open decision, or a message that waits, goes first (S-I4): the message is handed
+        // back at once, as the session's next.
+        let waiting = self
+            .inner
+            .queues
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+            .is_some_and(|queued| queued.iter().any(|input| !input.offered));
+        if waiting || self.session_open(caller, &session).await? {
+            return self.send(caller, session, text, false, false).await;
+        }
+        // Recorded before the turn holds it: a message whose record failed is never sent.
+        self.audit_command(
+            caller,
+            SURFACE_AUDIT_STEER,
+            json!({ "sessionId": session, "outcome": "offered" }),
+        )
+        .await?;
+        let Some(held) = self.offer(caller, &session, &text).await? else {
+            // No turn takes it here.
+            return self.send(caller, session, text, false, false).await;
+        };
+        let (id, _) = self.enqueue(&key, text, true);
+        let (done, settled) = oneshot::channel();
+        self.settle_offer(caller.clone(), session, id, held, Some(done));
+        settled.await.unwrap_or_else(|_| {
+            Err(SurfaceError::Invalid(
+                "the engine stopped before the turn said whether it took the message; the \
+                 session's thread shows it when it did"
+                    .into(),
+            ))
+        })
     }
 
     /// Whether the session has a decision open: one the caller may answer, or a call held for
@@ -1960,7 +2195,17 @@ impl SurfaceEngine {
                         return;
                     }
                 }
+                // A message the running turn holds is not sent until the turn hands it back.
+                let held = engine
+                    .inner
+                    .queues
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&key)
+                    .and_then(VecDeque::front)
+                    .is_some_and(|input| input.offered);
                 let free = match engine.session_open(&caller, &session).await {
+                    _ if held => Ok(false),
                     Ok(true) => Ok(false),
                     Ok(false) => {
                         engine.inner.source.busy(caller.user_id(), &session).await.map(|busy| !busy)
@@ -1987,15 +2232,17 @@ impl SurfaceEngine {
                         continue;
                     }
                 }
-                let next = engine
-                    .inner
-                    .queues
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .get_mut(&key)
-                    .and_then(VecDeque::pop_front);
-                let Some(text) = next else { continue };
-                match engine.inner.source.start_turn(&caller, &session, &text).await {
+                let next = {
+                    let mut queues = engine.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
+                    match queues.get_mut(&key) {
+                        Some(queued) if queued.front().is_some_and(|input| !input.offered) => {
+                            queued.pop_front()
+                        }
+                        _ => None,
+                    }
+                };
+                let Some(input) = next else { continue };
+                match engine.inner.source.start_turn(&caller, &session, &input.text).await {
                     Ok(()) => {
                         wait = poll;
                         // Let the turn begin before looking again.
@@ -2005,7 +2252,7 @@ impl SurfaceEngine {
                         {
                             let mut queues =
                                 engine.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
-                            queues.entry(key.clone()).or_default().push_front(text);
+                            queues.entry(key.clone()).or_default().push_front(input);
                             if !transient(&error) {
                                 // It stays queued and shown; the next message or answer tries
                                 // again.
@@ -2032,18 +2279,20 @@ impl SurfaceEngine {
     }
 
     /// Takes back the newest input queued for the session, before it is sent; `None` when
-    /// none waits (spec 3.3 §7.4 rule 2).
+    /// none waits (spec 3.3 §7.4 rule 2), or when the session's running turn holds the newest
+    /// (§6 "steer"): the turn may take it at any moment.
     pub fn unqueue_last(&self, caller: &Caller, session: &str) -> Option<String> {
-        self.inner
-            .queues
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get_mut(&(caller.user_id().to_string(), session.to_string()))
-            .and_then(VecDeque::pop_back)
+        let mut queues = self.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
+        let queued = queues.get_mut(&(caller.user_id().to_string(), session.to_string()))?;
+        match queued.back() {
+            Some(input) if !input.offered => queued.pop_back().map(|input| input.text),
+            _ => None,
+        }
     }
 
     /// The input queued for the session, oldest first, as the person reads it: an app's
-    /// suggestion is its words and label.
+    /// suggestion is its words and label. A message the session's running turn holds is
+    /// listed until the turn takes it.
     pub fn queued(&self, caller: &Caller, session: &str) -> Vec<String> {
         self.inner
             .queues
@@ -2053,8 +2302,9 @@ impl SurfaceEngine {
             .map(|queue| {
                 queue
                     .iter()
-                    .map(|text| {
-                        crate::genui::suggested_message(text).unwrap_or_else(|| text.clone())
+                    .map(|input| {
+                        crate::genui::suggested_message(&input.text)
+                            .unwrap_or_else(|| input.text.clone())
                     })
                     .collect()
             })

@@ -26,7 +26,7 @@ use super::api::{
     AgendaItemResponse, AgendaQuery, AgendaResponse, AttachRequest, AttachResponse, EventsQuery,
     FreezeRequest, FreezeResponse, KillRequest, NiceRequest, PartitionModeRequest,
     PartitionResponse, PartitionsResponse, ProcessResponse, ProcessesQuery, ProcessesResponse,
-    RejectRequest, ScheduleRequest, SpawnRequest,
+    RejectRequest, ScheduleRequest, SpawnRequest, SteerRequest, SteerResponse,
 };
 use super::{ControlTransport, paths};
 use crate::agenda::{Agenda, AgendaItem};
@@ -57,6 +57,17 @@ pub(crate) trait ControlBackend: Send + Sync + 'static {
     fn targets(&self) -> Vec<String>;
     fn has_target(&self, target: &str) -> bool;
     async fn spawn(&self, run: NewRun, spec: ProcessSpec) -> Result<Process>;
+    /// Sends `text` to the running turn of `user`'s session `session` (spec 3.3 §6 "steer");
+    /// `None` when no turn takes it here, and on a backend that runs none.
+    async fn steer(
+        &self,
+        user: &str,
+        session: &str,
+        text: &str,
+    ) -> Result<Option<crate::kernel::Steering>> {
+        let _ = (user, session, text);
+        Ok(None)
+    }
     async fn ps(&self, filter: ProcessFilter) -> Result<Vec<Process>>;
     async fn process(&self, pid: &str) -> Result<Option<Process>>;
     async fn kill(&self, pid: &str, reason: &str) -> Result<()>;
@@ -167,6 +178,15 @@ impl ControlBackend for Kernel {
         self.processes().spawn(run, spec).await
     }
 
+    async fn steer(
+        &self,
+        user: &str,
+        session: &str,
+        text: &str,
+    ) -> Result<Option<crate::kernel::Steering>> {
+        Kernel::steer(self, user, session, text).await
+    }
+
     async fn ps(&self, filter: ProcessFilter) -> Result<Vec<Process>> {
         self.processes().ps(filter).await
     }
@@ -260,6 +280,7 @@ pub(crate) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
         .route(paths::RESUME, post(resume))
         .route(paths::EVENTS, get(events))
         .route(paths::ATTACH, post(attach))
+        .route(paths::SESSION_STEER, post(steer))
         .route(paths::FREEZE, post(freeze))
         .route(paths::UNFREEZE, post(unfreeze))
         .route(paths::AGENDA, get(agenda))
@@ -603,6 +624,29 @@ async fn attach(
     let cursor = transcript.last().map(|event| event.timestamp).or(request.after);
     let process = session_process(backend.as_ref(), &user_id, &session_id).await?;
     Ok(Json(AttachResponse { session_id, transcript, cursor, pending, process }))
+}
+
+/// `POST /kernel/sessions/{session}/steer` (spec 3.3 §6 "steer"): the caller's message for
+/// the running turn of their own session. The person only, as a command is: a steered
+/// message is input to an agent, which a paired device's token never sends (S-I7).
+async fn steer(
+    State(backend): Backend,
+    caller: Caller,
+    UrlPath(session_id): UrlPath<String>,
+    Json(request): Json<SteerRequest>,
+) -> Result<Json<SteerResponse>> {
+    super::settings::require_owner(&caller, "send a message to a running turn")?;
+    // Recorded before the turn holds the message: a message nobody recorded is not sent.
+    record(backend.as_ref(), &caller, "steer", Some(&session_id), &[]).await?;
+    let answer = match backend.steer(&caller.context.user_id, &session_id, &request.text).await? {
+        Some(steering) => SteerResponse::Accepted {
+            steer_id: steering.receipt.steer_id().to_string(),
+            pid: steering.pid,
+            lease_epoch: steering.lease_epoch,
+        },
+        None => SteerResponse::Returned,
+    };
+    Ok(Json(answer))
 }
 
 /// The calls `events` hold for a decision, for every agent that held one.

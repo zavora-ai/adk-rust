@@ -3,8 +3,8 @@
 //!
 //! | Source | Reads | Acts |
 //! |---|---|---|
-//! | [`LocalSource`](crate::LocalSource) | the session store, the approval service, an in-process kernel's process table and `/proc` ledger, a harness's mode | decide, start a turn (kernel process, harness or runner), freeze and unfreeze, set the mode, standing rules |
-//! | [`ControlSource`](crate::ControlSource) | a kernel's control plane through `ControlClient`: attach, the approvals inbox, processes, health, the ledger | decide, spawn, freeze, unfreeze |
+//! | [`LocalSource`](crate::LocalSource) | the session store, the approval service, an in-process kernel's process table and `/proc` ledger, a harness's mode | decide, start a turn (kernel process, harness or runner), steer a running turn, freeze and unfreeze, set the mode, standing rules |
+//! | [`ControlSource`](crate::ControlSource) | a kernel's control plane through `ControlClient`: attach, the approvals inbox, processes, health, the ledger | decide, spawn, steer, freeze, unfreeze |
 //!
 //! A source holds no surface state (spec 3.2 K-I17): every call reads its stores.
 
@@ -57,6 +57,31 @@ pub struct AlwaysAllowOffer {
     /// The button's words, such as "Always allow for this folder".
     pub label: String,
 }
+
+/// What became of a message a running turn was offered (spec 3.3 §6 "steer").
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::Steered;
+///
+/// let taken = Steered::Delivered { event_id: "evt-7".into() };
+/// assert_ne!(taken, Steered::Returned);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Steered {
+    /// The turn took the message at its agent's next safe point: the session holds it as
+    /// this event.
+    Delivered {
+        /// The id of the session event that carries the message.
+        event_id: String,
+    },
+    /// The turn ended before it took the message, which goes as the session's next message.
+    Returned,
+}
+
+/// The wait for what became of a message a running turn holds ([`Source::steer`]).
+pub type Steering = futures::future::BoxFuture<'static, Result<Steered>>;
 
 /// The seam between the engine and what it shows (spec 3.3 §6).
 ///
@@ -184,6 +209,21 @@ pub trait Source: Send + Sync {
     async fn start_turn(&self, caller: &Caller, session: &str, text: &str) -> Result<()> {
         let _ = (caller, session, text);
         Err(SurfaceError::unsupported("sending a message"))
+    }
+
+    /// Offers `text` to the turn of the session that runs now (spec 3.3 §6 "steer"): the
+    /// runtime screens it as it screens a turn's own message, and the agent takes it at its
+    /// next safe point. Returns the wait for what became of it, or `None` when no turn takes
+    /// messages here — none runs, another replica runs it, or the source cannot steer — and
+    /// the message goes as the session's next. The default answers `None`.
+    ///
+    /// # Errors
+    ///
+    /// The source's error when the message is refused: everything is stopped, or an input
+    /// guardrail blocks it.
+    async fn steer(&self, caller: &Caller, session: &str, text: &str) -> Result<Option<Steering>> {
+        let _ = (caller, session, text);
+        Ok(None)
     }
 
     /// Starts a turn of the session on `text` that carries `call`, a call `caller` asked for

@@ -329,6 +329,15 @@ No message is dropped: one taken by an agent is saved before the next model call
 other is returned. A receipt whose run was dropped without closing its queue resolves to an
 `agent.steer.outcome_lost` error instead of waiting forever.
 
+A run is steered where it runs: `steer` reaches the runs of this `Runner` in this process.
+The layers above it find that runner and send a returned message as the session's next:
+
+| Caller | Reaches `steer` through |
+|--------|-------------------------|
+| A surface (web home, terminal, tray, phone, voice) | `adk-surface`'s `send` and `steer` commands; see [Steering a running turn](../surfaces/index.md#steering-a-running-turn) |
+| A kernel's control plane | `Kernel::steer` and `POST /api/kernel/sessions/{session}/steer`; see [Control Plane](../kernel/control-plane.md#steering-a-running-turn) |
+| A chat channel | The channel gateway, for a message that arrives while its thread's turn runs; see [Chat](../surfaces/chat.md) |
+
 | Error code | Category | When |
 |------------|----------|------|
 | `agent.steer.invalid_message` | `InvalidInput` | The message is not a user message with text or attachments |

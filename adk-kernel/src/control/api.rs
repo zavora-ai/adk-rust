@@ -272,6 +272,72 @@ impl SpawnRequest {
     }
 }
 
+/// `POST /kernel/sessions/{session}/steer` body: a message for the running turn of the
+/// caller's session (spec 3.3 §6 "steer"). The message is always the caller's own; any other
+/// field is refused with `422`.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::control::api::SteerRequest;
+///
+/// let request = SteerRequest::new("use the staging database");
+/// assert_eq!(serde_json::to_value(&request).unwrap()["text"], "use the staging database");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SteerRequest {
+    /// The message.
+    pub text: String,
+}
+
+impl SteerRequest {
+    /// A request to send `text`.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into() }
+    }
+}
+
+/// `POST /kernel/sessions/{session}/steer` answer (spec 3.3 §6 "steer").
+///
+/// The kernel answers once the running turn holds the message, not once the turn takes it.
+/// An accepted message is delivered when the session holds an event whose steering marker
+/// carries `steerId`, and handed back when the claim `leaseEpoch` of process `pid` ends
+/// without one.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::control::api::SteerResponse;
+///
+/// let answer: SteerResponse = serde_json::from_value(serde_json::json!({
+///     "outcome": "accepted",
+///     "steerId": "steer-1",
+///     "pid": "run-7",
+///     "leaseEpoch": 2,
+/// }))
+/// .unwrap();
+/// assert!(matches!(answer, SteerResponse::Accepted { lease_epoch: 2, .. }));
+/// assert_eq!(serde_json::to_value(SteerResponse::Returned).unwrap()["outcome"], "returned");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+pub enum SteerResponse {
+    /// The running turn holds the message for its agent's next safe point.
+    #[serde(rename_all = "camelCase")]
+    Accepted {
+        /// The id the message's session event carries once the turn takes it.
+        steer_id: String,
+        /// The process that holds the message.
+        pid: String,
+        /// The lease epoch of the claim that holds it.
+        lease_epoch: u64,
+    },
+    /// No turn of the session takes messages on this replica: send it as the session's next
+    /// message.
+    Returned,
+}
+
 /// A held call waiting in the approvals inbox, as `GET /api/approvals` shows it to an
 /// approver: without the call's fingerprint, which holds its unredacted arguments.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -20,11 +20,11 @@
 //! | `GET /surface/decisions/{id}` | [`DecisionCard`]: waiting, or decided with who, where and when |
 //! | `GET /surface/sessions/{session}/thread` | [`ThreadResponse`]: the session's entries, numbered by store position |
 //! | `GET /surface/sessions/{session}/feed` | Server-sent events: `entry` (with `id` = `seq`), `decisions`, `reset`; resumes after `Last-Event-ID` or `?after=` |
-//! | `GET /surface/sessions/{session}/queued` | [`QueuedResponse`]: what the caller typed while a decision of the session was open, sent once it is answered |
+//! | `GET /surface/sessions/{session}/queued` | [`QueuedResponse`]: what the caller typed while a decision of the session was open or a turn ran, not yet sent; a message the running turn holds is listed until the turn takes it |
 //! | `GET /surface/agents` | [`AgentsResponse`] |
 //! | `GET /surface/status` | [`StatusLine`]; `?session=` for that session's mode |
 //! | `GET /surface/briefing` | [`Briefing`] since `?since=` (default: the last 24 hours) |
-//! | `POST /surface/commands` | [`CommandRequest`] → [`CommandOutcome`] |
+//! | `POST /surface/commands` | [`CommandRequest`] → [`CommandOutcome`]; `send` answers at once, and `steer` once the running turn took the message or handed it back |
 //! | `GET /surface/openapi.json` | The OpenAPI 3.1 document of these routes |
 //! | `POST /surface/decisions/{id}/take-over` | [`TakeOverRequest`] → [`CommandOutcome`]; mounted by [`take_over_router`] beside a harness that takes over |
 //! | `/surface/workflow/…` | The Runs tab's routes (feature `workflow`), mounted by `workflow::router` beside these |
@@ -107,7 +107,7 @@ pub mod paths {
     pub const THREAD: &str = "/surface/sessions/{session}/thread";
     /// `GET`: a session's feed, as server-sent events.
     pub const FEED: &str = "/surface/sessions/{session}/feed";
-    /// `GET`: the input queued behind a session's open decisions.
+    /// `GET`: the input queued behind a session's open decisions or its running turn.
     pub const QUEUED: &str = "/surface/sessions/{session}/queued";
     /// `POST`: the secret a person typed for a take-over decision.
     pub const TAKE_OVER: &str = "/surface/decisions/{id}/take-over";
@@ -228,8 +228,9 @@ pub struct ThreadResponse {
 pub struct QueuedResponse {
     /// The session.
     pub session_id: String,
-    /// What the caller typed while a decision of the session was open, oldest first; each is
-    /// sent once the session's decisions are answered.
+    /// What the caller typed while a decision of the session was open or a turn ran, oldest
+    /// first; each is sent once the session is free, or leaves the list when the running turn
+    /// takes it.
     pub queued: Vec<String>,
 }
 

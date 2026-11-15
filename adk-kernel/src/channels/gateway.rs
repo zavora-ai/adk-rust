@@ -243,6 +243,7 @@ impl ChannelGatewayBuilder {
                 held: Mutex::new(Vec::new()),
                 carded: Mutex::new(Carded::default()),
                 started: Mutex::new(std::collections::BTreeSet::new()),
+                steered: Mutex::new(Carded::default()),
                 replied: Mutex::new(Carded::default()),
                 unpaired: tokio::sync::Mutex::new(()),
             }),
@@ -298,6 +299,9 @@ struct Inner {
     carded: Mutex<Carded>,
     /// The turns this gateway started that have not finished.
     started: Mutex<std::collections::BTreeSet<String>>,
+    /// The messages handed to a running turn, by idempotency key, so a redelivery of one is
+    /// handed to no turn again.
+    steered: Mutex<Carded>,
     /// The turns replied to, so a turn finished here and seen in the run store is answered
     /// once.
     replied: Mutex<Carded>,
@@ -524,7 +528,8 @@ impl ChannelGateway {
     }
 
     /// Handles one inbound message (spec 3.3 §10 K1): an unpaired account gets a pairing code
-    /// and starts nothing; a paired account's message starts a turn as its person, "stop
+    /// and starts nothing; a paired account's message starts a turn as its person, or is
+    /// handed to the thread's turn when one runs on this host (spec 3.3 §6 "steer"), "stop
     /// all" stops everything, "resume" is refused, and an answer decides at low and medium
     /// risk.
     ///
@@ -930,6 +935,41 @@ impl ChannelGateway {
         .with_concurrency_key(session.clone(), OnConflict::Enqueue)
         .with_authenticated_user();
         self.record(binding, Some(&binding.user_id), "message", Some(&session), &[]).await?;
+        // The thread's running turn takes the message at its agent's next safe point (spec 3.3
+        // §6 "steer"). Noted first, so a redelivery that arrives meanwhile reaches no turn.
+        let key = run.idempotency_key.clone().unwrap_or_default();
+        if !self.steered().note(&key, 0) {
+            return Ok(InboundOutcome::Steered);
+        }
+        match self.inner.host.steer(&binding.user_id, &session, text).await {
+            Ok(Some(receipt)) => {
+                // The gateway outlives the wait: a message the turn hands back is never lost.
+                let gateway = self.clone();
+                let thread = inbound.thread.clone();
+                tokio::spawn(async move { gateway.settle(receipt, run, &thread).await });
+                return Ok(InboundOutcome::Steered);
+            }
+            Ok(None) => {}
+            // What a running turn may not take starts a turn, which answers as any turn does.
+            Err(error) => {
+                tracing::debug!(session.id = %session, error = %error, "a chat message was not handed to the running turn");
+            }
+        }
+        self.steered().forget(&key, 0);
+        self.start_turn(sink, &inbound.thread, run).await
+    }
+
+    fn steered(&self) -> std::sync::MutexGuard<'_, Carded> {
+        self.inner.steered.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Starts `run`, a paired account's turn, and follows it for its reply.
+    async fn start_turn(
+        &self,
+        sink: &dyn ChannelSink,
+        thread: &str,
+        run: NewRun,
+    ) -> Result<InboundOutcome> {
         match self.inner.host.start_turn(run).await {
             Ok(pid) => {
                 self.inner
@@ -941,10 +981,37 @@ impl ChannelGateway {
             }
             Err(KernelError::Frozen { .. }) => {
                 let notice = ChannelNotice::Stopped { home: self.inner.home.clone() };
-                self.notify(sink, &inbound.thread, &notice).await;
+                self.notify(sink, thread, &notice).await;
                 Ok(InboundOutcome::TurnRefused)
             }
             Err(error) => Err(error),
+        }
+    }
+
+    /// Waits for what became of a message handed to a running turn: delivered, the turn's
+    /// reply answers it; handed back, it starts the thread's next turn as `run`, whose
+    /// idempotency key is the message's.
+    async fn settle(&self, receipt: adk_core::SteerReceipt, run: NewRun, thread: &str) {
+        let steer_id = receipt.steer_id().to_string();
+        let key = run.idempotency_key.clone().unwrap_or_default();
+        let channel = run.input["channel"]["channel"].as_str().unwrap_or_default().to_string();
+        let Ok(sink) = self.sink(&channel) else { return };
+        match receipt.outcome().await {
+            Ok(adk_core::SteerOutcome::Delivered { .. }) => return,
+            Ok(adk_core::SteerOutcome::Returned(_)) => {}
+            // The run was dropped before it said whether it took the message. Starting a turn
+            // could send the message twice, so the thread is told instead.
+            Err(error) => {
+                tracing::warn!(steer.id = %steer_id, error = %error, "a chat message handed to a running turn has no outcome");
+                self.notify(sink.as_ref(), thread, &ChannelNotice::TurnFailed).await;
+                return;
+            }
+        }
+        if let Err(error) = self.start_turn(sink.as_ref(), thread, run).await {
+            tracing::warn!(steer.id = %steer_id, error = %error, "a chat message a turn handed back could not start a turn");
+            // A redelivery may start it.
+            self.steered().forget(&key, 0);
+            self.notify(sink.as_ref(), thread, &ChannelNotice::TurnFailed).await;
         }
     }
 

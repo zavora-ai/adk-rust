@@ -920,7 +920,10 @@ impl App {
             CommandOutcome::Resumed => self.notice(words::RESUME_ALL, Tone::Info),
             CommandOutcome::ModeSet { mode } => self.notice(mode.status, Tone::Info),
             CommandOutcome::Pending { text, .. } => self.notice(text, Tone::Info),
-            CommandOutcome::Sent { .. } | CommandOutcome::AnswerCancelled { .. } => {}
+            // The thread shows a message a running turn took.
+            CommandOutcome::Sent { .. }
+            | CommandOutcome::Steered { .. }
+            | CommandOutcome::AnswerCancelled { .. } => {}
             // Changes to agents made through the engine (spec 3.3 §5.7); the Agents view
             // makes its own through `/agent` and says what each did.
             CommandOutcome::AgentAdded { agent } => self.notice(
