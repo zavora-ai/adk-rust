@@ -4,16 +4,15 @@
 # alongside `cargo audit`. Run locally with `cargo deny check`.
 #
 # The accepted-advisory list is the subset of `.cargo/audit.toml` that cargo-deny
-# actually reaches: it resolves the feature graph (so lockfile-only crates such as
-# rkyv 0.7 never appear) and `unmaintained = "workspace"` leaves transitive
-# unmaintained crates to upstream. Every entry is justified in
+# actually reaches: it resolves the feature graph (so lockfile-only crates never
+# appear) and `unmaintained = "workspace"` leaves transitive unmaintained crates
+# to upstream. Every entry is justified in
 # `docs/security/DEPENDENCY-ADVISORIES.md`; add the rationale there before adding
 # an ID here, and remove an ID as soon as `cargo deny check advisories` reports it
 # as `advisory-not-detected`.
 
 [graph]
-# Optional backends (surrealdb, lancedb, the ONNX audio models, mistral.rs,
-# LiveKit) carry most of the dependency surface. Resolving every feature keeps
+# Optional backends (lancedb, the ONNX audio models, mistral.rs, LiveKit) carry most of the dependency surface. Resolving every feature keeps
 # the crates a production deployment actually enables under the gate.
 all-features = true
 
@@ -58,9 +57,6 @@ ignore = [
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
 
-    # rsa — Marvin timing side-channel. No upstream fix exists.
-    "RUSTSEC-2023-0071",
-
     # --- Unsoundness and notices: reviewed, no ADK-reachable path ---
     # http-types: ASCII invariant in Authorization value. Reached only through
     # the Azure SDK's HTTP stack; ADK never constructs http-types headers.
@@ -104,40 +100,6 @@ crate = "intel-mkl-src"
 expression = "LicenseRef-Intel-Simplified-Software-License"
 license-files = [{ path = "License.txt", hash = 0x3bf8c2d0 }]
 
-# Non-OSI licenses, reached only through opt-in features. Allowed per-crate so
-# that enabling those features is a visible decision rather than a silent one:
-#   * surrealdb and its sub-crates (Business Source License 1.1)
-#     — `adk-rag/surrealdb`
-#   * intel-mkl-src (Intel Simplified Software License) — `adk-mistralrs/mkl`
-# See docs/security/DEPENDENCY-ADVISORIES.md ("Non-OSI dependency licenses").
-[[licenses.exceptions]]
-crate = "surrealdb"
-allow = ["BUSL-1.1"]
-
-[[licenses.exceptions]]
-crate = "surrealdb-core"
-allow = ["BUSL-1.1"]
-
-[[licenses.exceptions]]
-crate = "surrealdb-types"
-allow = ["BUSL-1.1"]
-
-[[licenses.exceptions]]
-crate = "surrealdb-types-derive"
-allow = ["BUSL-1.1"]
-
-[[licenses.exceptions]]
-crate = "surrealdb-strand"
-allow = ["BUSL-1.1"]
-
-[[licenses.exceptions]]
-crate = "surrealdb-collections"
-allow = ["BUSL-1.1"]
-
-[[licenses.exceptions]]
-crate = "surrealdb-protocol"
-allow = ["BUSL-1.1"]
-
 # `inferno` renders flamegraph SVG inside lance-testing's profiler, reached only
 # through the optional `adk-rag/lancedb` feature. CDDL-1.0 is OSI-approved,
 # file-level copyleft and imposes no obligation on this workspace's own sources.
@@ -145,6 +107,10 @@ allow = ["BUSL-1.1"]
 crate = "inferno"
 allow = ["CDDL-1.0"]
 
+# A non-OSI license, reached only through the opt-in `adk-mistralrs/mkl` feature.
+# Allowed per-crate so that enabling the feature is a visible decision rather than
+# a silent one. See docs/security/DEPENDENCY-ADVISORIES.md ("Non-OSI dependency
+# licenses").
 [[licenses.exceptions]]
 crate = "intel-mkl-src"
 allow = ["LicenseRef-Intel-Simplified-Software-License"]

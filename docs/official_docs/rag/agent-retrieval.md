@@ -1,6 +1,6 @@
 # Agent Retrieval Vector Store
 
-Agent Retrieval (formerly Vector Search 2.0) is Google's managed vector database on the Gemini Enterprise Agent Platform, served at `vectorsearch.googleapis.com`. The `agent-retrieval` feature of `adk-rag` implements the [`VectorStore`] trait against it, so it slots into the existing RAG pipeline exactly like the pgvector, Qdrant, LanceDB, and SurrealDB backends.
+Agent Retrieval (formerly Vector Search 2.0) is Google's managed vector database on the Gemini Enterprise Agent Platform, served at `vectorsearch.googleapis.com`. The `agent-retrieval` feature of `adk-rag` implements the [`VectorStore`] trait against it, so it slots into the existing RAG pipeline exactly like the pgvector, Qdrant, and LanceDB backends.
 
 ```toml
 [dependencies]
