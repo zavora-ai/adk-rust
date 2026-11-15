@@ -1274,26 +1274,24 @@ mod tests {
     }
 
     #[test]
-    fn convert_tools_has_deterministic_name_order() {
-        for _ in 0..32 {
-            let tools = adk_core::ToolDeclarations::from_iter([
-                ("zeta".to_string(), serde_json::json!({})),
-                ("alpha".to_string(), serde_json::json!({})),
-                ("middle".to_string(), serde_json::json!({})),
-            ]);
-            let names = convert_tools(&tools)
-                .expect("tool conversion should succeed")
-                .into_iter()
-                .map(|tool| {
-                    serde_json::to_value(tool).expect("tool should serialize")["name"]
-                        .as_str()
-                        .expect("function tool should have a name")
-                        .to_string()
-                })
-                .collect::<Vec<_>>();
+    fn convert_tools_keeps_declaration_order() {
+        let tools = adk_core::ToolDeclarations::from_iter([
+            ("zeta".to_string(), serde_json::json!({})),
+            ("alpha".to_string(), serde_json::json!({})),
+            ("middle".to_string(), serde_json::json!({})),
+        ]);
+        let names = convert_tools(&tools)
+            .expect("tool conversion should succeed")
+            .into_iter()
+            .map(|tool| {
+                serde_json::to_value(tool).expect("tool should serialize")["name"]
+                    .as_str()
+                    .expect("function tool should have a name")
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
 
-            assert_eq!(names, ["alpha", "middle", "zeta"]);
-        }
+        assert_eq!(names, ["zeta", "alpha", "middle"]);
     }
 
     #[test]

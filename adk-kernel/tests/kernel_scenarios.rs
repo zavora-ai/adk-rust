@@ -448,6 +448,16 @@ async fn k3_it_wakes_on_what_matters_and_a_duplicate_wakes_nothing() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     assert_eq!(model.requests().len(), 3, "one model turn per wake, none for a duplicate");
+    // Each turn is told the event that started it, once (spec 3.2 §7.4 step 5).
+    let told = told(&model);
+    let saved = woken_turn(&told, "file:");
+    assert!(saved.contains("audit the repo"), "the turn keeps its own input: {saved}");
+    assert!(saved.contains("Cargo.lock\""), "the changed path: {saved}");
+    let hooked = woken_turn(&told, "hook:github:msg_1");
+    assert!(hooked.contains("triage the delivery"), "the turn keeps its own input: {hooked}");
+    assert!(hooked.contains("\"delivery\":\"msg_1\""), "the webhook's body: {hooked}");
+    let messaged = woken_turn(&told, "queue:orders:m-1");
+    assert!(messaged.contains("\"order\":42"), "the queue message: {messaged}");
     let outcomes = |run: &RunRecord| -> Vec<WakeOutcome> {
         let result = run.result.as_ref().expect("a finished wake run records its outcomes");
         serde_json::from_value(result["outcomes"].clone()).unwrap()
@@ -487,6 +497,133 @@ async fn k3_it_wakes_on_what_matters_and_a_duplicate_wakes_nothing() {
 
     kernel.stop().await.unwrap();
     server.abort();
+}
+
+/// The user text of every request `model` received, one string per request: what each turn
+/// was told.
+fn told(model: &ScriptedLlm) -> Vec<String> {
+    model
+        .requests()
+        .iter()
+        .map(|request| {
+            request
+                .contents
+                .iter()
+                .filter(|content| content.role == "user")
+                .flat_map(|content| content.parts.iter().filter_map(|part| part.text()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect()
+}
+
+/// The one request whose user text names the wake keyed with `prefix`.
+fn woken_turn(told: &[String], prefix: &str) -> String {
+    let header = format!("[kernel wake \"{prefix}");
+    let turns: Vec<_> = told.iter().filter(|text| text.contains(&header)).collect();
+    assert_eq!(turns.len(), 1, "one turn is told the wake {prefix}: {told:#?}");
+    turns[0].clone()
+}
+
+/// A woken turn reads why it woke (spec 3.2 §7.4 step 5): a process asleep on another's
+/// finish is told that process's pid and final state; a queue message over the payload
+/// limit arrives cut and marked, whole on its `kernel.wake` run; and a wake routed while no
+/// kernel ran is told by the kernel that starts next, from the stores alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_woken_turn_is_told_the_event_across_a_restart() {
+    use adk_core::queue_source::InMemoryQueueSource;
+    use adk_kernel::{WAKE_PAYLOAD_LIMIT, WakeEvent, WakeRouter, keys, queue_wake_ingress};
+
+    let db = tempfile::tempdir().unwrap();
+    let path = db.path().join("kernel.db");
+    let stores = open(&path, Arc::new(SystemClock)).await;
+    let model = Arc::new(ScriptedLlm::new(
+        "scripted",
+        ["Built.", "Reviewed the build.", "Order handled."].map(ScriptedResponse::text),
+    ));
+    let control = GovernanceControl::new();
+    let agent = || LlmAgentBuilder::new("agent").model(Arc::clone(&model) as Arc<dyn Llm>);
+    let orders = Arc::new(InMemoryQueueSource::new("orders"));
+    let first = kernel("first", &stores, &control, Arc::new(SystemClock), 4)
+        .agent(TARGET, runner(&stores, &control, agent()))
+        .queue_ingress(queue_wake_ingress(orders.clone(), Arc::clone(&stores.runs), APP))
+        .build()
+        .unwrap();
+    first.start().await.unwrap();
+
+    // A finished process wakes the one waiting on it, which is told its pid and state.
+    let build = first
+        .processes()
+        .spawn(
+            run_on(QueueClass::Background, TARGET, "build the release")
+                .with_not_before(chrono::Utc::now() + chrono::Duration::milliseconds(1500)),
+            ProcessSpec::new(ProcessKind::Goal),
+        )
+        .await
+        .unwrap()
+        .meta
+        .pid;
+    let sleep_on = |text: &str, wake: Wake| {
+        let spawn = first.processes().spawn(
+            run_on(QueueClass::Background, TARGET, text),
+            ProcessSpec::new(ProcessKind::Goal).with_wake(WakeSet::any_of([wake])),
+        );
+        async move { spawn.await.unwrap().meta.pid }
+    };
+    let review = sleep_on("review the build", Wake::RunFinished { pid: build.clone() }).await;
+    in_state(&stores.runs, &review, RunState::Completed).await;
+    let reviewed = woken_turn(&told(&model), &keys::run_finished(&build, RunState::Completed));
+    assert!(reviewed.contains("review the build"), "the turn keeps its own input: {reviewed}");
+    assert!(reviewed.contains(&format!("\"pid\":\"{build}\"")), "{reviewed}");
+    assert!(reviewed.contains("\"state\":\"completed\""), "{reviewed}");
+
+    // The wake is routed with no kernel running: only the stores hold it.
+    let order = sleep_on("handle the order", Wake::Queue { source: "orders".into() }).await;
+    in_state(&stores.runs, &order, RunState::Waiting).await;
+    // The park's hook settles the row before the stop, which would record a drain on it.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    first.stop().await.unwrap();
+    let note = "n".repeat(2 * WAKE_PAYLOAD_LIMIT);
+    let event =
+        WakeEvent::new("orders", keys::queue("orders", "m-1"), json!({"amount": 42, "note": note}));
+    let whole = event.payload.to_string().len();
+    let router = WakeRouter::new(Arc::clone(&stores.runs), Arc::clone(&stores.processes));
+    assert_eq!(router.route(event.clone()).await.unwrap().len(), 1, "the sleeper is woken");
+    assert!(router.route(event).await.unwrap().is_empty(), "a woken process is not woken twice");
+    assert_eq!(model.requests().len(), 2, "no turn runs while no kernel does");
+    stores.pool.close().await;
+
+    let stores = open(&path, Arc::new(SystemClock)).await;
+    let second = kernel("second", &stores, &control, Arc::new(SystemClock), 4)
+        .agent(TARGET, runner(&stores, &control, agent()))
+        .build()
+        .unwrap();
+    second.start().await.unwrap();
+    in_state(&stores.runs, &order, RunState::Completed).await;
+    let told = told(&model);
+    assert_eq!(told.len(), 3, "one turn for the wake");
+    let handled = woken_turn(&told, "queue:orders:m-1");
+    assert!(handled.contains("handle the order"), "the turn keeps its own input: {handled}");
+    assert!(handled.contains("source: \"orders\""), "{handled}");
+    assert!(handled.contains("\"amount\":42"), "{handled}");
+    assert!(
+        handled.contains(&format!("[truncated: the first {WAKE_PAYLOAD_LIMIT} of {whole} bytes]")),
+        "{handled}"
+    );
+    assert!(!handled.contains(&note), "the payload is cut to the limit");
+    let instructions: Vec<String> = model.requests()[2]
+        .contents
+        .iter()
+        .filter(|content| content.role != "user")
+        .flat_map(|content| content.parts.iter().filter_map(|part| part.text()))
+        .map(str::to_string)
+        .collect();
+    assert!(
+        instructions.iter().all(|text| !text.contains("kernel wake")),
+        "the reason is user content, not an instruction: {instructions:#?}"
+    );
+
+    second.stop().await.unwrap();
 }
 
 /// A numbered step of process `process`'s work, counting its executions.

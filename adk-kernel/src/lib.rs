@@ -214,8 +214,9 @@ pub use stores::{
 pub use wake::webhook_wake_hook;
 pub use wake::{
     ApprovalWakeSource, CronWakeSource, ExpiryAction, FileWakeSource, KERNEL_WAKE_TARGET,
-    KernelWakeExecutor, RunFinishedWakeSource, Trigger, Wake, WakeEvent, WakeOutcome, WakeRouter,
-    WakeSet, WakeSource, kernel_wake_run, keys, queue_wake_ingress,
+    KernelWakeExecutor, RunFinishedWakeSource, Trigger, WAKE_PAYLOAD_LIMIT, Wake, WakeEvent,
+    WakeOutcome, WakeReason, WakeReasonHooks, WakeRouter, WakeSet, WakeSource, kernel_wake_run,
+    keys, queue_wake_ingress,
 };
 pub use watermark::{CronWatermarkStore, SourceWatermark};
 

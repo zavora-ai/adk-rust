@@ -1,18 +1,18 @@
-//! System-role contents reach Gemini `generateContent` as leading user turns.
+//! System-role contents reach Gemini `generateContent` as its `systemInstruction`.
 //!
 //! `LlmAgent` sends instructions as `system` contents. The standard Gemini
-//! transport keeps them as user turns so requests stay compatible with
-//! context caching, which already carries a system instruction.
+//! transport sends them as `systemInstruction`, except on a context cache, which
+//! already carries a system instruction: there they stay leading user turns.
 
-use adk_core::{Content, Llm, LlmRequest};
+use adk_core::{Content, GenerateContentConfig, Llm, LlmRequest};
 use adk_model::GeminiModel;
 use futures::StreamExt;
 use serde_json::{Value, json};
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-#[tokio::test]
-async fn system_contents_are_sent_as_leading_user_turns() {
+/// Sends `request` to a mock `generateContent` endpoint and returns the body it received.
+async fn sent_body(request: LlmRequest) -> Value {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -31,13 +31,6 @@ async fn system_contents_are_sent_as_leading_user_turns() {
         format!("{}/v1beta/", server.uri()),
     )
     .unwrap();
-    let request = LlmRequest::new(
-        "gemini-3.7-flash",
-        vec![
-            Content::new("system").with_text("You are a careful assistant."),
-            Content::new("user").with_text("Hello"),
-        ],
-    );
 
     let mut stream = model.generate_content(request, false).await.unwrap();
     while let Some(response) = stream.next().await {
@@ -46,7 +39,39 @@ async fn system_contents_are_sent_as_leading_user_turns() {
 
     let received = server.received_requests().await.unwrap();
     assert_eq!(received.len(), 1);
-    let body: Value = serde_json::from_slice(&received[0].body).unwrap();
+    serde_json::from_slice(&received[0].body).unwrap()
+}
+
+fn request() -> LlmRequest {
+    LlmRequest::new(
+        "gemini-3.7-flash",
+        vec![
+            Content::new("system").with_text("You are a careful assistant."),
+            Content::new("user").with_text("Hello"),
+        ],
+    )
+}
+
+#[tokio::test]
+async fn system_contents_are_sent_as_the_system_instruction() {
+    let body = sent_body(request()).await;
+
+    assert_eq!(
+        body["systemInstruction"],
+        json!({"parts": [{"text": "You are a careful assistant."}]})
+    );
+    assert_eq!(body["contents"], json!([{"role": "user", "parts": [{"text": "Hello"}]}]));
+}
+
+#[tokio::test]
+async fn system_contents_stay_leading_user_turns_on_a_context_cache() {
+    let config = GenerateContentConfig {
+        cached_content: Some("cachedContents/abc123".to_string()),
+        ..Default::default()
+    };
+
+    let body = sent_body(request().with_config(config)).await;
+
     assert_eq!(
         body["contents"],
         json!([
@@ -54,5 +79,6 @@ async fn system_contents_are_sent_as_leading_user_turns() {
             {"role": "user", "parts": [{"text": "Hello"}]}
         ])
     );
-    assert!(body.get("systemInstruction").is_none() && body.get("system_instruction").is_none());
+    assert_eq!(body["cachedContent"], "cachedContents/abc123");
+    assert!(body.get("systemInstruction").is_none());
 }

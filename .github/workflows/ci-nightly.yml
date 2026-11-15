@@ -252,10 +252,10 @@ jobs:
   # Every SpendLedger, ActionLedger, and ApprovalStore backend in adk-session runs the
   # adk-core conformance suites, and the kernel's process, agenda, driver, ledger, partition
   # and cron watermark stores run theirs on MongoDB, Neo4j and Firestore (spec 3.2 §13 Q8).
-  # SQLite runs on every PR (feature-coverage shard 5); the
+  # SQLite runs on every PR (the `adk-session` feature-coverage pairs); the
   # server-backed suites are #[ignore]d and run here against service containers. The
   # multi-process durability gates (adk-durability-gates) run here on every server
-  # backend; their SQLite gates run on every PR in feature-coverage shard 2 (the
+  # backend; their SQLite gates run on every PR in feature-coverage (the
   # `adk-durability-gates sqlite` pair). Needs no secrets.
   durable-stores:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'durable-stores' }}

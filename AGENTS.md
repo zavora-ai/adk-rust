@@ -167,20 +167,28 @@ expensive axes move to a later tier.
   driven by `scripts/feature-coverage-pairs.txt`: every pair linted on its own, each
   crate's tests run once with its pairs' features combined (a `solo` pair keeps its own
   build), and only the shards and crates the change can affect (`scripts/ci-scope.py`);
-  the nightly `feature-coverage-isolated` job tests every pair on its own build, `postgres` (the
+  the nightly `feature-coverage-isolated` job tests every pair on its own build,
+  `surface-e2e` (adk-surface's generated API and the web home end to end), `postgres` (the
   `#[ignore]`d PostgreSQL suites, pgvector and TLS included, against a
   `pgvector/pgvector:pg17` service, driven by `scripts/test-postgres.sh`),
   `docs` (`cargo doc --workspace --no-deps` plus doctests), standalone examples
   (2 shards), `kernel-scenarios` (the scripted scenarios of `examples/harness_kernel`, on Linux),
   `website-scenarios` (spec 3.5's scripted scenarios of `examples/website`),
-  `templates`, a compile-only macOS build, a Windows build with the code only
+  `doc-gates` (the documentation, release and script checks), `templates` (the cargo-adk
+  scaffolds), a compile-only macOS build, a Windows build with the code only
   Windows has (the restricted-token enforcer, process trees, owner-only files, the
   kernel's named pipe and service, the external generators' path), and `semver`
   (stable strict against the release type in `semver.yml`'s `SEMVER_RELEASE_TYPE`:
   `minor` fails breakage; `major`, during a major release candidate, accepts every
   change, so the job reports without building; everything else warn-only). A `scope`
-  job skips the Rust jobs when a change touches only `docs/` or Markdown, and
-  merge-queue builds skip `docs`, the standalone examples, the kernel scenarios and
+  job skips the Rust jobs when a change touches only `docs/` or Markdown, and runs
+  `postgres`, `templates`, `kernel-scenarios`, `website-scenarios`, `windows` and
+  `surface-e2e` only when the change can affect a crate they build
+  (`scripts/ci-job-crates.txt`; the merge tier's Windows run builds the workspace for
+  every other change). The jobs that compile from nothing or run long —
+  `feature-coverage`, `surface-e2e`, `postgres`, `docs`, the standalone examples,
+  `templates`, macOS and Windows — start after `fmt` and `clippy` pass. Merge-queue
+  builds skip `docs`, the standalone examples, the kernel scenarios and
   the macOS/Windows builds the pull request already passed. CI builds carry no debug
   info (`CARGO_PROFILE_DEV_DEBUG=0`). Only `main` saves build caches: a push to `main`
   runs `ci.yml`'s `clippy` and `test`, whose caches every pull request restores.

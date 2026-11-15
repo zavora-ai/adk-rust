@@ -234,7 +234,6 @@ mod tests {
     use adk_core::{Content, EventActions, ReadonlyContext};
     use adk_memory::{InMemoryMemoryService, MemoryEntry};
     use chrono::Utc;
-    use std::collections::HashMap;
     use std::sync::Mutex;
 
     struct MockToolContext {

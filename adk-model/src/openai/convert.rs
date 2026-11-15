@@ -1224,27 +1224,25 @@ mod tests {
     }
 
     #[test]
-    fn convert_tools_has_deterministic_name_order() {
+    fn convert_tools_keeps_declaration_order() {
         use super::super::schema_adapter::OpenAiSchemaAdapter;
 
         let adapter = OpenAiSchemaAdapter;
         let cache = SchemaCache::for_adapter(std::sync::Arc::new(OpenAiSchemaAdapter));
-        for _ in 0..32 {
-            let tools = adk_core::ToolDeclarations::from_iter([
-                ("zeta".to_string(), serde_json::json!({})),
-                ("alpha".to_string(), serde_json::json!({})),
-                ("middle".to_string(), serde_json::json!({})),
-            ]);
-            let names = convert_tools(&tools, &adapter, &cache)
-                .into_iter()
-                .map(|tool| match tool {
-                    ChatCompletionTools::Function(tool) => tool.function.name,
-                    ChatCompletionTools::Custom(_) => panic!("expected a function tool"),
-                })
-                .collect::<Vec<_>>();
+        let tools = adk_core::ToolDeclarations::from_iter([
+            ("zeta".to_string(), serde_json::json!({})),
+            ("alpha".to_string(), serde_json::json!({})),
+            ("middle".to_string(), serde_json::json!({})),
+        ]);
+        let names = convert_tools(&tools, &adapter, &cache)
+            .into_iter()
+            .map(|tool| match tool {
+                ChatCompletionTools::Function(tool) => tool.function.name,
+                ChatCompletionTools::Custom(_) => panic!("expected a function tool"),
+            })
+            .collect::<Vec<_>>();
 
-            assert_eq!(names, ["alpha", "middle", "zeta"]);
-        }
+        assert_eq!(names, ["zeta", "alpha", "middle"]);
     }
 
     /// Regression test for issue #395.
