@@ -87,3 +87,7 @@ runs:
         prefix-key: ${{ inputs.cache-key }}
         shared-key: ${{ inputs.cache-shared-key }}
         save-if: ${{ inputs.cache-save }}
+        # A failing test on `main` once kept the Windows cache from being saved for two
+        # weeks, so every pull request recompiled 189 dependencies. What compiled is
+        # valid whatever the tests reported.
+        cache-on-failure: 'true'
