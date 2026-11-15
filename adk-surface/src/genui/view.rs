@@ -77,7 +77,9 @@ fn drawn(
     call_id: Option<&String>,
     envelope: &DrawnEnvelope,
 ) -> Result<DrawnSurface, DrawRefusal> {
-    let catalog = Catalog::forms();
+    // A drawing is checked again against its own catalog, which this home must show.
+    let known = projector.catalogs.get(&envelope.catalog_id);
+    let catalog = known.unwrap_or_else(Catalog::forms);
     let agent = projector.agent(&event.author);
     let at = projector.hh_mm(event.timestamp);
     let changed_text = match (envelope.deleted, envelope.kind) {
@@ -115,7 +117,7 @@ fn drawn(
         component: None,
         detail: format!("this home does not render the catalog {}", envelope.catalog_id),
     };
-    if envelope.catalog_id != catalog.id() {
+    if known.is_none() {
         return Err(unknown());
     }
     let draft = envelope.draft().ok_or_else(|| DrawRefusal {
@@ -149,7 +151,7 @@ fn drawn(
                 .collect(),
         })
         .collect();
-    surface.root = Some(tree(&validated));
+    surface.root = Some(tree(catalog, &validated));
     Ok(surface)
 }
 
@@ -190,8 +192,9 @@ fn refused(
 /// of each, which is the one shown.
 type Texts<'a> = HashMap<(&'a str, &'a str, &'a str), &'a str>;
 
-/// The drawing's tree from `root`, templates expanded and strings resolved.
-pub(crate) fn tree(validated: &ValidatedSurface) -> DrawnNode {
+/// The drawing's tree from `root`, templates expanded and strings resolved; `catalog` is the
+/// one `validated` was checked against.
+pub(crate) fn tree(catalog: &'static Catalog, validated: &ValidatedSurface) -> DrawnNode {
     let mut texts: Texts<'_> = HashMap::new();
     for text in &validated.texts {
         if let Some(id) = &text.component_id {
@@ -210,6 +213,7 @@ pub(crate) fn tree(validated: &ValidatedSurface) -> DrawnNode {
         })
         .collect();
     let builder = Builder {
+        catalog,
         texts,
         components,
         model: DataModel::new(validated.draft.data_model.clone()),
@@ -229,6 +233,7 @@ pub(crate) fn tree(validated: &ValidatedSurface) -> DrawnNode {
 }
 
 struct Builder<'a> {
+    catalog: &'static Catalog,
     texts: Texts<'a>,
     components: HashMap<&'a str, (&'a str, &'a Map<String, Value>)>,
     model: DataModel,
@@ -307,7 +312,7 @@ impl Builder<'_> {
             }
             _ => {}
         }
-        for child in children(component, props) {
+        for child in children(self.catalog, component, props) {
             match child {
                 Child::Id(child) => {
                     // A titled drawing's own title is drawn once, above it.
