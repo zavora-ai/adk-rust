@@ -52,6 +52,7 @@ sequence keeps its emoji and loses its joiners.
 |---|---|
 | Writes from an account that is not paired | The account is sent a pairing code; nothing starts (S-I6). Accept it where the kernel runs: `adk-rust pair accept CODE` |
 | Writes from a paired account | A turn starts as the person, in the thread's session; the reply comes back to the thread |
+| Writes while the thread's turn runs | The running turn is handed the message and takes it after its current tool step, before its next model call, so its reply answers both. A turn that ends first hands it back, and it starts the thread's next turn, once. A turn another kernel replica runs is not handed the message: it starts the next turn, as before |
 | Presses **Allow once** or **Deny** | The decision is answered at the version the card showed. The press is acknowledged, the card loses its buttons, and the answer is confirmed under it: "You allowed it once · 07:31" |
 | Presses a button on a card someone answered first | "Decided already: You said yes at 07:31." Nothing is decided twice (S-I2) |
 | Types "allow once", "yes" or anything else | A message to the agent. Only a pressed button answers a decision (S-I4) |

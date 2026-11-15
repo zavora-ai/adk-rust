@@ -20,7 +20,7 @@ with `default-features = false` to leave it out.
 |---|---|---|
 | Feed | A session's events numbered by their position in the session store, as a snapshot then a live tail; reconnecting after the last `seq` seen never skips or repeats an event | `SurfaceEngine::feed`, `SurfaceEngine::thread` |
 | Projection | Decision cards (§7.1), thread items, agent rows, the status line and the "While you were away" briefing, in the plain words of §8 | `model`, `words` |
-| Commands | Decide at the version seen, send, queue, stop all, resume all, change the mode — each with the caller's subject and how the input was given, written to the audit log | `SurfaceEngine::execute`, `Command` |
+| Commands | Decide at the version seen, send, steer a running turn, queue, stop all, resume all, change the mode — each with the caller's subject and how the input was given, written to the audit log | `SurfaceEngine::execute`, `Command` |
 | Rules | What each surface may decide (§7.2) and the rules on every surface (§7.4), enforced by the engine | `rules` |
 | `web` | The web home: its HTTP API under `/api/surface`, its OpenAPI document and generated TypeScript types, and the page itself at `/ui/` — Threads, Today and Memory & rules, in light and dark (spec 3.3 §5.1) | `web::router`, `web::home` |
 | `channels` | Chat: the Telegram adapter over the kernel's channel contract — cards with Allow once and Deny, never the call's arguments, pairing, "stop all" (spec 3.3 §5.3) | `channels::TelegramAdapter` |
@@ -99,7 +99,11 @@ A decision answered on one surface is shown on every other as "Decided — You s
 Telegram at 07:31": a second answer gets `approval.version_conflict` from the approval
 service and the engine never retries it (S-I2). Input typed while a decision is open, or a
 turn runs, is queued as the next message, never an answer, and sent oldest first once the
-session is free, whichever surface answered (S-I4). "Stop all" works from every surface; "Resume all"
+session is free, whichever surface answered (S-I4). A message queued behind a running turn is
+offered to that turn through `Source::steer` (spec 3.3 §6 "steer"): the runtime screens it as
+it screens a turn's own message, the agent takes it after its current tool step, and it leaves
+the queue; a turn that ends first hands it back, and it goes as the next message, once.
+`Command::Steer` does the same and answers with what became of the message. "Stop all" works from every surface; "Resume all"
 only from the web home or a paired local terminal (S-I10). No agent answers a decision (§7.4).
 A chat card carries the agent, the risk and a short summary, never the call's arguments (S-I5).
 

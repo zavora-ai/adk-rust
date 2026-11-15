@@ -13,6 +13,7 @@
 //! | Only paired accounts reach an agent (S-I6) | An unpaired account's message, or answer, gets a pairing code ([`ChannelNotice::PairingCode`]) and starts nothing; the person accepts the code where the kernel runs (`adk-rust pair accept`, `POST /api/kernel/channels/pair`) |
 //! | One code per account, at most so many waiting | The gateway serializes unpaired accounts' messages, so concurrent messages from one account get one code and the waiting limit holds; the operator dismisses a waiting account (`adk-rust pair revoke`, `POST /api/kernel/channels/waiting/{id}/dismiss`), which then gets no code for [`DISMISSED_FOR`] |
 //! | A paired account's message is a turn | It starts a turn as the paired person, a `Human` subject, in the thread's session, keyed by the platform's message id so a redelivery starts nothing; the turn's reply goes back to the same thread, from whichever replica ran it |
+//! | A message for a running turn reaches it (spec 3.3 §6 "steer") | While the thread's turn runs on this host, the gateway hands the message to that turn ([`ChannelHost::steer`], [`InboundOutcome::Steered`]): its agent takes it at its next safe point and its reply answers it. A turn that ends first hands the message back, and it starts the thread's next turn under the message's idempotency key, once. A turn another replica runs is handed nothing: the message starts a turn behind it. A redelivery of a message handed to a turn is recognised by the replica that took it |
 //! | A removed account reaches no agent | Removing it stops its turns that have not finished, those queued behind the thread's session included |
 //! | Cards carry no arguments (S-I5) | A [`DecisionCard`] holds the agent, a short summary with every argument value masked, and the risk; never the call's arguments |
 //! | Chat says yes once or no, never money (§7.2, §7.4) | Answers are [`ChannelAnswer::AllowOnce`] and [`ChannelAnswer::Deny`] at low and medium risk only, through `ApprovalService::decide` with the version the card showed (S-I2); a call that moves money ([`ChannelHost::moves_money`], [`ChannelGatewayBuilder::money_tools`]) and high risk link to the home — high as the request rates it, or as the host does ([`ChannelHost::rates_high`]) — and a take-over, whose secret is typed in the home (§8.2), can only be denied |
@@ -1255,6 +1256,26 @@ pub trait ChannelHost: Send + Sync + 'static {
     /// Returns [`KernelError::Frozen`] while everything is stopped, or the host's error.
     async fn start_turn(&self, run: NewRun) -> Result<String>;
 
+    /// Sends `text` to the turn of `user`'s session `session` that runs on this host (spec
+    /// 3.3 §6 "steer"): its agent takes the message at its next safe point, and the receipt
+    /// says whether it did. `None`, the default, when no turn of the session takes messages
+    /// here — none runs, or another replica runs it — so the gateway starts a turn with the
+    /// message instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns the host's error when it refuses the message; the gateway then starts a turn
+    /// with it, which answers the thread as any turn does.
+    async fn steer(
+        &self,
+        user: &str,
+        session: &str,
+        text: &str,
+    ) -> Result<Option<adk_core::SteerReceipt>> {
+        let _ = (user, session, text);
+        Ok(None)
+    }
+
     /// The turns that finish from now on, as their final run records.
     ///
     /// # Errors
@@ -1299,6 +1320,10 @@ pub enum InboundOutcome {
         /// The turn's process.
         pid: String,
     },
+    /// A paired account's message was handed to its thread's running turn (spec 3.3 §6
+    /// "steer"): the turn takes it at its agent's next safe point, or hands it back and the
+    /// message starts the thread's next turn. A redelivery of the message finds it.
+    Steered,
     /// Everything is stopped, so the message started nothing.
     TurnRefused,
     /// Everything was stopped (S-I10).

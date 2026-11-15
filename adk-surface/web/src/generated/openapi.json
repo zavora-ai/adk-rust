@@ -1607,7 +1607,7 @@
         "type": "object"
       },
       "Command": {
-        "description": "A command from a surface (spec 3.3 §6). Every command runs as an authenticated\n`Caller`, whose subject, surface and `Origin` reach its audit record.\n\n§6 also names \"steer\", a message that reaches a turn while it runs. The runtime takes one\nthrough `Runner::steer`, but the engine has no steer command yet: a message sent during a\nturn is the session's next message (`Send`), and\n`StopAll` stops a turn that has gone wrong.",
+        "description": "A command from a surface (spec 3.3 §6). Every command runs as an authenticated\n`Caller`, whose subject, surface and `Origin` reach its audit record.\n\nA message sent while a turn of its session runs reaches that turn (§6 \"steer\"): the\nengine offers it through `Source::steer`, the runtime screens it as it screens a turn's\nown message, and the agent takes it at its next safe point. A turn that ends first hands\nthe message back, and it goes as the session's next message, once.\n\n| Command | A turn of the session runs | Answers |\n|---|---|---|\n| `Send` | Offered to the turn; it waits in the session's queue until the turn takes it or hands it back | At once: `Queued` |\n| `Steer` | The same | Once the message has a fate: `Steered`, or `Queued` when handed back |\n| `Queue` | Never offered: the session's next message | At once: `Queued` |",
         "oneOf": [
           {
             "description": "Answers a decision at the version the surface saw (S-I2).",
@@ -1673,7 +1673,7 @@
             "type": "object"
           },
           {
-            "description": "Sends a message; queued instead while a decision of the session is open (S-I4).",
+            "description": "Sends a message; queued instead while a decision of the session is open (S-I4). A\nrunning turn of the session is offered it and takes it at its agent's next safe point;\na turn that ends first leaves it queued as the session's next message.",
             "properties": {
               "sessionId": {
                 "description": "The session.",
@@ -1696,7 +1696,30 @@
             "type": "object"
           },
           {
-            "description": "Queues a message as the session's next, after its open decisions (S-I4).",
+            "description": "Sends a message to the running turn of the caller's own session and waits for what\nbecame of it (§6 \"steer\"): `Steered` when the turn took it,\n`Queued` or `Sent` when it was handed\nback and goes as the session's next message. A person sends it, never an agent.",
+            "properties": {
+              "sessionId": {
+                "description": "The session.",
+                "type": "string"
+              },
+              "text": {
+                "description": "The message.",
+                "type": "string"
+              },
+              "type": {
+                "const": "steer",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "sessionId",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Queues a message as the session's next, after its open decisions (S-I4): never offered\nto a running turn.",
             "properties": {
               "sessionId": {
                 "description": "The session.",
@@ -2127,7 +2150,30 @@
             "type": "object"
           },
           {
-            "description": "The message waits until the session's open decisions are answered (S-I4).",
+            "description": "The session's running turn took the message at its agent's next safe point (§6\n\"steer\"): the session holds it as event `event_id`, and the turn's next model call\ncarries it.",
+            "properties": {
+              "eventId": {
+                "description": "The id of the session event that carries the message.",
+                "type": "string"
+              },
+              "sessionId": {
+                "description": "The session.",
+                "type": "string"
+              },
+              "type": {
+                "const": "steered",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "sessionId",
+              "eventId"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The message waits: until the session's open decisions are answered (S-I4), or until its\nrunning turn takes it or ends.",
             "properties": {
               "position": {
                 "description": "Its place in the queue, from 1.",
@@ -3988,7 +4034,7 @@
         "description": "`GET /surface/sessions/{session}/queued` answer (spec 3.3 §7.4 rule 2, S-I4).",
         "properties": {
           "queued": {
-            "description": "What the caller typed while a decision of the session was open, oldest first; each is\nsent once the session's decisions are answered.",
+            "description": "What the caller typed while a decision of the session was open or a turn ran, oldest\nfirst; each is sent once the session is free, or leaves the list when the running turn\ntakes it.",
             "items": {
               "type": "string"
             },

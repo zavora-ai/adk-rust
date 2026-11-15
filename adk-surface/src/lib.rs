@@ -104,8 +104,8 @@ pub use engine::SURFACE_AUDIT_ANSWER;
 pub use engine::SURFACE_AUDIT_DRAWN_SUBMITTED;
 pub use engine::{
     Command, CommandOutcome, DEFAULT_POLL_INTERVAL, FeedFrame, SURFACE_AUDIT_RESUME_ALL,
-    SURFACE_AUDIT_SEND, SURFACE_AUDIT_SET_MODE, SURFACE_AUDIT_STOP_ALL, SurfaceEngine,
-    SurfaceEngineBuilder,
+    SURFACE_AUDIT_SEND, SURFACE_AUDIT_SET_MODE, SURFACE_AUDIT_STEER, SURFACE_AUDIT_STOP_ALL,
+    SurfaceEngine, SurfaceEngineBuilder,
 };
 pub use error::{Result, SurfaceError};
 pub use hints::{CardHint, CardHints};
@@ -119,4 +119,4 @@ pub use model::{
 pub use origin::{Caller, Origin, SurfaceKind, Via};
 pub use project::{CALL_TEXT_LIMIT, Place};
 pub use rules::{Allowed, Answer, AnswerOption, Risk};
-pub use source::{AgentState, AlwaysAllowOffer, RuleCommit, Source, SpendToday};
+pub use source::{AgentState, AlwaysAllowOffer, RuleCommit, Source, SpendToday, Steered, Steering};

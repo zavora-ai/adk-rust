@@ -19,6 +19,7 @@
 //! | `POST /kernel/processes/{pid}/{kill,nice,suspend,resume}` | [`ProcessTable`](crate::ProcessTable) actions |
 //! | `GET /kernel/events` | the event bus as server-sent events, from a cursor ([`api::EventsQuery`]) |
 //! | `POST /kernel/attach/{session}` | a surface attaches to a session: transcript cursor, pending holds, process |
+//! | `POST /kernel/sessions/{session}/steer` | send a message to the running turn of the caller's session ([`api::SteerRequest`], [`Kernel::steer`]): accepted by the turn this replica runs, or handed back to send as the next message |
 //! | `POST /kernel/freeze`, `POST /kernel/unfreeze` | [`Kernel::freeze`] and [`Kernel::unfreeze`]; `unfreeze` only on the socket or pipe, a paired local terminal ([`RESUME_NOT_HERE_CODE`] over HTTP, spec 3.3 S-I10) |
 //! | `GET /kernel/agenda` | the agenda ([`api::AgendaQuery`]) |
 //! | `POST /kernel/agenda/{id}/{approve,reject,schedule}` | [`Agenda`](crate::Agenda) actions as the caller ([`api::RejectRequest`], [`api::ScheduleRequest`]) |
@@ -57,7 +58,7 @@
 //! | [`ControlPlaneConfig::http`] on loopback without one | Loopback peers as the OS user with the `operator` scope |
 //! | [`ControlPlaneConfig::http`] beyond loopback without one | Refused at start (K-I18) |
 //!
-//! The routes that change the kernel — `spawn`, `kill`, `nice`, `suspend`, `resume`,
+//! The routes that change the kernel — `spawn`, `steer`, `kill`, `nice`, `suspend`, `resume`,
 //! `freeze`, `unfreeze`, the agenda's `approve`, `reject` and `schedule`, the driver actions
 //! and the partition writes — and the `/proc` routes, which describe the user's activity,
 //! need the `operator` scope (`403` otherwise), which the socket, the pipe and a loopback
@@ -280,6 +281,8 @@ pub mod paths {
     pub const SESSION_MODE: &str = "/kernel/sessions/{session}/mode";
     /// `POST`: write a surface engine's record on the kernel's signed log (spec 3.3 §11).
     pub const SURFACE_RECORDS: &str = "/kernel/surface/records";
+    /// `POST`: send a message to the running turn of the caller's session (spec 3.3 §6).
+    pub const SESSION_STEER: &str = "/kernel/sessions/{session}/steer";
 }
 
 /// Where the control plane listens and how it authenticates HTTP callers (spec 3.2 §7.11).

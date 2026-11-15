@@ -13,7 +13,9 @@ use adk_core::{
 };
 use adk_harness::HarnessMode;
 use adk_kernel::KernelEvent;
-use adk_kernel::control::api::{ApprovalItem, AttachRequest, LedgerParams, SpawnRequest};
+use adk_kernel::control::api::{
+    ApprovalItem, AttachRequest, LedgerParams, SpawnRequest, SteerResponse,
+};
 use adk_kernel::control::{ControlClient, SurfaceRecord};
 use adk_kernel::proc::LedgerEntry;
 use async_trait::async_trait;
@@ -25,7 +27,9 @@ use tokio::sync::watch;
 use crate::error::{Result, SurfaceError};
 use crate::inbox::Inbox;
 use crate::origin::Caller;
-use crate::source::{AgentState, AlwaysAllowOffer, RuleCommit, Source, SpendToday};
+use crate::source::{
+    AgentState, AlwaysAllowOffer, RuleCommit, Source, SpendToday, Steered, Steering,
+};
 
 /// How long the feed waits for a bus event before it reads the session again anyway, while a
 /// process runs (its turn writes the session between bus events) or the bus is unreachable.
@@ -72,6 +76,12 @@ struct Bus {
 /// while the decision waits and granted once the yes is recorded, as in process. A paired
 /// device's token reaches none of those routes, so a remote terminal offers Allow once, Edit
 /// and Deny.
+///
+/// A message for a running turn goes through `POST /api/kernel/sessions/{id}/steer`, which
+/// the replica that answers takes only for a turn it runs itself; a turn another replica runs
+/// hands the message back, and it goes as the session's next message. What became of a
+/// message the kernel accepted is read from the kernel's stores: delivered once the session
+/// holds its event, handed back once its process leaves the claim that held it.
 ///
 /// The session's mode is read from the kernel (`GET /api/kernel/sessions/{id}/mode`) and set
 /// by the REPL's `/mode`, which the kernel runs over its harness (spec 3.3 §5.2), so the
@@ -604,6 +614,48 @@ impl Source for ControlSource {
             .with_session_id(session);
         self.client.spawn(&request).await?;
         Ok(())
+    }
+
+    async fn steer(&self, caller: &Caller, session: &str, text: &str) -> Result<Option<Steering>> {
+        let (steer_id, pid, lease_epoch) = match self.client.steer(session, text).await? {
+            SteerResponse::Accepted { steer_id, pid, lease_epoch } => (steer_id, pid, lease_epoch),
+            SteerResponse::Returned => return Ok(None),
+        };
+        let source = self.clone();
+        let (user, session) = (caller.user_id().to_string(), session.to_string());
+        Ok(Some(Box::pin(async move {
+            loop {
+                // The wait for the next change begins before the reads, so a change during
+                // them is not missed.
+                let mut changed = Box::pin(source.changed(QUIET_REREAD));
+                let _ = futures::poll!(changed.as_mut());
+                // The process first, the session after: an event the turn saved before it
+                // ended is read once the turn is seen to have ended.
+                let held = source.client.processes(&Default::default()).await.map(|processes| {
+                    processes.iter().any(|process| {
+                        process.meta.pid == pid
+                            && process.run.state == RunState::Running
+                            && process.run.lease_epoch == lease_epoch
+                    })
+                });
+                match (held, source.transcript(&user, &session).await) {
+                    (Ok(held), Ok(events)) => {
+                        let steered = crate::local::taken(&events.unwrap_or_default(), &steer_id);
+                        if steered != Steered::Returned || !held {
+                            return Ok(steered);
+                        }
+                    }
+                    // The kernel is out of reach: its stores say once it answers again.
+                    (Err(error), _) => {
+                        tracing::debug!(error = %error, steer.id = %steer_id, "a steered message's process could not be read");
+                    }
+                    (_, Err(error)) => {
+                        tracing::debug!(error = %error, steer.id = %steer_id, "a steered message's session could not be read");
+                    }
+                }
+                changed.await;
+            }
+        })))
     }
 
     async fn request_call(

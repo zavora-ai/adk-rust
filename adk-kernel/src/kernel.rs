@@ -40,7 +40,7 @@ use adk_core::audit_log::{AuditActor, AuditTrail};
 use adk_core::queue_source::QueueIngress;
 use adk_core::{
     ApprovalService, Clock, DurableRunStore, Enqueued, GovernanceControl, GovernanceMirrorConfig,
-    GovernanceStateStore, ScheduleStore, SpendLedger, SystemClock,
+    GovernanceStateStore, RunCheckpointRef, ScheduleStore, SpendLedger, SystemClock,
 };
 use adk_runner::Runner;
 use adk_server::background::{
@@ -370,6 +370,27 @@ pub struct KernelHealth {
         with = "crate::serde_util::option_millis"
     )]
     pub store_latency: Option<Duration>,
+}
+
+/// The runner's code for a run that has not built its context yet, whose plugins cannot
+/// screen a steering message.
+const STEER_RUN_NOT_READY_CODE: &str = "agent.steer.run_not_ready";
+
+/// A message a running process holds for its agent's next safe point (spec 3.3 §6 "steer"):
+/// what [`Kernel::steer`] answers.
+///
+/// The message is delivered when the session holds an event whose steering marker carries
+/// the receipt's steer id; it is handed back when the claim ends without one.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct Steering {
+    /// The process that holds the message.
+    pub pid: String,
+    /// The lease epoch of the claim that holds it; a later claim of the process never
+    /// delivers it.
+    pub lease_epoch: u64,
+    /// Resolves once the turn takes the message, or ends first and hands it back.
+    pub receipt: adk_core::SteerReceipt,
 }
 
 /// One worker's health (spec 3.2 §7.2).
@@ -1126,6 +1147,101 @@ impl Kernel {
         sup.wake_suspended(&Suspension::Freeze).await;
         sup.nudge();
         Ok(())
+    }
+
+    /// Sends `text` to the turn of `user_id`'s session `session_id` that this replica runs
+    /// (spec 3.3 §6 "steer"): `Runner::steer` on the runner of the process's target, so the
+    /// message is screened as a turn's own message is and the agent takes it at its next safe
+    /// point.
+    ///
+    /// Returns `None` when no turn of the session takes messages here: none runs, another
+    /// replica runs it, its target is a workflow, or its run has not reached its agent yet.
+    /// Send the message as the session's next message then. An added agent's turn that
+    /// started before the agent was changed finishes on the build it started on, which is no
+    /// longer hosted, so it answers `None` too.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Frozen`] while everything is stopped, or the runner's error
+    /// when `text` is blank or an input guardrail or plugin refuses the message.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_core::SteerOutcome;
+    ///
+    /// # async fn example(kernel: adk_kernel::Kernel) -> adk_kernel::Result<()> {
+    /// match kernel.steer("ana", "s-1", "use the staging database").await? {
+    ///     Some(steering) => match steering.receipt.outcome().await? {
+    ///         SteerOutcome::Delivered { event_id } => println!("delivered as {event_id}"),
+    ///         SteerOutcome::Returned(_) => println!("send it as the next message"),
+    ///     },
+    ///     None => println!("no turn runs here: send it as the next message"),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn steer(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        text: &str,
+    ) -> Result<Option<Steering>> {
+        let governance = &self.inner.config.governance;
+        if governance.is_frozen() {
+            return Err(KernelError::Frozen { reason: governance.reason().unwrap_or_default() });
+        }
+        let message = adk_core::Content::new("user").with_text(text);
+        adk_core::validate_steering_message(&message)?;
+        let sup = &self.inner.sup;
+        // The newest claim of the session on this replica; the session is the one its worker
+        // runs the claim in.
+        let claimed = {
+            let local = sup.local.lock().unwrap_or_else(|e| e.into_inner());
+            local
+                .values()
+                .filter(|claim| {
+                    let run = &claim.run;
+                    let session = match &run.checkpoint {
+                        Some(
+                            RunCheckpointRef::Session { session_id, .. }
+                            | RunCheckpointRef::AwaitingApproval { session_id, .. },
+                        ) => Some(session_id),
+                        _ => run.session_id.as_ref(),
+                    };
+                    run.app_name == sup.app_name
+                        && run.user_id == user_id
+                        && session.is_some_and(|session| session == session_id)
+                })
+                .max_by_key(|claim| claim.claimed_at)
+                .map(|claim| claim.run.clone())
+        };
+        let Some(run) = claimed else { return Ok(None) };
+        let runner = match self.inner.agents.get(&run.target) {
+            Some(runner) => Arc::clone(runner),
+            None => match sup.targets.hosted(&run.target) {
+                Some(added) => added.runner,
+                None => return Ok(None),
+            },
+        };
+        let identity = adk_core::AdkIdentity::new(
+            adk_core::AppName::try_from(runner.app_name()).map_err(adk_core::AdkError::from)?,
+            adk_core::UserId::try_from(user_id).map_err(adk_core::AdkError::from)?,
+            adk_core::SessionId::try_from(session_id).map_err(adk_core::AdkError::from)?,
+        );
+        match runner.steer(&identity, message).await {
+            Ok(receipt) => {
+                Ok(Some(Steering { pid: run.run_id, lease_epoch: run.lease_epoch, receipt }))
+            }
+            // The claim has not started its run, or the run ended meanwhile.
+            Err(error)
+                if error.code == adk_core::STEER_NO_ACTIVE_RUN_CODE
+                    || error.code == STEER_RUN_NOT_READY_CODE =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// The process table.

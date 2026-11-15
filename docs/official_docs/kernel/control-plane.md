@@ -87,6 +87,7 @@ All routes are under `/api`, on both transports. `adk-rust up` merges them into 
 | `POST /kernel/processes/{pid}/resume` | Wake a suspended or sleeping process | Yes | `resume` |
 | `GET /kernel/events?after=` | The event bus as server-sent events from a cursor; `Last-Event-ID` wins over `after` | — | — |
 | `POST /kernel/attach/{session}` | Transcript since a cursor, held calls, the process running the session | — | `attach` |
+| `POST /kernel/sessions/{session}/steer` | Send `{"text": "..."}` to the running turn of the caller's session; see [Steering a running turn](#steering-a-running-turn) | Yes, and no device token | `steer` |
 | `POST /kernel/freeze`, `POST /kernel/unfreeze` | `Kernel::freeze` and `Kernel::unfreeze`; the answer reports `parkedRuns`. `unfreeze` answers only on the socket and the pipe, the kernel's own terminal: over HTTP it is `403 kernel.resume.not_here`, and the web home resumes in the kernel's process (spec 3.3 S-I10) | Yes | `freeze`, `unfreeze` |
 | `GET /kernel/drivers` | The mounted [drivers](drivers.md) with their state | — | — |
 | `POST /kernel/drivers/{id}/mount` | `{"manifest": "<toml>"}` answers what the mount approves; with `"confirm": true` mounts it as the caller | Yes | `drivers.mount` |
@@ -173,6 +174,39 @@ The answer carries `transcript` (the session's events after `after`), `cursor` (
 event's time, for the next attach), `pending` (the calls the session holds for a decision) and
 `process` (the unfinished process running the session, if any). A surface attaches only to
 its caller's own sessions.
+
+### Steering a running turn
+
+```bash
+curl --unix-socket "$HOME/Library/Application Support/adk-rust/kernel.sock" \
+  -H 'content-type: application/json' -d '{"text": "use the staging database"}' \
+  http://localhost/api/kernel/sessions/s-1/steer
+```
+
+`POST /kernel/sessions/{session}/steer` sends the caller's message to the turn of their own
+session that the answering replica runs (`Kernel::steer`, `ControlClient::steer`). The runner
+of the process's target screens it as it screens a turn's own message, and the agent takes it
+after its current tool step, before its next model call
+([Runner: Steering a Running Agent](../core/runner.md#steering-a-running-agent)).
+
+| Answer | Meaning | What to do |
+|---|---|---|
+| `{"outcome": "accepted", "steerId": "...", "pid": "...", "leaseEpoch": 2}` | The running turn holds the message. The kernel answers before the turn takes it | Delivered once `attach` shows an event whose `actions.steering.steerId` is `steerId`; handed back once process `pid` is no longer `running` at `leaseEpoch` without one |
+| `{"outcome": "returned"}` | No turn of the session takes messages on this replica: none runs, another replica runs it, its target is a workflow, or its run has not reached its agent yet | Send the message as the session's next: `POST /kernel/processes` |
+
+| Refusal | When |
+|---|---|
+| `403` | No `operator` scope, or a paired device's token: a device sends no input to an agent (S-I7) |
+| `400 agent.steer.invalid_message` | The message has no words |
+| `503 kernel.frozen` | Everything is stopped |
+| The guardrail's or plugin's error | An input guardrail blocks the message, or a plugin fails |
+
+The kernel keeps no record of an accepted message beyond the turn that holds it: its fate is
+read from the session and the process table, so a client that reconnects, or a kernel that
+restarts, loses nothing. With several replicas, a request reaches one of them, and only the
+replica whose worker claimed the session's run holds that run: any other answers `returned`,
+and the message goes as the session's next message. A turn of an added agent that started
+before the agent was changed finishes on the build it started on and answers `returned` too.
 
 ## Inventory
 

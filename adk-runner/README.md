@@ -148,7 +148,7 @@ In an ordinary agent tree, the runner checks every handoff — from a model's `t
 | Input screening | Every agent's input guardrails screen the user message before it is saved |
 | Plugin `on_event` | Sees every event the run yields, including a `before_run` early exit, a cancelled run's answers to its calls in flight, and a budget stop event |
 | Cancellation | `Runner::interrupt(session_id)` stops a run; each call still in flight is answered `{"status": "outcome_unknown"}`, persisted, and yielded |
-| Steering | `Runner::steer(identity, content)` screens a message like the run's own and queues it on that run; an agent takes it after a tool step and the runner saves it as a user event, or its `SteerReceipt` returns it when the run ends first |
+| Steering | `Runner::steer(identity, content)` screens a message like the run's own and queues it on that run; an agent takes it after a tool step and the runner saves it as a user event, or its `SteerReceipt` returns it when the run ends first. `adk-surface`'s `send` and `steer` commands, `Kernel::steer` and the kernel's chat gateway call it for a message that arrives while a turn runs |
 | Plugin `after_run` | Runs once for every run whose `before_run` ran, however it ends — including a consumer that drops the stream, whose calls in flight are answered outcome-unknown first. A durable attempt its worker drops writes nothing; the recovering worker finishes the run |
 | `Runner::close` | Closes every agent's toolsets through `Agent::close`, then the plugins |
 

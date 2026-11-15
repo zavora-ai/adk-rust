@@ -144,6 +144,16 @@ impl ChannelHost for Kernel {
         Ok(process.meta.pid)
     }
 
+    /// [`Kernel::steer`]: the turn this replica runs takes the message.
+    async fn steer(
+        &self,
+        user: &str,
+        session: &str,
+        text: &str,
+    ) -> Result<Option<adk_core::SteerReceipt>> {
+        Ok(Kernel::steer(self, user, session, text).await?.map(|steering| steering.receipt))
+    }
+
     /// The bus's finished processes whose runs a channel started, read from the run store.
     async fn finished_turns(&self) -> Result<BoxStream<'static, RunRecord>> {
         let runs = self.processes().run_store().clone();
