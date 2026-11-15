@@ -1335,6 +1335,10 @@ pub async fn goal(
 /// shared stores for the kernel's background worker, and this terminal follows it over the
 /// control plane until it ends, holds a call no one here decides, or Ctrl-C detaches —
 /// which leaves it running.
+///
+/// The goal runs as this user, authenticated as a local goal is, so the session's mode and
+/// the user's standing rules apply on the kernel (spec 3.1 §9.2 I6); `--yes` approves the
+/// goal's held calls through the inbox while this terminal follows it.
 #[cfg(feature = "persist")]
 async fn goal_on_kernel(
     setup: &Setup,
@@ -1355,7 +1359,8 @@ async fn goal_on_kernel(
         .await?
         .with_console(console.clone())
         .with_run_store(db.runs.clone())
-        .with_goal_queue(adk_kernel::QueueClass::BACKGROUND);
+        .with_goal_queue(adk_kernel::QueueClass::BACKGROUND)
+        .with_authenticated_goals();
     let spec = GoalSpec {
         goal: goal.goal.clone(),
         until: goal.until.clone(),
@@ -1365,16 +1370,29 @@ async fn goal_on_kernel(
     let mut cursor = Some(chrono::Utc::now());
     let pid = launcher.enqueue_goal(spec).await?;
     let session = launcher.session_id().unwrap_or_default().to_string();
+    let unattended = setup.resolved.yes.then_some(setup.resolved.allow_unsandboxed);
     println!("goal mode on the kernel at {}", client.endpoint());
+    println!(
+        "mode {} as {}, in the kernel's shell{}",
+        launcher.mode().await?,
+        setup.user,
+        if unattended.is_some() {
+            "; --yes approves held calls while this terminal follows"
+        } else {
+            ""
+        }
+    );
     println!("goal:  {}", goal.goal);
     println!("until: {}  (budget: {} iterations)", goal.until, goal.max_iters);
     println!("process {pid} · session {session}");
     println!(
-        "Ctrl-C detaches; the goal keeps running. Follow it again with `adk-rust attach          --session {session}`.\n"
+        "Ctrl-C detaches; the goal keeps running. Follow it again with `adk-rust attach \
+         --session {session}`.\n"
     );
     let terminal = console.is_terminal().then_some(&console);
     let followed =
-        crate::kernel_cli::follow(&client, terminal, &session, &mut cursor, Some(&pid)).await?;
+        crate::kernel_cli::follow(&client, terminal, unattended, &session, &mut cursor, Some(&pid))
+            .await?;
     let state = launcher.goal().await?;
     if let (Some(mirror), Some(state)) = (&mirror, &state) {
         write_goal_mirror(mirror, state)?;
@@ -1386,7 +1404,9 @@ async fn goal_on_kernel(
         }
         Followed::Held(calls) => {
             println!(
-                "\n{calls} call(s) wait for a decision. The goal waits on the kernel: decide                  with `adk-rust approvals` or from any surface."
+                "\n{calls} call(s) wait for a decision. The goal waits on the kernel: \
+                 `adk-rust approvals list` shows them, `adk-rust approvals approve ID` resumes \
+                 it, or decide from any surface."
             );
             EXIT_HELD
         }

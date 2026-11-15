@@ -652,6 +652,14 @@ impl ApprovalService for NotifyingApprovals {
     fn approval_store(&self) -> Option<Arc<dyn ApprovalStore>> {
         self.inner.approval_store()
     }
+
+    fn route_unrouted(&self, router: Arc<dyn adk_core::ApprovalRouter>) -> bool {
+        self.inner.route_unrouted(router)
+    }
+
+    fn add_notifier(&self, notifier: Arc<dyn ApprovalNotifier>) -> bool {
+        self.inner.add_notifier(notifier)
+    }
 }
 
 /// The harness's standing rules as the kernel's daily review reads them (spec 3.2 §9.1):

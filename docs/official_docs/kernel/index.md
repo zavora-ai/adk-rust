@@ -158,6 +158,51 @@ async fn run(runner: Arc<adk_rust::runner::Runner>) -> adk_rust::kernel::Result<
 }
 ```
 
+An agent that asks before a call needs an approval service, given to its runner and to the
+kernel: the kernel files every held call the service routes nowhere into the inbox for the
+`operator` group, self-approval allowed, and publishes `held` and `decided` on its
+[event bus](events.md). A router of the service's own keeps deciding.
+
+```rust
+use std::sync::Arc;
+
+use adk_rust::kernel::{InMemoryProcessStore, Kernel, KernelConfig};
+use adk_rust::runner::Runner;
+use adk_rust::{
+    Agent, ApprovalService, DurableRunStore, InMemoryApprovalStore, InMemoryRunStore, RunConfig,
+    StoreApprovalService,
+};
+use adk_rust::session::{InMemorySessionService, SessionService};
+
+fn build(agent: Arc<dyn Agent>) -> Result<Kernel, Box<dyn std::error::Error>> {
+    let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+    // `with_run_store` makes a decision wake the process parked on the call.
+    let approvals: Arc<dyn ApprovalService> = Arc::new(
+        StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+            .with_run_store(runs.clone()),
+    );
+    let runner = Runner::builder()
+        .app_name("ops")
+        .agent(agent)
+        .session_service(Arc::new(InMemorySessionService::new()) as Arc<dyn SessionService>)
+        .run_config(RunConfig::builder().approval_service(approvals.clone()).build())
+        .build()?;
+    Ok(Kernel::builder()
+        .config(KernelConfig::default().with_app_name("ops"))
+        .run_store(runs)
+        .process_store(Arc::new(InMemoryProcessStore::new()))
+        .approval_service(approvals)
+        .agent("ops", Arc::new(runner))
+        .build()?)
+}
+```
+
+`adk-rust approvals list --home DIR` and `GET /api/approvals` on its
+[control plane](control-plane.md) list the call; a decision there resumes the process. A
+service that takes neither the kernel's router nor its notifier, such as a wrapper that does
+not forward `ApprovalService::route_unrouted` and `add_notifier`, is named in the
+[inventory](control-plane.md#inventory).
+
 | Feature of `adk-kernel` | Default | Adds |
 |---|---|---|
 | `sqlite` | on | `SqliteProcessStore` on the `harness.db` pool |

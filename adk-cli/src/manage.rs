@@ -2,15 +2,20 @@
 
 use std::sync::Arc;
 
-use adk_core::{ApprovalScope, Part, ToolApproval, ToolOrigin};
+use adk_core::{
+    ApprovalAction, ApprovalDecision, ApprovalRequest, ApprovalRequestQuery, ApprovalScope,
+    ApprovalService, ApprovalState, Part, StoreApprovalService, ToolApproval, ToolOrigin,
+};
 use adk_harness::{
     HarnessAgent, HarnessMode, OriginPin, RulePredicate, RuleScope,
     SHELL_PREFIX_SUGGESTION_DENYLIST, ShellIsolation, StandingDecision, StandingRule,
     StandingRuleStore,
 };
+use adk_kernel::control::ControlClient;
+use adk_kernel::control::api::ApprovalItem;
 use adk_session::{DeleteRequest, GetRequest, ListRequest, SessionService};
 use anyhow::{Context, Result, bail};
-use serde_json::{Value, json};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::cli::{ApprovalsCommands, MemoryCommands, RulesCommands, SessionsCommands};
@@ -645,19 +650,154 @@ fn short_id(fingerprint: &str) -> String {
         .collect()
 }
 
-/// `adk-rust approvals …`.
+/// `adk-rust approvals …`: the approvals inbox of the kernel running here (or at `home`), or
+/// of the served harness or kernel `server` names, so the ids and decisions are the ones every
+/// surface sees. Calls an in-process session holds in this machine's harness.db, which no
+/// inbox files, are listed and decided beside them, and on their own when no kernel runs.
 pub async fn approvals(
     command: ApprovalsCommands,
     server: Option<String>,
     token: Option<String>,
+    home: Option<std::path::PathBuf>,
 ) -> Result<()> {
-    match server {
-        Some(server) => remote(command, server.trim_end_matches('/'), token).await,
-        None => local(command).await,
+    if let Some(server) = server {
+        let mut client = ControlClient::http(server.trim_end_matches('/'));
+        if let Some(token) = token.filter(|token| !token.trim().is_empty()) {
+            client = client.with_bearer_token(token);
+        }
+        return decide_or_list(command, Some(&client), false).await;
+    }
+    let kernel = match home {
+        Some(home) => {
+            let target = crate::cli::KernelTarget { home: Some(home), server: None, token: None };
+            Some(crate::kernel_cli::client(&target).await?)
+        }
+        None => crate::kernel_cli::local().await?,
+    };
+    decide_or_list(command, kernel.as_ref(), true).await
+}
+
+/// One row of `approvals list`.
+fn print_row(id: &str, session: &str, tool: &str, args: &Value, note: &str) {
+    println!(
+        "{}  session {}  {} {}  ({})",
+        safe(id),
+        safe(session),
+        safe(tool),
+        one_line(&args.to_string(), 120),
+        one_line(note, 80)
+    );
+}
+
+/// Lists or decides the pending calls of the inbox `kernel` reaches, and with `here` those
+/// harness.db holds that no inbox filed; a decision in the inbox wakes the process parked on
+/// the call.
+async fn decide_or_list(
+    command: ApprovalsCommands,
+    kernel: Option<&ControlClient>,
+    here: bool,
+) -> Result<()> {
+    let filed: Vec<ApprovalItem> = match kernel {
+        Some(client) => client
+            .approvals()
+            .await?
+            .into_iter()
+            .filter(|item| item.state == ApprovalState::Pending)
+            .collect(),
+        None => Vec::new(),
+    };
+    // With a kernel up, harness.db's calls it filed are in its inbox under the same id.
+    let held = match (here, kernel) {
+        (false, _) => Vec::new(),
+        (true, None) => held_here(false).await?,
+        (true, Some(_)) => held_here(true).await?,
+    };
+    let (id, action, reason) = match command {
+        ApprovalsCommands::List => {
+            if filed.is_empty() && held.is_empty() {
+                println!("No calls are waiting for a decision.");
+            }
+            for item in &filed {
+                print_row(
+                    &item.id,
+                    &item.scope.session_id,
+                    &item.tool_name,
+                    &item.args_redacted,
+                    &item.summary,
+                );
+            }
+            for held in &held {
+                let at = held.entry.requested_at.format("held %Y-%m-%d %H:%M").to_string();
+                let request = &held.entry.request;
+                print_row(
+                    &held.id(),
+                    &held.scope.session_id,
+                    &request.tool_name,
+                    &request.args,
+                    &at,
+                );
+            }
+            return Ok(());
+        }
+        ApprovalsCommands::Approve { id } => (id, ApprovalAction::Approve, None),
+        ApprovalsCommands::Deny { id, reason } => (id, ApprovalAction::Reject, reason),
+    };
+    // The full id, or the start of exactly one.
+    let mut starting = filed.iter().filter(|item| item.id.starts_with(&id));
+    let item = match (filed.iter().find(|item| item.id == id), starting.next(), starting.next()) {
+        (Some(item), _, _) | (None, Some(item), None) => Some(item),
+        (None, Some(_), Some(_)) => {
+            bail!("{id} starts more than one waiting call; give more of it")
+        }
+        (None, None, _) => None,
+    };
+    let Some(item) = item else {
+        let Some(held) = held.iter().find(|held| held.id() == id || held.entry.fingerprint == id)
+        else {
+            let place = kernel.map_or_else(|| "here".to_string(), |client| client.endpoint());
+            bail!("no pending call {id} at {place}; `adk-rust approvals list` shows them");
+        };
+        return decide_here(held, action, reason).await;
+    };
+    let kernel = kernel.context("a call in an inbox has a kernel")?;
+    let decided = kernel.decide(&item.id, item.version, action, reason.as_deref()).await?;
+    let tool = safe(&item.tool_name);
+    let process = match &item.run_id {
+        Some(run) => format!("process {}", safe(run)),
+        None => "the turn that holds it".to_string(),
+    };
+    match (action, decided.state) {
+        (ApprovalAction::Approve, ApprovalState::Pending) => {
+            println!("approval of {tool} recorded; {} waits for more approvers", safe(&item.id));
+        }
+        (ApprovalAction::Approve, _) => println!("approved {tool} once; {process} continues now"),
+        _ => println!("denied {tool}; {process} hears it now"),
+    }
+    Ok(())
+}
+
+/// A call held in harness.db, with the inbox request a kernel filed for it, if one did.
+#[derive(Clone)]
+struct Held {
+    scope: ApprovalScope,
+    entry: adk_core::PendingApproval,
+    request: Option<ApprovalRequest>,
+}
+
+impl Held {
+    /// The id `approvals list` shows: the inbox request's, as the kernel shows it, else the
+    /// start of the call's fingerprint digest.
+    fn id(&self) -> String {
+        match &self.request {
+            Some(request) => request.id.clone(),
+            None => short_id(&self.entry.fingerprint),
+        }
     }
 }
 
-async fn local(command: ApprovalsCommands) -> Result<()> {
+/// The calls harness.db holds for this user, newest session first; with `unfiled`, only those
+/// no inbox filed, which an in-process session decides.
+async fn held_here(unfiled: bool) -> Result<Vec<Held>> {
     let db = crate::sessions::open_default_db().await?;
     let user = crate::setup::os_user();
     let mut sessions = db
@@ -670,68 +810,82 @@ async fn local(command: ApprovalsCommands) -> Result<()> {
         })
         .await?;
     sessions.sort_by_key(|session| std::cmp::Reverse(session.last_update_time()));
-    let mut pending = Vec::new();
+    let mut held = Vec::new();
     for session in &sessions {
         let scope = ApprovalScope::new(APP_NAME, user.clone(), session.id());
-        for entry in db.approvals.pending(&scope).await? {
-            pending.push((scope.clone(), entry));
+        let entries = db.approvals.pending(&scope).await?;
+        if entries.is_empty() {
+            continue;
+        }
+        let open = db
+            .approvals
+            .list_requests(
+                &ApprovalRequestQuery::default()
+                    .with_session(&scope)
+                    .with_states([ApprovalState::Pending]),
+            )
+            .await?;
+        for entry in entries {
+            let request = open.iter().find(|request| request.fingerprint == entry.fingerprint);
+            if unfiled && request.is_some() {
+                continue;
+            }
+            held.push(Held { scope: scope.clone(), request: request.cloned(), entry });
         }
     }
-    let find = |id: &str| {
-        pending
-            .iter()
-            .find(|(_, entry)| short_id(&entry.fingerprint) == id || entry.fingerprint == id)
-            .cloned()
-            .with_context(|| format!("no pending call {id}; `adk-rust approvals list` shows them"))
-    };
-    match command {
-        ApprovalsCommands::List => {
-            if pending.is_empty() {
-                println!("No calls are waiting for a decision.");
-            }
-            for (scope, entry) in &pending {
-                println!(
-                    "{}  session {}  {} {}  (held {})",
-                    short_id(&entry.fingerprint),
-                    safe(&scope.session_id),
-                    safe(&entry.request.tool_name),
-                    one_line(&entry.request.args.to_string(), 120),
-                    entry.requested_at.format("%Y-%m-%d %H:%M")
-                );
-            }
+    Ok(held)
+}
+
+/// Decides a call harness.db holds. A request a kernel filed is decided as the operator its
+/// socket would name, so it resolves and its parked process is queued for the next
+/// `adk-rust up`; any other call is decided in the store for its session to take.
+async fn decide_here(held: &Held, action: ApprovalAction, reason: Option<String>) -> Result<()> {
+    use adk_core::principal::SubjectRef;
+
+    let db = crate::sessions::open_default_db().await?;
+    let tool = safe(&held.entry.request.tool_name);
+    let (scope, fingerprint) = (&held.scope, &held.entry.fingerprint);
+    if let Some(request) = &held.request {
+        let service =
+            StoreApprovalService::new(db.approvals.clone()).with_run_store(db.runs.clone());
+        let operator = SubjectRef::human(crate::setup::os_user());
+        let decision = match action {
+            ApprovalAction::Approve => ApprovalDecision::approve(operator),
+            _ => ApprovalDecision::reject(operator, reason.unwrap_or_default()),
         }
-        ApprovalsCommands::Approve { id } => {
-            let (scope, entry) = find(&id)?;
-            db.approvals.decide(&scope, &entry.fingerprint, ToolApproval::approve()).await?;
-            match parked_goal(&db, &scope, &entry.fingerprint).await? {
-                Some(goal) => println!(
-                    "approved {} once; the goal in session {} waits for it. Continue it in its \
-                     workspace: `adk-rust goal {} --until {} --resume`",
-                    safe(&entry.request.tool_name),
-                    safe(&scope.session_id),
-                    safe(&shell_quote(&goal.goal)),
-                    safe(&shell_quote(&goal.until))
-                ),
-                None => println!(
-                    "approved {} once; it runs when session {} continues: `adk-rust --session {}`",
-                    safe(&entry.request.tool_name),
-                    safe(&scope.session_id),
-                    safe(&scope.session_id)
-                ),
-            }
+        .with_groups([adk_cli::harness::OPERATOR_SCOPE]);
+        service.decide(&request.id, request.version, decision).await?;
+        match action {
+            ApprovalAction::Approve => println!(
+                "approved {tool} once; the kernel's process continues when `adk-rust up` starts"
+            ),
+            _ => println!("denied {tool}; the kernel's process hears it when `adk-rust up` starts"),
         }
-        ApprovalsCommands::Deny { id, reason } => {
-            let (scope, entry) = find(&id)?;
-            let approval = match reason {
-                Some(reason) => ToolApproval::deny().with_message(reason),
-                None => ToolApproval::deny(),
-            };
-            db.approvals.decide(&scope, &entry.fingerprint, approval).await?;
-            println!(
-                "denied {}; the model hears it when the session continues",
-                safe(&entry.request.tool_name)
-            );
-        }
+        return Ok(());
+    }
+    if action != ApprovalAction::Approve {
+        let approval = match reason {
+            Some(reason) => ToolApproval::deny().with_message(reason),
+            None => ToolApproval::deny(),
+        };
+        db.approvals.decide(scope, fingerprint, approval).await?;
+        println!("denied {tool}; the model hears it when the session continues");
+        return Ok(());
+    }
+    db.approvals.decide(scope, fingerprint, ToolApproval::approve()).await?;
+    match parked_goal(&db, scope, fingerprint).await? {
+        Some(goal) => println!(
+            "approved {tool} once; the goal in session {} waits for it. Continue it in its \
+             workspace: `adk-rust goal {} --until {} --resume`",
+            safe(&scope.session_id),
+            safe(&shell_quote(&goal.goal)),
+            safe(&shell_quote(&goal.until))
+        ),
+        None => println!(
+            "approved {tool} once; it runs when session {} continues: `adk-rust --session {}`",
+            safe(&scope.session_id),
+            safe(&scope.session_id)
+        ),
     }
     Ok(())
 }
@@ -772,75 +926,6 @@ async fn parked_goal(
 /// `text` as one single-quoted shell word.
 fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
-}
-
-async fn remote(command: ApprovalsCommands, server: &str, token: Option<String>) -> Result<()> {
-    let client = reqwest::Client::new();
-    let with_auth = |request: reqwest::RequestBuilder| match &token {
-        Some(token) => request.bearer_auth(token),
-        None => request,
-    };
-    let read = |response: reqwest::Response| async move {
-        let status = response.status();
-        let body: Value = response.json().await.unwrap_or(Value::Null);
-        if !status.is_success() {
-            bail!("the server answered {status}: {}", one_line(&body.to_string(), 300));
-        }
-        Ok(body)
-    };
-    match command {
-        ApprovalsCommands::List => {
-            let body = read(with_auth(client.get(format!("{server}/api/approvals"))).send().await?)
-                .await?;
-            let items = body.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
-            if items.is_empty() {
-                println!("No calls are waiting for a decision.");
-            }
-            for item in items {
-                let text =
-                    |key: &str| item.get(key).and_then(Value::as_str).unwrap_or("-").to_string();
-                println!(
-                    "{}  {}  {} {}  ({})",
-                    safe(&text("id")),
-                    safe(&text("state")),
-                    safe(&text("toolName")),
-                    one_line(
-                        &item.get("argsRedacted").cloned().unwrap_or(Value::Null).to_string(),
-                        120
-                    ),
-                    one_line(&text("summary"), 80)
-                );
-            }
-        }
-        ApprovalsCommands::Approve { ref id } | ApprovalsCommands::Deny { ref id, .. } => {
-            let request =
-                read(with_auth(client.get(format!("{server}/api/approvals/{id}"))).send().await?)
-                    .await?;
-            let version = request
-                .get("version")
-                .and_then(Value::as_u64)
-                .context("the request has no version")?;
-            let body = match &command {
-                ApprovalsCommands::Deny { reason, .. } => {
-                    json!({ "expectedVersion": version, "action": "reject", "reason": reason })
-                }
-                _ => json!({ "expectedVersion": version, "action": "approve" }),
-            };
-            let decided = read(
-                with_auth(client.post(format!("{server}/api/approvals/{id}/decide")))
-                    .json(&body)
-                    .send()
-                    .await?,
-            )
-            .await?;
-            println!(
-                "{}: {}",
-                safe(id),
-                safe(decided.get("state").and_then(Value::as_str).unwrap_or("decided"))
-            );
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -985,5 +1070,70 @@ mod tests {
         assert_eq!(short_id("a"), short_id("a"));
         assert_ne!(short_id("a"), short_id("b"));
         assert_eq!(short_id("a").len(), 12);
+    }
+
+    /// K1, K13: `approvals approve` with a kernel up decides on the kernel's inbox, under the
+    /// id the kernel shows or a unique start of it, and the request resolves, which wakes the
+    /// process parked on it; `deny` takes a reason. Fails on `origin/main`, where the command
+    /// wrote to harness.db and the request stayed pending.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn approvals_decide_on_the_kernels_inbox() {
+        use adk_core::principal::SubjectRef;
+        use adk_core::{
+            ApprovalPolicy, ApproverSelector, InMemoryApprovalStore, InMemoryRunStore,
+            ToolConfirmationRequest,
+        };
+        use adk_kernel::control::{ControlPlane, ControlPlaneConfig};
+
+        let service = Arc::new(StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new())));
+        let kernel = adk_kernel::Kernel::builder()
+            .config(
+                adk_kernel::KernelConfig::default().with_app_name(APP_NAME).with_control(
+                    ControlPlaneConfig::default()
+                        .without_socket()
+                        .with_http("127.0.0.1:0".parse().unwrap()),
+                ),
+            )
+            .run_store(Arc::new(InMemoryRunStore::new()))
+            .approval_service(service.clone())
+            .build()
+            .unwrap();
+        let plane = ControlPlane::start(&kernel).await.unwrap();
+        let client = ControlClient::http(format!("http://{}", plane.http_addr().unwrap()));
+        let held = |id: &str, command: &str| {
+            let call =
+                ToolConfirmationRequest::new("bash", serde_json::json!({ "command": command }));
+            ApprovalRequest::new(
+                id,
+                ApprovalScope::new(APP_NAME, "ana", "s-1"),
+                &call,
+                ApprovalPolicy::new([ApproverSelector::group("operator")]).allow_self_approval(),
+            )
+            .with_requester(SubjectRef::human("ana"))
+        };
+        service.submit(held("apr_7f7db6", "date -u >> stamp.txt")).await.unwrap();
+        service.submit(held("apr_91c2aa", "rm -rf build")).await.unwrap();
+
+        decide_or_list(ApprovalsCommands::List, Some(&client), false).await.unwrap();
+        let unknown = ApprovalsCommands::Approve { id: "apr_0".into() };
+        let error = decide_or_list(unknown, Some(&client), false).await.unwrap_err();
+        assert!(error.to_string().contains("no pending call apr_0"), "{error}");
+        let ambiguous = ApprovalsCommands::Approve { id: "apr_".into() };
+        let error = decide_or_list(ambiguous, Some(&client), false).await.unwrap_err();
+        assert!(error.to_string().contains("more than one"), "{error}");
+
+        let approve = ApprovalsCommands::Approve { id: "apr_7f".into() };
+        decide_or_list(approve, Some(&client), false).await.unwrap();
+        let deny = ApprovalsCommands::Deny { id: "apr_91c2aa".into(), reason: Some("no".into()) };
+        decide_or_list(deny, Some(&client), false).await.unwrap();
+        let state = |id: &'static str| {
+            let service = service.clone();
+            async move { service.get(id).await.unwrap().unwrap().state }
+        };
+        assert_eq!(
+            (state("apr_7f7db6").await, state("apr_91c2aa").await),
+            (ApprovalState::Approved, ApprovalState::Rejected)
+        );
+        plane.shutdown().await.unwrap();
     }
 }

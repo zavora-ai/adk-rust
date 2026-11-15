@@ -1828,6 +1828,67 @@ pub trait ApprovalService: fmt::Debug + Send + Sync {
     fn approval_store(&self) -> Option<Arc<dyn ApprovalStore>> {
         None
     }
+
+    /// Files held calls under `router` when the service has no router of its own, so a host
+    /// that decides calls in an inbox, such as a kernel, receives every call the governed
+    /// path holds. A router the service was built with keeps deciding, including to leave a
+    /// call in the store only. Returns whether held calls reach the inbox afterwards.
+    ///
+    /// The default files none and answers `false`; a wrapper forwards it to the service it
+    /// wraps.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::{
+    ///     ApprovalPolicy, ApprovalService, ApproverSelector, InMemoryApprovalStore,
+    ///     StoreApprovalService,
+    /// };
+    ///
+    /// let service = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()));
+    /// let operator = ApprovalPolicy::new([ApproverSelector::group("operator")]);
+    /// assert!(service.route_unrouted(Arc::new(operator)));
+    /// ```
+    fn route_unrouted(&self, router: Arc<dyn ApprovalRouter>) -> bool {
+        let _ = router;
+        false
+    }
+
+    /// Adds `notifier` to a service already built, for a host built after it, such as a
+    /// kernel that publishes each request on its event bus. Returns whether the service took
+    /// it.
+    ///
+    /// The default takes none and answers `false`; a wrapper forwards it to the service it
+    /// wraps.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::{
+    ///     ApprovalNotification, ApprovalNotifier, ApprovalService, InMemoryApprovalStore,
+    ///     StoreApprovalService, async_trait,
+    /// };
+    ///
+    /// #[derive(Debug)]
+    /// struct Log;
+    ///
+    /// #[async_trait]
+    /// impl ApprovalNotifier for Log {
+    ///     async fn notify(&self, notification: &ApprovalNotification) -> adk_core::Result<()> {
+    ///         tracing::info!(approval.id = %notification.request.id, "approval event");
+    ///         Ok(())
+    ///     }
+    /// }
+    ///
+    /// let service = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()));
+    /// assert!(service.add_notifier(Arc::new(Log)));
+    /// ```
+    fn add_notifier(&self, notifier: Arc<dyn ApprovalNotifier>) -> bool {
+        let _ = notifier;
+        false
+    }
 }
 
 /// Who belongs to which approver group, as the deployment knows it.
@@ -1911,6 +1972,10 @@ pub struct StoreApprovalService {
     router: Option<Arc<dyn ApprovalRouter>>,
     audit: Option<crate::audit_log::AuditTrail>,
     directory: Option<Arc<dyn ApproverDirectory>>,
+    /// The router a host gave a service built without one (`route_unrouted`).
+    fallback_router: std::sync::OnceLock<Arc<dyn ApprovalRouter>>,
+    /// Notifiers a host added after the service was built (`add_notifier`).
+    late_notifiers: std::sync::RwLock<Vec<Arc<dyn ApprovalNotifier>>>,
 }
 
 impl fmt::Debug for StoreApprovalService {
@@ -1921,6 +1986,11 @@ impl fmt::Debug for StoreApprovalService {
             .field("notifiers", &self.notifiers)
             .field("run_store", &self.run_store.is_some())
             .field("router", &self.router.is_some())
+            .field("fallback_router", &self.fallback_router.get().is_some())
+            .field(
+                "late_notifiers",
+                &self.late_notifiers.read().unwrap_or_else(|e| e.into_inner()).len(),
+            )
             .field("audit", &self.audit)
             .field("directory", &self.directory.is_some())
             .finish()
@@ -1929,7 +1999,8 @@ impl fmt::Debug for StoreApprovalService {
 
 impl StoreApprovalService {
     /// A service over `store`, reading the system clock, with no notifiers, run store,
-    /// or router.
+    /// or router. Without a router held calls stay in the store only, unless a host such
+    /// as a kernel gives it one ([`ApprovalService::route_unrouted`]).
     pub fn new(store: Arc<dyn ApprovalStore>) -> Self {
         Self {
             store,
@@ -1939,6 +2010,8 @@ impl StoreApprovalService {
             router: None,
             audit: None,
             directory: None,
+            fallback_router: std::sync::OnceLock::new(),
+            late_notifiers: std::sync::RwLock::new(Vec::new()),
         }
     }
 
@@ -2032,7 +2105,8 @@ impl StoreApprovalService {
         decision: Option<&ApprovalDecision>,
         escalation_step: Option<u32>,
     ) {
-        if self.notifiers.is_empty() {
+        let late = self.late_notifiers.read().unwrap_or_else(|e| e.into_inner()).clone();
+        if self.notifiers.is_empty() && late.is_empty() {
             return;
         }
         let notification = ApprovalNotification {
@@ -2043,7 +2117,7 @@ impl StoreApprovalService {
             escalation_step,
             at: self.clock.now(),
         };
-        for notifier in &self.notifiers {
+        for notifier in self.notifiers.iter().chain(&late) {
             if let Err(error) = notifier.notify(&notification).await {
                 tracing::warn!(
                     approval.id = %request.id,
@@ -2295,7 +2369,8 @@ impl ApprovalService for StoreApprovalService {
     }
 
     async fn submit_call(&self, call: ApprovalCall) -> Result<Option<ApprovalRequest>> {
-        let Some(route) = self.router.as_ref().and_then(|router| router.route(&call)) else {
+        let router = self.router.as_ref().or_else(|| self.fallback_router.get());
+        let Some(route) = router.and_then(|router| router.route(&call)) else {
             return Ok(None);
         };
         self.store.record_pending(&call.scope, &call.request).await?;
@@ -2669,6 +2744,19 @@ impl ApprovalService for StoreApprovalService {
 
     fn approval_store(&self) -> Option<Arc<dyn ApprovalStore>> {
         Some(self.store.clone())
+    }
+
+    fn route_unrouted(&self, router: Arc<dyn ApprovalRouter>) -> bool {
+        if self.router.is_none() {
+            // The first host's router stays: a second has nothing to add.
+            let _ = self.fallback_router.set(router);
+        }
+        true
+    }
+
+    fn add_notifier(&self, notifier: Arc<dyn ApprovalNotifier>) -> bool {
+        self.late_notifiers.write().unwrap_or_else(|e| e.into_inner()).push(notifier);
+        true
     }
 }
 
@@ -3174,5 +3262,67 @@ mod tests {
             json!({ "source": "verbs:adk-rust", "declarationDigest": verb_origin().declaration_digest })
         );
         assert_eq!(serde_json::from_value::<ApprovalRequest>(written).unwrap(), named);
+    }
+
+    /// A host routes and hears the held calls of a service built without a router or
+    /// notifiers; a router the service was built with keeps its own decisions.
+    #[tokio::test]
+    async fn a_host_routes_and_hears_a_service_built_without_a_router() {
+        use crate::InMemoryApprovalStore;
+
+        #[derive(Debug, Default)]
+        struct Heard(std::sync::Mutex<Vec<(ApprovalEventKind, ApprovalState)>>);
+
+        #[async_trait]
+        impl ApprovalNotifier for Heard {
+            async fn notify(&self, notification: &ApprovalNotification) -> Result<()> {
+                let heard = (notification.kind, notification.request.state);
+                self.0.lock().unwrap().push(heard);
+                Ok(())
+            }
+        }
+
+        let call = |args: Value| ApprovalCall {
+            scope: ApprovalScope::new("app", "ana", "s-1"),
+            request: ToolConfirmationRequest::new("bash", args),
+            reason: "needs approval".into(),
+            agent_name: "agent".into(),
+            invocation_id: "inv".into(),
+            run_id: Some("run-1".into()),
+            acting: None,
+        };
+        let operator = || -> Arc<dyn ApprovalRouter> {
+            Arc::new(
+                ApprovalPolicy::new([ApproverSelector::group("operator")]).allow_self_approval(),
+            )
+        };
+
+        let service = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()));
+        assert_eq!(service.submit_call(call(json!({ "command": "ls" }))).await.unwrap(), None);
+        let heard = Arc::new(Heard::default());
+        assert!(service.route_unrouted(operator()));
+        assert!(service.add_notifier(heard.clone()));
+        let filed = service.submit_call(call(json!({ "command": "date" }))).await.unwrap();
+        let filed = filed.expect("the host's router files the call");
+        assert_eq!(filed.policy.approvers, vec![ApproverSelector::group("operator")]);
+        let decision =
+            ApprovalDecision::approve(SubjectRef::human("ana")).with_groups(["operator"]);
+        service.decide(&filed.id, filed.version, decision).await.unwrap();
+        assert_eq!(
+            *heard.0.lock().unwrap(),
+            vec![
+                (ApprovalEventKind::Submitted, ApprovalState::Pending),
+                (ApprovalEventKind::Decided, ApprovalState::Approved),
+                (ApprovalEventKind::Resolved, ApprovalState::Approved),
+            ]
+        );
+
+        // A service's own router may leave a call in the store only; a host's does not
+        // replace it.
+        let declines = |_: &ApprovalCall| -> Option<ApprovalRoute> { None };
+        let own =
+            StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new())).with_router(declines);
+        assert!(own.route_unrouted(operator()));
+        assert_eq!(own.submit_call(call(json!({ "command": "ls" }))).await.unwrap(), None);
     }
 }

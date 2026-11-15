@@ -97,6 +97,7 @@ pub struct Harness {
     app_name: String,
     run_store: Option<Arc<dyn adk_core::DurableRunStore>>,
     goal_queue: String,
+    goals_authenticated: bool,
 }
 
 impl std::fmt::Debug for Harness {
@@ -182,6 +183,7 @@ impl Harness {
             app_name,
             run_store: None,
             goal_queue: DEFAULT_GOAL_QUEUE.to_string(),
+            goals_authenticated: false,
         })
     }
 
@@ -220,6 +222,7 @@ impl Harness {
             app_name,
             run_store: None,
             goal_queue: DEFAULT_GOAL_QUEUE.to_string(),
+            goals_authenticated: false,
         })
     }
 
@@ -322,6 +325,26 @@ impl Harness {
     /// The queue durable goals are enqueued on (default `default`).
     pub fn goal_queue(&self) -> &str {
         &self.goal_queue
+    }
+
+    /// Enqueues durable goals as runs of an authenticated user (spec 3.1 §9.2 I6), so the
+    /// worker that runs them applies the session's mode and the user's standing rules. For a
+    /// host that established who the user is, such as a terminal of the machine whose kernel
+    /// runs the goal; without it, a harness that requires authenticated identity decides the
+    /// goal's calls with Auto as Ask and no standing rule.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let harness = harness
+    ///     .with_run_store(runs)
+    ///     .with_goal_queue(adk_kernel::QueueClass::BACKGROUND)
+    ///     .with_authenticated_goals();
+    /// ```
+    #[must_use]
+    pub fn with_authenticated_goals(mut self) -> Self {
+        self.goals_authenticated = true;
+        self
     }
 
     /// Answers, from the action ledger, the calls a stopped process left without a response,
@@ -1130,6 +1153,7 @@ impl Harness {
         .with_session_id(session.to_string())
         .with_idempotency_key(format!("goal:{session}:{}", record.spec.digest()))
         .with_concurrency_key(session.to_string(), adk_core::OnConflict::Enqueue);
+        let run = if self.goals_authenticated { run.with_authenticated_user() } else { run };
         let (run, note) = match runs.enqueue(run).await? {
             adk_core::Enqueued::Created(run) => (run, "enqueued"),
             adk_core::Enqueued::Existing(run) if !run.state.is_terminal() => {

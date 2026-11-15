@@ -23,6 +23,7 @@ mod agents_store_redis;
 mod agents_store_sqlite;
 mod agents_suggestions;
 mod agents_table;
+mod approvals_wiring;
 mod away_property_tests;
 mod channel_contract;
 mod channel_gateway;

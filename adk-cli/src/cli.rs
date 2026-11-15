@@ -819,13 +819,21 @@ pub enum Commands {
         #[command(subcommand)]
         command: ApprovalsCommands,
 
-        /// A served harness to talk to instead of this machine's harness.db
-        #[arg(long, global = true)]
+        /// A served harness or kernel to talk to instead of the kernel running here, or this
+        /// machine's harness.db when none runs
+        // Ids of their own: a global argument's value is copied to every ancestor with the
+        // same id, which would set the terminal's --server and --token.
+        #[arg(long = "server", id = "approvals_server", global = true, value_name = "URL")]
         server: Option<String>,
 
         /// Bearer token for --server (default: $ADK_SERVE_TOKEN)
-        #[arg(long, global = true)]
+        #[arg(long = "token", id = "approvals_token", global = true)]
         token: Option<String>,
+
+        /// The home of the kernel whose inbox to use, on its socket (default: the config
+        /// directory's adk-rust)
+        #[arg(long = "home", id = "approvals_home", global = true, value_name = "DIR")]
+        home: Option<std::path::PathBuf>,
     },
 
     /// Skills tooling (list/validate/match)
@@ -2051,6 +2059,69 @@ mod tests {
             Cli::try_parse_from(["adk-rust", "ultracode", "x", "--architecture", "council"])
                 .is_err()
         );
+    }
+
+    /// `harness/cli.md` and `harness/serving.md`: `--server` and `--token` after `approvals`
+    /// or after its subcommand reach the approvals command, not the terminal.
+    #[cfg(all(feature = "harness", feature = "persist"))]
+    #[test]
+    fn approvals_take_server_and_token_after_any_subcommand() {
+        let cases: [(&[&str], ApprovalsCommands); 4] = [
+            (
+                &["adk-rust", "approvals", "list", "--server", "http://k:8080", "--token", "t"],
+                ApprovalsCommands::List,
+            ),
+            (
+                &["adk-rust", "approvals", "--server", "http://k:8080", "--token", "t", "list"],
+                ApprovalsCommands::List,
+            ),
+            (
+                &[
+                    "adk-rust",
+                    "approvals",
+                    "approve",
+                    "apr_1",
+                    "--server=http://k:8080",
+                    "--token=t",
+                ],
+                ApprovalsCommands::Approve { id: "apr_1".into() },
+            ),
+            (
+                &[
+                    "adk-rust",
+                    "approvals",
+                    "deny",
+                    "apr_1",
+                    "--reason",
+                    "no",
+                    "--server",
+                    "http://k:8080",
+                    "--token",
+                    "t",
+                ],
+                ApprovalsCommands::Deny { id: "apr_1".into(), reason: Some("no".into()) },
+            ),
+        ];
+        let Some(Commands::Approvals { home, .. }) =
+            parse(&["adk-rust", "approvals", "list", "--home", "/tmp/k"]).command
+        else {
+            panic!("approvals list --home is an approvals command");
+        };
+        assert_eq!(home, Some(std::path::PathBuf::from("/tmp/k")));
+        for (args, expected) in cases {
+            let cli = parse(args);
+            #[cfg(feature = "tui")]
+            assert!(!cli.surface.given(), "{args:?} set the terminal's flags");
+            let Some(Commands::Approvals { command, server, token, home: None }) = cli.command
+            else {
+                panic!("{args:?} is not an approvals command");
+            };
+            assert_eq!(
+                (command, server.as_deref(), token.as_deref()),
+                (expected, Some("http://k:8080"), Some("t")),
+                "{args:?}"
+            );
+        }
     }
 
     #[cfg(feature = "scripted-model")]

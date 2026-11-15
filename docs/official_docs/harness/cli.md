@@ -29,7 +29,7 @@ adk-rust --ui repl             # the harness REPL
 | `adk-rust rules list\|add\|rm` | Your standing rules |
 | `adk-rust memory list\|show\|forget\|accept\|export\|import\|undo` | The long-term facts the harness learned; see [Long-term memory](#long-term-memory) |
 | `adk-rust agents list\|show\|new\|edit\|pause\|resume\|remove` | Your own agents on the running kernel: each change shows what it does and asks before it applies (`--yes` is refused at high risk); `/agent` runs the same command in the REPL and the terminal; see [Your Agents](../surfaces/agents.md) |
-| `adk-rust approvals list\|approve\|deny` | Calls waiting for a decision, here or on a served harness with `--server URL --token T` |
+| `adk-rust approvals list\|approve\|deny` | Calls waiting for a decision: the approvals inbox of the kernel running here (`--home DIR` for another home), under the ids every surface shows, beside the calls in-process sessions hold in `harness.db`; only `harness.db` when no kernel runs; a served harness's or kernel's inbox with `--server URL --token T`, given after `approvals` or after its subcommand. An approval in an inbox resumes the parked run at once |
 | `adk-rust store status\|rotate-key` | The key `harness.db` is sealed under and which stores are wrapped; rotation to a new key (spec 3.1 §7.12); see [The encrypted store](#the-encrypted-store) |
 
 The model is chosen as for every command: `--provider`, `--model` and `--api-key`, the

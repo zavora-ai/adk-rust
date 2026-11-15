@@ -39,8 +39,9 @@ use std::time::Duration;
 use adk_core::audit_log::{AuditActor, AuditTrail};
 use adk_core::queue_source::QueueIngress;
 use adk_core::{
-    ApprovalService, Clock, DurableRunStore, Enqueued, GovernanceControl, GovernanceMirrorConfig,
-    GovernanceStateStore, RunCheckpointRef, ScheduleStore, SpendLedger, SystemClock,
+    ApprovalPolicy, ApprovalService, ApproverSelector, Clock, DurableRunStore, Enqueued,
+    GovernanceControl, GovernanceMirrorConfig, GovernanceStateStore, ScheduleStore, SpendLedger,
+    SystemClock,
 };
 use adk_runner::Runner;
 use adk_server::background::{
@@ -1195,23 +1196,16 @@ impl Kernel {
         adk_core::validate_steering_message(&message)?;
         let sup = &self.inner.sup;
         // The newest claim of the session on this replica; the session is the one its worker
-        // runs the claim in.
+        // runs the claim in, `run-{pid}` for a process spawned without one.
         let claimed = {
             let local = sup.local.lock().unwrap_or_else(|e| e.into_inner());
             local
                 .values()
                 .filter(|claim| {
                     let run = &claim.run;
-                    let session = match &run.checkpoint {
-                        Some(
-                            RunCheckpointRef::Session { session_id, .. }
-                            | RunCheckpointRef::AwaitingApproval { session_id, .. },
-                        ) => Some(session_id),
-                        _ => run.session_id.as_ref(),
-                    };
                     run.app_name == sup.app_name
                         && run.user_id == user_id
-                        && session.is_some_and(|session| session == session_id)
+                        && crate::supervise::run_session(run) == session_id
                 })
                 .max_by_key(|claim| claim.claimed_at)
                 .map(|claim| claim.run.clone())
@@ -2012,10 +2006,34 @@ impl KernelBuilder {
     }
 
     /// Sets the approval service, built with `StoreApprovalService::with_run_store` so a
-    /// decision wakes the parked run. The kernel cannot add a notifier to a built service:
-    /// for [`Wake::Approval`] sleepers, build the service with
+    /// decision wakes the parked run; pass the same service to the agents' `RunConfig`.
+    ///
+    /// The kernel files every call the service would hold with no route into its inbox for
+    /// the `operator` group, self-approval allowed, as `adk-rust up` routes them
+    /// (`ApprovalService::route_unrouted`): a router the service was built with keeps
+    /// deciding. It publishes `held` when a request is filed and `decided` when a decision
+    /// resolves one (`ApprovalService::add_notifier`). A service that takes neither is named
+    /// in [`Kernel::inventory`]. For [`Wake::Approval`] sleepers, build the service with
     /// `with_notifier(source)` over an [`ApprovalWakeSource`](crate::ApprovalWakeSource) and
     /// pass the same source to [`wake_source`](Self::wake_source).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::{InMemoryApprovalStore, InMemoryRunStore, StoreApprovalService};
+    /// use adk_kernel::Kernel;
+    ///
+    /// let runs = Arc::new(InMemoryRunStore::new());
+    /// let approvals = Arc::new(
+    ///     StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+    ///         .with_run_store(runs.clone()),
+    /// );
+    /// // The agents' runner takes the same service: `RunConfig::builder().approval_service(..)`.
+    /// let kernel = Kernel::builder().run_store(runs).approval_service(approvals).build()?;
+    /// assert!(!kernel.inventory().warnings.iter().any(|w| w.code.starts_with("kernel.approvals")));
+    /// # Ok::<(), adk_kernel::KernelError>(())
+    /// ```
     #[must_use]
     pub fn approval_service(mut self, approvals: Arc<dyn ApprovalService>) -> Self {
         self.approvals = Some(approvals);
@@ -2581,6 +2599,28 @@ impl KernelBuilder {
         for sink in self.sinks {
             bus.add_sink(sink);
         }
+        let mut inventory_warnings = self.inventory_warnings;
+        if let Some(approvals) = &self.approvals {
+            // Every held call reaches the inbox and the bus, however the host built the
+            // service: a call no one can see is a process no one can resume.
+            let operator =
+                ApprovalPolicy::new([ApproverSelector::group(crate::agenda::OPERATOR_GROUP)])
+                    .allow_self_approval();
+            if !approvals.route_unrouted(Arc::new(operator)) {
+                inventory_warnings.push(InventoryWarning::new(
+                    InventoryWarning::APPROVALS_UNROUTED,
+                    "the approval service takes no router from the kernel: a call it holds \
+                     with no route of its own reaches no inbox. Build it with `with_router`",
+                ));
+            }
+            if !approvals.add_notifier(Arc::new(crate::bus::ApprovalEvents::new(bus.clone()))) {
+                inventory_warnings.push(InventoryWarning::new(
+                    InventoryWarning::APPROVALS_UNHEARD,
+                    "the approval service takes no notifier from the kernel: no `held` or \
+                     `decided` event is published",
+                ));
+            }
+        }
         let trigger_names = self.triggers.iter().map(|trigger| trigger.name.clone()).collect();
         let trigger_crons = trigger_cron_sources(&self.triggers, &self.wake_sources, &watermarks)?;
         #[cfg(feature = "proc")]
@@ -2769,7 +2809,7 @@ impl KernelBuilder {
                 adds_agents,
                 #[cfg(feature = "charter")]
                 signal_stores: self.signal_stores,
-                inventory_warnings: self.inventory_warnings,
+                inventory_warnings,
                 consolidation,
                 #[cfg(feature = "drivers")]
                 drivers: self.drivers,

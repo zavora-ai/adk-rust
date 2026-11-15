@@ -139,6 +139,7 @@ pub struct HarnessLauncher {
     bind_address: IpAddr,
     run_store: Option<Arc<dyn DurableRunStore>>,
     goal_queue: Option<String>,
+    goals_authenticated: bool,
     kernel: Option<adk_kernel::Kernel>,
     hooks_disabled: bool,
     opened: Option<Arc<Shared>>,
@@ -217,6 +218,7 @@ impl HarnessLauncher {
             bind_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
             run_store: None,
             goal_queue: None,
+            goals_authenticated: false,
             kernel: None,
             hooks_disabled: false,
             opened: None,
@@ -479,6 +481,16 @@ impl HarnessLauncher {
         self
     }
 
+    /// Enqueues goals as runs of the launcher's user, authenticated
+    /// ([`Harness::with_authenticated_goals`](adk_harness::Harness::with_authenticated_goals)):
+    /// `adk-rust goal` on a running kernel, where the person at the kernel's own machine
+    /// starts it, as a local goal runs (spec 3.1 §9.2 I6).
+    #[must_use]
+    pub fn with_authenticated_goals(mut self) -> Self {
+        self.goals_authenticated = true;
+        self
+    }
+
     /// Serves the harness as the resident agent kernel's HTTP surface (spec 3.2 §7.1,
     /// §7.11, §8.1).
     ///
@@ -734,6 +746,8 @@ impl HarnessLauncher {
             Some(queue) => harness.with_goal_queue(queue.clone()),
             None => harness,
         };
+        let harness =
+            if self.goals_authenticated { harness.with_authenticated_goals() } else { harness };
         let user = UserId::new(self.user_id.clone())?;
         let session = SessionId::new(session)?;
         if let Some(mode) = self.mode
