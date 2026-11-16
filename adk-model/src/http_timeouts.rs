@@ -17,7 +17,8 @@ use std::time::Duration;
 /// Anthropic SDKs, which leaves room for reasoning models that think for minutes before
 /// their first token. The OpenAI-compatible, OpenAI Responses, Azure OpenAI, Azure AI, Groq,
 /// DeepSeek, OpenRouter, Ollama, and Bedrock clients apply them by default and take others
-/// through `with_timeouts`. Bedrock applies them as the SDK's connect and read timeouts plus
+/// through `with_timeouts`; the Gemini API-key client applies them by default and takes
+/// others through `GeminiModel::new_with_base_url_and_timeouts`. Bedrock applies them as the SDK's connect and read timeouts plus
 /// a bound on each stream event; an SDK client passed to `BedrockClient::from_client` keeps
 /// its own connect and read timeouts until `with_timeouts` replaces them.
 ///

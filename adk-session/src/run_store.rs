@@ -205,15 +205,18 @@ UPDATE adk_runs SET \
     updated_at_us = $1, revision = revision + 1 \
 WHERE run_id = $2 AND state IN ('waiting', 'running')";
 
-/// A retryable failure requeues while attempts remain and no cancellation was requested.
+/// A retryable failure requeues while attempts remain and no cancellation was requested,
+/// claimable from `$2`, the end of its backoff (`NULL`: at once).
 const FINISH: &str = concat!(
     "UPDATE adk_runs SET \
+         not_before_us = CASE WHEN $1 AND attempt < max_attempts AND NOT cancel_requested \
+             THEN $2 ELSE not_before_us END, \
          state = CASE WHEN $1 AND attempt < max_attempts AND NOT cancel_requested \
-             THEN 'queued' ELSE $2 END, \
-         result = COALESCE($3, result), error = COALESCE($4, error), \
+             THEN 'queued' ELSE $3 END, \
+         result = COALESCE($4, result), error = COALESCE($5, error), \
          wake_pending = FALSE, lease_owner = NULL, lease_expires_at_us = NULL, \
-         updated_at_us = $5, revision = revision + 1 \
-     WHERE run_id = $6 AND lease_epoch = $7 AND state = 'running' RETURNING ",
+         updated_at_us = $6, revision = revision + 1 \
+     WHERE run_id = $7 AND lease_epoch = $8 AND state = 'running' RETURNING ",
     run_columns!()
 );
 
@@ -655,21 +658,23 @@ macro_rules! sql_run_store {
                 epoch: u64,
                 outcome: RunOutcome,
             ) -> Result<RunRecord> {
-                let (_, now_us) = now(&*self.clock);
+                let (now_at, now_us) = now(&*self.clock);
                 let Ok(stored_epoch) = to_i64(CODE, epoch) else {
                     return Err(self.refused(run_id, epoch).await);
                 };
-                let (retryable, state, result, error) = match outcome {
+                let (retryable, backoff, state, result, error) = match outcome {
                     RunOutcome::Completed(result) => {
-                        (false, RunState::Completed, Some(to_json(CODE, &result)?), None)
+                        (false, None, RunState::Completed, Some(to_json(CODE, &result)?), None)
                     }
-                    RunOutcome::Failed { error, retryable } => {
-                        (retryable, RunState::Failed, None, Some(error))
+                    RunOutcome::Failed { error, retryable, backoff } => {
+                        (retryable, backoff, RunState::Failed, None, Some(error))
                     }
-                    RunOutcome::Cancelled => (false, RunState::Cancelled, None, None),
+                    RunOutcome::Cancelled => (false, None, RunState::Cancelled, None, None),
                 };
+                let retry_at = backoff.map(|backoff| micros(now_at + backoff).1);
                 let row = sqlx::query(FINISH)
                     .bind(retryable)
+                    .bind(retry_at)
                     .bind(variant_name(&state)?)
                     .bind(result)
                     .bind(error)

@@ -1135,7 +1135,7 @@ impl GeminiBuilder {
     pub fn new<K: Into<String>>(key: K) -> Self {
         Self {
             model: Model::default(),
-            client_builder: ClientBuilder::default(),
+            client_builder: backend::studio::default_client_builder(),
             base_url: DEFAULT_BASE_URL.clone(),
             #[cfg(feature = "vertex")]
             google_cloud: None,
@@ -1158,6 +1158,9 @@ impl GeminiBuilder {
     /// Settings such as proxies, timeouts and default headers apply to every Studio
     /// request. The redirect policy is always replaced with
     /// [`reqwest::redirect::Policy::none`] so the API key is never re-sent to another host.
+    /// Without this call the builder is
+    /// [`default_client_builder`](crate::backend::studio::default_client_builder), with its
+    /// connect and read timeouts; a builder set here keeps only the timeouts it sets.
     pub fn with_http_client(mut self, client_builder: ClientBuilder) -> Self {
         self.client_builder = client_builder;
         self

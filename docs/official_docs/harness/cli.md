@@ -21,7 +21,7 @@ adk-rust --ui repl             # the harness REPL
 |---|---|
 | `adk-rust` | The harness in `--dir` (default `.`), ask mode, in the [full-screen terminal](../surfaces/terminal.md) on a capable terminal; `--ui repl` for the REPL, approvals in the terminal |
 | `adk-rust chat` | The plain chat agent, without workspace tools |
-| `adk-rust code "task"` | One harness turn; exit code `3` means calls are held for a decision (the session id is printed) |
+| `adk-rust code "task"` | One harness turn. Exit codes: `0` done, `1` the run failed (a model error or an exhausted budget; the error is the last line), `3` calls are held for a decision (the session id is printed), `130` interrupted |
 | `adk-rust goal "goal" --until CMD` | Runs the harness goal engine until `CMD` exits 0, as a durable run in `harness.db`; `--resume` continues the goal in its session |
 | `adk-rust ultracode "task"` | Implements in your mode, routes the review to parallel read-only reviewers or a read-only Blackboard board, revises until they approve; see [Ultracode](#ultracode) |
 | `adk-rust serve` | The harness in plan mode behind the HTTP server with the approval inbox; see [Serving the harness](serving.md) |
@@ -426,6 +426,11 @@ stay on this machine, unless you choose another provider (spec 3.1 §7.32, §13 
 | The local model unavailable | None: facts are found by shared words, never by another provider |
 | `--embedder local\|gemini\|openai\|lexical`, or `[memory] embedder` in the user config | As chosen; a second provider sees your facts only this way |
 
+The local model is fetched on its first use, about 130 MB into the Hugging Face hub cache
+(`HF_HOME`). `adk-rust`, `code`, `goal` and `up` print
+`fetching the local embedding model BAAI/bge-small-en-v1.5 (about 130 MB, once)` before that
+download and the time it took after it; `--embedder lexical` skips it.
+
 `.adk/harness.toml` may set `[memory] embedder` to `local` or `lexical` only, and only to
 keep facts closer than your own choice: a workspace never sends them to a provider. Every
 session's banner names the embedder, and each stored vector carries its embedder's id, so
@@ -494,11 +499,12 @@ harness goal store, mirrored to the session as `harness:goal`.
 | A call is held (no terminal and no `--yes`) | The run parks and the command exits `3`. Approve with `adk-rust approvals approve ID`, which prints the `goal … --resume` command; `--resume` continues the run at the held call, which runs once |
 | `--resume` before the call is decided | Nothing runs; the command lists the held call and exits `3` again |
 | The budget runs out | Exit `1`; `--resume --max-iters N`, with `N` above the iterations used, continues the goal |
+| A turn fails, such as on a model error | Exit `1` with the error as the last line; `--resume` continues the goal |
 | Ctrl-C, or the process stops | Exit `130` on Ctrl-C; `--resume` continues the goal in its session, reclaiming the stopped process's run once its 10-second lease lapses |
 
 `--resume` continues the latest unfinished goal in this workspace, in its session and with
 its whole conversation. Goals need ask or auto mode. Exit codes: `0` met, `1` budget
-exhausted, `3` calls held, `130` interrupted. With `--ephemeral` the goal runs in the
+exhausted or a failed turn, `3` calls held, `130` interrupted. With `--ephemeral` the goal runs in the
 command's process only and cannot be resumed.
 
 ## Ultracode

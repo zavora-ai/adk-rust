@@ -64,7 +64,9 @@ A process is a durable run (spec 3.2 §7.3). Its pid is the run id and its state
 
 Each process carries a live view — age, spend today and over seven days, burn rate and the
 projection to the end of the day for a running process, model and tool calls, the loop
-guard's last verdict and a goal's progress — that `adk-rust ps` and `top` show. A process
+guard's last verdict and a goal's progress — that `adk-rust ps` and `top` show. Spend is what
+the process's model responses cost, whatever agent the kernel hosts; see
+[Scheduling](scheduling.md). A process
 suspended by a freeze shows `suspended: freeze` and resumes only on `unfreeze`; a manual
 suspension resumes only on `adk-rust resume`.
 
@@ -132,8 +134,10 @@ the resume leave.
 
 ## Using the kernel from code
 
-`adk-kernel` hosts any `Arc<Runner>` and depends on no harness type. The harness's `kernel`
-feature returns a builder with the harness registered:
+`adk-kernel` hosts any `Arc<Runner>` and depends on no harness type. It counts a hosted
+runner's spend from the usage its model responses report, so `ps` shows it and quotas and
+`daily_spend_cap` hold it without a `ProgressSource`. The harness's `kernel` feature returns a
+builder with the harness registered:
 
 ```toml
 [dependencies]
