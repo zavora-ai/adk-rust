@@ -209,7 +209,7 @@ fn status_category_and_code(status_code: u16) -> (ErrorCategory, &'static str) {
     match status_code {
         400 => (ErrorCategory::InvalidInput, "model.openrouter.bad_request"),
         401 => (ErrorCategory::Unauthorized, "model.openrouter.unauthorized"),
-        402 => (ErrorCategory::Forbidden, "model.openrouter.insufficient_credits"),
+        402 => (ErrorCategory::ResourceExhausted, "model.openrouter.insufficient_credits"),
         403 => (ErrorCategory::Forbidden, "model.openrouter.forbidden"),
         404 => (ErrorCategory::NotFound, "model.openrouter.not_found"),
         408 => (ErrorCategory::Timeout, "model.openrouter.timeout"),
@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn http_statuses_normalize_to_expected_error_categories_and_codes() {
         let cases = [
-            (402, ErrorCategory::Forbidden, "model.openrouter.insufficient_credits"),
+            (402, ErrorCategory::ResourceExhausted, "model.openrouter.insufficient_credits"),
             (429, ErrorCategory::RateLimited, "model.openrouter.rate_limited"),
             (503, ErrorCategory::Unavailable, "model.openrouter.unavailable"),
             (524, ErrorCategory::Timeout, "model.openrouter.edge_timeout"),

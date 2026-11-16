@@ -1315,7 +1315,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_402_maps_to_forbidden_insufficient_credits_error() {
+    async fn status_402_maps_to_resource_exhausted_insufficient_credits_error() {
         let error = list_models_error_for_status(
             402,
             json!({
@@ -1329,7 +1329,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(error.category, ErrorCategory::Forbidden);
+        assert_eq!(error.category, ErrorCategory::ResourceExhausted);
         assert_eq!(error.code, "model.openrouter.insufficient_credits");
         assert!(!error.retry.should_retry);
     }

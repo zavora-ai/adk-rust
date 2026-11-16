@@ -75,6 +75,10 @@ impl From<AnthropicApiError> for AdkError {
         if let Some(ref rid) = err.request_id {
             adk_err = adk_err.with_request_id(rid.clone());
         }
+        let adk_err = crate::error_metadata::classify_quota(
+            adk_err,
+            crate::error_metadata::is_quota_exhausted(&err.error_type),
+        );
         crate::error_metadata::with_code(adk_err, Some(&err.error_type))
     }
 }
@@ -223,6 +227,21 @@ mod tests {
         }
         .into();
         assert!(!client_error.is_retryable());
+    }
+
+    #[test]
+    fn a_billing_error_is_not_retried() {
+        let adk_err: AdkError = AnthropicApiError {
+            error_type: "billing_error".to_string(),
+            message: "Your credit balance is too low to access the Anthropic API.".to_string(),
+            status_code: 402,
+            request_id: None,
+        }
+        .into();
+        assert_eq!(adk_err.category, adk_core::ErrorCategory::ResourceExhausted);
+        assert!(!adk_err.is_retryable());
+        assert!(adk_err.message.contains("add credit or raise the limit"), "{}", adk_err.message);
+        assert_eq!(adk_err.details.metadata["provider_error_code"], "billing_error");
     }
 
     #[test]

@@ -314,11 +314,10 @@ fn stream_error(failure: Option<&Failure>) -> AdkError {
                 "vector_store_timeout" | "stream_timeout" => ErrorCategory::Timeout,
                 "invalid_api_key" | "authentication_error" => ErrorCategory::Unauthorized,
                 "permission_error" => ErrorCategory::Forbidden,
-                "insufficient_quota"
-                | "credit_balance_exhausted"
-                | "organization_spend_limit_exceeded"
-                | "project_spend_limit_exceeded"
-                | "context_length_exceeded"
+                quota if crate::error_metadata::is_quota_exhausted(quota) => {
+                    ErrorCategory::ResourceExhausted
+                }
+                "context_length_exceeded"
                 | "content_policy_violation"
                 | "invalid_request_error" => ErrorCategory::InvalidInput,
                 known if DOCUMENTED_ERROR_CODES.contains(&known) => ErrorCategory::InvalidInput,
@@ -338,6 +337,8 @@ fn stream_error(failure: Option<&Failure>) -> AdkError {
         message,
     )
     .with_provider("openai-responses");
+    let error =
+        crate::error_metadata::classify_quota(error, category == ErrorCategory::ResourceExhausted);
     crate::error_metadata::with_first_code(
         error,
         [failure.and_then(|failure| failure.code.as_deref()), code],

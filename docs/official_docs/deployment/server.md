@@ -768,7 +768,7 @@ generic message for the error's category.
 | `cancelled` | `The operation was cancelled` |
 | `internal` | `Internal server error` |
 | `unsupported` | `The operation is not supported` |
-| `resource_exhausted` | `A resource budget is used up` |
+| `resource_exhausted` | `A budget, quota or credit balance is used up` |
 | `conflict` | `The request conflicts with the current state` |
 
 The rule applies to every error response the run and governance endpoints write:
