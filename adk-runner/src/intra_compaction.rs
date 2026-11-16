@@ -1,11 +1,11 @@
 //! Auto-compaction during a run.
 //!
-//! [`IntraInvocationCompactor`] is the runner's [`HistoryCompactor`]: before each model call
-//! an agent asks it to compact its history, and it summarizes all but the most recent entries
-//! once the request passes the [`IntraCompactionConfig`] threshold. By default the summary is
-//! written by the model the agent is calling ([`LlmEventSummarizer`]); a
-//! [`BaseEventsSummarizer`] or, with the `context-compaction` feature, a
-//! `CompactionStrategy` (`compaction::CompactionStrategy`) can take its place.
+//! [`IntraInvocationCompactor`] is the runner's [`HistoryCompactor`]: before each model call an
+//! agent asks it to compact its history, and it summarizes all but the most recent entries once
+//! the request passes the [`IntraCompactionConfig`] threshold. By default the summary is written
+//! by the model the agent is calling ([`LlmEventSummarizer`]); a [`BaseEventsSummarizer`] or,
+//! with the `context-compaction` feature, a `CompactionStrategy`
+//! (`compaction::CompactionStrategy`) can take its place.
 //!
 //! The runner installs one per run over the run's session, so each compaction is also
 //! recorded as a compaction event and later runs start from the summary.

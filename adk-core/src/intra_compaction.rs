@@ -2,12 +2,13 @@
 //! that decides it, and the hook an agent calls before each model call.
 //!
 //! [`IntraCompactionConfig`] sets the threshold: by default a fraction of the model's
-//! context window ([`Llm::context_window`]), or [`DEFAULT_TOKEN_THRESHOLD`] when the model
+//! context window ([`Llm::context_window`]), or
+//! [`DEFAULT_TOKEN_THRESHOLD`](crate::intra_compaction::DEFAULT_TOKEN_THRESHOLD) when the model
 //! reports none. [`HistoryCompactor`] is the hook: the runner installs one on
 //! [`RunConfig::history_compactor`](crate::RunConfig::history_compactor) at the start of each
 //! run, and `LlmAgent` and `CodeActAgent` call it before every model call, and once more when
 //! the model rejects a request as longer than its context window
-//! ([`is_context_limit_error`]).
+//! ([`is_context_limit_error`](crate::intra_compaction::is_context_limit_error)).
 //!
 //! The session-level [`EventsCompactionConfig`](crate::EventsCompactionConfig) compacts after
 //! every N invocations instead; both summarize through
