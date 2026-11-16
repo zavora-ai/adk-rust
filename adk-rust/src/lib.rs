@@ -55,11 +55,12 @@
 //! # auth, server, eval, guardrail, plugin, artifacts, tools, memory, telemetry, computer-use
 //! adk-rust = { version = "3.0.0", features = ["standard"] }
 //!
-//! # Enterprise — standard + realtime, browser, rag, payments, awp
+//! # Enterprise — standard + realtime, browser, rag, payments, awp, and autonomy: the
+//! # harness, its kernel, durable and background runs, approvals and signed audit
 //! adk-rust = { version = "3.0.0", features = ["enterprise"] }
 //!
-//! # Full — enterprise + audio, code, sandbox, code-tools, the harness and its kernel, and
-//! # the graph-functional, graph-node-cache, graph-delta, and graph-time-travel capabilities
+//! # Full — enterprise + audio, code, sandbox, code-tools, the website, and the
+//! # graph-functional, graph-node-cache, graph-delta, and graph-time-travel capabilities
 //! adk-rust = { version = "3.0.0", features = ["full"] }
 //!
 //! # Custom — pick exactly what you need
@@ -462,11 +463,12 @@
 //! | `rag` | RAG pipeline | enterprise |
 //! | `payments` | Agentic commerce (ACP/AP2) | enterprise |
 //! | `awp` | Agentic Web Protocol | enterprise |
+//! | `autonomy` | An agent that runs unattended: the harness and its kernel, durable and background runs, cron and webhook wake-ups, the approvals service, SQLite stores, signed audit | enterprise |
 //! | `code`, `sandbox`, `code-tools` | Code execution and sandboxed execution | full |
 //! | `audio` | Audio processing | full |
 //! | `graph-functional`, `graph-node-cache`, `graph-delta`, `graph-time-travel` | Graph capabilities | full |
-//! | `harness` | The governed, durable harness agent (`adk-harness`) | full |
-//! | `harness-kernel` | The agent kernel, the harness's always-on form (`adk-kernel`) | full |
+//! | `harness` | The governed, durable harness agent (`adk-harness`) | enterprise |
+//! | `harness-kernel` | The agent kernel, the harness's always-on form (`adk-kernel`) | enterprise |
 //! | `website` | The AWP website product (`adk-website`, `adk-site`) | full |
 //! | `surface` | Agent surfaces: the engine and the web home (`adk-surface`) | opt-in |
 //! | `harness-browser`, `harness-computer-use`, `harness-payments`, `harness-voice`, `harness-managed` | Harness packs | opt-in |
@@ -1172,12 +1174,12 @@ pub mod managed {
 /// `ConsolePrompter`, which asks for approvals at the terminal, and the `ConsoleIo` it
 /// reads from.
 ///
-/// Available with feature: `harness` (included in `full`)
+/// Available with feature: `harness` (included in `enterprise` and `full`)
 ///
 /// # Example
 ///
 /// ```rust
-/// use adk_rust::harness::{HarnessAgent, HarnessMode, InstructionsConfig};
+/// use adk_rust::harness::{HarnessAgent, HarnessMode, InstructionsConfig, Workspace};
 /// use adk_rust::model::{ScriptedLlm, ScriptedResponse};
 /// use std::sync::Arc;
 ///
@@ -1185,7 +1187,7 @@ pub mod managed {
 /// let model = Arc::new(ScriptedLlm::new("scripted", vec![ScriptedResponse::text("done")]));
 /// let harness = HarnessAgent::builder("harness")
 ///     .model(model)
-///     .workspace(adk_devtools::Workspace::new(std::env::temp_dir()))
+///     .workspace(Workspace::new(std::env::temp_dir()))
 ///     .project_instructions(InstructionsConfig { user_file: None, ..InstructionsConfig::default() })
 ///     .mode(HarnessMode::Plan)
 ///     .build()?;
@@ -1209,7 +1211,7 @@ pub mod harness {
 /// builder, the process table, wake sources, the event bus and the
 /// [`control`](kernel::control) plane `adk-rust up` serves.
 ///
-/// Available with feature: `harness-kernel` (included in `full`)
+/// Available with feature: `harness-kernel` (included in `enterprise` and `full`)
 ///
 /// # Example
 ///

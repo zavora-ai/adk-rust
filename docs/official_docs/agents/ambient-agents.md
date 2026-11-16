@@ -10,6 +10,26 @@ Requires the `ambient` feature:
 adk-agent = { version = "3.0.0", features = ["ambient"] }
 ```
 
+## Ambient agent or the agent kernel
+
+An ambient agent is an event loop inside your program: each event runs the agent at once,
+and what survives a restart is the program's concern. The [agent kernel](../kernel/index.md)
+is a resident supervisor — `adk-rust up`, or a `Kernel` your program hosts — that keeps each
+waiting agent as a durable process and wakes it on the same kinds of event; its cron and file
+wake sources are built on `CronTrigger` and `FileWatchTrigger`.
+
+| Aspect | Ambient agent | Agent kernel |
+|---|---|---|
+| Between events | A subscribed `EventSource` in your process | A `Waiting` process with a wake set and no lease: no model calls |
+| An event | Runs the agent through the invoker or handler | A run keyed by the event, so a redelivery wakes nothing |
+| A crash | Delivery is at most once; offsets, retry and dead letters are yours | A stopped run is reclaimed once its lease lapses and resumes from its checkpoint |
+| A missed cron tick | `MissedTickPolicy` with a `TickWatermark` | `MissedFirePolicy` on `Wake::Cron` ([missed occurrences](../kernel/scheduling.md#cron-wakes-and-missed-occurrences)) |
+| A call that needs a person | The confirmation handler or approval service of the `Runner` you pass | The approvals inbox, decided from any surface; the decision wakes the parked process |
+| Operating it | `pause`, `resume`, `stop` and `status` in your program | `adk-rust ps`, `kill` and `freeze`, and the [control plane](../kernel/control-plane.md) |
+
+[Build an autonomous agent](../autonomy/index.md) compares these with the other mechanisms for
+running an agent unattended.
+
 ## Running an ambient agent
 
 A trigger handler is required. The supported path is `with_invoker`, which takes anything

@@ -264,7 +264,7 @@ On `adk-harness`:
 
 | File | Purpose |
 |---|---|
-| `src/main.rs` | Builds the harness over SQLite sessions in `.adk/state.db`, with `ConsolePrompter` and `.config(HarnessConfig::discover(".")?)`, and runs it with `HarnessLauncher` |
+| `src/main.rs` | Builds the harness over SQLite in `.adk/state.db` — sessions, the approval service and its store, the action ledger, standing rules, and the kernel's stores through `HarnessLauncher::with_kernel_stores` — with `ConsolePrompter` and `.config(HarnessConfig::discover(".")?)`, and runs it with `HarnessLauncher` |
 | `.adk/harness.toml` | The project file, with a `[deploy]` table |
 | `AGENTS.md` | Project instructions, loaded once you trust the workspace |
 | `.skills/example/SKILL.md` | An example skill, valid for `adk-rust skills validate` |
@@ -278,7 +278,14 @@ cp .env.example .env     # add GOOGLE_API_KEY
 cargo test               # the scripted smoke test
 cargo run                # the REPL, ask mode, approvals in the terminal
 cargo run -- serve       # the harness on 127.0.0.1:8080
+cargo run -- up          # the agent kernel, its state in .adk/state.db
+cargo run -- goal "make the tests pass" --until "cargo test"
 ```
+
+The project depends on `adk-rust` with `autonomy` and `cli`. For an agent that runs unattended
+from the start — `auto` mode, the OS sandbox, a budget, a spend cap, a signed audit log and a
+cron trigger — scaffold `--template autonomous` instead ([Build an autonomous
+agent](../autonomy/index.md)).
 
 The template takes the `telemetry`, `mcp` and other addons, and refuses `server` (the
 launcher serves) and `docker` (the launcher refuses a non-loopback address without an

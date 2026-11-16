@@ -239,7 +239,8 @@ pub fn generate_main_rs_with_registry(
     // When nothing serves (no server addon, template doesn't start its own
     // server), run the agent in the interactive console so `cargo run` does
     // something useful out of the box.
-    const SELF_SERVING_TEMPLATES: &[&str] = &["api", "agent-engine", "realtime", "harness"];
+    const SELF_SERVING_TEMPLATES: &[&str] =
+        &["api", "agent-engine", "realtime", "harness", "autonomous"];
     let has_server_addon = manifest.addons.iter().any(|a| a == "server");
     let interactive =
         !has_server_addon && !SELF_SERVING_TEMPLATES.contains(&manifest.template_name.as_str());
@@ -906,11 +907,15 @@ mod tests {
         let main_rs = file("src/main.rs");
         for expected in [
             "use adk_rust::prelude::*;",
-            "use adk_rust::harness::{ConsoleIo, ConsolePrompter, HarnessConfig, HarnessLauncher};",
+            "use adk_rust::harness::{",
+            "use adk_rust::kernel::stores::KernelStores;",
             "SqliteSessionService::new(\"sqlite://.adk/state.db?mode=rwc\").await?",
             "sessions.migrate().await?;",
+            "KernelStores::from_sqlite_pool(sessions.pool().clone()).await?",
             "HarnessAgent::builder(\"demo\")",
-            ".workspace(adk_devtools::Workspace::new(\".\").allow_bash(true))",
+            ".workspace(Workspace::new(\".\").allow_bash(true))",
+            ".action_ledger(stores.actions.clone())",
+            ".with_kernel_stores(stores)",
             ".prompter(Arc::new(ConsolePrompter::new(console.clone())))",
             ".config(HarnessConfig::discover(\".\")?)",
             "HarnessLauncher::new(harness)",
@@ -924,13 +929,12 @@ mod tests {
         assert!(!main_rs.contains("Launcher::new(agent)"), "{main_rs}");
 
         let cargo_toml = file("Cargo.toml");
-        for feature in ["\"minimal\"", "\"harness\"", "\"cli\"", "\"gemini\""] {
+        for feature in ["\"minimal\"", "\"autonomy\"", "\"cli\"", "\"gemini\""] {
             assert!(cargo_toml.contains(feature), "missing {feature} in:\n{cargo_toml}");
         }
-        assert!(cargo_toml.contains(&format!(
-            "adk-session = {{ version = \"{ADK_VERSION}\", features = [\"sqlite\"] }}"
-        )));
-        assert!(cargo_toml.contains(&format!("adk-devtools = \"{ADK_VERSION}\"")));
+        // `autonomy` brings the SQLite stores and `Workspace` through `adk-rust`.
+        assert!(!cargo_toml.contains("adk-session ="), "{cargo_toml}");
+        assert!(!cargo_toml.contains("adk-devtools ="), "{cargo_toml}");
 
         assert!(file(".gitignore").contains(".adk/state.db*"));
         assert!(file(".gitignore").contains(".env"));
@@ -941,6 +945,46 @@ mod tests {
         assert!(file("AGENTS.md").starts_with("# demo\n"));
         assert!(file(".adk/harness.toml").contains("[deploy]"));
         assert!(file(".skills/example/SKILL.md").contains("name: example"));
+    }
+
+    #[test]
+    fn autonomous_template_generates_a_self_serving_project_on_one_dependency() {
+        let manifest = resolve_composition(&registry(), "autonomous", &[], "anthropic").unwrap();
+        let files = generate_project(&manifest, "ops-agent");
+        let file = |path: &str| {
+            let matching: Vec<_> = files.iter().filter(|f| f.path == path).collect();
+            assert_eq!(matching.len(), 1, "expected exactly one '{path}'");
+            matching[0].content.as_str()
+        };
+
+        let main_rs = file("src/main.rs");
+        for expected in [
+            "mod audit;",
+            "mod publish;",
+            "HarnessAgent::builder(\"ops-agent\")",
+            ".mode(HarnessMode::Auto)",
+            ".tool(publish::tool(\"outbox\"))",
+            "audit::open(&sessions, \"ops-agent\")",
+            "NewRun::new(",
+            "\"ops-agent\",",
+            ".with_home(\".adk\")",
+            "AnthropicClient::new(",
+        ] {
+            assert!(main_rs.contains(expected), "missing `{expected}` in:\n{main_rs}");
+        }
+        // The launcher runs the agent; no generic console or server is added.
+        assert!(!main_rs.contains("Launcher::new(agent)"), "{main_rs}");
+        assert!(!main_rs.contains("{name}"), "{main_rs}");
+
+        let cargo_toml = file("Cargo.toml");
+        for feature in ["\"minimal\"", "\"autonomy\"", "\"cli\"", "\"anthropic\""] {
+            assert!(cargo_toml.contains(feature), "missing {feature} in:\n{cargo_toml}");
+        }
+        assert_eq!(cargo_toml.matches("adk-").count(), 1, "one ADK dependency:\n{cargo_toml}");
+        assert!(file("src/publish.rs").contains("\"ops-agent-publish-{}\""));
+        assert!(file("src/audit.rs").contains("--log-id ops-agent"));
+        assert!(file(".gitignore").contains(".adk/audit.key"));
+        assert!(file("README.md").starts_with("# ops-agent\n"));
     }
 
     #[test]

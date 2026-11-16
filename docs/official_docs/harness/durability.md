@@ -17,6 +17,37 @@ new one over the same SQLite file.
 | An approved plan runs after a restart | Plans are checkpointed in the store `plan_checkpoint_store(url)` names; a new process over the same database finds the plan and runs every step | `an_approved_plan_runs_after_a_restart` (`checkpoint_store_tests.rs`) |
 | The `Graph` goal engine continues its thread after a restart | The goal's graph is checkpointed in the same store; the restarted process decides the held call and finishes on the first process's thread | `the_goal_graph_continues_its_thread_after_a_restart` (`checkpoint_store_tests.rs`) |
 
+## After a crash
+
+What to run after a crash, a `kill -9` or a power loss depends on how the harness ran.
+`adk-rust` keeps its state in `harness.db`, or in the `--store` backend; under `--ephemeral`
+nothing is kept, so nothing resumes.
+
+| The harness ran as | Run | What happens |
+|---|---|---|
+| `adk-rust goal` | `adk-rust goal "GOAL" --until "CMD" --resume` | Continues the latest unfinished goal in this workspace, or the one in `--session ID`, in its session at the iteration it reached. The stopped process's run is reclaimed once its 10-second lease lapses. A run parked on a held call that is still undecided runs nothing: the command lists the call and exits `3` |
+| `adk-rust goal` on a running kernel | Nothing | The goal is the kernel's process and keeps running when the terminal following it stops; `adk-rust ps` shows it |
+| `adk-rust code`, or the REPL in its own process | `adk-rust code --session ID "continue"`, or `adk-rust --session ID` (`--continue` for the latest session in this workspace) | A turn is not a durable run, so nothing resumes by itself. The next message in the session first answers every call the stopped turn left unanswered from the action ledger, then runs; held calls with decisions run first, once |
+| The kernel, `adk-rust up` | `adk-rust up` with the same `--home` and `--store`; a kernel installed with `up --install` restarts by itself | Each process the crash stopped is reclaimed once its lease lapses (30 seconds, `DurableWorkerConfig::lease_ttl`) and resumes from its checkpoint. Sleepers stay asleep, and cron occurrences missed while it was down fire as each wake's [`MissedFirePolicy`](../kernel/scheduling.md#cron-wakes-and-missed-occurrences) picks them. Held calls stay in the approvals inbox, and a freeze in force at the crash still holds |
+| An app on `HarnessLauncher` | `cargo run -- up` | As `adk-rust up`, over the stores the app gave: `HarnessLauncher::with_kernel_stores` for the kernel's runs, processes, cron cursors and kill switch, `with_session_service` for sessions, and the harness's `approval_store` and `action_ledger`. A store left at its default is in memory and keeps nothing across the crash |
+
+What every form guarantees over durable stores:
+
+| Guarantee | Mechanism |
+|---|---|
+| A call in flight at the crash never runs twice | Before the session continues, each call the stopped process left unanswered is answered from the action ledger — `already_succeeded`, `already_failed`, or `outcome_unknown` when the ledger holds no outcome, as for a non-idempotent call that began and never finished — and no tool executes (`Runner::recover_unanswered_calls`). The model decides whether to call it again, as a new call |
+| A held call survives | The approval store is durable; a decision from any process or surface runs the call once |
+| One process works a run | Leases are fenced. A reclaimed run starts a new attempt; a run that already used `max_attempts` (3 by default, `NewRun::DEFAULT_MAX_ATTEMPTS`) fails at its next reclaim instead of resuming |
+| The current mode governs | A resumed run reads the mode and standing rules at evaluation, not those it parked under |
+
+To see where things stand:
+
+| Question | Command |
+|---|---|
+| Which processes the kernel holds, and in what state | `adk-rust ps` (a running kernel only) |
+| What a session did before the crash | `adk-rust sessions show ID`; a `call` with no `result` after it was in flight, and its recovered answer appears once the session continues. `adk-rust sessions list` lists the ids |
+| Which calls wait for a decision | `adk-rust approvals list`: the kernel's inbox and the calls sessions hold in `harness.db` |
+
 ## One backend per deployment
 
 Sessions, approvals, the action ledger, modes, goals, read records, durable runs and plan

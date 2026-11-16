@@ -13,13 +13,13 @@ ledger.
 | A library | `adk-rust` with the `harness` feature (in `full`), or `adk-harness` directly |
 | A new project | `cargo adk new my-harness --template harness`; see [Configuration](configuration.md#the-harness-template) |
 | A served agent | `adk-rust serve`, or `HarnessLauncher::run_serve_directly`; see [Serving the harness](serving.md) |
+| An autonomous agent | `adk-rust goal`, or the always-on [agent kernel](../kernel/index.md) with `adk-rust up`; see [Build an autonomous agent](../autonomy/index.md) |
 
 ## Quick start
 
 ```toml
 [dependencies]
 adk-rust = { version = "3.0.0", features = ["harness"] }
-adk-devtools = "3.0.0"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 ```
@@ -28,7 +28,7 @@ anyhow = "1"
 use std::sync::Arc;
 
 use adk_rust::futures::StreamExt;
-use adk_rust::harness::{HarnessAgent, HarnessMode};
+use adk_rust::harness::{HarnessAgent, HarnessMode, Workspace};
 use adk_rust::model::GeminiModel;
 use adk_rust::session::InMemorySessionService;
 use adk_rust::UserId;
@@ -38,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
     let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?);
     let harness = HarnessAgent::builder("harness")
         .model(model)
-        .workspace(adk_devtools::Workspace::new(".").allow_bash(true))
+        .workspace(Workspace::new(".").allow_bash(true))
         .mode(HarnessMode::Plan)
         .build()?
         .into_harness("my-app", Arc::new(InMemorySessionService::new()))?;
@@ -90,7 +90,7 @@ turn runs it once (see [Modes and approvals](modes-and-approvals.md)).
 | [Team](team.md) | Members, isolation, budgets, discovery, review rounds |
 | [Plans and goals](plan-and-goals.md) | The plan graph, gates and rewind; loop-until goals, durable and ambient |
 | [Snapshots and rewind](snapshots-and-rewind.md) | Whole-workspace snapshots before each turn, `/rewind` and `/redo`: files, transcript and plan |
-| [Durability](durability.md) | The durability invariants and the tests that prove them |
+| [Durability](durability.md) | The durability invariants, the tests that prove them, and what to run after a crash |
 | [Identity](identity.md) | RBAC, credentials, authenticated identity, audit |
 | [Observability](observability.md) | Spans, spend, the loop guard, evaluation baselines |
 | [Memory](memory.md) | Working notes and long-term facts |

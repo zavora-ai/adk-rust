@@ -48,11 +48,11 @@
 //!
 //! ```rust,ignore
 //! use std::sync::Arc;
-//! use adk_harness::{HarnessAgent, HarnessMode};
+//! use adk_harness::{HarnessAgent, HarnessMode, Workspace};
 //!
 //! let harness = HarnessAgent::builder("harness")
 //!     .model(model)
-//!     .workspace(adk_devtools::Workspace::new(".").allow_bash(true))
+//!     .workspace(Workspace::new(".").allow_bash(true))
 //!     .mode(HarnessMode::Ask)
 //!     .prompter(Arc::new(my_terminal_prompter))
 //!     .build()?
@@ -130,6 +130,9 @@ pub mod personal;
 #[path = "presets/preset.rs"]
 mod preset;
 
+/// The directory the harness works in, re-exported so a harness needs no direct
+/// `adk-devtools` dependency.
+pub use adk_devtools::Workspace;
 pub use agent::{HARNESS_UNGOVERNED_CODE, HarnessAgent, HarnessInfo, HarnessLayer, HarnessRuntime};
 #[cfg(all(feature = "kernel", feature = "web"))]
 pub use agents::screen_agent_definition;

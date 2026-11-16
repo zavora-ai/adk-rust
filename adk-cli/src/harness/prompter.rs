@@ -104,9 +104,10 @@ impl ConsolePrompter {
         &self.console
     }
 
-    /// `Some(allow_unsandboxed)` under `--yes`.
+    /// `Some(allow_unsandboxed)` under `--yes`: this prompter's own, else its console's
+    /// ([`ConsoleIo::set_approve_all`]).
     pub(super) fn approve_all_flag(&self) -> Option<bool> {
-        self.approve_all
+        self.approve_all.or_else(|| self.console.approve_all())
     }
 
     fn show(&self, prompt: &ApprovalPrompt) {
@@ -287,7 +288,7 @@ impl ApprovalPrompter for ConsolePrompter {
     }
 
     async fn prompt(&self, prompt: ApprovalPrompt) -> Result<PromptAnswer> {
-        if let Some(allow_unsandboxed) = self.approve_all {
+        if let Some(allow_unsandboxed) = self.approve_all_flag() {
             return Ok(self.approved_unattended(&prompt, allow_unsandboxed));
         }
         if self.console.run_interrupted() {

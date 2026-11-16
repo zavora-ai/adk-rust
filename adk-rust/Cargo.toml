@@ -48,7 +48,7 @@ standard = [
     "computer-use",
 ]
 
-# Enterprise — standard + all production specialist crates.
+# Enterprise — standard + all production specialist crates and the autonomy runtime.
 enterprise = [
     "standard",
     "realtime",
@@ -56,11 +56,13 @@ enterprise = [
     "rag",
     "payments",
     "awp",
+    "autonomy",
 ]
 
 # Full — everything: enterprise + all domain add-ons.
 full = [
     "enterprise",
+    "autonomy",
     "audio",
     "code",
     "sandbox",
@@ -176,6 +178,26 @@ harness-memory-local = ["harness", "adk-harness/memory-embeddings-local"]
 # The agent kernel, the harness's always-on form (spec 3.2 §8.2): `adk_rust::kernel`, and
 # with `cli` the `adk-rust up` composition through `HarnessLauncher::with_kernel`.
 harness-kernel = ["harness", "dep:adk-kernel", "adk-harness/kernel"]
+# Everything an agent needs to run unattended (docs/official_docs/autonomy/index.md): the
+# harness and its kernel, durable and background runs with cron wake-ups (`adk-server`
+# `background`, `adk-core` `cron`), signed webhook wake-ups (`webhook-ingress`), the approvals
+# service with notifications (`approvals`), SQLite sessions and durable stores for runs,
+# approvals, the action ledger, spend, standing rules, modes and goals (`adk-session` and
+# `adk-harness` `sqlite`), and the signed audit log (`adk-auth` `signed-audit`). In
+# `enterprise` and `full`; add `cli` for `HarnessLauncher`.
+autonomy = [
+    "harness-kernel",
+    "server",
+    "sessions",
+    "auth",
+    "adk-core/cron",
+    "adk-server/background",
+    "adk-server/webhook-ingress",
+    "adk-server/approvals",
+    "adk-session/sqlite",
+    "adk-harness/sqlite",
+    "adk-auth/signed-audit",
+]
 # Agent surfaces (spec 3.3 §6.1): `adk_rust::surface`, the engine every surface runs on and
 # the web home, its page and HTTP API; with `cli` and `harness`, the harness launcher
 # (`adk-rust serve`, `up`) mounts the home. Opt-in, in no tier.

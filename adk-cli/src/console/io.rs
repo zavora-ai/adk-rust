@@ -81,6 +81,8 @@ struct Inner {
     call_prints: Mutex<CallPrints>,
     /// The words Tab completes.
     completions: Arc<Completions>,
+    /// `Some(allow_unsandboxed)` while every prompt on this console is approved unattended.
+    approve_all: Mutex<Option<bool>>,
 }
 
 /// Writes through [`ConsoleIo::print`]; text that is not UTF-8 is printed lossily.
@@ -171,6 +173,7 @@ impl ConsoleIo {
                 end_turn: AtomicBool::new(false),
                 call_prints: Mutex::new(CallPrints::default()),
                 completions,
+                approve_all: Mutex::new(None),
             }),
         }
     }
@@ -313,6 +316,31 @@ impl ConsoleIo {
             Backend::Terminal { is_terminal, .. } => *is_terminal,
             Backend::Scripted { terminal, .. } => *terminal,
         }
+    }
+
+    /// Approves every call a [`ConsolePrompter`](crate::harness::ConsolePrompter) on this
+    /// console is asked about without asking, as its `approve_all` does: the `--yes` of a
+    /// command parsed after the harness was built, such as `goal --yes` in
+    /// `HarnessLauncher::run`. `Some(allow_unsandboxed)` turns it on; an unsandboxed retry is
+    /// approved only when `allow_unsandboxed` is true. `None` asks again.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_cli::console::ConsoleIo;
+    ///
+    /// let console = ConsoleIo::scripted([], false);
+    /// console.set_approve_all(Some(false));
+    /// assert_eq!(console.approve_all(), Some(false));
+    /// ```
+    pub fn set_approve_all(&self, allow_unsandboxed: Option<bool>) {
+        *lock(&self.inner.approve_all) = allow_unsandboxed;
+    }
+
+    /// `Some(allow_unsandboxed)` while prompts on this console are approved unattended
+    /// ([`set_approve_all`](Self::set_approve_all)).
+    pub fn approve_all(&self) -> Option<bool> {
+        *lock(&self.inner.approve_all)
     }
 
     /// Whether an external editor can take over the terminal: a real terminal, never a
