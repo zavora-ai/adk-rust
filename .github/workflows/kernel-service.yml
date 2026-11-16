@@ -68,12 +68,6 @@ jobs:
         neutralize-wild: 'true'
         enable-cache: 'false'
 
-    - name: Install system dependencies
-      timeout-minutes: 10
-      uses: ./.github/actions/apt-install
-      with:
-        packages: libdbus-1-dev pkg-config
-
     - name: Build adk-rust with the scripted model
       run: cargo build -p adk-cli --bin adk-rust --features scripted-model
 
