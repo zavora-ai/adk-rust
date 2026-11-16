@@ -186,6 +186,12 @@ webrtc-sys = { version = "=0.3.40", default-features = false }
 # `webrtc::ArrayView`, so webrtc-sys 0.3.40 stops compiling; a consumer's fresh resolve picks
 # 0.3.21 unless a dependency pins it. Pinned with webrtc-sys until the livekit 0.8.4 stack lands.
 webrtc-sys-build = "=0.3.18"
+# The livekit 0.8.1 stack asks for `livekit-protocol = "0.7.12"` and `livekit-common = "0.1.0"`.
+# livekit-protocol 0.7.13 adds `SyncState::data_subscription`, which livekit 0.8.1's struct
+# literal lacks, and livekit-common 0.1.7 moves to livekit-protocol 0.8, so `EncryptionType` no
+# longer converts; either release stops livekit compiling. Pinned until the livekit 0.8.4 stack.
+livekit-protocol = "=0.7.12"
+livekit-common = "=0.1.1"
 
 # Shared database API types; all public pool constructors use this SQLx line.
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio"] }
