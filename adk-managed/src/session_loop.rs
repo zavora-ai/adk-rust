@@ -622,7 +622,11 @@ impl SessionLoop {
                 None => {
                     let error =
                         format!("run input is not a managed turn: {}", claimed.record.input);
-                    self.finish(&claimed, RunOutcome::Failed { error, retryable: false }).await;
+                    self.finish(
+                        &claimed,
+                        RunOutcome::Failed { error, retryable: false, backoff: None },
+                    )
+                    .await;
                 }
             },
         }
@@ -636,7 +640,8 @@ impl SessionLoop {
             Ok(runner) => runner,
             Err(error) => {
                 let error = error.to_string();
-                self.finish(&claimed, RunOutcome::Failed { error, retryable: true }).await;
+                self.finish(&claimed, RunOutcome::Failed { error, retryable: true, backoff: None })
+                    .await;
                 return;
             }
         };
@@ -869,7 +874,11 @@ impl SessionLoop {
                 self.emit_error("runner_error", error.to_string()).await;
                 self.finish(
                     claimed,
-                    RunOutcome::Failed { error: error.to_string(), retryable: false },
+                    RunOutcome::Failed {
+                        error: error.to_string(),
+                        retryable: false,
+                        backoff: None,
+                    },
                 )
                 .await;
                 return (TurnEnd::Failed, turn.usage);

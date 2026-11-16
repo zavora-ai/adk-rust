@@ -55,6 +55,31 @@ fn code_in_plan_mode_writes_nothing() {
     assert!(!ws.path().join("made-by-bash").exists(), "plan mode ran bash:\n{shown}");
 }
 
+/// A run that ends on a model error exits `1` with the error, so CI and unattended callers
+/// see the failure: the empty script fails the first model call.
+#[test]
+fn code_exits_1_when_the_run_fails() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let output = run(
+        &[
+            "code",
+            "write a note",
+            "--yes",
+            "--no-memory",
+            "--dir",
+            &dir_arg(ws.path()),
+            "--model-script",
+            "[]",
+        ],
+        home.path(),
+        ws.path(),
+    );
+    let shown = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{shown}");
+    assert!(shown.contains("\nthe run failed: "), "{shown}");
+}
+
 #[test]
 fn the_read_only_alias_is_read_only_mode() {
     let home = tempfile::tempdir().unwrap();
