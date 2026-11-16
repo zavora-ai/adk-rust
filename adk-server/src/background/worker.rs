@@ -294,9 +294,10 @@ pub struct DurableWorkerConfig {
     /// What happens to a run the governance control refuses after it made a model or tool
     /// call. Defaults to [`GovernanceRefusal::Park`]; see [Freeze parks](self#freeze-parks).
     pub on_governance_refusal: GovernanceRefusal,
-    /// How long a retryable failure waits before the run's next attempt. Defaults to
-    /// [`RetryBackoff::default`]: about 5, 10 and 20 seconds, at least the error's own
-    /// retry hint, at most 10 minutes.
+    /// How long a retryable failure of a model call, one whose error names a wait
+    /// (`Retry-After`), or a workflow's waits before the run's next attempt; other retryable
+    /// failures, such as a busy store, retry at once. Defaults to [`RetryBackoff::default`]:
+    /// about 5, 10 and 20 seconds, at least the error's own retry hint, at most 10 minutes.
     pub retry_backoff: RetryBackoff,
 }
 
@@ -319,8 +320,9 @@ impl Default for DurableWorkerConfig {
 }
 
 impl DurableWorkerConfig {
-    /// Sets how long a retryable failure waits before the run's next attempt;
-    /// [`RetryBackoff::none`] retries at once.
+    /// Sets how long a retryable failure of a model call, one whose error names a wait, or
+    /// a workflow's waits before the run's next attempt; [`RetryBackoff::none`] retries at
+    /// once.
     ///
     /// # Example
     ///
@@ -613,6 +615,9 @@ enum Attempt {
 struct Failure {
     error: String,
     retryable: bool,
+    /// Whether the next attempt waits [`DurableWorkerConfig::retry_backoff`]: a model
+    /// provider's failure, one that names a wait, or a workflow's.
+    backs_off: bool,
     /// How long the error asked to wait before another attempt (`Retry-After`).
     retry_after: Option<Duration>,
 }
@@ -620,18 +625,19 @@ struct Failure {
 impl Failure {
     /// A failure no later attempt can fix.
     fn fatal(error: impl Into<String>) -> Self {
-        Self { error: error.into(), retryable: false, retry_after: None }
+        Self { error: error.into(), retryable: false, backs_off: false, retry_after: None }
     }
 }
 
 impl From<AdkError> for Failure {
     fn from(error: AdkError) -> Self {
         let retryable = error.is_retryable();
-        Self {
-            retry_after: retryable.then(|| error.retry.retry_after()).flatten(),
-            retryable,
-            error: error.to_string(),
-        }
+        let retry_after = retryable.then(|| error.retry.retry_after()).flatten();
+        // A provider under load needs time; a busy store or a stale kill-switch read clears
+        // in milliseconds and is retried at once.
+        let backs_off =
+            retryable && (error.component == ErrorComponent::Model || retry_after.is_some());
+        Self { retryable, backs_off, retry_after, error: error.to_string() }
     }
 }
 
@@ -1123,8 +1129,7 @@ impl DurableWorker {
                 }
             }
             Ok(Err(failure)) => {
-                let backoff = failure
-                    .retryable
+                let backoff = (failure.retryable && failure.backs_off)
                     .then(|| self.config.retry_backoff.delay(record.attempt, failure.retry_after));
                 if let Some(backoff) = backoff {
                     tracing::info!(
@@ -1346,7 +1351,12 @@ impl DurableWorker {
             .execute_durable(&record.target, input, context)
             .await
             .map(Attempt::Done)
-            .map_err(|error| Failure { error, retryable: true, retry_after: None }))
+            .map_err(|error| Failure {
+                error,
+                retryable: true,
+                backs_off: true,
+                retry_after: None,
+            }))
     }
 
     /// Applies the run's stored principal to `acting` under the rules in

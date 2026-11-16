@@ -57,8 +57,8 @@ use tracing::{debug, info, warn};
 use adk_core::Memory;
 use adk_core::{
     Agent, ClaimedRun, Content, Event, FunctionResponseData, NewRun, OnConflict, Part,
-    RetryBackoff, RunCheckpointRef, RunConfig, RunOutcome, RunState as DurableRunState, SessionId,
-    ToolApproval, UserId,
+    RunCheckpointRef, RunConfig, RunOutcome, RunState as DurableRunState, SessionId, ToolApproval,
+    UserId,
 };
 use adk_runner::Runner;
 use adk_session::service::SessionService;
@@ -640,8 +640,8 @@ impl SessionLoop {
             Ok(runner) => runner,
             Err(error) => {
                 let error = error.to_string();
-                let backoff = Some(RetryBackoff::default().delay(claimed.record.attempt, None));
-                self.finish(&claimed, RunOutcome::Failed { error, retryable: true, backoff }).await;
+                self.finish(&claimed, RunOutcome::Failed { error, retryable: true, backoff: None })
+                    .await;
                 return;
             }
         };

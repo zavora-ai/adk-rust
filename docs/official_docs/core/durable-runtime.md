@@ -212,7 +212,7 @@ more than `retain_finished` loses runs that just finished.
 | `retain_finished` | 24 h | Finished runs older than this on the worker's clock are pruned by the claim loop |
 | `approval_timeout` | `None` | How long a run parked on a held tool call waits for a decision; `None` waits until woken |
 | `allowed_principals` | Empty | Agent ids beyond the worker's own and the target's derived id that a run's stored principal may name (`with_allowed_principal`); any other fails the run with `identity.principal_not_allowed` |
-| `retry_backoff` | `RetryBackoff::default()` | How long a retryable failure waits before the next attempt: about 5, 10 and 20 s after attempts 1, 2 and 3 (exponential, jittered down by up to half), at least the error's retry hint (`Retry-After`), at most 10 minutes; `RetryBackoff::none()` retries at once |
+| `retry_backoff` | `RetryBackoff::default()` | How long a retryable failure of a model call (a provider's `429`, `503` or timeout), one whose error names a wait (`Retry-After`), or a workflow's waits before the next attempt: about 5, 10 and 20 s after attempts 1, 2 and 3 (exponential, jittered down by up to half), at least the error's retry hint, at most 10 minutes. Other retryable failures, such as a busy store, retry at once. `RetryBackoff::none()` retries every one at once |
 | `on_governance_refusal` | `GovernanceRefusal::Park` | What a kill-switch refusal does to a run that already made a model or tool call, on a worker with a governance control: `Park` parks it at its next model-call boundary and wakes it on unfreeze, as **Kill switch** below describes; `Fail` ends the attempt with the control's error (spec 3.2 §10 S3) |
 
 One attempt of a claimed run:
@@ -226,8 +226,9 @@ One attempt of a claimed run:
    request stops the run cooperatively; one refused with `run_store.stale_epoch` drops the
    execution at once, and the worker writes nothing more.
 4. `finish` writes the outcome, fenced by the epoch: `Completed`, `Failed { retryable }`
-   (retryable failures requeue while attempts remain, claimable once `retry_backoff` has
-   passed), or `Cancelled` when cancellation was requested. A retryable failure of the last
+   (retryable failures requeue while attempts remain; a provider's, a hinted or a
+   workflow's failure is claimable once `retry_backoff` has passed), or `Cancelled` when
+   cancellation was requested. A retryable failure of the last
    attempt fails the run with `; attempts exhausted (N of N)` after the error, so the run stays
    listed as failed with what stopped it.
 
