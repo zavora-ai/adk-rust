@@ -1078,6 +1078,8 @@ pub(crate) struct TurnEnd {
     pub(crate) held: Vec<ToolConfirmationRequest>,
     /// The text the agents wrote, without thoughts.
     pub(crate) text: String,
+    /// The error that ended the run, as shown, when it failed.
+    pub(crate) error: Option<String>,
 }
 
 /// Prints one run's events until it ends, Ctrl-C cancels it, or a person's denial ends
@@ -1184,8 +1186,11 @@ pub(crate) async fn drive_turn(
                     Err(e) => {
                         // The message is shown here, escaped; the log line
                         // stays content-free, since it can be exported.
-                        eprintln!("\nError: {}", terminal_safe(&e.to_string()));
+                        let message = e.to_string();
+                        let shown = terminal_safe(&message).into_owned();
+                        eprintln!("\nError: {shown}");
                         error!(error = %e.diagnostics(), "stream error");
+                        end.error = Some(shown);
                     }
                 }
             }

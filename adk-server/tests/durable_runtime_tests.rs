@@ -17,7 +17,7 @@ use adk_core::governance_state::{
     GovernanceScope, GovernanceState, GovernanceStateStore, InMemoryGovernanceStateStore,
 };
 use adk_core::principal::SubjectRef;
-use adk_core::run_store::{RUN_STALE_EPOCH_CODE, RunCheckpointRef};
+use adk_core::run_store::{RUN_STALE_EPOCH_CODE, RetryBackoff, RunCheckpointRef};
 use adk_core::schedule::{MissedFirePolicy, Schedule, ScheduleSpec};
 use adk_core::{
     AdkError, ClaimedRun, Clock, Content, DurableRunStore, Enqueued, ErrorCategory, ErrorComponent,
@@ -635,6 +635,7 @@ async fn the_worker_prunes_finished_runs_on_the_store_clock() {
 
 // --- Workflows and graphs ---
 
+/// A workflow's opaque failure retries at once, and the last one says the attempts ran out.
 #[tokio::test]
 async fn a_failing_workflow_retries_until_its_attempts_run_out() {
     let attempts = Arc::new(AtomicUsize::new(0));
@@ -663,7 +664,114 @@ async fn a_failing_workflow_retries_until_its_attempts_run_out() {
     assert_eq!(finished.state, RunState::Failed);
     assert_eq!(finished.attempt, 3);
     assert_eq!(attempts.load(Ordering::SeqCst), 3);
-    assert_eq!(finished.error.as_deref(), Some("still failing"));
+    assert_eq!(
+        finished.error.as_deref(),
+        Some("still failing; attempts exhausted (3 of 3)"),
+        "the dead run says why it stopped"
+    );
+}
+
+/// Fails its first call with `error`, then answers.
+struct FailsOnce {
+    error: std::sync::Mutex<Option<AdkError>>,
+}
+
+#[async_trait]
+impl Llm for FailsOnce {
+    fn name(&self) -> &str {
+        "fails-once"
+    }
+
+    async fn generate_content(&self, _req: LlmRequest, _stream: bool) -> Result<LlmResponseStream> {
+        if let Some(error) = self.error.lock().unwrap().take() {
+            return Err(error);
+        }
+        let response = LlmResponse {
+            content: Some(Content::new("model").with_text("done")),
+            turn_complete: true,
+            ..Default::default()
+        };
+        Ok(Box::pin(futures::stream::iter([Ok(response)])))
+    }
+}
+
+/// A provider's retryable refusal waits out the backoff; a retryable failure from inside
+/// the process, such as a busy store, is retried at once (K5).
+#[tokio::test]
+async fn a_providers_refusal_backs_off_and_an_internal_failure_retries_at_once() {
+    let backoff = RetryBackoff::new(Duration::from_secs(600), Duration::from_secs(600));
+    let attempt = |error: AdkError| async move {
+        let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+        let model = Arc::new(FailsOnce { error: std::sync::Mutex::new(Some(error)) });
+        let agent = LlmAgentBuilder::new("assistant").model(model as Arc<dyn Llm>).build().unwrap();
+        let runner = Runner::builder()
+            .app_name("ops")
+            .agent(Arc::new(agent))
+            .session_service(Arc::new(InMemorySessionService::new()) as Arc<dyn SessionService>)
+            .build()
+            .unwrap();
+        let run = runs
+            .enqueue(NewRun::new("default", "ops", "user", "assistant", json!({ "text": "hi" })))
+            .await
+            .unwrap()
+            .record()
+            .cloned()
+            .unwrap();
+        let worker = DurableWorker::new(Arc::clone(&runs))
+            .with_agent("assistant", Arc::new(runner))
+            .with_config(worker_config("w").with_retry_backoff(backoff))
+            .spawn();
+        let store = Arc::clone(&runs);
+        let id = run.run_id.clone();
+        let requeued = wait_for(Duration::from_secs(5), move || {
+            let (store, id) = (Arc::clone(&store), id.clone());
+            Box::pin(async move {
+                store
+                    .get(&id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .filter(|run| run.attempt >= 1 && run.state != RunState::Running)
+            })
+        })
+        .await
+        .expect("the first attempt ends");
+        let finished = wait_for(Duration::from_secs(2), {
+            let store = Arc::clone(&runs);
+            let id = run.run_id.clone();
+            move || {
+                let (store, id) = (Arc::clone(&store), id.clone());
+                Box::pin(async move {
+                    store.get(&id).await.ok().flatten().filter(|run| run.state.is_terminal())
+                })
+            }
+        })
+        .await;
+        worker.shutdown().await;
+        (requeued, finished)
+    };
+
+    let (requeued, finished) = attempt(AdkError::new(
+        ErrorComponent::Model,
+        ErrorCategory::RateLimited,
+        "model.rate_limited",
+        "429 Too Many Requests",
+    ))
+    .await;
+    assert_eq!(requeued.state, RunState::Queued);
+    let wait = requeued.not_before.expect("a provider's refusal backs off") - requeued.updated_at;
+    assert!(wait >= chrono::Duration::seconds(300), "{wait:?}");
+    assert!(finished.is_none(), "the retry waits out its backoff");
+
+    let (_, finished) = attempt(AdkError::new(
+        ErrorComponent::Session,
+        ErrorCategory::Unavailable,
+        "session.busy",
+        "the store is busy",
+    ))
+    .await;
+    let finished = finished.expect("an internal failure is retried at once");
+    assert_eq!((finished.state, finished.attempt), (RunState::Completed, 2));
 }
 
 /// A graph workflow recovered after a crash resumes from its checkpointer: the step

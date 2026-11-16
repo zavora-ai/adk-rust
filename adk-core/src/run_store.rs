@@ -18,7 +18,7 @@
 //! | `Running` | `wait` | `Waiting` (lease released) | — | — |
 //! | `Waiting` | `claim` once the wait's `until` passed or `wake` was called | `Running` | — | + 1 |
 //! | `Running` | `finish(Completed)` | `Completed` | — | — |
-//! | `Running` | `finish(Failed { retryable: true })` with attempts left and no cancel request | `Queued` | — | — |
+//! | `Running` | `finish(Failed { retryable: true, backoff })` with attempts left and no cancel request | `Queued`, claimable once `backoff` has passed | — | — |
 //! | `Running` | `finish(Failed)` otherwise | `Failed` | — | — |
 //! | `Running` | `finish(Cancelled)` | `Cancelled` | — | — |
 //! | `Queued`, `Waiting` | `request_cancel` | `Cancelled` | — | — |
@@ -550,9 +550,94 @@ pub enum RunOutcome {
         error: String,
         /// Whether another attempt may succeed.
         retryable: bool,
+        /// How long a requeued run waits before its next attempt, as its `not_before`;
+        /// `None` makes it claimable at once. [`RetryBackoff::delay`] computes one.
+        backoff: Option<Duration>,
     },
     /// The run stopped after a cancellation request.
     Cancelled,
+}
+
+/// Exponential backoff with jitter between the attempts of a run whose failure is retryable,
+/// so a provider that refuses with `429` or `503` is not asked again at once.
+///
+/// | Input | Wait before the next attempt |
+/// |-------|------------------------------|
+/// | Attempt `n` failed | `initial × multiplier^(n−1)`, capped at `max`, then a random part of its upper half dropped, so runs that failed together retry apart |
+/// | The error carries a retry hint (`Retry-After`) | At least the hint, still capped at `max` |
+///
+/// The defaults wait about 5, 10 and 20 seconds after the first three attempts, never
+/// longer than 10 minutes. [`none`](Self::none) retries at once.
+///
+/// # Example
+///
+/// ```rust
+/// use std::time::Duration;
+/// use adk_core::run_store::RetryBackoff;
+///
+/// let backoff = RetryBackoff::new(Duration::from_secs(2), Duration::from_secs(60));
+/// let first = backoff.delay(1, None);
+/// assert!(first >= Duration::from_secs(1) && first <= Duration::from_secs(2));
+/// // A provider that asks for 30 seconds gets them.
+/// assert!(backoff.delay(1, Some(Duration::from_secs(30))) >= Duration::from_secs(30));
+/// assert_eq!(RetryBackoff::none().delay(3, None), Duration::ZERO);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct RetryBackoff {
+    /// The wait after the first attempt fails, before jitter.
+    pub initial: Duration,
+    /// The longest wait, retry hints included.
+    pub max: Duration,
+    /// What each further attempt multiplies the wait by.
+    pub multiplier: f64,
+}
+
+impl Default for RetryBackoff {
+    fn default() -> Self {
+        Self::new(Duration::from_secs(5), Duration::from_secs(600))
+    }
+}
+
+impl RetryBackoff {
+    /// Waits from `initial`, doubling per attempt, at most `max`.
+    pub fn new(initial: Duration, max: Duration) -> Self {
+        Self { initial, max, multiplier: 2.0 }
+    }
+
+    /// No wait: a retryable failure is claimable again at once.
+    pub fn none() -> Self {
+        Self::new(Duration::ZERO, Duration::ZERO)
+    }
+
+    /// Sets what each further attempt multiplies the wait by.
+    #[must_use]
+    pub fn with_multiplier(mut self, multiplier: f64) -> Self {
+        self.multiplier = multiplier;
+        self
+    }
+
+    /// The wait before the attempt after `attempt` (1-based) failed, with the error's
+    /// `retry_after` hint when it has one.
+    pub fn delay(&self, attempt: u32, retry_after: Option<Duration>) -> Duration {
+        let exponent = i32::try_from(attempt.saturating_sub(1)).unwrap_or(i32::MAX);
+        let base = self.initial.as_secs_f64() * self.multiplier.max(1.0).powi(exponent);
+        let base = base.min(self.max.as_secs_f64());
+        let jittered = Duration::from_secs_f64(base * (0.5 + 0.5 * unit_random()));
+        jittered.max(retry_after.unwrap_or_default()).min(self.max)
+    }
+}
+
+/// A random number in `[0, 1)`, from the standard library's randomly keyed hasher.
+fn unit_random() -> f64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos()),
+    );
+    (hasher.finish() >> 11) as f64 / (1_u64 << 53) as f64
 }
 
 /// Selects runs for [`DurableRunStore::list`]. Every set field must match.
@@ -1068,10 +1153,13 @@ impl DurableRunStore for InMemoryRunStore {
                 record.state = RunState::Completed;
                 record.result = Some(result);
             }
-            RunOutcome::Failed { error, retryable } => {
+            RunOutcome::Failed { error, retryable, backoff } => {
                 let retry =
                     retryable && record.attempt < record.max_attempts && !record.cancel_requested;
                 record.state = if retry { RunState::Queued } else { RunState::Failed };
+                if retry {
+                    record.not_before = backoff.map(|backoff| now + backoff);
+                }
                 record.error = Some(error);
             }
             RunOutcome::Cancelled => record.state = RunState::Cancelled,

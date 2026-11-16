@@ -56,19 +56,11 @@ UMBRELLA = "adk-rust"
 # Entries are (kind, reason, replacement).
 ALIASES: dict[str, tuple[str, str, str]] = {
     # --- OpenAI-compatible presets: one client, one wire format. -------------
+    # The preset aliases (cerebras, fireworks, ...) were removed in 3.0.0.
     "openai": ("canonical", "the OpenAI client every preset builds on", "openai"),
-    "cerebras": ("collapse", "preset constructor", "OpenAICompatibleConfig::cerebras()"),
-    "fireworks": ("collapse", "preset constructor", "OpenAICompatibleConfig::fireworks()"),
-    "mistral": ("collapse", "preset constructor", "OpenAICompatibleConfig::mistral()"),
-    "perplexity": ("collapse", "preset constructor", "OpenAICompatibleConfig::perplexity()"),
-    "sambanova": ("collapse", "preset constructor", "OpenAICompatibleConfig::sambanova()"),
-    "together": ("collapse", "preset constructor", "OpenAICompatibleConfig::together()"),
     # --- ONNX checkpoints: one `ort` runtime, model chosen at run time. -------
+    # The checkpoint aliases (whisper-onnx, ...) were folded into audio-onnx in 3.0.0.
     "audio-onnx": ("canonical", "links the ort runtime every model needs", "audio-onnx"),
-    "whisper-onnx": ("collapse", "checkpoint, not a build", "audio-onnx"),
-    "distil-whisper": ("collapse", "checkpoint, not a build", "audio-onnx"),
-    "moonshine": ("collapse", "checkpoint, not a build", "audio-onnx"),
-    "chatterbox": ("collapse", "checkpoint, not a build", "audio-onnx"),
     # --- Harness add-ons that compile a module, not a dependency. ------------
     "harness": ("canonical", "links adk-harness, which every harness add-on builds on", "harness"),
     "harness-hooks": (
@@ -76,15 +68,10 @@ ALIASES: dict[str, tuple[str, str, str]] = {
         "compiles the hooks module of adk-harness (spec 3.1 §7.22): hooks from .adk/harness.toml run on tool events; toml is already a plain dependency",
         "",
     ),
-    # --- Action node kinds adding nothing over `action`. ---------------------
+    # --- Action node kinds adding nothing over `action` were folded into it in 3.0.0.
     "action": ("canonical", "the action node family", "action"),
-    "action-code": ("collapse", "no dependency beyond `action`", "action"),
-    "action-db": ("collapse", "no dependency beyond `action`", "action"),
-    "action-email": ("collapse", "no dependency beyond `action`", "action"),
     # --- Surface served by adk-server. ---------------------------------------
     "server": ("canonical", "the Axum server and its protocol surface", "server"),
-    "a2a": ("collapse", "A2A needs no dependency beyond adk-server", "server"),
-    "agent-registry": ("collapse", "YAML registry needs no dependency beyond adk-server", "server"),
     # --- Agent modes over one crate. -----------------------------------------
     "agents": ("canonical", "the agent crate", "agents"),
     "codeact": ("keep", "a distinct agent mode that links only adk-agent", "codeact"),
@@ -98,16 +85,12 @@ ALIASES: dict[str, tuple[str, str, str]] = {
     # --- Adjacent surfaces reached through one crate. ------------------------
     "default": ("canonical", "Cargo's implicit entry point; resolves to minimal", "minimal"),
     "minimal": ("canonical", "the default tier", "minimal"),
-    "action-http": ("canonical", "links reqwest; action-rss builds on it", "action-http"),
-    "action-rss": ("collapse", "an HTTP node reading a feed", "action-http"),
+    "action-http": ("canonical", "links reqwest; includes the RSS node", "action-http"),
     "audio": ("canonical", "the audio crate", "audio"),
     "audio-fx": ("keep", "mixing and effects, no dependency beyond adk-audio", "audio-fx"),
     "cli": ("canonical", "the CLI and its providers", "cli"),
     "optimize": ("keep", "prompt optimizer, links the CLI only", "optimize"),
-    "cli-deepseek": ("collapse", "CLI provider read from the environment", "cli"),
-    "cli-groq": ("collapse", "CLI provider read from the environment", "cli"),
     "eval": ("canonical", "the evaluation crate", "eval"),
-    "personas": ("collapse", "persona fixtures, links adk-eval only", "eval"),
     "mcp": ("canonical", "the MCP transport", "mcp"),
     "mcp-sampling": ("keep", "sampling needs nothing beyond rmcp", "mcp"),
     "gemini": ("canonical", "the Gemini client", "gemini"),
@@ -137,11 +120,7 @@ AXES: dict[str, str] = {
     "vertex": "gcp",
     "gcp": "gcp",
     "audio": "media",
-    "whisper": "media",
-    "distil": "media",
-    "moonshine": "media",
     "kokoro": "media",
-    "chatterbox": "media",
     "qwen3": "media",
     "all-onnx": "media",
     "mcp": "mcp",

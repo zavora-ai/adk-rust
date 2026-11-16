@@ -116,6 +116,11 @@ pub(crate) struct LocalRun {
     /// Spend attributed to this claim so far, and when, for the burn rate.
     pub(crate) samples: VecDeque<(DateTime<Utc>, u64)>,
     pub(crate) attributed: u64,
+    /// What the claim's agent turn used, counted from the usage its events carry, for a
+    /// hosted agent whose progress source keeps no counter (a plain `Runner`).
+    pub(crate) turn: RunUsage,
+    /// The part of `turn` already attributed.
+    pub(crate) turn_attributed: RunUsage,
 }
 
 /// What every kernel part shares: the stores, the bus, the kill switch, the workers.
@@ -540,24 +545,37 @@ impl Supervision {
     }
 
     /// Attributes the spend the hosted agent counted since the last attribution to `pid`,
-    /// on today's row (spec 3.2 §7.10).
+    /// on today's row (spec 3.2 §7.10): the counter of its [`ProgressSource`] when that
+    /// keeps one, else the usage the turn's events carried.
     pub(crate) async fn attribute(&self, pid: &str) {
         let Some(local) = self.local.lock().unwrap_or_else(|e| e.into_inner()).get(pid).cloned()
         else {
             return;
         };
-        let Some(progress) = self.progress_for(&local.run.target, &local.partition) else {
-            return;
+        let reading = match self.progress_for(&local.run.target, &local.partition) {
+            Some(progress) => match progress.usage(&local.run).await {
+                Ok(reading) => reading,
+                Err(error) => {
+                    tracing::debug!(process.pid = pid, error = %error, "could not read the run's usage");
+                    return;
+                }
+            },
+            None => None,
         };
-        let usage = match progress.usage(&local.run).await {
-            Ok(Some(usage)) => usage,
-            Ok(None) => return,
-            Err(error) => {
-                tracing::debug!(process.pid = pid, error = %error, "could not read the run's usage");
-                return;
+        let counted = local.last.is_some() || local.baseline.is_some();
+        let (usage, previous, from_source) = match reading {
+            // What the turn's events already attributed is part of the source's first reading.
+            Some(usage) => {
+                let previous = local
+                    .last
+                    .clone()
+                    .or(local.baseline.clone())
+                    .unwrap_or_else(|| local.turn_attributed.clone());
+                (usage, previous, true)
             }
+            None if !counted => (local.turn.clone(), local.turn_attributed.clone(), false),
+            None => return,
         };
-        let previous = local.last.clone().or(local.baseline.clone()).unwrap_or_default();
         // A counter that went down was restarted with the agent; everything since counts.
         let since = |now: u64, before: u64| if now >= before { now - before } else { now };
         let units: UsageVector = usage
@@ -573,7 +591,11 @@ impl Supervision {
         {
             let mut table = self.local.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = table.get_mut(pid) {
-                entry.last = Some(usage);
+                if from_source {
+                    entry.last = Some(usage);
+                } else {
+                    entry.turn_attributed = usage;
+                }
                 entry.attributed = entry.attributed.saturating_add(delta.micro_usd);
                 entry.samples.push_back((now, entry.attributed));
                 if entry.samples.len() > SAMPLES {
@@ -1909,6 +1931,8 @@ impl WorkerHooks for KernelHooks {
                 last: None,
                 samples: VecDeque::new(),
                 attributed: 0,
+                turn: RunUsage::default(),
+                turn_attributed: RunUsage::default(),
             },
         );
         sup.publish(KernelEvent::Process {
@@ -1921,6 +1945,35 @@ impl WorkerHooks for KernelHooks {
 
     async fn wake_input(&self, run: &RunRecord) -> Option<String> {
         crate::wake::wake_notice(self.sup.processes.as_ref(), run).await
+    }
+
+    async fn on_event(&self, run: &RunRecord, event: &adk_core::Event) {
+        // A complete model response counts once; its partial chunks repeat it.
+        if event.llm_response.partial || event.author == "user" {
+            return;
+        }
+        let usage = event.llm_response.usage_metadata.as_ref();
+        let tool_calls = event.tool_calls().len() as u64;
+        if usage.is_none() && tool_calls == 0 {
+            return;
+        }
+        let mut table = self.sup.local.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(entry) = table.get_mut(&run.run_id) else { return };
+        let turn = &mut entry.turn;
+        turn.tool_calls += tool_calls;
+        if let Some(usage) = usage {
+            let tokens = |count: i32| u64::try_from(count).unwrap_or(0);
+            turn.model_calls += 1;
+            turn.total_tokens = turn.total_tokens.saturating_add(tokens(usage.total_token_count));
+            turn.cost_micro_usd = turn.cost_micro_usd.saturating_add(
+                usage.cost.and_then(adk_core::usd_to_micro_usd).unwrap_or_default(),
+            );
+            turn.units.merge(
+                &UsageVector::new()
+                    .with(adk_core::UsageUnit::InputTokens, tokens(usage.prompt_token_count))
+                    .with(adk_core::UsageUnit::OutputTokens, tokens(usage.candidates_token_count)),
+            );
+        }
     }
 
     async fn on_park(&self, run: &RunRecord, reason: ParkReason) {

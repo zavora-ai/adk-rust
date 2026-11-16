@@ -9,14 +9,17 @@
 [![GitHub Discussions](https://img.shields.io/github/discussions/zavora-ai/adk-rust?style=flat&logo=github&color=5865F2)](https://github.com/zavora-ai/adk-rust/discussions)
 [![Sponsors](https://img.shields.io/github/sponsors/zavora-ai?logo=githubsponsors&color=EA4AAA)](https://github.com/sponsors/zavora-ai)
 
-A production-ready Rust framework for building AI agents. Model-agnostic, type-safe
-and async, across 49 publishable crates for agent orchestration.
+A Rust framework for building AI agents, including agents that work on their own inside limits
+you set. Model-agnostic, type-safe and async, across 49 publishable crates for agent
+orchestration.
 
 > **v3.0.0 release candidate — unpublished.** This major release carries breaking
 > API changes: tool calls run through one governed path, the server binds `127.0.0.1`
 > and refuses unlisted hosts and origins by default, and run budgets, durable runs,
-> approvals, and audit records join the runtime. The published release is 2.3.0, with all
-> 43 crates on [crates.io](https://crates.io/crates/adk-rust/2.3.0).
+> approvals, and audit records join the runtime, with the harness, the agent kernel and
+> agent surfaces on top. The published release is 2.3.0, with all 43 crates on
+> [crates.io](https://crates.io/crates/adk-rust/2.3.0); `adk-harness`, `adk-kernel`,
+> `adk-surface`, `adk-site`, `adk-drivers`, and `adk-website` are new in 3.0.0.
 >
 > **Milestone:** ADK-Rust has crossed **500K total crates.io downloads** across
 > the workspace crates.
@@ -25,86 +28,21 @@ and async, across 49 publishable crates for agent orchestration.
 > and the [CHANGELOG](CHANGELOG.md). Coming from 1.x: start with the
 > [1.0 to 2.0 guide](docs/official_docs/migration/1.0-to-2.0.md).
 
-### 🎬 Rust & Beyond Podcast — Episode 3: Agents That Act
+## What 3.0 gives you: autonomous agents
 
-**ADK-Rust v2.0.0 — Agents That Act.** Eight chapters on agents that run on their
-own and finish what they start: a workflow that resumes exactly where it stopped,
-a graph that changes course when the problem does, and approvals you can trust
-down to the digest. 42 crates, 4,300+ tests, sub-millisecond loop overhead on a fresh session.
+An autonomous agent pursues a goal over many steps, wakes itself, and keeps working while nobody
+watches. 3.0 makes that safe to run:
 
-<a href="https://www.youtube.com/watch?v=RIh-M0W1CiQ">
-  <img src="docs/podcast/episode-3-thumbnail.png" alt="▶ Watch Episode 3: ADK-Rust v2.0.0 — Agents That Act" width="100%">
-</a>
+| Property | What you get | Guide |
+|----------|--------------|-------|
+| **Autonomous** | A goal iterates until its check passes, parks on a decision and resumes at the same iteration; the kernel wakes an agent on a schedule, a file change, a webhook, a queue message, an approval or a finished run | [plans and goals](docs/official_docs/harness/plan-and-goals.md#goals), [wake-ups](docs/official_docs/core/wake-ups.md) |
+| **Governed** | Every tool call from every agent passes one path: tool policies (default-deny with `DeclarativePolicy`), approvals that hold a call across runs, run budgets and a daily spend cap, a kill switch that freezes every replica, an OS sandbox for the shell, and a signed audit log | [tool authorization](docs/official_docs/security/tool-authorization.md) |
+| **Durable** | A run resumes from its checkpoint after a crash; a held call survives a restart and runs once when approved; the action ledger keeps a non-idempotent call from running twice | [durable runtime](docs/official_docs/core/durable-runtime.md) |
+| **Observable and steerable** | OpenTelemetry spans, the spend ledger, and `adk-rust ps` and `top` over the kernel's processes; a message sent to a running turn from code (`Runner::steer`), a surface or the kernel's control plane | [telemetry](docs/official_docs/observability/telemetry.md), [steering](docs/official_docs/surfaces/index.md#steering-a-running-turn) |
+| **Always on** | `adk-rust up` runs the harness as the agent kernel; the web home, the terminal, a phone and chat channels attach to the same running state | [kernel](docs/official_docs/kernel/index.md), [surfaces](docs/official_docs/surfaces/index.md) |
 
-**▶️ [Watch on YouTube](https://www.youtube.com/watch?v=RIh-M0W1CiQ)** — *40 min 50 sec · Hosts: James (Fenrir) &amp; Ada (Kore) · Video with slides*
-
-> *"Show me."* — Ada, thirty seconds in, declining to be told about the visual
-> builder
-
-<details>
-<summary>Episode highlights</summary>
-
-- **The Numbers** — 42 crates, 4,300+ tests, 104 runnable examples, 568 μs agent-loop
-  overhead against LangGraph's 1,228 ms
-- **Agents That Survive** — SQLite checkpointers, delta checkpoints, and a pause that
-  resumes in a fresh process that shares only the database file
-- **Subgraphs** — a graph as a node, nested three deep, with channel mismatches caught
-  when the parent compiles rather than as an absent value at run time
-- **Deciding At Run Time** — `run_node_with` for work whose size comes from state, and
-  `with_goto` for a node that picks its own successor with no edge declared
-- **Built To Run Unattended** — retries with capped backoff, concurrency bounds,
-  node timeouts, and checkpoint retention that keeps a week-long thread steady
-- **Governed Computer Use** — approval interrupts bound to a digest, so what you
-  approved is what runs
-- **What It Costs** — no automatic crash recovery, an unbounded child ledger, and why
-  we kept two orchestration APIs when the other ADKs deprecated one
-
-</details>
-
-<details>
-<summary>Previous episodes</summary>
-
-#### 🎧 Episode 2: v1.0.0 — The Stable Foundation
-
-A deep-dive into what shipped, who built it, and where it was going. 39 crates.
-130K downloads. Semver stable.
-
-<a href="https://www.youtube.com/watch?v=tlqaE8qeHac">
-  <img src="docs/podcast/episode-2-thumbnail.jpg" alt="▶ Watch Episode 2: ADK-Rust v1.0.0 Launch" width="100%">
-</a>
-
-**▶️ [Watch on YouTube](https://www.youtube.com/watch?v=tlqaE8qeHac)** — *10 min 12 sec · Hosts: James (Fenrir) & Ada (Kore)*
-
-> *"We believe the next generation of software will be built by composing autonomous
-> agents, not by writing every line of logic by hand. And we believe Rust is the
-> right language for the runtime those agents live in."* — James
-
-#### 🎧 Episode 1: What is ADK-Rust?
-
-*2 min 21 sec · Generated entirely by ADK-Rust using Gemini 3.1 Flash TTS*
-
-</details>
-
-<details>
-<summary>How are these made?</summary>
-
-Episodes are generated using ADK-Rust's own audio capabilities — Chirp3-HD
-multi-speaker TTS synthesis via `adk-audio`. The script, slide deck (Marp), and
-synthesized audio segments are concatenated with ffmpeg into a video presentation.
-Zero manual voice recording.
-
-```bash
-# Episode 3 assets
-docs/podcast/episode-3-script.md      # Full script, eight chapters
-docs/podcast/episode-3-slides.md      # Marp slide deck
-docs/podcast/adk-rust-episode-3.mp4   # Final video
-docs/podcast/episode-3-narration.mp3  # Audio-only
-```
-
-The episode 3 video and slides are not in the repository: the video alone is about
-900 MB, over GitHub's 100 MB per-file limit. The script and the deck source are.
-
-</details>
+Start with **[Build an autonomous agent](docs/official_docs/autonomy/index.md)**: one agent from a
+scaffold to running on its own, and which runtime fits your deployment.
 
 ---
 
@@ -359,7 +297,7 @@ checks an agent definition without building. `cargo adk templates` and
 | `adk-runner` | Agent execution runtime | Event streaming, session persistence, transfer enforcement, plugins, run budgets, spend and action ledgers, durable cancellation, `Runner::close` |
 | `adk-server` | Production API servers | REST and SSE, A2A, loopback-first security defaults, durable background runs and cron, webhook wake-ups, approvals, governance endpoints, and Gemini Enterprise Agent Engine runtime dispatch |
 | `adk-harness` | Governed harness agent (Beta) | `HarnessAgent` over `LlmAgent`: modes, standing approvals, host or OS-sandboxed `bash`, todos, `AGENTS.md`, skills, team members, plan graphs, durable goals |
-| `adk-kernel` | Agent kernel (Beta) | Resident supervisor with a process table, wake sources (cron, file, webhook, queue, approval), an event bus, freeze across replicas, and a control plane; process stores on SQLite, PostgreSQL, and Redis |
+| `adk-kernel` | Agent kernel (Beta) | Resident supervisor with a process table, wake sources (cron, file, webhook, queue, approval), an event bus, freeze across replicas, and a control plane; stores in memory and on SQLite, PostgreSQL, Redis, MongoDB, Firestore, and Neo4j |
 | `adk-surface` | Agent surfaces (Beta) | `SurfaceEngine` turns sessions, decisions, and activity into plain words for every surface; the web home and its HTTP API (`web`), agent-drawn forms and tables (`genui`), and the workflow observer |
 | `adk-cli` | Run and inspect agents from a terminal | `adk-rust` binary: interactive REPL, web server, coding agent (`code`/`goal`/`ultracode`), skills, graph checkpoint inspection, signed audit log verification; embeddable `Launcher` |
 | `adk-realtime` | Real-time voice & multimodal agents | OpenAI Realtime + Gemini Live, bidirectional audio, video frames, VAD, affective dialogue, server-side tools via `IntegratedRealtimeRunner` |
@@ -429,6 +367,93 @@ cargo run -p adk-bench --release --example long_history -- turns 1000
 cargo run -p adk-bench --release --example long_history -- turns 1000 --window 50
 cargo run -p adk-bench --release --example long_history -- loop 1000
 ```
+
+## Rust & Beyond podcast
+
+Each episode covers the release it shipped with; the numbers are that release's.
+
+### 🎬 Rust & Beyond Podcast — Episode 3: Agents That Act
+
+**ADK-Rust v2.0.0 — Agents That Act.** Eight chapters on agents that run on their
+own and finish what they start: a workflow that resumes exactly where it stopped,
+a graph that changes course when the problem does, and approvals you can trust
+down to the digest. 42 crates, 4,300+ tests, sub-millisecond loop overhead on a fresh session.
+
+<a href="https://www.youtube.com/watch?v=RIh-M0W1CiQ">
+  <img src="docs/podcast/episode-3-thumbnail.png" alt="▶ Watch Episode 3: ADK-Rust v2.0.0 — Agents That Act" width="100%">
+</a>
+
+**▶️ [Watch on YouTube](https://www.youtube.com/watch?v=RIh-M0W1CiQ)** — *40 min 50 sec · Hosts: James (Fenrir) &amp; Ada (Kore) · Video with slides*
+
+> *"Show me."* — Ada, thirty seconds in, declining to be told about the visual
+> builder
+
+<details>
+<summary>Episode highlights</summary>
+
+- **The Numbers** — 42 crates, 4,300+ tests, 104 runnable examples, 568 μs agent-loop
+  overhead against LangGraph's 1,228 ms
+- **Agents That Survive** — SQLite checkpointers, delta checkpoints, and a pause that
+  resumes in a fresh process that shares only the database file
+- **Subgraphs** — a graph as a node, nested three deep, with channel mismatches caught
+  when the parent compiles rather than as an absent value at run time
+- **Deciding At Run Time** — `run_node_with` for work whose size comes from state, and
+  `with_goto` for a node that picks its own successor with no edge declared
+- **Built To Run Unattended** — retries with capped backoff, concurrency bounds,
+  node timeouts, and checkpoint retention that keeps a week-long thread steady
+- **Governed Computer Use** — approval interrupts bound to a digest, so what you
+  approved is what runs
+- **What It Costs** — no automatic crash recovery, an unbounded child ledger, and why
+  we kept two orchestration APIs when the other ADKs deprecated one
+  *(true of v2.0.0; in 3.0.0 a durable run resumes after a crash — see
+  [durable runtime](docs/official_docs/core/durable-runtime.md))*
+
+</details>
+
+<details>
+<summary>Previous episodes</summary>
+
+#### 🎧 Episode 2: v1.0.0 — The Stable Foundation
+
+A deep-dive into what shipped, who built it, and where it was going. 39 crates.
+130K downloads. Semver stable.
+
+<a href="https://www.youtube.com/watch?v=tlqaE8qeHac">
+  <img src="docs/podcast/episode-2-thumbnail.jpg" alt="▶ Watch Episode 2: ADK-Rust v1.0.0 Launch" width="100%">
+</a>
+
+**▶️ [Watch on YouTube](https://www.youtube.com/watch?v=tlqaE8qeHac)** — *10 min 12 sec · Hosts: James (Fenrir) & Ada (Kore)*
+
+> *"We believe the next generation of software will be built by composing autonomous
+> agents, not by writing every line of logic by hand. And we believe Rust is the
+> right language for the runtime those agents live in."* — James
+
+#### 🎧 Episode 1: What is ADK-Rust?
+
+*2 min 21 sec · Generated entirely by ADK-Rust using Gemini 3.1 Flash TTS*
+
+</details>
+
+<details>
+<summary>How are these made?</summary>
+
+Episodes are generated using ADK-Rust's own audio capabilities — Chirp3-HD
+multi-speaker TTS synthesis via `adk-audio`. The script, slide deck (Marp), and
+synthesized audio segments are concatenated with ffmpeg into a video presentation.
+Zero manual voice recording.
+
+```bash
+# Episode 3 assets
+docs/podcast/episode-3-script.md      # Full script, eight chapters
+docs/podcast/episode-3-slides.md      # Marp slide deck
+docs/podcast/adk-rust-episode-3.mp4   # Final video
+docs/podcast/episode-3-narration.mp3  # Audio-only
+```
+
+The episode 3 video and slides are not in the repository: the video alone is about
+900 MB, over GitHub's 100 MB per-file limit. The script and the deck source are.
+
+</details>
 
 ## Develop
 

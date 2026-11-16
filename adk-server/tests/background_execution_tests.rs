@@ -88,7 +88,7 @@ async fn a_failing_workflow_fails_the_run_after_its_retries() {
     .await;
     let run = await_terminal(&state, submitted["runId"].as_str().unwrap()).await;
     assert_eq!(run["status"], "failed");
-    assert_eq!(run["error"], "exploded");
+    assert_eq!(run["error"], "exploded; attempts exhausted (2 of 2)");
     assert_eq!(run["attempt"], 2);
     assert_eq!(run["retriesRemaining"], 0);
     state.shutdown_worker().await;

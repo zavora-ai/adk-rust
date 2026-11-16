@@ -5,6 +5,22 @@ Agent Development Kit (ADK) is a flexible and modular framework for developing a
 > **Note:** ADK-Rust requires Rust 1.95.0 or higher. Upgrading from 2.x? See
 > [Migrating 2.x → 3.0](migration/2.x-to-3.0.md).
 
+## What 3.0 adds: autonomous agents
+
+ADK-Rust 3.0 builds agents that work on their own: an agent pursues a goal over many steps,
+wakes itself, and keeps working while nobody watches, inside limits you set.
+
+| Property | What you get | Guide |
+|----------|--------------|-------|
+| **Autonomous** | Goals that iterate until a check passes, park on a decision and resume; wake-ups on a schedule, a file change, a webhook, a queue message, an approval or a finished run | [Plans and goals](harness/plan-and-goals.md), [Wake-ups](core/wake-ups.md) |
+| **Governed** | One tool path for every agent: tool policies, approvals that hold a call across runs, run budgets and a daily spend cap, a kill switch across replicas, an OS sandbox, a signed audit log | [Tool authorization](security/tool-authorization.md) |
+| **Durable** | Runs that resume after a crash, held calls that survive a restart, and an action ledger that keeps a non-idempotent call from running twice | [Durable runtime](core/durable-runtime.md) |
+| **Observable and steerable** | OpenTelemetry spans, the spend ledger, the kernel's process table, and messages sent to a running turn | [Telemetry](observability/telemetry.md), [Surfaces](surfaces/index.md) |
+| **Always on** | The harness, run as the agent kernel by `adk-rust up`, with the web home, the terminal, a phone and chat attached to the same state | [Harness](harness/index.md), [Kernel](kernel/index.md) |
+
+[Build an autonomous agent](autonomy/index.md) takes one agent from a scaffold to running on its
+own.
+
 ## Installation
 
 Add ADK-Rust to your project:
@@ -51,9 +67,14 @@ ADK-Rust uses a layered architecture designed for modularity and extensibility:
 ```mermaid
 graph TB
     subgraph Application["Application Layer"]
-        CLI["CLI (adk-cli)"]
-        Server["REST + A2A (adk-server)"]
-        Studio["Studio (separate repository)"]
+        CLI["CLI (adk-cli)\nadk-rust up • serve • goal"]
+        Server["REST + A2A (adk-server)\nBackground runs • Cron • Webhooks"]
+        Surfaces["Surfaces (adk-surface)\nWeb home • Terminal • Phone • Chat"]
+    end
+
+    subgraph Always["Always-on Layer"]
+        Kernel["Agent Kernel (adk-kernel)\nProcesses • Wake sources • Control plane"]
+        Harness["Harness (adk-harness)\nModes • Goals • Sandboxed shell"]
     end
 
     subgraph Execution["Execution Layer"]
@@ -79,6 +100,12 @@ graph TB
         Memory["Memory (adk-memory)\nSemantic Search • Knowledge Graph"]
     end
 
+    subgraph Governance["Governance and Durability"]
+        Path["Governed tool path\nPolicies • Approvals • Kill switch"]
+        Budgets["Run budgets • Spend ledger\nAction ledger"]
+        Durable["Durable runs • Checkpoints\nSigned audit log"]
+    end
+
     subgraph Foundation["Foundation"]
         Core["Core Traits (adk-core)\nAgent • Tool • Llm • Session"]
         Auth["Auth (adk-auth)"]
@@ -86,11 +113,17 @@ graph TB
         Plugin["Plugins (adk-plugin)"]
     end
 
+    Application --> Always
+    Always --> Execution
     Application --> Execution
     Execution --> Agents
+    Agents --> Governance
     Agents --> Services
+    Governance --> Foundation
     Services --> Foundation
 ```
+
+The workflow observer in `adk-surface` replaces the retired ADK Studio.
 
 ## Core Concepts
 
@@ -201,7 +234,40 @@ The engine that manages execution flow, orchestrates agent interactions, and coo
 - Session and state management, persisting each complete event
 - Event streaming
 - Run-wide plugins, tool policy, budgets and the kill switch
+- Steering: a message sent to the run in flight (`Runner::steer`)
 - Releasing toolsets and plugins with `Runner::close`
+
+### Governance
+
+Every tool call, from every agent type, passes one governed path before it runs
+(`adk_core::authorize_tool_call`):
+
+| Mechanism | Decides |
+|-----------|---------|
+| Tool policy | Allow, deny or require approval per call; `DeclarativePolicy` denies any tool no rule permits |
+| Confirmation | A person approves the call, in the run or in a later run that resumes the held call |
+| Run budgets and the spend ledger | Model calls, tokens, cost, wall time and tool calls per run, and spend caps across runs |
+| Kill switch | `GovernanceControl` stops model and tool calls everywhere it is attached; on a shared governance store, on every replica |
+| Audit | A signed, tamper-evident record of each decision and call |
+
+See [Tool Authorization](security/tool-authorization.md) and [Run Budgets](core/runner.md#run-budgets).
+
+### Durable Runs
+
+A durable run is a unit of work in a run store that a worker claims under a lease. When the
+process dies, the lease expires and the next claim resumes the run from its checkpoint; a call
+held for approval parks the run until someone decides. Background runs, cron schedules and
+webhook wake-ups enqueue durable runs. See [Durable Runtime](core/durable-runtime.md).
+
+### Harness, Kernel and Surfaces
+
+- **Harness** (`adk-harness`): a governed agent over `LlmAgent` with modes, standing approvals,
+  a sandboxed shell, plans and durable goals. See [Harness](harness/index.md).
+- **Kernel** (`adk-kernel`): runs the harness's work as processes that sleep until a wake source
+  fires, with a control plane and a kill switch across replicas; `adk-rust up` starts it. See
+  [Kernel](kernel/index.md).
+- **Surfaces** (`adk-surface`): the web home, the terminal, a phone, chat and voice, attached to
+  the same running state. See [Surfaces](surfaces/index.md).
 
 ## Feature Flags
 
@@ -218,7 +284,8 @@ adk-rust = { version = "3.0.0", features = ["standard"] }
 # Enterprise — standard + realtime, browser, RAG, payments, AWP
 adk-rust = { version = "3.0.0", features = ["enterprise"] }
 
-# Full — enterprise + audio, code execution, sandbox, code tools, graph capabilities
+# Full — enterprise + audio, code execution, sandbox, code tools, graph capabilities,
+# the harness and its kernel, and the AWP website
 adk-rust = { version = "3.0.0", features = ["full"] }
 
 # Equivalent explicit minimal selection
@@ -255,6 +322,12 @@ Available features:
 - `code`: Code execution (full preset)
 - `sandbox`: Sandboxed execution (full preset)
 - `audio`: Audio processing (full preset)
+- `harness`: The governed harness agent (full preset)
+- `harness-kernel`: The agent kernel, `adk_rust::kernel` (full preset)
+- `website`: The AWP website product (full preset)
+- `surface`: Agent surfaces, `adk_rust::surface`: the engine and the web home (in no tier)
+
+`adk-rust/Cargo.toml` lists every feature.
 
 ## Other Languages
 

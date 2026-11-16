@@ -30,10 +30,10 @@ class ResolverTests(unittest.TestCase):
         deps = self.workspace.deps_of(CHECK.UMBRELLA, "graph-sqlite")
         self.assertIn("sqlx", deps)
 
-    def test_canonical_feature_is_a_superset_of_its_aliases(self) -> None:
-        openai = self.workspace.deps_of(CHECK.UMBRELLA, "openai")
-        fireworks = self.workspace.deps_of(CHECK.UMBRELLA, "fireworks")
-        self.assertEqual(openai, fireworks)
+    def test_a_forwarded_member_feature_adds_no_dependency(self) -> None:
+        # `server` forwards adk-server/agent-registry, which links nothing of its own.
+        server = self.workspace.deps_of(CHECK.UMBRELLA, "server")
+        self.assertEqual(server, self.workspace.deps_of("adk-server", "a2a-v1") | {"adk-server"})
 
     def test_unknown_crate_resolves_to_empty(self) -> None:
         self.assertEqual(self.workspace.deps_of("does-not-exist", "nope"), frozenset())
