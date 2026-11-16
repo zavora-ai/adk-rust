@@ -25,9 +25,7 @@ mcp = ["dep:rmcp"]
 http-transport = [
     "mcp",
     "rmcp/transport-streamable-http-client-reqwest",
-    "reqwest",
     "dep:reqwest",
-    "dep:reqwest-mcp",
 ]
 # Enable code execution tools (CodeTool, etc.)
 code = ["dep:adk-code", "dep:adk-sandbox"]
