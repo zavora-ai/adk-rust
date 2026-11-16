@@ -34,7 +34,30 @@ use reqwest::{
 use serde_json::json;
 use snafu::{OptionExt, ResultExt};
 use std::sync::LazyLock;
+use std::time::Duration;
 use url::Url;
+
+/// How long the Studio client waits to establish a connection, TLS included.
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long the Studio client waits for response data: the headers, then each gap between
+/// body chunks. A stream that keeps sending data is never cut off.
+pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// A `reqwest` client builder with [`DEFAULT_CONNECT_TIMEOUT`] and [`DEFAULT_READ_TIMEOUT`],
+/// so a stalled call fails instead of holding its caller.
+///
+/// # Example
+///
+/// ```
+/// use adk_gemini::backend::studio::default_client_builder;
+///
+/// let client = default_client_builder().build().unwrap();
+/// # let _ = client;
+/// ```
+pub fn default_client_builder() -> reqwest::ClientBuilder {
+    Client::builder().connect_timeout(DEFAULT_CONNECT_TIMEOUT).read_timeout(DEFAULT_READ_TIMEOUT)
+}
 
 static DEFAULT_BASE_URL: LazyLock<Url> = LazyLock::new(|| {
     Url::parse("https://generativelanguage.googleapis.com/v1beta/")
@@ -69,14 +92,15 @@ pub struct StudioBackend {
 }
 
 impl StudioBackend {
-    /// Create a new Studio backend with the given API key, model, and base URL.
+    /// Create a new Studio backend with the given API key, model, and base URL, over a
+    /// client with [`DEFAULT_CONNECT_TIMEOUT`] and [`DEFAULT_READ_TIMEOUT`].
     pub fn new(api_key: &str, model: Model, base_url: Url) -> Result<Self, Error> {
         let headers = HeaderMap::from_iter([(
             HeaderName::from_static("x-goog-api-key"),
             HeaderValue::from_str(api_key).context(InvalidApiKeySnafu)?,
         )]);
 
-        let http_client = Client::builder()
+        let http_client = default_client_builder()
             .default_headers(headers)
             .redirect(reqwest::redirect::Policy::none())
             .build()

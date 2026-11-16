@@ -51,15 +51,6 @@ jobs:
       with:
         tool: cargo-nextest
 
-    # The harness_agent example links libdbus-sys through its keychain support.
-    - name: Install system dependencies
-      # A stalled apt mirror once held jobs for the full six-hour limit; the action bounds and
-      # retries each apt attempt, and the step timeout bounds the whole install.
-      timeout-minutes: 10
-      uses: ./.github/actions/apt-install
-      with:
-        packages: libdbus-1-dev
-
     # The tests create containers from this image and never pull it themselves.
     - name: Pull the test image
       timeout-minutes: 5

@@ -92,7 +92,7 @@ fails with `run_store.stale_epoch` once the run is no longer `Running` at that e
 | `Running` | `wait(until)` | `Waiting`, lease released | — | — |
 | `Waiting` | `claim` once `until` passed or `wake` was called | `Running` | — | + 1 |
 | `Running` | `finish(Completed)` | `Completed` | — | — |
-| `Running` | `finish(Failed { retryable: true })` with attempts left and no cancel request | `Queued` | — | — |
+| `Running` | `finish(Failed { retryable: true, backoff })` with attempts left and no cancel request | `Queued`, claimable once `backoff` has passed | — | — |
 | `Running` | `finish(Failed)` otherwise | `Failed` | — | — |
 | `Running` | `finish(Cancelled)` | `Cancelled` | — | — |
 | `Queued`, `Waiting` | `request_cancel` | `Cancelled` | — | — |
@@ -212,6 +212,7 @@ more than `retain_finished` loses runs that just finished.
 | `retain_finished` | 24 h | Finished runs older than this on the worker's clock are pruned by the claim loop |
 | `approval_timeout` | `None` | How long a run parked on a held tool call waits for a decision; `None` waits until woken |
 | `allowed_principals` | Empty | Agent ids beyond the worker's own and the target's derived id that a run's stored principal may name (`with_allowed_principal`); any other fails the run with `identity.principal_not_allowed` |
+| `retry_backoff` | `RetryBackoff::default()` | How long a retryable failure of a model call (a provider's `429`, `503` or timeout), or one whose error names a wait (`Retry-After`), waits before the next attempt: about 5, 10 and 20 s after attempts 1, 2 and 3 (exponential, jittered down by up to half), at least the error's retry hint, at most 10 minutes. Other retryable failures, such as a busy store or a workflow's, retry at once. `RetryBackoff::none()` retries every one at once |
 | `on_governance_refusal` | `GovernanceRefusal::Park` | What a kill-switch refusal does to a run that already made a model or tool call, on a worker with a governance control: `Park` parks it at its next model-call boundary and wakes it on unfreeze, as **Kill switch** below describes; `Fail` ends the attempt with the control's error (spec 3.2 §10 S3) |
 
 One attempt of a claimed run:
@@ -225,8 +226,11 @@ One attempt of a claimed run:
    request stops the run cooperatively; one refused with `run_store.stale_epoch` drops the
    execution at once, and the worker writes nothing more.
 4. `finish` writes the outcome, fenced by the epoch: `Completed`, `Failed { retryable }`
-   (retryable failures requeue while attempts remain), or `Cancelled` when cancellation was
-   requested.
+   (retryable failures requeue while attempts remain; a provider's or a hinted failure is
+   claimable once `retry_backoff` has passed), or `Cancelled` when cancellation was
+   requested. A retryable failure of the last
+   attempt fails the run with `; attempts exhausted (N of N)` after the error, so the run stays
+   listed as failed with what stopped it.
 
 **Lease fence.** For agent runs the worker installs invocation hooks around every model call,
 model response, tool call, and tool result. Each checks that the lease is still provably held —
@@ -360,6 +364,7 @@ slow work, such as delivery to a remote sink, to another task.
 | `on_claim(run)` | Once the worker starts the claimed run's target, before any model call or workflow step | `Running`, at the claim's epoch |
 | `on_park(run, reason)` | After `wait` parked the run | `Waiting`, holding no lease |
 | `on_finish(run)` | After `finish` wrote the attempt's outcome | `Completed`, `Failed`, or `Cancelled`; `Queued` when a retryable failure requeued it |
+| `on_event(run, event)` | For each event an agent turn yields, partial chunks included; the events carry each model response's usage and cost | `Running`, as claimed |
 | `wake_input(run)` | After `on_claim`, for an agent run; returns why the run was woken, or `None` | `Running`, at the claim's epoch |
 
 `wake_input` is the one hook that returns something. The worker adds its text to the user
