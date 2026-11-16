@@ -372,7 +372,7 @@ cargo run -p adk-bench --release --example long_history -- loop 1000
 
 Each episode covers the release it shipped with; the numbers are that release's.
 
-### 🎬 Episode 3: Agents That Act
+### 🎬 Rust & Beyond Podcast — Episode 3: Agents That Act
 
 **ADK-Rust v2.0.0 — Agents That Act.** Eight chapters on agents that run on their
 own and finish what they start: a workflow that resumes exactly where it stopped,
