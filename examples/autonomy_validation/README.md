@@ -1,8 +1,7 @@
 # Autonomy Validation
 
 Live validation of the autonomy-readiness Phase 0, Phase 1, and Phase 2 fixes against OpenAI, Anthropic,
-and Gemini. Each
-scenario drives real model calls through the public ADK APIs and asserts on observable facts —
+and Gemini: the governance and durability contracts an autonomous agent relies on. Each scenario drives real model calls through the public ADK APIs and asserts on observable facts —
 session history, tool execution counters, persisted state, checkpoints, and usage — never on model
 prose. Prompts are directive and tools are deterministic; when a model ignores a directive prompt,
 or a provider answers HTTP 429, the scenario is retried once (after 60 s for a rate limit) and the
@@ -14,8 +13,8 @@ retry is reported next to the result.
 |----------|-----|---------|
 | `transfer_roundtrip` | #747, #749, #759 | Coordinator → specialist → coordinator over two user turns; every function call in session history has exactly one response; a scripted `[transfer("ghost_agent"), transfer("billing_agent")]` turn answers each call once and a real second turn carrying that history is accepted |
 | `runner_plugin_denies_tool` | #761 | A runner `PluginManager` `before_tool` hook that denies `delete_records` with `Ok(Some(Content))`, the documented form: the tool runs 0 times, the turn completes, and the denial reaches the model as the call's function response |
-| `runner_plugin_denies_tool_err` | #761 | The same hook denying with `Err(..)` |
-| `path_guardrail_fail_closed` | #762 | `PathAllowList` on `path`: a tool that takes its path under another argument name is denied and runs 0 times, a path outside the root is denied, a permitted path runs once |
+| `runner_plugin_denies_tool_err` | #761 | The same hook denying with `Err(..)`: the tool runs 0 times and the call is answered `tool 'delete_records' was not run: a before-tool callback failed with …`, without the callback's message, which stays out of model requests |
+| `path_guardrail_fail_closed` | #762 | `PathAllowList` on `path`: a tool that takes its path under another argument name is denied (`holds no path at any depth`) and runs 0 times, a path outside the root is denied, a permitted path runs once |
 | `failing_toolset_skipped` | #760 | A toolset whose `tools()` fails is skipped and the working tool runs; with `strict_toolsets(true)` the turn fails before any model call |
 | `shared_state_fresh` | #763 | SQLite sessions: a tool on session A reads `app:kill_switch` written through session B; 12 concurrent `app:`/`user:` deltas across three sessions all persist |
 | `graph_resume_once` | #757 | `#[entrypoint]` workflow on `SqliteCheckpointer`: an LLM task, then a charge that crashes twice; after two resumes the LLM task and the charge each ran once |
@@ -32,7 +31,7 @@ retry is reported next to the result.
 | `codeact_payment_once` | Action ledger, CodeAct | A `CodeActAgent` on the Monty runtime writes Python that calls a `NonIdempotent` `charge` tool, which outlives the 2 s tool timeout with 3 retries configured: one charge, and the program sees an `outcome_unknown` error. After a simulated crash the SQLite `ActionLedger` is reopened, the write-ahead checkpoint is restored to session state, and a new runner replays the step from the Python snapshot: the ledger answers `outcome_unknown` and the card is not charged again |
 | `team_budget_cap` | Run budgets, cost | A coordinator delegating to a researcher through an `AgentTool` under a 400 micro-USD `RunBudget`: the run ends with `ResourceExhausted` (`budget.cost`), every model call reported `UsageMetadata::cost`, no call started after the cumulative cost reached the cap, spend is at most the cap plus one call, and the tracker's counters match the reported costs |
 | `default_deny_policy` | Governed path | A `DeclarativePolicy` that allows only `lookup_order` and `refund` up to 50: `delete_account` and a refund of 500 run 0 times and are answered `denied by policy`, a refund of 20 runs once |
-| `approval_across_runs` | Governed path | Run 1 holds `send_invoice` for approval (0 executions, one pending entry in the `ApprovalStore`); an approver decides by fingerprint; run 2 re-issues the call under a new call ID, it runs once, and the decision is consumed |
+| `approval_across_runs` | Governed path | Run 1 holds `send_invoice` for approval (0 executions, one pending entry in the `ApprovalStore`); an approver decides by fingerprint; run 2 resumes the held call under its original call ID before any model call, it runs once, and the decision is consumed |
 | `approval_service` | Approval service | Run 1 holds `send_invoice` and submits one request (quorum 2, group `finance`) to a `StoreApprovalService` over SQLite; the requester's own approval is refused; one approval keeps the call held through run 2; the second resolves it; run 3 resumes and executes it once, run 4 does not; notifications Submitted, Decided, Decided, Resolved |
 | `kill_switch` | Governed path | A tool freezes the runner's `GovernanceControl` mid-run: no later tool runs, the run ends with `governance.frozen`, and the next run is refused at its start |
 | `spend_ledger_daily_cap` | Spend ledger | One daily org cap covers model spend and payments: a probe call's reservation is at least its cost (an upper bound), a one-cent checkout through the `adk-payments` tools, then runs (output capped at 2,048 tokens) until one is refused before its model call, then a checkout larger than the remaining room refused by the `spend_limit` policy before it reaches the merchant; total spend never exceeds the cap and is split by vendor (provider and merchant) |
