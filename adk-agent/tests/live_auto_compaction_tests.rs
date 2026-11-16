@@ -15,14 +15,25 @@ use std::sync::Arc;
 
 const PAGES: u64 = 12;
 
-/// One page of a ledger: about 600 tokens of entries, and the page's total.
-fn page(number: u64) -> Value {
+/// The cursor that unlocks page `number`: each page names the next one's, so pages are read
+/// one call at a time.
+fn cursor(number: u64) -> String {
+    if number == 1 { "start".to_string() } else { format!("c{}", number * 7_919 % 10_007) }
+}
+
+/// One page of a ledger: about 600 tokens of entries, the page's total, and the next cursor.
+fn page(number: u64, given: &str) -> Value {
+    if given != cursor(number) {
+        return json!({ "error": format!("wrong cursor for page {number}; use the cursor the previous page gave") });
+    }
     let entries: Vec<String> = (1..=40)
         .map(|line| {
             format!("entry {number}.{line}: account {} moved {} units", line * 7, line * number)
         })
         .collect();
-    json!({ "page": number, "of": PAGES, "entries": entries, "page_total": number * 820 })
+    let next =
+        (number < PAGES).then(|| json!({ "page": number + 1, "cursor": cursor(number + 1) }));
+    json!({ "page": number, "of": PAGES, "entries": entries, "page_total": number * 820, "next": next })
 }
 
 #[tokio::test]
@@ -36,17 +47,18 @@ async fn a_live_tool_loop_compacts_mid_run_and_completes() {
     .unwrap();
     let read_page = FunctionTool::new(
         "read_page",
-        "Reads one page of the ledger. Pages are numbered from 1.",
+        "Reads one page of the ledger. Page 1 takes the cursor \"start\"; each page gives the \
+         cursor of the next.",
         |_ctx: Arc<dyn ToolContext>, args: Value| async move {
-            Ok(page(args["page"].as_u64().unwrap_or(1)))
+            Ok(page(args["page"].as_u64().unwrap_or(1), args["cursor"].as_str().unwrap_or("")))
         },
     )
     .with_parameters_schema::<PageArgs>();
     let agent = LlmAgentBuilder::new("auditor")
         .instruction(format!(
-            "You audit a ledger of {PAGES} pages. Call read_page once per page, one page per \
-             call, from page 1 to page {PAGES}, and keep a running sum of each page's \
-             page_total. After the last page, reply with only the sum."
+            "You audit a ledger of {PAGES} pages. Read them in order with read_page, starting \
+             at page 1 with cursor \"start\"; each page gives the cursor of the next. Keep a \
+             running sum of each page's page_total. After the last page, reply with only the sum."
         ))
         .model(Arc::new(model) as Arc<dyn Llm>)
         .tool(Arc::new(read_page))
@@ -127,4 +139,6 @@ async fn a_live_tool_loop_compacts_mid_run_and_completes() {
 struct PageArgs {
     /// The page to read, from 1.
     page: u64,
+    /// The cursor the previous page gave; "start" for page 1.
+    cursor: String,
 }

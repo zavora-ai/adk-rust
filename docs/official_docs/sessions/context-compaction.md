@@ -111,6 +111,8 @@ signatures) and tool results stay. Session compaction's kept events are treated 
 - The summary request carries the summarized entries, so a history far past the window when the
   model rejects it can be too long to summarize in one call; the default threshold leaves 20%
   of the window for this.
+- One tool round — a model turn's calls and their results — is never split, so a round that
+  alone passes the threshold, such as many parallel calls with large results, is sent whole.
 - A call held for confirmation, and everything after it, is never compacted (see
   [Calls Held for Confirmation](#calls-held-for-confirmation)).
 

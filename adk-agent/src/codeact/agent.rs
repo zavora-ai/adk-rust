@@ -3817,7 +3817,8 @@ mod tests {
     }
 
     fn with_compactor(input: &mut LoopInputs, compactor: Arc<NoticeCompactor>) {
-        let config = RunConfig { history_compactor: Some(compactor), ..RunConfig::default() };
+        let config =
+            adk_core::RunConfig { history_compactor: Some(compactor), ..Default::default() };
         input.invocation_ctx =
             Arc::new(MockInvocationContext::new(user("go")).with_run_config(config));
     }
