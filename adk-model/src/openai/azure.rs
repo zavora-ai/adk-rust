@@ -26,6 +26,7 @@ const ERROR_CODES: ErrorCodes = ErrorCodes {
         (504, "model.azure_openai.unavailable"),
         (529, "model.azure_openai.overloaded"),
     ],
+    quota_exhausted: "model.azure_openai.quota_exhausted",
 };
 
 /// Azure deployment client with API-key authentication and streaming support.

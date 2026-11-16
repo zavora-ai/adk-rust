@@ -98,7 +98,9 @@ pub fn is_retryable_status_code(status_code: u16) -> bool {
 ///
 /// The transient server statuses (500, 502–504, 520–524, and Anthropic's 529) map
 /// to [`ErrorCategory::Unavailable`], which [`execute_with_retry`] retries; every
-/// supported provider documents them as safe to retry after a short wait.
+/// supported provider documents them as safe to retry after a short wait. 402 Payment
+/// Required maps to [`ErrorCategory::ResourceExhausted`], which is not retried: DeepSeek,
+/// OpenRouter and Anthropic send it when the account cannot pay for the request.
 ///
 /// # Example
 ///
@@ -109,11 +111,13 @@ pub fn is_retryable_status_code(status_code: u16) -> bool {
 /// assert_eq!(category_for_status_code(502), ErrorCategory::Unavailable);
 /// assert_eq!(category_for_status_code(429), ErrorCategory::RateLimited);
 /// assert_eq!(category_for_status_code(400), ErrorCategory::InvalidInput);
+/// assert_eq!(category_for_status_code(402), ErrorCategory::ResourceExhausted);
 /// ```
 #[must_use]
 pub fn category_for_status_code(status_code: u16) -> ErrorCategory {
     match status_code {
         401 => ErrorCategory::Unauthorized,
+        402 => ErrorCategory::ResourceExhausted,
         403 => ErrorCategory::Forbidden,
         404 => ErrorCategory::NotFound,
         408 => ErrorCategory::Timeout,
@@ -536,6 +540,7 @@ mod tests {
         assert_eq!(category_for_status_code(429), ErrorCategory::RateLimited);
         assert_eq!(category_for_status_code(408), ErrorCategory::Timeout);
         assert_eq!(category_for_status_code(422), ErrorCategory::InvalidInput);
+        assert_eq!(category_for_status_code(402), ErrorCategory::ResourceExhausted);
     }
 
     #[test]

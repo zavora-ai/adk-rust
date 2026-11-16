@@ -83,7 +83,8 @@ impl fmt::Display for ErrorComponent {
 /// - [`Internal`](Self::Internal) — unexpected internal error (bugs, invariant violations)
 /// - [`Unsupported`](Self::Unsupported) — requested feature or operation is not supported
 /// - [`ResourceExhausted`](Self::ResourceExhausted) — a configured budget (model calls, tokens,
-///   cost, wall time, tool calls) is used up; not retryable within the same run
+///   cost, wall time, tool calls) or a provider account's quota, credit balance or spend limit
+///   is used up; not retryable within the same run
 /// - [`Conflict`](Self::Conflict) — the write lost a race or used a stale version; reload and
 ///   retry, or stop
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -109,10 +110,12 @@ pub enum ErrorCategory {
     Internal,
     /// Requested feature or operation is not supported.
     Unsupported,
-    /// A configured resource budget is used up.
+    /// A configured resource budget, or a provider account's quota, credit balance or
+    /// spend limit, is used up.
     ///
     /// Not retryable within the same run: retrying spends against the same
-    /// exhausted budget. See [`RunBudget`](crate::RunBudget).
+    /// exhausted budget, or fails until the account has credit again. See
+    /// [`RunBudget`](crate::RunBudget).
     ResourceExhausted,
     /// The write lost a race or used a stale version; reload and retry, or stop.
     ///

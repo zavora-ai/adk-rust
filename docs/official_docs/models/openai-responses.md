@@ -480,9 +480,14 @@ Errors are mapped to structured `AdkError` with appropriate categories:
 | 404 | `NotFound` | No |
 | 408 | `Timeout` | Yes |
 | 429 | `RateLimited` | Yes |
+| 402, or a `code` or `type` of `insufficient_quota`, `credit_balance_exhausted`, `billing_hard_limit_reached` or a spend limit, at any status | `ResourceExhausted` (`model.openai_responses.quota_exhausted`) | No |
 | 500, 502, 503, 504, 529 | `Unavailable` | Yes |
 | Other 4xx | `InvalidInput` | No |
 | Other | `Internal` | No |
+
+OpenAI answers HTTP 429 both for a rate limit and for an account with no credit; only the body
+tells them apart. A `response.failed` event or WebSocket `error` event with one of those codes is
+`ResourceExhausted` too.
 
 HTTP errors carry the upstream status in `details.upstream_status_code` and an
 identifier-like `x-request-id` in `details.request_id`. A `Retry-After` header, in

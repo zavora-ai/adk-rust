@@ -127,7 +127,16 @@ pub(super) fn mapped_http_error(error: &OpenAIError) -> Option<AdkError> {
 
 pub(super) fn map_api_error(api_err: &ApiErrorResponse) -> AdkError {
     let status_code = api_err.status_code.as_u16();
+    // OpenAI answers HTTP 429 both for a rate limit and for an account with no credit.
+    let quota_exhausted = status_code == 402
+        || [api_err.api_error.code.as_deref(), api_err.api_error.r#type.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(crate::error_metadata::is_quota_exhausted);
     let (category, code) = match status_code {
+        _ if quota_exhausted => {
+            (ErrorCategory::ResourceExhausted, "model.openai_responses.quota_exhausted")
+        }
         401 => (ErrorCategory::Unauthorized, "model.openai_responses.unauthorized"),
         403 => (ErrorCategory::Forbidden, "model.openai_responses.forbidden"),
         404 => (ErrorCategory::NotFound, "model.openai_responses.not_found"),
@@ -148,6 +157,7 @@ pub(super) fn map_api_error(api_err: &ApiErrorResponse) -> AdkError {
     )
     .with_provider("openai-responses")
     .with_upstream_status(status_code);
+    let mapped = crate::error_metadata::classify_quota(mapped, quota_exhausted);
     crate::error_metadata::with_first_code(
         mapped,
         [api_err.api_error.code.as_deref(), api_err.api_error.r#type.as_deref()],
@@ -265,6 +275,53 @@ mod tests {
             Some("invalid_schema".into())
         );
         assert_eq!(http_error_code(serde_json::json!({"error": {"message": "m"}})).await, None);
+    }
+
+    #[tokio::test]
+    async fn an_exhausted_quota_is_not_a_rate_limit() {
+        // OpenAI's body for an account with no credit, live on 2026-11-16.
+        let body = serde_json::json!({"error": {
+            "message": "You have no credits remaining.",
+            "type": "insufficient_quota",
+            "param": null,
+            "code": "credit_balance_exhausted"
+        }});
+        let response = http::Response::builder()
+            .status(429)
+            .header("retry-after", "7")
+            .body(body.to_string())
+            .unwrap();
+        let error = normalize_response(reqwest_openai::Response::from(response), false)
+            .await
+            .expect_err("a 429 is an error");
+        let mapped = mapped_http_error(&error).expect("an HTTP error");
+        assert_eq!(
+            (mapped.category, mapped.code, mapped.is_retryable(), mapped.retry.retry_after()),
+            (
+                ErrorCategory::ResourceExhausted,
+                "model.openai_responses.quota_exhausted",
+                false,
+                None
+            )
+        );
+        assert_eq!(mapped.details.upstream_status_code, Some(429));
+        assert_eq!(mapped.details.metadata["provider_error_code"], "credit_balance_exhausted");
+        assert!(mapped.message.contains("add credit or raise the limit"), "{}", mapped.message);
+
+        let rate_limited = ApiErrorResponse {
+            status_code: reqwest_openai::StatusCode::TOO_MANY_REQUESTS,
+            api_error: ApiError {
+                message: "slow down".into(),
+                r#type: Some("requests".into()),
+                param: None,
+                code: Some("rate_limit_exceeded".into()),
+            },
+        };
+        let mapped = map_api_error(&rate_limited);
+        assert_eq!(
+            (mapped.category, mapped.code, mapped.is_retryable()),
+            (ErrorCategory::RateLimited, "model.openai_responses.rate_limited", true)
+        );
     }
 
     #[test]

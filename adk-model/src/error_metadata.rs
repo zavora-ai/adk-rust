@@ -71,6 +71,92 @@ pub(crate) fn code_from_body(body: &str) -> Option<String> {
     reasons.chain(fields).find(|code| valid_code(code)).map(str::to_owned)
 }
 
+/// Provider error codes and types for an account whose quota, credit balance or spend
+/// limit is used up: OpenAI's `insufficient_quota` type with its `credit_balance_exhausted`,
+/// `billing_hard_limit_reached` and spend-limit codes, and Anthropic's `billing_error`.
+#[cfg(any(
+    feature = "anthropic",
+    feature = "azure-ai",
+    feature = "deepseek",
+    feature = "groq",
+    feature = "muse",
+    feature = "ollama",
+    feature = "openai",
+    feature = "openrouter"
+))]
+const QUOTA_EXHAUSTED_CODES: &[&str] = &[
+    "billing_error",
+    "billing_hard_limit_reached",
+    "credit_balance_exhausted",
+    "insufficient_quota",
+    "organization_spend_limit_exceeded",
+    "project_spend_limit_exceeded",
+];
+
+/// Whether a provider error code or type says the account's quota, credit balance or
+/// spend limit is used up.
+#[cfg(any(
+    feature = "anthropic",
+    feature = "azure-ai",
+    feature = "deepseek",
+    feature = "groq",
+    feature = "muse",
+    feature = "ollama",
+    feature = "openai",
+    feature = "openrouter"
+))]
+pub(crate) fn is_quota_exhausted(code: &str) -> bool {
+    QUOTA_EXHAUSTED_CODES.contains(&code)
+}
+
+/// Whether a JSON error body's `code` or `type` says the account is out of quota or credit.
+///
+/// OpenAI sends both, for example `"type": "insufficient_quota"` with
+/// `"code": "credit_balance_exhausted"`, so neither is preferred.
+#[cfg(any(feature = "azure-ai", feature = "deepseek", feature = "openai"))]
+pub(crate) fn body_reports_exhausted_quota(body: &str) -> bool {
+    if body.len() > MAX_BODY_LEN {
+        return false;
+    }
+    let Ok(body) = serde_json::from_str::<Value>(body) else {
+        return false;
+    };
+    let Some(error) = body.get("error").or_else(|| body.get(0).and_then(|item| item.get("error")))
+    else {
+        return false;
+    };
+    ["code", "type"].into_iter().filter_map(|key| error.get(key)?.as_str()).any(is_quota_exhausted)
+}
+
+/// Reports `error` as an account out of quota or credit when `reported` says so or the
+/// provider answered HTTP 402 Payment Required.
+///
+/// The error becomes [`ErrorCategory::ResourceExhausted`](adk_core::ErrorCategory) and is
+/// not retried: a retry fails the same way until the account has credit again.
+#[cfg(any(
+    feature = "anthropic",
+    feature = "azure-ai",
+    feature = "deepseek",
+    feature = "groq",
+    feature = "muse",
+    feature = "ollama",
+    feature = "openai",
+    feature = "openrouter"
+))]
+pub(crate) fn classify_quota(mut error: AdkError, reported: bool) -> AdkError {
+    if !reported && error.details.upstream_status_code != Some(402) {
+        return error;
+    }
+    error.category = adk_core::ErrorCategory::ResourceExhausted;
+    error.retry = adk_core::RetryHint::for_category(error.category);
+    error.message = format!(
+        "{}. The account's quota, credit balance or spend limit is used up: add credit or \
+         raise the limit with the provider; retrying before then fails the same way",
+        error.message.trim_end_matches('.')
+    );
+    error
+}
+
 /// Matches the `google.rpc.ErrorInfo` detail under any type-URL prefix.
 #[cfg(any(feature = "azure-ai", feature = "deepseek", feature = "gemini", feature = "openai"))]
 pub(crate) fn is_error_info(type_url: &str) -> bool {
@@ -191,6 +277,78 @@ mod tests {
             ]
         }});
         assert_eq!(body_code(body).as_deref(), Some("RATE_LIMIT_EXCEEDED"));
+    }
+
+    #[cfg(any(feature = "azure-ai", feature = "deepseek", feature = "openai"))]
+    #[test]
+    fn reads_an_exhausted_quota_from_the_code_or_the_type() {
+        for body in [
+            // OpenAI, live on 2026-11-16 for an account with no credit.
+            r#"{"error":{"message":"You have no credits remaining.","type":"insufficient_quota","param":null,"code":"credit_balance_exhausted"}}"#,
+            r#"{"error":{"type":"insufficient_quota","code":null}}"#,
+            r#"{"error":{"type":"requests","code":"project_spend_limit_exceeded"}}"#,
+            r#"[{"error":{"code":"insufficient_quota"}}]"#,
+        ] {
+            assert!(body_reports_exhausted_quota(body), "{body}");
+        }
+        for body in [
+            r#"{"error":{"type":"requests","code":"rate_limit_exceeded"}}"#,
+            r#"{"error":{"message":"insufficient_quota"}}"#,
+            r#"{"code":"insufficient_quota"}"#,
+            "insufficient_quota",
+        ] {
+            assert!(!body_reports_exhausted_quota(body), "{body}");
+        }
+    }
+
+    #[cfg(any(
+        feature = "anthropic",
+        feature = "azure-ai",
+        feature = "deepseek",
+        feature = "groq",
+        feature = "muse",
+        feature = "ollama",
+        feature = "openai",
+        feature = "openrouter"
+    ))]
+    #[test]
+    fn classifies_an_exhausted_quota_as_not_retryable() {
+        use adk_core::{ErrorCategory, ErrorComponent};
+
+        let rate_limited = || {
+            AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::RateLimited,
+                "model.test.api_error",
+                "test API error (HTTP 429): You have no credits remaining.",
+            )
+            .with_upstream_status(429)
+        };
+        let unchanged = classify_quota(rate_limited(), false);
+        assert_eq!(unchanged.category, ErrorCategory::RateLimited);
+        assert!(unchanged.is_retryable());
+
+        let exhausted = classify_quota(rate_limited(), true);
+        assert_eq!(exhausted.category, ErrorCategory::ResourceExhausted);
+        assert!(!exhausted.is_retryable());
+        assert_eq!(
+            exhausted.message,
+            "test API error (HTTP 429): You have no credits remaining. The account's quota, \
+             credit balance or spend limit is used up: add credit or raise the limit with the \
+             provider; retrying before then fails the same way"
+        );
+
+        let payment_required = AdkError::new(
+            ErrorComponent::Model,
+            ErrorCategory::InvalidInput,
+            "model.test.api_error",
+            "Insufficient Balance",
+        )
+        .with_upstream_status(402);
+        assert_eq!(
+            classify_quota(payment_required, false).category,
+            ErrorCategory::ResourceExhausted
+        );
     }
 
     #[cfg(any(feature = "azure-ai", feature = "deepseek", feature = "openai"))]
