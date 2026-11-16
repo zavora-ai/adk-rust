@@ -1046,6 +1046,11 @@ impl Llm for OpenAIResponsesClient {
         )
     }
 
+    fn context_window(&self) -> Option<u64> {
+        crate::pricing::PricingCatalog::standard()
+            .context_window(Some(self.provider_name()), self.name())
+    }
+
     fn name(&self) -> &str {
         &self.model
     }

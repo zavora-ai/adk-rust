@@ -2176,6 +2176,10 @@ impl Llm for GeminiModel {
         )
     }
 
+    fn context_window(&self) -> Option<u64> {
+        crate::pricing::PricingCatalog::standard().context_window(Some("gemini"), self.name())
+    }
+
     fn name(&self) -> &str {
         &self.model_name
     }

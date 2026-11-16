@@ -1,8 +1,124 @@
 # Context Compaction
 
-As an ADK agent runs, it accumulates context — user messages, tool responses, generated content. As this context grows, LLM processing times increase because more data is sent with each request. Context compaction addresses this by summarizing older events using a sliding window approach.
+As an ADK agent runs, it accumulates context — user messages, tool responses, generated content. As this context grows, LLM processing times increase because more data is sent with each request, until the request no longer fits the model's context window. Context compaction addresses this by summarizing older history.
 
-## How It Works
+Two mechanisms compact, and they compose:
+
+| Mechanism | When it runs | Default |
+|-----------|--------------|---------|
+| Auto-compaction (`IntraCompactionConfig`) | Before every model call inside a run, once the request nears the model's context window | On |
+| Session compaction (`EventsCompactionConfig`) | After every `compaction_interval` invocations | Off; on in the harness |
+
+## Auto-Compaction Within a Run
+
+Before every model call, `LlmAgent` and `CodeActAgent` ask the run's compactor
+(`RunConfig::history_compactor`, installed by the runner at the start of each run) to compact
+their history. Once the request passes the threshold, the compactor summarizes all but the most
+recent history entries — at most `overlap_event_count` of them, within half the threshold — into
+one summary turn, and the agent continues from it. A long tool loop — a harness goal, a 1,000-step autonomous run — therefore never grows
+its request past the model's window.
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `enabled` | `true` | `IntraCompactionConfig::disabled()` turns auto-compaction off |
+| `token_threshold` | `None` | A fixed threshold in estimated tokens (`IntraCompactionConfig::at_tokens(n)`); takes precedence over the window |
+| `context_window_fraction` | `0.8` | The share of the model's context window (`Llm::context_window`) a request may reach |
+| — | 100,000 tokens | The threshold when the model reports no context window (`DEFAULT_TOKEN_THRESHOLD`) |
+| `overlap_event_count` | 10 | The most recent history entries kept as they are; they also stay within half the threshold, so the compacted request has room to grow |
+| `chars_per_token` | 4 | The character-per-token ratio of the estimate |
+
+The estimate covers the agent's instructions and history, and the agent also passes the prompt
+size the provider reported for its previous call, so a history the character estimate
+undercounts still crosses the threshold. `adk-model` providers report their window from the
+pricing catalog (`PricingCatalog::context_window`), which records each vendor's published figure;
+a model with no recorded window compacts at the 100,000-token default.
+
+### Changing It
+
+| Where | Threshold | Summarizer or strategy | Off |
+|-------|-----------|------------------------|-----|
+| Runner | `.intra_compaction_config(config)` | `.intra_compaction_summarizer(s)`, or `.context_compaction(CompactionConfig)` with the `context-compaction` feature | `.without_intra_compaction()` |
+| One run | `RunConfig::intra_compaction` | `RunConfig::history_compactor` (any `HistoryCompactor`) | `RunConfig::builder().intra_compaction(IntraCompactionConfig::disabled())` |
+| Harness | `HarnessAgentBuilder::intra_compaction(config)` | — | `.without_intra_compaction()` |
+| CLI | `[compaction]` in `harness.toml` | — | `auto = false` |
+
+```rust
+use adk_core::IntraCompactionConfig;
+use adk_runner::Runner;
+use adk_session::InMemorySessionService;
+use std::sync::Arc;
+
+fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
+    Runner::builder()
+        .app_name("my_app")
+        .agent(agent)
+        .session_service(Arc::new(InMemorySessionService::new()))
+        // Compact past 60% of the model's window, keeping the 6 most recent entries.
+        .intra_compaction_config(
+            IntraCompactionConfig::at_window_fraction(0.6).with_overlap_event_count(6),
+        )
+        .build()
+}
+```
+
+By default the summary is written by the model the agent is calling, through
+`LlmEventSummarizer`. A summarizer set with `intra_compaction_summarizer` takes its place, and a
+`CompactionStrategy` set with `context_compaction` replaces the summary altogether: before any call
+whose request passes its `context_budget`, the history is shortened with the strategy, applied
+up to `max_retries` times.
+
+### A Request the Model Rejects as Too Long
+
+When a model rejects a request as longer than its context window
+(`adk_core::intra_compaction::is_context_limit_error`: Anthropic's "prompt is too long", OpenAI's
+`context_length_exceeded`, Gemini's input token limit), the agent compacts whatever the estimate
+says and sends the call once more. The rejection arrives inside the model's response stream, before
+any output. A second rejection of the same call, or a history with nothing left to compact, ends
+the run with the model's error.
+
+### Recorded in the Session
+
+Each compaction is yielded as an event carrying `EventActions::compaction`, which the runner
+persists, so later runs — the next iteration of a `LoopAgent`, the next user turn — start from
+the summary instead of the full history. The compaction ends at the session event before the
+first entry it keeps. The agent compacts only its working history, and records nothing, when:
+
+- the first kept entry matches no single session event a whole millisecond after the event
+  before it, so a store that keeps milliseconds only could not tell them apart;
+- the agent runs in a `ParallelAgent` branch, since a session's compaction applies to every
+  branch;
+- the agent is an agent tool's delegate, which reads a session of its own.
+
+`CodeActAgent` compacts its transcript, which its checkpoints carry.
+
+A compaction event is not a final response (`Event::is_final_response`). An agent that calls a
+model itself compacts the same way: before each call it passes its history to
+`ctx.run_config().history_compactor` and continues from the result.
+
+### Thinking in Kept Entries
+
+A provider binds a turn's thinking to the history it was produced with, and Anthropic's
+history-editing check rejects thinking replayed after earlier turns were replaced. Entries a
+compaction keeps are therefore sent without their thinking parts, both in the agent's working
+history and when a later run reads the session; their text, tool calls (with any thought
+signatures) and tool results stay. Session compaction's kept events are treated the same way.
+
+### Limits
+
+- A summary that fails, or that is not smaller than what it replaces, leaves the history as it
+  is; the runner then waits until the history has grown by `overlap_event_count` entries before
+  trying again.
+- The summary request carries the summarized entries, so a history far past the window when the
+  model rejects it can be too long to summarize in one call; the default threshold leaves 20%
+  of the window for this.
+- One tool round — a model turn's calls and their results — is never split, so a round that
+  alone passes the threshold, such as many parallel calls with large results, is sent whole.
+- A call held for confirmation, and everything after it, is never compacted (see
+  [Calls Held for Confirmation](#calls-held-for-confirmation)).
+
+## Session Compaction
+
+### How It Works
 
 Context compaction periodically summarizes older conversation events within a session. After an invocation completes, the runner counts the session's user messages; each time the count is a multiple of `compaction_interval`, the summarizer compresses every event before the most recent `overlap_size` invocations into one summary event.
 
@@ -36,7 +152,7 @@ survive repeated compaction. This matters with `RunConfig::history_max_events`: 
 loads only the most recent events, so an older turn reaches the model only through the
 summaries.
 
-## Configuration
+### Configuration
 
 Add compaction to your runner configuration:
 
@@ -60,7 +176,7 @@ let runner = Runner::builder()
     .build()?;
 ```
 
-## Configuration Parameters
+### Configuration Parameters
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -68,7 +184,7 @@ let runner = Runner::builder()
 | `overlap_size` | `u32` | Most recent invocations left out of the summary; `0` summarizes everything |
 | `summarizer` | `Arc<dyn BaseEventsSummarizer>` | The summarization strategy |
 
-## Custom Summarizer
+### Custom Summarizer
 
 You can customize the summarization prompt:
 
@@ -100,7 +216,7 @@ impl BaseEventsSummarizer for MySummarizer {
 }
 ```
 
-## How Compaction Affects History
+### How Compaction Affects History
 
 When `conversation_history()` (`adk_core::Session`) is called on a session with compaction events:
 
@@ -110,7 +226,7 @@ When `conversation_history()` (`adk_core::Session`) is called on a session with 
 
 This is transparent to agents — they receive a coherent conversation history that includes the summary followed by recent events.
 
-## Example Timeline
+### Example Timeline
 
 With `compaction_interval: 3` and `overlap_size: 1`:
 
@@ -135,7 +251,7 @@ its response and every later event.
 | Compaction | Where it cuts |
 |------------|---------------|
 | Session compaction (`EventsCompactionConfig`) | At the overlap boundary, moved back before any call answered after it |
-| Intra-invocation compaction (`IntraCompactionConfig`) | `overlap_event_count` events from the end, moved back the same way |
+| Auto-compaction (`IntraCompactionConfig`) | `overlap_event_count` history entries from the end, moved back the same way (`balanced_content_cut`), and back again to an entry the session can place when it is recorded |
 | `TruncationCompaction` | Keeps the first event and the last `preserve_recent`, plus the call of any kept response |
 | `SummarisationCompaction` | Summarises the first `turns_to_summarise` events, or fewer so that no call is split from its response |
 
@@ -151,7 +267,7 @@ A summary replaces history only when it is complete and smaller:
   but `Stop` (for example `MaxTokens`) or its stream fails, and returns no summary when the
   summary is empty or at least as long as the window it renders.
 - The runner keeps the history when a summarizer's event is not smaller, by the token estimate,
-  than the events it would replace, for session and intra-invocation compaction alike.
+  than the events it would replace, for session compaction and auto-compaction alike.
 - `SummarisationCompaction` keeps the events when its summary is empty or not smaller, and fails
   with `model.summary_incomplete` on an incomplete summary or a failed stream.
 - For a failed stream, `model.summary_incomplete` keeps the stream error's category, retry hint,
@@ -172,7 +288,7 @@ held, by any agent on any branch (`adk_core::held_call_compaction_limit`):
 | Compaction | Effect of a held call |
 |------------|-----------------------|
 | Session compaction (`EventsCompactionConfig`) | The window ends before the held call, whatever `overlap_size` allows; with nothing before it, the run skips compaction |
-| Intra-invocation compaction (`IntraCompactionConfig`) | The summarized events end before the held call; the call and every later event are kept |
+| Auto-compaction (`IntraCompactionConfig`) | The summarized entries end before the held call (`held_call_content_limit`); the call and every later entry are kept |
 | Context compaction (`CompactionConfig`, any `CompactionStrategy`) | The strategy receives only the events before the held call; the call and every later event are appended unchanged |
 
 Once the call is answered — resumed with a decision, or issued again and run — the next
@@ -182,10 +298,11 @@ uncompacted; deny it to release them.
 ## Notes
 
 - Compaction failure is non-fatal — the runner logs a warning and continues
-- Compaction runs after the invocation's events have streamed, before the run's stream ends
-- Compaction between the model calls of one turn is an `LlmAgent` history processor's job
-  (`LlmAgentBuilder::history_processor`, see [History Processors](../callbacks/callbacks.md#history-processors)),
-  which cuts with `adk_core::history::balanced_content_cut`
+- Session compaction runs after the invocation's events have streamed, before the run's stream
+  ends; auto-compaction runs before each model call
+- A history processor (`LlmAgentBuilder::history_processor`, see
+  [History Processors](../callbacks/callbacks.md#history-processors)) runs before
+  auto-compaction on every call, for windows and rewrites of your own
 - The summarizer's model call is metered against the run's budget and spend ledger (`ModelCallScope`)
 - The compaction event is persisted to the session service for durability
 - Use a fast, inexpensive model for summarization (e.g., `gemini-3.5-flash-lite`)

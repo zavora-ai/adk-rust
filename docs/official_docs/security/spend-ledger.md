@@ -175,8 +175,8 @@ ledger and counts against the same [run budget](../core/runner.md#run-budgets).
 | `LlmAgent` and `CodeActAgent` turns | `ModelCallScope::for_run` | The calling agent |
 | `LlmConditionalAgent` routing | `ModelCallScope::for_run` | The routing agent |
 | Post-run compaction (`EventsCompactionConfig`) | `ModelCallScope`, made current around the summarizer | The agent whose context is compacted |
-| Intra-invocation compaction (`IntraCompactionConfig`) | `ModelCallScope`, made current around the summarizer | The agent about to run |
-| Token-limit compaction (`context-compaction` feature) | `ModelCallScope`, made current around the strategy | The agent about to run |
+| Auto-compaction (`IntraCompactionConfig`) | `ModelCallScope`, made current around the summarizer | The agent whose history is compacted |
+| Auto-compaction with a strategy (`context-compaction` feature) | `ModelCallScope`, made current around the strategy | The agent whose history is compacted |
 | MCP sampling (`mcp-sampling` feature) | `ModelCallScope` of the run whose tool call is in flight | The agent that called the MCP tool |
 
 The built-in summarizers (`LlmEventSummarizer`, `SummarisationCompaction`) and
