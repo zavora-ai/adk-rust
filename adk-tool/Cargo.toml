@@ -26,7 +26,6 @@ http-transport = [
     "mcp",
     "rmcp/transport-streamable-http-client-reqwest",
     "reqwest",
-    "dep:reqwest-mcp",
 ]
 # Enable code execution tools (CodeTool, etc.)
 code = ["dep:adk-code", "dep:adk-sandbox"]
@@ -86,10 +85,6 @@ adk-code = { workspace = true, optional = true }
 adk-sandbox = { workspace = true, optional = true }
 # Optional: HTTP client for remote MCP servers and Slack toolset
 reqwest = { workspace = true, optional = true }
-# rmcp 2.x uses reqwest 0.13 for its Streamable HTTP transport. Keep this
-# transport-specific client separate from the workspace's provider-facing
-# reqwest version until the wider workspace migration is complete.
-reqwest-mcp = { package = "reqwest", version = "0.13", default-features = false, features = ["rustls", "json"], optional = true }
 # Optional: BigQuery toolset
 gcp-bigquery-client = { version = "0.28", optional = true }
 # Optional: Spanner toolset

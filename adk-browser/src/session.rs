@@ -996,7 +996,7 @@ mod tests {
                 serde_json::json!({"download.default_directory":"/tmp/downloads"}),
             );
         let caps = BrowserSession::new(config).build_capabilities().unwrap();
-        let options = &caps["goog:chromeOptions"];
+        let options = caps.get("goog:chromeOptions").expect("chrome options are set");
         assert_eq!(options["binary"], "/opt/chromium");
         assert_eq!(options["prefs"]["download.default_directory"], "/tmp/downloads");
         assert!(!options["args"].as_array().unwrap().iter().any(|arg| arg == "--no-sandbox"));

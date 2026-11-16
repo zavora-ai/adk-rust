@@ -14,7 +14,7 @@ Every Vertex integration in the workspace — sessions, memory, artifact storage
 [dependencies]
 adk-gcp = "3.0"
 adk-core = "3.0"
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
 serde_json = "1"
 ```
 

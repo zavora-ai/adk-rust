@@ -30,7 +30,7 @@ async-trait = "0.1"
 chrono = "0.4"
 dotenvy = "0.15"
 futures = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rmcp = { version = "3.1", features = ["client", "server"] }
 serde_json = "1.0"
 tempfile = "3"

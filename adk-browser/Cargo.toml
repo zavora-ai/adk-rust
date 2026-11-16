@@ -15,7 +15,7 @@ categories = ["web-programming", "development-tools"]
 
 [dependencies]
 adk-core.workspace = true
-thirtyfour = "0.35"
+thirtyfour = { version = "0.38", default-features = false, features = ["reqwest", "rustls", "component"] }
 tokio = { workspace = true, features = ["net", "sync", "time"] }
 async-trait.workspace = true
 serde.workspace = true
