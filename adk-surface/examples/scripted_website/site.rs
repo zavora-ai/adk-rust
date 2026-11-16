@@ -586,13 +586,15 @@ pub async fn live(dir: &Path) -> ScriptedSite {
             _ => [100.0, 100.0, 100.0],
         };
         for day in 0..21 {
-            let at = (monday - Duration::days(14) + Duration::days(day))
-                .and_hms_opt(9, 0, 0)
+            let day_start = (monday - Duration::days(14) + Duration::days(day))
+                .and_hms_opt(0, 0, 0)
                 .unwrap()
                 .and_utc();
-            if at > now {
+            if day_start > now {
                 break;
             }
+            // Before 09:00 UTC on a Monday the current week still gets its sample.
+            let at = (day_start + Duration::hours(9)).min(now);
             let value = weeks[(day / 7) as usize];
             kpis.record(KpiSample::new(parts.site.id, &kpi.id, at, value, kpi.source.to_string()))
                 .await
