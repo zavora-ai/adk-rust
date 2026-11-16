@@ -43,7 +43,6 @@ adk-rust = { version = "3.0.0", features = ["audio"] }
 | `livekit` | `RealtimeBridge` between `adk-realtime` audio and pipelines | `base64` |
 | `desktop-audio` | Microphone capture, speaker playback, and VAD turn-taking | `cpal` |
 | `music` | Adds `reqwest` for `MusicProvider` implementations | `reqwest` |
-| `streaming` | Marker; the streaming methods are always available | none |
 | `all` | Every feature except `desktop-audio` | |
 
 ## Core types

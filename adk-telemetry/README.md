@@ -34,7 +34,6 @@ adk-telemetry = "3.0.0"
 |---------|---------|---------|
 | `genai-semconv` | yes | The `semconv`, `config`, and `events` modules |
 | `otlp` | no | `init_with_otlp`, `build_otlp_layer`, and the OpenTelemetry re-exports (`global`, `Meter`) |
-| `metrics` | no | Alias that implies `otlp` |
 | `json` | no | JSON log formatting |
 | `sqlite` | no | `init_with_sqlite`, `SqliteSpanExporter`, `SqliteTraceReader` |
 | `gcp` | no | `init_with_gcp` and `init_json_logging` (implies `otlp` and `json`) |

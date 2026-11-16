@@ -6,7 +6,7 @@ launchers, depending on the `cli` feature:
 | Feature set | `adk_rust::Launcher` is | Modes |
 |-------------|-------------------------|-------|
 | default (`minimal`) and other tiers without `cli` | `adk_runner::Launcher` | Console only |
-| `cli` (or `cli-openai`, `cli-anthropic`, `cli-deepseek`, `cli-groq`, `cli-ollama`, `cli-all-providers`) | `adk_cli::Launcher` | Console, and an HTTP server with the REST API (`serve`) |
+| `cli` (or `cli-openai`, `cli-anthropic`, `cli-ollama`, `cli-all-providers`) | `adk_cli::Launcher` | Console, and an HTTP server with the REST API (`serve`) |
 
 No tier includes `cli`; add it to the tier you use:
 
