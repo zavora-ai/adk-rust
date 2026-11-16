@@ -357,6 +357,12 @@ pub fn shutdown_telemetry() {
 ///
 /// Creates a shared span exporter that can be used by both telemetry and the debug API.
 /// Returns the exporter so it can be passed to the debug controller.
+///
+/// # Errors
+///
+/// Returns [`TelemetryError::Init`] when a global tracing subscriber is already installed,
+/// such as one the application set in `main`; that subscriber stays in place and the
+/// exporter receives no spans.
 pub fn init_with_adk_exporter(service_name: &str) -> Result<Arc<AdkSpanExporter>, TelemetryError> {
     initialize_adk_exporter_with(&INIT, &ADK_EXPORTER, &ADK_EXPORTER_INSTALLED, |exporter| {
         let filter = EnvFilter::try_from_default_env()
@@ -376,9 +382,15 @@ pub fn init_with_adk_exporter(service_name: &str) -> Result<Arc<AdkSpanExporter>
                     .with_filter(filter),
             )
             .with(adk_layer)
-            .init();
-
-        tracing::info!(service.name = service_name, "telemetry initialized with ADK span exporter");
+            .try_init()
+            // An application that installed its own subscriber keeps it.
+            .map(|()| {
+                tracing::info!(
+                    service.name = service_name,
+                    "telemetry initialized with ADK span exporter"
+                );
+            })
+            .is_ok()
     })
 }
 
@@ -389,20 +401,20 @@ fn initialize_adk_exporter_with<F>(
     install: F,
 ) -> Result<Arc<AdkSpanExporter>, TelemetryError>
 where
-    F: FnOnce(Arc<AdkSpanExporter>),
+    F: FnOnce(Arc<AdkSpanExporter>) -> bool,
 {
     let exporter = exporter_cell.get_or_init(|| Arc::new(AdkSpanExporter::new())).clone();
     init.call_once(|| {
-        install(exporter.clone());
-        installed.store(true, Ordering::Release);
+        installed.store(install(exporter.clone()), Ordering::Release);
     });
 
     if installed.load(Ordering::Acquire) {
         Ok(exporter)
     } else {
         Err(TelemetryError::Init(
-            "global telemetry was already initialized without the ADK in-process exporter; \
-             initialize the ADK exporter before other global telemetry modes"
+            "global telemetry was already initialized without the ADK in-process exporter, \
+             by another telemetry mode or the application's own tracing subscriber; \
+             initialize the ADK exporter first to record spans for the debug API"
                 .to_string(),
         ))
     }
@@ -482,10 +494,12 @@ mod tests {
 
         let first = initialize_adk_exporter_with(&init, &exporter, &installed, |_| {
             installations.fetch_add(1, Ordering::Relaxed);
+            true
         })
         .unwrap();
         let second = initialize_adk_exporter_with(&init, &exporter, &installed, |_| {
             installations.fetch_add(1, Ordering::Relaxed);
+            true
         })
         .unwrap();
 
@@ -540,9 +554,20 @@ mod tests {
         let exporter = OnceLock::new();
         let installed = AtomicBool::new(false);
 
-        let error = initialize_adk_exporter_with(&init, &exporter, &installed, |_| {})
+        let error = initialize_adk_exporter_with(&init, &exporter, &installed, |_| true)
             .expect_err("an earlier telemetry mode must not return a disconnected exporter");
 
         assert!(error.to_string().contains("already initialized without the ADK"));
+    }
+
+    #[test]
+    fn an_application_subscriber_is_kept_and_reported_not_a_panic() {
+        // The application's own subscriber, as `tracing_subscriber::fmt().init()` in `main`.
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+        let error = init_with_adk_exporter("app")
+            .expect_err("the exporter cannot be installed over the application's subscriber");
+
+        assert!(error.to_string().contains("application's own tracing subscriber"), "{error}");
     }
 }
