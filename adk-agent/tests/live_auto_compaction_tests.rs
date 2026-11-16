@@ -18,7 +18,9 @@ const PAGES: u64 = 12;
 /// One page of a ledger: about 600 tokens of entries, and the page's total.
 fn page(number: u64) -> Value {
     let entries: Vec<String> = (1..=40)
-        .map(|line| format!("entry {number}.{line}: account {} moved {} units", line * 7, line * number))
+        .map(|line| {
+            format!("entry {number}.{line}: account {} moved {} units", line * 7, line * number)
+        })
         .collect();
     json!({ "page": number, "of": PAGES, "entries": entries, "page_total": number * 820 })
 }
@@ -66,7 +68,9 @@ async fn a_live_tool_loop_compacts_mid_run_and_completes() {
         .agent(Arc::new(agent))
         .session_service(sessions as Arc<dyn SessionService>)
         // COMPACTION: a low threshold keeps the run cheap.
-        .intra_compaction_config(IntraCompactionConfig::at_tokens(5_000).with_overlap_event_count(4))
+        .intra_compaction_config(
+            IntraCompactionConfig::at_tokens(5_000).with_overlap_event_count(4),
+        )
         .build()
         .unwrap();
 
@@ -111,12 +115,14 @@ async fn a_live_tool_loop_compacts_mid_run_and_completes() {
         }
     }
     let expected: u64 = (1..=PAGES).map(|number| number * 820).sum();
-    println!("model calls: {calls}, compactions: {compactions}, answer: {answer:?}, expected sum: {expected}");
+    println!(
+        "model calls: {calls}, compactions: {compactions}, answer: {answer:?}, expected sum: {expected}"
+    );
     assert!(compactions >= 1, "the run compacted between its model calls");
     assert!(!answer.trim().is_empty(), "the run completed with an answer");
 }
 
-#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[allow(dead_code)]
 struct PageArgs {
     /// The page to read, from 1.

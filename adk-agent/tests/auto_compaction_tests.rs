@@ -9,8 +9,8 @@ use adk_core::{
     Llm, LlmRequest, LlmResponse, LlmResponseStream, Part, Result, RunConfig, SessionId,
     ToolContext, UserId,
 };
-use adk_runner::compaction::{CompactionConfig, CompactionStrategy, TruncationCompaction};
 use adk_runner::Runner;
+use adk_runner::compaction::{CompactionConfig, CompactionStrategy, TruncationCompaction};
 use adk_session::{CreateRequest, GetRequest, InMemorySessionService, SessionService};
 use adk_tool::FunctionTool;
 use async_trait::async_trait;
@@ -258,7 +258,10 @@ fn balanced(contents: &[Content]) -> bool {
 }
 
 fn is_summary(content: &Content) -> bool {
-    content.parts.iter().any(|part| part.text().is_some_and(|t| t.contains(COMPACTION_SUMMARY_HEADING)))
+    content
+        .parts
+        .iter()
+        .any(|part| part.text().is_some_and(|t| t.contains(COMPACTION_SUMMARY_HEADING)))
 }
 
 #[tokio::test]
@@ -347,7 +350,11 @@ struct CountingTruncation(Arc<AtomicUsize>);
 
 #[async_trait]
 impl CompactionStrategy for CountingTruncation {
-    async fn compact(&self, events: Vec<Event>, budget: usize) -> Result<Vec<Event>, AdkError> {
+    async fn compact(
+        &self,
+        events: Vec<Event>,
+        budget: usize,
+    ) -> std::result::Result<Vec<Event>, AdkError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         TruncationCompaction { preserve_recent: 4 }.compact(events, budget).await
     }

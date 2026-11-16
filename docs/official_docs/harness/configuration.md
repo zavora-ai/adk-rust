@@ -165,7 +165,7 @@ than what the agent may do.
 | `auto` | `true` | `false` turns auto-compaction off |
 | `threshold_tokens` | none | A fixed threshold in estimated tokens, in place of the window fraction |
 | `window_fraction` | `0.8` | The share of the model's context window a request may reach |
-| `keep_recent` | `10` | How many of the most recent history entries are kept as they are |
+| `keep_recent` | `10` | The most recent history entries kept as they are, within half the threshold |
 
 ```toml
 [compaction]

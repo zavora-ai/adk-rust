@@ -2601,7 +2601,10 @@ impl Runner {
         }
         #[cfg(feature = "context-compaction")]
         if let Some(strategy) = &self.context_compaction {
-            return Some(Arc::new(IntraInvocationCompactor::with_strategy(config, strategy.clone())));
+            return Some(Arc::new(IntraInvocationCompactor::with_strategy(
+                config,
+                strategy.clone(),
+            )));
         }
         Some(Arc::new(match &self.intra_summarizer {
             Some(summarizer) => IntraInvocationCompactor::new(config, summarizer.clone()),

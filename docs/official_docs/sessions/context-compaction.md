@@ -14,8 +14,8 @@ Two mechanisms compact, and they compose:
 Before every model call, `LlmAgent` and `CodeActAgent` ask the run's compactor
 (`RunConfig::history_compactor`, installed by the runner at the start of each run) to compact
 their history. Once the request passes the threshold, the compactor summarizes all but the most
-recent `overlap_event_count` history entries into one summary turn, and the agent continues
-from it. A long tool loop — a harness goal, a 1,000-step autonomous run — therefore never grows
+recent history entries — at most `overlap_event_count` of them, within half the threshold — into
+one summary turn, and the agent continues from it. A long tool loop — a harness goal, a 1,000-step autonomous run — therefore never grows
 its request past the model's window.
 
 | Setting | Default | Effect |
@@ -24,7 +24,7 @@ its request past the model's window.
 | `token_threshold` | `None` | A fixed threshold in estimated tokens (`IntraCompactionConfig::at_tokens(n)`); takes precedence over the window |
 | `context_window_fraction` | `0.8` | The share of the model's context window (`Llm::context_window`) a request may reach |
 | — | 100,000 tokens | The threshold when the model reports no context window (`DEFAULT_TOKEN_THRESHOLD`) |
-| `overlap_event_count` | 10 | How many of the most recent history entries are kept as they are |
+| `overlap_event_count` | 10 | The most recent history entries kept as they are; they also stay within half the threshold, so the compacted request has room to grow |
 | `chars_per_token` | 4 | The character-per-token ratio of the estimate |
 
 The estimate covers the agent's instructions and history, and the agent also passes the prompt
@@ -81,9 +81,15 @@ the run with the model's error.
 Each compaction is yielded as an event carrying `EventActions::compaction`, which the runner
 persists, so later runs — the next iteration of a `LoopAgent`, the next user turn — start from
 the summary instead of the full history. The compaction ends at the session event before the
-first entry it keeps; when no event can be told apart in a store that keeps milliseconds only,
-or the agent runs in a `ParallelAgent` branch, the agent compacts its own working history and
-records nothing. `CodeActAgent` compacts its transcript, which its checkpoints carry.
+first entry it keeps. The agent compacts only its working history, and records nothing, when:
+
+- the first kept entry matches no single session event a whole millisecond after the event
+  before it, so a store that keeps milliseconds only could not tell them apart;
+- the agent runs in a `ParallelAgent` branch, since a session's compaction applies to every
+  branch;
+- the agent is an agent tool's delegate, which reads a session of its own.
+
+`CodeActAgent` compacts its transcript, which its checkpoints carry.
 
 A compaction event is not a final response (`Event::is_final_response`). An agent that calls a
 model itself compacts the same way: before each call it passes its history to

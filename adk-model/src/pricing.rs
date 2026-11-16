@@ -1618,7 +1618,8 @@ mod tests {
         // Priced, but no published window was recorded.
         assert_eq!(window("xai", "grok-code-fast-1"), None);
         // Every model with a recorded window is priced, so none is silently dropped.
-        let recorded = catalog.prices().iter().filter(|p| p.context_window_tokens.is_some()).count();
+        let recorded =
+            catalog.prices().iter().filter(|p| p.context_window_tokens.is_some()).count();
         assert_eq!(recorded, 66);
     }
 

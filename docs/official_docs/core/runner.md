@@ -615,8 +615,8 @@ with `strict_transfer_policy` fails the run with `agent.transfer.target_forbidde
 **Auto-compaction is on by default.** Before every model call, `LlmAgent` and `CodeActAgent`
 pass their history to the run's compactor (`RunConfig::history_compactor`, which the runner
 installs at the start of each run). Once the request passes 80% of the model's context window
-(`Llm::context_window`), or 100,000 estimated tokens when the model reports none, all but the 10
-most recent history entries are summarized by the model the agent is calling, and the
+(`Llm::context_window`), or 100,000 estimated tokens when the model reports none, all but the most
+recent history entries (at most 10, within half the threshold) are summarized by the model the agent is calling, and the
 compaction is recorded in the session. A request the model rejects as too long is compacted and
 sent once more.
 

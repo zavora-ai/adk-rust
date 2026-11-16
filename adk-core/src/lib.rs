@@ -153,9 +153,9 @@ pub mod egress;
 pub mod error;
 /// Event types representing agent interactions in a conversation.
 pub mod event;
+mod event_stream;
 /// The LLM summarizer that session and in-run compaction share.
 pub mod event_summarizer;
-mod event_stream;
 /// Governed tool execution: kill switch, durable approvals, and the authorization path.
 pub mod governance;
 /// Durable freeze state for the kill switch, shared by every replica.
@@ -274,6 +274,7 @@ pub use event::{
     WorkflowPosition, event_belongs_to_branch,
 };
 pub use event_stream::EventTextDeltas;
+pub use event_summarizer::LlmEventSummarizer;
 pub use governance::{
     ApprovalScope, ApprovalStore, BUILTIN_TOOLS_WITHHELD_KEY, BuiltinToolGovernor,
     BuiltinToolWithholding, CONFIRMATION_PENDING_STATUS, DEFAULT_TOOL_CONFIRMATION_TIMEOUT,
@@ -294,7 +295,6 @@ pub use identity::{
     AdkIdentity, AppName, ExecutionIdentity, IdentityError, InvocationId, SessionId, UserId,
 };
 pub use instruction_template::inject_session_state;
-pub use event_summarizer::LlmEventSummarizer;
 pub use intra_compaction::{
     CompactedHistory, CompactionTrigger, HistoryCompactionRequest, HistoryCompactor,
     IntraCompactionConfig,

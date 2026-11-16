@@ -128,6 +128,12 @@ search_domains = { allowed = ["docs.rs", "rust-lang.org"] }  # or { blocked = [.
 [memory]                     # spec 3.1 §7.32
 embedder = "local"           # local, gemini, openai or lexical
 
+[compaction]                 # auto-compaction before each model call; on by default
+auto = true                  # false turns it off
+window_fraction = 0.8        # compact past this share of the model's context window
+threshold_tokens = 150000    # or a fixed threshold instead
+keep_recent = 10             # history entries kept as they are
+
 [ultracode]                  # spec 3.1 §7.10; see Ultracode
 max_rounds = 2
 

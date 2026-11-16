@@ -33,8 +33,9 @@ use crate::context::MutableSession;
 /// Before each model call, `LlmAgent` and `CodeActAgent` pass their history to the run's
 /// [`HistoryCompactor`]. Once the estimated request, or the prompt size the provider reported
 /// for the agent's previous call, passes [`IntraCompactionConfig::threshold_for`] the model's
-/// [`context_window`](Llm::context_window), this compactor summarizes all but the
-/// `overlap_event_count` most recent entries and replaces them with one
+/// [`context_window`](Llm::context_window), this compactor summarizes all but the most recent
+/// entries — at most `overlap_event_count` of them, within half the threshold — and replaces
+/// them with one
 /// [summary notice](adk_core::intra_compaction::compaction_summary).
 ///
 /// The cut never separates a function response from its call, a call held for confirmation
@@ -244,45 +245,55 @@ impl IntraInvocationCompactor {
             "compacting the agent's history"
         );
         // The summary call counts against the run's budget and spend ledger.
-        let scope = adk_core::ModelCallScope::for_run(
-            ctx.run_config(),
-            ctx.app_name(),
-            ctx.agent_name(),
-        );
+        let scope =
+            adk_core::ModelCallScope::for_run(ctx.run_config(), ctx.app_name(), ctx.agent_name());
         #[cfg(feature = "context-compaction")]
         if let Some(strategy) = &self.strategy {
-            return Outcome::Attempted(
-                scope
-                    .within(self.compact_with_strategy(ctx.as_ref(), strategy, request.history))
-                    .await,
-            );
+            return scope
+                .within(self.compact_with_strategy(ctx.as_ref(), strategy, request.history))
+                .await;
         }
-        Outcome::Attempted(
-            scope.within(self.summarize(ctx.as_ref(), model, request.history, session)).await,
-        )
+        scope.within(self.summarize(ctx.as_ref(), model, request.history, threshold, session)).await
     }
 
-    /// Summarizes all but the most recent entries of `history`.
+    /// Summarizes all but the most recent entries of `history`: at most `overlap_event_count`
+    /// of them, and no more than half of `threshold`, so the compacted history has room to
+    /// grow.
     async fn summarize(
         &self,
         ctx: &dyn InvocationContext,
         model: Arc<dyn Llm>,
         history: &[Content],
+        threshold: u64,
         session: Option<&MutableSession>,
-    ) -> Option<CompactedHistory> {
+    ) -> Outcome {
+        let chars_per_token = self.config.chars_per_token;
         let overlap = self.config.overlap_event_count.min(history.len());
+        let mut within_budget = history.len();
+        let mut kept_tokens = 0;
+        for (index, content) in history.iter().enumerate().rev() {
+            kept_tokens += estimate_content_tokens(std::slice::from_ref(content), chars_per_token);
+            // The latest entry stays whatever its size.
+            if kept_tokens > threshold / 2 && index + 1 < history.len() {
+                break;
+            }
+            within_budget = index;
+        }
         let cut = balanced_content_cut(
             history,
-            held_call_content_limit(history, history.len().saturating_sub(overlap)),
+            held_call_content_limit(
+                history,
+                history.len().saturating_sub(overlap).max(within_budget),
+            ),
         );
         // A cut whose first kept entry the session can place is recorded there too; one in
         // a parallel branch is not, since a session's compaction applies to every branch.
-        let recorded = session.filter(|_| ctx.branch().is_empty()).and_then(|session| {
-            session.read_events(|events| session_cut(events, history, cut))
-        });
+        let recorded = session
+            .filter(|_| ctx.branch().is_empty())
+            .and_then(|session| session.read_events(|events| session_cut(events, history, cut)));
         let cut = recorded.as_ref().map_or(cut, |recorded| recorded.cut);
         if cut == 0 {
-            return None;
+            return Outcome::NothingToCompact;
         }
         let summarized = &history[..cut];
         let events = as_events(ctx, summarized);
@@ -292,22 +303,22 @@ impl IntraInvocationCompactor {
             .unwrap_or_else(|| Arc::new(LlmEventSummarizer::new(model)) as _);
         let text = match summarizer.summarize_events(&events).await {
             Ok(Some(event)) => summary_text(&event),
-            Ok(None) => return None,
+            Ok(None) => return Outcome::Kept,
             Err(error) => {
                 // A summarizer's model error can echo the history it was given.
                 tracing::warn!(
                     error = %error.diagnostics(),
                     "history compaction failed; continuing with the history as it is"
                 );
-                return None;
+                return Outcome::Kept;
             }
         };
         if text.trim().is_empty() {
-            return None;
+            return Outcome::Kept;
         }
         let summary = compaction_summary(&text);
-        let chars_per_token = self.config.chars_per_token;
-        let summary_tokens = estimate_content_tokens(std::slice::from_ref(&summary), chars_per_token);
+        let summary_tokens =
+            estimate_content_tokens(std::slice::from_ref(&summary), chars_per_token);
         let replaced_tokens = estimate_content_tokens(summarized, chars_per_token);
         if summary_tokens >= replaced_tokens {
             tracing::info!(
@@ -315,7 +326,7 @@ impl IntraInvocationCompactor {
                 replaced.tokens = replaced_tokens,
                 "history summary is not smaller than the history it replaces; keeping the history"
             );
-            return None;
+            return Outcome::Kept;
         }
         let event = recorded.map(|recorded| {
             let mut event = Event::new(ctx.invocation_id());
@@ -338,7 +349,7 @@ impl IntraInvocationCompactor {
             "history compacted"
         );
         let history = std::iter::once(summary).chain(without_thinking(&history[cut..])).collect();
-        Some(CompactedHistory { history, event })
+        Outcome::Compacted(CompactedHistory { history, event })
     }
 
     /// Shortens `history` with a compaction strategy, keeping a held call and everything
@@ -349,27 +360,28 @@ impl IntraInvocationCompactor {
         ctx: &dyn InvocationContext,
         config: &crate::compaction::CompactionConfig,
         history: &[Content],
-    ) -> Option<CompactedHistory> {
+    ) -> Outcome {
         let held_from = held_call_content_limit(history, history.len());
         let events = as_events(ctx, &history[..held_from]);
         let ids: HashMap<String, usize> =
             events.iter().enumerate().map(|(index, event)| (event.id.clone(), index)).collect();
-        let compacted = match crate::compaction::apply_compaction_with_retry(config, events).await
-        {
+        let compacted = match crate::compaction::apply_compaction_with_retry(config, events).await {
             Ok(compacted) => compacted,
             Err(error) => {
                 tracing::warn!(
                     error = %error.diagnostics(),
                     "history compaction failed; continuing with the history as it is"
                 );
-                return None;
+                return Outcome::Kept;
             }
         };
         // The strategy keeps a tail of the history as it was; whatever comes before that
         // tail stands in for the rest.
         let mut tail_from = compacted.len();
         let mut next = held_from;
-        while tail_from > 0 && next > 0 && ids.get(&compacted[tail_from - 1].id) == Some(&(next - 1))
+        while tail_from > 0
+            && next > 0
+            && ids.get(&compacted[tail_from - 1].id) == Some(&(next - 1))
         {
             tail_from -= 1;
             next -= 1;
@@ -396,9 +408,9 @@ impl IntraInvocationCompactor {
         if estimate_content_tokens(&shortened, chars_per_token)
             >= estimate_content_tokens(history, chars_per_token)
         {
-            return None;
+            return Outcome::Kept;
         }
-        Some(CompactedHistory { history: shortened, event: None })
+        Outcome::Compacted(CompactedHistory { history: shortened, event: None })
     }
 }
 
@@ -416,17 +428,21 @@ impl HistoryCompactor for IntraInvocationCompactor {
 
 /// What one compaction request came to.
 enum Outcome {
-    /// The request was below the threshold, so nothing was tried.
+    /// The request was below the threshold.
     BelowThreshold,
-    /// A compaction was tried; `None` when it failed or would not have shrunk the history.
-    Attempted(Option<CompactedHistory>),
+    /// Every entry is among the most recent ones kept, or after a held call.
+    NothingToCompact,
+    /// A summary or strategy ran but failed or would not have shrunk the history.
+    Kept,
+    /// The history was compacted.
+    Compacted(CompactedHistory),
 }
 
 impl Outcome {
     fn compacted(self) -> Option<CompactedHistory> {
         match self {
-            Self::BelowThreshold => None,
-            Self::Attempted(compacted) => compacted,
+            Self::Compacted(compacted) => Some(compacted),
+            Self::BelowThreshold | Self::NothingToCompact | Self::Kept => None,
         }
     }
 }
@@ -443,7 +459,10 @@ pub(crate) struct RunCompactor {
 }
 
 impl RunCompactor {
-    pub(crate) fn new(compactor: Arc<IntraInvocationCompactor>, session: Arc<MutableSession>) -> Self {
+    pub(crate) fn new(
+        compactor: Arc<IntraInvocationCompactor>,
+        session: Arc<MutableSession>,
+    ) -> Self {
         Self { compactor, session, retry_from: Mutex::new(HashMap::new()) }
     }
 }
@@ -463,9 +482,8 @@ impl HistoryCompactor for RunCompactor {
         request: HistoryCompactionRequest<'_>,
     ) -> Result<Option<CompactedHistory>> {
         let agent = ctx.agent_name().to_string();
-        let retry_from = || {
-            self.retry_from.lock().unwrap_or_else(PoisonError::into_inner).get(&agent).copied()
-        };
+        let retry_from =
+            || self.retry_from.lock().unwrap_or_else(PoisonError::into_inner).get(&agent).copied();
         if request.trigger == CompactionTrigger::BeforeModelCall
             && retry_from().is_some_and(|from| request.history.len() < from)
         {
@@ -482,11 +500,11 @@ impl HistoryCompactor for RunCompactor {
         let outcome = self.compactor.compact_history(ctx, model, request, session).await;
         let mut retry_from = self.retry_from.lock().unwrap_or_else(PoisonError::into_inner);
         match &outcome {
-            Outcome::BelowThreshold => {}
-            Outcome::Attempted(Some(_)) => {
+            Outcome::BelowThreshold | Outcome::NothingToCompact => {}
+            Outcome::Compacted(_) => {
                 retry_from.remove(&agent);
             }
-            Outcome::Attempted(None) => {
+            Outcome::Kept => {
                 let step = self.compactor.config.overlap_event_count.max(1);
                 retry_from.insert(agent, history_len + step);
             }
@@ -615,10 +633,9 @@ fn same_turn(event: &Event, content: &Content) -> bool {
                 Part::FunctionCall { name, id, .. } => {
                     Some(format!("call:{}", id.as_deref().unwrap_or(name)))
                 }
-                Part::FunctionResponse { function_response, id, .. } => Some(format!(
-                    "response:{}",
-                    id.as_deref().unwrap_or(&function_response.name)
-                )),
+                Part::FunctionResponse { function_response, id, .. } => {
+                    Some(format!("response:{}", id.as_deref().unwrap_or(&function_response.name)))
+                }
                 _ => None,
             })
             .collect()
@@ -662,7 +679,11 @@ mod tests {
         event
     }
 
-    fn config(token_threshold: u64, overlap_event_count: usize, chars_per_token: u32) -> IntraCompactionConfig {
+    fn config(
+        token_threshold: u64,
+        overlap_event_count: usize,
+        chars_per_token: u32,
+    ) -> IntraCompactionConfig {
         IntraCompactionConfig {
             token_threshold: Some(token_threshold),
             overlap_event_count,
@@ -819,14 +840,14 @@ mod tests {
 
         // The same text twice cannot be placed, so the cut moves to the call before it.
         let mut repeated = history.clone();
-        repeated[3] = Content::new("user").with_text("find A1");
+        repeated[4] = Content::new("user").with_text("find A1");
         let mut events = events;
-        events[3] = recorded("user", repeated[3].clone(), ms(30));
-        let cut = session_cut(&events, &repeated, 3).expect("placed earlier");
-        assert_eq!((cut.cut, cut.end), (1, ms(0)));
+        events[4] = recorded("user", repeated[4].clone(), ms(40));
+        let cut = session_cut(&events, &repeated, 4).expect("placed earlier");
+        assert_eq!((cut.cut, cut.end), (3, ms(20)));
 
         // Events in the same millisecond cannot be told apart by every store.
-        events[1].timestamp = ms(0) + chrono::Duration::microseconds(5);
-        assert!(session_cut(&events, &repeated, 3).is_none());
+        events[3].timestamp = ms(20) + chrono::Duration::microseconds(5);
+        assert!(session_cut(&events, &repeated, 4).is_none());
     }
 }

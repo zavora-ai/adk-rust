@@ -17,7 +17,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::{AdkError, Content, ErrorCategory, ErrorComponent, Event, InvocationContext, Llm, Part};
+use crate::{
+    AdkError, Content, ErrorCategory, ErrorComponent, Event, InvocationContext, Llm, Part,
+};
 
 /// The threshold, in estimated tokens, when the model reports no context window.
 ///
@@ -36,7 +38,8 @@ pub const DEFAULT_CONTEXT_WINDOW_FRACTION: f64 = 0.8;
 /// [`HistoryCompactor`] to compact their history once the estimated request
 /// ([`estimate_content_tokens`]) or the prompt size the provider reported for the previous
 /// call passes [`threshold_for`](Self::threshold_for) the model. The runner's compactor
-/// summarizes all but the most recent `overlap_event_count` history entries.
+/// summarizes all but the most recent history entries: at most `overlap_event_count` of
+/// them, within half the threshold.
 ///
 /// The default is on: the threshold is [`DEFAULT_CONTEXT_WINDOW_FRACTION`] of the model's
 /// context window, or [`DEFAULT_TOKEN_THRESHOLD`] when the model reports none. A fixed
@@ -70,7 +73,7 @@ pub struct IntraCompactionConfig {
     /// is `None` and the model reports its window. Values outside `(0, 1]` use
     /// [`DEFAULT_CONTEXT_WINDOW_FRACTION`].
     pub context_window_fraction: f64,
-    /// How many of the most recent history entries are kept as they are.
+    /// The most recent history entries kept as they are, within half the threshold.
     pub overlap_event_count: usize,
     /// Characters per token for the estimate (default: 4).
     pub chars_per_token: u32,
@@ -425,7 +428,6 @@ fn json_len<T: serde::Serialize + ?Sized>(value: &T) -> usize {
     let mut count = Count(0);
     serde_json::to_writer(&mut count, value).map_or(0, |()| count.0)
 }
-
 
 /// A one-line rendering of `part` for a summarizer prompt; `None` for thinking and for
 /// provider-native items (server-side tool calls and results).
