@@ -34,7 +34,7 @@ adk-server = { path = "../../adk-server", features = ["background", "approvals",
 adk-cli = { path = "../../adk-cli", default-features = false, features = ["harness"] }
 adk-managed = { path = "../../adk-managed", features = ["gemini", "openai", "anthropic"] }
 axum = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
 adk-memory = { path = "../../adk-memory", features = ["embedding-trait"] }
 adk-model = { path = "../../adk-model", features = ["gemini", "openai", "anthropic", "ollama"] }
 adk-runner = { path = "../../adk-runner" }

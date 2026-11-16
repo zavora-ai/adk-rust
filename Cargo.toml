@@ -165,7 +165,9 @@ opentelemetry = "0.32"
 # Unify rustls crypto provider to 'aws-lc-rs' across the workspace.
 rustls = { version = "0.23", features = ["aws-lc-rs"] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots", "connect"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls-native-roots", "multipart"] }
+# `rustls` is rustls on aws-lc-rs with the platform verifier (the OS trust store), the one
+# crypto provider the workspace uses.
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "multipart", "query", "form"] }
 toml = "0.8"
 sha2 = "0.10"
 hex = "0.4"

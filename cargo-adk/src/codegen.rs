@@ -777,8 +777,8 @@ mod tests {
         assert!(static_dockerfile.contains("rustup target add x86_64-unknown-linux-musl"));
         assert!(static_dockerfile.contains("musl-tools cmake ca-certificates"));
         assert!(static_dockerfile.contains("FROM scratch"));
-        // rustls-tls-native-roots reads /etc/ssl/certs at runtime, so the CA
-        // bundle copy is load-bearing, not cosmetic.
+        // reqwest's rustls verifier reads the system trust store in /etc/ssl/certs at
+        // runtime, so the CA bundle copy is load-bearing, not cosmetic.
         assert!(static_dockerfile.contains(
             "COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt"
         ));

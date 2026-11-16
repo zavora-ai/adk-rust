@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(feature = "http-transport")]
-use reqwest_mcp::header::{HeaderName, HeaderValue};
+use reqwest::header::{HeaderName, HeaderValue};
 #[cfg(feature = "http-transport")]
 use rmcp::{
     model::ClientJsonRpcMessage,
@@ -29,7 +29,7 @@ use rmcp::{
 };
 
 #[cfg(feature = "http-transport")]
-type HttpResult<T> = std::result::Result<T, StreamableHttpError<reqwest_mcp::Error>>;
+type HttpResult<T> = std::result::Result<T, StreamableHttpError<reqwest::Error>>;
 
 /// Brokered credentials for an MCP HTTP connection: the broker, the acting context
 /// tokens are minted for, the requested scopes, and the endpoint as the resource.
@@ -62,7 +62,7 @@ impl BrokeredAuth {
 #[cfg(feature = "http-transport")]
 #[derive(Clone)]
 struct McpHttpClient {
-    inner: reqwest_mcp::Client,
+    inner: reqwest::Client,
     oauth: Option<Arc<OAuth2Config>>,
     brokered: Option<(Arc<BrokeredAuth>, Url)>,
 }
@@ -108,7 +108,7 @@ impl McpHttpClient {
             Err(StreamableHttpError::UnexpectedServerResponse(message))
                 if message.starts_with("HTTP 401 ") => {}
             Err(StreamableHttpError::Client(error))
-                if error.status() == Some(reqwest_mcp::StatusCode::UNAUTHORIZED) => {}
+                if error.status() == Some(reqwest::StatusCode::UNAUTHORIZED) => {}
             result => return result,
         }
         tracing::debug!("MCP server rejected the OAuth2 access token; fetching a new one");
@@ -128,7 +128,7 @@ async fn oauth_token(oauth: &OAuth2Config) -> HttpResult<String> {
 
 #[cfg(feature = "http-transport")]
 impl StreamableHttpClient for McpHttpClient {
-    type Error = reqwest_mcp::Error;
+    type Error = reqwest::Error;
 
     fn post_message(
         &self,
@@ -507,7 +507,7 @@ impl McpHttpClientBuilder {
             config = config.auth_header(token);
         }
 
-        let inner = reqwest_mcp::Client::builder()
+        let inner = reqwest::Client::builder()
             .timeout(self.timeout)
             .build()
             .map_err(|error| AdkError::tool(format!("failed to build MCP HTTP client: {error}")))?;

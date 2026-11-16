@@ -26,7 +26,7 @@ axum = "0.8"
 bytes = "1"
 dotenvy = "0.15"
 futures = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls-native-roots"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 serde_json = "1.0"
 tokio = { version = "1.40", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

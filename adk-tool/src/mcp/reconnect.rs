@@ -46,7 +46,7 @@ fn classify(error: &ServiceError) -> Failure {
 
 /// The error ADK's own Streamable HTTP client reports.
 #[cfg(feature = "http-transport")]
-type HttpError = rmcp::transport::streamable_http_client::StreamableHttpError<reqwest_mcp::Error>;
+type HttpError = rmcp::transport::streamable_http_client::StreamableHttpError<reqwest::Error>;
 
 fn classify_transport(error: &(dyn std::error::Error + 'static)) -> Failure {
     #[cfg(feature = "http-transport")]
@@ -79,7 +79,7 @@ fn classify_http(error: &HttpError) -> Failure {
             Failure::AuthRejected
         }
         StreamableHttpError::Client(error)
-            if error.status() == Some(reqwest_mcp::StatusCode::UNAUTHORIZED) =>
+            if error.status() == Some(reqwest::StatusCode::UNAUTHORIZED) =>
         {
             Failure::AuthRejected
         }

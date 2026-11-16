@@ -46,7 +46,7 @@ pub struct OpenAIResponsesClient {
     /// HTTP client for direct API calls (compaction, polling, etc.).
     http: reqwest::Client,
     /// Redirect-free HTTP client under the async-openai generation transport.
-    transport: reqwest_openai::Client,
+    transport: reqwest::Client,
     /// Headers added to generation and auxiliary requests.
     default_headers: http::HeaderMap,
     /// Generation request adapter, kept so rebuilding the transport preserves it.
@@ -459,9 +459,9 @@ impl OpenAIResponsesClient {
 fn responses_http_clients(
     headers: &http::HeaderMap,
     timeouts: crate::HttpTimeouts,
-) -> Result<(reqwest_openai::Client, reqwest::Client), AdkError> {
-    let transport = reqwest_openai::Client::builder()
-        .redirect(reqwest_openai::redirect::Policy::none())
+) -> Result<(reqwest::Client, reqwest::Client), AdkError> {
+    let transport = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(timeouts.connect)
         .read_timeout(timeouts.idle)
         .build()
@@ -487,7 +487,7 @@ fn http_client_init_error(err: impl std::error::Error + Send + Sync + 'static) -
 
 fn with_transport(
     client: async_openai::Client<async_openai::config::OpenAIConfig>,
-    http: &reqwest_openai::Client,
+    http: &reqwest::Client,
     headers: http::HeaderMap,
     uses_max_reasoning: bool,
     open_responses_mode: bool,
@@ -554,7 +554,7 @@ fn with_transport(
                                 ))
                             })?;
                             *request.body_mut() = Some(encoded.into());
-                            request.headers_mut().remove(reqwest_openai::header::CONTENT_LENGTH);
+                            request.headers_mut().remove(reqwest::header::CONTENT_LENGTH);
                         }
                     }
                     Ok(request)
@@ -581,12 +581,12 @@ fn with_transport(
 }
 
 async fn normalize_responses_response(
-    response: reqwest_openai::Response,
+    response: reqwest::Response,
     uses_max_reasoning: bool,
     open_responses_mode: bool,
     requested_streaming: bool,
     idle_timeout: Option<Arc<AtomicBool>>,
-) -> Result<reqwest_openai::Response, async_openai::error::OpenAIError> {
+) -> Result<reqwest::Response, async_openai::error::OpenAIError> {
     use futures::TryStreamExt;
 
     if !response.status().is_success() {
@@ -597,10 +597,8 @@ async fn normalize_responses_response(
 
     // The adapted request selects SSE framing. Compatible endpoints can omit or
     // mislabel Content-Type even when returning an incremental event stream.
-    let content_type = response
-        .headers()
-        .get(reqwest_openai::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok());
+    let content_type =
+        response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|value| value.to_str().ok());
     let is_event_stream = requested_streaming
         || content_type.is_some_and(|value| value.starts_with("text/event-stream"));
     // An event stream is wrapped to report an idle timeout, even when it needs no rewrite.
@@ -612,7 +610,7 @@ async fn normalize_responses_response(
     let version = response.version();
     let url = response.url().clone();
     let mut headers = response.headers().clone();
-    headers.remove(reqwest_openai::header::CONTENT_LENGTH);
+    headers.remove(reqwest::header::CONTENT_LENGTH);
 
     let body = if is_event_stream {
         let mut upstream = response.bytes_stream().inspect_err(move |error| {
@@ -623,13 +621,7 @@ async fn normalize_responses_response(
             }
         });
         if !rewrite {
-            return rebuild(
-                status,
-                version,
-                url,
-                headers,
-                reqwest_openai::Body::wrap_stream(upstream),
-            );
+            return rebuild(status, version, url, headers, reqwest::Body::wrap_stream(upstream));
         }
         let normalized = async_stream::stream! {
             let mut lines = responses_lines::Lines::default();
@@ -664,10 +656,10 @@ async fn normalize_responses_response(
                 );
             }
         };
-        reqwest_openai::Body::wrap_stream(normalized)
+        reqwest::Body::wrap_stream(normalized)
     } else {
         let bytes = response.bytes().await.map_err(async_openai::error::OpenAIError::Reqwest)?;
-        reqwest_openai::Body::from(normalize_responses_bytes(
+        reqwest::Body::from(normalize_responses_bytes(
             &bytes,
             uses_max_reasoning,
             open_responses_mode,
@@ -680,13 +672,13 @@ async fn normalize_responses_response(
 
 /// A response with `body` in place of the one it was read from.
 fn rebuild(
-    status: reqwest_openai::StatusCode,
+    status: reqwest::StatusCode,
     version: http::Version,
-    url: reqwest_openai::Url,
+    url: reqwest::Url,
     headers: http::HeaderMap,
-    body: reqwest_openai::Body,
-) -> Result<reqwest_openai::Response, async_openai::error::OpenAIError> {
-    use reqwest_openai::ResponseBuilderExt;
+    body: reqwest::Body,
+) -> Result<reqwest::Response, async_openai::error::OpenAIError> {
+    use reqwest::ResponseBuilderExt;
 
     let mut rebuilt =
         http::Response::builder().status(status).version(version).url(url).body(body).map_err(
@@ -697,7 +689,7 @@ fn rebuild(
             },
         )?;
     *rebuilt.headers_mut() = headers;
-    Ok(reqwest_openai::Response::from(rebuilt))
+    Ok(reqwest::Response::from(rebuilt))
 }
 
 fn normalize_responses_bytes(

@@ -37,9 +37,9 @@ impl std::error::Error for HttpError {}
 /// body-deserialization error. `Retry-After` and `x-request-id` are captured
 /// before consuming the body.
 pub(super) async fn normalize_response(
-    response: reqwest_openai::Response,
+    response: reqwest::Response,
     open_responses_mode: bool,
-) -> Result<reqwest_openai::Response, OpenAIError> {
+) -> Result<reqwest::Response, OpenAIError> {
     let status = response.status();
     let header = |name| response.headers().get(name).and_then(|value| value.to_str().ok());
     let retry_after = header(http::header::RETRY_AFTER).and_then(parse_retry_after);
@@ -70,11 +70,7 @@ pub(super) async fn normalize_response(
     })))
 }
 
-fn api_error(
-    status: reqwest_openai::StatusCode,
-    bytes: &[u8],
-    open_responses_mode: bool,
-) -> ApiError {
+fn api_error(status: reqwest::StatusCode, bytes: &[u8], open_responses_mode: bool) -> ApiError {
     if let Ok(wrapped) = serde_json::from_slice::<WrappedError>(bytes) {
         return wrapped.error;
     }
@@ -170,7 +166,7 @@ mod tests {
 
     #[test]
     fn quotes_a_bounded_excerpt_of_unrecognized_bodies() {
-        let status = reqwest_openai::StatusCode::BAD_GATEWAY;
+        let status = reqwest::StatusCode::BAD_GATEWAY;
         assert_eq!(
             api_error(status, b"  upstream timed out \n", false).message,
             "HTTP 502 Bad Gateway: upstream timed out"
@@ -187,7 +183,7 @@ mod tests {
     #[test]
     fn bounds_an_echoed_api_message() {
         let error = ApiErrorResponse {
-            status_code: reqwest_openai::StatusCode::BAD_REQUEST,
+            status_code: reqwest::StatusCode::BAD_REQUEST,
             api_error: ApiError {
                 message: format!("Invalid value: '{}'", "x".repeat(4096)),
                 r#type: Some("invalid_request_error".into()),
@@ -213,7 +209,7 @@ mod tests {
     #[test]
     fn preserves_safe_provider_codes() {
         let error = ApiErrorResponse {
-            status_code: reqwest_openai::StatusCode::BAD_REQUEST,
+            status_code: reqwest::StatusCode::BAD_REQUEST,
             api_error: ApiError {
                 message: "invalid".into(),
                 r#type: None,
@@ -229,7 +225,7 @@ mod tests {
     #[test]
     fn falls_back_to_the_error_type() {
         let error = ApiErrorResponse {
-            status_code: reqwest_openai::StatusCode::BAD_REQUEST,
+            status_code: reqwest::StatusCode::BAD_REQUEST,
             api_error: ApiError {
                 message: "invalid".into(),
                 r#type: Some("invalid_request_error".into()),
@@ -243,7 +239,7 @@ mod tests {
 
     async fn http_error_code(body: serde_json::Value) -> Option<serde_json::Value> {
         let response = http::Response::builder().status(400).body(body.to_string()).unwrap();
-        let error = normalize_response(reqwest_openai::Response::from(response), false)
+        let error = normalize_response(reqwest::Response::from(response), false)
             .await
             .expect_err("a 400 is an error");
         let mapped = mapped_http_error(&error).expect("an HTTP error");
@@ -327,7 +323,7 @@ mod tests {
     #[test]
     fn drops_unsafe_provider_codes() {
         let error = ApiErrorResponse {
-            status_code: reqwest_openai::StatusCode::BAD_REQUEST,
+            status_code: reqwest::StatusCode::BAD_REQUEST,
             api_error: ApiError {
                 message: "invalid".into(),
                 r#type: None,

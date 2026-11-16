@@ -259,11 +259,9 @@ version = "0.3"
 workspace = true
 features = [
     "charset",
-    "h2",
     "http2",
     "json",
     "stream",
-    "rustls-tls"
 ]
 
 [dependencies.schemars]

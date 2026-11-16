@@ -27,7 +27,7 @@ which the working-group draft absorbed, for Ed25519 keys.
 [dependencies]
 adk-auth = { version = "3.0.0", features = ["web-bot-auth"] }
 http = "1"
-reqwest = "0.12"
+reqwest = "0.13"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

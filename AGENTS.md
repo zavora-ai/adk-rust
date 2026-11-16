@@ -49,7 +49,7 @@ feature-gated builds and the `full` tier require.
 | Tool | Needed for | Linux | macOS | Windows |
 |------|-----------|-------|-------|---------|
 | `protoc` | `adk-rag --features lancedb` (lance build script) | `apt install protobuf-compiler` | `brew install protobuf` | [prebuilt release](https://github.com/protocolbuffers/protobuf/releases), then set `PROTOC` |
-| NASM | `aws-lc-sys` on MSVC — any rustls path, e.g. `adk-auth --features sso` | not needed | not needed | [nasm.us](https://www.nasm.us/), add to `PATH` |
+| NASM | `aws-lc-sys` on MSVC — every TLS path, the default build included (`AWS_LC_SYS_PREBUILT_NASM=1` uses its prebuilt objects instead) | not needed | not needed | [nasm.us](https://www.nasm.us/), add to `PATH` |
 | `cmake` | `openai-webrtc` (audiopus builds Opus from source) | `apt install cmake` | `brew install cmake` | [get-cmake](https://github.com/lukka/get-cmake) or the official installer |
 | ALSA (`libasound2-dev`) | `examples/desktop_audio` (cpal links `alsa-sys`); pre-push examples gate | `apt install libasound2-dev` | not needed (CoreAudio) | not needed |
 | `bash` / `sh` | Shell-tool and external-runner tests across `adk-bench`, `adk-devtools`, `adk-managed`, `adk-sandbox`, `adk-tool` | preinstalled | preinstalled | [Git for Windows](https://git-scm.com/download/win) ships them in `Git\bin`, which the installer leaves off `PATH` — add it |

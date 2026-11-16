@@ -1052,7 +1052,7 @@ RUN cargo build --release --target x86_64-unknown-linux-musl
 
 FROM scratch
 
-# ADK-Rust uses rustls-tls-native-roots, which reads /etc/ssl/certs at runtime.
+# reqwest's rustls verifier reads the system trust store in /etc/ssl/certs at runtime.
 # `scratch` ships no filesystem, so the CA bundle must be copied in or every
 # TLS connection fails certificate verification.
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt

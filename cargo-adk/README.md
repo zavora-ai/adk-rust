@@ -234,7 +234,7 @@ The `api` template and the `server` addon listen on `BIND_HOST` (default `127.0.
 The `docker` addon emits three build-time files and touches no runtime code:
 
 - `Dockerfile` — multi-stage build: `rust:1.95-slim` build stage (tag kept in lockstep with the workspace `rust-toolchain.toml`, optional `sccache` lines commented out) and a `gcr.io/distroless/cc-debian12` runtime stage with `ENV PORT=8080` and `ENTRYPOINT ["/app/agent"]`.
-- `Dockerfile.static` — fully static variant: `x86_64-unknown-linux-musl` build (musl-tools and cmake for `aws-lc-sys`) on a `FROM scratch` runtime that copies in the CA bundle (`rustls-tls-native-roots` reads `/etc/ssl/certs` at runtime). Works with the `gemini-agent-platform` / `gemini-agent-platform-full` feature sets; incompatible with `livekit` (OpenSSL via native-tls) and the adk-audio `onnx` / `kokoro` / `desktop-audio` features (shared ONNX Runtime, espeak-ng, ALSA).
+- `Dockerfile.static` — fully static variant: `x86_64-unknown-linux-musl` build (musl-tools and cmake for `aws-lc-sys`) on a `FROM scratch` runtime that copies in the CA bundle (reqwest's `rustls` verifies against the system trust store, read from `/etc/ssl/certs` at runtime). Works with the `gemini-agent-platform` / `gemini-agent-platform-full` feature sets; incompatible with `livekit` (OpenSSL via native-tls) and the adk-audio `onnx` / `kokoro` / `desktop-audio` features (shared ONNX Runtime, espeak-ng, ALSA).
 - `.dockerignore` — excludes `target/`, `.git/`, and `.env` files from the build context.
 
 ### Enterprise Patterns (5)
