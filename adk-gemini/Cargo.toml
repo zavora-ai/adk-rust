@@ -21,7 +21,7 @@ keywords = [
     "client",
 ]
 categories = ["api-bindings"]
-license = "Apache-2.0"
+license = "MIT AND Apache-2.0"
 repository = "https://github.com/zavora-ai/adk-rust"
 homepage.workspace = true
 authors.workspace = true

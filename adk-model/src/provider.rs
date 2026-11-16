@@ -366,23 +366,34 @@ mod tests {
         }
     }
 
+    /// The features `all-providers` lists in `manifest`, read up to the closing bracket,
+    /// because `cargo package` writes the published manifest one feature per line.
+    fn all_providers(manifest: &str) -> BTreeSet<&str> {
+        let (_, listed) = manifest
+            .split_once("\nall-providers = [")
+            .expect("adk-model declares the all-providers feature");
+        let (listed, _) = listed.split_once(']').expect("the all-providers list is closed");
+        listed
+            .split(',')
+            .map(|name| name.trim().trim_matches('"'))
+            .filter(|name| !name.is_empty())
+            .collect()
+    }
+
     /// The variants and the provider features cannot drift apart: `all-providers` in this
     /// crate's manifest lists exactly the features the variants belong to.
     #[test]
     fn variants_cover_every_provider_feature() {
         let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
-        let listed = manifest
-            .lines()
-            .find_map(|line| line.trim().strip_prefix("all-providers = ["))
-            .expect("adk-model declares the all-providers feature on one line");
-        let features: BTreeSet<&str> = listed
-            .trim_end_matches(']')
-            .split(',')
-            .map(|name| name.trim().trim_matches('"'))
-            .filter(|name| !name.is_empty())
-            .collect();
         let covered: BTreeSet<&str> =
             ModelProvider::all().iter().map(|provider| provider.feature()).collect();
-        assert_eq!(covered, features);
+        assert_eq!(covered, all_providers(manifest));
+    }
+
+    #[test]
+    fn reads_the_manifest_cargo_package_writes() {
+        let normalized =
+            "[features]\nall-providers = [\n    \"gemini\",\n    \"openai\",\n]\nanthropic = []\n";
+        assert_eq!(all_providers(normalized), BTreeSet::from(["gemini", "openai"]));
     }
 }

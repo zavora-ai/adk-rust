@@ -11,11 +11,11 @@ documentation = "https://docs.rs/adk-eval"
 readme = "README.md"
 exclude = ["tests/"]
 homepage.workspace = true
+keywords = ["ai", "agent", "evaluation", "testing", "llm"]
+categories = ["development-tools::testing"]
 
 [package.metadata.docs.rs]
 features = ["embedding", "ci-helpers", "statistics", "vertex-eval", "personas", "experiments"]
-keywords = ["ai", "agent", "evaluation", "testing", "llm"]
-categories = ["development-tools::testing"]
 
 [dependencies]
 adk-core.workspace = true

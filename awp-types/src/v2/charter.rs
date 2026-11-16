@@ -113,7 +113,38 @@ impl Charter {
     /// ```
     /// use awp_types::{Charter, CharterViolation};
     ///
-    /// # fn charter() -> Charter { serde_json::from_str(include_str!("../../tests/fixtures/v2/charter.json")).unwrap() }
+    /// # fn charter() -> Charter {
+    /// #     serde_json::from_value(serde_json::json!({
+    /// #         "version": 1,
+    /// #         "siteId": "018f2c7e-5d1a-7c3b-9e4f-0a1b2c3d4e5f",
+    /// #         "kind": "business",
+    /// #         "governance": {
+    /// #             "roles": [{ "principal": "user:amina", "roles": ["owner", "editor"] }],
+    /// #             "approvalChains": [{ "action": "publish", "roles": ["editor"] }]
+    /// #         },
+    /// #         "mission": "Bring reliable solar power to homes in Nairobi.",
+    /// #         "kpis": [{
+    /// #             "id": "leads-qualified",
+    /// #             "name": "Qualified leads per week",
+    /// #             "metric": "leads.qualified",
+    /// #             "source": "commerce",
+    /// #             "direction": "up",
+    /// #             "baseline": { "value": 4.0, "window": 604800, "measuredAt": "2026-10-20T00:00:00Z" },
+    /// #             "target": { "value": 8.0, "horizon": "2027-01-31T00:00:00Z" },
+    /// #             "cadence": "weekly"
+    /// #         }],
+    /// #         "budget": { "period": "monthly", "currency": "KES", "caps": { "models": 300000 } },
+    /// #         "voice": { "tone": "Warm and plain", "languages": ["en"], "disclosure": "Written by an AI agent." },
+    /// #         "reporting": { "review": "weekly", "routes": [{ "urgency": "p1", "channels": ["sms"] }] },
+    /// #         "public": {
+    /// #             "usage": "train-ai=n, search=y",
+    /// #             "policies": [],
+    /// #             "consentScopes": ["contact"],
+    /// #             "contact": { "email": "hello@example.com" }
+    /// #         }
+    /// #     }))
+    /// #     .unwrap()
+    /// # }
     /// let mut charter = charter();
     /// assert!(charter.validate().is_ok());
     ///

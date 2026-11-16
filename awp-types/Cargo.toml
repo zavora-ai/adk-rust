@@ -12,7 +12,7 @@ documentation = "https://docs.rs/awp-types"
 readme = "README.md"
 keywords = ["awp", "agent", "protocol", "agentic", "web"]
 categories = ["web-programming", "data-structures"]
-include = ["src/**/*", "schemas/**/*", "Cargo.toml", "README.md"]
+include = ["src/**/*", "schemas/**/*", "Cargo.toml", "README.md", "LICENSE"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
