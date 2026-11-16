@@ -181,6 +181,11 @@ livekit-api = { version = "=0.6.1", default-features = false, features = ["servi
 livekit-datatrack = { version = "=0.1.13", default-features = false }
 libwebrtc = { version = "=0.3.43", default-features = false }
 webrtc-sys = { version = "=0.3.40", default-features = false }
+# webrtc-sys 0.3.40 asks for `webrtc-sys-build = "0.3.18"`, whose build script downloads the
+# prebuilt libwebrtc it names. 0.3.21 names webrtc-a545de4, whose headers lack
+# `webrtc::ArrayView`, so webrtc-sys 0.3.40 stops compiling; a consumer's fresh resolve picks
+# 0.3.21 unless a dependency pins it. Pinned with webrtc-sys until the livekit 0.8.4 stack lands.
+webrtc-sys-build = "=0.3.18"
 
 # Shared database API types; all public pool constructors use this SQLx line.
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio"] }
