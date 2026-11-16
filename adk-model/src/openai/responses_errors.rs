@@ -287,7 +287,7 @@ mod tests {
             .header("retry-after", "7")
             .body(body.to_string())
             .unwrap();
-        let error = normalize_response(reqwest_openai::Response::from(response), false)
+        let error = normalize_response(reqwest::Response::from(response), false)
             .await
             .expect_err("a 429 is an error");
         let mapped = mapped_http_error(&error).expect("an HTTP error");
@@ -305,7 +305,7 @@ mod tests {
         assert!(mapped.message.contains("add credit or raise the limit"), "{}", mapped.message);
 
         let rate_limited = ApiErrorResponse {
-            status_code: reqwest_openai::StatusCode::TOO_MANY_REQUESTS,
+            status_code: reqwest::StatusCode::TOO_MANY_REQUESTS,
             api_error: ApiError {
                 message: "slow down".into(),
                 r#type: Some("requests".into()),
