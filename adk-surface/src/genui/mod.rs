@@ -61,18 +61,21 @@ pub use app_view::{
     AppAnswer, AppBlockReason, AppError, AppMessageRequest, AppOpen, AppPrompt, AppRequest, AppView,
 };
 #[cfg(feature = "genui")]
-pub use capabilities::{GenuiWiring, capabilities, capabilities_wired};
+pub use capabilities::{GenuiWiring, capabilities, capabilities_wired, capabilities_with};
 pub use capabilities_wire::{
     CatalogView, Claim, ClaimScope, ClaimStatus, GenuiCapabilities, ProtocolClaims,
 };
 #[cfg(feature = "genui")]
-pub use catalog::{Catalog, FORMS_CATALOG_ID};
+pub use catalog::{
+    Catalog, CatalogError, Catalogs, ChildSlot, ExtensionComponent, ExtensionSpec,
+    FORMS_CATALOG_ID, HomeNode, HomeText, ResolvedComponent,
+};
 #[cfg(feature = "genui")]
 pub use draw::{DRAWN_STATE_KEY, DrawToolset, DrawnEnvelope, DrawnRecord, REFUSED_STATE_KEY};
 pub use drawn::{
-    DrawnActionView, DrawnArg, DrawnCheck, DrawnField, DrawnInput, DrawnKind, DrawnNode,
-    DrawnOption, DrawnSent, DrawnSurface, FormState, FormStatus, RefusalKind, RefusedDrawing,
-    SentVia,
+    ChartAxis, ChartKind, ChartSeries, ChartTick, DrawnActionView, DrawnArg, DrawnChart,
+    DrawnCheck, DrawnExtension, DrawnField, DrawnInput, DrawnKind, DrawnNode, DrawnOption,
+    DrawnSent, DrawnSurface, FormState, FormStatus, RefusalKind, RefusedDrawing, SentVia,
 };
 #[cfg(feature = "genui-apps")]
 pub use mcp_apps::{
@@ -86,8 +89,9 @@ pub use submit::DRAWN_CHANGED_CODE;
 #[cfg(feature = "genui")]
 pub use validate::{
     ActionArg, ComponentRef, DrawRefusal, DrawnAction, FieldArg, MAX_ACTIONS, MAX_COMPONENTS,
-    MAX_DEPTH, MAX_DRAWING_BYTES, MAX_LIST_ITEMS, MAX_SHOWN, MAX_TEXT_CHARS, RESERVED_LABELS,
-    RESERVED_PHRASES, ResolvedText, SurfaceDraft, ValidatedSurface, Validator, reserved,
+    MAX_DEPTH, MAX_DRAWING_BYTES, MAX_LIST_ITEMS, MAX_RESOLVED_BYTES, MAX_SHOWN, MAX_TEXT_CHARS,
+    RESERVED_LABELS, RESERVED_PHRASES, ResolvedText, SurfaceDraft, ValidatedSurface, Validator,
+    reserved,
 };
 #[cfg(feature = "genui")]
 pub use view::SHOWN_ROWS;

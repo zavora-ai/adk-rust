@@ -115,6 +115,14 @@ impl World {
         )
     }
 
+    /// The worker configuration of the replica `name`: fast polls and short leases.
+    pub fn worker(name: &str) -> DurableWorkerConfig {
+        DurableWorkerConfig::default()
+            .with_worker_id(name)
+            .with_lease_ttl(Duration::from_millis(600))
+            .with_poll_interval(Duration::from_millis(20))
+    }
+
     /// A kernel replica named `name` over the world, with fast polls and no control plane.
     pub fn kernel(&self, name: &str, control: &GovernanceControl) -> Kernel {
         self.kernel_with(name, control, |builder| builder)
@@ -126,10 +134,19 @@ impl World {
         control: &GovernanceControl,
         extend: impl FnOnce(adk_kernel::KernelBuilder) -> adk_kernel::KernelBuilder,
     ) -> Kernel {
-        let worker = DurableWorkerConfig::default()
-            .with_worker_id(name)
-            .with_lease_ttl(Duration::from_millis(600))
-            .with_poll_interval(Duration::from_millis(20));
+        self.kernel_configured(name, control, |config| config, extend)
+    }
+
+    /// [`kernel_with`](Self::kernel_with) with `configure` applied to the configuration
+    /// (`worker` is its worker configuration).
+    pub fn kernel_configured(
+        &self,
+        name: &str,
+        control: &GovernanceControl,
+        configure: impl FnOnce(KernelConfig) -> KernelConfig,
+        extend: impl FnOnce(adk_kernel::KernelBuilder) -> adk_kernel::KernelBuilder,
+    ) -> Kernel {
+        let worker = Self::worker(name);
         let config = KernelConfig::default()
             .with_app_name(APP)
             .with_worker(worker)
@@ -137,7 +154,7 @@ impl World {
             .with_governance(control.clone())
             .with_control(adk_kernel::control::ControlPlaneConfig::default().without_socket());
         let builder = Kernel::builder()
-            .config(config)
+            .config(configure(config))
             .run_store(Arc::clone(&self.runs))
             .process_store(Arc::clone(&self.processes) as Arc<dyn ProcessStore>)
             .session_service(Arc::clone(&self.sessions) as Arc<dyn SessionService>)

@@ -594,6 +594,30 @@ impl SurfaceEngineBuilder {
         self
     }
 
+    /// Shows drawings in the extension catalog `catalog` too (spec 3.3 §6.1 `genui`,
+    /// extension catalogs): register every catalog the agents' render tools draw in
+    /// (`DrawToolset::catalog`). A drawing in a catalog not registered here is refused
+    /// ("this home does not render the catalog …").
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    /// use adk_surface::genui::DrawToolset;
+    /// use adk_surface::{LocalSource, SurfaceEngine};
+    ///
+    /// # fn example(source: LocalSource, toolset: DrawToolset) {
+    /// let engine = SurfaceEngine::builder(Arc::new(source)).with_catalog(toolset.catalog()).build();
+    /// assert_eq!(engine.catalogs().iter().count(), 2);
+    /// # }
+    /// ```
+    #[cfg(feature = "genui")]
+    #[must_use]
+    pub fn with_catalog(mut self, catalog: &'static crate::genui::Catalog) -> Self {
+        self.projector.catalogs = self.projector.catalogs.clone().with(catalog);
+        self
+    }
+
     /// How often the feed reads the store when the source signals nothing sooner.
     #[must_use]
     pub fn poll_interval(mut self, poll: Duration) -> Self {
@@ -825,6 +849,13 @@ impl SurfaceEngine {
     /// ```
     pub fn granted(&self) -> &[GrantedUse] {
         &self.inner.granted
+    }
+
+    /// The catalogs this engine shows drawings in: `forms` and every catalog registered with
+    /// [`SurfaceEngineBuilder::with_catalog`] (spec 3.3 §6.1 `genui`).
+    #[cfg(feature = "genui")]
+    pub fn catalogs(&self) -> &crate::genui::Catalogs {
+        &self.inner.projector.catalogs
     }
 
     /// How long a spoken answer, or a spoken screen action, can be cancelled (spec 3.3 §5.6).
@@ -1432,7 +1463,14 @@ impl SurfaceEngine {
         if !matches!(caller.origin, Origin::Keyboard | Origin::Pointer | Origin::Touch) {
             return Err(SurfaceError::NotHere(words::SEND_FORMS_FROM_A_SCREEN.to_string()));
         }
-        let sent = crate::genui::submission(&events, &surface, version, action, values)?;
+        let sent = crate::genui::submission(
+            &events,
+            &self.inner.projector.catalogs,
+            &surface,
+            version,
+            action,
+            values,
+        )?;
         // A running turn writes the session meanwhile, so the call waits until it ends, as a
         // message does: a second run would interleave its events with the turn's (S-I4).
         let key = (caller.user_id().to_string(), session.clone());

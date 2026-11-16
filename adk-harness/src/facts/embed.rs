@@ -134,6 +134,25 @@ impl RagEmbedder {
     pub fn local() -> Result<Self> {
         Self::onnx(adk_rag::OnnxEmbeddingConfig::default())
     }
+
+    /// Whether [`local`](Self::local) finds its model on this machine and fetches nothing;
+    /// otherwise its first use downloads about 130 MB into the Hugging Face hub cache.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_harness::RagEmbedder;
+    ///
+    /// if !RagEmbedder::local_is_fetched() {
+    ///     eprintln!("fetching the local embedding model (about 130 MB, once)");
+    /// }
+    /// let embedder = RagEmbedder::local()?;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    #[cfg(feature = "memory-embeddings-local")]
+    pub fn local_is_fetched() -> bool {
+        adk_rag::OnnxEmbeddingConfig::default().is_fetched()
+    }
 }
 
 #[async_trait]

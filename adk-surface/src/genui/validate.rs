@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::a2ui::DataModel;
-use super::catalog::Catalog;
-use super::drawn::{DrawnKind, RefusalKind};
+use super::catalog::{Catalog, ChildSlot, ExtensionComponent, HomeNode, ResolvedComponent};
+use super::drawn::{ChartAxis, ChartKind, DrawnChart, DrawnKind, RefusalKind};
 
 /// Phrases of a decision and of the controls every surface owns, refused anywhere in a
 /// drawing after folding (spec 3.3 §8.1, §8.2; wave 4 decision 20).
@@ -53,6 +53,21 @@ pub const MAX_TEXT_CHARS: usize = 4_000;
 pub const MAX_DRAWING_BYTES: usize = 128 * 1024;
 /// The most actions a drawing declares.
 pub const MAX_ACTIONS: usize = 8;
+/// The most bytes the resolved properties of a drawing's extension components take as JSON,
+/// bound data included, so a chart in a list template cannot multiply its data unchecked.
+pub const MAX_RESOLVED_BYTES: usize = 256 * 1024;
+/// The most nodes one extension component's home view has.
+const MAX_HOME_NODES: usize = 64;
+/// The deepest one extension component's home view nests.
+const MAX_HOME_DEPTH: usize = 4;
+/// The deepest an extension component's properties, or the data they bind, nest.
+const MAX_PROP_DEPTH: usize = 16;
+/// The most series a chart has: one per chart colour.
+const MAX_CHART_SERIES: usize = 8;
+/// The most slices a pie has.
+const MAX_PIE_SLICES: usize = 8;
+/// The most labelled ticks a chart's axis has.
+const MAX_CHART_TICKS: usize = 16;
 
 /// The functions a drawing may call to check a field.
 const CHECK_FUNCTIONS: &[&str] =
@@ -199,6 +214,20 @@ pub struct ValidatedSurface {
     pub draft: SurfaceDraft,
     /// Every string it shows, in tree order.
     pub texts: Vec<ResolvedText>,
+    /// What each extension component shows, by component id and list item, as checked: the
+    /// projection draws these and never resolves or projects a component again.
+    #[serde(skip)]
+    pub(crate) extensions: BTreeMap<(String, String), ExtensionView>,
+}
+
+/// An extension component as checked: its resolved properties, what the home shows for it,
+/// and the ids its slots hold, in order.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ExtensionView {
+    pub(crate) component: String,
+    pub(crate) props: Value,
+    pub(crate) home: HomeNode,
+    pub(crate) children: Vec<String>,
 }
 
 /// The component a refusal is about.
@@ -368,11 +397,18 @@ impl Validator {
         if let Some(title) = &draft.title {
             texts.push(check.display(None, None, "title", title)?);
         }
-        let mut walk = Walk { check: &check, components: &components, shown: 0, texts };
+        let mut walk = Walk {
+            check: &check,
+            components: &components,
+            shown: 0,
+            texts,
+            extensions: BTreeMap::new(),
+            resolved_bytes: 0,
+        };
         walk.tree()?;
-        let mut texts = walk.texts;
+        let Walk { mut texts, extensions, .. } = walk;
         check.actions(draft, &components, self.bindable.as_ref(), &mut texts)?;
-        Ok(ValidatedSurface { draft: draft.clone(), texts })
+        Ok(ValidatedSurface { draft: draft.clone(), texts, extensions })
     }
 }
 
@@ -479,6 +515,9 @@ impl Check {
                 self.button(id, props, draft)?;
             }
             self.functions(id, name, value)?;
+            if self.catalog.extension(name).is_some() {
+                self.shows_only(id, name, value)?;
+            }
             if let Some(error) = self.catalog.schema_error(name, value) {
                 return Err(self.cannot_show(at, format!("does not match the catalog: {error}")));
             }
@@ -545,6 +584,27 @@ impl Check {
                     ),
                 ));
             }
+        }
+        Ok(())
+    }
+
+    /// An extension component only shows: no action, event or check anywhere in it, and no
+    /// function but the text functions (spec 3.3 §7.4 rule 5).
+    fn shows_only(&self, id: &str, name: &str, value: &Value) -> Result<(), DrawRefusal> {
+        let at = Some((id, name));
+        if let Some(key) = keys_named(value, &["action", "event", "checks"]) {
+            return Err(self.cannot_show(
+                at,
+                format!("carries '{key}'; a component of an extension catalog only shows"),
+            ));
+        }
+        let mut found = Vec::new();
+        calls(value, &mut found);
+        if let Some(call) = found.iter().find(|call| !TEXT_FUNCTIONS.contains(&call.as_str())) {
+            return Err(self.cannot_show(
+                at,
+                format!("calls '{call}'; a component of an extension catalog makes text only"),
+            ));
         }
         Ok(())
     }
@@ -849,6 +909,290 @@ impl Check {
         out.push_str(rest);
         Ok(out)
     }
+
+    /// A string an extension component shows, or its projection writes: [`Self::display`],
+    /// and never a link, even one a `formatString` put together.
+    fn shows(
+        &self,
+        at: (&str, &str),
+        item: Option<&str>,
+        field: &str,
+        text: &str,
+    ) -> Result<ResolvedText, DrawRefusal> {
+        if looks_like_link(text) {
+            return Err(
+                self.cannot_show(Some(at), format!("{field} '{}' is a link", truncate(text)))
+            );
+        }
+        self.display(Some(at), item, field, text)
+    }
+
+    /// An extension component's property `value`, resolved and checked whole (spec 3.3 §7.4
+    /// rule 5): every string and every key goes through [`Self::shows`]; a binding is replaced
+    /// by the data it reads, every string and key of which is checked the same way, however
+    /// it nests; a text function is replaced by the text it shows, every variant checked.
+    fn resolve(
+        &self,
+        at: (&str, &str),
+        scope: &str,
+        field: &str,
+        value: &Value,
+        depth: usize,
+        texts: &mut Vec<ResolvedText>,
+    ) -> Result<Value, DrawRefusal> {
+        if depth > MAX_PROP_DEPTH {
+            return Err(self.cannot_show(Some(at), format!("{field} nests too deeply")));
+        }
+        let item = (!scope.is_empty()).then_some(scope);
+        match value {
+            Value::String(text) => {
+                texts.push(self.shows(at, item, field, text)?);
+                Ok(value.clone())
+            }
+            Value::Object(map) if is_binding(map) => {
+                let path = map.get("path").and_then(Value::as_str).unwrap_or_default();
+                let bound = self.lookup(scope, path).cloned().unwrap_or(Value::Null);
+                self.bound(at, item, field, &bound, 0, texts)?;
+                Ok(bound)
+            }
+            Value::Object(map) if map.contains_key("call") => {
+                let mut first = None;
+                for text in self.texts(at, scope, value, 0)? {
+                    let resolved = self.shows(at, item, field, &text)?;
+                    first.get_or_insert_with(|| resolved.text.clone());
+                    texts.push(resolved);
+                }
+                Ok(Value::String(first.unwrap_or_default()))
+            }
+            Value::Object(map) => {
+                let mut out = Map::new();
+                for (key, value) in map {
+                    let field = format!("{field}/{key}");
+                    self.shows(at, item, &field, key)?;
+                    out.insert(
+                        key.clone(),
+                        self.resolve(at, scope, &field, value, depth + 1, texts)?,
+                    );
+                }
+                Ok(Value::Object(out))
+            }
+            Value::Array(items) => items
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    self.resolve(at, scope, &format!("{field}/{index}"), value, depth + 1, texts)
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(Value::Array),
+            other => Ok(other.clone()),
+        }
+    }
+
+    /// Data an extension component binds, checked whole: every string and every key,
+    /// however it nests. Data is data: an object in it is never read as a binding.
+    fn bound(
+        &self,
+        at: (&str, &str),
+        item: Option<&str>,
+        field: &str,
+        value: &Value,
+        depth: usize,
+        texts: &mut Vec<ResolvedText>,
+    ) -> Result<(), DrawRefusal> {
+        if depth > MAX_PROP_DEPTH {
+            return Err(
+                self.cannot_show(Some(at), format!("the data {field} binds nests too deeply"))
+            );
+        }
+        match value {
+            Value::String(text) => texts.push(self.shows(at, item, field, text)?),
+            Value::Object(map) => {
+                for (key, value) in map {
+                    let field = format!("{field}/{key}");
+                    self.shows(at, item, &field, key)?;
+                    self.bound(at, item, &field, value, depth + 1, texts)?;
+                }
+            }
+            Value::Array(items) => {
+                for (index, value) in items.iter().enumerate() {
+                    self.bound(at, item, &format!("{field}/{index}"), value, depth + 1, texts)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// What an extension component's projection shows, checked as a drawing's own strings
+    /// are, every child it holds shown exactly once, and its charts within their limits.
+    fn home(
+        &self,
+        at: (&str, &str),
+        item: Option<&str>,
+        node: HomeNode,
+        depth: usize,
+        seen: &mut HomeSeen,
+    ) -> Result<HomeNode, DrawRefusal> {
+        seen.nodes += 1;
+        if seen.nodes > MAX_HOME_NODES {
+            return Err(self.cannot_show(
+                Some(at),
+                format!("its home view has more than {MAX_HOME_NODES} parts"),
+            ));
+        }
+        if depth > MAX_HOME_DEPTH {
+            return Err(self.cannot_show(
+                Some(at),
+                format!("its home view nests deeper than {MAX_HOME_DEPTH}"),
+            ));
+        }
+        let nested = |children: Vec<HomeNode>, seen: &mut HomeSeen| {
+            children
+                .into_iter()
+                .map(|child| self.home(at, item, child, depth + 1, seen))
+                .collect::<Result<Vec<_>, _>>()
+        };
+        Ok(match node {
+            HomeNode::Text { text, variant } => {
+                self.shows(at, item, "home", &text)?;
+                HomeNode::Text { text, variant }
+            }
+            HomeNode::Row(children) => HomeNode::Row(nested(children, seen)?),
+            HomeNode::Column(children) => HomeNode::Column(nested(children, seen)?),
+            HomeNode::Card(children) => HomeNode::Card(nested(children, seen)?),
+            HomeNode::Tabs(tabs) => HomeNode::Tabs(
+                tabs.into_iter()
+                    .map(|(title, child)| {
+                        self.shows(at, item, "home/tab", &title)?;
+                        Ok((title, self.home(at, item, child, depth + 1, seen)?))
+                    })
+                    .collect::<Result<Vec<_>, DrawRefusal>>()?,
+            ),
+            HomeNode::Divider => HomeNode::Divider,
+            HomeNode::Child(index) => {
+                match seen.children.get_mut(index) {
+                    None => {
+                        return Err(self.cannot_show(
+                            Some(at),
+                            format!(
+                                "its home view shows child {index}; it holds {}",
+                                seen.children.len()
+                            ),
+                        ));
+                    }
+                    Some(true) => {
+                        return Err(self.cannot_show(
+                            Some(at),
+                            format!("its home view shows child {index} twice"),
+                        ));
+                    }
+                    Some(shown) => *shown = true,
+                }
+                HomeNode::Child(index)
+            }
+            HomeNode::Chart(chart) => HomeNode::Chart(self.chart(at, item, chart)?),
+        })
+    }
+
+    /// A chart within its limits, every string it shows checked, its summary written here.
+    fn chart(
+        &self,
+        at: (&str, &str),
+        item: Option<&str>,
+        mut chart: DrawnChart,
+    ) -> Result<DrawnChart, DrawRefusal> {
+        let refuse = |detail: String| self.cannot_show(Some(at), format!("its chart {detail}"));
+        if chart.series.is_empty() || chart.series.len() > MAX_CHART_SERIES {
+            return Err(refuse(format!(
+                "has {} series; a chart has 1 to {MAX_CHART_SERIES}",
+                chart.series.len()
+            )));
+        }
+        if matches!(chart.kind, ChartKind::Pie | ChartKind::Sparkline) && chart.series.len() != 1 {
+            return Err(refuse("of this kind has exactly one series".to_string()));
+        }
+        if chart.ticks.len() > MAX_CHART_TICKS {
+            return Err(refuse(format!("has more than {MAX_CHART_TICKS} ticks")));
+        }
+        let mut points = 0;
+        let (mut low, mut high) = (f64::INFINITY, f64::NEG_INFINITY);
+        for series in &chart.series {
+            if series.y.len() > MAX_LIST_ITEMS {
+                return Err(refuse(format!(
+                    "series '{}' has {} values; at most {MAX_LIST_ITEMS}",
+                    truncate(&series.name),
+                    series.y.len()
+                )));
+            }
+            let expected = match &chart.x {
+                ChartAxis::Category { labels } => {
+                    if !series.x.is_empty() {
+                        return Err(refuse("has x values on a category axis".to_string()));
+                    }
+                    labels.len()
+                }
+                ChartAxis::Number | ChartAxis::Time => series.x.len(),
+            };
+            if series.y.len() != expected {
+                return Err(refuse(format!(
+                    "series '{}' has {} values for {expected} places on its axis",
+                    truncate(&series.name),
+                    series.y.len()
+                )));
+            }
+            points += series.y.len();
+            for value in series.y.iter().filter_map(serde_json::Number::as_f64) {
+                if chart.kind == ChartKind::Pie && value < 0.0 {
+                    return Err(refuse("has a negative slice".to_string()));
+                }
+                low = low.min(value);
+                high = high.max(value);
+            }
+            self.shows(at, item, "chart/series", &series.name)?;
+        }
+        if points > MAX_SHOWN {
+            return Err(refuse(format!("has {points} values; at most {MAX_SHOWN}")));
+        }
+        if let ChartAxis::Category { labels } = &chart.x {
+            if chart.kind == ChartKind::Pie && labels.len() > MAX_PIE_SLICES {
+                return Err(refuse(format!(
+                    "has {} slices; at most {MAX_PIE_SLICES}",
+                    labels.len()
+                )));
+            }
+            for label in labels {
+                self.shows(at, item, "chart/label", label)?;
+            }
+        } else if chart.kind == ChartKind::Pie {
+            return Err(refuse("of kind pie has a category axis".to_string()));
+        }
+        for tick in &chart.ticks {
+            self.shows(at, item, "chart/tick", &tick.text)?;
+        }
+        for label in [&chart.x_label, &chart.y_label].into_iter().flatten() {
+            self.shows(at, item, "chart/axis", label)?;
+        }
+        let kind = match chart.kind {
+            ChartKind::Line => "Line",
+            ChartKind::Area => "Area",
+            ChartKind::Bar => "Bar",
+            ChartKind::Scatter => "Scatter",
+            ChartKind::Pie => "Pie",
+            ChartKind::Sparkline => "Trend",
+        };
+        let names: Vec<&str> = chart.series.iter().map(|series| series.name.as_str()).collect();
+        let range = (low <= high).then_some((low, high));
+        chart.summary = crate::words::chart_summary(kind, &names, points, range);
+        // Names checked one by one can still spell a decision's words once joined.
+        self.shows(at, item, "chart/summary", &chart.summary)?;
+        Ok(chart)
+    }
+}
+
+/// What an extension component's projection has shown so far.
+struct HomeSeen {
+    nodes: usize,
+    children: Vec<bool>,
 }
 
 /// The walk over the component tree from `root`, expanding templates against the data model.
@@ -857,6 +1201,8 @@ struct Walk<'a> {
     components: &'a BTreeMap<&'a str, Component<'a>>,
     shown: usize,
     texts: Vec<ResolvedText>,
+    extensions: BTreeMap<(String, String), ExtensionView>,
+    resolved_bytes: usize,
 }
 
 impl<'a> Walk<'a> {
@@ -904,18 +1250,22 @@ impl<'a> Walk<'a> {
         }
         visited.insert(id.to_string());
         let item = (!scope.is_empty()).then_some(scope);
-        for (field, value) in display_fields(component.name, component.props) {
-            for text in check.texts(at, scope, value, 0)? {
-                let resolved = check.display(Some(at), item, &field, &text)?;
-                self.texts.push(resolved);
+        if let Some(extension) = check.catalog.extension(component.name) {
+            self.extension(extension, at, scope, component)?;
+        } else {
+            for (field, value) in display_fields(component.name, component.props) {
+                for text in check.texts(at, scope, value, 0)? {
+                    let resolved = check.display(Some(at), item, &field, &text)?;
+                    self.texts.push(resolved);
+                }
+            }
+            // A choice that matches no option, or a slider's value, is shown as it is.
+            for text in check.shown_values(scope, component.name, component.props) {
+                check.display(Some(at), item, "value", &text)?;
             }
         }
-        // A choice that matches no option, or a slider's value, is shown as it is.
-        for text in check.shown_values(scope, component.name, component.props) {
-            check.display(Some(at), item, "value", &text)?;
-        }
         path.push(id);
-        for child in children(component.name, component.props) {
+        for child in children(check.catalog, component.name, component.props) {
             match child {
                 Child::Id(child) => self.visit(child, scope, depth + 1, path, visited)?,
                 Child::Template { component: child, list } => {
@@ -941,6 +1291,117 @@ impl<'a> Walk<'a> {
         path.pop();
         Ok(())
     }
+
+    /// An extension component (spec 3.3 §6.1 `genui`, extension catalogs): its properties
+    /// resolved and checked whole, then what the home shows for it checked, both kept for
+    /// the projection. Its slots' component ids are structure, not text.
+    fn extension(
+        &mut self,
+        extension: &dyn ExtensionComponent,
+        at: (&str, &str),
+        scope: &str,
+        component: &Component<'_>,
+    ) -> Result<(), DrawRefusal> {
+        let check = self.check;
+        let item = (!scope.is_empty()).then_some(scope);
+        let slots = extension.children();
+        let mut props = Map::new();
+        for (key, value) in component.props {
+            let holds_ids = key == "id"
+                || key == "component"
+                || slots.iter().any(|slot| {
+                    matches!(slot, ChildSlot::One(name) | ChildSlot::Many(name) if name == key)
+                });
+            if holds_ids {
+                props.insert(key.clone(), value.clone());
+                continue;
+            }
+            let each_of = slots.iter().find_map(|slot| match slot {
+                ChildSlot::EachOf { array, child } if array == key => Some(*child),
+                _ => None,
+            });
+            check.shows(at, item, key, key)?;
+            let resolved = match (each_of, value.as_array()) {
+                (Some(child), Some(entries)) => {
+                    let mut out = Vec::with_capacity(entries.len());
+                    for (index, entry) in entries.iter().enumerate() {
+                        let field = format!("{key}/{index}");
+                        let Some(map) = entry.as_object() else {
+                            out.push(check.resolve(
+                                at,
+                                scope,
+                                &field,
+                                entry,
+                                1,
+                                &mut self.texts,
+                            )?);
+                            continue;
+                        };
+                        let mut resolved = Map::new();
+                        for (name, value) in map {
+                            if name == child {
+                                resolved.insert(name.clone(), value.clone());
+                                continue;
+                            }
+                            let field = format!("{field}/{name}");
+                            check.shows(at, item, &field, name)?;
+                            resolved.insert(
+                                name.clone(),
+                                check.resolve(at, scope, &field, value, 2, &mut self.texts)?,
+                            );
+                        }
+                        out.push(Value::Object(resolved));
+                    }
+                    Value::Array(out)
+                }
+                _ => check.resolve(at, scope, key, value, 0, &mut self.texts)?,
+            };
+            props.insert(key.clone(), resolved);
+        }
+        let props = Value::Object(props);
+        let bytes = serde_json::to_vec(&props).map_or(usize::MAX, |bytes| bytes.len());
+        self.resolved_bytes = self.resolved_bytes.saturating_add(bytes);
+        if self.resolved_bytes > MAX_RESOLVED_BYTES {
+            return Err(check.cannot_show(
+                Some(at),
+                format!(
+                    "the drawing's extension components resolve to more than \
+                     {MAX_RESOLVED_BYTES} bytes"
+                ),
+            ));
+        }
+        let ids: Vec<String> = children(check.catalog, component.name, component.props)
+            .into_iter()
+            .filter_map(|child| match child {
+                Child::Id(id) => Some(id.to_string()),
+                Child::Template { .. } => None,
+            })
+            .collect();
+        let resolved =
+            ResolvedComponent { id: at.0, component: at.1, props: &props, children: ids.len() };
+        let home = extension
+            .home(&resolved)
+            .map_err(|why| check.cannot_show(Some(at), format!("its home view: {why}")))?;
+        let mut seen = HomeSeen { nodes: 0, children: vec![false; ids.len()] };
+        let home = check.home(at, item, home, 0, &mut seen)?;
+        if let Some(index) = seen.children.iter().position(|shown| !shown) {
+            return Err(
+                check.cannot_show(Some(at), format!("its home view leaves out child {index}"))
+            );
+        }
+        self.shown += seen.nodes;
+        if self.shown > MAX_SHOWN {
+            return Err(check.cannot_show(
+                Some(at),
+                format!("the drawing shows more than {MAX_SHOWN} components"),
+            ));
+        }
+        self.extensions.insert(
+            (at.0.to_string(), scope.to_string()),
+            ExtensionView { component: at.1.to_string(), props, home, children: ids },
+        );
+        Ok(())
+    }
 }
 
 /// A component's child: by id, or a template rendered once per item of a data model list.
@@ -949,8 +1410,42 @@ pub(super) enum Child<'a> {
     Template { component: &'a str, list: &'a str },
 }
 
-pub(super) fn children<'a>(name: &str, props: &'a Map<String, Value>) -> Vec<Child<'a>> {
+/// The children of a component of `catalog`: a forms component's by its type, an extension
+/// component's by its slots.
+pub(super) fn children<'a>(
+    catalog: &Catalog,
+    name: &str,
+    props: &'a Map<String, Value>,
+) -> Vec<Child<'a>> {
     let mut out = Vec::new();
+    if let Some(extension) = catalog.extension(name) {
+        for slot in extension.children() {
+            match *slot {
+                ChildSlot::One(slot) => {
+                    out.extend(props.get(slot).and_then(Value::as_str).map(Child::Id));
+                }
+                ChildSlot::Many(slot) => out.extend(
+                    props
+                        .get(slot)
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(Child::Id),
+                ),
+                ChildSlot::EachOf { array, child } => out.extend(
+                    props
+                        .get(array)
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|entry| entry.get(child)?.as_str())
+                        .map(Child::Id),
+                ),
+            }
+        }
+        return out;
+    }
     match name {
         "Row" | "Column" | "List" => match props.get("children") {
             Some(Value::Array(ids)) => {
@@ -1031,6 +1526,24 @@ fn display_fields<'a>(name: &str, props: &'a Map<String, Value>) -> Vec<(String,
         }
     }
     fields
+}
+
+/// Whether `map` is a data binding: an object whose only key is a string `path`.
+fn is_binding(map: &Map<String, Value>) -> bool {
+    map.len() == 1 && map.get("path").is_some_and(Value::is_string)
+}
+
+/// The first key of `names` anywhere in `value`.
+fn keys_named(value: &Value, names: &[&str]) -> Option<String> {
+    match value {
+        Value::Object(map) => map
+            .keys()
+            .find(|key| names.contains(&key.as_str()))
+            .cloned()
+            .or_else(|| map.values().find_map(|value| keys_named(value, names))),
+        Value::Array(items) => items.iter().find_map(|value| keys_named(value, names)),
+        _ => None,
+    }
 }
 
 /// Every function a component calls, by name.

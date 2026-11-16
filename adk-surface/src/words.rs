@@ -958,6 +958,35 @@ pub fn sending_runs(tool: &str) -> String {
     format!("Sending runs {tool} and asks you first")
 }
 
+/// What a drawn chart shows, in one sentence for screen readers and the terminal: "Line
+/// chart of Revenue and Costs, 12 points, from 3100 to 9800".
+pub fn chart_summary(
+    kind: &str,
+    names: &[&str],
+    points: usize,
+    range: Option<(f64, f64)>,
+) -> String {
+    let named: Vec<&str> = names.iter().copied().filter(|name| !name.trim().is_empty()).collect();
+    let of = match named.as_slice() {
+        [] => String::new(),
+        [one] => format!(" of {one}"),
+        [rest @ .., last] => format!(" of {} and {last}", rest.join(", ")),
+    };
+    let count = if points == 1 { "1 point".to_string() } else { format!("{points} points") };
+    match range {
+        Some((low, high)) if points > 0 => {
+            format!("{kind} chart{of}, {count}, from {} to {}", number(low), number(high))
+        }
+        _ => format!("{kind} chart{of}, {count}"),
+    }
+}
+
+/// `value` as a person reads it in a chart's summary: no more than two decimals.
+fn number(value: f64) -> String {
+    let rounded = (value * 100.0).round() / 100.0;
+    if rounded.fract() == 0.0 { format!("{rounded:.0}") } else { format!("{rounded}") }
+}
+
 /// A drawing refused because it looks like a decision.
 pub fn looked_like_a_decision(agent: &str) -> String {
     format!("{agent} tried to show something that looks like a decision. It wasn't shown.")

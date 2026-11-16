@@ -15,13 +15,18 @@ adk-rust --ui repl             # the harness REPL
 > **Note:** the harness refuses to start in your home directory or `/` unless `--dir` names
 > them explicitly, since the agent could read and change everything under them.
 
+> **Note:** on Linux the OS keychain is the desktop's Secret Service (GNOME Keyring, KWallet)
+> over D-Bus, reached in pure Rust, so `cargo install adk-cli` needs no `libdbus-1-dev`. A host
+> without a Secret Service (a server, a container) keeps API keys in the environment and the
+> store key in `--store-key env:<VAR>` or a secret provider.
+
 ## Commands
 
 | Invocation | Behaviour |
 |---|---|
 | `adk-rust` | The harness in `--dir` (default `.`), ask mode, in the [full-screen terminal](../surfaces/terminal.md) on a capable terminal; `--ui repl` for the REPL, approvals in the terminal |
 | `adk-rust chat` | The plain chat agent, without workspace tools |
-| `adk-rust code "task"` | One harness turn; exit code `3` means calls are held for a decision (the session id is printed) |
+| `adk-rust code "task"` | One harness turn. Exit codes: `0` done, `1` the run failed (a model error or an exhausted budget; the error is the last line), `3` calls are held for a decision (the session id is printed), `130` interrupted |
 | `adk-rust goal "goal" --until CMD` | Runs the harness goal engine until `CMD` exits 0, as a durable run in `harness.db`; `--resume` continues the goal in its session |
 | `adk-rust ultracode "task"` | Implements in your mode, routes the review to parallel read-only reviewers or a read-only Blackboard board, revises until they approve; see [Ultracode](#ultracode) |
 | `adk-rust serve` | The harness in plan mode behind the HTTP server with the approval inbox; see [Serving the harness](serving.md) |
@@ -67,7 +72,7 @@ The REPL, `code`, `goal`, `ultracode` and `serve` take the same harness flags.
 | `--member NAME=explore\|general` | Adds a team member |
 | `--no-memory` | Turns long-term memory off: nothing is recalled or learned |
 | `--no-consolidation` | Turns the kernel's consolidation tick off under `adk-rust up` ([Long-term memory](memory.md#consolidation)) |
-| `--embedder local\|gemini\|openai\|lexical` | What embeds long-term facts (spec 3.1 §7.32); without it `[memory] embedder`, else the chat provider's own embedder for Gemini and OpenAI and the local ONNX model for every other provider. See [Long-term memory](#long-term-memory) |
+| `--embedder local\|gemini\|openai\|lexical` | What embeds long-term facts (spec 3.1 §7.32); without it `[memory] embedder`, else the chat provider's own embedder for Gemini and OpenAI and the local ONNX model (feature `memory-local`) for every other provider. See [Long-term memory](#long-term-memory) |
 | `--effort low\|medium\|high` | The reasoning effort of every model call in this session, whatever the mode or role (spec 3.1 §7.23); without it the `[effort]` policy applies per mode: plan high, members low, everything else medium |
 | `--store-key keychain:<entry>\|secret:<provider>/<name>\|env:<VAR>` | Where the key sealing `harness.db` is kept (spec 3.1 §7.12); without it `[store] key` in the user config, else the store is plaintext |
 | `--no-hooks` | Runs no hooks, the workspace's included (spec 3.1 §7.22); `/hooks` lists the effective set |
@@ -377,6 +382,12 @@ once into the Hugging Face hub cache, feature `memory-local`), never another pro
 so with `--sandbox` and `--store-key` nothing leaves the machine but the local model
 endpoint.
 
+> **Note:** `memory-local` is off in the default build, since `ort` downloads the ONNX Runtime
+> binary while compiling and a default `cargo install adk-cli` builds offline.
+> `cargo install adk-cli --features memory-local` adds it. Without it, the harness (the REPL,
+> `code`, `goal`, `ultracode`, `up`) recalls long-term facts by shared words for every
+> provider except Gemini and OpenAI, and `--embedder local` is refused with the reinstall hint.
+
 ```bash
 adk-rust --provider ollama --model qwen3.5 --sandbox --store-key keychain:adk-rust
 ```
@@ -420,11 +431,16 @@ stay on this machine, unless you choose another provider (spec 3.1 §7.32, §13 
 
 | Chat provider | Embedder |
 |---|---|
-| Ollama, mistral.rs | The local ONNX model (`BAAI/bge-small-en-v1.5`) |
+| Ollama, mistral.rs | The local ONNX model (`BAAI/bge-small-en-v1.5`, feature `memory-local`) |
 | Gemini, OpenAI | That provider's: `gemini-embedding-2`, `text-embedding-3-small` |
-| Anthropic, DeepSeek, Groq, Meta Muse, OpenRouter, OpenCode, Bedrock, Azure AI | The local ONNX model, whatever other keys are in the environment |
-| The local model unavailable | None: facts are found by shared words, never by another provider |
+| Anthropic, DeepSeek, Groq, Meta Muse, OpenRouter, OpenCode, Bedrock, Azure AI | The local ONNX model (feature `memory-local`), whatever other keys are in the environment |
+| The local model not compiled in (the default build) or unavailable | None: facts are found by shared words, never by another provider |
 | `--embedder local\|gemini\|openai\|lexical`, or `[memory] embedder` in the user config | As chosen; a second provider sees your facts only this way |
+
+The local model is fetched on its first use, about 130 MB into the Hugging Face hub cache
+(`HF_HOME`). `adk-rust`, `code`, `goal` and `up` print
+`fetching the local embedding model BAAI/bge-small-en-v1.5 (about 130 MB, once)` before that
+download and the time it took after it; `--embedder lexical` skips it.
 
 `.adk/harness.toml` may set `[memory] embedder` to `local` or `lexical` only, and only to
 keep facts closer than your own choice: a workspace never sends them to a provider. Every
@@ -494,11 +510,12 @@ harness goal store, mirrored to the session as `harness:goal`.
 | A call is held (no terminal and no `--yes`) | The run parks and the command exits `3`. Approve with `adk-rust approvals approve ID`, which prints the `goal … --resume` command; `--resume` continues the run at the held call, which runs once |
 | `--resume` before the call is decided | Nothing runs; the command lists the held call and exits `3` again |
 | The budget runs out | Exit `1`; `--resume --max-iters N`, with `N` above the iterations used, continues the goal |
+| A turn fails, such as on a model error | Exit `1` with the error as the last line; `--resume` continues the goal |
 | Ctrl-C, or the process stops | Exit `130` on Ctrl-C; `--resume` continues the goal in its session, reclaiming the stopped process's run once its 10-second lease lapses |
 
 `--resume` continues the latest unfinished goal in this workspace, in its session and with
 its whole conversation. Goals need ask or auto mode. Exit codes: `0` met, `1` budget
-exhausted, `3` calls held, `130` interrupted. With `--ephemeral` the goal runs in the
+exhausted or a failed turn, `3` calls held, `130` interrupted. With `--ephemeral` the goal runs in the
 command's process only and cannot be resumed.
 
 ## Ultracode

@@ -11,7 +11,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::catalog::FORMS_CATALOG_ID;
+use super::catalog::{Catalogs, FORMS_CATALOG_ID};
 
 /// The A2UI version every envelope carries.
 pub const A2UI_VERSION: &str = "v0.9.1";
@@ -502,6 +502,20 @@ impl A2uiCapabilities {
         Self {
             v0_9: Some(CapabilitySet {
                 supported_catalog_ids: vec![FORMS_CATALOG_ID.to_string()],
+                accepts_inline_catalogs: false,
+            }),
+        }
+    }
+
+    /// Every catalog in `catalogs`, `forms` first, with no inline catalogs: what a home that
+    /// registers extension catalogs renders.
+    pub fn of(catalogs: &Catalogs) -> Self {
+        Self {
+            v0_9: Some(CapabilitySet {
+                supported_catalog_ids: catalogs
+                    .iter()
+                    .map(|catalog| catalog.id().to_string())
+                    .collect(),
                 accepts_inline_catalogs: false,
             }),
         }

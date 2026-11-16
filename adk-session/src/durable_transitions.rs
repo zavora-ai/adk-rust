@@ -152,10 +152,13 @@ pub(crate) fn apply_finish(record: &mut RunRecord, now: DateTime<Utc>, outcome: 
             record.state = RunState::Completed;
             record.result = Some(result);
         }
-        RunOutcome::Failed { error, retryable } => {
+        RunOutcome::Failed { error, retryable, backoff } => {
             let retry =
                 retryable && record.attempt < record.max_attempts && !record.cancel_requested;
             record.state = if retry { RunState::Queued } else { RunState::Failed };
+            if retry {
+                record.not_before = backoff.map(|backoff| stored_now(now + backoff));
+            }
             record.error = Some(error);
         }
         RunOutcome::Cancelled => record.state = RunState::Cancelled,

@@ -32,6 +32,19 @@
   --tab-active: #ffffff;
   --tab-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.06);
 
+  /* Charts agents draw (genui extension catalogs): blues, teals and violets first, never the
+     brand, waiting or decision oranges; each series also differs by position and legend. */
+  --chart-1: #2563eb;
+  --chart-2: #0d9488;
+  --chart-3: #7c3aed;
+  --chart-4: #db2777;
+  --chart-5: #4d7c0f;
+  --chart-6: #0e7490;
+  --chart-7: #475569;
+  --chart-8: #a21caf;
+  --chart-grid: #eef0f3;
+  --chart-axis: #64748b;
+
   --working: #15803d;
   --waiting: #c03a00;
   --done: #1d4ed8;
@@ -85,6 +98,16 @@
     --shadow-decision: none;
     --tab-active: #0a1628;
     --tab-shadow: none;
+    --chart-1: #60a5fa;
+    --chart-2: #2dd4bf;
+    --chart-3: #a78bfa;
+    --chart-4: #f472b6;
+    --chart-5: #a3e635;
+    --chart-6: #22d3ee;
+    --chart-7: #94a3b8;
+    --chart-8: #e879f9;
+    --chart-grid: #22344f;
+    --chart-axis: #a7b4c6;
     --working: #4ade80;
     --waiting: #ff9c78;
     --done: #93c5fd;
@@ -132,6 +155,16 @@
   --shadow-decision: none;
   --tab-active: #0a1628;
   --tab-shadow: none;
+  --chart-1: #60a5fa;
+  --chart-2: #2dd4bf;
+  --chart-3: #a78bfa;
+  --chart-4: #f472b6;
+  --chart-5: #a3e635;
+  --chart-6: #22d3ee;
+  --chart-7: #94a3b8;
+  --chart-8: #e879f9;
+  --chart-grid: #22344f;
+  --chart-axis: #a7b4c6;
   --working: #4ade80;
   --waiting: #ff9c78;
   --done: #93c5fd;
