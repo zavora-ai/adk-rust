@@ -48,6 +48,9 @@ ignore = [
     #   * zip 7.4.0 — adk-audio -> candle-core 0.9 (`adk-audio/qwen3-tts`) and
     #     adk-mistralrs -> mistralrs -> candle-core 0.10. Reads entries by name;
     #     never extracts.
+    #   * zip 0.6.6 — adk-realtime -> webrtc-sys-build 0.3.18 (`adk-realtime/livekit`),
+    #     pinned because 0.3.21's libwebrtc breaks webrtc-sys 0.3.40. Its build
+    #     script extracts LiveKit's own libwebrtc release archive, fetched over HTTPS.
     # The crates this workspace declares require zip 9, and the `[[bans.deny]]`
     # entry below keeps that floor enforced.
     "RUSTSEC-2026-0367",
@@ -157,7 +160,7 @@ wrappers = ["inferno"]
 # Keep declared zip usage on the patched line. The wrappers are the third-party
 # crates named in the zip advisory ignore above.
 crate = "zip:<9"
-wrappers = ["ndarray-npy", "candle-core"]
+wrappers = ["ndarray-npy", "candle-core", "webrtc-sys-build"]
 
 [sources]
 unknown-registry = "deny"
