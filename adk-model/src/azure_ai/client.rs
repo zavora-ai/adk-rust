@@ -130,6 +130,10 @@ impl Llm for AzureAIClient {
         )
     }
 
+    fn context_window(&self) -> Option<u64> {
+        crate::pricing::PricingCatalog::standard().context_window(Some("azure-ai"), self.name())
+    }
+
     fn name(&self) -> &str {
         &self.model
     }
@@ -210,6 +214,10 @@ impl Llm for AzureAIClient {
                                 adk_core::upstream_excerpt(&error_text)
                             ),
                         ).with_upstream_status(status_code).with_provider("azure-ai");
+                        let error = crate::error_metadata::classify_quota(
+                            error,
+                            crate::error_metadata::body_reports_exhausted_quota(&error_text),
+                        );
                         return Err(crate::retry::with_retry_after(
                             crate::error_metadata::from_body(error, &error_text),
                             retry_after,

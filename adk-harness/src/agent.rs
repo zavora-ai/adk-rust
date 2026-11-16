@@ -142,6 +142,9 @@ pub struct HarnessRuntime {
     pub(crate) spend_ledger: Option<Arc<dyn SpendLedger>>,
     pub(crate) history_max_events: Option<usize>,
     pub(crate) compaction: Option<EventsCompactionConfig>,
+    /// When the harness's runs compact their history before a model call; `None` keeps the
+    /// runner's default, which is on.
+    pub(crate) intra_compaction: Option<adk_core::IntraCompactionConfig>,
     pub(crate) toolset: Arc<HarnessToolset>,
     pub(crate) instructions: Arc<InstructionState>,
     pub(crate) non_waivable_tools: BTreeSet<String>,
@@ -313,6 +316,12 @@ impl HarnessRuntime {
     /// The events compaction the harness asks its runner for.
     pub fn compaction(&self) -> Option<&EventsCompactionConfig> {
         self.compaction.as_ref()
+    }
+
+    /// When the harness's runs compact their history before a model call, when set on the
+    /// builder; `None` keeps the runner's auto-compaction, which is on.
+    pub fn intra_compaction(&self) -> Option<&adk_core::IntraCompactionConfig> {
+        self.intra_compaction.as_ref()
     }
 
     /// The spend of `subject`, or of every subject, since the harness was built: per
@@ -585,6 +594,9 @@ impl HarnessLayer<'_> {
         }
         if config.history_max_events.is_none() {
             config.history_max_events = runtime.history_max_events;
+        }
+        if config.intra_compaction.is_none() {
+            config.intra_compaction = runtime.intra_compaction.clone();
         }
     }
 }

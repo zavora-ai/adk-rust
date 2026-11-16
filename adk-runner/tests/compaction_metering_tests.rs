@@ -5,10 +5,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use adk_core::{
-    Agent, BaseEventsSummarizer, BudgetTracker, Content, Event, EventActions, EventCompaction,
-    EventStream, EventsCompactionConfig, InMemorySpendLedger, IntraCompactionConfig,
-    InvocationContext, Llm, LlmRequest, LlmResponse, LlmResponseStream, Result, RunBudget,
-    RunConfig, SessionId, SpendKey, SpendLedger, SpendPeriod, UsageMetadata, UserId,
+    Agent, BaseEventsSummarizer, BudgetTracker, CompactionTrigger, Content, Event, EventActions,
+    EventCompaction, EventStream, EventsCompactionConfig, HistoryCompactionRequest,
+    InMemorySpendLedger, IntraCompactionConfig, InvocationContext, Llm, LlmRequest, LlmResponse,
+    LlmResponseStream, Result, RunBudget, RunConfig, SessionId, SpendKey, SpendLedger, SpendPeriod,
+    UsageMetadata, UserId,
 };
 use adk_runner::Runner;
 use adk_session::{InMemorySessionService, SessionService};
@@ -37,6 +38,44 @@ impl Agent for ReplyAgent {
             event.set_content(Content::new("model").with_text("a fairly long reply ".repeat(20)));
             Ok(event)
         })))
+    }
+}
+
+/// Replies without calling a model, after asking the run's compactor to compact its history,
+/// as an agent that calls a model does before each call.
+struct CompactingReplyAgent;
+
+#[async_trait]
+impl Agent for CompactingReplyAgent {
+    fn name(&self) -> &str {
+        "assistant"
+    }
+    fn description(&self) -> &str {
+        "compacts, then replies without a model"
+    }
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        let mut events = Vec::new();
+        if let Some(compactor) = ctx.run_config().history_compactor.clone() {
+            let history = ctx.session().conversation_history();
+            let request = HistoryCompactionRequest {
+                preamble: &[],
+                history: &history,
+                reported_prompt_tokens: None,
+                trigger: CompactionTrigger::BeforeModelCall,
+            };
+            let model: Arc<dyn Llm> = Arc::new(PricedModel { calls: Arc::default() });
+            if let Some(compacted) = compactor.compact(ctx.clone(), model, request).await? {
+                events.extend(compacted.event);
+            }
+        }
+        let mut event = Event::new(ctx.invocation_id());
+        event.author = "assistant".to_string();
+        event.set_content(Content::new("model").with_text("a fairly long reply ".repeat(20)));
+        events.push(event);
+        Ok(Box::pin(futures::stream::iter(events.into_iter().map(Ok))))
     }
 }
 
@@ -244,19 +283,15 @@ async fn intra_invocation_compaction_is_metered_and_refused_over_budget() {
     let fixture = Fixture::new().await;
     let runner = Runner::builder()
         .app_name("acme")
-        .agent(Arc::new(ReplyAgent))
+        .agent(Arc::new(CompactingReplyAgent))
         .session_service(fixture.sessions.clone() as Arc<dyn SessionService>)
-        .intra_compaction_config(IntraCompactionConfig {
-            token_threshold: 1,
-            overlap_event_count: 1,
-            chars_per_token: 4,
-        })
+        .intra_compaction_config(IntraCompactionConfig::at_tokens(1).with_overlap_event_count(1))
         .intra_compaction_summarizer(fixture.summarizer())
         .build()
         .unwrap();
     let ledger = Arc::new(InMemorySpendLedger::default());
 
-    // The first run leaves history; the second compacts it before the agent runs.
+    // The first run leaves history; the agent compacts it in the second.
     let tracker = Arc::new(BudgetTracker::new(RunBudget::new()));
     fixture.run(&runner, run_config(&tracker, &ledger)).await;
     fixture.run(&runner, run_config(&tracker, &ledger)).await;

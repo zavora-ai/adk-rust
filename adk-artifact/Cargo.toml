@@ -36,4 +36,4 @@ axum = "0.8"
 
 [features]
 default = []
-gcs = ["adk-gcp", "google-cloud-auth", "reqwest", "serde", "tracing", "tokio/sync", "tokio/time"]
+gcs = ["dep:adk-gcp", "dep:google-cloud-auth", "dep:reqwest", "dep:serde", "dep:tracing", "tokio/sync", "tokio/time"]

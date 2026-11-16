@@ -35,7 +35,12 @@ ignore = [
     #     feature `adk-audio/qwen3-tts`; adk-mistralrs -> mistralrs 0.8.1 ->
     #     candle-core 0.10.2. candle reads `.npz`/`.pth` entries by name and
     #     writes `.npz`; never extracts.
-    # Remove when ndarray-npy, qwen_tts and mistralrs release on zip >= 9.
+    #   * zip 0.6.6: adk-realtime -> webrtc-sys-build 0.3.18, feature
+    #     `adk-realtime/livekit`; pinned because 0.3.21's libwebrtc breaks
+    #     webrtc-sys 0.3.40. Its build script extracts LiveKit's own libwebrtc
+    #     release archive, fetched over HTTPS.
+    # Remove when ndarray-npy, qwen_tts and mistralrs release on zip >= 9, and
+    # webrtc-sys-build's pin goes with the livekit 0.8.4 stack.
     "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",

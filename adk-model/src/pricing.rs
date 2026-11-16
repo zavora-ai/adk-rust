@@ -325,6 +325,10 @@ pub struct ModelPrice {
     /// Largest output, reasoning included, the model produces for one request; used to
     /// bound a request that sets no output cap.
     pub max_output_tokens: Option<u64>,
+    /// The most tokens a request may carry, as the vendor publishes it: the stated maximum
+    /// input where the vendor gives one, else the context window. Auto-compaction compacts
+    /// an agent's history before a request nears it.
+    pub context_window_tokens: Option<u64>,
     /// Discounted rates outside the vendor's peak hours.
     pub off_peak: Option<OffPeak>,
 }
@@ -378,6 +382,7 @@ impl ModelPrice {
             long_context: None,
             change: None,
             max_output_tokens: None,
+            context_window_tokens: None,
             off_peak: None,
         }
     }
@@ -391,6 +396,12 @@ impl ModelPrice {
     /// Sets the model's maximum output tokens per request.
     pub fn with_max_output_tokens(mut self, tokens: u64) -> Self {
         self.max_output_tokens = Some(tokens);
+        self
+    }
+
+    /// Sets the most tokens a request to the model may carry.
+    pub fn with_context_window(mut self, tokens: u64) -> Self {
+        self.context_window_tokens = Some(tokens);
         self
     }
 
@@ -722,6 +733,25 @@ impl PricingCatalog {
                 }
             })
             .sum()
+    }
+
+    /// The most tokens a request to `model` as served by `provider` may carry, as its vendor
+    /// publishes it, or `None` when the catalog has no figure for it.
+    ///
+    /// Model ids resolve as in [`lookup`](Self::lookup).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_model::pricing::PricingCatalog;
+    ///
+    /// let catalog = PricingCatalog::standard();
+    /// assert_eq!(catalog.context_window(Some("anthropic"), "claude-sonnet-5-5"), Some(1_000_000));
+    /// assert_eq!(catalog.context_window(Some("gemini"), "gemini-3.8-flash"), Some(1_048_576));
+    /// assert_eq!(catalog.context_window(Some("openai"), "my-fine-tune"), None);
+    /// ```
+    pub fn context_window(&self, provider: Option<&str>, model: &str) -> Option<u64> {
+        self.lookup(provider, model)?.context_window_tokens
     }
 
     /// Resolves the price for `model` as served by `provider`.
@@ -1297,10 +1327,97 @@ fn standard_catalog() -> PricingCatalog {
         ("codestral-2508", 131_072),
         ("codestral-latest", 131_072),
     ];
+    // The most tokens a request may carry: the page's stated maximum input where it gives
+    // one, else its context window. Sources, retrieved 2026-11-16:
+    // - Anthropic: https://platform.claude.com/docs/en/about-claude/models/overview
+    //   ("Context").
+    // - Gemini: https://aistudio.google.com/docs/models/<id> ("Input token limit", separate
+    //   from the 65,536-token output limit).
+    // - OpenAI: https://developers.openai.com/api/docs/models/<id> ("Maximum input tokens"
+    //   where listed, else "context window").
+    // - DeepSeek: https://api-docs.deepseek.com/quick_start/pricing ("CONTEXT LENGTH 1M");
+    //   the page states `deepseek-v4-flash` is served by deepseek-flash.
+    // - Groq: https://console.groq.com/docs/models ("CONTEXT WINDOW (TOKENS)").
+    // - xAI: https://docs.x.ai/docs/models ("Context").
+    // - Mistral: https://docs.mistral.ai/models/<slug> ("Context").
+    const CLAUDE_WINDOW: u64 = 1_000_000;
+    const GEMINI_INPUT: u64 = 1_048_576;
+    let context_window: &[(&str, u64)] = &[
+        ("claude-fable-5-1", CLAUDE_WINDOW),
+        ("claude-mythos-5-1", CLAUDE_WINDOW),
+        ("claude-fable-5", CLAUDE_WINDOW),
+        ("claude-mythos-5", CLAUDE_WINDOW),
+        ("claude-opus-5-5", CLAUDE_WINDOW),
+        ("claude-opus-5", CLAUDE_WINDOW),
+        ("claude-sonnet-5-5", CLAUDE_WINDOW),
+        ("claude-sonnet-5", CLAUDE_WINDOW),
+        ("claude-haiku-5-5", CLAUDE_WINDOW),
+        ("claude-opus-4-8", CLAUDE_WINDOW),
+        ("claude-opus-4-7", CLAUDE_WINDOW),
+        ("claude-opus-4-6", CLAUDE_WINDOW),
+        ("claude-sonnet-4-6", CLAUDE_WINDOW),
+        ("claude-haiku-4-5", 200_000),
+        ("gemini-3.8-flash", GEMINI_INPUT),
+        ("gemini-3.7-flash", GEMINI_INPUT),
+        ("gemini-3.6-flash", GEMINI_INPUT),
+        ("gemini-3.5-flash", GEMINI_INPUT),
+        ("gemini-3.5-flash-lite", GEMINI_INPUT),
+        ("gemini-3.1-pro-preview", GEMINI_INPUT),
+        ("gemini-3.1-flash-lite", GEMINI_INPUT),
+        ("gemini-3-flash-preview", GEMINI_INPUT),
+        ("gemini-2.5-pro", GEMINI_INPUT),
+        ("gemini-2.5-flash", GEMINI_INPUT),
+        ("gemini-2.5-flash-lite", GEMINI_INPUT),
+        ("gpt-5.6", 922_000),
+        ("gpt-5.6-sol", 922_000),
+        ("gpt-5.6-terra", 922_000),
+        ("gpt-5.6-luna", 922_000),
+        ("gpt-5.5", 1_050_000),
+        ("gpt-5.4", 1_050_000),
+        ("gpt-5.4-mini", 272_000),
+        ("gpt-5.4-nano", 272_000),
+        ("gpt-5.2", 400_000),
+        ("gpt-5.1", 400_000),
+        ("gpt-5", 272_000),
+        ("gpt-5-mini", 272_000),
+        ("gpt-5-nano", 272_000),
+        ("gpt-4.1", 1_047_576),
+        ("gpt-4.1-mini", 1_047_576),
+        ("gpt-4o", 128_000),
+        ("gpt-4o-mini", 128_000),
+        ("o3", 200_000),
+        ("o4-mini", 200_000),
+        ("deepseek-flash", 1_000_000),
+        ("deepseek-v4-flash", 1_000_000),
+        ("deepseek-v4-pro", 1_000_000),
+        ("gpt-oss-120b", 131_072),
+        ("gpt-oss-20b", 131_072),
+        ("qwen3.8-27b", 131_072),
+        ("grok-4.7", 500_000),
+        ("grok-4.6", 500_000),
+        ("grok-4.5", 500_000),
+        ("grok-4.3", 1_000_000),
+        ("grok-4.20", 1_000_000),
+        ("grok-4.20-0309-reasoning", 1_000_000),
+        ("grok-4.20-reasoning", 1_000_000),
+        ("grok-4.20-0309-non-reasoning", 1_000_000),
+        ("grok-4.20-non-reasoning", 1_000_000),
+        ("grok-4.20-multi-agent-0309", 1_000_000),
+        ("grok-4.20-multi-agent", 1_000_000),
+        ("mistral-medium-3-5", 256_000),
+        ("mistral-large-2512", 256_000),
+        ("mistral-small-2603", 256_000),
+        ("ministral-14b-2512", 256_000),
+        ("codestral-2508", 128_000),
+    ];
     let prices = prices
         .into_iter()
         .map(|price| match max_output.iter().find(|(model, _)| *model == price.model) {
             Some((_, tokens)) => price.with_max_output_tokens(*tokens),
+            None => price,
+        })
+        .map(|price| match context_window.iter().find(|(model, _)| *model == price.model) {
+            Some((_, tokens)) => price.with_context_window(*tokens),
             None => price,
         })
         .collect();
@@ -1485,6 +1602,25 @@ mod tests {
         PricingCatalog::standard()
             .lookup(Some(provider), model)
             .unwrap_or_else(|| panic!("{provider}/{model} should be priced"))
+    }
+
+    #[test]
+    fn context_windows_resolve_by_provider_and_dated_alias() {
+        let catalog = PricingCatalog::standard();
+        let window = |provider: &str, model: &str| catalog.context_window(Some(provider), model);
+        assert_eq!(window("anthropic", "claude-sonnet-5-5"), Some(1_000_000));
+        assert_eq!(window("bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0"), Some(200_000));
+        assert_eq!(window("gemini", "models/gemini-3.5-flash-lite"), Some(1_048_576));
+        assert_eq!(window("openai", "gpt-5.6-terra"), Some(922_000));
+        assert_eq!(window("groq", "openai/gpt-oss-120b"), Some(131_072));
+        // A vendor's window applies only where the provider serves that vendor's models.
+        assert_eq!(window("groq", "claude-sonnet-5-5"), None);
+        // Priced, but no published window was recorded.
+        assert_eq!(window("xai", "grok-code-fast-1"), None);
+        // Every model with a recorded window is priced, so none is silently dropped.
+        let recorded =
+            catalog.prices().iter().filter(|p| p.context_window_tokens.is_some()).count();
+        assert_eq!(recorded, 66);
     }
 
     #[test]

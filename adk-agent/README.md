@@ -614,6 +614,8 @@ fn compaction(model: Arc<dyn Llm>) -> EventsCompactionConfig {
 
 Pass the config to `Runner::builder().compaction_config(...)` to enable automatic compaction. Each summary's input includes the previous summary and the window's function calls and responses, so older turns and tool results carry forward through repeated compaction. Compaction never covers a call still held for confirmation.
 
+Within a run, `LlmAgent` and `CodeActAgent` also compact before every model call: they pass their history to the run's `HistoryCompactor` (`RunConfig::history_compactor`), which the runner installs by default and which summarizes once a request nears the model's context window. A request the model rejects as too long is compacted and sent once more. See [Context Compaction](../docs/official_docs/sessions/context-compaction.md#auto-compaction-within-a-run).
+
 ## Changes in 3.0
 
 | Change | Migration |

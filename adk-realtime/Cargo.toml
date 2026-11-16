@@ -82,6 +82,13 @@ livekit-datatrack = { workspace = true, optional = true }
 livekit-data-stream = { workspace = true, optional = true }
 libwebrtc = { workspace = true, optional = true }
 webrtc-sys = { workspace = true, optional = true }
+# Not used directly: declared only so the workspace pin holds webrtc-sys's build helper at the
+# release whose libwebrtc matches webrtc-sys 0.3.40, for consumers' resolves as well as ours.
+webrtc-sys-build = { workspace = true, optional = true }
+# Not used directly either: they hold livekit's own protocol and common crates at the releases
+# livekit 0.8.1 compiles against.
+livekit-protocol = { workspace = true, optional = true }
+livekit-common = { workspace = true, optional = true }
 
 # OpenAI WebRTC (optional)
 # NOTE: `audiopus` builds the Opus C library from source and requires `cmake`.
@@ -185,7 +192,7 @@ gemini = ["dep:tokio-tungstenite", "dep:adk-gemini"]
 # Enable Vertex AI Live API support (requires gemini + OAuth2/ADC auth)
 vertex-live = ["gemini", "dep:google-cloud-auth"]
 # Enable LiveKit WebRTC bridge
-livekit = ["dep:livekit", "dep:livekit-api", "dep:tokio-tungstenite", "dep:libwebrtc", "dep:webrtc-sys", "dep:livekit-datatrack", "dep:livekit-data-stream"]
+livekit = ["dep:livekit", "dep:livekit-api", "dep:tokio-tungstenite", "dep:libwebrtc", "dep:webrtc-sys", "dep:webrtc-sys-build", "dep:livekit-protocol", "dep:livekit-common", "dep:livekit-datatrack", "dep:livekit-data-stream"]
 # Enable OpenAI WebRTC transport (requires openai + Sans-IO WebRTC + Opus codec)
 openai-webrtc = ["openai", "dep:str0m", "dep:audiopus", "dep:reqwest"]
 # Enable video avatar support for realtime sessions

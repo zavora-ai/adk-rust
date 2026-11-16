@@ -54,13 +54,28 @@ async fn runner_for(
 
 const DENIAL: &str = "DENIED_BY_POLICY: delete_records is disabled for autonomous agents";
 
+/// What answers a call a failing `before_tool` callback refused (`callbacks.md`): the
+/// callback's message stays out of the model request.
+const CALLBACK_FAILED: &str = "was not run: a before-tool callback failed";
+
 /// How the runner plugin's `before_tool` callback refuses the call.
 #[derive(Clone, Copy)]
 pub enum DenialForm {
     /// `Ok(Some(Content))`, the form `tool-authorization.md` and `AGENTS.md` document.
     Content,
-    /// `Err(..)`, documented as reported to the model as the tool's result.
+    /// `Err(..)`, answered `tool '<name>' was not run: a before-tool callback failed with
+    /// <component>.<category> (<code>)` without the callback's message.
     Error,
+}
+
+impl DenialForm {
+    /// The text the call's function response carries.
+    fn answer(self) -> &'static str {
+        match self {
+            Self::Content => DENIAL,
+            Self::Error => CALLBACK_FAILED,
+        }
+    }
 }
 
 pub async fn runner_plugin_denies_tool(
@@ -145,15 +160,23 @@ pub async fn runner_plugin_denies_tool(
     let (pairings, problems) = pair_calls(&events);
     let delete_calls: Vec<_> =
         pairings.iter().filter(|pairing| pairing.name == "delete_records").collect();
-    let denial_responses = delete_calls
+    let responses: Vec<String> = delete_calls
         .iter()
         .flat_map(|pairing| pairing.responses.iter())
-        .filter(|response| response.to_string().contains("DENIED_BY_POLICY"))
-        .count();
+        .map(Value::to_string)
+        .collect();
+    let denial_responses =
+        responses.iter().filter(|response| response.contains(form.answer())).count();
+    // A failing callback's message never reaches the model (migration/2.x-to-3.0.md).
+    let leaked = matches!(form, DenialForm::Error)
+        && responses.iter().any(|response| response.contains("DENIED_BY_POLICY"));
 
     let mut issues = Vec::new();
     if let Some(error) = &turn.error {
         issues.push(format!("turn error: {}", brief(error)));
+    }
+    if leaked {
+        issues.push("the callback's error message reached the model".to_string());
     }
     if denial_responses == 0 {
         issues.push(format!(
@@ -167,8 +190,9 @@ pub async fn runner_plugin_denies_tool(
     }
     if issues.is_empty() {
         Verdict::Pass(format!(
-            "delete_records executed 0x; hook ran {}x; denial returned as the call's function_response and the turn completed",
-            hook_calls.load(Ordering::SeqCst)
+            "delete_records executed 0x; hook ran {}x; the call was answered \"{}\" and the turn completed",
+            hook_calls.load(Ordering::SeqCst),
+            form.answer()
         ))
     } else {
         Verdict::Fail(format!("tool executed 0x (fail-closed) but {}", issues.join("; ")))
@@ -291,7 +315,8 @@ pub async fn path_guardrail_fail_closed(cfg: &Config, provider: Provider) -> Ver
             .filter(|response| response.to_string().contains(needle))
             .count()
     };
-    let missing_denials = denials("open_document", "is missing");
+    // `PathAllowList` refuses a call whose configured argument holds no path.
+    let missing_denials = denials("open_document", "holds no path at any depth");
     let outside_denials = denials("read_file", "not an absolute path inside an allowed root");
     let attempted_open = pairings.iter().any(|pairing| pairing.name == "open_document");
     if !attempted_open {

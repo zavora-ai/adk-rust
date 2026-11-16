@@ -69,7 +69,7 @@ fn generic_message(category: ErrorCategory) -> &'static str {
         ErrorCategory::Cancelled => "The operation was cancelled",
         ErrorCategory::Internal => "Internal server error",
         ErrorCategory::Unsupported => "The operation is not supported",
-        ErrorCategory::ResourceExhausted => "A resource budget is used up",
+        ErrorCategory::ResourceExhausted => "A budget, quota or credit balance is used up",
         ErrorCategory::Conflict => "The request conflicts with the current state",
     }
 }

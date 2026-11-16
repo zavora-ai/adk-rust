@@ -421,7 +421,8 @@ fn main() {
 | `Unsupported` | 501 | No |
 | `Unavailable` | 503 | Yes |
 
-`ResourceExhausted` marks a used-up run, team, or spend budget, and `Conflict` a write that
+`ResourceExhausted` marks a used-up run, team, or spend budget, or a model provider account
+out of quota or credit, and `Conflict` a write that
 lost a race or used a stale version (`lease.stale_epoch`, `run_store.stale_epoch`,
 `governance.conflict`, `approval.version_conflict`). `AdkError::diagnostics()` displays an
 error by everything but its message, for log lines that must not carry request content.

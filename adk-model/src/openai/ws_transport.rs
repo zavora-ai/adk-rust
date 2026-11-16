@@ -640,10 +640,18 @@ fn error_event(value: &Value) -> AdkError {
     let code =
         value.pointer("/error/code").or_else(|| value.get("code")).and_then(Value::as_str).filter(
             |code| {
-                WEBSOCKET_ERROR_CODES.contains(code) || wire::DOCUMENTED_ERROR_CODES.contains(code)
+                WEBSOCKET_ERROR_CODES.contains(code)
+                    || wire::DOCUMENTED_ERROR_CODES.contains(code)
+                    || crate::error_metadata::is_quota_exhausted(code)
             },
         );
+    let quota_exhausted = code.is_some_and(crate::error_metadata::is_quota_exhausted)
+        || value
+            .pointer("/error/type")
+            .and_then(Value::as_str)
+            .is_some_and(crate::error_metadata::is_quota_exhausted);
     let category = match code {
+        _ if quota_exhausted => ErrorCategory::ResourceExhausted,
         // A new connection is the documented remedy.
         Some("websocket_connection_limit_reached" | "server_error") => ErrorCategory::Unavailable,
         Some("rate_limit_exceeded") => ErrorCategory::RateLimited,
@@ -657,6 +665,7 @@ fn error_event(value: &Value) -> AdkError {
     let error =
         AdkError::new(ErrorComponent::Model, category, "model.openai_responses.ws_error", message)
             .with_provider("openai-responses");
+    let error = crate::error_metadata::classify_quota(error, quota_exhausted);
     crate::error_metadata::with_code(error, code)
 }
 
@@ -813,6 +822,13 @@ mod tests {
                 serde_json::json!({"type": "error", "code": "server_error", "message": "secret"}),
                 ErrorCategory::Unavailable,
                 Some("server_error"),
+            ),
+            (
+                serde_json::json!({"type": "error", "status": 429,
+                "error": {"type": "insufficient_quota", "code": "credit_balance_exhausted",
+                          "message": "secret"}}),
+                ErrorCategory::ResourceExhausted,
+                Some("credit_balance_exhausted"),
             ),
         ];
         for (event, category, code) in cases {

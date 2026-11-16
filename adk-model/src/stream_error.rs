@@ -120,6 +120,9 @@ pub(crate) fn reported(provider: &str, code: &'static str, error: &Value) -> Adk
     if let Some(status) = status {
         mapped = mapped.with_upstream_status(status);
     }
+    let quota_exhausted =
+        [provider_code, kind].into_iter().flatten().any(crate::error_metadata::is_quota_exhausted);
+    let mapped = crate::error_metadata::classify_quota(mapped, quota_exhausted);
     crate::error_metadata::with_code(mapped, provider_code.or(kind))
 }
 
@@ -152,6 +155,31 @@ mod tests {
         let invalid = reported("openai", CODE, &json!({"type": "invalid_request_error"}));
         assert_eq!(invalid.category, ErrorCategory::InvalidInput);
         assert!(!invalid.is_retryable());
+    }
+
+    #[test]
+    fn reported_classifies_an_exhausted_quota() {
+        let error = reported(
+            "openai",
+            CODE,
+            &json!({
+                "message": "You have no credits remaining.",
+                "type": "insufficient_quota",
+                "code": "credit_balance_exhausted"
+            }),
+        );
+        assert_eq!(error.category, ErrorCategory::ResourceExhausted);
+        assert!(!error.is_retryable());
+        assert!(error.message.contains("add credit or raise the limit"), "{}", error.message);
+        assert_eq!(error.details.metadata["provider_error_code"], "credit_balance_exhausted");
+
+        let numeric = reported("openai", CODE, &json!({"code": 429, "type": "insufficient_quota"}));
+        assert_eq!(numeric.category, ErrorCategory::ResourceExhausted);
+        assert_eq!(numeric.details.upstream_status_code, Some(429));
+
+        let payment = reported("openrouter", CODE, &json!({"code": 402, "message": "no credits"}));
+        assert_eq!(payment.category, ErrorCategory::ResourceExhausted);
+        assert!(!payment.is_retryable());
     }
 
     #[test]

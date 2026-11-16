@@ -97,3 +97,63 @@ while any cap of the daily proactive budget is reached.
 when its partition already queues `max_queued` processes, with `kernel.quota`
 (`ResourceExhausted`, HTTP 429). Runs enqueued outside the kernel, such as through
 `/api/runs`, are not refused; admission still holds them at `max_running`.
+
+## Cron wakes and missed occurrences
+
+A cron wake, `Wake::Cron { expr, missed }`, fires on a six-field cron expression, seconds
+first, in UTC (spec 3.2 §7.4). A standing trigger on one starts a process at each occurrence;
+a process asleep on one wakes at each occurrence, and its successor sleeps on the same wake.
+An occurrence that comes due while a kernel watches the expression fires. `missed`, an
+`adk_core::MissedFirePolicy`, decides the occurrences that came due while no kernel watched
+the expression — a restart or an outage. It has no default, so every cron wake names one:
+
+| `missed` | JSON | Missed occurrences that fire |
+|---|---|---|
+| `MissedFirePolicy::Skip` | `"skip"` | The latest, only when it is no more than a minute late (`DEFAULT_MISFIRE_GRACE`) |
+| `MissedFirePolicy::FireOnce` | `"fireOnce"` | The latest, however late |
+| `MissedFirePolicy::CatchUp(n)` | `{"catchUp": n}` | The latest `n`, oldest first; a trigger or a managed wake set with `CatchUp(0)` is refused |
+
+```rust
+use std::sync::Arc;
+
+use adk_core::{InMemoryRunStore, MissedFirePolicy, NewRun};
+use adk_kernel::{Kernel, KernelConfig, Trigger, Wake};
+use serde_json::json;
+
+fn main() -> anyhow::Result<()> {
+    let digest = NewRun::new(
+        "background",
+        "ops",
+        "ana",
+        "ops",
+        json!({ "text": "Summarize last night's CI failures" }),
+    );
+    let kernel = Kernel::builder()
+        .config(KernelConfig::default().with_app_name("ops"))
+        .run_store(Arc::new(InMemoryRunStore::new()))
+        // 08:00 UTC on weekdays; after downtime, the latest missed morning runs once.
+        .trigger(Trigger::new(
+            "ci-digest",
+            Wake::Cron { expr: "0 0 8 * * Mon-Fri".into(), missed: MissedFirePolicy::FireOnce },
+            digest,
+        ))
+        .build()?;
+    println!("{:?}", kernel.inventory().wake_sources);
+    Ok(())
+}
+```
+
+A sleeper takes the same wake in its wake set:
+`ProcessSpec::new(ProcessKind::Scheduled).with_wake(WakeSet::any_of([Wake::Cron { … }]))`.
+In JSON — an entry of a wake set's `anyOf`, such as a managed wake set's or the `wake` of
+`POST /api/kernel/processes`, or the `when` of `propose_followup` — a cron wake is
+`{"cron": {"expr": "0 0 8 * * Mon-Fri", "missed": "fireOnce"}}`. `adk-rust wake --cron` and
+`WakeSetDef::cron` use `Skip`.
+
+The kernel keeps each expression's cursor in its `CronWatermarkStore`, so a restart or a
+second replica never fires an occurrence twice. The sleepers on one expression are planned
+with the widest policy among them, and so are the triggers; each wakes only for the
+occurrences its own policy picks ([cron sleepers](backends.md#cron-sleepers),
+[cron triggers](backends.md#cron-triggers)).
+A durable `Schedule` takes the same `MissedFirePolicy`
+([schedules and the firing rule](../core/durable-runtime.md#schedules-and-the-firing-rule)).

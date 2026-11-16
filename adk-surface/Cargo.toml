@@ -74,7 +74,7 @@ genui = ["dep:jsonschema", "dep:sha2", "dep:regex"]
 # Apps from MCP servers in a thread (spec 3.3 §6.1 `genui-apps`, wave 4 decision 16): an MCP
 # server's `_meta.ui` app shown sandboxed on a second origin, whose tool calls a person decides
 # and which can never approve anything. Pulls in rmcp through `adk-tool/mcp-apps`.
-genui-apps = ["genui", "web", "adk-harness/mcp", "adk-tool/mcp-apps"]
+genui-apps = ["genui", "web", "adk-harness/mcp", "dep:adk-tool", "adk-tool/mcp-apps"]
 
 [dependencies]
 adk-core.workspace = true

@@ -118,17 +118,17 @@ pub struct TurnOutcome {
 /// }
 /// ```
 pub struct HarnessLauncher {
-    agent: Arc<HarnessAgent>,
+    pub(super) agent: Arc<HarnessAgent>,
     app_name: Option<String>,
-    session_service: Option<Arc<dyn SessionService>>,
-    user_id: String,
-    session_id: Option<String>,
-    mode: Option<HarnessMode>,
+    pub(super) session_service: Option<Arc<dyn SessionService>>,
+    pub(super) user_id: String,
+    pub(super) session_id: Option<String>,
+    pub(super) mode: Option<HarnessMode>,
     trust: bool,
-    console: Option<ConsoleIo>,
+    pub(super) console: Option<ConsoleIo>,
     thinking_mode: ThinkingDisplayMode,
     pub(super) echo: bool,
-    rebuild: Option<HarnessRebuild>,
+    pub(super) rebuild: Option<HarnessRebuild>,
     effort_rebuild: Option<HarnessEffortRebuild>,
     effort: Option<Effort>,
     status_lines: Vec<(String, String)>,
@@ -140,10 +140,13 @@ pub struct HarnessLauncher {
     background_runs: Option<BackgroundState>,
     security_config: Option<SecurityConfig>,
     bind_address: IpAddr,
-    run_store: Option<Arc<dyn DurableRunStore>>,
-    goal_queue: Option<String>,
-    goals_authenticated: bool,
-    kernel: Option<adk_kernel::Kernel>,
+    pub(super) run_store: Option<Arc<dyn DurableRunStore>>,
+    pub(super) goal_queue: Option<String>,
+    pub(super) goals_authenticated: bool,
+    pub(super) kernel: Option<adk_kernel::Kernel>,
+    pub(super) kernel_stores: Option<adk_kernel::stores::KernelStores>,
+    kernel_config: Option<adk_kernel::KernelConfig>,
+    triggers: Vec<adk_kernel::Trigger>,
     hooks_disabled: bool,
     opened: Option<Arc<Shared>>,
     #[cfg(feature = "surface")]
@@ -223,6 +226,9 @@ impl HarnessLauncher {
             goal_queue: None,
             goals_authenticated: false,
             kernel: None,
+            kernel_stores: None,
+            kernel_config: None,
+            triggers: Vec::new(),
             hooks_disabled: false,
             opened: None,
             #[cfg(feature = "surface")]
@@ -302,7 +308,7 @@ impl HarnessLauncher {
         self
     }
 
-    fn resolved_app_name(&self) -> String {
+    pub(super) fn resolved_app_name(&self) -> String {
         self.app_name
             .clone()
             .unwrap_or_else(|| adk_core::Agent::name(self.agent.as_ref()).to_string())
@@ -520,6 +526,83 @@ impl HarnessLauncher {
         self
     }
 
+    /// Keeps the state of the kernel `up` builds in `stores` (spec 3.2 §7.1): its runs,
+    /// processes, schedules, cron watermarks, agenda and kill switch. The kill switch is
+    /// mirrored from the stores, so a freeze outlives a restart; the run store is the
+    /// launcher's when [`with_run_store`](Self::with_run_store) gave none, so goals and
+    /// the kernel share it. Durable stores make `up` refuse to start a kernel that would
+    /// keep any store in memory.
+    ///
+    /// Give the harness the same backend's approval store and action ledger, so a held call
+    /// and a call in flight at a crash survive it too.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let stores = adk_kernel::stores::KernelStores::open("sqlite://.adk/state.db?mode=rwc").await?;
+    /// HarnessLauncher::new(harness).with_kernel_stores(stores).run().await?;
+    /// ```
+    pub fn with_kernel_stores(mut self, stores: adk_kernel::stores::KernelStores) -> Self {
+        self.kernel_stores = Some(stores);
+        self
+    }
+
+    /// Starts the kernel `up` builds with `config`: its home, quotas, quiet hours and
+    /// proactivity (spec 3.2 §7.2, §7.9). The launcher names the kernel's app after itself,
+    /// serves the control plane's socket at the home when `config` serves no control plane,
+    /// and keeps a home left at the default under `<config dir>/<app>`, not `adk-rust`'s.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_kernel::{KernelConfig, Quotas};
+    ///
+    /// let config = KernelConfig::default()
+    ///     .with_home(".adk")
+    ///     .with_quotas(Quotas::new().with_daily_spend_cap(2_000_000)); // micro-USD
+    /// HarnessLauncher::new(harness).with_kernel_config(config).run().await?;
+    /// ```
+    pub fn with_kernel_config(mut self, config: adk_kernel::KernelConfig) -> Self {
+        self.kernel_config = Some(config);
+        self
+    }
+
+    /// Adds a standing trigger to the kernel `up` builds (spec 3.2 §7.4): each time its
+    /// wake fires — a cron expression, a file change, a webhook — it starts a new process
+    /// from its run template. A trigger lives in code, so a restart neither loses nor
+    /// duplicates it; the kernel's cron watermark keeps a missed occurrence to its
+    /// `MissedFirePolicy`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::{MissedFirePolicy, NewRun};
+    /// use adk_kernel::{Trigger, Wake};
+    ///
+    /// let daily = Trigger::new(
+    ///     "daily-status",
+    ///     Wake::Cron { expr: "0 0 9 * * Mon-Fri".into(), missed: MissedFirePolicy::FireOnce },
+    ///     NewRun::new("background", "ops", "ana", "ops", serde_json::json!({"text": "Refresh STATUS.md"})),
+    /// );
+    /// HarnessLauncher::new(harness).with_trigger(daily).run().await?;
+    /// ```
+    pub fn with_trigger(mut self, trigger: adk_kernel::Trigger) -> Self {
+        self.triggers.push(trigger);
+        self
+    }
+
+    /// The home of the kernel `up` builds: the configured one, else `<config dir>/<app>`.
+    pub(super) fn kernel_home(&self) -> PathBuf {
+        match &self.kernel_config {
+            Some(config) if config.home != adk_kernel::KernelConfig::default().home => {
+                config.home.clone()
+            }
+            _ => dirs::config_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(self.resolved_app_name()),
+        }
+    }
+
     /// Serves `ingress` at `POST /hooks/{name}` beside the harness, checked against the
     /// kill switch everything served shares, which replaces the ingress's own: signed deliveries that wake the kernel's
     /// sleepers and triggers (spec 3.5 §8.2, §10 X11; spec 3.2 §7.4).
@@ -610,12 +693,54 @@ impl HarnessLauncher {
         self.opened.as_ref().map(|shared| shared.session.as_ref())
     }
 
-    /// Runs the REPL, or the server for `serve [--port PORT] [--host ADDRESS]`.
+    /// Runs the command line: the REPL (`chat`, the default), the server
+    /// (`serve [--port PORT] [--host ADDRESS]`), the agent kernel (`up`, likewise), or a goal
+    /// (`goal TEXT --until CMD`).
+    ///
+    /// `goal` works toward `TEXT` until `CMD` exits 0 (spec 3.1 §7.11, §8.1). With a kernel
+    /// answering at the launcher's [home](Self::with_kernel_config), the goal is a durable
+    /// run of this user on the kernel's `background` queue, followed here until it ends,
+    /// holds a call nobody here decides, or Ctrl-C detaches, which leaves it running.
+    /// Otherwise it runs in this process. `--mode ask|auto` sets the session's mode,
+    /// `--sandbox` requires the OS sandbox for `bash`, and `--yes` approves every call that
+    /// reaches the prompt — through the console's
+    /// [`ConsolePrompter`](super::ConsolePrompter) here, through the inbox on the kernel —
+    /// except an unsandboxed retry without `--allow-unsandboxed`. `--resume` continues the
+    /// unfinished goal of `--session`, or of the latest session that has one.
+    ///
+    /// A goal exits the process with `1` when it ends unmet, `3` when a call waits for a
+    /// decision and `130` when interrupted.
     ///
     /// # Errors
     ///
-    /// Returns the console's or the server's error.
+    /// Returns the console's, the server's or the goal's error.
     pub async fn run(self) -> Result<()> {
+        let code = self.run_with_args(std::env::args_os()).await?;
+        if code != 0 {
+            std::process::exit(code);
+        }
+        Ok(())
+    }
+
+    /// [`run`](Self::run) on `args`, the program's name first, returning the exit code instead
+    /// of exiting with it: `0`, or a goal's `1`, `3` or `130`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let code = HarnessLauncher::new(harness)
+    ///     .run_with_args(["agent", "goal", "make the tests pass", "--until", "cargo test"])
+    ///     .await?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the console's, the server's or the goal's error.
+    pub async fn run_with_args<I, T>(self, args: I) -> Result<i32>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
         use clap::Parser;
 
         #[derive(clap::Parser)]
@@ -641,8 +766,11 @@ impl HarnessLauncher {
                 #[arg(long)]
                 host: Option<IpAddr>,
             },
+            /// Work toward a goal until a check passes: on the kernel `up` runs, else here
+            Goal(super::goal::GoalCommand),
         }
-        match Cli::parse().command.unwrap_or(Command::Chat) {
+        let done = match Cli::parse_from(args).command.unwrap_or(Command::Chat) {
+            Command::Goal(command) => return self.goal_command(command).await,
             Command::Chat => self.run_console_directly().await,
             Command::Serve { port, host } => {
                 let launcher = match host {
@@ -658,14 +786,16 @@ impl HarnessLauncher {
                 };
                 launcher.resident()?.run_serve_directly(port).await
             }
-        }
+        };
+        done.map(|()| 0)
     }
 
     /// This launcher with a kernel over its own stores, for `up` from [`run`](Self::run):
-    /// the launcher's run store or an in-memory one, its approval service and sessions, the
-    /// harness runner as the `adk-rust`-style app target and as `harness.goal`, and its
-    /// home under the user's config directory named after the app.
-    fn resident(mut self) -> Result<Self> {
+    /// the [kernel stores](Self::with_kernel_stores), else the launcher's run store or an
+    /// in-memory one; its approval service and sessions; the harness runner as the
+    /// `adk-rust`-style app target and as `harness.goal`; its triggers; and the
+    /// [home](Self::kernel_home) with the control plane's socket.
+    pub(super) fn resident(mut self) -> Result<Self> {
         if self.kernel.is_some() {
             return Ok(self);
         }
@@ -673,28 +803,58 @@ impl HarnessLauncher {
         let sessions =
             self.session_service.clone().unwrap_or_else(|| Arc::new(InMemorySessionService::new()));
         self.session_service = Some(sessions.clone());
-        let runs: Arc<dyn DurableRunStore> =
-            self.run_store.clone().unwrap_or_else(|| Arc::new(adk_core::InMemoryRunStore::new()));
+        let stores = self.kernel_stores.clone();
+        let runs: Arc<dyn DurableRunStore> = self
+            .run_store
+            .clone()
+            .or_else(|| stores.as_ref().map(|stores| stores.runs.clone()))
+            .unwrap_or_else(|| Arc::new(adk_core::InMemoryRunStore::new()));
         self.run_store = Some(runs.clone());
         let root: Arc<dyn Agent> = self.agent.clone();
-        let runner = Runner::builder()
+        let mut runner = Runner::builder()
             .app_name(&app_name)
             .agent(root)
             .session_service(sessions)
-            .approval_store(self.agent.runtime().approval_store().clone())
-            .build()?;
+            .approval_store(self.agent.runtime().approval_store().clone());
+        // One kill switch for the runner, the kernel and the server: the launcher's, else one
+        // kept in the stores so a freeze outlives a restart (K-I8).
+        if self.governance.is_none()
+            && let Some(stores) = &stores
+            && !stores.is_in_memory("governance")
+        {
+            self.governance =
+                Some(adk_kernel::KernelConfig::mirrored_governance(stores.governance.clone()));
+        }
+        if let Some(governance) = &self.governance {
+            runner = runner.governance(governance.clone());
+        }
+        let runner = runner.build()?;
         // The harness glue registers the runner, its services and the goal progress
         // (spec 3.2 §10 HK1).
         let harness = Harness::with_runner(self.agent.clone(), runner)?
             .with_run_store(runs.clone())
             .with_goal_queue(adk_kernel::QueueClass::BACKGROUND);
-        let home = dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join(&app_name);
-        // The socket at the home, as `adk-rust up` serves it; the defaults serve none.
-        let config = adk_kernel::KernelConfig::default()
+        let mut config = self
+            .kernel_config
+            .clone()
+            .unwrap_or_default()
             .with_app_name(&app_name)
-            .with_home(home)
-            .with_control(adk_kernel::control::ControlPlaneConfig::default());
-        let kernel = harness.kernel().config(config).build().map_err(AdkError::from)?;
+            .with_home(self.kernel_home());
+        // The socket at the home, as `adk-rust up` serves it; the defaults serve none.
+        if config.control.socket.is_none() && config.control.http.is_none() {
+            config = config.with_control(adk_kernel::control::ControlPlaneConfig::default());
+        }
+        let mut builder = harness.kernel().config(config);
+        if let Some(stores) = &stores {
+            builder = builder.stores(stores);
+            if stores.is_durable() {
+                builder = builder.require_durable();
+            }
+        }
+        for trigger in &self.triggers {
+            builder = builder.trigger(trigger.clone());
+        }
+        let kernel = builder.build().map_err(AdkError::from)?;
         // Decisions go through the harness's service, which wakes the kernel's approval
         // sleepers.
         if let Some(service) = self.agent.runtime().approval_service() {

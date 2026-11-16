@@ -26,6 +26,7 @@ const ERROR_CODES: ErrorCodes = ErrorCodes {
         (504, "model.azure_openai.unavailable"),
         (529, "model.azure_openai.overloaded"),
     ],
+    quota_exhausted: "model.azure_openai.quota_exhausted",
 };
 
 /// Azure deployment client with API-key authentication and streaming support.
@@ -159,6 +160,10 @@ impl AzureOpenAIClient {
 impl Llm for AzureOpenAIClient {
     fn max_cost_micro_usd(&self, request: &adk_core::LlmRequest) -> Option<u64> {
         self.inner.max_cost_micro_usd(request)
+    }
+
+    fn context_window(&self) -> Option<u64> {
+        self.inner.context_window()
     }
 
     fn name(&self) -> &str {

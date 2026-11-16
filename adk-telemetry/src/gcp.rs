@@ -27,7 +27,7 @@ use tracing_subscriber::{
     util::SubscriberInitExt,
 };
 
-use crate::init::{INIT, TelemetryError, otlp_pipeline};
+use crate::init::{INIT, TelemetryError, otlp_pipeline, subscriber_already_installed};
 
 /// Google Cloud OTLP ingest endpoint (Telemetry API, gRPC over HTTPS).
 pub const GCP_OTLP_ENDPOINT: &str = "https://telemetry.googleapis.com";
@@ -318,12 +318,13 @@ pub async fn init_with_gcp(service_name: &str) -> Result<(), TelemetryError> {
         otlp_pipeline::build_tracer(resource, GCP_OTLP_ENDPOINT, &GcpExporterHook { interceptor })?;
 
     let service_name = service_name.to_string();
-    INIT.call_once(move || {
+    let mut installed = Ok(());
+    INIT.call_once(|| {
         let filter = EnvFilter::try_from_default_env()
             .or_else(|_| EnvFilter::try_new("info"))
             .unwrap_or_else(|_| EnvFilter::new("info"));
 
-        tracing_subscriber::registry()
+        installed = tracing_subscriber::registry()
             .with(
                 tracing_subscriber::fmt::layer()
                     .json()
@@ -331,16 +332,18 @@ pub async fn init_with_gcp(service_name: &str) -> Result<(), TelemetryError> {
                     .with_filter(filter),
             )
             .with(tracing_opentelemetry::OpenTelemetryLayer::new(tracer))
-            .init();
-
-        tracing::info!(
-            service.name = service_name,
-            otlp.endpoint = GCP_OTLP_ENDPOINT,
-            "telemetry initialized with google cloud otlp export"
-        );
+            .try_init()
+            .map_err(|_| subscriber_already_installed("Google Cloud export"));
+        if installed.is_ok() {
+            tracing::info!(
+                service.name = service_name,
+                otlp.endpoint = GCP_OTLP_ENDPOINT,
+                "telemetry initialized with google cloud otlp export"
+            );
+        }
     });
 
-    Ok(())
+    installed
 }
 
 /// Initialize structured JSON logging for Cloud Logging.
@@ -355,8 +358,8 @@ pub async fn init_with_gcp(service_name: &str) -> Result<(), TelemetryError> {
 /// logging only.
 ///
 /// # Errors
-/// Currently infallible; returns `Result` for signature stability with the
-/// other `init_*` functions.
+/// Returns [`TelemetryError::Init`] when a global tracing subscriber is already
+/// installed, such as one the application set in `main`; that subscriber stays in place.
 ///
 /// # Example
 /// ```
@@ -367,23 +370,26 @@ pub async fn init_with_gcp(service_name: &str) -> Result<(), TelemetryError> {
 /// ```
 pub fn init_json_logging() -> Result<(), TelemetryError> {
     let project_id = std::env::var(ENV_PROJECT).ok().filter(|v| !v.is_empty());
-    INIT.call_once(move || {
+    let mut installed = Ok(());
+    INIT.call_once(|| {
         let filter = EnvFilter::try_from_default_env()
             .or_else(|_| EnvFilter::try_new("info"))
             .unwrap_or_else(|_| EnvFilter::new("info"));
 
-        tracing_subscriber::registry()
+        installed = tracing_subscriber::registry()
             .with(filter)
             .with(
                 tracing_subscriber::fmt::layer()
                     .json()
                     .event_format(CloudLoggingJsonFormat::new(project_id)),
             )
-            .init();
-
-        tracing::info!("telemetry initialized with cloud logging json output");
+            .try_init()
+            .map_err(|_| subscriber_already_installed("Cloud Logging JSON output"));
+        if installed.is_ok() {
+            tracing::info!("telemetry initialized with cloud logging json output");
+        }
     });
-    Ok(())
+    installed
 }
 
 /// Maps a tracing level to its Cloud Logging severity name.
@@ -599,6 +605,16 @@ mod tests {
     use super::*;
     use google_cloud_auth::credentials::{CredentialsProvider, EntityTag};
     use std::sync::Mutex;
+
+    #[test]
+    fn json_logging_keeps_an_application_subscriber() {
+        // The application's own subscriber, as `tracing_subscriber::fmt().init()` in `main`.
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+        let error = init_json_logging().expect_err("the application's subscriber stays");
+
+        assert!(error.to_string().contains("already installed"), "{error}");
+    }
 
     /// Serializes env-var mutation across tests. `cargo nextest` isolates each
     /// test in its own process, but plain `cargo test` shares one.

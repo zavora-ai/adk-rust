@@ -128,6 +128,12 @@ search_domains = { allowed = ["docs.rs", "rust-lang.org"] }  # or { blocked = [.
 [memory]                     # spec 3.1 §7.32
 embedder = "local"           # local, gemini, openai or lexical
 
+[compaction]                 # auto-compaction before each model call; on by default
+auto = true                  # false turns it off
+window_fraction = 0.8        # compact past this share of the model's context window
+threshold_tokens = 150000    # or a fixed threshold instead
+keep_recent = 10             # history entries kept as they are
+
 [ultracode]                  # spec 3.1 §7.10; see Ultracode
 max_rounds = 2
 
@@ -516,7 +522,8 @@ harness goal store, mirrored to the session as `harness:goal`.
 `--resume` continues the latest unfinished goal in this workspace, in its session and with
 its whole conversation. Goals need ask or auto mode. Exit codes: `0` met, `1` budget
 exhausted or a failed turn, `3` calls held, `130` interrupted. With `--ephemeral` the goal runs in the
-command's process only and cannot be resumed.
+command's process only and cannot be resumed. [After a crash](durability.md#after-a-crash)
+lists what to run for a goal, a `code` turn, the REPL and the kernel.
 
 ## Ultracode
 
@@ -642,12 +649,12 @@ use std::sync::Arc;
 
 use adk_cli::console::ConsoleIo;
 use adk_cli::harness::{ConsolePrompter, HarnessLauncher};
-use adk_harness::HarnessAgent;
+use adk_harness::{HarnessAgent, Workspace};
 
 async fn run(model: Arc<dyn adk_core::Llm>) -> adk_core::Result<()> {
     let harness = HarnessAgent::builder("my-harness")
         .model(model)
-        .workspace(adk_devtools::Workspace::new(".").allow_bash(true))
+        .workspace(Workspace::new(".").allow_bash(true))
         .prompter(Arc::new(ConsolePrompter::new(ConsoleIo::terminal()?)))
         .build()?;
     // `cargo run` is the REPL; `cargo run -- serve` serves it on loopback.
@@ -655,8 +662,25 @@ async fn run(model: Arc<dyn adk_core::Llm>) -> adk_core::Result<()> {
 }
 ```
 
+`HarnessLauncher::run` parses the program's command line:
+
+| Command | Runs |
+|---|---|
+| (none), `chat` | The REPL |
+| `serve [--port P] [--host H]` | The harness behind the server, with the approvals inbox |
+| `up [--port P] [--host H]` | The agent kernel with the harness, its control socket at the home |
+| `goal TEXT --until CMD` | A goal: on the kernel answering at the home, followed until it ends or holds a call, else in this process; `--mode`, `--sandbox`, `--yes`, `--max-iters`, `--session` and `--resume` as for `adk-rust goal`. Exits `1` unmet, `3` held, `130` interrupted |
+
+| Builder | Effect on `up` and `goal` |
+|---|---|
+| `with_kernel_stores(KernelStores)` | The kernel's runs, processes, schedules, cron cursors, agenda and kill switch in those stores, the kill switch mirrored so a freeze outlives a restart; durable stores make `up` refuse any store held in memory |
+| `with_kernel_config(KernelConfig)` | The home (default `<config dir>/<app>`), quotas, quiet hours and proactivity; the control socket is served at the home |
+| `with_trigger(Trigger)` | A standing cron, file or webhook trigger that starts a process each time it fires |
+| `with_run_store(store)` | The run store goals use, when not the kernel stores' |
+
+`run_with_args` takes the arguments instead of the process's and returns the exit code.
 `HarnessLauncher::run_once` runs one turn and returns the calls held for a decision, for
-scripts and tests.
+scripts and tests. [Build an autonomous agent](../autonomy/index.md) puts these together.
 
 ## Logging
 

@@ -158,9 +158,10 @@ proptest! {
         let events: Vec<Event> = text_events.iter().map(|(_, e)| e.clone()).collect();
 
         let config = IntraCompactionConfig {
-            token_threshold,
+            token_threshold: Some(token_threshold),
             overlap_event_count: overlap,
             chars_per_token,
+            ..IntraCompactionConfig::default()
         };
 
         let estimated = estimate_tokens(&events, chars_per_token);
@@ -229,9 +230,10 @@ proptest! {
         let effective_overlap = overlap.min(num_events);
 
         let config = IntraCompactionConfig {
-            token_threshold: 1, // Very low threshold to ensure compaction triggers
+            token_threshold: Some(1), // Very low threshold to ensure compaction triggers
             overlap_event_count: effective_overlap,
             chars_per_token: 4,
+            ..IntraCompactionConfig::default()
         };
 
         let compactor = IntraInvocationCompactor::new(
@@ -292,9 +294,10 @@ proptest! {
             .collect();
 
         let config = IntraCompactionConfig {
-            token_threshold: 1, // Very low to ensure compaction triggers
+            token_threshold: Some(1), // Very low to ensure compaction triggers
             overlap_event_count: 1,
             chars_per_token: 4,
+            ..IntraCompactionConfig::default()
         };
 
         let compactor = IntraInvocationCompactor::new(
@@ -426,8 +429,7 @@ async fn test_summarizer_error_returns_none() {
         .map(|i| make_text_event(&format!("Event {i} with enough text to exceed threshold")))
         .collect();
 
-    let config =
-        IntraCompactionConfig { token_threshold: 1, overlap_event_count: 1, chars_per_token: 4 };
+    let config = IntraCompactionConfig::at_tokens(1).with_overlap_event_count(1);
 
     let compactor = IntraInvocationCompactor::new(config, Arc::new(FailingSummarizer));
 

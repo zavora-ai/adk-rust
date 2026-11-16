@@ -35,7 +35,7 @@ google-cloud-auth = { version = "1.8", optional = true, default-features = false
 
 [features]
 # Agent Engine (ReasoningEngine) BYOC deployment: create/poll/get/delete
-gcp = ["adk-core", "adk-gcp", "google-cloud-auth"]
+gcp = ["dep:adk-core", "dep:adk-gcp", "dep:google-cloud-auth"]
 
 [dev-dependencies]
 tempfile = "3"
