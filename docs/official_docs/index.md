@@ -6,6 +6,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 
 - [Introduction](introduction.md) - Overview of ADK-Rust, its architecture, and key concepts
 - [Quickstart](quickstart.md) - Scaffold, run, and test your first agent in the embedded UI in under 5 minutes
+- [Build an Autonomous Agent](autonomy/index.md) - Choose among ambient agents, durable workers, background runs, goals, the agent kernel and the managed runtime, then scaffold an agent that works toward goals unattended, wakes itself, waits for approvals, stays in its budget and survives a crash
 - [A2UI Quickstart](quickstart-a2ui.md) - Give an agent the `genui` render tools, see its drawings in the web home, and read them as A2UI v0.9.1 JSON lines
 - [Migrating 2.x → 3.0](migration/2.x-to-3.0.md) - Every breaking change since 2.3.0, with before/after code
 - [Migrating 1.0 → 2.0](migration/1.0-to-2.0.md) - Complete breaking-change list with before/after code
@@ -68,7 +69,7 @@ The governed, durable harness agent (`adk-harness`, spec 3.1): modes, approvals,
 - [Harness Shell and Sandbox](harness/shell-and-sandbox.md) - `bash` under Seatbelt or bubblewrap: isolation status, unsandboxed retry, `auto_allow_sandboxed`, audit records
 - [Harness Team](harness/team.md) - Members lowered to a `TeamSpec`: local, ACP and A2A members, isolation, budgets, discovery, review rounds
 - [Harness Plans and Goals](harness/plan-and-goals.md) - The plan graph with Approve and Review gates and rewind; loop-until goals, durable and ambient
-- [Harness Durability](harness/durability.md) - The durability invariants and the tests that prove them
+- [Harness Durability](harness/durability.md) - The durability invariants and the tests that prove them; what to run after a crash
 - [Harness Identity](harness/identity.md) - RBAC per tool class, per-call shell credentials, authenticated identity, audit
 - [Harness Observability](harness/observability.md) - Spans, spend per agent and subject, the loop guard, evaluation baselines
 - [Harness Memory](harness/memory.md) - Working notes behind approval, and long-term facts with provenance recalled into each turn

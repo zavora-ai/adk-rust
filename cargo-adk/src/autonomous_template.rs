@@ -179,8 +179,8 @@ mod tests {
     use adk_rust::futures::StreamExt;
     use adk_rust::harness::{HarnessAgent, HarnessMode, InstructionsConfig, Workspace};
     use adk_rust::model::{ScriptedLlm, ScriptedResponse};
+    use adk_rust::UserId;
     use adk_rust::session::InMemorySessionService;
-    use adk_rust::{Part, UserId};
 
     use super::*;
 
@@ -208,16 +208,16 @@ mod tests {
         let user = UserId::new("user")?;
         let session = harness.open_session(&user, None).await?;
         let mut events = harness.send(&user, &session, "publish the status").await?;
-        let mut answered = false;
         while let Some(event) = events.next().await {
-            for part in event?.llm_response.content.iter().flat_map(|content| &content.parts) {
-                answered |= matches!(part, Part::FunctionResponse { function_response, .. }
-                    if function_response.name == "publish_status");
-            }
+            event?;
         }
 
+        // Nothing was published; the call waits for a person, as the inbox would show it.
         assert!(!dir.join("outbox/published.md").exists(), "published without a decision");
-        assert!(!answered, "the held call was answered without a decision");
+        let pending = harness.pending_approvals(&user, &session).await?;
+        let held: Vec<&str> =
+            pending.iter().map(|entry| entry.request.tool_name.as_str()).collect();
+        assert_eq!(held, ["publish_status"]);
         std::fs::remove_dir_all(&dir).ok();
         Ok(())
     }

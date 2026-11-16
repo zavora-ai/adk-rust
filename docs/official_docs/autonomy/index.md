@@ -52,7 +52,7 @@ from the notes in `notes/` and publishes it. Replace the notes, the instruction 
 ## 1. Scaffold the agent
 
 ```bash
-cargo adk new ops-agent --template autonomous --provider anthropic
+cargo adk new ops-agent --template autonomous --provider anthropic --model claude-sonnet-5-5
 cd ops-agent
 cp .env.example .env       # set ANTHROPIC_API_KEY
 cargo test                 # publishing waits for a decision; no API key needed
@@ -61,7 +61,7 @@ cargo test                 # publishing waits for a decision; no API key needed
 The project depends on one crate:
 
 ```toml
-adk-rust = { version = "3.0.0", default-features = false, features = ["minimal", "autonomy", "cli", "anthropic"] }
+adk-rust = { version = "3.0.0", default-features = false, features = ["anthropic", "autonomy", "cli", "minimal"] }
 ```
 
 | File | Purpose |
@@ -222,7 +222,7 @@ A webhook wakes the agent the same way: a `Trigger` on `Wake::Webhook { hook }` 
 
 | Limit | Set in | What happens |
 |---|---|---|
-| Per run | `HarnessAgentBuilder::budget(RunBudget::new().max_model_calls(40).max_cost_usd(0.50))` | The run ends `ResourceExhausted` with a `budget.*` code before the call that would cross it ([run budgets](../core/runner.md)) |
+| Per run | `HarnessAgentBuilder::budget(RunBudget::new().max_model_calls(40).max_cost_usd(0.50))` | Once a limit is reached the run makes no further model call and ends `ResourceExhausted` with a `budget.*` code ([run budgets](../core/runner.md)) |
 | Per day | `Quotas::new().with_daily_spend_cap(2_000_000)` (micro-USD) | A background or scheduled process sleeps with the label `kernel.admission: budget` until the next UTC day ([scheduling](../kernel/scheduling.md)) |
 | Everything, now | `adk-rust freeze --home .adk --reason "…"` | Every process parks at its next checkpoint and nothing new starts, on every replica, until `adk-rust unfreeze --home .adk` |
 
@@ -273,10 +273,12 @@ way the harness runs.
 | What it did, provably | `adk-rust audit export` and `adk-rust audit verify` |
 
 Steer a running turn with a message it takes after its current tool step, before its next model
-call ([steering](../kernel/control-plane.md#steering-a-running-turn)):
+call ([steering](../kernel/control-plane.md#steering-a-running-turn)). `SOCKET` is the `socket`
+line `up` printed: `.adk/kernel.sock`, or a path in your temporary directory when the
+project's path is too long for a socket.
 
 ```bash
-curl --unix-socket .adk/kernel.sock -H 'content-type: application/json' \
+curl --unix-socket SOCKET -H 'content-type: application/json' \
   -d '{"text": "Keep STATUS.md under ten lines."}' \
   http://localhost/api/kernel/sessions/SESSION/steer
 ```

@@ -322,8 +322,9 @@ Available features:
 - `code`: Code execution (full preset)
 - `sandbox`: Sandboxed execution (full preset)
 - `audio`: Audio processing (full preset)
-- `harness`: The governed harness agent (full preset)
-- `harness-kernel`: The agent kernel, `adk_rust::kernel` (full preset)
+- `autonomy`: An agent that runs unattended — the harness and its kernel, durable and background runs, cron and webhook wake-ups, approvals, SQLite stores, signed audit (enterprise preset)
+- `harness`: The governed harness agent (enterprise preset, through `autonomy`)
+- `harness-kernel`: The agent kernel, `adk_rust::kernel` (enterprise preset, through `autonomy`)
 - `website`: The AWP website product (full preset)
 - `surface`: Agent surfaces, `adk_rust::surface`: the engine and the web home (in no tier)
 
@@ -339,4 +340,4 @@ ADK is available in multiple languages:
 
 ---
 
-**Next**: [Quickstart →](quickstart.md)
+**Next**: [Quickstart →](quickstart.md), then [Build an autonomous agent →](autonomy/index.md)
