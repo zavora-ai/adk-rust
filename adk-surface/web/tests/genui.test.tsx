@@ -508,3 +508,113 @@ describe("an app from an MCP server", () => {
     expect(screen.getAllByText("Turn on rain alerts for Nairobi")).toHaveLength(1);
   });
 });
+
+// Extension catalogs (spec 3.3 §6.1 `genui`): charts the home draws natively, and a host's
+// renderers of extension components, which get the checked properties and never a way to send.
+import { ChartView, compact, niceTicks } from "../src/genui/ChartView";
+import type { DrawnChart, DrawnNode } from "../src/generated/api";
+import type { ExtensionRendererProps } from "../src/genui/DrawnView";
+
+const chart = (kind: DrawnChart["kind"], extra: Partial<DrawnChart> = {}): DrawnChart => ({
+  kind,
+  x: { type: "category", labels: ["Jan", "Feb", "Mar"] },
+  series: [{ name: "Revenue", y: [4, 7, 5] }],
+  summary: `${kind} chart of Revenue, 3 points, from 4 to 7`,
+  ...extra,
+});
+
+const leaf = (key: string, text: string, variant?: string): DrawnNode => ({ key, component: "Text", text, variant });
+
+describe("a chart an extension component drew", () => {
+  it("draws every kind as a labelled SVG with no links", () => {
+    const kinds: DrawnChart["kind"][] = ["line", "area", "bar", "scatter", "pie", "sparkline"];
+    for (const kind of kinds) {
+      const { container, unmount } = render(<ChartView chart={chart(kind)} />);
+      const svg = container.querySelector("svg");
+      expect(svg?.getAttribute("role")).toBe("img");
+      expect(svg?.getAttribute("aria-label")).toBe(`${kind} chart of Revenue, 3 points, from 4 to 7`);
+      expect(container.querySelector("a, [href], foreignObject, script")).toBeNull();
+      expect(container.querySelector('[class*="decision"], [class*="pill"]')).toBeNull();
+      unmount();
+    }
+  });
+
+  it("writes its words as text and names each point's value", () => {
+    const tricky = chart("bar", {
+      x: { type: "category", labels: ["<b>Jan</b>", "Feb‮", "Mar"] },
+      series: [
+        { name: "Revenue", y: [4, 7, 5] },
+        { name: "Cost", y: [3, 2, 1] },
+      ],
+      yLabel: "USD",
+    });
+    const { container } = render(<ChartView chart={tricky} />);
+    expect(container.querySelector("b")).toBeNull();
+    expect(container.textContent).toContain("<b>Jan</b>");
+    expect(container.textContent).toContain("Feb\\u{202e}");
+    expect([...container.querySelectorAll("title")].map((title) => title.textContent)).toContain("Revenue · <b>Jan</b>: 4");
+    expect(container.querySelectorAll(".drawn-chart-legend li")).toHaveLength(2);
+  });
+
+  it("reads numbers compactly on round ticks", () => {
+    expect(compact(950)).toBe("950");
+    expect(compact(12_500)).toBe("12.5k");
+    expect(compact(3_400_000)).toBe("3.4M");
+    expect(niceTicks(0, 7)).toEqual([0, 2, 4, 6, 8]);
+  });
+});
+
+describe("an extension component", () => {
+  const metric: DrawnNode = {
+    key: "open",
+    component: "Metric",
+    extension: { catalog: "https://example.com/insight.json", component: "Metric", props: { label: "Open incidents", value: 3 } },
+    children: [
+      { key: "open#1", component: "Row", children: [leaf("open#2", "Open incidents", "caption"), leaf("open#3", "3", "h3")] },
+    ],
+  };
+  const surface = () => ({ ...timesheetCard(), title: undefined, root: metric });
+
+  it("is drawn as its home view where no renderer is set", () => {
+    const { container } = render(<DrawnView surface={surface()} />);
+    expect(within(container).getByText("Open incidents")).toBeTruthy();
+    expect(within(container).getByText("3")).toBeTruthy();
+    expect(container.querySelector(".drawn-extension")).toBeNull();
+  });
+
+  it("is drawn by the host's renderer from its checked properties, with no way to send", () => {
+    const seen: unknown[] = [];
+    const renderers = {
+      "https://example.com/insight.json": {
+        Metric: (props: ExtensionRendererProps) => {
+          seen.push(Object.keys(props).sort());
+          return <strong className="host-metric">{String(props.props.value)} open</strong>;
+        },
+      },
+    };
+    const { container } = render(<DrawnView surface={surface()} renderers={renderers} />);
+    expect(container.querySelector(".host-metric")?.textContent).toBe("3 open");
+    expect(seen[0]).toEqual(["children", "node", "props", "renderChild"]);
+    const other = { "https://example.com/other.json": renderers["https://example.com/insight.json"] };
+    const { container: fallback } = render(<DrawnView surface={surface()} renderers={other} />);
+    expect(fallback.querySelector(".host-metric")).toBeNull();
+  });
+
+  it("hands a renderer the nodes it holds, drawn by the home", () => {
+    const pages: DrawnNode = {
+      key: "root",
+      component: "Pages",
+      extension: { catalog: "https://example.com/insight.json", component: "Pages", props: {}, children: ["note"] },
+      children: [{ key: "root#1", component: "Tabs", tabs: ["Note"], children: [leaf("note", "Sent on the 10th")] }],
+    };
+    const renderers = {
+      "https://example.com/insight.json": {
+        Pages: ({ children, renderChild }: ExtensionRendererProps) => (
+          <section className="host-pages">{children.map((child) => renderChild(child))}</section>
+        ),
+      },
+    };
+    const { container } = render(<DrawnView surface={{ ...timesheetCard(), title: undefined, root: pages }} renderers={renderers} />);
+    expect(container.querySelector(".host-pages")?.textContent).toBe("Sent on the 10th");
+  });
+});

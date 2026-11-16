@@ -21,7 +21,7 @@ keywords = [
     "client",
 ]
 categories = ["api-bindings"]
-license = "Apache-2.0"
+license = "MIT AND Apache-2.0"
 repository = "https://github.com/zavora-ai/adk-rust"
 homepage.workspace = true
 authors.workspace = true
@@ -30,8 +30,7 @@ authors.workspace = true
 features = ["vertex", "interactions"]
 
 [features]
-default = ["studio"]
-studio = []
+default = []
 interactions = []
 vertex = ["dep:google-cloud-aiplatform-v1", "dep:google-cloud-auth", "dep:google-cloud-gax"]
 backtrace = ["snafu/backtraces-impl-backtrace-crate"]

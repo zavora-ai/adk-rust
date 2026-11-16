@@ -161,7 +161,7 @@ jobs:
       timeout-minutes: 10
       uses: ./.github/actions/apt-install
       with:
-        packages: protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
+        packages: protobuf-compiler libasound2-dev libudev-dev
 
     - name: Clippy
       run: cargo clippy --workspace --all-targets -- -D warnings
@@ -185,7 +185,7 @@ jobs:
       timeout-minutes: 10
       uses: ./.github/actions/apt-install
       with:
-        packages: protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
+        packages: protobuf-compiler libasound2-dev libudev-dev
 
     - name: Install cargo-nextest
       uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
@@ -228,8 +228,8 @@ jobs:
         components: clippy
         enable-cache: 'false'
 
-    # protoc for lancedb's build script, libdbus for adk-cli's keyring dependency,
-    # and the ALSA/udev headers for the audio and realtime pairs. cmake comes from
+    # protoc for lancedb's build script and the ALSA/udev headers for the audio and
+    # realtime pairs. cmake comes from
     # the runner image, whose /usr/local/bin precedes apt's /usr/bin on PATH. One
     # apt run per shard replaces the per-pair protoc action that hit the GitHub API
     # rate limit under fan-out.
@@ -239,7 +239,7 @@ jobs:
       timeout-minutes: 10
       uses: ./.github/actions/apt-install
       with:
-        packages: protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
+        packages: protobuf-compiler libasound2-dev libudev-dev
 
     - name: Install cargo-nextest
       uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
@@ -264,12 +264,12 @@ jobs:
       with:
         enable-cache: 'false'
 
-    # libdbus for adk-cli's keyring dependency; the ALSA/udev headers as in feature-coverage.
+    # The ALSA/udev headers as in feature-coverage.
     - name: Install system dependencies
       timeout-minutes: 10
       uses: ./.github/actions/apt-install
       with:
-        packages: protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
+        packages: protobuf-compiler libasound2-dev libudev-dev
 
     # adk-surface's OpenAPI document and TypeScript types are generated from its Rust types
     # (spec 3.3 §6); the committed ones must match.
@@ -431,16 +431,6 @@ jobs:
         cache-key: pr-linux
         cache-shared-key: clippy
 
-    # adk-cli's keyring dependency links libdbus on Linux even when rustdoc is
-    # only documenting the workspace's default feature sets.
-    - name: Install documentation system dependencies
-      # A stalled apt mirror once held jobs for the full six-hour limit; the action bounds and
-      # retries each apt attempt, and the step timeout bounds the whole install.
-      timeout-minutes: 10
-      uses: ./.github/actions/apt-install
-      with:
-        packages: libdbus-1-dev
-
     - name: Check documentation coverage
       env:
         RUSTDOCFLAGS: "-D warnings"
@@ -492,7 +482,7 @@ jobs:
       timeout-minutes: 10
       uses: ./.github/actions/apt-install
       with:
-        packages: protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
+        packages: protobuf-compiler libasound2-dev libudev-dev
 
     - name: Compile standalone examples (shard ${{ matrix.shard }} of 2)
       run: bash scripts/check-examples-compile.sh ${{ matrix.shard }} 2
@@ -523,7 +513,7 @@ jobs:
       timeout-minutes: 10
       uses: ./.github/actions/apt-install
       with:
-        packages: protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
+        packages: protobuf-compiler libasound2-dev libudev-dev
 
     - name: Run the kernel example's scripted scenarios
       timeout-minutes: 40
@@ -627,7 +617,7 @@ jobs:
       timeout-minutes: 10
       uses: ./.github/actions/apt-install
       with:
-        packages: protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
+        packages: protobuf-compiler libasound2-dev libudev-dev
 
     - name: Check cargo-adk templates
       run: bash scripts/check-cargo-adk-templates.sh

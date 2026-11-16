@@ -12,7 +12,7 @@ documentation = "https://docs.rs/adk-server"
 keywords = ["ai", "agent", "adk", "server", "a2a"]
 categories = ["api-bindings", "web-programming::http-server"]
 readme = "README.md"
-include = ["src/**/*", "Cargo.toml", "README.md"]
+include = ["src/**/*", "Cargo.toml", "README.md", "LICENSE"]
 
 [package.metadata.docs.rs]
 all-features = true

@@ -191,8 +191,10 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Security_Authorization"] }
 
+# The Secret Service over zbus, pure Rust, so the build needs no libdbus. `async-io` rather
+# than `tokio`: keyring's API is blocking, and zbus's tokio `block_on` panics inside a runtime.
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))'.dependencies]
-keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"], optional = true }
+keyring = { version = "3.6.3", default-features = false, features = ["async-secret-service", "async-io", "crypto-rust"], optional = true }
 
 [dev-dependencies]
 adk-telemetry = { path = "../adk-telemetry" }
@@ -228,4 +230,10 @@ name = "integration"
 path = "tests/integration.rs"
 
 [package.metadata.docs.rs]
-all-features = true
+# Every feature but two: `memory-embeddings-local` builds ONNX Runtime and the tokenizers C
+# libraries and is documented on adk-rag (`onnx`), and `web-fixture` is a test fixture.
+features = ["acp-server", "ambient", "auth", "browser", "computer-use", "docker", "encrypted",
+    "firestore", "graph", "hooks", "kernel", "managed", "mcp", "memory", "memory-embeddings",
+    "memory-graph", "mongodb", "neo4j", "observe", "payments", "postgres", "redis", "runner",
+    "sandbox", "skills", "skills-registry", "sqlite", "team", "team-a2a", "team-acp", "voice",
+    "web", "website"]

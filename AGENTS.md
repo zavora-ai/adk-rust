@@ -347,7 +347,7 @@ docs/official_docs/    Comprehensive documentation site content
 - `bedrock` — Amazon Bedrock via AWS SDK Converse API
 - `azure-ai` — Azure AI Inference endpoints
 - `all-providers` — enables all real feature flags
-- `fireworks`, `together`, `mistral`, `perplexity`, `cerebras`, `sambanova`, `xai` — backward-compat aliases for `openai`. Use `OpenAICompatibleConfig` presets instead of separate client types.
+- Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova and xAI have no feature of their own: enable `openai` and use the `OpenAICompatibleConfig` presets.
 
 ### Gemini model selection
 

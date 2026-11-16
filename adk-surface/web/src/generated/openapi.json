@@ -1483,6 +1483,139 @@
         ],
         "type": "object"
       },
+      "ChartAxis": {
+        "description": "What a chart's horizontal axis holds.",
+        "oneOf": [
+          {
+            "description": "Named categories, one value per category in every series.",
+            "properties": {
+              "labels": {
+                "description": "The categories' names, in order.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": {
+                "const": "category",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "labels"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Numbers: every series carries its `x` values.",
+            "properties": {
+              "type": {
+                "const": "number",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Times as epoch milliseconds: every series carries its `x` values.",
+            "properties": {
+              "type": {
+                "const": "time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ChartKind": {
+        "description": "How a chart is drawn.",
+        "oneOf": [
+          {
+            "const": "line",
+            "description": "Points joined by lines.",
+            "type": "string"
+          },
+          {
+            "const": "area",
+            "description": "Lines with the area under them filled.",
+            "type": "string"
+          },
+          {
+            "const": "bar",
+            "description": "Bars side by side.",
+            "type": "string"
+          },
+          {
+            "const": "scatter",
+            "description": "Points only.",
+            "type": "string"
+          },
+          {
+            "const": "pie",
+            "description": "Slices of one whole: one series of at most eight values, none negative.",
+            "type": "string"
+          },
+          {
+            "const": "sparkline",
+            "description": "One small line, no axes.",
+            "type": "string"
+          }
+        ]
+      },
+      "ChartSeries": {
+        "description": "One series of a chart.",
+        "properties": {
+          "name": {
+            "description": "Its name, in the legend.",
+            "type": "string"
+          },
+          "x": {
+            "description": "Its horizontal values on a number or time axis; empty on a category axis.",
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "y": {
+            "description": "Its values.",
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "y"
+        ],
+        "type": "object"
+      },
+      "ChartTick": {
+        "description": "A labelled point on a number or time axis.",
+        "properties": {
+          "at": {
+            "description": "Where, in the axis's values.",
+            "type": "number"
+          },
+          "text": {
+            "description": "What it reads.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "text"
+        ],
+        "type": "object"
+      },
       "Claim": {
         "description": "One claim of a protocol.",
         "properties": {
@@ -2902,6 +3035,59 @@
         ],
         "type": "object"
       },
+      "DrawnChart": {
+        "description": "A chart a component of an extension catalog shows in the home (spec 3.3 §6.1 `genui`,\nextension catalogs): numbers and words the server already checked by rule 5, never\ncolours, links or markup. The home draws it in its own chart colours.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ChartKind",
+            "description": "How it is drawn."
+          },
+          "series": {
+            "description": "The series, at most eight: one per chart colour.",
+            "items": {
+              "$ref": "#/components/schemas/ChartSeries"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "default": "",
+            "description": "One sentence that says what the chart shows, for screen readers and the terminal,\nwritten by the server: \"Line chart of Revenue, 12 points, from 3100 to 9800\".",
+            "type": "string"
+          },
+          "ticks": {
+            "description": "Labelled points on a number or time axis, such as \"10:00\" at its epoch milliseconds.",
+            "items": {
+              "$ref": "#/components/schemas/ChartTick"
+            },
+            "type": "array"
+          },
+          "x": {
+            "$ref": "#/components/schemas/ChartAxis",
+            "description": "What the horizontal axis holds."
+          },
+          "xLabel": {
+            "description": "The horizontal axis's name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "yLabel": {
+            "description": "The vertical axis's name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "x",
+          "series",
+          "summary"
+        ],
+        "type": "object"
+      },
       "DrawnCheck": {
         "description": "A check a drawn field makes: the catalog's `required`, `regex`, `length`, `numeric`,\n`email`, `and`, `or` and `not` functions, and the message shown when it fails.",
         "properties": {
@@ -2916,6 +3102,35 @@
         "required": [
           "condition",
           "message"
+        ],
+        "type": "object"
+      },
+      "DrawnExtension": {
+        "description": "A component of an extension catalog as a host renderer reads it (spec 3.3 §6.1 `genui`,\nextension catalogs): its properties with every binding and text function resolved and\nevery string already checked by rule 5. A renderer draws it from these and nothing else,\nand draws no control: the component only shows.",
+        "properties": {
+          "catalog": {
+            "description": "The catalog's id.",
+            "type": "string"
+          },
+          "children": {
+            "description": "The keys of the nodes its slots hold, in slot order: each is in the subtree of the\nnode's child.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "component": {
+            "description": "The component's type, such as `Metric`.",
+            "type": "string"
+          },
+          "props": {
+            "description": "Its properties, resolved and checked."
+          }
+        },
+        "required": [
+          "catalog",
+          "component",
+          "props"
         ],
         "type": "object"
       },
@@ -3042,7 +3257,7 @@
         ]
       },
       "DrawnNode": {
-        "description": "One component of a drawing, resolved for a renderer: templates expanded, every string a\nperson reads already in place (spec 3.3 §7.4 rule 5).\n\n| Component | `text` | `variant` | Other |\n|---|---|---|---|\n| `Text` | The text | `h1`–`h5`, `caption`, `body` | — |\n| `Row`, `Column`, `List` | — | `justify` (Row, Column) or `direction` (List) | `children`; a long `List` has `showAllText` |\n| `Card` | — | — | `children` |\n| `Tabs` | — | — | `tabs` titles and one child per tab |\n| `Divider` | — | `axis` | — |\n| `Button` | Its label | `primary`, `default`, `borderless` | `action` |\n| `TextField`, `DateTimeInput`, `CheckBox`, `ChoicePicker`, `Slider` | The label | the catalog's variant | `field` |",
+        "description": "One component of a drawing, resolved for a renderer: templates expanded, every string a\nperson reads already in place (spec 3.3 §7.4 rule 5).\n\n| Component | `text` | `variant` | Other |\n|---|---|---|---|\n| `Text` | The text | `h1`–`h5`, `caption`, `body` | — |\n| `Row`, `Column`, `List` | — | `justify` (Row, Column) or `direction` (List) | `children`; a long `List` has `showAllText` |\n| `Card` | — | — | `children` |\n| `Tabs` | — | — | `tabs` titles and one child per tab |\n| `Divider` | — | `axis` | — |\n| `Button` | Its label | `primary`, `default`, `borderless` | `action` |\n| `TextField`, `DateTimeInput`, `CheckBox`, `ChoicePicker`, `Slider` | The label | the catalog's variant | `field` |\n| `Chart` | — | — | `chart`: a chart an extension component's home view draws |\n| An extension component, such as `Metric` | — | — | `extension`, and one child: what the home shows for it |",
         "properties": {
           "action": {
             "description": "The declared action a button asks for.",
@@ -3050,6 +3265,17 @@
               "string",
               "null"
             ]
+          },
+          "chart": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DrawnChart"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A chart the home draws natively, from an extension component's home view."
           },
           "children": {
             "description": "Its children, in order.",
@@ -3061,6 +3287,17 @@
           "component": {
             "description": "The catalog component.",
             "type": "string"
+          },
+          "extension": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DrawnExtension"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The extension component this node draws, for a host that draws it with its own\nrenderer; every other surface draws its one child, what the home shows for it."
           },
           "field": {
             "anyOf": [

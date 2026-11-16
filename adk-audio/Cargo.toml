@@ -92,7 +92,6 @@ muse = ["stt", "dep:adk-model"]
 music = ["dep:reqwest"]
 # Built-in DSP processors use no external dependencies.
 fx = []
-streaming = []
 
 # Desktop audio I/O (cpal-based, not included in `all` — requires audio hardware)
 desktop-audio = ["dep:cpal"]
@@ -118,4 +117,4 @@ all-onnx = ["onnx", "kokoro", "chatterbox", "whisper-onnx", "distil-whisper", "m
 livekit = ["dep:base64"]
 
 # All portable features — safe for `--all-features` and CI on any platform.
-all = ["tts", "stt", "muse", "music", "fx", "streaming", "mlx", "all-onnx", "livekit"]
+all = ["tts", "stt", "muse", "music", "fx", "mlx", "all-onnx", "livekit"]

@@ -5,11 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Rust Agent Development Kit (ADK-Rust): build AI agents in Rust with modular components for models, tools, memory, and more"
+description = "Rust Agent Development Kit (ADK-Rust): build AI agents in Rust, including autonomous agents governed by policies, approvals and budgets, with durable runs, tools, memory, and more"
 homepage = "https://github.com/zavora-ai/adk-rust"
 repository.workspace = true
 documentation = "https://docs.rs/adk-rust"
-keywords = ["ai", "agent", "llm", "adk", "framework"]
+keywords = ["ai", "agent", "llm", "adk", "autonomous"]
 categories = ["api-bindings", "asynchronous", "web-programming"]
 readme = "README.md"
 exclude = ["tests/", "examples/"]
@@ -110,12 +110,11 @@ gemini-agent-platform-full = [
     "vertex-live", # Vertex AI Live API (adk-realtime)
 ]
 
-# CLI launcher support
-cli = ["dep:adk-cli", "runner", "server", "sessions", "telemetry"]
+# CLI launcher support. DeepSeek and Groq share the reqwest stack the CLI already links, so
+# `cli` compiles them; the providers below link a client crate of their own.
+cli = ["dep:adk-cli", "runner", "server", "sessions", "telemetry", "adk-cli/deepseek", "adk-cli/groq"]
 cli-openai = ["cli", "adk-cli/openai"]
 cli-anthropic = ["cli", "adk-cli/anthropic"]
-cli-deepseek = ["cli", "adk-cli/deepseek"]
-cli-groq = ["cli", "adk-cli/groq"]
 cli-ollama = ["cli", "adk-cli/ollama"]
 # mistral.rs in process behind `adk-rust --provider mistralrs` (spec 3.1 §8.1); a heavy build
 cli-mistralrs = ["cli", "adk-cli/mistralrs"]
@@ -136,7 +135,8 @@ artifacts = ["dep:adk-artifact"]
 gcs-artifacts = ["artifacts", "adk-artifact/gcs"]
 memory = ["dep:adk-memory"]
 runner = ["dep:adk-runner"]
-server = ["dep:adk-server", "adk-server/a2a-v1"]
+# A2A v1 and the agent registry REST API (`adk_rust::registry`) need nothing beyond adk-server.
+server = ["dep:adk-server", "adk-server/a2a-v1", "adk-server/agent-registry"]
 telemetry = ["dep:adk-telemetry"]
 telemetry-otlp = ["telemetry", "adk-telemetry/otlp"]
 telemetry-sqlite = ["telemetry", "adk-telemetry/sqlite"]
@@ -146,7 +146,8 @@ code = ["dep:adk-code"]
 sandbox = ["dep:adk-sandbox"]
 realtime = ["dep:adk-realtime"]
 browser = ["dep:adk-browser"]
-eval = ["dep:adk-eval"]
+# Persona-driven user simulation (`adk_rust::personas`) needs nothing beyond adk-eval.
+eval = ["dep:adk-eval", "adk-eval/personas"]
 guardrail = ["dep:adk-guardrail", "adk-agent?/guardrails"]
 auth = ["dep:adk-auth"]
 plugin = ["dep:adk-plugin", "adk-agent?/enhanced-plugins"]
@@ -192,9 +193,6 @@ managed-runtime = ["dep:adk-managed"]
 # Enterprise client SDK (feature-gated, experimental)
 enterprise-client = ["dep:adk-enterprise"]
 
-# A2A protocol feature (forwarded to adk-server)
-a2a = ["server", "adk-server/a2a-v1"]
-
 # Model provider features (forwarded to adk-model)
 gemini = ["models", "adk-model/gemini", "adk-managed?/gemini"]
 gemini-vertex = ["gemini", "adk-model/gemini-vertex"]
@@ -210,12 +208,6 @@ ollama = ["models", "adk-model/ollama", "adk-managed?/ollama"]
 # Local inference in process through mistral.rs 0.8 (spec 3.1 §8.1, §8.4); GPU through
 # adk-mistralrs's own `cuda` and `metal` features. A heavy build: not in any tier.
 mistralrs = ["models", "dep:adk-mistralrs"]
-fireworks = ["models", "adk-model/fireworks"]
-together = ["models", "adk-model/together"]
-mistral = ["models", "adk-model/mistral"]
-perplexity = ["models", "adk-model/perplexity"]
-cerebras = ["models", "adk-model/cerebras"]
-sambanova = ["models", "adk-model/sambanova"]
 bedrock = ["models", "adk-model/bedrock"]
 azure-ai = ["models", "adk-model/azure-ai"]
 
@@ -255,8 +247,6 @@ openai-webrtc = ["realtime", "adk-realtime/openai-webrtc"]
 # v0.7.0 competitive parity features (opt-in only, NOT included in standard or full)
 # YAML agent config and hot reload (forwarded to adk-server)
 yaml-agent = ["server", "adk-server/yaml-agent"]
-# Agent Registry REST API (forwarded to adk-server)
-agent-registry = ["server", "adk-server/agent-registry"]
 # Gemini Enterprise Agent Platform runtime contract: class-method dispatch
 # endpoints and the turnkey serve_agent_engine entrypoint (forwarded to adk-server)
 agent-engine = ["server", "adk-server/agent-engine"]
@@ -273,7 +263,7 @@ vertex-rag = ["rag", "adk-rag/vertex-rag"]
 # Agent Retrieval (Vector Search 2.0) VectorStore backend (forwarded to adk-rag)
 agent-retrieval = ["rag", "adk-rag/agent-retrieval"]
 # Agent Registry client + discovery tool (forwarded to adk-tool); unrelated to
-# the local YAML `agent-registry` feature below
+# `adk_rust::registry`, the agent registry REST API of `server`
 vertex-agent-registry = ["tools", "adk-tool/vertex-agent-registry"]
 # Skill Registry read-only client + safe extraction (forwarded to adk-skill)
 vertex-skill-registry = ["skills", "adk-skill/vertex-skill-registry"]
@@ -313,8 +303,6 @@ bigquery = ["tools", "adk-tool/bigquery"]
 spanner = ["tools", "adk-tool/spanner"]
 # Memory tools (LoadMemoryTool, PreloadMemoryTool) (forwarded to adk-tool)
 memory-tools = ["tools", "memory", "adk-tool/memory-tools"]
-# User personas for evaluation (forwarded to adk-eval)
-personas = ["eval", "adk-eval/personas"]
 # Prompt optimization CLI command (forwarded to adk-cli)
 optimize = ["cli", "adk-cli/optimize"]
 # Cloud secret manager providers (forwarded to adk-auth)
@@ -330,7 +318,9 @@ audio-tts = ["audio", "adk-audio/tts"]
 audio-stt = ["audio", "adk-audio/stt"]
 audio-fx = ["audio", "adk-audio/fx"]
 audio-mlx = ["audio", "adk-audio/mlx"]
-audio-onnx = ["audio", "adk-audio/onnx"]
+# Every ONNX speech model on one `ort` runtime: Whisper, Distil-Whisper and Moonshine STT,
+# Chatterbox TTS; the model is a checkpoint path chosen at run time.
+audio-onnx = ["audio", "adk-audio/onnx", "adk-audio/whisper-onnx", "adk-audio/distil-whisper", "adk-audio/moonshine", "adk-audio/chatterbox"]
 audio-all = ["audio", "adk-audio/all"]
 
 # Anthropic client crate (direct access to adk-anthropic types)
@@ -355,25 +345,17 @@ graph-mongodb = ["graph", "adk-graph/mongodb"]
 graph-neo4j = ["graph", "adk-graph/neo4j"]
 graph-firestore = ["graph", "adk-graph/firestore"]
 
-# Action node features (forwarded to adk-graph)
-action = ["graph", "dep:adk-action", "adk-graph/action"]
-action-http = ["action", "adk-graph/action-http"]
+# Action node features (forwarded to adk-graph). `action` includes the database and email
+# nodes, which link nothing more, and `action-http` the RSS node, which reads a feed over HTTP.
+action = ["graph", "dep:adk-action", "adk-graph/action", "adk-graph/action-db", "adk-graph/action-email"]
+action-http = ["action", "adk-graph/action-http", "adk-graph/action-rss"]
 action-trigger = ["action", "adk-graph/action-trigger"]
-action-db = ["action", "adk-graph/action-db"]
-# Deprecated alias of `action`: no code node needs more (docs/feature-surface.md).
-action-code = ["action"]
-action-email = ["action", "adk-graph/action-email"]
-action-rss = ["action", "adk-graph/action-rss"]
 action-full = ["action", "adk-graph/action-full"]
 
-# ONNX audio model features (forwarded to adk-audio)
-whisper-onnx = ["audio", "adk-audio/whisper-onnx"]
-distil-whisper = ["audio", "adk-audio/distil-whisper"]
-moonshine = ["audio", "adk-audio/moonshine"]
+# Audio models that link more than `audio-onnx` (forwarded to adk-audio)
 qwen3-tts = ["audio", "adk-audio/qwen3-tts"]
 all-onnx = ["audio", "adk-audio/all-onnx"]
 kokoro = ["audio", "adk-audio/kokoro"]
-chatterbox = ["audio", "adk-audio/chatterbox"]
 
 [dependencies]
 # Core is always included
@@ -442,7 +424,7 @@ name = "performance_0_8_llm_agents"
 required-features = ["minimal"]
 
 [package.metadata.docs.rs]
-# Use "full" to show the complete API surface on docs.rs, plus the Monty
-# opt-ins (not part of any tier) so their modules appear in the docs.
-features = ["full", "code-embedded-python", "codeact-monty"]
+# Use "full" to show the complete API surface on docs.rs, plus the opt-ins in no tier
+# whose modules belong in the docs: Monty and agent surfaces.
+features = ["full", "code-embedded-python", "codeact-monty", "surface"]
 rustdoc-args = ["--cfg", "docsrs"]

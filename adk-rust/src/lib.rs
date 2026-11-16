@@ -68,6 +68,23 @@
 //! ] }
 //! ```
 //!
+//! ## Autonomous Agents
+//!
+//! 3.0 builds agents that work on their own inside limits you set: goals that iterate until a
+//! check passes and park on a decision; wake-ups on a schedule, a file change, a webhook or a
+//! queue message; one governed tool path with tool policies, approvals across runs, run
+//! budgets, spend caps, a kill switch and a signed audit log; and durable runs that resume
+//! after a crash.
+//!
+//! | Module | Feature | What it holds |
+//! |--------|---------|---------------|
+//! | `harness` | `harness` (in `full`) | The governed harness agent: modes, standing approvals, a sandboxed shell, plans and durable goals |
+//! | `kernel` | `harness-kernel` (in `full`) | The agent kernel `adk-rust up` runs: processes, wake sources, the event bus and the control plane |
+//! | `surface` | `surface` (in no tier) | The surface engine and the web home, over a harness or a kernel |
+//!
+//! [Build an autonomous agent](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/autonomy/index.md)
+//! takes one agent from a scaffold to running on its own.
+//!
 //! ## Agent Types
 //!
 //! ADK-Rust provides several agent types for different use cases:
@@ -450,6 +467,8 @@
 //! | `graph-functional`, `graph-node-cache`, `graph-delta`, `graph-time-travel` | Graph capabilities | full |
 //! | `harness` | The governed, durable harness agent (`adk-harness`) | full |
 //! | `harness-kernel` | The agent kernel, the harness's always-on form (`adk-kernel`) | full |
+//! | `website` | The AWP website product (`adk-website`, `adk-site`) | full |
+//! | `surface` | Agent surfaces: the engine and the web home (`adk-surface`) | opt-in |
 //! | `harness-browser`, `harness-computer-use`, `harness-payments`, `harness-voice`, `harness-managed` | Harness packs | opt-in |
 //! | `cli` | CLI launcher with serve mode | opt-in |
 //! | `managed-runtime` | Managed agent runtime (`adk-managed`) | opt-in |
@@ -1025,9 +1044,9 @@ pub mod yaml_agent {
 /// - [`InMemoryAgentRegistryStore`](server::registry::InMemoryAgentRegistryStore) - In-memory storage
 /// - [`registry_router`](server::registry::registry_router) - Axum router for registry endpoints
 ///
-/// Available with feature: `agent-registry`
-#[cfg(feature = "agent-registry")]
-#[cfg_attr(docsrs, doc(cfg(feature = "agent-registry")))]
+/// Available with feature: `server`
+#[cfg(feature = "server")]
+#[cfg_attr(docsrs, doc(cfg(feature = "server")))]
 pub mod registry {
     pub use adk_server::registry::*;
 }
@@ -1096,9 +1115,9 @@ pub mod spanner {
 /// - [`UserSimulator`](eval::personas::UserSimulator) - Generate persona-driven messages
 /// - [`PersonaRegistry`](eval::personas::PersonaRegistry) - Load personas from directory
 ///
-/// Available with feature: `personas`
-#[cfg(feature = "personas")]
-#[cfg_attr(docsrs, doc(cfg(feature = "personas")))]
+/// Available with feature: `eval`
+#[cfg(feature = "eval")]
+#[cfg_attr(docsrs, doc(cfg(feature = "eval")))]
 pub mod personas {
     pub use adk_eval::personas::*;
 }

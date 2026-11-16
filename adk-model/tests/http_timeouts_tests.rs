@@ -439,3 +439,47 @@ async fn opencode_forwards_timeouts_to_every_protocol() {
         .await;
     }
 }
+
+/// The default Gemini constructors bound a call that never gets a response: the paused clock
+/// runs ahead to the client's own bound instead of hanging for the hour the test allows.
+#[cfg(feature = "gemini")]
+#[tokio::test(start_paused = true)]
+async fn gemini_default_constructors_bound_a_request_without_response() {
+    use adk_gemini::backend::studio::{DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT};
+    use adk_model::GeminiModel;
+    assert_eq!(
+        HttpTimeouts::new(DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT),
+        HttpTimeouts::default(),
+        "the Gemini SDK's defaults are the workspace's standard timeouts"
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let base = format!("http://{}", listener.local_addr().expect("address"));
+    // Reads the request and holds the connection open without a response, for good.
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buffer = [0_u8; 8192];
+                let _ = socket.read(&mut buffer).await;
+                std::future::pending::<()>().await;
+            });
+        }
+    });
+    for stream in [false, true] {
+        let model = GeminiModel::new_with_base_url("key", "m", format!("{base}/v1beta/"))
+            .unwrap()
+            .with_retry_config(adk_model::RetryConfig::disabled());
+        let request = LlmRequest::new("m", vec![Content::new("user").with_text("Hello")]);
+        let outcome = tokio::time::timeout(Duration::from_secs(3600), async {
+            let mut responses = model.generate_content(request, stream).await?;
+            while let Some(item) = responses.next().await {
+                item?;
+            }
+            Ok::<(), adk_core::AdkError>(())
+        })
+        .await
+        .expect("the default client must bound a call without a response, not hang");
+        let error = outcome.expect_err("a call without a response fails");
+        assert_eq!(error.category, ErrorCategory::Timeout, "stream {stream}: {error:?}");
+        assert!(error.is_retryable());
+    }
+}

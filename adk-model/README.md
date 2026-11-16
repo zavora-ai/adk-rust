@@ -712,7 +712,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `bedrock` | `BedrockClient` |
 | `azure-ai` | `AzureAIClient` |
 | `all-providers` | `gemini`, `openai`, `anthropic`, `deepseek`, `ollama`, `groq`, `muse`, `openrouter`, `opencode`, `bedrock`, `azure-ai` |
-| `xai`, `fireworks`, `together`, `mistral`, `perplexity`, `cerebras`, `sambanova` | Aliases for `openai`, kept for compatibility; use the `OpenAICompatibleConfig` presets |
 
 The `openai` feature turns on `async-openai`'s `byot` feature. An application that also calls
 `async-openai` directly must set `stream` on its own streaming requests.

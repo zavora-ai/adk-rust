@@ -49,6 +49,9 @@ pub use up::up;
 /// Exit code of a run that left calls held for a decision (spec 3.1 §8.1).
 pub const EXIT_HELD: i32 = 3;
 
+/// Exit code of a run that ended on an error, such as a model error or an exhausted budget.
+pub const EXIT_FAILED: i32 = 1;
+
 /// The user's harness config file.
 fn user_config() -> Option<std::path::PathBuf> {
     dirs::config_dir().map(|dir| dir.join("adk-rust").join("harness.toml"))
@@ -1130,7 +1133,22 @@ pub async fn code(
         println!("The turn ended after a denial (session {}).", outcome.session_id);
     }
     println!("session: {}", outcome.session_id);
-    Ok(if outcome.interrupted { 130 } else { 0 })
+    Ok(turn_exit(&outcome))
+}
+
+/// The exit code of a one-shot turn that held no call: `130` when interrupted, [`EXIT_FAILED`]
+/// when the run ended on an error, which is printed again as the last line, else `0`.
+fn turn_exit(outcome: &TurnOutcome) -> i32 {
+    if outcome.interrupted {
+        return 130;
+    }
+    match &outcome.error {
+        Some(error) => {
+            eprintln!("the run failed: {error}");
+            EXIT_FAILED
+        }
+        None => 0,
+    }
 }
 
 /// `adk-rust --voice`: the harness over a realtime session (spec 3.1 §8.1, §7.17, H5).
@@ -1439,13 +1457,21 @@ fn goal_exit(state: Option<&GoalState>, outcome: &TurnOutcome) -> i32 {
             if outcome.ended_by_denial {
                 println!("\nThe turn ended after a denial.");
             }
+            if let Some(error) = &outcome.error {
+                eprintln!("\nthe run failed: {error}");
+            }
             println!(
                 "\nthe goal is {:?} at iteration {}; continue with --resume.",
                 state.status, state.iteration
             );
             1
         }
-        None => 1,
+        None => {
+            if let Some(error) = &outcome.error {
+                eprintln!("\nthe run failed: {error}");
+            }
+            1
+        }
     }
 }
 
@@ -1995,6 +2021,10 @@ impl UltraAgents for HarnessUltra {
             }
             Ok(outcome) if outcome.interrupted => TurnStatus::Interrupted,
             Ok(outcome) if outcome.ended_by_denial => TurnStatus::Failed,
+            Ok(TurnOutcome { error: Some(error), .. }) => {
+                println!("  implement failed: {error}");
+                TurnStatus::Failed
+            }
             Ok(_) => TurnStatus::Completed,
             Err(error) => {
                 println!("  implement failed: {error}");
