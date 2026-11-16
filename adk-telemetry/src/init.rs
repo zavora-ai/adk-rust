@@ -46,10 +46,25 @@ pub enum TelemetryError {
     Init(String),
 }
 
+/// The error of an `init_*` function that found a global tracing subscriber already
+/// installed — such as one the application set in `main` — and left it in place.
+pub(crate) fn subscriber_already_installed(mode: &str) -> TelemetryError {
+    TelemetryError::Init(format!(
+        "a global tracing subscriber is already installed, such as the application's own \
+         tracing_subscriber; it stays in place and {mode} is not installed. Call the \
+         adk-telemetry init function instead of installing a subscriber, or skip it"
+    ))
+}
+
 /// Initialize basic telemetry with console logging.
 ///
 /// # Arguments
 /// * `service_name` - Name of the service for trace identification
+///
+/// # Errors
+///
+/// Returns [`TelemetryError::Init`] when a global tracing subscriber is already installed,
+/// such as one the application set in `main`; that subscriber stays in place.
 ///
 /// # Example
 /// ```
@@ -57,12 +72,13 @@ pub enum TelemetryError {
 /// init_telemetry("my-agent-service").expect("Failed to initialize telemetry");
 /// ```
 pub fn init_telemetry(service_name: &str) -> Result<(), TelemetryError> {
+    let mut installed = Ok(());
     INIT.call_once(|| {
         let filter = EnvFilter::try_from_default_env()
             .or_else(|_| EnvFilter::try_new("info"))
             .unwrap_or_else(|_| EnvFilter::new("info"));
 
-        tracing_subscriber::registry()
+        installed = tracing_subscriber::registry()
             .with(filter)
             .with(
                 tracing_subscriber::fmt::layer()
@@ -70,12 +86,14 @@ pub fn init_telemetry(service_name: &str) -> Result<(), TelemetryError> {
                     .with_thread_ids(true)
                     .with_line_number(true),
             )
-            .init();
-
-        tracing::info!(service.name = service_name, "telemetry initialized");
+            .try_init()
+            .map_err(|_| subscriber_already_installed("console telemetry"));
+        if installed.is_ok() {
+            tracing::info!(service.name = service_name, "telemetry initialized");
+        }
     });
 
-    Ok(())
+    installed
 }
 
 /// Initialize telemetry with OpenTelemetry OTLP export.
@@ -85,6 +103,12 @@ pub fn init_telemetry(service_name: &str) -> Result<(), TelemetryError> {
 /// # Arguments
 /// * `service_name` - Name of the service for trace identification
 /// * `endpoint` - OTLP collector endpoint (e.g., "http://localhost:4317")
+///
+/// # Errors
+///
+/// Returns [`TelemetryError::Init`] when an exporter cannot be built, or when a global
+/// tracing subscriber is already installed, such as one the application set in `main`;
+/// that subscriber stays in place.
 ///
 /// # Example
 /// ```no_run
@@ -160,7 +184,7 @@ pub fn init_with_otlp(service_name: &str, endpoint: &str) -> Result<(), Telemetr
             .or_else(|_| EnvFilter::try_new("info"))
             .unwrap_or_else(|_| EnvFilter::new("info"));
 
-        tracing_subscriber::registry()
+        let installed = tracing_subscriber::registry()
             .with(
                 tracing_subscriber::fmt::layer()
                     .with_target(true)
@@ -169,7 +193,12 @@ pub fn init_with_otlp(service_name: &str, endpoint: &str) -> Result<(), Telemetr
                     .with_filter(filter),
             )
             .with(telemetry_layer)
-            .init();
+            .try_init();
+        if installed.is_err() {
+            *init_error.lock().unwrap_or_else(|p| p.into_inner()) =
+                Some(subscriber_already_installed("the OpenTelemetry layer").to_string());
+            return;
+        }
 
         tracing::info!(
             service.name = service_name,
@@ -432,6 +461,12 @@ where
 /// before exiting (the subscriber keeps it alive for the process lifetime, so
 /// drop-based flushing never fires for globally installed subscribers).
 ///
+/// # Errors
+///
+/// Returns [`TelemetryError::Init`] when the database cannot be opened, or when a global
+/// tracing subscriber is already installed, such as one the application set in `main`;
+/// that subscriber stays in place and the exporter receives no spans.
+///
 /// # Example
 /// ```no_run
 /// use adk_telemetry::init_with_sqlite;
@@ -451,6 +486,7 @@ pub fn init_with_sqlite(
     let exporter = Arc::new(crate::sqlite::SqliteSpanExporter::new(db_path)?);
     let exporter_clone = exporter.clone();
 
+    let mut installed = Ok(());
     INIT.call_once(|| {
         let filter = EnvFilter::try_from_default_env()
             .or_else(|_| EnvFilter::try_new("info"))
@@ -460,7 +496,7 @@ pub fn init_with_sqlite(
             metadata.is_span() && is_runtime_span(metadata.name())
         }));
 
-        tracing_subscriber::registry()
+        installed = tracing_subscriber::registry()
             .with(
                 tracing_subscriber::fmt::layer()
                     .with_target(true)
@@ -469,15 +505,17 @@ pub fn init_with_sqlite(
                     .with_filter(filter),
             )
             .with(adk_layer)
-            .init();
-
-        tracing::info!(
-            service.name = service_name,
-            "telemetry initialized with SQLite span exporter"
-        );
+            .try_init()
+            .map_err(|_| subscriber_already_installed("the SQLite span exporter"));
+        if installed.is_ok() {
+            tracing::info!(
+                service.name = service_name,
+                "telemetry initialized with SQLite span exporter"
+            );
+        }
     });
 
-    Ok(exporter)
+    installed.map(|()| exporter)
 }
 
 #[cfg(test)]
@@ -560,10 +598,47 @@ mod tests {
         assert!(error.to_string().contains("already initialized without the ADK"));
     }
 
+    /// The application's own subscriber, as `tracing_subscriber::fmt().init()` in `main`.
+    /// nextest runs each test in its own process, so each test installs its own.
+    fn application_subscriber() {
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    }
+
+    #[test]
+    fn console_telemetry_keeps_an_application_subscriber() {
+        application_subscriber();
+
+        let error = init_telemetry("app").expect_err("the application's subscriber stays");
+
+        assert!(error.to_string().contains("already installed"), "{error}");
+    }
+
+    #[cfg(feature = "otlp")]
+    #[tokio::test]
+    async fn otlp_telemetry_keeps_an_application_subscriber() {
+        application_subscriber();
+
+        let error = init_with_otlp("app", "http://127.0.0.1:4317")
+            .expect_err("the application's subscriber stays");
+
+        assert!(error.to_string().contains("already installed"), "{error}");
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn sqlite_telemetry_keeps_an_application_subscriber() {
+        application_subscriber();
+        let db = std::env::temp_dir().join(format!("adk-telemetry-{}.db", std::process::id()));
+
+        let error = init_with_sqlite("app", &db).expect_err("the application's subscriber stays");
+
+        assert!(error.to_string().contains("already installed"), "{error}");
+        std::fs::remove_file(&db).ok();
+    }
+
     #[test]
     fn an_application_subscriber_is_kept_and_reported_not_a_panic() {
-        // The application's own subscriber, as `tracing_subscriber::fmt().init()` in `main`.
-        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+        application_subscriber();
 
         let error = init_with_adk_exporter("app")
             .expect_err("the exporter cannot be installed over the application's subscriber");
